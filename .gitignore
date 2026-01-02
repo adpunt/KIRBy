@@ -1,0 +1,135 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# Data files - UPDATED FOR NOISEINJECT
+*.csv
+!requirements.txt  # Allow requirements if it's CSV format
+*.json
+!package.json      # Allow package.json if needed
+*.pkl
+*.pth
+*.mmap
+data/
+*.db
+*.sqlite
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ExFAT-specific (for seagate drive)
+.Trashes
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+
+# Project specific
+results/           # All NoiseInject results (can be huge)
+logs/
+checkpoints/
+outputs/
+experiments/
+models/
+*.npy
+*.npz
+*.h5
+*.pt
+*.ckpt
+
+# Dataset cache directories
+tests/data/
+tests/CLAM/
+tests/tybalt/
+tests/small_cnn_320/
+tests/temp_tybalt/
+data/QM9/
+data/ESOL/
+data/hERG/
+data/TCGA/
+
+# UNIQUE cache/outputs
+unique_cache/
+unique_results/
+
+# Temporary analysis files
+*.ipynb
+notebooks/
+scratch/
+
+# Large result files that should stay local
+*.tar.gz
+*.zip
+*.parquet
+feats_pt.zip
+model_300dim.pkl
+gdc-client
+gdc-client_v1.6.1_*
+*.hdf5
+
+# Git LFS (if you use it for large files)
+*.lfs
+
+# Compiled Rust (if using Rust preprocessing)
+target/
+Cargo.lock
+
+# Allow these specific files even if they match patterns above
+!.gitignore
+!.gitattributes
