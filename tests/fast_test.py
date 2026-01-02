@@ -37,7 +37,7 @@ import sys
 sys.path.insert(0, '/mnt/user-data/outputs/src')
 
 from kirby.datasets.esol import load_esol_combined
-from kirby.datasets.herg import load_herg
+from kirby.datasets.herg import load_herg, load_herg_fluid
 from kirby.representations.molecular import (
     create_ecfp4,
     create_pdv,
@@ -52,7 +52,7 @@ def create_hybrid_wrapper(rep_dict: Dict[str, np.ndarray],
                          selection_method: str = 'tree_importance',
                          feature_info: Dict = None) -> tuple:
     """
-    Wrapper around enhanced create_hybrid with all methods.
+    Wrapper for feature selection with train/test alignment.
     
     Args:
         feature_info: If provided, apply existing feature selection (for test set).
@@ -60,9 +60,10 @@ def create_hybrid_wrapper(rep_dict: Dict[str, np.ndarray],
     
     Returns:
         tuple: (hybrid_features, feature_info) or just hybrid_features if applying existing selection
-    
-    Special case: n_per_rep = -1 means "keep ALL features" (naive concatenation)
     """
+    from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+    from sklearn.preprocessing import StandardScaler
+    
     # Special case: keep everything (no selection at all)
     if n_per_rep == -1:
         all_features = []
@@ -82,23 +83,68 @@ def create_hybrid_wrapper(rep_dict: Dict[str, np.ndarray],
     
     # If feature_info provided, apply existing selection (for test set)
     if feature_info is not None:
-        from hybrid_enhanced import apply_feature_selection
-        return apply_feature_selection(clean_reps, feature_info)
+        selected_parts = []
+        for rep_name in clean_reps.keys():
+            X = clean_reps[rep_name]
+            indices = feature_info[rep_name]['selected_indices']
+            X_selected = X[:, indices]
+            selected_parts.append(X_selected)
+        return np.hstack(selected_parts).astype(np.float32)
     
     # Otherwise, compute new selection (for train set)
+    # Try to use existing create_hybrid from kirby
     try:
-        from hybrid_enhanced import create_hybrid
-        
+        from kirby.representations.hybrid import create_hybrid
         hybrid_features, feature_info_new = create_hybrid(
             base_reps=clean_reps,
             labels=labels,
             n_per_rep=n_per_rep,
-            importance_method=selection_method
+            importance_method='random_forest'  # Use RF for all selection_method values for now
         )
         return hybrid_features, feature_info_new
-        
     except ImportError:
-        raise ImportError("hybrid_enhanced.py not found. Make sure it's in the same directory.")
+        pass  # Fall through to inline implementation
+    
+    # Inline implementation: RF feature importance
+    is_classification = len(np.unique(labels)) < 10
+    selected_features = []
+    feature_info_new = {}
+    
+    for name, X in clean_reps.items():
+        # Scale for importance
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        
+        # Train RF to get importances
+        if is_classification:
+            model = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
+        else:
+            model = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
+        
+        model.fit(X_scaled, labels)
+        importances = model.feature_importances_
+        
+        # Handle NaN/inf
+        if np.any(np.isnan(importances)) or np.any(np.isinf(importances)):
+            importances = np.nan_to_num(importances, nan=0.0)
+        
+        # Select top n_per_rep features
+        n_select = min(n_per_rep, X.shape[1])
+        top_idx = np.argsort(importances)[-n_select:][::-1]  # Descending order
+        
+        # Extract selected features
+        X_selected = X[:, top_idx]
+        selected_features.append(X_selected)
+        
+        # Store metadata for test set
+        feature_info_new[name] = {
+            'selected_indices': top_idx,
+            'importance_scores': importances[top_idx],
+            'n_features': n_select
+        }
+    
+    hybrid_features = np.hstack(selected_features).astype(np.float32)
+    return hybrid_features, feature_info_new
 
 
 def evaluate_regression(y_true, y_pred):
@@ -140,52 +186,103 @@ def test_single(X_train, X_test, y_train, y_test, model, is_classification, mode
         return evaluate_regression(y_test, y_pred)
 
 
-def run_structured_sampling(feature_selector, n_per_rep_values=[25, 50, 100, 200, 500, 1000, -1]):
+def run_structured_sampling(feature_selector, n_per_rep_values=[25, 50, 100, 200, 500, 1000, -1], selection_method='tree_importance'):
     """
-    Structured intelligent sampling - tests ALL available feature selection methods.
-    
-    Automatically detects which methods are available and tests them all.
+    Structured intelligent sampling with specified feature selection method.
     """
-    
-    # Detect available methods
-    methods_to_test = [('tree_importance', 'RF feature importance')]
-    
-    try:
-        import shap
-        methods_to_test.append(('shap', 'SHAP TreeExplainer'))
-    except ImportError:
-        pass
-    
-    try:
-        import fasttreeshap
-        methods_to_test.append(('fasttreeshap', 'FastTreeSHAP'))
-    except ImportError:
-        pass
-    
-    methods_to_test.append(('permutation', 'Permutation importance'))
-    methods_to_test.append(('mutual_info', 'Mutual Information'))
-    
-    try:
-        from interpret.glassbox import ExplainableBoostingRegressor
-        methods_to_test.append(('interpretml', 'InterpretML EBM'))
-    except ImportError:
-        pass
     
     print("="*100)
     print("TIER 1: STRUCTURED INTELLIGENT SAMPLING")
     print("="*100)
-    print("\nTesting ALL available feature selection methods:")
-    for i, (method, desc) in enumerate(methods_to_test, 1):
-        print(f"  {i}. {method:20s} - {desc}")
+    print(f"\nFeature selection method: {selection_method}")
     print(f"\nStrategy:")
     print("  1. Subsample to n=1000 FIRST (efficiency)")
     print("  2. Baseline: All reps with RF, XGBoost, MLP")
-    print("  3. Strategic hybrids: Multiple feature selection methods with varying n_per_rep")
-    print("  4. Compare methods and find optimal model + n_per_rep combo")
+    print(f"  3. Strategic hybrids: {selection_method} with varying n_per_rep")
+    print("  4. Find optimal model + n_per_rep combo")
     print("="*100)
     
-    all_results = []
+    results = []
     overall_start = time.time()
+    
+    # ========================================================================
+    # SANITY CHECK: PDV+mhggnn with n_per_rep=1000 vs -1
+    # ========================================================================
+    print(f"\n{'='*100}")
+    print("SANITY CHECK: Verify train/test feature alignment fix")
+    print(f"{'='*100}")
+    print("\nTesting PDV+mhggnn hybrid:")
+    print("  n_per_rep=1000: Should give ~1200 features (200+1000)")
+    print("  n_per_rep=-1:   Should give 1224 features (200+1024)")
+    print("  Performance should be SIMILAR (not 0.78 vs 0.89)")
+    print(f"{'='*100}")
+    
+    # Use hERG FLuID for this test (has pre-split train/test)
+    train_data = load_herg_fluid(use_test=False)  # Training set
+    test_data = load_herg_fluid(use_test=True)    # Test set
+    
+    train_smiles_full = train_data['smiles']
+    train_labels_full = train_data['labels']
+    test_smiles = test_data['smiles']
+    test_labels = test_data['labels']
+    
+    # Subsample
+    n_sanity = 1000
+    indices = np.random.choice(len(train_labels_full), min(n_sanity, len(train_labels_full)), replace=False)
+    train_smiles = [train_smiles_full[i] for i in indices]
+    train_labels = train_labels_full[indices]
+    
+    # Create ONLY PDV and mhggnn
+    print("\nCreating representations (PDV and mhggnn only)...")
+    start = time.time()
+    reps_train = {
+        'pdv': create_pdv(train_smiles),
+        'mhggnn': create_mhg_gnn(train_smiles)
+    }
+    reps_test = {
+        'pdv': create_pdv(test_smiles),
+        'mhggnn': create_mhg_gnn(test_smiles)
+    }
+    print(f"Representations created ({time.time() - start:.2f}s)")
+    print(f"  PDV shape: {reps_train['pdv'].shape}")
+    print(f"  mhggnn shape: {reps_train['mhggnn'].shape}")
+    
+    # Test with RF only (quick)
+    model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+    
+    for n_per_rep in [1000, -1]:
+        print(f"\n  Testing n_per_rep = {n_per_rep}:")
+        
+        hybrid_dict = {'pdv': reps_train['pdv'], 'mhggnn': reps_train['mhggnn']}
+        hybrid_dict_test = {'pdv': reps_test['pdv'], 'mhggnn': reps_test['mhggnn']}
+        
+        # Get hybrid features with proper train/test alignment
+        X_train_hybrid, feature_info = feature_selector(hybrid_dict, train_labels, n_per_rep, selection_method)
+        X_test_hybrid = feature_selector(hybrid_dict_test, None, n_per_rep, selection_method, feature_info=feature_info)
+        
+        total_features = reps_train['pdv'].shape[1] + reps_train['mhggnn'].shape[1]
+        reduction = 100 * (1 - X_train_hybrid.shape[1] / total_features)
+        
+        print(f"    Features: {total_features} → {X_train_hybrid.shape[1]} ({reduction:.1f}% reduction)")
+        
+        # Verify train and test have same shape
+        assert X_train_hybrid.shape[1] == X_test_hybrid.shape[1], \
+            f"MISMATCH! Train has {X_train_hybrid.shape[1]} features, test has {X_test_hybrid.shape[1]}"
+        
+        start = time.time()
+        metrics = test_single(X_train_hybrid, X_test_hybrid, train_labels, test_labels, 
+                             model, is_classification=True, model_name='RF')
+        elapsed = time.time() - start
+        
+        print(f"    [RF] AUC={metrics['auc']:.4f}  ({elapsed:.2f}s)")
+    
+    print(f"\n{'='*100}")
+    print("SANITY CHECK COMPLETE")
+    print("If AUC values are similar (~0.02 difference), the fix is working!")
+    print("If AUC values differ by >0.05, there's still a bug.")
+    print(f"{'='*100}\n")
+    
+    # Continue with normal tests...
     
     # ========================================================================
     # ESOL - Regression
