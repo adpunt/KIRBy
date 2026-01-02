@@ -75,6 +75,9 @@ setup(
             "black>=22.0.0",
             "flake8>=4.0.0",
         ],
+        "mhg": [
+            "mhg-gnn @ git+https://huggingface.co/spaces/ibm-research/FM4M-demo1@main#subdirectory=models/mhg_model",
+        ],
         # Convenience meta-extra: everything (except RDKit and ANARCI which need conda)
         "all": [
             "torch>=2.0.0",
