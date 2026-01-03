@@ -23,7 +23,7 @@ KIRBy creates task-optimized molecular representations by:
 **Pretrained (Frozen)**:
 - mol2vec: Word2vec on molecular substructures ✓ (requires model download)
 - Graph Kernels: Weisfeiler-Lehman graph similarity ✓
-- MHG-GNN: Pretrained GNN encoder ⚠️ (HuggingFace - needs integration)
+- MHG-GNN: Pretrained GNN encoder ⚠️ (requires local mhg_model code and pretrained weights)
 
 **Fine-Tuned (Task-Specific)**:
 - MoLFormer: Transformer on SMILES/SELFIES ✓
@@ -36,7 +36,7 @@ KIRBy creates task-optimized molecular representations by:
 **Hybrid**:
 - Combine any/all representations above ✓
 
-**Legend**: ✓ = Publicly accessible | ⚠️ = Available but needs integration
+**Legend**: ✓ = Publicly accessible | ⚠️ = Available but requires manual setup
 
 ## Installation
 
@@ -49,19 +49,35 @@ cd KIRBY
 wget https://github.com/samoturk/mol2vec/raw/master/examples/models/model_300dim.pkl
 ```
 
-**Optional - MHG-GNN (HuggingFace):**
+**Optional - MHG-GNN Setup:**
 
-MHG-GNN auto-downloads from HuggingFace (no IBM GitHub needed):
+MHG-GNN is NOT installed or downloaded automatically. KIRBy searches for a local directory containing `models/mhg_model` in the following paths:
+- `~/repos/materials`
+- `~/materials`
+- `../materials`
+- `../../materials`
 
-```bash
-# Install dependencies
-pip install -e .[mhg]
+**To set up MHG-GNN:**
 
-# Model auto-downloads from HuggingFace on first use
-# https://huggingface.co/ibm-research/materials.mhg-ged
-```
+1. The original IBM GitHub repository (https://github.com/IBM/materials) is deprecated, though some documentation may still reference it. All necessary files are now available on HuggingFace.
 
-**Status**: Implementation needs your working code. See molecular.py for details.
+2. Download the repository code from HuggingFace:
+   ```bash
+   cd ~/repos  # or your preferred location from search paths above
+   git clone https://huggingface.co/ibm-research/materials.mhg-ged materials
+   ```
+
+3. Download the pretrained weights file manually:
+   - File: `mhggnn_pretrained_model_0724_2023.pickle`
+   - URL: https://huggingface.co/ibm-research/materials.mhg-ged
+   - Place in the `materials/` directory
+
+4. Install Python dependencies:
+   ```bash
+   cd KIRBY
+   pip install -e ".[mhg]"
+   ```
+   Note: This installs only the Python dependencies. The model code and weights must be downloaded separately as described above.
 
 ### REGULAR SETUP (Every Time You Work)
 
@@ -189,7 +205,7 @@ create_pdv(smiles_list)
 ```python
 create_mol2vec(smiles_list)  # Requires mol2vec weights
 create_graph_kernel(smiles_list, kernel='weisfeiler_lehman', n_features=100)
-create_mhg_gnn(smiles_list, n_features=256)  # Requires manual install
+create_mhg_gnn(smiles_list, n_features=256)  # Requires local mhg_model code + weights
 ```
 
 ### Fine-Tuned (Task-Specific)
@@ -263,7 +279,7 @@ chemberta_model = finetune_chemberta(
 
 **Optional** (requires one-time manual setup):
 - mol2vec pretrained weights: Download from GitHub (see installation instructions)
-- MHG-GNN: Auto-downloads from HuggingFace (needs your working code to complete integration)
+- MHG-GNN: Requires local mhg_model code and pretrained weights from HuggingFace
 
 ## Key Concepts
 

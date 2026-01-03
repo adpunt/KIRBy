@@ -50,16 +50,12 @@ def create_hybrid_wrapper(rep_dict: Dict[str, np.ndarray],
                          labels: np.ndarray,
                          n_per_rep: int = 50,
                          selection_method: str = 'tree_importance',
-                         feature_info: Dict = None) -> tuple:
+                         feature_info: Dict = None):
     """
     Wrapper for feature selection with train/test alignment.
     
-    Args:
-        feature_info: If provided, apply existing feature selection (for test set).
-                     If None, compute new feature selection (for train set).
-    
-    Returns:
-        tuple: (hybrid_features, feature_info) or just hybrid_features if applying existing selection
+    ALWAYS returns: (hybrid_features, feature_info)
+    For test set calls, feature_info is ignored in output.
     """
     from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
     from sklearn.preprocessing import StandardScaler
@@ -72,9 +68,9 @@ def create_hybrid_wrapper(rep_dict: Dict[str, np.ndarray],
             X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
             all_features.append(X_clipped)
         result = np.hstack(all_features)
-        return (result, None) if feature_info is None else result
+        return result, feature_info  # Return same feature_info that was passed
     
-    # Clean the data first
+    # Clean the data
     clean_reps = {}
     for name, X in rep_dict.items():
         X_clipped = np.clip(X, -1e10, 1e10)
@@ -89,33 +85,29 @@ def create_hybrid_wrapper(rep_dict: Dict[str, np.ndarray],
             indices = feature_info[rep_name]['selected_indices']
             X_selected = X[:, indices]
             selected_parts.append(X_selected)
-        return np.hstack(selected_parts).astype(np.float32)
+        return np.hstack(selected_parts).astype(np.float32), feature_info
     
-    # Otherwise, compute new selection (for train set)
-    # Try to use existing create_hybrid from kirby
+    # Compute new selection (for train set)
     try:
         from kirby.representations.hybrid import create_hybrid
-        hybrid_features, feature_info_new = create_hybrid(
+        return create_hybrid(
             base_reps=clean_reps,
             labels=labels,
             n_per_rep=n_per_rep,
-            importance_method='random_forest'  # Use RF for all selection_method values for now
+            importance_method='random_forest'
         )
-        return hybrid_features, feature_info_new
     except ImportError:
-        pass  # Fall through to inline implementation
+        pass
     
-    # Inline implementation: RF feature importance
+    # Inline RF implementation
     is_classification = len(np.unique(labels)) < 10
     selected_features = []
     feature_info_new = {}
     
     for name, X in clean_reps.items():
-        # Scale for importance
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X)
         
-        # Train RF to get importances
         if is_classification:
             model = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
         else:
@@ -124,27 +116,22 @@ def create_hybrid_wrapper(rep_dict: Dict[str, np.ndarray],
         model.fit(X_scaled, labels)
         importances = model.feature_importances_
         
-        # Handle NaN/inf
         if np.any(np.isnan(importances)) or np.any(np.isinf(importances)):
             importances = np.nan_to_num(importances, nan=0.0)
         
-        # Select top n_per_rep features
         n_select = min(n_per_rep, X.shape[1])
-        top_idx = np.argsort(importances)[-n_select:][::-1]  # Descending order
+        top_idx = np.argsort(importances)[-n_select:][::-1]
         
-        # Extract selected features
         X_selected = X[:, top_idx]
         selected_features.append(X_selected)
         
-        # Store metadata for test set
         feature_info_new[name] = {
             'selected_indices': top_idx,
             'importance_scores': importances[top_idx],
             'n_features': n_select
         }
     
-    hybrid_features = np.hstack(selected_features).astype(np.float32)
-    return hybrid_features, feature_info_new
+    return np.hstack(selected_features).astype(np.float32), feature_info_new
 
 
 def evaluate_regression(y_true, y_pred):
@@ -167,6 +154,21 @@ def test_single(X_train, X_test, y_train, y_test, model, is_classification, mode
     """Test single representation with appropriate scaler for model type"""
     from sklearn.preprocessing import RobustScaler
     
+    # Check for NaN/inf in inputs - PRINT AND CRASH
+    if np.any(np.isnan(X_train)) or np.any(np.isinf(X_train)):
+        print(f"  ERROR: NaN/inf in X_train for {model_name}")
+        print(f"    NaN count: {np.sum(np.isnan(X_train))}, Inf count: {np.sum(np.isinf(X_train))}")
+        raise ValueError(f"NaN/inf in X_train for {model_name}")
+    if np.any(np.isnan(X_test)) or np.any(np.isinf(X_test)):
+        print(f"  ERROR: NaN/inf in X_test for {model_name}")
+        raise ValueError(f"NaN/inf in X_test for {model_name}")
+    if np.any(np.isnan(y_train)) or np.any(np.isinf(y_train)):
+        print(f"  ERROR: NaN/inf in y_train for {model_name}")
+        raise ValueError(f"NaN/inf in y_train for {model_name}")
+    if np.any(np.isnan(y_test)) or np.any(np.isinf(y_test)):
+        print(f"  ERROR: NaN/inf in y_test for {model_name}")
+        raise ValueError(f"NaN/inf in y_test for {model_name}")
+    
     # Use RobustScaler for MLP (handles outliers better), StandardScaler for others
     if 'MLP' in model_name:
         scaler = RobustScaler()
@@ -178,6 +180,12 @@ def test_single(X_train, X_test, y_train, y_test, model, is_classification, mode
     
     model.fit(X_train_scaled, y_train)
     y_pred = model.predict(X_test_scaled)
+    
+    # Check predictions - CRASH if bad
+    if np.any(np.isnan(y_pred)) or np.any(np.isinf(y_pred)):
+        print(f"  ERROR: NaN/inf in predictions for {model_name}")
+        print(f"    NaN count: {np.sum(np.isnan(y_pred))}, Inf count: {np.sum(np.isinf(y_pred))}")
+        raise ValueError(f"NaN/inf in predictions for {model_name}")
     
     if is_classification:
         y_prob = model.predict_proba(X_test_scaled)[:, 1]
@@ -258,7 +266,7 @@ def run_structured_sampling(feature_selector, n_per_rep_values=[25, 50, 100, 200
         
         # Get hybrid features with proper train/test alignment
         X_train_hybrid, feature_info = feature_selector(hybrid_dict, train_labels, n_per_rep, selection_method)
-        X_test_hybrid = feature_selector(hybrid_dict_test, None, n_per_rep, selection_method, feature_info=feature_info)
+        X_test_hybrid, _ = feature_selector(hybrid_dict_test, None, n_per_rep, selection_method, feature_info=feature_info)
         
         total_features = reps_train['pdv'].shape[1] + reps_train['mhggnn'].shape[1]
         reduction = 100 * (1 - X_train_hybrid.shape[1] / total_features)
@@ -393,7 +401,7 @@ def run_structured_sampling(feature_selector, n_per_rep_values=[25, 50, 100, 200
         X_train_hybrid, feature_info = feature_selector(hybrid_dict, train_labels, n_per_rep, selection_method)
         
         hybrid_dict_test = {name: reps_test[name] for name in best_combo}
-        X_test_hybrid = feature_selector(hybrid_dict_test, None, n_per_rep, selection_method, feature_info=feature_info)
+        X_test_hybrid, _ = feature_selector(hybrid_dict_test, None, n_per_rep, selection_method, feature_info=feature_info)
         
         n_input = sum(hybrid_dict[k].shape[1] for k in hybrid_dict)
         n_selected = X_train_hybrid.shape[1]
@@ -416,7 +424,7 @@ def run_structured_sampling(feature_selector, n_per_rep_values=[25, 50, 100, 200
             else:
                 model = model_class(n_estimators=100, random_state=42, n_jobs=-1)
             
-            metrics = test_single(X_train_hybrid, X_test_hybrid, train_labels, test_labels, model, is_classification=False, model_name=model_name)
+            metrics = test_single(X_train_hybrid, X_test_hybrid, train_labels, test_labels, model, is_classification=False, model_name='RF')
             elapsed = time.time() - start
             
             result = {
@@ -544,7 +552,7 @@ def run_structured_sampling(feature_selector, n_per_rep_values=[25, 50, 100, 200
         X_train_hybrid, feature_info = feature_selector(hybrid_dict, train_labels, n_per_rep, selection_method)
         
         hybrid_dict_test = {name: reps_test[name] for name in best_combo}
-        X_test_hybrid = feature_selector(hybrid_dict_test, None, n_per_rep, selection_method, feature_info=feature_info)
+        X_test_hybrid, _ = feature_selector(hybrid_dict_test, None, n_per_rep, selection_method, feature_info=feature_info)
         
         n_input = sum(hybrid_dict[k].shape[1] for k in hybrid_dict)
         n_selected = X_train_hybrid.shape[1]
@@ -567,7 +575,7 @@ def run_structured_sampling(feature_selector, n_per_rep_values=[25, 50, 100, 200
             else:
                 model = model_class(n_estimators=100, random_state=42, n_jobs=-1)
             
-            metrics = test_single(X_train_hybrid, X_test_hybrid, train_labels, test_labels, model, is_classification=True, model_name=model_name)
+            metrics = test_single(X_train_hybrid, X_test_hybrid, train_labels, test_labels, model, is_classification=True, model_name='RF')
             elapsed = time.time() - start
             
             result = {
@@ -604,7 +612,16 @@ def run_structured_sampling(feature_selector, n_per_rep_values=[25, 50, 100, 200
     for dataset in df['dataset'].unique():
         df_ds = df[df['dataset'] == dataset]
         df_baseline = df_ds[~df_ds['is_hybrid']]
+        
+        if len(df_baseline) == 0:
+            print(f"\n{dataset.upper()}: No baseline results")
+            continue
+            
         metric = 'auc' if 'auc' in df_baseline.columns else 'r2'
+        
+        if df_baseline[metric].isna().all():
+            print(f"\n{dataset.upper()}: All baseline results are NaN")
+            continue
         
         best = df_baseline.loc[df_baseline[metric].idxmax()]
         print(f"\n{dataset.upper()}:")
@@ -615,17 +632,26 @@ def run_structured_sampling(feature_selector, n_per_rep_values=[25, 50, 100, 200
         df_ds = df[df['dataset'] == dataset]
         df_hybrid = df_ds[df_ds['is_hybrid']]
         
-        if len(df_hybrid) > 0:
-            metric = 'auc' if 'auc' in df_hybrid.columns else 'r2'
-            best = df_hybrid.loc[df_hybrid[metric].idxmax()]
+        if len(df_hybrid) == 0:
+            print(f"\n{dataset.upper()}: No hybrid results")
+            continue
             
-            print(f"\n{dataset.upper()}:")
-            print(f"  Best: {best['representation']:30s} + {best['model']:8s}  n_per_rep={best['n_per_rep']:.0f}")
-            print(f"        {metric.upper()}={best[metric]:.4f}")
-            print(f"        Features: {best['n_features_input']:.0f} → {best['n_features_selected']:.0f} ({best['feature_reduction']:.1f}%)")
+        metric = 'auc' if 'auc' in df_hybrid.columns else 'r2'
+        
+        if df_hybrid[metric].isna().all():
+            print(f"\n{dataset.upper()}: All hybrid results are NaN")
+            continue
             
-            # Compare to best baseline
-            df_baseline = df_ds[~df_ds['is_hybrid']]
+        best = df_hybrid.loc[df_hybrid[metric].idxmax()]
+        
+        print(f"\n{dataset.upper()}:")
+        print(f"  Best: {best['representation']:30s} + {best['model']:8s}  n_per_rep={best['n_per_rep']:.0f}")
+        print(f"        {metric.upper()}={best[metric]:.4f}")
+        print(f"        Features: {best['n_features_input']:.0f} → {best['n_features_selected']:.0f} ({best['feature_reduction']:.1f}%)")
+        
+        # Compare to best baseline
+        df_baseline = df_ds[~df_ds['is_hybrid']]
+        if len(df_baseline) > 0 and not df_baseline[metric].isna().all():
             best_baseline = df_baseline[metric].max()
             improvement = ((best[metric] - best_baseline) / best_baseline) * 100
             
@@ -639,43 +665,53 @@ def run_structured_sampling(feature_selector, n_per_rep_values=[25, 50, 100, 200
         df_ds = df[df['dataset'] == dataset]
         df_hybrid = df_ds[df_ds['is_hybrid']]
         
-        if len(df_hybrid) > 0:
-            metric = 'auc' if 'auc' in df_hybrid.columns else 'r2'
+        if len(df_hybrid) == 0:
+            continue
             
-            print(f"\n{dataset.upper()}:")
-            
-            # Get best combo+model
-            best = df_hybrid.loc[df_hybrid[metric].idxmax()]
-            best_combo = best['representation']
-            best_model = best['model']
-            
-            df_sweep = df_hybrid[(df_hybrid['representation'] == best_combo) & 
-                                (df_hybrid['model'] == best_model)]
-            
-            for _, row in df_sweep.iterrows():
-                n_display = "ALL" if row['n_per_rep'] == -1 else f"{row['n_per_rep']:3.0f}"
-                print(f"  n_per_rep={n_display:>4s}: {metric.upper()}={row[metric]:.4f}  ({row['n_features_selected']:.0f} feats)")
+        metric = 'auc' if 'auc' in df_hybrid.columns else 'r2'
+        
+        if df_hybrid[metric].isna().all():
+            continue
+        
+        print(f"\n{dataset.upper()}:")
+        
+        # Get best combo+model
+        best = df_hybrid.loc[df_hybrid[metric].idxmax()]
+        best_combo = best['representation']
+        best_model = best['model']
+        
+        df_sweep = df_hybrid[(df_hybrid['representation'] == best_combo) & 
+                            (df_hybrid['model'] == best_model)]
+        
+        for _, row in df_sweep.iterrows():
+            n_display = "ALL" if row['n_per_rep'] == -1 else f"{row['n_per_rep']:3.0f}"
+            print(f"  n_per_rep={n_display:>4s}: {metric.upper()}={row[metric]:.4f}  ({row['n_features_selected']:.0f} feats)")
     
     print("\n4. MODEL SENSITIVITY (for best hybrid+n_per_rep):")
     for dataset in df['dataset'].unique():
         df_ds = df[df['dataset'] == dataset]
         df_hybrid = df_ds[df_ds['is_hybrid']]
         
-        if len(df_hybrid) > 0:
-            metric = 'auc' if 'auc' in df_hybrid.columns else 'r2'
+        if len(df_hybrid) == 0:
+            continue
             
-            print(f"\n{dataset.upper()}:")
-            
-            # Get best combo+n_per_rep
-            best = df_hybrid.loc[df_hybrid[metric].idxmax()]
-            best_combo = best['representation']
-            best_n = best['n_per_rep']
-            
-            df_models = df_hybrid[(df_hybrid['representation'] == best_combo) & 
-                                 (df_hybrid['n_per_rep'] == best_n)]
-            
-            for _, row in df_models.iterrows():
-                print(f"  {row['model']:8s}: {metric.upper()}={row[metric]:.4f}")
+        metric = 'auc' if 'auc' in df_hybrid.columns else 'r2'
+        
+        if df_hybrid[metric].isna().all():
+            continue
+        
+        print(f"\n{dataset.upper()}:")
+        
+        # Get best combo+n_per_rep
+        best = df_hybrid.loc[df_hybrid[metric].idxmax()]
+        best_combo = best['representation']
+        best_n = best['n_per_rep']
+        
+        df_models = df_hybrid[(df_hybrid['representation'] == best_combo) & 
+                             (df_hybrid['n_per_rep'] == best_n)]
+        
+        for _, row in df_models.iterrows():
+            print(f"  {row['model']:8s}: {metric.upper()}={row[metric]:.4f}")
     
     # Save
     output = {
@@ -778,7 +814,7 @@ if __name__ == '__main__':
         X_test = reps_test[rep_name]
         
         model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-        metrics = test_single(X_train, X_test, y_train, test_labels, model, is_classification=False, model_name=model_name)
+        metrics = test_single(X_train, X_test, y_train, test_labels, model, is_classification=False, model_name='RF')
         elapsed = time.time() - start
         
         result = {
@@ -807,6 +843,9 @@ if __name__ == '__main__':
     # STEP 2: Strategic hybrids from top performers
     print(f"\n{'STEP 2: STRATEGIC HYBRIDS (from top performers @ n=1000)':=^80}")
     
+    # Use fixed n_per_rep for this quick test
+    n_per_rep = 50
+    
     # Top 2 combo
     hybrid_combos = [
         (top_reps[:2], RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1), "Top 2 combo with RF"),
@@ -820,14 +859,14 @@ if __name__ == '__main__':
         X_train_hybrid, feature_info = feature_selector(hybrid_dict, train_labels[indices], n_per_rep, selection_method)
         
         hybrid_dict_test = {name: reps_test[name] for name in combo}
-        X_test_hybrid = feature_selector(hybrid_dict_test, None, n_per_rep, selection_method, feature_info=feature_info)
+        X_test_hybrid, _ = feature_selector(hybrid_dict_test, None, n_per_rep, selection_method, feature_info=feature_info)
         
         n_input = sum(hybrid_dict[k].shape[1] for k in hybrid_dict)
         n_selected = X_train_hybrid.shape[1]
         reduction = (1 - n_selected / n_input) * 100
         
         metrics = test_single(X_train_hybrid, X_test_hybrid, train_labels[indices],
-                             test_labels, model, is_classification=False, model_name=model_name)
+                             test_labels, model, is_classification=False, model_name='RF')
         elapsed = time.time() - start_hybrid
         
         result = {
@@ -863,14 +902,14 @@ if __name__ == '__main__':
         X_train_hybrid, feature_info = feature_selector(hybrid_dict, train_labels[indices], n_per_rep, selection_method)
         
         hybrid_dict_test = {name: reps_test[name] for name in best_combo}
-        X_test_hybrid = feature_selector(hybrid_dict_test, None, n_per_rep, selection_method, feature_info=feature_info)
+        X_test_hybrid, _ = feature_selector(hybrid_dict_test, None, n_per_rep, selection_method, feature_info=feature_info)
         
         n_input = sum(hybrid_dict[k].shape[1] for k in hybrid_dict)
         n_selected = X_train_hybrid.shape[1]
         reduction = (1 - n_selected / n_input) * 100
         
         metrics = test_single(X_train_hybrid, X_test_hybrid, train_labels[indices],
-                             test_labels, model, is_classification=False, model_name=model_name)
+                             test_labels, model, is_classification=False, model_name='RF')
         elapsed = time.time() - start_hybrid
         
         result = {
@@ -935,7 +974,7 @@ if __name__ == '__main__':
         X_test = reps_test[rep_name]
         
         model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
-        metrics = test_single(X_train, X_test, y_train, test_labels, model, is_classification=True, model_name=model_name)
+        metrics = test_single(X_train, X_test, y_train, test_labels, model, is_classification=True, model_name='RF')
         elapsed = time.time() - start
         
         result = {
@@ -963,6 +1002,9 @@ if __name__ == '__main__':
     # STEP 2: Strategic hybrids
     print(f"\n{'STEP 2: STRATEGIC HYBRIDS (from top performers @ n=1000)':=^80}")
     
+    # Use fixed n_per_rep for this quick test
+    n_per_rep = 50
+    
     hybrid_combos = [
         (top_reps[:2], RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1), "Top 2 combo with RF"),
         (top_reps[:3], RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1), "Top 3 combo with RF"),
@@ -975,14 +1017,14 @@ if __name__ == '__main__':
         X_train_hybrid, feature_info = feature_selector(hybrid_dict, train_labels[indices], n_per_rep, selection_method)
         
         hybrid_dict_test = {name: reps_test[name] for name in combo}
-        X_test_hybrid = feature_selector(hybrid_dict_test, None, n_per_rep, selection_method, feature_info=feature_info)
+        X_test_hybrid, _ = feature_selector(hybrid_dict_test, None, n_per_rep, selection_method, feature_info=feature_info)
         
         n_input = sum(hybrid_dict[k].shape[1] for k in hybrid_dict)
         n_selected = X_train_hybrid.shape[1]
         reduction = (1 - n_selected / n_input) * 100
         
         metrics = test_single(X_train_hybrid, X_test_hybrid, train_labels[indices],
-                             test_labels, model, is_classification=True, model_name=model_name)
+                             test_labels, model, is_classification=True, model_name='RF')
         elapsed = time.time() - start_hybrid
         
         result = {
@@ -1005,6 +1047,9 @@ if __name__ == '__main__':
     # STEP 3: Model variations
     print(f"\n{'STEP 3: MODEL VARIATIONS (best hybrid with different models)':=^80}")
     
+    # Use same n_per_rep as STEP 2
+    n_per_rep = 50
+    
     best_combo = top_reps[:2]
     
     models_to_test = [
@@ -1018,14 +1063,14 @@ if __name__ == '__main__':
         X_train_hybrid, feature_info = feature_selector(hybrid_dict, train_labels[indices], n_per_rep, selection_method)
         
         hybrid_dict_test = {name: reps_test[name] for name in best_combo}
-        X_test_hybrid = feature_selector(hybrid_dict_test, None, n_per_rep, selection_method, feature_info=feature_info)
+        X_test_hybrid, _ = feature_selector(hybrid_dict_test, None, n_per_rep, selection_method, feature_info=feature_info)
         
         n_input = sum(hybrid_dict[k].shape[1] for k in hybrid_dict)
         n_selected = X_train_hybrid.shape[1]
         reduction = (1 - n_selected / n_input) * 100
         
         metrics = test_single(X_train_hybrid, X_test_hybrid, train_labels[indices],
-                             test_labels, model, is_classification=True, model_name=model_name)
+                             test_labels, model, is_classification=True, model_name='RF')
         elapsed = time.time() - start_hybrid
         
         result = {
@@ -1065,20 +1110,27 @@ if __name__ == '__main__':
         print(f"\n{dataset.upper()}:")
         
         # Best baseline
-        best_baseline = df_ds[~df_ds['is_hybrid']].loc[df_ds[~df_ds['is_hybrid']][metric].idxmax()]
-        print(f"  Best baseline: {best_baseline['representation']:15s} {metric.upper()}={best_baseline[metric]:.4f}")
+        df_baseline = df_ds[~df_ds['is_hybrid']]
+        if len(df_baseline) > 0 and not df_baseline[metric].isna().all():
+            best_baseline = df_baseline.loc[df_baseline[metric].idxmax()]
+            print(f"  Best baseline: {best_baseline['representation']:15s} {metric.upper()}={best_baseline[metric]:.4f}")
+        else:
+            print(f"  Best baseline: No valid results")
+            best_baseline = None
         
         # Best hybrid
-        if len(df_ds[df_ds['is_hybrid']]) > 0:
-            best_hybrid = df_ds[df_ds['is_hybrid']].loc[df_ds[df_ds['is_hybrid']][metric].idxmax()]
+        df_hybrid = df_ds[df_ds['is_hybrid']]
+        if len(df_hybrid) > 0 and not df_hybrid[metric].isna().all():
+            best_hybrid = df_hybrid.loc[df_hybrid[metric].idxmax()]
             print(f"  Best hybrid:   {best_hybrid['representation']:30s} {metric.upper()}={best_hybrid[metric]:.4f}")
             print(f"                 Features: {best_hybrid['n_features_input']:.0f} → {best_hybrid['n_features_selected']:.0f} ({best_hybrid['feature_reduction']:.1f}% reduction)")
             
-            improvement = ((best_hybrid[metric] - best_baseline[metric]) / best_baseline[metric]) * 100
-            if improvement > 0:
-                print(f"                 ✓ Hybrid wins by +{improvement:.2f}%")
-            else:
-                print(f"                 Baseline better by {-improvement:.2f}%")
+            if best_baseline is not None:
+                improvement = ((best_hybrid[metric] - best_baseline[metric]) / best_baseline[metric]) * 100
+                if improvement > 0:
+                    print(f"                 ✓ Hybrid wins by +{improvement:.2f}%")
+                else:
+                    print(f"                 Baseline better by {-improvement:.2f}%")
     
     print("\n2. KEY INSIGHTS:")
     print(f"  Average feature reduction: {df[df['is_hybrid']]['feature_reduction'].mean():.1f}%")
@@ -1104,4 +1156,8 @@ if __name__ == '__main__':
 
 
 if __name__ == '__main__':
-    run_structured_sampling(create_hybrid_wrapper, n_per_rep=50)
+    run_structured_sampling(
+        create_hybrid_wrapper, 
+        n_per_rep_values=[25, 50, 100, 200, 500, 1000, -1],
+        selection_method='tree_importance'
+    )

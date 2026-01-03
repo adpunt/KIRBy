@@ -46,6 +46,7 @@ from kirby.representations.molecular import (
     create_ecfp4,
     create_pdv,
     create_sns,
+    create_mhg_gnn,
     train_gauche_gp,
     predict_gauche_gp
 )
@@ -389,10 +390,16 @@ def main():
     sns_val = create_sns(val_smiles, n_features=2048, reference_vocabulary=vocab)
     sns_test = create_sns(test_smiles, n_features=2048, reference_vocabulary=vocab)
     
+    print("  [4/4] MHG-GNN (pretrained)...")
+    mhggnn_train = create_mhg_gnn(train_smiles, batch_size=32)
+    mhggnn_val = create_mhg_gnn(val_smiles, batch_size=32)
+    mhggnn_test = create_mhg_gnn(test_smiles, batch_size=32)
+    
     representations = [
         ('ECFP4', ecfp4_train, ecfp4_val, ecfp4_test),
         ('PDV', pdv_train, pdv_val, pdv_test),
-        ('SNS', sns_train, sns_val, sns_test)
+        ('SNS', sns_train, sns_val, sns_test),
+        ('MHG-GNN-pretrained', mhggnn_train, mhggnn_val, mhggnn_test)
     ]
     
     # NoiseInject
@@ -493,9 +500,9 @@ def main():
                 print(" done")
         
         # ======================================================================
-        # Model 3: Gauche GP (only for ECFP4, PDV, SNS - needs SMILES)
+        # Model 3: Gauche GP (only for ECFP4, PDV, SNS, MHG-GNN - needs SMILES)
         # ======================================================================
-        if rep_name in ['ECFP4', 'PDV', 'SNS']:
+        if rep_name in ['ECFP4', 'PDV', 'SNS', 'MHG-GNN-pretrained']:
             print(f"\n[Gauche GP + {rep_name}]")
             
             for sigma in sigma_levels:
