@@ -26,11 +26,11 @@ Limited testing of expensive methods:
 - MHG-GNN-finetuned + RF (1 run only)
 
 Phases:
-1. Core Robustness - All strategies, all graph models (GCN, GAT, GIN, MPNN, Graph-GP)
+1. Core Robustness - Legacy strategy only, all graph models (GCN, GAT, GIN, MPNN, Graph-GP)
 2. MHG-GNN Finetuned - Limited (RF only, legacy only)
 3. Uncertainty Quantification - Graph-GP only (legacy strategy)
 
-Noise Strategies: legacy, outlier, quantile, hetero, threshold, valprop
+Noise Strategy: Legacy only for Phase 1
 Noise Levels: σ ∈ {0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0}
 """
 
@@ -690,7 +690,8 @@ def main():
     print("="*80)
     
     # Configuration
-    strategies = ['legacy', 'outlier', 'quantile', 'hetero', 'threshold', 'valprop']
+    # Only legacy strategy for Phase 1
+    strategies = ['legacy']
     sigma_levels = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
     results_dir = Path(__file__).parent.parent / 'results' / 'qm9_graphs' / f'seed_{args.random_seed}'
     results_dir.mkdir(parents=True, exist_ok=True)

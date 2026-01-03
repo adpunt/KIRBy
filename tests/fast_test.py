@@ -764,6 +764,9 @@ if __name__ == '__main__':
     print("  3. Model variations on best")
     print("="*100)
     
+    # Configuration for Tier 2 tests
+    selection_method = 'tree_importance'
+    
     results = []
     overall_start = time.time()
     
@@ -856,10 +859,10 @@ if __name__ == '__main__':
         start_hybrid = time.time()
         
         hybrid_dict = {name: reps_train[name][indices] for name in combo}
-        X_train_hybrid, feature_info = feature_selector(hybrid_dict, train_labels[indices], n_per_rep, selection_method)
+        X_train_hybrid, feature_info = create_hybrid_wrapper(hybrid_dict, train_labels[indices], n_per_rep, selection_method)
         
         hybrid_dict_test = {name: reps_test[name] for name in combo}
-        X_test_hybrid, _ = feature_selector(hybrid_dict_test, None, n_per_rep, selection_method, feature_info=feature_info)
+        X_test_hybrid, _ = create_hybrid_wrapper(hybrid_dict_test, None, n_per_rep, selection_method, feature_info=feature_info)
         
         n_input = sum(hybrid_dict[k].shape[1] for k in hybrid_dict)
         n_selected = X_train_hybrid.shape[1]
@@ -899,10 +902,10 @@ if __name__ == '__main__':
         start_hybrid = time.time()
         
         hybrid_dict = {name: reps_train[name][indices] for name in best_combo}
-        X_train_hybrid, feature_info = feature_selector(hybrid_dict, train_labels[indices], n_per_rep, selection_method)
+        X_train_hybrid, feature_info = create_hybrid_wrapper(hybrid_dict, train_labels[indices], n_per_rep, selection_method)
         
         hybrid_dict_test = {name: reps_test[name] for name in best_combo}
-        X_test_hybrid, _ = feature_selector(hybrid_dict_test, None, n_per_rep, selection_method, feature_info=feature_info)
+        X_test_hybrid, _ = create_hybrid_wrapper(hybrid_dict_test, None, n_per_rep, selection_method, feature_info=feature_info)
         
         n_input = sum(hybrid_dict[k].shape[1] for k in hybrid_dict)
         n_selected = X_train_hybrid.shape[1]
@@ -1014,10 +1017,10 @@ if __name__ == '__main__':
         start_hybrid = time.time()
         
         hybrid_dict = {name: reps_train[name][indices] for name in combo}
-        X_train_hybrid, feature_info = feature_selector(hybrid_dict, train_labels[indices], n_per_rep, selection_method)
+        X_train_hybrid, feature_info = create_hybrid_wrapper(hybrid_dict, train_labels[indices], n_per_rep, selection_method)
         
         hybrid_dict_test = {name: reps_test[name] for name in combo}
-        X_test_hybrid, _ = feature_selector(hybrid_dict_test, None, n_per_rep, selection_method, feature_info=feature_info)
+        X_test_hybrid, _ = create_hybrid_wrapper(hybrid_dict_test, None, n_per_rep, selection_method, feature_info=feature_info)
         
         n_input = sum(hybrid_dict[k].shape[1] for k in hybrid_dict)
         n_selected = X_train_hybrid.shape[1]
@@ -1060,10 +1063,10 @@ if __name__ == '__main__':
         start_hybrid = time.time()
         
         hybrid_dict = {name: reps_train[name][indices] for name in best_combo}
-        X_train_hybrid, feature_info = feature_selector(hybrid_dict, train_labels[indices], n_per_rep, selection_method)
+        X_train_hybrid, feature_info = create_hybrid_wrapper(hybrid_dict, train_labels[indices], n_per_rep, selection_method)
         
         hybrid_dict_test = {name: reps_test[name] for name in best_combo}
-        X_test_hybrid, _ = feature_selector(hybrid_dict_test, None, n_per_rep, selection_method, feature_info=feature_info)
+        X_test_hybrid, _ = create_hybrid_wrapper(hybrid_dict_test, None, n_per_rep, selection_method, feature_info=feature_info)
         
         n_input = sum(hybrid_dict[k].shape[1] for k in hybrid_dict)
         n_selected = X_train_hybrid.shape[1]
