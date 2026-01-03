@@ -52,7 +52,7 @@ def main():
     print("\nLoading QM9 dataset...")
     # TODO: CHANGE BACK TO n_samples=2000 FOR FULL EVALUATION!
     # Currently using n_samples=500 for faster testing
-    raw_data = load_qm9(n_samples=5000, property_idx=4) 
+    raw_data = load_qm9(n_samples=10000, property_idx=4) 
     splits = get_qm9_splits(raw_data, splitter='scaffold')
     
     # Combine train+val for final testing (like ESOL)
@@ -293,7 +293,6 @@ def main():
     print("\n" + "="*100)
     print("SUMMARY")
     print("="*100)
-    
     sorted_results = sorted(results.items(), key=lambda x: x[1][0])  # Sort by MAE
     
     print("\nRanked by MAE (best first):")

@@ -13,9 +13,9 @@ NO repetitions (n=1) - single run per configuration.
 Purpose: Demonstrate cross-dataset consistency and test new KIRBy representations
 
 Model-Representation Matrix:
-- Representations: ECFP4, PDV, SNS, GraphKernel, MHG-GNN-pretrained (5 total)
+- Representations: ECFP4, PDV, SNS, MHG-GNN-pretrained (4 total)
 - Models per rep: RF, QRF, XGBoost, NGBoost, DNN×4 (baseline, full-BNN, last-layer-BNN, var-BNN), Gauche GP (9 total)
-- Total configurations: 5 reps × 9 models = 45
+- Total configurations: 4 reps × 9 models = 36
 
 Noise Strategies: legacy, outlier, quantile, hetero, threshold, valprop (6 total)
 Noise Levels: σ ∈ {0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0} (11 levels)
@@ -23,7 +23,7 @@ Noise Levels: σ ∈ {0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0} (11
 Expected results:
 - Same model-rep rankings as QM9
 - Same "representation > model architecture" variance decomposition
-- New KIRBy reps (GraphKernel, MHG-GNN) competitive with baselines
+- New KIRBy reps (MHG-GNN) competitive with baselines
 """
 
 import numpy as np
@@ -43,7 +43,6 @@ from kirby.representations.molecular import (
     create_ecfp4,
     create_pdv,
     create_sns,
-    create_graph_kernel,
     create_mhg_gnn,
     train_gauche_gp,
     predict_gauche_gp
@@ -334,313 +333,16 @@ def run_experiment_neural(X_train, y_train, X_val, y_val, X_test, y_test,
 # MAIN SCRIPT
 # =============================================================================
 
+
+# =============================================================================
+# MAIN SCRIPT
+# =============================================================================
+
 def main():
     print("="*80)
-    print("ESOL + NoiseInject: Full Model-Representation Matrix")
-    print("5 representations × 9 models = 45 configurations")
+    print("ESOL + NoiseInject: Strategic Model-Representation Pairs")
     print("="*80)
-    
-    # Configuration
-    strategies = ['legacy', 'outlier', 'quantile', 'hetero', 'threshold', 'valprop']
-    sigma_levels = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
-    results_dir = Path(__file__).parent.parent / 'results' / 'esol'
-    results_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Load ESOL
-    print("\nLoading ESOL dataset...")
-    data = load_esol_combined(splitter='scaffold')
-    
-    train_smiles = data['train']['smiles']
-    train_labels = np.array(data['train']['labels'])
-    test_smiles = data['test']['smiles']
-    test_labels = np.array(data['test']['labels'])
-    
-    # Create validation split for neural models
-    n_val = len(train_smiles) // 5
-    val_smiles = train_smiles[:n_val]
-    val_labels = train_labels[:n_val]
-    train_smiles_fit = train_smiles[n_val:]
-    train_labels_fit = train_labels[n_val:]
-    
-    print(f"Split sizes: Train={len(train_smiles_fit)}, Val={len(val_smiles)}, Test={len(test_smiles)}")
-    
-    # Storage for all results
-    all_results = []
-    
-    # =========================================================================
-    # GENERATE ALL REPRESENTATIONS ONCE
-    # =========================================================================
-    print("\n" + "="*80)
-    print("GENERATING REPRESENTATIONS")
-    print("="*80)
-    
-    print("\n[1/5] ECFP4...")
-    ecfp4_train = create_ecfp4(train_smiles_fit, n_bits=2048)
-    ecfp4_val = create_ecfp4(val_smiles, n_bits=2048)
-    ecfp4_test = create_ecfp4(test_smiles, n_bits=2048)
-    
-    print("[2/5] PDV...")
-    pdv_train = create_pdv(train_smiles_fit)
-    pdv_val = create_pdv(val_smiles)
-    pdv_test = create_pdv(test_smiles)
-    
-    print("[3/5] SNS...")
-    from kirby.representations.molecular import create_sns
-    sns_train, vocab = create_sns(train_smiles_fit, n_features=2048, return_vocabulary=True)
-    sns_test = create_sns(test_smiles, n_features=2048, reference_vocabulary=vocab)
-    sns_val = create_sns(val_smiles, n_features=2048, reference_vocabulary=vocab)
-    
-    print("[4/5] GraphKernel...")
-    graphkernel_train, gk_vocab = create_graph_kernel(
-        train_smiles_fit, kernel='weisfeiler_lehman', n_iter=5, return_vocabulary=True
-    )
-    graphkernel_test = create_graph_kernel(
-        test_smiles, kernel='weisfeiler_lehman', n_iter=5, reference_vocabulary=gk_vocab
-    )
-    graphkernel_val = create_graph_kernel(
-        val_smiles, kernel='weisfeiler_lehman', n_iter=5, reference_vocabulary=gk_vocab
-    )
-    
-    print("[5/5] MHG-GNN (pretrained)...")
-    mhggnn_train = create_mhg_gnn(train_smiles_fit, batch_size=32)
-    mhggnn_test = create_mhg_gnn(test_smiles, batch_size=32)
-    mhggnn_val = create_mhg_gnn(val_smiles, batch_size=32)
-    
-    # =========================================================================
-    # TEST ALL MODEL-REPRESENTATION COMBINATIONS
-    # =========================================================================
-    print("\n" + "="*80)
-    print("TESTING ALL CONFIGURATIONS (45 total)")
-    print("="*80)
-    
-    # Define all representations
-    representations = [
-        ('ECFP4', ecfp4_train, ecfp4_val, ecfp4_test, train_smiles_fit),
-        ('PDV', pdv_train, pdv_val, pdv_test, train_smiles_fit),
-        ('SNS', sns_train, sns_val, sns_test, train_smiles_fit),
-        ('GraphKernel', graphkernel_train, graphkernel_val, graphkernel_test, train_smiles_fit),
-        ('MHG-GNN-pretrained', mhggnn_train, mhggnn_val, mhggnn_test, train_smiles_fit)
-    ]
-    
-    config_num = 0
-    for rep_name, X_train, X_val, X_test, smiles_train in representations:
-        print(f"\n{'='*80}")
-        print(f"REPRESENTATION: {rep_name}")
-        print(f"{'='*80}")
-        
-        # =====================================================================
-        # Model 1: Random Forest
-        # =====================================================================
-        config_num += 1
-        print(f"\n[{config_num}/45] RF + {rep_name}")
-        for strategy in strategies:
-            print(f"  Strategy: {strategy}")
-            predictions, _ = run_experiment_tree_model(
-                X_train, train_labels_fit, X_test, test_labels,
-                lambda: RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1),
-                strategy, sigma_levels
-            )
-            per_sigma, summary = calculate_noise_metrics(
-                test_labels, predictions, metrics=['r2', 'rmse', 'mae']
-            )
-            per_sigma['model'] = 'RF'
-            per_sigma['rep'] = rep_name
-            per_sigma['strategy'] = strategy
-            all_results.append(per_sigma)
-            per_sigma.to_csv(results_dir / f'RF_{rep_name}_{strategy}.csv', index=False)
-        
-        # =====================================================================
-        # Model 2: Quantile Random Forest
-        # =====================================================================
-        if HAS_QRF:
-            config_num += 1
-            print(f"\n[{config_num}/45] QRF + {rep_name}")
-            for strategy in strategies:
-                print(f"  Strategy: {strategy}")
-                predictions, _ = run_experiment_tree_model(
-                    X_train, train_labels_fit, X_test, test_labels,
-                    lambda: RandomForestQuantileRegressor(n_estimators=100, random_state=42, n_jobs=-1),
-                    strategy, sigma_levels
-                )
-                per_sigma, summary = calculate_noise_metrics(
-                    test_labels, predictions, metrics=['r2', 'rmse', 'mae']
-                )
-                per_sigma['model'] = 'QRF'
-                per_sigma['rep'] = rep_name
-                per_sigma['strategy'] = strategy
-                all_results.append(per_sigma)
-                per_sigma.to_csv(results_dir / f'QRF_{rep_name}_{strategy}.csv', index=False)
-        
-        # =====================================================================
-        # Model 3: XGBoost
-        # =====================================================================
-        config_num += 1
-        print(f"\n[{config_num}/45] XGBoost + {rep_name}")
-        from xgboost import XGBRegressor
-        for strategy in strategies:
-            print(f"  Strategy: {strategy}")
-            predictions, _ = run_experiment_tree_model(
-                X_train, train_labels_fit, X_test, test_labels,
-                lambda: XGBRegressor(n_estimators=100, random_state=42, n_jobs=-1),
-                strategy, sigma_levels
-            )
-            per_sigma, summary = calculate_noise_metrics(
-                test_labels, predictions, metrics=['r2', 'rmse', 'mae']
-            )
-            per_sigma['model'] = 'XGBoost'
-            per_sigma['rep'] = rep_name
-            per_sigma['strategy'] = strategy
-            all_results.append(per_sigma)
-            per_sigma.to_csv(results_dir / f'XGBoost_{rep_name}_{strategy}.csv', index=False)
-        
-        # =====================================================================
-        # Model 4: NGBoost
-        # =====================================================================
-        config_num += 1
-        print(f"\n[{config_num}/45] NGBoost + {rep_name}")
-        from ngboost import NGBRegressor
-        for strategy in strategies:
-            print(f"  Strategy: {strategy}")
-            predictions, _ = run_experiment_tree_model(
-                X_train, train_labels_fit, X_test, test_labels,
-                lambda: NGBRegressor(n_estimators=100, random_state=42),
-                strategy, sigma_levels
-            )
-            per_sigma, summary = calculate_noise_metrics(
-                test_labels, predictions, metrics=['r2', 'rmse', 'mae']
-            )
-            per_sigma['model'] = 'NGBoost'
-            per_sigma['rep'] = rep_name
-            per_sigma['strategy'] = strategy
-            all_results.append(per_sigma)
-            per_sigma.to_csv(results_dir / f'NGBoost_{rep_name}_{strategy}.csv', index=False)
-        
-        # =====================================================================
-        # Model 5: DNN (baseline)
-        # =====================================================================
-        config_num += 1
-        print(f"\n[{config_num}/45] DNN + {rep_name}")
-        for strategy in strategies:
-            print(f"  Strategy: {strategy}")
-            predictions, _ = run_experiment_neural(
-                X_train, train_labels_fit, X_val, val_labels, X_test, test_labels,
-                DeterministicRegressor, strategy, sigma_levels, is_bayesian=False
-            )
-            per_sigma, summary = calculate_noise_metrics(
-                test_labels, predictions, metrics=['r2', 'rmse', 'mae']
-            )
-            per_sigma['model'] = 'DNN'
-            per_sigma['rep'] = rep_name
-            per_sigma['strategy'] = strategy
-            all_results.append(per_sigma)
-            per_sigma.to_csv(results_dir / f'DNN_{rep_name}_{strategy}.csv', index=False)
-        
-        # =====================================================================
-        # Model 6: DNN (full-BNN)
-        # =====================================================================
-        if HAS_BLITZ:
-            config_num += 1
-            print(f"\n[{config_num}/45] DNN-full-BNN + {rep_name}")
-            for strategy in strategies:
-                print(f"  Strategy: {strategy}")
-                predictions, _ = run_experiment_neural(
-                    X_train, train_labels_fit, X_val, val_labels, X_test, test_labels,
-                    BayesianRegressor, strategy, sigma_levels, is_bayesian=True
-                )
-                per_sigma, summary = calculate_noise_metrics(
-                    test_labels, predictions, metrics=['r2', 'rmse', 'mae']
-                )
-                per_sigma['model'] = 'DNN-full-BNN'
-                per_sigma['rep'] = rep_name
-                per_sigma['strategy'] = strategy
-                all_results.append(per_sigma)
-                per_sigma.to_csv(results_dir / f'DNN-full-BNN_{rep_name}_{strategy}.csv', index=False)
-        
-        # =====================================================================
-        # Model 7: DNN (last-layer-BNN)
-        # =====================================================================
-        # TODO: Implement last-layer BNN class
-        # For now, skip or use simplified version
-        
-        # =====================================================================
-        # Model 8: DNN (var-BNN)
-        # =====================================================================
-        # TODO: Implement variational BNN class
-        # For now, skip or use simplified version
-        
-        # =====================================================================
-        # Model 9: Gauche GP (only for representations with SMILES access)
-        # =====================================================================
-        if rep_name in ['ECFP4', 'PDV', 'SNS', 'GraphKernel', 'MHG-GNN-pretrained']:
-            config_num += 1
-            print(f"\n[{config_num}/45] Gauche GP + {rep_name}")
-            for strategy in strategies:
-                print(f"  Strategy: {strategy}")
-                predictions, _ = run_experiment_gp(
-                    smiles_train, train_labels_fit, test_smiles, test_labels,
-                    strategy, sigma_levels
-                )
-                per_sigma, summary = calculate_noise_metrics(
-                    test_labels, predictions, metrics=['r2', 'rmse', 'mae']
-                )
-                per_sigma['model'] = 'GP'
-                per_sigma['rep'] = rep_name
-                per_sigma['strategy'] = strategy
-                all_results.append(per_sigma)
-                per_sigma.to_csv(results_dir / f'GP_{rep_name}_{strategy}.csv', index=False)
-    
-    # =========================================================================
-    # SUMMARY
-    # =========================================================================
-    print("\n" + "="*80)
-    print("SUMMARY")
-    print("="*80)
-    
-    # Combine all results
-    combined_df = pd.concat(all_results, ignore_index=True)
-    combined_df.to_csv(results_dir / 'all_results.csv', index=False)
-    
-    # Calculate NSI and retention using σ_max = 0.6
-    summary_table = []
-    for (model, rep, strategy), group in combined_df.groupby(['model', 'rep', 'strategy']):
-        baseline_rows = group[group['sigma'] == 0.0]
-        high_noise_rows = group[group['sigma'] == 0.6]
-        
-        if len(baseline_rows) > 0 and len(high_noise_rows) > 0:
-            baseline = baseline_rows['r2'].values[0]
-            high_noise = high_noise_rows['r2'].values[0]
-            nsi = (baseline - high_noise) / 0.6
-            retention = (high_noise / baseline) * 100 if baseline > 0 else 0
-            
-            summary_table.append({
-                'model': model,
-                'rep': rep,
-                'strategy': strategy,
-                'baseline_r2': baseline,
-                'r2_at_0.6': high_noise,
-                'NSI': nsi,
-                'retention_%': retention
-            })
-    
-    summary_df = pd.DataFrame(summary_table)
-    summary_df.to_csv(results_dir / 'summary.csv', index=False)
-    
-    print("\nTop 10 most robust (lowest NSI):")
-    top10 = summary_df.nsmallest(10, 'NSI')[['model', 'rep', 'strategy', 'NSI', 'retention_%']]
-    print(top10.to_string(index=False))
-    
-    print("\nResults by representation (mean across models/strategies):")
-    rep_summary = summary_df.groupby('rep')[['NSI', 'retention_%']].mean()
-    print(rep_summary.to_string())
-    
-    print("\nResults by model (mean across reps/strategies):")
-    model_summary = summary_df.groupby('model')[['NSI', 'retention_%']].mean()
-    print(model_summary.to_string())
-    
-    print("\n" + "="*80)
-    print("COMPLETE - Results saved to results/esol/")
-    print("="*80)
-    
+
     # Configuration
     strategies = ['legacy', 'outlier', 'quantile', 'hetero', 'threshold', 'valprop']
     sigma_levels = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
@@ -784,68 +486,9 @@ def main():
             all_uncertainties.append(('GP', 'PDV', pd.DataFrame(unc_data)))
     
     # -------------------------------------------------------------------------
-    # Pair 4: RF + Graph Kernel (new with KIRBy)
+    # Pair 4: RF + MHG-GNN pretrained (new with KIRBy)
     # -------------------------------------------------------------------------
-    print("\n[4/9] RF + Graph Kernel...")
-    graphkernel_train, vocab = create_graph_kernel(
-        train_smiles_fit,
-        kernel='weisfeiler_lehman',
-        n_iter=5,
-        return_vocabulary=True
-    )
-    graphkernel_test = create_graph_kernel(
-        test_smiles,
-        kernel='weisfeiler_lehman',
-        n_iter=5,
-        reference_vocabulary=vocab
-    )
-    
-    for strategy in strategies:
-        print(f"  Strategy: {strategy}")
-        predictions, _ = run_experiment_tree_model(
-            graphkernel_train, train_labels_fit, graphkernel_test, test_labels,
-            lambda: RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1),
-            strategy, sigma_levels
-        )
-        
-        per_sigma, summary = calculate_noise_metrics(
-            test_labels, predictions, metrics=['r2', 'rmse', 'mae']
-        )
-        per_sigma['model'] = 'RF'
-        per_sigma['rep'] = 'GraphKernel'
-        per_sigma['strategy'] = strategy
-        all_results.append(per_sigma)
-        per_sigma.to_csv(results_dir / f'RF_GraphKernel_{strategy}.csv', index=False)
-    
-    # -------------------------------------------------------------------------
-    # Pair 5: QRF + Graph Kernel (new with KIRBy)
-    # -------------------------------------------------------------------------
-    if HAS_QRF:
-        print("\n[5/9] QRF + Graph Kernel...")
-        
-        for strategy in strategies:
-            print(f"  Strategy: {strategy}")
-            predictions, _ = run_experiment_tree_model(
-                graphkernel_train, train_labels_fit, graphkernel_test, test_labels,
-                lambda: RandomForestQuantileRegressor(n_estimators=100, random_state=42, n_jobs=-1),
-                strategy, sigma_levels
-            )
-            
-            per_sigma, summary = calculate_noise_metrics(
-                test_labels, predictions, metrics=['r2', 'rmse', 'mae']
-            )
-            per_sigma['model'] = 'QRF'
-            per_sigma['rep'] = 'GraphKernel'
-            per_sigma['strategy'] = strategy
-            all_results.append(per_sigma)
-            per_sigma.to_csv(results_dir / f'QRF_GraphKernel_{strategy}.csv', index=False)
-    else:
-        print("\n[5/9] QRF + Graph Kernel... SKIPPED (quantile_forest not installed)")
-    
-    # -------------------------------------------------------------------------
-    # Pair 6: RF + MHG-GNN pretrained (new with KIRBy)
-    # -------------------------------------------------------------------------
-    print("\n[6/9] RF + MHG-GNN (pretrained)...")
+    print("\n[4/7] RF + MHG-GNN (pretrained)...")
     mhggnn_train = create_mhg_gnn(train_smiles_fit, batch_size=32)
     mhggnn_test = create_mhg_gnn(test_smiles, batch_size=32)
     
@@ -869,7 +512,7 @@ def main():
     # -------------------------------------------------------------------------
     # Pair 7: DNN + ECFP4 (neural baseline)
     # -------------------------------------------------------------------------
-    print("\n[7/9] DNN + ECFP4...")
+    print("\n[5/7] DNN + ECFP4...")
     
     for strategy in strategies:
         print(f"  Strategy: {strategy}")
@@ -890,7 +533,7 @@ def main():
     # -------------------------------------------------------------------------
     # Pair 8: DNN + PDV (neural baseline)
     # -------------------------------------------------------------------------
-    print("\n[8/9] DNN + PDV...")
+    print("\n[6/7] DNN + PDV...")
     
     for strategy in strategies:
         print(f"  Strategy: {strategy}")
@@ -912,7 +555,7 @@ def main():
     # Pair 9: Full-BNN + PDV (probabilistic neural)
     # -------------------------------------------------------------------------
     if HAS_BLITZ:
-        print("\n[9/9] Full-BNN + PDV...")
+        print("\n[7/7] Full-BNN + PDV...")
         
         for strategy in strategies:
             print(f"  Strategy: {strategy}")

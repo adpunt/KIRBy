@@ -23,12 +23,11 @@ Graph Models:
 - Graph-GP (Gauche with Weisfeiler-Lehman kernel)
 
 Limited testing of expensive methods:
-- GraphKernel + RF (feature extraction, no repetition needed)
 - MHG-GNN-finetuned + RF (1 run only)
 
 Phases:
-1. Core Robustness - All strategies, all graph models
-2. Graph-specific analysis - Message passing depth effects
+1. Core Robustness - All strategies, all graph models (GCN, GAT, GIN, MPNN, Graph-GP)
+2. MHG-GNN Finetuned - Limited (RF only, legacy only)
 3. Uncertainty Quantification - Graph-GP only (legacy strategy)
 
 Noise Strategies: legacy, outlier, quantile, hetero, threshold, valprop
@@ -44,6 +43,38 @@ import torch.nn.functional as F
 from torch_geometric.data import Data, DataLoader
 from torch_geometric.nn import GCNConv, GATConv, GINConv, global_mean_pool
 from sklearn.ensemble import RandomForestRegressor
+
+# Optional ML model imports
+try:
+    from quantile_forest import RandomForestQuantileRegressor
+    HAS_QRF = True
+except ImportError:
+    HAS_QRF = False
+    print("WARNING: quantile_forest not installed")
+
+try:
+    import xgboost as xgb
+    HAS_XGB = True
+except ImportError:
+    HAS_XGB = False
+    print("WARNING: xgboost not installed")
+
+try:
+    from ngboost import NGBRegressor
+    HAS_NGBOOST = True
+except ImportError:
+    HAS_NGBOOST = False
+    print("WARNING: ngboost not installed")
+
+# Bayesian NN support (torchhk)
+try:
+    import torchbnn as bnn
+    from torchhk.transform import transform_model, transform_layer
+    HAS_BNN = True
+except ImportError:
+    HAS_BNN = False
+    print("WARNING: torchbnn/torchhk not installed - BNN variants disabled")
+
 import sys
 from pathlib import Path
 from rdkit import Chem
@@ -52,7 +83,6 @@ from rdkit import Chem
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 from kirby.datasets.qm9 import load_qm9, get_qm9_splits
 from kirby.representations.molecular import (
-    create_graph_kernel,
     create_mhg_gnn,
     finetune_gnn,
     encode_from_model,
@@ -269,6 +299,89 @@ class MPNNRegressor(nn.Module):
         return self.fc(x).squeeze()
 
 
+class DNNRegressor(nn.Module):
+    """Simple DNN for tabular/fixed-length features"""
+    def __init__(self, input_dim, hidden_dim1=128, hidden_dim2=64):
+        super().__init__()
+        self.fc1 = nn.Linear(input_dim, hidden_dim1)
+        self.fc2 = nn.Linear(hidden_dim1, hidden_dim2)
+        self.fc3 = nn.Linear(hidden_dim2, 1)
+        self.activation = nn.ReLU()
+        self.dropout = nn.Dropout(0.2)
+    
+    def forward(self, x):
+        x = self.activation(self.fc1(x))
+        x = self.dropout(x)
+        x = self.activation(self.fc2(x))
+        x = self.dropout(x)
+        x = self.fc3(x)
+        return x.squeeze()
+
+
+# =============================================================================
+# BAYESIAN TRANSFORMATIONS
+# =============================================================================
+
+if HAS_BNN:
+    def apply_bayesian_transformation(model):
+        """Convert all Linear layers to Bayesian Linear layers"""
+        transform_model(
+            model, 
+            nn.Linear, 
+            bnn.BayesLinear, 
+            args={
+                "prior_mu": 0, 
+                "prior_sigma": 0.1, 
+                "in_features": ".in_features",
+                "out_features": ".out_features", 
+                "bias": ".bias"
+            }, 
+            attrs={"weight_mu": ".weight"}
+        )
+        return model
+    
+    def apply_bayesian_transformation_last_layer(model):
+        """Replace only the final Linear layer with Bayesian Linear"""
+        last_linear_name = None
+        last_linear_module = None
+        
+        for name, module in reversed(list(model.named_modules())):
+            if isinstance(module, nn.Linear):
+                last_linear_name = name
+                last_linear_module = module
+                break
+        
+        if last_linear_module is None:
+            raise ValueError("No nn.Linear layer found to replace.")
+        
+        bayesian_layer = transform_layer(
+            last_linear_module,
+            nn.Linear,
+            bnn.BayesLinear,
+            args={
+                "prior_mu": 0,
+                "prior_sigma": 0.1,
+                "in_features": ".in_features",
+                "out_features": ".out_features",
+                "bias": ".bias"
+            },
+            attrs={"weight_mu": ".weight"}
+        )
+        
+        def set_nested_attr(obj, attr_path, value):
+            attrs = attr_path.split(".")
+            for a in attrs[:-1]:
+                obj = getattr(obj, a)
+            setattr(obj, attrs[-1], value)
+        
+        set_nested_attr(model, last_linear_name, bayesian_layer)
+        return model
+    
+    def apply_bayesian_transformation_last_layer_variational(model):
+        """Variational Bayesian Last Layer - same as last_layer"""
+        return apply_bayesian_transformation_last_layer(model)
+
+
 # =============================================================================
 # GNN TRAINING
 # =============================================================================
@@ -346,6 +459,127 @@ def train_gnn_model(train_loader, val_loader, test_loader, model_class,
             predictions.extend(out.cpu().numpy().tolist())
     
     return np.array(predictions)
+
+
+def train_dnn_tabular(X_train, y_train, X_val, y_val, X_test, epochs=100, lr=1e-3):
+    """Train standard DNN on tabular features"""
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    X_train_t = torch.FloatTensor(X_train).to(device)
+    y_train_t = torch.FloatTensor(y_train).to(device)
+    X_val_t = torch.FloatTensor(X_val).to(device)
+    y_val_t = torch.FloatTensor(y_val).to(device)
+    X_test_t = torch.FloatTensor(X_test).to(device)
+    
+    model = DNNRegressor(X_train.shape[1]).to(device)
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    
+    best_val_loss = float('inf')
+    patience = 10
+    patience_counter = 0
+    best_state = None
+    
+    for epoch in range(epochs):
+        model.train()
+        optimizer.zero_grad()
+        out = model(X_train_t)
+        loss = criterion(out, y_train_t)
+        loss.backward()
+        optimizer.step()
+        
+        model.eval()
+        with torch.no_grad():
+            val_out = model(X_val_t)
+            val_loss = criterion(val_out, y_val_t).item()
+        
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            patience_counter = 0
+            best_state = model.state_dict().copy()
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                break
+    
+    model.load_state_dict(best_state)
+    model.eval()
+    with torch.no_grad():
+        predictions = model(X_test_t).cpu().numpy()
+    
+    return predictions
+
+
+def train_bnn_tabular(X_train, y_train, X_val, y_val, X_test, transformation_type, epochs=100, lr=1e-3):
+    """Train Bayesian NN on tabular features with multiple forward passes for uncertainty"""
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    X_train_t = torch.FloatTensor(X_train).to(device)
+    y_train_t = torch.FloatTensor(y_train).to(device)
+    X_val_t = torch.FloatTensor(X_val).to(device)
+    y_val_t = torch.FloatTensor(y_val).to(device)
+    X_test_t = torch.FloatTensor(X_test).to(device)
+    
+    # Create standard model then transform
+    model = DNNRegressor(X_train.shape[1]).to(device)
+    
+    # Apply Bayesian transformation
+    if transformation_type == 'full':
+        model = apply_bayesian_transformation(model)
+    elif transformation_type == 'last_layer':
+        model = apply_bayesian_transformation_last_layer(model)
+    elif transformation_type == 'variational':
+        model = apply_bayesian_transformation_last_layer_variational(model)
+    else:
+        raise ValueError(f"Unknown transformation type: {transformation_type}")
+    
+    model.to(device)
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    
+    best_val_loss = float('inf')
+    patience = 10
+    patience_counter = 0
+    best_state = None
+    
+    for epoch in range(epochs):
+        model.train()
+        optimizer.zero_grad()
+        out = model(X_train_t)
+        loss = criterion(out, y_train_t)
+        loss.backward()
+        optimizer.step()
+        
+        model.eval()
+        with torch.no_grad():
+            val_out = model(X_val_t)
+            val_loss = criterion(val_out, y_val_t).item()
+        
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            patience_counter = 0
+            best_state = model.state_dict().copy()
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                break
+    
+    model.load_state_dict(best_state)
+    
+    # Multiple forward passes for uncertainty
+    model.eval()
+    predictions_list = []
+    num_samples = 100
+    
+    with torch.no_grad():
+        for _ in range(num_samples):
+            pred = model(X_test_t).cpu().numpy()
+            predictions_list.append(pred)
+    
+    # Return mean prediction
+    predictions = np.mean(predictions_list, axis=0)
+    return predictions
+
 
 
 # =============================================================================
@@ -567,49 +801,6 @@ def main():
     
     # Only run on first seed to avoid redundancy
     if args.random_seed == 42:
-        # Graph Kernel + RF (feature extraction, not seed-dependent)
-        print("\n[GraphKernel + RF] (1 run only)")
-        graphkernel_train, vocab = create_graph_kernel(
-            train_smiles,
-            kernel='weisfeiler_lehman',
-            n_iter=5,
-            return_vocabulary=True
-        )
-        graphkernel_test = create_graph_kernel(
-            test_smiles,
-            kernel='weisfeiler_lehman',
-            n_iter=5,
-            reference_vocabulary=vocab
-        )
-        
-        for strategy in strategies:
-            print(f"  Strategy: {strategy}")
-            injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
-            predictions = {}
-            
-            for sigma in sigma_levels:
-                print(f"    σ={sigma:.1f}...", end='')
-                
-                if sigma == 0.0:
-                    y_noisy = train_labels
-                else:
-                    y_noisy = injector.inject(train_labels, sigma)
-                
-                model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-                model.fit(graphkernel_train, y_noisy)
-                predictions[sigma] = model.predict(graphkernel_test)
-                print(" done")
-            
-            per_sigma, summary = calculate_noise_metrics(
-                test_labels, predictions, metrics=['r2', 'rmse', 'mae']
-            )
-            per_sigma['model'] = 'RF'
-            per_sigma['rep'] = 'GraphKernel'
-            per_sigma['strategy'] = strategy
-            per_sigma['seed'] = args.random_seed
-            all_results.append(per_sigma)
-            per_sigma.to_csv(results_dir / f'RF_GraphKernel_{strategy}.csv', index=False)
-        
         # MHG-GNN finetuned + RF (1 run only, very expensive)
         print("\n[MHG-GNN-finetuned + RF] (1 run only, legacy strategy only)")
         strategy = 'legacy'

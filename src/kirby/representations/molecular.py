@@ -234,24 +234,36 @@ def create_mhg_gnn(smiles_list, n_features=None, batch_size=32,
                    materials_repo_path=None, model_pickle_path=None):
     """
     Create MHG-GNN embeddings (pretrained GNN encoder from IBM).
-    
-    MHG-GNN is a pretrained graph neural network encoder trained on 1.34M
-    molecules from PubChem.
-    
-    **INSTALLATION:**
-    1. Clone IBM materials repo: git clone https://github.com/IBM/materials.git
-    2. Download model weights from HuggingFace: https://huggingface.co/ibm-research/materials.mhg-ged
-    3. Paths will be auto-detected from common locations, or specify manually
-    
+
+    This implementation relies on a locally available copy of the MHG-GNN
+    model code and a separately downloaded pretrained weight file.
+
+    CODE REQUIREMENT:
+    A directory containing:
+        models/mhg_model/
+    This directory is auto-detected from common locations, e.g.:
+        ~/repos/materials
+        ~/materials
+        ../materials
+
+    WEIGHTS REQUIREMENT:
+    The pretrained weight file
+        mhggnn_pretrained_model_0724_2023.pickle
+    must be downloaded separately (e.g. from Hugging Face
+    ibm-research/materials.mhg-ged) and placed at one of the searched paths
+    or provided explicitly via `model_pickle_path`.
+
+    This function does NOT automatically download code or weights.
+
     Args:
         smiles_list: List of SMILES strings
-        n_features: Output embedding dimension via PCA (default: None = use full 1024-dim)
-        batch_size: Batch size for encoding (default: 32)
-        materials_repo_path: Path to IBM/materials repo (default: auto-search)
-        model_pickle_path: Path to model pickle (default: auto-search)
-        
+        n_features: Optional PCA output dimension
+        batch_size: Batch size for encoding
+        materials_repo_path: Path to directory containing models/mhg_model
+        model_pickle_path: Path to pretrained pickle file
+
     Returns:
-        np.ndarray: Pretrained GNN embeddings (n_molecules, 1024) or (n_molecules, n_features) if reduced
+        np.ndarray: MHG-GNN embeddings
     """
     import sys
     import os
@@ -275,9 +287,10 @@ def create_mhg_gnn(smiles_list, n_features=None, batch_size=32,
             
             if materials_repo_path is None:
                 raise RuntimeError(
-                    f"Could not find IBM materials repo. Searched: {search_paths}\n"
-                    f"Clone it: git clone https://github.com/IBM/materials.git\n"
-                    f"Or specify materials_repo_path='/path/to/materials'"
+                    f"Could not find a local MHG-GNN code directory. Searched: {search_paths}\n"
+                    f"Expected to find: <path>/models/mhg_model\n"
+                    f"Fix: place the MHG code at one of the searched locations (e.g. ~/repos/materials)\n"
+                    f"or pass materials_repo_path='/path/to/dir/that/contains/models/mhg_model'."
                 )
         
         # Add to path
