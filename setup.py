@@ -43,6 +43,9 @@ setup(
             "grakel>=0.1.8",
             "gauche>=0.1.0",
             "gpytorch>=1.9.0",
+            "quantile-forest>=1.2.0",
+            "ngboost>=0.4.0",
+            "torchbnn>=1.0.0",
         ],
         # MHG-GNN feature extraction support
         "mhg": [
