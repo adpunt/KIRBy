@@ -256,27 +256,28 @@ class MPNNRegressor(nn.Module):
     def __init__(self, num_node_features, hidden_dim=128, num_layers=3):
         super().__init__()
         self.num_layers = num_layers
+        self.hidden_dim = hidden_dim
         
-        # Message functions
+        # Initial projection to hidden_dim
+        self.initial_projection = nn.Linear(num_node_features, hidden_dim)
+        
+        # Message functions - all work with hidden_dim after initial projection
         self.msg_layers = nn.ModuleList()
         for i in range(num_layers):
-            if i == 0:
-                self.msg_layers.append(nn.Linear(num_node_features * 2, hidden_dim))
-            else:
-                self.msg_layers.append(nn.Linear(hidden_dim * 2, hidden_dim))
+            self.msg_layers.append(nn.Linear(hidden_dim * 2, hidden_dim))
         
-        # Update functions
+        # Update functions - all work with hidden_dim
         self.update_layers = nn.ModuleList()
-        for i in range(num_layers):
-            if i == 0:
-                self.update_layers.append(nn.GRUCell(hidden_dim, num_node_features))
-            else:
-                self.update_layers.append(nn.GRUCell(hidden_dim, hidden_dim))
+        for _ in range(num_layers):
+            self.update_layers.append(nn.GRUCell(hidden_dim, hidden_dim))
         
-        self.fc = nn.Linear(hidden_dim if num_layers > 1 else num_node_features, 1)
+        self.fc = nn.Linear(hidden_dim, 1)
     
     def forward(self, data):
         x, edge_index, batch = data.x, data.edge_index, data.batch
+        
+        # Project initial features to hidden_dim once at the start
+        x = self.initial_projection(x)
         
         for layer in range(self.num_layers):
             # Message passing
@@ -726,10 +727,11 @@ def main():
     print("PHASE 1: CORE ROBUSTNESS - Graph Neural Networks")
     print("="*80)
     
+    # TODO: uncomment, only for testing
     graph_models = [
-        (GCNRegressor, 'GCN'),
-        (GATRegressor, 'GAT'),
-        (GINRegressor, 'GIN'),
+        # (GCNRegressor, 'GCN'),
+        # (GATRegressor, 'GAT'),
+        # (GINRegressor, 'GIN'),
         (MPNNRegressor, 'MPNN')
     ]
     

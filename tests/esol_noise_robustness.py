@@ -488,7 +488,7 @@ def main():
     # -------------------------------------------------------------------------
     # Pair 4: RF + MHG-GNN pretrained (new with KIRBy)
     # -------------------------------------------------------------------------
-    print("\n[4/7] RF + MHG-GNN (pretrained)...")
+    print("\n[4/9] RF + MHG-GNN (pretrained)...")
     mhggnn_train = create_mhg_gnn(train_smiles_fit, batch_size=32)
     mhggnn_test = create_mhg_gnn(test_smiles, batch_size=32)
     
@@ -510,9 +510,34 @@ def main():
         per_sigma.to_csv(results_dir / f'RF_MHGGNN-pretrained_{strategy}.csv', index=False)
     
     # -------------------------------------------------------------------------
-    # Pair 7: DNN + ECFP4 (neural baseline)
+    # Pair 5: RF + SNS (Sort & Slice)
     # -------------------------------------------------------------------------
-    print("\n[5/7] DNN + ECFP4...")
+    print("\n[5/9] RF + SNS...")
+    sns_train, sns_featurizer = create_sns(train_smiles_fit, return_featurizer=True)
+    sns_val = create_sns(val_smiles, reference_featurizer=sns_featurizer)
+    sns_test = create_sns(test_smiles, reference_featurizer=sns_featurizer)
+    
+    for strategy in strategies:
+        print(f"  Strategy: {strategy}")
+        predictions, _ = run_experiment_tree_model(
+            sns_train, train_labels_fit, sns_test, test_labels,
+            lambda: RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1),
+            strategy, sigma_levels
+        )
+        
+        per_sigma, summary = calculate_noise_metrics(
+            test_labels, predictions, metrics=['r2', 'rmse', 'mae']
+        )
+        per_sigma['model'] = 'RF'
+        per_sigma['rep'] = 'SNS'
+        per_sigma['strategy'] = strategy
+        all_results.append(per_sigma)
+        per_sigma.to_csv(results_dir / f'RF_SNS_{strategy}.csv', index=False)
+    
+    # -------------------------------------------------------------------------
+    # Pair 6: DNN + ECFP4 (neural baseline)
+    # -------------------------------------------------------------------------
+    print("\n[6/9] DNN + ECFP4...")
     
     for strategy in strategies:
         print(f"  Strategy: {strategy}")
@@ -531,9 +556,9 @@ def main():
         per_sigma.to_csv(results_dir / f'DNN_ECFP4_{strategy}.csv', index=False)
     
     # -------------------------------------------------------------------------
-    # Pair 8: DNN + PDV (neural baseline)
+    # Pair 7: DNN + PDV (neural baseline)
     # -------------------------------------------------------------------------
-    print("\n[6/7] DNN + PDV...")
+    print("\n[7/9] DNN + PDV...")
     
     for strategy in strategies:
         print(f"  Strategy: {strategy}")
@@ -552,10 +577,31 @@ def main():
         per_sigma.to_csv(results_dir / f'DNN_PDV_{strategy}.csv', index=False)
     
     # -------------------------------------------------------------------------
+    # Pair 8: DNN + SNS (neural with SNS)
+    # -------------------------------------------------------------------------
+    print("\n[8/9] DNN + SNS...")
+    
+    for strategy in strategies:
+        print(f"  Strategy: {strategy}")
+        predictions, _ = run_experiment_neural(
+            sns_train, train_labels_fit, sns_val, val_labels, sns_test, test_labels,
+            DeterministicRegressor, strategy, sigma_levels, is_bayesian=False
+        )
+        
+        per_sigma, summary = calculate_noise_metrics(
+            test_labels, predictions, metrics=['r2', 'rmse', 'mae']
+        )
+        per_sigma['model'] = 'DNN'
+        per_sigma['rep'] = 'SNS'
+        per_sigma['strategy'] = strategy
+        all_results.append(per_sigma)
+        per_sigma.to_csv(results_dir / f'DNN_SNS_{strategy}.csv', index=False)
+    
+    # -------------------------------------------------------------------------
     # Pair 9: Full-BNN + PDV (probabilistic neural)
     # -------------------------------------------------------------------------
     if HAS_BLITZ:
-        print("\n[7/7] Full-BNN + PDV...")
+        print("\n[9/9] Full-BNN + PDV...")
         
         for strategy in strategies:
             print(f"  Strategy: {strategy}")

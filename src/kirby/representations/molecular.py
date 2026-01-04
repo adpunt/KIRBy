@@ -141,6 +141,139 @@ def create_pdv(smiles_list, descriptor_list=None):
     
     return np.array(descriptors)
 
+def create_sns(smiles_list, reference_featurizer=None, return_featurizer=False,
+               max_radius=2, pharm_atom_invs=False, bond_invs=True,
+               chirality=False, sub_counts=True, vec_dimension=1024):
+    """
+    Create Sort & Slice ECFP features (SNS).
+    
+    Sort & Slice is a learned pooling method that selects the most prevalent
+    substructures from the training set. Must be fitted on training data first.
+    
+    Args:
+        smiles_list: List of SMILES strings
+        reference_featurizer: Featurizer fitted on training (for test set)
+        return_featurizer: If True, return (features, featurizer) tuple
+        max_radius: Morgan fingerprint radius (default: 2)
+        pharm_atom_invs: Use pharmacophore atom invariants (default: False)
+        bond_invs: Use bond types (default: True)
+        chirality: Include chirality (default: False)
+        sub_counts: Use substructure counts vs binary (default: True)
+        vec_dimension: Output dimension (default: 1024)
+        
+    Returns:
+        np.ndarray: SNS features (n_molecules, vec_dimension)
+        or tuple: (features, featurizer) if return_featurizer=True
+        
+    Usage:
+        # Fit on training data
+        sns_train, featurizer = create_sns(train_smiles, return_featurizer=True)
+        
+        # Transform test data
+        sns_test = create_sns(test_smiles, reference_featurizer=featurizer)
+    """
+    from rdkit.Chem import rdFingerprintGenerator
+    
+    if reference_featurizer is not None:
+        # Transform mode - use provided featurizer
+        features = _transform_sns(smiles_list, reference_featurizer)
+        return features
+    
+    # Fit mode - create new featurizer
+    print(f"Fitting SNS featurizer on {len(smiles_list)} molecules...")
+    
+    # Convert SMILES to mol objects
+    mols = []
+    for smiles in smiles_list:
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is not None:
+            mols.append(mol)
+    
+    # Setup Morgan generator
+    if pharm_atom_invs:
+        atom_inv_gen = rdFingerprintGenerator.GetMorganFeatureAtomInvGen()
+    else:
+        atom_inv_gen = rdFingerprintGenerator.GetMorganAtomInvGen(includeRingMembership=True)
+    
+    morgan_generator = rdFingerprintGenerator.GetMorganGenerator(
+        radius=max_radius,
+        atomInvariantsGenerator=atom_inv_gen,
+        useBondTypes=bond_invs,
+        includeChirality=chirality
+    )
+    
+    # Function to enumerate substructure IDs and counts
+    def sub_id_enumerator(mol):
+        if mol is None:
+            return {}
+        fp = morgan_generator.GetSparseCountFingerprint(mol)
+        return fp.GetNonzeroElements()
+    
+    # Count prevalence of each substructure across training set
+    sub_ids_to_prevs = {}
+    for mol in mols:
+        for sub_id in sub_id_enumerator(mol).keys():
+            sub_ids_to_prevs[sub_id] = sub_ids_to_prevs.get(sub_id, 0) + 1
+    
+    # Sort substructures by prevalence (most common first)
+    sub_ids_sorted = sorted(
+        sub_ids_to_prevs.keys(),
+        key=lambda sub_id: (sub_ids_to_prevs[sub_id], sub_id),
+        reverse=True
+    )
+    
+    # Keep only top vec_dimension substructures
+    top_sub_ids = set(sub_ids_sorted[:vec_dimension])
+    sub_id_to_index = {sub_id: i for i, sub_id in enumerate(sub_ids_sorted[:vec_dimension])}
+    
+    print(f"  Found {len(sub_ids_to_prevs)} unique substructures, keeping top {vec_dimension}")
+    
+    # Store featurizer parameters
+    featurizer = {
+        'morgan_generator': morgan_generator,
+        'sub_id_to_index': sub_id_to_index,
+        'top_sub_ids': top_sub_ids,
+        'vec_dimension': vec_dimension,
+        'sub_counts': sub_counts
+    }
+    
+    # Transform training data
+    features = _transform_sns(smiles_list, featurizer)
+    
+    if return_featurizer:
+        return features, featurizer
+    return features
+
+
+def _transform_sns(smiles_list, featurizer):
+    """Transform SMILES using fitted SNS featurizer"""
+    morgan_generator = featurizer['morgan_generator']
+    sub_id_to_index = featurizer['sub_id_to_index']
+    top_sub_ids = featurizer['top_sub_ids']
+    vec_dimension = featurizer['vec_dimension']
+    sub_counts = featurizer['sub_counts']
+    
+    features = np.zeros((len(smiles_list), vec_dimension), dtype=np.float32)
+    
+    for i, smiles in enumerate(smiles_list):
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            continue
+        
+        # Get substructure counts
+        fp = morgan_generator.GetSparseCountFingerprint(mol)
+        sub_id_counts = fp.GetNonzeroElements()
+        
+        # Build feature vector
+        for sub_id, count in sub_id_counts.items():
+            if sub_id in top_sub_ids:
+                idx = sub_id_to_index[sub_id]
+                if sub_counts:
+                    features[i, idx] = count
+                else:
+                    features[i, idx] = 1
+    
+    return features
 
 # =============================================================================
 # PRETRAINED REPRESENTATIONS
