@@ -617,7 +617,8 @@ def run_structured_sampling(feature_selector, n_per_rep_values=[25, 50, 100, 200
             print(f"\n{dataset.upper()}: No baseline results")
             continue
             
-        metric = 'auc' if 'auc' in df_baseline.columns else 'r2'
+        # Select metric based on dataset type
+        metric = 'auc' if 'herg' in dataset.lower() else 'r2'
         
         if df_baseline[metric].isna().all():
             print(f"\n{dataset.upper()}: All baseline results are NaN")
@@ -636,7 +637,7 @@ def run_structured_sampling(feature_selector, n_per_rep_values=[25, 50, 100, 200
             print(f"\n{dataset.upper()}: No hybrid results")
             continue
             
-        metric = 'auc' if 'auc' in df_hybrid.columns else 'r2'
+        metric = 'auc' if 'herg' in dataset.lower() else 'r2'
         
         if df_hybrid[metric].isna().all():
             print(f"\n{dataset.upper()}: All hybrid results are NaN")
@@ -668,7 +669,7 @@ def run_structured_sampling(feature_selector, n_per_rep_values=[25, 50, 100, 200
         if len(df_hybrid) == 0:
             continue
             
-        metric = 'auc' if 'auc' in df_hybrid.columns else 'r2'
+        metric = 'auc' if 'herg' in dataset.lower() else 'r2'
         
         if df_hybrid[metric].isna().all():
             continue
@@ -695,7 +696,7 @@ def run_structured_sampling(feature_selector, n_per_rep_values=[25, 50, 100, 200
         if len(df_hybrid) == 0:
             continue
             
-        metric = 'auc' if 'auc' in df_hybrid.columns else 'r2'
+        metric = 'auc' if 'herg' in dataset.lower() else 'r2'
         
         if df_hybrid[metric].isna().all():
             continue
@@ -1108,7 +1109,7 @@ if __name__ == '__main__':
     print("\n1. BEST PERFORMERS PER DATASET:")
     for dataset in df['dataset'].unique():
         df_ds = df[df['dataset'] == dataset]
-        metric = 'auc' if 'auc' in df_ds.columns else 'r2'
+        metric = 'auc' if 'herg' in dataset.lower() else 'r2'
         
         print(f"\n{dataset.upper()}:")
         

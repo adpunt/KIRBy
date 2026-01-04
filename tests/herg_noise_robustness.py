@@ -252,6 +252,36 @@ def main():
     print("hERG + NoiseInject: Strategic Model-Representation Pairs")
     print("="*80)
 
+    # Configuration
+    strategies = ['uniform', 'class_imbalance', 'binary_asymmetric']
+    flip_prob_levels = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+    results_dir = Path('results/herg')
+    results_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Load hERG
+    print("\nLoading hERG dataset...")
+    data = load_herg()
+    
+    train_smiles = data['train']['smiles']
+    train_labels = np.array(data['train']['labels'])
+    test_smiles = data['test']['smiles']
+    test_labels = np.array(data['test']['labels'])
+    
+    # Create validation split for neural models
+    n_val = len(train_smiles) // 5
+    val_smiles = train_smiles[:n_val]
+    val_labels = train_labels[:n_val]
+    train_smiles_fit = train_smiles[n_val:]
+    train_labels_fit = train_labels[n_val:]
+    
+    print(f"Split sizes: Train={len(train_smiles_fit)}, Val={len(val_smiles)}, Test={len(test_smiles)}")
+    print(f"Class distribution - Train: {np.bincount(train_labels_fit)}, Test: {np.bincount(test_labels)}")
+    
+    # Storage for all results
+    all_results = []
+    all_calibration_data = []
+    
+    # =========================================================================
     # PHASE 1: CORE ROBUSTNESS
     # =========================================================================
     print("\n" + "="*80)
@@ -261,7 +291,7 @@ def main():
     # -------------------------------------------------------------------------
     # Pair 1: RF + ECFP4 (baseline)
     # -------------------------------------------------------------------------
-    print("\n[1/6] RF + ECFP4...")
+    print("\n[1/7] RF + ECFP4...")
     ecfp4_train = create_ecfp4(train_smiles_fit, n_bits=2048)
     ecfp4_val = create_ecfp4(val_smiles, n_bits=2048)
     ecfp4_test = create_ecfp4(test_smiles, n_bits=2048)
@@ -301,7 +331,7 @@ def main():
     # -------------------------------------------------------------------------
     # Pair 2: RF + PDV (baseline)
     # -------------------------------------------------------------------------
-    print("\n[2/6] RF + PDV...")
+    print("\n[2/7] RF + PDV...")
     pdv_train = create_pdv(train_smiles_fit)
     pdv_val = create_pdv(val_smiles)
     pdv_test = create_pdv(test_smiles)
@@ -325,9 +355,35 @@ def main():
         per_flip.to_csv(results_dir / f'RF_PDV_{strategy}.csv', index=False)
     
     # -------------------------------------------------------------------------
-    # Pair 3: RF + MHG-GNN pretrained (new with KIRBy)
+    # Pair 3: RF + SNS (Sort & Slice)
     # -------------------------------------------------------------------------
-    print("\n[3/5] RF + MHG-GNN (pretrained)...")
+    print("\n[3/7] RF + SNS...")
+    sns_train, sns_featurizer = create_sns(train_smiles_fit, return_featurizer=True)
+    sns_val = create_sns(val_smiles, reference_featurizer=sns_featurizer)
+    sns_test = create_sns(test_smiles, reference_featurizer=sns_featurizer)
+    
+    for strategy in strategies:
+        print(f"  Strategy: {strategy}")
+        predictions, probabilities = run_experiment_tree_model(
+            sns_train, train_labels_fit, sns_test, test_labels,
+            lambda: RandomForestClassifier(n_estimators=100, random_state=42,
+                                          n_jobs=-1, class_weight='balanced'),
+            strategy, flip_prob_levels
+        )
+        
+        per_flip, summary, per_class = calculate_classification_metrics(
+            test_labels, predictions, probabilities
+        )
+        per_flip['model'] = 'RF'
+        per_flip['rep'] = 'SNS'
+        per_flip['strategy'] = strategy
+        all_results.append(per_flip)
+        per_flip.to_csv(results_dir / f'RF_SNS_{strategy}.csv', index=False)
+    
+    # -------------------------------------------------------------------------
+    # Pair 4: RF + MHG-GNN pretrained (new with KIRBy)
+    # -------------------------------------------------------------------------
+    print("\n[4/7] RF + MHG-GNN (pretrained)...")
     mhggnn_train = create_mhg_gnn(train_smiles_fit, batch_size=32)
     mhggnn_test = create_mhg_gnn(test_smiles, batch_size=32)
     
@@ -352,7 +408,7 @@ def main():
     # -------------------------------------------------------------------------
     # Pair 5: DNN + ECFP4 (neural baseline)
     # -------------------------------------------------------------------------
-    print("\n[4/5] DNN + ECFP4...")
+    print("\n[5/7] DNN + ECFP4...")
     
     for strategy in strategies:
         print(f"  Strategy: {strategy}")
@@ -373,7 +429,7 @@ def main():
     # -------------------------------------------------------------------------
     # Pair 6: DNN + PDV (neural baseline)
     # -------------------------------------------------------------------------
-    print("\n[5/5] DNN + PDV...")
+    print("\n[6/7] DNN + PDV...")
     
     for strategy in strategies:
         print(f"  Strategy: {strategy}")
@@ -404,6 +460,27 @@ def main():
                         'probability': probabilities[flip_prob][i]
                     })
             all_calibration_data.append(('DNN', 'PDV', pd.DataFrame(calib_data)))
+    
+    # -------------------------------------------------------------------------
+    # Pair 7: DNN + SNS (neural with SNS)
+    # -------------------------------------------------------------------------
+    print("\n[7/7] DNN + SNS...")
+    
+    for strategy in strategies:
+        print(f"  Strategy: {strategy}")
+        predictions, probabilities = run_experiment_neural(
+            sns_train, train_labels_fit, sns_val, val_labels, sns_test, test_labels,
+            strategy, flip_prob_levels
+        )
+        
+        per_flip, summary, per_class = calculate_classification_metrics(
+            test_labels, predictions, probabilities
+        )
+        per_flip['model'] = 'DNN'
+        per_flip['rep'] = 'SNS'
+        per_flip['strategy'] = strategy
+        all_results.append(per_flip)
+        per_flip.to_csv(results_dir / f'DNN_SNS_{strategy}.csv', index=False)
     
     # =========================================================================
     # PHASE 2: PROBABILISTIC COMPARISON
@@ -563,7 +640,6 @@ def main():
     print("\n" + "="*80)
     print("COMPLETE - Results saved to results/herg/")
     print("="*80)
-
 
 if __name__ == '__main__':
     main()
