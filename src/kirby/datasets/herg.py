@@ -231,7 +231,7 @@ def load_herg_fluid(data_dir: str = 'data/fluid',
     }
 
 
-def load_herg(source: str = 'tdc',
+def load_herg(source: str = 'fluid',
               n_samples: Optional[int] = None,
               ic50_threshold: float = 10.0,
               data_dir: str = 'data',
