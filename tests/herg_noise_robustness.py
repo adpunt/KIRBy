@@ -581,6 +581,8 @@ def main():
     # Combine all results
     combined_df = pd.concat(all_results, ignore_index=True)
     combined_df.to_csv(results_dir / 'all_results.csv', index=False)
+
+    # TODO: fix summary, past here it's broken but all the results get saved
     
     # Calculate NSI and retention using flip_prob_max = 0.6
     summary_table = []
