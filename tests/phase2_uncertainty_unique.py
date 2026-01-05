@@ -12,22 +12,31 @@ Refactored for parallel execution.
 Noise levels are FIXED at [0.0, 0.3, 0.6] for consistency across all experiments.
 Parallelize by MODEL+REP combinations, not by noise levels.
 
+Valid Model/Representation Pairs:
+- QRF: ECFP4, PDV, SNS, SMILES-OHE, MHG-GNN
+- NGBoost: ECFP4, PDV, SNS, SMILES-OHE, MHG-GNN  
+- GP: ECFP4, PDV, SNS, SMILES-OHE, MHG-GNN (uses SMILES internally, others for UNIQUE)
+- BNN: ECFP4, PDV, SNS, SMILES-OHE, MHG-GNN
+
+SMILES-OHE: Character-level one-hot encoding of SMILES strings (padded)
+
+Outputs:
+1. MODEL_REP_uncertainty_values.csv - Per-sample uncertainties for analysis
+2. MODEL_REP_unique_results.csv - UNIQUE evaluation (which UQ metric is best)
+
 Usage:
     # Run specific model+rep (with ALL noise levels)
     python script.py --model QRF --rep ECFP4
-    python script.py --model NGBoost --rep PDV
+    python script.py --model NGBoost --rep SMILES-OHE
     
     # Run all reps for one model
     python script.py --model QRF --rep all
     
     # Run all (sequential)
     python script.py --all
-    
-    # Aggregate results from parallel runs
-    python script.py --aggregate-only
 
 Models: QRF, NGBoost, GP, BNN
-Representations: ECFP4, PDV, SNS, MHG-GNN
+Representations: ECFP4, PDV, SNS, SMILES-OHE, MHG-GNN
 """
 
 import argparse
@@ -42,7 +51,6 @@ import sys
 import yaml
 import tempfile
 from pathlib import Path
-import json
 
 # KIRBy imports
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
@@ -417,29 +425,65 @@ def generate_all_representations(splits):
     
     representations = {}
     
-    print("  [1/4] ECFP4...")
+    print("  [1/5] ECFP4...")
     representations['ECFP4'] = {
         'train': create_ecfp4(train_smiles, n_bits=2048),
         'val': create_ecfp4(val_smiles, n_bits=2048),
-        'test': create_ecfp4(test_smiles, n_bits=2048)
+        'test': create_ecfp4(test_smiles, n_bits=2048),
+        'smiles': {'train': train_smiles, 'val': val_smiles, 'test': test_smiles}
     }
     
-    print("  [2/4] PDV...")
+    print("  [2/5] PDV...")
     representations['PDV'] = {
         'train': create_pdv(train_smiles),
         'val': create_pdv(val_smiles),
-        'test': create_pdv(test_smiles)
+        'test': create_pdv(test_smiles),
+        'smiles': {'train': train_smiles, 'val': val_smiles, 'test': test_smiles}
     }
     
-    print("  [3/4] SNS...")
+    print("  [3/5] SNS...")
     sns_train, featurizer = create_sns(train_smiles, return_featurizer=True)
     representations['SNS'] = {
         'train': sns_train,
         'val': create_sns(val_smiles, reference_featurizer=featurizer),
-        'test': create_sns(test_smiles, reference_featurizer=featurizer)
+        'test': create_sns(test_smiles, reference_featurizer=featurizer),
+        'smiles': {'train': train_smiles, 'val': val_smiles, 'test': test_smiles}
     }
     
-    print("  [4/4] MHG-GNN...")
+    print("  [4/5] SMILES-OHE...")
+    # One-hot encode SMILES strings for NGBoost
+    from sklearn.preprocessing import LabelEncoder
+    
+    # Get all unique characters across all SMILES
+    all_chars = set()
+    for smi in train_smiles + val_smiles + test_smiles:
+        all_chars.update(smi)
+    
+    # Create character to index mapping
+    char_to_idx = {c: i for i, c in enumerate(sorted(all_chars))}
+    vocab_size = len(char_to_idx)
+    
+    # Find max length
+    max_len = max(len(smi) for smi in train_smiles + val_smiles + test_smiles)
+    
+    def smiles_to_ohe(smiles_list, char_to_idx, max_len, vocab_size):
+        """Convert SMILES to padded one-hot encoding"""
+        encoded = np.zeros((len(smiles_list), max_len * vocab_size))
+        for i, smi in enumerate(smiles_list):
+            for j, char in enumerate(smi):
+                if char in char_to_idx:
+                    encoded[i, j * vocab_size + char_to_idx[char]] = 1
+        return encoded
+    
+    representations['SMILES-OHE'] = {
+        'train': smiles_to_ohe(train_smiles, char_to_idx, max_len, vocab_size),
+        'val': smiles_to_ohe(val_smiles, char_to_idx, max_len, vocab_size),
+        'test': smiles_to_ohe(test_smiles, char_to_idx, max_len, vocab_size),
+        'smiles': {'train': train_smiles, 'val': val_smiles, 'test': test_smiles}
+    }
+    print(f"      Vocab size: {vocab_size}, Max length: {max_len}, Feature dim: {max_len * vocab_size}")
+    
+    print("  [5/5] MHG-GNN...")
     representations['MHG-GNN'] = {
         'train': create_mhg_gnn(train_smiles, batch_size=32),
         'val': create_mhg_gnn(val_smiles, batch_size=32),
@@ -451,107 +495,6 @@ def generate_all_representations(splits):
 
 
 # =============================================================================
-# MODEL RUNNERS
-# =============================================================================
-
-def run_qrf(X_train, y_train, X_test, test_labels, sigma, injector, results_dir, rep_name):
-    """Run Quantile Random Forest"""
-    if not HAS_QRF:
-        return None
-    
-    print(f"    QRF + {rep_name} @ σ={sigma:.1f}...", end='', flush=True)
-    
-    y_noisy = injector.inject(y_train, sigma) if sigma > 0 else y_train
-    
-    model = RandomForestQuantileRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-    model.fit(X_train, y_noisy)
-    
-    q16, q50, q84 = model.predict(X_test, quantiles=[0.16, 0.5, 0.84]).T
-    total, aleatoric, epistemic = decompose_qrf_uncertainty(q16, q50, q84, q50)
-    
-    uncertainties = {'total': total, 'aleatoric': aleatoric, 'epistemic': epistemic}
-    
-    unique_res = run_unique_analysis(
-        test_labels, q50, uncertainties, X_test,
-        sigma, 'QRF', rep_name, results_dir
-    )
-    
-    print(" done")
-    return unique_res
-
-
-def run_ngboost(X_train, y_train, X_test, test_labels, sigma, injector, results_dir, rep_name):
-    """Run NGBoost"""
-    if not HAS_NGBOOST:
-        return None
-    
-    print(f"    NGBoost + {rep_name} @ σ={sigma:.1f}...", end='', flush=True)
-    
-    y_noisy = injector.inject(y_train, sigma) if sigma > 0 else y_train
-    
-    model = NGBRegressor(n_estimators=100, random_state=42)
-    model.fit(X_train, y_noisy)
-    
-    predictions, total, aleatoric, epistemic = decompose_ngboost_uncertainty(model, X_test)
-    uncertainties = {'total': total, 'aleatoric': aleatoric, 'epistemic': epistemic}
-    
-    unique_res = run_unique_analysis(
-        test_labels, predictions, uncertainties, X_test,
-        sigma, 'NGBoost', rep_name, results_dir
-    )
-    
-    print(" done")
-    return unique_res
-
-
-def run_gp(train_smiles, y_train, test_smiles, X_test, test_labels, sigma, injector, results_dir, rep_name):
-    """Run Gauche GP"""
-    print(f"    GP + {rep_name} @ σ={sigma:.1f}...", end='', flush=True)
-    
-    y_noisy = injector.inject(y_train, sigma) if sigma > 0 else y_train
-    
-    gp_dict = train_gauche_gp(train_smiles, y_noisy, kernel='weisfeiler_lehman', num_epochs=50)
-    gp_results = predict_gauche_gp(gp_dict, test_smiles)
-    
-    predictions = gp_results['predictions']
-    uncertainties_raw = gp_results['uncertainties']
-    total, aleatoric, epistemic = decompose_gp_uncertainty(predictions, uncertainties_raw)
-    
-    uncertainties = {'total': total, 'aleatoric': aleatoric, 'epistemic': epistemic}
-    
-    unique_res = run_unique_analysis(
-        test_labels, predictions, uncertainties, X_test,
-        sigma, 'GP', rep_name, results_dir
-    )
-    
-    print(" done")
-    return unique_res
-
-
-def run_bnn(X_train, y_train, X_val, y_val, X_test, test_labels, sigma, injector, results_dir, rep_name):
-    """Run Bayesian Neural Network"""
-    if not HAS_BLITZ:
-        return None
-    
-    print(f"    BNN + {rep_name} @ σ={sigma:.1f}...", end='', flush=True)
-    
-    y_noisy = injector.inject(y_train, sigma) if sigma > 0 else y_train
-    
-    predictions_list = train_bnn(X_train, y_noisy, X_val, y_val, X_test, epochs=100)
-    predictions, total, aleatoric, epistemic = decompose_bnn_uncertainty(predictions_list)
-    
-    uncertainties = {'total': total, 'aleatoric': aleatoric, 'epistemic': epistemic}
-    
-    unique_res = run_unique_analysis(
-        test_labels, predictions, uncertainties, X_test,
-        sigma, 'BNN', rep_name, results_dir
-    )
-    
-    print(" done")
-    return unique_res
-
-
-# =============================================================================
 # EXPERIMENT ORCHESTRATION
 # =============================================================================
 
@@ -560,10 +503,11 @@ def run_experiment(model_name, rep_name, noise_levels, splits, representations,
     """
     Run experiments for specific model/representation/noise combinations
     
-    Returns list of UNIQUE results
+    Saves:
+    1. Per-sample uncertainty data (MODEL_REP_uncertainty_values.csv) for analysis
+    2. UNIQUE evaluation results (MODEL_REP_unique_results.csv)
     """
     injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
-    unique_summaries = []
     
     train_labels = np.array(splits['train']['labels'])
     val_labels = np.array(splits['val']['labels'])
@@ -578,42 +522,127 @@ def run_experiment(model_name, rep_name, noise_levels, splits, representations,
     print(f"MODEL: {model_name} | REPRESENTATION: {rep_name}")
     print(f"{'='*80}")
     
+    # Storage for per-sample data
+    all_sample_data = []
+    unique_summaries = []
+    
     for sigma in noise_levels:
-        result = None
+        print(f"\n  σ={sigma:.1f}...", end='', flush=True)
         
+        # Get predictions and uncertainties based on model
         if model_name == 'QRF':
-            result = run_qrf(X_train, train_labels, X_test, test_labels, 
-                           sigma, injector, results_dir, rep_name)
+            if not HAS_QRF:
+                print(" QRF not available, skipping")
+                continue
+                
+            y_noisy = injector.inject(train_labels, sigma) if sigma > 0 else train_labels
+            model = RandomForestQuantileRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+            model.fit(X_train, y_noisy)
+            
+            q16, q50, q84 = model.predict(X_test, quantiles=[0.16, 0.5, 0.84]).T
+            predictions = q50
+            total, aleatoric, epistemic = decompose_qrf_uncertainty(q16, q50, q84, q50)
         
         elif model_name == 'NGBoost':
-            result = run_ngboost(X_train, train_labels, X_test, test_labels,
-                               sigma, injector, results_dir, rep_name)
+            if not HAS_NGBOOST:
+                print(" NGBoost not available, skipping")
+                continue
+                
+            y_noisy = injector.inject(train_labels, sigma) if sigma > 0 else train_labels
+            model = NGBRegressor(n_estimators=100, random_state=42)
+            model.fit(X_train, y_noisy)
+            
+            predictions, total, aleatoric, epistemic = decompose_ngboost_uncertainty(model, X_test)
         
         elif model_name == 'GP':
-            if 'smiles' in rep_data:
-                train_smiles = rep_data['smiles']['train']
-                test_smiles = rep_data['smiles']['test']
-                result = run_gp(train_smiles, train_labels, test_smiles, X_test,
-                              test_labels, sigma, injector, results_dir, rep_name)
-            else:
-                print(f"    GP requires SMILES - skipping for {rep_name}")
+            if 'smiles' not in rep_data:
+                print(" GP requires SMILES, skipping")
+                continue
+                
+            y_noisy = injector.inject(train_labels, sigma) if sigma > 0 else train_labels
+            train_smiles = rep_data['smiles']['train']
+            test_smiles = rep_data['smiles']['test']
+            
+            gp_dict = train_gauche_gp(train_smiles, y_noisy, kernel='weisfeiler_lehman', num_epochs=50)
+            gp_results = predict_gauche_gp(gp_dict, test_smiles)
+            
+            predictions = gp_results['predictions']
+            uncertainties_raw = gp_results['uncertainties']
+            total, aleatoric, epistemic = decompose_gp_uncertainty(predictions, uncertainties_raw)
         
         elif model_name == 'BNN':
-            result = run_bnn(X_train, train_labels, X_val, val_labels, X_test,
-                           test_labels, sigma, injector, results_dir, rep_name)
+            if not HAS_BLITZ:
+                print(" BNN not available, skipping")
+                continue
+                
+            y_noisy = injector.inject(train_labels, sigma) if sigma > 0 else train_labels
+            predictions_list = train_bnn(X_train, y_noisy, X_val, val_labels, X_test, epochs=100)
+            predictions, total, aleatoric, epistemic = decompose_bnn_uncertainty(predictions_list)
         
-        if result:
-            unique_summaries.append(result)
+        else:
+            print(f" Unknown model: {model_name}")
+            continue
+        
+        # Store per-sample data
+        for i in range(len(test_labels)):
+            all_sample_data.append({
+                'model': model_name,
+                'representation': rep_name,
+                'sigma': sigma,
+                'sample_id': i,
+                'y_true_original': test_labels[i],
+                'y_pred_mean': predictions[i],
+                'total_uncertainty': total[i],
+                'aleatoric_uncertainty': aleatoric[i],
+                'epistemic_uncertainty': epistemic[i],
+            })
+        
+        # Run UNIQUE analysis
+        uncertainties = {
+            'total': total,
+            'aleatoric': aleatoric,
+            'epistemic': epistemic
+        }
+        
+        unique_res = run_unique_analysis(
+            test_labels, predictions, uncertainties, X_test,
+            sigma, model_name, rep_name, results_dir
+        )
+        
+        if unique_res:
+            unique_summaries.append(unique_res)
+        
+        print(" done")
     
-    return unique_summaries
+    return all_sample_data, unique_summaries
 
 
-def save_partial_results(results, model_name, rep_name, results_dir):
-    """Save results for a single model/rep combination"""
-    output_file = results_dir / f'partial_{model_name}_{rep_name}.json'
-    with open(output_file, 'w') as f:
-        json.dump(results, f, indent=2)
-    print(f"\nSaved partial results: {output_file}")
+def save_results(sample_data, unique_results, model_name, rep_name, results_dir):
+    """
+    Save both per-sample uncertainty data and UNIQUE evaluation results
+    
+    Args:
+        sample_data: List of dicts with per-sample uncertainties
+        unique_results: List of dicts with UNIQUE summary metrics
+        model_name, rep_name: For filename
+        results_dir: Output directory
+    """
+    if not sample_data and not unique_results:
+        return
+    
+    # Save per-sample uncertainty values (for your analysis script)
+    if sample_data:
+        sample_df = pd.DataFrame(sample_data)
+        sample_file = results_dir / f'{model_name}_{rep_name}_uncertainty_values.csv'
+        sample_df.to_csv(sample_file, index=False)
+        print(f"  ✓ Saved per-sample data: {sample_file.name} ({len(sample_df)} rows)")
+    
+    # Save UNIQUE results (which UQ metric is best)
+    if unique_results:
+        unique_df = pd.DataFrame(unique_results)
+        unique_file = results_dir / f'{model_name}_{rep_name}_unique_results.csv'
+        unique_df.to_csv(unique_file, index=False)
+        print(f"  ✓ Saved UNIQUE results: {unique_file.name}")
 
 
 def aggregate_results(results_dir):
@@ -688,7 +717,7 @@ Parallel execution example (4 jobs):
                        choices=['QRF', 'NGBoost', 'GP', 'BNN', 'all'],
                        help='Which model to run')
     parser.add_argument('--rep', type=str,
-                       choices=['ECFP4', 'PDV', 'SNS', 'MHG-GNN', 'all'],
+                       choices=['ECFP4', 'PDV', 'SNS', 'SMILES-OHE', 'MHG-GNN', 'all'],
                        help='Which representation to use')
     parser.add_argument('--all', action='store_true',
                        help='Run all combinations (sequential)')
@@ -716,25 +745,61 @@ Parallel execution example (4 jobs):
     
     # Define all possible values
     all_models = ['QRF', 'NGBoost', 'GP', 'BNN']
-    all_reps = ['ECFP4', 'PDV', 'SNS', 'MHG-GNN']
+    all_reps = ['ECFP4', 'PDV', 'SNS', 'SMILES-OHE', 'MHG-GNN']
     noise_levels = [0.0, 0.3, 0.6]  # FIXED - keep consistent across all experiments
+    
+    # Define valid model/representation pairs
+    valid_pairs = {
+        'QRF': ['ECFP4', 'PDV', 'SNS', 'SMILES-OHE', 'MHG-GNN'],
+        'NGBoost': ['ECFP4', 'PDV', 'SNS', 'SMILES-OHE', 'MHG-GNN'],
+        'GP': ['ECFP4', 'PDV', 'SNS', 'SMILES-OHE', 'MHG-GNN'],  # GP uses SMILES internally
+        'BNN': ['ECFP4', 'PDV', 'SNS', 'SMILES-OHE', 'MHG-GNN'],
+    }
     
     # Parse arguments
     if args.all:
-        models = all_models
-        reps = all_reps
+        # Run all valid pairs
+        models_to_run = []
+        reps_to_run = []
+        for model in all_models:
+            for rep in valid_pairs[model]:
+                models_to_run.append(model)
+                reps_to_run.append(rep)
     else:
         if not args.model or not args.rep:
             parser.error("Must specify --model and --rep (or use --all)")
         
-        models = all_models if args.model == 'all' else [args.model]
-        reps = all_reps if args.rep == 'all' else [args.rep]
+        # Handle 'all' for models or reps
+        if args.model == 'all':
+            if args.rep == 'all':
+                # All valid combinations
+                models_to_run = []
+                reps_to_run = []
+                for model in all_models:
+                    for rep in valid_pairs[model]:
+                        models_to_run.append(model)
+                        reps_to_run.append(rep)
+            else:
+                # All models that support this rep
+                models_to_run = [m for m in all_models if args.rep in valid_pairs[m]]
+                reps_to_run = [args.rep] * len(models_to_run)
+        elif args.rep == 'all':
+            # All reps for this model
+            models_to_run = [args.model] * len(valid_pairs[args.model])
+            reps_to_run = valid_pairs[args.model]
+        else:
+            # Single model/rep pair - validate
+            if args.rep not in valid_pairs[args.model]:
+                parser.error(f"{args.model} does not support {args.rep}. Valid: {valid_pairs[args.model]}")
+            models_to_run = [args.model]
+            reps_to_run = [args.rep]
     
     print(f"\nConfiguration:")
-    print(f"  Models: {models}")
-    print(f"  Representations: {reps}")
     print(f"  Noise levels: {noise_levels} (FIXED)")
     print(f"  Random seed: {args.random_seed}")
+    print(f"  Model/Rep pairs to run: {len(models_to_run)}")
+    for m, r in zip(models_to_run, reps_to_run):
+        print(f"    - {m}/{r}")
     
     # Load data once
     splits = load_and_split_data(n_samples=args.n_samples, random_state=args.random_seed)
@@ -743,31 +808,22 @@ Parallel execution example (4 jobs):
     representations = generate_all_representations(splits)
     
     # Run experiments
-    for model in models:
-        for rep in reps:
-            # Skip invalid combinations
-            if model == 'GP' and rep not in ['ECFP4', 'PDV', 'SNS', 'MHG-GNN']:
-                print(f"\nSkipping GP + {rep} (requires SMILES)")
-                continue
-            
-            results = run_experiment(
-                model, rep, noise_levels,
-                splits, representations,
-                results_dir
-            )
-            
-            # Save partial results after each model/rep combo
-            save_partial_results(results, model, rep, results_dir)
-    
-    # Final aggregation
-    print("\n" + "="*80)
-    print("AGGREGATING ALL RESULTS")
-    print("="*80)
-    aggregate_results(results_dir)
+    for model, rep in zip(models_to_run, reps_to_run):
+        sample_data, unique_results = run_experiment(
+            model, rep, noise_levels,
+            splits, representations,
+            results_dir
+        )
+        
+        # Save both types of results
+        save_results(sample_data, unique_results, model, rep, results_dir)
     
     print("\n" + "="*80)
     print("COMPLETE")
     print("="*80)
+    print(f"\nResults saved in: {results_dir}/")
+    print(f"  Per-sample data: MODEL_REP_uncertainty_values.csv")
+    print(f"  UNIQUE results: MODEL_REP_unique_results.csv")
 
 
 if __name__ == '__main__':
