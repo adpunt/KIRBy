@@ -385,11 +385,24 @@ def main():
     pdv_val = create_pdv(val_smiles)
     pdv_test = create_pdv(test_smiles)
     
-    print("  [3/3] SNS...")
-    sns_train, vocab = create_sns(train_smiles, n_features=2048, return_vocabulary=True)
-    sns_val = create_sns(val_smiles, n_features=2048, reference_vocabulary=vocab)
-    sns_test = create_sns(test_smiles, n_features=2048, reference_vocabulary=vocab)
-    
+   print("  [3/4] SNS...")
+    sns_train, featurizer = create_sns(
+        train_smiles,
+        vec_dimension=2048,
+        return_featurizer=True
+    )
+    sns_val = create_sns(
+        val_smiles,
+        reference_featurizer=featurizer,
+        vec_dimension=2048  # optional; ignored in transform mode, but fine to keep consistent
+    )
+    sns_test = create_sns(
+        test_smiles,
+        reference_featurizer=featurizer,
+        vec_dimension=2048  # optional
+    )
+
+
     print("  [4/4] MHG-GNN (pretrained)...")
     mhggnn_train = create_mhg_gnn(train_smiles, batch_size=32)
     mhggnn_val = create_mhg_gnn(val_smiles, batch_size=32)
