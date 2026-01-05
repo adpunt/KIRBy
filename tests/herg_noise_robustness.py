@@ -261,7 +261,7 @@ def main():
     # Load hERG
     print("\nLoading hERG dataset...")
     data = load_herg()
-    print(data[:10])
+    print(data)
     
     train_smiles = data['train']['smiles']
     train_labels = np.array(data['train']['labels'])
