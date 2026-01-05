@@ -415,8 +415,8 @@ def load_and_split_data(n_samples=10000, random_state=42):
     return splits
 
 
-def generate_all_representations(splits):
-    """Generate all molecular representations"""
+def generate_needed_representations(splits, needed_reps):
+    """Generate only the molecular representations that are actually needed"""
     print("\nGenerating representations...")
     
     train_smiles = splits['train']['smiles']
@@ -424,72 +424,84 @@ def generate_all_representations(splits):
     test_smiles = splits['test']['smiles']
     
     representations = {}
+    rep_count = 0
+    total_reps = len(needed_reps)
     
-    print("  [1/5] ECFP4...")
-    representations['ECFP4'] = {
-        'train': create_ecfp4(train_smiles, n_bits=2048),
-        'val': create_ecfp4(val_smiles, n_bits=2048),
-        'test': create_ecfp4(test_smiles, n_bits=2048),
-        'smiles': {'train': train_smiles, 'val': val_smiles, 'test': test_smiles}
-    }
+    if 'ECFP4' in needed_reps:
+        rep_count += 1
+        print(f"  [{rep_count}/{total_reps}] ECFP4...")
+        representations['ECFP4'] = {
+            'train': create_ecfp4(train_smiles, n_bits=2048),
+            'val': create_ecfp4(val_smiles, n_bits=2048),
+            'test': create_ecfp4(test_smiles, n_bits=2048),
+            'smiles': {'train': train_smiles, 'val': val_smiles, 'test': test_smiles}
+        }
     
-    print("  [2/5] PDV...")
-    representations['PDV'] = {
-        'train': create_pdv(train_smiles),
-        'val': create_pdv(val_smiles),
-        'test': create_pdv(test_smiles),
-        'smiles': {'train': train_smiles, 'val': val_smiles, 'test': test_smiles}
-    }
+    if 'PDV' in needed_reps:
+        rep_count += 1
+        print(f"  [{rep_count}/{total_reps}] PDV...")
+        representations['PDV'] = {
+            'train': create_pdv(train_smiles),
+            'val': create_pdv(val_smiles),
+            'test': create_pdv(test_smiles),
+            'smiles': {'train': train_smiles, 'val': val_smiles, 'test': test_smiles}
+        }
     
-    print("  [3/5] SNS...")
-    sns_train, featurizer = create_sns(train_smiles, return_featurizer=True)
-    representations['SNS'] = {
-        'train': sns_train,
-        'val': create_sns(val_smiles, reference_featurizer=featurizer),
-        'test': create_sns(test_smiles, reference_featurizer=featurizer),
-        'smiles': {'train': train_smiles, 'val': val_smiles, 'test': test_smiles}
-    }
+    if 'SNS' in needed_reps:
+        rep_count += 1
+        print(f"  [{rep_count}/{total_reps}] SNS...")
+        sns_train, featurizer = create_sns(train_smiles, return_featurizer=True)
+        representations['SNS'] = {
+            'train': sns_train,
+            'val': create_sns(val_smiles, reference_featurizer=featurizer),
+            'test': create_sns(test_smiles, reference_featurizer=featurizer),
+            'smiles': {'train': train_smiles, 'val': val_smiles, 'test': test_smiles}
+        }
     
-    print("  [4/5] SMILES-OHE...")
-    # One-hot encode SMILES strings for NGBoost
-    from sklearn.preprocessing import LabelEncoder
+    if 'SMILES-OHE' in needed_reps:
+        rep_count += 1
+        print(f"  [{rep_count}/{total_reps}] SMILES-OHE...")
+        # One-hot encode SMILES strings for NGBoost
+        from sklearn.preprocessing import LabelEncoder
+        
+        # Get all unique characters across all SMILES
+        all_chars = set()
+        for smi in train_smiles + val_smiles + test_smiles:
+            all_chars.update(smi)
+        
+        # Create character to index mapping
+        char_to_idx = {c: i for i, c in enumerate(sorted(all_chars))}
+        vocab_size = len(char_to_idx)
+        
+        # Find max length
+        max_len = max(len(smi) for smi in train_smiles + val_smiles + test_smiles)
+        
+        def smiles_to_ohe(smiles_list, char_to_idx, max_len, vocab_size):
+            """Convert SMILES to padded one-hot encoding"""
+            encoded = np.zeros((len(smiles_list), max_len * vocab_size))
+            for i, smi in enumerate(smiles_list):
+                for j, char in enumerate(smi):
+                    if char in char_to_idx:
+                        encoded[i, j * vocab_size + char_to_idx[char]] = 1
+            return encoded
+        
+        representations['SMILES-OHE'] = {
+            'train': smiles_to_ohe(train_smiles, char_to_idx, max_len, vocab_size),
+            'val': smiles_to_ohe(val_smiles, char_to_idx, max_len, vocab_size),
+            'test': smiles_to_ohe(test_smiles, char_to_idx, max_len, vocab_size),
+            'smiles': {'train': train_smiles, 'val': val_smiles, 'test': test_smiles}
+        }
+        print(f"      Vocab size: {vocab_size}, Max length: {max_len}, Feature dim: {max_len * vocab_size}")
     
-    # Get all unique characters across all SMILES
-    all_chars = set()
-    for smi in train_smiles + val_smiles + test_smiles:
-        all_chars.update(smi)
-    
-    # Create character to index mapping
-    char_to_idx = {c: i for i, c in enumerate(sorted(all_chars))}
-    vocab_size = len(char_to_idx)
-    
-    # Find max length
-    max_len = max(len(smi) for smi in train_smiles + val_smiles + test_smiles)
-    
-    def smiles_to_ohe(smiles_list, char_to_idx, max_len, vocab_size):
-        """Convert SMILES to padded one-hot encoding"""
-        encoded = np.zeros((len(smiles_list), max_len * vocab_size))
-        for i, smi in enumerate(smiles_list):
-            for j, char in enumerate(smi):
-                if char in char_to_idx:
-                    encoded[i, j * vocab_size + char_to_idx[char]] = 1
-        return encoded
-    
-    representations['SMILES-OHE'] = {
-        'train': smiles_to_ohe(train_smiles, char_to_idx, max_len, vocab_size),
-        'val': smiles_to_ohe(val_smiles, char_to_idx, max_len, vocab_size),
-        'test': smiles_to_ohe(test_smiles, char_to_idx, max_len, vocab_size),
-        'smiles': {'train': train_smiles, 'val': val_smiles, 'test': test_smiles}
-    }
-    print(f"      Vocab size: {vocab_size}, Max length: {max_len}, Feature dim: {max_len * vocab_size}")
-    
-    print("  [5/5] MHG-GNN...")
-    representations['MHG-GNN'] = {
-        'train': create_mhg_gnn(train_smiles, batch_size=32),
-        'val': create_mhg_gnn(val_smiles, batch_size=32),
-        'test': create_mhg_gnn(test_smiles, batch_size=32),
-        'smiles': {'train': train_smiles, 'val': val_smiles, 'test': test_smiles}
-    }
+    if 'MHG-GNN' in needed_reps:
+        rep_count += 1
+        print(f"  [{rep_count}/{total_reps}] MHG-GNN...")
+        representations['MHG-GNN'] = {
+            'train': create_mhg_gnn(train_smiles, batch_size=32),
+            'val': create_mhg_gnn(val_smiles, batch_size=32),
+            'test': create_mhg_gnn(test_smiles, batch_size=32),
+            'smiles': {'train': train_smiles, 'val': val_smiles, 'test': test_smiles}
+        }
     
     return representations
 
@@ -804,8 +816,12 @@ Parallel execution example (4 jobs):
     # Load data once
     splits = load_and_split_data(n_samples=args.n_samples, random_state=args.random_seed)
     
-    # Generate representations once
-    representations = generate_all_representations(splits)
+    # Determine which representations are actually needed
+    needed_reps = set(reps_to_run)
+    print(f"\nRepresentations needed: {sorted(needed_reps)}")
+    
+    # Generate only needed representations
+    representations = generate_needed_representations(splits, needed_reps)
     
     # Run experiments
     for model, rep in zip(models_to_run, reps_to_run):

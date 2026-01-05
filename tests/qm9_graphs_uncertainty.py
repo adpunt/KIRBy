@@ -7,11 +7,13 @@ os.environ['MKL_NUM_THREADS'] = '1'
 QM9 Graph Models - Uncertainty Quantification
 ==============================================
 
+Refactored for parallel execution.
+
 Focused uncertainty quantification for graph neural networks.
 Tests Bayesian GNN variants and Graph-GP under noise.
 
-Purpose: Evaluate which uncertainty quantification methods are most reliable
-when training data contains noise.
+Noise levels: FIXED at [0.0, 0.3, 0.6] for consistency
+Parallelize by MODEL, not by noise levels.
 
 Models:
 - Graph-GP (Weisfeiler-Lehman kernel)
@@ -20,13 +22,23 @@ Models:
 - GIN-BNN (Bayesian Graph Isomorphism Network)
 - MPNN-BNN (Bayesian Message Passing Neural Network)
 
-Noise Strategy: Legacy (Gaussian) only
-Noise Levels: σ ∈ {0.0, 0.2, 0.4, 0.6, 0.8, 1.0} (reduced for speed)
+Outputs:
+1. MODEL_uncertainty_values.csv - Per-sample uncertainties for analysis
+2. MODEL_unique_results.csv - UNIQUE evaluation (which UQ metric is best)
 
-Analysis:
-- Uncertainty-error correlation per noise level
-- Calibration analysis
-- Uncertainty decomposition
+Usage:
+    # Run specific model (with ALL noise levels)
+    python script.py --model Graph-GP
+    python script.py --model GCN-BNN
+    
+    # Run all (sequential)
+    python script.py --all
+    
+    # Parallel execution
+    python script.py --model Graph-GP &
+    python script.py --model GCN-BNN &
+    python script.py --model GAT-BNN &
+    wait
 """
 
 import argparse
@@ -517,8 +529,53 @@ def run_unique_analysis_graphs(y_true, y_pred, uncertainties, sigma, model_name,
 # MAIN SCRIPT
 # =============================================================================
 
+def save_model_results(sample_data, unique_results, model_name, results_dir):
+    """
+    Save both per-sample uncertainty data and UNIQUE evaluation results
+    """
+    if not sample_data and not unique_results:
+        return
+    
+    # Save per-sample uncertainty values
+    if sample_data:
+        sample_df = pd.DataFrame(sample_data)
+        sample_file = results_dir / f'{model_name}_uncertainty_values.csv'
+        sample_df.to_csv(sample_file, index=False)
+        print(f"  ✓ Saved per-sample data: {sample_file.name} ({len(sample_df)} rows)")
+    
+    # Save UNIQUE results
+    if unique_results:
+        unique_df = pd.DataFrame(unique_results)
+        unique_file = results_dir / f'{model_name}_unique_results.csv'
+        unique_df.to_csv(unique_file, index=False)
+        print(f"  ✓ Saved UNIQUE results: {unique_file.name}")
+
+
 def main():
-    parser = argparse.ArgumentParser(description='QM9 Graph Uncertainty Quantification')
+    parser = argparse.ArgumentParser(
+        description='QM9 Graph Uncertainty Quantification',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run specific model (with all noise levels: 0.0, 0.3, 0.6)
+  python script.py --model Graph-GP
+  python script.py --model GCN-BNN
+  
+  # Run all models (sequential)
+  python script.py --all
+  
+  # Parallel execution
+  python script.py --model Graph-GP &
+  python script.py --model GCN-BNN &
+  python script.py --model GAT-BNN &
+  wait
+        """
+    )
+    parser.add_argument('--model', type=str,
+                       choices=['Graph-GP', 'GCN-BNN', 'GAT-BNN', 'GIN-BNN', 'MPNN-BNN', 'all'],
+                       help='Which model to run')
+    parser.add_argument('--all', action='store_true',
+                       help='Run all models (sequential)')
     parser.add_argument('--random-seed', type=int, default=42)
     parser.add_argument('--n-samples', type=int, default=10000)
     args = parser.parse_args()
@@ -529,11 +586,27 @@ def main():
     
     # Configuration
     strategy = 'legacy'
-    sigma_levels = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]  # Reduced for speed
+    sigma_levels = [0.0, 0.3, 0.6]  # FIXED - consistent with other experiments
     results_dir = Path(__file__).parent.parent / 'results' / 'qm9_graphs_uncertainty' / f'seed_{args.random_seed}'
     results_dir.mkdir(parents=True, exist_ok=True)
     
-    # Load QM9
+    # Define models
+    all_models = ['Graph-GP', 'GCN-BNN', 'GAT-BNN', 'GIN-BNN', 'MPNN-BNN']
+    
+    # Parse which models to run
+    if args.all:
+        models_to_run = all_models
+    else:
+        if not args.model:
+            parser.error("Must specify --model (or use --all)")
+        models_to_run = all_models if args.model == 'all' else [args.model]
+    
+    print(f"\nConfiguration:")
+    print(f"  Models to run: {models_to_run}")
+    print(f"  Noise levels: {sigma_levels} (FIXED)")
+    print(f"  Random seed: {args.random_seed}")
+    
+    # Load QM9 once
     print(f"\nLoading QM9 (n={args.n_samples})...")
     raw_data = load_qm9(n_samples=args.n_samples, property_idx=4)
     
@@ -552,182 +625,106 @@ def main():
     
     injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
     
-    all_uncertainty_data = []
-    all_analysis = []
-    
-    # =========================================================================
-    # Model 1: Graph-GP
-    # =========================================================================
-    print("\n" + "="*80)
-    print("Graph-GP (Weisfeiler-Lehman Kernel)")
-    print("="*80)
-    
-    for sigma in sigma_levels:
-        print(f"  σ={sigma:.1f}...", end='')
-        
-        y_noisy = injector.inject(train_labels, sigma) if sigma > 0 else train_labels
-        
-        gp_dict = train_gauche_gp(
-            train_smiles, y_noisy,
-            kernel='weisfeiler_lehman',
-            num_epochs=50
-        )
-        
-        gp_results = predict_gauche_gp(gp_dict, test_smiles)
-        predictions = gp_results['predictions']
-        uncertainties = gp_results['uncertainties']
-        
-        # Store detailed data
-        for i in range(len(test_labels)):
-            all_uncertainty_data.append({
-                'model': 'Graph-GP',
-                'sigma': sigma,
-                'sample_idx': i,
-                'y_true': test_labels[i],
-                'y_pred': predictions[i],
-                'uncertainty': uncertainties[i],
-                'error': abs(test_labels[i] - predictions[i])
-            })
-        
-        # Analyze
-        analysis = analyze_uncertainty(test_labels, predictions, uncertainties, sigma, 'Graph-GP')
-        all_analysis.append(analysis)
-        
-        # UNIQUE analysis - ADDED
-        unique_res = run_unique_analysis_graphs(
-            test_labels, predictions, uncertainties, sigma,
-            'Graph-GP', results_dir
-        )
-        if unique_res:
-            all_analysis[-1].update(unique_res)
-        
-        print(f" ρ={analysis['uncertainty_error_corr']:.3f}")
-    
-    # =========================================================================
-    # Model 2-5: Bayesian GNNs
-    # =========================================================================
-    print("\n" + "="*80)
-    print("Bayesian Graph Neural Networks")
-    print("="*80)
-    
-    graph_models = [
-        (GCNRegressor, 'GCN-BNN'),
-        (GATRegressor, 'GAT-BNN'),
-        (GINRegressor, 'GIN-BNN'),
-        (MPNNRegressor, 'MPNN-BNN')
-    ]
-    
-    for model_class, model_name in graph_models:
-        print(f"\n[{model_name}]")
-        
-        # Convert SMILES to graphs
-        print("  Converting SMILES...", end='')
-        train_graphs = [smiles_to_graph(s) for s in train_smiles]
-        val_graphs = [smiles_to_graph(s) for s in val_smiles]
-        test_graphs = [smiles_to_graph(s) for s in test_smiles]
-        
+    # Convert to graphs once if needed for BNN models
+    if any('BNN' in m for m in models_to_run):
+        print("\nConverting SMILES to graphs...")
+        train_graphs = [smiles_to_graph(s, y) for s, y in zip(train_smiles, train_labels)]
         train_graphs = [g for g in train_graphs if g is not None]
+        val_graphs = [smiles_to_graph(s, y) for s, y in zip(val_smiles, val_labels)]
         val_graphs = [g for g in val_graphs if g is not None]
+        test_graphs = [smiles_to_graph(s, y) for s, y in zip(test_smiles, test_labels)]
         test_graphs = [g for g in test_graphs if g is not None]
-        print(f" {len(train_graphs)} train, {len(test_graphs)} test")
+        print(f"  Converted: {len(train_graphs)} train, {len(val_graphs)} val, {len(test_graphs)} test")
+    
+    # Run each model
+    for model_name in models_to_run:
+        print(f"\n{'='*80}")
+        print(f"MODEL: {model_name}")
+        print(f"{'='*80}")
         
-        num_node_features = train_graphs[0].x.shape[1]
+        all_sample_data = []
+        unique_summaries = []
         
         for sigma in sigma_levels:
-            print(f"  σ={sigma:.1f}...", end='')
+            print(f"  σ={sigma:.1f}...", end='', flush=True)
             
-            y_noisy = injector.inject(train_labels[:len(train_graphs)], sigma) if sigma > 0 else train_labels[:len(train_graphs)]
+            y_noisy = injector.inject(train_labels, sigma) if sigma > 0 else train_labels
             
-            # Attach labels
-            for i, graph in enumerate(train_graphs):
-                graph.y = torch.tensor([y_noisy[i]], dtype=torch.float)
-            for i, graph in enumerate(val_graphs):
-                graph.y = torch.tensor([val_labels[i]], dtype=torch.float)
-            for i, graph in enumerate(test_graphs):
-                graph.y = torch.tensor([test_labels[i]], dtype=torch.float)
+            # Run model
+            if model_name == 'Graph-GP':
+                gp_dict = train_gauche_gp(train_smiles, y_noisy, kernel='weisfeiler_lehman', num_epochs=50)
+                gp_results = predict_gauche_gp(gp_dict, test_smiles)
+                predictions = gp_results['predictions']
+                uncertainties = gp_results['uncertainties']
             
-            # Create loaders
-            train_loader = DataLoader(train_graphs, batch_size=64, shuffle=True)
-            val_loader = DataLoader(val_graphs, batch_size=64, shuffle=False)
-            test_loader = DataLoader(test_graphs, batch_size=64, shuffle=False)
+            else:  # BNN models
+                if model_name == 'GCN-BNN':
+                    model_class = GCNRegressor
+                elif model_name == 'GAT-BNN':
+                    model_class = GATRegressor
+                elif model_name == 'GIN-BNN':
+                    model_class = GINRegressor
+                elif model_name == 'MPNN-BNN':
+                    model_class = MPNNRegressor
+                
+                # Update train graphs with noisy labels
+                train_graphs_noisy = [smiles_to_graph(s, y) for s, y in zip(train_smiles, y_noisy)]
+                train_graphs_noisy = [g for g in train_graphs_noisy if g is not None]
+                
+                # Train model
+                model = model_class(
+                    in_channels=6,
+                    hidden_channels=64,
+                    num_layers=3,
+                    dropout=0.2
+                ).to('cuda' if torch.cuda.is_available() else 'cpu')
+                
+                model = train_bayesian_gnn(
+                    model, train_graphs_noisy, val_graphs,
+                    epochs=50, batch_size=32
+                )
+                
+                # Predict with uncertainty
+                predictions, uncertainties = predict_with_uncertainty_gnn(
+                    model, test_graphs, n_samples=30
+                )
             
-            # Train
-            predictions, uncertainties = train_bayesian_gnn(
-                train_loader, val_loader, test_loader,
-                model_class, num_node_features, epochs=100
-            )
-            
-            # Store detailed data
+            # Store per-sample data
             for i in range(len(test_labels)):
-                all_uncertainty_data.append({
+                all_sample_data.append({
                     'model': model_name,
                     'sigma': sigma,
-                    'sample_idx': i,
-                    'y_true': test_labels[i],
-                    'y_pred': predictions[i],
-                    'uncertainty': uncertainties[i],
-                    'error': abs(test_labels[i] - predictions[i])
+                    'sample_id': i,
+                    'y_true_original': test_labels[i],
+                    'y_pred_mean': predictions[i],
+                    'total_uncertainty': uncertainties[i],
                 })
             
-            # Analyze
-            analysis = analyze_uncertainty(test_labels, predictions, uncertainties, sigma, model_name)
-            all_analysis.append(analysis)
-            
-            # UNIQUE analysis - ADDED
+            # Run UNIQUE (pass single uncertainty array)
             unique_res = run_unique_analysis_graphs(
                 test_labels, predictions, uncertainties, sigma,
                 model_name, results_dir
             )
-            if unique_res:
-                all_analysis[-1].update(unique_res)
             
-            print(f" ρ={analysis['uncertainty_error_corr']:.3f}")
-    
-    # =========================================================================
-    # SAVE RESULTS
-    # =========================================================================
-    print("\n" + "="*80)
-    print("SAVING RESULTS")
-    print("="*80)
-    
-    # Save detailed uncertainty data
-    unc_df = pd.DataFrame(all_uncertainty_data)
-    unc_df.to_csv(results_dir / 'uncertainty_values.csv', index=False)
-    print(f"Saved: {results_dir / 'uncertainty_values.csv'}")
-    
-    # Save analysis
-    analysis_df = pd.DataFrame(all_analysis)
-    analysis_df.to_csv(results_dir / 'uncertainty_analysis.csv', index=False)
-    print(f"Saved: {results_dir / 'uncertainty_analysis.csv'}")
-    
-    # =========================================================================
-    # SUMMARY
-    # =========================================================================
-    print("\n" + "="*80)
-    print("SUMMARY")
-    print("="*80)
-    
-    print("\nUncertainty-Error Correlation by Model:")
-    print(analysis_df.pivot_table(values='uncertainty_error_corr', 
-                                   index='model', columns='sigma'))
-    
-    print("\nMean Correlation by Model (across noise levels):")
-    print(analysis_df.groupby('model')['uncertainty_error_corr'].mean().sort_values(ascending=False))
-    
-    print("\nBest model at high noise (σ=0.6):")
-    high_noise = analysis_df[analysis_df['sigma'] == 0.6].sort_values('uncertainty_error_corr', ascending=False)
-    print(high_noise[['model', 'uncertainty_error_corr', 'calibration_error']].head())
-    
-    # UNIQUE summary if available
-    if 'unique_spearman' in analysis_df.columns:
-        print("\nUNIQUE Spearman Correlations:")
-        print(analysis_df.pivot_table(values='unique_spearman',
-                                      index='model', columns='sigma'))
+            if unique_res:
+                unique_summaries.append(unique_res)
+            
+            # Quick analysis for printing
+            errors = np.abs(test_labels - predictions)
+            corr, _ = spearmanr(uncertainties, errors)
+            print(f" ρ={corr:.3f}")
+        
+        # Save results
+        save_model_results(all_sample_data, unique_summaries, model_name, results_dir)
     
     print("\n" + "="*80)
-    print(f"COMPLETE - Results saved to {results_dir}/")
+    print("COMPLETE")
     print("="*80)
-
+    print(f"\nResults saved in: {results_dir}/")
+    print(f"  Per-sample data: MODEL_uncertainty_values.csv")
+    print(f"  UNIQUE results: MODEL_unique_results.csv")
+    
+-e 
 
 if __name__ == '__main__':
     main()
