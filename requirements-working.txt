@@ -203,7 +203,6 @@ jupyterlab-widgets @ file:///private/var/folders/sy/f16zz6x50xz3113nwtb9bvq00000
 jupyterlab_server @ file:///private/var/folders/c_/qfmhj66j0tn016nkx_th4hxm0000gp/T/abs_57gd4vwlz2/croot/jupyterlab_server_1699555433477/work
 keras==3.9.2
 keyring @ file:///private/var/folders/sy/f16zz6x50xz3113nwtb9bvq00000gp/T/abs_2ds0bchnl2/croot/keyring_1678999223818/work
--e git+https://github.com/adpunt/KIRBy.git@91b3f7c077319e18d3ed89dd0af5e30796c47992#egg=kirby
 kiwisolver @ file:///Users/ec2-user/ci_py311/kiwisolver_1678322457192/work
 lazy-object-proxy @ file:///Users/ec2-user/ci_py311/lazy-object-proxy_1678322504286/work
 lazy_loader @ file:///private/var/folders/sy/f16zz6x50xz3113nwtb9bvq00000gp/T/abs_4a85lv11ob/croot/lazy_loader_1695850116141/work
@@ -257,7 +256,6 @@ nest-asyncio @ file:///private/var/folders/c_/qfmhj66j0tn016nkx_th4hxm0000gp/T/a
 networkx @ file:///private/var/folders/sy/f16zz6x50xz3113nwtb9bvq00000gp/T/abs_666p3uavvu/croot/networkx_1690562005807/work
 ngboost==0.5.8
 nltk @ file:///private/var/folders/sy/f16zz6x50xz3113nwtb9bvq00000gp/T/abs_3dn6s26pv5/croot/nltk_1688114157897/work
--e git+ssh://git@github.com/adpunt/noise_inject.git@73a6d8a5733974563ce16b6999b01974b35c3aff#egg=noiseInject
 notebook @ file:///private/var/folders/sy/f16zz6x50xz3113nwtb9bvq00000gp/T/abs_fal5vav6rv/croot/notebook_1708029873897/work
 notebook_shim @ file:///private/var/folders/c_/qfmhj66j0tn016nkx_th4hxm0000gp/T/abs_3ad004vb8r/croot/notebook-shim_1699455899066/work
 numba @ file:///private/var/folders/sy/f16zz6x50xz3113nwtb9bvq00000gp/T/abs_23vs4df6lp/croot/numba_1707085087632/work
@@ -417,7 +415,6 @@ tables @ file:///private/var/folders/c_/qfmhj66j0tn016nkx_th4hxm0000gp/T/abs_14t
 tabulate @ file:///private/var/folders/sy/f16zz6x50xz3113nwtb9bvq00000gp/T/abs_977ujncxei/croot/tabulate_1701354815519/work
 tblib @ file:///Users/ktietz/demo/mc3/conda-bld/tblib_1629402031467/work
 # Editable install with no version control (tcm==0.1.0)
--e /Users/apunt/repos/tcm
 tenacity @ file:///private/var/folders/sy/f16zz6x50xz3113nwtb9bvq00000gp/T/abs_cct5tq4h70/croot/tenacity_1682972283326/work
 tensorboard==2.16.2
 tensorboard-data-server==0.7.2
