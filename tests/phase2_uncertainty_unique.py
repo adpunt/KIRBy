@@ -7,28 +7,30 @@ os.environ['MKL_NUM_THREADS'] = '1'
 QM9 Uncertainty Quantification + NoiseInject + UNIQUE
 ======================================================
 
-Tests uncertainty quantification under noise using NoiseInject framework.
-Integrates UNIQUE for UQ metric evaluation and comparison.
+Refactored for parallel execution.
 
-Single run (no bootstraps) - matches original Phase 2 experimental design.
+Noise levels are FIXED at [0.0, 0.3, 0.6] for consistency across all experiments.
+Parallelize by MODEL+REP combinations, not by noise levels.
 
-Purpose: 
-- Demonstrate aleatoric vs epistemic uncertainty decomposition
-- Use UNIQUE to determine which UQ metric is most robust to noise
-- Answer: "Which uncertainty should I trust when training data is noisy?"
+Usage:
+    # Run specific model+rep (with ALL noise levels)
+    python script.py --model QRF --rep ECFP4
+    python script.py --model NGBoost --rep PDV
+    
+    # Run all reps for one model
+    python script.py --model QRF --rep all
+    
+    # Run all (sequential)
+    python script.py --all
+    
+    # Aggregate results from parallel runs
+    python script.py --aggregate-only
 
-Models: QRF, NGBoost, Gauche GP, BNN variants (full, last-layer, var)
-Representations: ECFP4, PDV, SNS
-Noise Strategy: legacy (Gaussian) only
-Noise Levels: σ ∈ {0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0}
-
-UNIQUE Integration:
-- For each (model, rep, noise level): create UNIQUE input
-- Evaluate: variance, knn_euclidean, kde_gaussian
-- Compare: ranking, calibration, scoring_rules
-- Output: Which UQ metric best predicts errors at each noise level
+Models: QRF, NGBoost, GP, BNN
+Representations: ECFP4, PDV, SNS, MHG-GNN
 """
 
+import argparse
 import numpy as np
 import pandas as pd
 import torch
@@ -40,6 +42,7 @@ import sys
 import yaml
 import tempfile
 from pathlib import Path
+import json
 
 # KIRBy imports
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
@@ -289,14 +292,11 @@ def run_unique_analysis(y_true, y_pred, uncertainties, features, noise_level,
             'epistemic_variance': uncertainties['epistemic'] ** 2,
         })
         
-        # Add features
-        feature_columns = []
+        # Add features as single column containing arrays (one array per sample)
         if features is not None:
             n_features = min(features.shape[1], 50)
-            for i in range(n_features):
-                col_name = f'feat_{i}'
-                unique_df[col_name] = features[:, i]
-                feature_columns.append(col_name)
+            # FIXED: Create ONE column with list of arrays, not multiple columns
+            unique_df['features'] = [features[i, :n_features].tolist() for i in range(n_samples)]
         
         # Step 2: Create config
         inputs_list = [
@@ -305,10 +305,11 @@ def run_unique_analysis(y_true, y_pred, uncertainties, features, noise_level,
             {'ModelInputType': {'column_name': 'epistemic_variance'}},
         ]
         
-        if feature_columns:
+        # Add feature-based UQ if features provided
+        if features is not None:
             inputs_list.append({
                 'FeaturesInputType': {
-                    'column_name': feature_columns,
+                    'column_name': 'features',  # FIXED: String not list
                     'metrics': ['euclidean_distance']
                 }
             })
@@ -387,244 +388,385 @@ def run_unique_analysis(y_true, y_pred, uncertainties, features, noise_level,
 
 
 # =============================================================================
-# MAIN EXPERIMENT RUNNER
+# DATA LOADING AND SPLITTING
+# =============================================================================
+
+def load_and_split_data(n_samples=10000, random_state=42):
+    """Load QM9 and create train/val/test splits"""
+    print(f"Loading QM9 (n={n_samples})...")
+    raw_data = load_qm9(n_samples=n_samples, property_idx=4)
+    
+    np.random.seed(random_state)
+    torch.manual_seed(random_state)
+    splits = get_qm9_splits(raw_data, splitter='scaffold')
+    
+    print(f"Splits: Train={len(splits['train']['smiles'])}, "
+          f"Val={len(splits['val']['smiles'])}, "
+          f"Test={len(splits['test']['smiles'])}")
+    
+    return splits
+
+
+def generate_all_representations(splits):
+    """Generate all molecular representations"""
+    print("\nGenerating representations...")
+    
+    train_smiles = splits['train']['smiles']
+    val_smiles = splits['val']['smiles']
+    test_smiles = splits['test']['smiles']
+    
+    representations = {}
+    
+    print("  [1/4] ECFP4...")
+    representations['ECFP4'] = {
+        'train': create_ecfp4(train_smiles, n_bits=2048),
+        'val': create_ecfp4(val_smiles, n_bits=2048),
+        'test': create_ecfp4(test_smiles, n_bits=2048)
+    }
+    
+    print("  [2/4] PDV...")
+    representations['PDV'] = {
+        'train': create_pdv(train_smiles),
+        'val': create_pdv(val_smiles),
+        'test': create_pdv(test_smiles)
+    }
+    
+    print("  [3/4] SNS...")
+    sns_train, featurizer = create_sns(train_smiles, return_featurizer=True)
+    representations['SNS'] = {
+        'train': sns_train,
+        'val': create_sns(val_smiles, reference_featurizer=featurizer),
+        'test': create_sns(test_smiles, reference_featurizer=featurizer)
+    }
+    
+    print("  [4/4] MHG-GNN...")
+    representations['MHG-GNN'] = {
+        'train': create_mhg_gnn(train_smiles, batch_size=32),
+        'val': create_mhg_gnn(val_smiles, batch_size=32),
+        'test': create_mhg_gnn(test_smiles, batch_size=32),
+        'smiles': {'train': train_smiles, 'val': val_smiles, 'test': test_smiles}
+    }
+    
+    return representations
+
+
+# =============================================================================
+# MODEL RUNNERS
+# =============================================================================
+
+def run_qrf(X_train, y_train, X_test, test_labels, sigma, injector, results_dir, rep_name):
+    """Run Quantile Random Forest"""
+    if not HAS_QRF:
+        return None
+    
+    print(f"    QRF + {rep_name} @ σ={sigma:.1f}...", end='', flush=True)
+    
+    y_noisy = injector.inject(y_train, sigma) if sigma > 0 else y_train
+    
+    model = RandomForestQuantileRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+    model.fit(X_train, y_noisy)
+    
+    q16, q50, q84 = model.predict(X_test, quantiles=[0.16, 0.5, 0.84]).T
+    total, aleatoric, epistemic = decompose_qrf_uncertainty(q16, q50, q84, q50)
+    
+    uncertainties = {'total': total, 'aleatoric': aleatoric, 'epistemic': epistemic}
+    
+    unique_res = run_unique_analysis(
+        test_labels, q50, uncertainties, X_test,
+        sigma, 'QRF', rep_name, results_dir
+    )
+    
+    print(" done")
+    return unique_res
+
+
+def run_ngboost(X_train, y_train, X_test, test_labels, sigma, injector, results_dir, rep_name):
+    """Run NGBoost"""
+    if not HAS_NGBOOST:
+        return None
+    
+    print(f"    NGBoost + {rep_name} @ σ={sigma:.1f}...", end='', flush=True)
+    
+    y_noisy = injector.inject(y_train, sigma) if sigma > 0 else y_train
+    
+    model = NGBRegressor(n_estimators=100, random_state=42)
+    model.fit(X_train, y_noisy)
+    
+    predictions, total, aleatoric, epistemic = decompose_ngboost_uncertainty(model, X_test)
+    uncertainties = {'total': total, 'aleatoric': aleatoric, 'epistemic': epistemic}
+    
+    unique_res = run_unique_analysis(
+        test_labels, predictions, uncertainties, X_test,
+        sigma, 'NGBoost', rep_name, results_dir
+    )
+    
+    print(" done")
+    return unique_res
+
+
+def run_gp(train_smiles, y_train, test_smiles, X_test, test_labels, sigma, injector, results_dir, rep_name):
+    """Run Gauche GP"""
+    print(f"    GP + {rep_name} @ σ={sigma:.1f}...", end='', flush=True)
+    
+    y_noisy = injector.inject(y_train, sigma) if sigma > 0 else y_train
+    
+    gp_dict = train_gauche_gp(train_smiles, y_noisy, kernel='weisfeiler_lehman', num_epochs=50)
+    gp_results = predict_gauche_gp(gp_dict, test_smiles)
+    
+    predictions = gp_results['predictions']
+    uncertainties_raw = gp_results['uncertainties']
+    total, aleatoric, epistemic = decompose_gp_uncertainty(predictions, uncertainties_raw)
+    
+    uncertainties = {'total': total, 'aleatoric': aleatoric, 'epistemic': epistemic}
+    
+    unique_res = run_unique_analysis(
+        test_labels, predictions, uncertainties, X_test,
+        sigma, 'GP', rep_name, results_dir
+    )
+    
+    print(" done")
+    return unique_res
+
+
+def run_bnn(X_train, y_train, X_val, y_val, X_test, test_labels, sigma, injector, results_dir, rep_name):
+    """Run Bayesian Neural Network"""
+    if not HAS_BLITZ:
+        return None
+    
+    print(f"    BNN + {rep_name} @ σ={sigma:.1f}...", end='', flush=True)
+    
+    y_noisy = injector.inject(y_train, sigma) if sigma > 0 else y_train
+    
+    predictions_list = train_bnn(X_train, y_noisy, X_val, y_val, X_test, epochs=100)
+    predictions, total, aleatoric, epistemic = decompose_bnn_uncertainty(predictions_list)
+    
+    uncertainties = {'total': total, 'aleatoric': aleatoric, 'epistemic': epistemic}
+    
+    unique_res = run_unique_analysis(
+        test_labels, predictions, uncertainties, X_test,
+        sigma, 'BNN', rep_name, results_dir
+    )
+    
+    print(" done")
+    return unique_res
+
+
+# =============================================================================
+# EXPERIMENT ORCHESTRATION
+# =============================================================================
+
+def run_experiment(model_name, rep_name, noise_levels, splits, representations, 
+                   results_dir, strategy='legacy'):
+    """
+    Run experiments for specific model/representation/noise combinations
+    
+    Returns list of UNIQUE results
+    """
+    injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
+    unique_summaries = []
+    
+    train_labels = np.array(splits['train']['labels'])
+    val_labels = np.array(splits['val']['labels'])
+    test_labels = np.array(splits['test']['labels'])
+    
+    rep_data = representations[rep_name]
+    X_train = rep_data['train']
+    X_val = rep_data['val']
+    X_test = rep_data['test']
+    
+    print(f"\n{'='*80}")
+    print(f"MODEL: {model_name} | REPRESENTATION: {rep_name}")
+    print(f"{'='*80}")
+    
+    for sigma in noise_levels:
+        result = None
+        
+        if model_name == 'QRF':
+            result = run_qrf(X_train, train_labels, X_test, test_labels, 
+                           sigma, injector, results_dir, rep_name)
+        
+        elif model_name == 'NGBoost':
+            result = run_ngboost(X_train, train_labels, X_test, test_labels,
+                               sigma, injector, results_dir, rep_name)
+        
+        elif model_name == 'GP':
+            if 'smiles' in rep_data:
+                train_smiles = rep_data['smiles']['train']
+                test_smiles = rep_data['smiles']['test']
+                result = run_gp(train_smiles, train_labels, test_smiles, X_test,
+                              test_labels, sigma, injector, results_dir, rep_name)
+            else:
+                print(f"    GP requires SMILES - skipping for {rep_name}")
+        
+        elif model_name == 'BNN':
+            result = run_bnn(X_train, train_labels, X_val, val_labels, X_test,
+                           test_labels, sigma, injector, results_dir, rep_name)
+        
+        if result:
+            unique_summaries.append(result)
+    
+    return unique_summaries
+
+
+def save_partial_results(results, model_name, rep_name, results_dir):
+    """Save results for a single model/rep combination"""
+    output_file = results_dir / f'partial_{model_name}_{rep_name}.json'
+    with open(output_file, 'w') as f:
+        json.dump(results, f, indent=2)
+    print(f"\nSaved partial results: {output_file}")
+
+
+def aggregate_results(results_dir):
+    """Aggregate all partial results into final summary"""
+    print("\n" + "="*80)
+    print("AGGREGATING RESULTS")
+    print("="*80)
+    
+    partial_files = list(results_dir.glob('partial_*.json'))
+    
+    if not partial_files:
+        print("No partial results found!")
+        return
+    
+    all_results = []
+    for pfile in partial_files:
+        with open(pfile, 'r') as f:
+            data = json.load(f)
+            all_results.extend(data)
+        print(f"Loaded: {pfile.name}")
+    
+    # Create summary
+    unique_df = pd.DataFrame(all_results)
+    unique_df.to_csv(results_dir / 'unique_summary.csv', index=False)
+    
+    print(f"\nTotal experiments: {len(all_results)}")
+    print(f"\nSaved: {results_dir / 'unique_summary.csv'}")
+    
+    # Print summary statistics
+    print("\nBest UQ Metrics by Noise Level:")
+    for sigma in [0.0, 0.3, 0.6]:
+        subset = unique_df[unique_df['sigma'] == sigma]
+        if len(subset) > 0:
+            mode_vals = subset['best_uq_metric'].mode()
+            best = mode_vals.values[0] if len(mode_vals) > 0 else 'N/A'
+            print(f"  σ={sigma:.1f}: {best}")
+
+
+# =============================================================================
+# MAIN
 # =============================================================================
 
 def main():
+    parser = argparse.ArgumentParser(
+        description='QM9 UQ Experiments - Parallel Execution Support',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Run specific model+rep (with all noise levels: 0.0, 0.3, 0.6)
+  python script.py --model QRF --rep ECFP4
+  
+  # Run all reps for one model
+  python script.py --model QRF --rep all
+  
+  # Run everything (sequential)
+  python script.py --all
+  
+  # Aggregate results from parallel runs
+  python script.py --aggregate-only
+  
+Parallel execution example (4 jobs):
+  python script.py --model QRF --rep ECFP4 &
+  python script.py --model QRF --rep PDV &
+  python script.py --model NGBoost --rep ECFP4 &
+  python script.py --model NGBoost --rep PDV &
+  wait
+  python script.py --aggregate-only
+        """
+    )
+    
+    parser.add_argument('--model', type=str, 
+                       choices=['QRF', 'NGBoost', 'GP', 'BNN', 'all'],
+                       help='Which model to run')
+    parser.add_argument('--rep', type=str,
+                       choices=['ECFP4', 'PDV', 'SNS', 'MHG-GNN', 'all'],
+                       help='Which representation to use')
+    parser.add_argument('--all', action='store_true',
+                       help='Run all combinations (sequential)')
+    parser.add_argument('--aggregate-only', action='store_true',
+                       help='Only aggregate existing partial results')
+    parser.add_argument('--n-samples', type=int, default=10000,
+                       help='Number of QM9 samples to load')
+    parser.add_argument('--random-seed', type=int, default=42,
+                       help='Random seed')
+    
+    args = parser.parse_args()
+    
     print("="*80)
     print("QM9 Uncertainty Quantification + NoiseInject + UNIQUE")
     print("="*80)
     
-    # Configuration
-    sigma_levels = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
-    strategy = 'legacy'
-    n_samples = 10000
+    # Setup
     results_dir = Path(__file__).parent.parent / 'results' / 'phase2_uncertainty'
     results_dir.mkdir(parents=True, exist_ok=True)
     
-    # Load QM9
-    print("\nLoading QM9...")
-    raw_data = load_qm9(n_samples=n_samples, property_idx=4)
-    splits = get_qm9_splits(raw_data, splitter='scaffold')
+    # Aggregate only mode
+    if args.aggregate_only:
+        aggregate_results(results_dir)
+        return
     
-    train_smiles = splits['train']['smiles']
-    train_labels = splits['train']['labels']
-    val_smiles = splits['val']['smiles']
-    val_labels = splits['val']['labels']
-    test_smiles = splits['test']['smiles']
-    test_labels = splits['test']['labels']
+    # Define all possible values
+    all_models = ['QRF', 'NGBoost', 'GP', 'BNN']
+    all_reps = ['ECFP4', 'PDV', 'SNS', 'MHG-GNN']
+    noise_levels = [0.0, 0.3, 0.6]  # FIXED - keep consistent across all experiments
     
-    print(f"Splits: Train={len(train_smiles)}, Val={len(val_smiles)}, Test={len(test_smiles)}")
-    
-    # Generate representations
-    print("\nGenerating representations...")
-    
-    print("  [1/3] ECFP4...")
-    ecfp4_train = create_ecfp4(train_smiles, n_bits=2048)
-    ecfp4_val = create_ecfp4(val_smiles, n_bits=2048)
-    ecfp4_test = create_ecfp4(test_smiles, n_bits=2048)
-    
-    print("  [2/3] PDV...")
-    pdv_train = create_pdv(train_smiles)
-    pdv_val = create_pdv(val_smiles)
-    pdv_test = create_pdv(test_smiles)
-    
-    print("  [3/4] SNS...")
-    sns_train, featurizer = create_sns(train_smiles, return_featurizer=True)
-    sns_val = create_sns(val_smiles, reference_featurizer=featurizer)
-    sns_test = create_sns(test_smiles, reference_featurizer=featurizer)
-
-    print("  [4/4] MHG-GNN (pretrained)...")
-    mhggnn_train = create_mhg_gnn(train_smiles, batch_size=32)
-    mhggnn_val = create_mhg_gnn(val_smiles, batch_size=32)
-    mhggnn_test = create_mhg_gnn(test_smiles, batch_size=32)
-    
-    representations = [
-        ('ECFP4', ecfp4_train, ecfp4_val, ecfp4_test),
-        ('PDV', pdv_train, pdv_val, pdv_test),
-        ('SNS', sns_train, sns_val, sns_test),
-        ('MHG-GNN-pretrained', mhggnn_train, mhggnn_val, mhggnn_test)
-    ]
-    
-    # NoiseInject
-    injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
-    
-    # Storage
-    all_results = []
-    unique_summaries = []
-    
-    # ==========================================================================
-    # TEST ALL CONFIGURATIONS
-    # ==========================================================================
-    
-    for rep_name, X_train, X_val, X_test in representations:
-        print(f"\n{'='*80}")
-        print(f"REPRESENTATION: {rep_name}")
-        print(f"{'='*80}")
+    # Parse arguments
+    if args.all:
+        models = all_models
+        reps = all_reps
+    else:
+        if not args.model or not args.rep:
+            parser.error("Must specify --model and --rep (or use --all)")
         
-        # ======================================================================
-        # Model 1: Quantile Random Forest
-        # ======================================================================
-        if HAS_QRF:
-            print(f"\n[QRF + {rep_name}]")
-            
-            for sigma in sigma_levels:
-                print(f"  σ={sigma:.1f}...", end='')
-                
-                # Inject noise
-                y_noisy = injector.inject(train_labels, sigma) if sigma > 0 else train_labels
-                
-                # Train
-                model = RandomForestQuantileRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-                model.fit(X_train, y_noisy)
-                
-                # Predict with quantiles
-                q16, q50, q84 = model.predict(X_test, quantiles=[0.16, 0.5, 0.84]).T
-                
-                # Decompose uncertainty
-                total, aleatoric, epistemic = decompose_qrf_uncertainty(q16, q50, q84, q50)
-                
-                # UNIQUE analysis
-                uncertainties = {
-                    'total': total,
-                    'aleatoric': aleatoric,
-                    'epistemic': epistemic
-                }
-                
-                unique_res = run_unique_analysis(
-                    test_labels, q50, uncertainties, X_test,
-                    sigma, 'QRF', rep_name, results_dir
-                )
-                
-                if unique_res is not None:
-                    unique_summaries.append(unique_res)
-                
-                print(" done")
-        
-        # ======================================================================
-        # Model 2: NGBoost
-        # ======================================================================
-        if HAS_NGBOOST:
-            print(f"\n[NGBoost + {rep_name}]")
-            
-            for sigma in sigma_levels:
-                print(f"  σ={sigma:.1f}...", end='')
-                
-                y_noisy = injector.inject(train_labels, sigma) if sigma > 0 else train_labels
-                
-                model = NGBRegressor(n_estimators=100, random_state=42)
-                model.fit(X_train, y_noisy)
-                
-                predictions, total, aleatoric, epistemic = decompose_ngboost_uncertainty(model, X_test)
-                
-                uncertainties = {
-                    'total': total,
-                    'aleatoric': aleatoric,
-                    'epistemic': epistemic
-                }
-                
-                unique_res = run_unique_analysis(
-                    test_labels, predictions, uncertainties, X_test,
-                    sigma, 'NGBoost', rep_name, results_dir
-                )
-                
-                if unique_res is not None:
-                    unique_summaries.append(unique_res)
-                
-                print(" done")
-        
-        # ======================================================================
-        # Model 3: Gauche GP (only for ECFP4, PDV, SNS, MHG-GNN - needs SMILES)
-        # ======================================================================
-        if rep_name in ['ECFP4', 'PDV', 'SNS', 'MHG-GNN-pretrained']:
-            print(f"\n[Gauche GP + {rep_name}]")
-            
-            for sigma in sigma_levels:
-                print(f"  σ={sigma:.1f}...", end='')
-                
-                y_noisy = injector.inject(train_labels, sigma) if sigma > 0 else train_labels
-                
-                gp_dict = train_gauche_gp(
-                    train_smiles, y_noisy,
-                    kernel='weisfeiler_lehman',
-                    num_epochs=50
-                )
-                
-                gp_results = predict_gauche_gp(gp_dict, test_smiles)
-                predictions = gp_results['predictions']
-                uncertainties_raw = gp_results['uncertainties']
-                
-                total, aleatoric, epistemic = decompose_gp_uncertainty(predictions, uncertainties_raw)
-                
-                uncertainties = {
-                    'total': total,
-                    'aleatoric': aleatoric,
-                    'epistemic': epistemic
-                }
-                
-                unique_res = run_unique_analysis(
-                    test_labels, predictions, uncertainties, X_test,
-                    sigma, 'GP', rep_name, results_dir
-                )
-                
-                if unique_res is not None:
-                    unique_summaries.append(unique_res)
-                
-                print(" done")
-        
-        # ======================================================================
-        # Model 4: Bayesian Neural Network
-        # ======================================================================
-        if HAS_BLITZ:
-            print(f"\n[BNN + {rep_name}]")
-            
-            for sigma in sigma_levels:
-                print(f"  σ={sigma:.1f}...", end='')
-                
-                y_noisy = injector.inject(train_labels, sigma) if sigma > 0 else train_labels
-                
-                predictions_list = train_bnn(X_train, y_noisy, X_val, val_labels, X_test, epochs=100)
-                
-                predictions, total, aleatoric, epistemic = decompose_bnn_uncertainty(predictions_list)
-                
-                uncertainties = {
-                    'total': total,
-                    'aleatoric': aleatoric,
-                    'epistemic': epistemic
-                }
-                
-                unique_res = run_unique_analysis(
-                    test_labels, predictions, uncertainties, X_test,
-                    sigma, 'BNN', rep_name, results_dir
-                )
-                
-                if unique_res is not None:
-                    unique_summaries.append(unique_res)
-                
-                print(" done")
+        models = all_models if args.model == 'all' else [args.model]
+        reps = all_reps if args.rep == 'all' else [args.rep]
     
-    # ==========================================================================
-    # SUMMARY
-    # ==========================================================================
+    print(f"\nConfiguration:")
+    print(f"  Models: {models}")
+    print(f"  Representations: {reps}")
+    print(f"  Noise levels: {noise_levels} (FIXED)")
+    print(f"  Random seed: {args.random_seed}")
+    
+    # Load data once
+    splits = load_and_split_data(n_samples=args.n_samples, random_state=args.random_seed)
+    
+    # Generate representations once
+    representations = generate_all_representations(splits)
+    
+    # Run experiments
+    for model in models:
+        for rep in reps:
+            # Skip invalid combinations
+            if model == 'GP' and rep not in ['ECFP4', 'PDV', 'SNS', 'MHG-GNN']:
+                print(f"\nSkipping GP + {rep} (requires SMILES)")
+                continue
+            
+            results = run_experiment(
+                model, rep, noise_levels,
+                splits, representations,
+                results_dir
+            )
+            
+            # Save partial results after each model/rep combo
+            save_partial_results(results, model, rep, results_dir)
+    
+    # Final aggregation
     print("\n" + "="*80)
-    print("SUMMARY")
+    print("AGGREGATING ALL RESULTS")
     print("="*80)
-    
-    if unique_summaries:
-        unique_df = pd.DataFrame(unique_summaries)
-        unique_df.to_csv(results_dir / 'unique_summary.csv', index=False)
-        
-        print("\nBest UQ Metrics by Noise Level:")
-        for sigma in sigma_levels:
-            subset = unique_df[unique_df['sigma'] == sigma]
-            if len(subset) > 0:
-                print(f"  σ={sigma:.1f}: {subset['best_uq_metric'].mode().values[0] if len(subset['best_uq_metric'].mode()) > 0 else 'N/A'}")
-        
-        print("\nBest UQ Metrics by Model:")
-        print(unique_df.groupby('model')['best_uq_metric'].value_counts())
+    aggregate_results(results_dir)
     
     print("\n" + "="*80)
-    print("COMPLETE - Results saved to results/phase2_uncertainty/")
+    print("COMPLETE")
     print("="*80)
 
 
