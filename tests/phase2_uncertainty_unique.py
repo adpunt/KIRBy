@@ -37,6 +37,8 @@ from torch.utils.data import TensorDataset, DataLoader
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.neighbors import NearestNeighbors
 import sys
+import yaml
+import tempfile
 from pathlib import Path
 
 # KIRBy imports
@@ -54,9 +56,9 @@ from kirby.representations.molecular import (
 # NoiseInject imports
 from noiseInject import NoiseInjectorRegression
 
-# UNIQUE imports
+# UNIQUE imports - FIXED
 try:
-    from unique import Pipeline as UNIQUEPipeline
+    from unique.pipeline import Pipeline
     HAS_UNIQUE = True
 except ImportError:
     print("WARNING: UNIQUE not installed. Install with: pip install unique-uncertainty")
@@ -249,7 +251,7 @@ def train_bnn(X_train, y_train, X_val, y_val, X_test, epochs=100):
 
 
 # =============================================================================
-# UNIQUE INTEGRATION
+# UNIQUE INTEGRATION - FIXED
 # =============================================================================
 
 def run_unique_analysis(y_true, y_pred, uncertainties, features, noise_level, 
@@ -267,78 +269,120 @@ def run_unique_analysis(y_true, y_pred, uncertainties, features, noise_level,
         results_dir: Where to save results
     
     Returns:
-        UNIQUE results DataFrame
+        UNIQUE results dict or None
     """
     if not HAS_UNIQUE:
         print("  UNIQUE not available, skipping")
         return None
     
-    # Create UNIQUE input DataFrame
-    n_samples = len(y_true)
-    n_features = min(features.shape[1], 50)  # Limit features for speed
-    
-    unique_input = pd.DataFrame({
-        'ID': range(n_samples),
-        'Labels': y_true,
-        'Predictions': y_pred,
-        'Subset': ['test'] * n_samples,
-        'Total_Uncertainty': uncertainties['total'],
-        'Aleatoric_Uncertainty': uncertainties['aleatoric'],
-        'Epistemic_Uncertainty': uncertainties['epistemic'],
-        'Absolute_Error': np.abs(y_true - y_pred),
-    })
-    
-    # Add features for distance-based UQ
-    for i in range(n_features):
-        unique_input[f'feat_{i}'] = features[:, i]
-    
-    # UNIQUE configuration
-    config = {
-        'input_types': {
-            'total_uncertainty': {
-                'type': 'model_variance',
-                'column': 'Total_Uncertainty'
-            },
-            'aleatoric_uncertainty': {
-                'type': 'model_variance',
-                'column': 'Aleatoric_Uncertainty'
-            },
-            'epistemic_uncertainty': {
-                'type': 'model_variance',
-                'column': 'Epistemic_Uncertainty'
-            },
-            'features': {
-                'type': 'feature_vector',
-                'columns': [f'feat_{i}' for i in range(n_features)]
-            }
-        },
-        'uq_metrics': [
-            'total_uncertainty',
-            'aleatoric_uncertainty', 
-            'epistemic_uncertainty',
-            'knn_euclidean',
-            'kde_gaussian'
-        ],
-        'evaluation': ['ranking', 'calibration', 'scoring_rules']
-    }
-    
-    # Run UNIQUE
     try:
-        pipeline = UNIQUEPipeline(unique_input, config)
-        unique_results = pipeline.run()
+        n_samples = len(y_true)
         
-        # Save results
-        output_file = results_dir / f'unique_{model_name}_{rep_name}_sigma{noise_level:.1f}.csv'
-        unique_results.to_csv(output_file, index=False)
+        # Step 1: Create DataFrame
+        unique_df = pd.DataFrame({
+            'ID': [f'sample_{i}' for i in range(n_samples)],
+            'labels': y_true,
+            'predictions': y_pred,
+            'which_set': ['TEST'] * n_samples,
+            'total_variance': uncertainties['total'] ** 2,
+            'aleatoric_variance': uncertainties['aleatoric'] ** 2,
+            'epistemic_variance': uncertainties['epistemic'] ** 2,
+        })
         
-        # Print summary
-        print(f"\n  UNIQUE Results (σ={noise_level:.1f}):")
-        print(f"    Best UQ metric: {unique_results['ranking'].iloc[0]}")
+        # Add features
+        feature_columns = []
+        if features is not None:
+            n_features = min(features.shape[1], 50)
+            for i in range(n_features):
+                col_name = f'feat_{i}'
+                unique_df[col_name] = features[:, i]
+                feature_columns.append(col_name)
         
-        return unique_results
+        # Step 2: Create config
+        inputs_list = [
+            {'ModelInputType': {'column_name': 'total_variance'}},
+            {'ModelInputType': {'column_name': 'aleatoric_variance'}},
+            {'ModelInputType': {'column_name': 'epistemic_variance'}},
+        ]
         
+        if feature_columns:
+            inputs_list.append({
+                'FeaturesInputType': {
+                    'column_name': feature_columns,
+                    'metrics': ['euclidean_distance']
+                }
+            })
+        
+        config = {
+            'data_path': None,
+            'output_path': None,
+            'id_column_name': 'ID',
+            'labels_column_name': 'labels',
+            'predictions_column_name': 'predictions',
+            'which_set_column_name': 'which_set',
+            'model_name': f'{model_name}_{rep_name}',
+            'problem_type': 'regression',
+            'mode': 'compact',
+            'inputs_list': inputs_list,
+            'error_models_list': [],
+            'individual_plots': False,
+            'summary_plots': False,
+            'save_plots': False,
+            'evaluate_test_only': True,
+            'display_outputs': False,
+            'n_bootstrap': 50,
+            'verbose': False
+        }
+        
+        # Step 3: Run UNIQUE
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            
+            data_file = tmpdir / 'data.csv'
+            unique_df.to_csv(data_file, index=False)
+            
+            output_dir = tmpdir / 'output'
+            output_dir.mkdir()
+            
+            config['data_path'] = str(data_file)
+            config['output_path'] = str(output_dir)
+            
+            config_file = tmpdir / 'config.yaml'
+            with open(config_file, 'w') as f:
+                yaml.dump(config, f)
+            
+            pipeline = Pipeline.from_config(str(config_file))
+            uq_outputs, eval_results = pipeline.fit()
+            
+            # Save results
+            uq_file = results_dir / f'unique_uq_{model_name}_{rep_name}_sigma{noise_level:.1f}.csv'
+            pd.DataFrame(uq_outputs).to_csv(uq_file, index=False)
+            
+            # Extract best method
+            best_method = 'N/A'
+            best_score = 0.0
+            if 'ranking_metrics' in eval_results:
+                ranking = eval_results['ranking_metrics']
+                if ranking:
+                    best_item = max(ranking.items(), 
+                                  key=lambda x: x[1].get('spearman_correlation', 0))
+                    best_method = best_item[0]
+                    best_score = best_item[1].get('spearman_correlation', 0.0)
+            
+            print(f"\n  UNIQUE Results (σ={noise_level:.1f}):")
+            print(f"    Best UQ metric: {best_method} (ρ={best_score:.3f})")
+            
+            return {
+                'model': model_name,
+                'rep': rep_name,
+                'sigma': noise_level,
+                'best_uq_metric': best_method
+            }
+            
     except Exception as e:
         print(f"  UNIQUE error: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
@@ -453,12 +497,7 @@ def main():
                 )
                 
                 if unique_res is not None:
-                    unique_summaries.append({
-                        'model': 'QRF',
-                        'rep': rep_name,
-                        'sigma': sigma,
-                        'best_uq_metric': unique_res['ranking'].iloc[0] if 'ranking' in unique_res else None
-                    })
+                    unique_summaries.append(unique_res)
                 
                 print(" done")
         
@@ -490,12 +529,7 @@ def main():
                 )
                 
                 if unique_res is not None:
-                    unique_summaries.append({
-                        'model': 'NGBoost',
-                        'rep': rep_name,
-                        'sigma': sigma,
-                        'best_uq_metric': unique_res['ranking'].iloc[0] if 'ranking' in unique_res else None
-                    })
+                    unique_summaries.append(unique_res)
                 
                 print(" done")
         
@@ -534,12 +568,7 @@ def main():
                 )
                 
                 if unique_res is not None:
-                    unique_summaries.append({
-                        'model': 'GP',
-                        'rep': rep_name,
-                        'sigma': sigma,
-                        'best_uq_metric': unique_res['ranking'].iloc[0] if 'ranking' in unique_res else None
-                    })
+                    unique_summaries.append(unique_res)
                 
                 print(" done")
         
@@ -570,12 +599,7 @@ def main():
                 )
                 
                 if unique_res is not None:
-                    unique_summaries.append({
-                        'model': 'BNN',
-                        'rep': rep_name,
-                        'sigma': sigma,
-                        'best_uq_metric': unique_res['ranking'].iloc[0] if 'ranking' in unique_res else None
-                    })
+                    unique_summaries.append(unique_res)
                 
                 print(" done")
     
