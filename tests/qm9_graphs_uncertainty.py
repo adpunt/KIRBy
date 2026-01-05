@@ -39,6 +39,8 @@ from torch_geometric.data import Data, DataLoader
 from torch_geometric.nn import GCNConv, GATConv, GINConv, global_mean_pool
 from scipy.stats import spearmanr
 import sys
+import yaml
+import tempfile
 from pathlib import Path
 from rdkit import Chem
 
@@ -63,6 +65,14 @@ from kirby.representations.molecular import (
 
 # NoiseInject imports
 from noiseInject import NoiseInjectorRegression
+
+# UNIQUE imports - ADDED
+try:
+    from unique.pipeline import Pipeline
+    HAS_UNIQUE = True
+except ImportError:
+    HAS_UNIQUE = False
+    print("WARNING: UNIQUE not installed")
 
 
 # =============================================================================
@@ -122,7 +132,7 @@ def smiles_to_graph(smiles, y_value=None):
 
 
 # =============================================================================
-# GNN MODELS (same as qm9_graphs_noise_robustness.py)
+# GNN MODELS
 # =============================================================================
 
 class GCNRegressor(nn.Module):
@@ -404,6 +414,106 @@ def analyze_uncertainty(y_true, y_pred, uncertainties, sigma, model_name):
 
 
 # =============================================================================
+# UNIQUE INTEGRATION - ADDED
+# =============================================================================
+
+def run_unique_analysis_graphs(y_true, y_pred, uncertainties, sigma, model_name, results_dir):
+    """
+    Run UNIQUE for graph models (simpler - just epistemic uncertainty)
+    
+    Args:
+        y_true: True labels
+        y_pred: Predictions
+        uncertainties: Uncertainty values (std dev)
+        sigma: Noise level
+        model_name: Model name
+        results_dir: Output directory
+    
+    Returns:
+        Dict with UNIQUE results or None
+    """
+    if not HAS_UNIQUE:
+        return None
+    
+    try:
+        n_samples = len(y_true)
+        
+        # Create DataFrame
+        unique_df = pd.DataFrame({
+            'ID': [f'sample_{i}' for i in range(n_samples)],
+            'labels': y_true,
+            'predictions': y_pred,
+            'which_set': ['TEST'] * n_samples,
+            'variance': uncertainties ** 2,  # Convert std to variance
+        })
+        
+        # Config
+        config = {
+            'data_path': None,
+            'output_path': None,
+            'id_column_name': 'ID',
+            'labels_column_name': 'labels',
+            'predictions_column_name': 'predictions',
+            'which_set_column_name': 'which_set',
+            'model_name': model_name,
+            'problem_type': 'regression',
+            'mode': 'compact',
+            'inputs_list': [
+                {'ModelInputType': {'column_name': 'variance'}}
+            ],
+            'error_models_list': [],
+            'individual_plots': False,
+            'summary_plots': False,
+            'save_plots': False,
+            'evaluate_test_only': True,
+            'display_outputs': False,
+            'n_bootstrap': 50,
+            'verbose': False
+        }
+        
+        # Run UNIQUE
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            
+            data_file = tmpdir / 'data.csv'
+            unique_df.to_csv(data_file, index=False)
+            
+            output_dir = tmpdir / 'output'
+            output_dir.mkdir()
+            
+            config['data_path'] = str(data_file)
+            config['output_path'] = str(output_dir)
+            
+            config_file = tmpdir / 'config.yaml'
+            with open(config_file, 'w') as f:
+                yaml.dump(config, f)
+            
+            pipeline = Pipeline.from_config(str(config_file))
+            uq_outputs, eval_results = pipeline.fit()
+            
+            # Save results
+            uq_file = results_dir / f'unique_{model_name}_sigma{sigma:.1f}.csv'
+            pd.DataFrame(uq_outputs).to_csv(uq_file, index=False)
+            
+            # Extract metrics
+            best_method = 'variance'
+            spearman = 0.0
+            if 'ranking_metrics' in eval_results:
+                ranking = eval_results['ranking_metrics']
+                if ranking and 'variance' in ranking:
+                    spearman = ranking['variance'].get('spearman_correlation', 0.0)
+            
+            return {
+                'unique_best_metric': best_method,
+                'unique_spearman': spearman
+            }
+            
+    except Exception as e:
+        print(f"  UNIQUE error: {e}")
+        return None
+
+
+# =============================================================================
 # MAIN SCRIPT
 # =============================================================================
 
@@ -483,6 +593,14 @@ def main():
         analysis = analyze_uncertainty(test_labels, predictions, uncertainties, sigma, 'Graph-GP')
         all_analysis.append(analysis)
         
+        # UNIQUE analysis - ADDED
+        unique_res = run_unique_analysis_graphs(
+            test_labels, predictions, uncertainties, sigma,
+            'Graph-GP', results_dir
+        )
+        if unique_res:
+            all_analysis[-1].update(unique_res)
+        
         print(f" ρ={analysis['uncertainty_error_corr']:.3f}")
     
     # =========================================================================
@@ -555,6 +673,14 @@ def main():
             analysis = analyze_uncertainty(test_labels, predictions, uncertainties, sigma, model_name)
             all_analysis.append(analysis)
             
+            # UNIQUE analysis - ADDED
+            unique_res = run_unique_analysis_graphs(
+                test_labels, predictions, uncertainties, sigma,
+                model_name, results_dir
+            )
+            if unique_res:
+                all_analysis[-1].update(unique_res)
+            
             print(f" ρ={analysis['uncertainty_error_corr']:.3f}")
     
     # =========================================================================
@@ -591,6 +717,12 @@ def main():
     print("\nBest model at high noise (σ=0.6):")
     high_noise = analysis_df[analysis_df['sigma'] == 0.6].sort_values('uncertainty_error_corr', ascending=False)
     print(high_noise[['model', 'uncertainty_error_corr', 'calibration_error']].head())
+    
+    # UNIQUE summary if available
+    if 'unique_spearman' in analysis_df.columns:
+        print("\nUNIQUE Spearman Correlations:")
+        print(analysis_df.pivot_table(values='unique_spearman',
+                                      index='model', columns='sigma'))
     
     print("\n" + "="*80)
     print(f"COMPLETE - Results saved to {results_dir}/")
