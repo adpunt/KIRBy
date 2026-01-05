@@ -260,13 +260,15 @@ def main():
     
     # Load hERG
     print("\nLoading hERG dataset...")
-    data = load_herg()
-    print(data)
-    
-    train_smiles = data['train']['smiles']
-    train_labels = np.array(data['train']['labels'])
-    test_smiles = data['test']['smiles']
-    test_labels = np.array(data['test']['labels'])
+    print("Loading FLuID training set...")
+    train_data = load_herg(source='fluid', use_test=False)
+    print("Loading FLuID test set...")
+    test_data = load_herg(source='fluid', use_test=True)
+
+    train_smiles = train_data['smiles']
+    train_labels = np.array(train_data['labels'])
+    test_smiles = test_data['smiles']
+    test_labels = np.array(test_data['labels'])
     
     # Create validation split for neural models
     n_val = len(train_smiles) // 5
