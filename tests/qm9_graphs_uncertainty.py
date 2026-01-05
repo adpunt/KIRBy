@@ -671,13 +671,23 @@ Examples:
                 train_graphs_noisy = [smiles_to_graph(s, y) for s, y in zip(train_smiles, y_noisy)]
                 train_graphs_noisy = [g for g in train_graphs_noisy if g is not None]
                 
-                # Train model
-                model = model_class(
-                    in_channels=6,
-                    hidden_channels=64,
-                    num_layers=3,
-                    dropout=0.2
-                ).to('cuda' if torch.cuda.is_available() else 'cpu')
+                # Get num_node_features from first graph
+                num_node_features = train_graphs_noisy[0].x.shape[1]
+                
+                # Train model - instantiate with correct signature
+                if model_name == 'GAT-BNN':
+                    model = model_class(
+                        num_node_features=num_node_features,
+                        hidden_dim=128,
+                        num_layers=3,
+                        heads=4
+                    ).to('cuda' if torch.cuda.is_available() else 'cpu')
+                else:
+                    model = model_class(
+                        num_node_features=num_node_features,
+                        hidden_dim=128,
+                        num_layers=3
+                    ).to('cuda' if torch.cuda.is_available() else 'cpu')
                 
                 model = train_bayesian_gnn(
                     model, train_graphs_noisy, val_graphs,
@@ -723,6 +733,7 @@ Examples:
     print(f"\nResults saved in: {results_dir}/")
     print(f"  Per-sample data: MODEL_uncertainty_values.csv")
     print(f"  UNIQUE results: MODEL_unique_results.csv")
+
 
 if __name__ == '__main__':
     main()
