@@ -32,7 +32,7 @@ except ImportError:
     HAS_TORCHBNN = False
     print("WARNING: pip install torchbnn")
 
-from kirby.data.loaders import load_qm9, get_qm9_splits
+from kirby.datasets.qm9 import load_qm9, get_qm9_splits
 from kirby.representations.molecular import create_mhg_gnn
 from noiseInject import NoiseInjectorRegression
 
