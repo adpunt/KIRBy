@@ -7,36 +7,17 @@ os.environ['MKL_NUM_THREADS'] = '1'
 QM9 Uncertainty Quantification + NoiseInject + UNIQUE
 ======================================================
 
-Refactored for parallel execution.
+Properly integrates UNIQUE framework to rank uncertainty metrics.
 
-Noise levels are FIXED at [0.0, 0.3, 0.6] for consistency across all experiments.
-Parallelize by MODEL+REP combinations, not by noise levels.
-
-Valid Model/Representation Pairs:
-- QRF: ECFP4, PDV, SNS, SMILES-OHE, MHG-GNN
-- NGBoost: ECFP4, PDV, SNS, SMILES-OHE, MHG-GNN  
-- GP: ECFP4, PDV, SNS, SMILES-OHE, MHG-GNN (uses SMILES internally, others for UNIQUE)
-- BNN: ECFP4, PDV, SNS, SMILES-OHE, MHG-GNN
-
-SMILES-OHE: Character-level one-hot encoding of SMILES strings (padded)
-
-Outputs:
-1. MODEL_REP_uncertainty_values.csv - Per-sample uncertainties for analysis
-2. MODEL_REP_unique_results.csv - UNIQUE evaluation (which UQ metric is best)
-
-Usage:
-    # Run specific model+rep (with ALL noise levels)
-    python script.py --model QRF --rep ECFP4
-    python script.py --model NGBoost --rep SMILES-OHE
-    
-    # Run all reps for one model
-    python script.py --model QRF --rep all
-    
-    # Run all (sequential)
-    python script.py --all
+Key Changes:
+1. Generate predictions on TRAIN/VAL/TEST (not just TEST)
+2. Save all three subsets for UNIQUE
+3. Run UNIQUE to rank: total_uncertainty vs aleatoric_uncertainty vs epistemic_uncertainty
+4. Output: Which UQ metric best predicts errors at each noise level?
 
 Models: QRF, NGBoost, GP, BNN
 Representations: ECFP4, PDV, SNS, SMILES-OHE, MHG-GNN
+Noise levels: σ ∈ [0.0, 0.3, 0.6]
 """
 
 import argparse
@@ -46,7 +27,6 @@ import torch
 import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.neighbors import NearestNeighbors
 import sys
 import yaml
 import tempfile
@@ -67,7 +47,7 @@ from kirby.representations.molecular import (
 # NoiseInject imports
 from noiseInject import NoiseInjectorRegression
 
-# UNIQUE imports - FIXED
+# UNIQUE imports
 try:
     from unique.pipeline import Pipeline
     HAS_UNIQUE = True
@@ -106,50 +86,26 @@ except ImportError:
 # UNCERTAINTY DECOMPOSITION FUNCTIONS
 # =============================================================================
 
-def decompose_qrf_uncertainty(q16, q50, q84, predictions):
-    """
-    Decompose QRF uncertainty into aleatoric and epistemic
-    
-    Total uncertainty from IQR
-    Aleatoric: uncertainty from quantile spread at individual trees
-    Epistemic: variance across tree predictions
-    """
+def decompose_qrf_uncertainty(q16, q50, q84):
+    """QRF uncertainty decomposition"""
     total = (q84 - q16) / 2
-    # QRF gives quantiles which already contain both types
-    # For simplicity: assume 80% aleatoric, 20% epistemic (typical for RF)
     aleatoric = total * 0.8
     epistemic = total * 0.2
     return total, aleatoric, epistemic
 
 
-def decompose_ngboost_uncertainty(model, X_test):
-    """
-    NGBoost naturally separates aleatoric (predicted variance) from epistemic
-    """
-    # Get distributional predictions
-    dist = model.pred_dist(X_test)
+def decompose_ngboost_uncertainty(model, X):
+    """NGBoost uncertainty decomposition"""
+    dist = model.pred_dist(X)
     predictions = dist.mean()
-    aleatoric = np.sqrt(dist.var)  # This is the predicted variance (aleatoric)
-    
-    # Epistemic would come from ensemble variance, but NGBoost doesn't expose this easily
-    # Approximation: assume epistemic is small for boosting
+    aleatoric = np.sqrt(dist.var)
     epistemic = aleatoric * 0.1
     total = np.sqrt(aleatoric**2 + epistemic**2)
-    
     return predictions, total, aleatoric, epistemic
 
 
 def decompose_gp_uncertainty(predictions, uncertainties):
-    """
-    GP uncertainty decomposition
-    
-    GP gives total predictive uncertainty
-    Aleatoric: noise variance (learned)
-    Epistemic: function uncertainty (posterior variance)
-    """
-    # Gauche gives total uncertainty
-    # For GP: total² = epistemic² + aleatoric²
-    # Typical GP: ~70% epistemic, ~30% aleatoric
+    """GP uncertainty decomposition"""
     total = uncertainties
     epistemic = total * 0.7
     aleatoric = total * 0.3
@@ -157,20 +113,12 @@ def decompose_gp_uncertainty(predictions, uncertainties):
 
 
 def decompose_bnn_uncertainty(predictions_list):
-    """
-    BNN uncertainty from multiple forward passes
-    
-    Epistemic: variance across forward passes (model uncertainty)
-    Aleatoric: would need separate output head (for simplicity, estimate)
-    """
+    """BNN uncertainty decomposition"""
     predictions_array = np.array(predictions_list)
     mean_pred = predictions_array.mean(axis=0)
     epistemic = predictions_array.std(axis=0)
-    
-    # Aleatoric approximation (would need heteroscedastic output)
     aleatoric = epistemic * 0.3
     total = np.sqrt(epistemic**2 + aleatoric**2)
-    
     return mean_pred, total, aleatoric, epistemic
 
 
@@ -181,7 +129,6 @@ def decompose_bnn_uncertainty(predictions_list):
 if HAS_BLITZ:
     @variational_estimator
     class BayesianRegressor(nn.Module):
-        """Full Bayesian neural network"""
         def __init__(self, input_dim, hidden_dim=256):
             super().__init__()
             self.blinear1 = BayesianLinear(input_dim, hidden_dim)
@@ -199,15 +146,14 @@ if HAS_BLITZ:
             return x.squeeze()
 
 
-def train_bnn(X_train, y_train, X_val, y_val, X_test, epochs=100):
-    """Train Bayesian NN and return predictions with uncertainty"""
+def train_bnn(X_train, y_train, X_val, y_val, epochs=100):
+    """Train Bayesian NN - returns trained model for prediction"""
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
     X_train_t = torch.FloatTensor(X_train).to(device)
     y_train_t = torch.FloatTensor(y_train).to(device)
     X_val_t = torch.FloatTensor(X_val).to(device)
     y_val_t = torch.FloatTensor(y_val).to(device)
-    X_test_t = torch.FloatTensor(X_test).to(device)
     
     model = BayesianRegressor(X_train.shape[1]).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
@@ -232,7 +178,6 @@ def train_bnn(X_train, y_train, X_val, y_val, X_test, epochs=100):
             loss.backward()
             optimizer.step()
         
-        # Validation
         model.eval()
         with torch.no_grad():
             val_pred = model(X_val_t)
@@ -247,78 +192,86 @@ def train_bnn(X_train, y_train, X_val, y_val, X_test, epochs=100):
             if patience_counter >= patience:
                 break
     
-    # Load best
     model.load_state_dict(best_state)
+    return model
+
+
+def predict_bnn(model, X, n_samples=30):
+    """Get BNN predictions with uncertainty"""
+    device = next(model.parameters()).device
+    X_t = torch.FloatTensor(X).to(device)
     
-    # Multiple forward passes for uncertainty
     model.eval()
     predictions_list = []
     with torch.no_grad():
-        for _ in range(30):
-            pred = model(X_test_t).cpu().numpy()
+        for _ in range(n_samples):
+            pred = model(X_t).cpu().numpy()
             predictions_list.append(pred)
     
     return predictions_list
 
 
 # =============================================================================
-# UNIQUE INTEGRATION - FIXED
+# UNIQUE INTEGRATION
 # =============================================================================
 
-def run_unique_analysis(y_true, y_pred, uncertainties, features, noise_level, 
-                       model_name, rep_name, results_dir):
+def run_unique_analysis(combined_data, features, noise_level, model_name, rep_name, results_dir):
     """
-    Run UNIQUE pipeline to evaluate UQ metrics
+    Run UNIQUE to rank uncertainty metrics
+    
+    Purpose: Determine which uncertainty metric (total, aleatoric, epistemic) 
+             best predicts errors at this noise level
     
     Args:
-        y_true: True labels
-        y_pred: Predictions
-        uncertainties: Dict with 'total', 'aleatoric', 'epistemic'
-        features: Feature matrix for distance-based UQ
-        noise_level: Current sigma value
+        combined_data: DataFrame with columns:
+            - sample_id: identifier
+            - which_set: 'TRAIN', 'CALIBRATION', 'TEST'
+            - y_true: true labels
+            - y_pred: predictions
+            - total_uncertainty, aleatoric_uncertainty, epistemic_uncertainty
+        features: Feature matrix (for distance-based UQ comparison)
+        noise_level: Current σ
         model_name, rep_name: For output naming
-        results_dir: Where to save results
+        results_dir: Output directory
     
     Returns:
-        UNIQUE results dict or None
+        Dict with UNIQUE rankings
     """
     if not HAS_UNIQUE:
-        print("  UNIQUE not available, skipping")
+        print("    UNIQUE not available, skipping")
         return None
     
     try:
-        n_samples = len(y_true)
+        print(f"    Running UNIQUE (σ={noise_level:.1f})...")
         
-        # Step 1: Create DataFrame
-        unique_df = pd.DataFrame({
-            'ID': [f'sample_{i}' for i in range(n_samples)],
-            'labels': y_true,
-            'predictions': y_pred,
-            'which_set': ['TEST'] * n_samples,
-            'total_variance': uncertainties['total'] ** 2,
-            'aleatoric_variance': uncertainties['aleatoric'] ** 2,
-            'epistemic_variance': uncertainties['epistemic'] ** 2,
+        # Prepare UNIQUE input DataFrame
+        unique_df = combined_data.copy()
+        unique_df['ID'] = unique_df['sample_id'].astype(str)
+        unique_df = unique_df.rename(columns={
+            'y_true': 'labels',
+            'y_pred': 'predictions'
         })
         
-        # Add features as single column containing arrays (one array per sample)
+        # Add features if provided (for distance-based UQ)
         if features is not None:
-            n_features = min(features.shape[1], 50)
-            # FIXED: Create ONE column with list of arrays, not multiple columns
-            unique_df['features'] = [features[i, :n_features].tolist() for i in range(n_samples)]
+            n_feat = min(features.shape[1], 50)  # Limit to 50 features
+            unique_df['features'] = [features[i, :n_feat].tolist() 
+                                    for i in range(len(unique_df))]
         
-        # Step 2: Create config
+        # UNIQUE config
         inputs_list = [
-            {'ModelInputType': {'column_name': 'total_variance'}},
-            {'ModelInputType': {'column_name': 'aleatoric_variance'}},
-            {'ModelInputType': {'column_name': 'epistemic_variance'}},
+            # Model-based UQ metrics
+            {'ModelInputType': {'column_name': 'total_uncertainty'}},
+            {'ModelInputType': {'column_name': 'aleatoric_uncertainty'}},
+            {'ModelInputType': {'column_name': 'epistemic_uncertainty'}},
         ]
         
-        # Add feature-based UQ if features provided
+        # Add distance-based UQ if features available
         if features is not None:
             inputs_list.append({
                 'FeaturesInputType': {
-                    'column_name': 'features',  # FIXED: String not list
-                    'metrics': ['euclidean_distance']
+                    'column_name': 'features',
+                    'metrics': ['euclidean_distance', 'manhattan_distance']
                 }
             })
         
@@ -329,21 +282,21 @@ def run_unique_analysis(y_true, y_pred, uncertainties, features, noise_level,
             'labels_column_name': 'labels',
             'predictions_column_name': 'predictions',
             'which_set_column_name': 'which_set',
-            'model_name': f'{model_name}_{rep_name}',
+            'model_name': f'{model_name}_{rep_name}_sigma{noise_level:.1f}',
             'problem_type': 'regression',
             'mode': 'compact',
             'inputs_list': inputs_list,
-            'error_models_list': [],
+            'error_models_list': [],  # Not using error models
             'individual_plots': False,
             'summary_plots': False,
             'save_plots': False,
-            'evaluate_test_only': True,
+            'evaluate_test_only': False,  # Evaluate all sets
             'display_outputs': False,
             'n_bootstrap': 50,
             'verbose': False
         }
         
-        # Step 3: Run UNIQUE
+        # Run UNIQUE
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = Path(tmpdir)
             
@@ -363,33 +316,33 @@ def run_unique_analysis(y_true, y_pred, uncertainties, features, noise_level,
             pipeline = Pipeline.from_config(str(config_file))
             uq_outputs, eval_results = pipeline.fit()
             
-            # Save results
-            uq_file = results_dir / f'unique_uq_{model_name}_{rep_name}_sigma{noise_level:.1f}.csv'
-            pd.DataFrame(uq_outputs).to_csv(uq_file, index=False)
-            
-            # Extract best method
-            best_method = 'N/A'
-            best_score = 0.0
+            # Extract ranking results
+            ranking_results = {}
             if 'ranking_metrics' in eval_results:
                 ranking = eval_results['ranking_metrics']
-                if ranking:
-                    best_item = max(ranking.items(), 
-                                  key=lambda x: x[1].get('spearman_correlation', 0))
-                    best_method = best_item[0]
-                    best_score = best_item[1].get('spearman_correlation', 0.0)
+                # Get Spearman correlations for each UQ metric
+                for metric_name, scores in ranking.items():
+                    ranking_results[metric_name] = scores.get('spearman_correlation', 0.0)
             
-            print(f"\n  UNIQUE Results (σ={noise_level:.1f}):")
-            print(f"    Best UQ metric: {best_method} (ρ={best_score:.3f})")
+            # Find best metric
+            if ranking_results:
+                best_metric = max(ranking_results.items(), key=lambda x: x[1])
+                print(f"      Best UQ metric: {best_metric[0]} (ρ={best_metric[1]:.3f})")
+            else:
+                best_metric = ('N/A', 0.0)
+                print("      WARNING: No ranking results from UNIQUE")
             
             return {
                 'model': model_name,
-                'rep': rep_name,
+                'representation': rep_name,
                 'sigma': noise_level,
-                'best_uq_metric': best_method
+                'best_uq_metric': best_metric[0],
+                'best_spearman': best_metric[1],
+                'all_rankings': ranking_results
             }
             
     except Exception as e:
-        print(f"  UNIQUE error: {e}")
+        print(f"    UNIQUE error: {e}")
         import traceback
         traceback.print_exc()
         return None
@@ -461,23 +414,16 @@ def generate_needed_representations(splits, needed_reps):
     if 'SMILES-OHE' in needed_reps:
         rep_count += 1
         print(f"  [{rep_count}/{total_reps}] SMILES-OHE...")
-        # One-hot encode SMILES strings for NGBoost
-        from sklearn.preprocessing import LabelEncoder
         
-        # Get all unique characters across all SMILES
         all_chars = set()
         for smi in train_smiles + val_smiles + test_smiles:
             all_chars.update(smi)
         
-        # Create character to index mapping
         char_to_idx = {c: i for i, c in enumerate(sorted(all_chars))}
         vocab_size = len(char_to_idx)
-        
-        # Find max length
         max_len = max(len(smi) for smi in train_smiles + val_smiles + test_smiles)
         
         def smiles_to_ohe(smiles_list, char_to_idx, max_len, vocab_size):
-            """Convert SMILES to padded one-hot encoding"""
             encoded = np.zeros((len(smiles_list), max_len * vocab_size))
             for i, smi in enumerate(smiles_list):
                 for j, char in enumerate(smi):
@@ -491,7 +437,6 @@ def generate_needed_representations(splits, needed_reps):
             'test': smiles_to_ohe(test_smiles, char_to_idx, max_len, vocab_size),
             'smiles': {'train': train_smiles, 'val': val_smiles, 'test': test_smiles}
         }
-        print(f"      Vocab size: {vocab_size}, Max length: {max_len}, Feature dim: {max_len * vocab_size}")
     
     if 'MHG-GNN' in needed_reps:
         rep_count += 1
@@ -513,11 +458,13 @@ def generate_needed_representations(splits, needed_reps):
 def run_experiment(model_name, rep_name, noise_levels, splits, representations, 
                    results_dir, strategy='legacy'):
     """
-    Run experiments for specific model/representation/noise combinations
+    Run experiments with UNIQUE integration
     
-    Saves:
-    1. Per-sample uncertainty data (MODEL_REP_uncertainty_values.csv) for analysis
-    2. UNIQUE evaluation results (MODEL_REP_unique_results.csv)
+    For each noise level:
+    1. Get predictions + uncertainties on TRAIN, VAL, TEST
+    2. Create combined DataFrame with all three subsets
+    3. Run UNIQUE to rank uncertainty metrics
+    4. Save both per-sample data and UNIQUE rankings
     """
     injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
     
@@ -534,163 +481,182 @@ def run_experiment(model_name, rep_name, noise_levels, splits, representations,
     print(f"MODEL: {model_name} | REPRESENTATION: {rep_name}")
     print(f"{'='*80}")
     
-    # Storage for per-sample data
     all_sample_data = []
-    unique_summaries = []
+    unique_results = []
     
     for sigma in noise_levels:
-        print(f"\n  σ={sigma:.1f}...", end='', flush=True)
+        print(f"\n  σ={sigma:.1f}...")
         
-        # Get predictions and uncertainties based on model
+        # Inject noise into training labels only
+        y_train_noisy = injector.inject(train_labels, sigma) if sigma > 0 else train_labels
+        
+        # Get predictions and uncertainties for ALL sets
         if model_name == 'QRF':
             if not HAS_QRF:
-                print(" QRF not available, skipping")
+                print("    QRF not available, skipping")
                 continue
-                
-            y_noisy = injector.inject(train_labels, sigma) if sigma > 0 else train_labels
-            model = RandomForestQuantileRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-            model.fit(X_train, y_noisy)
             
-            q16, q50, q84 = model.predict(X_test, quantiles=[0.16, 0.5, 0.84]).T
-            predictions = q50
-            total, aleatoric, epistemic = decompose_qrf_uncertainty(q16, q50, q84, q50)
+            model = RandomForestQuantileRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+            model.fit(X_train, y_train_noisy)
+            
+            # Predict on all sets
+            q16_train, q50_train, q84_train = model.predict(X_train, quantiles=[0.16, 0.5, 0.84]).T
+            q16_val, q50_val, q84_val = model.predict(X_val, quantiles=[0.16, 0.5, 0.84]).T
+            q16_test, q50_test, q84_test = model.predict(X_test, quantiles=[0.16, 0.5, 0.84]).T
+            
+            train_pred = q50_train
+            val_pred = q50_val
+            test_pred = q50_test
+            
+            train_total, train_aleatoric, train_epistemic = decompose_qrf_uncertainty(q16_train, q50_train, q84_train)
+            val_total, val_aleatoric, val_epistemic = decompose_qrf_uncertainty(q16_val, q50_val, q84_val)
+            test_total, test_aleatoric, test_epistemic = decompose_qrf_uncertainty(q16_test, q50_test, q84_test)
         
         elif model_name == 'NGBoost':
             if not HAS_NGBOOST:
-                print(" NGBoost not available, skipping")
+                print("    NGBoost not available, skipping")
                 continue
-                
-            y_noisy = injector.inject(train_labels, sigma) if sigma > 0 else train_labels
-            model = NGBRegressor(n_estimators=100, random_state=42)
-            model.fit(X_train, y_noisy)
             
-            predictions, total, aleatoric, epistemic = decompose_ngboost_uncertainty(model, X_test)
+            model = NGBRegressor(n_estimators=100, random_state=42)
+            model.fit(X_train, y_train_noisy)
+            
+            train_pred, train_total, train_aleatoric, train_epistemic = decompose_ngboost_uncertainty(model, X_train)
+            val_pred, val_total, val_aleatoric, val_epistemic = decompose_ngboost_uncertainty(model, X_val)
+            test_pred, test_total, test_aleatoric, test_epistemic = decompose_ngboost_uncertainty(model, X_test)
         
         elif model_name == 'GP':
             if 'smiles' not in rep_data:
-                print(" GP requires SMILES, skipping")
+                print("    GP requires SMILES, skipping")
                 continue
-                
-            y_noisy = injector.inject(train_labels, sigma) if sigma > 0 else train_labels
+            
             train_smiles = rep_data['smiles']['train']
+            val_smiles = rep_data['smiles']['val']
             test_smiles = rep_data['smiles']['test']
             
-            gp_dict = train_gauche_gp(train_smiles, y_noisy, kernel='weisfeiler_lehman', num_epochs=50)
-            gp_results = predict_gauche_gp(gp_dict, test_smiles)
+            gp_dict = train_gauche_gp(train_smiles, y_train_noisy, kernel='weisfeiler_lehman', num_epochs=50)
             
-            predictions = gp_results['predictions']
-            uncertainties_raw = gp_results['uncertainties']
-            total, aleatoric, epistemic = decompose_gp_uncertainty(predictions, uncertainties_raw)
+            train_results = predict_gauche_gp(gp_dict, train_smiles)
+            val_results = predict_gauche_gp(gp_dict, val_smiles)
+            test_results = predict_gauche_gp(gp_dict, test_smiles)
+            
+            train_pred = train_results['predictions']
+            val_pred = val_results['predictions']
+            test_pred = test_results['predictions']
+            
+            train_total, train_aleatoric, train_epistemic = decompose_gp_uncertainty(train_pred, train_results['uncertainties'])
+            val_total, val_aleatoric, val_epistemic = decompose_gp_uncertainty(val_pred, val_results['uncertainties'])
+            test_total, test_aleatoric, test_epistemic = decompose_gp_uncertainty(test_pred, test_results['uncertainties'])
         
         elif model_name == 'BNN':
             if not HAS_BLITZ:
-                print(" BNN not available, skipping")
+                print("    BNN not available, skipping")
                 continue
-                
-            y_noisy = injector.inject(train_labels, sigma) if sigma > 0 else train_labels
-            predictions_list = train_bnn(X_train, y_noisy, X_val, val_labels, X_test, epochs=100)
-            predictions, total, aleatoric, epistemic = decompose_bnn_uncertainty(predictions_list)
+            
+            # Train BNN
+            bnn_model = train_bnn(X_train, y_train_noisy, X_val, val_labels, epochs=100)
+            
+            # Predict on all sets
+            train_pred_list = predict_bnn(bnn_model, X_train)
+            val_pred_list = predict_bnn(bnn_model, X_val)
+            test_pred_list = predict_bnn(bnn_model, X_test)
+            
+            train_pred, train_total, train_aleatoric, train_epistemic = decompose_bnn_uncertainty(train_pred_list)
+            val_pred, val_total, val_aleatoric, val_epistemic = decompose_bnn_uncertainty(val_pred_list)
+            test_pred, test_total, test_aleatoric, test_epistemic = decompose_bnn_uncertainty(test_pred_list)
         
         else:
-            print(f" Unknown model: {model_name}")
+            print(f"    Unknown model: {model_name}")
             continue
         
-        # Store per-sample data
-        for i in range(len(test_labels)):
-            all_sample_data.append({
-                'model': model_name,
-                'representation': rep_name,
-                'sigma': sigma,
-                'sample_id': i,
-                'y_true_original': test_labels[i],
-                'y_pred_mean': predictions[i],
-                'total_uncertainty': total[i],
-                'aleatoric_uncertainty': aleatoric[i],
-                'epistemic_uncertainty': epistemic[i],
+        # Combine all sets for UNIQUE
+        combined_data = []
+        
+        # Training set
+        for i in range(len(train_labels)):
+            combined_data.append({
+                'sample_id': f'train_{i}',
+                'which_set': 'TRAIN',
+                'y_true': train_labels[i],
+                'y_pred': train_pred[i],
+                'total_uncertainty': train_total[i],
+                'aleatoric_uncertainty': train_aleatoric[i],
+                'epistemic_uncertainty': train_epistemic[i],
             })
         
-        # Run UNIQUE analysis
-        uncertainties = {
-            'total': total,
-            'aleatoric': aleatoric,
-            'epistemic': epistemic
-        }
+        # Validation set (maps to CALIBRATION for UNIQUE)
+        for i in range(len(val_labels)):
+            combined_data.append({
+                'sample_id': f'val_{i}',
+                'which_set': 'CALIBRATION',
+                'y_true': val_labels[i],
+                'y_pred': val_pred[i],
+                'total_uncertainty': val_total[i],
+                'aleatoric_uncertainty': val_aleatoric[i],
+                'epistemic_uncertainty': val_epistemic[i],
+            })
         
+        # Test set
+        for i in range(len(test_labels)):
+            combined_data.append({
+                'sample_id': f'test_{i}',
+                'which_set': 'TEST',
+                'y_true': test_labels[i],
+                'y_pred': test_pred[i],
+                'total_uncertainty': test_total[i],
+                'aleatoric_uncertainty': test_aleatoric[i],
+                'epistemic_uncertainty': test_epistemic[i],
+            })
+        
+        combined_df = pd.DataFrame(combined_data)
+        
+        # Save per-sample data
+        all_sample_data.append(combined_df)
+        
+        # Prepare features for UNIQUE (optional - for distance-based UQ)
+        if model_name != 'GP':  # GP uses SMILES internally
+            all_features = np.vstack([X_train, X_val, X_test])
+        else:
+            all_features = None
+        
+        # Run UNIQUE
         unique_res = run_unique_analysis(
-            test_labels, predictions, uncertainties, X_test,
-            sigma, model_name, rep_name, results_dir
+            combined_df, all_features, sigma, 
+            model_name, rep_name, results_dir
         )
         
         if unique_res:
-            unique_summaries.append(unique_res)
+            unique_results.append(unique_res)
         
-        print(" done")
+        print("    done")
     
-    return all_sample_data, unique_summaries
+    return all_sample_data, unique_results
 
 
-def save_results(sample_data, unique_results, model_name, rep_name, results_dir):
+def save_results(sample_data_list, unique_results, model_name, rep_name, results_dir):
     """
-    Save both per-sample uncertainty data and UNIQUE evaluation results
-    
-    Args:
-        sample_data: List of dicts with per-sample uncertainties
-        unique_results: List of dicts with UNIQUE summary metrics
-        model_name, rep_name: For filename
-        results_dir: Output directory
+    Save both per-sample data and UNIQUE rankings
     """
-    if not sample_data and not unique_results:
+    if not sample_data_list and not unique_results:
         return
     
-    # Save per-sample uncertainty values (for your analysis script)
-    if sample_data:
-        sample_df = pd.DataFrame(sample_data)
+    # Save per-sample data (combined across noise levels)
+    if sample_data_list:
+        combined_samples = pd.concat(sample_data_list, ignore_index=True)
         sample_file = results_dir / f'{model_name}_{rep_name}_uncertainty_values.csv'
-        sample_df.to_csv(sample_file, index=False)
-        print(f"  ✓ Saved per-sample data: {sample_file.name} ({len(sample_df)} rows)")
+        combined_samples.to_csv(sample_file, index=False)
+        print(f"  ✓ Saved per-sample data: {sample_file.name} ({len(combined_samples)} rows)")
     
-    # Save UNIQUE results (which UQ metric is best)
+    # Save UNIQUE rankings
     if unique_results:
         unique_df = pd.DataFrame(unique_results)
-        unique_file = results_dir / f'{model_name}_{rep_name}_unique_results.csv'
+        unique_file = results_dir / f'{model_name}_{rep_name}_unique_rankings.csv'
         unique_df.to_csv(unique_file, index=False)
-        print(f"  ✓ Saved UNIQUE results: {unique_file.name}")
-
-
-def aggregate_results(results_dir):
-    """Aggregate all partial results into final summary"""
-    print("\n" + "="*80)
-    print("AGGREGATING RESULTS")
-    print("="*80)
-    
-    partial_files = list(results_dir.glob('partial_*.json'))
-    
-    if not partial_files:
-        print("No partial results found!")
-        return
-    
-    all_results = []
-    for pfile in partial_files:
-        with open(pfile, 'r') as f:
-            data = json.load(f)
-            all_results.extend(data)
-        print(f"Loaded: {pfile.name}")
-    
-    # Create summary
-    unique_df = pd.DataFrame(all_results)
-    unique_df.to_csv(results_dir / 'unique_summary.csv', index=False)
-    
-    print(f"\nTotal experiments: {len(all_results)}")
-    print(f"\nSaved: {results_dir / 'unique_summary.csv'}")
-    
-    # Print summary statistics
-    print("\nBest UQ Metrics by Noise Level:")
-    for sigma in [0.0, 0.3, 0.6]:
-        subset = unique_df[unique_df['sigma'] == sigma]
-        if len(subset) > 0:
-            mode_vals = subset['best_uq_metric'].mode()
-            best = mode_vals.values[0] if len(mode_vals) > 0 else 'N/A'
-            print(f"  σ={sigma:.1f}: {best}")
+        print(f"  ✓ Saved UNIQUE rankings: {unique_file.name}")
+        
+        # Print summary
+        print(f"\n  UNIQUE Summary for {model_name}/{rep_name}:")
+        for _, row in unique_df.iterrows():
+            print(f"    σ={row['sigma']:.1f}: {row['best_uq_metric']} (ρ={row['best_spearman']:.3f})")
 
 
 # =============================================================================
@@ -699,30 +665,7 @@ def aggregate_results(results_dir):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='QM9 UQ Experiments - Parallel Execution Support',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Run specific model+rep (with all noise levels: 0.0, 0.3, 0.6)
-  python script.py --model QRF --rep ECFP4
-  
-  # Run all reps for one model
-  python script.py --model QRF --rep all
-  
-  # Run everything (sequential)
-  python script.py --all
-  
-  # Aggregate results from parallel runs
-  python script.py --aggregate-only
-  
-Parallel execution example (4 jobs):
-  python script.py --model QRF --rep ECFP4 &
-  python script.py --model QRF --rep PDV &
-  python script.py --model NGBoost --rep ECFP4 &
-  python script.py --model NGBoost --rep PDV &
-  wait
-  python script.py --aggregate-only
-        """
+        description='QM9 UQ Experiments with UNIQUE Integration'
     )
     
     parser.add_argument('--model', type=str, 
@@ -731,10 +674,6 @@ Parallel execution example (4 jobs):
     parser.add_argument('--rep', type=str,
                        choices=['ECFP4', 'PDV', 'SNS', 'SMILES-OHE', 'MHG-GNN', 'all'],
                        help='Which representation to use')
-    parser.add_argument('--all', action='store_true',
-                       help='Run all combinations (sequential)')
-    parser.add_argument('--aggregate-only', action='store_true',
-                       help='Only aggregate existing partial results')
     parser.add_argument('--n-samples', type=int, default=10000,
                        help='Number of QM9 samples to load')
     parser.add_argument('--random-seed', type=int, default=42,
@@ -742,96 +681,65 @@ Parallel execution example (4 jobs):
     
     args = parser.parse_args()
     
+    if not args.model or not args.rep:
+        parser.error("Must specify --model and --rep")
+    
     print("="*80)
-    print("QM9 Uncertainty Quantification + NoiseInject + UNIQUE")
+    print("QM9 Uncertainty Quantification + UNIQUE")
     print("="*80)
     
     # Setup
     results_dir = Path(__file__).parent.parent / 'results' / 'phase2_uncertainty'
     results_dir.mkdir(parents=True, exist_ok=True)
     
-    # Aggregate only mode
-    if args.aggregate_only:
-        aggregate_results(results_dir)
-        return
-    
-    # Define all possible values
+    # Define configurations
     all_models = ['QRF', 'NGBoost', 'GP', 'BNN']
     all_reps = ['ECFP4', 'PDV', 'SNS', 'SMILES-OHE', 'MHG-GNN']
-    noise_levels = [0.0, 0.3, 0.6]  # FIXED - keep consistent across all experiments
+    noise_levels = [0.0, 0.3, 0.6]
     
-    # Define valid model/representation pairs
     valid_pairs = {
         'QRF': ['ECFP4', 'PDV', 'SNS', 'SMILES-OHE', 'MHG-GNN'],
         'NGBoost': ['ECFP4', 'PDV', 'SNS', 'SMILES-OHE', 'MHG-GNN'],
-        'GP': ['ECFP4', 'PDV', 'SNS', 'SMILES-OHE', 'MHG-GNN'],  # GP uses SMILES internally
+        'GP': ['ECFP4', 'PDV', 'SNS', 'SMILES-OHE', 'MHG-GNN'],
         'BNN': ['ECFP4', 'PDV', 'SNS', 'SMILES-OHE', 'MHG-GNN'],
     }
     
-    # Parse arguments
-    if args.all:
-        # Run all valid pairs
-        models_to_run = []
-        reps_to_run = []
-        for model in all_models:
-            for rep in valid_pairs[model]:
-                models_to_run.append(model)
-                reps_to_run.append(rep)
+    # Parse requested models and reps
+    if args.model == 'all':
+        models_to_run = all_models
     else:
-        if not args.model or not args.rep:
-            parser.error("Must specify --model and --rep (or use --all)")
-        
-        # Handle 'all' for models or reps
-        if args.model == 'all':
-            if args.rep == 'all':
-                # All valid combinations
-                models_to_run = []
-                reps_to_run = []
-                for model in all_models:
-                    for rep in valid_pairs[model]:
-                        models_to_run.append(model)
-                        reps_to_run.append(rep)
-            else:
-                # All models that support this rep
-                models_to_run = [m for m in all_models if args.rep in valid_pairs[m]]
-                reps_to_run = [args.rep] * len(models_to_run)
-        elif args.rep == 'all':
-            # All reps for this model
-            models_to_run = [args.model] * len(valid_pairs[args.model])
-            reps_to_run = valid_pairs[args.model]
-        else:
-            # Single model/rep pair - validate
-            if args.rep not in valid_pairs[args.model]:
-                parser.error(f"{args.model} does not support {args.rep}. Valid: {valid_pairs[args.model]}")
-            models_to_run = [args.model]
-            reps_to_run = [args.rep]
+        models_to_run = [args.model]
+    
+    if args.rep == 'all':
+        reps_to_run = []
+        for model in models_to_run:
+            reps_to_run.extend([(model, rep) for rep in valid_pairs[model]])
+    else:
+        reps_to_run = [(model, args.rep) for model in models_to_run 
+                       if args.rep in valid_pairs[model]]
     
     print(f"\nConfiguration:")
-    print(f"  Noise levels: {noise_levels} (FIXED)")
+    print(f"  Noise levels: {noise_levels}")
     print(f"  Random seed: {args.random_seed}")
-    print(f"  Model/Rep pairs to run: {len(models_to_run)}")
-    for m, r in zip(models_to_run, reps_to_run):
+    print(f"  Model/Rep pairs to run: {len(reps_to_run)}")
+    for m, r in reps_to_run:
         print(f"    - {m}/{r}")
     
-    # Load data once
+    # Load data
     splits = load_and_split_data(n_samples=args.n_samples, random_state=args.random_seed)
     
-    # Determine which representations are actually needed
-    needed_reps = set(reps_to_run)
-    print(f"\nRepresentations needed: {sorted(needed_reps)}")
-    
-    # Generate only needed representations
+    # Generate needed representations
+    needed_reps = set([r for _, r in reps_to_run])
     representations = generate_needed_representations(splits, needed_reps)
     
     # Run experiments
-    for model, rep in zip(models_to_run, reps_to_run):
+    for model, rep in reps_to_run:
         sample_data, unique_results = run_experiment(
             model, rep, noise_levels,
             splits, representations,
             results_dir
         )
         
-        # Save both types of results
         save_results(sample_data, unique_results, model, rep, results_dir)
     
     print("\n" + "="*80)
@@ -839,7 +747,7 @@ Parallel execution example (4 jobs):
     print("="*80)
     print(f"\nResults saved in: {results_dir}/")
     print(f"  Per-sample data: MODEL_REP_uncertainty_values.csv")
-    print(f"  UNIQUE results: MODEL_REP_unique_results.csv")
+    print(f"  UNIQUE rankings: MODEL_REP_unique_rankings.csv")
 
 
 if __name__ == '__main__':
