@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
 """
-KIRBy Hybrid Master - TIER 3 COMPREHENSIVE (~30-60 min)
+KIRBy Hybrid Master - COMPREHENSIVE EVALUATION VERSION (~10-15 min)
 
-Tests a NEW feature selection method across:
-- Datasets: ESOL, hERG FLuID, hERG ChEMBL, QM9 (4 datasets)
-- Representations: ECFP4, PDV, mol2vec, Graph Kernel, MHG-GNN, GNN (6 reps)
-  + Optional: MoLFormer, ChemBERTa (if GPU available)
-- Models: RandomForest, XGBoost, LightGBM, MLP (4 models)
-- Sample sizes: 100, 250, 500, 1000, 2000 (5 sizes)
-- Hybrids: All pairwise + comprehensive combinations (20+ hybrids)
+Complete evaluation across all datasets and configurations.
 
-TOTAL: 4 datasets × 4 models × 5 sample sizes × (6-8 reps + 20 hybrids) = 2,000+ experiments
+Tests:
+1. QM9 HOMO-LUMO gap (scaffold split) - PRIMARY
+2. ESOL solubility (regression)
+3. hERG cardiotoxicity (classification)
 
-Goal: Publication-ready comprehensive validation showing:
-  - KIRBy hybrids > individual SOTA methods
-  - Feature reduction effectiveness across scales
-  - Model robustness across sample sizes
+All with:
+- All baseline reps (ECFP4, PDV, mol2vec, mhggnn)
+- Multiple models (RF, XGBoost, MLP)
+- Full n_per_rep sweep [25, 50, 100, 200, 500, 1000, -1]
+
+Use this for: Final evaluation before thesis, comprehensive comparisons
 """
 
 import os
@@ -26,92 +25,97 @@ import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.neural_network import MLPClassifier, MLPRegressor
-from sklearn.metrics import (accuracy_score, roc_auc_score, f1_score, 
+from sklearn.metrics import (accuracy_score, roc_auc_score, f1_score,
                              mean_squared_error, r2_score, mean_absolute_error)
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, RobustScaler
 import xgboost as xgb
-try:
-    import lightgbm as lgb
-    HAS_LIGHTGBM = True
-except:
-    HAS_LIGHTGBM = False
 import time
 import json
 from datetime import datetime
-from typing import Dict, Callable, Tuple
-from itertools import combinations
-import matplotlib.pyplot as plt
-import seaborn as sns
 
 import sys
 sys.path.insert(0, '/mnt/user-data/outputs/src')
 
-from kirby.datasets.esol import load_esol_combined
-from kirby.datasets.herg import load_herg, get_herg_splits
 from kirby.datasets.qm9 import load_qm9, get_qm9_splits
+from kirby.datasets.esol import load_esol_combined
+from kirby.datasets.herg import load_herg
 from kirby.representations.molecular import (
     create_ecfp4,
     create_pdv,
     create_mol2vec,
-    create_graph_kernel,
-    create_mhg_gnn,
-    finetune_gnn,
-    encode_from_model
+    create_mhg_gnn
 )
 
 
-def default_feature_selector(rep_dict: Dict[str, np.ndarray], 
-                             labels: np.ndarray, 
-                             n_per_rep: int = 50) -> np.ndarray:
-    """
-    Default KIRBy feature selection (mutual information).
+def create_hybrid_wrapper(rep_dict, labels, n_per_rep, selection_method='tree_importance',
+                         feature_info=None):
+    """Wrapper for feature selection with train/test alignment"""
+    from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+    from sklearn.preprocessing import StandardScaler
     
-    YOUR NEW METHOD GOES HERE - Replace this function with your method!
+    # Keep everything case
+    if n_per_rep == -1:
+        all_features = []
+        for name, X in rep_dict.items():
+            X_clipped = np.clip(X, -1e10, 1e10)
+            X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
+            all_features.append(X_clipped)
+        result = np.hstack(all_features)
+        return result, feature_info
     
-    This includes numerical stability fixes to prevent overflow.
-    
-    Args:
-        rep_dict: {'rep_name': features_array}
-        labels: Target labels
-        n_per_rep: Features to select per representation
-        
-    Returns:
-        Selected features (n_samples, n_selected_features)
-    """
-    from sklearn.feature_selection import mutual_info_regression, mutual_info_classif
-    
-    # Determine task type
-    is_classification = len(np.unique(labels)) < 10
-    mi_func = mutual_info_classif if is_classification else mutual_info_regression
-    
-    selected_features = []
-    
+    # Clean the data
+    clean_reps = {}
     for name, X in rep_dict.items():
-        # FIX: Clip extreme values to prevent overflow
         X_clipped = np.clip(X, -1e10, 1e10)
-        
-        # FIX: Replace inf/nan with reasonable values
         X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
-        
-        # Compute MI with safe values
-        mi_scores = mi_func(X_clipped, labels, random_state=42)
-        
-        # FIX: Handle case where MI calculation failed
-        if np.any(np.isnan(mi_scores)) or np.any(np.isinf(mi_scores)):
-            mi_scores = np.nan_to_num(mi_scores, nan=0.0)
-        
-        # Select top n_per_rep
-        n_select = min(n_per_rep, len(mi_scores))
-        top_idx = np.argsort(mi_scores)[-n_select:]
-        
-        # Use clipped version for output
-        selected_features.append(X_clipped[:, top_idx])
+        clean_reps[name] = X_clipped
     
-    return np.hstack(selected_features)
+    # If feature_info provided, apply existing selection (for test set)
+    if feature_info is not None:
+        selected_parts = []
+        for rep_name in clean_reps.keys():
+            X = clean_reps[rep_name]
+            indices = feature_info[rep_name]['selected_indices']
+            X_selected = X[:, indices]
+            selected_parts.append(X_selected)
+        return np.hstack(selected_parts).astype(np.float32), feature_info
+    
+    # Compute new selection (for train set)
+    is_classification = len(np.unique(labels)) < 10
+    selected_features = []
+    feature_info_new = {}
+    
+    for name, X in clean_reps.items():
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        
+        if is_classification:
+            model = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
+        else:
+            model = RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)
+        
+        model.fit(X_scaled, labels)
+        importances = model.feature_importances_
+        
+        if np.any(np.isnan(importances)) or np.any(np.isinf(importances)):
+            importances = np.nan_to_num(importances, nan=0.0)
+        
+        n_select = min(n_per_rep, X.shape[1])
+        top_idx = np.argsort(importances)[-n_select:][::-1]
+        
+        X_selected = X[:, top_idx]
+        selected_features.append(X_selected)
+        
+        feature_info_new[name] = {
+            'selected_indices': top_idx,
+            'importance_scores': importances[top_idx],
+            'n_features': n_select
+        }
+    
+    return np.hstack(selected_features).astype(np.float32), feature_info_new
 
 
 def evaluate_regression(y_true, y_pred):
-    """Regression metrics"""
     return {
         'mae': mean_absolute_error(y_true, y_pred),
         'rmse': np.sqrt(mean_squared_error(y_true, y_pred)),
@@ -120,7 +124,6 @@ def evaluate_regression(y_true, y_pred):
 
 
 def evaluate_classification(y_true, y_pred, y_prob):
-    """Classification metrics"""
     return {
         'acc': accuracy_score(y_true, y_pred),
         'auc': roc_auc_score(y_true, y_prob),
@@ -128,501 +131,621 @@ def evaluate_classification(y_true, y_pred, y_prob):
     }
 
 
-def load_dataset(dataset_name: str):
-    """Load dataset"""
-    print(f"\nLoading {dataset_name}...")
-    start = time.time()
+def test_single(X_train, X_test, y_train, y_test, model, is_classification, model_name=''):
+    """Test single representation with appropriate scaler"""
     
-    if dataset_name == 'esol':
-        data = load_esol_combined(splitter='scaffold')
-        train_smiles = data['train']['smiles']
-        train_labels = data['train']['labels']
-        test_smiles = data['test']['smiles']
-        test_labels = data['test']['labels']
-        is_classification = False
-        
-    elif dataset_name == 'herg_fluid':
-        train_data = load_herg(source='fluid', use_test=False)
-        test_data = load_herg(source='fluid', use_test=True)
-        train_smiles = train_data['smiles']
-        train_labels = train_data['labels']
-        test_smiles = test_data['smiles']
-        test_labels = test_data['labels']
-        is_classification = True
-        
-    elif dataset_name == 'herg_chembl':
-        data = load_herg(source='chembl')
-        splits = get_herg_splits(data, splitter='scaffold')
-        train_smiles = splits['train']['smiles'] + splits['val']['smiles']
-        train_labels = np.concatenate([splits['train']['labels'], splits['val']['labels']])
-        test_smiles = splits['test']['smiles']
-        test_labels = splits['test']['labels']
-        is_classification = True
-        
-    elif dataset_name == 'qm9':
-        raw_data = load_qm9(n_samples=5000, property_idx=4)
-        splits = get_qm9_splits(raw_data, splitter='scaffold')
-        train_smiles = splits['train']['smiles'] + splits['val']['smiles']
-        train_labels = np.concatenate([splits['train']['labels'], splits['val']['labels']])
-        test_smiles = splits['test']['smiles']
-        test_labels = splits['test']['labels']
-        is_classification = False
+    # Check for NaN/inf - crash if found
+    if np.any(np.isnan(X_train)) or np.any(np.isinf(X_train)):
+        raise ValueError(f"NaN/inf in X_train for {model_name}")
+    if np.any(np.isnan(X_test)) or np.any(np.isinf(X_test)):
+        raise ValueError(f"NaN/inf in X_test for {model_name}")
     
-    elapsed = time.time() - start
-    print(f"  Loaded: {len(train_labels)} train, {len(test_labels)} test ({elapsed:.2f}s)")
+    # Use RobustScaler for MLP, StandardScaler for others
+    if 'MLP' in model_name:
+        scaler = RobustScaler()
+    else:
+        scaler = StandardScaler()
     
-    return train_smiles, train_labels, test_smiles, test_labels, is_classification
-
-
-def create_representations_comprehensive(train_smiles, test_smiles, train_labels, 
-                                        val_smiles, val_labels, is_classification,
-                                        include_finetuned=True):
-    """Create ALL representations including fine-tuned neural models"""
-    print("\nCreating comprehensive representations...")
-    start = time.time()
-    
-    # Static representations
-    reps_train = {
-        'ecfp4': create_ecfp4(train_smiles, n_bits=2048),
-        'pdv': create_pdv(train_smiles),
-        'mol2vec': create_mol2vec(train_smiles),
-        'mhggnn': create_mhg_gnn(train_smiles)
-    }
-    
-    reps_test = {
-        'ecfp4': create_ecfp4(test_smiles, n_bits=2048),
-        'pdv': create_pdv(test_smiles),
-        'mol2vec': create_mol2vec(test_smiles),
-        'mhggnn': create_mhg_gnn(test_smiles)
-    }
-    
-    # Graph kernel
-    print("  Computing graph kernel...")
-    graph_train, vocab = create_graph_kernel(
-        train_smiles, kernel='weisfeiler_lehman', n_features=100, return_vocabulary=True
-    )
-    graph_test = create_graph_kernel(
-        test_smiles, kernel='weisfeiler_lehman', n_features=100, reference_vocabulary=vocab
-    )
-    reps_train['graph_kernel'] = graph_train
-    reps_test['graph_kernel'] = graph_test
-    
-    # Fine-tuned GNN
-    if include_finetuned:
-        print("  Fine-tuning GNN...")
-        gnn_model = finetune_gnn(
-            train_smiles, train_labels,
-            val_smiles, val_labels,
-            gnn_type='gcn', hidden_dim=128, epochs=50
-        )
-        reps_train['gnn'] = encode_from_model(gnn_model, train_smiles)
-        reps_test['gnn'] = encode_from_model(gnn_model, test_smiles)
-    
-    elapsed = time.time() - start
-    print(f"Representations created ({elapsed:.2f}s)")
-    for name, X in reps_train.items():
-        print(f"  {name}: {X.shape}")
-    
-    return reps_train, reps_test
-
-
-def test_single_representation(X_train, X_test, y_train, y_test, 
-                               model, is_classification):
-    """Test single representation"""
-    scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
     
     model.fit(X_train_scaled, y_train)
     y_pred = model.predict(X_test_scaled)
     
+    # Check predictions
+    if np.any(np.isnan(y_pred)) or np.any(np.isinf(y_pred)):
+        raise ValueError(f"NaN/inf in predictions for {model_name}")
+    
     if is_classification:
         y_prob = model.predict_proba(X_test_scaled)[:, 1]
-        metrics = evaluate_classification(y_test, y_pred, y_prob)
+        return evaluate_classification(y_test, y_pred, y_prob)
     else:
-        metrics = evaluate_regression(y_test, y_pred)
-    
-    return metrics
+        return evaluate_regression(y_test, y_pred)
 
 
-def test_dataset_comprehensive(dataset_name: str,
-                               feature_selector: Callable,
-                               models: Dict[str, Callable],
-                               sample_sizes: list,
-                               n_per_rep: int = 50,
-                               include_finetuned: bool = True):
-    """Comprehensive testing on one dataset"""
+def run_comprehensive_evaluation(n_per_rep_values=[25, 50, 100, 200, 500, 1000, -1]):
+    """Comprehensive evaluation across all datasets"""
     
-    print(f"\n{'='*80}")
-    print(f"DATASET: {dataset_name.upper()}")
-    print(f"{'='*80}")
-    
-    # Load data
-    train_smiles, train_labels, test_smiles, test_labels, is_classification = load_dataset(dataset_name)
-    
-    # Validation split for fine-tuning
-    n_val = len(train_smiles) // 5
-    val_smiles = train_smiles[:n_val]
-    val_labels = train_labels[:n_val]
-    train_smiles_fit = train_smiles[n_val:]
-    train_labels_fit = train_labels[n_val:]
-    
-    # Create representations
-    reps_train, reps_test = create_representations_comprehensive(
-        train_smiles_fit, test_smiles, train_labels_fit,
-        val_smiles, val_labels, is_classification,
-        include_finetuned
-    )
+    print("="*100)
+    print("KIRBY COMPREHENSIVE EVALUATION")
+    print("="*100)
+    print("\nDatasets:")
+    print("  1. QM9 HOMO-LUMO gap (scaffold split) - PRIMARY")
+    print("  2. ESOL solubility (scaffold split)")
+    print("  3. hERG cardiotoxicity (FLuID)")
+    print("\nModels: RF, XGBoost, MLP")
+    print(f"n_per_rep values: {n_per_rep_values}")
+    print("="*100)
     
     results = []
-    
-    # Test each sample size
-    for n_samples in sample_sizes:
-        if n_samples > len(train_labels_fit):
-            continue
-            
-        print(f"\n{'-'*80}")
-        print(f"Sample size: {n_samples}")
-        print(f"{'-'*80}")
-        
-        # Subsample
-        indices = np.random.choice(len(train_labels_fit), n_samples, replace=False)
-        train_sub_labels = train_labels_fit[indices]
-        reps_train_sub = {name: X[indices] for name, X in reps_train.items()}
-        
-        # Test individual representations
-        print("\n  Individual representations:")
-        for rep_name, X_train in reps_train_sub.items():
-            X_test = reps_test[rep_name]
-            
-            for model_name, model_fn in models.items():
-                start = time.time()
-                
-                model = model_fn()
-                metrics = test_single_representation(X_train, X_test, train_sub_labels,
-                                                    test_labels, model, is_classification)
-                
-                elapsed = time.time() - start
-                
-                result = {
-                    'dataset': dataset_name,
-                    'representation': rep_name,
-                    'n_samples': n_samples,
-                    'n_features_input': X_train.shape[1],
-                    'n_features_selected': X_train.shape[1],
-                    'feature_reduction': 0.0,
-                    'model': model_name,
-                    'is_hybrid': False,
-                    'time': elapsed,
-                    **metrics
-                }
-                
-                results.append(result)
-                
-                metric_str = f"AUC={metrics['auc']:.4f}" if is_classification else f"R²={metrics['r2']:.4f}"
-                print(f"    [{model_name:12s}] {rep_name:15s} {X_train.shape[1]:6d} feats → {metric_str} ({elapsed:.2f}s)")
-        
-        # Test hybrids
-        print(f"\n  Comprehensive hybrids:")
-        
-        rep_names = list(reps_train_sub.keys())
-        
-        # All pairwise
-        hybrid_combos = list(combinations(rep_names, 2))
-        
-        # Key triplets
-        triplets = [
-            ('ecfp4', 'pdv', 'mol2vec'),
-            ('pdv', 'mol2vec', 'mhggnn'),
-            ('ecfp4', 'graph_kernel', 'mhggnn'),
-        ]
-        if 'gnn' in rep_names:
-            triplets.extend([
-                ('pdv', 'mhggnn', 'gnn'),
-                ('ecfp4', 'pdv', 'gnn')
-            ])
-        
-        hybrid_combos.extend(triplets)
-        
-        # Full combination
-        if len(rep_names) >= 4:
-            hybrid_combos.append(tuple(rep_names))
-        
-        for combo in hybrid_combos:
-            start_hybrid = time.time()
-            
-            # Create hybrid
-            hybrid_dict = {name: reps_train_sub[name] for name in combo}
-            X_train_hybrid = feature_selector(hybrid_dict, train_sub_labels, n_per_rep)
-            
-            hybrid_dict_test = {name: reps_test[name] for name in combo}
-            X_test_hybrid = feature_selector(hybrid_dict_test, test_labels, n_per_rep)
-            
-            hybrid_time = time.time() - start_hybrid
-            
-            n_input = sum(hybrid_dict[k].shape[1] for k in hybrid_dict)
-            n_selected = X_train_hybrid.shape[1]
-            reduction = (1 - n_selected / n_input) * 100
-            
-            for model_name, model_fn in models.items():
-                start = time.time()
-                
-                model = model_fn()
-                metrics = test_single_representation(X_train_hybrid, X_test_hybrid,
-                                                    train_sub_labels, test_labels,
-                                                    model, is_classification)
-                
-                elapsed = time.time() - start
-                
-                result = {
-                    'dataset': dataset_name,
-                    'representation': '+'.join(combo),
-                    'n_samples': n_samples,
-                    'n_features_input': n_input,
-                    'n_features_selected': n_selected,
-                    'feature_reduction': reduction,
-                    'model': model_name,
-                    'is_hybrid': True,
-                    'hybrid_time': hybrid_time,
-                    'time': elapsed + hybrid_time,
-                    **metrics
-                }
-                
-                results.append(result)
-                
-                metric_str = f"AUC={metrics['auc']:.4f}" if is_classification else f"R²={metrics['r2']:.4f}"
-                combo_str = '+'.join(combo)
-                print(f"    [{model_name:12s}] {combo_str:35s} {n_input:6d}→{n_selected:5d} ({reduction:4.1f}%) → {metric_str} ({elapsed:.2f}s)")
-    
-    return results
-
-
-def analyze_comprehensive(all_results: list):
-    """Publication-ready comprehensive analysis"""
-    df = pd.DataFrame(all_results)
-    
-    print("\n" + "="*80)
-    print("TIER 3 COMPREHENSIVE ANALYSIS")
-    print("Publication-Ready Results")
-    print("="*80)
-    
-    # 1. Executive summary
-    print("\n1. EXECUTIVE SUMMARY:")
-    print("-"*80)
-    
-    n_datasets = df['dataset'].nunique()
-    n_models = df['model'].nunique()
-    n_reps = df[~df['is_hybrid']]['representation'].nunique()
-    n_hybrids = df[df['is_hybrid']]['representation'].nunique()
-    
-    print(f"\nExperiments run: {len(df)}")
-    print(f"  Datasets: {n_datasets}")
-    print(f"  Models: {n_models}")
-    print(f"  Representations: {n_reps}")
-    print(f"  Hybrid combinations: {n_hybrids}")
-    
-    # Overall hybrid vs baseline
-    metric = 'auc' if 'auc' in df.columns else 'r2'
-    baseline_avg = df[~df['is_hybrid']][metric].mean()
-    hybrid_avg = df[df['is_hybrid']][metric].mean()
-    
-    print(f"\nOVERALL RESULTS:")
-    print(f"  Baseline average {metric.upper()}: {baseline_avg:.4f}")
-    print(f"  Hybrid average {metric.upper()}: {hybrid_avg:.4f}")
-    print(f"  Overall improvement: {((hybrid_avg - baseline_avg) / baseline_avg * 100):+.2f}%")
-    
-    # Feature reduction
-    avg_reduction = df[df['is_hybrid']]['feature_reduction'].mean()
-    print(f"\nFEATURE REDUCTION:")
-    print(f"  Average reduction: {avg_reduction:.1f}%")
-    print(f"  Range: {df[df['is_hybrid']]['feature_reduction'].min():.1f}% - {df[df['is_hybrid']]['feature_reduction'].max():.1f}%")
-    
-    # 2. Per-dataset detailed results
-    print("\n\n2. DETAILED RESULTS PER DATASET:")
-    print("-"*80)
-    
-    for dataset in df['dataset'].unique():
-        df_ds = df[df['dataset'] == dataset]
-        
-        best_overall = df_ds.loc[df_ds[metric].idxmax()]
-        best_baseline = df_ds[~df_ds['is_hybrid']].loc[df_ds[~df_ds['is_hybrid']][metric].idxmax()]
-        best_hybrid = df_ds[df_ds['is_hybrid']].loc[df_ds[df_ds['is_hybrid']][metric].idxmax()]
-        
-        print(f"\n{dataset.upper()}:")
-        print(f"  Best: {best_overall['representation']} ({best_overall['model']})")
-        print(f"    {metric.upper()}: {best_overall[metric]:.4f}, n={best_overall['n_samples']:.0f}, features={best_overall['n_features_selected']:.0f}")
-        
-        print(f"  Best baseline: {best_baseline['representation']} ({best_baseline['model']})")
-        print(f"    {metric.upper()}: {best_baseline[metric]:.4f}")
-        
-        print(f"  Best hybrid: {best_hybrid['representation']} ({best_hybrid['model']})")
-        print(f"    {metric.upper()}: {best_hybrid[metric]:.4f}")
-        print(f"    Features: {best_hybrid['n_features_input']:.0f} → {best_hybrid['n_features_selected']:.0f} ({best_hybrid['feature_reduction']:.1f}% reduction)")
-        
-        improvement = ((best_hybrid[metric] - best_baseline[metric]) / best_baseline[metric]) * 100
-        if improvement > 0:
-            print(f"    ✓✓✓ KIRBY WINS: +{improvement:.2f}% improvement with {best_hybrid['feature_reduction']:.1f}% fewer features!")
-        else:
-            print(f"    Baseline better by: {-improvement:.2f}%")
-    
-    # 3. Model comparison
-    print("\n\n3. MODEL COMPARISON:")
-    print("-"*80)
-    
-    for model in sorted(df['model'].unique()):
-        df_m = df[df['model'] == model]
-        
-        base_avg = df_m[~df_m['is_hybrid']][metric].mean()
-        hybrid_avg = df_m[df_m['is_hybrid']][metric].mean()
-        
-        print(f"\n{model}:")
-        print(f"  Baseline: {base_avg:.4f}")
-        print(f"  Hybrid:   {hybrid_avg:.4f}")
-        print(f"  Δ: {((hybrid_avg - base_avg) / base_avg * 100):+.2f}%")
-    
-    # 4. Sample size analysis
-    print("\n\n4. SAMPLE SIZE ROBUSTNESS:")
-    print("-"*80)
-    
-    for dataset in df['dataset'].unique():
-        df_ds = df[df['dataset'] == dataset]
-        
-        print(f"\n{dataset.upper()}:")
-        print(f"  {'n':>6} {'Baseline':>10} {'Hybrid':>10} {'Improvement':>12}")
-        print(f"  {'-'*6} {'-'*10} {'-'*10} {'-'*12}")
-        
-        for n in sorted(df_ds['n_samples'].unique()):
-            df_n = df_ds[df_ds['n_samples'] == n]
-            base_best = df_n[~df_n['is_hybrid']][metric].max()
-            hybrid_best = df_n[df_n['is_hybrid']][metric].max()
-            
-            improvement = ((hybrid_best - base_best) / base_best) * 100
-            
-            print(f"  {n:6.0f} {base_best:10.4f} {hybrid_best:10.4f} {improvement:+11.2f}%")
-    
-    # 5. Key findings for publication
-    print("\n\n5. KEY FINDINGS FOR PUBLICATION:")
-    print("-"*80)
-    
-    # Best improvements
-    hybrids = df[df['is_hybrid']].copy()
-    baselines = df[~df['is_hybrid']].copy()
-    
-    # Group by dataset and find best improvement
-    best_improvements = []
-    for dataset in df['dataset'].unique():
-        df_ds = df[df['dataset'] == dataset]
-        
-        base_best = df_ds[~df_ds['is_hybrid']][metric].max()
-        hybrid_best_row = df_ds[df_ds['is_hybrid']].loc[df_ds[df_ds['is_hybrid']][metric].idxmax()]
-        
-        improvement = ((hybrid_best_row[metric] - base_best) / base_best) * 100
-        
-        best_improvements.append({
-            'dataset': dataset,
-            'improvement': improvement,
-            'reduction': hybrid_best_row['feature_reduction'],
-            'hybrid': hybrid_best_row['representation']
-        })
-    
-    print("\nBest improvements per dataset:")
-    for item in sorted(best_improvements, key=lambda x: x['improvement'], reverse=True):
-        print(f"  {item['dataset']:15s}: +{item['improvement']:5.2f}% with {item['reduction']:4.1f}% feature reduction")
-        print(f"    Hybrid: {item['hybrid']}")
-    
-    # Statistical significance (if enough samples)
-    print("\n\nSTATISTICAL SUMMARY:")
-    print(f"  Hybrids beat baseline in {sum(1 for x in best_improvements if x['improvement'] > 0)}/{len(best_improvements)} datasets")
-    print(f"  Average improvement: {np.mean([x['improvement'] for x in best_improvements]):.2f}%")
-    print(f"  Average feature reduction: {np.mean([x['reduction'] for x in best_improvements]):.1f}%")
-    
-    return df
-
-
-def main():
-    print("="*80)
-    print("KIRBy Hybrid Master - TIER 3 COMPREHENSIVE")
-    print("Publication-Ready Complete Testing Suite")
-    print("="*80)
-    
-    # Configuration
-    datasets = ['esol', 'herg_fluid', 'herg_chembl', 'qm9']
-    sample_sizes = [100, 250, 500, 1000, 2000]
-    n_per_rep = 50
-    include_finetuned = True  # Set to False to skip GNN fine-tuning
-    
-    # Use default feature selector
-    feature_selector = default_feature_selector
-    
-    # Track timing
     overall_start = time.time()
     
-    # Run experiments
-    all_results = []
+    # ========================================================================
+    # QM9 HOMO-LUMO GAP - PRIMARY TEST
+    # ========================================================================
+    print(f"\n{'='*80}")
+    print("DATASET 1: QM9 HOMO-LUMO Gap (Scaffold Split)")
+    print(f"{'='*80}")
     
-    for dataset in datasets:
-        # Models
-        if dataset in ['esol', 'qm9']:
-            models = {
-                'RandomForest': lambda: RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1),
-                'XGBoost': lambda: xgb.XGBRegressor(n_estimators=100, random_state=42, n_jobs=1),
-                'MLP': lambda: MLPRegressor(hidden_layer_sizes=(128, 64), max_iter=500, random_state=42)
-            }
-            if HAS_LIGHTGBM:
-                models['LightGBM'] = lambda: lgb.LGBMRegressor(n_estimators=100, random_state=42, n_jobs=1, verbose=-1)
-        else:
-            models = {
-                'RandomForest': lambda: RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1),
-                'XGBoost': lambda: xgb.XGBClassifier(n_estimators=100, random_state=42, n_jobs=1),
-                'MLP': lambda: MLPClassifier(hidden_layer_sizes=(128, 64), max_iter=500, random_state=42)
-            }
-            if HAS_LIGHTGBM:
-                models['LightGBM'] = lambda: lgb.LGBMClassifier(n_estimators=100, random_state=42, n_jobs=1, verbose=-1)
+    raw_data = load_qm9(n_samples=2000, property_idx=4)  # HOMO-LUMO gap
+    splits = get_qm9_splits(raw_data, splitter='scaffold')
+    
+    train_smiles_full = splits['train']['smiles'] + splits['val']['smiles']
+    train_labels_full = np.concatenate([splits['train']['labels'], splits['val']['labels']])
+    test_smiles = splits['test']['smiles']
+    test_labels = splits['test']['labels']
+    
+    print(f"Target: {raw_data['property_name']} (eV)")
+    print(f"Train: {len(train_smiles_full)}, Test: {len(test_smiles)}")
+    
+    # Subsample for efficiency
+    n_baseline = 1000
+    print(f"\nSubsampling to n={n_baseline}...")
+    indices = np.random.choice(len(train_labels_full), 
+                              min(n_baseline, len(train_labels_full)), 
+                              replace=False)
+    train_smiles = [train_smiles_full[i] for i in indices]
+    train_labels = train_labels_full[indices]
+    
+    # Create representations
+    print("Creating representations...")
+    start = time.time()
+    reps_train = {
+        'ecfp4': create_ecfp4(train_smiles, n_bits=2048),
+        'pdv': create_pdv(train_smiles),
+        'mol2vec': create_mol2vec(train_smiles),
+        'mhggnn': create_mhg_gnn(train_smiles)
+    }
+    reps_test = {
+        'ecfp4': create_ecfp4(test_smiles, n_bits=2048),
+        'pdv': create_pdv(test_smiles),
+        'mol2vec': create_mol2vec(test_smiles),
+        'mhggnn': create_mhg_gnn(test_smiles)
+    }
+    print(f"Representations created ({time.time() - start:.2f}s)")
+    
+    # STEP 1: Baseline with all models
+    print(f"\n{'STEP 1: BASELINE (all reps with RF, XGBoost, MLP)':=^80}")
+    
+    models_to_test = [
+        ('RF', RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)),
+        ('XGBoost', xgb.XGBRegressor(n_estimators=100, random_state=42, n_jobs=1)),
+        ('MLP', MLPRegressor(hidden_layer_sizes=(128, 64), max_iter=300, random_state=42))
+    ]
+    
+    baseline_results = []
+    for rep_name in ['ecfp4', 'pdv', 'mol2vec', 'mhggnn']:
+        print(f"\n  {rep_name} ({reps_train[rep_name].shape[1]} features):")
         
-        results = test_dataset_comprehensive(dataset, feature_selector, models, 
-                                            sample_sizes, n_per_rep, include_finetuned)
-        all_results.extend(results)
+        X_train = reps_train[rep_name]
+        X_test = reps_test[rep_name]
+        
+        for model_name, model in models_to_test:
+            start = time.time()
+            metrics = test_single(X_train, X_test, train_labels, test_labels, 
+                                 model, is_classification=False, model_name=model_name)
+            elapsed = time.time() - start
+            
+            result = {
+                'dataset': 'qm9_homo_lumo_gap',
+                'representation': rep_name,
+                'n_samples': n_baseline,
+                'n_features_input': X_train.shape[1],
+                'n_features_selected': X_train.shape[1],
+                'feature_reduction': 0.0,
+                'model': model_name,
+                'is_hybrid': False,
+                'time': elapsed,
+                **metrics
+            }
+            results.append(result)
+            baseline_results.append((rep_name, model_name, metrics['r2']))
+            
+            print(f"    [{model_name:8s}] R²={metrics['r2']:.4f}, MAE={metrics['mae']:.4f}  ({elapsed:.2f}s)")
     
-    # Analyze
-    df = analyze_comprehensive(all_results)
+    # Get top 3 performers
+    baseline_results.sort(key=lambda x: x[2], reverse=True)
+    print(f"\n  → Top 3 rep+model combos:")
+    for i in range(min(3, len(baseline_results))):
+        rep, model, r2 = baseline_results[i]
+        print(f"      {i+1}. {rep:15s} + {model:8s}  R²={r2:.4f}")
     
-    # Save
+    # Get top reps
+    seen_reps = set()
+    top_reps = []
+    for rep, model, r2 in baseline_results:
+        if rep not in seen_reps:
+            top_reps.append(rep)
+            seen_reps.add(rep)
+        if len(top_reps) >= 3:
+            break
+    
+    # STEP 2: Strategic hybrids
+    print(f"\n{'STEP 2: STRATEGIC HYBRIDS (top 2 combo with varying n_per_rep)':=^80}")
+    
+    best_combo = top_reps[:2]
+    print(f"\n  Testing {'+'.join(best_combo)} with n_per_rep = {n_per_rep_values}")
+    
+    for n_per_rep in n_per_rep_values:
+        print(f"\n  n_per_rep = {n_per_rep if n_per_rep != -1 else 'ALL'}:")
+        
+        hybrid_dict = {name: reps_train[name] for name in best_combo}
+        X_train_hybrid, feature_info = create_hybrid_wrapper(
+            hybrid_dict, train_labels, n_per_rep, 'tree_importance'
+        )
+        
+        hybrid_dict_test = {name: reps_test[name] for name in best_combo}
+        X_test_hybrid, _ = create_hybrid_wrapper(
+            hybrid_dict_test, None, n_per_rep, 'tree_importance', feature_info
+        )
+        
+        n_input = sum(hybrid_dict[k].shape[1] for k in hybrid_dict)
+        n_selected = X_train_hybrid.shape[1]
+        reduction = (1 - n_selected / n_input) * 100
+        
+        print(f"    Features: {n_input} → {n_selected} ({reduction:.1f}% reduction)")
+        
+        # Test with all models
+        for model_name, model_class in [
+            ('RF', RandomForestRegressor),
+            ('XGBoost', xgb.XGBRegressor),
+            ('MLP', MLPRegressor)
+        ]:
+            start = time.time()
+            
+            if model_name == 'XGBoost':
+                model = model_class(n_estimators=100, random_state=42, n_jobs=1)
+            elif model_name == 'MLP':
+                model = model_class(hidden_layer_sizes=(128, 64), max_iter=300, random_state=42)
+            else:
+                model = model_class(n_estimators=100, random_state=42, n_jobs=-1)
+            
+            metrics = test_single(X_train_hybrid, X_test_hybrid, train_labels, test_labels,
+                                 model, is_classification=False, model_name=model_name)
+            elapsed = time.time() - start
+            
+            result = {
+                'dataset': 'qm9_homo_lumo_gap',
+                'representation': '+'.join(best_combo),
+                'n_samples': n_baseline,
+                'n_features_input': n_input,
+                'n_features_selected': n_selected,
+                'feature_reduction': reduction,
+                'n_per_rep': n_per_rep,
+                'model': model_name,
+                'is_hybrid': True,
+                'time': elapsed,
+                **metrics
+            }
+            results.append(result)
+            
+            print(f"    [{model_name:8s}] R²={metrics['r2']:.4f}, MAE={metrics['mae']:.4f}  ({elapsed:.2f}s)")
+    
+    # ========================================================================
+    # ESOL - Regression
+    # ========================================================================
+    print(f"\n{'='*80}")
+    print("DATASET 2: ESOL Solubility (Scaffold Split)")
+    print(f"{'='*80}")
+    
+    data = load_esol_combined(splitter='scaffold')
+    train_smiles_full = data['train']['smiles']
+    train_labels_full = data['train']['labels']
+    test_smiles = data['test']['smiles']
+    test_labels = data['test']['labels']
+    
+    # Subsample
+    n_baseline = 1000
+    print(f"\nSubsampling to n={n_baseline}...")
+    indices = np.random.choice(len(train_labels_full), 
+                              min(n_baseline, len(train_labels_full)), 
+                              replace=False)
+    train_smiles = [train_smiles_full[i] for i in indices]
+    train_labels = train_labels_full[indices]
+    
+    # Create representations
+    print("Creating representations...")
+    start = time.time()
+    reps_train = {
+        'ecfp4': create_ecfp4(train_smiles, n_bits=2048),
+        'pdv': create_pdv(train_smiles),
+        'mol2vec': create_mol2vec(train_smiles),
+        'mhggnn': create_mhg_gnn(train_smiles)
+    }
+    reps_test = {
+        'ecfp4': create_ecfp4(test_smiles, n_bits=2048),
+        'pdv': create_pdv(test_smiles),
+        'mol2vec': create_mol2vec(test_smiles),
+        'mhggnn': create_mhg_gnn(test_smiles)
+    }
+    print(f"Representations created ({time.time() - start:.2f}s)")
+    
+    # STEP 1: Baseline
+    print(f"\n{'STEP 1: BASELINE (all reps with RF, XGBoost, MLP)':=^80}")
+    
+    models_to_test = [
+        ('RF', RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)),
+        ('XGBoost', xgb.XGBRegressor(n_estimators=100, random_state=42, n_jobs=1)),
+        ('MLP', MLPRegressor(hidden_layer_sizes=(128, 64), max_iter=300, random_state=42))
+    ]
+    
+    baseline_results = []
+    for rep_name in ['ecfp4', 'pdv', 'mol2vec', 'mhggnn']:
+        print(f"\n  {rep_name} ({reps_train[rep_name].shape[1]} features):")
+        
+        X_train = reps_train[rep_name]
+        X_test = reps_test[rep_name]
+        
+        for model_name, model in models_to_test:
+            start = time.time()
+            metrics = test_single(X_train, X_test, train_labels, test_labels,
+                                 model, is_classification=False, model_name=model_name)
+            elapsed = time.time() - start
+            
+            result = {
+                'dataset': 'esol',
+                'representation': rep_name,
+                'n_samples': n_baseline,
+                'n_features_input': X_train.shape[1],
+                'n_features_selected': X_train.shape[1],
+                'feature_reduction': 0.0,
+                'model': model_name,
+                'is_hybrid': False,
+                'time': elapsed,
+                **metrics
+            }
+            results.append(result)
+            baseline_results.append((rep_name, model_name, metrics['r2']))
+            
+            print(f"    [{model_name:8s}] R²={metrics['r2']:.4f}  ({elapsed:.2f}s)")
+    
+    # Get top performers
+    baseline_results.sort(key=lambda x: x[2], reverse=True)
+    seen_reps = set()
+    top_reps = []
+    for rep, model, r2 in baseline_results:
+        if rep not in seen_reps:
+            top_reps.append(rep)
+            seen_reps.add(rep)
+        if len(top_reps) >= 3:
+            break
+    
+    # STEP 2: Hybrids
+    print(f"\n{'STEP 2: STRATEGIC HYBRIDS (top 2 combo with varying n_per_rep)':=^80}")
+    
+    best_combo = top_reps[:2]
+    print(f"\n  Testing {'+'.join(best_combo)} with n_per_rep = {n_per_rep_values}")
+    
+    for n_per_rep in n_per_rep_values:
+        print(f"\n  n_per_rep = {n_per_rep if n_per_rep != -1 else 'ALL'}:")
+        
+        hybrid_dict = {name: reps_train[name] for name in best_combo}
+        X_train_hybrid, feature_info = create_hybrid_wrapper(
+            hybrid_dict, train_labels, n_per_rep, 'tree_importance'
+        )
+        
+        hybrid_dict_test = {name: reps_test[name] for name in best_combo}
+        X_test_hybrid, _ = create_hybrid_wrapper(
+            hybrid_dict_test, None, n_per_rep, 'tree_importance', feature_info
+        )
+        
+        n_input = sum(hybrid_dict[k].shape[1] for k in hybrid_dict)
+        n_selected = X_train_hybrid.shape[1]
+        reduction = (1 - n_selected / n_input) * 100
+        
+        print(f"    Features: {n_input} → {n_selected} ({reduction:.1f}% reduction)")
+        
+        for model_name, model_class in [
+            ('RF', RandomForestRegressor),
+            ('XGBoost', xgb.XGBRegressor),
+            ('MLP', MLPRegressor)
+        ]:
+            start = time.time()
+            
+            if model_name == 'XGBoost':
+                model = model_class(n_estimators=100, random_state=42, n_jobs=1)
+            elif model_name == 'MLP':
+                model = model_class(hidden_layer_sizes=(128, 64), max_iter=300, random_state=42)
+            else:
+                model = model_class(n_estimators=100, random_state=42, n_jobs=-1)
+            
+            metrics = test_single(X_train_hybrid, X_test_hybrid, train_labels, test_labels,
+                                 model, is_classification=False, model_name=model_name)
+            elapsed = time.time() - start
+            
+            result = {
+                'dataset': 'esol',
+                'representation': '+'.join(best_combo),
+                'n_samples': n_baseline,
+                'n_features_input': n_input,
+                'n_features_selected': n_selected,
+                'feature_reduction': reduction,
+                'n_per_rep': n_per_rep,
+                'model': model_name,
+                'is_hybrid': True,
+                'time': elapsed,
+                **metrics
+            }
+            results.append(result)
+            
+            print(f"    [{model_name:8s}] R²={metrics['r2']:.4f}  ({elapsed:.2f}s)")
+    
+    # ========================================================================
+    # hERG - Classification
+    # ========================================================================
+    print(f"\n{'='*80}")
+    print("DATASET 3: hERG FLuID Cardiotoxicity (Classification)")
+    print(f"{'='*80}")
+    
+    train_data = load_herg(source='fluid', use_test=False)
+    test_data = load_herg(source='fluid', use_test=True)
+    train_smiles_full = train_data['smiles']
+    train_labels_full = train_data['labels']
+    test_smiles = test_data['smiles']
+    test_labels = test_data['labels']
+    
+    # Subsample
+    n_baseline = 1000
+    print(f"\nSubsampling to n={n_baseline}...")
+    indices = np.random.choice(len(train_labels_full),
+                              min(n_baseline, len(train_labels_full)),
+                              replace=False)
+    train_smiles = [train_smiles_full[i] for i in indices]
+    train_labels = train_labels_full[indices]
+    
+    # Create representations
+    print("Creating representations...")
+    start = time.time()
+    reps_train = {
+        'ecfp4': create_ecfp4(train_smiles, n_bits=2048),
+        'pdv': create_pdv(train_smiles),
+        'mol2vec': create_mol2vec(train_smiles),
+        'mhggnn': create_mhg_gnn(train_smiles)
+    }
+    reps_test = {
+        'ecfp4': create_ecfp4(test_smiles, n_bits=2048),
+        'pdv': create_pdv(test_smiles),
+        'mol2vec': create_mol2vec(test_smiles),
+        'mhggnn': create_mhg_gnn(test_smiles)
+    }
+    print(f"Representations created ({time.time() - start:.2f}s)")
+    
+    # STEP 1: Baseline
+    print(f"\n{'STEP 1: BASELINE (all reps with RF, XGBoost, MLP)':=^80}")
+    
+    models_to_test = [
+        ('RF', RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)),
+        ('XGBoost', xgb.XGBClassifier(n_estimators=100, random_state=42, n_jobs=1)),
+        ('MLP', MLPClassifier(hidden_layer_sizes=(128, 64), max_iter=300, random_state=42))
+    ]
+    
+    baseline_results = []
+    for rep_name in ['ecfp4', 'pdv', 'mol2vec', 'mhggnn']:
+        print(f"\n  {rep_name} ({reps_train[rep_name].shape[1]} features):")
+        
+        X_train = reps_train[rep_name]
+        X_test = reps_test[rep_name]
+        
+        for model_name, model in models_to_test:
+            start = time.time()
+            metrics = test_single(X_train, X_test, train_labels, test_labels,
+                                 model, is_classification=True, model_name=model_name)
+            elapsed = time.time() - start
+            
+            result = {
+                'dataset': 'herg_fluid',
+                'representation': rep_name,
+                'n_samples': n_baseline,
+                'n_features_input': X_train.shape[1],
+                'n_features_selected': X_train.shape[1],
+                'feature_reduction': 0.0,
+                'model': model_name,
+                'is_hybrid': False,
+                'time': elapsed,
+                **metrics
+            }
+            results.append(result)
+            baseline_results.append((rep_name, model_name, metrics['auc']))
+            
+            print(f"    [{model_name:8s}] AUC={metrics['auc']:.4f}  ({elapsed:.2f}s)")
+    
+    # Get top reps
+    baseline_results.sort(key=lambda x: x[2], reverse=True)
+    seen_reps = set()
+    top_reps = []
+    for rep, model, auc in baseline_results:
+        if rep not in seen_reps:
+            top_reps.append(rep)
+            seen_reps.add(rep)
+        if len(top_reps) >= 3:
+            break
+    
+    # STEP 2: Hybrids
+    print(f"\n{'STEP 2: STRATEGIC HYBRIDS (top 2 combo with varying n_per_rep)':=^80}")
+    
+    best_combo = top_reps[:2]
+    print(f"\n  Testing {'+'.join(best_combo)} with n_per_rep = {n_per_rep_values}")
+    
+    for n_per_rep in n_per_rep_values:
+        print(f"\n  n_per_rep = {n_per_rep if n_per_rep != -1 else 'ALL'}:")
+        
+        hybrid_dict = {name: reps_train[name] for name in best_combo}
+        X_train_hybrid, feature_info = create_hybrid_wrapper(
+            hybrid_dict, train_labels, n_per_rep, 'tree_importance'
+        )
+        
+        hybrid_dict_test = {name: reps_test[name] for name in best_combo}
+        X_test_hybrid, _ = create_hybrid_wrapper(
+            hybrid_dict_test, None, n_per_rep, 'tree_importance', feature_info
+        )
+        
+        n_input = sum(hybrid_dict[k].shape[1] for k in hybrid_dict)
+        n_selected = X_train_hybrid.shape[1]
+        reduction = (1 - n_selected / n_input) * 100
+        
+        print(f"    Features: {n_input} → {n_selected} ({reduction:.1f}% reduction)")
+        
+        for model_name, model_class in [
+            ('RF', RandomForestClassifier),
+            ('XGBoost', xgb.XGBClassifier),
+            ('MLP', MLPClassifier)
+        ]:
+            start = time.time()
+            
+            if model_name == 'XGBoost':
+                model = model_class(n_estimators=100, random_state=42, n_jobs=1)
+            elif model_name == 'MLP':
+                model = model_class(hidden_layer_sizes=(128, 64), max_iter=300, random_state=42)
+            else:
+                model = model_class(n_estimators=100, random_state=42, n_jobs=-1)
+            
+            metrics = test_single(X_train_hybrid, X_test_hybrid, train_labels, test_labels,
+                                 model, is_classification=True, model_name=model_name)
+            elapsed = time.time() - start
+            
+            result = {
+                'dataset': 'herg_fluid',
+                'representation': '+'.join(best_combo),
+                'n_samples': n_baseline,
+                'n_features_input': n_input,
+                'n_features_selected': n_selected,
+                'feature_reduction': reduction,
+                'n_per_rep': n_per_rep,
+                'model': model_name,
+                'is_hybrid': True,
+                'time': elapsed,
+                **metrics
+            }
+            results.append(result)
+            
+            print(f"    [{model_name:8s}] AUC={metrics['auc']:.4f}  ({elapsed:.2f}s)")
+    
+    # ========================================================================
+    # COMPREHENSIVE SUMMARY
+    # ========================================================================
     total_time = time.time() - overall_start
     
+    print(f"\n{'='*80}")
+    print("COMPREHENSIVE EVALUATION SUMMARY")
+    print(f"{'='*80}")
+    
+    df = pd.DataFrame(results)
+    
+    print(f"\nRan {len(results)} experiments in {total_time:.2f}s ({total_time/60:.2f}min)")
+    
+    print("\n1. BEST BASELINE (rep+model) PER DATASET:")
+    for dataset in df['dataset'].unique():
+        df_ds = df[df['dataset'] == dataset]
+        df_baseline = df_ds[~df_ds['is_hybrid']]
+        
+        if len(df_baseline) == 0:
+            continue
+        
+        metric = 'auc' if 'herg' in dataset.lower() else 'r2'
+        
+        if df_baseline[metric].isna().all():
+            continue
+        
+        best = df_baseline.loc[df_baseline[metric].idxmax()]
+        print(f"\n{dataset.upper()}:")
+        print(f"  Best: {best['representation']:15s} + {best['model']:8s}  {metric.upper()}={best[metric]:.4f}")
+    
+    print("\n2. BEST HYBRID (rep+model+n_per_rep) PER DATASET:")
+    for dataset in df['dataset'].unique():
+        df_ds = df[df['dataset'] == dataset]
+        df_hybrid = df_ds[df_ds['is_hybrid']]
+        
+        if len(df_hybrid) == 0:
+            continue
+        
+        metric = 'auc' if 'herg' in dataset.lower() else 'r2'
+        
+        if df_hybrid[metric].isna().all():
+            continue
+        
+        best = df_hybrid.loc[df_hybrid[metric].idxmax()]
+        
+        print(f"\n{dataset.upper()}:")
+        print(f"  Best: {best['representation']:30s} + {best['model']:8s}  n_per_rep={best['n_per_rep']:.0f}")
+        print(f"        {metric.upper()}={best[metric]:.4f}")
+        print(f"        Features: {best['n_features_input']:.0f} → {best['n_features_selected']:.0f} ({best['feature_reduction']:.1f}%)")
+        
+        # Compare to best baseline
+        df_baseline = df_ds[~df_ds['is_hybrid']]
+        if len(df_baseline) > 0 and not df_baseline[metric].isna().all():
+            best_baseline = df_baseline[metric].max()
+            improvement = ((best[metric] - best_baseline) / best_baseline) * 100
+            
+            if improvement > 0:
+                print(f"        ✓ Beats best baseline by +{improvement:.2f}%")
+            else:
+                print(f"        Baseline better by {-improvement:.2f}%")
+    
+    print("\n3. n_per_rep SENSITIVITY (for best hybrid per dataset):")
+    for dataset in df['dataset'].unique():
+        df_ds = df[df['dataset'] == dataset]
+        df_hybrid = df_ds[df_ds['is_hybrid']]
+        
+        if len(df_hybrid) == 0:
+            continue
+        
+        metric = 'auc' if 'herg' in dataset.lower() else 'r2'
+        
+        if df_hybrid[metric].isna().all():
+            continue
+        
+        print(f"\n{dataset.upper()}:")
+        
+        # Get best combo+model
+        best = df_hybrid.loc[df_hybrid[metric].idxmax()]
+        best_combo = best['representation']
+        best_model = best['model']
+        
+        df_sweep = df_hybrid[(df_hybrid['representation'] == best_combo) &
+                            (df_hybrid['model'] == best_model)]
+        
+        for _, row in df_sweep.iterrows():
+            n_display = "ALL" if row['n_per_rep'] == -1 else f"{row['n_per_rep']:3.0f}"
+            print(f"  n_per_rep={n_display:>4s}: {metric.upper()}={row[metric]:.4f}  ({row['n_features_selected']:.0f} feats)")
+    
+    # Save
     output = {
         'tier': 'comprehensive',
         'start_time': datetime.now().isoformat(),
         'total_time': total_time,
-        'n_experiments': len(all_results),
-        'datasets': datasets,
-        'sample_sizes': sample_sizes,
-        'n_per_rep': n_per_rep,
-        'include_finetuned': include_finetuned,
-        'results': all_results
+        'n_experiments': len(results),
+        'philosophy': 'comprehensive: QM9 + ESOL + hERG, all models, full n_per_rep sweep',
+        'results': results
     }
     
     with open('hybrid_master_comprehensive_results.json', 'w') as f:
         json.dump(output, f, indent=2)
-    
     df.to_csv('hybrid_master_comprehensive_results.csv', index=False)
     
     print(f"\n{'='*80}")
-    print(f"COMPREHENSIVE TESTING COMPLETE!")
+    print(f"Results saved: hybrid_master_comprehensive_results.*")
     print(f"{'='*80}")
-    print(f"Total experiments: {len(all_results)}")
-    print(f"Total runtime: {total_time:.2f}s ({total_time/60:.2f}min, {total_time/3600:.2f}hr)")
-    print(f"\nResults saved to:")
-    print(f"  - hybrid_master_comprehensive_results.json")
-    print(f"  - hybrid_master_comprehensive_results.csv")
-    print(f"{'='*80}")
-    
-    print("\n✓ Ready for publication!")
-    print("  Use these results to show:")
-    print("  1. KIRBy hybrids > individual SOTA methods")
-    print("  2. Feature reduction effectiveness (typically 70-85%)")
-    print("  3. Robustness across sample sizes")
-    print("  4. Model-agnostic improvements")
 
 
 if __name__ == '__main__':
-    main()
+    run_comprehensive_evaluation()
