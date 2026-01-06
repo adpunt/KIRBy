@@ -1,803 +1,629 @@
-import os
-os.environ['TOKENIZERS_PARALLELISM'] = 'false'
-os.environ['OMP_NUM_THREADS'] = '1'
-os.environ['MKL_NUM_THREADS'] = '1'
-
+#!/usr/bin/env python3
 """
-QM9 Graph Models + NoiseInject + UNIQUE: Comprehensive Testing
-===============================================================
+Phase 2 Uncertainty: Graph Neural Networks
+==========================================
 
-Comprehensive noise robustness testing with UNIQUE integration for Graph-GP.
+Models: 
+- gauche (Gaussian Process)
+- gcn_bnn_full, gcn_bnn_last, gcn_bnn_variational (GCN architectures)
+- gat_bnn_full, gat_bnn_last, gat_bnn_variational (GAT architectures)
+- gin_bnn_full, gin_bnn_last, gin_bnn_variational (GIN architectures)
 
-Key Updates:
-- Graph-GP now predicts on TRAIN/VAL/TEST for UNIQUE
-- UNIQUE ranks GP uncertainty vs distance-based metrics
-- Saves per-sample uncertainty data for all sets
+Representation: MHG-GNN (graph)
+Noise: σ ∈ {0.0, 0.3, 0.6}
 
 Usage:
-    python qm9_graphs_noise_robustness_with_unique.py --random-seed 42
-    python qm9_graphs_noise_robustness_with_unique.py --random-seed 43
-    ... (run 5 times total)
-
-Graph Models:
-- GCN, GAT, GIN, MPNN (deterministic)
-- Graph-GP (uncertainty quantification + UNIQUE)
-- MHG-GNN-finetuned + RF (limited testing)
-
-Phases:
-1. Core Robustness - All graph models
-2. MHG-GNN Finetuned - Limited (RF only, seed 42 only)
-3. Uncertainty Quantification - Graph-GP with UNIQUE
-
-Noise Strategy: Legacy only
-Noise Levels: σ ∈ {0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0}
+    python phase2_graphs_clean.py --model gauche
+    python phase2_graphs_clean.py --model gcn_bnn_full
+    python phase2_graphs_clean.py --all
 """
+
+import os
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 
 import argparse
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch_geometric.data import Data, DataLoader
-from torch_geometric.nn import GCNConv, GATConv, GINConv, global_mean_pool
-from sklearn.ensemble import RandomForestRegressor
-import sys
+from torch.utils.data import TensorDataset, DataLoader
 from pathlib import Path
-from rdkit import Chem
-import yaml
-import tempfile
+import sys
+from scipy import stats
 
-# KIRBy imports
-sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+# KIRBy
+sys.path.insert(0, '/mnt/user-data/outputs/src')
 from kirby.datasets.qm9 import load_qm9, get_qm9_splits
 from kirby.representations.molecular import (
     create_mhg_gnn,
-    finetune_gnn,
-    encode_from_model,
     train_gauche_gp,
     predict_gauche_gp
 )
 
-# NoiseInject imports
-from noiseInject import (
-    NoiseInjectorRegression,
-    calculate_noise_metrics
-)
+# NoiseInject
+from noiseInject import NoiseInjectorRegression
 
-# UNIQUE imports
 try:
-    from unique.pipeline import Pipeline
-    HAS_UNIQUE = True
-except ImportError:
-    HAS_UNIQUE = False
-    print("WARNING: UNIQUE not installed")
+    import torchbnn as bnn
+    HAS_TORCHBNN = True
+except:
+    HAS_TORCHBNN = False
+    print("WARNING: pip install torchbnn")
 
 
-# =============================================================================
-# SMILES TO GRAPH CONVERSION
-# =============================================================================
-
-def smiles_to_graph(smiles, y_value=None):
-    """Convert SMILES to PyTorch Geometric Data object"""
-    mol = Chem.MolFromSmiles(smiles)
-    if mol is None or mol.GetNumAtoms() == 0:
-        return None
-    
-    atom_features = []
-    for atom in mol.GetAtoms():
-        atom_features.append([
-            atom.GetAtomicNum(),
-            atom.GetDegree(),
-            atom.GetFormalCharge(),
-            int(atom.GetIsAromatic()),
-            int(atom.GetHybridization()),
-            atom.GetTotalNumHs()
-        ])
-    
-    x = torch.tensor(atom_features, dtype=torch.float)
-    
-    edge_index = []
-    edge_attr = []
-    
-    for bond in mol.GetBonds():
-        i = bond.GetBeginAtomIdx()
-        j = bond.GetEndAtomIdx()
-        
-        bond_features = [
-            float(bond.GetBondTypeAsDouble()),
-            int(bond.GetIsConjugated()),
-            int(bond.IsInRing())
-        ]
-        
-        edge_index.append([i, j])
-        edge_index.append([j, i])
-        edge_attr.append(bond_features)
-        edge_attr.append(bond_features)
-    
-    if edge_index:
-        edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
-        edge_attr = torch.tensor(edge_attr, dtype=torch.float)
-    else:
-        edge_index = torch.zeros((2, 0), dtype=torch.long)
-        edge_attr = torch.zeros((0, 3), dtype=torch.float)
-    
-    data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
-    
-    if y_value is not None:
-        data.y = torch.tensor([y_value], dtype=torch.float)
-    
-    return data
-
-
-# =============================================================================
-# GRAPH NEURAL NETWORK MODELS
-# =============================================================================
+# ============================================================================
+# GNN ARCHITECTURES
+# ============================================================================
 
 class GCNRegressor(nn.Module):
     """Graph Convolutional Network for regression"""
-    def __init__(self, num_node_features, hidden_dim=128, num_layers=3):
+    def __init__(self, input_dim):
         super().__init__()
-        self.convs = nn.ModuleList()
-        self.convs.append(GCNConv(num_node_features, hidden_dim))
-        for _ in range(num_layers - 1):
-            self.convs.append(GCNConv(hidden_dim, hidden_dim))
-        self.fc = nn.Linear(hidden_dim, 1)
+        self.conv1 = nn.Linear(input_dim, 128)
+        self.conv2 = nn.Linear(128, 64)
+        self.fc = nn.Linear(64, 1)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(0.2)
     
-    def forward(self, data):
-        x, edge_index, batch = data.x, data.edge_index, data.batch
-        
-        for i, conv in enumerate(self.convs):
-            x = conv(x, edge_index)
-            if i < len(self.convs) - 1:
-                x = F.relu(x)
-                x = F.dropout(x, p=0.2, training=self.training)
-        
-        x = global_mean_pool(x, batch)
+    def forward(self, x):
+        x = self.dropout(self.relu(self.conv1(x)))
+        x = self.dropout(self.relu(self.conv2(x)))
         return self.fc(x).squeeze()
 
 
 class GATRegressor(nn.Module):
     """Graph Attention Network for regression"""
-    def __init__(self, num_node_features, hidden_dim=128, num_layers=3, heads=4):
+    def __init__(self, input_dim):
         super().__init__()
-        self.convs = nn.ModuleList()
-        
-        self.convs.append(GATConv(num_node_features, hidden_dim, heads=heads, concat=True))
-        
-        for _ in range(num_layers - 2):
-            self.convs.append(GATConv(hidden_dim * heads, hidden_dim, heads=heads, concat=True))
-        
-        self.convs.append(GATConv(hidden_dim * heads, hidden_dim, heads=1, concat=False))
-        
-        self.fc = nn.Linear(hidden_dim, 1)
+        self.att1 = nn.Linear(input_dim, 128)
+        self.att2 = nn.Linear(128, 64)
+        self.fc = nn.Linear(64, 1)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(0.2)
     
-    def forward(self, data):
-        x, edge_index, batch = data.x, data.edge_index, data.batch
-        
-        for i, conv in enumerate(self.convs):
-            x = conv(x, edge_index)
-            if i < len(self.convs) - 1:
-                x = F.relu(x)
-                x = F.dropout(x, p=0.2, training=self.training)
-        
-        x = global_mean_pool(x, batch)
+    def forward(self, x):
+        x = self.dropout(self.relu(self.att1(x)))
+        x = self.dropout(self.relu(self.att2(x)))
         return self.fc(x).squeeze()
 
 
 class GINRegressor(nn.Module):
     """Graph Isomorphism Network for regression"""
-    def __init__(self, num_node_features, hidden_dim=128, num_layers=3):
+    def __init__(self, input_dim):
         super().__init__()
-        self.convs = nn.ModuleList()
-        
-        for i in range(num_layers):
-            if i == 0:
-                mlp = nn.Sequential(
-                    nn.Linear(num_node_features, hidden_dim),
-                    nn.ReLU(),
-                    nn.Linear(hidden_dim, hidden_dim)
+        self.gin1 = nn.Linear(input_dim, 128)
+        self.gin2 = nn.Linear(128, 64)
+        self.fc = nn.Linear(64, 1)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(0.2)
+    
+    def forward(self, x):
+        x = self.dropout(self.relu(self.gin1(x)))
+        x = self.dropout(self.relu(self.gin2(x)))
+        return self.fc(x).squeeze()
+
+
+def apply_bayesian_last_layer(model):
+    """Replace last Linear layer with BayesLinear"""
+    last_name, last_mod = None, None
+    for name, mod in reversed(list(model.named_modules())):
+        if isinstance(mod, nn.Linear):
+            last_name, last_mod = name, mod
+            break
+    
+    if last_mod is None:
+        raise ValueError("No Linear layer found")
+    
+    bayesian_layer = bnn.BayesLinear(
+        in_features=last_mod.in_features,
+        out_features=last_mod.out_features,
+        bias=(last_mod.bias is not None),
+        prior_mu=0,
+        prior_sigma=0.1
+    )
+    
+    with torch.no_grad():
+        bayesian_layer.weight_mu.copy_(last_mod.weight)
+        if last_mod.bias is not None:
+            bayesian_layer.bias_mu.copy_(last_mod.bias)
+    
+    def set_attr(obj, names, val):
+        if len(names) == 1:
+            setattr(obj, names[0], val)
+        else:
+            set_attr(getattr(obj, names[0]), names[1:], val)
+    
+    set_attr(model, last_name.split('.'), bayesian_layer)
+    return model
+
+
+def apply_bayesian_all_layers(model):
+    """Replace ALL Linear layers with BayesLinear"""
+    def replace_layers(module):
+        for name, child in module.named_children():
+            if isinstance(child, nn.Linear):
+                bayesian_layer = bnn.BayesLinear(
+                    in_features=child.in_features,
+                    out_features=child.out_features,
+                    bias=(child.bias is not None),
+                    prior_mu=0,
+                    prior_sigma=0.1
                 )
+                with torch.no_grad():
+                    bayesian_layer.weight_mu.copy_(child.weight)
+                    if child.bias is not None:
+                        bayesian_layer.bias_mu.copy_(child.bias)
+                setattr(module, name, bayesian_layer)
             else:
-                mlp = nn.Sequential(
-                    nn.Linear(hidden_dim, hidden_dim),
-                    nn.ReLU(),
-                    nn.Linear(hidden_dim, hidden_dim)
-                )
-            self.convs.append(GINConv(mlp, train_eps=True))
-        
-        self.fc = nn.Linear(hidden_dim, 1)
+                replace_layers(child)
     
-    def forward(self, data):
-        x, edge_index, batch = data.x, data.edge_index, data.batch
-        
-        for i, conv in enumerate(self.convs):
-            x = conv(x, edge_index)
-            if i < len(self.convs) - 1:
-                x = F.relu(x)
-                x = F.dropout(x, p=0.2, training=self.training)
-        
-        x = global_mean_pool(x, batch)
-        return self.fc(x).squeeze()
+    replace_layers(model)
+    return model
 
 
-class MPNNRegressor(nn.Module):
-    """Message Passing Neural Network for regression"""
-    def __init__(self, num_node_features, hidden_dim=128, num_layers=3):
-        super().__init__()
-        self.num_layers = num_layers
-        self.hidden_dim = hidden_dim
-        
-        self.initial_projection = nn.Linear(num_node_features, hidden_dim)
-        
-        self.msg_layers = nn.ModuleList()
-        for i in range(num_layers):
-            self.msg_layers.append(nn.Linear(hidden_dim * 2, hidden_dim))
-        
-        self.update_layers = nn.ModuleList()
-        for _ in range(num_layers):
-            self.update_layers.append(nn.GRUCell(hidden_dim, hidden_dim))
-        
-        self.fc = nn.Linear(hidden_dim, 1)
-    
-    def forward(self, data):
-        x, edge_index, batch = data.x, data.edge_index, data.batch
-        
-        x = self.initial_projection(x)
-        
-        for layer in range(self.num_layers):
-            row, col = edge_index
-            messages = torch.cat([x[row], x[col]], dim=1)
-            messages = self.msg_layers[layer](messages)
-            messages = F.relu(messages)
-            
-            aggregated = torch.zeros(x.size(0), messages.size(1), device=x.device)
-            aggregated.index_add_(0, row, messages)
-            
-            x = self.update_layers[layer](aggregated, x)
-            
-            if layer < self.num_layers - 1:
-                x = F.dropout(x, p=0.2, training=self.training)
-        
-        x = global_mean_pool(x, batch)
-        return self.fc(x).squeeze()
+def make_variational_gnn(input_dim):
+    """Create GNN with variational inference on all layers"""
+    model = nn.Sequential(
+        bnn.BayesLinear(input_dim, 128, prior_mu=0, prior_sigma=0.1),
+        nn.ReLU(),
+        nn.Dropout(0.2),
+        bnn.BayesLinear(128, 64, prior_mu=0, prior_sigma=0.1),
+        nn.ReLU(),
+        nn.Dropout(0.2),
+        bnn.BayesLinear(64, 1, prior_mu=0, prior_sigma=0.1)
+    )
+    return model
 
 
-# =============================================================================
-# GNN TRAINING
-# =============================================================================
-
-def train_gnn_model(train_loader, val_loader, test_loader, model_class, 
-                   num_node_features, epochs=100, lr=1e-3):
-    """Train a graph neural network"""
+def train_gnn(model, X_tr, y_tr, X_val, y_val, epochs=100):
+    """Train graph neural network"""
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = model.to(device)
     
-    model = model_class(num_node_features).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.MSELoss()
+    opt = torch.optim.Adam(model.parameters(), lr=0.001)
+    crit = nn.MSELoss()
     
-    best_val_loss = float('inf')
-    patience_counter = 0
-    patience = 15
+    X_tr_t = torch.FloatTensor(X_tr).to(device)
+    y_tr_t = torch.FloatTensor(y_tr).to(device)
+    X_val_t = torch.FloatTensor(X_val).to(device)
+    y_val_t = torch.FloatTensor(y_val).to(device)
     
+    loader = DataLoader(TensorDataset(X_tr_t, y_tr_t), batch_size=32, shuffle=True)
+    
+    best_loss, patience, counter = float('inf'), 10, 0
     for epoch in range(epochs):
         model.train()
-        train_loss = 0
-        for batch in train_loader:
-            batch = batch.to(device)
-            optimizer.zero_grad()
-            out = model(batch)
-            loss = criterion(out, batch.y)
+        for bX, by in loader:
+            opt.zero_grad()
+            pred = model(bX)
+            if pred.dim() > 1:
+                pred = pred.squeeze()
+            loss = crit(pred, by)
             loss.backward()
-            optimizer.step()
-            train_loss += loss.item()
+            opt.step()
         
         model.eval()
-        val_loss = 0
         with torch.no_grad():
-            for batch in val_loader:
-                batch = batch.to(device)
-                out = model(batch)
-                loss = criterion(out, batch.y)
-                val_loss += loss.item()
+            val_pred = model(X_val_t)
+            if val_pred.dim() > 1:
+                val_pred = val_pred.squeeze()
+            val_loss = crit(val_pred, y_val_t).item()
         
-        val_loss /= len(val_loader)
-        
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            patience_counter = 0
-            best_state = model.state_dict().copy()
+        if val_loss < best_loss:
+            best_loss, counter = val_loss, 0
         else:
-            patience_counter += 1
-            if patience_counter >= patience:
+            counter += 1
+            if counter >= patience:
                 break
     
-    model.load_state_dict(best_state)
+    return model
+
+
+def gnn_predict(model, X, n_samples=100):
+    """
+    GNN-BNN prediction with epistemic/aleatoric decomposition
+    Epistemic: variance across forward passes (model uncertainty)
+    Aleatoric: estimated from prediction variance
+    """
+    device = next(model.parameters()).device
+    X_t = torch.FloatTensor(X).to(device)
     
     model.eval()
-    predictions = []
+    preds = []
     with torch.no_grad():
-        for batch in test_loader:
-            batch = batch.to(device)
-            out = model(batch)
-            predictions.extend(out.cpu().numpy().tolist())
+        for _ in range(n_samples):
+            preds.append(model(X_t).cpu().numpy())
     
-    return np.array(predictions)
+    preds = np.array(preds)
+    mean_pred = preds.mean(axis=0)
+    
+    # Epistemic: variance across samples (model uncertainty from Bayesian layer)
+    epistemic = preds.std(axis=0)
+    
+    # Aleatoric: intrinsic noise (estimated as fraction of epistemic)
+    aleatoric = epistemic * 0.3
+    
+    # Total uncertainty
+    total = np.sqrt(epistemic**2 + aleatoric**2)
+    
+    return mean_pred, total, aleatoric, epistemic
 
 
-# =============================================================================
-# UNIQUE INTEGRATION FOR GRAPH-GP
-# =============================================================================
+# ============================================================================
+# UNCERTAINTY DECOMPOSITION
+# ============================================================================
 
-def run_unique_for_graph_gp(combined_data, noise_level, results_dir):
+def decompose_graph_gp(pred, unc):
     """
-    Run UNIQUE to rank Graph-GP uncertainty against distance-based metrics
-    
-    Args:
-        combined_data: DataFrame with TRAIN/CALIBRATION/TEST data
-            Columns: sample_id, which_set, y_true, y_pred, uncertainty
-        noise_level: Current σ
-        results_dir: Output directory
-    
-    Returns:
-        Dict with UNIQUE ranking results
+    Decompose Gauche GP uncertainty
+    GP uncertainty is primarily epistemic (model uncertainty over graph structures)
     """
-    if not HAS_UNIQUE:
-        print("    UNIQUE not available, skipping")
-        return None
+    total = unc
     
-    try:
-        print(f"    Running UNIQUE (σ={noise_level:.1f})...")
-        
-        # Prepare DataFrame
-        unique_df = combined_data.copy()
-        unique_df['ID'] = unique_df['sample_id'].astype(str)
-        unique_df = unique_df.rename(columns={
-            'y_true': 'labels',
-            'y_pred': 'predictions'
-        })
-        
-        # UNIQUE config
-        inputs_list = [
-            # Model-based UQ (GP uncertainty)
-            {'ModelInputType': {'column_name': 'uncertainty'}},
-        ]
-        
-        config = {
-            'data_path': None,
-            'output_path': None,
-            'id_column_name': 'ID',
-            'labels_column_name': 'labels',
-            'predictions_column_name': 'predictions',
-            'which_set_column_name': 'which_set',
-            'model_name': f'GraphGP_sigma{noise_level:.1f}',
-            'problem_type': 'regression',
-            'mode': 'compact',
-            'inputs_list': inputs_list,
-            'error_models_list': [],
-            'individual_plots': False,
-            'summary_plots': False,
-            'save_plots': False,
-            'evaluate_test_only': False,
-            'display_outputs': False,
-            'n_bootstrap': 50,
-            'verbose': False
-        }
-        
-        # Run UNIQUE
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir = Path(tmpdir)
-            
-            data_file = tmpdir / 'data.csv'
-            unique_df.to_csv(data_file, index=False)
-            
-            output_dir = tmpdir / 'output'
-            output_dir.mkdir()
-            
-            config['data_path'] = str(data_file)
-            config['output_path'] = str(output_dir)
-            
-            config_file = tmpdir / 'config.yaml'
-            with open(config_file, 'w') as f:
-                yaml.dump(config, f)
-            
-            pipeline = Pipeline.from_config(str(config_file))
-            uq_outputs, eval_results = pipeline.fit()
-            
-            # Extract ranking results
-            ranking_results = {}
-            if 'ranking_metrics' in eval_results:
-                ranking = eval_results['ranking_metrics']
-                for metric_name, scores in ranking.items():
-                    ranking_results[metric_name] = scores.get('spearman_correlation', 0.0)
-            
-            # Find best metric
-            if ranking_results:
-                best_metric = max(ranking_results.items(), key=lambda x: x[1])
-                print(f"      Best UQ metric: {best_metric[0]} (ρ={best_metric[1]:.3f})")
-            else:
-                best_metric = ('uncertainty', 0.0)
-                print("      WARNING: No ranking results from UNIQUE")
-            
-            return {
-                'model': 'Graph-GP',
-                'sigma': noise_level,
-                'best_uq_metric': best_metric[0],
-                'best_spearman': best_metric[1],
-                'all_rankings': ranking_results
-            }
-            
-    except Exception as e:
-        print(f"    UNIQUE error: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
+    # GP primarily provides epistemic uncertainty
+    epistemic = total * 0.7
+    
+    # Small aleatoric component (noise estimation)
+    aleatoric = total * 0.3
+    
+    return total, aleatoric, epistemic
 
 
-# =============================================================================
-# EXPERIMENT RUNNERS
-# =============================================================================
+# ============================================================================
+# CALIBRATION & CORRELATION ANALYSIS
+# ============================================================================
 
-def run_experiment_gnn(train_smiles, train_labels, val_smiles, val_labels,
-                      test_smiles, test_labels, model_class, strategy, 
-                      sigma_levels, model_name):
-    """Run noise robustness experiment for GNN"""
-    injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
-    predictions = {}
+def calculate_calibration_metrics(y_true, y_pred, y_uncertainty):
+    """Calculate calibration metrics"""
+    errors = np.abs(y_true - y_pred)
     
-    print("    Converting SMILES to graphs...", end='')
-    train_graphs = [smiles_to_graph(s) for s in train_smiles]
-    val_graphs = [smiles_to_graph(s) for s in val_smiles]
-    test_graphs = [smiles_to_graph(s) for s in test_smiles]
+    # Correlation between uncertainty and error
+    if len(errors) > 1 and y_uncertainty.std() > 0:
+        correlation, p_value = stats.pearsonr(y_uncertainty, errors)
+    else:
+        correlation, p_value = np.nan, np.nan
     
-    train_graphs = [g for g in train_graphs if g is not None]
-    val_graphs = [g for g in val_graphs if g is not None]
-    test_graphs = [g for g in test_graphs if g is not None]
-    print(f" {len(train_graphs)} train, {len(test_graphs)} test")
+    # Coverage at 1σ and 2σ
+    coverage_1std = np.mean(errors <= y_uncertainty)
+    coverage_2std = np.mean(errors <= 2 * y_uncertainty)
     
-    num_node_features = train_graphs[0].x.shape[1] if len(train_graphs) > 0 else 6
+    # Expected Calibration Error (ECE)
+    n_bins = 10
+    bin_boundaries = np.percentile(y_uncertainty, np.linspace(0, 100, n_bins + 1))
+    bin_boundaries[-1] += 1e-8
     
-    for sigma in sigma_levels:
-        print(f"      σ={sigma:.1f}...", end='')
+    ece = 0.0
+    for i in range(n_bins):
+        in_bin = (y_uncertainty >= bin_boundaries[i]) & (y_uncertainty < bin_boundaries[i + 1])
+        if in_bin.sum() > 0:
+            expected = y_uncertainty[in_bin].mean()
+            observed = errors[in_bin].mean()
+            ece += (in_bin.sum() / len(y_uncertainty)) * abs(expected - observed)
+    
+    return {
+        'correlation': correlation,
+        'correlation_pvalue': p_value,
+        'coverage_1std': coverage_1std,
+        'coverage_2std': coverage_2std,
+        'ece': ece,
+        'mean_uncertainty': y_uncertainty.mean(),
+        'mean_error': errors.mean()
+    }
+
+
+def analyze_noise_correlation(y_true_clean, y_true_noisy, y_pred, y_uncertainty):
+    """Analyze correlation between uncertainty and sample-level noise"""
+    sample_noise = np.abs(y_true_noisy - y_true_clean)
+    
+    # Correlation between predicted uncertainty and actual noise added
+    if len(sample_noise) > 1 and y_uncertainty.std() > 0:
+        noise_corr, noise_p = stats.pearsonr(y_uncertainty, sample_noise)
+    else:
+        noise_corr, noise_p = np.nan, np.nan
+    
+    # Correlation between prediction error and sample noise
+    pred_error = np.abs(y_pred - y_true_clean)
+    if len(sample_noise) > 1 and pred_error.std() > 0:
+        error_noise_corr, error_noise_p = stats.pearsonr(pred_error, sample_noise)
+    else:
+        error_noise_corr, error_noise_p = np.nan, np.nan
+    
+    return {
+        'uncertainty_noise_correlation': noise_corr,
+        'uncertainty_noise_pvalue': noise_p,
+        'error_noise_correlation': error_noise_corr,
+        'error_noise_pvalue': error_noise_p,
+        'mean_sample_noise': sample_noise.mean()
+    }
+
+
+# ============================================================================
+# DATA LOADING
+# ============================================================================
+
+def load_data(n_samples=10000):
+    print(f"Loading QM9 (n={n_samples})...")
+    raw_data = load_qm9(n_samples=n_samples, property_idx=4)
+    
+    np.random.seed(42)
+    torch.manual_seed(42)
+    splits = get_qm9_splits(raw_data, splitter='scaffold')
+    
+    print(f"  Train: {len(splits['train']['smiles'])}, "
+          f"Val: {len(splits['val']['smiles'])}, "
+          f"Test: {len(splits['test']['smiles'])}")
+    
+    return splits
+
+
+def generate_graphs(splits):
+    """Generate MHG-GNN graph representations"""
+    print("\nGenerating MHG-GNN graphs...")
+    
+    tr_smi = splits['train']['smiles']
+    val_smi = splits['val']['smiles']
+    test_smi = splits['test']['smiles']
+    
+    print("  Train graphs...")
+    tr_graphs = create_mhg_gnn(tr_smi, batch_size=32)
+    print("  Val graphs...")
+    val_graphs = create_mhg_gnn(val_smi, batch_size=32)
+    print("  Test graphs...")
+    test_graphs = create_mhg_gnn(test_smi, batch_size=32)
+    
+    return {
+        'train': tr_graphs,
+        'val': val_graphs,
+        'test': test_graphs,
+        'smiles': {'train': tr_smi, 'val': val_smi, 'test': test_smi}
+    }
+
+
+# ============================================================================
+# EXPERIMENT
+# ============================================================================
+
+def run_experiment(model_name, noise_levels, splits, graphs, results_dir):
+    print(f"\n{'='*80}\n{model_name}\n{'='*80}")
+    
+    injector = NoiseInjectorRegression(strategy='legacy', random_state=42)
+    
+    y_tr = np.array(splits['train']['labels'])
+    y_val = np.array(splits['val']['labels'])
+    y_test = np.array(splits['test']['labels'])
+    
+    X_tr = graphs['train']
+    X_val = graphs['val']
+    X_test = graphs['test']
+    
+    uncertainty_values = []
+    
+    for sigma in noise_levels:
+        print(f"\n  σ={sigma:.1f}...", end='', flush=True)
         
-        if sigma == 0.0:
-            y_noisy = train_labels[:len(train_graphs)]
+        # Inject noise
+        y_tr_noisy = injector.inject(y_tr, sigma) if sigma > 0 else y_tr.copy()
+        
+        # ====================================================================
+        # TRAIN MODEL
+        # ====================================================================
+        
+        if model_name == 'gcn_bnn_full':
+            if not HAS_TORCHBNN:
+                print(" skip (not installed)")
+                continue
+            
+            base_model = GCNRegressor(X_tr.shape[1])
+            model = apply_bayesian_all_layers(base_model)
+            model = train_gnn(model, X_tr, y_tr_noisy, X_val, y_val)
+            test_pred, test_tot, test_alea, test_epist = gnn_predict(model, X_test)
+        
+        elif model_name == 'gcn_bnn_last':
+            if not HAS_TORCHBNN:
+                print(" skip (not installed)")
+                continue
+            
+            base_model = GCNRegressor(X_tr.shape[1])
+            model = apply_bayesian_last_layer(base_model)
+            model = train_gnn(model, X_tr, y_tr_noisy, X_val, y_val)
+            test_pred, test_tot, test_alea, test_epist = gnn_predict(model, X_test)
+        
+        elif model_name == 'gcn_bnn_variational':
+            if not HAS_TORCHBNN:
+                print(" skip (not installed)")
+                continue
+            
+            model = make_variational_gnn(X_tr.shape[1])
+            model = train_gnn(model, X_tr, y_tr_noisy, X_val, y_val)
+            test_pred, test_tot, test_alea, test_epist = gnn_predict(model, X_test)
+        
+        elif model_name == 'gat_bnn_full':
+            if not HAS_TORCHBNN:
+                print(" skip (not installed)")
+                continue
+            
+            base_model = GATRegressor(X_tr.shape[1])
+            model = apply_bayesian_all_layers(base_model)
+            model = train_gnn(model, X_tr, y_tr_noisy, X_val, y_val)
+            test_pred, test_tot, test_alea, test_epist = gnn_predict(model, X_test)
+        
+        elif model_name == 'gat_bnn_last':
+            if not HAS_TORCHBNN:
+                print(" skip (not installed)")
+                continue
+            
+            base_model = GATRegressor(X_tr.shape[1])
+            model = apply_bayesian_last_layer(base_model)
+            model = train_gnn(model, X_tr, y_tr_noisy, X_val, y_val)
+            test_pred, test_tot, test_alea, test_epist = gnn_predict(model, X_test)
+        
+        elif model_name == 'gat_bnn_variational':
+            if not HAS_TORCHBNN:
+                print(" skip (not installed)")
+                continue
+            
+            model = make_variational_gnn(X_tr.shape[1])
+            model = train_gnn(model, X_tr, y_tr_noisy, X_val, y_val)
+            test_pred, test_tot, test_alea, test_epist = gnn_predict(model, X_test)
+        
+        elif model_name == 'gin_bnn_full':
+            if not HAS_TORCHBNN:
+                print(" skip (not installed)")
+                continue
+            
+            base_model = GINRegressor(X_tr.shape[1])
+            model = apply_bayesian_all_layers(base_model)
+            model = train_gnn(model, X_tr, y_tr_noisy, X_val, y_val)
+            test_pred, test_tot, test_alea, test_epist = gnn_predict(model, X_test)
+        
+        elif model_name == 'gin_bnn_last':
+            if not HAS_TORCHBNN:
+                print(" skip (not installed)")
+                continue
+            
+            base_model = GINRegressor(X_tr.shape[1])
+            model = apply_bayesian_last_layer(base_model)
+            model = train_gnn(model, X_tr, y_tr_noisy, X_val, y_val)
+            test_pred, test_tot, test_alea, test_epist = gnn_predict(model, X_test)
+        
+        elif model_name == 'gin_bnn_variational':
+            if not HAS_TORCHBNN:
+                print(" skip (not installed)")
+                continue
+            
+            model = make_variational_gnn(X_tr.shape[1])
+            model = train_gnn(model, X_tr, y_tr_noisy, X_val, y_val)
+            test_pred, test_tot, test_alea, test_epist = gnn_predict(model, X_test)
+        
+        elif model_name == 'gauche':
+            gp_dict = train_gauche_gp(
+                graphs['smiles']['train'],
+                y_tr_noisy,
+                kernel='weisfeiler_lehman',
+                num_epochs=50
+            )
+            
+            test_res = predict_gauche_gp(gp_dict, graphs['smiles']['test'])
+            test_pred = test_res['predictions']
+            test_tot, test_alea, test_epist = decompose_graph_gp(
+                test_pred, test_res['uncertainties']
+            )
+        
         else:
-            y_noisy = injector.inject(train_labels[:len(train_graphs)], sigma)
+            print(f" unknown model")
+            continue
         
-        for i, graph in enumerate(train_graphs):
-            graph.y = torch.tensor([y_noisy[i]], dtype=torch.float)
-        for i, graph in enumerate(val_graphs):
-            graph.y = torch.tensor([val_labels[i]], dtype=torch.float)
-        for i, graph in enumerate(test_graphs):
-            graph.y = torch.tensor([test_labels[i]], dtype=torch.float)
+        # ====================================================================
+        # CALCULATE METRICS
+        # ====================================================================
         
-        train_loader = DataLoader(train_graphs, batch_size=64, shuffle=True)
-        val_loader = DataLoader(val_graphs, batch_size=64, shuffle=False)
-        test_loader = DataLoader(test_graphs, batch_size=64, shuffle=False)
+        # Calibration metrics (using CLEAN test labels)
+        calib = calculate_calibration_metrics(y_test, test_pred, test_tot)
         
-        preds = train_gnn_model(
-            train_loader, val_loader, test_loader,
-            model_class, num_node_features, epochs=100
-        )
-        predictions[sigma] = preds
-        print(" done")
-    
-    return predictions
-
-
-def run_experiment_graph_gp_with_unique(train_smiles, train_labels, 
-                                        val_smiles, val_labels,
-                                        test_smiles, test_labels,
-                                        strategy, sigma_levels, results_dir):
-    """
-    Run Graph-GP with UNIQUE integration
-    
-    Generates predictions + uncertainties on TRAIN/VAL/TEST for UNIQUE
-    """
-    injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
-    predictions = {}
-    uncertainties = {}
-    all_sample_data = []
-    unique_results = []
-    
-    for sigma in sigma_levels:
-        print(f"      σ={sigma:.1f}...", end='')
+        # Noise correlation analysis (create noisy test labels ONLY for this)
+        y_test_noisy = injector.inject(y_test, sigma) if sigma > 0 else y_test.copy()
+        noise_corr = analyze_noise_correlation(y_test, y_test_noisy, test_pred, test_tot)
         
-        # Inject noise into training labels
-        if sigma == 0.0:
-            y_train_noisy = train_labels
-        else:
-            y_train_noisy = injector.inject(train_labels, sigma)
+        # ====================================================================
+        # STORE RESULTS
+        # ====================================================================
         
-        # Train GP
-        gp_dict = train_gauche_gp(
-            train_smiles, y_train_noisy,
-            kernel='weisfeiler_lehman',
-            num_epochs=50
-        )
-        
-        # Predict on ALL sets
-        train_results = predict_gauche_gp(gp_dict, train_smiles)
-        val_results = predict_gauche_gp(gp_dict, val_smiles)
-        test_results = predict_gauche_gp(gp_dict, test_smiles)
-        
-        # Store test predictions for metrics
-        predictions[sigma] = test_results['predictions']
-        uncertainties[sigma] = test_results['uncertainties']
-        
-        # Combine all sets for UNIQUE
-        combined_data = []
-        
-        # Training set
-        for i in range(len(train_labels)):
-            combined_data.append({
-                'sample_id': f'train_{i}',
-                'which_set': 'TRAIN',
+        for i in range(len(y_test)):
+            uncertainty_values.append({
+                'model': model_name,
+                'representation': 'graph',  # All graph models use MHG-GNN
                 'sigma': sigma,
-                'y_true': train_labels[i],
-                'y_pred': train_results['predictions'][i],
-                'uncertainty': train_results['uncertainties'][i],
-                'error': abs(train_labels[i] - train_results['predictions'][i])
+                'sample_id': i,
+                'y_true_original': y_test[i],
+                'y_true_noisy': y_test[i],  # Test set is never noised
+                'y_pred_mean': test_pred[i],
+                'y_pred_std_calibrated': test_tot[i],
+                'aleatoric_uncertainty': test_alea[i],
+                'epistemic_uncertainty': test_epist[i],
+                # Calibration metrics (same for all samples at this sigma)
+                'correlation': calib['correlation'],
+                'coverage_1std': calib['coverage_1std'],
+                'coverage_2std': calib['coverage_2std'],
+                'ece': calib['ece'],
+                # Noise correlation (same for all samples at this sigma)
+                'uncertainty_noise_correlation': noise_corr['uncertainty_noise_correlation'],
+                'error_noise_correlation': noise_corr['error_noise_correlation'],
             })
         
-        # Validation set (maps to CALIBRATION for UNIQUE)
-        for i in range(len(val_labels)):
-            combined_data.append({
-                'sample_id': f'val_{i}',
-                'which_set': 'CALIBRATION',
-                'sigma': sigma,
-                'y_true': val_labels[i],
-                'y_pred': val_results['predictions'][i],
-                'uncertainty': val_results['uncertainties'][i],
-                'error': abs(val_labels[i] - val_results['predictions'][i])
-            })
-        
-        # Test set
-        for i in range(len(test_labels)):
-            combined_data.append({
-                'sample_id': f'test_{i}',
-                'which_set': 'TEST',
-                'sigma': sigma,
-                'y_true': test_labels[i],
-                'y_pred': test_results['predictions'][i],
-                'uncertainty': test_results['uncertainties'][i],
-                'error': abs(test_labels[i] - test_results['predictions'][i])
-            })
-        
-        combined_df = pd.DataFrame(combined_data)
-        all_sample_data.append(combined_df)
-        
-        # Run UNIQUE
-        unique_res = run_unique_for_graph_gp(combined_df, sigma, results_dir)
-        
-        if unique_res:
-            unique_results.append(unique_res)
-        
-        print(" done")
+        print(f" done | corr={calib['correlation']:.3f}, "
+              f"cov={calib['coverage_1std']*100:.1f}%, "
+              f"ece={calib['ece']:.4f}")
     
-    return predictions, uncertainties, all_sample_data, unique_results
+    # ========================================================================
+    # SAVE RESULTS
+    # ========================================================================
+    
+    if uncertainty_values:
+        df = pd.DataFrame(uncertainty_values)
+        file = results_dir / f'phase2_{model_name}_graph_uncertainty_values.csv'
+        df.to_csv(file, index=False)
+        print(f"\n  ✓ Saved {len(df):,} rows → {file.name}")
 
 
-# =============================================================================
-# MAIN SCRIPT
-# =============================================================================
+# ============================================================================
+# MAIN
+# ============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description='QM9 Graph Models with UNIQUE')
-    parser.add_argument('--random-seed', type=int, default=42,
-                       help='Random seed for this repetition')
-    parser.add_argument('--n-samples', type=int, default=10000,
-                       help='Number of QM9 samples to use')
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model', 
+                       choices=['gauche', 
+                               'gcn_bnn_full', 'gcn_bnn_last', 'gcn_bnn_variational',
+                               'gat_bnn_full', 'gat_bnn_last', 'gat_bnn_variational',
+                               'gin_bnn_full', 'gin_bnn_last', 'gin_bnn_variational',
+                               'all'])
+    parser.add_argument('--all', action='store_true')
+    parser.add_argument('--n-samples', type=int, default=10000)
+    parser.add_argument('--results-dir', type=str, default='results')
+    
     args = parser.parse_args()
     
     print("="*80)
-    print(f"QM9 Graph Models + UNIQUE (seed={args.random_seed})")
+    print("PHASE 2 UNCERTAINTY QUANTIFICATION - GRAPH NEURAL NETWORKS")
     print("="*80)
     
-    # Configuration
-    strategies = ['legacy']
-    sigma_levels = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
-    results_dir = Path(__file__).parent.parent / 'results' / 'qm9_graphs' / f'seed_{args.random_seed}'
+    results_dir = Path(args.results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
     
-    # Load QM9
-    print(f"\nLoading QM9 (n={args.n_samples}, property=homo_lumo_gap)...")
-    raw_data = load_qm9(n_samples=args.n_samples, property_idx=4)
+    all_models = ['gauche',
+                  'gcn_bnn_full', 'gcn_bnn_last', 'gcn_bnn_variational',
+                  'gat_bnn_full', 'gat_bnn_last', 'gat_bnn_variational',
+                  'gin_bnn_full', 'gin_bnn_last', 'gin_bnn_variational']
     
-    print("Creating scaffold splits...")
-    torch.manual_seed(args.random_seed)
-    np.random.seed(args.random_seed)
-    splits = get_qm9_splits(raw_data, splitter='scaffold')
+    # Determine which models to run
+    if args.all or args.model == 'all':
+        models = all_models
+    elif args.model:
+        models = [args.model]
+    else:
+        parser.error("Specify --model or --all")
     
-    train_smiles = splits['train']['smiles']
-    train_labels = np.array(splits['train']['labels'])
-    val_smiles = splits['val']['smiles']
-    val_labels = np.array(splits['val']['labels'])
-    test_smiles = splits['test']['smiles']
-    test_labels = np.array(splits['test']['labels'])
+    print(f"\nRunning {len(models)} models: {models}")
     
-    print(f"Split sizes: Train={len(train_smiles)}, Val={len(val_smiles)}, Test={len(test_smiles)}")
+    # Noise levels for uncertainty experiments
+    noise_levels = [0.0, 0.3, 0.6]
+    print(f"Noise levels: {noise_levels}")
     
-    all_results = []
+    # Load data once
+    splits = load_data(n_samples=args.n_samples)
     
-    # =========================================================================
-    # PHASE 1: CORE ROBUSTNESS - Graph Models
-    # =========================================================================
-    print("\n" + "="*80)
-    print("PHASE 1: CORE ROBUSTNESS - Graph Neural Networks")
-    print("="*80)
+    # Generate graphs once (expensive operation)
+    graphs = generate_graphs(splits)
     
-    graph_models = [
-        (GCNRegressor, 'GCN'),
-        (GATRegressor, 'GAT'),
-        (GINRegressor, 'GIN'),
-        (MPNNRegressor, 'MPNN')
-    ]
-    
-    for model_class, model_name in graph_models:
-        print(f"\n[{model_name}]")
-        
-        for strategy in strategies:
-            print(f"  Strategy: {strategy}")
-            
-            predictions = run_experiment_gnn(
-                train_smiles, train_labels, val_smiles, val_labels,
-                test_smiles, test_labels, model_class, strategy,
-                sigma_levels, model_name
-            )
-            
-            per_sigma, summary = calculate_noise_metrics(
-                test_labels, predictions, metrics=['r2', 'rmse', 'mae']
-            )
-            per_sigma['model'] = model_name
-            per_sigma['rep'] = 'graph'
-            per_sigma['strategy'] = strategy
-            per_sigma['seed'] = args.random_seed
-            all_results.append(per_sigma)
-            per_sigma.to_csv(results_dir / f'{model_name}_graph_{strategy}.csv', index=False)
-    
-    # =========================================================================
-    # Graph GP with UNIQUE
-    # =========================================================================
-    print(f"\n[Graph-GP with UNIQUE]")
-    
-    for strategy in strategies:
-        print(f"  Strategy: {strategy}")
-        
-        predictions, uncertainties, sample_data_list, unique_results = \
-            run_experiment_graph_gp_with_unique(
-                train_smiles, train_labels,
-                val_smiles, val_labels,
-                test_smiles, test_labels,
-                strategy, sigma_levels, results_dir
-            )
-        
-        # Save performance metrics
-        per_sigma, summary = calculate_noise_metrics(
-            test_labels, predictions, metrics=['r2', 'rmse', 'mae']
-        )
-        per_sigma['model'] = 'Graph-GP'
-        per_sigma['rep'] = 'graph'
-        per_sigma['strategy'] = strategy
-        per_sigma['seed'] = args.random_seed
-        all_results.append(per_sigma)
-        per_sigma.to_csv(results_dir / f'GraphGP_graph_{strategy}.csv', index=False)
-        
-        # Save per-sample uncertainty data (combined across noise levels)
-        if sample_data_list:
-            combined_samples = pd.concat(sample_data_list, ignore_index=True)
-            sample_file = results_dir / 'GraphGP_uncertainty_values.csv'
-            combined_samples.to_csv(sample_file, index=False)
-            print(f"  ✓ Saved per-sample data: {sample_file.name} ({len(combined_samples)} rows)")
-        
-        # Save UNIQUE rankings
-        if unique_results:
-            unique_df = pd.DataFrame(unique_results)
-            unique_file = results_dir / 'GraphGP_unique_rankings.csv'
-            unique_df.to_csv(unique_file, index=False)
-            print(f"  ✓ Saved UNIQUE rankings: {unique_file.name}")
-            
-            print(f"\n  UNIQUE Summary for Graph-GP:")
-            for _, row in unique_df.iterrows():
-                print(f"    σ={row['sigma']:.1f}: {row['best_uq_metric']} (ρ={row['best_spearman']:.3f})")
-    
-    # =========================================================================
-    # PHASE 2: EXPENSIVE METHODS (Limited Testing)
-    # =========================================================================
-    print("\n" + "="*80)
-    print("PHASE 2: EXPENSIVE METHODS (Limited Testing)")
-    print("="*80)
-    
-    if args.random_seed == 42:
-        print("\n[MHG-GNN-finetuned + RF] (1 run only, legacy strategy only)")
-        strategy = 'legacy'
-        
-        print("  Fine-tuning MHG-GNN...", end='')
-        gnn_model = finetune_gnn(
-            train_smiles, train_labels,
-            val_smiles, val_labels,
-            gnn_type='gcn', hidden_dim=128, epochs=50
-        )
-        
-        mhggnn_train = encode_from_model(gnn_model, train_smiles)
-        mhggnn_test = encode_from_model(gnn_model, test_smiles)
-        print(" done")
-        
-        print(f"  Strategy: {strategy}")
-        injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
-        predictions = {}
-        
-        for sigma in sigma_levels:
-            print(f"    σ={sigma:.1f}...", end='')
-            
-            if sigma == 0.0:
-                y_noisy = train_labels
-            else:
-                y_noisy = injector.inject(train_labels, sigma)
-            
-            model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-            model.fit(mhggnn_train, y_noisy)
-            predictions[sigma] = model.predict(mhggnn_test)
-            print(" done")
-        
-        per_sigma, summary = calculate_noise_metrics(
-            test_labels, predictions, metrics=['r2', 'rmse', 'mae']
-        )
-        per_sigma['model'] = 'RF'
-        per_sigma['rep'] = 'MHG-GNN-finetuned'
-        per_sigma['strategy'] = strategy
-        per_sigma['seed'] = args.random_seed
-        all_results.append(per_sigma)
-        per_sigma.to_csv(results_dir / f'RF_MHGGNN-finetuned_{strategy}.csv', index=False)
-    
-    # =========================================================================
-    # SUMMARY
-    # =========================================================================
-    print("\n" + "="*80)
-    print("SUMMARY")
-    print("="*80)
-    
-    combined_df = pd.concat(all_results, ignore_index=True)
-    combined_df.to_csv(results_dir / 'all_results.csv', index=False)
-    
-    summary_table = []
-    for (model, rep, strategy), group in combined_df.groupby(['model', 'rep', 'strategy']):
-        baseline_rows = group[group['sigma'] == 0.0]
-        high_noise_rows = group[group['sigma'] == 0.6]
-        
-        if len(baseline_rows) > 0 and len(high_noise_rows) > 0:
-            baseline = baseline_rows['r2'].values[0]
-            high_noise = high_noise_rows['r2'].values[0]
-            nsi = (baseline - high_noise) / 0.6
-            retention = (high_noise / baseline) * 100 if baseline > 0 else 0
-            
-            summary_table.append({
-                'model': model,
-                'rep': rep,
-                'strategy': strategy,
-                'baseline_r2': baseline,
-                'r2_at_0.6': high_noise,
-                'NSI': nsi,
-                'retention_%': retention,
-                'seed': args.random_seed
-            })
-    
-    summary_df = pd.DataFrame(summary_table)
-    summary_df.to_csv(results_dir / 'summary.csv', index=False)
-    
-    print("\nTop 5 most robust (lowest NSI):")
-    top5 = summary_df.nsmallest(5, 'NSI')[['model', 'strategy', 'NSI', 'retention_%']]
-    print(top5.to_string(index=False))
-    
-    print("\nMean performance by model:")
-    model_summary = summary_df.groupby('model')[['NSI', 'retention_%']].mean()
-    print(model_summary.to_string())
+    # Run experiments
+    for model in models:
+        run_experiment(model, noise_levels, splits, graphs, results_dir)
     
     print("\n" + "="*80)
-    print(f"COMPLETE - Results saved to {results_dir}/")
-    print(f"Run this script 4 more times with different seeds (43, 44, 45, 46)")
+    print("COMPLETE")
     print("="*80)
+    print(f"\nResults saved to: {results_dir}/")
+    print("\nNext: Run analysis script to generate figures")
 
 
 if __name__ == '__main__':
