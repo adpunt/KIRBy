@@ -1024,8 +1024,8 @@ def create_figure2_representation_effects(df, metrics_df, output_dir):
     print(f"Unique models in graph: {sorted(graph_data_raw['model'].unique())}")
     print(f"Unique sigmas in graph: {sorted(graph_data_raw['sigma'].unique())}")
     
-    # HARDCODED EXCLUSION: Remove full Bayesian GNNs
-    exclude_models = ['gcn_bnn_full', 'mpnn_bnn_full', 'gin_bnn_full', 'gat_bnn_full']
+    # HARDCODED EXCLUSION: Remove full Bayesian GNNs AND lowercase gcn
+    exclude_models = ['gcn_bnn_full', 'mpnn_bnn_full', 'gin_bnn_full', 'gat_bnn_full', 'gcn']
     df_panel_d = df[~((df['model'].isin(exclude_models)) & (df['representation'] == 'graph'))].copy()
     
     graph_data_filtered = df_panel_d[df_panel_d['representation'] == 'graph'].copy()
@@ -1033,26 +1033,20 @@ def create_figure2_representation_effects(df, metrics_df, output_dir):
     print(f"  Filtered graph data: {len(graph_data_filtered)} rows")
     print(f"  Remaining models: {sorted(graph_data_filtered['model'].unique())}")
     
-    # Check specific problem sigmas
-    for test_sigma in [0.5, 0.6, 0.7, 0.8]:
-        sigma_data = graph_data_filtered[np.abs(graph_data_filtered['sigma'] - test_sigma) < 0.05]
-        print(f"\n  Sigma {test_sigma}: {len(sigma_data)} rows")
-        if len(sigma_data) > 0:
-            print(f"    Models: {sorted(sigma_data['model'].unique())}")
-            print(f"    R² range: [{sigma_data['r2'].min():.3f}, {sigma_data['r2'].max():.3f}]")
-            print(f"    Median R²: {sigma_data['r2'].median():.3f}")
-        else:
-            print(f"    NO DATA AT THIS SIGMA!")
-    
     representations = sorted(df_panel_d['representation'].unique())
     for rep in representations:
         rep_data = df_panel_d[df_panel_d['representation'] == rep]
         if len(rep_data) == 0:
             continue
-        avg_by_sigma = rep_data.groupby('sigma')['r2'].median().reset_index()
+        
+        # CRITICAL FIX: Round sigma to avoid floating point duplicates
+        rep_data = rep_data.copy()
+        rep_data['sigma_rounded'] = rep_data['sigma'].round(2)
+        avg_by_sigma = rep_data.groupby('sigma_rounded')['r2'].median().reset_index()
+        avg_by_sigma.rename(columns={'sigma_rounded': 'sigma'}, inplace=True)
         
         if rep == 'graph':
-            print(f"\nGraph median by sigma:")
+            print(f"\nGraph median by sigma (after rounding):")
             print(avg_by_sigma)
         
         color = REPRESENTATION_COLORS.get(rep, '#999999')
