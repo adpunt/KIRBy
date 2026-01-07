@@ -85,7 +85,7 @@ def load_old_phase0c_data(results_dir="../../qsar_qm_models/results"):
     return results
 
 
-def load_new_graph_data(results_dir="../results"):
+def load_new_graph_data(results_dir="results"):
     """Load NEW graph screening data from phase1_graphs_updated"""
     print("\n" + "="*80)
     print("LOADING NEW GRAPH SCREENING DATA")
@@ -270,7 +270,7 @@ def define_robustness_score(metrics_df):
 # ============================================================================
 
 def main(old_results_dir="../../qsar_qm_models/results", 
-         new_results_dir="../results"):
+         new_results_dir="results"):
     """Main execution"""
     print("="*80)
     print("PHASE 0 ANALYSIS - GLOBAL SCREENING (EXTENDED WITH GRAPHS)")
