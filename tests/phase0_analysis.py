@@ -31,7 +31,7 @@ sns.set_style("ticks")
 plt.rcParams.update({
     'figure.dpi': 300,
     'font.family': 'sans-serif',
-    'font.sans-serif': ['Arial', 'Helvetica'],
+    'font.sans-serif': ['DejaVu Sans'],
     'font.size': 8,
     'axes.labelsize': 9,
     'axes.titlesize': 10,
