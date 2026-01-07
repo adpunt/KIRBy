@@ -309,6 +309,13 @@ def load_phase1_results(old_results_dir="../../qsar_qm_models/results",
         'rmse': 'mean',
         'mae': 'mean',
     }).reset_index()
+
+    mlp_mtl_models = ['mlp', 'mlp_bnn_full', 'mlp_bnn_last', 'mlp_bnn_variational',
+                      'residual_mlp', 'residual_mlp_bnn_full', 'residual_mlp_bnn_last',
+                      'residual_mlp_bnn_variational',
+                      'mtl', 'mtl_bnn_full', 'mtl_bnn_last', 'mtl_bnn_variational']
+
+    results = results[~results['model'].isin(mlp_mtl_models)]
     
     print(f"\nFinal data: {len(results)} rows")
     print(f"Unique models: {results['model'].nunique()}")
