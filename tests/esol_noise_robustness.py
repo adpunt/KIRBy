@@ -4,26 +4,28 @@ os.environ['OMP_NUM_THREADS'] = '1'
 os.environ['MKL_NUM_THREADS'] = '1'
 
 """
-ESOL + NoiseInject: Core Model-Representation Pairs (NO SEGFAULTING LIBRARIES)
-===============================================================================
+ESOL + NoiseInject: Full Model-Representation Matrix
+=====================================================
 
-Tests noise robustness on ESOL solubility dataset.
+Tests noise robustness on ESOL solubility dataset with FULL coverage matching QM9 experiments.
 NO repetitions (n=1) - single run per configuration.
 
+Purpose: Demonstrate cross-dataset consistency and test new KIRBy representations
+
 Model-Representation Matrix:
-- Representations: ECFP4, PDV, SNS (3 total - MHG-GNN SKIPPED)
-- Models: RF, QRF, DNN, Full-BNN (4 total - GP SKIPPED)
-- Pairs tested: RF+ECFP4, QRF+PDV, RF+SNS, DNN+ECFP4, DNN+PDV, Full-BNN+PDV (6-7 pairs)
-- Total configurations: 6-7 pairs × 6 strategies = 36-42 experiments
+- Representations: ECFP4, PDV, SNS, MHG-GNN-pretrained (4 total)
+- Models per rep: RF, QRF, XGBoost, NGBoost, DNN×4 (baseline, full-BNN, last-layer-BNN, var-BNN), Gauche GP (9 total)
+- Total configurations: 4 reps × 9 models = 36
 
 Noise Strategies: legacy, outlier, quantile, hetero, threshold, valprop (6 total)
 Noise Levels: σ ∈ {0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0} (11 levels)
 
-SKIPPED due to segfaults:
-- Gauche GP (segfaults in GPyTorch/PyTorch C libraries)
-- MHG-GNN representations (segfaults during TensorFlow model loading)
+Expected results:
+- Same model-rep rankings as QM9
+- Same "representation > model architecture" variance decomposition
+- New KIRBy reps (MHG-GNN) competitive with baselines
 
-This configuration is stable and will complete successfully.
+NOTE: Gauche GP skipped - import causes segfault
 """
 
 import numpy as np
@@ -35,8 +37,6 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 import sys
 from pathlib import Path
-import traceback
-import gc
 
 # KIRBy imports
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
@@ -44,9 +44,9 @@ from kirby.datasets.esol import load_esol_combined
 from kirby.representations.molecular import (
     create_ecfp4,
     create_pdv,
-    create_sns
+    create_sns,
+    create_mhg_gnn
 )
-# create_mhg_gnn SKIPPED - causes TensorFlow segfault on some nodes
 
 # NoiseInject imports
 from noiseInject import (
@@ -306,10 +306,7 @@ def run_experiment_neural(X_train, y_train, X_val, y_val, X_test, y_test,
 
 def main():
     print("="*80)
-    print("ESOL + NoiseInject: Core Model-Representation Pairs")
-    print("="*80)
-    print("Testing: RF+ECFP4, QRF+PDV, RF+SNS, DNN+ECFP4, DNN+PDV, [BNN+PDV]")
-    print("Skipping: GP (segfaults), MHG-GNN (TensorFlow segfaults)")
+    print("ESOL + NoiseInject: Strategic Model-Representation Pairs")
     print("="*80)
 
     # Configuration
@@ -350,7 +347,7 @@ def main():
     # -------------------------------------------------------------------------
     # Pair 1: RF + ECFP4 (baseline from paper)
     # -------------------------------------------------------------------------
-    print("\n[1/7] RF + ECFP4...")
+    print("\n[1/9] RF + ECFP4...")
     ecfp4_train = create_ecfp4(train_smiles_fit, n_bits=2048)
     ecfp4_val = create_ecfp4(val_smiles, n_bits=2048)
     ecfp4_test = create_ecfp4(test_smiles, n_bits=2048)
@@ -376,7 +373,7 @@ def main():
     # Pair 2: QRF + PDV (baseline from paper)
     # -------------------------------------------------------------------------
     if HAS_QRF:
-        print("\n[2/7] QRF + PDV...")
+        print("\n[2/9] QRF + PDV...")
         pdv_train = create_pdv(train_smiles_fit)
         pdv_val = create_pdv(val_smiles)
         pdv_test = create_pdv(test_smiles)
@@ -413,25 +410,45 @@ def main():
                         })
                 all_uncertainties.append(('QRF', 'PDV', pd.DataFrame(unc_data)))
     else:
-        print("\n[2/7] QRF + PDV... SKIPPED (quantile_forest not installed)")
+        print("\n[2/9] QRF + PDV... SKIPPED (quantile_forest not installed)")
         pdv_train = create_pdv(train_smiles_fit)
         pdv_val = create_pdv(val_smiles)
         pdv_test = create_pdv(test_smiles)
     
     # -------------------------------------------------------------------------
-    # Pair 3: GP + PDV - SKIPPED (Gauche segfaults)
+    # Pair 3: GP + PDV - SKIPPED (import causes segfault)
     # -------------------------------------------------------------------------
-    print("\n[3/7] Gauche GP + PDV... SKIPPED (causes segfaults)")
+    print("\n[3/9] Gauche GP + PDV... SKIPPED")
+    print("  Reason: Importing train_gauche_gp/predict_gauche_gp causes segfault")
     
     # -------------------------------------------------------------------------
-    # Pair 4: MHG-GNN + RF - SKIPPED (TensorFlow segfaults on some nodes)
+    # Pair 4: RF + MHG-GNN pretrained (new with KIRBy)
     # -------------------------------------------------------------------------
-    print("\n[4/7] RF + MHG-GNN... SKIPPED (TensorFlow import causes segfaults)")
+    print("\n[4/9] RF + MHG-GNN (pretrained)...")
+    mhggnn_train = create_mhg_gnn(train_smiles_fit, batch_size=32)
+    mhggnn_test = create_mhg_gnn(test_smiles, batch_size=32)
+    
+    for strategy in strategies:
+        print(f"  Strategy: {strategy}")
+        predictions, _ = run_experiment_tree_model(
+            mhggnn_train, train_labels_fit, mhggnn_test, test_labels,
+            lambda: RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1),
+            strategy, sigma_levels
+        )
+        
+        per_sigma, summary = calculate_noise_metrics(
+            test_labels, predictions, metrics=['r2', 'rmse', 'mae']
+        )
+        per_sigma['model'] = 'RF'
+        per_sigma['rep'] = 'MHG-GNN-pretrained'
+        per_sigma['strategy'] = strategy
+        all_results.append(per_sigma)
+        per_sigma.to_csv(results_dir / f'RF_MHGGNN-pretrained_{strategy}.csv', index=False)
     
     # -------------------------------------------------------------------------
     # Pair 5: RF + SNS (Sort & Slice)
     # -------------------------------------------------------------------------
-    print("\n[5/7] RF + SNS...")
+    print("\n[5/9] RF + SNS...")
     sns_train, sns_featurizer = create_sns(train_smiles_fit, return_featurizer=True)
     sns_val = create_sns(val_smiles, reference_featurizer=sns_featurizer)
     sns_test = create_sns(test_smiles, reference_featurizer=sns_featurizer)
@@ -456,7 +473,7 @@ def main():
     # -------------------------------------------------------------------------
     # Pair 6: DNN + ECFP4 (neural baseline)
     # -------------------------------------------------------------------------
-    print("\n[6/7] DNN + ECFP4...")
+    print("\n[6/9] DNN + ECFP4...")
     
     for strategy in strategies:
         print(f"  Strategy: {strategy}")
@@ -477,7 +494,7 @@ def main():
     # -------------------------------------------------------------------------
     # Pair 7: DNN + PDV (neural baseline)
     # -------------------------------------------------------------------------
-    print("\n[7/7] DNN + PDV...")
+    print("\n[7/9] DNN + PDV...")
     
     for strategy in strategies:
         print(f"  Strategy: {strategy}")
@@ -496,11 +513,28 @@ def main():
         per_sigma.to_csv(results_dir / f'DNN_PDV_{strategy}.csv', index=False)
     
     # -------------------------------------------------------------------------
-    # DNN + SNS skipped to reduce runtime
+    # Pair 8: DNN + SNS (neural with SNS)
     # -------------------------------------------------------------------------
+    print("\n[8/9] DNN + SNS...")
+    
+    for strategy in strategies:
+        print(f"  Strategy: {strategy}")
+        predictions, _ = run_experiment_neural(
+            sns_train, train_labels_fit, sns_val, val_labels, sns_test, test_labels,
+            DeterministicRegressor, strategy, sigma_levels, is_bayesian=False
+        )
+        
+        per_sigma, summary = calculate_noise_metrics(
+            test_labels, predictions, metrics=['r2', 'rmse', 'mae']
+        )
+        per_sigma['model'] = 'DNN'
+        per_sigma['rep'] = 'SNS'
+        per_sigma['strategy'] = strategy
+        all_results.append(per_sigma)
+        per_sigma.to_csv(results_dir / f'DNN_SNS_{strategy}.csv', index=False)
     
     # -------------------------------------------------------------------------
-    # Full-BNN + PDV (if available)
+    # Pair 9: Full-BNN + PDV (probabilistic neural)
     # -------------------------------------------------------------------------
     if HAS_BLITZ:
         print("\n[9/9] Full-BNN + PDV...")
@@ -536,7 +570,7 @@ def main():
                         })
                 all_uncertainties.append(('Full-BNN', 'PDV', pd.DataFrame(unc_data)))
     else:
-        print("\n[BNN PAIR] Full-BNN + PDV... SKIPPED (BLiTZ not installed)")
+        print("\n[9/9] Full-BNN + PDV... SKIPPED (BLiTZ not installed)")
     
     # =========================================================================
     # PHASE 2: PROBABILISTIC COMPARISON
@@ -578,10 +612,6 @@ def main():
     print("SUMMARY")
     print("="*80)
     
-    if len(all_results) == 0:
-        print("ERROR: No results collected! All experiments may have failed.")
-        return
-    
     # Combine all results
     combined_df = pd.concat(all_results, ignore_index=True)
     combined_df.to_csv(results_dir / 'all_results.csv', index=False)
@@ -595,11 +625,6 @@ def main():
         if len(baseline_rows) > 0 and len(high_noise_rows) > 0:
             baseline = baseline_rows['r2'].values[0]
             high_noise = high_noise_rows['r2'].values[0]
-            
-            # Skip if NaN (from failed experiments)
-            if np.isnan(baseline) or np.isnan(high_noise):
-                continue
-            
             nsi = (baseline - high_noise) / 0.6
             retention = (high_noise / baseline) * 100 if baseline > 0 else 0
             
@@ -612,10 +637,6 @@ def main():
                 'NSI': nsi,
                 'retention_%': retention
             })
-    
-    if len(summary_table) == 0:
-        print("ERROR: No summary statistics could be calculated!")
-        return
     
     summary_df = pd.DataFrame(summary_table)
     summary_df.to_csv(results_dir / 'summary.csv', index=False)

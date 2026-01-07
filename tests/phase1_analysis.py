@@ -378,9 +378,43 @@ def calculate_robustness_metrics(df, sigma_high=0.6):
         metrics_list.append(metrics)
     
     metrics_df = pd.DataFrame(metrics_list)
+    
     print(f"Calculated metrics for {len(metrics_df)} configurations")
     
-    return metrics_df
+    # FILTER OUTLIERS
+    print("\n" + "="*80)
+    print("FILTERING OUTLIERS")
+    print("="*80)
+    
+    original_count = len(metrics_df)
+    
+    # Identify outliers
+    outliers = metrics_df[
+        (metrics_df['baseline_r2'] < 0.1) |  # Terrible baseline
+        (metrics_df['retention_pct'] < -50) |  # Extreme degradation
+        (metrics_df['retention_pct'] > 150)    # Suspicious improvement
+    ].copy()
+    
+    if len(outliers) > 0:
+        print(f"\nFound {len(outliers)} outlier configurations:")
+        print("\nOutliers (will be excluded from figures):")
+        for _, row in outliers.iterrows():
+            print(f"  - {row['model']}/{row['representation']}: "
+                  f"baseline_r2={row['baseline_r2']:.3f}, "
+                  f"retention={row['retention_pct']:.1f}%")
+        
+        # Remove outliers
+        metrics_df = metrics_df[
+            (metrics_df['baseline_r2'] >= 0.1) &
+            (metrics_df['retention_pct'] >= -50) &
+            (metrics_df['retention_pct'] <= 150)
+        ].copy()
+        
+        print(f"\nAfter filtering: {len(metrics_df)} configurations ({original_count - len(metrics_df)} removed)")
+    else:
+        print("No outliers detected")
+    
+    return metrics_df, outliers
 
 # ============================================================================
 # FIGURE GENERATION - ALL FROM OLD SCRIPT
@@ -709,7 +743,6 @@ def perform_statistical_comparisons(df, metrics_df, output_dir):
 # ============================================================================
 # MAIN
 # ============================================================================
-
 def main(old_results_dir="../../qsar_qm_models/results",
          new_results_dir="results"):
     """Main execution"""
@@ -722,13 +755,18 @@ def main(old_results_dir="../../qsar_qm_models/results",
         print("ERROR: No data loaded!")
         return
     
-    metrics_df = calculate_robustness_metrics(df, sigma_high=0.6)
+    metrics_df, outliers = calculate_robustness_metrics(df, sigma_high=0.6)  # <-- CHANGED
     
     output_dir = Path(new_results_dir) / "phase1_figures_combined"
     output_dir.mkdir(exist_ok=True, parents=True)
     
     metrics_df.to_csv(output_dir / "phase1_robustness_metrics.csv", index=False)
     print(f"\n✓ Saved metrics to {output_dir / 'phase1_robustness_metrics.csv'}")
+    
+    # Save outliers
+    if len(outliers) > 0:
+        outliers.to_csv(output_dir / "phase1_outliers_excluded.csv", index=False)
+        print(f"✓ Saved {len(outliers)} outliers to {output_dir / 'phase1_outliers_excluded.csv'}")
     
     print("\n" + "="*80)
     print("GENERATING FIGURES")
