@@ -91,13 +91,13 @@ class BNNRegressor(nn.Module):
 def make_bnn_full(input_size):
     """Bayesian NN with all layers Bayesian"""
     model = nn.Sequential(
-        bnn.BayesLinear(input_size, 128, prior_mu=0, prior_sigma=0.1),
+        bnn.BayesLinear(in_features=input_size, out_features=128, prior_mu=0, prior_sigma=0.1),
         nn.ReLU(),
         nn.Dropout(0.2),
-        bnn.BayesLinear(128, 64, prior_mu=0, prior_sigma=0.1),
+        bnn.BayesLinear(in_features=128, out_features=64, prior_mu=0, prior_sigma=0.1),
         nn.ReLU(),
         nn.Dropout(0.2),
-        bnn.BayesLinear(64, 1, prior_mu=0, prior_sigma=0.1)
+        bnn.BayesLinear(in_features=64, out_features=1, prior_mu=0, prior_sigma=0.1)
     )
     return model
 
@@ -111,7 +111,7 @@ def make_bnn_last(input_size):
         nn.Linear(128, 64),
         nn.ReLU(),
         nn.Dropout(0.2),
-        bnn.BayesLinear(64, 1, prior_mu=0, prior_sigma=0.1)
+        bnn.BayesLinear(in_features=64, out_features=1, prior_mu=0, prior_sigma=0.1)
     )
     return model
 

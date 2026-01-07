@@ -67,21 +67,26 @@ MODEL_COLORS = {
     'ngboost': '#f39c12',
     'dnn': '#34495e',
     'gp': '#9b59b6',
-    'full-bnn': '#8e44ad',
+    'fullbnn': '#8e44ad',
+    'full_bnn': '#8e44ad',
+    'lastlayerbnn': '#e67e22',
+    'lastlayer_bnn': '#e67e22',
+    'varbnn': '#c0392b',
+    'var_bnn': '#c0392b',
 }
 
 REPRESENTATION_COLORS = {
     'ecfp4': '#DE8F05',
     'pdv': '#56B4E9',
     'sns': '#029E73',
-    'mhg-gnn-pretrained': '#CC78BC',
+    'mhg_gnn_pretrained': '#CC78BC',
 }
 
 # ============================================================================
 # DATA LOADING
 # ============================================================================
 
-def load_dataset_results(dataset_name, results_dir="../results"):
+def load_dataset_results(dataset_name, results_dir="/results"):
     """
     Load all results for a specific dataset
     
@@ -135,7 +140,7 @@ def load_dataset_results(dataset_name, results_dir="../results"):
                     continue
             
             # Parse filename: {MODEL}_{REP}_{STRATEGY}.csv
-            # Handle: RF_ECFP4_legacy, FullBNN_PDV_hetero, RF_MHGGNN-pretrained_outlier
+            # Handle: RF_ECFP4_legacy, FullBNN_PDV_hetero, RF_MHGGNNpretrained_outlier
             name_parts = filepath.stem.split('_')
             
             if len(name_parts) < 3:
@@ -148,7 +153,7 @@ def load_dataset_results(dataset_name, results_dir="../results"):
             # Model and rep are before strategy
             model_rep_parts = name_parts[:-1]
             
-            # Parse model (handle multi-part like FullBNN, Full-BNN)
+            # Parse model (handle multi-part like FullBNN, LastLayerBNN)
             if len(model_rep_parts) == 2:
                 model, rep = model_rep_parts
             elif len(model_rep_parts) == 3:
@@ -171,13 +176,13 @@ def load_dataset_results(dataset_name, results_dir="../results"):
                 model = model_rep_parts[0]
                 rep = '_'.join(model_rep_parts[1:])
             
-            # Normalize names
+            # Normalize names from filename
             model = model.lower().replace('-', '_')
             rep = rep.lower().replace('-', '_')
             strategy = strategy.lower()
             
-            # Normalize representation names
-            if rep in ['mhggnn', 'mhg_gnn', 'mhggnn_pretrained']:
+            # Normalize representation names from filename
+            if rep in ['mhggnn', 'mhg_gnn', 'mhggnn_pretrained', 'mhggnnpretrained']:
                 rep = 'mhg_gnn_pretrained'
             
             # Add metadata if not already present
@@ -189,6 +194,24 @@ def load_dataset_results(dataset_name, results_dir="../results"):
                 df['rep'] = rep
             if 'strategy' not in df.columns:
                 df['strategy'] = strategy
+            
+            # Normalize existing columns (in case CSV has different casing/formatting)
+            if 'model' in df.columns:
+                df['model'] = df['model'].str.lower().str.replace('-', '_')
+            if 'representation' in df.columns:
+                df['representation'] = df['representation'].str.lower().str.replace('-', '_')
+                # Normalize MHG-GNN variants
+                df.loc[df['representation'].isin(['mhggnn', 'mhg_gnn', 'mhggnn_pretrained', 
+                                                  'mhggnnpretrained', 'mhg-gnn-pretrained']), 
+                       'representation'] = 'mhg_gnn_pretrained'
+            if 'rep' in df.columns:
+                df['rep'] = df['rep'].str.lower().str.replace('-', '_')
+                # Normalize MHG-GNN variants
+                df.loc[df['rep'].isin(['mhggnn', 'mhg_gnn', 'mhggnn_pretrained', 
+                                       'mhggnnpretrained', 'mhg-gnn-pretrained']), 
+                       'rep'] = 'mhg_gnn_pretrained'
+            if 'strategy' in df.columns:
+                df['strategy'] = df['strategy'].str.lower()
             
             df['dataset'] = dataset_name
             df['source_file'] = filepath.name
@@ -308,6 +331,13 @@ def calculate_robustness_metrics_classification(df, noise_high=0.5):
     
     metrics_list = []
     
+    # Find AUC column name (could be 'auc', 'roc_auc', 'auroc', etc.)
+    auc_col = None
+    for col in df.columns:
+        if 'auc' in col.lower() and 'pr' not in col.lower():
+            auc_col = col
+            break
+    
     for (dataset, model, rep, strategy), group in df.groupby(
         ['dataset', 'model', 'representation', 'strategy']
     ):
@@ -327,8 +357,8 @@ def calculate_robustness_metrics_classification(df, noise_high=0.5):
         fp_0 = group[group['flip_prob'] == 0.0]
         if len(fp_0) > 0:
             metrics['baseline_accuracy'] = fp_0['accuracy'].values[0]
-            if 'auc' in fp_0.columns:
-                metrics['baseline_auc'] = fp_0['auc'].values[0]
+            if auc_col and auc_col in fp_0.columns:
+                metrics['baseline_auc'] = fp_0[auc_col].values[0]
             else:
                 metrics['baseline_auc'] = np.nan
             if 'f1' in fp_0.columns:
@@ -344,8 +374,8 @@ def calculate_robustness_metrics_classification(df, noise_high=0.5):
         fp_h = group[np.abs(group['flip_prob'] - noise_high) < 0.1]
         if len(fp_h) > 0:
             metrics['accuracy_high'] = fp_h['accuracy'].values[0]
-            if 'auc' in fp_h.columns:
-                metrics['auc_high'] = fp_h['auc'].values[0]
+            if auc_col and auc_col in fp_h.columns:
+                metrics['auc_high'] = fp_h[auc_col].values[0]
             else:
                 metrics['auc_high'] = np.nan
             if 'f1' in fp_h.columns:
@@ -386,9 +416,9 @@ def calculate_robustness_metrics_classification(df, noise_high=0.5):
             metrics['nsi_accuracy'] = np.nan
         
         # NSI (AUC)
-        if len(group) >= 3 and 'auc' in group.columns:
+        if len(group) >= 3 and auc_col and auc_col in group.columns:
             try:
-                slope_auc, _, _, _, _ = stats.linregress(group['flip_prob'], group['auc'])
+                slope_auc, _, _, _, _ = stats.linregress(group['flip_prob'], group[auc_col])
                 metrics['nsi_auc'] = slope_auc
             except:
                 metrics['nsi_auc'] = np.nan
@@ -765,7 +795,7 @@ def create_summary_tables(all_metrics, output_dir):
 # MAIN
 # ============================================================================
 
-def main(results_dir="../results"):
+def main(results_dir="/results"):
     """Main execution"""
     print("="*80)
     print("ALTERNATIVE DATASETS ANALYSIS")
@@ -845,5 +875,5 @@ def main(results_dir="../results"):
 
 if __name__ == "__main__":
     import sys
-    results_dir = sys.argv[1] if len(sys.argv) > 1 else "../results"
+    results_dir = sys.argv[1] if len(sys.argv) > 1 else "/results"
     main(results_dir)
