@@ -1,0 +1,80 @@
+================================================================================
+ANOVA VARIANCE DECOMPOSITION - NOISE ROBUSTNESS METRICS
+================================================================================
+
+
+================================================================================
+METRIC: NSI (R²)
+================================================================================
+
+Source                         SS     df           MS          F    p-value     η² (%)
+--------------------------------------------------------------------------------
+Model                      0.9590     27       0.0355        nan        nan      94.60
+Representation             0.8085      4       0.2021        nan        nan      79.76
+Interaction                0.8407    108       0.0078        nan        nan      82.93
+Residual                  -1.5945    -72       0.0000                          -157.28
+--------------------------------------------------------------------------------
+Total                      1.0138     67                                        100.00
+
+INTERPRETATION:
+  - Model architecture explains 94.6% of variance in NSI (R²)
+  - Representation explains 79.8% of variance in NSI (R²)
+  - Interaction explains 82.9% of variance in NSI (R²)
+  - Residual (unexplained) is -157.3% of variance
+
+
+================================================================================
+METRIC: Retention (%)
+================================================================================
+
+Source                         SS     df           MS          F    p-value     η² (%)
+--------------------------------------------------------------------------------
+Model                 916115.3513     27   33930.1982        nan        nan      99.98
+Representation        190377.9547      4   47594.4887        nan        nan      20.78
+Interaction           190402.4974    108    1762.9861        nan        nan      20.78
+Residual             -380618.9629    -72       0.0000                           -41.54
+--------------------------------------------------------------------------------
+Total                 916276.8405     67                                        100.00
+
+INTERPRETATION:
+  - Model architecture explains 100.0% of variance in Retention (%)
+  - Representation explains 20.8% of variance in Retention (%)
+  - Interaction explains 20.8% of variance in Retention (%)
+  - Residual (unexplained) is -41.5% of variance
+
+
+================================================================================
+METRIC: |NSI|
+================================================================================
+
+Source                         SS     df           MS          F    p-value     η² (%)
+--------------------------------------------------------------------------------
+Model                      0.9394     27       0.0348        nan        nan      94.49
+Representation             0.7941      4       0.1985        nan        nan      79.88
+Interaction                0.8263    108       0.0077        nan        nan      83.11
+Residual                  -1.5657    -72       0.0000                          -157.48
+--------------------------------------------------------------------------------
+Total                      0.9942     67                                        100.00
+
+INTERPRETATION:
+  - Model architecture explains 94.5% of variance in |NSI|
+  - Representation explains 79.9% of variance in |NSI|
+  - Interaction explains 83.1% of variance in |NSI|
+  - Residual (unexplained) is -157.5% of variance
+
+
+================================================================================
+SUMMARY COMPARISON ACROSS METRICS
+================================================================================
+
+Metric                   Model η²       Rep η² Interaction η²  Residual η²
+--------------------------------------------------------------------------------
+NSI (R²)                    94.6%        79.8%        82.9%      -157.3%
+Retention (%)              100.0%        20.8%        20.8%       -41.5%
+|NSI|                       94.5%        79.9%        83.1%      -157.5%
+================================================================================
+
+KEY INSIGHTS:
+  - NSI (R²): Model dominates (94.6% variance explained)
+  - Retention (%): Model dominates (100.0% variance explained)
+  - |NSI|: Model dominates (94.5% variance explained)

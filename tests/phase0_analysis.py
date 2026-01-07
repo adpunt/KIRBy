@@ -78,7 +78,9 @@ MODEL_COLORS = {
 mlp_mtl_models = ['mlp', 'mlp_bnn_full', 'mlp_bnn_last', 'mlp_bnn_variational',
                   'residual_mlp', 'residual_mlp_bnn_full', 'residual_mlp_bnn_last',
                   'residual_mlp_bnn_variational',
-                  'mtl', 'mtl_bnn_full', 'mtl_bnn_last', 'mtl_bnn_variational']
+                  'mtl', 'mtl_bnn_full', 'mtl_bnn_last', 'mtl_bnn_variational',
+                  'flexible_dnn', 'flexible_bnn_full', 'flexible_bnn_last',
+                  'flexible_bnn_variational']
 
 # ============================================================================
 # FORMATTING HELPERS
@@ -1014,15 +1016,15 @@ def create_figure2_representation_effects(df, metrics_df, output_dir):
     representations = sorted(df['representation'].unique())
     for rep in representations:
         rep_data = df[df['representation'] == rep]
-        avg_by_sigma = rep_data.groupby('sigma')['r2'].mean().reset_index()
+        avg_by_sigma = rep_data.groupby('sigma')['r2'].median().reset_index()
         color = REPRESENTATION_COLORS.get(rep, '#999999')
         ax_d.plot(avg_by_sigma['sigma'], avg_by_sigma['r2'],
                  marker='o', markersize=4, linewidth=2, alpha=0.8,
                  label=format_representation(rep), color=color)
     
     ax_d.set_xlabel('Noise level (σ)', fontsize=9)
-    ax_d.set_ylabel('Average R²', fontsize=9)
-    ax_d.set_title('D. Performance Across Noise Levels', fontsize=10, fontweight='bold', pad=10)
+    ax_d.set_ylabel('Median R²', fontsize=9)
+    ax_d.set_title('D. Performance Across Noise Levels\n(Median across models)', fontsize=10, fontweight='bold', pad=10)
     ax_d.legend(fontsize=7, loc='best', frameon=True, framealpha=0.9, ncol=2)
     ax_d.spines['top'].set_visible(False)
     ax_d.spines['right'].set_visible(False)
