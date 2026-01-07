@@ -4,17 +4,61 @@ Phase 0 Analysis - Global Screening (Extended with Graphs)
 
 Analyzes:
 1. Original phase0c screening data (from ../../qsar_qm_models/results)
-2. NEW: Graph models from phase1_graphs_updated (from ../results)
+2. NEW: Graph models from phase1_graphs_updated (from results)
 
-Generates robustness metrics for all model-representation pairs
+Generates robustness metrics and figures for all model-representation pairs
 """
 
 import pandas as pd
 import numpy as np
 from pathlib import Path
 from scipy import stats
+import matplotlib.pyplot as plt
+import seaborn as sns
 import warnings
 warnings.filterwarnings('ignore')
+
+# ============================================================================
+# PLOTTING STYLE
+# ============================================================================
+
+sns.set_style("ticks")
+plt.rcParams.update({
+    'figure.dpi': 300,
+    'font.family': 'sans-serif',
+    'font.sans-serif': ['Arial', 'Helvetica'],
+    'font.size': 8,
+    'axes.labelsize': 9,
+    'axes.titlesize': 10,
+    'xtick.labelsize': 8,
+    'ytick.labelsize': 8,
+    'legend.fontsize': 7,
+    'axes.linewidth': 0.8,
+    'xtick.major.width': 0.8,
+    'ytick.major.width': 0.8,
+    'legend.frameon': False,
+})
+
+REPRESENTATION_COLORS = {
+    'pdv': '#0173B2',
+    'sns': '#029E73',
+    'ecfp4': '#DE8F05',
+    'smiles': '#CA3542',
+    'graph': '#949494',
+}
+
+MODEL_COLORS = {
+    'rf': '#3498db',
+    'xgboost': '#e74c3c',
+    'gauche': '#9b59b6',
+    'qrf': '#16a085',
+    'ngboost': '#f39c12',
+    'dnn': '#34495e',
+    'GCN': '#1f77b4',
+    'GAT': '#ff7f0e',
+    'GIN': '#2ca02c',
+    'MPNN': '#d62728',
+}
 
 # ============================================================================
 # DATA LOADING
@@ -147,7 +191,7 @@ def load_new_graph_data(results_dir="results"):
 
 
 def combine_all_screening_data(old_results_dir="../../qsar_qm_models/results", 
-                               new_results_dir="../results"):
+                               new_results_dir="results"):
     """Combine old phase0c and new graph screening data"""
     print("\n" + "="*80)
     print("COMBINING ALL SCREENING DATA")
@@ -266,6 +310,208 @@ def define_robustness_score(metrics_df):
 
 
 # ============================================================================
+# PLOTTING FUNCTIONS
+# ============================================================================
+
+def plot_retention_heatmap(metrics_df, output_dir):
+    """Plot heatmap of retention % across model-rep pairs"""
+    print("\nGenerating retention heatmap...")
+    
+    # Pivot for heatmap
+    pivot = metrics_df.pivot(index='model', columns='representation', values='retention_pct')
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.heatmap(pivot, annot=True, fmt='.1f', cmap='RdYlGn', center=50,
+                vmin=0, vmax=100, ax=ax, cbar_kws={'label': 'Retention %'})
+    ax.set_title('R² Retention at σ=0.6')
+    ax.set_xlabel('Representation')
+    ax.set_ylabel('Model')
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / 'retention_heatmap.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: retention_heatmap.png")
+
+
+def plot_robustness_score_heatmap(metrics_df, output_dir):
+    """Plot heatmap of composite robustness scores"""
+    print("\nGenerating robustness score heatmap...")
+    
+    pivot = metrics_df.pivot(index='model', columns='representation', values='robustness_score')
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    sns.heatmap(pivot, annot=True, fmt='.3f', cmap='viridis',
+                ax=ax, cbar_kws={'label': 'Robustness Score'})
+    ax.set_title('Composite Robustness Score')
+    ax.set_xlabel('Representation')
+    ax.set_ylabel('Model')
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / 'robustness_score_heatmap.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: robustness_score_heatmap.png")
+
+
+def plot_top_bottom_configs(metrics_df, output_dir, n=10):
+    """Plot top and bottom configurations"""
+    print(f"\nGenerating top/bottom {n} configurations...")
+    
+    # Get top and bottom
+    top = metrics_df.nlargest(n, 'robustness_score')
+    bottom = metrics_df.nsmallest(n, 'robustness_score')
+    
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+    
+    # Top configs
+    top_labels = [f"{row['model']}/{row['representation']}" for _, row in top.iterrows()]
+    ax1.barh(range(len(top)), top['robustness_score'].values, color='#2ecc71')
+    ax1.set_yticks(range(len(top)))
+    ax1.set_yticklabels(top_labels)
+    ax1.set_xlabel('Robustness Score')
+    ax1.set_title(f'Top {n} Most Robust Configurations')
+    ax1.invert_yaxis()
+    
+    # Bottom configs
+    bottom_labels = [f"{row['model']}/{row['representation']}" for _, row in bottom.iterrows()]
+    ax2.barh(range(len(bottom)), bottom['robustness_score'].values, color='#e74c3c')
+    ax2.set_yticks(range(len(bottom)))
+    ax2.set_yticklabels(bottom_labels)
+    ax2.set_xlabel('Robustness Score')
+    ax2.set_title(f'Bottom {n} Least Robust Configurations')
+    ax2.invert_yaxis()
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / f'top_bottom_{n}_configs.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: top_bottom_{n}_configs.png")
+
+
+def plot_representation_rankings(metrics_df, output_dir):
+    """Plot representation rankings by retention"""
+    print("\nGenerating representation rankings...")
+    
+    rep_stats = metrics_df.groupby('representation')['retention_pct'].agg(['mean', 'std', 'median'])
+    rep_stats = rep_stats.sort_values('median', ascending=False)
+    
+    fig, ax = plt.subplots(figsize=(8, 5))
+    
+    x = range(len(rep_stats))
+    ax.bar(x, rep_stats['median'], yerr=rep_stats['std'], 
+           capsize=5, alpha=0.7, color='#3498db')
+    ax.set_xticks(x)
+    ax.set_xticklabels(rep_stats.index, rotation=45, ha='right')
+    ax.set_ylabel('Retention % (median ± std)')
+    ax.set_title('Representation Robustness Rankings')
+    ax.axhline(y=50, color='red', linestyle='--', alpha=0.5, label='50% retention')
+    ax.legend()
+    ax.grid(axis='y', alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / 'representation_rankings.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: representation_rankings.png")
+
+
+def plot_model_rankings(metrics_df, output_dir):
+    """Plot model rankings by retention"""
+    print("\nGenerating model rankings...")
+    
+    model_stats = metrics_df.groupby('model')['retention_pct'].agg(['mean', 'std', 'median'])
+    model_stats = model_stats.sort_values('median', ascending=False)
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    x = range(len(model_stats))
+    ax.bar(x, model_stats['median'], yerr=model_stats['std'],
+           capsize=5, alpha=0.7, color='#e74c3c')
+    ax.set_xticks(x)
+    ax.set_xticklabels(model_stats.index, rotation=45, ha='right')
+    ax.set_ylabel('Retention % (median ± std)')
+    ax.set_title('Model Robustness Rankings')
+    ax.axhline(y=50, color='red', linestyle='--', alpha=0.5, label='50% retention')
+    ax.legend()
+    ax.grid(axis='y', alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / 'model_rankings.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: model_rankings.png")
+
+
+def plot_baseline_vs_retention(metrics_df, output_dir):
+    """Scatter plot of baseline performance vs retention"""
+    print("\nGenerating baseline vs retention scatter...")
+    
+    fig, ax = plt.subplots(figsize=(8, 6))
+    
+    for rep in metrics_df['representation'].unique():
+        data = metrics_df[metrics_df['representation'] == rep]
+        color = REPRESENTATION_COLORS.get(rep, '#999999')
+        ax.scatter(data['baseline_r2'], data['retention_pct'], 
+                  label=rep.upper(), alpha=0.6, s=50, color=color)
+    
+    ax.set_xlabel('Baseline R² (σ=0)')
+    ax.set_ylabel('Retention % (σ=0.6)')
+    ax.set_title('Baseline Performance vs Noise Robustness')
+    ax.legend()
+    ax.grid(alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / 'baseline_vs_retention.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: baseline_vs_retention.png")
+
+
+def plot_nsi_distribution(metrics_df, output_dir):
+    """Plot distribution of NSI values"""
+    print("\nGenerating NSI distribution...")
+    
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+    
+    # By representation
+    for rep in metrics_df['representation'].unique():
+        data = metrics_df[metrics_df['representation'] == rep]['nsi_r2']
+        ax1.hist(data, alpha=0.5, label=rep.upper(), bins=15)
+    
+    ax1.set_xlabel('NSI (R²)')
+    ax1.set_ylabel('Count')
+    ax1.set_title('NSI Distribution by Representation')
+    ax1.legend()
+    ax1.axvline(x=0, color='red', linestyle='--', alpha=0.5)
+    
+    # Overall
+    ax2.hist(metrics_df['nsi_r2'], bins=20, color='#3498db', alpha=0.7)
+    ax2.set_xlabel('NSI (R²)')
+    ax2.set_ylabel('Count')
+    ax2.set_title('Overall NSI Distribution')
+    ax2.axvline(x=metrics_df['nsi_r2'].median(), color='red', 
+                linestyle='--', alpha=0.7, label=f"Median: {metrics_df['nsi_r2'].median():.4f}")
+    ax2.legend()
+    
+    plt.tight_layout()
+    plt.savefig(output_dir / 'nsi_distribution.png', dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"  Saved: nsi_distribution.png")
+
+
+def generate_all_plots(metrics_df, output_dir):
+    """Generate all phase0 figures"""
+    print("\n" + "="*80)
+    print("GENERATING FIGURES")
+    print("="*80)
+    
+    plot_retention_heatmap(metrics_df, output_dir)
+    plot_robustness_score_heatmap(metrics_df, output_dir)
+    plot_top_bottom_configs(metrics_df, output_dir, n=10)
+    plot_representation_rankings(metrics_df, output_dir)
+    plot_model_rankings(metrics_df, output_dir)
+    plot_baseline_vs_retention(metrics_df, output_dir)
+    plot_nsi_distribution(metrics_df, output_dir)
+    
+    print("\n✓ All figures generated")
+
+
+# ============================================================================
 # MAIN
 # ============================================================================
 
@@ -293,6 +539,9 @@ def main(old_results_dir="../../qsar_qm_models/results",
     # Save metrics
     metrics_df.to_csv(output_dir / "phase0_robustness_metrics_extended.csv", index=False)
     print(f"\n✓ Saved metrics to {output_dir / 'phase0_robustness_metrics_extended.csv'}")
+    
+    # Generate all plots
+    generate_all_plots(metrics_df, output_dir)
     
     # Summary
     print("\n" + "="*80)

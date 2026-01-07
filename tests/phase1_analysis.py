@@ -141,7 +141,7 @@ def load_old_phase1_data(results_dir="../../qsar_qm_models/results"):
     return combined_df
 
 
-def load_new_phase1_data(results_dir="../results"):
+def load_new_phase1_data(results_dir="results"):
     """Load new phase1 data (continuous_pdv and mhg_gnn)"""
     print("\n" + "="*80)
     print("LOADING NEW PHASE 1 DATA (PDV, MHG-GNN)")
@@ -202,7 +202,7 @@ def load_new_phase1_data(results_dir="../results"):
     return combined_df
 
 
-def load_graph_phase1_data(results_dir="../results"):
+def load_graph_phase1_data(results_dir="results"):
     """Load graph deterministic and Bayesian models"""
     print("\n" + "="*80)
     print("LOADING GRAPH PHASE 1 DATA")
@@ -363,7 +363,7 @@ def parse_model_type(df):
 
 
 def combine_phase1_data(old_results_dir="../../qsar_qm_models/results",
-                       new_results_dir="../results"):
+                       new_results_dir="results"):
     """Combine all Phase 1 data sources"""
     print("\n" + "="*80)
     print("COMBINING PHASE 1 DATA")
@@ -373,16 +373,30 @@ def combine_phase1_data(old_results_dir="../../qsar_qm_models/results",
     new_data = load_new_phase1_data(new_results_dir)
     graph_data = load_graph_phase1_data(new_results_dir)
     
-    all_dfs = [df for df in [old_data, new_data, graph_data] if len(df) > 0]
+    # Standardize column names BEFORE concatenating
+    standardized_dfs = []
+    for df in [old_data, new_data, graph_data]:
+        if len(df) > 0:
+            df = df.copy()  # Don't modify original
+            
+            # Standardize representation column
+            if 'rep' in df.columns and 'representation' not in df.columns:
+                df = df.rename(columns={'rep': 'representation'})
+            elif 'rep' in df.columns and 'representation' in df.columns:
+                # Both exist - drop 'rep', keep 'representation'
+                df = df.drop(columns=['rep'])
+            elif 'rep' not in df.columns and 'representation' not in df.columns:
+                # Neither exists - skip this dataframe
+                print(f"WARNING: Dataframe missing both 'rep' and 'representation' columns")
+                continue
+            
+            standardized_dfs.append(df)
     
-    if not all_dfs:
+    if not standardized_dfs:
         print("ERROR: No Phase 1 data loaded!")
         return pd.DataFrame()
     
-    combined = pd.concat(all_dfs, ignore_index=True)
-    
-    # Standardize columns
-    combined = combined.rename(columns={'rep': 'representation'})
+    combined = pd.concat(standardized_dfs, ignore_index=True)
     
     # Parse model types
     combined = parse_model_type(combined)
@@ -823,7 +837,7 @@ def perform_statistical_comparisons(df, metrics_df, output_dir):
 # ============================================================================
 
 def main(old_results_dir="../../qsar_qm_models/results",
-         new_results_dir="../results"):
+         new_results_dir="results"):
     """Main execution"""
     print("="*80)
     print("PHASE 1 ANALYSIS - DETERMINISTIC VS PROBABILISTIC (UPDATED)")
