@@ -69,13 +69,11 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
             if trial_allocation[rep_name] > max_features:
                 continue
             
-            # Create and evaluate hybrid
-            X_train_trial, _ = _create_hybrid_with_allocation(
+            # Create hybrid on train and apply SAME features to val
+            X_train_trial, feat_info = _create_hybrid_with_allocation(
                 rep_dict_train, train_labels, trial_allocation, importance_method
             )
-            X_val_trial, _ = _create_hybrid_with_allocation(
-                rep_dict_val, val_labels, trial_allocation, importance_method
-            )
+            X_val_trial = apply_feature_selection(rep_dict_val, feat_info)
             
             # Evaluate on validation
             r2 = _evaluate_allocation(X_train_trial, X_val_trial, train_labels, val_labels)
@@ -223,11 +221,19 @@ def compute_feature_importance(base_reps, labels, method='random_forest', **kwar
     
     # RANDOM FOREST (DEFAULT)
     if method == 'random_forest':
-        n_estimators = kwargs.get('n_estimators', 100)
+        n_estimators = kwargs.get('n_estimators', 50)  # Match original implementation
         max_depth = kwargs.get('max_depth', 10)
         random_state = kwargs.get('random_state', 42)
         
         for rep_name, X in base_reps.items():
+            # Clean data (match original implementation)
+            X_clipped = np.clip(X, -1e10, 1e10)
+            X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
+            
+            # Scale data (match original implementation)
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X_clipped)
+            
             if is_classification:
                 rf = RandomForestClassifier(
                     n_estimators=n_estimators,
@@ -243,7 +249,7 @@ def compute_feature_importance(base_reps, labels, method='random_forest', **kwar
                     n_jobs=-1
                 )
             
-            rf.fit(X, labels)
+            rf.fit(X_scaled, labels)
             importance_scores[rep_name] = rf.feature_importances_
     
     # PERMUTATION IMPORTANCE
