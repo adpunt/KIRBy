@@ -1,0 +1,72 @@
+STATISTICAL COMPARISONS - PHASE 0
+================================================================================
+
+TEST 1: Representation Comparisons
+--------------------------------------------------------------------------------
+ECFP4 vs PDV:
+  Mean retention: 78.98% vs 80.58%
+  Mann-Whitney U: stat=107.00, p=0.4397
+  → No significant difference
+
+ECFP4 vs GRAPH:
+  Mean retention: 78.98% vs -59.78%
+  Mann-Whitney U: stat=64.00, p=0.1433
+  → No significant difference
+
+ECFP4 vs RANDOMIZED_SMILES:
+  Mean retention: 78.98% vs 77.58%
+  Mann-Whitney U: stat=111.00, p=0.5009
+  → No significant difference
+
+ECFP4 vs SMILES:
+  Mean retention: 78.98% vs 77.46%
+  Mann-Whitney U: stat=113.00, p=0.4437
+  → No significant difference
+
+PDV vs GRAPH:
+  Mean retention: 80.58% vs -59.78%
+  Mann-Whitney U: stat=64.00, p=0.1433
+  → No significant difference
+
+PDV vs RANDOMIZED_SMILES:
+  Mean retention: 80.58% vs 77.58%
+  Mann-Whitney U: stat=127.00, p=0.1568
+  → No significant difference
+
+PDV vs SMILES:
+  Mean retention: 80.58% vs 77.46%
+  Mann-Whitney U: stat=145.00, p=0.0244
+  → Significant difference, PDV superior
+
+GRAPH vs RANDOMIZED_SMILES:
+  Mean retention: -59.78% vs 77.58%
+  Mann-Whitney U: stat=96.00, p=0.1743
+  → No significant difference
+
+GRAPH vs SMILES:
+  Mean retention: -59.78% vs 77.46%
+  Mann-Whitney U: stat=96.00, p=0.1743
+  → No significant difference
+
+RANDOMIZED_SMILES vs SMILES:
+  Mean retention: 77.58% vs 77.46%
+  Mann-Whitney U: stat=71.00, p=0.9770
+  → No significant difference
+
+
+TEST 2: Model Family Comparisons
+--------------------------------------------------------------------------------
+flexible_bnn_variational vs dnn:
+  Mean retention: 75.17% vs 74.70%
+  Mann-Whitney U: stat=14.00, p=0.8413
+  → No significant difference
+
+flexible_bnn_variational vs flexible_bnn_full:
+  Mean retention: 75.17% vs 78.51%
+  Mann-Whitney U: stat=4.00, p=0.0952
+  → No significant difference
+
+dnn vs flexible_bnn_full:
+  Mean retention: 74.70% vs 78.51%
+  Mann-Whitney U: stat=4.00, p=0.0952
+  → No significant difference
