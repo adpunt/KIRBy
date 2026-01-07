@@ -4,18 +4,18 @@ os.environ['OMP_NUM_THREADS'] = '1'
 os.environ['MKL_NUM_THREADS'] = '1'
 
 """
-ESOL + NoiseInject: Full Model-Representation Matrix
-=====================================================
+ESOL + NoiseInject: Strategic Model-Representation Pairs (NO GP)
+=================================================================
 
-Tests noise robustness on ESOL solubility dataset with FULL coverage matching QM9 experiments.
+Tests noise robustness on ESOL solubility dataset.
 NO repetitions (n=1) - single run per configuration.
 
 Purpose: Demonstrate cross-dataset consistency and test new KIRBy representations
 
 Model-Representation Matrix:
 - Representations: ECFP4, PDV, SNS, MHG-GNN-pretrained (4 total)
-- Models per rep: RF, QRF, XGBoost, NGBoost, DNN×4 (baseline, full-BNN, last-layer-BNN, var-BNN), Gauche GP (9 total)
-- Total configurations: 4 reps × 9 models = 36
+- Models per rep: RF, QRF, DNN (8 pairs total - GP SKIPPED due to segfault)
+- Total configurations: 8 pairs × 6 strategies = 48 experiments
 
 Noise Strategies: legacy, outlier, quantile, hetero, threshold, valprop (6 total)
 Noise Levels: σ ∈ {0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0} (11 levels)
@@ -24,6 +24,9 @@ Expected results:
 - Same model-rep rankings as QM9
 - Same "representation > model architecture" variance decomposition
 - New KIRBy reps (MHG-GNN) competitive with baselines
+
+NOTE: Gauche GP is SKIPPED entirely due to segmentation faults in the library.
+      If you need GP results, run them separately in a different environment.
 """
 
 import numpy as np
@@ -45,9 +48,7 @@ from kirby.representations.molecular import (
     create_ecfp4,
     create_pdv,
     create_sns,
-    create_mhg_gnn,
-    train_gauche_gp,
-    predict_gauche_gp
+    create_mhg_gnn
 )
 
 # NoiseInject imports
@@ -276,54 +277,6 @@ def run_experiment_tree_model(X_train, y_train, X_test, y_test,
     return predictions, uncertainties
 
 
-def run_experiment_gp(train_smiles, y_train, test_smiles, y_test,
-                     strategy, sigma_levels):
-    """Run noise robustness experiment for Gaussian Process with error handling"""
-    injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
-    predictions = {}
-    uncertainties = {}
-    
-    for sigma in sigma_levels:
-        print(f"    σ={sigma:.1f}...", end='', flush=True)
-        try:
-            # Inject noise
-            if sigma == 0.0:
-                y_noisy = y_train
-            else:
-                y_noisy = injector.inject(y_train, sigma)
-            
-            # Train GP with reduced epochs to avoid timeout/memory issues
-            gp_dict = train_gauche_gp(
-                train_smiles, y_noisy,
-                kernel='weisfeiler_lehman',
-                num_epochs=30  # Reduced from 50
-            )
-            
-            # Predict
-            gp_results = predict_gauche_gp(gp_dict, test_smiles)
-            predictions[sigma] = gp_results['predictions']
-            uncertainties[sigma] = gp_results['uncertainties']
-            
-            # Force garbage collection to free memory
-            del gp_dict, gp_results
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            
-            print(" OK", flush=True)
-            
-        except Exception as e:
-            print(f" FAILED: {str(e)}", flush=True)
-            print(f"    Full traceback:")
-            traceback.print_exc()
-            
-            # Use fallback: NaN predictions
-            predictions[sigma] = np.full(len(test_smiles), np.nan)
-            uncertainties[sigma] = np.full(len(test_smiles), np.nan)
-    
-    return predictions, uncertainties
-
-
 def run_experiment_neural(X_train, y_train, X_val, y_val, X_test, y_test,
                          model_class, strategy, sigma_levels, is_bayesian=False):
     """Run noise robustness experiment for neural network"""
@@ -397,7 +350,7 @@ def main():
     # -------------------------------------------------------------------------
     # Pair 1: RF + ECFP4 (baseline from paper)
     # -------------------------------------------------------------------------
-    print("\n[1/9] RF + ECFP4...")
+    print("\n[1/8] RF + ECFP4...")
     ecfp4_train = create_ecfp4(train_smiles_fit, n_bits=2048)
     ecfp4_val = create_ecfp4(val_smiles, n_bits=2048)
     ecfp4_test = create_ecfp4(test_smiles, n_bits=2048)
@@ -423,7 +376,7 @@ def main():
     # Pair 2: QRF + PDV (baseline from paper)
     # -------------------------------------------------------------------------
     if HAS_QRF:
-        print("\n[2/9] QRF + PDV...")
+        print("\n[2/8] QRF + PDV...")
         pdv_train = create_pdv(train_smiles_fit)
         pdv_val = create_pdv(val_smiles)
         pdv_test = create_pdv(test_smiles)
@@ -460,66 +413,22 @@ def main():
                         })
                 all_uncertainties.append(('QRF', 'PDV', pd.DataFrame(unc_data)))
     else:
-        print("\n[2/9] QRF + PDV... SKIPPED (quantile_forest not installed)")
+        print("\n[2/8] QRF + PDV... SKIPPED (quantile_forest not installed)")
         pdv_train = create_pdv(train_smiles_fit)
         pdv_val = create_pdv(val_smiles)
         pdv_test = create_pdv(test_smiles)
     
     # -------------------------------------------------------------------------
-    # Pair 3: GP + PDV (best performer from paper) - WITH ERROR HANDLING
+    # Pair 3: GP + PDV (best performer from paper) - SKIPPED DUE TO SEGFAULT
     # -------------------------------------------------------------------------
-    print("\n[3/9] Gauche GP + PDV... (with error handling)")
-    
-    for strategy in strategies:
-        print(f"  Strategy: {strategy}")
-        try:
-            predictions, uncertainties = run_experiment_gp(
-                train_smiles_fit, train_labels_fit, test_smiles, test_labels,
-                strategy, sigma_levels
-            )
-            
-            # Check if we got valid predictions
-            valid_sigmas = [s for s in sigma_levels if not np.isnan(predictions[s]).any()]
-            if len(valid_sigmas) == 0:
-                print(f"    WARNING: All GP predictions failed for {strategy}, skipping...")
-                continue
-            
-            per_sigma, summary = calculate_noise_metrics(
-                test_labels, predictions, metrics=['r2', 'rmse', 'mae']
-            )
-            per_sigma['model'] = 'GP'
-            per_sigma['rep'] = 'PDV'
-            per_sigma['strategy'] = strategy
-            all_results.append(per_sigma)
-            per_sigma.to_csv(results_dir / f'GP_PDV_{strategy}.csv', index=False)
-            
-            # Save uncertainties for Phase 3
-            if strategy == 'legacy' and len(valid_sigmas) > 0:
-                unc_data = []
-                for sigma in sigma_levels:
-                    if not np.isnan(predictions[sigma]).any():
-                        for i in range(len(test_labels)):
-                            unc_data.append({
-                                'sigma': sigma,
-                                'sample_idx': i,
-                                'y_true': test_labels[i],
-                                'y_pred': predictions[sigma][i],
-                                'uncertainty': uncertainties[sigma][i],
-                                'error': abs(test_labels[i] - predictions[sigma][i])
-                            })
-                if len(unc_data) > 0:
-                    all_uncertainties.append(('GP', 'PDV', pd.DataFrame(unc_data)))
-        
-        except Exception as e:
-            print(f"    FAILED strategy {strategy}: {str(e)}")
-            traceback.print_exc()
-            print(f"    Continuing with next strategy...")
-            continue
+    print("\n[3/8] Gauche GP + PDV... SKIPPED")
+    print("  Reason: Gauche GP causes segmentation faults, skip entirely")
+    print("  If you need GP results, run it separately with more memory/different environment")
     
     # -------------------------------------------------------------------------
     # Pair 4: RF + MHG-GNN pretrained (new with KIRBy)
     # -------------------------------------------------------------------------
-    print("\n[4/9] RF + MHG-GNN (pretrained)...")
+    print("\n[4/8] RF + MHG-GNN (pretrained)...")
     mhggnn_train = create_mhg_gnn(train_smiles_fit, batch_size=32)
     mhggnn_test = create_mhg_gnn(test_smiles, batch_size=32)
     
@@ -543,7 +452,7 @@ def main():
     # -------------------------------------------------------------------------
     # Pair 5: RF + SNS (Sort & Slice)
     # -------------------------------------------------------------------------
-    print("\n[5/9] RF + SNS...")
+    print("\n[5/8] RF + SNS...")
     sns_train, sns_featurizer = create_sns(train_smiles_fit, return_featurizer=True)
     sns_val = create_sns(val_smiles, reference_featurizer=sns_featurizer)
     sns_test = create_sns(test_smiles, reference_featurizer=sns_featurizer)
@@ -568,7 +477,7 @@ def main():
     # -------------------------------------------------------------------------
     # Pair 6: DNN + ECFP4 (neural baseline)
     # -------------------------------------------------------------------------
-    print("\n[6/9] DNN + ECFP4...")
+    print("\n[6/8] DNN + ECFP4...")
     
     for strategy in strategies:
         print(f"  Strategy: {strategy}")
@@ -589,7 +498,7 @@ def main():
     # -------------------------------------------------------------------------
     # Pair 7: DNN + PDV (neural baseline)
     # -------------------------------------------------------------------------
-    print("\n[7/9] DNN + PDV...")
+    print("\n[7/8] DNN + PDV...")
     
     for strategy in strategies:
         print(f"  Strategy: {strategy}")
@@ -610,7 +519,7 @@ def main():
     # -------------------------------------------------------------------------
     # Pair 8: DNN + SNS (neural with SNS)
     # -------------------------------------------------------------------------
-    print("\n[8/9] DNN + SNS...")
+    print("\n[8/8] DNN + SNS...")
     
     for strategy in strategies:
         print(f"  Strategy: {strategy}")
@@ -665,7 +574,7 @@ def main():
                         })
                 all_uncertainties.append(('Full-BNN', 'PDV', pd.DataFrame(unc_data)))
     else:
-        print("\n[9/9] Full-BNN + PDV... SKIPPED (BLiTZ not installed)")
+        print("\n[BNN PAIR] Full-BNN + PDV... SKIPPED (BLiTZ not installed)")
     
     # =========================================================================
     # PHASE 2: PROBABILISTIC COMPARISON
