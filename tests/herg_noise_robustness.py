@@ -1,650 +1,398 @@
+#!/usr/bin/env python3
+"""
+Final Feature Allocation Test
+
+Comprehensive test to determine optimal configuration:
+- Filters: none vs quality_only
+- Patience: None vs 3
+- Budget: 50, 100, 150
+- Reps: 2 (ECFP4+PDV) and 3 (ECFP4+PDV+mhggnn)
+
+Total: 24 tests (2 reps × 2 filters × 2 patience × 3 budgets)
+"""
+
 import os
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
 os.environ['OMP_NUM_THREADS'] = '1'
-os.environ['MKL_NUM_THREADS'] = '1'
-
-"""
-hERG Cardiotoxicity + NoiseInject: Full Model-Representation Matrix
-====================================================================
-
-Tests noise robustness on hERG classification dataset with FULL coverage matching QM9 experiments.
-NO repetitions (n=1) - single run per configuration.
-
-Purpose: Demonstrate cross-dataset consistency on classification task and test new KIRBy representations
-
-Model-Representation Matrix:
-- Representations: ECFP4, PDV, SNS, MHG-GNN-pretrained (4 total)
-- Models per rep: RF, XGBoost, DNN (baseline), DNN (full-BNN), DNN (last-layer-BNN), DNN (var-BNN) (6 total)  
-- Total configurations: 4 reps × 6 models = 24
-
-Noise Strategies: uniform, class_imbalance, binary_asymmetric (3 total)
-Noise Levels: flip_prob ∈ {0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0} (11 levels)
-
-Expected results:
-- Same model-rep rankings as QM9/ESOL
-- Classification-specific noise behavior
-- New KIRBy reps competitive with baselines
-
-Note: Uses FLuID dataset with provided train/test split
-"""
 
 import numpy as np
-import pandas as pd
-import torch
-import torch.nn as nn
-from torch.utils.data import TensorDataset, DataLoader
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import (
-    accuracy_score, roc_auc_score, precision_score, 
-    recall_score, f1_score, matthews_corrcoef
-)
-from sklearn.calibration import CalibratedClassifierCV
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import r2_score, mean_absolute_error
+from sklearn.preprocessing import StandardScaler
+import time
 import sys
-from pathlib import Path
+sys.path.insert(0, '/mnt/user-data/outputs/src')
 
-# KIRBy imports
-sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
-from kirby.datasets.herg import load_herg
-from kirby.representations.molecular import (
-    create_ecfp4,
-    create_pdv,
-    create_sns,
-    create_mhg_gnn
-)
-
-# NoiseInject imports
-from noiseInject import (
-    NoiseInjectorClassification,
-    calculate_classification_metrics
-)
+from kirby.datasets.esol import load_esol_combined
+from kirby.representations.molecular import create_ecfp4, create_pdv, create_mhg_gnn
+from kirby.feature_filtering import apply_filters, FILTER_CONFIGS
 
 
-# =============================================================================
-# NEURAL NETWORK MODELS
-# =============================================================================
-
-class DeterministicClassifier(nn.Module):
-    """Standard feedforward neural network for binary classification"""
-    def __init__(self, input_dim, hidden_dim=256):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.BatchNorm1d(hidden_dim),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.BatchNorm1d(hidden_dim // 2),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(hidden_dim // 2, 1),
-            nn.Sigmoid()
-        )
+def create_hybrid_with_allocation(rep_dict, labels, n_per_rep_dict):
+    """Create hybrid with per-rep feature allocation via RF importance"""
+    selected_features = []
+    feature_info_new = {}
     
-    def forward(self, x):
-        return self.net(x).squeeze()
-
-
-def train_neural_classifier(X_train, y_train, X_val, y_val, X_test, 
-                            epochs=100, lr=1e-3):
-    """
-    Train a neural network classifier
-    
-    Args:
-        X_train, y_train: Training data
-        X_val, y_val: Validation data (for early stopping)
-        X_test: Test data
-        epochs: Number of training epochs
-        lr: Learning rate
-    
-    Returns:
-        predictions: Test predictions (0/1)
-        probabilities: Test prediction probabilities
-    """
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
-    # Convert to tensors
-    X_train_t = torch.FloatTensor(X_train).to(device)
-    y_train_t = torch.FloatTensor(y_train).to(device)
-    X_val_t = torch.FloatTensor(X_val).to(device)
-    y_val_t = torch.FloatTensor(y_val).to(device)
-    X_test_t = torch.FloatTensor(X_test).to(device)
-    
-    # Initialize model
-    model = DeterministicClassifier(X_train.shape[1]).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.BCELoss()
-    
-    # Calculate class weights for imbalanced data
-    pos_weight = (y_train == 0).sum() / (y_train == 1).sum()
-    criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight]).to(device))
-    
-    # Update model to output logits
-    model.net[-1] = nn.Identity()  # Remove sigmoid, use with BCEWithLogitsLoss
-    
-    # Training
-    train_dataset = TensorDataset(X_train_t, y_train_t)
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-    
-    best_val_loss = float('inf')
-    patience_counter = 0
-    patience = 10
-    
-    for epoch in range(epochs):
-        model.train()
-        train_loss = 0
+    for name, X in rep_dict.items():
+        X_clipped = np.clip(X, -1e10, 1e10)
+        X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
         
-        for batch_X, batch_y in train_loader:
-            optimizer.zero_grad()
-            logits = model(batch_X)
-            loss = criterion(logits, batch_y)
-            loss.backward()
-            optimizer.step()
-            train_loss += loss.item()
+        n_select = n_per_rep_dict[name]
         
-        # Validation
-        model.eval()
-        with torch.no_grad():
-            val_logits = model(X_val_t)
-            val_loss = criterion(val_logits, y_val_t).item()
+        if n_select == 0:
+            continue
         
-        # Early stopping
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss
-            patience_counter = 0
-            best_state = model.state_dict().copy()
+        if n_select == -1 or n_select >= X_clipped.shape[1]:
+            selected_features.append(X_clipped)
+            feature_info_new[name] = {
+                'selected_indices': np.arange(X_clipped.shape[1]),
+                'n_features': X_clipped.shape[1]
+            }
+            continue
+        
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X_clipped)
+        
+        model = RandomForestRegressor(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
+        model.fit(X_scaled, labels)
+        importances = model.feature_importances_
+        importances = np.nan_to_num(importances, nan=0.0)
+        
+        n_select = min(n_select, X_clipped.shape[1])
+        top_idx = np.argsort(importances)[-n_select:][::-1]
+        
+        X_selected = X_clipped[:, top_idx]
+        selected_features.append(X_selected)
+        
+        feature_info_new[name] = {
+            'selected_indices': top_idx,
+            'importance_scores': importances[top_idx],
+            'n_features': n_select
+        }
+    
+    if len(selected_features) == 0:
+        return np.zeros((len(labels), 0)), feature_info_new
+    
+    return np.hstack(selected_features).astype(np.float32), feature_info_new
+
+
+def apply_allocation(rep_dict_test, feature_info):
+    """Apply saved feature selection to test set"""
+    selected_parts = []
+    for rep_name, X in rep_dict_test.items():
+        if rep_name not in feature_info:
+            continue
+        X_clipped = np.clip(X, -1e10, 1e10)
+        X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
+        
+        indices = feature_info[rep_name]['selected_indices']
+        X_selected = X_clipped[:, indices]
+        selected_parts.append(X_selected)
+    
+    if len(selected_parts) == 0:
+        return np.zeros((X.shape[0], 0))
+    
+    return np.hstack(selected_parts).astype(np.float32)
+
+
+def test_single(X_train, X_test, y_train, y_test):
+    """Test with RF"""
+    if X_train.shape[1] == 0:
+        return {'r2': -np.inf, 'mae': np.inf}
+    
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+    
+    model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+    model.fit(X_train_scaled, y_train)
+    y_pred = model.predict(X_test_scaled)
+    
+    return {
+        'r2': r2_score(y_test, y_pred),
+        'mae': mean_absolute_error(y_test, y_pred)
+    }
+
+
+def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labels, 
+                           total_budget=100, step_size=10, patience=None):
+    """Greedy forward selection with optional plateau detection"""
+    allocation = {rep: 0 for rep in rep_dict_train.keys()}
+    remaining_budget = total_budget
+    
+    best_val_r2 = -np.inf
+    steps_without_improvement = 0
+    
+    iteration = 0
+    while remaining_budget >= step_size:
+        iteration += 1
+        best_gain = -np.inf
+        best_rep = None
+        
+        for rep_name in rep_dict_train.keys():
+            trial_allocation = allocation.copy()
+            trial_allocation[rep_name] += step_size
+            
+            max_features = rep_dict_train[rep_name].shape[1]
+            if trial_allocation[rep_name] > max_features:
+                continue
+            
+            X_train_trial, feat_info = create_hybrid_with_allocation(
+                rep_dict_train, train_labels, trial_allocation
+            )
+            X_val_trial = apply_allocation(rep_dict_val, feat_info)
+            
+            metrics = test_single(X_train_trial, X_val_trial, train_labels, val_labels)
+            
+            if metrics['r2'] > best_gain:
+                best_gain = metrics['r2']
+                best_rep = rep_name
+        
+        if best_rep is None:
+            break
+        
+        if patience is not None:
+            if best_gain <= best_val_r2:
+                steps_without_improvement += 1
+                if steps_without_improvement >= patience:
+                    break
+            else:
+                steps_without_improvement = 0
+                best_val_r2 = best_gain
         else:
-            patience_counter += 1
-            if patience_counter >= patience:
-                break
-    
-    # Load best model
-    model.load_state_dict(best_state)
-    
-    # Test predictions
-    model.eval()
-    with torch.no_grad():
-        logits = model(X_test_t).cpu().numpy()
-        probabilities = torch.sigmoid(torch.FloatTensor(logits)).numpy()
-        predictions = (probabilities > 0.5).astype(int)
-    
-    return predictions, probabilities
-
-
-# =============================================================================
-# EXPERIMENT RUNNER
-# =============================================================================
-
-def run_experiment_tree_model(X_train, y_train, X_test, y_test,
-                              model_fn, strategy, flip_prob_levels):
-    """
-    Run noise robustness experiment for tree-based classifier
-    
-    Args:
-        X_train, y_train: Training data
-        X_test, y_test: Test data
-        model_fn: Function that returns initialized model
-        strategy: Noise strategy name
-        flip_prob_levels: List of flip probability values to test
-    
-    Returns:
-        predictions: Dict mapping flip_prob -> predictions
-        probabilities: Dict mapping flip_prob -> probabilities
-    """
-    injector = NoiseInjectorClassification(strategy=strategy, random_state=42)
-    predictions = {}
-    probabilities = {}
-    
-    for flip_prob in flip_prob_levels:
-        # Inject noise
-        if flip_prob == 0.0:
-            y_noisy = y_train
-        else:
-            y_noisy = injector.inject(y_train, flip_prob)
+            best_val_r2 = max(best_val_r2, best_gain)
         
-        # Train model
-        model = model_fn()
-        model.fit(X_train, y_noisy)
-        
-        # Get predictions and probabilities
-        predictions[flip_prob] = model.predict(X_test)
-        probabilities[flip_prob] = model.predict_proba(X_test)[:, 1]
+        allocation[best_rep] += step_size
+        remaining_budget -= step_size
     
-    return predictions, probabilities
+    X_train_final, feat_info = create_hybrid_with_allocation(
+        rep_dict_train, train_labels, allocation
+    )
+    
+    return allocation, feat_info
 
 
-def run_experiment_neural(X_train, y_train, X_val, y_val, X_test, y_test,
-                          strategy, flip_prob_levels):
-    """Run noise robustness experiment for neural classifier"""
-    injector = NoiseInjectorClassification(strategy=strategy, random_state=42)
-    predictions = {}
-    probabilities = {}
+def test_configuration(rep_dict_train_raw, rep_dict_val_raw, rep_dict_test_raw,
+                      train_labels, val_labels, test_labels,
+                      filter_config, patience, budget):
+    """Test one complete configuration"""
     
-    for flip_prob in flip_prob_levels:
-        # Inject noise
-        if flip_prob == 0.0:
-            y_noisy = y_train
-        else:
-            y_noisy = injector.inject(y_train, flip_prob)
+    # Apply filters if needed
+    if filter_config is not None:
+        rep_dict_full = {}
+        for rep_name in rep_dict_train_raw.keys():
+            rep_dict_full[rep_name] = np.vstack([rep_dict_train_raw[rep_name], rep_dict_val_raw[rep_name]])
         
-        # Train
-        preds, probs = train_neural_classifier(
-            X_train, y_noisy, X_val, y_val, X_test,
-            epochs=100
+        labels_full = np.concatenate([train_labels, val_labels])
+        
+        filtered_full, filtered_test = apply_filters(
+            rep_dict_full, rep_dict_test_raw, labels_full, **filter_config
         )
         
-        predictions[flip_prob] = preds
-        probabilities[flip_prob] = probs
+        n_train = len(train_labels)
+        rep_dict_train = {name: X[:n_train] for name, X in filtered_full.items()}
+        rep_dict_val = {name: X[n_train:] for name, X in filtered_full.items()}
+        rep_dict_test = filtered_test
+    else:
+        rep_dict_train = rep_dict_train_raw
+        rep_dict_val = rep_dict_val_raw
+        rep_dict_test = rep_dict_test_raw
     
-    return predictions, probabilities
+    # Run greedy
+    allocation, feat_info = allocate_greedy_forward(
+        rep_dict_train, rep_dict_val, train_labels, val_labels,
+        budget, step_size=10, patience=patience
+    )
+    
+    # Test on full train+val combined
+    rep_dict_full_final = {}
+    for rep_name in rep_dict_train.keys():
+        rep_dict_full_final[rep_name] = np.vstack([rep_dict_train[rep_name], rep_dict_val[rep_name]])
+    labels_full = np.concatenate([train_labels, val_labels])
+    
+    X_train, feat_info_final = create_hybrid_with_allocation(
+        rep_dict_full_final, labels_full, allocation
+    )
+    X_test = apply_allocation(rep_dict_test, feat_info_final)
+    
+    metrics = test_single(X_train, X_test, labels_full, test_labels)
+    
+    return {
+        'allocation': allocation,
+        'metrics': metrics,
+        'n_features': sum(allocation.values())
+    }
 
-
-# =============================================================================
-# MAIN SCRIPT
-# =============================================================================
-
-
-# =============================================================================
-# MAIN SCRIPT
-# =============================================================================
 
 def main():
-    print("="*80)
-    print("hERG + NoiseInject: Strategic Model-Representation Pairs")
-    print("="*80)
-
-    # Configuration
-    strategies = ['uniform', 'class_imbalance', 'binary_asymmetric']
-    flip_prob_levels = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
-    results_dir = Path('results/herg')
-    results_dir.mkdir(parents=True, exist_ok=True)
+    print("="*100)
+    print("FINAL FEATURE ALLOCATION TEST")
+    print("="*100)
+    print("\nTest Matrix:")
+    print("  Reps: 2 (ECFP4+PDV), 3 (ECFP4+PDV+mhggnn)")
+    print("  Filters: none, quality_only")
+    print("  Patience: None, 3")
+    print("  Budgets: 50, 100, 150")
+    print("  Total: 24 tests")
+    print("="*100)
     
-    # Load hERG
-    print("\nLoading hERG dataset...")
-    print("Loading FLuID training set...")
-    train_data = load_herg(source='fluid', use_test=False)
-    print("Loading FLuID test set...")
-    test_data = load_herg(source='fluid', use_test=True)
-
-    train_smiles = train_data['smiles']
-    train_labels = np.array(train_data['labels'])
-    test_smiles = test_data['smiles']
-    test_labels = np.array(test_data['labels'])
+    # Load data
+    print("\nLoading ESOL...")
+    data = load_esol_combined(splitter='scaffold')
     
-    # Create validation split for neural models
+    train_smiles = data['train']['smiles']
+    train_labels = data['train']['labels']
+    test_smiles = data['test']['smiles']
+    test_labels = data['test']['labels']
+    
+    # Split train into train/val
     n_val = len(train_smiles) // 5
-    val_smiles = train_smiles[:n_val]
-    val_labels = train_labels[:n_val]
-    train_smiles_fit = train_smiles[n_val:]
-    train_labels_fit = train_labels[n_val:]
+    indices = np.random.RandomState(42).permutation(len(train_smiles))
+    val_indices = indices[:n_val]
+    train_indices = indices[n_val:]
     
-    print(f"Split sizes: Train={len(train_smiles_fit)}, Val={len(val_smiles)}, Test={len(test_smiles)}")
-    print(f"Class distribution - Train: {np.bincount(train_labels_fit)}, Test: {np.bincount(test_labels)}")
+    train_smiles_split = [train_smiles[i] for i in train_indices]
+    train_labels_split = train_labels[train_indices]
+    val_smiles_split = [train_smiles[i] for i in val_indices]
+    val_labels_split = train_labels[val_indices]
     
-    # Storage for all results
-    all_results = []
-    all_calibration_data = []
+    print(f"Split: Train={len(train_smiles_split)}, Val={len(val_smiles_split)}, Test={len(test_smiles)}")
     
-    # =========================================================================
-    # PHASE 1: CORE ROBUSTNESS
-    # =========================================================================
-    print("\n" + "="*80)
-    print("PHASE 1: CORE ROBUSTNESS - Strategic Pairs")
-    print("="*80)
+    # Create representations
+    print("\nCreating representations...")
+    start = time.time()
     
-    # -------------------------------------------------------------------------
-    # Pair 1: RF + ECFP4 (baseline)
-    # -------------------------------------------------------------------------
-    print("\n[1/7] RF + ECFP4...")
-    ecfp4_train = create_ecfp4(train_smiles_fit, n_bits=2048)
-    ecfp4_val = create_ecfp4(val_smiles, n_bits=2048)
+    ecfp4_train = create_ecfp4(train_smiles_split, n_bits=2048)
+    ecfp4_val = create_ecfp4(val_smiles_split, n_bits=2048)
     ecfp4_test = create_ecfp4(test_smiles, n_bits=2048)
     
-    for strategy in strategies:
-        print(f"  Strategy: {strategy}")
-        predictions, probabilities = run_experiment_tree_model(
-            ecfp4_train, train_labels_fit, ecfp4_test, test_labels,
-            lambda: RandomForestClassifier(n_estimators=100, random_state=42, 
-                                          n_jobs=-1, class_weight='balanced'),
-            strategy, flip_prob_levels
-        )
-        
-        per_flip, summary, per_class = calculate_classification_metrics(
-            test_labels, predictions, probabilities
-        )
-        per_flip['model'] = 'RF'
-        per_flip['rep'] = 'ECFP4'
-        per_flip['strategy'] = strategy
-        all_results.append(per_flip)
-        per_flip.to_csv(results_dir / f'RF_ECFP4_{strategy}.csv', index=False)
-        
-        # Save calibration data for Phase 3
-        if strategy == 'uniform':
-            calib_data = []
-            for flip_prob in flip_prob_levels:
-                for i in range(len(test_labels)):
-                    calib_data.append({
-                        'flip_prob': flip_prob,
-                        'sample_idx': i,
-                        'y_true': test_labels[i],
-                        'y_pred': predictions[flip_prob][i],
-                        'probability': probabilities[flip_prob][i]
-                    })
-            all_calibration_data.append(('RF', 'ECFP4', pd.DataFrame(calib_data)))
-    
-    # -------------------------------------------------------------------------
-    # Pair 2: RF + PDV (baseline)
-    # -------------------------------------------------------------------------
-    print("\n[2/7] RF + PDV...")
-    pdv_train = create_pdv(train_smiles_fit)
-    pdv_val = create_pdv(val_smiles)
+    pdv_train = create_pdv(train_smiles_split)
+    pdv_val = create_pdv(val_smiles_split)
     pdv_test = create_pdv(test_smiles)
     
-    for strategy in strategies:
-        print(f"  Strategy: {strategy}")
-        predictions, probabilities = run_experiment_tree_model(
-            pdv_train, train_labels_fit, pdv_test, test_labels,
-            lambda: RandomForestClassifier(n_estimators=100, random_state=42,
-                                          n_jobs=-1, class_weight='balanced'),
-            strategy, flip_prob_levels
-        )
-        
-        per_flip, summary, per_class = calculate_classification_metrics(
-            test_labels, predictions, probabilities
-        )
-        per_flip['model'] = 'RF'
-        per_flip['rep'] = 'PDV'
-        per_flip['strategy'] = strategy
-        all_results.append(per_flip)
-        per_flip.to_csv(results_dir / f'RF_PDV_{strategy}.csv', index=False)
+    mhggnn_train = create_mhg_gnn(train_smiles_split)
+    mhggnn_val = create_mhg_gnn(val_smiles_split)
+    mhggnn_test = create_mhg_gnn(test_smiles)
     
-    # -------------------------------------------------------------------------
-    # Pair 3: RF + SNS (Sort & Slice)
-    # -------------------------------------------------------------------------
-    print("\n[3/7] RF + SNS...")
-    sns_train, sns_featurizer = create_sns(train_smiles_fit, return_featurizer=True)
-    sns_val = create_sns(val_smiles, reference_featurizer=sns_featurizer)
-    sns_test = create_sns(test_smiles, reference_featurizer=sns_featurizer)
+    print(f"Done ({time.time() - start:.1f}s)")
     
-    for strategy in strategies:
-        print(f"  Strategy: {strategy}")
-        predictions, probabilities = run_experiment_tree_model(
-            sns_train, train_labels_fit, sns_test, test_labels,
-            lambda: RandomForestClassifier(n_estimators=100, random_state=42,
-                                          n_jobs=-1, class_weight='balanced'),
-            strategy, flip_prob_levels
-        )
-        
-        per_flip, summary, per_class = calculate_classification_metrics(
-            test_labels, predictions, probabilities
-        )
-        per_flip['model'] = 'RF'
-        per_flip['rep'] = 'SNS'
-        per_flip['strategy'] = strategy
-        all_results.append(per_flip)
-        per_flip.to_csv(results_dir / f'RF_SNS_{strategy}.csv', index=False)
+    # Test configurations
+    filters_to_test = {
+        'none': None,
+        'quality_only': FILTER_CONFIGS['quality_only']
+    }
     
-    # -------------------------------------------------------------------------
-    # Pair 4: RF + MHG-GNN pretrained (new with KIRBy)
-    # -------------------------------------------------------------------------
-    print("\n[4/7] RF + MHG-GNN (pretrained)...")
-    mhggnn_train = create_mhg_gnn(train_smiles_fit, batch_size=32)
-    mhggnn_test = create_mhg_gnn(test_smiles, batch_size=32)
+    patience_values = [None, 3]
+    budgets = [50, 100, 150]
     
-    for strategy in strategies:
-        print(f"  Strategy: {strategy}")
-        predictions, probabilities = run_experiment_tree_model(
-            mhggnn_train, train_labels_fit, mhggnn_test, test_labels,
-            lambda: RandomForestClassifier(n_estimators=100, random_state=42,
-                                          n_jobs=-1, class_weight='balanced'),
-            strategy, flip_prob_levels
-        )
-        
-        per_flip, summary, per_class = calculate_classification_metrics(
-            test_labels, predictions, probabilities
-        )
-        per_flip['model'] = 'RF'
-        per_flip['rep'] = 'MHG-GNN-pretrained'
-        per_flip['strategy'] = strategy
-        all_results.append(per_flip)
-        per_flip.to_csv(results_dir / f'RF_MHGGNN-pretrained_{strategy}.csv', index=False)
+    results = {}
     
-    # -------------------------------------------------------------------------
-    # Pair 5: DNN + ECFP4 (neural baseline)
-    # -------------------------------------------------------------------------
-    print("\n[5/7] DNN + ECFP4...")
+    # 2 REPS
+    print(f"\n{'='*100}")
+    print("TESTING: 2 REPS (ECFP4 + PDV)")
+    print(f"{'='*100}")
     
-    for strategy in strategies:
-        print(f"  Strategy: {strategy}")
-        predictions, probabilities = run_experiment_neural(
-            ecfp4_train, train_labels_fit, ecfp4_val, val_labels, ecfp4_test, test_labels,
-            strategy, flip_prob_levels
-        )
-        
-        per_flip, summary, per_class = calculate_classification_metrics(
-            test_labels, predictions, probabilities
-        )
-        per_flip['model'] = 'DNN'
-        per_flip['rep'] = 'ECFP4'
-        per_flip['strategy'] = strategy
-        all_results.append(per_flip)
-        per_flip.to_csv(results_dir / f'DNN_ECFP4_{strategy}.csv', index=False)
+    rep_dict_train_2 = {'ecfp4': ecfp4_train, 'pdv': pdv_train}
+    rep_dict_val_2 = {'ecfp4': ecfp4_val, 'pdv': pdv_val}
+    rep_dict_test_2 = {'ecfp4': ecfp4_test, 'pdv': pdv_test}
     
-    # -------------------------------------------------------------------------
-    # Pair 6: DNN + PDV (neural baseline)
-    # -------------------------------------------------------------------------
-    print("\n[6/7] DNN + PDV...")
+    results['2rep'] = {}
     
-    for strategy in strategies:
-        print(f"  Strategy: {strategy}")
-        predictions, probabilities = run_experiment_neural(
-            pdv_train, train_labels_fit, pdv_val, val_labels, pdv_test, test_labels,
-            strategy, flip_prob_levels
-        )
-        
-        per_flip, summary, per_class = calculate_classification_metrics(
-            test_labels, predictions, probabilities
-        )
-        per_flip['model'] = 'DNN'
-        per_flip['rep'] = 'PDV'
-        per_flip['strategy'] = strategy
-        all_results.append(per_flip)
-        per_flip.to_csv(results_dir / f'DNN_PDV_{strategy}.csv', index=False)
-        
-        # Save calibration data for Phase 3
-        if strategy == 'uniform':
-            calib_data = []
-            for flip_prob in flip_prob_levels:
-                for i in range(len(test_labels)):
-                    calib_data.append({
-                        'flip_prob': flip_prob,
-                        'sample_idx': i,
-                        'y_true': test_labels[i],
-                        'y_pred': predictions[flip_prob][i],
-                        'probability': probabilities[flip_prob][i]
-                    })
-            all_calibration_data.append(('DNN', 'PDV', pd.DataFrame(calib_data)))
+    for filter_name, filter_config in filters_to_test.items():
+        for patience in patience_values:
+            for budget in budgets:
+                patience_str = "no_patience" if patience is None else f"patience_{patience}"
+                config_name = f"{filter_name}_{patience_str}_budget_{budget}"
+                
+                print(f"\n  [{config_name}]")
+                
+                result = test_configuration(
+                    rep_dict_train_2, rep_dict_val_2, rep_dict_test_2,
+                    train_labels_split, val_labels_split, test_labels,
+                    filter_config, patience, budget
+                )
+                
+                results['2rep'][config_name] = result
+                
+                print(f"    R²={result['metrics']['r2']:.4f}, "
+                      f"features={result['n_features']}/{budget}, "
+                      f"allocation={result['allocation']}")
     
-    # -------------------------------------------------------------------------
-    # Pair 7: DNN + SNS (neural with SNS)
-    # -------------------------------------------------------------------------
-    print("\n[7/7] DNN + SNS...")
+    # 3 REPS
+    print(f"\n{'='*100}")
+    print("TESTING: 3 REPS (ECFP4 + PDV + mhggnn)")
+    print(f"{'='*100}")
     
-    for strategy in strategies:
-        print(f"  Strategy: {strategy}")
-        predictions, probabilities = run_experiment_neural(
-            sns_train, train_labels_fit, sns_val, val_labels, sns_test, test_labels,
-            strategy, flip_prob_levels
-        )
-        
-        per_flip, summary, per_class = calculate_classification_metrics(
-            test_labels, predictions, probabilities
-        )
-        per_flip['model'] = 'DNN'
-        per_flip['rep'] = 'SNS'
-        per_flip['strategy'] = strategy
-        all_results.append(per_flip)
-        per_flip.to_csv(results_dir / f'DNN_SNS_{strategy}.csv', index=False)
+    rep_dict_train_3 = {'ecfp4': ecfp4_train, 'pdv': pdv_train, 'mhggnn': mhggnn_train}
+    rep_dict_val_3 = {'ecfp4': ecfp4_val, 'pdv': pdv_val, 'mhggnn': mhggnn_val}
+    rep_dict_test_3 = {'ecfp4': ecfp4_test, 'pdv': pdv_test, 'mhggnn': mhggnn_test}
     
-    # =========================================================================
-    # PHASE 2: PROBABILISTIC COMPARISON
-    # =========================================================================
-    print("\n" + "="*80)
-    print("PHASE 2: PROBABILISTIC COMPARISON (uniform strategy only)")
-    print("="*80)
-    print("Testing RF with and without probability calibration on ECFP4...")
+    results['3rep'] = {}
     
-    strategy = 'uniform'
-    injector = NoiseInjectorClassification(strategy=strategy, random_state=42)
+    for filter_name, filter_config in filters_to_test.items():
+        for patience in patience_values:
+            for budget in budgets:
+                patience_str = "no_patience" if patience is None else f"patience_{patience}"
+                config_name = f"{filter_name}_{patience_str}_budget_{budget}"
+                
+                print(f"\n  [{config_name}]")
+                
+                result = test_configuration(
+                    rep_dict_train_3, rep_dict_val_3, rep_dict_test_3,
+                    train_labels_split, val_labels_split, test_labels,
+                    filter_config, patience, budget
+                )
+                
+                results['3rep'][config_name] = result
+                
+                print(f"    R²={result['metrics']['r2']:.4f}, "
+                      f"features={result['n_features']}/{budget}, "
+                      f"allocation={result['allocation']}")
     
-    uncalibrated_predictions = {}
-    uncalibrated_probabilities = {}
-    calibrated_predictions = {}
-    calibrated_probabilities = {}
-    
-    for flip_prob in flip_prob_levels:
-        print(f"  flip_prob={flip_prob:.1f}...", end='')
-        
-        # Inject noise
-        if flip_prob == 0.0:
-            y_noisy = train_labels_fit
-        else:
-            y_noisy = injector.inject(train_labels_fit, flip_prob)
-        
-        # Train uncalibrated RF
-        rf_uncal = RandomForestClassifier(n_estimators=100, random_state=42,
-                                         n_jobs=-1, class_weight='balanced')
-        rf_uncal.fit(ecfp4_train, y_noisy)
-        uncalibrated_predictions[flip_prob] = rf_uncal.predict(ecfp4_test)
-        uncalibrated_probabilities[flip_prob] = rf_uncal.predict_proba(ecfp4_test)[:, 1]
-        
-        # Train calibrated RF (isotonic calibration)
-        rf_cal = RandomForestClassifier(n_estimators=100, random_state=42,
-                                       n_jobs=-1, class_weight='balanced')
-        rf_calibrated = CalibratedClassifierCV(rf_cal, method='isotonic', cv=3)
-        rf_calibrated.fit(ecfp4_train, y_noisy)
-        calibrated_predictions[flip_prob] = rf_calibrated.predict(ecfp4_test)
-        calibrated_probabilities[flip_prob] = rf_calibrated.predict_proba(ecfp4_test)[:, 1]
-        
-        print(" done")
-    
-    # Calculate metrics for both
-    per_flip_uncal, summary_uncal, _ = calculate_classification_metrics(
-        test_labels, uncalibrated_predictions, uncalibrated_probabilities
-    )
-    per_flip_uncal['model'] = 'RF-uncalibrated'
-    per_flip_uncal['rep'] = 'ECFP4'
-    per_flip_uncal['strategy'] = strategy
-    per_flip_uncal.to_csv(results_dir / 'RF_ECFP4_uncalibrated_uniform.csv', index=False)
-    
-    per_flip_cal, summary_cal, _ = calculate_classification_metrics(
-        test_labels, calibrated_predictions, calibrated_probabilities
-    )
-    per_flip_cal['model'] = 'RF-calibrated'
-    per_flip_cal['rep'] = 'ECFP4'
-    per_flip_cal['strategy'] = strategy
-    per_flip_cal.to_csv(results_dir / 'RF_ECFP4_calibrated_uniform.csv', index=False)
-    
-    print("\nComparison (uniform strategy):")
-    print(f"  Uncalibrated - NSI(accuracy): {summary_uncal['nsi_accuracy'].values[0]:.4f}")
-    print(f"  Calibrated   - NSI(accuracy): {summary_cal['nsi_accuracy'].values[0]:.4f}")
-    
-    # =========================================================================
-    # PHASE 3: UNCERTAINTY QUANTIFICATION
-    # =========================================================================
-    print("\n" + "="*80)
-    print("PHASE 3: PROBABILITY CALIBRATION ANALYSIS (uniform strategy only)")
-    print("="*80)
-    
-    # Save all calibration data
-    for model_name, rep_name, calib_df in all_calibration_data:
-        calib_df.to_csv(
-            results_dir / f'{model_name}_{rep_name}_calibration_values.csv',
-            index=False
-        )
-        print(f"Saved {model_name} + {rep_name} calibration data")
-        
-        # Calculate Brier score per flip_prob
-        print(f"\n{model_name} + {rep_name} - Brier Score:")
-        for flip_prob in flip_prob_levels:
-            subset = calib_df[calib_df['flip_prob'] == flip_prob]
-            if len(subset) > 0:
-                brier = np.mean((subset['probability'] - subset['y_true'])**2)
-                print(f"  flip_prob={flip_prob:.1f}: Brier = {brier:.4f}")
-    
-    # =========================================================================
     # SUMMARY
-    # =========================================================================
-    print("\n" + "="*80)
-    print("SUMMARY")
-    print("="*80)
+    print(f"\n\n{'='*100}")
+    print("SUMMARY - BEST CONFIGURATIONS")
+    print(f"{'='*100}")
     
-    # Combine all results
-    combined_df = pd.concat(all_results, ignore_index=True)
-    combined_df.to_csv(results_dir / 'all_results.csv', index=False)
-
-    # TODO: fix summary, past here it's broken but all the results get saved
+    # Find best for 2-rep
+    best_2rep = max(results['2rep'].items(), key=lambda x: x[1]['metrics']['r2'])
+    print(f"\nBEST 2-REP: {best_2rep[0]}")
+    print(f"  R²={best_2rep[1]['metrics']['r2']:.4f}")
+    print(f"  Allocation: {best_2rep[1]['allocation']}")
+    print(f"  Features used: {best_2rep[1]['n_features']}")
     
-    # Calculate NSI and retention using flip_prob_max = 0.6
-    summary_table = []
-    for (model, rep, strategy), group in combined_df.groupby(['model', 'rep', 'strategy']):
-        baseline_rows = group[group['flip_prob'] == 0.0]
-        high_noise_rows = group[group['flip_prob'] == 0.6]
+    # Find best for 3-rep
+    best_3rep = max(results['3rep'].items(), key=lambda x: x[1]['metrics']['r2'])
+    print(f"\nBEST 3-REP: {best_3rep[0]}")
+    print(f"  R²={best_3rep[1]['metrics']['r2']:.4f}")
+    print(f"  Allocation: {best_3rep[1]['allocation']}")
+    print(f"  Features used: {best_3rep[1]['n_features']}")
+    
+    # Detailed tables
+    print(f"\n\n{'='*100}")
+    print("DETAILED RESULTS")
+    print(f"{'='*100}")
+    
+    for rep_type in ['2rep', '3rep']:
+        print(f"\n{rep_type.upper()}:")
+        print(f"  {'Config':<50} {'R²':>8} {'Features':>10} {'Allocation'}")
+        print(f"  {'-'*100}")
         
-        if len(baseline_rows) > 0 and len(high_noise_rows) > 0:
-            baseline_acc = baseline_rows['accuracy'].values[0]
-            high_noise_acc = high_noise_rows['accuracy'].values[0]
-            baseline_auc = baseline_rows['auc'].values[0]
-            high_noise_auc = high_noise_rows['auc'].values[0]
-            
-            nsi_acc = (baseline_acc - high_noise_acc) / 0.6
-            retention_acc = (high_noise_acc / baseline_acc) * 100 if baseline_acc > 0 else 0
-            nsi_auc = (baseline_auc - high_noise_auc) / 0.6
-            retention_auc = (high_noise_auc / baseline_auc) * 100 if baseline_auc > 0 else 0
-            
-            summary_table.append({
-                'model': model,
-                'rep': rep,
-                'strategy': strategy,
-                'baseline_accuracy': baseline_acc,
-                'accuracy_at_0.6': high_noise_acc,
-                'NSI_accuracy': nsi_acc,
-                'retention_%_accuracy': retention_acc,
-                'baseline_auc': baseline_auc,
-                'auc_at_0.6': high_noise_auc,
-                'NSI_auc': nsi_auc,
-                'retention_%_auc': retention_auc
-            })
+        # Sort by R²
+        sorted_results = sorted(results[rep_type].items(), 
+                               key=lambda x: x[1]['metrics']['r2'], 
+                               reverse=True)
+        
+        for config_name, result in sorted_results:
+            r2 = result['metrics']['r2']
+            n_feat = result['n_features']
+            alloc = result['allocation']
+            print(f"  {config_name:<50} {r2:>8.4f} {n_feat:>10} {alloc}")
     
-    summary_df = pd.DataFrame(summary_table)
-    summary_df.to_csv(results_dir / 'summary.csv', index=False)
-    
-    print("\nTop 10 most robust by accuracy (lowest NSI):")
-    top10_acc = summary_df.nsmallest(10, 'NSI_accuracy')[
-        ['model', 'rep', 'strategy', 'NSI_accuracy', 'retention_%_accuracy']
-    ]
-    print(top10_acc.to_string(index=False))
-    
-    print("\nTop 10 most robust by AUC (lowest NSI):")
-    top10_auc = summary_df.nsmallest(10, 'NSI_auc')[
-        ['model', 'rep', 'strategy', 'NSI_auc', 'retention_%_auc']
-    ]
-    print(top10_auc.to_string(index=False))
-    
-    print("\nResults by strategy (mean across models/reps):")
-    strategy_summary = summary_df.groupby('strategy')[
-        ['NSI_accuracy', 'retention_%_accuracy', 'NSI_auc', 'retention_%_auc']
-    ].mean()
-    print(strategy_summary.to_string())
-    
-    print("\nResults by representation (mean across models/strategies):")
-    rep_summary = summary_df.groupby('rep')[
-        ['NSI_accuracy', 'retention_%_accuracy', 'NSI_auc', 'retention_%_auc']
-    ].mean()
-    print(rep_summary.to_string())
-    
-    print("\n" + "="*80)
-    print("COMPLETE - Results saved to results/herg/")
-    print("="*80)
+    print(f"\n{'='*100}")
+    print("ANALYSIS COMPLETE")
+    print(f"{'='*100}")
+
 
 if __name__ == '__main__':
     main()
