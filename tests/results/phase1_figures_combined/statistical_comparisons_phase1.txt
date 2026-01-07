@@ -21,10 +21,6 @@ Representation: Binary PDV
   p-value: 0.000977
   → Significant difference (p<0.05), deterministic superior
 
-Representation: SNS
---------------------------------------------------------------------------------
-  No data available for comparison
-
 ================================================================================
 GRADIENT BOOSTING: xgboost vs ngboost
 ================================================================================
@@ -34,10 +30,6 @@ Representation: Graph
   No data available for comparison
 
 Representation: Binary PDV
---------------------------------------------------------------------------------
-  No data available for comparison
-
-Representation: SNS
 --------------------------------------------------------------------------------
   No data available for comparison
 
@@ -56,7 +48,3 @@ Representation: Binary PDV
   Wilcoxon statistic: 1.00
   p-value: 0.001953
   → Significant difference (p<0.05), deterministic superior
-
-Representation: SNS
---------------------------------------------------------------------------------
-  No data available for comparison

@@ -74,9 +74,9 @@ MODEL_COLORS = {
 }
 
 mlp_mtl_models = ['mlp', 'mlp_bnn_full', 'mlp_bnn_last', 'mlp_bnn_variational',
-                      'residual_mlp', 'residual_mlp_bnn_full', 'residual_mlp_bnn_last',
-                      'residual_mlp_bnn_variational',
-                      'mtl', 'mtl_bnn_full', 'mtl_bnn_last', 'mtl_bnn_variational']
+                  'residual_mlp', 'residual_mlp_bnn_full', 'residual_mlp_bnn_last',
+                  'residual_mlp_bnn_variational',
+                  'mtl', 'mtl_bnn_full', 'mtl_bnn_last', 'mtl_bnn_variational']
 
 # ============================================================================
 # FORMATTING HELPERS
