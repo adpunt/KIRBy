@@ -259,14 +259,16 @@ def load_phase1_results(old_results_dir="../../qsar_qm_models/results",
     print("="*80)
     
     old_data = load_old_phase1_data(old_results_dir)
-    new_data = load_new_phase1_data(new_results_dir)
     graph_data = load_graph_phase1_data(new_results_dir)
     
+    # REMOVED: new_data loading - those files don't exist
+    
     standardized_dfs = []
-    for df in [old_data, new_data, graph_data]:
+    for df in [old_data, graph_data]:
         if len(df) > 0:
             df = df.copy()
             
+            # Standardize representation column
             if 'rep' in df.columns and 'representation' not in df.columns:
                 df = df.rename(columns={'rep': 'representation'})
             elif 'rep' in df.columns and 'representation' in df.columns:
@@ -275,6 +277,17 @@ def load_phase1_results(old_results_dir="../../qsar_qm_models/results",
                 print(f"WARNING: Dataframe missing both 'rep' and 'representation' columns")
                 continue
             
+            # CRITICAL: Parse model_type BEFORE concat
+            df = parse_model_type(df)
+            
+            # Ensure required columns exist
+            required_cols = ['model', 'representation', 'sigma', 'r2', 'rmse', 'mae', 'model_type']
+            missing = [col for col in required_cols if col not in df.columns]
+            if missing:
+                print(f"WARNING: Missing required columns {missing}, skipping this dataframe")
+                continue
+            
+            print(f"  Adding {len(df)} rows with representations: {df['representation'].unique()}")
             standardized_dfs.append(df)
     
     if not standardized_dfs:
@@ -282,9 +295,11 @@ def load_phase1_results(old_results_dir="../../qsar_qm_models/results",
         return pd.DataFrame()
     
     combined = pd.concat(standardized_dfs, ignore_index=True)
-    combined = parse_model_type(combined)
     
-    print(f"\nBefore filtering: {len(combined)} rows")
+    print(f"\nAfter concat: {len(combined)} rows")
+    print(f"  Unique representations: {combined['representation'].unique()}")
+    print(f"  Unique models: {combined['model'].nunique()}")
+    
     combined = combined[combined['r2'] > -10]
     print(f"After R² > -10 filter: {len(combined)} rows")
     
@@ -298,6 +313,7 @@ def load_phase1_results(old_results_dir="../../qsar_qm_models/results",
     print(f"\nFinal data: {len(results)} rows")
     print(f"Unique models: {results['model'].nunique()}")
     print(f"Unique representations: {results['representation'].nunique()}")
+    print(f"Representations: {sorted(results['representation'].unique())}")
     
     return results
 
