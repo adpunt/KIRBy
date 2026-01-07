@@ -757,11 +757,6 @@ def main(old_results_dir="../../qsar_qm_models/results",
     metrics_df.to_csv(output_dir / "phase1_robustness_metrics.csv", index=False)
     print(f"\n✓ Saved metrics to {output_dir / 'phase1_robustness_metrics.csv'}")
     
-    # Save outliers
-    if len(outliers) > 0:
-        outliers.to_csv(output_dir / "phase1_outliers_excluded.csv", index=False)
-        print(f"✓ Saved {len(outliers)} outliers to {output_dir / 'phase1_outliers_excluded.csv'}")
-    
     print("\n" + "="*80)
     print("GENERATING FIGURES")
     print("="*80)
