@@ -322,7 +322,7 @@ def load_phase1_results(old_results_dir="../../qsar_qm_models/results",
 # ============================================================================
 
 def calculate_robustness_metrics(df, sigma_high=0.6):
-    """Calculate robustness metrics"""
+    """Calculate robustness metrics and filter outliers"""
     print("\n" + "="*80)
     print(f"CALCULATING ROBUSTNESS METRICS (σ_high = {sigma_high})")
     print("="*80)
@@ -377,44 +377,39 @@ def calculate_robustness_metrics(df, sigma_high=0.6):
         
         metrics_list.append(metrics)
     
-    metrics_df = pd.DataFrame(metrics_list)
-    
-    print(f"Calculated metrics for {len(metrics_df)} configurations")
+    all_metrics = pd.DataFrame(metrics_list)
+    print(f"Calculated metrics for {len(all_metrics)} configurations")
     
     # FILTER OUTLIERS
     print("\n" + "="*80)
     print("FILTERING OUTLIERS")
     print("="*80)
     
-    original_count = len(metrics_df)
-    
-    # Identify outliers
-    outliers = metrics_df[
-        (metrics_df['baseline_r2'] < 0.1) |  # Terrible baseline
-        (metrics_df['retention_pct'] < -50) |  # Extreme degradation
-        (metrics_df['retention_pct'] > 150)    # Suspicious improvement
+    outliers = all_metrics[
+        (all_metrics['baseline_r2'] < 0.1) |
+        (all_metrics['retention_pct'] < -50) |
+        (all_metrics['retention_pct'] > 150)
     ].copy()
     
     if len(outliers) > 0:
-        print(f"\nFound {len(outliers)} outlier configurations:")
-        print("\nOutliers (will be excluded from figures):")
+        print(f"\nFound {len(outliers)} outlier configurations to exclude:")
         for _, row in outliers.iterrows():
             print(f"  - {row['model']}/{row['representation']}: "
                   f"baseline_r2={row['baseline_r2']:.3f}, "
                   f"retention={row['retention_pct']:.1f}%")
-        
-        # Remove outliers
-        metrics_df = metrics_df[
-            (metrics_df['baseline_r2'] >= 0.1) &
-            (metrics_df['retention_pct'] >= -50) &
-            (metrics_df['retention_pct'] <= 150)
-        ].copy()
-        
-        print(f"\nAfter filtering: {len(metrics_df)} configurations ({original_count - len(metrics_df)} removed)")
     else:
-        print("No outliers detected")
+        print("\nNo outliers detected")
     
-    return metrics_df, outliers
+    metrics_df = all_metrics[
+        (all_metrics['baseline_r2'] >= 0.1) &
+        (all_metrics['retention_pct'] >= -50) &
+        (all_metrics['retention_pct'] <= 150)
+    ].copy()
+    
+    print(f"\nAfter filtering: {len(metrics_df)} configurations retained")
+    print(f"Excluded: {len(outliers)} configurations")
+    
+    return metrics_df
 
 # ============================================================================
 # FIGURE GENERATION - ALL FROM OLD SCRIPT
