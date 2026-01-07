@@ -706,6 +706,231 @@ def perform_noise_robustness_anova(metrics_df, output_dir):
     
     return all_results
 
+# ============================================================================
+# FIGURE 1: GLOBAL NOISE ROBUSTNESS LANDSCAPE
+# ============================================================================
+
+def create_figure1_global_landscape(df, metrics_df, output_dir):
+    """
+    Figure 1: Global noise robustness landscape across all model-representation pairs
+    
+    Panel A: Top 20 most noise-robust configurations (horizontal bars)
+    Panel B: Bottom 20 least robust configurations (horizontal bars)
+    Panel C: Global heatmap of retention % at high noise
+    
+    Layout: VERTICAL (3 rows x 1 column) for better readability
+    """
+    print("\n" + "="*80)
+    print("GENERATING FIGURE 1: GLOBAL ROBUSTNESS LANDSCAPE (VERTICAL LAYOUT)")
+    print("="*80)
+    
+    fig = plt.figure(figsize=(12, 18))  # Taller for vertical layout
+    gs = fig.add_gridspec(3, 1, hspace=0.35, wspace=0.20,
+                          left=0.10, right=0.95, top=0.96, bottom=0.04)
+    
+    # ========================================================================
+    # PANEL A: Top 20 most robust configurations
+    # ========================================================================
+    
+    ax_a = fig.add_subplot(gs[0, 0])
+    
+    # Rank by robustness score (combination of retention and NSI)
+    top_20 = metrics_df.nlargest(20, 'robustness_score').sort_values('robustness_score')
+    
+    y_pos = np.arange(len(top_20))
+    
+    # Color bars by representation
+    bar_colors = [REPRESENTATION_COLORS.get(rep, '#999999') for rep in top_20['representation']]
+    
+    bars = ax_a.barh(y_pos, top_20['robustness_score'], 
+                     color=bar_colors, alpha=0.8, height=0.75, edgecolor='black', linewidth=0.5)
+    
+    # Annotate with baseline and high-noise R²
+    for i, (idx, row) in enumerate(top_20.iterrows()):
+        # Add text showing baseline R² and high-noise R²
+        text = f"R²₀={row['baseline_r2']:.2f}, R²_h={row['r2_high']:.2f}"
+        ax_a.text(row['robustness_score'] + 0.01, i, text, 
+                 va='center', fontsize=7, color='black')
+    
+    ax_a.set_yticks(y_pos)
+    labels = [f"{format_model(row['model'])}/{format_representation(row['representation'])}" 
+              for _, row in top_20.iterrows()]
+    ax_a.set_yticklabels(labels, fontsize=8)
+    ax_a.set_xlabel('Robustness Score', fontsize=10)
+    ax_a.set_title('A. Top 20 Most Noise-Robust Configurations', 
+                   fontsize=11, fontweight='bold', pad=12)
+    ax_a.spines['top'].set_visible(False)
+    ax_a.spines['right'].set_visible(False)
+    ax_a.set_xlim(0, max(top_20['robustness_score']) * 1.25)
+    ax_a.grid(True, axis='x', alpha=0.3, linestyle=':', linewidth=0.5)
+    
+    # ========================================================================
+    # PANEL B: Bottom 20 least robust configurations
+    # ========================================================================
+    
+    ax_b = fig.add_subplot(gs[1, 0])
+    
+    bottom_20 = metrics_df.nsmallest(20, 'robustness_score').sort_values('robustness_score', ascending=False)
+    
+    y_pos = np.arange(len(bottom_20))
+    
+    bar_colors = [REPRESENTATION_COLORS.get(rep, '#999999') for rep in bottom_20['representation']]
+    
+    bars = ax_b.barh(y_pos, bottom_20['robustness_score'], 
+                     color=bar_colors, alpha=0.8, height=0.75, edgecolor='black', linewidth=0.5)
+    
+    # Annotate
+    for i, (idx, row) in enumerate(bottom_20.iterrows()):
+        text = f"R²₀={row['baseline_r2']:.2f}, R²_h={row['r2_high']:.2f}"
+        ax_b.text(row['robustness_score'] + 0.01, i, text, 
+                 va='center', fontsize=7, color='black')
+    
+    ax_b.set_yticks(y_pos)
+    labels = [f"{format_model(row['model'])}/{format_representation(row['representation'])}" 
+              for _, row in bottom_20.iterrows()]
+    ax_b.set_yticklabels(labels, fontsize=8)
+    ax_b.set_xlabel('Robustness Score', fontsize=10)
+    ax_b.set_title('B. Bottom 20 Least Robust Configurations', 
+                   fontsize=11, fontweight='bold', pad=12)
+    ax_b.spines['top'].set_visible(False)
+    ax_b.spines['right'].set_visible(False)
+    ax_b.set_xlim(0, max(bottom_20['robustness_score']) * 1.25)
+    ax_b.grid(True, axis='x', alpha=0.3, linestyle=':', linewidth=0.5)
+    
+    # ========================================================================
+    # PANEL C: Global heatmap of retention % at high noise
+    # ========================================================================
+    
+    ax_c = fig.add_subplot(gs[2, 0])
+    
+    # Create pivot table for heatmap
+    # Use retention_pct as the metric
+    heatmap_data = metrics_df.pivot_table(
+        index='model',
+        columns='representation',
+        values='retention_pct',
+        aggfunc='mean'
+    )
+    
+    # Sort by average retention
+    heatmap_data = heatmap_data.loc[heatmap_data.mean(axis=1).sort_values(ascending=False).index]
+    
+    # Format labels
+    formatted_models = [format_model(m) for m in heatmap_data.index]
+    formatted_reps = [format_representation(r) for r in heatmap_data.columns]
+    
+    # Plot heatmap
+    im = ax_c.imshow(heatmap_data.values, aspect='auto', cmap='RdYlGn', 
+                     vmin=0, vmax=100, interpolation='nearest')
+    
+    # Set ticks
+    ax_c.set_xticks(np.arange(len(heatmap_data.columns)))
+    ax_c.set_yticks(np.arange(len(heatmap_data.index)))
+    ax_c.set_xticklabels(formatted_reps, rotation=45, ha='right', fontsize=9)
+    ax_c.set_yticklabels(formatted_models, fontsize=9)
+    
+    # Add colorbar
+    cbar = plt.colorbar(im, ax=ax_c, fraction=0.03, pad=0.04)
+    cbar.set_label('Retention at high noise (%)', fontsize=9, rotation=270, labelpad=20)
+    cbar.ax.tick_params(labelsize=8)
+    
+    # Add text annotations
+    for i in range(len(heatmap_data.index)):
+        for j in range(len(heatmap_data.columns)):
+            value = heatmap_data.iloc[i, j]
+            if not np.isnan(value):
+                text_color = 'white' if value < 50 else 'black'
+                ax_c.text(j, i, f'{value:.0f}', ha='center', va='center',
+                         color=text_color, fontsize=7, fontweight='bold')
+    
+    ax_c.set_title('C. Global Heatmap: Retention % at High Noise\n(Average across configurations)', 
+                   fontsize=10, fontweight='bold', pad=10)
+    ax_c.set_xlabel('Representation', fontsize=9)
+    ax_c.set_ylabel('Model', fontsize=9)
+    
+    # ========================================================================
+    # Save figure
+    # ========================================================================
+    
+    output_path = Path(output_dir) / "figure1_global_robustness_landscape.png"
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    print(f"✓ Saved Figure 1 (3-panel) to {output_path}")
+    plt.close()
+
+
+def create_supplementary_degradation_curves(df, metrics_df, output_dir):
+    """
+    Supplementary figure: R² degradation curves for top 5 vs bottom 5
+    
+    Originally Figure 1 Panel C, now moved to separate figure to streamline main Figure 1
+    """
+    print("\n" + "="*80)
+    print("GENERATING SUPPLEMENTARY: DEGRADATION CURVES")
+    print("="*80)
+    
+    fig, ax = plt.subplots(1, 1, figsize=(8, 6))
+    
+    # Select top 5 and bottom 5 for visualization
+    top_5 = metrics_df.nlargest(5, 'robustness_score')
+    bottom_5 = metrics_df.nsmallest(5, 'robustness_score')
+    
+    # Plot top configurations
+    for idx, (_, row) in enumerate(top_5.iterrows()):
+        model, rep = row['model'], row['representation']
+        pair_data = df[(df['model'] == model) & (df['representation'] == rep)].sort_values('sigma')
+        
+        if len(pair_data) == 0:
+            continue
+        
+        color = REPRESENTATION_COLORS.get(rep, '#999999')
+        ax.plot(pair_data['sigma'], pair_data['r2'], 
+                 marker='o', markersize=4, linewidth=2, alpha=0.9,
+                 label=f"{model}/{rep} (top #{idx+1})", color=color, linestyle='-')
+        
+        # Annotate NSI on the line
+        mid_idx = len(pair_data) // 2
+        if mid_idx < len(pair_data):
+            ax.text(pair_data.iloc[mid_idx]['sigma'], pair_data.iloc[mid_idx]['r2'] + 0.02, 
+                     f"NSI={row['nsi_r2']:.3f}", fontsize=6, color=color, fontweight='bold',
+                     bbox=dict(boxstyle='round,pad=0.3', facecolor='white', 
+                             alpha=0.8, edgecolor=color, linewidth=1))
+    
+    # Plot bottom configurations with dashed lines
+    for idx, (_, row) in enumerate(bottom_5.iterrows()):
+        model, rep = row['model'], row['representation']
+        pair_data = df[(df['model'] == model) & (df['representation'] == rep)].sort_values('sigma')
+        
+        if len(pair_data) == 0:
+            continue
+        
+        color = REPRESENTATION_COLORS.get(rep, '#999999')
+        ax.plot(pair_data['sigma'], pair_data['r2'], 
+                 marker='s', markersize=4, linewidth=2, alpha=0.8,
+                 label=f"{model}/{rep} (bottom #{idx+1})", color=color, linestyle='--')
+        
+        # Annotate NSI
+        mid_idx = len(pair_data) // 2
+        if mid_idx < len(pair_data):
+            ax.text(pair_data.iloc[mid_idx]['sigma'], pair_data.iloc[mid_idx]['r2'] - 0.02, 
+                     f"NSI={row['nsi_r2']:.3f}", fontsize=6, color=color, fontweight='bold',
+                     bbox=dict(boxstyle='round,pad=0.3', facecolor='white', 
+                             alpha=0.8, edgecolor=color, linewidth=1))
+    
+    ax.set_xlabel('Noise level (σ)', fontsize=9)
+    ax.set_ylabel('R² score', fontsize=9)
+    ax.set_title('R² Degradation Curves: Top 5 vs Bottom 5 Configurations\n(Ranked by robustness score)', 
+                   fontsize=10, fontweight='bold', pad=10)
+    ax.legend(fontsize=7, loc='best', ncol=2, frameon=True, framealpha=0.9)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.grid(True, alpha=0.3, linestyle=':', linewidth=0.5)
+    ax.set_ylim(bottom=0)
+    
+    output_path = Path(output_dir) / "supplementary_degradation_curves.png"
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    print(f"✓ Saved degradation curves to {output_path}")
+    plt.close()
+
 
 # ============================================================================
 # FIGURE 2: REPRESENTATION AND NOISE-TYPE EFFECTS
