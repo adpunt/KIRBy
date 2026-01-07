@@ -3,70 +3,70 @@ STATISTICAL COMPARISONS - PHASE 0
 
 TEST 1: Representation Comparisons
 --------------------------------------------------------------------------------
-ECFP4 vs PDV:
-  Mean retention: 78.98% vs 80.58%
-  Mann-Whitney U: stat=107.00, p=0.4397
+GRAPH vs ECFP4:
+  Mean retention: -59.78% vs 80.01%
+  Mann-Whitney U: stat=96.00, p=0.1743
   → No significant difference
 
-ECFP4 vs GRAPH:
-  Mean retention: 78.98% vs -59.78%
-  Mann-Whitney U: stat=64.00, p=0.1433
+GRAPH vs PDV:
+  Mean retention: -59.78% vs 80.64%
+  Mann-Whitney U: stat=96.00, p=0.1743
   → No significant difference
-
-ECFP4 vs RANDOMIZED_SMILES:
-  Mean retention: 78.98% vs 77.58%
-  Mann-Whitney U: stat=111.00, p=0.5009
-  → No significant difference
-
-ECFP4 vs SMILES:
-  Mean retention: 78.98% vs 77.46%
-  Mann-Whitney U: stat=113.00, p=0.4437
-  → No significant difference
-
-PDV vs GRAPH:
-  Mean retention: 80.58% vs -59.78%
-  Mann-Whitney U: stat=64.00, p=0.1433
-  → No significant difference
-
-PDV vs RANDOMIZED_SMILES:
-  Mean retention: 80.58% vs 77.58%
-  Mann-Whitney U: stat=127.00, p=0.1568
-  → No significant difference
-
-PDV vs SMILES:
-  Mean retention: 80.58% vs 77.46%
-  Mann-Whitney U: stat=145.00, p=0.0244
-  → Significant difference, PDV superior
 
 GRAPH vs RANDOMIZED_SMILES:
-  Mean retention: -59.78% vs 77.58%
-  Mann-Whitney U: stat=96.00, p=0.1743
+  Mean retention: -59.78% vs 79.66%
+  Mann-Whitney U: stat=64.00, p=0.2307
   → No significant difference
 
 GRAPH vs SMILES:
-  Mean retention: -59.78% vs 77.46%
-  Mann-Whitney U: stat=96.00, p=0.1743
+  Mean retention: -59.78% vs 79.31%
+  Mann-Whitney U: stat=64.00, p=0.2307
+  → No significant difference
+
+ECFP4 vs PDV:
+  Mean retention: 80.01% vs 80.64%
+  Mann-Whitney U: stat=77.00, p=0.7950
+  → No significant difference
+
+ECFP4 vs RANDOMIZED_SMILES:
+  Mean retention: 80.01% vs 79.66%
+  Mann-Whitney U: stat=50.00, p=0.9101
+  → No significant difference
+
+ECFP4 vs SMILES:
+  Mean retention: 80.01% vs 79.31%
+  Mann-Whitney U: stat=52.00, p=0.7921
+  → No significant difference
+
+PDV vs RANDOMIZED_SMILES:
+  Mean retention: 80.64% vs 79.66%
+  Mann-Whitney U: stat=48.00, p=1.0000
+  → No significant difference
+
+PDV vs SMILES:
+  Mean retention: 80.64% vs 79.31%
+  Mann-Whitney U: stat=61.00, p=0.3431
   → No significant difference
 
 RANDOMIZED_SMILES vs SMILES:
-  Mean retention: 77.58% vs 77.46%
-  Mann-Whitney U: stat=71.00, p=0.9770
+  Mean retention: 79.66% vs 79.31%
+  Mann-Whitney U: stat=37.00, p=0.6454
   → No significant difference
 
 
 TEST 2: Model Family Comparisons
 --------------------------------------------------------------------------------
-flexible_bnn_variational vs dnn:
-  Mean retention: 75.17% vs 74.70%
-  Mann-Whitney U: stat=14.00, p=0.8413
-  → No significant difference
+conformal_qrf vs xgboost:
+  Mean retention: 79.68% vs 81.83%
+  Mann-Whitney U: stat=0.00, p=0.0079
+  → Significant difference, xgboost superior
 
-flexible_bnn_variational vs flexible_bnn_full:
-  Mean retention: 75.17% vs 78.51%
-  Mann-Whitney U: stat=4.00, p=0.0952
-  → No significant difference
+conformal_qrf vs ngboost:
+  Mean retention: 79.68% vs 82.56%
+  Mann-Whitney U: stat=0.00, p=0.0079
+  → Significant difference, ngboost superior
 
-dnn vs flexible_bnn_full:
-  Mean retention: 74.70% vs 78.51%
-  Mann-Whitney U: stat=4.00, p=0.0952
-  → No significant difference
+xgboost vs ngboost:
+  Mean retention: 81.83% vs 82.56%
+  Mann-Whitney U: stat=0.00, p=0.0079
+  → Significant difference, ngboost superior

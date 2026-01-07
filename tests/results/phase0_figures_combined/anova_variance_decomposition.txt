@@ -3,22 +3,22 @@ ANOVA VARIANCE DECOMPOSITION
 Dependent Variable: R² at σ=0.3
 ================================================================================
 
-Data: 68 observations, 28 models, 5 representations
+Data: 52 observations, 24 models, 5 representations
 
 ANOVA TABLE
 --------------------------------------------------------------------------------
 Source                         SS     df           MS          F    p-value     η² (%)
 --------------------------------------------------------------------------------
-Model                      2.1797     27       0.0807        nan        nan      93.29
-Representation             0.5414      4       0.1353        nan        nan      23.17
-Interaction                0.4475    108       0.0041        nan        nan      19.15
-Residual                  -0.8320    -72       0.0000                           -35.61
+Model                      2.1497     23       0.0935        nan        nan      94.04
+Representation             0.4985      4       0.1246        nan        nan      21.81
+Interaction                0.4138     92       0.0045        nan        nan      18.10
+Residual                  -0.7761    -68       0.0000                           -33.95
 --------------------------------------------------------------------------------
-Total                      2.3366     67                                        100.00
+Total                      2.2858     51                                        100.00
 ================================================================================
 
 INTERPRETATION:
-  - Model architecture explains 93.3% of variance
-  - Representation explains 23.2% of variance
-  - Interaction explains 19.2% of variance
-  - Residual (unexplained) is -35.6% of variance
+  - Model architecture explains 94.0% of variance
+  - Representation explains 21.8% of variance
+  - Interaction explains 18.1% of variance
+  - Residual (unexplained) is -34.0% of variance
