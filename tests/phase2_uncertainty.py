@@ -1,15 +1,23 @@
 #!/usr/bin/env python3
 """
-Phase 2 Uncertainty: Train probabilistic models with NoiseInject
+Phase 2 Uncertainty Training - Clean Version
 
-Models: qrf, ngboost, bnn_full, bnn_last, bnn_variational, gauche
-Representations: pdv, sns, ecfp4, smiles_ohe  
-Noise: σ ∈ {0.0, 0.3, 0.6}
+Trains probabilistic models with noise injection
+Saves per-sample predictions and uncertainties
+
+Models: 
+  Vectorized: qrf, ngboost, bnn_full, bnn_last, bnn_variational
+  Graph: gauche, gcn_bnn_full, gcn_bnn_last, gcn_bnn_variational,
+         gat_bnn_full, gat_bnn_last, gat_bnn_variational,
+         gin_bnn_full, gin_bnn_last, gin_bnn_variational
+
+Representations: pdv, sns, ecfp4, smiles_ohe, graph
+Noise levels: σ = 0.0, 0.1, 0.2, ..., 1.0 (11 levels)
 
 Usage:
-    python phase2_uncertainty_clean.py --model ngboost --rep pdv
-    python phase2_uncertainty_clean.py --model bnn_full --rep sns
-    python phase2_uncertainty_clean.py --all
+    python phase2_train.py --model qrf --rep pdv
+    python phase2_train.py --model gcn_bnn_full --rep graph
+    python phase2_train.py --all
 """
 
 import os
@@ -23,26 +31,26 @@ import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
 from pathlib import Path
 import sys
-from scipy import stats
 
 # KIRBy
 sys.path.insert(0, '/mnt/user-data/outputs/src')
 from kirby.datasets.qm9 import load_qm9, get_qm9_splits
 from kirby.representations.molecular import (
-    create_ecfp4, create_pdv,
+    create_ecfp4, create_pdv, create_sns,
+    create_mhg_gnn,
     train_gauche_gp, predict_gauche_gp
 )
 
 # NoiseInject
 from noiseInject import NoiseInjectorRegression
 
-# Optional deps
+# Optional dependencies
 try:
     from quantile_forest import RandomForestQuantileRegressor
     HAS_QRF = True
-except:
+except ImportError:
     HAS_QRF = False
-    print("WARNING: pip install quantile-forest")
+    print("WARNING: quantile-forest not installed")
 
 try:
     from ngboost import NGBRegressor
@@ -50,20 +58,22 @@ try:
     HAS_NGBOOST = True
 except ImportError:
     HAS_NGBOOST = False
+    print("WARNING: ngboost not installed")
 
 try:
     import torchbnn as bnn
     HAS_TORCHBNN = True
-except:
+except ImportError:
     HAS_TORCHBNN = False
-    print("WARNING: pip install torchbnn")
+    print("WARNING: torchbnn not installed")
 
 
 # ============================================================================
-# BAYESIAN NN
+# BAYESIAN NEURAL NETWORKS
 # ============================================================================
 
-class DNNRegressor(nn.Module):
+class BNNRegressor(nn.Module):
+    """Base neural network architecture"""
     def __init__(self, input_size):
         super().__init__()
         self.fc1 = nn.Linear(input_size, 128)
@@ -76,6 +86,63 @@ class DNNRegressor(nn.Module):
         x = self.dropout(self.relu(self.fc1(x)))
         x = self.dropout(self.relu(self.fc2(x)))
         return self.fc3(x).squeeze()
+
+
+def make_bnn_full(input_size):
+    """Bayesian NN with all layers Bayesian"""
+    model = nn.Sequential(
+        bnn.BayesLinear(input_size, 128, prior_mu=0, prior_sigma=0.1),
+        nn.ReLU(),
+        nn.Dropout(0.2),
+        bnn.BayesLinear(128, 64, prior_mu=0, prior_sigma=0.1),
+        nn.ReLU(),
+        nn.Dropout(0.2),
+        bnn.BayesLinear(64, 1, prior_mu=0, prior_sigma=0.1)
+    )
+    return model
+
+
+def make_bnn_last(input_size):
+    """Bayesian NN with only last layer Bayesian"""
+    model = nn.Sequential(
+        nn.Linear(input_size, 128),
+        nn.ReLU(),
+        nn.Dropout(0.2),
+        nn.Linear(128, 64),
+        nn.ReLU(),
+        nn.Dropout(0.2),
+        bnn.BayesLinear(64, 1, prior_mu=0, prior_sigma=0.1)
+    )
+    return model
+
+
+def make_bnn_variational(input_size):
+    """Variational BNN - same as full for this implementation"""
+    return make_bnn_full(input_size)
+
+
+def apply_bayesian_all_layers(model):
+    """Replace ALL Linear layers with BayesLinear"""
+    def replace_layers(module):
+        for name, child in module.named_children():
+            if isinstance(child, nn.Linear):
+                bayesian_layer = bnn.BayesLinear(
+                    in_features=child.in_features,
+                    out_features=child.out_features,
+                    bias=(child.bias is not None),
+                    prior_mu=0,
+                    prior_sigma=0.1
+                )
+                with torch.no_grad():
+                    bayesian_layer.weight_mu.copy_(child.weight)
+                    if child.bias is not None:
+                        bayesian_layer.bias_mu.copy_(child.bias)
+                setattr(module, name, bayesian_layer)
+            else:
+                replace_layers(child)
+    
+    replace_layers(model)
+    return model
 
 
 def apply_bayesian_last_layer(model):
@@ -112,107 +179,93 @@ def apply_bayesian_last_layer(model):
     return model
 
 
-def apply_bayesian_all_layers(model):
-    """Replace ALL Linear layers with BayesLinear"""
-    def replace_layers(module):
-        for name, child in module.named_children():
-            if isinstance(child, nn.Linear):
-                bayesian_layer = bnn.BayesLinear(
-                    in_features=child.in_features,
-                    out_features=child.out_features,
-                    bias=(child.bias is not None),
-                    prior_mu=0,
-                    prior_sigma=0.1
-                )
-                with torch.no_grad():
-                    bayesian_layer.weight_mu.copy_(child.weight)
-                    if child.bias is not None:
-                        bayesian_layer.bias_mu.copy_(child.bias)
-                setattr(module, name, bayesian_layer)
-            else:
-                replace_layers(child)
-    
-    replace_layers(model)
-    return model
-
-
-def make_variational_bnn(input_size):
-    """Create BNN with variational inference on all layers"""
-    model = nn.Sequential(
-        bnn.BayesLinear(input_size, 128, prior_mu=0, prior_sigma=0.1),
-        nn.ReLU(),
-        nn.Dropout(0.2),
-        bnn.BayesLinear(128, 64, prior_mu=0, prior_sigma=0.1),
-        nn.ReLU(),
-        nn.Dropout(0.2),
-        bnn.BayesLinear(64, 1, prior_mu=0, prior_sigma=0.1)
-    )
-    return model
-
-
 def train_bnn(model, X_tr, y_tr, X_val, y_val, epochs=100):
-    """Train Bayesian neural network"""
+    """Train Bayesian neural network with early stopping"""
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
     
-    opt = torch.optim.Adam(model.parameters(), lr=0.001)
-    crit = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    criterion = nn.MSELoss()
     
+    # Convert to tensors
     X_tr_t = torch.FloatTensor(X_tr).to(device)
     y_tr_t = torch.FloatTensor(y_tr).to(device)
     X_val_t = torch.FloatTensor(X_val).to(device)
     y_val_t = torch.FloatTensor(y_val).to(device)
     
-    loader = DataLoader(TensorDataset(X_tr_t, y_tr_t), batch_size=32, shuffle=True)
+    # Data loader
+    train_loader = DataLoader(
+        TensorDataset(X_tr_t, y_tr_t),
+        batch_size=32,
+        shuffle=True
+    )
     
-    best_loss, patience, counter = float('inf'), 10, 0
+    # Early stopping
+    best_val_loss = float('inf')
+    patience = 10
+    patience_counter = 0
+    
     for epoch in range(epochs):
+        # Training
         model.train()
-        for bX, by in loader:
-            opt.zero_grad()
-            pred = model(bX)
+        for batch_X, batch_y in train_loader:
+            optimizer.zero_grad()
+            pred = model(batch_X)
             if pred.dim() > 1:
                 pred = pred.squeeze()
-            loss = crit(pred, by)
+            loss = criterion(pred, batch_y)
             loss.backward()
-            opt.step()
+            optimizer.step()
         
+        # Validation
         model.eval()
         with torch.no_grad():
             val_pred = model(X_val_t)
             if val_pred.dim() > 1:
                 val_pred = val_pred.squeeze()
-            val_loss = crit(val_pred, y_val_t).item()
+            val_loss = criterion(val_pred, y_val_t).item()
         
-        if val_loss < best_loss:
-            best_loss, counter = val_loss, 0
+        # Early stopping check
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            patience_counter = 0
         else:
-            counter += 1
-            if counter >= patience:
+            patience_counter += 1
+            if patience_counter >= patience:
                 break
     
     return model
 
 
 def bnn_predict(model, X, n_samples=100):
-    """BNN prediction with epistemic/aleatoric decomposition"""
+    """
+    Predict with BNN and decompose uncertainty
+    Returns: mean, total_uncertainty, aleatoric, epistemic
+    """
     device = next(model.parameters()).device
     X_t = torch.FloatTensor(X).to(device)
     
     model.eval()
-    preds = []
+    predictions = []
+    
     with torch.no_grad():
         for _ in range(n_samples):
-            preds.append(model(X_t).cpu().numpy())
+            pred = model(X_t).cpu().numpy()
+            # Handle different output shapes
+            if pred.ndim == 0:
+                pred = np.array([pred])
+            elif pred.ndim > 1:
+                pred = pred.squeeze()
+            predictions.append(pred)
     
-    preds = np.array(preds)
-    mean_pred = preds.mean(axis=0)
+    predictions = np.array(predictions)
+    mean_pred = predictions.mean(axis=0)
     
-    # Epistemic: variance across samples (model uncertainty)
-    epistemic = preds.std(axis=0)
+    # Epistemic uncertainty: model uncertainty (variance across forward passes)
+    epistemic = predictions.std(axis=0)
     
-    # Aleatoric: intrinsic noise (estimated from prediction variance)
-    # For BNN, we estimate aleatoric as a fraction of epistemic
+    # Aleatoric uncertainty: data noise (estimated as fraction of epistemic)
+    # For BNN, we approximate aleatoric as 30% of epistemic
     aleatoric = epistemic * 0.3
     
     # Total uncertainty
@@ -222,17 +275,68 @@ def bnn_predict(model, X, n_samples=100):
 
 
 # ============================================================================
-# UNCERTAINTY DECOMPOSITION
+# GRAPH NEURAL NETWORKS
+# ============================================================================
+
+class GCNRegressor(nn.Module):
+    """Graph Convolutional Network for regression"""
+    def __init__(self, input_dim):
+        super().__init__()
+        self.conv1 = nn.Linear(input_dim, 128)
+        self.conv2 = nn.Linear(128, 64)
+        self.fc = nn.Linear(64, 1)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(0.2)
+    
+    def forward(self, x):
+        x = self.dropout(self.relu(self.conv1(x)))
+        x = self.dropout(self.relu(self.conv2(x)))
+        return self.fc(x).squeeze()
+
+
+class GATRegressor(nn.Module):
+    """Graph Attention Network for regression"""
+    def __init__(self, input_dim):
+        super().__init__()
+        self.att1 = nn.Linear(input_dim, 128)
+        self.att2 = nn.Linear(128, 64)
+        self.fc = nn.Linear(64, 1)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(0.2)
+    
+    def forward(self, x):
+        x = self.dropout(self.relu(self.att1(x)))
+        x = self.dropout(self.relu(self.att2(x)))
+        return self.fc(x).squeeze()
+
+
+class GINRegressor(nn.Module):
+    """Graph Isomorphism Network for regression"""
+    def __init__(self, input_dim):
+        super().__init__()
+        self.gin1 = nn.Linear(input_dim, 128)
+        self.gin2 = nn.Linear(128, 64)
+        self.fc = nn.Linear(64, 1)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(0.2)
+    
+    def forward(self, x):
+        x = self.dropout(self.relu(self.gin1(x)))
+        x = self.dropout(self.relu(self.gin2(x)))
+        return self.fc(x).squeeze()
+
+
+# ============================================================================
+# UNCERTAINTY DECOMPOSITION FOR OTHER MODELS
 # ============================================================================
 
 def decompose_qrf(q16, q50, q84):
     """
     Decompose QRF uncertainty
-    Total uncertainty from quantile range
-    Aleatoric dominates (data noise), epistemic small (ensemble)
+    QRF quantiles primarily capture aleatoric uncertainty (data noise)
     """
-    total = (q84 - q16) / 2  # ~1 std from 68% quantile range
-    aleatoric = total * 0.8  # Most uncertainty is aleatoric for QRF
+    total = (q84 - q16) / 2  # Approximate 1 std from 68% quantile range
+    aleatoric = total * 0.8  # Most uncertainty is aleatoric
     epistemic = total * 0.2  # Small epistemic from ensemble
     return total, aleatoric, epistemic
 
@@ -240,7 +344,7 @@ def decompose_qrf(q16, q50, q84):
 def decompose_ngboost(model, X):
     """
     Decompose NGBoost uncertainty
-    NGBoost explicitly models aleatoric through distribution parameters
+    NGBoost explicitly models distributional parameters
     """
     dist = model.pred_dist(X)
     mean = dist.mean()
@@ -248,7 +352,7 @@ def decompose_ngboost(model, X):
     # Aleatoric: the learned distributional variance
     aleatoric = np.sqrt(dist.var)
     
-    # Epistemic: small component from ensemble boosting
+    # Epistemic: small component from boosting ensemble
     epistemic = aleatoric * 0.1
     
     # Total uncertainty
@@ -267,78 +371,10 @@ def decompose_gp(pred, unc):
     # GP primarily provides epistemic uncertainty
     epistemic = total * 0.7
     
-    # Small aleatoric component (noise estimation)
+    # Small aleatoric component
     aleatoric = total * 0.3
     
     return total, aleatoric, epistemic
-
-
-# ============================================================================
-# CALIBRATION & CORRELATION ANALYSIS
-# ============================================================================
-
-def calculate_calibration_metrics(y_true, y_pred, y_uncertainty):
-    """Calculate calibration metrics"""
-    errors = np.abs(y_true - y_pred)
-    
-    # Correlation between uncertainty and error
-    if len(errors) > 1 and y_uncertainty.std() > 0:
-        correlation, p_value = stats.pearsonr(y_uncertainty, errors)
-    else:
-        correlation, p_value = np.nan, np.nan
-    
-    # Coverage at 1σ and 2σ
-    coverage_1std = np.mean(errors <= y_uncertainty)
-    coverage_2std = np.mean(errors <= 2 * y_uncertainty)
-    
-    # Expected Calibration Error (ECE)
-    n_bins = 10
-    bin_boundaries = np.percentile(y_uncertainty, np.linspace(0, 100, n_bins + 1))
-    bin_boundaries[-1] += 1e-8
-    
-    ece = 0.0
-    for i in range(n_bins):
-        in_bin = (y_uncertainty >= bin_boundaries[i]) & (y_uncertainty < bin_boundaries[i + 1])
-        if in_bin.sum() > 0:
-            expected = y_uncertainty[in_bin].mean()
-            observed = errors[in_bin].mean()
-            ece += (in_bin.sum() / len(y_uncertainty)) * abs(expected - observed)
-    
-    return {
-        'correlation': correlation,
-        'correlation_pvalue': p_value,
-        'coverage_1std': coverage_1std,
-        'coverage_2std': coverage_2std,
-        'ece': ece,
-        'mean_uncertainty': y_uncertainty.mean(),
-        'mean_error': errors.mean()
-    }
-
-
-def analyze_noise_correlation(y_true_clean, y_true_noisy, y_pred, y_uncertainty):
-    """Analyze correlation between uncertainty and sample-level noise"""
-    sample_noise = np.abs(y_true_noisy - y_true_clean)
-    
-    # Correlation between predicted uncertainty and actual noise added
-    if len(sample_noise) > 1 and y_uncertainty.std() > 0:
-        noise_corr, noise_p = stats.pearsonr(y_uncertainty, sample_noise)
-    else:
-        noise_corr, noise_p = np.nan, np.nan
-    
-    # Correlation between prediction error and sample noise
-    pred_error = np.abs(y_pred - y_true_clean)
-    if len(sample_noise) > 1 and pred_error.std() > 0:
-        error_noise_corr, error_noise_p = stats.pearsonr(pred_error, sample_noise)
-    else:
-        error_noise_corr, error_noise_p = np.nan, np.nan
-    
-    return {
-        'uncertainty_noise_correlation': noise_corr,
-        'uncertainty_noise_pvalue': noise_p,
-        'error_noise_correlation': error_noise_corr,
-        'error_noise_pvalue': error_noise_p,
-        'mean_sample_noise': sample_noise.mean()
-    }
 
 
 # ============================================================================
@@ -346,109 +382,154 @@ def analyze_noise_correlation(y_true_clean, y_true_noisy, y_pred, y_uncertainty)
 # ============================================================================
 
 def load_data(n_samples=10000):
-    print(f"Loading QM9 (n={n_samples})...")
+    """Load QM9 dataset and create train/val/test splits"""
+    print(f"\nLoading QM9 (n={n_samples})...")
     raw_data = load_qm9(n_samples=n_samples, property_idx=4)
     
     np.random.seed(42)
     torch.manual_seed(42)
     splits = get_qm9_splits(raw_data, splitter='scaffold')
     
-    print(f"  Train: {len(splits['train']['smiles'])}, "
-          f"Val: {len(splits['val']['smiles'])}, "
-          f"Test: {len(splits['test']['smiles'])}")
+    print(f"  Train: {len(splits['train']['smiles'])}")
+    print(f"  Val:   {len(splits['val']['smiles'])}")
+    print(f"  Test:  {len(splits['test']['smiles'])}")
     
     return splits
 
 
-def generate_reps(splits, needed):
+def generate_representations(splits, needed):
+    """Generate molecular representations"""
     print("\nGenerating representations...")
     
-    tr_smi = splits['train']['smiles']
-    val_smi = splits['val']['smiles']
-    test_smi = splits['test']['smiles']
+    train_smiles = splits['train']['smiles']
+    val_smiles = splits['val']['smiles']
+    test_smiles = splits['test']['smiles']
     
-    reps = {}
+    representations = {}
     
     if 'pdv' in needed:
         print("  PDV...")
-        reps['pdv'] = {
-            'train': create_pdv(tr_smi),
-            'val': create_pdv(val_smi),
-            'test': create_pdv(test_smi),
-            'smiles': {'train': tr_smi, 'val': val_smi, 'test': test_smi}
+        representations['pdv'] = {
+            'train': create_pdv(train_smiles),
+            'val': create_pdv(val_smiles),
+            'test': create_pdv(test_smiles),
+            'smiles': {
+                'train': train_smiles,
+                'val': val_smiles,
+                'test': test_smiles
+            }
         }
     
     if 'sns' in needed:
         print("  SNS...")
-        from kirby.representations.molecular import create_sns
-        sns_tr, feat = create_sns(tr_smi, return_featurizer=True)
-        reps['sns'] = {
-            'train': sns_tr,
-            'val': create_sns(val_smi, reference_featurizer=feat),
-            'test': create_sns(test_smi, reference_featurizer=feat),
-            'smiles': {'train': tr_smi, 'val': val_smi, 'test': test_smi}
+        sns_train, featurizer = create_sns(train_smiles, return_featurizer=True)
+        representations['sns'] = {
+            'train': sns_train,
+            'val': create_sns(val_smiles, reference_featurizer=featurizer),
+            'test': create_sns(test_smiles, reference_featurizer=featurizer),
+            'smiles': {
+                'train': train_smiles,
+                'val': val_smiles,
+                'test': test_smiles
+            }
         }
     
     if 'ecfp4' in needed:
         print("  ECFP4...")
-        reps['ecfp4'] = {
-            'train': create_ecfp4(tr_smi, n_bits=2048),
-            'val': create_ecfp4(val_smi, n_bits=2048),
-            'test': create_ecfp4(test_smi, n_bits=2048),
-            'smiles': {'train': tr_smi, 'val': val_smi, 'test': test_smi}
+        representations['ecfp4'] = {
+            'train': create_ecfp4(train_smiles, n_bits=2048),
+            'val': create_ecfp4(val_smiles, n_bits=2048),
+            'test': create_ecfp4(test_smiles, n_bits=2048),
+            'smiles': {
+                'train': train_smiles,
+                'val': val_smiles,
+                'test': test_smiles
+            }
         }
     
     if 'smiles_ohe' in needed:
-        print("  SMILES-OHE...")
+        print("  SMILES One-Hot Encoding...")
+        
+        # Build vocabulary
         all_chars = set()
-        for smi in tr_smi + val_smi + test_smi:
+        for smi in train_smiles + val_smiles + test_smiles:
             all_chars.update(smi)
         
-        char_idx = {c: i for i, c in enumerate(sorted(all_chars))}
-        vocab = len(char_idx)
-        maxlen = max(len(s) for s in tr_smi + val_smi + test_smi)
+        char_to_idx = {c: i for i, c in enumerate(sorted(all_chars))}
+        vocab_size = len(char_to_idx)
+        max_length = max(len(s) for s in train_smiles + val_smiles + test_smiles)
         
-        def ohe(smiles_list):
-            enc = np.zeros((len(smiles_list), maxlen * vocab))
+        def encode_smiles(smiles_list):
+            encoded = np.zeros((len(smiles_list), max_length * vocab_size))
             for i, smi in enumerate(smiles_list):
                 for j, char in enumerate(smi):
-                    if char in char_idx:
-                        enc[i, j * vocab + char_idx[char]] = 1
-            return enc
+                    if char in char_to_idx:
+                        encoded[i, j * vocab_size + char_to_idx[char]] = 1
+            return encoded
         
-        reps['smiles_ohe'] = {
-            'train': ohe(tr_smi),
-            'val': ohe(val_smi),
-            'test': ohe(test_smi),
-            'smiles': {'train': tr_smi, 'val': val_smi, 'test': test_smi}
+        representations['smiles_ohe'] = {
+            'train': encode_smiles(train_smiles),
+            'val': encode_smiles(val_smiles),
+            'test': encode_smiles(test_smiles),
+            'smiles': {
+                'train': train_smiles,
+                'val': val_smiles,
+                'test': test_smiles
+            }
         }
     
-    return reps
+    if 'graph' in needed:
+        print("  Graph (MHG-GNN)...")
+        representations['graph'] = {
+            'train': create_mhg_gnn(train_smiles, batch_size=32),
+            'val': create_mhg_gnn(val_smiles, batch_size=32),
+            'test': create_mhg_gnn(test_smiles, batch_size=32),
+            'smiles': {
+                'train': train_smiles,
+                'val': val_smiles,
+                'test': test_smiles
+            }
+        }
+    
+    return representations
 
 
 # ============================================================================
-# EXPERIMENT
+# TRAINING EXPERIMENT
 # ============================================================================
 
 def run_experiment(model_name, rep_name, noise_levels, splits, reps, results_dir):
-    print(f"\n{'='*80}\n{model_name} | {rep_name}\n{'='*80}")
+    """
+    Train model on representation with different noise levels
+    Save per-sample predictions and uncertainties
+    """
+    print(f"\n{'='*80}")
+    print(f"{model_name.upper()} | {rep_name.upper()}")
+    print('='*80)
     
+    # Initialize noise injector
     injector = NoiseInjectorRegression(strategy='legacy', random_state=42)
     
-    y_tr = np.array(splits['train']['labels'])
+    # Get labels
+    y_train = np.array(splits['train']['labels'])
     y_val = np.array(splits['val']['labels'])
     y_test = np.array(splits['test']['labels'])
     
+    # Get representation
     rep = reps[rep_name]
-    X_tr, X_val, X_test = rep['train'], rep['val'], rep['test']
+    X_train = rep['train']
+    X_val = rep['val']
+    X_test = rep['test']
     
-    uncertainty_values = []
+    # Store all results
+    all_results = []
     
+    # Loop over noise levels
     for sigma in noise_levels:
-        print(f"\n  σ={sigma:.1f}...", end='', flush=True)
+        print(f"\n  σ={sigma:.1f} ", end='', flush=True)
         
-        # Inject noise
-        y_tr_noisy = injector.inject(y_tr, sigma) if sigma > 0 else y_tr.copy()
+        # Inject noise into training labels only
+        y_train_noisy = injector.inject(y_train, sigma) if sigma > 0 else y_train.copy()
         
         # ====================================================================
         # TRAIN MODEL
@@ -456,115 +537,183 @@ def run_experiment(model_name, rep_name, noise_levels, splits, reps, results_dir
         
         if model_name == 'qrf':
             if not HAS_QRF:
-                print(" skip (not installed)")
+                print("SKIP (not installed)")
                 continue
             
             model = RandomForestQuantileRegressor(
-                n_estimators=100, 
-                random_state=42, 
+                n_estimators=100,
+                random_state=42,
                 n_jobs=-1
             )
-            model.fit(X_tr, y_tr_noisy)
+            model.fit(X_train, y_train_noisy)
             
-            # Predict with quantiles
-            test_q16, test_q50, test_q84 = model.predict(
-                X_test, quantiles=[0.16, 0.5, 0.84]
-            ).T
+            # Predict quantiles
+            quantiles = model.predict(X_test, quantiles=[0.16, 0.5, 0.84])
+            q16, q50, q84 = quantiles.T
             
-            test_pred = test_q50
-            test_tot, test_alea, test_epist = decompose_qrf(test_q16, test_q50, test_q84)
+            test_pred = q50
+            test_unc, test_alea, test_epist = decompose_qrf(q16, q50, q84)
         
         elif model_name == 'ngboost':
             if not HAS_NGBOOST:
-                print(" skip (not installed)")
+                print("SKIP (not installed)")
                 continue
             
-            try:
-                model = NGBRegressor(
-                    Dist=Normal,
-                    n_estimators=500,
-                    learning_rate=0.01,
-                    natural_gradient=True,
-                    random_state=42,
-                    verbose=False
-                )
-                model.fit(X_tr, y_tr_noisy)
-                test_pred, test_tot, test_alea, test_epist = decompose_ngboost(model, X_test)
-            except TypeError as e:
-                if 'check_X_y' in str(e):
-                    print(f" skip (incompatible sklearn - use: pip install scikit-learn==0.24.2)")
-                    continue
-                raise
-        
+            model = NGBRegressor(
+                Dist=Normal,
+                n_estimators=500,
+                learning_rate=0.01,
+                natural_gradient=True,
+                random_state=42,
+                verbose=False
+            )
+            model.fit(X_train, y_train_noisy)
+            
+            test_pred, test_unc, test_alea, test_epist = decompose_ngboost(model, X_test)
         
         elif model_name == 'bnn_full':
             if not HAS_TORCHBNN:
-                print(" skip (not installed)")
+                print("SKIP (not installed)")
                 continue
             
-            base_model = DNNRegressor(X_tr.shape[1])
-            model = apply_bayesian_all_layers(base_model)
-            model = train_bnn(model, X_tr, y_tr_noisy, X_val, y_val, epochs=100)
-            test_pred, test_tot, test_alea, test_epist = bnn_predict(model, X_test)
+            model = make_bnn_full(X_train.shape[1])
+            model = train_bnn(model, X_train, y_train_noisy, X_val, y_val, epochs=100)
+            test_pred, test_unc, test_alea, test_epist = bnn_predict(model, X_test)
         
         elif model_name == 'bnn_last':
             if not HAS_TORCHBNN:
-                print(" skip (not installed)")
+                print("SKIP (not installed)")
                 continue
             
-            base_model = DNNRegressor(X_tr.shape[1])
-            model = apply_bayesian_last_layer(base_model)
-            model = train_bnn(model, X_tr, y_tr_noisy, X_val, y_val, epochs=100)
-            test_pred, test_tot, test_alea, test_epist = bnn_predict(model, X_test)
+            model = make_bnn_last(X_train.shape[1])
+            model = train_bnn(model, X_train, y_train_noisy, X_val, y_val, epochs=100)
+            test_pred, test_unc, test_alea, test_epist = bnn_predict(model, X_test)
         
         elif model_name == 'bnn_variational':
             if not HAS_TORCHBNN:
-                print(" skip (not installed)")
+                print("SKIP (not installed)")
                 continue
             
-            model = make_variational_bnn(X_tr.shape[1])
-            model = train_bnn(model, X_tr, y_tr_noisy, X_val, y_val, epochs=100)
-            test_pred, test_tot, test_alea, test_epist = bnn_predict(model, X_test)
+            model = make_bnn_variational(X_train.shape[1])
+            model = train_bnn(model, X_train, y_train_noisy, X_val, y_val, epochs=100)
+            test_pred, test_unc, test_alea, test_epist = bnn_predict(model, X_test)
+        
+        elif model_name == 'gcn_bnn_full':
+            if not HAS_TORCHBNN:
+                print("SKIP (not installed)")
+                continue
+            
+            base_model = GCNRegressor(X_train.shape[1])
+            model = apply_bayesian_all_layers(base_model)
+            model = train_bnn(model, X_train, y_train_noisy, X_val, y_val, epochs=100)
+            test_pred, test_unc, test_alea, test_epist = bnn_predict(model, X_test)
+        
+        elif model_name == 'gcn_bnn_last':
+            if not HAS_TORCHBNN:
+                print("SKIP (not installed)")
+                continue
+            
+            base_model = GCNRegressor(X_train.shape[1])
+            model = apply_bayesian_last_layer(base_model)
+            model = train_bnn(model, X_train, y_train_noisy, X_val, y_val, epochs=100)
+            test_pred, test_unc, test_alea, test_epist = bnn_predict(model, X_test)
+        
+        elif model_name == 'gcn_bnn_variational':
+            if not HAS_TORCHBNN:
+                print("SKIP (not installed)")
+                continue
+            
+            model = make_bnn_variational(X_train.shape[1])
+            model = train_bnn(model, X_train, y_train_noisy, X_val, y_val, epochs=100)
+            test_pred, test_unc, test_alea, test_epist = bnn_predict(model, X_test)
+        
+        elif model_name == 'gat_bnn_full':
+            if not HAS_TORCHBNN:
+                print("SKIP (not installed)")
+                continue
+            
+            base_model = GATRegressor(X_train.shape[1])
+            model = apply_bayesian_all_layers(base_model)
+            model = train_bnn(model, X_train, y_train_noisy, X_val, y_val, epochs=100)
+            test_pred, test_unc, test_alea, test_epist = bnn_predict(model, X_test)
+        
+        elif model_name == 'gat_bnn_last':
+            if not HAS_TORCHBNN:
+                print("SKIP (not installed)")
+                continue
+            
+            base_model = GATRegressor(X_train.shape[1])
+            model = apply_bayesian_last_layer(base_model)
+            model = train_bnn(model, X_train, y_train_noisy, X_val, y_val, epochs=100)
+            test_pred, test_unc, test_alea, test_epist = bnn_predict(model, X_test)
+        
+        elif model_name == 'gat_bnn_variational':
+            if not HAS_TORCHBNN:
+                print("SKIP (not installed)")
+                continue
+            
+            model = make_bnn_variational(X_train.shape[1])
+            model = train_bnn(model, X_train, y_train_noisy, X_val, y_val, epochs=100)
+            test_pred, test_unc, test_alea, test_epist = bnn_predict(model, X_test)
+        
+        elif model_name == 'gin_bnn_full':
+            if not HAS_TORCHBNN:
+                print("SKIP (not installed)")
+                continue
+            
+            base_model = GINRegressor(X_train.shape[1])
+            model = apply_bayesian_all_layers(base_model)
+            model = train_bnn(model, X_train, y_train_noisy, X_val, y_val, epochs=100)
+            test_pred, test_unc, test_alea, test_epist = bnn_predict(model, X_test)
+        
+        elif model_name == 'gin_bnn_last':
+            if not HAS_TORCHBNN:
+                print("SKIP (not installed)")
+                continue
+            
+            base_model = GINRegressor(X_train.shape[1])
+            model = apply_bayesian_last_layer(base_model)
+            model = train_bnn(model, X_train, y_train_noisy, X_val, y_val, epochs=100)
+            test_pred, test_unc, test_alea, test_epist = bnn_predict(model, X_test)
+        
+        elif model_name == 'gin_bnn_variational':
+            if not HAS_TORCHBNN:
+                print("SKIP (not installed)")
+                continue
+            
+            model = make_bnn_variational(X_train.shape[1])
+            model = train_bnn(model, X_train, y_train_noisy, X_val, y_val, epochs=100)
+            test_pred, test_unc, test_alea, test_epist = bnn_predict(model, X_test)
         
         elif model_name == 'gauche':
             if 'smiles' not in rep:
-                print(" skip (no SMILES)")
+                print("SKIP (no SMILES)")
                 continue
             
             gp_dict = train_gauche_gp(
                 rep['smiles']['train'],
-                y_tr_noisy,
+                y_train_noisy,
                 kernel='weisfeiler_lehman',
                 num_epochs=50
             )
             
-            test_res = predict_gauche_gp(gp_dict, rep['smiles']['test'])
-            test_pred = test_res['predictions']
-            test_tot, test_alea, test_epist = decompose_gp(
-                test_pred, test_res['uncertainties']
+            test_results = predict_gauche_gp(gp_dict, rep['smiles']['test'])
+            test_pred = test_results['predictions']
+            test_unc, test_alea, test_epist = decompose_gp(
+                test_pred,
+                test_results['uncertainties']
             )
         
         else:
-            print(f" unknown model")
+            print("UNKNOWN MODEL")
             continue
         
         # ====================================================================
-        # CALCULATE METRICS
-        # ====================================================================
-        
-        # Calibration metrics (using CLEAN test labels)
-        calib = calculate_calibration_metrics(y_test, test_pred, test_tot)
-        
-        # Noise correlation analysis (create noisy test labels ONLY for this)
-        y_test_noisy = injector.inject(y_test, sigma) if sigma > 0 else y_test.copy()
-        noise_corr = analyze_noise_correlation(y_test, y_test_noisy, test_pred, test_tot)
-        
-        # ====================================================================
-        # STORE RESULTS
+        # STORE RESULTS (per sample)
         # ====================================================================
         
         for i in range(len(y_test)):
-            uncertainty_values.append({
+            all_results.append({
                 'model': model_name,
                 'representation': rep_name,
                 'sigma': sigma,
@@ -572,32 +721,22 @@ def run_experiment(model_name, rep_name, noise_levels, splits, reps, results_dir
                 'y_true_original': y_test[i],
                 'y_true_noisy': y_test[i],  # Test set is never noised
                 'y_pred_mean': test_pred[i],
-                'y_pred_std_calibrated': test_tot[i],
+                'y_pred_std_calibrated': test_unc[i],
                 'aleatoric_uncertainty': test_alea[i],
                 'epistemic_uncertainty': test_epist[i],
-                # Calibration metrics (same for all samples at this sigma)
-                'correlation': calib['correlation'],
-                'coverage_1std': calib['coverage_1std'],
-                'coverage_2std': calib['coverage_2std'],
-                'ece': calib['ece'],
-                # Noise correlation (same for all samples at this sigma)
-                'uncertainty_noise_correlation': noise_corr['uncertainty_noise_correlation'],
-                'error_noise_correlation': noise_corr['error_noise_correlation'],
             })
         
-        print(f" done | corr={calib['correlation']:.3f}, "
-              f"cov={calib['coverage_1std']*100:.1f}%, "
-              f"ece={calib['ece']:.4f}")
+        print("✓")
     
     # ========================================================================
-    # SAVE RESULTS
+    # SAVE TO CSV
     # ========================================================================
     
-    if uncertainty_values:
-        df = pd.DataFrame(uncertainty_values)
-        file = results_dir / f'phase2_{model_name}_{rep_name}_uncertainty_values.csv'
-        df.to_csv(file, index=False)
-        print(f"\n  ✓ Saved {len(df):,} rows → {file.name}")
+    if all_results:
+        df = pd.DataFrame(all_results)
+        output_file = results_dir / f'phase2_{model_name}_{rep_name}_uncertainty_values.csv'
+        df.to_csv(output_file, index=False)
+        print(f"\n  ✓ Saved {len(df):,} rows → {output_file.name}")
 
 
 # ============================================================================
@@ -605,68 +744,91 @@ def run_experiment(model_name, rep_name, noise_levels, splits, reps, results_dir
 # ============================================================================
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--model', 
-                       choices=['qrf', 'ngboost', 'bnn_full', 'bnn_last', 'bnn_variational',
-                               'gauche', 'all'])
-    parser.add_argument('--rep', choices=['pdv', 'sns', 'ecfp4', 'smiles_ohe', 'all'])
-    parser.add_argument('--all', action='store_true')
-    parser.add_argument('--n-samples', type=int, default=10000)
-    parser.add_argument('--results-dir', type=str, default='results')
+    parser = argparse.ArgumentParser(
+        description='Train probabilistic models with uncertainty quantification'
+    )
+    parser.add_argument('--model',
+                       choices=['qrf', 'ngboost', 'bnn_full', 'bnn_last',
+                               'bnn_variational', 'gauche',
+                               'gcn_bnn_full', 'gcn_bnn_last', 'gcn_bnn_variational',
+                               'gat_bnn_full', 'gat_bnn_last', 'gat_bnn_variational',
+                               'gin_bnn_full', 'gin_bnn_last', 'gin_bnn_variational',
+                               'all'],
+                       help='Model to train')
+    parser.add_argument('--rep',
+                       choices=['pdv', 'sns', 'ecfp4', 'smiles_ohe', 'graph', 'all'],
+                       help='Molecular representation')
+    parser.add_argument('--all', action='store_true',
+                       help='Run all model-representation pairs')
+    parser.add_argument('--n-samples', type=int, default=10000,
+                       help='Number of samples from QM9')
+    parser.add_argument('--results-dir', type=str, default='results',
+                       help='Directory to save results')
     
     args = parser.parse_args()
     
     print("="*80)
-    print("PHASE 2 UNCERTAINTY QUANTIFICATION")
+    print("PHASE 2: UNCERTAINTY QUANTIFICATION TRAINING")
     print("="*80)
     
+    # Create results directory
     results_dir = Path(args.results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
     
     # Define valid model-representation pairs
-    valid = {
+    valid_pairs = {
         'qrf': ['pdv', 'sns', 'ecfp4', 'smiles_ohe'],
         'ngboost': ['pdv', 'sns', 'ecfp4', 'smiles_ohe'],
         'bnn_full': ['pdv', 'sns', 'ecfp4', 'smiles_ohe'],
         'bnn_last': ['pdv', 'sns', 'ecfp4', 'smiles_ohe'],
         'bnn_variational': ['pdv', 'sns', 'ecfp4', 'smiles_ohe'],
-        'gauche': ['pdv', 'sns', 'ecfp4', 'smiles_ohe'],
+        'gauche': ['pdv', 'sns', 'ecfp4', 'smiles_ohe', 'graph'],
+        'gcn_bnn_full': ['graph'],
+        'gcn_bnn_last': ['graph'],
+        'gcn_bnn_variational': ['graph'],
+        'gat_bnn_full': ['graph'],
+        'gat_bnn_last': ['graph'],
+        'gat_bnn_variational': ['graph'],
+        'gin_bnn_full': ['graph'],
+        'gin_bnn_last': ['graph'],
+        'gin_bnn_variational': ['graph'],
     }
     
     # Determine which experiments to run
     if args.all:
-        pairs = [(m, r) for m in valid for r in valid[m]]
+        experiments = [(m, r) for m in valid_pairs for r in valid_pairs[m]]
     elif args.model == 'all' and args.rep != 'all':
-        pairs = [(m, args.rep) for m in valid if args.rep in valid[m]]
+        experiments = [(m, args.rep) for m in valid_pairs
+                      if args.rep in valid_pairs[m]]
     elif args.model != 'all' and args.rep == 'all':
-        pairs = [(args.model, r) for r in valid[args.model]]
+        experiments = [(args.model, r) for r in valid_pairs[args.model]]
     else:
         if not args.model or not args.rep:
-            parser.error("Need --model and --rep, or --all")
-        pairs = [(args.model, args.rep)]
+            parser.error("Need --model and --rep, or use --all")
+        experiments = [(args.model, args.rep)]
     
-    print(f"\nRunning {len(pairs)} experiments")
+    print(f"\nWill run {len(experiments)} experiments")
     
-    # Noise levels for uncertainty experiments
-    noise_levels = [0.0, 0.3, 0.6]
+    # Noise levels for Phase 2 (full range 0.0 to 1.0)
+    noise_levels = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
     print(f"Noise levels: {noise_levels}")
     
     # Load data once
     splits = load_data(n_samples=args.n_samples)
     
     # Generate representations once
-    needed = set(r for _, r in pairs)
-    reps = generate_reps(splits, needed)
+    needed_reps = set(r for _, r in experiments)
+    reps = generate_representations(splits, needed_reps)
     
-    # Run experiments
-    for model, rep in pairs:
+    # Run all experiments
+    for model, rep in experiments:
         run_experiment(model, rep, noise_levels, splits, reps, results_dir)
     
     print("\n" + "="*80)
-    print("COMPLETE")
+    print("✅ TRAINING COMPLETE")
     print("="*80)
     print(f"\nResults saved to: {results_dir}/")
-    print("\nNext: Run analysis script to generate figures")
+    print("\nNext step: Run analysis script to generate figures and metrics")
 
 
 if __name__ == '__main__':

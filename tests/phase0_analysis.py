@@ -1013,9 +1013,27 @@ def create_figure2_representation_effects(df, metrics_df, output_dir):
     
     # Panel D: Degradation across noise
     ax_d = fig.add_subplot(gs[1, 0])
-    representations = sorted(df['representation'].unique())
+    
+    # Identify and exclude model-representation pairs with catastrophic failures
+    # (any R² < 0 across any noise level indicates training failure)
+    catastrophic_configs = df[df['r2'] < 0][['model', 'representation']].drop_duplicates()
+    excluded_models = []
+    
+    df_panel_d = df.copy()
+    for _, row in catastrophic_configs.iterrows():
+        model, rep = row['model'], row['representation']
+        excluded_models.append(f"{model}/{rep}")
+        df_panel_d = df_panel_d[~((df_panel_d['model'] == model) & 
+                                   (df_panel_d['representation'] == rep))]
+    
+    if len(excluded_models) > 0:
+        print(f"\n  Note: Panel D excludes {len(excluded_models)} configurations with catastrophic failures:")
+        for config in excluded_models:
+            print(f"    - {config}")
+    
+    representations = sorted(df_panel_d['representation'].unique())
     for rep in representations:
-        rep_data = df[df['representation'] == rep]
+        rep_data = df_panel_d[df_panel_d['representation'] == rep]
         avg_by_sigma = rep_data.groupby('sigma')['r2'].median().reset_index()
         color = REPRESENTATION_COLORS.get(rep, '#999999')
         ax_d.plot(avg_by_sigma['sigma'], avg_by_sigma['r2'],
@@ -1024,7 +1042,8 @@ def create_figure2_representation_effects(df, metrics_df, output_dir):
     
     ax_d.set_xlabel('Noise level (σ)', fontsize=9)
     ax_d.set_ylabel('Median R²', fontsize=9)
-    ax_d.set_title('D. Performance Across Noise Levels\n(Median across models)', fontsize=10, fontweight='bold', pad=10)
+    ax_d.set_title('D. Performance Across Noise Levels\n(Median across models, catastrophic failures excluded)', 
+                   fontsize=10, fontweight='bold', pad=10)
     ax_d.legend(fontsize=7, loc='best', frameon=True, framealpha=0.9, ncol=2)
     ax_d.spines['top'].set_visible(False)
     ax_d.spines['right'].set_visible(False)
