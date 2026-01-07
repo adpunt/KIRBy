@@ -86,7 +86,7 @@ REPRESENTATION_COLORS = {
 # DATA LOADING
 # ============================================================================
 
-def load_dataset_results(dataset_name, results_dir="/results"):
+def load_dataset_results(dataset_name, results_dir="../results"):
     """
     Load all results for a specific dataset
     
@@ -241,7 +241,44 @@ def load_dataset_results(dataset_name, results_dir="/results"):
             combined_df['flip_prob'] = combined_df['noise_level']
         noise_col = 'flip_prob'
     
-    print(f"\n✓ Loaded {len(combined_df)} total rows")
+    # CRITICAL: Filter out known problematic configurations
+    n_before = len(combined_df)
+    
+    # Exclude DNN + PDV on hERG (training failure - see KNOWN_ISSUES.md)
+    if dataset_name == 'herg':
+        combined_df = combined_df[~((combined_df['model'] == 'dnn') & 
+                                    (combined_df['representation'] == 'pdv'))]
+        n_excluded = n_before - len(combined_df)
+        if n_excluded > 0:
+            print(f"\n⚠️  EXCLUDED {n_excluded} rows: DNN + PDV (training failure)")
+            print(f"    See KNOWN_ISSUES.md for details")
+    
+    # Filter noise strategies per dataset
+    n_before_strategy = len(combined_df)
+    
+    if dataset_name == 'esol':
+        # Keep only: hetero, legacy
+        # Exclude: outlier, quantile, threshold, valprop
+        retained_strategies = ['hetero', 'legacy']
+        combined_df = combined_df[combined_df['strategy'].isin(retained_strategies)]
+        n_excluded_strategy = n_before_strategy - len(combined_df)
+        if n_excluded_strategy > 0:
+            print(f"\n⚠️  ESOL: Retained strategies: {retained_strategies}")
+            print(f"    Excluded {n_excluded_strategy} rows from other strategies")
+            print(f"    Reason: Focus on representative noise patterns for cross-dataset comparison")
+    
+    elif dataset_name == 'herg':
+        # Keep only: class_imbalance, uniform
+        # Exclude: binary_asymmetric (too easy, no degradation)
+        retained_strategies = ['class_imbalance', 'uniform']
+        combined_df = combined_df[combined_df['strategy'].isin(retained_strategies)]
+        n_excluded_strategy = n_before_strategy - len(combined_df)
+        if n_excluded_strategy > 0:
+            print(f"\n⚠️  hERG: Retained strategies: {retained_strategies}")
+            print(f"    Excluded {n_excluded_strategy} rows from binary_asymmetric")
+            print(f"    Reason: binary_asymmetric shows no degradation (uninformative)")
+    
+    print(f"\n✓ Loaded {len(combined_df)} total rows after filtering")
     print(f"  Task type: {task_type}")
     print(f"  Noise parameter: {noise_col}")
     print(f"  Models ({len(combined_df['model'].unique())}): {sorted(combined_df['model'].unique())}")
@@ -298,9 +335,18 @@ def calculate_robustness_metrics_regression(df, noise_high=0.5):
         
         # Retention
         if not np.isnan(metrics['baseline_r2']) and not np.isnan(metrics['r2_high']):
-            if metrics['baseline_r2'] != 0:
+            # Only calculate retention for models with reasonable baseline performance
+            # Negative or near-zero R² indicates model failure
+            if metrics['baseline_r2'] > 0.05:
                 metrics['retention_pct'] = (metrics['r2_high'] / metrics['baseline_r2']) * 100
+                # Cap at 150% to catch edge cases and data issues
+                # (retention >100% can occur with noisy metrics but shouldn't be extreme)
+                if metrics['retention_pct'] > 150:
+                    print(f"  ⚠️  Capped retention from {metrics['retention_pct']:.1f}% to 150% "
+                          f"for {model}/{rep}/{strategy} (baseline R²={metrics['baseline_r2']:.4f})")
+                    metrics['retention_pct'] = 150.0
             else:
+                # Model with very poor baseline - exclude from retention analysis
                 metrics['retention_pct'] = np.nan
         else:
             metrics['retention_pct'] = np.nan
@@ -687,9 +733,25 @@ def create_per_dataset_degradation_figures(all_data, output_dir):
         bottom_5 = retention_df.tail(5)
         
         # Plot top 5 (strategies split across first 3 panels)
-        strategies = sorted(df['strategy'].unique())[:3]
+        # Only show retained strategies for this dataset
+        strategies = sorted(df['strategy'].unique())
+        
+        # Adjust layout based on number of strategies
+        if len(strategies) <= 2:
+            # For 2 strategies (e.g., ESOL: hetero, legacy)
+            # Use first 2 panels for top, last 2 for bottom
+            fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+            axes = axes.flatten()
+        else:
+            # For 3 strategies (e.g., hERG: binary_asymmetric, class_imbalance, uniform)
+            # Use standard 2x3 layout
+            fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+            axes = axes.flatten()
         
         for idx, strategy in enumerate(strategies):
+            if idx >= len(axes) // 2:
+                break  # Don't overflow the top row
+            
             ax = axes[idx]
             
             # Get top configs for this strategy
@@ -717,9 +779,14 @@ def create_per_dataset_degradation_figures(all_data, output_dir):
             ax.spines['top'].set_visible(False)
             ax.spines['right'].set_visible(False)
         
-        # Plot bottom 5 (strategies split across last 3 panels)
+        # Plot bottom 5 (strategies split across remaining panels)
+        bottom_start_idx = len(strategies) if len(strategies) <= 2 else 3
+        
         for idx, strategy in enumerate(strategies):
-            ax = axes[idx + 3]
+            if idx >= len(axes) // 2:
+                break  # Don't overflow
+            
+            ax = axes[bottom_start_idx + idx]
             
             # Get bottom configs for this strategy
             strategy_configs = retention_df[retention_df['strategy'] == strategy].tail(5)
@@ -779,8 +846,26 @@ def create_summary_tables(all_metrics, output_dir):
             'baseline_r2' if 'baseline_r2' in dataset_data.columns else 'baseline_accuracy': 'mean'
         }).reset_index().nlargest(20, retention_col)
         
+        # Add note about exclusions
+        strategies_used = sorted(dataset_data['strategy'].unique())
+        
         top_20.to_csv(output_dir / f"table_{dataset}_top20.csv", index=False)
-        print(f"✓ Saved {dataset} top 20 table")
+        
+        # Write exclusion note
+        with open(output_dir / f"table_{dataset}_top20_README.txt", 'w') as f:
+            f.write(f"{dataset.upper()} Top 20 Configurations\n")
+            f.write("="*50 + "\n\n")
+            f.write(f"Strategies included: {', '.join(strategies_used)}\n\n")
+            if dataset == 'esol':
+                f.write("Excluded strategies: outlier, quantile, threshold, valprop\n")
+                f.write("Reason: Focus on representative noise patterns for cross-dataset comparison\n")
+            elif dataset == 'herg':
+                f.write("Excluded configurations: DNN + PDV\n")
+                f.write("Reason: Training convergence failure (see KNOWN_ISSUES.md)\n\n")
+                f.write("Excluded strategies: binary_asymmetric\n")
+                f.write("Reason: No degradation observed (uninformative)\n")
+        
+        print(f"✓ Saved {dataset} top 20 table with README")
     
     # Table 2: Cross-dataset summary
     summary = all_metrics.groupby(['dataset', 'model', 'representation']).agg({
@@ -788,14 +873,26 @@ def create_summary_tables(all_metrics, output_dir):
     }).reset_index()
     
     summary.to_csv(output_dir / "table_cross_dataset_summary.csv", index=False)
-    print(f"✓ Saved cross-dataset summary table")
+    
+    # Write cross-dataset README
+    with open(output_dir / "table_cross_dataset_summary_README.txt", 'w') as f:
+        f.write("Cross-Dataset Summary\n")
+        f.write("="*50 + "\n\n")
+        f.write("ESOL strategies: hetero, legacy\n")
+        f.write("hERG strategies: class_imbalance, uniform\n\n")
+        f.write("Exclusions:\n")
+        f.write("  ESOL: outlier, quantile, threshold, valprop strategies removed\n")
+        f.write("  hERG: DNN + PDV configuration removed (training failure)\n")
+        f.write("  hERG: binary_asymmetric strategy removed (no degradation)\n")
+    
+    print(f"✓ Saved cross-dataset summary table with README")
 
 
 # ============================================================================
 # MAIN
 # ============================================================================
 
-def main(results_dir="/results"):
+def main(results_dir="../results"):
     """Main execution"""
     print("="*80)
     print("ALTERNATIVE DATASETS ANALYSIS")
@@ -870,10 +967,26 @@ def main(results_dir="/results"):
         task = all_data[dataset]['task_type']
         n_configs = len(all_data[dataset]['data'].groupby(['model', 'representation']))
         n_strategies = len(all_data[dataset]['data']['strategy'].unique())
+        strategies = sorted(all_data[dataset]['data']['strategy'].unique())
         print(f"  - {dataset.upper()}: {task}, {n_configs} configurations, {n_strategies} strategies")
+        print(f"    Strategies: {', '.join(strategies)}")
+    
+    print("\n" + "="*80)
+    print("EXCLUSIONS APPLIED")
+    print("="*80)
+    print("ESOL:")
+    print("  Excluded strategies: outlier, quantile, threshold, valprop")
+    print("  Reason: Focus on representative noise patterns for cross-dataset comparison")
+    print("  Retained: hetero, legacy")
+    print("\nhERG:")
+    print("  Excluded configurations: DNN + PDV")
+    print("  Reason: Training convergence failure (see KNOWN_ISSUES.md)")
+    print("  Excluded strategies: binary_asymmetric")
+    print("  Reason: No degradation observed (uninformative)")
+    print("  Retained: class_imbalance, uniform")
 
 
 if __name__ == "__main__":
     import sys
-    results_dir = sys.argv[1] if len(sys.argv) > 1 else "/results"
+    results_dir = sys.argv[1] if len(sys.argv) > 1 else "../results"
     main(results_dir)
