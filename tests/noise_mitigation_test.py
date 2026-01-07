@@ -41,7 +41,7 @@ from kirby.utils.feature_filtering import apply_filters, FILTER_CONFIGS
 from noiseInject import NoiseInjectorRegression
 
 # Import noise mitigation methods
-from kirby.noise_mitigation_methods import get_mitigation_method
+from kirby.utils.noise_mitigation_methods import get_mitigation_method
 
 
 # ============================================================================
