@@ -14,8 +14,8 @@ Purpose: Demonstrate cross-dataset consistency and test new KIRBy representation
 
 Model-Representation Matrix:
 - Representations: ECFP4, PDV, SNS, MHG-GNN-pretrained (4 total)
-- Models per rep: RF, QRF, XGBoost, NGBoost, DNN×4 (baseline, full-BNN, last-layer-BNN, var-BNN), Gauche GP (9 total)
-- Total configurations: 4 reps × 9 models = 36
+- Models per rep: RF, QRF, XGBoost, GP, DNN×4 (baseline, full-BNN, last-layer-BNN, var-BNN) (8 total)
+- Total configurations: 4 reps × 8 models = 32
 
 Noise Strategies: legacy, outlier, quantile, hetero, threshold, valprop (6 total)
 Noise Levels: σ ∈ {0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0} (11 levels)
@@ -24,9 +24,6 @@ Expected results:
 - Same model-rep rankings as QM9
 - Same "representation > model architecture" variance decomposition
 - New KIRBy reps (MHG-GNN) competitive with baselines
-
-NOTE: Gauche GP skipped - import causes segfault
-FIXED: Removed batch_size parameter from create_mhg_gnn calls (was causing segfault)
 """
 
 import numpy as np
@@ -38,6 +35,40 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 import sys
 from pathlib import Path
+
+# Bayesian neural network imports
+try:
+    import bayesian_torch.layers as bnn
+    from bayesian_torch.models.dnn_to_bnn import transform_model, transform_layer
+    HAS_BAYESIAN_TORCH = True
+except ImportError:
+    print("WARNING: bayesian-torch not installed, BNN experiments will be skipped")
+    HAS_BAYESIAN_TORCH = False
+
+# XGBoost
+try:
+    from xgboost import XGBRegressor
+    HAS_XGBOOST = True
+except ImportError:
+    print("WARNING: xgboost not installed, XGBoost experiments will be skipped")
+    HAS_XGBOOST = False
+
+# Gaussian Process
+try:
+    from sklearn.gaussian_process import GaussianProcessRegressor
+    from sklearn.gaussian_process.kernels import RBF, ConstantKernel, WhiteKernel
+    HAS_GP = True
+except ImportError:
+    print("WARNING: sklearn.gaussian_process not available, GP experiments will be skipped")
+    HAS_GP = False
+
+# Quantile forest
+try:
+    from quantile_forest import RandomForestQuantileRegressor
+    HAS_QRF = True
+except ImportError:
+    print("WARNING: quantile_forest not installed, QRF experiments will be skipped")
+    HAS_QRF = False
 
 # KIRBy imports
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
@@ -54,24 +85,6 @@ from noiseInject import (
     NoiseInjectorRegression, 
     calculate_noise_metrics
 )
-
-# Quantile forest
-try:
-    from quantile_forest import RandomForestQuantileRegressor
-    HAS_QRF = True
-except ImportError:
-    print("WARNING: quantile_forest not installed, QRF experiments will be skipped")
-    HAS_QRF = False
-
-# Bayesian neural network
-try:
-    import blitz
-    from blitz.modules import BayesianLinear
-    from blitz.utils import variational_estimator
-    HAS_BLITZ = True
-except ImportError:
-    print("WARNING: BLiTZ not installed, BNN experiments will be skipped")
-    HAS_BLITZ = False
 
 
 # =============================================================================
@@ -98,29 +111,156 @@ class DeterministicRegressor(nn.Module):
         return self.net(x).squeeze()
 
 
-if HAS_BLITZ:
-    @variational_estimator
-    class BayesianRegressor(nn.Module):
-        """Full Bayesian neural network with weight uncertainty"""
-        def __init__(self, input_dim, hidden_dim=256):
-            super().__init__()
-            self.blinear1 = BayesianLinear(input_dim, hidden_dim)
-            self.blinear2 = BayesianLinear(hidden_dim, hidden_dim // 2)
-            self.blinear3 = BayesianLinear(hidden_dim // 2, 1)
-            self.relu = nn.ReLU()
-            self.dropout = nn.Dropout(0.2)
-        
-        def forward(self, x):
-            x = self.relu(self.blinear1(x))
-            x = self.dropout(x)
-            x = self.relu(self.blinear2(x))
-            x = self.dropout(x)
-            x = self.blinear3(x)
-            return x.squeeze()
+# =============================================================================
+# BAYESIAN TRANSFORMATIONS
+# =============================================================================
 
+if HAS_BAYESIAN_TORCH:
+    def apply_bayesian_transformation(model):
+        """
+        Converts an existing PyTorch model's Linear layers to Bayesian Linear layers.
+        
+        Parameters
+        ----------
+        model : nn.Module
+            The PyTorch model to be transformed.
+            
+        Returns
+        -------
+        model : nn.Module
+            The transformed model with Bayesian layers.
+        """
+        # Convert Linear -> BayesLinear
+        transform_model(
+            model, 
+            nn.Linear, 
+            bnn.BayesLinear, 
+            args={
+                "prior_mu": 0, 
+                "prior_sigma": 0.1, 
+                "in_features": ".in_features",
+                "out_features": ".out_features", 
+                "bias": ".bias"
+            }, 
+            attrs={"weight_mu": ".weight"}
+        )
+        return model
+
+    def apply_bayesian_transformation_last_layer(model):
+        """
+        Replaces only the final nn.Linear layer in the model with a Bayesian Linear layer.
+        Uses torchhk-style transform_layer to apply the conversion.
+        
+        Parameters
+        ----------
+        model : nn.Module
+            Your PyTorch model with at least one nn.Linear layer.
+            
+        Returns
+        -------
+        model : nn.Module
+            The modified model with the final nn.Linear replaced by bnn.BayesLinear.
+        """
+        last_linear_name = None
+        last_linear_module = None
+        
+        # Find the last nn.Linear layer
+        for name, module in reversed(list(model.named_modules())):
+            if isinstance(module, nn.Linear):
+                last_linear_name = name
+                last_linear_module = module
+                break
+        
+        if last_linear_module is None:
+            raise ValueError("No nn.Linear layer found to replace.")
+        
+        # Build Bayesian version of the final layer
+        bayesian_layer = transform_layer(
+            last_linear_module,
+            nn.Linear,
+            bnn.BayesLinear,
+            args={
+                "prior_mu": 0,
+                "prior_sigma": 0.1,
+                "in_features": ".in_features",
+                "out_features": ".out_features",
+                "bias": ".bias"
+            },
+            attrs={"weight_mu": ".weight"}
+        )
+        
+        # Helper: assign new module to its place in the model
+        def set_nested_attr(obj, attr_path, value):
+            attrs = attr_path.split(".")
+            for a in attrs[:-1]:
+                obj = getattr(obj, a)
+            setattr(obj, attrs[-1], value)
+        
+        # Replace the final linear layer
+        set_nested_attr(model, last_linear_name, bayesian_layer)
+        return model
+
+    def apply_bayesian_transformation_last_layer_variational(model):
+        """
+        Converts the last Linear layer of a PyTorch model to a Bayesian Linear layer
+        (VBLL - Variational Bayesian Last Layer) while keeping the rest of the model deterministic.
+        
+        Parameters
+        ----------
+        model : nn.Module
+            The PyTorch model to be transformed.
+            
+        Returns
+        -------
+        model : nn.Module
+            The transformed model with the last layer replaced by a Bayesian layer.
+        """
+        last_linear_name = None
+        last_linear_module = None
+        
+        # Identify the last nn.Linear layer
+        for name, module in reversed(list(model.named_modules())):
+            if isinstance(module, nn.Linear):
+                last_linear_name = name
+                last_linear_module = module
+                break
+        
+        if last_linear_module is None:
+            raise ValueError("No nn.Linear layer found to replace.")
+        
+        # Transform using torchhk-style util
+        bayesian_layer = transform_layer(
+            last_linear_module,
+            nn.Linear,
+            bnn.BayesLinear,
+            args={
+                "prior_mu": 0,
+                "prior_sigma": 0.1,
+                "in_features": ".in_features",
+                "out_features": ".out_features",
+                "bias": ".bias"
+            },
+            attrs={"weight_mu": ".weight"}
+        )
+        
+        # Helper for recursive attribute setting
+        def set_nested_attr(obj, attr_path, value):
+            attrs = attr_path.split(".")
+            for a in attrs[:-1]:
+                obj = getattr(obj, a)
+            setattr(obj, attrs[-1], value)
+        
+        # Replace in the model
+        set_nested_attr(model, last_linear_name, bayesian_layer)
+        return model
+
+
+# =============================================================================
+# TRAINING FUNCTIONS
+# =============================================================================
 
 def train_neural_model(X_train, y_train, X_val, y_val, X_test, 
-                       model_class, epochs=100, lr=1e-3, is_bayesian=False):
+                       model_type='deterministic', epochs=100, lr=1e-3):
     """
     Train a neural network model (deterministic or Bayesian)
     
@@ -128,10 +268,9 @@ def train_neural_model(X_train, y_train, X_val, y_val, X_test,
         X_train, y_train: Training data
         X_val, y_val: Validation data (for early stopping)
         X_test: Test data
-        model_class: DeterministicRegressor or BayesianRegressor
+        model_type: 'deterministic', 'full-bnn', 'last-layer-bnn', or 'var-bnn'
         epochs: Number of training epochs
         lr: Learning rate
-        is_bayesian: Whether this is a Bayesian model
     
     Returns:
         predictions: Test predictions
@@ -147,8 +286,23 @@ def train_neural_model(X_train, y_train, X_val, y_val, X_test,
     X_test_t = torch.FloatTensor(X_test).to(device)
     
     # Initialize model
-    model = model_class(X_train.shape[1]).to(device)
+    model = DeterministicRegressor(X_train.shape[1]).to(device)
+    
+    # Apply Bayesian transformation if requested
+    if HAS_BAYESIAN_TORCH and model_type != 'deterministic':
+        if model_type == 'full-bnn':
+            model = apply_bayesian_transformation(model)
+        elif model_type == 'last-layer-bnn':
+            model = apply_bayesian_transformation_last_layer(model)
+        elif model_type == 'var-bnn':
+            model = apply_bayesian_transformation_last_layer_variational(model)
+        else:
+            raise ValueError(f"Unknown model_type: {model_type}")
+    
+    is_bayesian = model_type != 'deterministic'
+    
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    criterion = nn.MSELoss()
     
     # Training
     train_dataset = TensorDataset(X_train_t, y_train_t)
@@ -164,21 +318,8 @@ def train_neural_model(X_train, y_train, X_val, y_val, X_test,
         
         for batch_X, batch_y in train_loader:
             optimizer.zero_grad()
-            
-            if is_bayesian:
-                # Bayesian forward pass
-                loss = model.sample_elbo(
-                    inputs=batch_X,
-                    labels=batch_y,
-                    criterion=nn.MSELoss(),
-                    sample_nbr=3,
-                    complexity_cost_weight=1/X_train.shape[0]
-                )
-            else:
-                # Standard forward pass
-                pred = model(batch_X)
-                loss = nn.MSELoss()(pred, batch_y)
-            
+            pred = model(batch_X)
+            loss = criterion(pred, batch_y)
             loss.backward()
             optimizer.step()
             train_loss += loss.item()
@@ -186,17 +327,13 @@ def train_neural_model(X_train, y_train, X_val, y_val, X_test,
         # Validation
         model.eval()
         with torch.no_grad():
-            if is_bayesian:
-                val_pred = model(X_val_t)
-            else:
-                val_pred = model(X_val_t)
-            val_loss = nn.MSELoss()(val_pred, y_val_t).item()
+            val_pred = model(X_val_t)
+            val_loss = criterion(val_pred, y_val_t).item()
         
         # Early stopping
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience_counter = 0
-            # Save best model state
             best_state = model.state_dict().copy()
         else:
             patience_counter += 1
@@ -208,20 +345,21 @@ def train_neural_model(X_train, y_train, X_val, y_val, X_test,
     
     # Test predictions
     model.eval()
-    with torch.no_grad():
-        if is_bayesian:
-            # Multiple forward passes for uncertainty
-            predictions_list = []
-            for _ in range(30):
+    if is_bayesian:
+        # Multiple forward passes for uncertainty
+        predictions_list = []
+        for _ in range(30):
+            with torch.no_grad():
                 pred = model(X_test_t).cpu().numpy()
                 predictions_list.append(pred)
-            
-            predictions_array = np.array(predictions_list)
-            predictions = predictions_array.mean(axis=0)
-            uncertainties = predictions_array.std(axis=0)
-            
-            return predictions, uncertainties
-        else:
+        
+        predictions_array = np.array(predictions_list)
+        predictions = predictions_array.mean(axis=0)
+        uncertainties = predictions_array.std(axis=0)
+        
+        return predictions, uncertainties
+    else:
+        with torch.no_grad():
             predictions = model(X_test_t).cpu().numpy()
             return predictions, None
 
@@ -267,6 +405,11 @@ def run_experiment_tree_model(X_train, y_train, X_test, y_test,
             q16, q50, q84 = model.predict(X_test, quantiles=[0.16, 0.5, 0.84]).T
             predictions[sigma] = q50
             uncertainties[sigma] = (q84 - q16) / 2
+        elif hasattr(model, 'predict') and 'GaussianProcess' in str(type(model)):
+            # GP - get mean and std
+            pred_mean, pred_std = model.predict(X_test, return_std=True)
+            predictions[sigma] = pred_mean
+            uncertainties[sigma] = pred_std
         else:
             # Standard model
             predictions[sigma] = model.predict(X_test)
@@ -276,7 +419,7 @@ def run_experiment_tree_model(X_train, y_train, X_test, y_test,
 
 
 def run_experiment_neural(X_train, y_train, X_val, y_val, X_test, y_test,
-                         model_class, strategy, sigma_levels, is_bayesian=False):
+                         model_type, strategy, sigma_levels):
     """Run noise robustness experiment for neural network"""
     injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
     predictions = {}
@@ -292,7 +435,7 @@ def run_experiment_neural(X_train, y_train, X_val, y_val, X_test, y_test,
         # Train
         preds, uncs = train_neural_model(
             X_train, y_noisy, X_val, y_val, X_test,
-            model_class, epochs=100, is_bayesian=is_bayesian
+            model_type=model_type, epochs=100
         )
         
         predictions[sigma] = preds
@@ -307,7 +450,7 @@ def run_experiment_neural(X_train, y_train, X_val, y_val, X_test, y_test,
 
 def main():
     print("="*80)
-    print("ESOL + NoiseInject: Strategic Model-Representation Pairs")
+    print("ESOL + NoiseInject: Full Model-Representation Matrix")
     print("="*80)
 
     # Configuration
@@ -339,225 +482,131 @@ def main():
     all_uncertainties = []
     
     # =========================================================================
-    # PHASE 1: CORE ROBUSTNESS
+    # REPRESENTATIONS
     # =========================================================================
     print("\n" + "="*80)
-    print("PHASE 1: CORE ROBUSTNESS - Strategic Pairs")
+    print("GENERATING MOLECULAR REPRESENTATIONS")
     print("="*80)
     
-    # -------------------------------------------------------------------------
-    # Pair 1: RF + ECFP4 (baseline from paper)
-    # -------------------------------------------------------------------------
-    print("\n[1/9] RF + ECFP4...")
+    print("ECFP4...")
     ecfp4_train = create_ecfp4(train_smiles_fit, n_bits=2048)
     ecfp4_val = create_ecfp4(val_smiles, n_bits=2048)
     ecfp4_test = create_ecfp4(test_smiles, n_bits=2048)
     
-    for strategy in strategies:
-        print(f"  Strategy: {strategy}")
-        predictions, _ = run_experiment_tree_model(
-            ecfp4_train, train_labels_fit, ecfp4_test, test_labels,
-            lambda: RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1),
-            strategy, sigma_levels
-        )
-        
-        per_sigma, summary = calculate_noise_metrics(
-            test_labels, predictions, metrics=['r2', 'rmse', 'mae']
-        )
-        per_sigma['model'] = 'RF'
-        per_sigma['rep'] = 'ECFP4'
-        per_sigma['strategy'] = strategy
-        all_results.append(per_sigma)
-        per_sigma.to_csv(results_dir / f'RF_ECFP4_{strategy}.csv', index=False)
+    print("PDV...")
+    pdv_train = create_pdv(train_smiles_fit)
+    pdv_val = create_pdv(val_smiles)
+    pdv_test = create_pdv(test_smiles)
     
-    # -------------------------------------------------------------------------
-    # Pair 2: QRF + PDV (baseline from paper)
-    # -------------------------------------------------------------------------
-    if HAS_QRF:
-        print("\n[2/9] QRF + PDV...")
-        pdv_train = create_pdv(train_smiles_fit)
-        pdv_val = create_pdv(val_smiles)
-        pdv_test = create_pdv(test_smiles)
-        
-        for strategy in strategies:
-            print(f"  Strategy: {strategy}")
-            predictions, uncertainties = run_experiment_tree_model(
-                pdv_train, train_labels_fit, pdv_test, test_labels,
-                lambda: RandomForestQuantileRegressor(n_estimators=100, random_state=42, n_jobs=-1),
-                strategy, sigma_levels
-            )
-            
-            per_sigma, summary = calculate_noise_metrics(
-                test_labels, predictions, metrics=['r2', 'rmse', 'mae']
-            )
-            per_sigma['model'] = 'QRF'
-            per_sigma['rep'] = 'PDV'
-            per_sigma['strategy'] = strategy
-            all_results.append(per_sigma)
-            per_sigma.to_csv(results_dir / f'QRF_PDV_{strategy}.csv', index=False)
-            
-            # Save uncertainties for Phase 3
-            if strategy == 'legacy':
-                unc_data = []
-                for sigma in sigma_levels:
-                    for i in range(len(test_labels)):
-                        unc_data.append({
-                            'sigma': sigma,
-                            'sample_idx': i,
-                            'y_true': test_labels[i],
-                            'y_pred': predictions[sigma][i],
-                            'uncertainty': uncertainties[sigma][i],
-                            'error': abs(test_labels[i] - predictions[sigma][i])
-                        })
-                all_uncertainties.append(('QRF', 'PDV', pd.DataFrame(unc_data)))
-    else:
-        print("\n[2/9] QRF + PDV... SKIPPED (quantile_forest not installed)")
-        pdv_train = create_pdv(train_smiles_fit)
-        pdv_val = create_pdv(val_smiles)
-        pdv_test = create_pdv(test_smiles)
-    
-    # -------------------------------------------------------------------------
-    # Pair 3: GP + PDV - SKIPPED (import causes segfault)
-    # -------------------------------------------------------------------------
-    print("\n[3/9] Gauche GP + PDV... SKIPPED")
-    print("  Reason: Importing train_gauche_gp/predict_gauche_gp causes segfault")
-    
-    # -------------------------------------------------------------------------
-    # Pair 4: RF + MHG-GNN pretrained (new with KIRBy)
-    # -------------------------------------------------------------------------
-    print("\n[4/9] RF + MHG-GNN (pretrained)...")
-    mhggnn_train = create_mhg_gnn(train_smiles_fit)
-    mhggnn_test = create_mhg_gnn(test_smiles)
-    
-    for strategy in strategies:
-        print(f"  Strategy: {strategy}")
-        predictions, _ = run_experiment_tree_model(
-            mhggnn_train, train_labels_fit, mhggnn_test, test_labels,
-            lambda: RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1),
-            strategy, sigma_levels
-        )
-        
-        per_sigma, summary = calculate_noise_metrics(
-            test_labels, predictions, metrics=['r2', 'rmse', 'mae']
-        )
-        per_sigma['model'] = 'RF'
-        per_sigma['rep'] = 'MHG-GNN-pretrained'
-        per_sigma['strategy'] = strategy
-        all_results.append(per_sigma)
-        per_sigma.to_csv(results_dir / f'RF_MHGGNN-pretrained_{strategy}.csv', index=False)
-    
-    # -------------------------------------------------------------------------
-    # Pair 5: RF + SNS (Sort & Slice)
-    # -------------------------------------------------------------------------
-    print("\n[5/9] RF + SNS...")
+    print("SNS...")
     sns_train, sns_featurizer = create_sns(train_smiles_fit, return_featurizer=True)
     sns_val = create_sns(val_smiles, reference_featurizer=sns_featurizer)
     sns_test = create_sns(test_smiles, reference_featurizer=sns_featurizer)
     
-    for strategy in strategies:
-        print(f"  Strategy: {strategy}")
-        predictions, _ = run_experiment_tree_model(
-            sns_train, train_labels_fit, sns_test, test_labels,
-            lambda: RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1),
-            strategy, sigma_levels
-        )
+    print("MHG-GNN (pretrained)...")
+    mhggnn_train = create_mhg_gnn(train_smiles_fit)
+    mhggnn_test = create_mhg_gnn(test_smiles)
+    
+    # =========================================================================
+    # EXPERIMENTS
+    # =========================================================================
+    print("\n" + "="*80)
+    print("RUNNING EXPERIMENTS")
+    print("="*80)
+    
+    # Define experiment configurations
+    experiments = [
+        # RF experiments
+        ('RF', 'ECFP4', ecfp4_train, None, ecfp4_test,
+         lambda: RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1), None),
+        ('RF', 'PDV', pdv_train, None, pdv_test,
+         lambda: RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1), None),
+        ('RF', 'SNS', sns_train, None, sns_test,
+         lambda: RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1), None),
+        ('RF', 'MHG-GNN-pretrained', mhggnn_train, None, mhggnn_test,
+         lambda: RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1), None),
+    ]
+    
+    # QRF experiments
+    if HAS_QRF:
+        experiments.extend([
+            ('QRF', 'ECFP4', ecfp4_train, None, ecfp4_test,
+             lambda: RandomForestQuantileRegressor(n_estimators=100, random_state=42, n_jobs=-1), None),
+            ('QRF', 'PDV', pdv_train, None, pdv_test,
+             lambda: RandomForestQuantileRegressor(n_estimators=100, random_state=42, n_jobs=-1), None),
+        ])
+    
+    # XGBoost experiments
+    if HAS_XGBOOST:
+        experiments.extend([
+            ('XGBoost', 'ECFP4', ecfp4_train, None, ecfp4_test,
+             lambda: XGBRegressor(n_estimators=100, random_state=42), None),
+            ('XGBoost', 'PDV', pdv_train, None, pdv_test,
+             lambda: XGBRegressor(n_estimators=100, random_state=42), None),
+        ])
+    
+    # GP experiments
+    if HAS_GP:
+        experiments.extend([
+            ('GP', 'ECFP4', ecfp4_train, None, ecfp4_test,
+             lambda: GaussianProcessRegressor(
+                 kernel=ConstantKernel(1.0) * RBF(1.0) + WhiteKernel(noise_level=1.0),
+                 alpha=1e-10, random_state=42, n_restarts_optimizer=10
+             ), None),
+            ('GP', 'PDV', pdv_train, None, pdv_test,
+             lambda: GaussianProcessRegressor(
+                 kernel=ConstantKernel(1.0) * RBF(1.0) + WhiteKernel(noise_level=1.0),
+                 alpha=1e-10, random_state=42, n_restarts_optimizer=10
+             ), None),
+        ])
+    
+    # Neural network experiments
+    for model_type in ['deterministic', 'full-bnn', 'last-layer-bnn', 'var-bnn']:
+        if model_type != 'deterministic' and not HAS_BAYESIAN_TORCH:
+            continue
         
-        per_sigma, summary = calculate_noise_metrics(
-            test_labels, predictions, metrics=['r2', 'rmse', 'mae']
-        )
-        per_sigma['model'] = 'RF'
-        per_sigma['rep'] = 'SNS'
-        per_sigma['strategy'] = strategy
-        all_results.append(per_sigma)
-        per_sigma.to_csv(results_dir / f'RF_SNS_{strategy}.csv', index=False)
-    
-    # -------------------------------------------------------------------------
-    # Pair 6: DNN + ECFP4 (neural baseline)
-    # -------------------------------------------------------------------------
-    print("\n[6/9] DNN + ECFP4...")
-    
-    for strategy in strategies:
-        print(f"  Strategy: {strategy}")
-        predictions, _ = run_experiment_neural(
-            ecfp4_train, train_labels_fit, ecfp4_val, val_labels, ecfp4_test, test_labels,
-            DeterministicRegressor, strategy, sigma_levels, is_bayesian=False
-        )
+        model_name = {'deterministic': 'DNN', 'full-bnn': 'Full-BNN', 
+                     'last-layer-bnn': 'LastLayer-BNN', 'var-bnn': 'Var-BNN'}[model_type]
         
-        per_sigma, summary = calculate_noise_metrics(
-            test_labels, predictions, metrics=['r2', 'rmse', 'mae']
-        )
-        per_sigma['model'] = 'DNN'
-        per_sigma['rep'] = 'ECFP4'
-        per_sigma['strategy'] = strategy
-        all_results.append(per_sigma)
-        per_sigma.to_csv(results_dir / f'DNN_ECFP4_{strategy}.csv', index=False)
+        experiments.extend([
+            (model_name, 'ECFP4', ecfp4_train, ecfp4_val, ecfp4_test, None, model_type),
+            (model_name, 'PDV', pdv_train, pdv_val, pdv_test, None, model_type),
+            (model_name, 'SNS', sns_train, sns_val, sns_test, None, model_type),
+        ])
     
-    # -------------------------------------------------------------------------
-    # Pair 7: DNN + PDV (neural baseline)
-    # -------------------------------------------------------------------------
-    print("\n[7/9] DNN + PDV...")
-    
-    for strategy in strategies:
-        print(f"  Strategy: {strategy}")
-        predictions, _ = run_experiment_neural(
-            pdv_train, train_labels_fit, pdv_val, val_labels, pdv_test, test_labels,
-            DeterministicRegressor, strategy, sigma_levels, is_bayesian=False
-        )
-        
-        per_sigma, summary = calculate_noise_metrics(
-            test_labels, predictions, metrics=['r2', 'rmse', 'mae']
-        )
-        per_sigma['model'] = 'DNN'
-        per_sigma['rep'] = 'PDV'
-        per_sigma['strategy'] = strategy
-        all_results.append(per_sigma)
-        per_sigma.to_csv(results_dir / f'DNN_PDV_{strategy}.csv', index=False)
-    
-    # -------------------------------------------------------------------------
-    # Pair 8: DNN + SNS (neural with SNS)
-    # -------------------------------------------------------------------------
-    print("\n[8/9] DNN + SNS...")
-    
-    for strategy in strategies:
-        print(f"  Strategy: {strategy}")
-        predictions, _ = run_experiment_neural(
-            sns_train, train_labels_fit, sns_val, val_labels, sns_test, test_labels,
-            DeterministicRegressor, strategy, sigma_levels, is_bayesian=False
-        )
-        
-        per_sigma, summary = calculate_noise_metrics(
-            test_labels, predictions, metrics=['r2', 'rmse', 'mae']
-        )
-        per_sigma['model'] = 'DNN'
-        per_sigma['rep'] = 'SNS'
-        per_sigma['strategy'] = strategy
-        all_results.append(per_sigma)
-        per_sigma.to_csv(results_dir / f'DNN_SNS_{strategy}.csv', index=False)
-    
-    # -------------------------------------------------------------------------
-    # Pair 9: Full-BNN + PDV (probabilistic neural)
-    # -------------------------------------------------------------------------
-    if HAS_BLITZ:
-        print("\n[9/9] Full-BNN + PDV...")
+    # Run all experiments
+    for idx, (model_name, rep_name, X_train, X_val, X_test, model_fn, model_type) in enumerate(experiments, 1):
+        print(f"\n[{idx}/{len(experiments)}] {model_name} + {rep_name}...")
         
         for strategy in strategies:
             print(f"  Strategy: {strategy}")
-            predictions, uncertainties = run_experiment_neural(
-                pdv_train, train_labels_fit, pdv_val, val_labels, pdv_test, test_labels,
-                BayesianRegressor, strategy, sigma_levels, is_bayesian=True
-            )
+            
+            if model_fn is not None:
+                # Tree-based or GP model
+                predictions, uncertainties = run_experiment_tree_model(
+                    X_train, train_labels_fit, X_test, test_labels,
+                    model_fn, strategy, sigma_levels
+                )
+            else:
+                # Neural network
+                predictions, uncertainties = run_experiment_neural(
+                    X_train, train_labels_fit, X_val, val_labels, X_test, test_labels,
+                    model_type, strategy, sigma_levels
+                )
             
             per_sigma, summary = calculate_noise_metrics(
                 test_labels, predictions, metrics=['r2', 'rmse', 'mae']
             )
-            per_sigma['model'] = 'Full-BNN'
-            per_sigma['rep'] = 'PDV'
+            per_sigma['model'] = model_name
+            per_sigma['rep'] = rep_name
             per_sigma['strategy'] = strategy
             all_results.append(per_sigma)
-            per_sigma.to_csv(results_dir / f'FullBNN_PDV_{strategy}.csv', index=False)
             
-            # Save uncertainties for Phase 3
-            if strategy == 'legacy':
+            filename = f"{model_name.replace('-', '')}_{rep_name.replace('-', '')}_{strategy}.csv"
+            per_sigma.to_csv(results_dir / filename, index=False)
+            
+            # Save uncertainties for legacy strategy
+            if strategy == 'legacy' and uncertainties[0.0] is not None:
                 unc_data = []
                 for sigma in sigma_levels:
                     for i in range(len(test_labels)):
@@ -569,33 +618,19 @@ def main():
                             'uncertainty': uncertainties[sigma][i],
                             'error': abs(test_labels[i] - predictions[sigma][i])
                         })
-                all_uncertainties.append(('Full-BNN', 'PDV', pd.DataFrame(unc_data)))
-    else:
-        print("\n[9/9] Full-BNN + PDV... SKIPPED (BLiTZ not installed)")
+                all_uncertainties.append((model_name, rep_name, pd.DataFrame(unc_data)))
     
     # =========================================================================
-    # PHASE 2: PROBABILISTIC COMPARISON
+    # UNCERTAINTY QUANTIFICATION
     # =========================================================================
     print("\n" + "="*80)
-    print("PHASE 2: PROBABILISTIC COMPARISON (legacy strategy only)")
-    print("="*80)
-    print("Comparison results already collected in Phase 1:")
-    print("  - RF vs QRF on PDV")
-    print("  - DNN vs Full-BNN on PDV")
-    
-    # =========================================================================
-    # PHASE 3: UNCERTAINTY QUANTIFICATION
-    # =========================================================================
-    print("\n" + "="*80)
-    print("PHASE 3: UNCERTAINTY QUANTIFICATION (legacy strategy only)")
+    print("UNCERTAINTY QUANTIFICATION (legacy strategy only)")
     print("="*80)
     
     # Save all uncertainty data
     for model_name, rep_name, unc_df in all_uncertainties:
-        unc_df.to_csv(
-            results_dir / f'{model_name}_{rep_name}_uncertainty_values.csv',
-            index=False
-        )
+        filename = f'{model_name.replace("-", "")}_{rep_name.replace("-", "")}_uncertainty_values.csv'
+        unc_df.to_csv(results_dir / filename, index=False)
         print(f"Saved {model_name} + {rep_name} uncertainties")
         
         # Calculate correlation between uncertainty and error per sigma
