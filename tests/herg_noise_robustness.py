@@ -14,8 +14,8 @@ Purpose: Demonstrate cross-dataset consistency on classification task and test n
 
 Model-Representation Matrix:
 - Representations: ECFP4, PDV, SNS, MHG-GNN-pretrained (4 total)
-- Models per rep: RF, XGBoost, DNN (baseline), DNN (full-BNN), DNN (last-layer-BNN), DNN (var-BNN) (6 total)  
-- Total configurations: 4 reps × 6 models = 24
+- Models per rep: RF, XGBoost, GP, DNN (baseline), DNN (full-BNN), DNN (last-layer-BNN), DNN (var-BNN) (7 total)  
+- Total configurations: 4 reps × 7 models = 28
 
 Noise Strategies: uniform, class_imbalance, binary_asymmetric (3 total)
 Noise Levels: flip_prob ∈ {0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0} (11 levels)
@@ -41,6 +41,32 @@ from sklearn.metrics import (
 from sklearn.calibration import CalibratedClassifierCV
 import sys
 from pathlib import Path
+
+# Bayesian neural network imports
+try:
+    import bayesian_torch.layers as bnn
+    from bayesian_torch.models.dnn_to_bnn import transform_model, transform_layer
+    HAS_BAYESIAN_TORCH = True
+except ImportError:
+    print("WARNING: bayesian-torch not installed, BNN experiments will be skipped")
+    HAS_BAYESIAN_TORCH = False
+
+# XGBoost
+try:
+    from xgboost import XGBClassifier
+    HAS_XGBOOST = True
+except ImportError:
+    print("WARNING: xgboost not installed, XGBoost experiments will be skipped")
+    HAS_XGBOOST = False
+
+# Gaussian Process
+try:
+    from sklearn.gaussian_process import GaussianProcessClassifier
+    from sklearn.gaussian_process.kernels import RBF, ConstantKernel
+    HAS_GP = True
+except ImportError:
+    print("WARNING: sklearn.gaussian_process not available, GP experiments will be skipped")
+    HAS_GP = False
 
 # KIRBy imports
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
@@ -76,23 +102,171 @@ class DeterministicClassifier(nn.Module):
             nn.BatchNorm1d(hidden_dim // 2),
             nn.ReLU(),
             nn.Dropout(0.2),
-            nn.Linear(hidden_dim // 2, 1),
-            nn.Sigmoid()
+            nn.Linear(hidden_dim // 2, 1)
         )
     
     def forward(self, x):
         return self.net(x).squeeze()
 
 
+# =============================================================================
+# BAYESIAN TRANSFORMATIONS
+# =============================================================================
+
+if HAS_BAYESIAN_TORCH:
+    def apply_bayesian_transformation(model):
+        """
+        Converts an existing PyTorch model's Linear layers to Bayesian Linear layers.
+        
+        Parameters
+        ----------
+        model : nn.Module
+            The PyTorch model to be transformed.
+            
+        Returns
+        -------
+        model : nn.Module
+            The transformed model with Bayesian layers.
+        """
+        # Convert Linear -> BayesLinear
+        transform_model(
+            model, 
+            nn.Linear, 
+            bnn.BayesLinear, 
+            args={
+                "prior_mu": 0, 
+                "prior_sigma": 0.1, 
+                "in_features": ".in_features",
+                "out_features": ".out_features", 
+                "bias": ".bias"
+            }, 
+            attrs={"weight_mu": ".weight"}
+        )
+        return model
+
+    def apply_bayesian_transformation_last_layer(model):
+        """
+        Replaces only the final nn.Linear layer in the model with a Bayesian Linear layer.
+        Uses torchhk-style transform_layer to apply the conversion.
+        
+        Parameters
+        ----------
+        model : nn.Module
+            Your PyTorch model with at least one nn.Linear layer.
+            
+        Returns
+        -------
+        model : nn.Module
+            The modified model with the final nn.Linear replaced by bnn.BayesLinear.
+        """
+        last_linear_name = None
+        last_linear_module = None
+        
+        # Find the last nn.Linear layer
+        for name, module in reversed(list(model.named_modules())):
+            if isinstance(module, nn.Linear):
+                last_linear_name = name
+                last_linear_module = module
+                break
+        
+        if last_linear_module is None:
+            raise ValueError("No nn.Linear layer found to replace.")
+        
+        # Build Bayesian version of the final layer
+        bayesian_layer = transform_layer(
+            last_linear_module,
+            nn.Linear,
+            bnn.BayesLinear,
+            args={
+                "prior_mu": 0,
+                "prior_sigma": 0.1,
+                "in_features": ".in_features",
+                "out_features": ".out_features",
+                "bias": ".bias"
+            },
+            attrs={"weight_mu": ".weight"}
+        )
+        
+        # Helper: assign new module to its place in the model
+        def set_nested_attr(obj, attr_path, value):
+            attrs = attr_path.split(".")
+            for a in attrs[:-1]:
+                obj = getattr(obj, a)
+            setattr(obj, attrs[-1], value)
+        
+        # Replace the final linear layer
+        set_nested_attr(model, last_linear_name, bayesian_layer)
+        return model
+
+    def apply_bayesian_transformation_last_layer_variational(model):
+        """
+        Converts the last Linear layer of a PyTorch model to a Bayesian Linear layer
+        (VBLL - Variational Bayesian Last Layer) while keeping the rest of the model deterministic.
+        
+        Parameters
+        ----------
+        model : nn.Module
+            The PyTorch model to be transformed.
+            
+        Returns
+        -------
+        model : nn.Module
+            The transformed model with the last layer replaced by a Bayesian layer.
+        """
+        last_linear_name = None
+        last_linear_module = None
+        
+        # Identify the last nn.Linear layer
+        for name, module in reversed(list(model.named_modules())):
+            if isinstance(module, nn.Linear):
+                last_linear_name = name
+                last_linear_module = module
+                break
+        
+        if last_linear_module is None:
+            raise ValueError("No nn.Linear layer found to replace.")
+        
+        # Transform using torchhk-style util
+        bayesian_layer = transform_layer(
+            last_linear_module,
+            nn.Linear,
+            bnn.BayesLinear,
+            args={
+                "prior_mu": 0,
+                "prior_sigma": 0.1,
+                "in_features": ".in_features",
+                "out_features": ".out_features",
+                "bias": ".bias"
+            },
+            attrs={"weight_mu": ".weight"}
+        )
+        
+        # Helper for recursive attribute setting
+        def set_nested_attr(obj, attr_path, value):
+            attrs = attr_path.split(".")
+            for a in attrs[:-1]:
+                obj = getattr(obj, a)
+            setattr(obj, attrs[-1], value)
+        
+        # Replace in the model
+        set_nested_attr(model, last_linear_name, bayesian_layer)
+        return model
+
+
+# =============================================================================
+# TRAINING FUNCTIONS
+# =============================================================================
+
 def train_neural_classifier(X_train, y_train, X_val, y_val, X_test, 
-                            epochs=100, lr=1e-3):
+                            model_type='deterministic', epochs=100, lr=1e-3):
     """
-    Train a neural network classifier
+    Train a neural network classifier (deterministic or Bayesian)
     
     Args:
         X_train, y_train: Training data
         X_val, y_val: Validation data (for early stopping)
         X_test: Test data
+        model_type: 'deterministic', 'full-bnn', 'last-layer-bnn', or 'var-bnn'
         epochs: Number of training epochs
         lr: Learning rate
     
@@ -111,15 +285,25 @@ def train_neural_classifier(X_train, y_train, X_val, y_val, X_test,
     
     # Initialize model
     model = DeterministicClassifier(X_train.shape[1]).to(device)
+    
+    # Apply Bayesian transformation if requested
+    if HAS_BAYESIAN_TORCH and model_type != 'deterministic':
+        if model_type == 'full-bnn':
+            model = apply_bayesian_transformation(model)
+        elif model_type == 'last-layer-bnn':
+            model = apply_bayesian_transformation_last_layer(model)
+        elif model_type == 'var-bnn':
+            model = apply_bayesian_transformation_last_layer_variational(model)
+        else:
+            raise ValueError(f"Unknown model_type: {model_type}")
+    
+    is_bayesian = model_type != 'deterministic'
+    
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.BCELoss()
     
     # Calculate class weights for imbalanced data
     pos_weight = (y_train == 0).sum() / (y_train == 1).sum()
     criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight]).to(device))
-    
-    # Update model to output logits
-    model.net[-1] = nn.Identity()  # Remove sigmoid, use with BCEWithLogitsLoss
     
     # Training
     train_dataset = TensorDataset(X_train_t, y_train_t)
@@ -162,10 +346,22 @@ def train_neural_classifier(X_train, y_train, X_val, y_val, X_test,
     
     # Test predictions
     model.eval()
-    with torch.no_grad():
-        logits = model(X_test_t).cpu().numpy()
-        probabilities = torch.sigmoid(torch.FloatTensor(logits)).numpy()
+    if is_bayesian:
+        # Multiple forward passes for uncertainty
+        probabilities_list = []
+        for _ in range(30):
+            with torch.no_grad():
+                logits = model(X_test_t).cpu().numpy()
+                probs = torch.sigmoid(torch.FloatTensor(logits)).numpy()
+                probabilities_list.append(probs)
+        
+        probabilities = np.mean(probabilities_list, axis=0)
         predictions = (probabilities > 0.5).astype(int)
+    else:
+        with torch.no_grad():
+            logits = model(X_test_t).cpu().numpy()
+            probabilities = torch.sigmoid(torch.FloatTensor(logits)).numpy()
+            predictions = (probabilities > 0.5).astype(int)
     
     return predictions, probabilities
 
@@ -207,13 +403,18 @@ def run_experiment_tree_model(X_train, y_train, X_test, y_test,
         
         # Get predictions and probabilities
         predictions[flip_prob] = model.predict(X_test)
-        probabilities[flip_prob] = model.predict_proba(X_test)[:, 1]
+        
+        # Get probabilities if available
+        if hasattr(model, 'predict_proba'):
+            probabilities[flip_prob] = model.predict_proba(X_test)[:, 1]
+        else:
+            probabilities[flip_prob] = predictions[flip_prob].astype(float)
     
     return predictions, probabilities
 
 
 def run_experiment_neural(X_train, y_train, X_val, y_val, X_test, y_test,
-                          strategy, flip_prob_levels):
+                          model_type, strategy, flip_prob_levels):
     """Run noise robustness experiment for neural classifier"""
     injector = NoiseInjectorClassification(strategy=strategy, random_state=42)
     predictions = {}
@@ -229,7 +430,7 @@ def run_experiment_neural(X_train, y_train, X_val, y_val, X_test, y_test,
         # Train
         preds, probs = train_neural_classifier(
             X_train, y_noisy, X_val, y_val, X_test,
-            epochs=100
+            model_type=model_type, epochs=100
         )
         
         predictions[flip_prob] = preds
@@ -244,7 +445,7 @@ def run_experiment_neural(X_train, y_train, X_val, y_val, X_test, y_test,
 
 def main():
     print("="*80)
-    print("hERG + NoiseInject: Strategic Model-Representation Pairs")
+    print("hERG + NoiseInject: Full Model-Representation Matrix")
     print("="*80)
 
     # Configuration
@@ -280,282 +481,139 @@ def main():
     all_calibration_data = []
     
     # =========================================================================
-    # PHASE 1: CORE ROBUSTNESS
+    # REPRESENTATIONS
     # =========================================================================
     print("\n" + "="*80)
-    print("PHASE 1: CORE ROBUSTNESS - Strategic Pairs")
+    print("GENERATING MOLECULAR REPRESENTATIONS")
     print("="*80)
     
-    # -------------------------------------------------------------------------
-    # Pair 1: RF + ECFP4 (baseline)
-    # -------------------------------------------------------------------------
-    print("\n[1/7] RF + ECFP4...")
+    print("ECFP4...")
     ecfp4_train = create_ecfp4(train_smiles_fit, n_bits=2048)
     ecfp4_val = create_ecfp4(val_smiles, n_bits=2048)
     ecfp4_test = create_ecfp4(test_smiles, n_bits=2048)
     
-    for strategy in strategies:
-        print(f"  Strategy: {strategy}")
-        predictions, probabilities = run_experiment_tree_model(
-            ecfp4_train, train_labels_fit, ecfp4_test, test_labels,
-            lambda: RandomForestClassifier(n_estimators=100, random_state=42, 
-                                          n_jobs=-1, class_weight='balanced'),
-            strategy, flip_prob_levels
-        )
-        
-        per_flip, summary, per_class = calculate_classification_metrics(
-            test_labels, predictions, probabilities
-        )
-        per_flip['model'] = 'RF'
-        per_flip['rep'] = 'ECFP4'
-        per_flip['strategy'] = strategy
-        all_results.append(per_flip)
-        per_flip.to_csv(results_dir / f'RF_ECFP4_{strategy}.csv', index=False)
-        
-        # Save calibration data for Phase 3
-        if strategy == 'uniform':
-            calib_data = []
-            for flip_prob in flip_prob_levels:
-                for i in range(len(test_labels)):
-                    calib_data.append({
-                        'flip_prob': flip_prob,
-                        'sample_idx': i,
-                        'y_true': test_labels[i],
-                        'y_pred': predictions[flip_prob][i],
-                        'probability': probabilities[flip_prob][i]
-                    })
-            all_calibration_data.append(('RF', 'ECFP4', pd.DataFrame(calib_data)))
-    
-    # -------------------------------------------------------------------------
-    # Pair 2: RF + PDV (baseline)
-    # -------------------------------------------------------------------------
-    print("\n[2/7] RF + PDV...")
+    print("PDV...")
     pdv_train = create_pdv(train_smiles_fit)
     pdv_val = create_pdv(val_smiles)
     pdv_test = create_pdv(test_smiles)
     
-    for strategy in strategies:
-        print(f"  Strategy: {strategy}")
-        predictions, probabilities = run_experiment_tree_model(
-            pdv_train, train_labels_fit, pdv_test, test_labels,
-            lambda: RandomForestClassifier(n_estimators=100, random_state=42,
-                                          n_jobs=-1, class_weight='balanced'),
-            strategy, flip_prob_levels
-        )
-        
-        per_flip, summary, per_class = calculate_classification_metrics(
-            test_labels, predictions, probabilities
-        )
-        per_flip['model'] = 'RF'
-        per_flip['rep'] = 'PDV'
-        per_flip['strategy'] = strategy
-        all_results.append(per_flip)
-        per_flip.to_csv(results_dir / f'RF_PDV_{strategy}.csv', index=False)
-    
-    # -------------------------------------------------------------------------
-    # Pair 3: RF + SNS (Sort & Slice)
-    # -------------------------------------------------------------------------
-    print("\n[3/7] RF + SNS...")
+    print("SNS...")
     sns_train, sns_featurizer = create_sns(train_smiles_fit, return_featurizer=True)
     sns_val = create_sns(val_smiles, reference_featurizer=sns_featurizer)
     sns_test = create_sns(test_smiles, reference_featurizer=sns_featurizer)
     
-    for strategy in strategies:
-        print(f"  Strategy: {strategy}")
-        predictions, probabilities = run_experiment_tree_model(
-            sns_train, train_labels_fit, sns_test, test_labels,
-            lambda: RandomForestClassifier(n_estimators=100, random_state=42,
-                                          n_jobs=-1, class_weight='balanced'),
-            strategy, flip_prob_levels
-        )
-        
-        per_flip, summary, per_class = calculate_classification_metrics(
-            test_labels, predictions, probabilities
-        )
-        per_flip['model'] = 'RF'
-        per_flip['rep'] = 'SNS'
-        per_flip['strategy'] = strategy
-        all_results.append(per_flip)
-        per_flip.to_csv(results_dir / f'RF_SNS_{strategy}.csv', index=False)
-    
-    # -------------------------------------------------------------------------
-    # Pair 4: RF + MHG-GNN pretrained (new with KIRBy)
-    # -------------------------------------------------------------------------
-    print("\n[4/7] RF + MHG-GNN (pretrained)...")
-    mhggnn_train = create_mhg_gnn(train_smiles_fit, batch_size=32)
-    mhggnn_test = create_mhg_gnn(test_smiles, batch_size=32)
-    
-    for strategy in strategies:
-        print(f"  Strategy: {strategy}")
-        predictions, probabilities = run_experiment_tree_model(
-            mhggnn_train, train_labels_fit, mhggnn_test, test_labels,
-            lambda: RandomForestClassifier(n_estimators=100, random_state=42,
-                                          n_jobs=-1, class_weight='balanced'),
-            strategy, flip_prob_levels
-        )
-        
-        per_flip, summary, per_class = calculate_classification_metrics(
-            test_labels, predictions, probabilities
-        )
-        per_flip['model'] = 'RF'
-        per_flip['rep'] = 'MHG-GNN-pretrained'
-        per_flip['strategy'] = strategy
-        all_results.append(per_flip)
-        per_flip.to_csv(results_dir / f'RF_MHGGNN-pretrained_{strategy}.csv', index=False)
-    
-    # -------------------------------------------------------------------------
-    # Pair 5: DNN + ECFP4 (neural baseline)
-    # -------------------------------------------------------------------------
-    print("\n[5/7] DNN + ECFP4...")
-    
-    for strategy in strategies:
-        print(f"  Strategy: {strategy}")
-        predictions, probabilities = run_experiment_neural(
-            ecfp4_train, train_labels_fit, ecfp4_val, val_labels, ecfp4_test, test_labels,
-            strategy, flip_prob_levels
-        )
-        
-        per_flip, summary, per_class = calculate_classification_metrics(
-            test_labels, predictions, probabilities
-        )
-        per_flip['model'] = 'DNN'
-        per_flip['rep'] = 'ECFP4'
-        per_flip['strategy'] = strategy
-        all_results.append(per_flip)
-        per_flip.to_csv(results_dir / f'DNN_ECFP4_{strategy}.csv', index=False)
-    
-    # -------------------------------------------------------------------------
-    # Pair 6: DNN + PDV (neural baseline)
-    # -------------------------------------------------------------------------
-    print("\n[6/7] DNN + PDV...")
-    
-    for strategy in strategies:
-        print(f"  Strategy: {strategy}")
-        predictions, probabilities = run_experiment_neural(
-            pdv_train, train_labels_fit, pdv_val, val_labels, pdv_test, test_labels,
-            strategy, flip_prob_levels
-        )
-        
-        per_flip, summary, per_class = calculate_classification_metrics(
-            test_labels, predictions, probabilities
-        )
-        per_flip['model'] = 'DNN'
-        per_flip['rep'] = 'PDV'
-        per_flip['strategy'] = strategy
-        all_results.append(per_flip)
-        per_flip.to_csv(results_dir / f'DNN_PDV_{strategy}.csv', index=False)
-        
-        # Save calibration data for Phase 3
-        if strategy == 'uniform':
-            calib_data = []
-            for flip_prob in flip_prob_levels:
-                for i in range(len(test_labels)):
-                    calib_data.append({
-                        'flip_prob': flip_prob,
-                        'sample_idx': i,
-                        'y_true': test_labels[i],
-                        'y_pred': predictions[flip_prob][i],
-                        'probability': probabilities[flip_prob][i]
-                    })
-            all_calibration_data.append(('DNN', 'PDV', pd.DataFrame(calib_data)))
-    
-    # -------------------------------------------------------------------------
-    # Pair 7: DNN + SNS (neural with SNS)
-    # -------------------------------------------------------------------------
-    print("\n[7/7] DNN + SNS...")
-    
-    for strategy in strategies:
-        print(f"  Strategy: {strategy}")
-        predictions, probabilities = run_experiment_neural(
-            sns_train, train_labels_fit, sns_val, val_labels, sns_test, test_labels,
-            strategy, flip_prob_levels
-        )
-        
-        per_flip, summary, per_class = calculate_classification_metrics(
-            test_labels, predictions, probabilities
-        )
-        per_flip['model'] = 'DNN'
-        per_flip['rep'] = 'SNS'
-        per_flip['strategy'] = strategy
-        all_results.append(per_flip)
-        per_flip.to_csv(results_dir / f'DNN_SNS_{strategy}.csv', index=False)
+    print("MHG-GNN (pretrained)...")
+    mhggnn_train = create_mhg_gnn(train_smiles_fit)
+    mhggnn_test = create_mhg_gnn(test_smiles)
     
     # =========================================================================
-    # PHASE 2: PROBABILISTIC COMPARISON
+    # EXPERIMENTS
     # =========================================================================
     print("\n" + "="*80)
-    print("PHASE 2: PROBABILISTIC COMPARISON (uniform strategy only)")
+    print("RUNNING EXPERIMENTS")
     print("="*80)
-    print("Testing RF with and without probability calibration on ECFP4...")
     
-    strategy = 'uniform'
-    injector = NoiseInjectorClassification(strategy=strategy, random_state=42)
+    # Define experiment configurations
+    experiments = [
+        # RF experiments
+        ('RF', 'ECFP4', ecfp4_train, None, ecfp4_test, 
+         lambda: RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1, class_weight='balanced'), None),
+        ('RF', 'PDV', pdv_train, None, pdv_test,
+         lambda: RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1, class_weight='balanced'), None),
+        ('RF', 'SNS', sns_train, None, sns_test,
+         lambda: RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1, class_weight='balanced'), None),
+        ('RF', 'MHG-GNN-pretrained', mhggnn_train, None, mhggnn_test,
+         lambda: RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1, class_weight='balanced'), None),
+    ]
     
-    uncalibrated_predictions = {}
-    uncalibrated_probabilities = {}
-    calibrated_predictions = {}
-    calibrated_probabilities = {}
+    # XGBoost experiments
+    if HAS_XGBOOST:
+        experiments.extend([
+            ('XGBoost', 'ECFP4', ecfp4_train, None, ecfp4_test,
+             lambda: XGBClassifier(n_estimators=100, random_state=42, eval_metric='logloss'), None),
+            ('XGBoost', 'PDV', pdv_train, None, pdv_test,
+             lambda: XGBClassifier(n_estimators=100, random_state=42, eval_metric='logloss'), None),
+        ])
     
-    for flip_prob in flip_prob_levels:
-        print(f"  flip_prob={flip_prob:.1f}...", end='')
+    # GP experiments
+    if HAS_GP:
+        experiments.extend([
+            ('GP', 'ECFP4', ecfp4_train, None, ecfp4_test,
+             lambda: GaussianProcessClassifier(kernel=ConstantKernel(1.0) * RBF(1.0), random_state=42, n_jobs=-1), None),
+            ('GP', 'PDV', pdv_train, None, pdv_test,
+             lambda: GaussianProcessClassifier(kernel=ConstantKernel(1.0) * RBF(1.0), random_state=42, n_jobs=-1), None),
+        ])
+    
+    # Neural network experiments
+    for model_type in ['deterministic', 'full-bnn', 'last-layer-bnn', 'var-bnn']:
+        if model_type != 'deterministic' and not HAS_BAYESIAN_TORCH:
+            continue
         
-        # Inject noise
-        if flip_prob == 0.0:
-            y_noisy = train_labels_fit
-        else:
-            y_noisy = injector.inject(train_labels_fit, flip_prob)
+        model_name = {'deterministic': 'DNN', 'full-bnn': 'Full-BNN', 
+                     'last-layer-bnn': 'LastLayer-BNN', 'var-bnn': 'Var-BNN'}[model_type]
         
-        # Train uncalibrated RF
-        rf_uncal = RandomForestClassifier(n_estimators=100, random_state=42,
-                                         n_jobs=-1, class_weight='balanced')
-        rf_uncal.fit(ecfp4_train, y_noisy)
-        uncalibrated_predictions[flip_prob] = rf_uncal.predict(ecfp4_test)
-        uncalibrated_probabilities[flip_prob] = rf_uncal.predict_proba(ecfp4_test)[:, 1]
+        experiments.extend([
+            (model_name, 'ECFP4', ecfp4_train, ecfp4_val, ecfp4_test, None, model_type),
+            (model_name, 'PDV', pdv_train, pdv_val, pdv_test, None, model_type),
+            (model_name, 'SNS', sns_train, sns_val, sns_test, None, model_type),
+        ])
+    
+    # Run all experiments
+    for idx, (model_name, rep_name, X_train, X_val, X_test, model_fn, model_type) in enumerate(experiments, 1):
+        print(f"\n[{idx}/{len(experiments)}] {model_name} + {rep_name}...")
         
-        # Train calibrated RF (isotonic calibration)
-        rf_cal = RandomForestClassifier(n_estimators=100, random_state=42,
-                                       n_jobs=-1, class_weight='balanced')
-        rf_calibrated = CalibratedClassifierCV(rf_cal, method='isotonic', cv=3)
-        rf_calibrated.fit(ecfp4_train, y_noisy)
-        calibrated_predictions[flip_prob] = rf_calibrated.predict(ecfp4_test)
-        calibrated_probabilities[flip_prob] = rf_calibrated.predict_proba(ecfp4_test)[:, 1]
-        
-        print(" done")
-    
-    # Calculate metrics for both
-    per_flip_uncal, summary_uncal, _ = calculate_classification_metrics(
-        test_labels, uncalibrated_predictions, uncalibrated_probabilities
-    )
-    per_flip_uncal['model'] = 'RF-uncalibrated'
-    per_flip_uncal['rep'] = 'ECFP4'
-    per_flip_uncal['strategy'] = strategy
-    per_flip_uncal.to_csv(results_dir / 'RF_ECFP4_uncalibrated_uniform.csv', index=False)
-    
-    per_flip_cal, summary_cal, _ = calculate_classification_metrics(
-        test_labels, calibrated_predictions, calibrated_probabilities
-    )
-    per_flip_cal['model'] = 'RF-calibrated'
-    per_flip_cal['rep'] = 'ECFP4'
-    per_flip_cal['strategy'] = strategy
-    per_flip_cal.to_csv(results_dir / 'RF_ECFP4_calibrated_uniform.csv', index=False)
-    
-    print("\nComparison (uniform strategy):")
-    print(f"  Uncalibrated - NSI(accuracy): {summary_uncal['nsi_accuracy'].values[0]:.4f}")
-    print(f"  Calibrated   - NSI(accuracy): {summary_cal['nsi_accuracy'].values[0]:.4f}")
+        for strategy in strategies:
+            print(f"  Strategy: {strategy}")
+            
+            if model_fn is not None:
+                # Tree-based model
+                predictions, probabilities = run_experiment_tree_model(
+                    X_train, train_labels_fit, X_test, test_labels,
+                    model_fn, strategy, flip_prob_levels
+                )
+            else:
+                # Neural network
+                predictions, probabilities = run_experiment_neural(
+                    X_train, train_labels_fit, X_val, val_labels, X_test, test_labels,
+                    model_type, strategy, flip_prob_levels
+                )
+            
+            per_flip, summary, per_class = calculate_classification_metrics(
+                test_labels, predictions, probabilities
+            )
+            per_flip['model'] = model_name
+            per_flip['rep'] = rep_name
+            per_flip['strategy'] = strategy
+            all_results.append(per_flip)
+            
+            filename = f"{model_name.replace('-', '')}_{rep_name.replace('-', '')}_{strategy}.csv"
+            per_flip.to_csv(results_dir / filename, index=False)
+            
+            # Save calibration data for uniform strategy
+            if strategy == 'uniform' and model_name in ['RF', 'DNN', 'Full-BNN']:
+                calib_data = []
+                for flip_prob in flip_prob_levels:
+                    for i in range(len(test_labels)):
+                        calib_data.append({
+                            'flip_prob': flip_prob,
+                            'sample_idx': i,
+                            'y_true': test_labels[i],
+                            'y_pred': predictions[flip_prob][i],
+                            'probability': probabilities[flip_prob][i]
+                        })
+                all_calibration_data.append((model_name, rep_name, pd.DataFrame(calib_data)))
     
     # =========================================================================
-    # PHASE 3: UNCERTAINTY QUANTIFICATION
+    # CALIBRATION ANALYSIS
     # =========================================================================
     print("\n" + "="*80)
-    print("PHASE 3: PROBABILITY CALIBRATION ANALYSIS (uniform strategy only)")
+    print("PROBABILITY CALIBRATION ANALYSIS (uniform strategy only)")
     print("="*80)
     
     # Save all calibration data
     for model_name, rep_name, calib_df in all_calibration_data:
-        calib_df.to_csv(
-            results_dir / f'{model_name}_{rep_name}_calibration_values.csv',
-            index=False
-        )
+        filename = f'{model_name.replace("-", "")}_{rep_name.replace("-", "")}_calibration_values.csv'
+        calib_df.to_csv(results_dir / filename, index=False)
         print(f"Saved {model_name} + {rep_name} calibration data")
         
         # Calculate Brier score per flip_prob
@@ -577,11 +635,7 @@ def main():
     combined_df = pd.concat(all_results, ignore_index=True)
     combined_df.to_csv(results_dir / 'all_results.csv', index=False)
     
-    # Debug: Print column names
-    print("\nAvailable columns in combined_df:")
-    print(combined_df.columns.tolist())
-    
-    # Find AUC column name (could be 'auc', 'roc_auc', 'auroc', etc.)
+    # Find AUC column name
     auc_col = None
     for col in combined_df.columns:
         if 'auc' in col.lower() and 'pr' not in col.lower():
@@ -589,8 +643,7 @@ def main():
             break
     
     if auc_col is None:
-        print("\nWARNING: Could not find AUC column. Available columns:", combined_df.columns.tolist())
-        print("Skipping summary table generation.")
+        print("\nWARNING: Could not find AUC column.")
         return
     
     print(f"\nUsing AUC column: {auc_col}")

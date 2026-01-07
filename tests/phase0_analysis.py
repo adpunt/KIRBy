@@ -73,6 +73,11 @@ MODEL_COLORS = {
     'MPNN': '#d62728',
 }
 
+mlp_mtl_models = ['mlp', 'mlp_bnn_full', 'mlp_bnn_last', 'mlp_bnn_variational',
+                      'residual_mlp', 'residual_mlp_bnn_full', 'residual_mlp_bnn_last',
+                      'residual_mlp_bnn_variational',
+                      'mtl', 'mtl_bnn_full', 'mtl_bnn_last', 'mtl_bnn_variational']
+
 # ============================================================================
 # FORMATTING HELPERS
 # ============================================================================
@@ -178,6 +183,9 @@ def load_old_phase0c_data(results_dir="../../qsar_qm_models/results"):
     print(f"Final aggregated data: {len(results)} rows")
     print(f"Unique models: {results['model'].nunique()}")
     print(f"Unique representations: {results['representation'].nunique()}")
+
+    # Filter out MTL/MLP
+    results = results[~results['model'].isin(mlp_mtl_models)]
     
     return results
 
@@ -239,6 +247,9 @@ def load_new_graph_data(results_dir="results"):
     
     print(f"Final aggregated data: {len(results)} rows")
     print(f"Models: {sorted(results['model'].unique())}")
+
+    # Filter out MTL/MLP
+    results = results[~results['model'].isin(mlp_mtl_models)]
     
     return results
 
