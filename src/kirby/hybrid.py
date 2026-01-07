@@ -112,6 +112,84 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
     return allocation, history
 
 
+def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, val_labels,
+                                  total_budget=100):
+    """
+    Allocate features proportional to each representation's baseline performance.
+    
+    Tests each representation individually on validation set, then allocates budget
+    proportional to their R² scores. Better performing reps get more features.
+    
+    Args:
+        rep_dict_train: Dict of {rep_name: train_features}
+        rep_dict_val: Dict of {rep_name: val_features}
+        train_labels: Training labels
+        val_labels: Validation labels
+        total_budget: Maximum total features to select (default: 100)
+        
+    Returns:
+        dict: Allocation of {rep_name: n_features}
+    """
+    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.metrics import r2_score
+    
+    print(f"  Performance-weighted allocation (budget={total_budget}):")
+    
+    baseline_scores = {}
+    
+    # Test each representation individually
+    for rep_name, X_train in rep_dict_train.items():
+        X_val = rep_dict_val[rep_name]
+        
+        # Clean and scale
+        X_train_clean = np.clip(X_train, -1e10, 1e10)
+        X_train_clean = np.nan_to_num(X_train_clean, nan=0.0, posinf=1e10, neginf=-1e10)
+        X_val_clean = np.clip(X_val, -1e10, 1e10)
+        X_val_clean = np.nan_to_num(X_val_clean, nan=0.0, posinf=1e10, neginf=-1e10)
+        
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train_clean)
+        X_val_scaled = scaler.transform(X_val_clean)
+        
+        # Train and evaluate
+        model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+        model.fit(X_train_scaled, train_labels)
+        y_pred = model.predict(X_val_scaled)
+        
+        r2 = r2_score(val_labels, y_pred)
+        baseline_scores[rep_name] = max(r2, 0.0)  # Clip negative R² to 0
+        
+        print(f"    {rep_name:8s}: val R²={r2:.4f}")
+    
+    # Allocate proportional to performance
+    total_score = sum(baseline_scores.values())
+    
+    if total_score == 0:
+        # Fallback: equal allocation
+        allocation = {rep: total_budget // len(rep_dict_train) for rep in rep_dict_train.keys()}
+    else:
+        allocation = {}
+        for rep_name, score in baseline_scores.items():
+            # Allocate proportional to R² score
+            n_features = int(round((score / total_score) * total_budget))
+            # Ensure we don't exceed available features
+            max_features = rep_dict_train[rep_name].shape[1]
+            allocation[rep_name] = min(n_features, max_features)
+    
+    # Adjust to hit budget exactly (distribute remainder to best performer)
+    current_total = sum(allocation.values())
+    if current_total < total_budget:
+        best_rep = max(baseline_scores.items(), key=lambda x: x[1])[0]
+        max_features = rep_dict_train[best_rep].shape[1]
+        allocation[best_rep] = min(allocation[best_rep] + (total_budget - current_total), max_features)
+    
+    print(f"    Allocation: {allocation}")
+    print(f"    Total: {sum(allocation.values())}/{total_budget} features")
+    
+    return allocation
+
+
 def _create_hybrid_with_allocation(rep_dict, labels, allocation, importance_method='random_forest'):
     """Helper: Create hybrid with specific allocation"""
     selected_features = []
@@ -412,6 +490,7 @@ def create_hybrid(base_reps, labels,
         
         allocation_method: Method for allocating features across representations
             - 'greedy': Adaptive allocation via greedy forward selection (default)
+            - 'performance_weighted': Allocate proportional to baseline R² scores
             - 'fixed': Equal allocation (n_per_rep for all)
             
         n_per_rep: Number of features per rep (for 'fixed' method, default: 100)
@@ -484,6 +563,42 @@ def create_hybrid(base_reps, labels,
         # Add allocation to feature_info for reference
         feature_info['allocation'] = allocation
         feature_info['greedy_history'] = history
+    
+    # PERFORMANCE-WEIGHTED ALLOCATION
+    elif allocation_method == 'performance_weighted':
+        # Split into train/val to test baselines
+        n_samples = len(labels)
+        n_val = int(n_samples * validation_split)
+        
+        # Shuffle indices
+        indices = np.random.RandomState(42).permutation(n_samples)
+        train_idx = indices[n_val:]
+        val_idx = indices[:n_val]
+        
+        # Split data
+        rep_dict_train = {name: X[train_idx] for name, X in base_reps.items()}
+        rep_dict_val = {name: X[val_idx] for name, X in base_reps.items()}
+        train_labels = labels[train_idx]
+        val_labels = labels[val_idx]
+        
+        # Run performance-weighted allocation
+        allocation = allocate_performance_weighted(
+            rep_dict_train, rep_dict_val, train_labels, val_labels,
+            total_budget=budget
+        )
+        
+        # Compute importance on full data
+        importance_scores = compute_feature_importance(
+            base_reps, labels, method=importance_method, **kwargs
+        )
+        
+        # Create final hybrid with optimal allocation
+        hybrid_features, feature_info = concatenate_features(
+            base_reps, importance_scores, allocation
+        )
+        
+        # Add allocation to feature_info for reference
+        feature_info['allocation'] = allocation
         
     # FIXED ALLOCATION (BACKWARDS COMPATIBLE)
     elif allocation_method == 'fixed':
@@ -503,6 +618,6 @@ def create_hybrid(base_reps, labels,
     
     else:
         raise ValueError(f"Unknown allocation_method: {allocation_method}. "
-                        f"Choose 'greedy' or 'fixed'")
+                        f"Choose 'greedy', 'performance_weighted', or 'fixed'")
     
     return hybrid_features, feature_info
