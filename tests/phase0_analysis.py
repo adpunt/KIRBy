@@ -1014,17 +1014,35 @@ def create_figure2_representation_effects(df, metrics_df, output_dir):
     # Panel D: Degradation across noise
     ax_d = fig.add_subplot(gs[1, 0])
     
-    # Exclude model-representation pairs with ANY catastrophic failure (R² < 0 at any sigma)
-    bad_pairs = df[df['r2'] < 0][['model', 'representation']].drop_duplicates()
+    print(f"\n{'='*80}")
+    print("PANEL D DEBUG - GRAPH REPRESENTATION")
+    print(f"{'='*80}")
     
-    df_panel_d = df.copy()
-    for _, row in bad_pairs.iterrows():
-        mask = (df_panel_d['model'] == row['model']) & (df_panel_d['representation'] == row['representation'])
-        df_panel_d = df_panel_d[~mask]
+    # Check raw graph data
+    graph_data_raw = df[df['representation'] == 'graph'].copy()
+    print(f"\nRaw graph data: {len(graph_data_raw)} rows")
+    print(f"Unique models in graph: {sorted(graph_data_raw['model'].unique())}")
+    print(f"Unique sigmas in graph: {sorted(graph_data_raw['sigma'].unique())}")
     
-    print(f"\n  Panel D: Excluded {len(bad_pairs)} model-rep pairs with catastrophic failures:")
-    for _, row in bad_pairs.iterrows():
-        print(f"    - {row['model']}/{row['representation']}")
+    # HARDCODED EXCLUSION: Remove full Bayesian GNNs
+    exclude_models = ['gcn_bnn_full', 'mpnn_bnn_full', 'gin_bnn_full', 'gat_bnn_full']
+    df_panel_d = df[~((df['model'].isin(exclude_models)) & (df['representation'] == 'graph'))].copy()
+    
+    graph_data_filtered = df_panel_d[df_panel_d['representation'] == 'graph'].copy()
+    print(f"\nAfter filtering {exclude_models}:")
+    print(f"  Filtered graph data: {len(graph_data_filtered)} rows")
+    print(f"  Remaining models: {sorted(graph_data_filtered['model'].unique())}")
+    
+    # Check specific problem sigmas
+    for test_sigma in [0.5, 0.6, 0.7, 0.8]:
+        sigma_data = graph_data_filtered[np.abs(graph_data_filtered['sigma'] - test_sigma) < 0.05]
+        print(f"\n  Sigma {test_sigma}: {len(sigma_data)} rows")
+        if len(sigma_data) > 0:
+            print(f"    Models: {sorted(sigma_data['model'].unique())}")
+            print(f"    R² range: [{sigma_data['r2'].min():.3f}, {sigma_data['r2'].max():.3f}]")
+            print(f"    Median R²: {sigma_data['r2'].median():.3f}")
+        else:
+            print(f"    NO DATA AT THIS SIGMA!")
     
     representations = sorted(df_panel_d['representation'].unique())
     for rep in representations:
@@ -1032,14 +1050,21 @@ def create_figure2_representation_effects(df, metrics_df, output_dir):
         if len(rep_data) == 0:
             continue
         avg_by_sigma = rep_data.groupby('sigma')['r2'].median().reset_index()
+        
+        if rep == 'graph':
+            print(f"\nGraph median by sigma:")
+            print(avg_by_sigma)
+        
         color = REPRESENTATION_COLORS.get(rep, '#999999')
         ax_d.plot(avg_by_sigma['sigma'], avg_by_sigma['r2'],
                  marker='o', markersize=4, linewidth=2, alpha=0.8,
                  label=format_representation(rep), color=color)
     
+    print(f"{'='*80}\n")
+    
     ax_d.set_xlabel('Noise level (σ)', fontsize=9)
     ax_d.set_ylabel('Median R²', fontsize=9)
-    ax_d.set_title('D. Performance Across Noise Levels\n(Median, catastrophic failures excluded)', 
+    ax_d.set_title('D. Performance Across Noise Levels\n(Median, full Bayesian GNNs excluded)', 
                    fontsize=9, fontweight='bold', pad=10)
     ax_d.legend(fontsize=7, loc='best', frameon=True, framealpha=0.9, ncol=2)
     ax_d.spines['top'].set_visible(False)
