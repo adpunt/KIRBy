@@ -26,6 +26,7 @@ Expected results:
 - New KIRBy reps (MHG-GNN) competitive with baselines
 
 NOTE: Gauche GP skipped - import causes segfault
+FIXED: Removed batch_size parameter from create_mhg_gnn calls (was causing segfault)
 """
 
 import numpy as np
@@ -425,8 +426,8 @@ def main():
     # Pair 4: RF + MHG-GNN pretrained (new with KIRBy)
     # -------------------------------------------------------------------------
     print("\n[4/9] RF + MHG-GNN (pretrained)...")
-    mhggnn_train = create_mhg_gnn(train_smiles_fit, batch_size=32)
-    mhggnn_test = create_mhg_gnn(test_smiles, batch_size=32)
+    mhggnn_train = create_mhg_gnn(train_smiles_fit)
+    mhggnn_test = create_mhg_gnn(test_smiles)
     
     for strategy in strategies:
         print(f"  Strategy: {strategy}")

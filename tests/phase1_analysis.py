@@ -750,8 +750,7 @@ def main(old_results_dir="../../qsar_qm_models/results",
         print("ERROR: No data loaded!")
         return
     
-    metrics_df, outliers = calculate_robustness_metrics(df, sigma_high=0.6)  # <-- CHANGED
-    
+    metrics_df = calculate_robustness_metrics(df, sigma_high=0.6)    
     output_dir = Path(new_results_dir) / "phase1_figures_combined"
     output_dir.mkdir(exist_ok=True, parents=True)
     
