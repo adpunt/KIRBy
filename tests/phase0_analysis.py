@@ -112,8 +112,11 @@ def format_representation(rep):
 
 def format_model(model):
     """Format model names for display - IMPROVED"""
+    if model is None:
+        return 'Unknown'
+    
     # First normalize to lowercase for matching
-    model_lower = model.lower()
+    model_lower = str(model).lower().strip()
     
     # Direct mappings for simple models
     simple_map = {
@@ -125,12 +128,13 @@ def format_model(model):
         'mlp': 'MLP',
         'gauche': 'GP',
         'svm': 'SVM',
+        'gp': 'GP',
     }
     
     if model_lower in simple_map:
         return simple_map[model_lower]
     
-    # Handle GNN variants
+    # Handle GNN variants - check these BEFORE simple base matches
     gnn_base = {'gcn': 'GCN', 'gin': 'GIN', 'gat': 'GAT', 'mpnn': 'MPNN'}
     
     for base, formatted in gnn_base.items():
@@ -141,6 +145,8 @@ def format_model(model):
                 return f'{formatted}-BNN-Last'
             elif 'bnn_variational' in model_lower or 'bnn_var' in model_lower:
                 return f'{formatted}-BNN-Var'
+            elif model_lower == base:  # Exact match only
+                return formatted
             else:
                 return formatted
     
@@ -156,13 +162,13 @@ def format_model(model):
     
     # Handle conformal variants
     if 'conformal' in model_lower:
-        parts = model_lower.replace('conformal_', '').split('_')
-        base_model = parts[0]
-        formatted_base = simple_map.get(base_model, base_model.upper())
-        return f'Conformal-{formatted_base}'
+        remainder = model_lower.replace('conformal_', '').replace('conformal-', '')
+        # Recursively format the base model
+        formatted_base = format_model(remainder)
+        return f'CF-{formatted_base}'
     
-    # Fallback: capitalize
-    return model.replace('_', '-').title()
+    # Fallback: capitalize and replace underscores
+    return str(model).replace('_', '-').upper()
 
 
 def format_config_label(model, rep):
@@ -518,7 +524,26 @@ def define_robustness_score(metrics_df):
 
 def get_valid_metrics(metrics_df):
     """Return only valid (non-catastrophic) configurations"""
-    return metrics_df[metrics_df['is_valid']].copy()
+    # Ensure is_valid column exists and is boolean
+    if 'is_valid' not in metrics_df.columns:
+        print("WARNING: is_valid column not found, creating it")
+        metrics_df['is_valid'] = metrics_df['baseline_r2'] >= MIN_BASELINE_R2
+    
+    valid = metrics_df[metrics_df['is_valid'] == True].copy()
+    
+    # Double-check: also filter by baseline and retention
+    valid = valid[valid['baseline_r2'] >= MIN_BASELINE_R2]
+    valid = valid[valid['retention_pct'].notna()]
+    valid = valid[(valid['retention_pct'] >= 0) & (valid['retention_pct'] <= 150)]
+    
+    print(f"get_valid_metrics: {len(valid)} of {len(metrics_df)} configs are valid")
+    
+    # Debug: show any invalid configs
+    invalid_count = len(metrics_df) - len(valid)
+    if invalid_count > 0:
+        print(f"  Excluded {invalid_count} invalid/catastrophic configs")
+    
+    return valid
 
 
 def get_valid_data(df, metrics_df):
@@ -673,6 +698,11 @@ def create_figure1_global_landscape(df, metrics_df, output_dir):
     # Panel A: Top 20
     ax_a = fig.add_subplot(gs[0, 0])
     top_20 = valid_metrics.nlargest(20, 'robustness_score').sort_values('robustness_score')
+    
+    print(f"Top 20 configs for Panel A:")
+    for _, row in top_20.iterrows():
+        print(f"  {row['model']}/{row['representation']}: score={row['robustness_score']:.3f}")
+    
     y_pos = np.arange(len(top_20))
     bar_colors = [REPRESENTATION_COLORS.get(rep, '#999999') for rep in top_20['representation']]
     
@@ -685,6 +715,7 @@ def create_figure1_global_landscape(df, metrics_df, output_dir):
                  va='center', fontsize=7, color='black')
     
     ax_a.set_yticks(y_pos)
+    # Use format_config_label for clean labels
     labels = [format_config_label(row['model'], row['representation']) 
               for _, row in top_20.iterrows()]
     ax_a.set_yticklabels(labels, fontsize=8)
@@ -696,9 +727,14 @@ def create_figure1_global_landscape(df, metrics_df, output_dir):
     ax_a.set_xlim(0, max(top_20['robustness_score']) * 1.25)
     ax_a.grid(True, axis='x', alpha=0.3, linestyle=':', linewidth=0.5)
     
-    # Panel B: Bottom 20 (of VALID configs - not catastrophic failures)
+    # Panel B: Bottom 20 of VALID configs
     ax_b = fig.add_subplot(gs[1, 0])
     bottom_20 = valid_metrics.nsmallest(20, 'robustness_score').sort_values('robustness_score', ascending=False)
+    
+    print(f"\nBottom 20 valid configs for Panel B:")
+    for _, row in bottom_20.iterrows():
+        print(f"  {row['model']}/{row['representation']}: score={row['robustness_score']:.3f}, retention={row['retention_pct']:.1f}%")
+    
     y_pos = np.arange(len(bottom_20))
     bar_colors = [REPRESENTATION_COLORS.get(rep, '#999999') for rep in bottom_20['representation']]
     
@@ -715,7 +751,7 @@ def create_figure1_global_landscape(df, metrics_df, output_dir):
               for _, row in bottom_20.iterrows()]
     ax_b.set_yticklabels(labels, fontsize=8)
     ax_b.set_xlabel('Robustness Score', fontsize=10)
-    ax_b.set_title('B. Bottom 20 Least Robust Configurations (Valid Only)', 
+    ax_b.set_title('B. Bottom 20 Least Robust (Valid Only)', 
                    fontsize=11, fontweight='bold', pad=12)
     ax_b.spines['top'].set_visible(False)
     ax_b.spines['right'].set_visible(False)
@@ -725,6 +761,10 @@ def create_figure1_global_landscape(df, metrics_df, output_dir):
     # Panel C: Heatmap - IMPROVED ordering with Graph on right
     ax_c = fig.add_subplot(gs[2, 0])
     
+    # CRITICAL: Use only valid metrics - this excludes catastrophic failures
+    print(f"\nHeatmap using {len(valid_metrics)} valid configs")
+    print(f"Excluded invalid: {len(metrics_df) - len(valid_metrics)} configs")
+    
     # Pivot with valid metrics only
     heatmap_data = valid_metrics.pivot_table(
         index='model',
@@ -733,15 +773,19 @@ def create_figure1_global_landscape(df, metrics_df, output_dir):
         aggfunc='mean'
     )
     
-    # Order representations: fingerprints first, then Graph on right
+    # CRITICAL: Verify no negative values
+    print(f"Retention range: {heatmap_data.min().min():.1f}% to {heatmap_data.max().max():.1f}%")
+    
+    # Order representations: fingerprints first, then Graph LAST (on right)
     rep_order = ['ecfp4', 'pdv', 'sns', 'smiles', 'randomized_smiles', 'graph']
     rep_order = [r for r in rep_order if r in heatmap_data.columns]
     heatmap_data = heatmap_data[rep_order]
     
-    # Sort models by mean retention
-    heatmap_data = heatmap_data.loc[heatmap_data.mean(axis=1).sort_values(ascending=False).index]
+    # Sort models by mean retention (descending)
+    model_means = heatmap_data.mean(axis=1).sort_values(ascending=False)
+    heatmap_data = heatmap_data.loc[model_means.index]
     
-    # Format labels
+    # Format labels BEFORE plotting
     formatted_models = [format_model(m) for m in heatmap_data.index]
     formatted_reps = [format_representation(r) for r in heatmap_data.columns]
     
@@ -766,12 +810,12 @@ def create_figure1_global_landscape(df, metrics_df, output_dir):
                 ax_c.text(j, i, f'{value:.0f}', ha='center', va='center',
                          color=text_color, fontsize=7, fontweight='bold')
     
-    ax_c.set_title('C. Retention (%) at High Noise — Valid Configurations Only', 
+    ax_c.set_title('C. Retention (%) at High Noise — Valid Configurations Only\n(Catastrophic Failures Excluded)', 
                    fontsize=10, fontweight='bold', pad=10)
     ax_c.set_xlabel('Representation', fontsize=9)
     ax_c.set_ylabel('Model', fontsize=9)
     
-    # Add vertical line before Graph column
+    # Add vertical line before Graph column if present
     if 'graph' in rep_order:
         graph_idx = rep_order.index('graph')
         ax_c.axvline(x=graph_idx - 0.5, color='black', linewidth=2, linestyle='-')
@@ -796,16 +840,19 @@ def create_supplementary_degradation_curves(df, metrics_df, output_dir):
     
     fig, ax = plt.subplots(1, 1, figsize=(10, 7))
     
-    # Top 5 from valid metrics
+    # Top 5 from valid metrics only
     top_5 = valid_metrics.nlargest(5, 'robustness_score')
-    # Bottom 5 from valid metrics (not catastrophic failures)
+    # Bottom 5 from valid metrics (NOT catastrophic failures - these are the worst VALID configs)
     bottom_5 = valid_metrics.nsmallest(5, 'robustness_score')
     
-    # Color palettes for clear distinction
-    top_colors = ['#1a9850', '#66bd63', '#a6d96a', '#d9ef8b', '#ffffbf']
-    bottom_colors = ['#d73027', '#f46d43', '#fdae61', '#fee08b', '#ffffbf']
+    print(f"Top 5 configs: {list(top_5['model'].values)}")
+    print(f"Bottom 5 valid configs: {list(bottom_5['model'].values)}")
     
-    # Plot top 5 with solid lines
+    # Distinct color palettes
+    top_colors = ['#1a9850', '#66bd63', '#a6d96a', '#d9ef8b', '#91cf60']
+    bottom_colors = ['#d73027', '#f46d43', '#fdae61', '#fee08b', '#fc8d59']
+    
+    # Plot top 5 with solid lines and circle markers
     for idx, (_, row) in enumerate(top_5.iterrows()):
         model, rep = row['model'], row['representation']
         pair_data = df[(df['model'] == model) & (df['representation'] == rep)].sort_values('sigma')
@@ -813,12 +860,12 @@ def create_supplementary_degradation_curves(df, metrics_df, output_dir):
         if len(pair_data) == 0:
             continue
         
-        label = f"{format_model(model)}/{format_representation(rep)}"
+        label = format_config_label(model, rep)
         ax.plot(pair_data['sigma'], pair_data['r2'], 
-                marker='o', markersize=5, linewidth=2.5, alpha=0.9,
-                label=f"⬆ {label}", color=top_colors[idx], linestyle='-')
+                marker='o', markersize=6, linewidth=2.5, alpha=0.9,
+                label=f"↑ {label}", color=top_colors[idx], linestyle='-')
     
-    # Plot bottom 5 with dashed lines
+    # Plot bottom 5 valid with dashed lines and square markers
     for idx, (_, row) in enumerate(bottom_5.iterrows()):
         model, rep = row['model'], row['representation']
         pair_data = df[(df['model'] == model) & (df['representation'] == rep)].sort_values('sigma')
@@ -826,26 +873,30 @@ def create_supplementary_degradation_curves(df, metrics_df, output_dir):
         if len(pair_data) == 0:
             continue
         
-        label = f"{format_model(model)}/{format_representation(rep)}"
+        label = format_config_label(model, rep)
         ax.plot(pair_data['sigma'], pair_data['r2'], 
-                marker='s', markersize=5, linewidth=2.5, alpha=0.9,
-                label=f"⬇ {label}", color=bottom_colors[idx], linestyle='--')
+                marker='s', markersize=5, linewidth=2, alpha=0.8,
+                label=f"↓ {label}", color=bottom_colors[idx], linestyle='--')
     
     ax.set_xlabel('Noise level (σ)', fontsize=11)
     ax.set_ylabel('R² score', fontsize=11)
-    ax.set_title('R² Degradation: Top 5 vs Bottom 5 Valid Configurations', 
+    ax.set_title('R² Degradation: Best vs Worst Valid Configurations\n(Catastrophic Failures Excluded)', 
                  fontsize=12, fontweight='bold', pad=15)
     
-    # Improved legend - two columns, clear grouping
-    ax.legend(fontsize=8, loc='upper right', ncol=2, frameon=True, 
-              framealpha=0.95, edgecolor='gray',
-              title='⬆ Most Robust    ⬇ Least Robust', title_fontsize=9)
+    # Split legend into two columns
+    ax.legend(fontsize=8, loc='lower left', ncol=2, frameon=True, 
+              framealpha=0.95, edgecolor='gray', fancybox=True,
+              title='↑ Most Robust          ↓ Least Robust (Valid)', title_fontsize=9)
     
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
     ax.grid(True, alpha=0.3, linestyle=':', linewidth=0.5)
-    ax.set_ylim(bottom=0)
+    ax.set_ylim(bottom=0, top=1.0)
     ax.set_xlim(-0.02, 1.02)
+    
+    # Add reference lines
+    ax.axhline(0.5, color='gray', linestyle=':', alpha=0.3, linewidth=1)
+    ax.text(1.0, 0.52, 'R²=0.5', fontsize=7, color='gray', ha='right')
     
     output_path = Path(output_dir) / "supplementary_degradation_curves.png"
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
@@ -1089,64 +1140,86 @@ def create_supplementary_s1(metrics_df, output_dir):
     
     fig, ax = plt.subplots(figsize=(10, 8))
     
-    # Plot ALL data first (including invalid)
+    # Get valid and invalid separately
+    valid_metrics = get_valid_metrics(metrics_df)
+    invalid_metrics = metrics_df[~metrics_df['is_valid']]
+    
+    print(f"Valid configs: {len(valid_metrics)}, Invalid: {len(invalid_metrics)}")
+    
+    # Plot valid data points (main cluster)
     representations = metrics_df['representation'].unique()
     for rep in representations:
-        rep_data = metrics_df[metrics_df['representation'] == rep]
-        color = REPRESENTATION_COLORS.get(rep, '#999999')
-        ax.scatter(rep_data['baseline_r2'], rep_data['retention_pct'],
-                  alpha=0.7, s=60, color=color, label=format_representation(rep).upper(),
-                  edgecolors='black', linewidth=0.5)
+        rep_data = valid_metrics[valid_metrics['representation'] == rep]
+        if len(rep_data) > 0:
+            color = REPRESENTATION_COLORS.get(rep, '#999999')
+            ax.scatter(rep_data['baseline_r2'], rep_data['retention_pct'],
+                      alpha=0.7, s=60, color=color, label=format_representation(rep),
+                      edgecolors='black', linewidth=0.5)
     
-    # Reference lines
-    ax.axvline(0.8, color='gray', linestyle='--', linewidth=1, alpha=0.5)
-    ax.axhline(80, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+    # Plot invalid data points separately (marked as failures)
+    for _, row in invalid_metrics.iterrows():
+        ax.scatter(row['baseline_r2'], row['retention_pct'],
+                  alpha=0.5, s=100, color='red', marker='x', linewidth=2)
+    
+    # Reference lines at median of valid data
+    median_baseline = valid_metrics['baseline_r2'].median()
+    median_retention = valid_metrics['retention_pct'].median()
+    ax.axvline(median_baseline, color='gray', linestyle='--', linewidth=1, alpha=0.5,
+              label=f'Median baseline: {median_baseline:.2f}')
+    ax.axhline(median_retention, color='gray', linestyle=':', linewidth=1, alpha=0.5,
+              label=f'Median retention: {median_retention:.0f}%')
     
     ax.set_xlabel('Baseline R² (σ=0)', fontsize=10)
     ax.set_ylabel('Retention at σ=0.6 (%)', fontsize=10)
-    ax.set_title('Supplementary S1: Baseline vs Retention\n(All Configurations)', 
+    ax.set_title('Supplementary S1: Baseline vs Retention\n(Red X = Catastrophic Failures)', 
                  fontsize=11, fontweight='bold', pad=15)
     ax.legend(fontsize=8, loc='lower left', ncol=2, frameon=True, framealpha=0.9)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
     ax.grid(True, alpha=0.3, linestyle=':', linewidth=0.5)
     
-    # Add zoomed inset for main cluster
-    axins = inset_axes(ax, width="45%", height="45%", loc='upper right',
-                       bbox_to_anchor=(0.02, 0.02, 0.96, 0.96),
-                       bbox_transform=ax.transAxes)
+    # Set axis limits to show outliers but not distort too much
+    ax.set_xlim(-0.05, 0.95)
+    
+    # Create INSET showing zoomed main cluster
+    from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+    
+    axins = inset_axes(ax, width="40%", height="40%", loc='center right',
+                       bbox_to_anchor=(0, 0.1, 1, 1), bbox_transform=ax.transAxes)
     
     # Plot only valid configs in inset
-    valid_metrics = get_valid_metrics(metrics_df)
     for rep in representations:
         rep_data = valid_metrics[valid_metrics['representation'] == rep]
         if len(rep_data) > 0:
             color = REPRESENTATION_COLORS.get(rep, '#999999')
             axins.scatter(rep_data['baseline_r2'], rep_data['retention_pct'],
-                         alpha=0.7, s=40, color=color,
+                         alpha=0.7, s=30, color=color,
                          edgecolors='black', linewidth=0.3)
     
     # Set inset limits to focus on main cluster
     axins.set_xlim(0.55, 0.92)
-    axins.set_ylim(68, 102)
+    axins.set_ylim(70, 100)
     axins.set_xlabel('Baseline R²', fontsize=7)
     axins.set_ylabel('Retention (%)', fontsize=7)
     axins.tick_params(labelsize=6)
     axins.grid(True, alpha=0.3, linestyle=':', linewidth=0.3)
-    axins.set_title('Main Cluster (Valid Only)', fontsize=8, fontweight='bold')
+    axins.set_title('Main Cluster\n(Valid Only)', fontsize=8, fontweight='bold')
+    axins.set_facecolor('white')
     
-    # Mark the inset region on main plot
-    mark_inset(ax, axins, loc1=2, loc2=4, fc="none", ec="0.5", linestyle='--')
+    # Add box around inset
+    for spine in axins.spines.values():
+        spine.set_edgecolor('black')
+        spine.set_linewidth(1.5)
     
-    # Annotate outliers
-    invalid_metrics = metrics_df[~metrics_df['is_valid']]
+    # Annotate the catastrophic failures
     for _, row in invalid_metrics.iterrows():
+        model_name = format_model(row['model'])
         if row['retention_pct'] < -100:
-            ax.annotate(f"{format_model(row['model'])}\n(catastrophic)", 
-                       xy=(row['baseline_r2'], row['retention_pct']),
-                       xytext=(0.15, row['retention_pct'] + 50),
-                       fontsize=7, ha='center',
-                       arrowprops=dict(arrowstyle='->', color='red', lw=0.5))
+            ax.annotate(f"{model_name}\n(Catastrophic)", 
+                       xy=(row['baseline_r2'], max(row['retention_pct'], -600)),
+                       xytext=(0.15, -400),
+                       fontsize=7, ha='center', color='red',
+                       arrowprops=dict(arrowstyle='->', color='red', lw=0.8))
     
     output_path = Path(output_dir) / "supplementary_s1_baseline_vs_retention.png"
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
@@ -1167,35 +1240,41 @@ def create_supplementary_s2(metrics_df, output_dir):
     # Use valid metrics only
     valid_metrics = get_valid_metrics(metrics_df)
     
-    fig = plt.figure(figsize=(10, 8))
-    gs = fig.add_gridspec(2, 2, hspace=0.35, wspace=0.30)
+    fig = plt.figure(figsize=(12, 9))
+    gs = fig.add_gridspec(2, 2, hspace=0.40, wspace=0.35,
+                          left=0.08, right=0.95, top=0.93, bottom=0.08)
     
     # Panel A: NSI histogram (valid only)
     ax_a = fig.add_subplot(gs[0, 0])
-    ax_a.hist(valid_metrics['nsi_r2'].dropna(), bins=25, 
+    nsi_data = valid_metrics['nsi_r2'].dropna()
+    ax_a.hist(nsi_data, bins=25, 
              color='#3498db', alpha=0.7, edgecolor='black', linewidth=0.8)
-    median_val = valid_metrics['nsi_r2'].median()
+    median_val = nsi_data.median()
     ax_a.axvline(median_val, color='red', linestyle='--', 
-                linewidth=2, label=f'Median = {median_val:.4f}')
+                linewidth=2, label=f'Median = {median_val:.3f}')
     ax_a.axvline(0, color='black', linestyle='-', linewidth=1, alpha=0.5)
     ax_a.set_xlabel('NSI (R²)', fontsize=9)
     ax_a.set_ylabel('Frequency', fontsize=9)
-    ax_a.set_title('A. Distribution of NSI\n(Valid Configurations)', fontsize=10, fontweight='bold')
+    ax_a.set_title('A. Distribution of NSI\n(Valid Configurations Only)', fontsize=10, fontweight='bold')
     ax_a.legend(fontsize=8)
     ax_a.spines['top'].set_visible(False)
     ax_a.spines['right'].set_visible(False)
     ax_a.grid(True, axis='y', alpha=0.3, linestyle=':', linewidth=0.5)
     
-    # Panel B: NSI by representation (valid only)
+    # Panel B: NSI by representation (valid only) - EXCLUDE GRAPH or annotate
     ax_b = fig.add_subplot(gs[0, 1])
-    rep_order = valid_metrics.groupby('representation')['nsi_r2'].apply(
+    
+    # Exclude graph from this panel since its low NSI is misleading
+    valid_no_graph = valid_metrics[valid_metrics['representation'] != 'graph']
+    
+    rep_order = valid_no_graph.groupby('representation')['nsi_r2'].apply(
         lambda x: np.abs(x).median()
     ).sort_values().index
     
     valid_rep_data = []
     valid_rep_names = []
     for rep in rep_order:
-        data = valid_metrics[valid_metrics['representation'] == rep]['nsi_r2'].dropna()
+        data = valid_no_graph[valid_no_graph['representation'] == rep]['nsi_r2'].dropna()
         if len(data) >= 2:
             valid_rep_data.append(data)
             valid_rep_names.append(rep)
@@ -1217,49 +1296,75 @@ def create_supplementary_s2(metrics_df, output_dir):
     ax_b.set_xticklabels([format_representation(r) for r in valid_rep_names], 
                          rotation=45, ha='right')
     ax_b.set_ylabel('NSI (R²)', fontsize=9)
-    ax_b.set_title('B. NSI by Representation\n(Valid Configurations)', fontsize=10, fontweight='bold')
+    ax_b.set_title('B. NSI by Representation\n(Graph Excluded — See Note)', fontsize=10, fontweight='bold')
     ax_b.spines['top'].set_visible(False)
     ax_b.spines['right'].set_visible(False)
     ax_b.grid(True, axis='y', alpha=0.3, linestyle=':', linewidth=0.5)
     
+    # Add note about graph
+    ax_b.text(0.98, 0.02, 'Note: Graph NSI near 0 reflects\nfailure (R²≈0), not robustness',
+             transform=ax_b.transAxes, fontsize=7, ha='right', va='bottom',
+             style='italic', color='gray',
+             bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+    
     # Panel C: RMSE NSI (valid only)
     ax_c = fig.add_subplot(gs[1, 0])
-    ax_c.hist(valid_metrics['nsi_rmse'].dropna(), bins=25, 
+    rmse_data = valid_metrics['nsi_rmse'].dropna()
+    ax_c.hist(rmse_data, bins=25, 
              color='#e74c3c', alpha=0.7, edgecolor='black', linewidth=0.8)
-    median_rmse = valid_metrics['nsi_rmse'].median()
+    median_rmse = rmse_data.median()
     ax_c.axvline(median_rmse, color='blue', linestyle='--', 
-                linewidth=2, label=f'Median = {median_rmse:.4f}')
+                linewidth=2, label=f'Median = {median_rmse:.3f}')
     ax_c.set_xlabel('NSI (RMSE)', fontsize=9)
     ax_c.set_ylabel('Frequency', fontsize=9)
-    ax_c.set_title('C. Distribution of NSI (RMSE)\n(Valid Configurations)', fontsize=10, fontweight='bold')
+    ax_c.set_title('C. Distribution of NSI (RMSE)\n(Valid Configurations Only)', fontsize=10, fontweight='bold')
     ax_c.legend(fontsize=8)
     ax_c.spines['top'].set_visible(False)
     ax_c.spines['right'].set_visible(False)
     ax_c.grid(True, axis='y', alpha=0.3, linestyle=':', linewidth=0.5)
     
-    # Panel D: NSI by model - IMPROVED: show most SENSITIVE (worst NSI)
+    # Panel D: Most noise-SENSITIVE models (worst NSI = most degradation)
     ax_d = fig.add_subplot(gs[1, 1])
     
-    # Sort by absolute NSI (most negative = most sensitive to noise)
+    # Sort by NSI (most negative = most sensitive to noise = WORST)
     model_nsi = valid_metrics.groupby('model')['nsi_r2'].median().sort_values()
-    top_sensitive = model_nsi.head(10)  # Most negative NSI = most degradation
+    most_sensitive = model_nsi.head(12)  # Most negative NSI
     
-    colors = ['#e74c3c' if nsi < -0.3 else '#f39c12' if nsi < -0.2 else '#3498db' 
-              for nsi in top_sensitive.values]
+    # Color by severity
+    colors = []
+    for nsi in most_sensitive.values:
+        if nsi < -0.4:
+            colors.append('#c0392b')  # Dark red - very sensitive
+        elif nsi < -0.3:
+            colors.append('#e74c3c')  # Red
+        elif nsi < -0.2:
+            colors.append('#f39c12')  # Orange
+        else:
+            colors.append('#3498db')  # Blue - less sensitive
     
-    y_pos = np.arange(len(top_sensitive))
-    ax_d.barh(y_pos, top_sensitive.values, color=colors, alpha=0.8, 
-             edgecolor='black', linewidth=0.5)
+    y_pos = np.arange(len(most_sensitive))
+    bars = ax_d.barh(y_pos, most_sensitive.values, color=colors, alpha=0.8, 
+                    edgecolor='black', linewidth=0.5)
+    
+    # Format model names properly
+    formatted_names = [format_model(m) for m in most_sensitive.index]
+    
     ax_d.set_yticks(y_pos)
-    ax_d.set_yticklabels([format_model(m) for m in top_sensitive.index], fontsize=8)
+    ax_d.set_yticklabels(formatted_names, fontsize=8)
     ax_d.axvline(0, color='black', linestyle='--', linewidth=1, alpha=0.5)
     ax_d.set_xlabel('Median NSI (R²)', fontsize=9)
-    ax_d.set_title('D. Most Noise-Sensitive Models\n(Lower = More Degradation)', 
+    ax_d.set_title('D. Most Noise-Sensitive Models\n(More Negative = Greater Performance Loss)', 
                    fontsize=10, fontweight='bold')
     ax_d.spines['top'].set_visible(False)
     ax_d.spines['right'].set_visible(False)
     ax_d.grid(True, axis='x', alpha=0.3, linestyle=':', linewidth=0.5)
     
+    # Add value labels
+    for i, (bar, val) in enumerate(zip(bars, most_sensitive.values)):
+        ax_d.text(val - 0.02, i, f'{val:.2f}', ha='right', va='center', 
+                 fontsize=7, color='white', fontweight='bold')
+    
+    plt.tight_layout()
     output_path = Path(output_dir) / "supplementary_s2_nsi_distributions.png"
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     print(f"✓ Saved Supplementary S2 to {output_path}")
