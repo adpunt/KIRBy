@@ -71,6 +71,15 @@ ALLOCATION_METHODS = ['performance_weighted', 'greedy']
 # Filter options to test
 FILTER_OPTIONS = [False, True]
 
+# Default hybrid config (from QM9 HOMO-LUMO gap optimization)
+QM9_GAP_DEFAULT_HYBRID = {
+    'combo': 'pdv+mhggnn',
+    'budget': 100,
+    'allocation': 'greedy',
+    'filtered': False,
+    'feature_allocation': {'pdv': 35, 'mhggnn': 10}
+}
+
 # Distance metrics - now all supported via precomputed distances (scipy.cdist)
 DISTANCE_METRICS = [
     'euclidean',      # L2 norm
@@ -632,13 +641,14 @@ def test_dataset(
     train_labels: np.ndarray,
     test_smiles: List[str],
     test_labels: np.ndarray,
-    results_dir: Path
+    results_dir: Path,
+    use_default_hybrid: bool = False
 ) -> List[Dict]:
     """
     Test noise mitigation methods: best hybrid vs its component bases.
     
     1. Create all base representations (filtered + unfiltered)
-    2. Find best hybrid (combo + budget + allocation + filter)
+    2. Find best hybrid (combo + budget + allocation + filter) OR use default
     3. Capture clean baseline metrics
     4. Run full tests on: component bases + single best hybrid (σ=0.3, 0.6 only)
     """
@@ -686,17 +696,52 @@ def test_dataset(
         print(f"  {name}: {unfiltered_train[name].shape[1]} → {filtered_train[name].shape[1]}")
     
     # ========================================================================
-    # FIND BEST HYBRID (comprehensive search)
+    # GET HYBRID CONFIG (search or use default)
     # ========================================================================
-    (best_combo, best_budget, best_allocation, best_filtered,
-     base_train, base_test, hybrid_train, hybrid_test, hybrid_info) = find_best_hybrid(
-        filtered_reps_train=filtered_train,
-        unfiltered_reps_train=unfiltered_train,
-        train_labels=train_labels,
-        filtered_reps_test=filtered_test,
-        unfiltered_reps_test=unfiltered_test,
-        test_labels=test_labels
-    )
+    if use_default_hybrid:
+        print("\n" + "="*60)
+        print("USING DEFAULT HYBRID CONFIG (skipping search)")
+        print("="*60)
+        cfg = QM9_GAP_DEFAULT_HYBRID
+        best_combo = cfg['combo']
+        best_budget = cfg['budget']
+        best_allocation = cfg['allocation']
+        best_filtered = cfg['filtered']
+        
+        print(f"  Combo:      {best_combo}")
+        print(f"  Budget:     {best_budget}")
+        print(f"  Allocation: {best_allocation}")
+        print(f"  Filtered:   {best_filtered}")
+        
+        # Use unfiltered since filtered=False in default
+        base_train = unfiltered_train
+        base_test = unfiltered_test
+        
+        # Build hybrid with default config
+        rep_names = best_combo.split('+')
+        reps_train = {k: base_train[k] for k in rep_names}
+        reps_test = {k: base_test[k] for k in rep_names}
+        
+        hybrid_train, hybrid_info = create_hybrid(
+            reps_train, train_labels,
+            allocation_method=best_allocation,
+            budget=best_budget,
+            validation_split=0.2,
+            apply_filters=False
+        )
+        hybrid_test = apply_feature_selection(reps_test, hybrid_info)
+        
+        print(f"  Hybrid dims: {hybrid_train.shape[1]}")
+    else:
+        (best_combo, best_budget, best_allocation, best_filtered,
+         base_train, base_test, hybrid_train, hybrid_test, hybrid_info) = find_best_hybrid(
+            filtered_reps_train=filtered_train,
+            unfiltered_reps_train=unfiltered_train,
+            train_labels=train_labels,
+            filtered_reps_test=filtered_test,
+            unfiltered_reps_test=unfiltered_test,
+            test_labels=test_labels
+        )
     
     # ========================================================================
     # CAPTURE CLEAN BASELINE METRICS (σ=0.0, no full experiments)
@@ -988,7 +1033,7 @@ def analyze_hybrid_advantage(results_df: pd.DataFrame, dataset_name: str, output
 # MAIN
 # ============================================================================
 
-def main():
+def main(dataset='both', use_default_hybrid=False):
     results_dir = Path("results/noise_robustness_v3")
     results_dir.mkdir(parents=True, exist_ok=True)
     
@@ -1012,42 +1057,46 @@ def main():
     # ========================================================================
     # QM9 DATASET
     # ========================================================================
-    print("\n" + "="*100)
-    print("LOADING QM9")
-    print("="*100)
-    
-    raw_data = load_qm9(n_samples=N_SAMPLES_QM9, property_idx=4)  # 4 = HOMO-LUMO gap (PyG ordering)
-    splits = get_qm9_splits(raw_data, splitter='scaffold')
-    
-    qm9_train_smiles = splits['train']['smiles'] + splits['val']['smiles']
-    qm9_train_labels = np.concatenate([splits['train']['labels'], splits['val']['labels']])
-    qm9_test_smiles = splits['test']['smiles']
-    qm9_test_labels = splits['test']['labels']
-    
-    qm9_results = test_dataset(
-        'QM9', qm9_train_smiles, qm9_train_labels,
-        qm9_test_smiles, qm9_test_labels, results_dir
-    )
-    all_dataset_results['QM9'] = qm9_results
+    if dataset in ['qm9', 'both']:
+        print("\n" + "="*100)
+        print("LOADING QM9")
+        print("="*100)
+        
+        raw_data = load_qm9(n_samples=N_SAMPLES_QM9, property_idx=4)  # 4 = HOMO-LUMO gap (PyG ordering)
+        splits = get_qm9_splits(raw_data, splitter='scaffold')
+        
+        qm9_train_smiles = splits['train']['smiles'] + splits['val']['smiles']
+        qm9_train_labels = np.concatenate([splits['train']['labels'], splits['val']['labels']])
+        qm9_test_smiles = splits['test']['smiles']
+        qm9_test_labels = splits['test']['labels']
+        
+        qm9_results = test_dataset(
+            'QM9', qm9_train_smiles, qm9_train_labels,
+            qm9_test_smiles, qm9_test_labels, results_dir,
+            use_default_hybrid=use_default_hybrid
+        )
+        all_dataset_results['QM9'] = qm9_results
     
     # ========================================================================
     # ESOL DATASET
     # ========================================================================
-    print("\n" + "="*100)
-    print("LOADING ESOL")
-    print("="*100)
-    
-    esol_data = load_esol_combined(splitter='scaffold')
-    
-    esol_results = test_dataset(
-        'ESOL',
-        esol_data['train']['smiles'],
-        esol_data['train']['labels'],
-        esol_data['test']['smiles'],
-        esol_data['test']['labels'],
-        results_dir
-    )
-    all_dataset_results['ESOL'] = esol_results
+    if dataset in ['esol', 'both']:
+        print("\n" + "="*100)
+        print("LOADING ESOL")
+        print("="*100)
+        
+        esol_data = load_esol_combined(splitter='scaffold')
+        
+        esol_results = test_dataset(
+            'ESOL',
+            esol_data['train']['smiles'],
+            esol_data['train']['labels'],
+            esol_data['test']['smiles'],
+            esol_data['test']['labels'],
+            results_dir,
+            use_default_hybrid=use_default_hybrid
+        )
+        all_dataset_results['ESOL'] = esol_results
     
     # ========================================================================
     # ANALYSIS
@@ -1083,4 +1132,10 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--dataset', choices=['qm9', 'esol', 'both'], default='both')
+    parser.add_argument('--use-default-hybrid', action='store_true', 
+                        help='Skip hybrid selection, use QM9_GAP_DEFAULT_HYBRID config')
+    args = parser.parse_args()
+    main(dataset=args.dataset, use_default_hybrid=args.use_default_hybrid)
