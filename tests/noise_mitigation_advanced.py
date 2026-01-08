@@ -555,15 +555,26 @@ def run_representation_experiments(
     
     weighting_options = [False, True]
     
-    # Precompute distance matrices for all (metric, weighted) combinations
+    # Precompute distance matrices (with disk caching)
     print(f"    Precomputing distance matrices...")
     distance_cache = {}
+    cache_dir = Path(f".distance_cache/{rep_name}")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    
     for metric in DISTANCE_METRICS:
         for weighted in weighting_options:
             key = (metric, weighted)
-            weights = feature_weights if weighted else None
-            distance_cache[key] = compute_distance_matrix(X_train, metric, weights)
-    print(f"    Computed {len(distance_cache)} distance matrices")
+            cache_file = cache_dir / f"{metric}_weighted{weighted}.npy"
+            
+            if cache_file.exists():
+                distance_cache[key] = np.load(cache_file)
+            else:
+                weights = feature_weights if weighted else None
+                D = compute_distance_matrix(X_train, metric, weights)
+                np.save(cache_file, D)
+                distance_cache[key] = D
+    
+    print(f"    Loaded/computed {len(distance_cache)} distance matrices")
     
     # Build configs: (method_name, distance_metric, weighted)
     configs = []
