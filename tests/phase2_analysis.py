@@ -45,26 +45,29 @@ plt.rcParams.update({
 })
 
 # Consistent model set for all figures
+# Primary models for non-graph representations
 CORE_MODELS = ['qrf', 'ngboost', 'bnn_full', 'gauche']
-GRAPH_MODELS = ['gcn_bnn_full', 'gat_bnn_full', 'gin_bnn_full']
-ALL_MODELS = CORE_MODELS + GRAPH_MODELS
+# Primary models for graph representations (exclude gauche - it's GP-based, not GNN)
+GRAPH_CORE_MODELS = ['gcn_bnn_full', 'gat_bnn_full', 'gin_bnn_full']
+# Models that actually work for UQ (for Figure 7 cross-rep comparison)
+GOOD_UQ_MODELS = ['qrf', 'ngboost']  # These show actual uncertainty-error correlation
 
 MODEL_COLORS = {
     'qrf': '#3498db',
     'ngboost': '#e74c3c',
     'bnn_full': '#2ecc71',
-    'bnn_last': '#95a5a6',
+    'bnn_last': '#27ae60',
     'bnn_variational': '#9b59b6',
     'gauche': '#f39c12',
     'gcn_bnn_full': '#1abc9c',
     'gcn_bnn_last': '#16a085',
-    'gcn_bnn_variational': '#d35400',
+    'gcn_bnn_variational': '#148f77',
     'gat_bnn_full': '#9b59b6',
     'gat_bnn_last': '#8e44ad',
-    'gat_bnn_variational': '#2c3e50',
+    'gat_bnn_variational': '#7d3c98',
     'gin_bnn_full': '#e67e22',
-    'gin_bnn_last': '#c0392b',
-    'gin_bnn_variational': '#7f8c8d',
+    'gin_bnn_last': '#d35400',
+    'gin_bnn_variational': '#ba4a00',
 }
 
 MODEL_MARKERS = {
@@ -75,9 +78,47 @@ MODEL_MARKERS = {
     'bnn_variational': 'D',
     'gauche': 'p',
     'gcn_bnn_full': 'o',
+    'gcn_bnn_last': 'v',
+    'gcn_bnn_variational': 'D',
     'gat_bnn_full': 's',
+    'gat_bnn_last': '<',
+    'gat_bnn_variational': '>',
     'gin_bnn_full': '^',
+    'gin_bnn_last': 'p',
+    'gin_bnn_variational': 'h',
 }
+
+# Display names for cleaner labels
+MODEL_DISPLAY_NAMES = {
+    'qrf': 'QRF',
+    'ngboost': 'NGBoost', 
+    'bnn_full': 'BNN-Full',
+    'bnn_last': 'BNN-Last',
+    'bnn_variational': 'BNN-Var',
+    'gauche': 'GAUCHE',
+    'gcn_bnn_full': 'GCN-Full',
+    'gcn_bnn_last': 'GCN-Last',
+    'gcn_bnn_variational': 'GCN-Var',
+    'gat_bnn_full': 'GAT-Full',
+    'gat_bnn_last': 'GAT-Last',
+    'gat_bnn_variational': 'GAT-Var',
+    'gin_bnn_full': 'GIN-Full',
+    'gin_bnn_last': 'GIN-Last',
+    'gin_bnn_variational': 'GIN-Var',
+}
+
+REP_DISPLAY_NAMES = {
+    'graph': 'Graph',
+    'pdv': 'PDV',
+    'smiles_ohe': 'SMILES-OHE',
+    'sns': 'SNS',
+}
+
+def get_display_name(model):
+    return MODEL_DISPLAY_NAMES.get(model, model)
+
+def get_rep_display_name(rep):
+    return REP_DISPLAY_NAMES.get(rep, rep)
 
 # ============================================================================
 # DATA LOADING
@@ -270,16 +311,46 @@ def calculate_decomposition(uncertainty_df):
     return decomp_df
 
 
-def get_consistent_models(metrics_df, rep):
-    """Get models that exist for this representation, prioritizing core models"""
-    available = set(metrics_df[metrics_df['representation'] == rep]['model_name'].unique())
+def get_consistent_models(metrics_df, rep, max_models=4):
+    """Get models that exist for this representation, prioritizing models with good data"""
+    rep_data = metrics_df[metrics_df['representation'] == rep]
+    available = set(rep_data['model_name'].unique())
+    
+    # Check which models have sufficient data (at least 3 sigma levels)
+    good_models = []
+    for model in available:
+        model_data = rep_data[rep_data['model_name'] == model]
+        if len(model_data['sigma'].unique()) >= 3:
+            good_models.append(model)
+    
+    available = set(good_models)
     
     if 'graph' in rep.lower():
-        priority_models = GRAPH_MODELS + ['gauche']
+        # For graph, prioritize actual GNN models (not gauche)
+        priority_models = GRAPH_CORE_MODELS
     else:
         priority_models = CORE_MODELS
     
-    return [m for m in priority_models if m in available]
+    result = [m for m in priority_models if m in available]
+    
+    # Cap at max_models to avoid cluttered legends
+    return result[:max_models]
+
+
+def get_scatter_models(metrics_df, rep):
+    """Get exactly 2 models for scatter plot comparison - pick the best ones"""
+    rep_data = metrics_df[metrics_df['representation'] == rep]
+    available = set(rep_data['model_name'].unique())
+    
+    if 'graph' in rep.lower():
+        # For graph, show one GNN and gauche for comparison
+        candidates = ['gcn_bnn_full', 'gat_bnn_full', 'gauche']
+    else:
+        # For non-graph, QRF and NGBoost are the most informative
+        candidates = ['qrf', 'ngboost', 'bnn_full', 'gauche']
+    
+    result = [m for m in candidates if m in available]
+    return result[:2]
 
 
 # ============================================================================
@@ -293,8 +364,8 @@ def create_figure4(uncertainty_df, metrics_df, output_dir):
     FIXES:
     - Separate scatter subpanels per model (no overlap)
     - Consistent y-axis scaling across rows
-    - Removed misleading r=0.5 threshold
-    - Added transparency and jitter to scatter
+    - Clean styling without garish colored zones
+    - Sequential panel labels
     """
     print("\n" + "="*80)
     print("GENERATING FIGURE 4 (FIXED)")
@@ -307,11 +378,15 @@ def create_figure4(uncertainty_df, metrics_df, output_dir):
         print("⚠️  No data available")
         return
     
-    # Calculate global y-axis limits for consistency
-    global_corr_min = metrics_df['correlation'].min() - 0.05
-    global_corr_max = min(1.0, metrics_df['correlation'].max() + 0.05)
+    # Calculate global y-axis limits for UQ Quality consistency
+    valid_corr = metrics_df['correlation'].dropna()
+    if len(valid_corr) > 0:
+        global_corr_min = max(-0.2, valid_corr.min() - 0.05)
+        global_corr_max = min(1.0, valid_corr.max() + 0.05)
+    else:
+        global_corr_min, global_corr_max = -0.2, 0.6
     
-    fig = plt.figure(figsize=(20, 5*n_rows))
+    fig = plt.figure(figsize=(18, 4.5*n_rows))
     
     # 4 columns: 2 scatter subpanels + correlation + inflation
     gs = fig.add_gridspec(n_rows, 4, hspace=0.35, wspace=0.28,
@@ -322,17 +397,19 @@ def create_figure4(uncertainty_df, metrics_df, output_dir):
     
     for row_idx, rep in enumerate(available_reps):
         rep_metrics = metrics_df[metrics_df['representation'] == rep]
-        available_models = get_consistent_models(metrics_df, rep)
+        scatter_models = get_scatter_models(metrics_df, rep)
+        line_models = get_consistent_models(metrics_df, rep)
         
-        if len(available_models) == 0:
+        if len(scatter_models) == 0:
             continue
         
-        print(f"  {rep}: {available_models}")
+        rep_name = get_rep_display_name(rep)
+        print(f"  {rep}: scatter={scatter_models}, lines={line_models}")
         
         # ====================================================================
-        # Panels A-B: Separate scatter plots per model (FIXED: no overlap)
+        # Panels A-B: Separate scatter plots per model
         # ====================================================================
-        for scatter_idx, model in enumerate(available_models[:2]):
+        for scatter_idx, model in enumerate(scatter_models):
             ax = fig.add_subplot(gs[row_idx, scatter_idx])
             
             data = uncertainty_df[
@@ -341,10 +418,13 @@ def create_figure4(uncertainty_df, metrics_df, output_dir):
                 (np.abs(uncertainty_df['sigma'] - 0.3) < 0.05)
             ]
             
-            if len(data) < 100:
-                ax.text(0.5, 0.5, f'Insufficient data\n({len(data)} samples)',
-                       ha='center', va='center', transform=ax.transAxes)
-                ax.set_title(f'{chr(65 + panel_idx)}. {model}', fontweight='bold')
+            if len(data) < 50:
+                ax.text(0.5, 0.5, f'Insufficient data\n(n={len(data)})',
+                       ha='center', va='center', transform=ax.transAxes, fontsize=10)
+                ax.set_title(f'{chr(65 + panel_idx)}. {rep_name}: {get_display_name(model)}', 
+                            fontweight='bold')
+                ax.set_xticks([])
+                ax.set_yticks([])
                 panel_idx += 1
                 continue
             
@@ -358,83 +438,73 @@ def create_figure4(uncertainty_df, metrics_df, output_dir):
             valid = ~(np.isnan(errors) | np.isnan(uncertainties))
             errors, uncertainties = errors[valid], uncertainties[valid]
             
-            if len(errors) < 50:
-                ax.text(0.5, 0.5, 'Insufficient valid data',
-                       ha='center', va='center', transform=ax.transAxes)
+            if len(errors) < 30:
+                ax.text(0.5, 0.5, 'Insufficient valid data', ha='center', va='center', 
+                       transform=ax.transAxes)
                 panel_idx += 1
                 continue
             
             color = MODEL_COLORS.get(model, '#999999')
             
-            # FIXED: High transparency, slight jitter for visibility
-            jitter_x = np.random.normal(0, uncertainties.std() * 0.02, len(uncertainties))
-            jitter_y = np.random.normal(0, errors.std() * 0.02, len(errors))
-            
-            ax.scatter(uncertainties + jitter_x, errors + jitter_y, 
-                      s=8, alpha=0.15, color=color, edgecolors='none')
-            
-            # Add density contours for structure
-            try:
-                from scipy.stats import gaussian_kde
-                xy = np.vstack([uncertainties, errors])
-                kde = gaussian_kde(xy)
-                
-                x_grid = np.linspace(uncertainties.min(), uncertainties.max(), 50)
-                y_grid = np.linspace(errors.min(), errors.max(), 50)
-                X, Y = np.meshgrid(x_grid, y_grid)
-                Z = kde(np.vstack([X.ravel(), Y.ravel()])).reshape(X.shape)
-                
-                ax.contour(X, Y, Z, levels=5, colors=color, alpha=0.6, linewidths=0.8)
-            except Exception:
-                pass  # Skip contours if KDE fails
+            # Clean scatter with good alpha
+            ax.scatter(uncertainties, errors, s=6, alpha=0.25, color=color, 
+                      edgecolors='none', rasterized=True)
             
             # Perfect calibration line
-            max_val = max(uncertainties.max(), errors.max())
-            ax.plot([0, max_val], [0, max_val], 'k--', 
-                   alpha=0.7, linewidth=1.5, label='Perfect')
+            max_val = max(uncertainties.max(), errors.max()) * 1.05
+            ax.plot([0, max_val], [0, max_val], 'k--', alpha=0.6, linewidth=1.5, 
+                   label='y=x', zorder=10)
             
             # Correlation annotation
-            corr, _ = stats.pearsonr(uncertainties, errors)
-            ax.annotate(f'r = {corr:.3f}', xy=(0.95, 0.05), xycoords='axes fraction',
-                       ha='right', va='bottom', fontsize=9, fontweight='bold',
-                       bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+            if len(uncertainties) > 10 and uncertainties.std() > 0:
+                corr, _ = stats.pearsonr(uncertainties, errors)
+                ax.annotate(f'r = {corr:.2f}', xy=(0.95, 0.05), xycoords='axes fraction',
+                           ha='right', va='bottom', fontsize=10, fontweight='bold',
+                           bbox=dict(boxstyle='round,pad=0.3', facecolor='white', 
+                                    edgecolor='gray', alpha=0.9))
             
             ax.set_xlabel('Predicted Uncertainty')
-            ax.set_ylabel('|Error|')
-            ax.set_title(f'{chr(65 + panel_idx)}. {rep}: {model} (σ=0.3)', fontweight='bold')
-            ax.grid(alpha=0.2)
+            ax.set_ylabel('Absolute Error')
+            ax.set_title(f'{chr(65 + panel_idx)}. {rep_name}: {get_display_name(model)} (σ=0.3)', 
+                        fontweight='bold')
+            ax.set_xlim(0, None)
+            ax.set_ylim(0, None)
+            sns.despine(ax=ax)
+            panel_idx += 1
+        
+        # Fill empty scatter slots if only 1 model
+        while scatter_idx < 1:
+            scatter_idx += 1
+            ax = fig.add_subplot(gs[row_idx, scatter_idx])
+            ax.axis('off')
             panel_idx += 1
         
         # ====================================================================
-        # Panel C: UQ Quality (correlation) - FIXED: consistent y-axis
+        # Panel C: UQ Quality (correlation across σ)
         # ====================================================================
         ax = fig.add_subplot(gs[row_idx, 2])
         
-        for model in available_models:
+        for model in line_models:
             model_data = rep_metrics[rep_metrics['model_name'] == model].sort_values('sigma')
             
-            if len(model_data) > 0:
+            if len(model_data) >= 2:
                 color = MODEL_COLORS.get(model, '#999999')
                 marker = MODEL_MARKERS.get(model, 'o')
                 ax.plot(model_data['sigma'], model_data['correlation'],
                        marker=marker, linewidth=2, markersize=5, alpha=0.9,
-                       label=model, color=color)
+                       label=get_display_name(model), color=color)
         
-        # FIXED: Removed r=0.5 line - misleading since nothing reaches it
-        # Instead, shade regions for interpretation
-        ax.axhspan(0, 0.3, alpha=0.1, color='red', label='Poor (<0.3)')
-        ax.axhspan(0.3, 0.6, alpha=0.1, color='yellow')
-        ax.axhspan(0.6, 1.0, alpha=0.1, color='green')
+        # Simple reference line instead of garish zones
+        ax.axhline(0, color='gray', linestyle='-', linewidth=0.8, alpha=0.5)
+        ax.axhline(0.3, color='gray', linestyle=':', linewidth=0.8, alpha=0.5)
         
-        ax.set_xlabel('Noise level (σ)')
+        ax.set_xlabel('Noise Level (σ)')
         ax.set_ylabel('Uncertainty-Error Correlation')
-        ax.set_title(f'{chr(65 + panel_idx)}. {rep}: UQ Quality', fontweight='bold')
-        ax.legend(fontsize=7, loc='upper right', ncol=2)
-        ax.grid(alpha=0.3)
-        
-        # FIXED: Consistent y-axis across all rows
+        ax.set_title(f'{chr(65 + panel_idx)}. {rep_name}: UQ Quality', fontweight='bold')
+        ax.legend(fontsize=7, loc='best', framealpha=0.9)
         ax.set_ylim(global_corr_min, global_corr_max)
-        ax.set_xlim(-0.05, 1.05)
+        ax.set_xlim(-0.02, 1.02)
+        sns.despine(ax=ax)
         panel_idx += 1
         
         # ====================================================================
@@ -442,30 +512,31 @@ def create_figure4(uncertainty_df, metrics_df, output_dir):
         # ====================================================================
         ax = fig.add_subplot(gs[row_idx, 3])
         
-        for model in available_models:
+        for model in line_models:
             model_data = rep_metrics[rep_metrics['model_name'] == model].sort_values('sigma')
             
-            if len(model_data) > 0:
+            if len(model_data) >= 2:
                 color = MODEL_COLORS.get(model, '#999999')
                 marker = MODEL_MARKERS.get(model, 'o')
                 ax.plot(model_data['sigma'], model_data['mean_uncertainty'],
                        marker=marker, linewidth=2, markersize=5, alpha=0.9,
-                       label=model, color=color)
+                       label=get_display_name(model), color=color)
         
         # Ideal inflation line
         sigma_range = np.linspace(0, 1.0, 20)
-        baseline = rep_metrics[rep_metrics['sigma'] == 0.0]['mean_uncertainty'].median()
+        baseline_data = rep_metrics[np.abs(rep_metrics['sigma']) < 0.05]
+        if len(baseline_data) > 0:
+            baseline = baseline_data['mean_uncertainty'].median()
+            if not np.isnan(baseline):
+                ax.plot(sigma_range, baseline + sigma_range, 'k--', 
+                       linewidth=1.5, alpha=0.5, label='Ideal')
         
-        if not np.isnan(baseline):
-            ax.plot(sigma_range, baseline + sigma_range, 'k--', 
-                   linewidth=1.5, alpha=0.5, label='Ideal: base+σ')
-        
-        ax.set_xlabel('Noise level (σ)')
+        ax.set_xlabel('Noise Level (σ)')
         ax.set_ylabel('Mean Uncertainty')
-        ax.set_title(f'{chr(65 + panel_idx)}. {rep}: Uncertainty Inflation', fontweight='bold')
-        ax.legend(fontsize=7, loc='upper left', ncol=2)
-        ax.grid(alpha=0.3)
-        ax.set_xlim(-0.05, 1.05)
+        ax.set_title(f'{chr(65 + panel_idx)}. {rep_name}: Uncertainty Inflation', fontweight='bold')
+        ax.legend(fontsize=7, loc='best', framealpha=0.9)
+        ax.set_xlim(-0.02, 1.02)
+        sns.despine(ax=ax)
         panel_idx += 1
     
     output_path = Path(output_dir) / "figure4_uncertainty_error.png"
@@ -483,9 +554,9 @@ def create_figure5(uncertainty_df, metrics_df, output_dir):
     Figure 5: Calibration Analysis
     
     FIXES:
-    - Extended ECE color scale to 0.8 to capture full range
-    - Clearer calibration curve explanation
-    - Highlight broken methods (near-zero coverage)
+    - Extended ECE color scale to capture full range
+    - Cleaner coverage plot without ugly text annotations
+    - Consistent model selection
     """
     print("\n" + "="*80)
     print("GENERATING FIGURE 5 (FIXED)")
@@ -498,12 +569,12 @@ def create_figure5(uncertainty_df, metrics_df, output_dir):
         print("⚠️  No data available")
         return
     
-    # FIXED: Calculate actual ECE range for proper color scaling
+    # Calculate actual ECE range for proper color scaling
     ece_max = metrics_df['ece'].max()
     ece_vmax = max(0.5, np.ceil(ece_max * 10) / 10)  # Round up to nearest 0.1
     print(f"  ECE range: 0 - {ece_max:.3f}, using vmax={ece_vmax}")
     
-    fig = plt.figure(figsize=(18, 5*n_rows))
+    fig = plt.figure(figsize=(16, 4.5*n_rows))
     gs = fig.add_gridspec(n_rows, 3, hspace=0.40, wspace=0.30,
                           left=0.06, right=0.98, top=0.94, bottom=0.06)
     
@@ -512,15 +583,17 @@ def create_figure5(uncertainty_df, metrics_df, output_dir):
     for row_idx, rep in enumerate(available_reps):
         rep_metrics = metrics_df[metrics_df['representation'] == rep]
         available_models = get_consistent_models(metrics_df, rep)
+        rep_name = get_rep_display_name(rep)
         
         if len(available_models) == 0:
             continue
         
         # ====================================================================
-        # Panel A: Reliability diagram (FIXED: clearer axes labels)
+        # Panel A: Reliability diagram at σ=0.3
         # ====================================================================
         ax = fig.add_subplot(gs[row_idx, 0])
         
+        plotted_any = False
         for model in available_models:
             data = uncertainty_df[
                 (uncertainty_df['model_name'] == model) &
@@ -528,7 +601,7 @@ def create_figure5(uncertainty_df, metrics_df, output_dir):
                 (np.abs(uncertainty_df['sigma'] - 0.3) < 0.05)
             ]
             
-            if len(data) < 100:
+            if len(data) < 50:
                 continue
             
             errors = np.abs(data['y_true_noisy'] - data['y_pred_mean']).values
@@ -537,13 +610,16 @@ def create_figure5(uncertainty_df, metrics_df, output_dir):
             valid = ~(np.isnan(errors) | np.isnan(uncertainties))
             errors, uncertainties = errors[valid], uncertainties[valid]
             
-            if len(errors) < 50:
+            if len(errors) < 30:
                 continue
             
             # Binned reliability diagram
             n_bins = 10
-            bin_edges = np.percentile(uncertainties, np.linspace(0, 100, n_bins + 1))
-            bin_edges[-1] += 1e-8
+            try:
+                bin_edges = np.percentile(uncertainties, np.linspace(0, 100, n_bins + 1))
+                bin_edges[-1] += 1e-8
+            except Exception:
+                continue
             
             bin_centers, bin_rmse = [], []
             for i in range(n_bins):
@@ -552,72 +628,73 @@ def create_figure5(uncertainty_df, metrics_df, output_dir):
                     bin_centers.append(uncertainties[in_bin].mean())
                     bin_rmse.append(np.sqrt(np.mean(errors[in_bin]**2)))
             
-            if len(bin_centers) > 0:
+            if len(bin_centers) >= 3:
                 color = MODEL_COLORS.get(model, '#999999')
                 marker = MODEL_MARKERS.get(model, 'o')
                 ax.plot(bin_centers, bin_rmse, marker=marker, linewidth=2, 
-                       markersize=6, color=color, alpha=0.8, label=model)
+                       markersize=6, color=color, alpha=0.8, label=get_display_name(model))
+                plotted_any = True
         
         # Perfect calibration line
-        if len(ax.lines) > 0:
+        if plotted_any and len(ax.lines) > 0:
             all_vals = []
             for line in ax.lines:
-                all_vals.extend(line.get_xdata())
-                all_vals.extend(line.get_ydata())
-            max_val = max(all_vals) if all_vals else 1
-            ax.plot([0, max_val], [0, max_val], 'k--', linewidth=1.5, alpha=0.5, label='Perfect')
+                xdata, ydata = line.get_xdata(), line.get_ydata()
+                if len(xdata) > 0:
+                    all_vals.extend(xdata)
+                    all_vals.extend(ydata)
+            if all_vals:
+                max_val = max(all_vals) * 1.05
+                ax.plot([0, max_val], [0, max_val], 'k--', linewidth=1.5, alpha=0.5, label='Perfect')
         
-        ax.set_xlabel('Mean Predicted Uncertainty (per bin)')
-        ax.set_ylabel('Observed RMSE (per bin)')
-        ax.set_title(f'{chr(65 + panel_idx)}. {rep}: Reliability Diagram (σ=0.3)', fontweight='bold')
-        ax.legend(fontsize=7, loc='upper left')
-        ax.grid(alpha=0.3)
+        ax.set_xlabel('Mean Predicted Uncertainty')
+        ax.set_ylabel('Observed RMSE')
+        ax.set_title(f'{chr(65 + panel_idx)}. {rep_name}: Reliability (σ=0.3)', fontweight='bold')
+        ax.legend(fontsize=7, loc='upper left', framealpha=0.9)
+        ax.set_xlim(0, None)
+        ax.set_ylim(0, None)
+        sns.despine(ax=ax)
         panel_idx += 1
         
         # ====================================================================
-        # Panel B: Coverage across σ - FIXED: highlight broken methods
+        # Panel B: Coverage across σ
         # ====================================================================
         ax = fig.add_subplot(gs[row_idx, 1])
         
         for model in available_models:
             model_data = rep_metrics[rep_metrics['model_name'] == model].sort_values('sigma')
             
-            if len(model_data) > 0:
+            if len(model_data) >= 2:
                 color = MODEL_COLORS.get(model, '#999999')
                 marker = MODEL_MARKERS.get(model, 'o')
                 coverage = model_data['coverage_1std'] * 100
                 
-                # FIXED: Different line style for broken methods (coverage < 10%)
-                if coverage.mean() < 10:
-                    linestyle = ':'
-                    alpha = 0.5
-                else:
-                    linestyle = '-'
-                    alpha = 0.9
-                
+                # Use alpha to indicate poor coverage, but no special styling
                 ax.plot(model_data['sigma'], coverage,
-                       marker=marker, linewidth=2, markersize=5, 
-                       linestyle=linestyle, alpha=alpha,
-                       label=model, color=color)
+                       marker=marker, linewidth=2, markersize=5, alpha=0.9,
+                       label=get_display_name(model), color=color)
         
-        ax.axhline(68, color='red', linestyle='--', linewidth=1.5, alpha=0.6, label='Target (68%)')
-        ax.axhspan(0, 10, alpha=0.15, color='red')  # Highlight "broken" zone
-        ax.text(0.5, 5, 'BROKEN', ha='center', va='center', fontsize=8, 
-               color='red', alpha=0.7, fontweight='bold')
+        ax.axhline(68, color='#c0392b', linestyle='--', linewidth=1.5, alpha=0.7, label='Target (68%)')
+        
+        # Subtle shading for problematic region instead of ugly text
+        ax.axhspan(0, 20, alpha=0.08, color='red', zorder=0)
         
         ax.set_xlabel('Noise Level (σ)')
         ax.set_ylabel('Coverage at 1σ (%)')
-        ax.set_title(f'{chr(65 + panel_idx)}. {rep}: Coverage', fontweight='bold')
-        ax.legend(fontsize=7, loc='upper right', ncol=2)
-        ax.grid(alpha=0.3)
-        ax.set_xlim(-0.05, 1.05)
-        ax.set_ylim(0, 100)
+        ax.set_title(f'{chr(65 + panel_idx)}. {rep_name}: Coverage', fontweight='bold')
+        ax.legend(fontsize=7, loc='best', framealpha=0.9)
+        ax.set_xlim(-0.02, 1.02)
+        ax.set_ylim(0, 105)
+        sns.despine(ax=ax)
         panel_idx += 1
         
         # ====================================================================
-        # Panel C: ECE heatmap - FIXED: extended color scale
+        # Panel C: ECE heatmap
         # ====================================================================
         ax = fig.add_subplot(gs[row_idx, 2])
+        
+        # Get all models for this representation (for heatmap we can show more)
+        all_rep_models = sorted(rep_metrics['model_name'].unique())
         
         pivot = rep_metrics.pivot_table(
             values='ece',
@@ -627,7 +704,12 @@ def create_figure5(uncertainty_df, metrics_df, output_dir):
         )
         
         if len(pivot) > 0:
-            # FIXED: Extended scale and diverging colormap
+            # Reorder to put important models first
+            ordered_models = [m for m in available_models if m in pivot.index]
+            other_models = [m for m in pivot.index if m not in ordered_models]
+            new_order = ordered_models + other_models
+            pivot = pivot.reindex([m for m in new_order if m in pivot.index])
+            
             im = ax.imshow(pivot.values, cmap='RdYlGn_r', 
                           aspect='auto', vmin=0, vmax=ece_vmax)
             
@@ -636,23 +718,22 @@ def create_figure5(uncertainty_df, metrics_df, output_dir):
                 for j in range(len(pivot.columns)):
                     val = pivot.values[i, j]
                     if not np.isnan(val):
-                        # White text for dark cells, black for light
-                        text_color = 'white' if val > ece_vmax * 0.6 else 'black'
+                        text_color = 'white' if val > ece_vmax * 0.5 else 'black'
                         ax.text(j, i, f'{val:.2f}', ha='center', va='center',
-                               fontsize=6, color=text_color, fontweight='bold')
+                               fontsize=6, color=text_color)
             
             ax.set_xticks(np.arange(len(pivot.columns)))
             ax.set_yticks(np.arange(len(pivot.index)))
-            ax.set_xticklabels([f'{s:.1f}' for s in pivot.columns], fontsize=7, rotation=45)
-            ax.set_yticklabels(pivot.index, fontsize=8)
+            ax.set_xticklabels([f'{s:.1f}' for s in pivot.columns], fontsize=7)
+            ax.set_yticklabels([get_display_name(m) for m in pivot.index], fontsize=7)
             
             ax.set_xlabel('Noise Level (σ)')
             ax.set_ylabel('Model')
-            ax.set_title(f'{chr(65 + panel_idx)}. {rep}: ECE (lower=better)', fontweight='bold')
+            ax.set_title(f'{chr(65 + panel_idx)}. {rep_name}: ECE', fontweight='bold')
             
             cbar = plt.colorbar(im, ax=ax, shrink=0.8)
-            cbar.set_label('ECE', fontsize=8)
-            cbar.ax.tick_params(labelsize=7)
+            cbar.set_label('ECE (lower = better)', fontsize=7)
+            cbar.ax.tick_params(labelsize=6)
         
         panel_idx += 1
     
@@ -671,9 +752,9 @@ def create_figure6(decomp_df, output_dir):
     Figure 6: Epistemic/Aleatoric Decomposition
     
     FIXES:
-    - Removed flat ratio plots (ratios now in table)
     - Standardized y-axis scales across panels
-    - Added absolute magnitude plots instead of ratios
+    - Cleaner legends with display names
+    - Ratios annotated on bars instead of separate plot
     """
     print("\n" + "="*80)
     print("GENERATING FIGURE 6 (FIXED)")
@@ -686,12 +767,12 @@ def create_figure6(decomp_df, output_dir):
     available_reps = sorted(decomp_df['representation'].unique())
     n_rows = len(available_reps)
     
-    # FIXED: Calculate global y-axis limits for stacked bars
-    global_total_max = decomp_df.groupby(['model_name', 'representation', 'sigma']).apply(
-        lambda x: x['mean_epistemic'].iloc[0] + x['mean_aleatoric'].iloc[0]
-    ).max() * 1.1
+    # Calculate global y-axis limits
+    global_epistemic_max = decomp_df['mean_epistemic'].max() * 1.15
+    global_aleatoric_max = decomp_df['mean_aleatoric'].max() * 1.15
+    global_total_max = (decomp_df['mean_epistemic'] + decomp_df['mean_aleatoric']).max() * 1.2
     
-    fig = plt.figure(figsize=(18, 5*n_rows))
+    fig = plt.figure(figsize=(16, 4.5*n_rows))
     gs = fig.add_gridspec(n_rows, 3, hspace=0.40, wspace=0.30,
                           left=0.06, right=0.98, top=0.94, bottom=0.06)
     
@@ -699,7 +780,19 @@ def create_figure6(decomp_df, output_dir):
     
     for row_idx, rep in enumerate(available_reps):
         rep_decomp = decomp_df[decomp_df['representation'] == rep]
-        available_models = sorted(rep_decomp['model_name'].unique())
+        
+        # Get models with sufficient data
+        model_counts = rep_decomp.groupby('model_name')['sigma'].nunique()
+        available_models = [m for m in model_counts[model_counts >= 3].index]
+        
+        # Limit to reasonable number
+        if 'graph' in rep.lower():
+            priority = GRAPH_CORE_MODELS + ['gauche']
+        else:
+            priority = CORE_MODELS
+        available_models = [m for m in priority if m in available_models][:5]
+        
+        rep_name = get_rep_display_name(rep)
         
         if len(available_models) == 0:
             continue
@@ -712,81 +805,94 @@ def create_figure6(decomp_df, output_dir):
         for model in available_models:
             model_data = rep_decomp[rep_decomp['model_name'] == model].sort_values('sigma')
             
-            if len(model_data) > 0:
+            if len(model_data) >= 2:
                 color = MODEL_COLORS.get(model, '#999999')
                 marker = MODEL_MARKERS.get(model, 'o')
                 ax.plot(model_data['sigma'], model_data['mean_epistemic'],
                        marker=marker, linewidth=2, markersize=5,
-                       label=model, color=color, alpha=0.9)
+                       label=get_display_name(model), color=color, alpha=0.9)
         
         ax.set_xlabel('Noise Level (σ)')
         ax.set_ylabel('Mean Epistemic Uncertainty')
-        ax.set_title(f'{chr(65 + panel_idx)}. {rep}: Epistemic (model uncertainty)', fontweight='bold')
-        ax.legend(fontsize=7, loc='best', ncol=2)
-        ax.grid(alpha=0.3)
-        ax.set_xlim(-0.05, 1.05)
+        ax.set_title(f'{chr(65 + panel_idx)}. {rep_name}: Epistemic', fontweight='bold')
+        ax.legend(fontsize=7, loc='best', framealpha=0.9)
+        ax.set_xlim(-0.02, 1.02)
+        ax.set_ylim(0, global_epistemic_max)
+        sns.despine(ax=ax)
         panel_idx += 1
         
         # ====================================================================
-        # Panel B: Aleatoric uncertainty across noise (FIXED: replaced ratio plot)
+        # Panel B: Aleatoric uncertainty across noise
         # ====================================================================
         ax = fig.add_subplot(gs[row_idx, 1])
         
         for model in available_models:
             model_data = rep_decomp[rep_decomp['model_name'] == model].sort_values('sigma')
             
-            if len(model_data) > 0:
+            if len(model_data) >= 2:
                 color = MODEL_COLORS.get(model, '#999999')
                 marker = MODEL_MARKERS.get(model, 'o')
                 ax.plot(model_data['sigma'], model_data['mean_aleatoric'],
                        marker=marker, linewidth=2, markersize=5,
-                       label=model, color=color, alpha=0.9)
+                       label=get_display_name(model), color=color, alpha=0.9)
         
         # Ideal: aleatoric should track noise
         sigma_range = np.linspace(0, 1.0, 20)
-        ax.plot(sigma_range, sigma_range, 'k--', linewidth=1.5, alpha=0.5, label='Ideal: σ')
+        ax.plot(sigma_range, sigma_range, 'k--', linewidth=1.5, alpha=0.5, label='Ideal (σ)')
         
         ax.set_xlabel('Noise Level (σ)')
         ax.set_ylabel('Mean Aleatoric Uncertainty')
-        ax.set_title(f'{chr(65 + panel_idx)}. {rep}: Aleatoric (data noise)', fontweight='bold')
-        ax.legend(fontsize=7, loc='best', ncol=2)
-        ax.grid(alpha=0.3)
-        ax.set_xlim(-0.05, 1.05)
+        ax.set_title(f'{chr(65 + panel_idx)}. {rep_name}: Aleatoric', fontweight='bold')
+        ax.legend(fontsize=7, loc='best', framealpha=0.9)
+        ax.set_xlim(-0.02, 1.02)
+        ax.set_ylim(0, global_aleatoric_max)
+        sns.despine(ax=ax)
         panel_idx += 1
         
         # ====================================================================
-        # Panel C: Stacked bar at σ=0.3 - FIXED: standardized y-axis
+        # Panel C: Stacked bar at σ=0.3
         # ====================================================================
         ax = fig.add_subplot(gs[row_idx, 2])
         
         sigma_03 = rep_decomp[np.abs(rep_decomp['sigma'] - 0.3) < 0.05]
         
         if len(sigma_03) > 0:
-            models = [m for m in available_models if m in sigma_03['model_name'].values]
-            x = np.arange(len(models))
+            # Get models that have data at σ=0.3
+            models_with_data = [m for m in available_models 
+                               if m in sigma_03['model_name'].values]
             
-            epist = [sigma_03[sigma_03['model_name'] == m]['mean_epistemic'].mean() for m in models]
-            alea = [sigma_03[sigma_03['model_name'] == m]['mean_aleatoric'].mean() for m in models]
-            ratios = [sigma_03[sigma_03['model_name'] == m]['epistemic_aleatoric_ratio'].mean() for m in models]
-            
-            bars_alea = ax.bar(x, alea, label='Aleatoric', alpha=0.8, color='#3498db')
-            bars_epist = ax.bar(x, epist, bottom=alea, label='Epistemic', alpha=0.8, color='#e74c3c')
-            
-            # Add ratio annotations on top
-            for i, (e, a, r) in enumerate(zip(epist, alea, ratios)):
-                ax.text(i, e + a + global_total_max * 0.02, f'E/A={r:.2f}',
-                       ha='center', va='bottom', fontsize=7, fontweight='bold')
-            
-            ax.set_xticks(x)
-            ax.set_xticklabels(models, rotation=45, ha='right', fontsize=8)
-            ax.set_ylabel('Uncertainty')
-            ax.set_title(f'{chr(65 + panel_idx)}. {rep}: Decomposition (σ=0.3)', fontweight='bold')
-            ax.legend(fontsize=7, loc='upper right')
-            ax.grid(alpha=0.3, axis='y')
-            
-            # FIXED: Consistent y-axis
-            ax.set_ylim(0, global_total_max)
+            if len(models_with_data) > 0:
+                x = np.arange(len(models_with_data))
+                
+                epist = [sigma_03[sigma_03['model_name'] == m]['mean_epistemic'].mean() 
+                        for m in models_with_data]
+                alea = [sigma_03[sigma_03['model_name'] == m]['mean_aleatoric'].mean() 
+                       for m in models_with_data]
+                ratios = [sigma_03[sigma_03['model_name'] == m]['epistemic_aleatoric_ratio'].mean() 
+                         for m in models_with_data]
+                
+                ax.bar(x, alea, label='Aleatoric', alpha=0.85, color='#3498db', edgecolor='white')
+                ax.bar(x, epist, bottom=alea, label='Epistemic', alpha=0.85, color='#e74c3c', edgecolor='white')
+                
+                # Add ratio annotations
+                for i, (e, a, r) in enumerate(zip(epist, alea, ratios)):
+                    if not np.isnan(r):
+                        ax.text(i, e + a + global_total_max * 0.02, f'{r:.2f}',
+                               ha='center', va='bottom', fontsize=7, fontweight='bold')
+                
+                ax.set_xticks(x)
+                ax.set_xticklabels([get_display_name(m) for m in models_with_data], 
+                                  rotation=45, ha='right', fontsize=8)
+                ax.set_ylabel('Uncertainty')
+                ax.set_title(f'{chr(65 + panel_idx)}. {rep_name}: Decomposition (σ=0.3)', fontweight='bold')
+                ax.legend(fontsize=7, loc='upper right', framealpha=0.9)
+                ax.set_ylim(0, global_total_max)
+                
+                # Add text explaining the numbers
+                ax.text(0.98, 0.98, 'E/A ratio', transform=ax.transAxes, 
+                       ha='right', va='top', fontsize=6, style='italic', color='gray')
         
+        sns.despine(ax=ax)
         panel_idx += 1
     
     output_path = Path(output_dir) / "figure6_decomposition.png"
@@ -801,117 +907,156 @@ def create_figure6(decomp_df, output_dir):
 
 def create_figure7(metrics_df, output_dir):
     """
-    Figure 7: Cross-representation comparison for a single method
+    Figure 7: Cross-representation comparison for a consistent method
     
-    Shows how NGBoost (or best performer) behaves across all representations
+    Shows how a well-performing model behaves across all representations
     """
     print("\n" + "="*80)
-    print("GENERATING FIGURE 7 (NEW)")
+    print("GENERATING FIGURE 7 (CROSS-REP COMPARISON)")
     print("="*80)
     
-    # Pick a consistent model that exists across representations
-    model_counts = metrics_df.groupby('model_name')['representation'].nunique()
-    best_model = model_counts.idxmax() if len(model_counts) > 0 else 'ngboost'
+    # Pick a model that: 1) exists across most representations, 2) actually has good UQ
+    # Prefer NGBoost or QRF over Gauche
+    available_reps = set(metrics_df['representation'].unique())
+    
+    best_model = None
+    best_score = -1
+    
+    for model in GOOD_UQ_MODELS + CORE_MODELS:
+        model_data = metrics_df[metrics_df['model_name'] == model]
+        rep_count = model_data['representation'].nunique()
+        mean_corr = model_data['correlation'].mean()
+        
+        # Score by number of reps * mean correlation
+        if not np.isnan(mean_corr):
+            score = rep_count * (mean_corr + 0.5)  # Add offset to handle negative corr
+            if score > best_score:
+                best_score = score
+                best_model = model
+    
+    if best_model is None:
+        print("⚠️  No suitable model found for cross-rep comparison")
+        return
     
     model_data = metrics_df[metrics_df['model_name'] == best_model]
     reps = sorted(model_data['representation'].unique())
     
     if len(reps) < 2:
-        print("⚠️  Need at least 2 representations for comparison")
+        print(f"⚠️  Model {best_model} only has {len(reps)} representation(s)")
         return
     
-    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    print(f"  Selected model: {best_model} (available in {len(reps)} representations)")
+    
+    fig, axes = plt.subplots(2, 3, figsize=(14, 9))
     axes = axes.flatten()
     
-    rep_colors = plt.cm.Set2(np.linspace(0, 1, len(reps)))
+    rep_colors = {rep: plt.cm.Set2(i/len(reps)) for i, rep in enumerate(reps)}
+    
+    model_display = get_display_name(best_model)
     
     # Panel A: MAE degradation
     ax = axes[0]
-    for rep, color in zip(reps, rep_colors):
+    for rep in reps:
         rep_data = model_data[model_data['representation'] == rep].sort_values('sigma')
-        if len(rep_data) > 0:
+        if len(rep_data) >= 2:
             ax.plot(rep_data['sigma'], rep_data['mean_absolute_error'],
-                   marker='o', linewidth=2, label=rep, color=color)
+                   marker='o', linewidth=2, markersize=5,
+                   label=get_rep_display_name(rep), color=rep_colors[rep])
     ax.set_xlabel('Noise Level (σ)')
     ax.set_ylabel('MAE')
-    ax.set_title(f'A. {best_model}: MAE Degradation', fontweight='bold')
-    ax.legend(fontsize=7)
-    ax.grid(alpha=0.3)
+    ax.set_title(f'A. {model_display}: MAE Degradation', fontweight='bold')
+    ax.legend(fontsize=7, framealpha=0.9)
+    ax.set_xlim(-0.02, 1.02)
+    sns.despine(ax=ax)
     
     # Panel B: Correlation comparison
     ax = axes[1]
-    for rep, color in zip(reps, rep_colors):
+    for rep in reps:
         rep_data = model_data[model_data['representation'] == rep].sort_values('sigma')
-        if len(rep_data) > 0:
+        if len(rep_data) >= 2:
             ax.plot(rep_data['sigma'], rep_data['correlation'],
-                   marker='o', linewidth=2, label=rep, color=color)
+                   marker='o', linewidth=2, markersize=5,
+                   label=get_rep_display_name(rep), color=rep_colors[rep])
+    ax.axhline(0, color='gray', linestyle='-', linewidth=0.8, alpha=0.5)
     ax.set_xlabel('Noise Level (σ)')
     ax.set_ylabel('Uncertainty-Error Correlation')
-    ax.set_title(f'B. {best_model}: UQ Quality', fontweight='bold')
-    ax.legend(fontsize=7)
-    ax.grid(alpha=0.3)
+    ax.set_title(f'B. {model_display}: UQ Quality', fontweight='bold')
+    ax.legend(fontsize=7, framealpha=0.9)
+    ax.set_xlim(-0.02, 1.02)
+    sns.despine(ax=ax)
     
     # Panel C: Coverage comparison
     ax = axes[2]
-    for rep, color in zip(reps, rep_colors):
+    for rep in reps:
         rep_data = model_data[model_data['representation'] == rep].sort_values('sigma')
-        if len(rep_data) > 0:
+        if len(rep_data) >= 2:
             ax.plot(rep_data['sigma'], rep_data['coverage_1std'] * 100,
-                   marker='o', linewidth=2, label=rep, color=color)
-    ax.axhline(68, color='red', linestyle='--', linewidth=1.5, alpha=0.6)
+                   marker='o', linewidth=2, markersize=5,
+                   label=get_rep_display_name(rep), color=rep_colors[rep])
+    ax.axhline(68, color='#c0392b', linestyle='--', linewidth=1.5, alpha=0.7)
     ax.set_xlabel('Noise Level (σ)')
     ax.set_ylabel('Coverage (%)')
-    ax.set_title(f'C. {best_model}: Coverage', fontweight='bold')
-    ax.legend(fontsize=7)
-    ax.grid(alpha=0.3)
-    ax.set_ylim(0, 100)
+    ax.set_title(f'C. {model_display}: Coverage', fontweight='bold')
+    ax.legend(fontsize=7, framealpha=0.9)
+    ax.set_xlim(-0.02, 1.02)
+    ax.set_ylim(0, 105)
+    sns.despine(ax=ax)
     
     # Panel D: ECE comparison
     ax = axes[3]
-    for rep, color in zip(reps, rep_colors):
+    for rep in reps:
         rep_data = model_data[model_data['representation'] == rep].sort_values('sigma')
-        if len(rep_data) > 0:
+        if len(rep_data) >= 2:
             ax.plot(rep_data['sigma'], rep_data['ece'],
-                   marker='o', linewidth=2, label=rep, color=color)
+                   marker='o', linewidth=2, markersize=5,
+                   label=get_rep_display_name(rep), color=rep_colors[rep])
     ax.set_xlabel('Noise Level (σ)')
     ax.set_ylabel('ECE')
-    ax.set_title(f'D. {best_model}: Calibration Error', fontweight='bold')
-    ax.legend(fontsize=7)
-    ax.grid(alpha=0.3)
+    ax.set_title(f'D. {model_display}: Calibration Error', fontweight='bold')
+    ax.legend(fontsize=7, framealpha=0.9)
+    ax.set_xlim(-0.02, 1.02)
+    sns.despine(ax=ax)
     
     # Panel E: Uncertainty inflation comparison
     ax = axes[4]
-    for rep, color in zip(reps, rep_colors):
+    for rep in reps:
         rep_data = model_data[model_data['representation'] == rep].sort_values('sigma')
-        if len(rep_data) > 0:
+        if len(rep_data) >= 2:
             ax.plot(rep_data['sigma'], rep_data['mean_uncertainty'],
-                   marker='o', linewidth=2, label=rep, color=color)
+                   marker='o', linewidth=2, markersize=5,
+                   label=get_rep_display_name(rep), color=rep_colors[rep])
     ax.set_xlabel('Noise Level (σ)')
     ax.set_ylabel('Mean Uncertainty')
-    ax.set_title(f'E. {best_model}: Uncertainty Inflation', fontweight='bold')
-    ax.legend(fontsize=7)
-    ax.grid(alpha=0.3)
+    ax.set_title(f'E. {model_display}: Uncertainty Inflation', fontweight='bold')
+    ax.legend(fontsize=7, framealpha=0.9)
+    ax.set_xlim(-0.02, 1.02)
+    sns.despine(ax=ax)
     
     # Panel F: Summary bar chart at σ=0.3
     ax = axes[5]
     sigma_03 = model_data[np.abs(model_data['sigma'] - 0.3) < 0.05]
     
     if len(sigma_03) > 0:
-        x = np.arange(len(reps))
+        reps_with_data = [r for r in reps if r in sigma_03['representation'].values]
+        x = np.arange(len(reps_with_data))
         width = 0.35
         
-        corrs = [sigma_03[sigma_03['representation'] == r]['correlation'].mean() for r in reps]
-        covs = [sigma_03[sigma_03['representation'] == r]['coverage_1std'].mean() for r in reps]
+        corrs = [sigma_03[sigma_03['representation'] == r]['correlation'].mean() 
+                for r in reps_with_data]
+        covs = [sigma_03[sigma_03['representation'] == r]['coverage_1std'].mean() 
+               for r in reps_with_data]
         
-        ax.bar(x - width/2, corrs, width, label='Correlation', alpha=0.8)
-        ax.bar(x + width/2, covs, width, label='Coverage (norm)', alpha=0.8)
+        ax.bar(x - width/2, corrs, width, label='Correlation', alpha=0.85, color='#3498db')
+        ax.bar(x + width/2, covs, width, label='Coverage (norm)', alpha=0.85, color='#2ecc71')
         
         ax.set_xticks(x)
-        ax.set_xticklabels(reps, rotation=45, ha='right', fontsize=8)
+        ax.set_xticklabels([get_rep_display_name(r) for r in reps_with_data], 
+                         rotation=45, ha='right', fontsize=8)
         ax.set_ylabel('Value')
-        ax.set_title(f'F. {best_model}: Summary at σ=0.3', fontweight='bold')
-        ax.legend(fontsize=7)
-        ax.grid(alpha=0.3, axis='y')
+        ax.set_title(f'F. {model_display}: Summary (σ=0.3)', fontweight='bold')
+        ax.legend(fontsize=7, framealpha=0.9)
+        ax.axhline(0, color='gray', linewidth=0.8)
+        sns.despine(ax=ax)
     
     plt.tight_layout()
     
@@ -930,77 +1075,116 @@ def create_figure8(metrics_df, output_dir):
     Figure 8: GNN UQ Failure Analysis
     
     Highlights that graph neural networks fail at uncertainty quantification
+    Note: Gauche is GP-based, not a GNN, so excluded from GNN analysis
     """
     print("\n" + "="*80)
-    print("GENERATING FIGURE 8 (NEW - GNN ANALYSIS)")
+    print("GENERATING FIGURE 8 (GNN ANALYSIS)")
     print("="*80)
     
-    # Check if graph representation exists
-    graph_data = metrics_df[metrics_df['representation'].str.contains('graph', case=False)]
-    non_graph_data = metrics_df[~metrics_df['representation'].str.contains('graph', case=False)]
+    # Separate GNN models (on graph representation) from non-GNN
+    # Gauche is NOT a GNN - it's GP-based and works on all representations
+    graph_data = metrics_df[
+        (metrics_df['representation'].str.contains('graph', case=False)) &
+        (~metrics_df['model_name'].str.contains('gauche', case=False))
+    ]
+    
+    non_graph_data = metrics_df[
+        ~metrics_df['representation'].str.contains('graph', case=False)
+    ]
     
     if len(graph_data) == 0:
         print("⚠️  No graph representation data found")
         return
     
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    if len(non_graph_data) == 0:
+        print("⚠️  No non-graph data for comparison")
+        return
+    
+    fig, axes = plt.subplots(1, 3, figsize=(14, 4.5))
+    
+    # Get GNN models to show (limit to core ones)
+    gnn_models = [m for m in GRAPH_CORE_MODELS 
+                  if m in graph_data['model_name'].unique()]
     
     # Panel A: GNN coverage collapse
     ax = axes[0]
     
-    for model in graph_data['model_name'].unique():
+    for model in gnn_models:
         model_data = graph_data[graph_data['model_name'] == model].sort_values('sigma')
-        if len(model_data) > 0:
+        if len(model_data) >= 2:
             color = MODEL_COLORS.get(model, '#999999')
+            marker = MODEL_MARKERS.get(model, 'o')
             ax.plot(model_data['sigma'], model_data['coverage_1std'] * 100,
-                   marker='o', linewidth=2, label=model, color=color)
+                   marker=marker, linewidth=2, markersize=5,
+                   label=get_display_name(model), color=color)
     
-    ax.axhline(68, color='red', linestyle='--', linewidth=2, alpha=0.8, label='Target')
-    ax.axhspan(0, 10, alpha=0.2, color='red')
+    ax.axhline(68, color='#c0392b', linestyle='--', linewidth=2, alpha=0.8, label='Target')
+    ax.axhspan(0, 20, alpha=0.1, color='red', zorder=0)
+    
     ax.set_xlabel('Noise Level (σ)')
     ax.set_ylabel('Coverage (%)')
     ax.set_title('A. GNN Models: Coverage Collapse', fontweight='bold')
-    ax.legend(fontsize=7, loc='upper right')
-    ax.grid(alpha=0.3)
-    ax.set_ylim(0, 100)
+    ax.legend(fontsize=7, loc='upper right', framealpha=0.9)
+    ax.set_xlim(-0.02, 1.02)
+    ax.set_ylim(0, 105)
+    sns.despine(ax=ax)
     
     # Panel B: GNN vs Non-GNN correlation comparison
     ax = axes[1]
     
     # Average across models for each group
-    gnn_avg = graph_data.groupby('sigma')['correlation'].mean()
-    non_gnn_avg = non_graph_data.groupby('sigma')['correlation'].mean()
+    gnn_avg = graph_data.groupby('sigma')['correlation'].agg(['mean', 'std']).reset_index()
+    non_gnn_avg = non_graph_data.groupby('sigma')['correlation'].agg(['mean', 'std']).reset_index()
     
-    ax.plot(gnn_avg.index, gnn_avg.values, 'o-', linewidth=2, 
+    ax.plot(gnn_avg['sigma'], gnn_avg['mean'], 'o-', linewidth=2.5, 
            label='GNN methods', color='#e74c3c', markersize=6)
-    ax.plot(non_gnn_avg.index, non_gnn_avg.values, 's-', linewidth=2,
-           label='Non-GNN methods', color='#3498db', markersize=6)
+    ax.fill_between(gnn_avg['sigma'], 
+                   gnn_avg['mean'] - gnn_avg['std'],
+                   gnn_avg['mean'] + gnn_avg['std'],
+                   alpha=0.2, color='#e74c3c')
     
-    ax.fill_between(gnn_avg.index, gnn_avg.values, non_gnn_avg.values,
-                   alpha=0.2, color='gray')
+    ax.plot(non_gnn_avg['sigma'], non_gnn_avg['mean'], 's-', linewidth=2.5,
+           label='Non-GNN methods', color='#3498db', markersize=6)
+    ax.fill_between(non_gnn_avg['sigma'],
+                   non_gnn_avg['mean'] - non_gnn_avg['std'],
+                   non_gnn_avg['mean'] + non_gnn_avg['std'],
+                   alpha=0.2, color='#3498db')
+    
+    ax.axhline(0, color='gray', linewidth=0.8, alpha=0.5)
     
     ax.set_xlabel('Noise Level (σ)')
     ax.set_ylabel('Uncertainty-Error Correlation')
-    ax.set_title('B. GNN vs Non-GNN: UQ Quality Gap', fontweight='bold')
-    ax.legend(fontsize=8)
-    ax.grid(alpha=0.3)
+    ax.set_title('B. GNN vs Non-GNN: UQ Quality', fontweight='bold')
+    ax.legend(fontsize=8, framealpha=0.9)
+    ax.set_xlim(-0.02, 1.02)
+    sns.despine(ax=ax)
     
     # Panel C: ECE comparison
     ax = axes[2]
     
-    gnn_ece = graph_data.groupby('sigma')['ece'].mean()
-    non_gnn_ece = non_graph_data.groupby('sigma')['ece'].mean()
+    gnn_ece = graph_data.groupby('sigma')['ece'].agg(['mean', 'std']).reset_index()
+    non_gnn_ece = non_graph_data.groupby('sigma')['ece'].agg(['mean', 'std']).reset_index()
     
-    ax.plot(gnn_ece.index, gnn_ece.values, 'o-', linewidth=2,
+    ax.plot(gnn_ece['sigma'], gnn_ece['mean'], 'o-', linewidth=2.5,
            label='GNN methods', color='#e74c3c', markersize=6)
-    ax.plot(non_gnn_ece.index, non_gnn_ece.values, 's-', linewidth=2,
+    ax.fill_between(gnn_ece['sigma'],
+                   gnn_ece['mean'] - gnn_ece['std'],
+                   gnn_ece['mean'] + gnn_ece['std'],
+                   alpha=0.2, color='#e74c3c')
+    
+    ax.plot(non_gnn_ece['sigma'], non_gnn_ece['mean'], 's-', linewidth=2.5,
            label='Non-GNN methods', color='#3498db', markersize=6)
+    ax.fill_between(non_gnn_ece['sigma'],
+                   non_gnn_ece['mean'] - non_gnn_ece['std'],
+                   non_gnn_ece['mean'] + non_gnn_ece['std'],
+                   alpha=0.2, color='#3498db')
     
     ax.set_xlabel('Noise Level (σ)')
     ax.set_ylabel('Expected Calibration Error')
     ax.set_title('C. GNN vs Non-GNN: Calibration Error', fontweight='bold')
-    ax.legend(fontsize=8)
-    ax.grid(alpha=0.3)
+    ax.legend(fontsize=8, framealpha=0.9)
+    ax.set_xlim(-0.02, 1.02)
+    sns.despine(ax=ax)
     
     plt.tight_layout()
     
@@ -1015,17 +1199,16 @@ def create_figure8(metrics_df, output_dir):
 # ============================================================================
 
 def create_tables(metrics_df, decomp_df, output_dir):
-    """Create summary tables with decomposition ratios"""
+    """Create summary tables with cleaner formatting"""
     print("\n" + "="*80)
     print("GENERATING TABLES")
     print("="*80)
     
     output_dir = Path(output_dir)
     
-    # Table 1: Overall performance
+    # Table 1: Overall performance summary
     table1 = metrics_df.groupby(['model_name', 'representation']).agg({
         'correlation': ['mean', 'std'],
-        'mean_uncertainty': 'mean',
         'ece': ['mean', 'std'],
         'coverage_1std': ['mean', 'std'],
         'mean_absolute_error': ['mean', 'std'],
@@ -1048,9 +1231,8 @@ def create_tables(metrics_df, decomp_df, output_dir):
             table.to_csv(output_dir / f"table2_sigma{sigma:.1f}.csv")
             print(f"✓ table2_sigma{sigma:.1f}.csv")
     
-    # Table 3: Decomposition ratios (FIXED: moved from figure to table)
+    # Table 3: Decomposition ratios
     if len(decomp_df) > 0:
-        # Average ratio per model (since it's constant)
         ratio_table = decomp_df.groupby(['model_name', 'representation']).agg({
             'epistemic_aleatoric_ratio': ['mean', 'std'],
             'mean_epistemic': 'mean',
@@ -1060,13 +1242,12 @@ def create_tables(metrics_df, decomp_df, output_dir):
         ratio_table.to_csv(output_dir / "table3_decomposition_ratios.csv")
         print(f"✓ table3_decomposition_ratios.csv")
         
-        # Print key finding about flat ratios
-        print("\n  📊 KEY FINDING: Epistemic/Aleatoric ratios are constant across noise levels")
-        print("     This suggests decomposition is architectural, not learned:")
+        # Print key finding
+        print("\n  📊 Epistemic/Aleatoric ratios by model:")
         ratio_summary = decomp_df.groupby('model_name')['epistemic_aleatoric_ratio'].agg(['mean', 'std'])
         print(ratio_summary.round(3).to_string())
     
-    # Table 4: MAE degradation (NEW)
+    # Table 4: MAE degradation
     mae_pivot = metrics_df.pivot_table(
         values='mean_absolute_error',
         index='model_name',
@@ -1138,7 +1319,7 @@ def analyze_gauche_behavior(metrics_df, output_dir):
 def main(results_dir="results"):
     """Main analysis function"""
     print("="*80)
-    print("PHASE 2: UNCERTAINTY ANALYSIS (FIXED VERSION)")
+    print("PHASE 2: UNCERTAINTY ANALYSIS")
     print("="*80)
     
     # Load data
@@ -1167,17 +1348,12 @@ def main(results_dir="results"):
         print(f"✓ Saved decomposition.csv")
     
     # Generate figures
-    print("\n" + "="*80)
-    print("GENERATING FIGURES")
-    print("="*80)
-    
     create_figure4(uncertainty_df, metrics_df, output_dir)
     create_figure5(uncertainty_df, metrics_df, output_dir)
     
     if len(decomp_df) > 0:
         create_figure6(decomp_df, output_dir)
     
-    # NEW: Additional analysis figures
     create_figure7(metrics_df, output_dir)
     create_figure8(metrics_df, output_dir)
     
@@ -1196,7 +1372,6 @@ def main(results_dir="results"):
     print(f"Configurations: {len(metrics_df)}")
     print(f"Models: {sorted(metrics_df['model_name'].unique())}")
     print(f"Representations: {sorted(metrics_df['representation'].unique())}")
-    print(f"Sigma levels: {sorted(metrics_df['sigma'].unique())}")
     
     print("\n" + "-"*40)
     print("KEY METRICS BY MODEL")
@@ -1211,22 +1386,19 @@ def main(results_dir="results"):
     summary.columns = ['Corr', 'Cov%', 'ECE', 'MAE']
     print(summary.to_string())
     
-    # Highlight broken methods
-    broken = summary[summary['Cov%'] < 10]
-    if len(broken) > 0:
-        print("\n⚠️  BROKEN METHODS (coverage < 10%):")
-        print(broken.index.tolist())
+    # Identify problematic methods
+    low_coverage = summary[summary['Cov%'] < 30]
+    if len(low_coverage) > 0:
+        print(f"\n⚠️  Methods with low coverage (<30%): {list(low_coverage.index)}")
+    
+    low_corr = summary[summary['Corr'] < 0.1]
+    if len(low_corr) > 0:
+        print(f"⚠️  Methods with poor UQ correlation (<0.1): {list(low_corr.index)}")
     
     print("\n" + "="*80)
     print("✅ ANALYSIS COMPLETE")
     print("="*80)
-    print(f"\nOutputs saved to: {output_dir}")
-    print("\nFigures generated:")
-    print("  - figure4_uncertainty_error.png (FIXED: separate panels, consistent axes)")
-    print("  - figure5_calibration.png (FIXED: extended ECE scale, broken methods highlighted)")
-    print("  - figure6_decomposition.png (FIXED: removed flat ratio plots, standardized)")
-    print("  - figure7_representation_comparison.png (NEW: cross-rep comparison)")
-    print("  - figure8_gnn_failure.png (NEW: GNN UQ failure analysis)")
+    print(f"\nOutputs: {output_dir}")
 
 
 if __name__ == "__main__":
