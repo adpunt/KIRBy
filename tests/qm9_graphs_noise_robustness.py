@@ -407,11 +407,11 @@ def run_all_experiments(model_name, n_samples=10000, n_seeds=10, results_dir='re
     print(f"PHASE 1 GRAPH ROBUSTNESS: {model_name.upper()}")
     print("="*80)
     
-    results_dir = Path(results_dir) / "phase1_graphs_updated"
+    results_dir = Path(results_dir) / "phase1_graphs_updated_long"
     results_dir.mkdir(parents=True, exist_ok=True)
     
     # Noise levels
-    noise_levels = np.arange(0.0, 1.1, 0.1)
+    noise_levels = np.arange(0.0, 2.1, 0.1)
     
     print(f"\nModel: {model_name}")
     print(f"Noise levels: {len(noise_levels)}")
