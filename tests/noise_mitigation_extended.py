@@ -34,7 +34,7 @@ from kirby.datasets.esol import load_esol_combined
 from kirby.representations.molecular import create_pdv, create_mhg_gnn, create_ecfp4
 from kirby.hybrid import create_hybrid, apply_feature_selection
 from noiseInject import NoiseInjectorRegression
-from kirby.utils.noise_mitigation_methods import get_mitigation_method, DISTANCE_AWARE_METHODS, compute_distance_matrix
+from noise_mitigation_methods import get_mitigation_method, DISTANCE_AWARE_METHODS, compute_distance_matrix
 
 
 # ============================================================================
@@ -361,14 +361,6 @@ def run_dataset(dataset_name: str, train_smiles: List[str], train_labels: np.nda
     print(f"  Hybrid:  {hybrid_train.shape}")
     print(f"  Done ({time.time() - t0:.1f}s)")
     
-    # Detection representations to test
-    detection_reps = {
-        'hybrid': hybrid_train,
-        'ecfp': ecfp_train,
-        'pdv': pdv_train,
-        'mhggnn': mhggnn_train,
-    }
-    
     # Clean baseline (ECFP/RF on clean data)
     print("\nComputing clean baseline...")
     clean_baseline = train_evaluate_ecfp(ecfp_train, ecfp_test, train_labels, test_labels)
@@ -392,34 +384,33 @@ def run_dataset(dataset_name: str, train_smiles: List[str], train_labels: np.nda
         r2_noisy = noisy_baseline['r2']
         print(f"  Noisy R² = {r2_noisy:.4f} (drop: {r2_clean - r2_noisy:.4f})")
         
-        # Test each detection representation
-        for rep_name, X_detect in detection_reps.items():
-            print(f"\n  [{rep_name.upper()}] for noise detection")
-            
-            cache_dir = dataset_dir / f".cache/{rep_name}_sigma{sigma}"
-            
-            rep_results = run_all_methods(
-                X_detect=X_detect,
-                X_ecfp_train=ecfp_train,
-                X_ecfp_test=ecfp_test,
-                y_train_clean=train_labels,
-                y_train_noisy=y_noisy,
-                y_test=test_labels,
-                true_noise_mask=true_noise_mask,
-                r2_clean=r2_clean,
-                r2_noisy=r2_noisy,
-                dataset=dataset_name,
-                sigma=sigma,
-                detection_rep=rep_name,
-                cache_dir=cache_dir
-            )
-            
-            all_results.extend([r.to_dict() for r in rep_results])
-            
-            # Checkpoint save
-            checkpoint_df = pd.DataFrame(all_results)
-            checkpoint_df.to_csv(dataset_dir / f"checkpoint_{rep_name}_sigma{sigma}.csv", index=False)
-            print(f"      ✓ Checkpoint saved ({len(all_results)} total results)")
+        # Use HYBRID for noise detection
+        print(f"\n  [HYBRID] for noise detection → [ECFP4/RF] for evaluation")
+        
+        cache_dir = dataset_dir / f".cache/hybrid_sigma{sigma}"
+        
+        rep_results = run_all_methods(
+            X_detect=hybrid_train,
+            X_ecfp_train=ecfp_train,
+            X_ecfp_test=ecfp_test,
+            y_train_clean=train_labels,
+            y_train_noisy=y_noisy,
+            y_test=test_labels,
+            true_noise_mask=true_noise_mask,
+            r2_clean=r2_clean,
+            r2_noisy=r2_noisy,
+            dataset=dataset_name,
+            sigma=sigma,
+            detection_rep='hybrid',
+            cache_dir=cache_dir
+        )
+        
+        all_results.extend([r.to_dict() for r in rep_results])
+        
+        # Checkpoint save
+        checkpoint_df = pd.DataFrame(all_results)
+        checkpoint_df.to_csv(dataset_dir / f"checkpoint_sigma{sigma}.csv", index=False)
+        print(f"      ✓ Checkpoint saved ({len(all_results)} total results)")
     
     # Final save
     results_df = pd.DataFrame(all_results)
@@ -439,7 +430,7 @@ def main(dataset='both'):
     print("="*80)
     print("NOISE MITIGATION EXPERIMENT")
     print("="*80)
-    print(f"Detection: hybrid (pdv+mhggnn) vs individual reps")
+    print(f"Detection: hybrid (pdv+mhggnn)")
     print(f"Evaluation: ECFP4 + Random Forest")
     print(f"Results: {results_dir}")
     print("="*80)
