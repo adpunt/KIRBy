@@ -1133,93 +1133,69 @@ def create_figure2_representation_effects(df, metrics_df, output_dir):
 # ============================================================================
 
 def create_supplementary_s1(metrics_df, output_dir):
-    """Supplementary S1: Baseline vs retention scatter - IMPROVED with inset"""
+    """Supplementary S1: Baseline vs retention scatter - FIXED layout"""
     print("\n" + "="*80)
     print("GENERATING SUPPLEMENTARY S1")
     print("="*80)
     
-    fig, ax = plt.subplots(figsize=(10, 8))
+    fig, ax = plt.subplots(figsize=(12, 8))
     
     # Get valid and invalid separately
     valid_metrics = get_valid_metrics(metrics_df)
-    invalid_metrics = metrics_df[~metrics_df['is_valid']]
+    invalid_metrics = metrics_df[~metrics_df['is_valid']].copy()
     
     print(f"Valid configs: {len(valid_metrics)}, Invalid: {len(invalid_metrics)}")
     
-    # Plot valid data points (main cluster)
+    # MAIN PLOT: Show only VALID configurations (clean view)
     representations = metrics_df['representation'].unique()
     for rep in representations:
         rep_data = valid_metrics[valid_metrics['representation'] == rep]
         if len(rep_data) > 0:
             color = REPRESENTATION_COLORS.get(rep, '#999999')
             ax.scatter(rep_data['baseline_r2'], rep_data['retention_pct'],
-                      alpha=0.7, s=60, color=color, label=format_representation(rep),
+                      alpha=0.7, s=80, color=color, label=format_representation(rep),
                       edgecolors='black', linewidth=0.5)
     
-    # Plot invalid data points separately (marked as failures)
-    for _, row in invalid_metrics.iterrows():
-        ax.scatter(row['baseline_r2'], row['retention_pct'],
-                  alpha=0.5, s=100, color='red', marker='x', linewidth=2)
-    
-    # Reference lines at median of valid data
+    # Reference lines
     median_baseline = valid_metrics['baseline_r2'].median()
     median_retention = valid_metrics['retention_pct'].median()
-    ax.axvline(median_baseline, color='gray', linestyle='--', linewidth=1, alpha=0.5,
-              label=f'Median baseline: {median_baseline:.2f}')
-    ax.axhline(median_retention, color='gray', linestyle=':', linewidth=1, alpha=0.5,
-              label=f'Median retention: {median_retention:.0f}%')
+    ax.axvline(median_baseline, color='gray', linestyle='--', linewidth=1, alpha=0.4)
+    ax.axhline(median_retention, color='gray', linestyle=':', linewidth=1, alpha=0.4)
     
-    ax.set_xlabel('Baseline R² (σ=0)', fontsize=10)
-    ax.set_ylabel('Retention at σ=0.6 (%)', fontsize=10)
-    ax.set_title('Supplementary S1: Baseline vs Retention\n(Red X = Catastrophic Failures)', 
-                 fontsize=11, fontweight='bold', pad=15)
-    ax.legend(fontsize=8, loc='lower left', ncol=2, frameon=True, framealpha=0.9)
+    ax.set_xlabel('Baseline R² (σ=0)', fontsize=11)
+    ax.set_ylabel('Retention at σ=0.6 (%)', fontsize=11)
+    ax.set_title('Supplementary S1: Baseline Performance vs Noise Retention\n(Valid Configurations Only)', 
+                 fontsize=12, fontweight='bold', pad=15)
+    ax.legend(fontsize=9, loc='lower right', ncol=2, frameon=True, framealpha=0.9,
+             title='Representation', title_fontsize=9)
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
     ax.grid(True, alpha=0.3, linestyle=':', linewidth=0.5)
     
-    # Set axis limits to show outliers but not distort too much
-    ax.set_xlim(-0.05, 0.95)
+    # Set clean axis limits for valid data
+    ax.set_xlim(0.35, 0.92)
+    ax.set_ylim(70, 102)
     
-    # Create INSET showing zoomed main cluster
-    from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+    # Add text box noting excluded failures
+    n_failures = len(invalid_metrics)
+    if n_failures > 0:
+        failure_models = [format_model(m) for m in invalid_metrics['model'].unique()]
+        ax.text(0.02, 0.98, 
+                f'Note: {n_failures} catastrophic failures excluded\n({", ".join(failure_models[:3])}...)',
+                transform=ax.transAxes, fontsize=8, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='#ffcccc', alpha=0.8, edgecolor='red'))
     
-    axins = inset_axes(ax, width="40%", height="40%", loc='center right',
-                       bbox_to_anchor=(0, 0.1, 1, 1), bbox_transform=ax.transAxes)
-    
-    # Plot only valid configs in inset
-    for rep in representations:
-        rep_data = valid_metrics[valid_metrics['representation'] == rep]
-        if len(rep_data) > 0:
-            color = REPRESENTATION_COLORS.get(rep, '#999999')
-            axins.scatter(rep_data['baseline_r2'], rep_data['retention_pct'],
-                         alpha=0.7, s=30, color=color,
-                         edgecolors='black', linewidth=0.3)
-    
-    # Set inset limits to focus on main cluster
-    axins.set_xlim(0.55, 0.92)
-    axins.set_ylim(70, 100)
-    axins.set_xlabel('Baseline R²', fontsize=7)
-    axins.set_ylabel('Retention (%)', fontsize=7)
-    axins.tick_params(labelsize=6)
-    axins.grid(True, alpha=0.3, linestyle=':', linewidth=0.3)
-    axins.set_title('Main Cluster\n(Valid Only)', fontsize=8, fontweight='bold')
-    axins.set_facecolor('white')
-    
-    # Add box around inset
-    for spine in axins.spines.values():
-        spine.set_edgecolor('black')
-        spine.set_linewidth(1.5)
-    
-    # Annotate the catastrophic failures
-    for _, row in invalid_metrics.iterrows():
-        model_name = format_model(row['model'])
-        if row['retention_pct'] < -100:
-            ax.annotate(f"{model_name}\n(Catastrophic)", 
-                       xy=(row['baseline_r2'], max(row['retention_pct'], -600)),
-                       xytext=(0.15, -400),
-                       fontsize=7, ha='center', color='red',
-                       arrowprops=dict(arrowstyle='->', color='red', lw=0.8))
+    # Add annotations for key findings
+    # Find the top performers (graph-based)
+    graph_valid = valid_metrics[valid_metrics['representation'] == 'graph']
+    if len(graph_valid) > 0:
+        top_graph = graph_valid.nlargest(1, 'retention_pct').iloc[0]
+        ax.annotate(f'Top: {format_model(top_graph["model"])}\n({top_graph["retention_pct"]:.0f}% retention)',
+                   xy=(top_graph['baseline_r2'], top_graph['retention_pct']),
+                   xytext=(top_graph['baseline_r2'] - 0.15, top_graph['retention_pct'] - 5),
+                   fontsize=8, ha='center',
+                   arrowprops=dict(arrowstyle='->', color='gray', lw=0.8),
+                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
     
     output_path = Path(output_dir) / "supplementary_s1_baseline_vs_retention.png"
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
@@ -1432,43 +1408,62 @@ def create_figure_gnn_analysis(df, metrics_df, output_dir):
     # Panel B: Comparison of BNN variants
     ax_b = fig.add_subplot(gs[0, 1])
     
-    bnn_variants = {
-        'bnn_last': {'color': '#2ecc71', 'label': 'BNN-Last (Works)'},
-        'bnn_full': {'color': '#e74c3c', 'label': 'BNN-Full (Fails)'},
-    }
-    
     base_gnns = ['GCN', 'GAT', 'GIN', 'MPNN']
-    
     x_positions = np.arange(len(base_gnns))
     width = 0.35
     
-    # Get retention for each variant
-    for idx, (variant, style) in enumerate(bnn_variants.items()):
-        retentions = []
-        for base in base_gnns:
-            model_name = f"{base.lower()}_{variant}"
-            model_metrics = graph_metrics[graph_metrics['model'] == model_name]
-            if len(model_metrics) > 0 and model_metrics['is_valid'].values[0]:
-                retentions.append(model_metrics['retention_pct'].values[0])
-            else:
-                retentions.append(0)  # Failure
-        
-        offset = width * (idx - 0.5)
-        bars = ax_b.bar(x_positions + offset, retentions, width, 
-                       color=style['color'], alpha=0.8, label=style['label'],
-                       edgecolor='black', linewidth=0.5)
-        
-        # Add value labels
-        for bar, ret in zip(bars, retentions):
-            if ret > 0:
-                ax_b.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 2,
-                         f'{ret:.0f}%', ha='center', va='bottom', fontsize=7)
-            else:
-                ax_b.text(bar.get_x() + bar.get_width()/2, 5,
-                         'FAIL', ha='center', va='bottom', fontsize=6, color='red')
+    # Get retention for BNN-Last (working)
+    bnn_last_retentions = []
+    for base in base_gnns:
+        model_name = f"{base.lower()}_bnn_last"
+        model_metrics = graph_metrics[graph_metrics['model'] == model_name]
+        if len(model_metrics) > 0 and model_metrics['is_valid'].values[0]:
+            bnn_last_retentions.append(model_metrics['retention_pct'].values[0])
+        else:
+            bnn_last_retentions.append(0)
+    
+    # Get retention for BNN-Full (failing) - use actual values even if negative/weird
+    bnn_full_retentions = []
+    bnn_full_baselines = []
+    for base in base_gnns:
+        model_name = f"{base.lower()}_bnn_full"
+        model_metrics = graph_metrics[graph_metrics['model'] == model_name]
+        if len(model_metrics) > 0:
+            # Get raw retention for display (even if invalid)
+            ret_raw = model_metrics['retention_pct_raw'].values[0] if 'retention_pct_raw' in model_metrics.columns else 0
+            baseline = model_metrics['baseline_r2'].values[0]
+            bnn_full_retentions.append(ret_raw if not np.isnan(ret_raw) else 0)
+            bnn_full_baselines.append(baseline)
+        else:
+            bnn_full_retentions.append(0)
+            bnn_full_baselines.append(0)
+    
+    # Plot BNN-Last bars (green, solid)
+    bars_last = ax_b.bar(x_positions - width/2, bnn_last_retentions, width,
+                         color='#2ecc71', alpha=0.9, label='BNN-Last (Works)',
+                         edgecolor='black', linewidth=0.8)
+    
+    # Plot BNN-Full bars - show as small hatched bars for failures
+    fail_display_height = 8  # Small visible height for failed models
+    bars_full = ax_b.bar(x_positions + width/2, [fail_display_height]*4, width,
+                         color='#e74c3c', alpha=0.4, label='BNN-Full (Fails)',
+                         edgecolor='#e74c3c', linewidth=1.5, hatch='///')
+    
+    # Add value labels for BNN-Last
+    for bar, ret in zip(bars_last, bnn_last_retentions):
+        if ret > 0:
+            ax_b.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
+                     f'{ret:.0f}%', ha='center', va='bottom', fontsize=8, fontweight='bold')
+    
+    # Add FAIL labels for BNN-Full with baseline info
+    for i, (bar, baseline) in enumerate(zip(bars_full, bnn_full_baselines)):
+        ax_b.text(bar.get_x() + bar.get_width()/2, bar.get_height()/2,
+                 'FAIL', ha='center', va='center', fontsize=7, color='white', fontweight='bold')
+        ax_b.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
+                 f'R²₀≈{baseline:.2f}', ha='center', va='bottom', fontsize=6, color='#c0392b')
     
     ax_b.set_xticks(x_positions)
-    ax_b.set_xticklabels(base_gnns, fontsize=9)
+    ax_b.set_xticklabels(base_gnns, fontsize=10, fontweight='bold')
     ax_b.set_ylabel('Retention at σ=0.6 (%)', fontsize=10)
     ax_b.set_title('B. BNN Variant Comparison Across GNN Architectures', 
                    fontsize=11, fontweight='bold', pad=10)
@@ -1477,7 +1472,8 @@ def create_figure_gnn_analysis(df, metrics_df, output_dir):
     ax_b.spines['right'].set_visible(False)
     ax_b.grid(True, axis='y', alpha=0.3, linestyle=':', linewidth=0.5)
     ax_b.set_ylim(0, 110)
-    ax_b.axhline(80, color='gray', linestyle='--', linewidth=1, alpha=0.5)
+    ax_b.axhline(80, color='gray', linestyle='--', linewidth=1, alpha=0.5,
+                label='_nolegend_')
     
     # Add annotation
     fig.text(0.5, 0.02, 
