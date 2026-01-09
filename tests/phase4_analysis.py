@@ -82,6 +82,26 @@ REPRESENTATION_COLORS = {
     'mhg_gnn_pretrained': '#CC78BC',
 }
 
+
+def format_label(model, rep):
+    """Format model/representation labels for clean display."""
+    model_map = {
+        'rf': 'RF', 'qrf': 'QRF', 'xgboost': 'XGBoost', 'ngboost': 'NGBoost',
+        'dnn': 'DNN', 'gp': 'GP', 'rf_calibrated': 'RF-Cal',
+        'fullbnn': 'FullBNN', 'full_bnn': 'FullBNN',
+        'lastlayerbnn': 'LLBNN', 'lastlayer_bnn': 'LLBNN',
+        'varbnn': 'VarBNN', 'var_bnn': 'VarBNN',
+    }
+    rep_map = {
+        'ecfp4': 'ECFP4', 'ecfp4_class': 'ECFP4', 'ecfp4_calibrated': 'ECFP4-Cal',
+        'pdv': 'PDV', 'pdv_class': 'PDV',
+        'sns': 'SNS', 'sns_class': 'SNS',
+        'mhg_gnn_pretrained': 'MHG-GNN', 'mhggnn_pretrained_class': 'MHG-GNN',
+    }
+    m = model_map.get(model, model.upper())
+    r = rep_map.get(rep, rep.upper().replace('_', '-'))
+    return f"{m}/{r}"
+
 # ============================================================================
 # DATA LOADING
 # ============================================================================
@@ -244,13 +264,27 @@ def load_dataset_results(dataset_name, results_dir="../results"):
     # CRITICAL: Filter out known problematic configurations
     n_before = len(combined_df)
     
-    # Exclude DNN + PDV on hERG (training failure - see KNOWN_ISSUES.md)
     if dataset_name == 'herg':
+        # DNN + PDV: training failure
+        # DNN + PDV_CLASS: 100% retention but predicts majority class only (broken)
         combined_df = combined_df[~((combined_df['model'] == 'dnn') & 
-                                    (combined_df['representation'] == 'pdv'))]
+                                    (combined_df['representation'].isin(['pdv', 'pdv_class'])))]
         n_excluded = n_before - len(combined_df)
         if n_excluded > 0:
-            print(f"\n⚠️  EXCLUDED {n_excluded} rows: DNN + PDV (training failure)")
+            print(f"\n⚠️  EXCLUDED {n_excluded} rows: DNN+PDV, DNN+PDV_CLASS (training failures)")
+            print(f"    See KNOWN_ISSUES.md for details")
+    
+    elif dataset_name == 'esol':
+        # DNN + PDV: negative R², model failed to learn
+        # GP + PDV: very poor baseline (~0.08 R²), unreliable retention metrics
+        n_before_esol = len(combined_df)
+        combined_df = combined_df[~((combined_df['model'] == 'dnn') & 
+                                    (combined_df['representation'] == 'pdv'))]
+        combined_df = combined_df[~((combined_df['model'] == 'gp') & 
+                                    (combined_df['representation'] == 'pdv'))]
+        n_excluded = n_before_esol - len(combined_df)
+        if n_excluded > 0:
+            print(f"\n⚠️  EXCLUDED {n_excluded} rows: DNN+PDV (negative R²), GP+PDV (poor baseline)")
             print(f"    See KNOWN_ISSUES.md for details")
     
     # Filter noise strategies per dataset
@@ -546,7 +580,7 @@ def create_cross_dataset_figure(all_metrics, output_dir):
                         edgecolor='black', linewidth=0.5)
             
             ax_a.set_xticks(x_pos + width * (len(datasets) - 1) / 2)
-            ax_a.set_xticklabels([f"{m}/{r}" for m, r in sorted(common_configs)], 
+            ax_a.set_xticklabels([format_label(m, r) for m, r in sorted(common_configs)], 
                                 rotation=45, ha='right', fontsize=6)
             ax_a.set_ylabel('Average Retention (%)', fontsize=9)
             ax_a.set_title('A. Robustness Across Datasets\n(Common Configurations)', 
@@ -593,12 +627,36 @@ def create_cross_dataset_figure(all_metrics, output_dir):
     # ========================================================================
     ax_c = fig.add_subplot(gs[0, 2])
     
-    # Average retention by representation across all datasets
-    rep_performance = all_metrics.groupby(['representation', 'dataset'])[retention_col].mean().reset_index()
+    # Normalize representations to base names before aggregating
+    def get_base_rep(rep):
+        """Map representation variants to base name."""
+        rep = rep.lower()
+        if 'ecfp4' in rep and 'calibrated' in rep:
+            return 'ECFP4-Cal'
+        elif 'ecfp4' in rep:
+            return 'ECFP4'
+        elif 'mhg' in rep or 'mhggnn' in rep:
+            return 'MHG-GNN'
+        elif 'pdv' in rep:
+            return 'PDV'
+        elif 'sns' in rep:
+            return 'SNS'
+        else:
+            return rep.upper()
+    
+    # Create copy with base representation
+    metrics_for_heatmap = all_metrics.copy()
+    metrics_for_heatmap['base_rep'] = metrics_for_heatmap['representation'].apply(get_base_rep)
+    
+    # Exclude ECFP4-Cal (only present in one dataset)
+    metrics_for_heatmap = metrics_for_heatmap[metrics_for_heatmap['base_rep'] != 'ECFP4-Cal']
+    
+    # Average retention by base representation and dataset
+    rep_performance = metrics_for_heatmap.groupby(['base_rep', 'dataset'])[retention_col].mean().reset_index()
     
     # Create pivot for heatmap
     if len(rep_performance) > 0:
-        pivot = rep_performance.pivot(index='representation', 
+        pivot = rep_performance.pivot(index='base_rep', 
                                       columns='dataset', 
                                       values=retention_col)
         
@@ -608,7 +666,7 @@ def create_cross_dataset_figure(all_metrics, output_dir):
         ax_c.set_xticks(np.arange(len(pivot.columns)))
         ax_c.set_yticks(np.arange(len(pivot.index)))
         ax_c.set_xticklabels([d.upper() for d in pivot.columns], fontsize=8)
-        ax_c.set_yticklabels([r.upper().replace('_', '-') for r in pivot.index], fontsize=8)
+        ax_c.set_yticklabels(pivot.index, fontsize=8)
         
         # Add values
         for i in range(len(pivot.index)):
@@ -644,7 +702,7 @@ def create_cross_dataset_figure(all_metrics, output_dir):
         
         if len(top_10) > 0:
             y_pos = np.arange(len(top_10))
-            labels = [f"{row['model']}/{row['representation']}" for _, row in top_10.iterrows()]
+            labels = [format_label(row['model'], row['representation']) for _, row in top_10.iterrows()]
             
             color = DATASET_COLORS.get(dataset, '#999999')
             ax.barh(y_pos, top_10[retention_col], color=color, alpha=0.8,
@@ -675,11 +733,11 @@ def create_cross_dataset_figure(all_metrics, output_dir):
 
 def create_per_dataset_degradation_figures(all_data, output_dir):
     """
-    Create degradation curve figures for each dataset
-    Shows top 10 configurations per dataset
+    Create degradation curve figures for each dataset.
+    Shows TOP 5 configurations only (no bottom 5).
     """
     print(f"\n{'='*80}")
-    print("GENERATING PER-DATASET DEGRADATION FIGURES")
+    print("GENERATING PER-DATASET DEGRADATION FIGURES (TOP 5 ONLY)")
     print(f"{'='*80}")
     
     for dataset_name, dataset_info in all_data.items():
@@ -688,10 +746,6 @@ def create_per_dataset_degradation_figures(all_data, output_dir):
         
         print(f"\nGenerating figure for {dataset_name.upper()}...")
         
-        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
-        axes = axes.flatten()
-        
-        # Get top 5 and bottom 5 configurations by retention
         if task_type == 'regression':
             noise_col = 'sigma'
             metric_col = 'r2'
@@ -724,37 +778,21 @@ def create_per_dataset_degradation_figures(all_data, output_dir):
         
         if len(config_retention) == 0:
             print(f"  ⚠️  No configurations with sufficient data for {dataset_name}")
-            plt.close()
             continue
         
         retention_df = pd.DataFrame(config_retention).sort_values('retention', ascending=False)
-        
-        top_5 = retention_df.head(5)
-        bottom_5 = retention_df.tail(5)
-        
-        # Plot top 5 (strategies split across first 3 panels)
-        # Only show retained strategies for this dataset
         strategies = sorted(df['strategy'].unique())
+        n_strategies = len(strategies)
         
-        # Adjust layout based on number of strategies
-        if len(strategies) <= 2:
-            # For 2 strategies (e.g., ESOL: hetero, legacy)
-            # Use first 2 panels for top, last 2 for bottom
-            fig, axes = plt.subplots(2, 2, figsize=(12, 8))
-            axes = axes.flatten()
-        else:
-            # For 3 strategies (e.g., hERG: binary_asymmetric, class_imbalance, uniform)
-            # Use standard 2x3 layout
-            fig, axes = plt.subplots(2, 3, figsize=(15, 10))
-            axes = axes.flatten()
+        # Single row of panels for top 5 only
+        fig, axes = plt.subplots(1, n_strategies, figsize=(6 * n_strategies, 5))
+        if n_strategies == 1:
+            axes = [axes]
         
         for idx, strategy in enumerate(strategies):
-            if idx >= len(axes) // 2:
-                break  # Don't overflow the top row
-            
             ax = axes[idx]
             
-            # Get top configs for this strategy
+            # Get top 5 configs for this strategy
             strategy_configs = retention_df[retention_df['strategy'] == strategy].head(5)
             
             for _, config in strategy_configs.iterrows():
@@ -766,7 +804,7 @@ def create_per_dataset_degradation_figures(all_data, output_dir):
                 ].sort_values(noise_col)
                 
                 if len(config_data) > 2:
-                    label = f"{model}/{rep}"
+                    label = format_label(model, rep)
                     ax.plot(config_data[noise_col], config_data[metric_col],
                            marker='o', linewidth=1.5, markersize=4, alpha=0.8,
                            label=label)
@@ -774,47 +812,13 @@ def create_per_dataset_degradation_figures(all_data, output_dir):
             ax.set_xlabel(f'Noise Level ({noise_col})', fontsize=9)
             ax.set_ylabel(metric_label, fontsize=9)
             ax.set_title(f'Top 5: {strategy}', fontsize=10, fontweight='bold')
-            ax.legend(fontsize=6, loc='best')
-            ax.grid(alpha=0.3)
-            ax.spines['top'].set_visible(False)
-            ax.spines['right'].set_visible(False)
-        
-        # Plot bottom 5 (strategies split across remaining panels)
-        bottom_start_idx = len(strategies) if len(strategies) <= 2 else 3
-        
-        for idx, strategy in enumerate(strategies):
-            if idx >= len(axes) // 2:
-                break  # Don't overflow
-            
-            ax = axes[bottom_start_idx + idx]
-            
-            # Get bottom configs for this strategy
-            strategy_configs = retention_df[retention_df['strategy'] == strategy].tail(5)
-            
-            for _, config in strategy_configs.iterrows():
-                model, rep = config['model'], config['rep']
-                config_data = df[
-                    (df['model'] == model) &
-                    (df['representation'] == rep) &
-                    (df['strategy'] == strategy)
-                ].sort_values(noise_col)
-                
-                if len(config_data) > 2:
-                    label = f"{model}/{rep}"
-                    ax.plot(config_data[noise_col], config_data[metric_col],
-                           marker='s', linewidth=1.5, markersize=4, alpha=0.8,
-                           label=label)
-            
-            ax.set_xlabel(f'Noise Level ({noise_col})', fontsize=9)
-            ax.set_ylabel(metric_label, fontsize=9)
-            ax.set_title(f'Bottom 5: {strategy}', fontsize=10, fontweight='bold')
-            ax.legend(fontsize=6, loc='best')
+            ax.legend(fontsize=7, loc='lower left')
             ax.grid(alpha=0.3)
             ax.spines['top'].set_visible(False)
             ax.spines['right'].set_visible(False)
         
         plt.suptitle(f'{dataset_name.upper()}: Performance Degradation Curves',
-                    fontsize=12, fontweight='bold', y=0.995)
+                    fontsize=12, fontweight='bold', y=1.02)
         plt.tight_layout()
         
         output_path = Path(output_dir) / f"{dataset_name}_degradation_curves.png"
@@ -857,10 +861,11 @@ def create_summary_tables(all_metrics, output_dir):
             f.write("="*50 + "\n\n")
             f.write(f"Strategies included: {', '.join(strategies_used)}\n\n")
             if dataset == 'esol':
+                f.write("Excluded configurations: DNN+PDV (negative R²), GP+PDV (poor baseline)\n")
                 f.write("Excluded strategies: outlier, quantile, threshold, valprop\n")
                 f.write("Reason: Focus on representative noise patterns for cross-dataset comparison\n")
             elif dataset == 'herg':
-                f.write("Excluded configurations: DNN + PDV\n")
+                f.write("Excluded configurations: DNN+PDV, DNN+PDV_CLASS\n")
                 f.write("Reason: Training convergence failure (see KNOWN_ISSUES.md)\n\n")
                 f.write("Excluded strategies: binary_asymmetric\n")
                 f.write("Reason: No degradation observed (uninformative)\n")
@@ -881,8 +886,9 @@ def create_summary_tables(all_metrics, output_dir):
         f.write("ESOL strategies: hetero, legacy\n")
         f.write("hERG strategies: class_imbalance, uniform\n\n")
         f.write("Exclusions:\n")
+        f.write("  ESOL: DNN+PDV, GP+PDV configurations removed (model failures)\n")
         f.write("  ESOL: outlier, quantile, threshold, valprop strategies removed\n")
-        f.write("  hERG: DNN + PDV configuration removed (training failure)\n")
+        f.write("  hERG: DNN+PDV, DNN+PDV_CLASS configurations removed (training failures)\n")
         f.write("  hERG: binary_asymmetric strategy removed (no degradation)\n")
     
     print(f"✓ Saved cross-dataset summary table with README")
@@ -954,7 +960,7 @@ def main(results_dir="../results"):
     print("  FIGURES:")
     print("    - cross_dataset_comparison.png (6 panels)")
     for dataset in all_data.keys():
-        print(f"    - {dataset}_degradation_curves.png (top/bottom 5 per strategy)")
+        print(f"    - {dataset}_degradation_curves.png (top 5 per strategy)")
     
     print("  TABLES:")
     for dataset in all_data.keys():
@@ -975,11 +981,12 @@ def main(results_dir="../results"):
     print("EXCLUSIONS APPLIED")
     print("="*80)
     print("ESOL:")
+    print("  Excluded configurations: DNN+PDV (negative R²), GP+PDV (poor baseline)")
     print("  Excluded strategies: outlier, quantile, threshold, valprop")
     print("  Reason: Focus on representative noise patterns for cross-dataset comparison")
     print("  Retained: hetero, legacy")
     print("\nhERG:")
-    print("  Excluded configurations: DNN + PDV")
+    print("  Excluded configurations: DNN+PDV, DNN+PDV_CLASS (training failures)")
     print("  Reason: Training convergence failure (see KNOWN_ISSUES.md)")
     print("  Excluded strategies: binary_asymmetric")
     print("  Reason: No degradation observed (uninformative)")
