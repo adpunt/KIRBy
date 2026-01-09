@@ -833,7 +833,7 @@ def test_dataset(
         
         # Checkpoint save after each noise level
         checkpoint_df = pd.DataFrame(all_results)
-        checkpoint_df.to_csv(dataset_dir / f"checkpoint_sigma_{sigma}.csv", index=False)
+        checkpoint_df.to_csv(dataset_dir / f"checkpoint_sigma_{sigma}_original.csv", index=False)
         print(f"    ✓ Checkpoint saved ({len(all_results)} results so far)")
     
     # ========================================================================
@@ -1118,7 +1118,7 @@ def main(dataset='both', use_default_hybrid=False):
         dataset_dir = results_dir / dataset_name.lower()
         
         # Save combined results FIRST (before any analysis)
-        results_csv = dataset_dir / f"{dataset_name.lower()}_all_results.csv"
+        results_csv = dataset_dir / f"{dataset_name.lower()}_all_results_original.csv"
         results_df.to_csv(results_csv, index=False)
         print(f"✓ Results saved to: {results_csv}")
         
