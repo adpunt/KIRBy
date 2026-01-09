@@ -34,7 +34,7 @@ from kirby.datasets.esol import load_esol_combined
 from kirby.representations.molecular import create_pdv, create_mhg_gnn, create_ecfp4
 from kirby.hybrid import create_hybrid, apply_feature_selection
 from noiseInject import NoiseInjectorRegression
-from noise_mitigation_methods import get_mitigation_method, DISTANCE_AWARE_METHODS, compute_distance_matrix
+from kirby.utils.noise_mitigation_methods import get_mitigation_method, DISTANCE_AWARE_METHODS, compute_distance_matrix
 
 
 # ============================================================================
