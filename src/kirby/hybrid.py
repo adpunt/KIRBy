@@ -16,6 +16,7 @@ Default configuration (from testing):
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import r2_score
 
 
 # ============================================================================
@@ -23,8 +24,7 @@ from sklearn.preprocessing import StandardScaler
 # ============================================================================
 
 def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labels,
-                           total_budget=100, step_size=10, patience=3, 
-                           importance_method='random_forest'):
+                           total_budget=100, step_size=10, patience=3):
     """
     Greedy forward feature allocation with plateau detection.
     
@@ -39,90 +39,96 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
         total_budget: Maximum total features to select (default: 100)
         step_size: Features to add per iteration (default: 10)
         patience: Early stopping patience, None to disable (default: 3)
-        importance_method: Method for feature selection within reps (default: 'random_forest')
         
     Returns:
-        tuple: (allocation, history, final_feature_info)
-            - allocation: Dict of {rep_name: n_features}
+        tuple: (best_allocation, history, final_feature_info)
+            - best_allocation: Dict of {rep_name: n_features} for best-performing iteration
             - history: List of iteration details
-            - final_feature_info: Feature selection info from final allocation (for consistent selection)
+            - final_feature_info: Feature selection info matching best_allocation
     """
     allocation = {rep: 0 for rep in rep_dict_train.keys()}
     remaining_budget = total_budget
     
     best_val_r2 = -np.inf
+    best_allocation = None
+    best_feature_info = {}
     steps_without_improvement = 0
     history = []
-    final_feature_info = {}
     
     iteration = 0
-    while remaining_budget >= step_size:
+    while remaining_budget > 0:
         iteration += 1
-        best_gain = -np.inf
-        best_rep = None
-        best_feat_info = None
+        iter_best_gain = -np.inf
+        iter_best_rep = None
+        iter_best_feat_info = None
+        iter_best_trial_allocation = None
         
         # Try adding step_size features from each rep
         for rep_name in rep_dict_train.keys():
-            trial_allocation = allocation.copy()
-            trial_allocation[rep_name] += step_size
-            
-            # Check if rep has enough features
+            # Check if rep is already maxed out
             max_features = rep_dict_train[rep_name].shape[1]
-            if trial_allocation[rep_name] > max_features:
+            if allocation[rep_name] >= max_features:
+                continue  # Already using all features from this rep
+            
+            trial_allocation = allocation.copy()
+            # Add step_size, but cap at max_features AND remaining_budget
+            features_to_add = min(step_size, max_features - allocation[rep_name], remaining_budget)
+            if features_to_add <= 0:
                 continue
+            trial_allocation[rep_name] = allocation[rep_name] + features_to_add
             
             # Create hybrid on train and apply SAME features to val
             X_train_trial, feat_info = _create_hybrid_with_allocation(
-                rep_dict_train, train_labels, trial_allocation, importance_method
+                rep_dict_train, train_labels, trial_allocation
             )
             X_val_trial = apply_feature_selection(rep_dict_val, feat_info)
             
             # Evaluate on validation
             r2 = _evaluate_allocation(X_train_trial, X_val_trial, train_labels, val_labels)
             
-            if r2 > best_gain:
-                best_gain = r2
-                best_rep = rep_name
-                best_feat_info = feat_info
+            if r2 > iter_best_gain:
+                iter_best_gain = r2
+                iter_best_rep = rep_name
+                iter_best_feat_info = feat_info
+                iter_best_trial_allocation = trial_allocation
         
         # Stopping conditions
-        if best_rep is None:
+        if iter_best_rep is None:
             break
         
-        # Patience-based early stopping
-        if patience is not None:
-            if best_gain <= best_val_r2:
-                steps_without_improvement += 1
-                if steps_without_improvement >= patience:
-                    break
-            else:
-                steps_without_improvement = 0
-                best_val_r2 = best_gain
-                final_feature_info = best_feat_info  # Save best feature selection
-        else:
-            best_val_r2 = max(best_val_r2, best_gain)
-            final_feature_info = best_feat_info  # Always update when no patience
+        # Commit this iteration's best choice
+        features_added = sum(iter_best_trial_allocation.values()) - sum(allocation.values())
+        allocation = iter_best_trial_allocation
+        remaining_budget -= features_added
         
-        # Add features
-        allocation[best_rep] += step_size
-        remaining_budget -= step_size
+        # Track global best (for patience-based early stopping)
+        if iter_best_gain > best_val_r2:
+            best_val_r2 = iter_best_gain
+            best_allocation = allocation.copy()
+            best_feature_info = iter_best_feat_info
+            steps_without_improvement = 0
+        else:
+            steps_without_improvement += 1
         
         history.append({
             'iteration': iteration,
-            'rep': best_rep,
+            'rep': iter_best_rep,
             'allocation': allocation.copy(),
-            'val_r2': best_gain
+            'val_r2': iter_best_gain
         })
+        
+        # Patience-based early stopping
+        if patience is not None and steps_without_improvement >= patience:
+            break
     
-    # If we never updated final_feature_info (e.g., first iteration was best),
-    # compute it for the final allocation
-    if not final_feature_info and sum(allocation.values()) > 0:
-        _, final_feature_info = _create_hybrid_with_allocation(
-            rep_dict_train, train_labels, allocation, importance_method
+    # If we never found anything, raise an error
+    if best_allocation is None:
+        raise ValueError(
+            "Greedy allocation found no valid feature combinations. "
+            "Check that representations have features and data is valid."
         )
     
-    return allocation, history, final_feature_info
+    return best_allocation, history, best_feature_info
 
 
 def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, val_labels,
@@ -131,7 +137,8 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
     Allocate features proportional to each representation's baseline performance.
     
     Tests each representation individually on validation set, then allocates budget
-    proportional to their R² scores. Better performing reps get more features.
+    proportional to their R² scores (regression) or accuracy (classification).
+    Better performing reps get more features.
     
     Args:
         rep_dict_train: Dict of {rep_name: train_features}
@@ -143,11 +150,7 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
     Returns:
         dict: Allocation of {rep_name: n_features}
     """
-    from sklearn.ensemble import RandomForestRegressor
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.metrics import r2_score
-    
-    print(f"  Performance-weighted allocation (budget={total_budget}):")
+    is_classification = _is_classification_task(train_labels)
     
     baseline_scores = {}
     
@@ -165,48 +168,88 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
         X_train_scaled = scaler.fit_transform(X_train_clean)
         X_val_scaled = scaler.transform(X_val_clean)
         
-        # Train and evaluate
-        model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-        model.fit(X_train_scaled, train_labels)
-        y_pred = model.predict(X_val_scaled)
+        # Train and evaluate with appropriate model
+        if is_classification:
+            model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+            model.fit(X_train_scaled, train_labels)
+            score = model.score(X_val_scaled, val_labels)  # accuracy
+        else:
+            model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+            model.fit(X_train_scaled, train_labels)
+            y_pred = model.predict(X_val_scaled)
+            score = r2_score(val_labels, y_pred)
         
-        r2 = r2_score(val_labels, y_pred)
-        baseline_scores[rep_name] = max(r2, 0.0)  # Clip negative R² to 0
-        
-        print(f"    {rep_name:8s}: val R²={r2:.4f}")
+        baseline_scores[rep_name] = max(score, 0.0)  # Clip negative scores to 0
     
     # Allocate proportional to performance
     total_score = sum(baseline_scores.values())
     
     if total_score == 0:
-        # Fallback: equal allocation
-        allocation = {rep: total_budget // len(rep_dict_train) for rep in rep_dict_train.keys()}
-    else:
-        allocation = {}
-        for rep_name, score in baseline_scores.items():
-            # Allocate proportional to R² score
-            n_features = int(round((score / total_score) * total_budget))
-            # Ensure we don't exceed available features
-            max_features = rep_dict_train[rep_name].shape[1]
-            allocation[rep_name] = min(n_features, max_features)
+        raise ValueError(
+            "All representations have zero or negative validation scores. "
+            "Cannot compute performance-weighted allocation. Use allocation_method='greedy' or 'fixed' instead."
+        )
     
-    # Adjust to hit budget exactly (distribute remainder to best performer)
+    allocation = {}
+    for rep_name, score in baseline_scores.items():
+        # Allocate proportional to score
+        n_features = int(round((score / total_score) * total_budget))
+        # Ensure we don't exceed available features
+        max_features = rep_dict_train[rep_name].shape[1]
+        allocation[rep_name] = min(n_features, max_features)
+    
+    # Adjust to hit budget exactly
     current_total = sum(allocation.values())
     if current_total < total_budget:
-        best_rep = max(baseline_scores.items(), key=lambda x: x[1])[0]
-        max_features = rep_dict_train[best_rep].shape[1]
-        allocation[best_rep] = min(allocation[best_rep] + (total_budget - current_total), max_features)
-    
-    print(f"    Allocation: {allocation}")
-    print(f"    Total: {sum(allocation.values())}/{total_budget} features")
+        # Distribute remainder to reps with capacity, prioritizing best performers
+        sorted_reps = sorted(baseline_scores.items(), key=lambda x: x[1], reverse=True)
+        remaining = total_budget - current_total
+        for rep_name, _ in sorted_reps:
+            if remaining <= 0:
+                break
+            max_features = rep_dict_train[rep_name].shape[1]
+            can_add = max_features - allocation[rep_name]
+            add_amount = min(can_add, remaining)
+            allocation[rep_name] += add_amount
+            remaining -= add_amount
+    elif current_total > total_budget:
+        # Remove excess from worst performer
+        sorted_reps = sorted(baseline_scores.items(), key=lambda x: x[1])
+        excess = current_total - total_budget
+        for rep_name, _ in sorted_reps:
+            if excess <= 0:
+                break
+            reduce_by = min(allocation[rep_name], excess)
+            allocation[rep_name] -= reduce_by
+            excess -= reduce_by
     
     return allocation
 
 
-def _create_hybrid_with_allocation(rep_dict, labels, allocation, importance_method='random_forest'):
-    """Helper: Create hybrid with specific allocation"""
+def _is_classification_task(labels):
+    """Determine if this is a classification or regression task.
+    
+    Uses dtype check: integer types are classification, float types are regression.
+    """
+    labels = np.asarray(labels)
+    # Check if labels are integer type (classification)
+    if np.issubdtype(labels.dtype, np.integer):
+        return True
+    # Check if float labels are actually integers (e.g., 0.0, 1.0, 2.0)
+    if np.issubdtype(labels.dtype, np.floating):
+        return np.allclose(labels, labels.astype(int)) and len(np.unique(labels)) < 20
+    return False
+
+
+def _create_hybrid_with_allocation(rep_dict, labels, allocation):
+    """Helper: Create hybrid with specific allocation.
+    
+    Note: Always uses RandomForest for importance (fast and reliable for greedy inner loop).
+    """
     selected_features = []
     feature_info = {}
+    
+    is_classification = _is_classification_task(labels)
     
     for name, X in rep_dict.items():
         n_select = allocation[name]
@@ -222,6 +265,7 @@ def _create_hybrid_with_allocation(rep_dict, labels, allocation, importance_meth
             selected_features.append(X_clipped)
             feature_info[name] = {
                 'selected_indices': np.arange(X_clipped.shape[1]),
+                'importance_scores': np.ones(X_clipped.shape[1]),  # All features selected, importance not computed
                 'n_features': X_clipped.shape[1]
             }
             continue
@@ -231,7 +275,6 @@ def _create_hybrid_with_allocation(rep_dict, labels, allocation, importance_meth
         X_scaled = scaler.fit_transform(X_clipped)
         
         # Use RF for importance (fast and reliable)
-        is_classification = len(np.unique(labels)) < 10
         if is_classification:
             model = RandomForestClassifier(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
         else:
@@ -254,7 +297,8 @@ def _create_hybrid_with_allocation(rep_dict, labels, allocation, importance_meth
         }
     
     if len(selected_features) == 0:
-        return np.zeros((len(labels), 0)), feature_info
+        n_samples = len(labels)
+        return np.zeros((n_samples, 0), dtype=np.float32), feature_info
     
     return np.hstack(selected_features).astype(np.float32), feature_info
 
@@ -268,7 +312,7 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val):
     X_train_scaled = scaler.fit_transform(X_train)
     X_val_scaled = scaler.transform(X_val)
     
-    is_classification = len(np.unique(y_train)) < 10
+    is_classification = _is_classification_task(y_train)
     if is_classification:
         model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
     else:
@@ -279,7 +323,6 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val):
     if is_classification:
         return model.score(X_val_scaled, y_val)
     else:
-        from sklearn.metrics import r2_score
         y_pred = model.predict(X_val_scaled)
         return r2_score(y_val, y_pred)
 
@@ -308,7 +351,7 @@ def compute_feature_importance(base_reps, labels, method='random_forest', **kwar
         dict: Dictionary with representation names as keys and importance score arrays as values
     """
     importance_scores = {}
-    is_classification = len(np.unique(labels)) < 10
+    is_classification = _is_classification_task(labels)
     
     # RANDOM FOREST (DEFAULT)
     if method == 'random_forest':
@@ -317,6 +360,9 @@ def compute_feature_importance(base_reps, labels, method='random_forest', **kwar
         random_state = kwargs.get('random_state', 42)
         
         for rep_name, X in base_reps.items():
+            if X.shape[1] == 0:
+                raise ValueError(f"Representation '{rep_name}' has 0 features")
+            
             # Clean data (match original implementation)
             X_clipped = np.clip(X, -1e10, 1e10)
             X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
@@ -341,7 +387,7 @@ def compute_feature_importance(base_reps, labels, method='random_forest', **kwar
                 )
             
             rf.fit(X_scaled, labels)
-            importance_scores[rep_name] = rf.feature_importances_
+            importance_scores[rep_name] = np.nan_to_num(rf.feature_importances_, nan=0.0)
     
     # PERMUTATION IMPORTANCE
     elif method == 'permutation':
@@ -353,8 +399,15 @@ def compute_feature_importance(base_reps, labels, method='random_forest', **kwar
         n_repeats = kwargs.get('n_repeats', 5)
         
         for rep_name, X in base_reps.items():
+            if X.shape[1] == 0:
+                raise ValueError(f"Representation '{rep_name}' has 0 features")
+            
+            # Clean data (match random_forest implementation)
+            X_clipped = np.clip(X, -1e10, 1e10)
+            X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
+            
             scaler = StandardScaler()
-            X_scaled = scaler.fit_transform(X)
+            X_scaled = scaler.fit_transform(X_clipped)
             
             if is_classification:
                 model = RandomForestClassifier(n_estimators=n_estimators, max_depth=max_depth,
@@ -375,8 +428,15 @@ def compute_feature_importance(base_reps, labels, method='random_forest', **kwar
         random_state = kwargs.get('random_state', 42)
         
         for rep_name, X in base_reps.items():
+            if X.shape[1] == 0:
+                raise ValueError(f"Representation '{rep_name}' has 0 features")
+            
+            # Clean data (match random_forest implementation)
+            X_clipped = np.clip(X, -1e10, 1e10)
+            X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
+            
             scaler = StandardScaler()
-            X_scaled = scaler.fit_transform(X)
+            X_scaled = scaler.fit_transform(X_clipped)
             
             if is_classification:
                 mi_scores = mutual_info_classif(X_scaled, labels, random_state=random_state)
@@ -408,30 +468,43 @@ def concatenate_features(base_reps, importance_scores, allocation):
         
     Returns:
         tuple: (hybrid_features, feature_info)
-            - hybrid_features: Concatenated array of selected features
+            - hybrid_features: Concatenated array of selected features (clipped and cleaned)
             - feature_info: Dict with metadata about selected features
     """
-    # Handle int allocation (backwards compatibility)
-    if isinstance(allocation, int):
-        allocation = {rep: allocation for rep in base_reps.keys()}
+    if not isinstance(allocation, dict):
+        raise TypeError(f"allocation must be a dict, got {type(allocation).__name__}")
     
     selected_parts = []
     feature_info = {}
     
     for rep_name in base_reps.keys():
+        if rep_name not in allocation:
+            raise KeyError(f"allocation missing key '{rep_name}'")
+        
         X = base_reps[rep_name]
         scores = importance_scores[rep_name]
-        n_select = allocation.get(rep_name, 0)
+        n_select = allocation[rep_name]
         
         if n_select == 0:
             continue
         
+        # Verify dimension match
+        if len(scores) != X.shape[1]:
+            raise ValueError(
+                f"Dimension mismatch for '{rep_name}': importance_scores has {len(scores)} values "
+                f"but features has {X.shape[1]} columns. Ensure importance was computed on same data."
+            )
+        
+        # Clean data (consistent with all other functions)
+        X_clipped = np.clip(X, -1e10, 1e10)
+        X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
+        
         # Select top N features
-        n_select = min(n_select, X.shape[1])
+        n_select = min(n_select, X_clipped.shape[1])
         top_indices = np.argsort(scores)[-n_select:][::-1]
         
         # Extract selected features
-        X_selected = X[:, top_indices]
+        X_selected = X_clipped[:, top_indices]
         selected_parts.append(X_selected)
         
         # Store metadata
@@ -443,7 +516,10 @@ def concatenate_features(base_reps, importance_scores, allocation):
     
     # Concatenate all selected features
     if len(selected_parts) == 0:
-        return np.zeros((list(base_reps.values())[0].shape[0], 0)), feature_info
+        raise ValueError(
+            "No features selected. Check that allocation has non-zero values "
+            "for at least one representation."
+        )
     
     hybrid_features = np.hstack(selected_parts).astype(np.float32)
     
@@ -459,23 +535,44 @@ def apply_feature_selection(base_reps, feature_info):
         feature_info: Dict from create_hybrid containing selected_indices for each rep
         
     Returns:
-        np.ndarray: Concatenated selected features
+        np.ndarray: Concatenated selected features (clipped and cleaned)
     """
     selected_parts = []
     
-    for rep_name in base_reps.keys():
-        if rep_name not in feature_info:
+    # Iterate over feature_info keys to maintain same order as training
+    # (feature_info preserves the order from create_hybrid)
+    for rep_name in feature_info.keys():
+        # Skip metadata keys like 'allocation', 'greedy_history'
+        if not isinstance(feature_info[rep_name], dict) or 'selected_indices' not in feature_info[rep_name]:
             continue
+            
+        if rep_name not in base_reps:
+            raise ValueError(f"Representation '{rep_name}' found in feature_info but not in base_reps")
         
         X = base_reps[rep_name]
         indices = feature_info[rep_name]['selected_indices']
         
+        # Check that indices are valid for this data
+        max_idx = np.max(indices) if len(indices) > 0 else -1
+        if max_idx >= X.shape[1]:
+            raise ValueError(
+                f"Feature index {max_idx} out of bounds for representation '{rep_name}' "
+                f"with {X.shape[1]} features. Ensure test data has same number of features as training data."
+            )
+        
         # Apply same selection as training
         X_selected = X[:, indices]
+        
+        # Apply same clipping as training (CRITICAL for consistency)
+        X_selected = np.clip(X_selected, -1e10, 1e10)
+        X_selected = np.nan_to_num(X_selected, nan=0.0, posinf=1e10, neginf=-1e10)
+        
         selected_parts.append(X_selected)
     
     if len(selected_parts) == 0:
-        return np.zeros((list(base_reps.values())[0].shape[0], 0))
+        raise ValueError(
+            "No features to select. feature_info contains no valid representation entries."
+        )
     
     return np.hstack(selected_parts).astype(np.float32)
 
@@ -522,7 +619,53 @@ def create_hybrid(base_reps, labels,
             - hybrid_features: Combined feature array
             - feature_info: Metadata about selected features (includes 'allocation' for greedy)
     """
+    # Convert labels to numpy array if needed
+    labels = np.asarray(labels)
+    
+    # Input validation
+    if not base_reps:
+        raise ValueError("base_reps cannot be empty")
+    
+    # Check all reps have same number of samples and at least 1 feature
+    n_samples_list = [X.shape[0] for X in base_reps.values()]
+    if len(set(n_samples_list)) > 1:
+        raise ValueError(f"All representations must have same number of samples. Got: {n_samples_list}")
+    
+    n_samples = n_samples_list[0]
+    if len(labels) != n_samples:
+        raise ValueError(f"labels length ({len(labels)}) must match number of samples ({n_samples})")
+    
+    if n_samples < 2:
+        raise ValueError(f"Need at least 2 samples, got {n_samples}")
+    
+    # Check for reps with 0 features
+    for rep_name, X in base_reps.items():
+        if X.shape[1] == 0:
+            raise ValueError(f"Representation '{rep_name}' has 0 features")
+    
+    # Check for NaN/inf in labels
+    if np.any(np.isnan(labels)):
+        raise ValueError("labels contains NaN values")
+    if np.any(np.isinf(labels)):
+        raise ValueError("labels contains infinite values")
+    
+    # Validate numeric parameters
+    if budget <= 0:
+        raise ValueError(f"budget must be positive, got {budget}")
+    if step_size <= 0:
+        raise ValueError(f"step_size must be positive, got {step_size}")
+    if n_per_rep <= 0:
+        raise ValueError(f"n_per_rep must be positive, got {n_per_rep}")
+    if not (0 < validation_split < 1):
+        raise ValueError(f"validation_split must be between 0 and 1, got {validation_split}")
+    if patience is not None and patience < 1:
+        raise ValueError(f"patience must be at least 1 or None, got {patience}")
+    
     # Apply quality filters if requested
+    # We track the mapping from filtered indices back to original indices
+    filter_index_maps = {}  # {rep_name: array mapping filtered_idx -> original_idx}
+    original_base_reps = base_reps  # Keep reference to original data
+    
     if apply_filters:
         try:
             from kirby.utils.feature_filtering import apply_quality_filters
@@ -534,16 +677,35 @@ def create_hybrid(base_reps, labels,
                     sparsity_threshold=kwargs.get('sparsity_threshold', 0.95),
                     variance_threshold=kwargs.get('variance_threshold', 0.01)
                 )
+                if X_filtered.shape[1] == 0:
+                    raise ValueError(
+                        f"All features filtered out for '{rep_name}'. "
+                        f"Adjust sparsity_threshold or variance_threshold, or set apply_filters=False."
+                    )
                 filtered_reps[rep_name] = X_filtered
+                filter_index_maps[rep_name] = np.where(keep_mask)[0]
             base_reps = filtered_reps
-        except ImportError:
-            print("Warning: Could not import feature_filtering, skipping filters")
+        except ImportError as e:
+            raise ImportError(
+                f"apply_filters=True requires kirby.utils.feature_filtering module: {e}"
+            )
     
     # GREEDY ALLOCATION
     if allocation_method == 'greedy':
         # Split into train/val for greedy allocation
         n_samples = len(labels)
         n_val = int(n_samples * validation_split)
+        
+        # Ensure minimum val size to avoid degenerate cases
+        n_val = max(n_val, 1)
+        n_train = n_samples - n_val
+        
+        if n_train < 2:
+            raise ValueError(f"Need at least 2 training samples for greedy allocation. "
+                           f"Got {n_train} with validation_split={validation_split} and {n_samples} total samples.")
+        if n_val >= n_samples:
+            raise ValueError(f"validation_split={validation_split} leaves no training data "
+                           f"for {n_samples} samples")
         
         # Shuffle indices
         indices = np.random.RandomState(42).permutation(n_samples)
@@ -559,13 +721,20 @@ def create_hybrid(base_reps, labels,
         # Run greedy allocation - now returns feature_info directly
         allocation, history, greedy_feature_info = allocate_greedy_forward(
             rep_dict_train, rep_dict_val, train_labels, val_labels,
-            total_budget=budget, step_size=step_size, patience=patience,
-            importance_method=importance_method
+            total_budget=budget, step_size=step_size, patience=patience
         )
         
+        # If filters were applied, remap indices from filtered space to original space
+        if filter_index_maps:
+            for rep_name in list(greedy_feature_info.keys()):
+                if rep_name in filter_index_maps and 'selected_indices' in greedy_feature_info[rep_name]:
+                    filtered_indices = greedy_feature_info[rep_name]['selected_indices']
+                    original_indices = filter_index_maps[rep_name][filtered_indices]
+                    greedy_feature_info[rep_name]['selected_indices'] = original_indices
+        
         # Apply the SAME feature selection from greedy to full data
-        # This ensures we use the exact features that greedy optimized for
-        hybrid_features = apply_feature_selection(base_reps, greedy_feature_info)
+        # Use original_base_reps so indices (now in original space) match
+        hybrid_features = apply_feature_selection(original_base_reps, greedy_feature_info)
         
         # Build feature_info with allocation metadata
         feature_info = greedy_feature_info.copy()
@@ -577,6 +746,17 @@ def create_hybrid(base_reps, labels,
         # Split into train/val to test baselines
         n_samples = len(labels)
         n_val = int(n_samples * validation_split)
+        
+        # Ensure minimum val size to avoid degenerate cases
+        n_val = max(n_val, 1)
+        n_train = n_samples - n_val
+        
+        if n_train < 2:
+            raise ValueError(f"Need at least 2 training samples for performance_weighted allocation. "
+                           f"Got {n_train} with validation_split={validation_split} and {n_samples} total samples.")
+        if n_val >= n_samples:
+            raise ValueError(f"validation_split={validation_split} leaves no training data "
+                           f"for {n_samples} samples")
         
         # Shuffle indices
         indices = np.random.RandomState(42).permutation(n_samples)
@@ -595,32 +775,75 @@ def create_hybrid(base_reps, labels,
             total_budget=budget
         )
         
-        # Compute importance on full data
+        # Compute importance on TRAIN split (consistent with allocation decision)
         importance_scores = compute_feature_importance(
-            base_reps, labels, method=importance_method, **kwargs
+            rep_dict_train, train_labels, method=importance_method, **kwargs
         )
         
-        # Create final hybrid with optimal allocation
-        hybrid_features, feature_info = concatenate_features(
-            base_reps, importance_scores, allocation
+        # Select features based on train importance, then apply to full data
+        _, feature_info = concatenate_features(
+            rep_dict_train, importance_scores, allocation
         )
+        
+        # If filters were applied, remap indices from filtered space to original space
+        if filter_index_maps:
+            for rep_name in list(feature_info.keys()):
+                if rep_name in filter_index_maps and 'selected_indices' in feature_info[rep_name]:
+                    filtered_indices = feature_info[rep_name]['selected_indices']
+                    original_indices = filter_index_maps[rep_name][filtered_indices]
+                    feature_info[rep_name]['selected_indices'] = original_indices
+        
+        # Apply same feature selection to full data (use original if filters applied)
+        hybrid_features = apply_feature_selection(original_base_reps, feature_info)
         
         # Add allocation to feature_info for reference
         feature_info['allocation'] = allocation
         
     # FIXED ALLOCATION (BACKWARDS COMPATIBLE)
     elif allocation_method == 'fixed':
-        # Compute importance
+        # Split data for consistent importance computation (avoid data leakage)
+        n_samples = len(labels)
+        n_val = int(n_samples * validation_split)
+        n_val = max(n_val, 1)
+        n_train = n_samples - n_val
+        
+        if n_train < 2:
+            raise ValueError(f"Need at least 2 training samples for fixed allocation. "
+                           f"Got {n_train} with validation_split={validation_split} and {n_samples} total samples.")
+        if n_val >= n_samples:
+            raise ValueError(f"validation_split={validation_split} leaves no training data "
+                           f"for {n_samples} samples")
+        
+        indices = np.random.RandomState(42).permutation(n_samples)
+        train_idx = indices[n_val:]
+        
+        # Split reps for importance computation
+        rep_dict_train = {name: X[train_idx] for name, X in base_reps.items()}
+        train_labels = labels[train_idx]
+        
+        # Compute importance on TRAIN split (consistent with other methods)
         importance_scores = compute_feature_importance(
-            base_reps, labels, method=importance_method, **kwargs
+            rep_dict_train, train_labels, method=importance_method, **kwargs
         )
         
         # Use same n_per_rep for all reps
         allocation = {rep: n_per_rep for rep in base_reps.keys()}
         
-        hybrid_features, feature_info = concatenate_features(
-            base_reps, importance_scores, allocation
+        # Select features based on train importance
+        _, feature_info = concatenate_features(
+            rep_dict_train, importance_scores, allocation
         )
+        
+        # If filters were applied, remap indices from filtered space to original space
+        if filter_index_maps:
+            for rep_name in list(feature_info.keys()):
+                if rep_name in filter_index_maps and 'selected_indices' in feature_info[rep_name]:
+                    filtered_indices = feature_info[rep_name]['selected_indices']
+                    original_indices = filter_index_maps[rep_name][filtered_indices]
+                    feature_info[rep_name]['selected_indices'] = original_indices
+        
+        # Apply same feature selection to original data
+        hybrid_features = apply_feature_selection(original_base_reps, feature_info)
         
         feature_info['allocation'] = allocation
     
