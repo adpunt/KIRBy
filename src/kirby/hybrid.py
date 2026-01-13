@@ -42,9 +42,10 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
         importance_method: Method for feature selection within reps (default: 'random_forest')
         
     Returns:
-        tuple: (allocation, history)
+        tuple: (allocation, history, final_feature_info)
             - allocation: Dict of {rep_name: n_features}
             - history: List of iteration details
+            - final_feature_info: Feature selection info from final allocation (for consistent selection)
     """
     allocation = {rep: 0 for rep in rep_dict_train.keys()}
     remaining_budget = total_budget
@@ -52,12 +53,14 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
     best_val_r2 = -np.inf
     steps_without_improvement = 0
     history = []
+    final_feature_info = {}
     
     iteration = 0
     while remaining_budget >= step_size:
         iteration += 1
         best_gain = -np.inf
         best_rep = None
+        best_feat_info = None
         
         # Try adding step_size features from each rep
         for rep_name in rep_dict_train.keys():
@@ -81,6 +84,7 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
             if r2 > best_gain:
                 best_gain = r2
                 best_rep = rep_name
+                best_feat_info = feat_info
         
         # Stopping conditions
         if best_rep is None:
@@ -95,8 +99,10 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
             else:
                 steps_without_improvement = 0
                 best_val_r2 = best_gain
+                final_feature_info = best_feat_info  # Save best feature selection
         else:
             best_val_r2 = max(best_val_r2, best_gain)
+            final_feature_info = best_feat_info  # Always update when no patience
         
         # Add features
         allocation[best_rep] += step_size
@@ -109,7 +115,14 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
             'val_r2': best_gain
         })
     
-    return allocation, history
+    # If we never updated final_feature_info (e.g., first iteration was best),
+    # compute it for the final allocation
+    if not final_feature_info and sum(allocation.values()) > 0:
+        _, final_feature_info = _create_hybrid_with_allocation(
+            rep_dict_train, train_labels, allocation, importance_method
+        )
+    
+    return allocation, history, final_feature_info
 
 
 def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, val_labels,
@@ -543,24 +556,19 @@ def create_hybrid(base_reps, labels,
         train_labels = labels[train_idx]
         val_labels = labels[val_idx]
         
-        # Run greedy allocation
-        allocation, history = allocate_greedy_forward(
+        # Run greedy allocation - now returns feature_info directly
+        allocation, history, greedy_feature_info = allocate_greedy_forward(
             rep_dict_train, rep_dict_val, train_labels, val_labels,
             total_budget=budget, step_size=step_size, patience=patience,
             importance_method=importance_method
         )
         
-        # Compute importance on full data
-        importance_scores = compute_feature_importance(
-            base_reps, labels, method=importance_method, **kwargs
-        )
+        # Apply the SAME feature selection from greedy to full data
+        # This ensures we use the exact features that greedy optimized for
+        hybrid_features = apply_feature_selection(base_reps, greedy_feature_info)
         
-        # Create final hybrid with optimal allocation
-        hybrid_features, feature_info = concatenate_features(
-            base_reps, importance_scores, allocation
-        )
-        
-        # Add allocation to feature_info for reference
+        # Build feature_info with allocation metadata
+        feature_info = greedy_feature_info.copy()
         feature_info['allocation'] = allocation
         feature_info['greedy_history'] = history
     
