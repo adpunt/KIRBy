@@ -373,7 +373,7 @@ def create_all_hybrids(
 # ============================================================================
 
 def find_best_hybrids(
-    representations: Dict[str, Tuple[np.ndarray, np.ndarray]],
+    hybrids: Dict[str, Tuple[np.ndarray, np.ndarray, Dict, float]],
     ecfp_train: np.ndarray,
     ecfp_test: np.ndarray,
     train_labels: np.ndarray,
@@ -384,6 +384,9 @@ def find_best_hybrids(
     """
     Find the best hybrid configurations for noise estimation.
     
+    Args:
+        hybrids: Dict of {name: (train, test, info, creation_time)} from create_all_hybrids
+    
     Tests each hybrid as a neighbor structure and reports which works best.
     """
     print(f"\n{'='*60}")
@@ -392,15 +395,12 @@ def find_best_hybrids(
     
     hybrid_results = []
     
-    # Get hybrid representations
-    hybrid_reps = {k: v for k, v in representations.items() if k.startswith('hybrid_')}
-    
-    if not hybrid_reps:
+    if not hybrids:
         print("  No hybrid representations to evaluate")
         return pd.DataFrame()
     
     # Test each noise level
-    results_by_hybrid = {name: {'sigma_0.3': [], 'sigma_0.6': []} for name in hybrid_reps}
+    results_by_hybrid = {name: {'sigma_0.3': [], 'sigma_0.6': []} for name in hybrids}
     
     for sigma in NOISE_LEVELS:
         print(f"\n  σ = {sigma}")
@@ -421,7 +421,7 @@ def find_best_hybrids(
         }
         
         # Test each hybrid
-        for hybrid_name, (hybrid_train, hybrid_test, hybrid_info, creation_time) in hybrid_reps.items():
+        for hybrid_name, (hybrid_train, hybrid_test, hybrid_info, creation_time) in hybrids.items():
             print(f"\n    [{hybrid_name}]")
             
             best_recovery = -np.inf
@@ -467,7 +467,7 @@ def find_best_hybrids(
             print(f"      Best: {best_recovery:+.1%} ({best_config}) {marker}")
     
     # Compile results
-    for hybrid_name, (hybrid_train, hybrid_test, hybrid_info, creation_time) in hybrid_reps.items():
+    for hybrid_name, (hybrid_train, hybrid_test, hybrid_info, creation_time) in hybrids.items():
         # Extract config from name
         config = next((c for c in HYBRID_CONFIGS if c[0] == hybrid_name), None)
         if config is None:
@@ -574,7 +574,7 @@ def run_dataset(
     # HYBRID SEARCH: Find best hybrid configurations
     # ============================================================
     hybrid_search_df = find_best_hybrids(
-        representations, ecfp_train, ecfp_test,
+        hybrids, ecfp_train, ecfp_test,
         train_labels, test_labels,
         dataset_name, results_dir
     )
