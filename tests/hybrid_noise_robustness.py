@@ -87,7 +87,7 @@ except ImportError:
 # CONFIGURATION
 # =============================================================================
 
-N_SAMPLES = 10000
+N_SAMPLES = 5000
 RANDOM_SEED = 42
 
 # Hybrid optimization
