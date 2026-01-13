@@ -13,7 +13,7 @@ Approach:
    - Weight samples (downweight high-noise samples during training)
 3. Evaluate all methods with fixed ECFP4 + RF pipeline
 
-Representations compared: ECFP4, PDV, MHG-GNN, Hybrid(PDV+MHG-GNN)
+Representations compared: ECFP4, PDV, MHG-GNN, Hybrid (multiple configurations)
 """
 
 import argparse
@@ -22,6 +22,7 @@ import sys
 import time
 from dataclasses import dataclass, asdict
 from datetime import datetime
+from itertools import combinations
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -55,8 +56,20 @@ NOISE_LEVELS = [0.3, 0.6]
 N_SAMPLES_QM9 = 5000
 N_JOBS = -1
 
-# Representations for neighbor computation (only used by neighbor-based methods)
-SMOOTHING_REPS = ['ecfp4', 'pdv', 'mhggnn', 'hybrid']
+# Base representations (used for hybrids and standalone)
+BASE_REPS = ['ecfp4', 'pdv', 'mhggnn']
+
+# Hybrid configurations to explore
+HYBRID_CONFIGS = [
+    # (name, rep_list, budget, allocation_method)
+    ('hybrid_pdv_mhg_greedy100', ['pdv', 'mhggnn'], 100, 'greedy'),
+    ('hybrid_pdv_mhg_greedy50', ['pdv', 'mhggnn'], 50, 'greedy'),
+    ('hybrid_pdv_mhg_fixed50', ['pdv', 'mhggnn'], 50, 'fixed'),
+    ('hybrid_all_greedy100', ['ecfp4', 'pdv', 'mhggnn'], 100, 'greedy'),
+    ('hybrid_all_greedy150', ['ecfp4', 'pdv', 'mhggnn'], 150, 'greedy'),
+    ('hybrid_ecfp_pdv_greedy100', ['ecfp4', 'pdv'], 100, 'greedy'),
+    ('hybrid_ecfp_mhg_greedy100', ['ecfp4', 'mhggnn'], 100, 'greedy'),
+]
 
 # Noise estimation methods
 # Group 1: Neighbor-based (use molecular representation)
@@ -75,7 +88,7 @@ ALPHA_VALUES = [0.1, 0.3, 0.5, 0.7]
 
 # Neighbor parameters (for neighbor-based methods)
 K_NEIGHBORS = 10
-DISTANCE_METRICS = ['cosine', 'euclidean', 'manhattan']  # Compare distance metrics
+DISTANCE_METRICS = ['cosine', 'euclidean', 'manhattan']
 
 
 # ============================================================================
@@ -88,7 +101,7 @@ class Result:
     sigma: float
     smoothing_rep: str
     estimator: str
-    distance_metric: str  # NEW: which distance metric was used
+    distance_metric: str
     approach: str  # 'smooth' or 'weight'
     method: str    # specific smoothing/weighting method
     alpha: float
@@ -114,6 +127,29 @@ class Result:
     weight_std: float
     
     time_seconds: float
+    
+    def to_dict(self):
+        return asdict(self)
+
+
+@dataclass
+class HybridSearchResult:
+    """Result from hybrid configuration search."""
+    dataset: str
+    hybrid_name: str
+    reps_combined: str  # comma-separated
+    budget: int
+    allocation_method: str
+    n_features: int
+    allocation: str  # JSON-like string of allocation dict
+    
+    # Evaluation as neighbor structure (best across all estimators/methods)
+    best_r2_recovery_sigma03: float
+    best_config_sigma03: str
+    best_r2_recovery_sigma06: float
+    best_config_sigma06: str
+    
+    creation_time_seconds: float
     
     def to_dict(self):
         return asdict(self)
@@ -163,7 +199,6 @@ def run_experiment_with_scores(
     start = time.time()
     
     if approach == 'smooth':
-        # Smooth labels
         y_modified = smooth_by_scores(
             y_noisy, noise_scores, neighbor_means,
             alpha=alpha, method=method
@@ -182,10 +217,8 @@ def run_experiment_with_scores(
     
     elapsed = time.time() - start
     
-    # Evaluate
     metrics = train_evaluate_rf(X_ecfp_train, X_ecfp_test, y_modified, y_test, sample_weight=weights)
     
-    # Recovery rates
     r2_recovery = (metrics['r2'] - baselines['r2_noisy']) / (baselines['r2_clean'] - baselines['r2_noisy'] + 1e-10)
     mae_recovery = (baselines['mae_noisy'] - metrics['mae']) / (baselines['mae_noisy'] - baselines['mae_clean'] + 1e-10)
     
@@ -227,12 +260,11 @@ def print_result(result: Result):
 # REPRESENTATION CREATION
 # ============================================================================
 
-def create_all_representations(
+def create_base_representations(
     train_smiles: List[str], 
-    test_smiles: List[str],
-    train_labels: np.ndarray
+    test_smiles: List[str]
 ) -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
-    """Create all representations for train and test."""
+    """Create base representations (without hybrids)."""
     
     print("  Creating ECFP4...")
     ecfp_train = create_ecfp4(train_smiles, radius=2, n_bits=2048)
@@ -246,25 +278,245 @@ def create_all_representations(
     mhggnn_train = create_mhg_gnn(train_smiles)
     mhggnn_test = create_mhg_gnn(test_smiles)
     
-    print("  Creating Hybrid (PDV+MHG-GNN)...")
-    reps_train = {'pdv': pdv_train, 'mhggnn': mhggnn_train}
-    reps_test = {'pdv': pdv_test, 'mhggnn': mhggnn_test}
-    
-    hybrid_train, hybrid_info = create_hybrid(
-        reps_train, train_labels,
-        allocation_method='greedy',
-        budget=100,
-        validation_split=0.2,
-        apply_filters=False
-    )
-    hybrid_test = apply_feature_selection(reps_test, hybrid_info)
-    
     return {
         'ecfp4': (ecfp_train, ecfp_test),
         'pdv': (pdv_train, pdv_test),
         'mhggnn': (mhggnn_train, mhggnn_test),
-        'hybrid': (hybrid_train, hybrid_test),
     }
+
+
+def create_hybrid_representation(
+    base_reps_train: Dict[str, np.ndarray],
+    base_reps_test: Dict[str, np.ndarray],
+    train_labels: np.ndarray,
+    rep_names: List[str],
+    budget: int,
+    allocation_method: str
+) -> Tuple[np.ndarray, np.ndarray, Dict, float]:
+    """
+    Create a single hybrid representation.
+    
+    Returns:
+        (hybrid_train, hybrid_test, info, creation_time)
+    
+    Raises:
+        ValueError: If hybrid creation fails
+    """
+    reps_train = {name: base_reps_train[name] for name in rep_names}
+    reps_test = {name: base_reps_test[name] for name in rep_names}
+    
+    t0 = time.time()
+    
+    if allocation_method == 'fixed':
+        n_per_rep = budget // len(rep_names)
+        hybrid_train, hybrid_info = create_hybrid(
+            reps_train, train_labels,
+            allocation_method='fixed',
+            n_per_rep=n_per_rep,
+            validation_split=0.2
+        )
+    else:
+        hybrid_train, hybrid_info = create_hybrid(
+            reps_train, train_labels,
+            allocation_method=allocation_method,
+            budget=budget,
+            step_size=10,
+            patience=3,
+            validation_split=0.2
+        )
+    
+    hybrid_test = apply_feature_selection(reps_test, hybrid_info)
+    creation_time = time.time() - t0
+    
+    return hybrid_train, hybrid_test, hybrid_info, creation_time
+
+
+def create_all_hybrids(
+    base_reps: Dict[str, Tuple[np.ndarray, np.ndarray]],
+    train_labels: np.ndarray,
+    configs: List[Tuple]
+) -> Dict[str, Tuple[np.ndarray, np.ndarray, Dict, float]]:
+    """
+    Create all hybrid configurations.
+    
+    Returns:
+        Dict of {name: (train, test, info, creation_time)}
+    """
+    base_train = {name: reps[0] for name, reps in base_reps.items()}
+    base_test = {name: reps[1] for name, reps in base_reps.items()}
+    
+    hybrids = {}
+    
+    for name, rep_list, budget, alloc_method in configs:
+        print(f"  Creating {name} ({'+'.join(rep_list)}, budget={budget}, {alloc_method})...")
+        
+        try:
+            hybrid_train, hybrid_test, info, creation_time = create_hybrid_representation(
+                base_train, base_test, train_labels,
+                rep_list, budget, alloc_method
+            )
+            hybrids[name] = (hybrid_train, hybrid_test, info, creation_time)
+            
+            alloc = info.get('allocation', {})
+            total = sum(v for k, v in alloc.items() if isinstance(v, (int, float)))
+            print(f"    → {hybrid_train.shape[1]} features, allocation: {alloc} ({creation_time:.1f}s)")
+            
+        except (ValueError, KeyError) as e:
+            print(f"    → FAILED: {e}")
+            continue
+    
+    return hybrids
+
+
+# ============================================================================
+# HYBRID SEARCH
+# ============================================================================
+
+def find_best_hybrids(
+    representations: Dict[str, Tuple[np.ndarray, np.ndarray]],
+    ecfp_train: np.ndarray,
+    ecfp_test: np.ndarray,
+    train_labels: np.ndarray,
+    test_labels: np.ndarray,
+    dataset_name: str,
+    results_dir: Path
+) -> pd.DataFrame:
+    """
+    Find the best hybrid configurations for noise estimation.
+    
+    Tests each hybrid as a neighbor structure and reports which works best.
+    """
+    print(f"\n{'='*60}")
+    print("HYBRID CONFIGURATION SEARCH")
+    print(f"{'='*60}")
+    
+    hybrid_results = []
+    
+    # Get hybrid representations
+    hybrid_reps = {k: v for k, v in representations.items() if k.startswith('hybrid_')}
+    
+    if not hybrid_reps:
+        print("  No hybrid representations to evaluate")
+        return pd.DataFrame()
+    
+    # Test each noise level
+    results_by_hybrid = {name: {'sigma_0.3': [], 'sigma_0.6': []} for name in hybrid_reps}
+    
+    for sigma in NOISE_LEVELS:
+        print(f"\n  σ = {sigma}")
+        
+        # Inject noise
+        injector = NoiseInjectorRegression(strategy='legacy', random_state=42)
+        y_noisy = injector.inject(train_labels, sigma)
+        
+        # Baselines
+        clean_metrics = train_evaluate_rf(ecfp_train, ecfp_test, train_labels, test_labels)
+        noisy_metrics = train_evaluate_rf(ecfp_train, ecfp_test, y_noisy, test_labels)
+        
+        baselines = {
+            'r2_clean': clean_metrics['r2'],
+            'r2_noisy': noisy_metrics['r2'],
+            'mae_clean': clean_metrics['mae'],
+            'mae_noisy': noisy_metrics['mae'],
+        }
+        
+        # Test each hybrid
+        for hybrid_name, (hybrid_train, hybrid_test, hybrid_info, creation_time) in hybrid_reps.items():
+            print(f"\n    [{hybrid_name}]")
+            
+            best_recovery = -np.inf
+            best_config = None
+            
+            # Test with neighbor-based estimators
+            for dist_metric in ['cosine']:  # Just cosine for speed
+                for est_name in NEIGHBOR_ESTIMATORS:
+                    estimator = get_noise_estimator(
+                        est_name, k=K_NEIGHBORS, metric=dist_metric, random_state=42
+                    )
+                    
+                    noise_scores = estimator.estimate(hybrid_train, y_noisy)
+                    neighbor_means = getattr(estimator, 'neighbor_means_', None)
+                    
+                    if neighbor_means is None:
+                        from sklearn.neighbors import NearestNeighbors
+                        nn = NearestNeighbors(n_neighbors=K_NEIGHBORS + 1, metric=dist_metric)
+                        nn.fit(hybrid_train)
+                        _, indices = nn.kneighbors(hybrid_train)
+                        neighbor_means = y_noisy[indices[:, 1:]].mean(axis=1)
+                    
+                    # Quick test with best alpha values
+                    for method in ['proportional', 'confidence']:
+                        for alpha in [0.3, 0.5]:
+                            result = run_experiment_with_scores(
+                                noise_scores, neighbor_means,
+                                ecfp_train, ecfp_test,
+                                y_noisy, test_labels,
+                                'smooth', method, alpha,
+                                baselines, dataset_name, sigma,
+                                hybrid_name, est_name, dist_metric
+                            )
+                            
+                            if result.r2_recovery > best_recovery:
+                                best_recovery = result.r2_recovery
+                                best_config = f"{est_name}/{method}/α={alpha}"
+            
+            sigma_key = f"sigma_{sigma}"
+            results_by_hybrid[hybrid_name][sigma_key] = (best_recovery, best_config)
+            
+            marker = "✓" if best_recovery > 0 else "✗"
+            print(f"      Best: {best_recovery:+.1%} ({best_config}) {marker}")
+    
+    # Compile results
+    for hybrid_name, (hybrid_train, hybrid_test, hybrid_info, creation_time) in hybrid_reps.items():
+        # Extract config from name
+        config = next((c for c in HYBRID_CONFIGS if c[0] == hybrid_name), None)
+        if config is None:
+            continue
+        
+        _, rep_list, budget, alloc_method = config
+        alloc = hybrid_info.get('allocation', {})
+        
+        r03, cfg03 = results_by_hybrid[hybrid_name].get('sigma_0.3', (-999, 'n/a'))
+        r06, cfg06 = results_by_hybrid[hybrid_name].get('sigma_0.6', (-999, 'n/a'))
+        
+        hybrid_results.append(HybridSearchResult(
+            dataset=dataset_name,
+            hybrid_name=hybrid_name,
+            reps_combined='+'.join(rep_list),
+            budget=budget,
+            allocation_method=alloc_method,
+            n_features=hybrid_train.shape[1],
+            allocation=str({k: v for k, v in alloc.items() if isinstance(v, (int, float))}),
+            best_r2_recovery_sigma03=r03,
+            best_config_sigma03=cfg03,
+            best_r2_recovery_sigma06=r06,
+            best_config_sigma06=cfg06,
+            creation_time_seconds=creation_time
+        ).to_dict())
+    
+    df = pd.DataFrame(hybrid_results)
+    
+    # Print summary
+    print(f"\n{'='*60}")
+    print("HYBRID SEARCH SUMMARY")
+    print(f"{'='*60}")
+    
+    if not df.empty:
+        print("\nRanked by average R² recovery:")
+        df['avg_recovery'] = (df['best_r2_recovery_sigma03'] + df['best_r2_recovery_sigma06']) / 2
+        df_sorted = df.sort_values('avg_recovery', ascending=False)
+        
+        for _, row in df_sorted.iterrows():
+            avg = row['avg_recovery']
+            marker = "✓" if avg > 0 else "✗"
+            print(f"  {row['hybrid_name']:30s}: avg={avg:+6.1%} "
+                  f"(σ0.3:{row['best_r2_recovery_sigma03']:+.1%}, σ0.6:{row['best_r2_recovery_sigma06']:+.1%}) {marker}")
+        
+        # Save
+        df.to_csv(results_dir / f"{dataset_name.lower()}_hybrid_search.csv", index=False)
+        print(f"\n  Saved to {results_dir / f'{dataset_name.lower()}_hybrid_search.csv'}")
+    
+    return df
 
 
 # ============================================================================
@@ -291,24 +543,63 @@ def run_dataset(
     
     all_results = []
     
-    # Create all representations
-    print("\nCreating representations...")
+    # Create base representations
+    print("\nCreating base representations...")
     t0 = time.time()
-    representations = create_all_representations(train_smiles, test_smiles, train_labels)
+    base_reps = create_base_representations(train_smiles, test_smiles)
     print(f"  Done ({time.time() - t0:.1f}s)")
     
-    for rep_name, (rep_train, _) in representations.items():
+    for rep_name, (rep_train, _) in base_reps.items():
         print(f"  {rep_name}: {rep_train.shape}")
     
+    # Create all hybrid configurations
+    print("\nCreating hybrid representations...")
+    hybrids = create_all_hybrids(base_reps, train_labels, HYBRID_CONFIGS)
+    
+    # Combine all representations
+    representations = {}
+    representations.update(base_reps)
+    for name, (h_train, h_test, h_info, _) in hybrids.items():
+        representations[name] = (h_train, h_test)
+    
     # ECFP for evaluation
-    ecfp_train, ecfp_test = representations['ecfp4']
+    ecfp_train, ecfp_test = base_reps['ecfp4']
     
     # Clean baseline
     print("\nComputing clean baseline (ECFP4/RF)...")
     clean_metrics = train_evaluate_rf(ecfp_train, ecfp_test, train_labels, test_labels)
     print(f"  Clean R² = {clean_metrics['r2']:.4f}, MAE = {clean_metrics['mae']:.4f}")
     
-    # Run for each noise level
+    # ============================================================
+    # HYBRID SEARCH: Find best hybrid configurations
+    # ============================================================
+    hybrid_search_df = find_best_hybrids(
+        representations, ecfp_train, ecfp_test,
+        train_labels, test_labels,
+        dataset_name, results_dir
+    )
+    
+    # Determine best hybrid for full experiments
+    if not hybrid_search_df.empty:
+        hybrid_search_df['avg_recovery'] = (
+            hybrid_search_df['best_r2_recovery_sigma03'] + 
+            hybrid_search_df['best_r2_recovery_sigma06']
+        ) / 2
+        best_hybrid_name = hybrid_search_df.loc[hybrid_search_df['avg_recovery'].idxmax(), 'hybrid_name']
+        print(f"\n  Best hybrid for full experiments: {best_hybrid_name}")
+    else:
+        best_hybrid_name = None
+    
+    # ============================================================
+    # FULL EXPERIMENTS
+    # ============================================================
+    
+    # Select representations for full comparison
+    # Use base reps + best hybrid
+    smoothing_reps = list(BASE_REPS)
+    if best_hybrid_name and best_hybrid_name in representations:
+        smoothing_reps.append(best_hybrid_name)
+    
     for sigma in NOISE_LEVELS:
         print(f"\n{'='*60}")
         print(f"σ = {sigma}")
@@ -332,11 +623,11 @@ def run_dataset(
         }
         
         # ============================================================
-        # PART 1: Neighbor-based methods (compare representations × distance metrics)
+        # PART 1: Neighbor-based methods
         # ============================================================
-        print(f"\n  --- NEIGHBOR-BASED METHODS (comparing representations × distance metrics) ---")
+        print(f"\n  --- NEIGHBOR-BASED METHODS ---")
         
-        for rep_name in SMOOTHING_REPS:
+        for rep_name in smoothing_reps:
             print(f"\n  [{rep_name.upper()}]")
             X_rep = representations[rep_name][0]
             
@@ -344,27 +635,21 @@ def run_dataset(
                 print(f"    Distance: {dist_metric}")
                 
                 for est_name in NEIGHBOR_ESTIMATORS:
-                    # Get estimator with representation-specific neighbors
                     estimator = get_noise_estimator(
-                        est_name, 
-                        k=K_NEIGHBORS, 
-                        metric=dist_metric,
-                        random_state=42
+                        est_name, k=K_NEIGHBORS, metric=dist_metric, random_state=42
                     )
                     
-                    # Estimate noise scores
                     noise_scores = estimator.estimate(X_rep, y_noisy)
                     neighbor_means = getattr(estimator, 'neighbor_means_', None)
                     
                     if neighbor_means is None:
-                        # Fall back to computing neighbor means
                         from sklearn.neighbors import NearestNeighbors
                         nn = NearestNeighbors(n_neighbors=K_NEIGHBORS + 1, metric=dist_metric)
                         nn.fit(X_rep)
                         _, indices = nn.kneighbors(X_rep)
                         neighbor_means = y_noisy[indices[:, 1:]].mean(axis=1)
                     
-                    # Smoothing approaches
+                    # Smoothing
                     for smooth_method in SMOOTHING_METHODS:
                         for alpha in ALPHA_VALUES:
                             result = run_experiment_with_scores(
@@ -378,7 +663,7 @@ def run_dataset(
                             all_results.append(result.to_dict())
                             print_result(result)
                     
-                    # Weighting approaches
+                    # Weighting
                     for weight_method in WEIGHTING_METHODS:
                         for strength in ALPHA_VALUES:
                             result = run_experiment_with_scores(
@@ -393,14 +678,13 @@ def run_dataset(
                             print_result(result)
         
         # ============================================================
-        # PART 2: SOTA methods (representation-agnostic)
+        # PART 2: SOTA methods
         # ============================================================
         print(f"\n  --- SOTA METHODS (using ECFP4 features) ---")
         
         for est_name in SOTA_ESTIMATORS:
             print(f"\n  [{est_name.upper()}]")
             
-            # SOTA methods use ECFP4 as input features
             estimator = get_noise_estimator(est_name, random_state=42)
             
             try:
@@ -409,19 +693,17 @@ def run_dataset(
                 print(f"    FAILED: {e}")
                 continue
             
-            # For SOTA methods, use predictions as targets (if available)
             predictions = getattr(estimator, 'predictions_', None)
             if predictions is None:
-                # Fall back to neighbor means on ECFP
                 from sklearn.neighbors import NearestNeighbors
                 nn = NearestNeighbors(n_neighbors=K_NEIGHBORS + 1, metric='cosine')
                 nn.fit(ecfp_train)
                 _, indices = nn.kneighbors(ecfp_train)
                 neighbor_means = y_noisy[indices[:, 1:]].mean(axis=1)
             else:
-                neighbor_means = predictions  # Use model predictions as correction targets
+                neighbor_means = predictions
             
-            # Smoothing approaches
+            # Smoothing
             for smooth_method in SMOOTHING_METHODS:
                 for alpha in ALPHA_VALUES:
                     result = run_experiment_with_scores(
@@ -430,12 +712,12 @@ def run_dataset(
                         y_noisy, test_labels,
                         'smooth', smooth_method, alpha,
                         baselines, dataset_name, sigma,
-                        'ecfp4', est_name, 'n/a'  # SOTA methods don't use distance metric
+                        'ecfp4', est_name, 'n/a'
                     )
                     all_results.append(result.to_dict())
                     print_result(result)
             
-            # Weighting approaches
+            # Weighting
             for weight_method in WEIGHTING_METHODS:
                 for strength in ALPHA_VALUES:
                     result = run_experiment_with_scores(
@@ -477,7 +759,9 @@ def print_summary(df: pd.DataFrame):
         
         # Best per representation × distance metric (neighbor-based)
         df_neighbor = df_sigma[df_sigma['distance_metric'] != 'n/a']
-        for rep in SMOOTHING_REPS:
+        
+        reps_in_data = df_neighbor['smoothing_rep'].unique()
+        for rep in reps_in_data:
             for dm in DISTANCE_METRICS:
                 df_sub = df_neighbor[(df_neighbor['smoothing_rep'] == rep) & 
                                      (df_neighbor['distance_metric'] == dm)]
@@ -486,7 +770,7 @@ def print_summary(df: pd.DataFrame):
                 best = df_sub.loc[df_sub['r2_recovery'].idxmax()]
                 rec = best['r2_recovery']
                 marker = "✓" if rec > 0 else "✗"
-                print(f"  {rep:8s}/{dm:10s}: {rec:+6.1%} ({best['estimator']}/{best['method']}, α={best['alpha']}) {marker}")
+                print(f"  {rep:30s}/{dm:10s}: {rec:+6.1%} ({best['estimator']}/{best['method']}, α={best['alpha']}) {marker}")
         
         # Best SOTA methods
         df_sota = df_sigma[df_sigma['distance_metric'] == 'n/a']
@@ -499,12 +783,12 @@ def print_summary(df: pd.DataFrame):
                 best = df_est.loc[df_est['r2_recovery'].idxmax()]
                 rec = best['r2_recovery']
                 marker = "✓" if rec > 0 else "✗"
-                print(f"  {est:20s}: {rec:+6.1%} ({best['method']}, α={best['alpha']}) {marker}")
+                print(f"    {est:20s}: {rec:+6.1%} ({best['method']}, α={best['alpha']}) {marker}")
         
         # Overall best
         best_overall = df_sigma.loc[df_sigma['r2_recovery'].idxmax()]
         dm_str = f"/{best_overall['distance_metric']}" if best_overall['distance_metric'] != 'n/a' else ""
-        print(f"\n  {'BEST':8s}: {best_overall['r2_recovery']:+6.1%} "
+        print(f"\n  {'BEST':30s}: {best_overall['r2_recovery']:+6.1%} "
               f"({best_overall['smoothing_rep']}{dm_str}/{best_overall['estimator']}/{best_overall['method']})")
 
 
@@ -518,7 +802,10 @@ def main(dataset: str = 'both'):
     print("="*80)
     print("LABEL DENOISING EXPERIMENT")
     print("="*80)
-    print(f"Representations: {', '.join(SMOOTHING_REPS)}")
+    print(f"Base representations: {', '.join(BASE_REPS)}")
+    print(f"Hybrid configurations: {len(HYBRID_CONFIGS)}")
+    for name, reps, budget, method in HYBRID_CONFIGS:
+        print(f"  - {name}: {'+'.join(reps)}, budget={budget}, {method}")
     print(f"Distance metrics: {', '.join(DISTANCE_METRICS)}")
     print(f"Neighbor-based estimators: {', '.join(NEIGHBOR_ESTIMATORS)}")
     print(f"SOTA estimators: {', '.join(SOTA_ESTIMATORS)}")
@@ -529,17 +816,6 @@ def main(dataset: str = 'both'):
     print(f"Evaluation: ECFP4 + RF")
     print(f"Results: {results_dir}")
     print("="*80)
-    
-    # Count experiments
-    n_smooth = len(SMOOTHING_METHODS) * len(ALPHA_VALUES)
-    n_weight = len(WEIGHTING_METHODS) * len(ALPHA_VALUES)
-    n_per_neighbor_est = len(NEIGHBOR_ESTIMATORS) * (n_smooth + n_weight)
-    n_per_sota_est = len(SOTA_ESTIMATORS) * (n_smooth + n_weight)
-    # Neighbor-based: reps × distance_metrics × estimators × (smooth + weight)
-    n_neighbor = len(SMOOTHING_REPS) * len(DISTANCE_METRICS) * n_per_neighbor_est * len(NOISE_LEVELS)
-    n_sota = n_per_sota_est * len(NOISE_LEVELS)
-    n_total = n_neighbor + n_sota
-    print(f"Experiments per dataset: {n_total} ({n_neighbor} neighbor-based + {n_sota} SOTA)")
     
     if dataset in ['qm9', 'both']:
         raw_data = load_qm9(n_samples=N_SAMPLES_QM9, property_idx=4)
