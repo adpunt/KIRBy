@@ -209,13 +209,7 @@ except ImportError:
         summary = df.describe()
         return df, summary
 
-# AstraZeneca ADME loader
-from astrazeneca_adme import (
-    load_lipophilicity,
-    load_ppbr,
-    load_clearance_microsome,
-    AZ_DATASETS
-)
+from kirby.datasets.az_adme import *
 
 
 # =============================================================================
