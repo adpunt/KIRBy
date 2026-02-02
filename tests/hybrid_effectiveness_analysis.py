@@ -18,8 +18,17 @@ Usage:
     python tests/hybrid_effectiveness_analysis.py --dataset esol     # Specific dataset
 """
 
-import sys
+# Set environment variables BEFORE any other imports to prevent issues
 import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+# Import torchvision early to avoid circular import with torch
+try:
+    import torchvision  # noqa: F401
+except ImportError:
+    pass
+
+import sys
 import time
 import argparse
 import warnings
