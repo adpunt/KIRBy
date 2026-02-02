@@ -1,9 +1,13 @@
 import os
 os.environ['TOKENIZERS_PARALLELISM'] = 'false'
-os.environ['OMP_NUM_THREADS'] = '1'
-os.environ['MKL_NUM_THREADS'] = '1'
+os.environ['OMP_NUM_THREADS'] = '4'
+os.environ['MKL_NUM_THREADS'] = '4'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Suppress TF warnings
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
+import warnings
+warnings.filterwarnings('ignore', message='.*experimental_relax_shapes.*')
+warnings.filterwarnings('ignore', message='.*reduce_retracing.*')
 
 """
 COX-2 IC50 + NoiseInject: Full Model-Representation Matrix
@@ -46,11 +50,11 @@ from pathlib import Path
 
 # Bayesian neural network imports
 try:
-    import bayesian_torch.layers as bnn
+    import torchbnn as bnn
     from bayesian_torch.models.dnn_to_bnn import transform_model, transform_layer
     HAS_BAYESIAN_TORCH = True
 except ImportError:
-    print("WARNING: bayesian-torch not installed, BNN experiments will be skipped")
+    print("WARNING: torchbnn or bayesian-torch not installed, BNN experiments will be skipped")
     HAS_BAYESIAN_TORCH = False
 
 # XGBoost
@@ -419,27 +423,38 @@ def main():
     # =========================================================================
     print("\n" + "="*80)
     print("GENERATING MOLECULAR REPRESENTATIONS")
-    print("="*80)
+    print("="*80, flush=True)
     
-    print("ECFP4...")
+    print("ECFP4...", flush=True)
     ecfp4_train = create_ecfp4(train_smiles_fit, n_bits=2048)
     ecfp4_val = create_ecfp4(val_smiles, n_bits=2048)
     ecfp4_test = create_ecfp4(test_smiles, n_bits=2048)
+    print(f"  ECFP4 done: {ecfp4_train.shape}", flush=True)
     
-    print("PDV...")
+    print("PDV...", flush=True)
     pdv_train = create_pdv(train_smiles_fit)
     pdv_val = create_pdv(val_smiles)
     pdv_test = create_pdv(test_smiles)
+    print(f"  PDV done: {pdv_train.shape}", flush=True)
     
-    print("SNS...")
+    print("SNS...", flush=True)
     sns_train, sns_featurizer = create_sns(train_smiles_fit, return_featurizer=True)
     sns_val = create_sns(val_smiles, reference_featurizer=sns_featurizer)
     sns_test = create_sns(test_smiles, reference_featurizer=sns_featurizer)
+    print(f"  SNS done: {sns_train.shape}", flush=True)
     
-    print("MHG-GNN (pretrained)...")
-    mhggnn_train = create_mhg_gnn(train_smiles_fit)
-    mhggnn_val = create_mhg_gnn(val_smiles)
-    mhggnn_test = create_mhg_gnn(test_smiles)
+    print("MHG-GNN (pretrained)...", flush=True)
+    try:
+        mhggnn_train = create_mhg_gnn(train_smiles_fit)
+        mhggnn_val = create_mhg_gnn(val_smiles)
+        mhggnn_test = create_mhg_gnn(test_smiles)
+        HAS_MHGGNN = True
+        print(f"  MHG-GNN done: {mhggnn_train.shape}", flush=True)
+    except Exception as e:
+        print(f"  WARNING: MHG-GNN failed: {e}")
+        print(f"  Skipping MHG-GNN experiments", flush=True)
+        mhggnn_train = mhggnn_val = mhggnn_test = None
+        HAS_MHGGNN = False
     
     # =========================================================================
     # EXPERIMENTS
@@ -457,9 +472,13 @@ def main():
          lambda: RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1), None),
         ('RF', 'SNS', sns_train, None, sns_test,
          lambda: RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1), None),
-        ('RF', 'MHG-GNN-pretrained', mhggnn_train, None, mhggnn_test,
-         lambda: RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1), None),
     ]
+    
+    if HAS_MHGGNN:
+        experiments.append(
+            ('RF', 'MHG-GNN-pretrained', mhggnn_train, None, mhggnn_test,
+             lambda: RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1), None)
+        )
     
     # QRF experiments
     if HAS_QRF:
@@ -470,9 +489,12 @@ def main():
              lambda: RandomForestQuantileRegressor(n_estimators=100, random_state=42, n_jobs=-1), None),
             ('QRF', 'SNS', sns_train, None, sns_test,
              lambda: RandomForestQuantileRegressor(n_estimators=100, random_state=42, n_jobs=-1), None),
-            ('QRF', 'MHG-GNN-pretrained', mhggnn_train, None, mhggnn_test,
-             lambda: RandomForestQuantileRegressor(n_estimators=100, random_state=42, n_jobs=-1), None),
         ])
+        if HAS_MHGGNN:
+            experiments.append(
+                ('QRF', 'MHG-GNN-pretrained', mhggnn_train, None, mhggnn_test,
+                 lambda: RandomForestQuantileRegressor(n_estimators=100, random_state=42, n_jobs=-1), None)
+            )
     
     # XGBoost experiments
     if HAS_XGBOOST:
@@ -483,9 +505,12 @@ def main():
              lambda: XGBRegressor(n_estimators=100, random_state=42), None),
             ('XGBoost', 'SNS', sns_train, None, sns_test,
              lambda: XGBRegressor(n_estimators=100, random_state=42), None),
-            ('XGBoost', 'MHG-GNN-pretrained', mhggnn_train, None, mhggnn_test,
-             lambda: XGBRegressor(n_estimators=100, random_state=42), None),
         ])
+        if HAS_MHGGNN:
+            experiments.append(
+                ('XGBoost', 'MHG-GNN-pretrained', mhggnn_train, None, mhggnn_test,
+                 lambda: XGBRegressor(n_estimators=100, random_state=42), None)
+            )
     
     # GP experiments (only on smaller representations due to computational cost)
     if HAS_GP:
@@ -509,52 +534,60 @@ def main():
             (model_name, 'ECFP4', ecfp4_train, ecfp4_val, ecfp4_test, None, model_type),
             (model_name, 'PDV', pdv_train, pdv_val, pdv_test, None, model_type),
             (model_name, 'SNS', sns_train, sns_val, sns_test, None, model_type),
-            (model_name, 'MHG-GNN-pretrained', mhggnn_train, mhggnn_val, mhggnn_test, None, model_type),
         ])
+        if HAS_MHGGNN:
+            experiments.append(
+                (model_name, 'MHG-GNN-pretrained', mhggnn_train, mhggnn_val, mhggnn_test, None, model_type)
+            )
     
     # Run all experiments
     for idx, (model_name, rep_name, X_train, X_val, X_test, model_fn, model_type) in enumerate(experiments, 1):
-        print(f"\n[{idx}/{len(experiments)}] {model_name} + {rep_name}...")
+        print(f"\n[{idx}/{len(experiments)}] {model_name} + {rep_name}...", flush=True)
         
         for strategy in strategies:
-            print(f"  Strategy: {strategy}")
+            print(f"  Strategy: {strategy}", flush=True)
             
-            if model_fn is not None:
-                predictions, uncertainties = run_experiment_tree_model(
-                    X_train, train_labels_fit, X_test, test_labels,
-                    model_fn, strategy, sigma_levels
+            try:
+                if model_fn is not None:
+                    predictions, uncertainties = run_experiment_tree_model(
+                        X_train, train_labels_fit, X_test, test_labels,
+                        model_fn, strategy, sigma_levels
+                    )
+                else:
+                    predictions, uncertainties = run_experiment_neural(
+                        X_train, train_labels_fit, X_val, val_labels, X_test, test_labels,
+                        model_type, strategy, sigma_levels
+                    )
+                
+                per_sigma, summary = calculate_noise_metrics(
+                    test_labels, predictions, metrics=['r2', 'rmse', 'mae']
                 )
-            else:
-                predictions, uncertainties = run_experiment_neural(
-                    X_train, train_labels_fit, X_val, val_labels, X_test, test_labels,
-                    model_type, strategy, sigma_levels
-                )
+                per_sigma['model'] = model_name
+                per_sigma['rep'] = rep_name
+                per_sigma['strategy'] = strategy
+                all_results.append(per_sigma)
+                
+                filename = f"{model_name.replace('-', '')}_{rep_name.replace('-', '')}_{strategy}.csv"
+                per_sigma.to_csv(results_dir / filename, index=False)
+                
+                # Save uncertainties for legacy strategy
+                if strategy == 'legacy' and uncertainties[0.0] is not None:
+                    unc_data = []
+                    for sigma in sigma_levels:
+                        for i in range(len(test_labels)):
+                            unc_data.append({
+                                'sigma': sigma,
+                                'sample_idx': i,
+                                'y_true': test_labels[i],
+                                'y_pred': predictions[sigma][i],
+                                'uncertainty': uncertainties[sigma][i],
+                                'error': abs(test_labels[i] - predictions[sigma][i])
+                            })
+                    all_uncertainties.append((model_name, rep_name, pd.DataFrame(unc_data)))
             
-            per_sigma, summary = calculate_noise_metrics(
-                test_labels, predictions, metrics=['r2', 'rmse', 'mae']
-            )
-            per_sigma['model'] = model_name
-            per_sigma['rep'] = rep_name
-            per_sigma['strategy'] = strategy
-            all_results.append(per_sigma)
-            
-            filename = f"{model_name.replace('-', '')}_{rep_name.replace('-', '')}_{strategy}.csv"
-            per_sigma.to_csv(results_dir / filename, index=False)
-            
-            # Save uncertainties for legacy strategy
-            if strategy == 'legacy' and uncertainties[0.0] is not None:
-                unc_data = []
-                for sigma in sigma_levels:
-                    for i in range(len(test_labels)):
-                        unc_data.append({
-                            'sigma': sigma,
-                            'sample_idx': i,
-                            'y_true': test_labels[i],
-                            'y_pred': predictions[sigma][i],
-                            'uncertainty': uncertainties[sigma][i],
-                            'error': abs(test_labels[i] - predictions[sigma][i])
-                        })
-                all_uncertainties.append((model_name, rep_name, pd.DataFrame(unc_data)))
+            except Exception as e:
+                print(f"  ERROR in {model_name} + {rep_name} + {strategy}: {e}", flush=True)
+                continue
     
     # =========================================================================
     # UNCERTAINTY QUANTIFICATION
@@ -581,6 +614,10 @@ def main():
     print("\n" + "="*80)
     print("SUMMARY")
     print("="*80)
+    
+    if not all_results:
+        print("ERROR: No results collected. Check for errors above.")
+        return
     
     combined_df = pd.concat(all_results, ignore_index=True)
     combined_df.to_csv(results_dir / 'all_results.csv', index=False)
