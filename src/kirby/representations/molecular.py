@@ -563,9 +563,10 @@ def create_molformer(smiles_list, batch_size=32, device=None):
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
     # Import torchvision BEFORE torch CUDA initialization to avoid circular import
+    # Catch all exceptions since torchvision may be incompatible with torch version
     try:
         import torchvision  # noqa: F401 - imported for side effects
-    except ImportError:
+    except Exception:
         pass  # torchvision not required, just prevents circular import if present
 
     import torch

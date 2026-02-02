@@ -23,9 +23,10 @@ import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Import torchvision early to avoid circular import with torch
+# Catch all exceptions since torchvision may be incompatible with torch version
 try:
     import torchvision  # noqa: F401
-except ImportError:
+except Exception:
     pass
 
 import sys
