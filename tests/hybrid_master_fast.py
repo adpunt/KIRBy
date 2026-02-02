@@ -1,603 +1,587 @@
 #!/usr/bin/env python3
 """
-Hybrid Master Fast Test - Extended
+Hybrid Master Fast Test - Comprehensive Sanity Check
 
-Tests new KIRBy hybrid features:
-1. MACCS as additional base representation
-2. Augmentations with greedy ablation (graph_topology, spectral, subgraph_counts, graph_distances)
-3. Comparison of augmentation strategies ('none', 'all', 'greedy_ablation')
+Quick pipeline validation for all KIRBy representations:
+1. Molecular: ECFP4, MACCS, PDV, SNS, mol2vec, ChemBERTa, MolFormer, MHG-GNN, graph kernel, augmentations
+2. Antibody: AntiBERTy, AbLang, CDR-stratified, developability, humanness
+3. Sequence (DNA/RNA): Nucleotide Transformer, DNABERT-2, HyenaDNA, Caduceus, k-mer, augmentations
+4. Hybrid: Greedy allocation, augmentation strategies
 
-Datasets: ESOL (water solubility), Lipophilicity, FreeSolv (optional)
-Models: RandomForest, XGBoost, (optionally MLP)
+This is NOT for benchmarking - just verifying the pipeline works end-to-end.
 
 Usage:
-    python hybrid_master_fast.py                    # Run all tests
-    python hybrid_master_fast.py --quick            # Quick smoke test
-    python hybrid_master_fast.py --augmentations    # Focus on augmentation testing
-    python hybrid_master_fast.py --threshold-sweep  # Test augmentation threshold values
+    python -m pytest tests/hybrid_master_fast.py -v          # Run as pytest
+    python tests/hybrid_master_fast.py                        # Run directly
+    python tests/hybrid_master_fast.py --skip-slow           # Skip slow pretrained models
 """
 
-import numpy as np
+import sys
+import os
 import time
 import argparse
-from typing import Dict, List, Tuple, Optional
+import traceback
+import numpy as np
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import r2_score, mean_squared_error
-from sklearn.preprocessing import StandardScaler
 
-# Try importing XGBoost
-try:
-    import xgboost as xgb
-    HAS_XGBOOST = True
-except ImportError:
-    HAS_XGBOOST = False
-    print("Warning: XGBoost not available, skipping XGBoost tests")
-
-# Try importing MoleculeNet datasets
-try:
-    from deepchem.molnet import load_delaney, load_lipo, load_freesolv
-    HAS_DEEPCHEM = True
-except ImportError:
-    HAS_DEEPCHEM = False
-    print("Warning: DeepChem not available, using synthetic data")
-
+# Add src to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
 # =============================================================================
-# DATA LOADING
+# TEST CONFIGURATION
+# =============================================================================
+
+# Small sample sizes for quick testing
+N_MOLECULES = 15
+N_ANTIBODIES = 10
+N_SEQUENCES = 10
+
+# Test SMILES (valid, diverse molecules)
+TEST_SMILES = [
+    'CCO',                          # ethanol
+    'CC(=O)O',                      # acetic acid
+    'c1ccccc1',                     # benzene
+    'CC(C)Cc1ccc(cc1)C(C)C(=O)O',  # ibuprofen
+    'CN1C=NC2=C1C(=O)N(C(=O)N2C)C', # caffeine
+    'CC(=O)Nc1ccc(cc1)O',          # paracetamol
+    'CCN(CC)CCCC(C)Nc1ccnc2cc(Cl)ccc12',  # chloroquine
+    'CC(C)(C)NCC(O)c1ccc(O)c(CO)c1',      # salbutamol
+    'COc1ccc2[nH]cc(CCNC(C)=O)c2c1',      # melatonin
+    'CC1=C(C(=O)N(N1C)C2=CC=CC=C2)N(C)CS(=O)(=O)O',  # metamizole
+    'CCCC',                         # butane
+    'c1ccc2ccccc2c1',              # naphthalene
+    'CC(C)C',                       # isobutane
+    'C1CCCCC1',                     # cyclohexane
+    'CCN',                          # ethylamine
+]
+
+# Test antibody sequences (simplified, valid)
+TEST_HEAVY_CHAINS = [
+    'EVQLVESGGGLVQPGGSLRLSCAASGFTFSSYAMSWVRQAPGKGLEWVSAISGSGGSTYYADSVKGRFTISRDNSKNTLYLQMNSLRAEDTAVYYCAR',
+    'QVQLVQSGAEVKKPGASVKVSCKASGYTFTGYYMHWVRQAPGQGLEWMGWINPNSGGTNYAQKFQGRVTMTRDTSISTAYMELSRLRSDDTAVYYCAR',
+    'EVQLVESGGGLVQPGGSLRLSCAASGFTFSSYWMSWVRQAPGKGLEWVANIKQDGSEKYYVDSVKGRFTISRDNAKNSLYLQMNSLRAEDTAVYYCAR',
+    'QVQLVESGGGVVQPGRSLRLSCAASGFTFSSYGMHWVRQAPGKGLEWVAVIWYDGSNKYYADSVKGRFTISRDNSKNTLYLQMNSLRAEDTAVYYCAR',
+    'EVQLVESGGGLVKPGGSLRLSCAASGFTFSSYSMNWVRQAPGKGLEWVSSISSSSSYIYYADSVKGRFTISRDNAKNSLYLQMNSLRAEDTAVYYCAR',
+    'QVQLQESGPGLVKPSETLSLTCTVSGGSISSYYWSWIRQPPGKGLEWIGYIYYSGSTNYNPSLKSRVTISVDTSKNQFSLKLSSVTAADTAVYYCAR',
+    'EVQLVESGGGLVQPGGSLRLSCAASGFTFDDYAMHWVRQAPGKGLEWVSGISWNSGSIGYADSVKGRFTISRDNAKNSLYLQMNSLRAEDTAVYYCAR',
+    'QITLKESGPTLVKPTQTLTLTCTFSGFSLSTSGVGVGWIRQPPGKALEWLALIYWDDDKRYSPSLKSRLTITKDTSKNQVVLTMTNMDPVDTATYYCAHR',
+    'EVQLVQSGAEVKKPGESLKISCKGSGYSFTSYWIGWVRQMPGKGLEWMGIIYPGDSDTRYSPSFQGQVTISADKSISTAYLQWSSLKASDTAMYYCAR',
+    'QVQLQQSGPGLVKPSQTLSLTCAISGDSVSSNSAAWNWIRQSPSRGLEWLGRTYYRSKWYNDYAVSVKSRITINPDTSKNQFSLQLNSVTPEDTAVYYCAR',
+]
+
+TEST_LIGHT_CHAINS = [
+    'DIQMTQSPSSLSASVGDRVTITCRASQSISSYLNWYQQKPGKAPKLLIYAASSLQSGVPSRFSGSGSGTDFTLTISSLQPEDFATYYCQQSYSTPLT',
+    'DIQLTQSPSFLSASVGDRVTITCRASQGISSYLAWYQQKPGKAPKLLIYAASTLQSGVPSRFSGSGSGTEFTLTISSLQPEDFATYYCQQLNSYPLT',
+    'EIVLTQSPGTLSLSPGERATLSCRASQSVSSSYLAWYQQKPGQAPRLLIYGASSRATGIPDRFSGSGSGTDFTLTISRLEPEDFAVYYCQQYGSSPRT',
+    'DIVMTQSPLSLPVTPGEPASISCRSSQSLLHSNGYNYLDWYLQKPGQSPQLLIYLGSNRASGVPDRFSGSGSGTDFTLKISRVEAEDVGVYYCMQALQTPLT',
+    'QSVLTQPPSASGTPGQRVTISCSGSSSNIGSNTVNWYQQLPGTAPKLLIYSDNQRPSGVPDRFSGSKSGTSASLAISGLQSEDEADYYCAAWDDSLNGWV',
+    'SYELTQPPSVSVSPGQTASITCSGDKLGDKYACWYQQKPGQSPVLVIYQDSKRPSGIPERFSGSNSGNTATLTISGTQAMDEADYYCQAWDSSTAV',
+    'DIQMTQSPSSLSASVGDRVTITCQASQDISNYLNWYQQKPGKAPKLLIYDASNLETGVPSRFSGSGSGTDFTFTISSLQPEDIATYYCQQYDNLPLT',
+    'EIVMTQSPATLSVSPGERATLSCRASQSVSSNLAWYQQKPGQAPRLLIYGASTRATGIPARFSGSGSGTEFTLTISSLQSEDFAVYYCQQYNNWPLT',
+    'QSALTQPRSVSGSPGQSVTISCTGTSSDVGGYNYVSWYQQHPGKAPKLMIYDVSNRPSGVSNRFSGSKSGNTASLTISGLQAEDEADYYCSSYTSSSTLVV',
+    'NFMLTQPHSVSESPGKTVTISCTRSSGSIASNYVQWYQQRPGSSPTTVIYDDDKRPSGVPDRFSGSIDSSSNSASLTISGLKTEDEADYYCQSYDSSNHWV',
+]
+
+# Test DNA sequences
+TEST_DNA_SEQUENCES = [
+    'ATGCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCGATCG',
+    'GCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAG',
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    'TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT',
+    'GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG',
+    'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC',
+    'ATATATATATATATATATATATATATATATATATATATATATATATATATAT',
+    'GCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGCGC',
+    'ATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGCATGC',
+    'TAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGC',
+]
+
+# =============================================================================
+# TEST RESULT TRACKING
 # =============================================================================
 
 @dataclass
-class Dataset:
-    """Container for dataset with SMILES and labels"""
+class TestResult:
     name: str
-    smiles: List[str]
-    labels: np.ndarray
-    task_type: str = 'regression'
+    passed: bool
+    time_seconds: float
+    output_shape: Optional[Tuple] = None
+    error: Optional[str] = None
+    skipped: bool = False
+    skip_reason: Optional[str] = None
 
 
-def load_esol() -> Dataset:
-    """Load ESOL (water solubility) dataset"""
-    if HAS_DEEPCHEM:
-        tasks, datasets, _ = load_delaney(featurizer='Raw', splitter=None)
-        train = datasets[0]
-        smiles = [x[0] for x in train.ids]
-        labels = train.y.flatten()
-        return Dataset('ESOL', smiles, labels)
-    else:
-        return _generate_synthetic_data('ESOL_synthetic', n_samples=500)
+class TestRunner:
+    def __init__(self):
+        self.results: List[TestResult] = []
+        self.skip_slow = False
 
+    def run_test(self, name: str, test_fn, skip_if_slow: bool = False):
+        """Run a single test and record result."""
+        if skip_if_slow and self.skip_slow:
+            self.results.append(TestResult(
+                name=name, passed=True, time_seconds=0,
+                skipped=True, skip_reason="--skip-slow flag"
+            ))
+            print(f"  SKIP: {name} (slow)")
+            return None
 
-def load_lipophilicity() -> Dataset:
-    """Load Lipophilicity dataset"""
-    if HAS_DEEPCHEM:
-        tasks, datasets, _ = load_lipo(featurizer='Raw', splitter=None)
-        train = datasets[0]
-        smiles = [x[0] for x in train.ids]
-        labels = train.y.flatten()
-        return Dataset('Lipophilicity', smiles, labels)
-    else:
-        return _generate_synthetic_data('Lipo_synthetic', n_samples=500)
-
-
-def load_freesolv_data() -> Dataset:
-    """Load FreeSolv (hydration free energy) dataset"""
-    if HAS_DEEPCHEM:
-        tasks, datasets, _ = load_freesolv(featurizer='Raw', splitter=None)
-        train = datasets[0]
-        smiles = [x[0] for x in train.ids]
-        labels = train.y.flatten()
-        return Dataset('FreeSolv', smiles, labels)
-    else:
-        return _generate_synthetic_data('FreeSolv_synthetic', n_samples=300)
-
-
-def _generate_synthetic_data(name: str, n_samples: int) -> Dataset:
-    """Generate synthetic SMILES-like data for testing when DeepChem unavailable"""
-    # Simple alkane-like SMILES for testing
-    np.random.seed(42)
-    smiles = []
-    for i in range(n_samples):
-        chain_length = np.random.randint(2, 10)
-        smiles.append('C' * chain_length)
-    labels = np.random.randn(n_samples)
-    return Dataset(name, smiles, labels)
-
-
-# =============================================================================
-# REPRESENTATION GENERATION
-# =============================================================================
-
-def generate_base_representations(smiles: List[str], include_maccs: bool = True) -> Dict[str, np.ndarray]:
-    """
-    Generate base representations for molecules.
-    
-    Args:
-        smiles: List of SMILES strings
-        include_maccs: Whether to include MACCS keys (new feature to test)
-        
-    Returns:
-        Dict of {rep_name: features}
-    """
-    from kirby.representations.molecular import create_ecfp4, create_pdv, create_maccs
-    
-    print(f"  Generating representations for {len(smiles)} molecules...")
-    
-    reps = {}
-    
-    # ECFP4 - standard fingerprint
-    t0 = time.time()
-    reps['ecfp4'] = create_ecfp4(smiles)
-    print(f"    ECFP4: {reps['ecfp4'].shape} in {time.time()-t0:.2f}s")
-    
-    # PDV - physical descriptors
-    t0 = time.time()
-    reps['pdv'] = create_pdv(smiles)
-    print(f"    PDV: {reps['pdv'].shape} in {time.time()-t0:.2f}s")
-    
-    # MACCS - new representation to test
-    if include_maccs:
         t0 = time.time()
-        reps['maccs'] = create_maccs(smiles)
-        print(f"    MACCS: {reps['maccs'].shape} in {time.time()-t0:.2f}s")
-    
-    return reps
+        try:
+            result = test_fn()
+            elapsed = time.time() - t0
+
+            shape = None
+            if isinstance(result, np.ndarray):
+                shape = result.shape
+            elif isinstance(result, dict):
+                shape = {k: v.shape if isinstance(v, np.ndarray) else type(v).__name__
+                        for k, v in result.items() if not k.startswith('_')}
+            elif isinstance(result, tuple) and len(result) == 2:
+                if isinstance(result[0], np.ndarray):
+                    shape = result[0].shape
+
+            self.results.append(TestResult(
+                name=name, passed=True, time_seconds=elapsed, output_shape=shape
+            ))
+            print(f"  PASS: {name} ({elapsed:.2f}s) -> {shape}")
+            return result
+
+        except Exception as e:
+            elapsed = time.time() - t0
+            error_msg = f"{type(e).__name__}: {str(e)}"
+            self.results.append(TestResult(
+                name=name, passed=False, time_seconds=elapsed, error=error_msg
+            ))
+            print(f"  FAIL: {name} ({elapsed:.2f}s)")
+            print(f"        {error_msg}")
+            if os.environ.get('DEBUG'):
+                traceback.print_exc()
+            return None
+
+    def summary(self):
+        """Print test summary."""
+        passed = sum(1 for r in self.results if r.passed and not r.skipped)
+        failed = sum(1 for r in self.results if not r.passed)
+        skipped = sum(1 for r in self.results if r.skipped)
+        total = len(self.results)
+
+        print("\n" + "=" * 60)
+        print("TEST SUMMARY")
+        print("=" * 60)
+        print(f"Passed:  {passed}/{total - skipped}")
+        print(f"Failed:  {failed}/{total - skipped}")
+        print(f"Skipped: {skipped}/{total}")
+
+        if failed > 0:
+            print("\nFailed tests:")
+            for r in self.results:
+                if not r.passed:
+                    print(f"  - {r.name}: {r.error}")
+
+        return failed == 0
 
 
-def generate_augmentations(smiles: List[str]) -> Dict[str, np.ndarray]:
-    """
-    Generate augmentation features for molecules.
-    
-    Args:
-        smiles: List of SMILES strings
-        
-    Returns:
-        Dict of {aug_name: features}
-    """
-    from kirby.representations.molecular import (
-        compute_graph_topology,
-        compute_spectral_features,
-        compute_subgraph_counts,
-        compute_graph_distances
-    )
-    
-    print(f"  Generating augmentations for {len(smiles)} molecules...")
-    
-    augs = {}
-    
-    t0 = time.time()
-    augs['graph_topology'] = compute_graph_topology(smiles)
-    print(f"    graph_topology: {augs['graph_topology'].shape} in {time.time()-t0:.2f}s")
-    
-    t0 = time.time()
-    augs['spectral'] = compute_spectral_features(smiles, k=10)
-    print(f"    spectral: {augs['spectral'].shape} in {time.time()-t0:.2f}s")
-    
-    t0 = time.time()
-    augs['subgraph_counts'] = compute_subgraph_counts(smiles)
-    print(f"    subgraph_counts: {augs['subgraph_counts'].shape} in {time.time()-t0:.2f}s")
-    
-    t0 = time.time()
-    augs['graph_distances'] = compute_graph_distances(smiles)
-    print(f"    graph_distances: {augs['graph_distances'].shape} in {time.time()-t0:.2f}s")
-    
-    return augs
+runner = TestRunner()
 
 
 # =============================================================================
-# MODEL EVALUATION
+# MOLECULAR REPRESENTATION TESTS
 # =============================================================================
 
-def evaluate_model(
-    X_train: np.ndarray, 
-    X_test: np.ndarray, 
-    y_train: np.ndarray, 
-    y_test: np.ndarray,
-    model_type: str = 'rf'
-) -> Dict[str, float]:
-    """
-    Train and evaluate a model.
-    
-    Args:
-        X_train, X_test: Feature matrices
-        y_train, y_test: Labels
-        model_type: 'rf' for RandomForest, 'xgb' for XGBoost
-        
-    Returns:
-        Dict with 'r2', 'rmse', 'train_time'
-    """
-    # Scale features
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
-    
-    t0 = time.time()
-    
-    if model_type == 'rf':
-        model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-    elif model_type == 'xgb':
-        if not HAS_XGBOOST:
-            return {'r2': np.nan, 'rmse': np.nan, 'train_time': 0}
-        model = xgb.XGBRegressor(n_estimators=100, random_state=42, n_jobs=-1, verbosity=0)
+def test_molecular_representations():
+    """Test all molecular representations."""
+    print("\n" + "=" * 60)
+    print("MOLECULAR REPRESENTATIONS")
+    print("=" * 60)
+
+    smiles = TEST_SMILES[:N_MOLECULES]
+    labels = np.random.randn(len(smiles))
+
+    # Import molecular module
+    try:
+        from kirby.representations import molecular
+    except ImportError:
+        from kirby.representations.molecular import (
+            create_ecfp4, create_maccs, create_pdv, create_sns,
+            create_mol2vec, create_chemberta, create_molformer, create_mhg_gnn,
+            create_graph_kernel,
+            compute_graph_topology, compute_spectral_features,
+            compute_subgraph_counts, compute_graph_distances
+        )
+        molecular = None
+
+    # --- STATIC REPRESENTATIONS ---
+    print("\n[Static Representations]")
+
+    if molecular:
+        runner.run_test("ECFP4", lambda: molecular.create_ecfp4(smiles))
+        runner.run_test("MACCS", lambda: molecular.create_maccs(smiles))
+        runner.run_test("PDV", lambda: molecular.create_pdv(smiles))
+        runner.run_test("SNS (fit)", lambda: molecular.create_sns(smiles, return_featurizer=True))
     else:
-        raise ValueError(f"Unknown model_type: {model_type}")
-    
-    model.fit(X_train_scaled, y_train)
-    train_time = time.time() - t0
-    
-    y_pred = model.predict(X_test_scaled)
-    
-    r2 = r2_score(y_test, y_pred)
-    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-    
-    return {'r2': r2, 'rmse': rmse, 'train_time': train_time}
+        runner.run_test("ECFP4", lambda: create_ecfp4(smiles))
+        runner.run_test("MACCS", lambda: create_maccs(smiles))
+        runner.run_test("PDV", lambda: create_pdv(smiles))
+        runner.run_test("SNS (fit)", lambda: create_sns(smiles, return_featurizer=True))
+
+    # --- PRETRAINED (FROZEN) ---
+    print("\n[Pretrained Embeddings (Frozen)]")
+
+    if molecular:
+        runner.run_test("mol2vec", lambda: molecular.create_mol2vec(smiles), skip_if_slow=True)
+        runner.run_test("ChemBERTa", lambda: molecular.create_chemberta(smiles, batch_size=8), skip_if_slow=True)
+        runner.run_test("MolFormer", lambda: molecular.create_molformer(smiles, batch_size=8), skip_if_slow=True)
+        runner.run_test("MHG-GNN", lambda: molecular.create_mhg_gnn(smiles, batch_size=8), skip_if_slow=True)
+    else:
+        runner.run_test("mol2vec", lambda: create_mol2vec(smiles), skip_if_slow=True)
+        runner.run_test("ChemBERTa", lambda: create_chemberta(smiles, batch_size=8), skip_if_slow=True)
+        runner.run_test("MolFormer", lambda: create_molformer(smiles, batch_size=8), skip_if_slow=True)
+        runner.run_test("MHG-GNN", lambda: create_mhg_gnn(smiles, batch_size=8), skip_if_slow=True)
+
+    # --- GRAPH KERNEL ---
+    print("\n[Graph Kernel]")
+
+    if molecular:
+        runner.run_test("WL Graph Kernel", lambda: molecular.create_graph_kernel(smiles, n_iter=3, return_vocabulary=True))
+    else:
+        runner.run_test("WL Graph Kernel", lambda: create_graph_kernel(smiles, n_iter=3, return_vocabulary=True))
+
+    # --- AUGMENTATIONS ---
+    print("\n[Augmentations]")
+
+    if molecular:
+        runner.run_test("Graph Topology", lambda: molecular.compute_graph_topology(smiles))
+        runner.run_test("Spectral Features", lambda: molecular.compute_spectral_features(smiles, k=5))
+        runner.run_test("Subgraph Counts", lambda: molecular.compute_subgraph_counts(smiles))
+        runner.run_test("Graph Distances", lambda: molecular.compute_graph_distances(smiles))
+    else:
+        runner.run_test("Graph Topology", lambda: compute_graph_topology(smiles))
+        runner.run_test("Spectral Features", lambda: compute_spectral_features(smiles, k=5))
+        runner.run_test("Subgraph Counts", lambda: compute_subgraph_counts(smiles))
+        runner.run_test("Graph Distances", lambda: compute_graph_distances(smiles))
 
 
 # =============================================================================
-# TEST FUNCTIONS
+# ANTIBODY REPRESENTATION TESTS
 # =============================================================================
 
-def test_maccs_contribution(dataset: Dataset, test_size: float = 0.2) -> Dict:
-    """
-    Test whether MACCS improves hybrid performance.
-    
-    Compares:
-    - Baseline: ECFP4 + PDV
-    - With MACCS: ECFP4 + PDV + MACCS
-    """
-    from kirby.hybrid import create_hybrid, apply_feature_selection
-    
-    print(f"\n{'='*60}")
-    print(f"Testing MACCS contribution on {dataset.name}")
-    print(f"{'='*60}")
-    
-    # Split data
-    train_smiles, test_smiles, train_labels, test_labels = train_test_split(
-        dataset.smiles, dataset.labels, test_size=test_size, random_state=42
-    )
-    
-    results = {}
-    
-    # Generate representations
-    print("\n[Baseline: ECFP4 + PDV]")
-    base_train = generate_base_representations(train_smiles, include_maccs=False)
-    base_test = generate_base_representations(test_smiles, include_maccs=False)
-    
-    # Create hybrid without MACCS
-    hybrid_train, feature_info = create_hybrid(
-        base_train, train_labels,
-        allocation_method='greedy',
-        budget=100
-    )
-    hybrid_test = apply_feature_selection(base_test, feature_info)
-    
-    for model_type in ['rf', 'xgb']:
-        if model_type == 'xgb' and not HAS_XGBOOST:
-            continue
-        metrics = evaluate_model(hybrid_train, hybrid_test, train_labels, test_labels, model_type)
-        results[f'baseline_{model_type}'] = metrics
-        print(f"  {model_type.upper()}: R²={metrics['r2']:.4f}, RMSE={metrics['rmse']:.4f}")
-    
-    # Generate representations with MACCS
-    print("\n[With MACCS: ECFP4 + PDV + MACCS]")
-    maccs_train = generate_base_representations(train_smiles, include_maccs=True)
-    maccs_test = generate_base_representations(test_smiles, include_maccs=True)
-    
-    # Create hybrid with MACCS
-    hybrid_train, feature_info = create_hybrid(
-        maccs_train, train_labels,
-        allocation_method='greedy',
-        budget=100
-    )
-    hybrid_test = apply_feature_selection(maccs_test, feature_info)
-    
-    for model_type in ['rf', 'xgb']:
-        if model_type == 'xgb' and not HAS_XGBOOST:
-            continue
-        metrics = evaluate_model(hybrid_train, hybrid_test, train_labels, test_labels, model_type)
-        results[f'with_maccs_{model_type}'] = metrics
-        print(f"  {model_type.upper()}: R²={metrics['r2']:.4f}, RMSE={metrics['rmse']:.4f}")
-    
-    # Summary
-    print("\n[MACCS Impact Summary]")
-    for model_type in ['rf', 'xgb']:
-        if model_type == 'xgb' and not HAS_XGBOOST:
-            continue
-        baseline_r2 = results[f'baseline_{model_type}']['r2']
-        maccs_r2 = results[f'with_maccs_{model_type}']['r2']
-        improvement = maccs_r2 - baseline_r2
-        status = "✓ IMPROVED" if improvement > 0.005 else ("≈ NEUTRAL" if improvement > -0.005 else "✗ WORSE")
-        print(f"  {model_type.upper()}: {improvement:+.4f} R² ({status})")
-    
-    return results
+def test_antibody_representations():
+    """Test all antibody representations."""
+    print("\n" + "=" * 60)
+    print("ANTIBODY REPRESENTATIONS")
+    print("=" * 60)
+
+    heavy = TEST_HEAVY_CHAINS[:N_ANTIBODIES]
+    light = TEST_LIGHT_CHAINS[:N_ANTIBODIES]
+
+    # Import antibody module
+    try:
+        from kirby.representations import antibody
+    except ImportError:
+        from kirby.representations.antibody import (
+            create_antiberty_embeddings, create_antiberty_embeddings_batch,
+            create_ablang_embeddings, create_ablang2_embeddings,
+            compute_developability_features, compute_humanness_scores
+        )
+        antibody = None
+
+    # --- LANGUAGE MODEL EMBEDDINGS ---
+    print("\n[Language Model Embeddings]")
+
+    if antibody:
+        runner.run_test("AntiBERTy (heavy)",
+                       lambda: antibody.create_antiberty_embeddings(heavy, chain_type='heavy'),
+                       skip_if_slow=True)
+        runner.run_test("AntiBERTy Batch",
+                       lambda: antibody.create_antiberty_embeddings_batch(heavy, light, aggregations=['mean']),
+                       skip_if_slow=True)
+        runner.run_test("AbLang (heavy)",
+                       lambda: antibody.create_ablang_embeddings(heavy),
+                       skip_if_slow=True)
+        runner.run_test("AbLang2 (paired)",
+                       lambda: antibody.create_ablang2_embeddings(heavy, light),
+                       skip_if_slow=True)
+    else:
+        runner.run_test("AntiBERTy (heavy)",
+                       lambda: create_antiberty_embeddings(heavy, chain_type='heavy'),
+                       skip_if_slow=True)
+        runner.run_test("AntiBERTy Batch",
+                       lambda: create_antiberty_embeddings_batch(heavy, light, aggregations=['mean']),
+                       skip_if_slow=True)
+        runner.run_test("AbLang (heavy)",
+                       lambda: create_ablang_embeddings(heavy),
+                       skip_if_slow=True)
+        runner.run_test("AbLang2 (paired)",
+                       lambda: create_ablang2_embeddings(heavy, light),
+                       skip_if_slow=True)
+
+    # --- AUGMENTATIONS ---
+    print("\n[Augmentations]")
+
+    if antibody:
+        runner.run_test("Developability Features",
+                       lambda: antibody.compute_developability_features(heavy, light))
+        runner.run_test("Humanness Scores (heavy)",
+                       lambda: antibody.compute_humanness_scores(heavy, chain_type='heavy'))
+        runner.run_test("Humanness Scores (light)",
+                       lambda: antibody.compute_humanness_scores(light, chain_type='light'))
+    else:
+        runner.run_test("Developability Features",
+                       lambda: compute_developability_features(heavy, light))
+        runner.run_test("Humanness Scores (heavy)",
+                       lambda: compute_humanness_scores(heavy, chain_type='heavy'))
+        runner.run_test("Humanness Scores (light)",
+                       lambda: compute_humanness_scores(light, chain_type='light'))
 
 
-def test_augmentation_strategies(
-    dataset: Dataset, 
-    test_size: float = 0.2,
-    threshold: Optional[float] = None
-) -> Dict:
-    """
-    Test different augmentation strategies.
-    
-    Compares:
-    - No augmentation
-    - All augmentations
-    - Greedy ablation (keep only helpful ones)
-    """
-    from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
-    
-    print(f"\n{'='*60}")
-    print(f"Testing Augmentation Strategies on {dataset.name}")
-    print(f"Threshold: {threshold}")
-    print(f"{'='*60}")
-    
-    # Split data
-    train_smiles, test_smiles, train_labels, test_labels = train_test_split(
-        dataset.smiles, dataset.labels, test_size=test_size, random_state=42
-    )
-    
-    # Generate base representations (with MACCS)
-    print("\n[Generating base representations]")
-    base_train = generate_base_representations(train_smiles, include_maccs=True)
-    base_test = generate_base_representations(test_smiles, include_maccs=True)
-    
+# =============================================================================
+# SEQUENCE (DNA/RNA) REPRESENTATION TESTS
+# =============================================================================
+
+def test_sequence_representations():
+    """Test all sequence (DNA/RNA) representations."""
+    print("\n" + "=" * 60)
+    print("SEQUENCE (DNA/RNA) REPRESENTATIONS")
+    print("=" * 60)
+
+    seqs = TEST_DNA_SEQUENCES[:N_SEQUENCES]
+
+    # Import sequence module
+    try:
+        from kirby.representations import sequence
+    except ImportError:
+        from kirby.representations.sequence import (
+            create_nucleotide_transformer, create_dnabert2, create_hyenadna, create_caduceus,
+            create_kmer_features, create_onehot_encoding,
+            compute_gc_content, compute_sequence_complexity,
+            compute_positional_features, compute_motif_features
+        )
+        sequence = None
+
+    # --- STATIC REPRESENTATIONS ---
+    print("\n[Static Representations]")
+
+    if sequence:
+        runner.run_test("k-mer (k=4)", lambda: sequence.create_kmer_features(seqs, k=4))
+        runner.run_test("One-hot encoding", lambda: sequence.create_onehot_encoding(seqs, max_length=60))
+    else:
+        runner.run_test("k-mer (k=4)", lambda: create_kmer_features(seqs, k=4))
+        runner.run_test("One-hot encoding", lambda: create_onehot_encoding(seqs, max_length=60))
+
+    # --- PRETRAINED (FROZEN) ---
+    print("\n[Pretrained Embeddings (Frozen)]")
+
+    if sequence:
+        runner.run_test("Nucleotide Transformer",
+                       lambda: sequence.create_nucleotide_transformer(seqs, batch_size=4),
+                       skip_if_slow=True)
+        runner.run_test("DNABERT-2",
+                       lambda: sequence.create_dnabert2(seqs, batch_size=4),
+                       skip_if_slow=True)
+        runner.run_test("HyenaDNA",
+                       lambda: sequence.create_hyenadna(seqs, batch_size=4),
+                       skip_if_slow=True)
+        runner.run_test("Caduceus",
+                       lambda: sequence.create_caduceus(seqs, batch_size=4),
+                       skip_if_slow=True)
+    else:
+        runner.run_test("Nucleotide Transformer",
+                       lambda: create_nucleotide_transformer(seqs, batch_size=4),
+                       skip_if_slow=True)
+        runner.run_test("DNABERT-2",
+                       lambda: create_dnabert2(seqs, batch_size=4),
+                       skip_if_slow=True)
+        runner.run_test("HyenaDNA",
+                       lambda: create_hyenadna(seqs, batch_size=4),
+                       skip_if_slow=True)
+        runner.run_test("Caduceus",
+                       lambda: create_caduceus(seqs, batch_size=4),
+                       skip_if_slow=True)
+
+    # --- AUGMENTATIONS ---
+    print("\n[Augmentations]")
+
+    if sequence:
+        runner.run_test("GC Content", lambda: sequence.compute_gc_content(seqs))
+        runner.run_test("Sequence Complexity", lambda: sequence.compute_sequence_complexity(seqs))
+        runner.run_test("Positional Features", lambda: sequence.compute_positional_features(seqs, n_bins=5))
+        runner.run_test("Motif Features", lambda: sequence.compute_motif_features(seqs))
+    else:
+        runner.run_test("GC Content", lambda: compute_gc_content(seqs))
+        runner.run_test("Sequence Complexity", lambda: compute_sequence_complexity(seqs))
+        runner.run_test("Positional Features", lambda: compute_positional_features(seqs, n_bins=5))
+        runner.run_test("Motif Features", lambda: compute_motif_features(seqs))
+
+
+# =============================================================================
+# HYBRID CREATION TESTS
+# =============================================================================
+
+def test_hybrid_creation():
+    """Test hybrid creation with different allocation methods."""
+    print("\n" + "=" * 60)
+    print("HYBRID CREATION")
+    print("=" * 60)
+
+    # Import hybrid module
+    try:
+        from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
+    except ImportError:
+        from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
+
+    # Import molecular for base reps
+    try:
+        from kirby.representations.molecular import (
+            create_ecfp4, create_maccs, create_pdv,
+            compute_graph_topology, compute_spectral_features
+        )
+    except ImportError:
+        from kirby.representations.molecular import (
+            create_ecfp4, create_maccs, create_pdv,
+            compute_graph_topology, compute_spectral_features
+        )
+
+    smiles = TEST_SMILES[:N_MOLECULES]
+    labels = np.random.randn(len(smiles))
+
+    # Generate base representations
+    print("\n[Generating base representations for hybrid tests]")
+    base_reps = {}
+    base_reps['ecfp4'] = create_ecfp4(smiles)
+    base_reps['maccs'] = create_maccs(smiles)
+    base_reps['pdv'] = create_pdv(smiles)
+    print(f"  Base reps: {list(base_reps.keys())}")
+
     # Generate augmentations
-    print("\n[Generating augmentations]")
-    aug_train = generate_augmentations(train_smiles)
-    aug_test = generate_augmentations(test_smiles)
-    
-    results = {}
-    
-    # Strategy 1: No augmentation
-    print("\n[Strategy: none]")
-    hybrid_train, feature_info = create_hybrid(
-        base_train, train_labels,
-        allocation_method='greedy',
-        budget=100,
-        augmentations=aug_train,
-        augmentation_strategy='none'
-    )
-    hybrid_test = apply_feature_selection(base_test, feature_info)
-    
-    for model_type in ['rf', 'xgb']:
-        if model_type == 'xgb' and not HAS_XGBOOST:
-            continue
-        metrics = evaluate_model(hybrid_train, hybrid_test, train_labels, test_labels, model_type)
-        results[f'none_{model_type}'] = metrics
-        print(f"  {model_type.upper()}: R²={metrics['r2']:.4f} (dims={hybrid_train.shape[1]})")
-    
-    # Strategy 2: All augmentations
-    print("\n[Strategy: all]")
-    hybrid_train, feature_info = create_hybrid(
-        base_train, train_labels,
-        allocation_method='greedy',
-        budget=100,
-        augmentations=aug_train,
-        augmentation_strategy='all',
-        augmentation_budget=20
-    )
-    hybrid_test = apply_feature_selection(base_test, feature_info)
-    if 'augmentation_info' in feature_info:
-        aug_features = apply_augmentation_selection(aug_test, feature_info['augmentation_info'])
-        if aug_features is not None:
-            hybrid_test = np.hstack([hybrid_test, aug_features])
-    
-    for model_type in ['rf', 'xgb']:
-        if model_type == 'xgb' and not HAS_XGBOOST:
-            continue
-        metrics = evaluate_model(hybrid_train, hybrid_test, train_labels, test_labels, model_type)
-        results[f'all_{model_type}'] = metrics
-        print(f"  {model_type.upper()}: R²={metrics['r2']:.4f} (dims={hybrid_train.shape[1]})")
-    
-    # Strategy 3: Greedy ablation
-    print("\n[Strategy: greedy_ablation]")
-    hybrid_train, feature_info = create_hybrid(
-        base_train, train_labels,
-        allocation_method='greedy',
-        budget=100,
-        augmentations=aug_train,
-        augmentation_strategy='greedy_ablation',
-        augmentation_threshold=threshold,
-        augmentation_budget=20
-    )
-    hybrid_test = apply_feature_selection(base_test, feature_info)
-    if 'augmentation_info' in feature_info and feature_info['augmentation_info']:
-        aug_features = apply_augmentation_selection(aug_test, feature_info['augmentation_info'])
-        if aug_features is not None:
-            hybrid_test = np.hstack([hybrid_test, aug_features])
-    
-    kept = feature_info.get('kept_augmentations', [])
-    print(f"  Kept augmentations: {kept if kept else 'none'}")
-    
-    if 'augmentation_scores' in feature_info:
-        print("  Augmentation scores:")
-        for aug_name, scores in feature_info['augmentation_scores'].items():
-            status = "✓ kept" if aug_name in kept else "✗ dropped"
-            print(f"    {aug_name}: improvement={scores['improvement']:+.4f} ({status})")
-    
-    for model_type in ['rf', 'xgb']:
-        if model_type == 'xgb' and not HAS_XGBOOST:
-            continue
-        metrics = evaluate_model(hybrid_train, hybrid_test, train_labels, test_labels, model_type)
-        results[f'greedy_{model_type}'] = metrics
-        print(f"  {model_type.upper()}: R²={metrics['r2']:.4f} (dims={hybrid_train.shape[1]})")
-    
-    # Summary
-    print("\n[Augmentation Strategy Summary]")
-    for model_type in ['rf', 'xgb']:
-        if model_type == 'xgb' and not HAS_XGBOOST:
-            continue
-        none_r2 = results[f'none_{model_type}']['r2']
-        all_r2 = results[f'all_{model_type}']['r2']
-        greedy_r2 = results[f'greedy_{model_type}']['r2']
-        
-        best = max([('none', none_r2), ('all', all_r2), ('greedy', greedy_r2)], key=lambda x: x[1])
-        
-        print(f"  {model_type.upper()}:")
-        print(f"    none:   {none_r2:.4f}")
-        print(f"    all:    {all_r2:.4f} ({all_r2 - none_r2:+.4f} vs none)")
-        print(f"    greedy: {greedy_r2:.4f} ({greedy_r2 - none_r2:+.4f} vs none)")
-        print(f"    BEST:   {best[0]} ({best[1]:.4f})")
-    
-    results['kept_augmentations'] = kept
-    results['feature_info'] = feature_info
-    
-    return results
+    augmentations = {}
+    augmentations['topology'] = compute_graph_topology(smiles)
+    augmentations['spectral'] = compute_spectral_features(smiles, k=5)
+    print(f"  Augmentations: {list(augmentations.keys())}")
 
+    # --- ALLOCATION METHODS ---
+    print("\n[Allocation Methods]")
 
-def test_threshold_sweep(dataset: Dataset, test_size: float = 0.2) -> Dict:
-    """
-    Test different augmentation threshold values.
-    
-    Sweeps through threshold values: [None (any improvement), 0.001, 0.005, 0.01, 0.02, 0.05]
-    """
-    print(f"\n{'='*60}")
-    print(f"Threshold Sweep on {dataset.name}")
-    print(f"{'='*60}")
-    
-    thresholds = [None, 0.001, 0.005, 0.01, 0.02, 0.05]
-    
-    results = {}
-    
-    for threshold in thresholds:
-        threshold_name = str(threshold) if threshold is not None else 'any'
-        print(f"\n--- Threshold: {threshold_name} ---")
-        
-        result = test_augmentation_strategies(dataset, test_size, threshold)
-        results[threshold_name] = result
-    
-    # Summary table
-    print(f"\n{'='*60}")
-    print("THRESHOLD SWEEP SUMMARY")
-    print(f"{'='*60}")
-    print(f"{'Threshold':<12} {'RF R²':<10} {'Kept Augs'}")
-    print("-" * 40)
-    
-    for threshold in thresholds:
-        threshold_name = str(threshold) if threshold is not None else 'any'
-        r2 = results[threshold_name]['greedy_rf']['r2']
-        kept = results[threshold_name]['kept_augmentations']
-        kept_str = ', '.join(kept) if kept else 'none'
-        print(f"{threshold_name:<12} {r2:.4f}     {kept_str}")
-    
-    return results
+    runner.run_test("Greedy Allocation",
+                   lambda: create_hybrid(base_reps, labels, allocation_method='greedy', budget=50, step_size=10))
+
+    runner.run_test("Fixed Allocation",
+                   lambda: create_hybrid(base_reps, labels, allocation_method='fixed', n_per_rep=20))
+
+    runner.run_test("Performance-Weighted Allocation",
+                   lambda: create_hybrid(base_reps, labels, allocation_method='performance_weighted', budget=50))
+
+    # --- AUGMENTATION STRATEGIES ---
+    print("\n[Augmentation Strategies]")
+
+    runner.run_test("Augmentation: none",
+                   lambda: create_hybrid(base_reps, labels, allocation_method='greedy', budget=50,
+                                        augmentations=augmentations, augmentation_strategy='none'))
+
+    runner.run_test("Augmentation: all",
+                   lambda: create_hybrid(base_reps, labels, allocation_method='greedy', budget=50,
+                                        augmentations=augmentations, augmentation_strategy='all',
+                                        augmentation_budget=10))
+
+    runner.run_test("Augmentation: greedy_ablation",
+                   lambda: create_hybrid(base_reps, labels, allocation_method='greedy', budget=50,
+                                        augmentations=augmentations, augmentation_strategy='greedy_ablation',
+                                        augmentation_budget=10))
+
+    # --- TEST/VAL APPLICATION ---
+    print("\n[Train/Test Split Application]")
+
+    def test_train_test_split():
+        # Simulate train/test
+        train_idx = list(range(10))
+        test_idx = list(range(10, N_MOLECULES))
+
+        train_smiles = [smiles[i] for i in train_idx]
+        test_smiles = [smiles[i] for i in test_idx]
+        train_labels = labels[train_idx]
+
+        # Generate reps for train and test
+        train_reps = {
+            'ecfp4': create_ecfp4(train_smiles),
+            'maccs': create_maccs(train_smiles),
+        }
+        test_reps = {
+            'ecfp4': create_ecfp4(test_smiles),
+            'maccs': create_maccs(test_smiles),
+        }
+
+        # Create hybrid on train
+        hybrid_train, feature_info = create_hybrid(
+            train_reps, train_labels,
+            allocation_method='greedy', budget=30
+        )
+
+        # Apply same selection to test
+        hybrid_test = apply_feature_selection(test_reps, feature_info)
+
+        return {'train_shape': hybrid_train.shape, 'test_shape': hybrid_test.shape}
+
+    runner.run_test("Train/Test Feature Selection", test_train_test_split)
 
 
 # =============================================================================
 # MAIN
 # =============================================================================
 
-def run_quick_test():
-    """Quick smoke test to verify everything works"""
-    print("\n" + "="*60)
-    print("QUICK SMOKE TEST")
-    print("="*60)
-    
-    # Use smallest dataset
-    dataset = load_freesolv_data()
-    
-    # Limit to 200 samples for speed
-    if len(dataset.smiles) > 200:
-        indices = np.random.RandomState(42).choice(len(dataset.smiles), 200, replace=False)
-        dataset = Dataset(
-            dataset.name + '_subset',
-            [dataset.smiles[i] for i in indices],
-            dataset.labels[indices]
-        )
-    
-    print(f"\nDataset: {dataset.name} ({len(dataset.smiles)} samples)")
-    
-    # Test MACCS
-    test_maccs_contribution(dataset)
-    
-    # Test augmentation (one strategy only)
-    test_augmentation_strategies(dataset, threshold=None)
-    
-    print("\n" + "="*60)
-    print("QUICK TEST COMPLETE")
-    print("="*60)
-
-
-def run_full_test():
-    """Run full test suite"""
-    print("\n" + "="*60)
-    print("FULL TEST SUITE")
-    print("="*60)
-    
-    datasets = [load_esol(), load_lipophilicity()]
-    
-    all_results = {}
-    
-    for dataset in datasets:
-        print(f"\n{'#'*60}")
-        print(f"# Dataset: {dataset.name} ({len(dataset.smiles)} samples)")
-        print(f"{'#'*60}")
-        
-        # Test MACCS contribution
-        maccs_results = test_maccs_contribution(dataset)
-        all_results[f'{dataset.name}_maccs'] = maccs_results
-        
-        # Test augmentation strategies
-        aug_results = test_augmentation_strategies(dataset, threshold=None)
-        all_results[f'{dataset.name}_augmentations'] = aug_results
-    
-    # Final summary
-    print("\n" + "="*60)
-    print("FINAL SUMMARY")
-    print("="*60)
-    
-    print("\n[MACCS Impact Across Datasets]")
-    for dataset in datasets:
-        key = f'{dataset.name}_maccs'
-        if key in all_results:
-            baseline = all_results[key].get('baseline_rf', {}).get('r2', np.nan)
-            with_maccs = all_results[key].get('with_maccs_rf', {}).get('r2', np.nan)
-            improvement = with_maccs - baseline
-            print(f"  {dataset.name}: {improvement:+.4f} R²")
-    
-    print("\n[Best Augmentation Strategy Across Datasets]")
-    for dataset in datasets:
-        key = f'{dataset.name}_augmentations'
-        if key in all_results:
-            none_r2 = all_results[key].get('none_rf', {}).get('r2', np.nan)
-            greedy_r2 = all_results[key].get('greedy_rf', {}).get('r2', np.nan)
-            kept = all_results[key].get('kept_augmentations', [])
-            print(f"  {dataset.name}: greedy improvement={greedy_r2 - none_r2:+.4f}, kept={kept}")
-    
-    return all_results
-
-
-def run_augmentation_focus():
-    """Focus specifically on augmentation testing"""
-    print("\n" + "="*60)
-    print("AUGMENTATION FOCUS TEST")
-    print("="*60)
-    
-    dataset = load_esol()
-    
-    # Test multiple thresholds
-    results = test_threshold_sweep(dataset)
-    
-    return results
-
-
 def main():
-    parser = argparse.ArgumentParser(description='Hybrid Master Fast Test')
-    parser.add_argument('--quick', action='store_true', help='Quick smoke test')
-    parser.add_argument('--augmentations', action='store_true', help='Focus on augmentation testing')
-    parser.add_argument('--threshold-sweep', action='store_true', help='Sweep augmentation thresholds')
-    
+    parser = argparse.ArgumentParser(description='KIRBy Hybrid Master Fast Test')
+    parser.add_argument('--skip-slow', action='store_true',
+                       help='Skip slow pretrained model tests')
+    parser.add_argument('--molecular-only', action='store_true',
+                       help='Only test molecular representations')
+    parser.add_argument('--antibody-only', action='store_true',
+                       help='Only test antibody representations')
+    parser.add_argument('--sequence-only', action='store_true',
+                       help='Only test sequence representations')
+    parser.add_argument('--hybrid-only', action='store_true',
+                       help='Only test hybrid creation')
+
     args = parser.parse_args()
-    
-    if args.quick:
-        run_quick_test()
-    elif args.augmentations or args.threshold_sweep:
-        run_augmentation_focus()
-    else:
-        run_full_test()
+
+    runner.skip_slow = args.skip_slow
+
+    print("=" * 60)
+    print("KIRBy HYBRID MASTER FAST TEST")
+    print("=" * 60)
+    print(f"Configuration:")
+    print(f"  N_MOLECULES:  {N_MOLECULES}")
+    print(f"  N_ANTIBODIES: {N_ANTIBODIES}")
+    print(f"  N_SEQUENCES:  {N_SEQUENCES}")
+    print(f"  Skip slow:    {args.skip_slow}")
+
+    # Determine which tests to run
+    run_all = not (args.molecular_only or args.antibody_only or
+                   args.sequence_only or args.hybrid_only)
+
+    start_time = time.time()
+
+    if run_all or args.molecular_only:
+        test_molecular_representations()
+
+    if run_all or args.antibody_only:
+        test_antibody_representations()
+
+    if run_all or args.sequence_only:
+        test_sequence_representations()
+
+    if run_all or args.hybrid_only:
+        test_hybrid_creation()
+
+    total_time = time.time() - start_time
+
+    print(f"\nTotal time: {total_time:.1f}s")
+
+    success = runner.summary()
+
+    return 0 if success else 1
 
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
