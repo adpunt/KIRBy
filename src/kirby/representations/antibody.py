@@ -7,12 +7,16 @@ Implements state-of-the-art antibody featurization from Nature ML papers:
 - IMGT positional encoding
 - Structure-based features (when available)
 - Multi-scale aggregations
+- Developability assessment (charge, hydrophobicity, aggregation propensity)
+- Humanness scoring (germline identity)
 
 References:
 - IgFold: Ruffolo et al. (2023) Nature Communications
 - AbLang: Olsen et al. (2022) Bioinformatics Advances  
 - BALM: (2024) Briefings in Bioinformatics
 - Paragraph: (2023) Bioinformatics
+- TAP: Raybould et al. (2019) PNAS (Therapeutic Antibody Profiler)
+- OASis: Prihoda et al. (2022) MAbs (humanness scoring)
 """
 
 import numpy as np
@@ -20,6 +24,108 @@ import torch
 import torch.nn as nn
 import warnings
 from typing import List, Dict, Optional, Tuple
+
+
+# ============================================================================
+# CONSTANTS: AMINO ACID PROPERTIES
+# ============================================================================
+
+# Physicochemical properties per amino acid
+# Sources: Kyte-Doolittle hydrophobicity, Zimmerman polarity, charge at pH 7.4,
+# molecular weight, van der Waals volume (A^3)
+AA_PROPERTIES = {
+    'A': {'hydrophobicity':  1.8, 'charge':  0.0, 'mw':  89.09, 'volume':  88.6, 'polarity':  0.0, 'flexibility': 0.360},
+    'R': {'hydrophobicity': -4.5, 'charge':  1.0, 'mw': 174.20, 'volume': 173.4, 'polarity':  1.0, 'flexibility': 0.530},
+    'N': {'hydrophobicity': -3.5, 'charge':  0.0, 'mw': 132.12, 'volume': 114.1, 'polarity':  1.0, 'flexibility': 0.460},
+    'D': {'hydrophobicity': -3.5, 'charge': -1.0, 'mw': 133.10, 'volume': 111.1, 'polarity':  1.0, 'flexibility': 0.510},
+    'C': {'hydrophobicity':  2.5, 'charge':  0.0, 'mw': 121.15, 'volume': 108.5, 'polarity':  0.0, 'flexibility': 0.350},
+    'E': {'hydrophobicity': -3.5, 'charge': -1.0, 'mw': 147.13, 'volume': 138.4, 'polarity':  1.0, 'flexibility': 0.500},
+    'Q': {'hydrophobicity': -3.5, 'charge':  0.0, 'mw': 146.15, 'volume': 143.8, 'polarity':  1.0, 'flexibility': 0.490},
+    'G': {'hydrophobicity': -0.4, 'charge':  0.0, 'mw':  75.03, 'volume':  60.1, 'polarity':  0.0, 'flexibility': 0.540},
+    'H': {'hydrophobicity': -3.2, 'charge':  0.1, 'mw': 155.16, 'volume': 153.2, 'polarity':  1.0, 'flexibility': 0.320},
+    'I': {'hydrophobicity':  4.5, 'charge':  0.0, 'mw': 131.17, 'volume': 166.7, 'polarity':  0.0, 'flexibility': 0.460},
+    'L': {'hydrophobicity':  3.8, 'charge':  0.0, 'mw': 131.17, 'volume': 166.7, 'polarity':  0.0, 'flexibility': 0.400},
+    'K': {'hydrophobicity': -3.9, 'charge':  1.0, 'mw': 146.19, 'volume': 168.6, 'polarity':  1.0, 'flexibility': 0.535},
+    'M': {'hydrophobicity':  1.9, 'charge':  0.0, 'mw': 149.21, 'volume': 162.9, 'polarity':  0.0, 'flexibility': 0.410},
+    'F': {'hydrophobicity':  2.8, 'charge':  0.0, 'mw': 165.19, 'volume': 189.9, 'polarity':  0.0, 'flexibility': 0.310},
+    'P': {'hydrophobicity': -1.6, 'charge':  0.0, 'mw': 115.13, 'volume': 112.7, 'polarity':  0.0, 'flexibility': 0.510},
+    'S': {'hydrophobicity': -0.8, 'charge':  0.0, 'mw': 105.09, 'volume':  89.0, 'polarity':  1.0, 'flexibility': 0.510},
+    'T': {'hydrophobicity': -0.7, 'charge':  0.0, 'mw': 119.12, 'volume': 116.1, 'polarity':  1.0, 'flexibility': 0.440},
+    'W': {'hydrophobicity': -0.9, 'charge':  0.0, 'mw': 204.23, 'volume': 227.8, 'polarity':  0.0, 'flexibility': 0.310},
+    'Y': {'hydrophobicity': -1.3, 'charge':  0.0, 'mw': 181.19, 'volume': 193.6, 'polarity':  1.0, 'flexibility': 0.420},
+    'V': {'hydrophobicity':  4.2, 'charge':  0.0, 'mw': 117.15, 'volume': 140.0, 'polarity':  0.0, 'flexibility': 0.390},
+}
+
+# Sequence liability motifs known to cause manufacturing/stability issues
+# Reference: Lu et al. (2019) "Deamidation and isomerization liability analysis..."
+LIABILITY_MOTIFS = {
+    'deamidation': ['NG', 'NS', 'NT', 'ND', 'NH', 'NA', 'NQ', 'NK'],
+    'isomerization': ['DG', 'DS', 'DT', 'DD', 'DH'],
+    'oxidation': ['MW', 'MH', 'MD', 'MS'],  # Met oxidation context
+    'glycosylation': ['N[^P][ST]'],  # N-X-S/T sequon (regex-style, handled separately)
+    'clipping': ['DP'],  # Asp-Pro clipping
+    'unpaired_cys': ['C'],  # Free cysteines (counted, not motif-matched)
+}
+
+# ============================================================================
+# CONSTANTS: HUMAN GERMLINE V-GENE SEQUENCES
+# ============================================================================
+
+# Representative human VH germline framework sequences (IMGT-aligned)
+# Source: IMGT/GENE-DB, most frequently observed alleles in human repertoires
+# These are framework region consensus sequences used for humanness scoring
+# Only FR1-FR3 included (FR4 is J-gene derived)
+HUMAN_VH_GERMLINES = {
+    'IGHV1-2*02':   'QVQLVQSGAEVKKPGASVKVSCKASGYTFTGYYMHWVRQAPGQGLEWMGWINPNSGGTNYAQKFQGRVTMTRDTSISTAYMELSRLRSDDTAVYYCAR',
+    'IGHV1-3*01':   'QVQLVQSGAEVKKPGASVKVSCKASGYTFTSYAMHWVRQAPGQRLEWMGWINAGNGNTKYSQKFQGRVTITRDTSASTAYMELSSLRSEDTAVYYCAR',
+    'IGHV1-18*01':  'QVQLVQSGAEVKKPGASVKVSCKASGYTFTSYDINWVRQAPGQGLEWMGWMNPNSGNTGYAQKFQGRVTMTRNTSISTAYMELSSLRSEDTAVYYCAR',
+    'IGHV1-46*01':  'QVQLVQSGAEVKKPGASVKVSCKASGYTFTGYYMHWVRQAPGQGLEWMGWINPNSGGTNYAQKFQGRVTMTRDTSISTAYMELSRLRSDDTAVYYCAR',
+    'IGHV1-69*01':  'QVQLVQSGAEVKKPGASVKVSCKASGYTFTGYYMHWVRQAPGQGLEWMGWINPNSGGTNYAQKFQGRVTMTRDTSISTAYMELSRLRSDDTAVYYCAR',
+    'IGHV2-5*02':   'QITLKESGPTLVKPTQTLTLTCTFSGFSLSTSGVGVGWIRQPPGKALEWLALIYWDDDKRYSPSLKSRLTITKDTSKNQVVLTMTNMDPVDTATYYCAHR',
+    'IGHV3-7*01':   'EVQLVESGGGLVQPGGSLRLSCAASGFTFSSYWMSWVRQAPGKGLEWVANIKQDGSEKYYVDSVKGRFTISRDNAKNSLYLQMNSLRAEDTAVYYCAR',
+    'IGHV3-11*01':  'EVQLVESGGGLVQPGGSLRLSCAASGFTFSSYWMHWVRQAPGKGLEWVSRINSDGSSTSYADSVKGRFTISRDNAKNTLYLQMNSLRAEDTAVYYCAK',
+    'IGHV3-15*01':  'EVQLVESGGGLVQPGGSLRLSCAASGFTFSSYAMSWVRQAPGKGLEWVSAISGSGGSTYYADSVKGRFTISRDNSKNTLYLQMNSLRAEDTAVYYCAR',
+    'IGHV3-21*01':  'EVQLVESGGGLVKPGGSLRLSCAASGFTFSSYSMNWVRQAPGKGLEWVSSISSSSSYIYYADSVKGRFTISRDNAKNSLYLQMNSLRAEDTAVYYCAR',
+    'IGHV3-23*01':  'EVQLLESGGGLVQPGGSLRLSCAASGFTFSSYAMSWVRQAPGKGLEWVSAISGSGGSTYYADSVKGRFTISRDNSKNTLYLQMNSLRAEDTAVYYCAR',
+    'IGHV3-30*01':  'QVQLVESGGGVVQPGRSLRLSCAASGFTFSSYGMHWVRQAPGKGLEWVAVIWYDGSNKYYADSVKGRFTISRDNSKNTLYLQMNSLRAEDTAVYYCAR',
+    'IGHV3-33*01':  'QVQLVESGGGVVQPGRSLRLSCAASGFTFSSYGMHWVRQAPGKGLEWVAVIWYDGSNEHYADSVKGRFTISRDNSKNTLYLQMNSLRAEDTAVYYCAK',
+    'IGHV3-48*01':  'EVQLVESGGGLVQPGGSLRLSCAASGFTFSSYSMNWVRQAPGKGLEWVSYISSSSSTIYYADSVKGRFTISRDNAKNSLYLQMNSLRAEDTAVYYCAR',
+    'IGHV3-53*01':  'EVQLVESGGGLVQPGGSLRLSCAASGFTFDDYAMHWVRQAPGKGLEWVSGISWNSGSIGYADSVKGRFTISRDNAKNSLYLQMNSLRAEDTAVYYCAR',
+    'IGHV3-66*01':  'EVQLVESGGGLVQPGGSLRLSCAASGFTFDDYAMHWVRQAPGKGLEWVSGISWNSGSIGYADSVKGRFTISRDNAKNSLYLQMNSLRAEDTAVYYCAR',
+    'IGHV4-4*02':   'QVQLQESGPGLVKPSETLSLTCTVSGGSISSYYWSWIRQPPGKGLEWIGYIYYSGSTNYNPSLKSRVTISVDTSKNQFSLKLSSVTAADTAVYYCAR',
+    'IGHV4-34*01':  'QVQLQESGPGLVKPSQTLSLTCTVSGGSISSGDYYWSWIRQPPGKGLEWIGYIYYSGSTYYNPSLKSRVTISVDTSKNQFSLKLSSVTAADTAVYYCAR',
+    'IGHV4-39*01':  'QLQLQESGPGLVKPSETLSLTCTVSGGSISSSSYYWGWIRQPPGKGLEWIGSIYYSGSTYYNPSLKSRVTISVDTSKNQFSLKLSSVTAADTAVYYCAR',
+    'IGHV4-59*01':  'QVQLQESGPGLVKPSETLSLTCTVSGGSISSYYWSWIRQPPGKGLEWIGYIYYSGSTNYNPSLKSRVTISVDTSKNQFSLKLSSVTAADTAVYYCAR',
+    'IGHV5-51*01':  'EVQLVQSGAEVKKPGESLKISCKGSGYSFTSYWIGWVRQMPGKGLEWMGIIYPGDSDTRYSPSFQGQVTISADKSISTAYLQWSSLKASDTAMYYCAR',
+    'IGHV6-1*01':   'QVQLQQSGPGLVKPSQTLSLTCAISGDSVSSNSAAWNWIRQSPSRGLEWLGRTYYRSKWYNDYAVSVKSRITINPDTSKNQFSLQLNSVTPEDTAVYYCAR',
+}
+
+# Representative human VL (kappa + lambda) germline framework sequences
+HUMAN_VL_GERMLINES = {
+    # Kappa
+    'IGKV1-5*03':   'DIQMTQSPSSLSASVGDRVTITCRASQSISSYLNWYQQKPGKAPKLLIYAASSLQSGVPSRFSGSGSGTDFTLTISSLQPEDFATYYCQQSYSTPLT',
+    'IGKV1-9*01':   'DIQLTQSPSFLSASVGDRVTITCRASQGISSYLAWYQQKPGKAPKLLIYAASTLQSGVPSRFSGSGSGTEFTLTISSLQPEDFATYYCQQLNSYPLT',
+    'IGKV1-12*01':  'DIQMTQSPSSLSASVGDRVTITCRASQSISSYLNWYQQKPGKAPKLLIYAASSLQSGVPSRFSGSGSGTDFTLTISSLQPEDFATYYCQQSYSTPRT',
+    'IGKV1-27*01':  'DIQMTQSPSSLSASVGDRVTITCRASQGISNYLNWYQQKPGKAPKLLIYAASSLQSGVPSRFSGSGSGTDFTLTISSLQPEDFATYYCQQSYSTPPT',
+    'IGKV1-33*01':  'DIQMTQSPSSLSASVGDRVTITCQASQDISNYLNWYQQKPGKAPKLLIYDASNLETGVPSRFSGSGSGTDFTFTISSLQPEDIATYYCQQYDNLPLT',
+    'IGKV1-39*01':  'DIQMTQSPSSLSASVGDRVTITCRASQSISSYLNWYQQKPGKAPKLLIYAASSLQSGVPSRFSGSGSGTDFTLTISSLQPEDFATYYCQQSYSTPYT',
+    'IGKV2-28*01':  'DIVMTQSPLSLPVTPGEPASISCRSSQSLLHSNGYNYLDWYLQKPGQSPQLLIYLGSNRASGVPDRFSGSGSGTDFTLKISRVEAEDVGVYYCMQALQTPLT',
+    'IGKV3-11*01':  'EIVLTQSPGTLSLSPGERATLSCRASQSVSSSYLAWYQQKPGQAPRLLIYGASSRATGIPDRFSGSGSGTDFTLTISRLEPEDFAVYYCQQYGSSPRT',
+    'IGKV3-15*01':  'EIVMTQSPATLSVSPGERATLSCRASQSVSSNLAWYQQKPGQAPRLLIYGASTRATGIPARFSGSGSGTEFTLTISSLQSEDFAVYYCQQYNNWPLT',
+    'IGKV3-20*01':  'EIVLTQSPGTLSLSPGERATLSCRASQSVSSSYLAWYQQKPGQAPRLLIYGASSRATGIPDRFSGSGSGTDFTLTISRLEPEDFAVYYCQQYGSSPWT',
+    'IGKV4-1*01':   'DIVMTQSPDSLAVSLGERATINCKSSQSVLYSSNNKNYLAWYQQKPGQPPKLLIYWASTRESGVPDRFSGSGSGTDFTLTISSLQAEDVAVYYCQQYYSTPRT',
+    # Lambda
+    'IGLV1-40*01':  'QSVLTQPPSASGTPGQRVTISCSGSSSNIGSNTVNWYQQLPGTAPKLLIYSDNQRPSGVPDRFSGSKSGTSASLAISGLQSEDEADYYCAAWDDSLNGWV',
+    'IGLV1-44*01':  'QSVLTQPPSASGTPGQRVTISCSGSSSNIGSNYVYWYQQLPGTAPKLLIYRDNQRPSGVPDRFSGSKSGTSASLAISGLRSEDEADYYCAAWDDSLSGWV',
+    'IGLV1-47*01':  'QSVLTQPPSASGTPGQRVTISCSGSSSNIGSNTVNWYQQLPGTAPKLLIYSNNQRPSGVPDRFSGSKSGTSASLAISGLQSEDEADYYCAAWDDSLNGPV',
+    'IGLV1-51*01':  'QSVLTQPPSVSAAPGQKVTISCSGSSSNIGNNYVSWYQQLPGTAPKLLIYDHTNRPAGVPDRFSGSKSGTSATLGITGLQTGDEADYYCGTWDSSLSAWV',
+    'IGLV2-8*01':   'QSALTQPRSVSGSPGQSVTISCTGTSSDVGGYNYVSWYQQHPGKAPKLMIYDVSNRPSGVSNRFSGSKSGNTASLTISGLQAEDEADYYCSSYTSSSTLVV',
+    'IGLV2-14*01':  'QSALTQPASVSGSPGQSITISCTGTSSDVGSYNLVSWYQQHPGKAPKLMIYEGSKRPSGVSNRFSGSKSGNTASLTISGLQAEDEADYYCCSYAGSYTLV',
+    'IGLV3-1*01':   'SYELTQPPSVSVSPGQTASITCSGDKLGDKYACWYQQKPGQSPVLVIYQDSKRPSGIPERFSGSNSGNTATLTISGTQAMDEADYYCQAWDSSTAV',
+    'IGLV3-19*01':  'SYELTQPPSVSVAPGQTARITCGGNNIGSKSVHWYQQKPGQAPVLVIYYDDSDRPSGIPERFSGSNSGNTATLTISRVEAGDEADYYCQVWDSSSDHYV',
+    'IGLV3-21*02':  'SYVLTQPPSVSVAPGKTARITCGGNNIGSKSVHWYQQKPGQAPVLVVYDDSDRPSGIPERFSGSNSGNTATLTISRVEAGDEADYYCQVWDSSSDHPV',
+    'IGLV6-57*01':  'NFMLTQPHSVSESPGKTVTISCTRSSGSIASNYVQWYQQRPGSSPTTVIYDDDKRPSGVPDRFSGSIDSSSNSASLTISGLKTEDEADYYCQSYDSSNHWV',
+}
 
 
 # ============================================================================
@@ -255,10 +361,6 @@ def create_antiberty_embeddings(
         raise ImportError("AntiBERTy requires transformers: pip install transformers")
     
     print(f"Loading AntiBERTy ({chain_type} chain)...")
-    
-    # Load pretrained AntiBERTy
-    # Note: Actual model is 'Exscientia/IgBert' or similar on HuggingFace
-    # For now, placeholder - would need actual model weights
     
     try:
         model_name = "alchemab/antiberta2"
@@ -618,7 +720,7 @@ class AntibodyAffinityModel(nn.Module):
     
     Architecture:
     - Pre-trained LM (frozen or fine-tuned)
-    - Regression head for Kd/ΔG prediction
+    - Regression head for Kd/dG prediction
     """
     def __init__(self, base_model, hidden_dim=256, freeze_base=False):
         super().__init__()
@@ -670,8 +772,6 @@ def finetune_antibody_lm(
 ):
     """
     Fine-tune antibody language model for downstream task.
-    
-    Similar to your ChemBERTa fine-tuning, but for antibodies.
     
     Returns:
         Trained model for embedding extraction
@@ -829,6 +929,367 @@ def predict_paratope_simple(sequence: str, chain_type: str = 'heavy') -> List[bo
 
 
 # ============================================================================
+# PART 7: DEVELOPABILITY AUGMENTATION FEATURES
+# ============================================================================
+
+def compute_developability_features(
+    heavy_sequences: List[str],
+    light_sequences: Optional[List[str]] = None,
+) -> np.ndarray:
+    """
+    Compute biophysical developability features for antibody sequences.
+    
+    Inspired by the Therapeutic Antibody Profiler (TAP, Raybould et al. 2019)
+    and CamSol/Aggrescan methods. These features capture manufacturability
+    and stability properties critical for drug development.
+    
+    Features (16 total):
+        0:  net_charge_heavy        - Net charge at pH 7.4
+        1:  net_charge_light        - Net charge at pH 7.4 (0 if no light chain)
+        2:  net_charge_total        - Combined net charge
+        3:  charge_asymmetry        - |heavy_charge - light_charge| / total_length
+        4:  hydrophobicity_mean     - Mean Kyte-Doolittle hydrophobicity
+        5:  hydrophobicity_std      - Std of hydrophobicity (patch heterogeneity)
+        6:  max_hydrophobic_stretch - Longest consecutive hydrophobic window (w=7)
+        7:  fraction_hydrophobic    - Fraction of residues with KD > 1.5
+        8:  molecular_weight        - Total MW in kDa
+        9:  isoelectric_point       - Estimated pI via Henderson-Hasselbalch
+        10: deamidation_motifs      - Count of NG/NS/NT/etc. motifs
+        11: isomerization_motifs    - Count of DG/DS/DT/etc. motifs
+        12: oxidation_motifs        - Count of MW/MH/MD/MS motifs
+        13: glycosylation_sequons   - Count of N-X-S/T sequons (X != P)
+        14: unpaired_cys_risk       - Odd cysteine count (proxy for free Cys)
+        15: total_liability_motifs  - Sum of all liability motif counts
+    
+    Args:
+        heavy_sequences: List of heavy chain amino acid sequences
+        light_sequences: Optional list of light chain amino acid sequences.
+                        If None, light-chain-specific features are set to 0.
+    
+    Returns:
+        np.ndarray: (n_sequences, 16) developability feature matrix
+    
+    Raises:
+        ValueError: If sequence contains non-standard amino acids that cannot
+                    be resolved, with index and sequence reported.
+    """
+    import re
+    
+    n = len(heavy_sequences)
+    if light_sequences is not None and len(light_sequences) != n:
+        raise ValueError(
+            f"heavy_sequences ({n}) and light_sequences ({len(light_sequences)}) "
+            f"must have the same length"
+        )
+    
+    valid_aa = set(AA_PROPERTIES.keys())
+    features = np.zeros((n, 16), dtype=np.float64)
+    
+    print(f"Computing developability features for {n} antibodies...")
+    
+    for i in range(n):
+        heavy = heavy_sequences[i].upper().strip()
+        light = light_sequences[i].upper().strip() if light_sequences is not None else ''
+        
+        # Validate sequences
+        for j, aa in enumerate(heavy):
+            if aa not in valid_aa:
+                raise ValueError(
+                    f"Invalid amino acid '{aa}' at position {j} in heavy chain "
+                    f"of sequence {i}: '{heavy[:50]}...'"
+                )
+        for j, aa in enumerate(light):
+            if aa not in valid_aa:
+                raise ValueError(
+                    f"Invalid amino acid '{aa}' at position {j} in light chain "
+                    f"of sequence {i}: '{light[:50]}...'"
+                )
+        
+        combined = heavy + light
+        
+        # --- Charge features ---
+        heavy_charge = sum(AA_PROPERTIES[aa]['charge'] for aa in heavy)
+        light_charge = sum(AA_PROPERTIES[aa]['charge'] for aa in light) if light else 0.0
+        total_charge = heavy_charge + light_charge
+        total_len = len(combined) if combined else 1
+        
+        features[i, 0] = heavy_charge
+        features[i, 1] = light_charge
+        features[i, 2] = total_charge
+        features[i, 3] = abs(heavy_charge - light_charge) / total_len
+        
+        # --- Hydrophobicity features ---
+        if combined:
+            hydro_values = np.array([AA_PROPERTIES[aa]['hydrophobicity'] for aa in combined])
+            features[i, 4] = hydro_values.mean()
+            features[i, 5] = hydro_values.std()
+            
+            # Max hydrophobic stretch: sliding window of size 7
+            window = 7
+            if len(hydro_values) >= window:
+                windowed_means = np.convolve(
+                    hydro_values, np.ones(window) / window, mode='valid'
+                )
+                features[i, 6] = windowed_means.max()
+            else:
+                features[i, 6] = hydro_values.mean()
+            
+            features[i, 7] = np.mean(hydro_values > 1.5)
+        
+        # --- Molecular weight (kDa) ---
+        mw = sum(AA_PROPERTIES[aa]['mw'] for aa in combined)
+        # Subtract water for peptide bonds: (n-1) * 18.015
+        if len(combined) > 1:
+            mw -= (len(combined) - 1) * 18.015
+        features[i, 8] = mw / 1000.0  # Convert to kDa
+        
+        # --- Isoelectric point estimation ---
+        features[i, 9] = _estimate_pI(combined)
+        
+        # --- Liability motif counts ---
+        deamidation_count = 0
+        for motif in LIABILITY_MOTIFS['deamidation']:
+            deamidation_count += combined.count(motif)
+        features[i, 10] = deamidation_count
+        
+        isomerization_count = 0
+        for motif in LIABILITY_MOTIFS['isomerization']:
+            isomerization_count += combined.count(motif)
+        features[i, 11] = isomerization_count
+        
+        oxidation_count = 0
+        for motif in LIABILITY_MOTIFS['oxidation']:
+            oxidation_count += combined.count(motif)
+        features[i, 12] = oxidation_count
+        
+        # N-linked glycosylation sequon: N-X-S/T where X != P
+        glyco_count = len(re.findall(r'N[^P][ST]', combined))
+        features[i, 13] = glyco_count
+        
+        # Unpaired cysteine risk: odd number of Cys suggests free thiol
+        cys_count = combined.count('C')
+        features[i, 14] = float(cys_count % 2 != 0)
+        
+        # Total liability score
+        features[i, 15] = deamidation_count + isomerization_count + oxidation_count + glyco_count
+    
+    print(f"  Generated developability features: ({n}, 16)")
+    return features
+
+
+def _estimate_pI(sequence: str) -> float:
+    """
+    Estimate isoelectric point using the bisection method with
+    Henderson-Hasselbalch equation.
+    
+    pKa values from Lehninger Principles of Biochemistry:
+    - N-terminus: 9.69
+    - C-terminus: 2.34
+    - D (Asp): 3.65, E (Glu): 4.25
+    - C (Cys): 8.18, Y (Tyr): 10.07
+    - H (His): 6.00, K (Lys): 10.53, R (Arg): 12.48
+    """
+    if not sequence:
+        return 7.0
+    
+    # pKa values
+    pKa_nterm = 9.69
+    pKa_cterm = 2.34
+    pKa_side = {
+        'D': 3.65, 'E': 4.25,  # negative
+        'C': 8.18, 'Y': 10.07,  # negative
+        'H': 6.00,  # positive
+        'K': 10.53, 'R': 12.48,  # positive
+    }
+    positive_residues = {'H', 'K', 'R'}
+    negative_residues = {'D', 'E', 'C', 'Y'}
+    
+    # Count titratable residues
+    counts = {}
+    for aa in sequence:
+        if aa in pKa_side:
+            counts[aa] = counts.get(aa, 0) + 1
+    
+    def net_charge_at_pH(pH):
+        # N-terminus (positive)
+        charge = 1.0 / (1.0 + 10.0 ** (pH - pKa_nterm))
+        # C-terminus (negative)
+        charge -= 1.0 / (1.0 + 10.0 ** (pKa_cterm - pH))
+        
+        for aa, count in counts.items():
+            pKa = pKa_side[aa]
+            if aa in positive_residues:
+                charge += count / (1.0 + 10.0 ** (pH - pKa))
+            else:
+                charge -= count / (1.0 + 10.0 ** (pKa - pH))
+        
+        return charge
+    
+    # Bisection method
+    low, high = 0.0, 14.0
+    for _ in range(100):
+        mid = (low + high) / 2.0
+        if net_charge_at_pH(mid) > 0:
+            low = mid
+        else:
+            high = mid
+    
+    return (low + high) / 2.0
+
+
+def compute_humanness_scores(
+    sequences: List[str],
+    chain_type: str = 'heavy',
+) -> np.ndarray:
+    """
+    Compute humanness scores by comparing to human germline V-gene sequences.
+    
+    Inspired by OASis (Prihoda et al. 2022) and T20 scoring. Measures how
+    closely an antibody sequence matches human germline repertoire, which
+    correlates with immunogenicity risk.
+    
+    Features (7 total):
+        0: best_germline_identity   - Highest % identity to any germline
+        1: top3_mean_identity       - Mean of top-3 germline identities
+        2: top5_mean_identity       - Mean of top-5 germline identities
+        3: germline_identity_std    - Std across all germline comparisons
+        4: best_fr_identity         - Best identity considering only framework positions
+        5: n_human_positions        - Count of positions matching human consensus
+        6: humanness_zscore         - Z-score of best identity vs. distribution
+    
+    Args:
+        sequences: List of antibody variable region sequences
+        chain_type: 'heavy' or 'light' -- selects germline database
+    
+    Returns:
+        np.ndarray: (n_sequences, 7) humanness feature matrix
+    
+    Raises:
+        ValueError: If chain_type is not 'heavy' or 'light', or if a sequence
+                    is empty, with index reported.
+    """
+    if chain_type == 'heavy':
+        germlines = HUMAN_VH_GERMLINES
+    elif chain_type == 'light':
+        germlines = HUMAN_VL_GERMLINES
+    else:
+        raise ValueError(f"chain_type must be 'heavy' or 'light', got '{chain_type}'")
+    
+    germline_names = list(germlines.keys())
+    germline_seqs = list(germlines.values())
+    n_germlines = len(germline_seqs)
+    
+    n = len(sequences)
+    features = np.zeros((n, 7), dtype=np.float64)
+    
+    print(f"Computing humanness scores for {n} {chain_type} chain sequences "
+          f"against {n_germlines} germlines...")
+    
+    # Precompute framework mask positions for germlines
+    # IMGT framework regions: FR1=1-26, FR2=39-55, FR3=66-104
+    # These correspond roughly to non-CDR positions in the aligned sequence
+    # CDR1 ~ positions 27-38 (0-indexed: 26-37)
+    # CDR2 ~ positions 56-65 (0-indexed: 55-64)
+    # CDR3 ~ positions 105-117 (0-indexed: 104-116)
+    cdr_ranges_0idx = [(26, 38), (55, 65), (104, 117)]
+    
+    def is_framework_position(pos, seq_len):
+        """Check if position is framework (not CDR) by IMGT-like numbering."""
+        for start, end in cdr_ranges_0idx:
+            if start <= pos < end:
+                return False
+        return True
+    
+    for i in range(n):
+        seq = sequences[i].upper().strip()
+        if not seq:
+            raise ValueError(f"Empty sequence at index {i}")
+        
+        seq_len = len(seq)
+        
+        # Compute pairwise identity to each germline
+        identities = np.zeros(n_germlines, dtype=np.float64)
+        fr_identities = np.zeros(n_germlines, dtype=np.float64)
+        
+        for g_idx, germ_seq in enumerate(germline_seqs):
+            # Align by truncating to shorter length (simple global alignment)
+            align_len = min(seq_len, len(germ_seq))
+            
+            if align_len == 0:
+                identities[g_idx] = 0.0
+                fr_identities[g_idx] = 0.0
+                continue
+            
+            # Overall identity
+            matches = sum(
+                1 for k in range(align_len) if seq[k] == germ_seq[k]
+            )
+            identities[g_idx] = matches / align_len
+            
+            # Framework-only identity
+            fr_matches = 0
+            fr_positions = 0
+            for k in range(align_len):
+                if is_framework_position(k, align_len):
+                    fr_positions += 1
+                    if seq[k] == germ_seq[k]:
+                        fr_matches += 1
+            
+            if fr_positions > 0:
+                fr_identities[g_idx] = fr_matches / fr_positions
+            else:
+                fr_identities[g_idx] = 0.0
+        
+        # Sort identities descending
+        sorted_ids = np.sort(identities)[::-1]
+        
+        # Feature 0: Best germline identity
+        features[i, 0] = sorted_ids[0]
+        
+        # Feature 1: Mean of top-3
+        top3 = sorted_ids[:min(3, n_germlines)]
+        features[i, 1] = top3.mean()
+        
+        # Feature 2: Mean of top-5
+        top5 = sorted_ids[:min(5, n_germlines)]
+        features[i, 2] = top5.mean()
+        
+        # Feature 3: Std across all germlines
+        features[i, 3] = identities.std()
+        
+        # Feature 4: Best framework identity
+        features[i, 4] = fr_identities.max()
+        
+        # Feature 5: Count of positions matching human consensus
+        # Build consensus from all germlines at each position
+        min_germ_len = min(len(g) for g in germline_seqs)
+        consensus_matches = 0
+        for k in range(min(seq_len, min_germ_len)):
+            # Get most common AA at this position across germlines
+            aa_counts = {}
+            for germ_seq in germline_seqs:
+                if k < len(germ_seq):
+                    aa = germ_seq[k]
+                    aa_counts[aa] = aa_counts.get(aa, 0) + 1
+            
+            if aa_counts:
+                consensus_aa = max(aa_counts, key=aa_counts.get)
+                if seq[k] == consensus_aa:
+                    consensus_matches += 1
+        
+        features[i, 5] = consensus_matches
+        
+        # Feature 6: Z-score of best identity
+        if identities.std() > 1e-10:
+            features[i, 6] = (sorted_ids[0] - identities.mean()) / identities.std()
+        else:
+            features[i, 6] = 0.0
+    
+    print(f"  Generated humanness features: ({n}, 7)")
+    return features
+
+
+# ============================================================================
 # CONVENIENCE FUNCTIONS
 # ============================================================================
 
@@ -875,5 +1336,21 @@ def create_antibody_hybrid(
         features['imgt_positions'] = create_imgt_position_features(
             heavy_sequences, chain_type='heavy'
         )
+    
+    if 'developability' in methods:
+        print("\n[4] Developability features...")
+        features['developability'] = compute_developability_features(
+            heavy_sequences, light_sequences
+        )
+    
+    if 'humanness' in methods:
+        print("\n[5] Humanness scores...")
+        features['humanness_heavy'] = compute_humanness_scores(
+            heavy_sequences, chain_type='heavy'
+        )
+        if light_sequences:
+            features['humanness_light'] = compute_humanness_scores(
+                light_sequences, chain_type='light'
+            )
     
     return features

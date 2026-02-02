@@ -4,6 +4,7 @@ Core hybrid representation creation functions - ENHANCED with Greedy Allocation
 Supports multiple feature importance methods and allocation strategies:
 - Allocation methods: 'fixed' (equal per rep) or 'greedy' (adaptive)
 - Importance methods: random_forest, shap, permutation, mutual_info, etc.
+- Augmentation strategies: 'all', 'none', 'greedy_ablation'
 
 Default configuration (from testing):
 - allocation_method='greedy'
@@ -328,6 +329,189 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val):
 
 
 # ============================================================================
+# AUGMENTATION HANDLING
+# ============================================================================
+
+def _select_augmentation_features(X_aug, labels, budget, is_classification):
+    """
+    Select top features from an augmentation array based on RF importance.
+    
+    Args:
+        X_aug: Augmentation features (n_samples, n_features)
+        labels: Target labels
+        budget: Max features to select
+        is_classification: Whether this is a classification task
+        
+    Returns:
+        tuple: (selected_features, selected_indices, importance_scores)
+    """
+    # Clean data
+    X_clean = np.clip(X_aug, -1e10, 1e10)
+    X_clean = np.nan_to_num(X_clean, nan=0.0, posinf=1e10, neginf=-1e10)
+    
+    n_features = X_clean.shape[1]
+    n_select = min(budget, n_features)
+    
+    if n_select >= n_features:
+        # Use all features
+        return X_clean, np.arange(n_features), np.ones(n_features)
+    
+    # Compute importance
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_clean)
+    
+    if is_classification:
+        model = RandomForestClassifier(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
+    else:
+        model = RandomForestRegressor(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
+    
+    model.fit(X_scaled, labels)
+    importances = np.nan_to_num(model.feature_importances_, nan=0.0)
+    
+    # Select top features
+    top_idx = np.argsort(importances)[-n_select:][::-1]
+    
+    return X_clean[:, top_idx], top_idx, importances[top_idx]
+
+
+def _evaluate_augmentation_addition(
+    X_base_train, X_base_val,
+    X_aug_train, X_aug_val,
+    y_train, y_val,
+    baseline_score
+):
+    """
+    Evaluate whether adding an augmentation improves performance.
+    
+    Args:
+        X_base_train, X_base_val: Base hybrid features
+        X_aug_train, X_aug_val: Augmentation features to test
+        y_train, y_val: Labels
+        baseline_score: Current validation score without augmentation
+        
+    Returns:
+        tuple: (new_score, improvement)
+    """
+    # Combine base + augmentation
+    X_train_combined = np.hstack([X_base_train, X_aug_train])
+    X_val_combined = np.hstack([X_base_val, X_aug_val])
+    
+    new_score = _evaluate_allocation(X_train_combined, X_val_combined, y_train, y_val)
+    improvement = new_score - baseline_score
+    
+    return new_score, improvement
+
+
+def greedy_augmentation_ablation(
+    X_base_train, X_base_val,
+    augmentations_train, augmentations_val,
+    y_train, y_val,
+    augmentation_budget=20,
+    threshold=None,
+    return_all_scores=False
+):
+    """
+    Greedily select augmentations that improve validation performance.
+    
+    For each augmentation:
+    1. Select top `augmentation_budget` features by importance
+    2. Test if adding improves validation score
+    3. Keep if improvement exceeds threshold (or all if threshold=None)
+    
+    Args:
+        X_base_train, X_base_val: Base hybrid features
+        augmentations_train: Dict of {aug_name: train_features}
+        augmentations_val: Dict of {aug_name: val_features}
+        y_train, y_val: Labels
+        augmentation_budget: Max features per augmentation (default: 20)
+        threshold: Minimum improvement required to keep (default: None = keep all improving)
+        return_all_scores: Return scores for all augmentations, not just kept ones
+        
+    Returns:
+        dict: {
+            'kept_augmentations': List of augmentation names that were kept,
+            'augmentation_info': Dict of {aug_name: {'indices': ..., 'improvement': ...}},
+            'all_scores': Dict of {aug_name: improvement} (if return_all_scores=True),
+            'final_score': Final validation score with all kept augmentations
+        }
+    """
+    is_classification = _is_classification_task(y_train)
+    
+    # Get baseline score (base hybrid only)
+    baseline_score = _evaluate_allocation(X_base_train, X_base_val, y_train, y_val)
+    
+    kept_augmentations = []
+    augmentation_info = {}
+    all_scores = {}
+    
+    # Current best features (accumulates as we add augmentations)
+    X_current_train = X_base_train.copy()
+    X_current_val = X_base_val.copy()
+    current_score = baseline_score
+    
+    # Test each augmentation
+    for aug_name, X_aug_train in augmentations_train.items():
+        X_aug_val = augmentations_val[aug_name]
+        
+        # Select top features from this augmentation
+        X_aug_train_selected, indices, importances = _select_augmentation_features(
+            X_aug_train, y_train, augmentation_budget, is_classification
+        )
+        X_aug_val_selected = X_aug_val[:, indices]
+        X_aug_val_selected = np.clip(X_aug_val_selected, -1e10, 1e10)
+        X_aug_val_selected = np.nan_to_num(X_aug_val_selected, nan=0.0, posinf=1e10, neginf=-1e10)
+        
+        # Test improvement
+        new_score, improvement = _evaluate_augmentation_addition(
+            X_current_train, X_current_val,
+            X_aug_train_selected, X_aug_val_selected,
+            y_train, y_val,
+            current_score
+        )
+        
+        all_scores[aug_name] = {
+            'improvement': improvement,
+            'new_score': new_score,
+            'n_features': len(indices)
+        }
+        
+        # Decide whether to keep
+        keep = False
+        if threshold is None:
+            # Keep if any improvement
+            keep = improvement > 0
+        else:
+            # Keep if improvement exceeds threshold
+            keep = improvement >= threshold
+        
+        if keep:
+            kept_augmentations.append(aug_name)
+            augmentation_info[aug_name] = {
+                'selected_indices': indices,
+                'importance_scores': importances,
+                'n_features': len(indices),
+                'improvement': improvement
+            }
+            # Update current features
+            X_current_train = np.hstack([X_current_train, X_aug_train_selected])
+            X_current_val = np.hstack([X_current_val, X_aug_val_selected])
+            current_score = new_score
+    
+    result = {
+        'kept_augmentations': kept_augmentations,
+        'augmentation_info': augmentation_info,
+        'baseline_score': baseline_score,
+        'final_score': current_score,
+        'total_improvement': current_score - baseline_score
+    }
+    
+    if return_all_scores:
+        result['all_scores'] = all_scores
+    
+    return result
+
+
+# ============================================================================
 # FEATURE IMPORTANCE COMPUTATION
 # ============================================================================
 
@@ -542,7 +726,7 @@ def apply_feature_selection(base_reps, feature_info):
     # Iterate over feature_info keys to maintain same order as training
     # (feature_info preserves the order from create_hybrid)
     for rep_name in feature_info.keys():
-        # Skip metadata keys like 'allocation', 'greedy_history'
+        # Skip metadata keys like 'allocation', 'greedy_history', 'augmentation_info'
         if not isinstance(feature_info[rep_name], dict) or 'selected_indices' not in feature_info[rep_name]:
             continue
             
@@ -577,6 +761,49 @@ def apply_feature_selection(base_reps, feature_info):
     return np.hstack(selected_parts).astype(np.float32)
 
 
+def apply_augmentation_selection(augmentations, augmentation_info):
+    """
+    Apply pre-computed augmentation selection to new data (e.g., test set).
+    
+    Args:
+        augmentations: Dict of {aug_name: features}
+        augmentation_info: Dict from create_hybrid containing selected_indices for each aug
+        
+    Returns:
+        np.ndarray: Concatenated selected augmentation features
+    """
+    if not augmentation_info:
+        return None
+    
+    selected_parts = []
+    
+    for aug_name, info in augmentation_info.items():
+        if aug_name not in augmentations:
+            raise ValueError(f"Augmentation '{aug_name}' found in augmentation_info but not in augmentations")
+        
+        X = augmentations[aug_name]
+        indices = info['selected_indices']
+        
+        # Check bounds
+        max_idx = np.max(indices) if len(indices) > 0 else -1
+        if max_idx >= X.shape[1]:
+            raise ValueError(
+                f"Feature index {max_idx} out of bounds for augmentation '{aug_name}' "
+                f"with {X.shape[1]} features."
+            )
+        
+        X_selected = X[:, indices]
+        X_selected = np.clip(X_selected, -1e10, 1e10)
+        X_selected = np.nan_to_num(X_selected, nan=0.0, posinf=1e10, neginf=-1e10)
+        
+        selected_parts.append(X_selected)
+    
+    if len(selected_parts) == 0:
+        return None
+    
+    return np.hstack(selected_parts).astype(np.float32)
+
+
 # ============================================================================
 # MAIN HYBRID CREATION
 # ============================================================================
@@ -590,6 +817,11 @@ def create_hybrid(base_reps, labels,
                  validation_split=0.2,
                  apply_filters=False,
                  importance_method='random_forest',
+                 # Augmentation parameters
+                 augmentations=None,
+                 augmentation_strategy='greedy_ablation',
+                 augmentation_threshold=None,
+                 augmentation_budget=20,
                  **kwargs):
     """
     Create hybrid representation by combining features from multiple base representations.
@@ -612,12 +844,23 @@ def create_hybrid(base_reps, labels,
         apply_filters: Apply quality filters (sparsity + variance) before allocation (default: False)
         importance_method: Method for feature importance (default: 'random_forest')
         
+        augmentations: Dict of {aug_name: feature_array} for supplementary features (default: None)
+            These are evaluated separately from base_reps via greedy ablation
+        augmentation_strategy: How to handle augmentations
+            - 'greedy_ablation': Test each, keep only those that improve (default)
+            - 'all': Include all augmentations
+            - 'none': Ignore augmentations
+        augmentation_threshold: Minimum improvement to keep augmentation (default: None = any improvement)
+            Can be float (e.g., 0.01 for 1% R² improvement) or None
+        augmentation_budget: Max features per augmentation to select (default: 20)
+        
         **kwargs: Additional arguments for importance computation
         
     Returns:
         tuple: (hybrid_features, feature_info)
             - hybrid_features: Combined feature array
-            - feature_info: Metadata about selected features (includes 'allocation' for greedy)
+            - feature_info: Metadata about selected features (includes 'allocation' for greedy,
+                           'augmentation_info' if augmentations used)
     """
     # Convert labels to numpy array if needed
     labels = np.asarray(labels)
@@ -643,6 +886,14 @@ def create_hybrid(base_reps, labels,
         if X.shape[1] == 0:
             raise ValueError(f"Representation '{rep_name}' has 0 features")
     
+    # Validate augmentations if provided
+    if augmentations is not None:
+        for aug_name, X_aug in augmentations.items():
+            if X_aug.shape[0] != n_samples:
+                raise ValueError(f"Augmentation '{aug_name}' has {X_aug.shape[0]} samples, expected {n_samples}")
+            if X_aug.shape[1] == 0:
+                raise ValueError(f"Augmentation '{aug_name}' has 0 features")
+    
     # Check for NaN/inf in labels
     if np.any(np.isnan(labels)):
         raise ValueError("labels contains NaN values")
@@ -660,6 +911,8 @@ def create_hybrid(base_reps, labels,
         raise ValueError(f"validation_split must be between 0 and 1, got {validation_split}")
     if patience is not None and patience < 1:
         raise ValueError(f"patience must be at least 1 or None, got {patience}")
+    if augmentation_budget <= 0:
+        raise ValueError(f"augmentation_budget must be positive, got {augmentation_budget}")
     
     # Apply quality filters if requested
     # We track the mapping from filtered indices back to original indices
@@ -690,34 +943,39 @@ def create_hybrid(base_reps, labels,
                 f"apply_filters=True requires kirby.utils.feature_filtering module: {e}"
             )
     
+    # Common setup: create train/val split
+    n_val = int(n_samples * validation_split)
+    n_val = max(n_val, 1)
+    n_train = n_samples - n_val
+    
+    if n_train < 2:
+        raise ValueError(f"Need at least 2 training samples. "
+                       f"Got {n_train} with validation_split={validation_split} and {n_samples} total samples.")
+    
+    indices = np.random.RandomState(42).permutation(n_samples)
+    train_idx = indices[n_val:]
+    val_idx = indices[:n_val]
+    
+    train_labels = labels[train_idx]
+    val_labels = labels[val_idx]
+    
+    # Split base reps
+    rep_dict_train = {name: X[train_idx] for name, X in base_reps.items()}
+    rep_dict_val = {name: X[val_idx] for name, X in base_reps.items()}
+    
+    # Split augmentations if provided
+    aug_dict_train = None
+    aug_dict_val = None
+    if augmentations is not None and augmentation_strategy != 'none':
+        aug_dict_train = {name: X[train_idx] for name, X in augmentations.items()}
+        aug_dict_val = {name: X[val_idx] for name, X in augmentations.items()}
+    
+    # ========================================================================
+    # BASE HYBRID CREATION
+    # ========================================================================
+    
     # GREEDY ALLOCATION
     if allocation_method == 'greedy':
-        # Split into train/val for greedy allocation
-        n_samples = len(labels)
-        n_val = int(n_samples * validation_split)
-        
-        # Ensure minimum val size to avoid degenerate cases
-        n_val = max(n_val, 1)
-        n_train = n_samples - n_val
-        
-        if n_train < 2:
-            raise ValueError(f"Need at least 2 training samples for greedy allocation. "
-                           f"Got {n_train} with validation_split={validation_split} and {n_samples} total samples.")
-        if n_val >= n_samples:
-            raise ValueError(f"validation_split={validation_split} leaves no training data "
-                           f"for {n_samples} samples")
-        
-        # Shuffle indices
-        indices = np.random.RandomState(42).permutation(n_samples)
-        train_idx = indices[n_val:]
-        val_idx = indices[:n_val]
-        
-        # Split data
-        rep_dict_train = {name: X[train_idx] for name, X in base_reps.items()}
-        rep_dict_val = {name: X[val_idx] for name, X in base_reps.items()}
-        train_labels = labels[train_idx]
-        val_labels = labels[val_idx]
-        
         # Run greedy allocation - now returns feature_info directly
         allocation, history, greedy_feature_info = allocate_greedy_forward(
             rep_dict_train, rep_dict_val, train_labels, val_labels,
@@ -743,32 +1001,6 @@ def create_hybrid(base_reps, labels,
     
     # PERFORMANCE-WEIGHTED ALLOCATION
     elif allocation_method == 'performance_weighted':
-        # Split into train/val to test baselines
-        n_samples = len(labels)
-        n_val = int(n_samples * validation_split)
-        
-        # Ensure minimum val size to avoid degenerate cases
-        n_val = max(n_val, 1)
-        n_train = n_samples - n_val
-        
-        if n_train < 2:
-            raise ValueError(f"Need at least 2 training samples for performance_weighted allocation. "
-                           f"Got {n_train} with validation_split={validation_split} and {n_samples} total samples.")
-        if n_val >= n_samples:
-            raise ValueError(f"validation_split={validation_split} leaves no training data "
-                           f"for {n_samples} samples")
-        
-        # Shuffle indices
-        indices = np.random.RandomState(42).permutation(n_samples)
-        train_idx = indices[n_val:]
-        val_idx = indices[:n_val]
-        
-        # Split data
-        rep_dict_train = {name: X[train_idx] for name, X in base_reps.items()}
-        rep_dict_val = {name: X[val_idx] for name, X in base_reps.items()}
-        train_labels = labels[train_idx]
-        val_labels = labels[val_idx]
-        
         # Run performance-weighted allocation
         allocation = allocate_performance_weighted(
             rep_dict_train, rep_dict_val, train_labels, val_labels,
@@ -801,26 +1033,6 @@ def create_hybrid(base_reps, labels,
         
     # FIXED ALLOCATION (BACKWARDS COMPATIBLE)
     elif allocation_method == 'fixed':
-        # Split data for consistent importance computation (avoid data leakage)
-        n_samples = len(labels)
-        n_val = int(n_samples * validation_split)
-        n_val = max(n_val, 1)
-        n_train = n_samples - n_val
-        
-        if n_train < 2:
-            raise ValueError(f"Need at least 2 training samples for fixed allocation. "
-                           f"Got {n_train} with validation_split={validation_split} and {n_samples} total samples.")
-        if n_val >= n_samples:
-            raise ValueError(f"validation_split={validation_split} leaves no training data "
-                           f"for {n_samples} samples")
-        
-        indices = np.random.RandomState(42).permutation(n_samples)
-        train_idx = indices[n_val:]
-        
-        # Split reps for importance computation
-        rep_dict_train = {name: X[train_idx] for name, X in base_reps.items()}
-        train_labels = labels[train_idx]
-        
         # Compute importance on TRAIN split (consistent with other methods)
         importance_scores = compute_feature_importance(
             rep_dict_train, train_labels, method=importance_method, **kwargs
@@ -850,5 +1062,68 @@ def create_hybrid(base_reps, labels,
     else:
         raise ValueError(f"Unknown allocation_method: {allocation_method}. "
                         f"Choose 'greedy', 'performance_weighted', or 'fixed'")
+    
+    # ========================================================================
+    # AUGMENTATION HANDLING
+    # ========================================================================
+    
+    if aug_dict_train is not None and augmentation_strategy != 'none':
+        # Get base hybrid for train/val
+        X_base_train = apply_feature_selection(
+            {name: X[train_idx] for name, X in original_base_reps.items()},
+            feature_info
+        )
+        X_base_val = apply_feature_selection(
+            {name: X[val_idx] for name, X in original_base_reps.items()},
+            feature_info
+        )
+        
+        if augmentation_strategy == 'greedy_ablation':
+            # Run greedy ablation
+            aug_result = greedy_augmentation_ablation(
+                X_base_train, X_base_val,
+                aug_dict_train, aug_dict_val,
+                train_labels, val_labels,
+                augmentation_budget=augmentation_budget,
+                threshold=augmentation_threshold,
+                return_all_scores=True
+            )
+            
+            feature_info['augmentation_info'] = aug_result['augmentation_info']
+            feature_info['augmentation_scores'] = aug_result['all_scores']
+            feature_info['augmentation_baseline'] = aug_result['baseline_score']
+            feature_info['augmentation_final'] = aug_result['final_score']
+            feature_info['kept_augmentations'] = aug_result['kept_augmentations']
+            
+            # Apply kept augmentations to full data
+            if aug_result['kept_augmentations']:
+                aug_features = apply_augmentation_selection(
+                    augmentations, aug_result['augmentation_info']
+                )
+                if aug_features is not None:
+                    hybrid_features = np.hstack([hybrid_features, aug_features])
+        
+        elif augmentation_strategy == 'all':
+            # Include all augmentations (select top features from each)
+            is_classification = _is_classification_task(labels)
+            augmentation_info = {}
+            aug_parts = []
+            
+            for aug_name, X_aug in augmentations.items():
+                X_selected, indices, importances = _select_augmentation_features(
+                    X_aug, labels, augmentation_budget, is_classification
+                )
+                augmentation_info[aug_name] = {
+                    'selected_indices': indices,
+                    'importance_scores': importances,
+                    'n_features': len(indices)
+                }
+                aug_parts.append(X_selected)
+            
+            feature_info['augmentation_info'] = augmentation_info
+            feature_info['kept_augmentations'] = list(augmentations.keys())
+            
+            if aug_parts:
+                hybrid_features = np.hstack([hybrid_features] + aug_parts)
     
     return hybrid_features, feature_info

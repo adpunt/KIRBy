@@ -15,34 +15,38 @@ Available Representations:
 
 STATIC (No Training):
 - ECFP4: Extended-connectivity fingerprints
+- MACCS: MACCS keys fingerprints (167 bits)
 - PDV: Physical descriptor vectors
 
-PRETRAINED (Can be used frozen or fine-tuned):
+PRETRAINED (Frozen):
 - mol2vec: Word2vec on molecular substructures
 - MHG-GNN: Pretrained GNN encoder
+- ChemBERTa: BERT-style on SMILES (frozen extraction)
+- MolFormer: Transformer on SMILES (frozen extraction)
 
 STANDALONE LEARNED:
 - Graph Kernel: Deterministic graph similarity features
 
 FINE-TUNABLE:
-- MoLFormer: Transformer on SMILES/SELFIES (fine-tune on YOUR data)
-- ChemBERTa: BERT-style on SMILES/SELFIES (fine-tune on YOUR data)
 - GNN: Graph neural networks (train on YOUR data)
 
 GAUSSIAN PROCESSES:
 - GAUCHE GP: Train GP with graph kernels
 
-HYBRID:
-- create_hybrid: Combine multiple representations
+AUGMENTATIONS:
+- Graph topology: degree stats, clustering, diameter
+- Spectral features: Laplacian eigenvalues
+- Subgraph counts: rings, BRICS, functional groups
+- Graph distances: path lengths, Wiener index
 """
 
 import numpy as np
 from rdkit import Chem, RDLogger
-from rdkit.Chem import rdFingerprintGenerator
+from rdkit.Chem import rdFingerprintGenerator, MACCSkeys
 from rdkit.ML.Descriptors.MoleculeDescriptors import MolecularDescriptorCalculator
 
-# Suppress RDKit warnings
 RDLogger.DisableLog('rdApp.*')
+
 
 # =============================================================================
 # CONSTANTS
@@ -102,13 +106,37 @@ def create_ecfp4(smiles_list, radius=2, n_bits=2048):
     fingerprints = []
     generator = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=n_bits)
     
-    for smiles in smiles_list:
+    for i, smiles in enumerate(smiles_list):
         mol = Chem.MolFromSmiles(smiles)
-        if mol is not None:
-            fp = generator.GetFingerprint(mol)
-            fingerprints.append(np.array(fp))
-        else:
-            fingerprints.append(np.zeros(n_bits))
+        if mol is None:
+            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
+        fp = generator.GetFingerprint(mol)
+        fingerprints.append(np.array(fp))
+    
+    return np.array(fingerprints, dtype=np.float32)
+
+
+def create_maccs(smiles_list):
+    """
+    Create MACCS keys fingerprints (167 bits).
+    
+    MACCS (Molecular ACCess System) keys are a set of 166 structural keys
+    plus 1 unused key, designed for substructure searching.
+    
+    Args:
+        smiles_list: List of SMILES strings
+        
+    Returns:
+        np.ndarray: Binary fingerprint matrix (n_molecules, 167)
+    """
+    fingerprints = []
+    
+    for i, smiles in enumerate(smiles_list):
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
+        fp = MACCSkeys.GenMACCSKeys(mol)
+        fingerprints.append(np.array(fp))
     
     return np.array(fingerprints, dtype=np.float32)
 
@@ -130,16 +158,16 @@ def create_pdv(smiles_list, descriptor_list=None):
     calc = MolecularDescriptorCalculator(descriptor_list)
     descriptors = []
     
-    for smiles in smiles_list:
+    for i, smiles in enumerate(smiles_list):
         mol = Chem.MolFromSmiles(smiles)
-        if mol is not None:
-            desc = np.array(calc.CalcDescriptors(mol), dtype=np.float32)
-            desc = np.nan_to_num(desc, nan=0.0, posinf=0.0, neginf=0.0)
-            descriptors.append(desc)
-        else:
-            descriptors.append(np.zeros(len(descriptor_list), dtype=np.float32))
+        if mol is None:
+            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
+        desc = np.array(calc.CalcDescriptors(mol), dtype=np.float32)
+        desc = np.nan_to_num(desc, nan=0.0, posinf=0.0, neginf=0.0)
+        descriptors.append(desc)
     
     return np.array(descriptors)
+
 
 def create_sns(smiles_list, reference_featurizer=None, return_featurizer=False,
                max_radius=2, pharm_atom_invs=False, bond_invs=True,
@@ -172,24 +200,19 @@ def create_sns(smiles_list, reference_featurizer=None, return_featurizer=False,
         # Transform test data
         sns_test = create_sns(test_smiles, reference_featurizer=featurizer)
     """
-    from rdkit.Chem import rdFingerprintGenerator
-    
     if reference_featurizer is not None:
-        # Transform mode - use provided featurizer
         features = _transform_sns(smiles_list, reference_featurizer)
         return features
     
-    # Fit mode - create new featurizer
     print(f"Fitting SNS featurizer on {len(smiles_list)} molecules...")
     
-    # Convert SMILES to mol objects
     mols = []
-    for smiles in smiles_list:
+    for i, smiles in enumerate(smiles_list):
         mol = Chem.MolFromSmiles(smiles)
-        if mol is not None:
-            mols.append(mol)
+        if mol is None:
+            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
+        mols.append(mol)
     
-    # Setup Morgan generator
     if pharm_atom_invs:
         atom_inv_gen = rdFingerprintGenerator.GetMorganFeatureAtomInvGen()
     else:
@@ -202,33 +225,26 @@ def create_sns(smiles_list, reference_featurizer=None, return_featurizer=False,
         includeChirality=chirality
     )
     
-    # Function to enumerate substructure IDs and counts
     def sub_id_enumerator(mol):
-        if mol is None:
-            return {}
         fp = morgan_generator.GetSparseCountFingerprint(mol)
         return fp.GetNonzeroElements()
     
-    # Count prevalence of each substructure across training set
     sub_ids_to_prevs = {}
     for mol in mols:
         for sub_id in sub_id_enumerator(mol).keys():
             sub_ids_to_prevs[sub_id] = sub_ids_to_prevs.get(sub_id, 0) + 1
     
-    # Sort substructures by prevalence (most common first)
     sub_ids_sorted = sorted(
         sub_ids_to_prevs.keys(),
         key=lambda sub_id: (sub_ids_to_prevs[sub_id], sub_id),
         reverse=True
     )
     
-    # Keep only top vec_dimension substructures
     top_sub_ids = set(sub_ids_sorted[:vec_dimension])
     sub_id_to_index = {sub_id: i for i, sub_id in enumerate(sub_ids_sorted[:vec_dimension])}
     
     print(f"  Found {len(sub_ids_to_prevs)} unique substructures, keeping top {vec_dimension}")
     
-    # Store featurizer parameters
     featurizer = {
         'morgan_generator': morgan_generator,
         'sub_id_to_index': sub_id_to_index,
@@ -237,7 +253,6 @@ def create_sns(smiles_list, reference_featurizer=None, return_featurizer=False,
         'sub_counts': sub_counts
     }
     
-    # Transform training data
     features = _transform_sns(smiles_list, featurizer)
     
     if return_featurizer:
@@ -258,13 +273,11 @@ def _transform_sns(smiles_list, featurizer):
     for i, smiles in enumerate(smiles_list):
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
-            continue
+            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
         
-        # Get substructure counts
         fp = morgan_generator.GetSparseCountFingerprint(mol)
         sub_id_counts = fp.GetNonzeroElements()
         
-        # Build feature vector
         for sub_id, count in sub_id_counts.items():
             if sub_id in top_sub_ids:
                 idx = sub_id_to_index[sub_id]
@@ -275,11 +288,11 @@ def _transform_sns(smiles_list, featurizer):
     
     return features
 
+
 # =============================================================================
-# PRETRAINED REPRESENTATIONS
+# PRETRAINED REPRESENTATIONS (FROZEN)
 # =============================================================================
 
-# Global cache for mol2vec
 _MOL2VEC_MODEL = None
 
 def create_mol2vec(smiles_list, model_path=None, radius=1, unseen='UNK'):
@@ -298,26 +311,20 @@ def create_mol2vec(smiles_list, model_path=None, radius=1, unseen='UNK'):
     Returns:
         np.ndarray: Mol2vec embeddings (n_molecules, 300)
     """
-    try:
-        from mol2vec.features import mol2alt_sentence, MolSentence
-        from gensim.models import word2vec
-    except ImportError:
-        raise ImportError("mol2vec requires: pip install mol2vec gensim")
-    
+    from mol2vec.features import mol2alt_sentence, MolSentence
+    from gensim.models import word2vec
     import os
     
     global _MOL2VEC_MODEL
     
-    # Load model once
     if _MOL2VEC_MODEL is None:
         if model_path is None:
-            # Search common locations
             search_paths = [
-                'model_300dim.pkl',  # Current directory
-                '../model_300dim.pkl',  # Parent directory
-                'tests/model_300dim.pkl',  # tests subdirectory
-                '../tests/model_300dim.pkl',  # tests in parent
-                os.path.expanduser('~/model_300dim.pkl'),  # Home directory
+                'model_300dim.pkl',
+                '../model_300dim.pkl',
+                'tests/model_300dim.pkl',
+                '../tests/model_300dim.pkl',
+                os.path.expanduser('~/model_300dim.pkl'),
             ]
             
             found_path = None
@@ -327,8 +334,8 @@ def create_mol2vec(smiles_list, model_path=None, radius=1, unseen='UNK'):
                     break
             
             if found_path is None:
-                raise RuntimeError(
-                    f"Could not find mol2vec model in any of: {search_paths}\n"
+                raise FileNotFoundError(
+                    f"Could not find mol2vec model in: {search_paths}\n"
                     f"Download from: https://github.com/samoturk/mol2vec/raw/master/examples/models/model_300dim.pkl"
                 )
             
@@ -337,13 +344,13 @@ def create_mol2vec(smiles_list, model_path=None, radius=1, unseen='UNK'):
         else:
             _MOL2VEC_MODEL = word2vec.Word2Vec.load(model_path)
     
-    # Convert SMILES to molecules and sentences
-    mols = [Chem.MolFromSmiles(s) for s in smiles_list]
-    sentences = [MolSentence(mol2alt_sentence(m, radius)) for m in mols if m is not None]
-    
-    # Manual embedding generation (Gensim 4.x compatible)
     embeddings = []
-    for sentence in sentences:
+    for i, smiles in enumerate(smiles_list):
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
+        
+        sentence = MolSentence(mol2alt_sentence(mol, radius))
         vec = np.zeros(_MOL2VEC_MODEL.wv.vector_size)
         count = 0
         
@@ -360,7 +367,6 @@ def create_mol2vec(smiles_list, model_path=None, radius=1, unseen='UNK'):
     return np.array(embeddings, dtype=np.float32)
 
 
-# Global cache for MHG-GNN
 _MHG_GNN_MODEL = None
 
 def create_mhg_gnn(smiles_list, n_features=None, batch_size=32, 
@@ -368,25 +374,11 @@ def create_mhg_gnn(smiles_list, n_features=None, batch_size=32,
     """
     Create MHG-GNN embeddings (pretrained GNN encoder from IBM).
 
-    This implementation relies on a locally available copy of the MHG-GNN
-    model code and a separately downloaded pretrained weight file.
-
     CODE REQUIREMENT:
-    A directory containing:
-        models/mhg_model/
-    This directory is auto-detected from common locations, e.g.:
-        ~/repos/materials
-        ~/materials
-        ../materials
+    A directory containing models/mhg_model/
 
     WEIGHTS REQUIREMENT:
-    The pretrained weight file
-        mhggnn_pretrained_model_0724_2023.pickle
-    must be downloaded separately (e.g. from Hugging Face
-    ibm-research/materials.mhg-ged) and placed at one of the searched paths
-    or provided explicitly via `model_pickle_path`.
-
-    This function does NOT automatically download code or weights.
+    The pretrained weight file mhggnn_pretrained_model_0724_2023.pickle
 
     Args:
         smiles_list: List of SMILES strings
@@ -401,11 +393,11 @@ def create_mhg_gnn(smiles_list, n_features=None, batch_size=32,
     import sys
     import os
     import torch
+    import pickle
     
     global _MHG_GNN_MODEL
     
     if _MHG_GNN_MODEL is None:
-        # Find materials repo
         if materials_repo_path is None:
             search_paths = [
                 os.path.expanduser('~/repos/materials'),
@@ -419,24 +411,19 @@ def create_mhg_gnn(smiles_list, n_features=None, batch_size=32,
                     break
             
             if materials_repo_path is None:
-                raise RuntimeError(
-                    f"Could not find a local MHG-GNN code directory. Searched: {search_paths}\n"
-                    f"Expected to find: <path>/models/mhg_model\n"
-                    f"Fix: place the MHG code at one of the searched locations (e.g. ~/repos/materials)\n"
-                    f"or pass materials_repo_path='/path/to/dir/that/contains/models/mhg_model'."
+                raise FileNotFoundError(
+                    f"Could not find MHG-GNN code directory. Searched: {search_paths}\n"
+                    f"Expected: <path>/models/mhg_model"
                 )
         
-        # Add to path
         models_path = os.path.join(materials_repo_path, 'models')
         if models_path not in sys.path:
             sys.path.insert(0, models_path)
         
         print(f"Loading MHG-GNN from {materials_repo_path}...")
         
-        # Import after adding to path
         from mhg_model.load import PretrainedModelWrapper
         
-        # Find model pickle
         if model_pickle_path is None:
             search_paths = [
                 os.path.expanduser('~/repos/materials.mhg-ged/mhggnn_pretrained_model_0724_2023.pickle'),
@@ -449,53 +436,177 @@ def create_mhg_gnn(smiles_list, n_features=None, batch_size=32,
                     break
             
             if model_pickle_path is None:
-                raise RuntimeError(
+                raise FileNotFoundError(
                     f"Could not find model pickle. Searched: {search_paths}\n"
                     f"Download from: https://huggingface.co/ibm-research/materials.mhg-ged"
                 )
         
-        # Load pickle
-        import pickle
         with open(model_pickle_path, 'rb') as f:
             model_dict = pickle.load(f)
         
-        # Wrap with PretrainedModelWrapper
         _MHG_GNN_MODEL = PretrainedModelWrapper(model_dict)
         _MHG_GNN_MODEL.model.eval()
         print(f"MHG-GNN model loaded successfully")
     
-    # Encode SMILES
     print(f"Encoding {len(smiles_list)} molecules with MHG-GNN...")
     
     all_embeddings = []
     
     for i in range(0, len(smiles_list), batch_size):
         batch = smiles_list[i:i + batch_size]
-        
-        # encode() returns list of tensors
         batch_embeddings = _MHG_GNN_MODEL.encode(batch)
-        
-        # Convert to numpy and stack
         batch_np = torch.stack(batch_embeddings).cpu().detach().numpy()
         all_embeddings.append(batch_np)
     
     embeddings = np.vstack(all_embeddings)
     
-    # Optionally reduce dimensionality
     if n_features is not None and n_features < embeddings.shape[1]:
-        # Check if we have enough samples for PCA
         if embeddings.shape[0] < n_features:
-            print(f"WARNING: Cannot reduce to {n_features} dims with only {embeddings.shape[0]} samples.")
-            print(f"         Returning full {embeddings.shape[1]}-dim embeddings instead.")
-            print(f"         Fit PCA on training set first, then transform test set using same PCA.")
-        else:
-            from sklearn.decomposition import PCA
-            print(f"Reducing from {embeddings.shape[1]} to {n_features} dims via PCA...")
-            pca = PCA(n_components=n_features)
-            embeddings = pca.fit_transform(embeddings)
+            raise ValueError(
+                f"Cannot reduce to {n_features} dims with only {embeddings.shape[0]} samples. "
+                f"Fit PCA on training set first."
+            )
+        from sklearn.decomposition import PCA
+        print(f"Reducing from {embeddings.shape[1]} to {n_features} dims via PCA...")
+        pca = PCA(n_components=n_features)
+        embeddings = pca.fit_transform(embeddings)
     
     return embeddings
 
+
+_CHEMBERTA_MODEL = None
+_CHEMBERTA_TOKENIZER = None
+
+def create_chemberta(smiles_list, batch_size=32, device=None):
+    """
+    Create ChemBERTa embeddings (frozen, no fine-tuning).
+    
+    Uses DeepChem's ChemBERTa-77M-MTR, trained on 77M molecules with
+    multi-task regression pretraining for better molecular representations.
+    
+    Args:
+        smiles_list: List of SMILES strings
+        batch_size: Batch size for encoding (default: 32)
+        device: 'cpu' or 'cuda' (default: auto-detect)
+        
+    Returns:
+        np.ndarray: ChemBERTa embeddings (n_molecules, 768)
+    """
+    import torch
+    from transformers import AutoModel, AutoTokenizer
+    
+    global _CHEMBERTA_MODEL, _CHEMBERTA_TOKENIZER
+    
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
+    if _CHEMBERTA_MODEL is None:
+        print("Loading ChemBERTa-77M-MTR...")
+        _CHEMBERTA_TOKENIZER = AutoTokenizer.from_pretrained("DeepChem/ChemBERTa-77M-MTR")
+        _CHEMBERTA_MODEL = AutoModel.from_pretrained("DeepChem/ChemBERTa-77M-MTR")
+        _CHEMBERTA_MODEL = _CHEMBERTA_MODEL.to(device).eval()
+        print(f"  Loaded on {device}")
+    
+    all_embeddings = []
+    
+    with torch.no_grad():
+        for i in range(0, len(smiles_list), batch_size):
+            batch = smiles_list[i:i + batch_size]
+            
+            encoded = _CHEMBERTA_TOKENIZER(
+                batch, 
+                padding=True, 
+                truncation=True, 
+                max_length=512, 
+                return_tensors='pt'
+            )
+            inputs = {k: v.to(device) for k, v in encoded.items()}
+            
+            outputs = _CHEMBERTA_MODEL(**inputs)
+            
+            # Mean pooling over sequence length (excluding padding)
+            attention_mask = inputs['attention_mask'].unsqueeze(-1)
+            token_embeddings = outputs.last_hidden_state
+            sum_embeddings = torch.sum(token_embeddings * attention_mask, dim=1)
+            sum_mask = attention_mask.sum(dim=1)
+            embeddings = sum_embeddings / sum_mask
+            
+            all_embeddings.append(embeddings.cpu().numpy())
+    
+    return np.vstack(all_embeddings).astype(np.float32)
+
+
+_MOLFORMER_MODEL = None
+_MOLFORMER_TOKENIZER = None
+
+def create_molformer(smiles_list, batch_size=32, device=None):
+    """
+    Create MolFormer embeddings (frozen, no fine-tuning).
+    
+    Uses IBM's MoLFormer-XL trained on 1.1B molecules from PubChem and ZINC.
+    Linear attention mechanism allows processing of long SMILES sequences.
+    
+    Args:
+        smiles_list: List of SMILES strings
+        batch_size: Batch size for encoding (default: 32)
+        device: 'cpu' or 'cuda' (default: auto-detect)
+        
+    Returns:
+        np.ndarray: MolFormer embeddings (n_molecules, 768)
+    """
+    import torch
+    from transformers import AutoModel, AutoTokenizer
+    
+    global _MOLFORMER_MODEL, _MOLFORMER_TOKENIZER
+    
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
+    if _MOLFORMER_MODEL is None:
+        print("Loading MoLFormer-XL...")
+        _MOLFORMER_TOKENIZER = AutoTokenizer.from_pretrained(
+            "ibm/MoLFormer-XL-both-10pct", 
+            trust_remote_code=True
+        )
+        _MOLFORMER_MODEL = AutoModel.from_pretrained(
+            "ibm/MoLFormer-XL-both-10pct", 
+            trust_remote_code=True
+        )
+        _MOLFORMER_MODEL = _MOLFORMER_MODEL.to(device).eval()
+        print(f"  Loaded on {device}")
+    
+    all_embeddings = []
+    
+    with torch.no_grad():
+        for i in range(0, len(smiles_list), batch_size):
+            batch = smiles_list[i:i + batch_size]
+            
+            encoded = _MOLFORMER_TOKENIZER(
+                batch, 
+                padding=True, 
+                truncation=True, 
+                max_length=512, 
+                return_tensors='pt'
+            )
+            inputs = {k: v.to(device) for k, v in encoded.items()}
+            
+            outputs = _MOLFORMER_MODEL(**inputs)
+            
+            # Mean pooling over sequence length (excluding padding)
+            attention_mask = inputs['attention_mask'].unsqueeze(-1)
+            token_embeddings = outputs.last_hidden_state
+            sum_embeddings = torch.sum(token_embeddings * attention_mask, dim=1)
+            sum_mask = attention_mask.sum(dim=1)
+            embeddings = sum_embeddings / sum_mask
+            
+            all_embeddings.append(embeddings.cpu().numpy())
+    
+    return np.vstack(all_embeddings).astype(np.float32)
+
+
+# =============================================================================
+# GRAPH KERNEL FEATURES
+# =============================================================================
 
 def create_graph_kernel(smiles_list, kernel='weisfeiler_lehman', n_iter=5, 
                         n_features=None, reference_vocabulary=None, return_vocabulary=False):
@@ -507,7 +618,7 @@ def create_graph_kernel(smiles_list, kernel='weisfeiler_lehman', n_iter=5,
     
     Args:
         smiles_list: List of SMILES strings
-        kernel: 'weisfeiler_lehman' (others not properly implemented for histograms)
+        kernel: 'weisfeiler_lehman' (others not implemented)
         n_iter: Number of WL iterations (default: 5)
         n_features: Ignored (kept for API compatibility)
         reference_vocabulary: Set of WL labels from training (for test set)
@@ -521,397 +632,328 @@ def create_graph_kernel(smiles_list, kernel='weisfeiler_lehman', n_iter=5,
     
     print(f"Converting {len(smiles_list)} molecules to graphs...")
     
-    # Convert SMILES to molecular graphs
     graphs_data = []
-    failed = 0
     
-    for smiles in smiles_list:
+    for i, smiles in enumerate(smiles_list):
         mol = Chem.MolFromSmiles(smiles)
-        if mol is None or mol.GetNumBonds() == 0:
-            graphs_data.append(None)
-            failed += 1
-            continue
+        if mol is None:
+            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
+        if mol.GetNumBonds() == 0:
+            raise ValueError(f"Molecule at index {i} has no bonds: {smiles}")
         
-        # Extract graph structure
         node_labels = {atom.GetIdx(): atom.GetSymbol() for atom in mol.GetAtoms()}
         edges = {atom.GetIdx(): [] for atom in mol.GetAtoms()}
         for bond in mol.GetBonds():
-            i, j = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
-            edges[i].append(j)
-            edges[j].append(i)
+            i_atom, j_atom = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+            edges[i_atom].append(j_atom)
+            edges[j_atom].append(i_atom)
         
         graphs_data.append((node_labels, edges))
     
-    if failed > 0:
-        print(f"  Warning: {failed}/{len(smiles_list)} molecules failed")
-    
     print(f"Computing WL histograms with {n_iter} iterations...")
     
-    # Run WL algorithm and collect histograms
     all_histograms = []
     discovered_labels = set()
     
     for graph_data in graphs_data:
-        if graph_data is None:
-            all_histograms.append(None)
-            continue
-        
         node_labels, edges = graph_data
         current_labels = node_labels.copy()
         histogram = Counter()
         
-        # Collect labels from all iterations
         for iteration in range(n_iter + 1):
-            # Add current labels to histogram
             for label in current_labels.values():
                 label_str = f"{iteration}_{label}"
                 histogram[label_str] += 1
-                # Only add to discovered labels if we're fitting (not transforming)
                 if reference_vocabulary is None:
                     discovered_labels.add(label_str)
             
-            # WL relabeling
             if iteration < n_iter:
                 new_labels = {}
                 for node, label in current_labels.items():
-                    # Get sorted neighbor labels
                     neighbor_labels = sorted([current_labels[n] for n in edges[node]])
-                    # New label is combination of current + neighbors
                     new_label = f"{label}_{'_'.join(neighbor_labels)}"
                     new_labels[node] = new_label
                 current_labels = new_labels
         
         all_histograms.append(histogram)
     
-    # Determine which vocabulary to use
     if reference_vocabulary is not None:
-        # Transforming test data - use reference vocabulary
         vocabulary = reference_vocabulary
-        print(f"  Using {len(vocabulary)} reference WL labels (from training)")
+        print(f"  Using {len(vocabulary)} reference WL labels")
     else:
-        # Fitting on training data - use discovered labels
         vocabulary = discovered_labels
-        print(f"  Extracted {len(vocabulary)} unique WL labels as features")
+        print(f"  Extracted {len(vocabulary)} unique WL labels")
     
-    # Convert to feature matrix using vocabulary
     sorted_labels = sorted(vocabulary)
     features = np.zeros((len(smiles_list), len(sorted_labels)), dtype=np.float32)
     
     for i, histogram in enumerate(all_histograms):
-        if histogram is not None:
-            for j, label in enumerate(sorted_labels):
-                features[i, j] = histogram.get(label, 0)
+        for j, label in enumerate(sorted_labels):
+            features[i, j] = histogram.get(label, 0)
     
     if return_vocabulary:
         return features, vocabulary
     return features
 
+
 # =============================================================================
-# FINE-TUNING: MoLFormer
+# GRAPH AUGMENTATIONS
 # =============================================================================
 
-def finetune_molformer(train_smiles, train_labels, val_smiles, val_labels,
-                       epochs=10, batch_size=32, learning_rate=1e-4,
-                       embedding_dim=768, freeze_encoder=False, use_selfies=False):
+def compute_graph_topology(smiles_list):
     """
-    Fine-tune MoLFormer on YOUR task-specific data.
+    Compute graph topology features from molecular graphs.
     
-    Supports both SMILES and SELFIES input. The model learns task-specific
-    patterns and the embeddings become optimized for YOUR property.
+    Features (10 total):
+    - num_atoms: Number of atoms
+    - num_bonds: Number of bonds  
+    - degree_mean: Mean node degree
+    - degree_max: Maximum node degree
+    - degree_std: Standard deviation of node degrees
+    - density: Graph density (2*edges / (nodes*(nodes-1)))
+    - num_components: Number of connected components
+    - diameter: Graph diameter (-1 if disconnected)
+    - radius: Graph radius (-1 if disconnected)
+    - clustering: Average clustering coefficient
     
     Args:
-        train_smiles: Training SMILES
-        train_labels: Training labels
-        val_smiles: Validation SMILES
-        val_labels: Validation labels
-        epochs: Number of training epochs (default: 10)
-        batch_size: Batch size (default: 32)
-        learning_rate: Learning rate (default: 1e-4)
-        embedding_dim: Embedding dimension (default: 768)
-        freeze_encoder: If True, only train head (default: False)
-        use_selfies: If True, use SELFIES instead of SMILES (default: False)
+        smiles_list: List of SMILES strings
         
     Returns:
-        dict: {
-            'model': Fine-tuned model,
-            'tokenizer': Tokenizer,
-            'embedding_dim': Dimension,
-            'use_selfies': Whether SELFIES is used,
-            'device': Device
-        }
+        np.ndarray: Topology features (n_molecules, 10)
     """
-    try:
-        import torch
-        import torch.nn as nn
-        from torch.utils.data import Dataset, DataLoader
-        from transformers import AutoModel, AutoTokenizer
-        if use_selfies:
-            import selfies as sf
-    except ImportError:
-        deps = "torch transformers" + (" selfies" if use_selfies else "")
-        raise ImportError(f"MoLFormer fine-tuning requires: pip install {deps}")
+    import networkx as nx
     
-    # Convert to SELFIES if requested
-    if use_selfies:
-        print("Converting SMILES to SELFIES...")
-        train_input = [sf.encoder(s) for s in train_smiles]
-        val_input = [sf.encoder(s) for s in val_smiles]
-    else:
-        train_input = train_smiles
-        val_input = val_smiles
+    features = []
     
-    print("Loading pretrained MoLFormer...")
-    tokenizer = AutoTokenizer.from_pretrained("ibm/MoLFormer-XL-both-10pct", trust_remote_code=True)
-    base_model = AutoModel.from_pretrained("ibm/MoLFormer-XL-both-10pct", trust_remote_code=True)
-    
-    # Regression model
-    class MoLFormerRegressor(nn.Module):
-        def __init__(self, base_model, embedding_dim=768, freeze_encoder=False):
-            super().__init__()
-            self.encoder = base_model
-            self.regression_head = nn.Linear(embedding_dim, 1)
-            
-            if freeze_encoder:
-                for param in self.encoder.parameters():
-                    param.requires_grad = False
+    for i, smiles in enumerate(smiles_list):
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
         
-        def forward(self, input_ids, attention_mask):
-            outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
-            embeddings = outputs.last_hidden_state.mean(dim=1)
-            return self.regression_head(embeddings), embeddings
-    
-    model = MoLFormerRegressor(base_model, embedding_dim, freeze_encoder)
-    
-    # Dataset
-    class MoleculeDataset(Dataset):
-        def __init__(self, inputs, labels, tokenizer):
-            self.inputs = inputs
-            self.labels = torch.tensor(labels, dtype=torch.float32)
-            self.tokenizer = tokenizer
+        G = nx.Graph()
+        for atom in mol.GetAtoms():
+            G.add_node(atom.GetIdx())
+        for bond in mol.GetBonds():
+            G.add_edge(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx())
         
-        def __len__(self):
-            return len(self.inputs)
+        num_atoms = G.number_of_nodes()
+        num_bonds = G.number_of_edges()
         
-        def __getitem__(self, idx):
-            encoded = self.tokenizer(
-                self.inputs[idx],
-                padding='max_length',
-                truncation=True,
-                max_length=512,
-                return_tensors='pt'
-            )
-            return {
-                'input_ids': encoded['input_ids'].squeeze(),
-                'attention_mask': encoded['attention_mask'].squeeze(),
-                'labels': self.labels[idx]
-            }
-    
-    train_dataset = MoleculeDataset(train_input, train_labels, tokenizer)
-    val_dataset = MoleculeDataset(val_input, val_labels, tokenizer)
-    
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size)
-    
-    # Training
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-    criterion = nn.MSELoss()
-    
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model.to(device)
-    
-    input_type = "SELFIES" if use_selfies else "SMILES"
-    print(f"Fine-tuning MoLFormer on {input_type} for {epochs} epochs on {device}...")
-    
-    for epoch in range(epochs):
-        model.train()
-        train_loss = 0
-        for batch in train_loader:
-            input_ids = batch['input_ids'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
-            labels = batch['labels'].to(device)
-            
-            optimizer.zero_grad()
-            predictions, _ = model(input_ids, attention_mask)
-            loss = criterion(predictions.squeeze(), labels)
-            loss.backward()
-            optimizer.step()
-            
-            train_loss += loss.item()
+        degrees = [d for n, d in G.degree()]
+        degree_mean = np.mean(degrees)
+        degree_max = np.max(degrees)
+        degree_std = np.std(degrees)
         
-        # Validation
-        model.eval()
-        val_loss = 0
-        with torch.no_grad():
-            for batch in val_loader:
-                input_ids = batch['input_ids'].to(device)
-                attention_mask = batch['attention_mask'].to(device)
-                labels = batch['labels'].to(device)
-                
-                predictions, _ = model(input_ids, attention_mask)
-                loss = criterion(predictions.squeeze(), labels)
-                val_loss += loss.item()
+        density = nx.density(G)
+        num_components = nx.number_connected_components(G)
         
-        print(f"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss/len(train_loader):.4f}, "
-              f"Val Loss: {val_loss/len(val_loader):.4f}")
+        if num_components == 1 and num_atoms > 1:
+            diameter = nx.diameter(G)
+            radius = nx.radius(G)
+        else:
+            diameter = -1
+            radius = -1
+        
+        clustering = nx.average_clustering(G)
+        
+        features.append(np.array([
+            num_atoms, num_bonds, degree_mean, degree_max, degree_std,
+            density, num_components, diameter, radius, clustering
+        ], dtype=np.float32))
     
-    return {
-        'model': model,
-        'tokenizer': tokenizer,
-        'embedding_dim': embedding_dim,
-        'use_selfies': use_selfies,
-        'device': device
-    }
+    return np.array(features)
 
 
-# =============================================================================
-# FINE-TUNING: ChemBERTa
-# =============================================================================
-
-def finetune_chemberta(train_smiles, train_labels, val_smiles, val_labels,
-                       epochs=10, batch_size=32, learning_rate=1e-4,
-                       embedding_dim=768, freeze_encoder=False, use_selfies=False):
+def compute_spectral_features(smiles_list, k=10):
     """
-    Fine-tune ChemBERTa on YOUR task-specific data.
+    Compute spectral features from molecular graph Laplacian.
     
-    Supports both SMILES and SELFIES input. Similar to MoLFormer but uses
-    BERT-style architecture.
+    Extracts the k smallest non-trivial eigenvalues of the normalized
+    graph Laplacian. These capture the global structure of the molecule.
     
     Args:
-        train_smiles: Training SMILES
-        train_labels: Training labels
-        val_smiles: Validation SMILES
-        val_labels: Validation labels
-        epochs: Number of training epochs (default: 10)
-        batch_size: Batch size (default: 32)
-        learning_rate: Learning rate (default: 1e-4)
-        embedding_dim: Embedding dimension (default: 768)
-        freeze_encoder: If True, only train head (default: False)
-        use_selfies: If True, use SELFIES instead of SMILES (default: False)
+        smiles_list: List of SMILES strings
+        k: Number of eigenvalues to return (default: 10)
         
     Returns:
-        dict: {'model', 'tokenizer', 'embedding_dim', 'use_selfies', 'device'}
+        np.ndarray: Spectral features (n_molecules, k)
     """
-    try:
-        import torch
-        import torch.nn as nn
-        from torch.utils.data import Dataset, DataLoader
-        from transformers import AutoModel, AutoTokenizer
-        if use_selfies:
-            import selfies as sf
-    except ImportError:
-        deps = "torch transformers" + (" selfies" if use_selfies else "")
-        raise ImportError(f"ChemBERTa fine-tuning requires: pip install {deps}")
+    features = []
     
-    # Convert to SELFIES if requested
-    if use_selfies:
-        print("Converting SMILES to SELFIES...")
-        train_input = [sf.encoder(s) for s in train_smiles]
-        val_input = [sf.encoder(s) for s in val_smiles]
-    else:
-        train_input = train_smiles
-        val_input = val_smiles
-    
-    print("Loading pretrained ChemBERTa...")
-    tokenizer = AutoTokenizer.from_pretrained("seyonec/ChemBERTa-zinc-base-v1")
-    base_model = AutoModel.from_pretrained("seyonec/ChemBERTa-zinc-base-v1")
-    
-    # Regression model
-    class ChemBERTaRegressor(nn.Module):
-        def __init__(self, base_model, embedding_dim=768, freeze_encoder=False):
-            super().__init__()
-            self.encoder = base_model
-            self.regression_head = nn.Linear(embedding_dim, 1)
-            
-            if freeze_encoder:
-                for param in self.encoder.parameters():
-                    param.requires_grad = False
+    for i, smiles in enumerate(smiles_list):
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
         
-        def forward(self, input_ids, attention_mask):
-            outputs = self.encoder(input_ids=input_ids, attention_mask=attention_mask)
-            embeddings = outputs.last_hidden_state.mean(dim=1)
-            return self.regression_head(embeddings), embeddings
-    
-    model = ChemBERTaRegressor(base_model, embedding_dim, freeze_encoder)
-    
-    # Dataset
-    class MoleculeDataset(Dataset):
-        def __init__(self, inputs, labels, tokenizer):
-            self.inputs = inputs
-            self.labels = torch.tensor(labels, dtype=torch.float32)
-            self.tokenizer = tokenizer
+        num_atoms = mol.GetNumAtoms()
         
-        def __len__(self):
-            return len(self.inputs)
+        if num_atoms < 2:
+            raise ValueError(f"Molecule at index {i} has fewer than 2 atoms: {smiles}")
         
-        def __getitem__(self, idx):
-            encoded = self.tokenizer(
-                self.inputs[idx],
-                padding='max_length',
-                truncation=True,
-                max_length=512,
-                return_tensors='pt'
-            )
-            return {
-                'input_ids': encoded['input_ids'].squeeze(),
-                'attention_mask': encoded['attention_mask'].squeeze(),
-                'labels': self.labels[idx]
-            }
-    
-    train_dataset = MoleculeDataset(train_input, train_labels, tokenizer)
-    val_dataset = MoleculeDataset(val_input, val_labels, tokenizer)
-    
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size)
-    
-    # Training
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
-    criterion = nn.MSELoss()
-    
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model.to(device)
-    
-    input_type = "SELFIES" if use_selfies else "SMILES"
-    print(f"Fine-tuning ChemBERTa on {input_type} for {epochs} epochs on {device}...")
-    
-    for epoch in range(epochs):
-        model.train()
-        train_loss = 0
-        for batch in train_loader:
-            input_ids = batch['input_ids'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
-            labels = batch['labels'].to(device)
-            
-            optimizer.zero_grad()
-            predictions, _ = model(input_ids, attention_mask)
-            loss = criterion(predictions.squeeze(), labels)
-            loss.backward()
-            optimizer.step()
-            
-            train_loss += loss.item()
+        # Build adjacency matrix
+        adj = np.zeros((num_atoms, num_atoms), dtype=np.float32)
+        for bond in mol.GetBonds():
+            i_atom, j_atom = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+            adj[i_atom, j_atom] = 1
+            adj[j_atom, i_atom] = 1
         
-        # Validation
-        model.eval()
-        val_loss = 0
-        with torch.no_grad():
-            for batch in val_loader:
-                input_ids = batch['input_ids'].to(device)
-                attention_mask = batch['attention_mask'].to(device)
-                labels = batch['labels'].to(device)
-                
-                predictions, _ = model(input_ids, attention_mask)
-                loss = criterion(predictions.squeeze(), labels)
-                val_loss += loss.item()
+        # Compute normalized Laplacian: L = I - D^(-1/2) A D^(-1/2)
+        degrees = adj.sum(axis=1)
+        degrees[degrees == 0] = 1  # Avoid division by zero for isolated atoms
+        d_inv_sqrt = np.diag(1.0 / np.sqrt(degrees))
+        laplacian = np.eye(num_atoms) - d_inv_sqrt @ adj @ d_inv_sqrt
         
-        print(f"Epoch {epoch+1}/{epochs} - Train Loss: {train_loss/len(train_loader):.4f}, "
-              f"Val Loss: {val_loss/len(val_loader):.4f}")
+        # Compute eigenvalues
+        eigenvalues = np.sort(np.linalg.eigvalsh(laplacian))
+        
+        # Pad or truncate to k values
+        if len(eigenvalues) < k:
+            eigenvalues = np.pad(eigenvalues, (0, k - len(eigenvalues)), mode='constant')
+        else:
+            eigenvalues = eigenvalues[:k]
+        
+        features.append(eigenvalues.astype(np.float32))
     
-    return {
-        'model': model,
-        'tokenizer': tokenizer,
-        'embedding_dim': embedding_dim,
-        'use_selfies': use_selfies,
-        'device': device
-    }
+    return np.array(features)
+
+
+def compute_subgraph_counts(smiles_list):
+    """
+    Compute subgraph and motif counts from molecules.
+    
+    Features (20 total):
+    - ring_3 through ring_8: Count of rings of each size
+    - aromatic_rings: Number of aromatic rings
+    - aliphatic_rings: Number of aliphatic rings
+    - brics_fragments: Number of BRICS decomposition fragments
+    - heterocycles: Number of heterocyclic rings
+    - spiro_atoms: Number of spiro atoms
+    - bridgehead_atoms: Number of bridgehead atoms
+    - rotatable_bonds: Number of rotatable bonds
+    - hbd: Number of hydrogen bond donors
+    - hba: Number of hydrogen bond acceptors
+    - stereocenters: Number of stereocenters
+    - amide_bonds: Number of amide bonds
+    
+    Args:
+        smiles_list: List of SMILES strings
+        
+    Returns:
+        np.ndarray: Subgraph count features (n_molecules, 20)
+    """
+    from rdkit.Chem import BRICS, rdMolDescriptors
+    
+    features = []
+    
+    for i, smiles in enumerate(smiles_list):
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
+        
+        feat = []
+        
+        # Ring counts by size
+        ring_info = mol.GetRingInfo()
+        ring_sizes = [len(r) for r in ring_info.AtomRings()]
+        for size in range(3, 9):
+            feat.append(ring_sizes.count(size))
+        
+        # Ring type counts
+        feat.append(rdMolDescriptors.CalcNumAromaticRings(mol))
+        feat.append(rdMolDescriptors.CalcNumAliphaticRings(mol))
+        
+        # BRICS fragments
+        brics_bonds = list(BRICS.FindBRICSBonds(mol))
+        feat.append(len(brics_bonds) + 1 if brics_bonds else 1)
+        
+        # Other structural features
+        feat.append(rdMolDescriptors.CalcNumHeterocycles(mol))
+        feat.append(rdMolDescriptors.CalcNumSpiroAtoms(mol))
+        feat.append(rdMolDescriptors.CalcNumBridgeheadAtoms(mol))
+        feat.append(rdMolDescriptors.CalcNumRotatableBonds(mol))
+        feat.append(rdMolDescriptors.CalcNumHBD(mol))
+        feat.append(rdMolDescriptors.CalcNumHBA(mol))
+        feat.append(rdMolDescriptors.CalcNumAtomStereoCenters(mol))
+        feat.append(rdMolDescriptors.CalcNumAmideBonds(mol))
+        
+        features.append(np.array(feat, dtype=np.float32))
+    
+    return np.array(features)
+
+
+def compute_graph_distances(smiles_list):
+    """
+    Compute graph distance statistics from molecular graphs.
+    
+    Features (8 total):
+    - mean_path_length: Mean shortest path length between all pairs
+    - max_path_length: Maximum shortest path length (diameter)
+    - wiener_index: Sum of all shortest path lengths
+    - path_length_std: Standard deviation of path lengths
+    - eccentricity_mean: Mean eccentricity of nodes
+    - eccentricity_std: Standard deviation of eccentricity
+    - periphery_size: Number of nodes in periphery
+    - center_size: Number of nodes in center
+    
+    Args:
+        smiles_list: List of SMILES strings
+        
+    Returns:
+        np.ndarray: Graph distance features (n_molecules, 8)
+    """
+    import networkx as nx
+    
+    features = []
+    
+    for i, smiles in enumerate(smiles_list):
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
+        
+        G = nx.Graph()
+        for atom in mol.GetAtoms():
+            G.add_node(atom.GetIdx())
+        for bond in mol.GetBonds():
+            G.add_edge(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx())
+        
+        if G.number_of_nodes() < 2:
+            raise ValueError(f"Molecule at index {i} has fewer than 2 atoms: {smiles}")
+        
+        # Handle disconnected graphs by taking largest component
+        if not nx.is_connected(G):
+            largest_cc = max(nx.connected_components(G), key=len)
+            G = G.subgraph(largest_cc).copy()
+        
+        # Compute all shortest paths
+        path_lengths = dict(nx.all_pairs_shortest_path_length(G))
+        all_paths = [
+            length 
+            for source in path_lengths 
+            for target, length in path_lengths[source].items() 
+            if source < target
+        ]
+        
+        mean_path = np.mean(all_paths)
+        max_path = np.max(all_paths)
+        wiener = np.sum(all_paths)
+        std_path = np.std(all_paths)
+        
+        # Eccentricity
+        eccentricities = list(nx.eccentricity(G).values())
+        ecc_mean = np.mean(eccentricities)
+        ecc_std = np.std(eccentricities)
+        
+        # Periphery and center
+        periphery_size = len(nx.periphery(G))
+        center_size = len(nx.center(G))
+        
+        features.append(np.array([
+            mean_path, max_path, wiener, std_path,
+            ecc_mean, ecc_std, periphery_size, center_size
+        ], dtype=np.float32))
+    
+    return np.array(features)
 
 
 # =============================================================================
@@ -924,7 +966,7 @@ def finetune_gnn(train_smiles, train_labels, val_smiles, val_labels,
     """
     Fine-tune a GNN (GCN/GAT/MPNN) on YOUR task-specific data.
     
-    Trains GNN from scratch (or pretrained if available) on YOUR data.
+    Trains GNN from scratch on YOUR data.
     
     Args:
         train_smiles: Training SMILES
@@ -941,21 +983,17 @@ def finetune_gnn(train_smiles, train_labels, val_smiles, val_labels,
     Returns:
         dict: {'model', 'gnn_type', 'hidden_dim', 'device'}
     """
-    try:
-        import torch
-        import torch.nn as nn
-        import torch.nn.functional as F
-        from torch_geometric.data import Data, Batch
-        from torch_geometric.nn import GCNConv, GATConv, global_mean_pool
-        from torch.utils.data import Dataset, DataLoader
-    except ImportError:
-        raise ImportError("GNN fine-tuning requires: pip install torch torch-geometric")
+    import torch
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from torch_geometric.data import Data, Batch
+    from torch_geometric.nn import GCNConv, GATConv, global_mean_pool
+    from torch.utils.data import DataLoader
     
-    # Convert SMILES to PyG graphs
     def smiles_to_graph(smiles):
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
-            return None
+            raise ValueError(f"Invalid SMILES: {smiles}")
         
         atom_features = []
         for atom in mol.GetAtoms():
@@ -975,7 +1013,10 @@ def finetune_gnn(train_smiles, train_labels, val_smiles, val_labels,
             edge_index.append([i, j])
             edge_index.append([j, i])
         
-        edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous() if edge_index else torch.zeros((2, 0), dtype=torch.long)
+        if edge_index:
+            edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
+        else:
+            edge_index = torch.zeros((2, 0), dtype=torch.long)
         
         return Data(x=x, edge_index=edge_index)
     
@@ -983,8 +1024,8 @@ def finetune_gnn(train_smiles, train_labels, val_smiles, val_labels,
     train_graphs = [smiles_to_graph(s) for s in train_smiles]
     val_graphs = [smiles_to_graph(s) for s in val_smiles]
     
-    train_data = [(g, l) for g, l in zip(train_graphs, train_labels) if g is not None]
-    val_data = [(g, l) for g, l in zip(val_graphs, val_labels) if g is not None]
+    train_data = list(zip(train_graphs, train_labels))
+    val_data = list(zip(val_graphs, val_labels))
     
     def collate_fn(batch):
         graphs, labels = zip(*batch)
@@ -995,7 +1036,6 @@ def finetune_gnn(train_smiles, train_labels, val_smiles, val_labels,
     train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
     val_loader = DataLoader(val_data, batch_size=batch_size, collate_fn=collate_fn)
     
-    # GNN model
     num_node_features = 4
     
     class GNNRegressor(nn.Module):
@@ -1078,125 +1118,82 @@ def finetune_gnn(train_smiles, train_labels, val_smiles, val_labels,
     }
 
 
-# =============================================================================
-# ENCODING: Extract embeddings from fine-tuned models
-# =============================================================================
-
 def encode_from_model(finetuned_model_dict, smiles_list, batch_size=32):
     """
-    Extract task-specific embeddings from a fine-tuned model.
-    
-    Works with models returned from finetune_molformer(), finetune_chemberta(),
-    or finetune_gnn().
+    Extract embeddings from a fine-tuned GNN model.
     
     Args:
-        finetuned_model_dict: Dictionary from fine-tuning function
+        finetuned_model_dict: Dictionary from finetune_gnn()
         smiles_list: List of SMILES to encode
         batch_size: Batch size (default: 32)
         
     Returns:
-        np.ndarray: Task-specific embeddings (n_molecules, embedding_dim)
+        np.ndarray: Embeddings (n_molecules, hidden_dim)
     """
     import torch
+    from torch_geometric.data import Data, Batch
     
     model = finetuned_model_dict['model']
     device = finetuned_model_dict['device']
     model.eval()
     
+    def smiles_to_graph(smiles):
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            raise ValueError(f"Invalid SMILES: {smiles}")
+        
+        atom_features = []
+        for atom in mol.GetAtoms():
+            atom_features.append([
+                atom.GetAtomicNum(),
+                atom.GetDegree(),
+                atom.GetFormalCharge(),
+                int(atom.GetIsAromatic())
+            ])
+        
+        x = torch.tensor(atom_features, dtype=torch.float)
+        
+        edge_index = []
+        for bond in mol.GetBonds():
+            i = bond.GetBeginAtomIdx()
+            j = bond.GetEndAtomIdx()
+            edge_index.append([i, j])
+            edge_index.append([j, i])
+        
+        if edge_index:
+            edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
+        else:
+            edge_index = torch.zeros((2, 0), dtype=torch.long)
+        
+        return Data(x=x, edge_index=edge_index)
+    
     all_embeddings = []
     
-    # Transformer model
-    if 'tokenizer' in finetuned_model_dict:
-        tokenizer = finetuned_model_dict['tokenizer']
-        use_selfies = finetuned_model_dict.get('use_selfies', False)
+    for i in range(0, len(smiles_list), batch_size):
+        batch_smiles = smiles_list[i:i + batch_size]
+        graphs = [smiles_to_graph(s) for s in batch_smiles]
+        batched = Batch.from_data_list(graphs).to(device)
         
-        # Convert to SELFIES if needed
-        if use_selfies:
-            import selfies as sf
-            input_list = [sf.encoder(s) for s in smiles_list]
-        else:
-            input_list = smiles_list
-        
-        for i in range(0, len(input_list), batch_size):
-            batch = input_list[i:i + batch_size]
-            
-            encoded = tokenizer(
-                batch,
-                padding=True,
-                truncation=True,
-                max_length=512,
-                return_tensors='pt'
-            )
-            
-            input_ids = encoded['input_ids'].to(device)
-            attention_mask = encoded['attention_mask'].to(device)
-            
-            with torch.no_grad():
-                _, embeddings = model(input_ids, attention_mask)
-                all_embeddings.append(embeddings.cpu().numpy())
-    
-    # GNN model
-    elif 'gnn_type' in finetuned_model_dict:
-        from torch_geometric.data import Data, Batch
-        
-        def smiles_to_graph(smiles):
-            mol = Chem.MolFromSmiles(smiles)
-            if mol is None:
-                return None
-            
-            atom_features = []
-            for atom in mol.GetAtoms():
-                atom_features.append([
-                    atom.GetAtomicNum(),
-                    atom.GetDegree(),
-                    atom.GetFormalCharge(),
-                    int(atom.GetIsAromatic())
-                ])
-            
-            x = torch.tensor(atom_features, dtype=torch.float)
-            
-            edge_index = []
-            for bond in mol.GetBonds():
-                i = bond.GetBeginAtomIdx()
-                j = bond.GetEndAtomIdx()
-                edge_index.append([i, j])
-                edge_index.append([j, i])
-            
-            edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous() if edge_index else torch.zeros((2, 0), dtype=torch.long)
-            
-            return Data(x=x, edge_index=edge_index)
-        
-        for i in range(0, len(smiles_list), batch_size):
-            batch_smiles = smiles_list[i:i + batch_size]
-            graphs = [smiles_to_graph(s) for s in batch_smiles]
-            
-            valid_graphs = [g for g in graphs if g is not None]
-            
-            if valid_graphs:
-                batched = Batch.from_data_list(valid_graphs)
-                batched = batched.to(device)
-                
-                with torch.no_grad():
-                    _, embeddings = model(batched)
-                    all_embeddings.append(embeddings.cpu().numpy())
+        with torch.no_grad():
+            _, embeddings = model(batched)
+            all_embeddings.append(embeddings.cpu().numpy())
     
     return np.vstack(all_embeddings)
 
 
 # =============================================================================
-# GAUCHE: Train Gaussian Process with graph kernels
+# GAUCHE: Gaussian Process with Graph Kernels
 # =============================================================================
+
 def train_gauche_gp(train_smiles, train_labels, kernel='weisfeiler_lehman',
                     n_iter=5, num_epochs=100, learning_rate=0.1):
     """
     Train a Gaussian Process with graph kernel on YOUR data.
     
-    This trains a GP directly on molecular graphs (not feature extraction).
-    
     Args:
         train_smiles: Training SMILES
         train_labels: Training labels
-        kernel: 'weisfeiler_lehman', 'shortest_path', or 'subtree'
+        kernel: 'weisfeiler_lehman'
         n_iter: WL iterations (default: 5)
         num_epochs: GP training epochs (default: 100)
         learning_rate: Learning rate (default: 0.1)
@@ -1204,23 +1201,18 @@ def train_gauche_gp(train_smiles, train_labels, kernel='weisfeiler_lehman',
     Returns:
         dict: {'gp_model', 'likelihood', 'kernel_obj', 'train_graphs', 'train_labels'}
     """
-    try:
-        import torch
-        import gpytorch
-        from grakel.kernels import WeisfeilerLehman
-        from grakel import Graph
-    except ImportError:
-        raise ImportError("GAUCHE GP requires: pip install gauche[graphs] gpytorch")
+    import torch
+    import gpytorch
+    from grakel.kernels import WeisfeilerLehman
+    from grakel import Graph
     
     print(f"Converting {len(train_smiles)} molecules to graphs...")
     graphs = []
-    for smiles in train_smiles:
+    for i, smiles in enumerate(train_smiles):
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
-            graphs.append(None)
-            continue
+            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
         
-        # Build adjacency dictionary for grakel
         node_labels = {}
         edges = {}
         
@@ -1230,51 +1222,42 @@ def train_gauche_gp(train_smiles, train_labels, kernel='weisfeiler_lehman',
             edges[idx] = []
         
         for bond in mol.GetBonds():
-            i = bond.GetBeginAtomIdx()
-            j = bond.GetEndAtomIdx()
-            edges[i].append(j)
-            edges[j].append(i)
+            i_atom = bond.GetBeginAtomIdx()
+            j_atom = bond.GetEndAtomIdx()
+            edges[i_atom].append(j_atom)
+            edges[j_atom].append(i_atom)
         
         g = Graph(edges, node_labels=node_labels)
         graphs.append(g)
     
-    valid_indices = [i for i, g in enumerate(graphs) if g is not None]
-    valid_graphs = [graphs[i] for i in valid_indices]
-    valid_labels = torch.tensor([train_labels[i] for i in valid_indices], dtype=torch.float32)
+    valid_labels = torch.tensor(train_labels, dtype=torch.float32)
     
-    print(f"Computing kernel matrix for {len(valid_graphs)} valid molecules...")
+    print(f"Computing kernel matrix for {len(graphs)} molecules...")
     
-    # Initialize graph kernel
     if kernel == 'weisfeiler_lehman':
         kernel_obj = WeisfeilerLehman(n_iter=n_iter, normalize=True)
     else:
         raise ValueError(f"Kernel '{kernel}' not implemented. Use 'weisfeiler_lehman'")
     
-    # Compute kernel matrix (this is what grakel does)
-    K_train = kernel_obj.fit_transform(valid_graphs)
+    K_train = kernel_obj.fit_transform(graphs)
     K_train_tensor = torch.tensor(K_train, dtype=torch.float32)
     
-    # Add jitter for numerical stability
     jitter = 1e-4
     K_train_tensor = K_train_tensor + jitter * torch.eye(K_train_tensor.shape[0])
     
     print(f"Training GP on kernel matrix of shape {K_train_tensor.shape}...")
     
-    # Create index tensor for GPyTorch
-    train_indices = torch.arange(len(valid_graphs), dtype=torch.float32).unsqueeze(-1)
+    train_indices = torch.arange(len(graphs), dtype=torch.float32).unsqueeze(-1)
     
     class PrecomputedKernelGP(gpytorch.models.ExactGP):
         def __init__(self, train_x, train_y, likelihood, K_train):
             super().__init__(train_x, train_y, likelihood)
             self.mean_module = gpytorch.means.ConstantMean()
-            # Store precomputed kernel matrix
             self.register_buffer('K_train', K_train)
-            # Scale kernel for the precomputed matrix
             self.outputscale = torch.nn.Parameter(torch.ones(1))
         
         def forward(self, x):
             mean_x = self.mean_module(x)
-            # Use precomputed kernel matrix scaled
             covar_x = self.outputscale * self.K_train
             return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
     
@@ -1301,8 +1284,8 @@ def train_gauche_gp(train_smiles, train_labels, kernel='weisfeiler_lehman',
     return {
         'gp_model': gp_model,
         'likelihood': likelihood,
-        'kernel_obj': kernel_obj,  # Save this for test predictions
-        'train_graphs': valid_graphs,
+        'kernel_obj': kernel_obj,
+        'train_graphs': graphs,
         'train_labels': valid_labels
     }
 
@@ -1328,13 +1311,11 @@ def predict_gauche_gp(gp_dict, test_smiles):
     
     print(f"Converting {len(test_smiles)} test molecules to graphs...")
     test_graphs = []
-    for smiles in test_smiles:
+    for i, smiles in enumerate(test_smiles):
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
-            test_graphs.append(None)
-            continue
+            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
         
-        # Build adjacency dictionary for grakel
         node_labels = {}
         edges = {}
         
@@ -1344,71 +1325,54 @@ def predict_gauche_gp(gp_dict, test_smiles):
             edges[idx] = []
         
         for bond in mol.GetBonds():
-            i = bond.GetBeginAtomIdx()
-            j = bond.GetEndAtomIdx()
-            edges[i].append(j)
-            edges[j].append(i)
+            i_atom = bond.GetBeginAtomIdx()
+            j_atom = bond.GetEndAtomIdx()
+            edges[i_atom].append(j_atom)
+            edges[j_atom].append(i_atom)
         
         g = Graph(edges, node_labels=node_labels)
         test_graphs.append(g)
     
-    valid_test_graphs = [g for g in test_graphs if g is not None]
-    
-    print(f"Computing kernel matrix between {len(valid_test_graphs)} test and {len(train_graphs)} train graphs...")
-    # Compute K(test, train)
-    K_test_train = kernel_obj.transform(valid_test_graphs)
+    print(f"Computing kernel matrix between {len(test_graphs)} test and {len(train_graphs)} train graphs...")
+    K_test_train = kernel_obj.transform(test_graphs)
     K_test_train_tensor = torch.tensor(K_test_train, dtype=torch.float32)
     
     gp_model.eval()
     likelihood.eval()
     
-    # Manual GP prediction with precomputed kernel
     with torch.no_grad():
-        # Get training data
         train_labels = gp_dict['train_labels']
         K_train = gp_model.K_train
         noise_var = likelihood.noise.item()
         
-        # K_train + noise*I
         K_train_noise = K_train + noise_var * torch.eye(K_train.shape[0])
-        
-        # Solve (K + noise*I)^{-1} @ y
         alpha = torch.linalg.solve(K_train_noise, train_labels)
-        
-        # Mean: K_test_train @ alpha
         mean = (K_test_train_tensor @ alpha).numpy()
-        
-        # For uncertainty, we'd need K_test_test which requires all test graphs upfront
-        # For now, return constant uncertainty (simplification)
-        std = torch.ones(len(valid_test_graphs)).numpy() * noise_var**0.5
+        std = torch.ones(len(test_graphs)).numpy() * noise_var**0.5
     
     return {
         'predictions': mean,
         'uncertainties': std
     }
 
+
 # =============================================================================
-# HYBRID: Combine representations
+# HYBRID: Simple Concatenation (use kirby.hybrid for advanced allocation)
 # =============================================================================
 
 def create_hybrid(embeddings_dict, selection_method='concat', n_features=None):
     """
-    Combine task-specific embeddings from fine-tuned models.
+    Combine embeddings via simple concatenation or PCA.
     
-    This is the CORE of KIRBy - combining embeddings optimized for YOUR task.
+    For advanced allocation (greedy, performance-weighted), use kirby.hybrid.create_hybrid.
     
     Args:
         embeddings_dict: Dict of embeddings
-            Example: {
-                'ecfp4': ecfp4_train,
-                'molformer': molformer_embeddings,
-                'gnn': gnn_embeddings
-            }
         selection_method: 'concat' or 'pca' (default: 'concat')
         n_features: For PCA, target dimensionality (default: None)
         
     Returns:
-        np.ndarray: Hybrid representation tailored to your task
+        np.ndarray: Hybrid representation
     """
     arrays = list(embeddings_dict.values())
     
