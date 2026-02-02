@@ -480,30 +480,34 @@ _CHEMBERTA_TOKENIZER = None
 def create_chemberta(smiles_list, batch_size=32, device=None):
     """
     Create ChemBERTa embeddings (frozen, no fine-tuning).
-    
+
     Uses DeepChem's ChemBERTa-77M-MTR, trained on 77M molecules with
     multi-task regression pretraining for better molecular representations.
-    
+
     Args:
         smiles_list: List of SMILES strings
         batch_size: Batch size for encoding (default: 32)
         device: 'cpu' or 'cuda' (default: auto-detect)
-        
+
     Returns:
         np.ndarray: ChemBERTa embeddings (n_molecules, 768)
     """
+    import os
+    # Prevent tokenizer parallelism issues
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
     import torch
-    from transformers import AutoModel, AutoTokenizer
-    
+    from transformers import RobertaModel, RobertaTokenizer
+
     global _CHEMBERTA_MODEL, _CHEMBERTA_TOKENIZER
-    
+
     if device is None:
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    
+
     if _CHEMBERTA_MODEL is None:
         print("Loading ChemBERTa-77M-MTR...")
-        _CHEMBERTA_TOKENIZER = AutoTokenizer.from_pretrained("DeepChem/ChemBERTa-77M-MTR")
-        _CHEMBERTA_MODEL = AutoModel.from_pretrained("DeepChem/ChemBERTa-77M-MTR")
+        _CHEMBERTA_TOKENIZER = RobertaTokenizer.from_pretrained("DeepChem/ChemBERTa-77M-MTR")
+        _CHEMBERTA_MODEL = RobertaModel.from_pretrained("DeepChem/ChemBERTa-77M-MTR")
         _CHEMBERTA_MODEL = _CHEMBERTA_MODEL.to(device).eval()
         print(f"  Loaded on {device}")
     
@@ -542,34 +546,44 @@ _MOLFORMER_TOKENIZER = None
 def create_molformer(smiles_list, batch_size=32, device=None):
     """
     Create MolFormer embeddings (frozen, no fine-tuning).
-    
+
     Uses IBM's MoLFormer-XL trained on 1.1B molecules from PubChem and ZINC.
     Linear attention mechanism allows processing of long SMILES sequences.
-    
+
     Args:
         smiles_list: List of SMILES strings
         batch_size: Batch size for encoding (default: 32)
         device: 'cpu' or 'cuda' (default: auto-detect)
-        
+
     Returns:
         np.ndarray: MolFormer embeddings (n_molecules, 768)
     """
+    import os
+    # Prevent tokenizer parallelism and torch extension issues
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+    # Import torchvision BEFORE torch CUDA initialization to avoid circular import
+    try:
+        import torchvision  # noqa: F401 - imported for side effects
+    except ImportError:
+        pass  # torchvision not required, just prevents circular import if present
+
     import torch
     from transformers import AutoModel, AutoTokenizer
-    
+
     global _MOLFORMER_MODEL, _MOLFORMER_TOKENIZER
-    
+
     if device is None:
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    
+
     if _MOLFORMER_MODEL is None:
         print("Loading MoLFormer-XL...")
         _MOLFORMER_TOKENIZER = AutoTokenizer.from_pretrained(
-            "ibm/MoLFormer-XL-both-10pct", 
+            "ibm/MoLFormer-XL-both-10pct",
             trust_remote_code=True
         )
         _MOLFORMER_MODEL = AutoModel.from_pretrained(
-            "ibm/MoLFormer-XL-both-10pct", 
+            "ibm/MoLFormer-XL-both-10pct",
             trust_remote_code=True
         )
         _MOLFORMER_MODEL = _MOLFORMER_MODEL.to(device).eval()
