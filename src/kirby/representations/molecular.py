@@ -40,12 +40,46 @@ AUGMENTATIONS:
 - Graph distances: path lengths, Wiener index
 """
 
+import os
 import numpy as np
 from rdkit import Chem, RDLogger
 from rdkit.Chem import rdFingerprintGenerator, MACCSkeys
 from rdkit.ML.Descriptors.MoleculeDescriptors import MolecularDescriptorCalculator
 
 RDLogger.DisableLog('rdApp.*')
+
+
+# =============================================================================
+# MODEL PATH CONFIGURATION
+# =============================================================================
+
+def get_models_dir():
+    """
+    Get the directory where pretrained model weights are stored.
+
+    Uses KIRBY_MODELS_DIR environment variable, or falls back to defaults:
+    - Local (macOS): /Volumes/seagate/kirby_models
+    - Server/Linux: ~/kirby_models
+
+    Returns:
+        str: Path to models directory
+    """
+    if 'KIRBY_MODELS_DIR' in os.environ:
+        return os.environ['KIRBY_MODELS_DIR']
+
+    # Default paths
+    defaults = [
+        '/Volumes/seagate/kirby_models',  # Local macOS external drive
+        os.path.expanduser('~/kirby_models'),  # Server/Linux
+        os.path.expanduser('~/repos'),  # Fallback
+    ]
+
+    for path in defaults:
+        if os.path.exists(path):
+            return path
+
+    # Return home directory as last resort
+    return os.path.expanduser('~')
 
 
 # =============================================================================
@@ -367,9 +401,245 @@ def create_mol2vec(smiles_list, model_path=None, radius=1, unseen='UNK'):
     return np.array(embeddings, dtype=np.float32)
 
 
+_UNIMOL_MODEL = None
+
+def create_unimol(smiles_list, model_name='unimolv1', remove_hs=False):
+    """
+    Create Uni-Mol embeddings (3D conformer-aware pretrained model).
+
+    Uni-Mol is a universal 3D molecular representation learning framework
+    trained on 209M molecular conformations. It captures 3D structural
+    information that SMILES-based models miss.
+
+    Args:
+        smiles_list: List of SMILES strings
+        model_name: 'unimolv1' (default) or 'unimolv2'
+        remove_hs: Whether to remove hydrogens (default: False)
+
+    Returns:
+        np.ndarray: Uni-Mol embeddings (n_molecules, 512)
+
+    Requires:
+        pip install unimol-tools
+    """
+    from unimol_tools import UniMolRepr
+
+    global _UNIMOL_MODEL
+
+    if _UNIMOL_MODEL is None or _UNIMOL_MODEL._model_name != model_name:
+        print(f"Loading Uni-Mol ({model_name})...")
+        _UNIMOL_MODEL = UniMolRepr(
+            data_type='molecule',
+            remove_hs=remove_hs,
+            model_name=model_name
+        )
+        _UNIMOL_MODEL._model_name = model_name  # Track which model is loaded
+        print("  Loaded")
+
+    # Get representations
+    repr_dict = _UNIMOL_MODEL.get_repr(smiles_list, return_atomic_reprs=False)
+
+    # cls_repr is the molecule-level embedding
+    embeddings = np.array(repr_dict['cls_repr'], dtype=np.float32)
+
+    return embeddings
+
+
+_GROVER_MODEL = None
+_GROVER_ARGS = None
+
+def create_grover(smiles_list, grover_dir=None, checkpoint_path=None,
+                  fingerprint_source='both', batch_size=32, no_cuda=False):
+    """
+    Create GROVER embeddings (self-supervised graph transformer).
+
+    GROVER was pretrained on 10M molecules from ChEMBL and ZINC15 using
+    self-supervised learning on molecular graphs. It captures both local
+    and global graph structure.
+
+    SETUP REQUIRED:
+    1. Clone GROVER repo: git clone https://github.com/tencent-ailab/grover.git
+    2. Download weights from: https://1drv.ms/u/s!Ak4XFI0qaGjOhdlxC3mGn0LC1NFd6g
+       (GROVERlarge) or https://1drv.ms/u/s!Ak4XFI0qaGjOhdlwa2_h-8WAymU1AQ (GROVERbase)
+    3. Extract the checkpoint file (e.g., grover_large.pt)
+
+    Args:
+        smiles_list: List of SMILES strings
+        grover_dir: Path to cloned GROVER repo (default: ~/repos/grover)
+        checkpoint_path: Path to pretrained checkpoint (default: searches common locations)
+        fingerprint_source: 'atom', 'bond', or 'both' (default: 'both')
+            - atom: Mean pooling of atom embeddings (5000d for large)
+            - bond: Mean pooling of bond embeddings (5000d for large)
+            - both: Concatenation of atom and bond (10000d for large, but typically reduced)
+        batch_size: Batch size for encoding (default: 32)
+        no_cuda: Disable CUDA even if available (default: False)
+
+    Returns:
+        np.ndarray: GROVER embeddings (n_molecules, embedding_dim)
+            - GROVERlarge 'both': ~5000 dimensions
+            - GROVERbase 'both': ~3000 dimensions
+
+    Requires:
+        - PyTorch
+        - RDKit
+        - GROVER repo cloned and in path
+    """
+    import sys
+    import tempfile
+
+    global _GROVER_MODEL, _GROVER_ARGS
+
+    models_dir = get_models_dir()
+
+    # Find GROVER directory
+    if grover_dir is None:
+        search_paths = [
+            os.path.join(models_dir, 'grover'),
+            os.path.expanduser('~/repos/grover'),
+            os.path.expanduser('~/grover'),
+            '../grover',
+        ]
+        for path in search_paths:
+            if os.path.exists(os.path.join(path, 'grover', 'data')):
+                grover_dir = os.path.abspath(path)
+                break
+
+        if grover_dir is None:
+            raise FileNotFoundError(
+                f"Could not find GROVER repo. Searched: {search_paths}\n"
+                f"Clone to: {models_dir}/grover\n"
+                f"From: https://github.com/tencent-ailab/grover.git"
+            )
+
+    # Add GROVER to path
+    import sys
+    if grover_dir not in sys.path:
+        sys.path.insert(0, grover_dir)
+
+    # Find checkpoint
+    if checkpoint_path is None:
+        search_paths = [
+            os.path.join(grover_dir, 'grover_large.pt'),
+            os.path.join(grover_dir, 'grover_base.pt'),
+            os.path.join(models_dir, 'grover_large.pt'),
+            os.path.join(models_dir, 'grover_base.pt'),
+        ]
+        for path in search_paths:
+            if os.path.exists(path):
+                checkpoint_path = path
+                break
+
+        if checkpoint_path is None:
+            raise FileNotFoundError(
+                f"Could not find GROVER checkpoint. Searched: {search_paths}\n"
+                f"Download from: https://1drv.ms/u/s!Ak4XFI0qaGjOhdlxC3mGn0LC1NFd6g"
+            )
+
+    # Import GROVER modules
+    try:
+        from grover.util.utils import load_checkpoint, get_data
+        from grover.data import MolCollator, MoleculeDataset
+        import torch
+        from torch.utils.data import DataLoader
+        from argparse import Namespace
+    except ImportError as e:
+        raise ImportError(
+            f"Failed to import GROVER modules: {e}\n"
+            f"Make sure GROVER repo is properly set up at: {grover_dir}"
+        )
+
+    # Load model if not cached
+    if _GROVER_MODEL is None or _GROVER_ARGS is None:
+        print(f"Loading GROVER from {checkpoint_path}...")
+
+        # Create args namespace
+        cuda = torch.cuda.is_available() and not no_cuda
+        _GROVER_ARGS = Namespace(
+            checkpoint_paths=[checkpoint_path],
+            cuda=cuda,
+            fingerprint_source=fingerprint_source,
+            features_path=None,
+            no_features=True,
+        )
+
+        _GROVER_MODEL = load_checkpoint(checkpoint_path, cuda=cuda, current_args=_GROVER_ARGS)
+        _GROVER_MODEL.eval()
+        print(f"  Loaded on {'cuda' if cuda else 'cpu'}")
+
+    # Write SMILES to temp file (GROVER expects CSV input)
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+        f.write('smiles\n')
+        for smi in smiles_list:
+            f.write(f'{smi}\n')
+        temp_path = f.name
+
+    try:
+        # Load data using GROVER's pipeline
+        test_data = get_data(
+            path=temp_path,
+            args=_GROVER_ARGS,
+            use_compound_names=False,
+            skip_invalid_smiles=False
+        )
+
+        # Create dataset and dataloader
+        mol_collator = MolCollator(args=_GROVER_ARGS, shared_dict={})
+        mol_dataset = MoleculeDataset(test_data)
+        mol_loader = DataLoader(
+            mol_dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=0,
+            collate_fn=mol_collator
+        )
+
+        # Generate fingerprints
+        all_fingerprints = []
+        device = next(_GROVER_MODEL.parameters()).device
+
+        with torch.no_grad():
+            for batch in mol_loader:
+                # Move batch to device
+                _, batch, _, _, _ = batch
+                mask = batch['mask'].to(device)
+                a_scope = batch['a_scope']
+                b_scope = batch['b_scope']
+
+                # Forward pass
+                output = _GROVER_MODEL(batch)
+
+                # Extract fingerprints based on source
+                atom_output = output['atom_output']
+                bond_output = output['bond_output']
+
+                # Mean pooling over atoms/bonds for each molecule
+                batch_fps = []
+                for i, (a_start, a_size) in enumerate(a_scope):
+                    if fingerprint_source == 'atom':
+                        fp = atom_output[a_start:a_start+a_size].mean(dim=0)
+                    elif fingerprint_source == 'bond':
+                        b_start, b_size = b_scope[i]
+                        fp = bond_output[b_start:b_start+b_size].mean(dim=0)
+                    else:  # both
+                        atom_fp = atom_output[a_start:a_start+a_size].mean(dim=0)
+                        b_start, b_size = b_scope[i]
+                        bond_fp = bond_output[b_start:b_start+b_size].mean(dim=0)
+                        fp = torch.cat([atom_fp, bond_fp])
+
+                    batch_fps.append(fp.cpu().numpy())
+
+                all_fingerprints.extend(batch_fps)
+
+    finally:
+        # Clean up temp file
+        os.unlink(temp_path)
+
+    return np.array(all_fingerprints, dtype=np.float32)
+
+
 _MHG_GNN_MODEL = None
 
-def create_mhg_gnn(smiles_list, n_features=None, batch_size=32, 
+def create_mhg_gnn(smiles_list, n_features=None, batch_size=32,
                    materials_repo_path=None, model_pickle_path=None):
     """
     Create MHG-GNN embeddings (pretrained GNN encoder from IBM).
@@ -448,15 +718,34 @@ def create_mhg_gnn(smiles_list, n_features=None, batch_size=32,
         _MHG_GNN_MODEL.model.eval()
         print(f"MHG-GNN model loaded successfully")
     
-    print(f"Encoding {len(smiles_list)} molecules with MHG-GNN...")
-    
+    n_batches = (len(smiles_list) + batch_size - 1) // batch_size
+    print(f"Encoding {len(smiles_list)} molecules with MHG-GNN "
+          f"({n_batches} batches of {batch_size})...")
+
     all_embeddings = []
-    
-    for i in range(0, len(smiles_list), batch_size):
+
+    for batch_idx, i in enumerate(range(0, len(smiles_list), batch_size)):
         batch = smiles_list[i:i + batch_size]
-        batch_embeddings = _MHG_GNN_MODEL.encode(batch)
-        batch_np = torch.stack(batch_embeddings).cpu().detach().numpy()
-        all_embeddings.append(batch_np)
+
+        # Flush output so we can see progress before a crash (bus errors kill the process)
+        print(f"  Batch {batch_idx + 1}/{n_batches} "
+              f"(molecules {i}-{i + len(batch) - 1})...",
+              end='', flush=True)
+
+        try:
+            batch_embeddings = _MHG_GNN_MODEL.encode(batch)
+            batch_np = torch.stack(batch_embeddings).cpu().detach().numpy()
+            all_embeddings.append(batch_np)
+            print(" done", flush=True)
+
+        except Exception as e:
+            # This catches Python exceptions but NOT bus errors (SIGBUS)
+            print(f" FAILED: {e}", flush=True)
+            print(f"  Problematic SMILES in this batch:", flush=True)
+            for j, smi in enumerate(batch):
+                print(f"    [{i + j}]: {smi[:80]}{'...' if len(smi) > 80 else ''}",
+                      flush=True)
+            raise
     
     embeddings = np.vstack(all_embeddings)
     

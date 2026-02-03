@@ -762,6 +762,7 @@ def generate_representations(train_smiles, val_smiles, test_smiles):
 
     Returns dict mapping rep_name -> (X_train, X_val, X_test).
     """
+    import gc
     reps = {}
 
     print("  ECFP4...", flush=True)
@@ -789,11 +790,23 @@ def generate_representations(train_smiles, val_smiles, test_smiles):
 
     print("  MHG-GNN (pretrained)...", flush=True)
     try:
-        reps['MHG-GNN-pretrained'] = (
-            create_mhg_gnn(train_smiles),
-            create_mhg_gnn(val_smiles),
-            create_mhg_gnn(test_smiles),
-        )
+        # Explicit memory cleanup before MHG-GNN
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        # Process with verbose output to identify crashes
+        # (MHG-GNN now prints batch progress to help diagnose bus errors)
+        mhg_train = create_mhg_gnn(train_smiles, batch_size=32)
+        gc.collect()
+
+        mhg_val = create_mhg_gnn(val_smiles, batch_size=32)
+        gc.collect()
+
+        mhg_test = create_mhg_gnn(test_smiles, batch_size=32)
+        gc.collect()
+
+        reps['MHG-GNN-pretrained'] = (mhg_train, mhg_val, mhg_test)
         print(f"    done: {reps['MHG-GNN-pretrained'][0].shape}", flush=True)
     except Exception as e:
         print(f"    FAILED: {e} — skipping MHG-GNN", flush=True)
@@ -1076,6 +1089,9 @@ def run_dataset(dataset_name, task_type, data, results_dir):
     metric_col = 'r2' if task_type == 'regression' else 'auc'
     degrade_col = 'rmse' if task_type == 'regression' else 'f1'
 
+    # Baseline threshold for "working" configurations
+    baseline_threshold = 0.5 if task_type == 'regression' else 0.6
+
     summary_rows = []
     for (model, rep, strat), grp in combined.groupby(
             ['model', 'rep', 'strategy']):
@@ -1090,6 +1106,16 @@ def run_dataset(dataset_name, task_type, data, results_dir):
         sl_p, _, rv, _, _ = linregress(sigmas, primary)
         sl_s, _, _, _, _ = linregress(sigmas, secondary)
 
+        # Compute retention at sigma=0.5 and 1.0
+        perf_at_05 = grp[grp['sigma'] == 0.5][metric_col].values
+        perf_at_10 = grp[grp['sigma'] == 1.0][metric_col].values
+        retention_05 = (perf_at_05[0] / baseline_primary
+                        if len(perf_at_05) > 0 and baseline_primary > 0
+                        else np.nan)
+        retention_10 = (perf_at_10[0] / baseline_primary
+                        if len(perf_at_10) > 0 and baseline_primary > 0
+                        else np.nan)
+
         summary_rows.append({
             'dataset': dataset_name,
             'task': task_type,
@@ -1100,6 +1126,8 @@ def run_dataset(dataset_name, task_type, data, results_dir):
             f'baseline_{degrade_col}': baseline_secondary,
             f'NDS_{metric_col}': sl_p,
             f'NDS_{degrade_col}': sl_s,
+            'retention_0.5': retention_05,
+            'retention_1.0': retention_10,
             'r2_fit': rv ** 2,
         })
 
@@ -1113,40 +1141,149 @@ def run_dataset(dataset_name, task_type, data, results_dir):
     print(f"  NDS_{metric_col}: slope of {metric_col} vs σ "
           f"(more negative = faster degradation)")
     print(f"  baseline_{metric_col}: performance at σ=0")
+    print(f"  retention_0.5/1.0: fraction of baseline preserved at σ=0.5/1.0")
 
-    print(f"\n  Top 10 most robust (NDS_{metric_col}, least negative):")
-    top = summary_df.nlargest(10, f'NDS_{metric_col}')[
-        ['model', 'rep', 'strategy',
-         f'baseline_{metric_col}', f'NDS_{metric_col}']]
-    print(top.to_string(index=False))
+    # ── Filter to working configurations ──────────────────────────────
+    working = summary_df[summary_df[f'baseline_{metric_col}'] >= baseline_threshold]
+    failed = summary_df[summary_df[f'baseline_{metric_col}'] < baseline_threshold]
 
-    print(f"\n  By representation (mean across models/strategies):")
-    rep_agg = summary_df.groupby('rep')[
-        [f'baseline_{metric_col}', f'NDS_{metric_col}']].mean()
+    print(f"\n  Working configurations (baseline >= {baseline_threshold}): "
+          f"{len(working)}/{len(summary_df)}")
+    if len(failed) > 0:
+        print(f"  Failed configurations: {len(failed)}")
+        failed_summary = failed.groupby(['model', 'rep']).size().reset_index(name='count')
+        print(f"    By model+rep:")
+        for _, row in failed_summary.iterrows():
+            print(f"      {row['model']} + {row['rep']}: {row['count']} strategies failed")
+
+    if len(working) == 0:
+        print("  WARNING: No working configurations found!")
+        return summary_df
+
+    # ── Individual configuration analysis ─────────────────────────────
+    print(f"\n{'─'*40}")
+    print(f"INDIVIDUAL CONFIGURATION ANALYSIS (baseline >= {baseline_threshold})")
+    print(f"{'─'*40}")
+
+    # Sort by robustness (NDS, least negative = most robust)
+    working_sorted = working.sort_values(f'NDS_{metric_col}', ascending=False)
+
+    print(f"\n  TOP 10 MOST ROBUST CONFIGURATIONS:")
+    print(f"  {'Model':<12} {'Rep':<20} {'Strategy':<10} "
+          f"{'Baseline':>8} {'NDS':>8} {'Ret@0.5':>8} {'Ret@1.0':>8}")
+    print(f"  {'-'*12} {'-'*20} {'-'*10} {'-'*8} {'-'*8} {'-'*8} {'-'*8}")
+    for _, row in working_sorted.head(10).iterrows():
+        print(f"  {row['model']:<12} {row['rep']:<20} {row['strategy']:<10} "
+              f"{row[f'baseline_{metric_col}']:>8.3f} {row[f'NDS_{metric_col}']:>8.4f} "
+              f"{row['retention_0.5']:>8.2%} {row['retention_1.0']:>8.2%}")
+
+    print(f"\n  BOTTOM 10 LEAST ROBUST CONFIGURATIONS:")
+    print(f"  {'Model':<12} {'Rep':<20} {'Strategy':<10} "
+          f"{'Baseline':>8} {'NDS':>8} {'Ret@0.5':>8} {'Ret@1.0':>8}")
+    print(f"  {'-'*12} {'-'*20} {'-'*10} {'-'*8} {'-'*8} {'-'*8} {'-'*8}")
+    for _, row in working_sorted.tail(10).iterrows():
+        print(f"  {row['model']:<12} {row['rep']:<20} {row['strategy']:<10} "
+              f"{row[f'baseline_{metric_col}']:>8.3f} {row[f'NDS_{metric_col}']:>8.4f} "
+              f"{row['retention_0.5']:>8.2%} {row['retention_1.0']:>8.2%}")
+
+    # ── Grouped analysis (on working configs only) ────────────────────
+    print(f"\n{'─'*40}")
+    print(f"GROUPED ANALYSIS (working configs only, n={len(working)})")
+    print(f"{'─'*40}")
+
+    print(f"\n  By representation:")
+    rep_agg = working.groupby('rep').agg({
+        f'baseline_{metric_col}': ['mean', 'std', 'count'],
+        f'NDS_{metric_col}': ['mean', 'std'],
+        'retention_0.5': 'mean',
+        'retention_1.0': 'mean',
+    }).round(4)
+    rep_agg.columns = ['baseline_mean', 'baseline_std', 'n',
+                       'NDS_mean', 'NDS_std', 'ret_0.5', 'ret_1.0']
     print(rep_agg.to_string())
 
-    print(f"\n  By model (mean across reps/strategies):")
-    mod_agg = summary_df.groupby('model')[
-        [f'baseline_{metric_col}', f'NDS_{metric_col}']].mean()
+    print(f"\n  By model:")
+    mod_agg = working.groupby('model').agg({
+        f'baseline_{metric_col}': ['mean', 'std', 'count'],
+        f'NDS_{metric_col}': ['mean', 'std'],
+        'retention_0.5': 'mean',
+        'retention_1.0': 'mean',
+    }).round(4)
+    mod_agg.columns = ['baseline_mean', 'baseline_std', 'n',
+                       'NDS_mean', 'NDS_std', 'ret_0.5', 'ret_1.0']
     print(mod_agg.to_string())
 
-    print(f"\n  By strategy (mean across models/reps):")
-    strat_agg = summary_df.groupby('strategy')[
-        [f'baseline_{metric_col}', f'NDS_{metric_col}']].mean()
+    print(f"\n  By strategy:")
+    strat_agg = working.groupby('strategy').agg({
+        f'baseline_{metric_col}': ['mean', 'std', 'count'],
+        f'NDS_{metric_col}': ['mean', 'std'],
+        'retention_0.5': 'mean',
+        'retention_1.0': 'mean',
+    }).round(4)
+    strat_agg.columns = ['baseline_mean', 'baseline_std', 'n',
+                         'NDS_mean', 'NDS_std', 'ret_0.5', 'ret_1.0']
     print(strat_agg.to_string())
 
-    # ── Uncertainty summary ───────────────────────────────────────────
+    # ── Best configuration per model ──────────────────────────────────
+    print(f"\n  Best configuration per model (highest NDS):")
+    for model in working['model'].unique():
+        model_configs = working[working['model'] == model]
+        if len(model_configs) > 0:
+            best = model_configs.loc[model_configs[f'NDS_{metric_col}'].idxmax()]
+            print(f"    {model:<12}: {best['rep']:<20} + {best['strategy']:<10} "
+                  f"(NDS={best[f'NDS_{metric_col}']:.4f}, "
+                  f"baseline={best[f'baseline_{metric_col}']:.3f})")
+
+    # ── Best configuration per representation ─────────────────────────
+    print(f"\n  Best configuration per representation (highest NDS):")
+    for rep in working['rep'].unique():
+        rep_configs = working[working['rep'] == rep]
+        if len(rep_configs) > 0:
+            best = rep_configs.loc[rep_configs[f'NDS_{metric_col}'].idxmax()]
+            print(f"    {rep:<20}: {best['model']:<12} + {best['strategy']:<10} "
+                  f"(NDS={best[f'NDS_{metric_col}']:.4f}, "
+                  f"baseline={best[f'baseline_{metric_col}']:.3f})")
+
+    # ── Uncertainty analysis ──────────────────────────────────────────
     if all_uncertainties:
-        print(f"\n  Uncertainty-Error Correlations (legacy strategy):")
+        print(f"\n{'─'*40}")
+        print(f"UNCERTAINTY ANALYSIS")
+        print(f"{'─'*40}")
+
         for mname, rname, udf in all_uncertainties:
-            print(f"    {mname} + {rname}:")
+            print(f"\n  {mname} + {rname}:")
+
+            # Uncertainty-Error correlation (per sigma)
+            print(f"    Uncertainty-Error Correlation by σ:")
+            ue_corrs = []
             for sigma in SIGMA_LEVELS:
                 sub = udf[udf['sigma'] == sigma]
                 if len(sub) > 0 and sub['uncertainty'].std() > 0:
-                    corr = np.corrcoef(
-                        sub['uncertainty'],
-                        np.abs(sub['y_true'] - sub['y_pred']))[0, 1]
-                    print(f"      σ={sigma:.1f}: ρ = {corr:.4f}")
+                    errors = np.abs(sub['y_true'] - sub['y_pred'])
+                    corr = np.corrcoef(sub['uncertainty'], errors)[0, 1]
+                    ue_corrs.append((sigma, corr))
+                    print(f"      σ={sigma:.1f}: ρ(unc, error) = {corr:.4f}")
+
+            # Uncertainty-Noise correlation (does uncertainty increase with σ?)
+            print(f"    Uncertainty-Noise Correlation:")
+            mean_uncs = []
+            for sigma in SIGMA_LEVELS:
+                sub = udf[udf['sigma'] == sigma]
+                if len(sub) > 0:
+                    mean_uncs.append((sigma, sub['uncertainty'].mean(),
+                                      sub['uncertainty'].std()))
+
+            if len(mean_uncs) >= 3:
+                sigmas = [x[0] for x in mean_uncs]
+                means = [x[1] for x in mean_uncs]
+                slope, intercept, r, _, _ = linregress(sigmas, means)
+                print(f"      Mean uncertainty vs σ: slope={slope:.4f}, r²={r**2:.4f}")
+                print(f"      (positive slope = uncertainty correctly increases with noise)")
+
+                # Print uncertainty progression
+                print(f"      σ=0.0: mean_unc={mean_uncs[0][1]:.4f} ± {mean_uncs[0][2]:.4f}")
+                print(f"      σ=0.5: mean_unc={mean_uncs[5][1]:.4f} ± {mean_uncs[5][2]:.4f}")
+                print(f"      σ=1.0: mean_unc={mean_uncs[-1][1]:.4f} ± {mean_uncs[-1][2]:.4f}")
 
     return summary_df
 
@@ -1257,30 +1394,110 @@ def main():
         print("CROSS-DATASET COMPARISON")
         print("=" * 80)
 
-        # Compare representations across datasets
-        print("\nBy representation × dataset (mean NDS across models/strategies):")
+        # Filter to working configurations for each dataset
+        working_configs = []
+        for ds_name, ds_grp in combined_summary.groupby('dataset'):
+            task = ds_grp['task'].iloc[0]
+            base_col = 'baseline_r2' if task == 'regression' else 'baseline_auc'
+            threshold = 0.5 if task == 'regression' else 0.6
+            working = ds_grp[ds_grp[base_col] >= threshold].copy()
+            working_configs.append(working)
+            print(f"\n  {ds_name}: {len(working)}/{len(ds_grp)} working configs "
+                  f"(baseline >= {threshold})")
+
+        if working_configs:
+            combined_working = pd.concat(working_configs, ignore_index=True)
+
+            # Find configurations that work well across multiple datasets
+            print("\n" + "-" * 40)
+            print("CONFIGURATIONS CONSISTENT ACROSS DATASETS")
+            print("-" * 40)
+
+            # Group by model+rep to find patterns
+            for (model, rep), grp in combined_working.groupby(['model', 'rep']):
+                datasets_present = grp['dataset'].unique()
+                if len(datasets_present) >= 2:
+                    print(f"\n  {model} + {rep} (works on {len(datasets_present)} datasets):")
+                    for ds in datasets_present:
+                        ds_data = grp[grp['dataset'] == ds]
+                        task = ds_data['task'].iloc[0]
+                        nds_col = 'NDS_r2' if task == 'regression' else 'NDS_auc'
+                        base_col = 'baseline_r2' if task == 'regression' else 'baseline_auc'
+                        best_strat = ds_data.loc[ds_data[nds_col].idxmax()]
+                        print(f"    {ds}: best_strategy={best_strat['strategy']}, "
+                              f"NDS={best_strat[nds_col]:.4f}, "
+                              f"baseline={best_strat[base_col]:.3f}")
+
+            # Summary: which model+rep combinations are most robust overall?
+            print("\n" + "-" * 40)
+            print("MOST ROBUST MODEL+REP COMBINATIONS (averaged across datasets)")
+            print("-" * 40)
+
+            # For each dataset, normalize NDS to [0,1] within that dataset
+            normalized_dfs = []
+            for ds_name, ds_grp in combined_working.groupby('dataset'):
+                task = ds_grp['task'].iloc[0]
+                nds_col = 'NDS_r2' if task == 'regression' else 'NDS_auc'
+                # More positive NDS = more robust
+                nds_min = ds_grp[nds_col].min()
+                nds_max = ds_grp[nds_col].max()
+                if nds_max > nds_min:
+                    ds_grp = ds_grp.copy()
+                    ds_grp['nds_normalized'] = ((ds_grp[nds_col] - nds_min) /
+                                                 (nds_max - nds_min))
+                    normalized_dfs.append(ds_grp)
+
+            if normalized_dfs:
+                all_normalized = pd.concat(normalized_dfs, ignore_index=True)
+                model_rep_scores = all_normalized.groupby(['model', 'rep']).agg({
+                    'nds_normalized': ['mean', 'std', 'count'],
+                }).round(3)
+                model_rep_scores.columns = ['mean_norm_nds', 'std', 'n_configs']
+                model_rep_scores = model_rep_scores.sort_values(
+                    'mean_norm_nds', ascending=False)
+                print("\n  Model + Rep ranked by normalized robustness:")
+                print(model_rep_scores.head(15).to_string())
+
+        # Compare representations across datasets (working configs only)
+        print("\n" + "-" * 40)
+        print("BY REPRESENTATION (working configs only)")
+        print("-" * 40)
         for ds_name, ds_grp in combined_summary.groupby('dataset'):
             task = ds_grp['task'].iloc[0]
             nds_col = 'NDS_r2' if task == 'regression' else 'NDS_auc'
-            base_col = ('baseline_r2' if task == 'regression'
-                        else 'baseline_auc')
-            if nds_col not in ds_grp.columns:
+            base_col = 'baseline_r2' if task == 'regression' else 'baseline_auc'
+            threshold = 0.5 if task == 'regression' else 0.6
+            working = ds_grp[ds_grp[base_col] >= threshold]
+            if len(working) == 0:
                 continue
             print(f"\n  {ds_name} ({task}):")
-            agg = ds_grp.groupby('rep')[[base_col, nds_col]].mean()
+            agg = working.groupby('rep').agg({
+                base_col: ['mean', 'count'],
+                nds_col: ['mean', 'std'],
+                'retention_0.5': 'mean',
+            }).round(4)
+            agg.columns = ['baseline', 'n', 'NDS_mean', 'NDS_std', 'ret@0.5']
             print(agg.to_string())
 
-        # Compare models across datasets
-        print("\nBy model × dataset (mean NDS across reps/strategies):")
+        # Compare models across datasets (working configs only)
+        print("\n" + "-" * 40)
+        print("BY MODEL (working configs only)")
+        print("-" * 40)
         for ds_name, ds_grp in combined_summary.groupby('dataset'):
             task = ds_grp['task'].iloc[0]
             nds_col = 'NDS_r2' if task == 'regression' else 'NDS_auc'
-            base_col = ('baseline_r2' if task == 'regression'
-                        else 'baseline_auc')
-            if nds_col not in ds_grp.columns:
+            base_col = 'baseline_r2' if task == 'regression' else 'baseline_auc'
+            threshold = 0.5 if task == 'regression' else 0.6
+            working = ds_grp[ds_grp[base_col] >= threshold]
+            if len(working) == 0:
                 continue
             print(f"\n  {ds_name} ({task}):")
-            agg = ds_grp.groupby('model')[[base_col, nds_col]].mean()
+            agg = working.groupby('model').agg({
+                base_col: ['mean', 'count'],
+                nds_col: ['mean', 'std'],
+                'retention_0.5': 'mean',
+            }).round(4)
+            agg.columns = ['baseline', 'n', 'NDS_mean', 'NDS_std', 'ret@0.5']
             print(agg.to_string())
 
     print("\n" + "=" * 80)
