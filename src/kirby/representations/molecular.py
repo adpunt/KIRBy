@@ -23,6 +23,12 @@ PRETRAINED (Frozen):
 - MHG-GNN: Pretrained GNN encoder
 - ChemBERTa: BERT-style on SMILES (frozen extraction)
 - MolFormer: Transformer on SMILES (frozen extraction)
+- SELFormer: RoBERTa on SELFIES (more robust than SMILES)
+- MolBERT: BERT with physicochemical auxiliary tasks (BenevolentAI)
+- ChemBERT: Compact BERT pretrained on ChEMBL (256d)
+- MolCLR: Contrastive learning on molecular graphs (512d)
+- GraphMVP: Multi-view 2D+3D pretraining (300d)
+- SMI-TED: IBM's SMILES encoder-decoder
 
 STANDALONE LEARNED:
 - Graph Kernel: Deterministic graph similarity features
@@ -80,6 +86,38 @@ def get_models_dir():
 
     # Return home directory as last resort
     return os.path.expanduser('~')
+
+
+# =============================================================================
+# PYTORCH COMPATIBILITY
+# =============================================================================
+
+def _safe_torch_load(path, map_location=None):
+    """
+    Load a PyTorch checkpoint with backwards compatibility.
+
+    PyTorch 2.6+ changed the default of `weights_only` from False to True,
+    which breaks loading checkpoints that contain non-tensor objects like
+    argparse.Namespace. This wrapper handles version differences gracefully.
+
+    Args:
+        path: Path to checkpoint file
+        map_location: Device mapping (e.g., 'cpu', 'cuda')
+
+    Returns:
+        Loaded checkpoint object
+    """
+    import torch
+
+    # Check PyTorch version
+    torch_version = tuple(int(x) for x in torch.__version__.split('.')[:2])
+
+    if torch_version >= (2, 6):
+        # PyTorch 2.6+: explicitly set weights_only=False for legacy checkpoints
+        return torch.load(path, map_location=map_location, weights_only=False)
+    else:
+        # Older PyTorch: use default behavior
+        return torch.load(path, map_location=map_location)
 
 
 # =============================================================================
@@ -445,6 +483,211 @@ def create_unimol(smiles_list, model_name='unimolv1', remove_hs=False):
     return embeddings
 
 
+_SCHNET_MODEL = None
+
+def create_schnet(smiles_list, hidden_channels=128, num_interactions=6,
+                  num_gaussians=50, cutoff=10.0, pretrained_target=None,
+                  batch_size=32, device=None):
+    """
+    Create SchNet embeddings (3D equivariant graph neural network).
+
+    SchNet uses continuous-filter convolutions to learn representations that
+    respect rotational and translational invariance of molecular systems.
+    Requires 3D conformer generation.
+
+    Reference:
+        Schütt et al. "SchNet: A Continuous-filter Convolutional Neural Network
+        for Modeling Quantum Interactions" (NeurIPS 2017)
+
+    Args:
+        smiles_list: List of SMILES strings
+        hidden_channels: Hidden embedding dimension (default: 128)
+        num_interactions: Number of interaction blocks (default: 6)
+        num_gaussians: Number of Gaussian basis functions (default: 50)
+        cutoff: Cutoff distance for interactions in Angstroms (default: 10.0)
+        pretrained_target: QM9 target index (0-11) for pretrained model, or None
+            for random initialization. See QM9 dataset for target meanings.
+        batch_size: Batch size for encoding (default: 32)
+        device: 'cpu' or 'cuda' (default: auto-detect)
+
+    Returns:
+        np.ndarray: SchNet embeddings (n_molecules, hidden_channels)
+
+    Requires:
+        pip install torch-geometric rdkit
+    """
+    import torch
+    from torch_geometric.nn.models import SchNet
+    from torch_geometric.data import Data, Batch
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    global _SCHNET_MODEL
+
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    # Load or create model
+    if _SCHNET_MODEL is None:
+        if pretrained_target is not None:
+            print(f"Loading pretrained SchNet (QM9 target {pretrained_target})...")
+            # Load pretrained model - requires QM9 dataset download
+            try:
+                from torch_geometric.datasets import QM9
+                import tempfile
+
+                # Download QM9 to temp dir for pretrained weights
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    qm9 = QM9(root=tmpdir)
+                    _SCHNET_MODEL, _ = SchNet.from_qm9_pretrained(
+                        tmpdir, qm9, target=pretrained_target
+                    )
+            except Exception as e:
+                print(f"  Could not load pretrained model: {e}")
+                print(f"  Using randomly initialized model instead")
+                _SCHNET_MODEL = SchNet(
+                    hidden_channels=hidden_channels,
+                    num_filters=hidden_channels,
+                    num_interactions=num_interactions,
+                    num_gaussians=num_gaussians,
+                    cutoff=cutoff,
+                )
+        else:
+            print(f"Creating SchNet (hidden={hidden_channels}, interactions={num_interactions})...")
+            _SCHNET_MODEL = SchNet(
+                hidden_channels=hidden_channels,
+                num_filters=hidden_channels,
+                num_interactions=num_interactions,
+                num_gaussians=num_gaussians,
+                cutoff=cutoff,
+            )
+
+        _SCHNET_MODEL = _SCHNET_MODEL.to(device)
+        _SCHNET_MODEL.eval()
+        print(f"  Loaded on {device}")
+
+    def smiles_to_data(smiles):
+        """Convert SMILES to PyG Data with 3D coordinates."""
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            raise ValueError(f"Invalid SMILES: {smiles}")
+
+        # Add hydrogens and generate 3D conformer
+        mol = Chem.AddHs(mol)
+        result = AllChem.EmbedMolecule(mol, randomSeed=42)
+        if result == -1:
+            # Fallback: use distance geometry
+            AllChem.EmbedMolecule(mol, useRandomCoords=True, randomSeed=42)
+
+        # Optimize geometry
+        try:
+            AllChem.MMFFOptimizeMolecule(mol, maxIters=200)
+        except Exception:
+            pass  # Some molecules can't be optimized
+
+        # Extract atomic numbers and positions
+        conf = mol.GetConformer()
+        z = torch.tensor([atom.GetAtomicNum() for atom in mol.GetAtoms()], dtype=torch.long)
+        pos = torch.tensor(conf.GetPositions(), dtype=torch.float)
+
+        return Data(z=z, pos=pos)
+
+    # Convert all molecules
+    print(f"Generating 3D conformers for {len(smiles_list)} molecules...")
+    data_list = []
+    for i, smiles in enumerate(smiles_list):
+        try:
+            data = smiles_to_data(smiles)
+            data_list.append(data)
+        except Exception as e:
+            print(f"  Warning: Failed on molecule {i} ({smiles[:30]}...): {e}")
+            # Create dummy data for failed molecules
+            data = Data(z=torch.tensor([6], dtype=torch.long),
+                       pos=torch.tensor([[0.0, 0.0, 0.0]], dtype=torch.float))
+            data_list.append(data)
+
+    def compute_radius_graph(pos, batch, cutoff, max_neighbors=32):
+        """Compute radius graph without torch-cluster dependency."""
+        device = pos.device
+        edge_index_list = []
+        edge_weight_list = []
+
+        # Process each molecule in batch separately
+        unique_batches = batch.unique()
+        for b in unique_batches:
+            mask = batch == b
+            mol_pos = pos[mask]
+            mol_indices = torch.where(mask)[0]
+            n_atoms = mol_pos.size(0)
+
+            # Compute pairwise distances
+            dist_matrix = torch.cdist(mol_pos, mol_pos)
+
+            # Find edges within cutoff (excluding self-loops)
+            for i in range(n_atoms):
+                dists = dist_matrix[i]
+                within_cutoff = (dists < cutoff) & (dists > 0)
+                neighbors = torch.where(within_cutoff)[0]
+
+                # Limit number of neighbors
+                if len(neighbors) > max_neighbors:
+                    _, top_idx = dists[neighbors].topk(max_neighbors, largest=False)
+                    neighbors = neighbors[top_idx]
+
+                for j in neighbors:
+                    edge_index_list.append([mol_indices[i].item(), mol_indices[j].item()])
+                    edge_weight_list.append(dists[j].item())
+
+        if len(edge_index_list) == 0:
+            # No edges found - create self-loops
+            edge_index = torch.tensor([[0], [0]], dtype=torch.long, device=device)
+            edge_weight = torch.tensor([0.1], dtype=torch.float, device=device)
+        else:
+            edge_index = torch.tensor(edge_index_list, dtype=torch.long, device=device).t()
+            edge_weight = torch.tensor(edge_weight_list, dtype=torch.float, device=device)
+
+        return edge_index, edge_weight
+
+    # Extract embeddings by modifying forward pass
+    all_embeddings = []
+
+    # We need to get embeddings BEFORE the final linear layers
+    # SchNet architecture: embedding -> interactions -> lin1 -> lin2 -> readout
+    # We want the output after interactions (hidden_channels dim)
+
+    with torch.no_grad():
+        for i in range(0, len(data_list), batch_size):
+            batch_data = data_list[i:i + batch_size]
+            batch = Batch.from_data_list(batch_data).to(device)
+
+            # Run through embedding and interaction blocks manually
+            h = _SCHNET_MODEL.embedding(batch.z)
+
+            # Get interaction graph (use our implementation to avoid torch-cluster)
+            try:
+                edge_index, edge_weight = _SCHNET_MODEL.interaction_graph(batch.pos, batch.batch)
+            except ImportError:
+                # Fallback if torch-cluster not available
+                edge_index, edge_weight = compute_radius_graph(
+                    batch.pos, batch.batch, cutoff=cutoff
+                )
+
+            edge_attr = _SCHNET_MODEL.distance_expansion(edge_weight)
+
+            # Run through interaction blocks
+            for interaction in _SCHNET_MODEL.interactions:
+                h = h + interaction(h, edge_index, edge_weight, edge_attr)
+
+            # Mean pooling over atoms to get molecular embedding
+            # (instead of going through lin1/lin2 which reduce to property prediction)
+            from torch_geometric.nn import global_mean_pool
+            mol_embeddings = global_mean_pool(h, batch.batch)
+
+            all_embeddings.append(mol_embeddings.cpu().numpy())
+
+    return np.vstack(all_embeddings).astype(np.float32)
+
+
 _GROVER_MODEL = None
 _GROVER_ARGS = None
 
@@ -495,7 +738,8 @@ def create_grover(smiles_list, grover_dir=None, checkpoint_path=None,
     if grover_dir is None:
         search_paths = [
             os.path.join(models_dir, 'grover'),
-            os.path.expanduser('~/repos/grover'),
+            os.path.expanduser('~/repos/grover'),  # Common dev location
+            os.path.expanduser('~/kirby_models/grover'),  # Server location
             os.path.expanduser('~/grover'),
             '../grover',
         ]
@@ -523,6 +767,8 @@ def create_grover(smiles_list, grover_dir=None, checkpoint_path=None,
             os.path.join(grover_dir, 'grover_base.pt'),
             os.path.join(models_dir, 'grover_large.pt'),
             os.path.join(models_dir, 'grover_base.pt'),
+            os.path.expanduser('~/repos/grover/grover_large.pt'),
+            os.path.expanduser('~/repos/grover/grover_base.pt'),
         ]
         for path in search_paths:
             if os.path.exists(path):
@@ -552,17 +798,43 @@ def create_grover(smiles_list, grover_dir=None, checkpoint_path=None,
     if _GROVER_MODEL is None or _GROVER_ARGS is None:
         print(f"Loading GROVER from {checkpoint_path}...")
 
-        # Create args namespace
         cuda = torch.cuda.is_available() and not no_cuda
+
+        # Create args with all required attributes for fingerprint mode
+        # These will be merged with checkpoint args by load_checkpoint
         _GROVER_ARGS = Namespace(
-            checkpoint_paths=[checkpoint_path],
-            cuda=cuda,
+            parser_name='fingerprint',
             fingerprint_source=fingerprint_source,
+            cuda=cuda,
             features_path=None,
             no_features=True,
+            checkpoint_paths=[checkpoint_path],
+            # Data loading defaults
+            max_data_size=None,
+            use_compound_names=False,
+            features_generator=None,
+            features_scaling=False,
+            no_cache=True,
+            atom_messages=False,
+            bond_drop_rate=0,
+            # Model defaults (will be overwritten by checkpoint if present)
+            dropout=0.0,
+            ffn_num_layers=2,
+            ffn_hidden_size=None,  # Set after loading
         )
 
-        _GROVER_MODEL = load_checkpoint(checkpoint_path, cuda=cuda, current_args=_GROVER_ARGS)
+        # Create a logger that suppresses debug messages (the verbose "Loading pretrained parameter" lines)
+        import logging
+        logger = logging.getLogger('grover_load')
+        logger.setLevel(logging.INFO)
+
+        # Patch torch.load for PyTorch 2.6+ compatibility (GROVER uses legacy checkpoint format)
+        original_torch_load = torch.load
+        torch.load = lambda *args, **kwargs: _safe_torch_load(*args, **kwargs)
+        try:
+            _GROVER_MODEL = load_checkpoint(checkpoint_path, cuda=cuda, current_args=_GROVER_ARGS, logger=logger)
+        finally:
+            torch.load = original_torch_load
         _GROVER_MODEL.eval()
         print(f"  Loaded on {'cuda' if cuda else 'cpu'}")
 
@@ -593,42 +865,15 @@ def create_grover(smiles_list, grover_dir=None, checkpoint_path=None,
             collate_fn=mol_collator
         )
 
-        # Generate fingerprints
+        # Generate fingerprints using GROVER's pattern from task/fingerprint.py
         all_fingerprints = []
-        device = next(_GROVER_MODEL.parameters()).device
+        _GROVER_ARGS.bond_drop_rate = 0
 
         with torch.no_grad():
-            for batch in mol_loader:
-                # Move batch to device
-                _, batch, _, _, _ = batch
-                mask = batch['mask'].to(device)
-                a_scope = batch['a_scope']
-                b_scope = batch['b_scope']
-
-                # Forward pass
-                output = _GROVER_MODEL(batch)
-
-                # Extract fingerprints based on source
-                atom_output = output['atom_output']
-                bond_output = output['bond_output']
-
-                # Mean pooling over atoms/bonds for each molecule
-                batch_fps = []
-                for i, (a_start, a_size) in enumerate(a_scope):
-                    if fingerprint_source == 'atom':
-                        fp = atom_output[a_start:a_start+a_size].mean(dim=0)
-                    elif fingerprint_source == 'bond':
-                        b_start, b_size = b_scope[i]
-                        fp = bond_output[b_start:b_start+b_size].mean(dim=0)
-                    else:  # both
-                        atom_fp = atom_output[a_start:a_start+a_size].mean(dim=0)
-                        b_start, b_size = b_scope[i]
-                        bond_fp = bond_output[b_start:b_start+b_size].mean(dim=0)
-                        fp = torch.cat([atom_fp, bond_fp])
-
-                    batch_fps.append(fp.cpu().numpy())
-
-                all_fingerprints.extend(batch_fps)
+            for item in mol_loader:
+                _, batch, features_batch, _, _ = item
+                batch_preds = _GROVER_MODEL(batch, features_batch)
+                all_fingerprints.extend(batch_preds.data.cpu().numpy())
 
     finally:
         # Clean up temp file
@@ -908,18 +1153,947 @@ def create_molformer(smiles_list, batch_size=32, device=None):
     return np.vstack(all_embeddings).astype(np.float32)
 
 
+_SELFORMER_MODEL = None
+_SELFORMER_TOKENIZER = None
+
+def create_selformer(smiles_list, batch_size=32, device=None):
+    """
+    Create SELFormer embeddings (SELFIES-based molecular language model).
+
+    SELFormer is a RoBERTa-based model pretrained on SELFIES representations
+    (Self-Referencing Embedded Strings). SELFIES are 100% valid molecular
+    representations, making them more robust than SMILES for ML applications.
+
+    Reference: Yuksel et al. "SELFormer: Molecular Representation Learning
+    via SELFIES Language Models" (2023)
+
+    Args:
+        smiles_list: List of SMILES strings (automatically converted to SELFIES)
+        batch_size: Batch size for encoding (default: 32)
+        device: 'cpu' or 'cuda' (default: auto-detect)
+
+    Returns:
+        np.ndarray: SELFormer embeddings (n_molecules, 768)
+
+    Requires:
+        pip install selfies transformers
+    """
+    import os
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+    try:
+        import selfies as sf
+    except ImportError:
+        raise ImportError(
+            "selfies package required for SELFormer. Install with: pip install selfies"
+        )
+
+    import torch
+    from transformers import AutoModel, AutoTokenizer
+
+    global _SELFORMER_MODEL, _SELFORMER_TOKENIZER
+
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    if _SELFORMER_MODEL is None:
+        print("Loading SELFormer...")
+        _SELFORMER_TOKENIZER = AutoTokenizer.from_pretrained("HUBioDataLab/SELFormer")
+        _SELFORMER_MODEL = AutoModel.from_pretrained("HUBioDataLab/SELFormer")
+        _SELFORMER_MODEL = _SELFORMER_MODEL.to(device).eval()
+        print(f"  Loaded on {device}")
+
+    # Convert SMILES to SELFIES
+    selfies_list = []
+    failed_indices = []
+    for i, smi in enumerate(smiles_list):
+        try:
+            selfies = sf.encoder(smi)
+            if selfies is None:
+                failed_indices.append(i)
+                selfies_list.append("")  # Placeholder
+            else:
+                selfies_list.append(selfies)
+        except Exception:
+            failed_indices.append(i)
+            selfies_list.append("")  # Placeholder
+
+    if failed_indices:
+        print(f"  Warning: {len(failed_indices)} molecules failed SELFIES conversion")
+
+    all_embeddings = []
+
+    with torch.no_grad():
+        for i in range(0, len(selfies_list), batch_size):
+            batch = selfies_list[i:i + batch_size]
+
+            encoded = _SELFORMER_TOKENIZER(
+                batch,
+                padding=True,
+                truncation=True,
+                max_length=512,
+                return_tensors='pt'
+            )
+            inputs = {k: v.to(device) for k, v in encoded.items()}
+
+            outputs = _SELFORMER_MODEL(**inputs)
+
+            # Mean pooling over sequence length (excluding padding)
+            attention_mask = inputs['attention_mask'].unsqueeze(-1)
+            token_embeddings = outputs.last_hidden_state
+            sum_embeddings = torch.sum(token_embeddings * attention_mask, dim=1)
+            sum_mask = attention_mask.sum(dim=1).clamp(min=1e-9)  # Avoid div by zero
+            embeddings = sum_embeddings / sum_mask
+
+            all_embeddings.append(embeddings.cpu().numpy())
+
+    result = np.vstack(all_embeddings).astype(np.float32)
+
+    # Zero out failed molecules
+    for idx in failed_indices:
+        result[idx] = 0.0
+
+    return result
+
+
+_CHEMBERT_MODEL = None
+_CHEMBERT_TOKENIZER = None
+
+def create_chembert(smiles_list, batch_size=32, device=None):
+    """
+    Create ChemBERT embeddings (BERT pretrained on ChEMBL database).
+
+    ChemBERT is a compact BERT model (256d, 8 layers) pretrained on ChEMBL33
+    using masked language modeling on SMILES strings. Different from ChemBERTa.
+
+    Reference: "Pushing the Boundaries of Molecular Property Prediction for
+    Drug Discovery with Multitask Learning BERT Enhanced by SMILES Enumeration"
+
+    Args:
+        smiles_list: List of SMILES strings
+        batch_size: Batch size for encoding (default: 32)
+        device: 'cpu' or 'cuda' (default: auto-detect)
+
+    Returns:
+        np.ndarray: ChemBERT embeddings (n_molecules, 256)
+
+    Requires:
+        pip install transformers
+    """
+    import os
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+    import torch
+    from transformers import AutoModel, AutoTokenizer
+
+    global _CHEMBERT_MODEL, _CHEMBERT_TOKENIZER
+
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    if _CHEMBERT_MODEL is None:
+        print("Loading ChemBERT (ChEMBL)...")
+        _CHEMBERT_TOKENIZER = AutoTokenizer.from_pretrained(
+            "jonghyunlee/ChemBERT_ChEMBL_pretrained"
+        )
+        _CHEMBERT_MODEL = AutoModel.from_pretrained(
+            "jonghyunlee/ChemBERT_ChEMBL_pretrained"
+        )
+        _CHEMBERT_MODEL = _CHEMBERT_MODEL.to(device).eval()
+        print(f"  Loaded on {device}")
+
+    all_embeddings = []
+
+    with torch.no_grad():
+        for i in range(0, len(smiles_list), batch_size):
+            batch = smiles_list[i:i + batch_size]
+
+            encoded = _CHEMBERT_TOKENIZER(
+                batch,
+                padding=True,
+                truncation=True,
+                max_length=512,
+                return_tensors='pt'
+            )
+            inputs = {k: v.to(device) for k, v in encoded.items()}
+
+            outputs = _CHEMBERT_MODEL(**inputs)
+
+            # Mean pooling over sequence length (excluding padding)
+            attention_mask = inputs['attention_mask'].unsqueeze(-1)
+            token_embeddings = outputs.last_hidden_state
+            sum_embeddings = torch.sum(token_embeddings * attention_mask, dim=1)
+            sum_mask = attention_mask.sum(dim=1).clamp(min=1e-9)
+            embeddings = sum_embeddings / sum_mask
+
+            all_embeddings.append(embeddings.cpu().numpy())
+
+    return np.vstack(all_embeddings).astype(np.float32)
+
+
+_CHEMFORMER_MODEL = None
+_CHEMFORMER_TOKENIZER = None
+
+def create_chemformer(smiles_list, chemformer_dir=None, checkpoint_path=None,
+                      batch_size=32, device=None):
+    """
+    Create Chemformer embeddings (BART transformer pretrained on SMILES).
+
+    Chemformer is a BART-style encoder-decoder model from AstraZeneca,
+    pretrained on SMILES using a denoising objective. We extract embeddings
+    from the encoder.
+
+    SETUP REQUIRED:
+    1. Clone Chemformer repo: git clone https://github.com/MolecularAI/Chemformer.git
+    2. Download weights from: https://az.box.com/s/7eci3nd9vy0xplqniitpk02rbg9q2zcq
+    3. Install dependencies: pip install pytorch-lightning pysmilesutils
+    4. Convert checkpoint if needed (see SETUP_PRETRAINED_MODELS.md)
+
+    Args:
+        smiles_list: List of SMILES strings
+        chemformer_dir: Path to cloned Chemformer repo (default: searches common locations)
+        checkpoint_path: Path to pretrained checkpoint (default: searches common locations)
+        batch_size: Batch size for encoding (default: 32)
+        device: 'cpu' or 'cuda' (default: auto-detect)
+
+    Returns:
+        np.ndarray: Chemformer embeddings (n_molecules, 512)
+    """
+    import sys
+
+    global _CHEMFORMER_MODEL, _CHEMFORMER_TOKENIZER
+
+    models_dir = get_models_dir()
+
+    # Find Chemformer directory
+    if chemformer_dir is None:
+        search_paths = [
+            os.path.join(models_dir, 'Chemformer'),
+            os.path.join(models_dir, 'chemformer'),
+            os.path.expanduser('~/repos/Chemformer'),
+            os.path.expanduser('~/repos/chemformer'),
+            os.path.expanduser('~/kirby_models/Chemformer'),
+            '../Chemformer',
+        ]
+        for path in search_paths:
+            if os.path.exists(os.path.join(path, 'molbart')):
+                chemformer_dir = os.path.abspath(path)
+                break
+
+        if chemformer_dir is None:
+            raise FileNotFoundError(
+                f"Could not find Chemformer repo. Searched: {search_paths}\n"
+                f"Clone to: {models_dir}/Chemformer\n"
+                f"From: https://github.com/MolecularAI/Chemformer.git"
+            )
+
+    # Add Chemformer to path
+    if chemformer_dir not in sys.path:
+        sys.path.insert(0, chemformer_dir)
+
+    # Find checkpoint
+    if checkpoint_path is None:
+        search_paths = [
+            # Box download structure: models/pre-trained/combined/
+            os.path.join(chemformer_dir, 'models', 'pre-trained', 'combined', 'step=1000000.ckpt'),
+            os.path.join(chemformer_dir, 'models', 'pre-trained', 'step=1000000.ckpt'),
+            os.path.join(chemformer_dir, 'models', 'pre-trained', 'combined.ckpt'),
+            os.path.join(chemformer_dir, 'models', 'pre-trained', 'span_aug.ckpt'),
+            # Alternative structures
+            os.path.join(chemformer_dir, 'models', 'bart', 'span_aug.ckpt'),
+            os.path.join(chemformer_dir, 'models', 'bart', 'combined.ckpt'),
+            os.path.join(chemformer_dir, 'models', 'combined.ckpt'),
+            os.path.join(chemformer_dir, 'step=1000000.ckpt'),
+            os.path.join(chemformer_dir, 'combined.ckpt'),
+            os.path.join(chemformer_dir, 'span_aug.ckpt'),
+            # Generic names
+            os.path.join(chemformer_dir, 'chemformer_pretrained.ckpt'),
+            os.path.join(chemformer_dir, 'pretrained.ckpt'),
+            os.path.join(models_dir, 'chemformer_pretrained.ckpt'),
+        ]
+        for path in search_paths:
+            if os.path.exists(path):
+                checkpoint_path = path
+                break
+
+        if checkpoint_path is None:
+            raise FileNotFoundError(
+                f"Could not find Chemformer checkpoint. Searched: {search_paths}\n"
+                f"Download from: https://az.box.com/s/7eci3nd9vy0xplqniitpk02rbg9q2zcq\n"
+                f"Place at: {chemformer_dir}/models/bart/span_aug.ckpt"
+            )
+
+    # Import Chemformer modules
+    try:
+        import torch
+        from pysmilesutils.augment import SMILESAugmenter
+    except ImportError as e:
+        raise ImportError(
+            f"Failed to import required modules: {e}\n"
+            f"Install with: pip install pytorch-lightning pysmilesutils"
+        )
+
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    # Load model if not cached
+    if _CHEMFORMER_MODEL is None:
+        print(f"Loading Chemformer from {checkpoint_path}...")
+
+        # Load tokenizer first
+        from molbart.utils.tokenizers import ChemformerTokenizer
+
+        vocab_path = os.path.join(chemformer_dir, 'bart_vocab.json')
+        if not os.path.exists(vocab_path):
+            raise FileNotFoundError(f"Vocab file not found: {vocab_path}")
+
+        _CHEMFORMER_TOKENIZER = ChemformerTokenizer(filename=vocab_path)
+        vocab_size = len(_CHEMFORMER_TOKENIZER.vocabulary)
+        print(f"  Loaded tokenizer with {vocab_size} tokens")
+
+        # Load checkpoint (using safe loader for PyTorch 2.6+ compatibility)
+        checkpoint = _safe_torch_load(checkpoint_path, map_location=device)
+
+        # Get hyperparameters and state dict
+        hparams = checkpoint.get('hyper_parameters', {})
+        state_dict = checkpoint.get('state_dict', checkpoint)
+
+        # Get model dimensions from hparams or infer from weights
+        d_model = hparams.get('d_model', 512)
+        num_layers = hparams.get('num_layers', 6)
+        num_heads = hparams.get('num_heads', 8)
+
+        # Infer d_model from weight shapes if not in hparams
+        for key, val in state_dict.items():
+            if 'embed_tokens.weight' in key:
+                d_model = val.shape[1]
+                vocab_size = val.shape[0]
+                break
+
+        print(f"  Model config: d_model={d_model}, layers={num_layers}, vocab={vocab_size}")
+
+        try:
+            # Try using Chemformer's BARTModel class
+            from molbart.models.transformer_models import BARTModel
+
+            _CHEMFORMER_MODEL = BARTModel(
+                d_model=d_model,
+                num_layers=num_layers,
+                num_heads=num_heads,
+                vocabulary_size=vocab_size,
+                d_feedforward=d_model * 4,
+                max_seq_len=512,
+                dropout=0.1,
+                pad_token_idx=_CHEMFORMER_TOKENIZER.vocabulary[_CHEMFORMER_TOKENIZER.special_tokens['pad']],
+            )
+
+            # Load state dict (remove 'model.' prefix if present)
+            new_state_dict = {}
+            for key, val in state_dict.items():
+                new_key = key.replace('model.', '') if key.startswith('model.') else key
+                new_state_dict[new_key] = val
+
+            _CHEMFORMER_MODEL.load_state_dict(new_state_dict, strict=False)
+            print(f"  Loaded model weights")
+
+        except Exception as e:
+            print(f"  Note: Using PyTorch Transformer fallback ({e})")
+
+            import torch.nn as nn
+
+            # Build a simple encoder model matching the checkpoint structure
+            class ChemformerEncoder(nn.Module):
+                def __init__(self, vocab_size, d_model, num_layers, num_heads, d_ff, max_len=512, dropout=0.1):
+                    super().__init__()
+                    self.emb = nn.Embedding(vocab_size, d_model)
+                    self.pos_emb = nn.Embedding(max_len, d_model)
+                    encoder_layer = nn.TransformerEncoderLayer(
+                        d_model=d_model,
+                        nhead=num_heads,
+                        dim_feedforward=d_ff,
+                        dropout=dropout,
+                        batch_first=True
+                    )
+                    self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+                    self.d_model = d_model
+
+                def forward(self, input_ids, attention_mask=None):
+                    seq_len = input_ids.size(1)
+                    positions = torch.arange(seq_len, device=input_ids.device).unsqueeze(0)
+                    x = self.emb(input_ids) + self.pos_emb(positions)
+                    if attention_mask is not None:
+                        # Convert to transformer mask format (True = ignore)
+                        src_key_padding_mask = (attention_mask == 0)
+                    else:
+                        src_key_padding_mask = None
+                    return self.encoder(x, src_key_padding_mask=src_key_padding_mask)
+
+            _CHEMFORMER_MODEL = ChemformerEncoder(
+                vocab_size=vocab_size,
+                d_model=d_model,
+                num_layers=num_layers,
+                num_heads=num_heads,
+                d_ff=d_model * 4,
+            )
+
+            # Load weights
+            missing, unexpected = _CHEMFORMER_MODEL.load_state_dict(state_dict, strict=False)
+            print(f"  Loaded {len(state_dict) - len(missing)} weights ({len(missing)} missing, {len(unexpected)} unexpected)")
+
+        _CHEMFORMER_MODEL = _CHEMFORMER_MODEL.to(device)
+        _CHEMFORMER_MODEL.eval()
+        print(f"  Loaded on {device}")
+
+    # Simple SMILES tokenizer if we don't have the official one
+    def simple_tokenize(smiles):
+        """Basic SMILES tokenization."""
+        import re
+        pattern = r'(\[[^\]]+\]|Br?|Cl?|N|O|S|P|F|I|b|c|n|o|s|p|\(|\)|\.|=|#|-|\+|\\|\/|:|~|@|\?|>|\*|\$|\%[0-9]{2}|[0-9])'
+        tokens = re.findall(pattern, smiles)
+        return tokens
+
+    all_embeddings = []
+
+    with torch.no_grad():
+        for i in range(0, len(smiles_list), batch_size):
+            batch = smiles_list[i:i + batch_size]
+
+            if _CHEMFORMER_TOKENIZER is not None:
+                # Use Chemformer's tokenizer
+                tokens_list = _CHEMFORMER_TOKENIZER.tokenize(batch)
+                token_ids_list = _CHEMFORMER_TOKENIZER.convert_tokens_to_ids(tokens_list)
+
+                # Convert to lists if tensors
+                if hasattr(token_ids_list[0], 'tolist'):
+                    token_ids_list = [ids.tolist() for ids in token_ids_list]
+
+                # Pad to max length in batch
+                max_len = max(len(ids) for ids in token_ids_list)
+                pad_id = _CHEMFORMER_TOKENIZER.vocabulary[_CHEMFORMER_TOKENIZER.special_tokens['pad']]
+
+                padded_ids = []
+                attention_masks = []
+                for ids in token_ids_list:
+                    pad_len = max_len - len(ids)
+                    padded_ids.append(list(ids) + [pad_id] * pad_len)
+                    attention_masks.append([1] * len(ids) + [0] * pad_len)
+
+                input_ids = torch.tensor(padded_ids, dtype=torch.long, device=device)
+                attention_mask = torch.tensor(attention_masks, dtype=torch.long, device=device)
+            else:
+                raise RuntimeError("Chemformer tokenizer not loaded - cannot proceed")
+
+            # Get encoder outputs
+            encoder_output = _CHEMFORMER_MODEL(input_ids, attention_mask)
+
+            # Mean pooling over sequence length
+            mask = attention_mask.unsqueeze(-1)
+            sum_embeddings = torch.sum(encoder_output * mask, dim=1)
+            sum_mask = mask.sum(dim=1)
+            embeddings = sum_embeddings / sum_mask
+
+            all_embeddings.append(embeddings.cpu().numpy())
+
+    return np.vstack(all_embeddings).astype(np.float32)
+
+
+_MOLCLR_MODEL = None
+_GRAPHMVP_MODEL = None
+_SMITED_MODEL = None
+
+def create_molclr(smiles_list, molclr_dir=None, model_type='gin', device=None):
+    """
+    Create MolCLR embeddings (contrastive learning on molecular graphs).
+
+    MolCLR uses contrastive learning with graph augmentations to learn
+    molecular representations. The model learns by maximizing agreement
+    between different augmented views of the same molecule.
+
+    Reference: Wang et al. "Molecular Contrastive Learning of Representations
+    via Graph Neural Networks" Nature Machine Intelligence, 2022.
+
+    Args:
+        smiles_list: List of SMILES strings
+        molclr_dir: Path to MolCLR repo (default: $KIRBY_MODELS_DIR/MolCLR)
+        model_type: 'gin' or 'gcn' (default: 'gin')
+        device: 'cpu' or 'cuda' (default: auto-detect)
+
+    Returns:
+        np.ndarray: MolCLR embeddings (n_molecules, 512)
+
+    SETUP REQUIRED:
+        1. Clone repo:
+           cd $KIRBY_MODELS_DIR
+           git clone https://github.com/yuyangw/MolCLR.git
+
+        2. Download pretrained weights from the repo's ckpt folder
+           (pretrained_gin or pretrained_gcn)
+
+        3. Install dependencies:
+           pip install torch-geometric rdkit
+    """
+    import sys
+    import torch
+
+    global _MOLCLR_MODEL
+
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    # Find MolCLR directory
+    if molclr_dir is None:
+        models_dir = get_models_dir()
+        search_paths = [
+            os.path.join(models_dir, 'MolCLR'),
+            os.path.expanduser('~/repos/MolCLR'),
+            os.path.expanduser('~/kirby_models/MolCLR'),
+            '../MolCLR',
+        ]
+        for path in search_paths:
+            if os.path.exists(os.path.join(path, 'ckpt')):
+                molclr_dir = os.path.abspath(path)
+                break
+
+    if molclr_dir is None or not os.path.exists(molclr_dir):
+        raise FileNotFoundError(
+            f"MolCLR directory not found in search paths\n"
+            "Setup instructions:\n"
+            "  cd $KIRBY_MODELS_DIR  # or ~/repos\n"
+            "  git clone https://github.com/yuyangw/MolCLR.git"
+        )
+
+    # Add MolCLR to path
+    if molclr_dir not in sys.path:
+        sys.path.insert(0, molclr_dir)
+
+    # Check for pretrained weights
+    ckpt_folder = os.path.join(molclr_dir, 'ckpt', f'pretrained_{model_type}', 'checkpoints')
+    ckpt_path = os.path.join(ckpt_folder, 'model.pth')
+
+    if not os.path.exists(ckpt_path):
+        raise FileNotFoundError(
+            f"MolCLR checkpoint not found at {ckpt_path}\n"
+            "Download pretrained weights from the MolCLR repository."
+        )
+
+    if _MOLCLR_MODEL is None:
+        print(f"Loading MolCLR ({model_type})...")
+        try:
+            if model_type == 'gin':
+                from models.ginet_finetune import GINet
+                model = GINet(task='classification', num_layer=5, emb_dim=300,
+                             feat_dim=512, drop_ratio=0, pool='mean')
+            else:
+                from models.gcn_finetune import GCN
+                model = GCN(task='classification', num_layer=5, emb_dim=300,
+                           feat_dim=512, drop_ratio=0, pool='mean')
+
+            state_dict = _safe_torch_load(ckpt_path, map_location=device)
+            model.load_my_state_dict(state_dict)
+            model = model.to(device).eval()
+            _MOLCLR_MODEL = model
+            print(f"  Loaded on {device}")
+        except ImportError as e:
+            raise ImportError(
+                f"Failed to import MolCLR models: {e}\n"
+                "Make sure MolCLR is properly installed."
+            )
+
+    # Convert SMILES to graphs
+    from torch_geometric.data import Data, Batch
+
+    # Atom and bond feature mappings (from MolCLR)
+    ATOM_LIST = ['C', 'N', 'O', 'S', 'F', 'Si', 'P', 'Cl', 'Br', 'Mg', 'Na', 'Ca',
+                 'Fe', 'As', 'Al', 'I', 'B', 'V', 'K', 'Tl', 'Yb', 'Sb', 'Sn',
+                 'Ag', 'Pd', 'Co', 'Se', 'Ti', 'Zn', 'H', 'Li', 'Ge', 'Cu', 'Au',
+                 'Ni', 'Cd', 'In', 'Mn', 'Zr', 'Cr', 'Pt', 'Hg', 'Pb', 'Unknown']
+    CHIRALITY_LIST = [
+        Chem.rdchem.ChiralType.CHI_UNSPECIFIED,
+        Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CW,
+        Chem.rdchem.ChiralType.CHI_TETRAHEDRAL_CCW,
+        Chem.rdchem.ChiralType.CHI_OTHER
+    ]
+    BOND_LIST = [
+        Chem.rdchem.BondType.SINGLE,
+        Chem.rdchem.BondType.DOUBLE,
+        Chem.rdchem.BondType.TRIPLE,
+        Chem.rdchem.BondType.AROMATIC
+    ]
+    BONDDIR_LIST = [
+        Chem.rdchem.BondDir.NONE,
+        Chem.rdchem.BondDir.ENDUPRIGHT,
+        Chem.rdchem.BondDir.ENDDOWNRIGHT
+    ]
+
+    def smiles_to_graph(smiles):
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            return None
+
+        # Node features
+        atom_features = []
+        for atom in mol.GetAtoms():
+            atom_type = atom.GetSymbol()
+            if atom_type in ATOM_LIST:
+                atom_idx = ATOM_LIST.index(atom_type)
+            else:
+                atom_idx = len(ATOM_LIST) - 1  # Unknown
+            chirality = atom.GetChiralTag()
+            if chirality in CHIRALITY_LIST:
+                chiral_idx = CHIRALITY_LIST.index(chirality)
+            else:
+                chiral_idx = 0
+            atom_features.append([atom_idx, chiral_idx])
+
+        x = torch.tensor(atom_features, dtype=torch.long)
+
+        # Edge features
+        edge_indices = []
+        edge_attrs = []
+        for bond in mol.GetBonds():
+            i = bond.GetBeginAtomIdx()
+            j = bond.GetEndAtomIdx()
+            bond_type = bond.GetBondType()
+            if bond_type in BOND_LIST:
+                bond_idx = BOND_LIST.index(bond_type)
+            else:
+                bond_idx = 0
+            bond_dir = bond.GetBondDir()
+            if bond_dir in BONDDIR_LIST:
+                dir_idx = BONDDIR_LIST.index(bond_dir)
+            else:
+                dir_idx = 0
+            # Add both directions
+            edge_indices.extend([[i, j], [j, i]])
+            edge_attrs.extend([[bond_idx, dir_idx], [bond_idx, dir_idx]])
+
+        if len(edge_indices) == 0:
+            # Single atom molecule
+            edge_index = torch.zeros((2, 0), dtype=torch.long)
+            edge_attr = torch.zeros((0, 2), dtype=torch.long)
+        else:
+            edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
+            edge_attr = torch.tensor(edge_attrs, dtype=torch.long)
+
+        return Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+
+    # Convert all SMILES
+    graphs = []
+    failed_indices = []
+    for i, smi in enumerate(smiles_list):
+        g = smiles_to_graph(smi)
+        if g is None:
+            failed_indices.append(i)
+            # Create dummy graph
+            g = Data(
+                x=torch.tensor([[0, 0]], dtype=torch.long),
+                edge_index=torch.zeros((2, 0), dtype=torch.long),
+                edge_attr=torch.zeros((0, 2), dtype=torch.long)
+            )
+        graphs.append(g)
+
+    if failed_indices:
+        print(f"  Warning: {len(failed_indices)} molecules failed conversion")
+
+    # Batch and get embeddings
+    all_embeddings = []
+    batch_size = 32
+
+    with torch.no_grad():
+        for i in range(0, len(graphs), batch_size):
+            batch_graphs = graphs[i:i + batch_size]
+            batch = Batch.from_data_list(batch_graphs).to(device)
+            h, _ = _MOLCLR_MODEL(batch)
+            all_embeddings.append(h.cpu().numpy())
+
+    result = np.vstack(all_embeddings).astype(np.float32)
+
+    # Zero out failed molecules
+    for idx in failed_indices:
+        result[idx] = 0.0
+
+    return result
+
+
+def create_graphmvp(smiles_list, graphmvp_dir=None, checkpoint_path=None,
+                    emb_dim=300, device=None):
+    """
+    Create GraphMVP embeddings (multi-view pretraining with 2D+3D geometry).
+
+    GraphMVP pretrains molecular representations by aligning 2D graph and
+    3D conformer views using both contrastive and generative objectives.
+    At inference, only the 2D GNN encoder is used.
+
+    Reference: Liu et al. "Pre-training Molecular Graph Representation with
+    3D Geometry" ICLR 2022.
+
+    Args:
+        smiles_list: List of SMILES strings
+        graphmvp_dir: Path to GraphMVP repo (default: $KIRBY_MODELS_DIR/GraphMVP)
+        checkpoint_path: Path to pretrained checkpoint
+        emb_dim: Embedding dimension (default: 300, must match checkpoint)
+        device: 'cpu' or 'cuda' (default: auto-detect)
+
+    Returns:
+        np.ndarray: GraphMVP embeddings (n_molecules, emb_dim)
+
+    SETUP REQUIRED:
+        1. Clone repo:
+           cd $KIRBY_MODELS_DIR
+           git clone https://github.com/chao1224/GraphMVP.git
+
+        2. Download pretrained weights from repo's Google Drive link
+
+        3. Install dependencies:
+           pip install torch-geometric ogb rdkit
+    """
+    import sys
+    import torch
+
+    global _GRAPHMVP_MODEL
+
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    # Find GraphMVP directory
+    if graphmvp_dir is None:
+        models_dir = get_models_dir()
+        search_paths = [
+            os.path.join(models_dir, 'GraphMVP'),
+            os.path.expanduser('~/repos/GraphMVP'),
+            os.path.expanduser('~/kirby_models/GraphMVP'),
+            '../GraphMVP',
+        ]
+        for path in search_paths:
+            if os.path.exists(os.path.join(path, 'src_classification')):
+                graphmvp_dir = os.path.abspath(path)
+                break
+
+    if graphmvp_dir is None or not os.path.exists(graphmvp_dir):
+        raise FileNotFoundError(
+            f"GraphMVP directory not found in search paths\n"
+            "Setup instructions:\n"
+            "  cd $KIRBY_MODELS_DIR  # or ~/repos\n"
+            "  git clone https://github.com/chao1224/GraphMVP.git"
+        )
+
+    # Add GraphMVP to path
+    src_dir = os.path.join(graphmvp_dir, 'src_classification')
+    if src_dir not in sys.path:
+        sys.path.insert(0, src_dir)
+
+    # Find checkpoint
+    if checkpoint_path is None:
+        # Look for common checkpoint locations (including MoleculeSTM weights)
+        possible_paths = [
+            os.path.join(graphmvp_dir, 'pretrained_models', 'GraphMVP.pth'),
+            os.path.join(graphmvp_dir, 'MoleculeSTM_weights', 'pretrained_GraphMVP', 'GraphMVP_C', 'model.pth'),
+            os.path.join(graphmvp_dir, 'MoleculeSTM_weights', 'pretrained_GraphMVP', 'GraphMVP_G', 'model.pth'),
+            os.path.join(graphmvp_dir, 'checkpoints', 'GraphMVP.pth'),
+        ]
+        for p in possible_paths:
+            if os.path.exists(p):
+                checkpoint_path = p
+                break
+
+    if checkpoint_path is None or not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(
+            f"GraphMVP checkpoint not found.\n"
+            "Download pretrained weights from the GraphMVP repository or HuggingFace."
+        )
+
+    if _GRAPHMVP_MODEL is None:
+        print("Loading GraphMVP...")
+        try:
+            from models.gnn import GNN
+            model = GNN(num_layer=5, emb_dim=emb_dim, JK='last',
+                       drop_ratio=0, gnn_type='gin')
+            model.from_pretrained(checkpoint_path)
+            model = model.to(device).eval()
+            _GRAPHMVP_MODEL = model
+            print(f"  Loaded on {device}")
+        except ImportError as e:
+            raise ImportError(
+                f"Failed to import GraphMVP models: {e}\n"
+                "Make sure GraphMVP is properly set up."
+            )
+
+    # Use OGB-style atom featurization
+    from torch_geometric.data import Data, Batch
+    from ogb.utils.features import atom_to_feature_vector, bond_to_feature_vector
+
+    def smiles_to_graph(smiles):
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            return None
+
+        # Node features (OGB style)
+        atom_features = []
+        for atom in mol.GetAtoms():
+            atom_features.append(atom_to_feature_vector(atom))
+        x = torch.tensor(atom_features, dtype=torch.long)
+
+        # Edge features
+        edge_indices = []
+        edge_attrs = []
+        for bond in mol.GetBonds():
+            i = bond.GetBeginAtomIdx()
+            j = bond.GetEndAtomIdx()
+            edge_feature = bond_to_feature_vector(bond)
+            edge_indices.extend([[i, j], [j, i]])
+            edge_attrs.extend([edge_feature, edge_feature])
+
+        if len(edge_indices) == 0:
+            edge_index = torch.zeros((2, 0), dtype=torch.long)
+            edge_attr = torch.zeros((0, 3), dtype=torch.long)
+        else:
+            edge_index = torch.tensor(edge_indices, dtype=torch.long).t().contiguous()
+            edge_attr = torch.tensor(edge_attrs, dtype=torch.long)
+
+        return Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+
+    # Convert all SMILES
+    graphs = []
+    failed_indices = []
+    for i, smi in enumerate(smiles_list):
+        g = smiles_to_graph(smi)
+        if g is None:
+            failed_indices.append(i)
+            # Create dummy graph
+            g = Data(
+                x=torch.zeros((1, 9), dtype=torch.long),
+                edge_index=torch.zeros((2, 0), dtype=torch.long),
+                edge_attr=torch.zeros((0, 3), dtype=torch.long)
+            )
+        graphs.append(g)
+
+    if failed_indices:
+        print(f"  Warning: {len(failed_indices)} molecules failed conversion")
+
+    # Batch and get embeddings
+    all_embeddings = []
+    batch_size = 32
+
+    with torch.no_grad():
+        for i in range(0, len(graphs), batch_size):
+            batch_graphs = graphs[i:i + batch_size]
+            batch = Batch.from_data_list(batch_graphs).to(device)
+            h = _GRAPHMVP_MODEL(batch.x, batch.edge_index, batch.edge_attr, batch.batch)
+            all_embeddings.append(h.cpu().numpy())
+
+    result = np.vstack(all_embeddings).astype(np.float32)
+
+    # Zero out failed molecules
+    for idx in failed_indices:
+        result[idx] = 0.0
+
+    return result
+
+
+def create_smited(smiles_list, smited_dir=None, model_variant='light', device=None):
+    """
+    Create SMI-TED embeddings (IBM's SMILES Transformer Encoder-Decoder).
+
+    SMI-TED is a large encoder-decoder model pretrained on 91M SMILES from
+    PubChem. The encoder can be used to extract molecular embeddings.
+
+    Reference: Born et al. "A Large Encoder-Decoder Family of Foundation
+    Models for Chemical Language" Nature Communications Chemistry, 2025.
+
+    Args:
+        smiles_list: List of SMILES strings
+        smited_dir: Path to SMI-TED directory (default: $KIRBY_MODELS_DIR/smi-ted)
+        model_variant: 'light' (default) or 'large'
+        device: 'cpu' or 'cuda' (default: auto-detect)
+
+    Returns:
+        np.ndarray: SMI-TED embeddings (n_molecules, varies by model)
+
+    SETUP REQUIRED:
+        1. Clone IBM materials repo:
+           cd $KIRBY_MODELS_DIR
+           git clone https://github.com/IBM/materials.git
+
+        2. Download weights and follow setup in models/smi_ted/
+
+        3. Install dependencies:
+           pip install pytorch-fast-transformers
+    """
+    import sys
+    import torch
+
+    global _SMITED_MODEL
+
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    # Find SMI-TED directory
+    if smited_dir is None:
+        models_dir = get_models_dir()
+        search_paths = [
+            os.path.join(models_dir, 'materials', 'models', 'smi_ted'),
+            os.path.expanduser('~/repos/materials/models/smi_ted'),
+            os.path.expanduser('~/kirby_models/materials/models/smi_ted'),
+            os.path.join(models_dir, 'smi-ted'),
+            '../materials/models/smi_ted',
+        ]
+        for path in search_paths:
+            if os.path.exists(os.path.join(path, 'inference')):
+                smited_dir = os.path.abspath(path)
+                break
+
+    if smited_dir is None or not os.path.exists(smited_dir):
+        raise FileNotFoundError(
+            f"SMI-TED directory not found in search paths\n"
+            "Setup instructions:\n"
+            "  cd $KIRBY_MODELS_DIR  # or ~/repos\n"
+            "  git clone https://github.com/IBM/materials.git\n"
+            "  Follow setup in models/smi_ted/"
+        )
+
+    # Add to path
+    inference_dir = os.path.join(smited_dir, 'inference')
+    if inference_dir not in sys.path:
+        sys.path.insert(0, inference_dir)
+    if smited_dir not in sys.path:
+        sys.path.insert(0, smited_dir)
+
+    if _SMITED_MODEL is None:
+        print(f"Loading SMI-TED ({model_variant})...")
+        try:
+            from smi_ted_light.load import load_smi_ted
+            model_folder = os.path.join(inference_dir, f'smi_ted_{model_variant}')
+            _SMITED_MODEL = load_smi_ted(
+                folder=model_folder,
+                ckpt_filename=f'smi_ted_{model_variant}.pt'
+            )
+            print(f"  Loaded")
+        except ImportError as e:
+            raise ImportError(
+                f"Failed to import SMI-TED: {e}\n"
+                "Make sure SMI-TED is properly installed."
+            )
+
+    # Get embeddings
+    with torch.no_grad():
+        embeddings = _SMITED_MODEL.encode(smiles_list, return_torch=True)
+        embeddings = embeddings.cpu().numpy()
+
+    return embeddings.astype(np.float32)
+
+
 # =============================================================================
 # GRAPH KERNEL FEATURES
 # =============================================================================
 
-def create_graph_kernel(smiles_list, kernel='weisfeiler_lehman', n_iter=5, 
+def create_graph_kernel(smiles_list, kernel='weisfeiler_lehman', n_iter=5,
                         n_features=None, reference_vocabulary=None, return_vocabulary=False):
     """
     Create graph kernel features using WL histogram approach.
-    
+
     Extracts WL label histograms as features - the proper way to use graph kernels
     with non-kernel methods like Random Forest.
-    
+
     Args:
         smiles_list: List of SMILES strings
         kernel: 'weisfeiler_lehman' (others not implemented)
