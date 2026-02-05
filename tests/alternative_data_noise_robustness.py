@@ -10,52 +10,39 @@ warnings.filterwarnings('ignore', message='.*experimental_relax_shapes.*')
 warnings.filterwarnings('ignore', message='.*reduce_retracing.*')
 
 """
-Baseline Noise Robustness: OpenADMET-LogD, OpenADMET-Caco2 Efflux, FLuID hERG
-===============================================================================
+Validation Noise Robustness: 3 Regression Datasets with Scaffold CV
+====================================================================
 
-Tests noise robustness on three defensible baseline datasets with the full
-model-representation matrix matching the DRD2/QM9 experiments.
+Tests noise robustness on three validated regression datasets that pass
+the ECFP4+RF baseline (R² > 0.5).
 
-NO repetitions (n=1) - single run per configuration (matching DRD2 protocol).
+Datasets (all REGRESSION):
+  1. OpenADMET-LogD — 7309 molecules, lipophilicity
+     Baseline: RF R²=0.69, LGBM R²=0.81
 
-Datasets:
-  1. OpenADMET-LogD (REGRESSION) — 7309 molecules, lipophilicity
-     Source: ExpansionRx via HuggingFace (CC-BY-4.0)
-     Baseline: R²=0.805 (LGBM scaffold CV from benchmark)
-     Notes: Untransformed. Most ECFP-learnable ADMET endpoint.
+  2. OpenADMET-Caco2_Efflux — 3777 molecules, P-gp efflux ratio
+     Baseline: RF R²=0.66, LGBM R²=0.70
 
-  2. OpenADMET-Caco2_Efflux (REGRESSION) — 3777 molecules, P-gp efflux ratio
-     Source: ExpansionRx via HuggingFace (CC-BY-4.0)
-     Baseline: R²=0.703 (LGBM scaffold CV from benchmark)
-     Notes: log10 transformed. Functional ADME endpoint.
+  3. ChEMBL-hERG-Ki — 1415 molecules, hERG binding affinity (pKi)
+     Baseline: RF R²=0.54, LGBM R²=0.56
 
-  3. FLuID hERG (CLASSIFICATION) — Lhasa Limited benchmark
-     Source: kirby.datasets.herg (source='fluid')
-     Notes: Binary blocker/non-blocker. Pre-split train/test.
+Split: 5-fold scaffold CV (Murcko scaffolds)
+  - Groups molecules by scaffold
+  - Holds out entire scaffold groups per fold
+  - Tests generalization to novel chemotypes
 
-Model-Representation Matrix (per dataset):
+Model-Representation Matrix:
   Representations: ECFP4, PDV, SNS, MHG-GNN-pretrained (4 total)
-  Regression models: RF, QRF, XGBoost, GP(PDV only), DNN, Full-BNN,
-                     LastLayer-BNN, Var-BNN (8 total)
-  Classification models: RF, XGBoost, GP(PDV only), DNN, Full-BNN,
-                         LastLayer-BNN, Var-BNN (7 total)
-  Total: 4 reps × ~8 models × 6 strategies × 3 datasets
+  Models: RF, QRF, XGBoost, GP(PDV only), DNN, Full-BNN, LastLayer-BNN, Var-BNN (8 total)
+  Total: 4 reps × 8 models × 6 strategies × 3 datasets × 5 folds
 
-Noise:
-  Regression strategies: legacy, outlier, quantile, hetero, threshold, valprop (6)
-  Classification strategies: uniform, class_imbalance, binary_asymmetric,
-                             instance_noise, class_dependent, confusion_directed (6)
-  Sigma levels: 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0 (11)
-
-Key output metric:
-  NDS (Noise Degradation Slope): linear slope of R² (or AUC) vs σ
-  More negative = degrades faster with noise = less robust
+Noise Strategies (regression): legacy, outlier, quantile, hetero, threshold, valprop (6)
+Sigma levels: 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0 (11)
 
 Usage:
-  python run_baselines_noise.py
-  python run_baselines_noise.py --datasets logd caco2
-  python run_baselines_noise.py --datasets herg
-  python run_baselines_noise.py --openadmet-csv /path/to/cached/expansion_data_train.csv
+  python alternative_data_noise_robustness.py
+  python alternative_data_noise_robustness.py --datasets logd caco2 herg
+  python alternative_data_noise_robustness.py --results-root results/validation
 """
 
 import argparse
@@ -64,44 +51,35 @@ import pandas as pd
 import torch
 import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
-from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-from sklearn.metrics import (
-    r2_score, mean_absolute_error, mean_squared_error,
-    accuracy_score, roc_auc_score, f1_score, matthews_corrcoef
-)
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import GroupKFold
+from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
 from scipy.stats import linregress, spearmanr
 import sys
 import time
 import requests
 from pathlib import Path
 
-# RDKit for scaffold splitting and SMILES standardization
 from rdkit import Chem, RDLogger
 from rdkit.Chem.Scaffolds import MurckoScaffold
 RDLogger.logger().setLevel(RDLogger.ERROR)
 
 
-def standardise_smiles(smi):
-    """Canonicalise SMILES, keep largest fragment, remove salts.
+# ═══════════════════════════════════════════════════════════════════════════
+# CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════
 
-    Matches test_datasets.py standardization protocol.
-    """
-    if not isinstance(smi, str) or not smi.strip():
-        return None
-    mol = Chem.MolFromSmiles(smi)
-    if mol is None:
-        return None
-    # Largest fragment (salt removal)
-    frags = Chem.GetMolFrags(mol, asMols=True, sanitizeFrags=True)
-    if not frags:
-        return None
-    mol = max(frags, key=lambda m: m.GetNumHeavyAtoms())
-    try:
-        return Chem.MolToSmiles(mol, canonical=True)
-    except Exception:
-        return None
+STRATEGIES = ['legacy', 'outlier', 'quantile', 'hetero', 'threshold', 'valprop']
+SIGMA_LEVELS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+N_FOLDS = 5
+GP_MAX_N = 2000
+CACHE_DIR = Path('data_cache')
 
-# ── Optional imports ──────────────────────────────────────────────────────
+
+# ═══════════════════════════════════════════════════════════════════════════
+# OPTIONAL IMPORTS
+# ═══════════════════════════════════════════════════════════════════════════
+
 try:
     import torchbnn as bnn
     from bayesian_torch.models.dnn_to_bnn import transform_model, transform_layer
@@ -111,14 +89,14 @@ except ImportError:
     HAS_BAYESIAN_TORCH = False
 
 try:
-    from xgboost import XGBRegressor, XGBClassifier
+    from xgboost import XGBRegressor
     HAS_XGBOOST = True
 except ImportError:
     print("WARNING: xgboost not installed, XGBoost experiments will be skipped")
     HAS_XGBOOST = False
 
 try:
-    from sklearn.gaussian_process import GaussianProcessRegressor, GaussianProcessClassifier
+    from sklearn.gaussian_process import GaussianProcessRegressor
     from sklearn.gaussian_process.kernels import RBF, ConstantKernel, WhiteKernel
     HAS_GP = True
 except ImportError:
@@ -132,7 +110,7 @@ except ImportError:
     print("WARNING: quantile_forest not installed, QRF experiments will be skipped")
     HAS_QRF = False
 
-# ── KIRBy imports ─────────────────────────────────────────────────────────
+# KIRBy imports
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 from kirby.representations.molecular import (
     create_ecfp4,
@@ -140,29 +118,49 @@ from kirby.representations.molecular import (
     create_sns,
     create_mhg_gnn
 )
-from noiseInject import NoiseInjectorRegression, NoiseInjectorClassification, calculate_noise_metrics
-
-# hERG data loader
-try:
-    from kirby.datasets.herg import load_herg
-    HAS_HERG = True
-except ImportError:
-    print("WARNING: kirby.datasets.herg not available, hERG experiments will be skipped")
-    HAS_HERG = False
+from noiseInject import NoiseInjectorRegression
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# CONFIGURATION
+# SMILES / SCAFFOLD UTILITIES
 # ═══════════════════════════════════════════════════════════════════════════
 
-# Separate strategies for regression vs classification (different noise injectors)
-STRATEGIES_REGRESSION = ['legacy', 'outlier', 'quantile', 'hetero', 'threshold', 'valprop']
-STRATEGIES_CLASSIFICATION = ['uniform', 'class_imbalance', 'binary_asymmetric',
-                             'instance_noise', 'class_dependent', 'confusion_directed']
+def standardise_smiles(smi):
+    """Canonicalise SMILES, keep largest fragment, remove salts."""
+    if not isinstance(smi, str) or not smi.strip():
+        return None
+    mol = Chem.MolFromSmiles(smi)
+    if mol is None:
+        return None
+    frags = Chem.GetMolFrags(mol, asMols=True, sanitizeFrags=True)
+    if not frags:
+        return None
+    mol = max(frags, key=lambda m: m.GetNumHeavyAtoms())
+    try:
+        return Chem.MolToSmiles(mol, canonical=True)
+    except Exception:
+        return None
 
-SIGMA_LEVELS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
-GP_MAX_N = 2000  # Subsample for GP (O(n³) cost)
-CACHE_DIR = Path('data_cache')
+
+def get_scaffold(smi):
+    """Get Murcko scaffold for a SMILES string."""
+    mol = Chem.MolFromSmiles(smi)
+    if mol is None:
+        return smi
+    try:
+        core = MurckoScaffold.GetScaffoldForMol(mol)
+        return Chem.MolToSmiles(core, canonical=True)
+    except Exception:
+        return smi
+
+
+def assign_scaffold_groups(smiles_list):
+    """Assign scaffold group IDs to molecules."""
+    scaffolds = [get_scaffold(smi) for smi in smiles_list]
+    unique_scaffolds = list(set(scaffolds))
+    scaffold_to_id = {s: i for i, s in enumerate(unique_scaffolds)}
+    groups = np.array([scaffold_to_id[s] for s in scaffolds])
+    return groups, len(unique_scaffolds)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -170,10 +168,7 @@ CACHE_DIR = Path('data_cache')
 # ═══════════════════════════════════════════════════════════════════════════
 
 def download_openadmet(csv_path=None):
-    """Download or load OpenADMET-ExpansionRx data.
-
-    Returns the full DataFrame with all endpoints.
-    """
+    """Download or load OpenADMET-ExpansionRx data."""
     if csv_path and Path(csv_path).exists():
         print(f"  Loading cached OpenADMET data from {csv_path}")
         return pd.read_csv(csv_path)
@@ -197,71 +192,106 @@ def download_openadmet(csv_path=None):
     return pd.read_csv(cached)
 
 
-def scaffold_split(smiles_list, test_frac=0.2, random_state=42):
-    """Bemis-Murcko scaffold-based train/test split.
+def fetch_chembl_herg_ki():
+    """Extract hERG (CHEMBL240) Ki data via ChEMBL REST API."""
+    print("  Fetching ChEMBL hERG Ki data...")
 
-    Returns (train_indices, test_indices) as numpy arrays.
-    """
-    scaffolds = {}
-    for i, smi in enumerate(smiles_list):
-        mol = Chem.MolFromSmiles(smi)
-        if mol is not None:
-            try:
-                scaf = MurckoScaffold.MurckoScaffoldSmiles(
-                    mol=mol, includeChirality=False)
-            except Exception:
-                scaf = smi
-        else:
-            scaf = smi
-        scaffolds.setdefault(scaf, []).append(i)
+    cached = CACHE_DIR / "chembl_herg_ki.csv"
+    if cached.exists():
+        print(f"  [cached] {cached}")
+        return pd.read_csv(cached)
 
-    rng = np.random.RandomState(random_state)
-    groups = list(scaffolds.values())
-    rng.shuffle(groups)
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    TARGET_ID = "CHEMBL240"
+    base_url = "https://www.ebi.ac.uk/chembl/api/data/activity.json"
 
-    n_total = len(smiles_list)
-    n_test = int(n_total * test_frac)
+    all_records = []
+    offset = 0
+    limit = 1000
 
-    test_idx, train_idx = [], []
-    for group in groups:
-        if len(test_idx) < n_test:
-            test_idx.extend(group)
-        else:
-            train_idx.extend(group)
+    while True:
+        params = {
+            "target_chembl_id": TARGET_ID,
+            "standard_type": "Ki",
+            "pchembl_value__isnull": "false",
+            "standard_relation": "=",
+            "data_validity_comment__isnull": "true",
+            "limit": limit,
+            "offset": offset,
+            "format": "json",
+        }
 
-    return np.array(train_idx), np.array(test_idx)
+        print(f"    Querying ChEMBL API (offset={offset})...")
+        try:
+            resp = requests.get(base_url, params=params, timeout=60)
+            resp.raise_for_status()
+            data = resp.json()
+        except requests.exceptions.RequestException as e:
+            print(f"    ChEMBL API request failed: {e}")
+            break
+
+        activities = data.get("activities", [])
+        if not activities:
+            break
+
+        for act in activities:
+            all_records.append({
+                "canonical_smiles": act.get("canonical_smiles"),
+                "pchembl_value": act.get("pchembl_value"),
+                "assay_type": act.get("assay_type"),
+            })
+
+        page_meta = data.get("page_meta", {})
+        if page_meta.get("next") is None:
+            break
+        offset += limit
+        time.sleep(0.5)
+
+    if not all_records:
+        raise RuntimeError("No hERG Ki records retrieved from ChEMBL!")
+
+    df = pd.DataFrame(all_records)
+    print(f"    Retrieved {len(df)} raw hERG Ki records")
+
+    # Filter to binding assays
+    if "assay_type" in df.columns:
+        df = df[df["assay_type"] == "B"].copy()
+
+    df["pchembl_value"] = pd.to_numeric(df["pchembl_value"], errors="coerce")
+    df = df.dropna(subset=["pchembl_value", "canonical_smiles"])
+
+    # Deduplicate: median pchembl per compound
+    grouped = df.groupby("canonical_smiles")["pchembl_value"]
+    medians = grouped.median().reset_index()
+    stds = grouped.std().reset_index().rename(columns={"pchembl_value": "std"})
+    merged = medians.merge(stds, on="canonical_smiles")
+
+    # Remove high-variance compounds (std > 1.0 log unit)
+    merged = merged[(merged["std"].isna()) | (merged["std"] <= 1.0)]
+
+    result = merged[["canonical_smiles", "pchembl_value"]].copy()
+    result.columns = ["SMILES", "pKi"]
+
+    result.to_csv(cached, index=False)
+    print(f"    Final hERG Ki dataset: {len(result)} compounds")
+
+    return result
 
 
 def load_openadmet_endpoint(df, endpoint_col, log_transform=False):
-    """Extract a single endpoint from OpenADMET, scaffold-split it.
-
-    Matches test_datasets.py protocol:
-      - Standardizes SMILES (canonicalize, salt removal)
-      - Deduplicates by taking median target per canonical SMILES
-      - Scaffold split: 80 train / 20 test
-
-    Returns dict with keys: train_smiles, train_labels, val_smiles, val_labels,
-                            test_smiles, test_labels
-    """
-    # Find SMILES column
+    """Extract a single endpoint from OpenADMET, standardize, deduplicate."""
     smiles_col = next(c for c in df.columns if c.upper() == 'SMILES')
 
     sub = df[[smiles_col, endpoint_col]].dropna(subset=[endpoint_col]).copy()
     sub[endpoint_col] = pd.to_numeric(sub[endpoint_col], errors='coerce')
     sub = sub.dropna()
 
-    if len(sub) < 100:
-        raise ValueError(f"Only {len(sub)} valid rows for {endpoint_col}")
-
-    # Standardize SMILES (matching test_datasets.py protocol)
+    # Standardize SMILES
     sub['std_smiles'] = sub[smiles_col].apply(standardise_smiles)
     sub = sub.dropna(subset=['std_smiles'])
 
-    # Deduplicate by canonical SMILES: take median target (matching test_datasets.py)
+    # Deduplicate by canonical SMILES: take median target
     sub = sub.groupby('std_smiles').agg({endpoint_col: 'median'}).reset_index()
-
-    if len(sub) < 100:
-        raise ValueError(f"Only {len(sub)} unique molecules for {endpoint_col}")
 
     smiles_arr = sub['std_smiles'].values
     labels_arr = sub[endpoint_col].values.astype(np.float64)
@@ -272,67 +302,21 @@ def load_openadmet_endpoint(df, endpoint_col, log_transform=False):
         smiles_arr = smiles_arr[valid]
         labels_arr = labels_arr[valid]
 
-    if len(smiles_arr) < 100:
-        raise ValueError(f"Only {len(smiles_arr)} valid after transform for {endpoint_col}")
-
-    # Scaffold split: 80 train / 20 test
-    train_idx, test_idx = scaffold_split(smiles_arr.tolist(), test_frac=0.2,
-                                         random_state=42)
-
-    train_smiles = smiles_arr[train_idx]
-    train_labels = labels_arr[train_idx]
-    test_smiles = smiles_arr[test_idx]
-    test_labels = labels_arr[test_idx]
-
-    # Carve validation from train (20% of train = 16% of total)
-    n_val = len(train_smiles) // 5
-    val_smiles = train_smiles[:n_val]
-    val_labels = train_labels[:n_val]
-    train_smiles_fit = train_smiles[n_val:]
-    train_labels_fit = train_labels[n_val:]
-
-    return {
-        'train_smiles': train_smiles_fit,
-        'train_labels': train_labels_fit,
-        'val_smiles': val_smiles,
-        'val_labels': val_labels,
-        'test_smiles': test_smiles,
-        'test_labels': test_labels,
-    }
+    return smiles_arr, labels_arr
 
 
-def load_herg_fluid():
-    """Load FLuID hERG from kirby with its canonical train/test split.
+def load_chembl_herg():
+    """Load ChEMBL hERG Ki as regression dataset."""
+    df = fetch_chembl_herg_ki()
 
-    Returns dict with same keys as load_openadmet_endpoint.
-    """
-    print("  Loading FLuID training set...")
-    train_data = load_herg(source='fluid', use_test=False)
-    print("  Loading FLuID test set...")
-    test_data = load_herg(source='fluid', use_test=True)
+    # Standardize SMILES
+    df['std_smiles'] = df['SMILES'].apply(standardise_smiles)
+    df = df.dropna(subset=['std_smiles'])
 
-    train_smiles = train_data['smiles']
-    train_labels = train_data['labels']
-    test_smiles = test_data['smiles']
-    test_labels = test_data['labels']
+    smiles_arr = df['std_smiles'].values
+    labels_arr = df['pKi'].values.astype(np.float64)
 
-    # Carve validation from train
-    n_val = len(train_smiles) // 5
-    val_smiles = train_smiles[:n_val]
-    val_labels = train_labels[:n_val]
-    train_smiles_fit = train_smiles[n_val:]
-    train_labels_fit = train_labels[n_val:]
-
-    return {
-        'train_smiles': train_smiles_fit,
-        'train_labels': train_labels_fit,
-        'val_smiles': val_smiles,
-        'val_labels': val_labels,
-        'test_smiles': test_smiles,
-        'test_labels': test_labels,
-    }
-
-
+    return smiles_arr, labels_arr
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -357,10 +341,6 @@ class DeterministicRegressor(nn.Module):
     def forward(self, x):
         return self.net(x).squeeze()
 
-
-# ═══════════════════════════════════════════════════════════════════════════
-# BAYESIAN TRANSFORMATIONS (identical to DRD2 script)
-# ═══════════════════════════════════════════════════════════════════════════
 
 if HAS_BAYESIAN_TORCH:
     def apply_bayesian_transformation(model):
@@ -396,7 +376,6 @@ if HAS_BAYESIAN_TORCH:
         _set(model, last_name, bl)
         return model
 
-    # var-bnn uses same transformation as last-layer-bnn in the DRD2 script
     apply_bayesian_transformation_variational = apply_bayesian_transformation_last_layer
 
 
@@ -406,8 +385,7 @@ if HAS_BAYESIAN_TORCH:
 
 def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
                             model_type='deterministic', epochs=100, lr=1e-3):
-    """Train a regression neural network (deterministic or Bayesian).
-    Returns (predictions, uncertainties_or_None)."""
+    """Train regression neural network. Returns (predictions, uncertainties)."""
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     X_tr = torch.FloatTensor(X_train).to(device)
@@ -463,81 +441,12 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
         return model(X_te).cpu().numpy(), None
 
 
-def train_neural_classification(X_train, y_train, X_val, y_val, X_test,
-                                model_type='deterministic', epochs=100, lr=1e-3):
-    """Train a binary classification neural network.
-    Returns (predicted_labels, predicted_probabilities, uncertainties_or_None)."""
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-    X_tr = torch.FloatTensor(X_train).to(device)
-    y_tr = torch.FloatTensor(y_train).to(device)
-    X_v = torch.FloatTensor(X_val).to(device)
-    y_v = torch.FloatTensor(y_val).to(device)
-    X_te = torch.FloatTensor(X_test).to(device)
-
-    model = DeterministicRegressor(X_train.shape[1]).to(device)  # outputs logit
-
-    if HAS_BAYESIAN_TORCH and model_type != 'deterministic':
-        if model_type == 'full-bnn':
-            model = apply_bayesian_transformation(model)
-        elif model_type == 'last-layer-bnn':
-            model = apply_bayesian_transformation_last_layer(model)
-        elif model_type == 'var-bnn':
-            model = apply_bayesian_transformation_variational(model)
-
-    is_bayesian = model_type != 'deterministic'
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.BCEWithLogitsLoss()
-    loader = DataLoader(TensorDataset(X_tr, y_tr), batch_size=64, shuffle=True)
-
-    best_val, patience_ctr, patience = float('inf'), 0, 10
-    best_state = None
-
-    for _ in range(epochs):
-        model.train()
-        for bx, by in loader:
-            optimizer.zero_grad()
-            criterion(model(bx), by).backward()
-            optimizer.step()
-
-        model.eval()
-        with torch.no_grad():
-            vl = criterion(model(X_v), y_v).item()
-        if vl < best_val:
-            best_val = vl
-            patience_ctr = 0
-            best_state = {k: v.clone() for k, v in model.state_dict().items()}
-        else:
-            patience_ctr += 1
-            if patience_ctr >= patience:
-                break
-
-    model.load_state_dict(best_state)
-    model.eval()
-
-    if is_bayesian:
-        logits_all = np.array(
-            [model(X_te).detach().cpu().numpy() for _ in range(30)])
-        mean_logit = logits_all.mean(0)
-        probs = 1.0 / (1.0 + np.exp(-mean_logit))
-        preds = (probs >= 0.5).astype(int)
-        uncs = logits_all.std(0)
-        return preds, probs, uncs
-
-    with torch.no_grad():
-        logits = model(X_te).cpu().numpy()
-    probs = 1.0 / (1.0 + np.exp(-logits))
-    preds = (probs >= 0.5).astype(int)
-    return preds, probs, None
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # EXPERIMENT RUNNERS
 # ═══════════════════════════════════════════════════════════════════════════
 
-def run_regression_tree_experiment(X_train, y_train, X_test, y_test,
-                                   model_fn, strategy, sigma_levels):
-    """Noise robustness for a tree-based regression model."""
+def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, strategy, sigma_levels):
+    """Noise robustness for tree-based regression model."""
     injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
     predictions, uncertainties = {}, {}
 
@@ -561,10 +470,9 @@ def run_regression_tree_experiment(X_train, y_train, X_test, y_test,
     return predictions, uncertainties
 
 
-def run_regression_neural_experiment(X_train, y_train, X_val, y_val,
-                                     X_test, y_test,
-                                     model_type, strategy, sigma_levels):
-    """Noise robustness for a neural regression model."""
+def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
+                          model_type, strategy, sigma_levels):
+    """Noise robustness for neural regression model."""
     injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
     predictions, uncertainties = {}, {}
 
@@ -579,56 +487,7 @@ def run_regression_neural_experiment(X_train, y_train, X_val, y_val,
     return predictions, uncertainties
 
 
-def run_classification_tree_experiment(X_train, y_train, X_test, y_test,
-                                       model_fn, strategy, sigma_levels):
-    """Noise robustness for a tree-based classification model."""
-    injector = NoiseInjectorClassification(strategy=strategy, random_state=42)
-    predictions, probabilities, uncertainties = {}, {}, {}
-
-    for sigma in sigma_levels:
-        y_noisy = y_train if sigma == 0.0 else injector.inject(y_train, sigma)
-        mdl = model_fn()
-        mdl.fit(X_train, y_noisy)
-
-        preds = mdl.predict(X_test)
-        predictions[sigma] = preds
-
-        if hasattr(mdl, 'predict_proba'):
-            probabilities[sigma] = mdl.predict_proba(X_test)[:, 1]
-        elif 'GaussianProcess' in str(type(mdl)):
-            probabilities[sigma] = mdl.predict_proba(X_test)[:, 1]
-        else:
-            probabilities[sigma] = preds.astype(float)
-
-        uncertainties[sigma] = None
-
-    return predictions, probabilities, uncertainties
-
-
-def run_classification_neural_experiment(X_train, y_train, X_val, y_val,
-                                          X_test, y_test,
-                                          model_type, strategy, sigma_levels):
-    """Noise robustness for a neural classification model."""
-    injector = NoiseInjectorClassification(strategy=strategy, random_state=42)
-    predictions, probabilities, uncertainties = {}, {}, {}
-
-    for sigma in sigma_levels:
-        y_noisy = y_train if sigma == 0.0 else injector.inject(y_train, sigma)
-        preds, probs, uncs = train_neural_classification(
-            X_train, y_noisy.astype(np.float32), X_val, y_val.astype(np.float32),
-            X_test, model_type=model_type, epochs=100)
-        predictions[sigma] = preds
-        probabilities[sigma] = probs
-        uncertainties[sigma] = uncs
-
-    return predictions, probabilities, uncertainties
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# METRICS HELPERS
-# ═══════════════════════════════════════════════════════════════════════════
-
-def compute_regression_metrics(y_true, predictions_dict):
+def compute_metrics(y_true, predictions_dict):
     """Per-sigma regression metrics DataFrame."""
     rows = []
     for sigma in sorted(predictions_dict):
@@ -638,28 +497,7 @@ def compute_regression_metrics(y_true, predictions_dict):
             'r2': r2_score(y_true, yp),
             'rmse': np.sqrt(mean_squared_error(y_true, yp)),
             'mae': mean_absolute_error(y_true, yp),
-            'spearman': spearmanr(y_true, yp).correlation
-                        if np.std(yp) > 0 else 0.0,
-        })
-    return pd.DataFrame(rows)
-
-
-def compute_classification_metrics(y_true, predictions_dict, probabilities_dict):
-    """Per-sigma classification metrics DataFrame."""
-    rows = []
-    for sigma in sorted(predictions_dict):
-        yp = predictions_dict[sigma]
-        yprob = probabilities_dict.get(sigma)
-        try:
-            auc = roc_auc_score(y_true, yprob) if yprob is not None else np.nan
-        except ValueError:
-            auc = np.nan
-        rows.append({
-            'sigma': sigma,
-            'accuracy': accuracy_score(y_true, yp),
-            'auc': auc,
-            'f1': f1_score(y_true, yp, zero_division=0),
-            'mcc': matthews_corrcoef(y_true, yp),
+            'spearman': spearmanr(y_true, yp).correlation if np.std(yp) > 0 else 0.0,
         })
     return pd.DataFrame(rows)
 
@@ -668,57 +506,30 @@ def compute_classification_metrics(y_true, predictions_dict, probabilities_dict)
 # REPRESENTATION GENERATION
 # ═══════════════════════════════════════════════════════════════════════════
 
-def generate_representations(train_smiles, val_smiles, test_smiles):
-    """Generate all four representations for a dataset.
-
-    Returns dict mapping rep_name -> (X_train, X_val, X_test).
-    """
+def generate_representations(smiles_list):
+    """Generate all representations for a SMILES list. Returns dict of arrays."""
     import gc
     reps = {}
 
     print("  ECFP4...", flush=True)
-    reps['ECFP4'] = (
-        create_ecfp4(train_smiles, n_bits=2048),
-        create_ecfp4(val_smiles, n_bits=2048),
-        create_ecfp4(test_smiles, n_bits=2048),
-    )
-    print(f"    done: {reps['ECFP4'][0].shape}", flush=True)
+    reps['ECFP4'] = create_ecfp4(smiles_list, n_bits=2048)
+    print(f"    done: {reps['ECFP4'].shape}", flush=True)
 
     print("  PDV...", flush=True)
-    reps['PDV'] = (
-        create_pdv(train_smiles),
-        create_pdv(val_smiles),
-        create_pdv(test_smiles),
-    )
-    print(f"    done: {reps['PDV'][0].shape}", flush=True)
+    reps['PDV'] = create_pdv(smiles_list)
+    print(f"    done: {reps['PDV'].shape}", flush=True)
 
     print("  SNS...", flush=True)
-    sns_train, sns_feat = create_sns(train_smiles, return_featurizer=True)
-    sns_val = create_sns(val_smiles, reference_featurizer=sns_feat)
-    sns_test = create_sns(test_smiles, reference_featurizer=sns_feat)
-    reps['SNS'] = (sns_train, sns_val, sns_test)
-    print(f"    done: {sns_train.shape}", flush=True)
+    reps['SNS'], _ = create_sns(smiles_list, return_featurizer=True)
+    print(f"    done: {reps['SNS'].shape}", flush=True)
 
     print("  MHG-GNN (pretrained)...", flush=True)
     try:
-        # Explicit memory cleanup before MHG-GNN
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-
-        # Process with verbose output to identify crashes
-        # (MHG-GNN now prints batch progress to help diagnose bus errors)
-        mhg_train = create_mhg_gnn(train_smiles, batch_size=32)
-        gc.collect()
-
-        mhg_val = create_mhg_gnn(val_smiles, batch_size=32)
-        gc.collect()
-
-        mhg_test = create_mhg_gnn(test_smiles, batch_size=32)
-        gc.collect()
-
-        reps['MHG-GNN-pretrained'] = (mhg_train, mhg_val, mhg_test)
-        print(f"    done: {reps['MHG-GNN-pretrained'][0].shape}", flush=True)
+        reps['MHG-GNN-pretrained'] = create_mhg_gnn(smiles_list, batch_size=32)
+        print(f"    done: {reps['MHG-GNN-pretrained'].shape}", flush=True)
     except Exception as e:
         print(f"    FAILED: {e} — skipping MHG-GNN", flush=True)
 
@@ -726,319 +537,190 @@ def generate_representations(train_smiles, val_smiles, test_smiles):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# BUILD EXPERIMENT LIST
+# MAIN EXPERIMENT RUNNER
 # ═══════════════════════════════════════════════════════════════════════════
 
-def build_regression_experiments(reps, train_labels, val_labels, test_labels):
-    """Return list of (model_name, rep_name, X_train, X_val, X_test,
-                        model_fn_or_None, neural_type_or_None)."""
-    exps = []
-
-    for rname, (Xtr, Xv, Xte) in reps.items():
-        # RF
-        exps.append(('RF', rname, Xtr, None, Xte,
-                      lambda: RandomForestRegressor(n_estimators=100,
-                                                    random_state=42, n_jobs=-1),
-                      None))
-        # QRF
-        if HAS_QRF:
-            exps.append(('QRF', rname, Xtr, None, Xte,
-                          lambda: RandomForestQuantileRegressor(
-                              n_estimators=100, random_state=42, n_jobs=-1),
-                          None))
-        # XGBoost
-        if HAS_XGBOOST:
-            exps.append(('XGBoost', rname, Xtr, None, Xte,
-                          lambda: XGBRegressor(n_estimators=100,
-                                               random_state=42),
-                          None))
-        # GP — PDV only, subsample if large
-        if HAS_GP and rname == 'PDV':
-            _Xtr = Xtr
-            _y = train_labels
-            if len(Xtr) > GP_MAX_N:
-                idx = np.random.RandomState(42).choice(
-                    len(Xtr), GP_MAX_N, replace=False)
-                _Xtr = Xtr[idx]
-                _y = train_labels[idx]
-            exps.append(('GP', rname, _Xtr, None, Xte,
-                          lambda: GaussianProcessRegressor(
-                              kernel=ConstantKernel(1.0) * RBF(1.0)
-                                     + WhiteKernel(noise_level=1.0),
-                              alpha=1e-10, random_state=42,
-                              n_restarts_optimizer=5),
-                          None))
-
-        # Neural models
-        for mtype, mname in [('deterministic', 'DNN'),
-                              ('full-bnn', 'Full-BNN'),
-                              ('last-layer-bnn', 'LastLayer-BNN'),
-                              ('var-bnn', 'Var-BNN')]:
-            if mtype != 'deterministic' and not HAS_BAYESIAN_TORCH:
-                continue
-            exps.append((mname, rname, Xtr, Xv, Xte, None, mtype))
-
-    return exps
-
-
-def build_classification_experiments(reps, train_labels, val_labels,
-                                      test_labels):
-    """Same structure as regression but with classifiers."""
-    exps = []
-
-    for rname, (Xtr, Xv, Xte) in reps.items():
-        # RF (classifier)
-        exps.append(('RF', rname, Xtr, None, Xte,
-                      lambda: RandomForestClassifier(
-                          n_estimators=100, random_state=42,
-                          n_jobs=-1, class_weight='balanced'),
-                      None))
-        # XGBoost (classifier)
-        if HAS_XGBOOST:
-            scale = ((train_labels == 0).sum() /
-                     max((train_labels == 1).sum(), 1))
-            exps.append(('XGBoost', rname, Xtr, None, Xte,
-                          lambda s=scale: XGBClassifier(
-                              n_estimators=100, random_state=42,
-                              scale_pos_weight=s),
-                          None))
-        # GP classifier — PDV only, subsample
-        if HAS_GP and rname == 'PDV':
-            _Xtr = Xtr
-            _y = train_labels
-            if len(Xtr) > GP_MAX_N:
-                idx = np.random.RandomState(42).choice(
-                    len(Xtr), GP_MAX_N, replace=False)
-                _Xtr = Xtr[idx]
-                _y = train_labels[idx]
-            exps.append(('GP', rname, _Xtr, None, Xte,
-                          lambda: GaussianProcessClassifier(
-                              kernel=ConstantKernel(1.0) * RBF(1.0),
-                              random_state=42, n_restarts_optimizer=3),
-                          None))
-
-        # Neural models
-        for mtype, mname in [('deterministic', 'DNN'),
-                              ('full-bnn', 'Full-BNN'),
-                              ('last-layer-bnn', 'LastLayer-BNN'),
-                              ('var-bnn', 'Var-BNN')]:
-            if mtype != 'deterministic' and not HAS_BAYESIAN_TORCH:
-                continue
-            exps.append((mname, rname, Xtr, Xv, Xte, None, mtype))
-
-    return exps
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# DATASET RUNNER
-# ═══════════════════════════════════════════════════════════════════════════
-
-def run_dataset(dataset_name, task_type, data, results_dir):
-    """Run the full noise robustness experiment matrix for one dataset.
-
-    Args:
-        dataset_name: e.g. 'OpenADMET-LogD'
-        task_type: 'regression' or 'classification'
-        data: dict with train_smiles, train_labels, val_smiles, val_labels,
-              test_smiles, test_labels
-        results_dir: Path for output CSVs
-
-    Returns:
-        summary_df with NDS values
-    """
+def run_dataset(dataset_name, smiles, labels, results_dir):
+    """Run full scaffold CV experiment for one dataset."""
     results_dir = Path(results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
 
-    train_smiles = data['train_smiles']
-    train_labels = data['train_labels']
-    val_smiles = data['val_smiles']
-    val_labels = data['val_labels']
-    test_smiles = data['test_smiles']
-    test_labels = data['test_labels']
-
     print(f"\n{'='*80}")
-    print(f"DATASET: {dataset_name} ({task_type})")
+    print(f"DATASET: {dataset_name}")
     print(f"{'='*80}")
-    print(f"  Train: {len(train_smiles)}, Val: {len(val_smiles)}, "
-          f"Test: {len(test_smiles)}")
-    if task_type == 'classification':
-        print(f"  Train blockers: {train_labels.sum()} "
-              f"({100*train_labels.mean():.1f}%)")
-        print(f"  Test  blockers: {test_labels.sum()} "
-              f"({100*test_labels.mean():.1f}%)")
-    else:
-        print(f"  Train y range: [{train_labels.min():.2f}, "
-              f"{train_labels.max():.2f}], std={train_labels.std():.3f}")
-        print(f"  Test  y range: [{test_labels.min():.2f}, "
-              f"{test_labels.max():.2f}], std={test_labels.std():.3f}")
+    print(f"  N molecules: {len(smiles)}")
+    print(f"  y range: [{labels.min():.3f}, {labels.max():.3f}], std={labels.std():.3f}")
 
-    # ── Generate representations ──────────────────────────────────────
-    print(f"\nGENERATING REPRESENTATIONS for {dataset_name}")
-    reps = generate_representations(train_smiles, val_smiles, test_smiles)
+    # Assign scaffold groups
+    groups, n_scaffolds = assign_scaffold_groups(smiles)
+    print(f"  N scaffolds: {n_scaffolds}")
 
-    # ── Build experiment list ─────────────────────────────────────────
-    if task_type == 'regression':
-        experiments = build_regression_experiments(
-            reps, train_labels, val_labels, test_labels)
-        strategies = STRATEGIES_REGRESSION
-    else:
-        experiments = build_classification_experiments(
-            reps, train_labels, val_labels, test_labels)
-        strategies = STRATEGIES_CLASSIFICATION
+    # Generate representations for ALL molecules
+    print(f"\nGenerating representations for {len(smiles)} molecules...")
+    reps = generate_representations(smiles)
 
-    print(f"\n{len(experiments)} model-rep configs × {len(strategies)} strategies "
-          f"= {len(experiments) * len(strategies)} experiment runs")
+    # Build experiment configs
+    experiments = []
+    for rname in reps.keys():
+        # RF
+        experiments.append(('RF', rname,
+            lambda: RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1), None))
+        # QRF
+        if HAS_QRF:
+            experiments.append(('QRF', rname,
+                lambda: RandomForestQuantileRegressor(n_estimators=100, random_state=42, n_jobs=-1), None))
+        # XGBoost
+        if HAS_XGBOOST:
+            experiments.append(('XGBoost', rname,
+                lambda: XGBRegressor(n_estimators=100, random_state=42), None))
+        # GP (PDV only)
+        if HAS_GP and rname == 'PDV':
+            experiments.append(('GP', rname,
+                lambda: GaussianProcessRegressor(
+                    kernel=ConstantKernel(1.0) * RBF(1.0) + WhiteKernel(noise_level=1.0),
+                    alpha=1e-10, random_state=42, n_restarts_optimizer=5), None))
+        # Neural models
+        for mtype, mname in [('deterministic', 'DNN'),
+                              ('full-bnn', 'Full-BNN'),
+                              ('last-layer-bnn', 'LastLayer-BNN'),
+                              ('var-bnn', 'Var-BNN')]:
+            if mtype != 'deterministic' and not HAS_BAYESIAN_TORCH:
+                continue
+            experiments.append((mname, rname, None, mtype))
 
-    # ── Run experiments ───────────────────────────────────────────────
-    all_per_sigma = []
+    print(f"\n{len(experiments)} model-rep configs × {len(STRATEGIES)} strategies × {N_FOLDS} folds")
+
+    # Scaffold CV
+    gkf = GroupKFold(n_splits=N_FOLDS)
+    all_fold_results = []
     all_uncertainties = []
 
-    for idx, (model_name, rep_name, X_train, X_val_rep, X_test,
-              model_fn, model_type) in enumerate(experiments, 1):
+    for fold_idx, (train_idx, test_idx) in enumerate(gkf.split(smiles, labels, groups)):
+        print(f"\n{'─'*40}")
+        print(f"FOLD {fold_idx + 1}/{N_FOLDS}")
+        print(f"{'─'*40}")
+        print(f"  Train: {len(train_idx)}, Test: {len(test_idx)}")
 
-        print(f"\n[{idx}/{len(experiments)}] {model_name} + {rep_name}...",
-              flush=True)
+        # Split labels
+        y_train_full = labels[train_idx]
+        y_test = labels[test_idx]
 
-        # For GP subsampled datasets, need matching labels
-        if model_name == 'GP' and len(X_train) < len(train_labels):
-            # GP was subsampled; reconstruct matching labels
-            gp_n = len(X_train)
-            gp_idx = np.random.RandomState(42).choice(
-                len(train_labels), gp_n, replace=False)
-            y_train_for_exp = train_labels[gp_idx]
-        else:
-            y_train_for_exp = train_labels
+        # Carve validation from train (20% of train)
+        n_val = len(train_idx) // 5
+        val_idx_local = np.arange(n_val)
+        train_idx_local = np.arange(n_val, len(train_idx))
+        y_train = y_train_full[train_idx_local]
+        y_val = y_train_full[val_idx_local]
 
-        for strategy in strategies:
-            print(f"  Strategy: {strategy}", flush=True)
+        # Run experiments
+        for exp_idx, (model_name, rep_name, model_fn, model_type) in enumerate(experiments, 1):
+            print(f"\n  [{exp_idx}/{len(experiments)}] {model_name} + {rep_name}...", flush=True)
 
-            try:
-                if task_type == 'regression':
-                    # ── Regression experiment ─────────────────────────
+            # Get representation splits
+            X_full = reps[rep_name]
+            X_train_full = X_full[train_idx]
+            X_test = X_full[test_idx]
+            X_train = X_train_full[train_idx_local]
+            X_val = X_train_full[val_idx_local]
+
+            # Subsample for GP if needed
+            if model_name == 'GP' and len(X_train) > GP_MAX_N:
+                gp_idx = np.random.RandomState(42).choice(len(X_train), GP_MAX_N, replace=False)
+                X_train_gp = X_train[gp_idx]
+                y_train_gp = y_train[gp_idx]
+            else:
+                X_train_gp = X_train
+                y_train_gp = y_train
+
+            for strategy in STRATEGIES:
+                print(f"    Strategy: {strategy}", flush=True)
+
+                try:
                     if model_fn is not None:
-                        predictions, uncertainties = \
-                            run_regression_tree_experiment(
-                                X_train, y_train_for_exp, X_test,
-                                test_labels, model_fn, strategy,
-                                SIGMA_LEVELS)
+                        if model_name == 'GP':
+                            predictions, uncertainties = run_tree_experiment(
+                                X_train_gp, y_train_gp, X_test, y_test,
+                                model_fn, strategy, SIGMA_LEVELS)
+                        else:
+                            predictions, uncertainties = run_tree_experiment(
+                                X_train, y_train, X_test, y_test,
+                                model_fn, strategy, SIGMA_LEVELS)
                     else:
-                        predictions, uncertainties = \
-                            run_regression_neural_experiment(
-                                X_train, y_train_for_exp,
-                                X_val_rep, val_labels,
-                                X_test, test_labels,
-                                model_type, strategy, SIGMA_LEVELS)
+                        predictions, uncertainties = run_neural_experiment(
+                            X_train, y_train, X_val, y_val, X_test, y_test,
+                            model_type, strategy, SIGMA_LEVELS)
 
-                    per_sigma = compute_regression_metrics(
-                        test_labels, predictions)
+                    per_sigma = compute_metrics(y_test, predictions)
+                    per_sigma['model'] = model_name
+                    per_sigma['rep'] = rep_name
+                    per_sigma['strategy'] = strategy
+                    per_sigma['fold'] = fold_idx
+                    per_sigma['dataset'] = dataset_name
+                    all_fold_results.append(per_sigma)
 
-                else:
-                    # ── Classification experiment ─────────────────────
-                    if model_fn is not None:
-                        predictions, probabilities, uncertainties = \
-                            run_classification_tree_experiment(
-                                X_train, y_train_for_exp, X_test,
-                                test_labels, model_fn, strategy,
-                                SIGMA_LEVELS)
-                    else:
-                        predictions, probabilities, uncertainties = \
-                            run_classification_neural_experiment(
-                                X_train, y_train_for_exp,
-                                X_val_rep, val_labels,
-                                X_test, test_labels,
-                                model_type, strategy, SIGMA_LEVELS)
+                    # Save uncertainty data (legacy strategy only)
+                    if strategy == 'legacy' and uncertainties.get(0.0) is not None:
+                        unc_rows = []
+                        for sigma in SIGMA_LEVELS:
+                            for i in range(len(y_test)):
+                                unc_rows.append({
+                                    'sigma': sigma,
+                                    'sample_idx': i,
+                                    'y_true': y_test[i],
+                                    'y_pred': predictions[sigma][i],
+                                    'uncertainty': uncertainties[sigma][i],
+                                    'fold': fold_idx,
+                                })
+                        all_uncertainties.append((model_name, rep_name, pd.DataFrame(unc_rows)))
 
-                    per_sigma = compute_classification_metrics(
-                        test_labels, predictions, probabilities)
+                except Exception as e:
+                    print(f"    ERROR: {e}", flush=True)
+                    continue
 
-                per_sigma['model'] = model_name
-                per_sigma['rep'] = rep_name
-                per_sigma['strategy'] = strategy
-                per_sigma['dataset'] = dataset_name
-                all_per_sigma.append(per_sigma)
-
-                # Save per-experiment CSV
-                fname = (f"{model_name.replace('-', '')}_"
-                         f"{rep_name.replace('-', '')}_{strategy}.csv")
-                per_sigma.to_csv(results_dir / fname, index=False)
-
-                # Save uncertainty data for legacy strategy
-                if (strategy == 'legacy' and
-                        uncertainties.get(0.0) is not None):
-                    unc_rows = []
-                    for sigma in SIGMA_LEVELS:
-                        for i in range(len(test_labels)):
-                            unc_rows.append({
-                                'sigma': sigma,
-                                'sample_idx': i,
-                                'y_true': test_labels[i],
-                                'y_pred': (predictions[sigma][i]
-                                           if task_type == 'regression'
-                                           else probabilities[sigma][i]),
-                                'uncertainty': uncertainties[sigma][i],
-                            })
-                    unc_df = pd.DataFrame(unc_rows)
-                    ufname = (f"{model_name.replace('-', '')}_"
-                              f"{rep_name.replace('-', '')}"
-                              f"_uncertainty_values.csv")
-                    unc_df.to_csv(results_dir / ufname, index=False)
-                    all_uncertainties.append(
-                        (model_name, rep_name, unc_df))
-
-            except Exception as e:
-                print(f"  ERROR in {model_name}+{rep_name}+{strategy}: "
-                      f"{e}", flush=True)
-                continue
-
-    if not all_per_sigma:
+    if not all_fold_results:
         print(f"ERROR: No results for {dataset_name}")
         return pd.DataFrame()
 
-    # ── Combine and compute NDS ───────────────────────────────────────
-    combined = pd.concat(all_per_sigma, ignore_index=True)
+    # Combine results across folds
+    combined = pd.concat(all_fold_results, ignore_index=True)
     combined.to_csv(results_dir / 'all_results.csv', index=False)
 
-    # Primary metric for NDS
-    metric_col = 'r2' if task_type == 'regression' else 'auc'
-    degrade_col = 'rmse' if task_type == 'regression' else 'f1'
-
-    # Baseline threshold for "working" configurations
-    baseline_threshold = 0.5 if task_type == 'regression' else 0.6
-
+    # Aggregate across folds and compute NDS
     summary_rows = []
-    for (model, rep, strat), grp in combined.groupby(
-            ['model', 'rep', 'strategy']):
-        grp = grp.sort_values('sigma')
-        sigmas = grp['sigma'].values
-        primary = grp[metric_col].values
-        secondary = grp[degrade_col].values
+    for (model, rep, strat), grp in combined.groupby(['model', 'rep', 'strategy']):
+        # Average across folds first, then compute NDS
+        fold_avgs = grp.groupby('sigma')[['r2', 'rmse', 'mae', 'spearman']].mean().reset_index()
+        fold_avgs = fold_avgs.sort_values('sigma')
 
-        baseline_primary = primary[0]
-        baseline_secondary = secondary[0]
+        sigmas = fold_avgs['sigma'].values
+        r2_vals = fold_avgs['r2'].values
+        rmse_vals = fold_avgs['rmse'].values
 
-        sl_p, _, rv, _, _ = linregress(sigmas, primary)
-        sl_s, _, _, _, _ = linregress(sigmas, secondary)
+        baseline_r2 = r2_vals[0]
+        baseline_rmse = rmse_vals[0]
 
-        # Compute retention at sigma=0.5 and 1.0
-        perf_at_05 = grp[grp['sigma'] == 0.5][metric_col].values
-        perf_at_10 = grp[grp['sigma'] == 1.0][metric_col].values
-        retention_05 = (perf_at_05[0] / baseline_primary
-                        if len(perf_at_05) > 0 and baseline_primary > 0
-                        else np.nan)
-        retention_10 = (perf_at_10[0] / baseline_primary
-                        if len(perf_at_10) > 0 and baseline_primary > 0
-                        else np.nan)
+        sl_r2, _, rv, _, _ = linregress(sigmas, r2_vals)
+        sl_rmse, _, _, _, _ = linregress(sigmas, rmse_vals)
+
+        # Retention at sigma=0.5 and 1.0
+        r2_at_05 = fold_avgs[fold_avgs['sigma'] == 0.5]['r2'].values
+        r2_at_10 = fold_avgs[fold_avgs['sigma'] == 1.0]['r2'].values
+        retention_05 = r2_at_05[0] / baseline_r2 if len(r2_at_05) > 0 and baseline_r2 > 0 else np.nan
+        retention_10 = r2_at_10[0] / baseline_r2 if len(r2_at_10) > 0 and baseline_r2 > 0 else np.nan
+
+        # CV std of baseline R²
+        baseline_std = grp[grp['sigma'] == 0.0]['r2'].std()
 
         summary_rows.append({
             'dataset': dataset_name,
-            'task': task_type,
             'model': model,
             'rep': rep,
             'strategy': strat,
-            f'baseline_{metric_col}': baseline_primary,
-            f'baseline_{degrade_col}': baseline_secondary,
-            f'NDS_{metric_col}': sl_p,
-            f'NDS_{degrade_col}': sl_s,
+            'baseline_r2': baseline_r2,
+            'baseline_r2_std': baseline_std,
+            'baseline_rmse': baseline_rmse,
+            'NDS_r2': sl_r2,
+            'NDS_rmse': sl_rmse,
             'retention_0.5': retention_05,
             'retention_1.0': retention_10,
             'r2_fit': rv ** 2,
@@ -1047,156 +729,38 @@ def run_dataset(dataset_name, task_type, data, results_dir):
     summary_df = pd.DataFrame(summary_rows)
     summary_df.to_csv(results_dir / 'summary.csv', index=False)
 
-    # ── Print summary ─────────────────────────────────────────────────
+    # Save uncertainty data
+    for model_name, rep_name, unc_df in all_uncertainties:
+        unc_combined = unc_df.groupby(['sigma', 'sample_idx']).agg({
+            'y_true': 'first',
+            'y_pred': 'mean',
+            'uncertainty': 'mean',
+        }).reset_index()
+        fname = f"{model_name.replace('-', '')}_{rep_name.replace('-', '')}_uncertainty_values.csv"
+        unc_combined.to_csv(results_dir / fname, index=False)
+
+    # Print summary
     print(f"\n{'─'*80}")
-    print(f"NDS SUMMARY: {dataset_name}")
+    print(f"SUMMARY: {dataset_name}")
     print(f"{'─'*80}")
-    print(f"  NDS_{metric_col}: slope of {metric_col} vs σ "
-          f"(more negative = faster degradation)")
-    print(f"  baseline_{metric_col}: performance at σ=0")
-    print(f"  retention_0.5/1.0: fraction of baseline preserved at σ=0.5/1.0")
 
-    # ── Filter to working configurations ──────────────────────────────
-    working = summary_df[summary_df[f'baseline_{metric_col}'] >= baseline_threshold]
-    failed = summary_df[summary_df[f'baseline_{metric_col}'] < baseline_threshold]
+    working = summary_df[summary_df['baseline_r2'] >= 0.3]
+    print(f"  Working configs (baseline R² >= 0.3): {len(working)}/{len(summary_df)}")
 
-    print(f"\n  Working configurations (baseline >= {baseline_threshold}): "
-          f"{len(working)}/{len(summary_df)}")
-    if len(failed) > 0:
-        print(f"  Failed configurations: {len(failed)}")
-        failed_summary = failed.groupby(['model', 'rep']).size().reset_index(name='count')
-        print(f"    By model+rep:")
-        for _, row in failed_summary.iterrows():
-            print(f"      {row['model']} + {row['rep']}: {row['count']} strategies failed")
+    if len(working) > 0:
+        print(f"\n  Top 5 most robust (highest NDS):")
+        top5 = working.nlargest(5, 'NDS_r2')
+        for _, row in top5.iterrows():
+            print(f"    {row['model']:12} + {row['rep']:20} + {row['strategy']:10}: "
+                  f"NDS={row['NDS_r2']:.4f}, baseline={row['baseline_r2']:.3f}±{row['baseline_r2_std']:.3f}")
 
-    if len(working) == 0:
-        print("  WARNING: No working configurations found!")
-        return summary_df
+        print(f"\n  By representation (mean across models/strategies):")
+        rep_agg = working.groupby('rep')[['baseline_r2', 'NDS_r2', 'retention_0.5']].mean()
+        print(rep_agg.round(4).to_string())
 
-    # ── Individual configuration analysis ─────────────────────────────
-    print(f"\n{'─'*40}")
-    print(f"INDIVIDUAL CONFIGURATION ANALYSIS (baseline >= {baseline_threshold})")
-    print(f"{'─'*40}")
-
-    # Sort by robustness (NDS, least negative = most robust)
-    working_sorted = working.sort_values(f'NDS_{metric_col}', ascending=False)
-
-    print(f"\n  TOP 10 MOST ROBUST CONFIGURATIONS:")
-    print(f"  {'Model':<12} {'Rep':<20} {'Strategy':<10} "
-          f"{'Baseline':>8} {'NDS':>8} {'Ret@0.5':>8} {'Ret@1.0':>8}")
-    print(f"  {'-'*12} {'-'*20} {'-'*10} {'-'*8} {'-'*8} {'-'*8} {'-'*8}")
-    for _, row in working_sorted.head(10).iterrows():
-        print(f"  {row['model']:<12} {row['rep']:<20} {row['strategy']:<10} "
-              f"{row[f'baseline_{metric_col}']:>8.3f} {row[f'NDS_{metric_col}']:>8.4f} "
-              f"{row['retention_0.5']:>8.2%} {row['retention_1.0']:>8.2%}")
-
-    print(f"\n  BOTTOM 10 LEAST ROBUST CONFIGURATIONS:")
-    print(f"  {'Model':<12} {'Rep':<20} {'Strategy':<10} "
-          f"{'Baseline':>8} {'NDS':>8} {'Ret@0.5':>8} {'Ret@1.0':>8}")
-    print(f"  {'-'*12} {'-'*20} {'-'*10} {'-'*8} {'-'*8} {'-'*8} {'-'*8}")
-    for _, row in working_sorted.tail(10).iterrows():
-        print(f"  {row['model']:<12} {row['rep']:<20} {row['strategy']:<10} "
-              f"{row[f'baseline_{metric_col}']:>8.3f} {row[f'NDS_{metric_col}']:>8.4f} "
-              f"{row['retention_0.5']:>8.2%} {row['retention_1.0']:>8.2%}")
-
-    # ── Grouped analysis (on working configs only) ────────────────────
-    print(f"\n{'─'*40}")
-    print(f"GROUPED ANALYSIS (working configs only, n={len(working)})")
-    print(f"{'─'*40}")
-
-    print(f"\n  By representation:")
-    rep_agg = working.groupby('rep').agg({
-        f'baseline_{metric_col}': ['mean', 'std', 'count'],
-        f'NDS_{metric_col}': ['mean', 'std'],
-        'retention_0.5': 'mean',
-        'retention_1.0': 'mean',
-    }).round(4)
-    rep_agg.columns = ['baseline_mean', 'baseline_std', 'n',
-                       'NDS_mean', 'NDS_std', 'ret_0.5', 'ret_1.0']
-    print(rep_agg.to_string())
-
-    print(f"\n  By model:")
-    mod_agg = working.groupby('model').agg({
-        f'baseline_{metric_col}': ['mean', 'std', 'count'],
-        f'NDS_{metric_col}': ['mean', 'std'],
-        'retention_0.5': 'mean',
-        'retention_1.0': 'mean',
-    }).round(4)
-    mod_agg.columns = ['baseline_mean', 'baseline_std', 'n',
-                       'NDS_mean', 'NDS_std', 'ret_0.5', 'ret_1.0']
-    print(mod_agg.to_string())
-
-    print(f"\n  By strategy:")
-    strat_agg = working.groupby('strategy').agg({
-        f'baseline_{metric_col}': ['mean', 'std', 'count'],
-        f'NDS_{metric_col}': ['mean', 'std'],
-        'retention_0.5': 'mean',
-        'retention_1.0': 'mean',
-    }).round(4)
-    strat_agg.columns = ['baseline_mean', 'baseline_std', 'n',
-                         'NDS_mean', 'NDS_std', 'ret_0.5', 'ret_1.0']
-    print(strat_agg.to_string())
-
-    # ── Best configuration per model ──────────────────────────────────
-    print(f"\n  Best configuration per model (highest NDS):")
-    for model in working['model'].unique():
-        model_configs = working[working['model'] == model]
-        if len(model_configs) > 0:
-            best = model_configs.loc[model_configs[f'NDS_{metric_col}'].idxmax()]
-            print(f"    {model:<12}: {best['rep']:<20} + {best['strategy']:<10} "
-                  f"(NDS={best[f'NDS_{metric_col}']:.4f}, "
-                  f"baseline={best[f'baseline_{metric_col}']:.3f})")
-
-    # ── Best configuration per representation ─────────────────────────
-    print(f"\n  Best configuration per representation (highest NDS):")
-    for rep in working['rep'].unique():
-        rep_configs = working[working['rep'] == rep]
-        if len(rep_configs) > 0:
-            best = rep_configs.loc[rep_configs[f'NDS_{metric_col}'].idxmax()]
-            print(f"    {rep:<20}: {best['model']:<12} + {best['strategy']:<10} "
-                  f"(NDS={best[f'NDS_{metric_col}']:.4f}, "
-                  f"baseline={best[f'baseline_{metric_col}']:.3f})")
-
-    # ── Uncertainty analysis ──────────────────────────────────────────
-    if all_uncertainties:
-        print(f"\n{'─'*40}")
-        print(f"UNCERTAINTY ANALYSIS")
-        print(f"{'─'*40}")
-
-        for mname, rname, udf in all_uncertainties:
-            print(f"\n  {mname} + {rname}:")
-
-            # Uncertainty-Error correlation (per sigma)
-            print(f"    Uncertainty-Error Correlation by σ:")
-            ue_corrs = []
-            for sigma in SIGMA_LEVELS:
-                sub = udf[udf['sigma'] == sigma]
-                if len(sub) > 0 and sub['uncertainty'].std() > 0:
-                    errors = np.abs(sub['y_true'] - sub['y_pred'])
-                    corr = np.corrcoef(sub['uncertainty'], errors)[0, 1]
-                    ue_corrs.append((sigma, corr))
-                    print(f"      σ={sigma:.1f}: ρ(unc, error) = {corr:.4f}")
-
-            # Uncertainty-Noise correlation (does uncertainty increase with σ?)
-            print(f"    Uncertainty-Noise Correlation:")
-            mean_uncs = []
-            for sigma in SIGMA_LEVELS:
-                sub = udf[udf['sigma'] == sigma]
-                if len(sub) > 0:
-                    mean_uncs.append((sigma, sub['uncertainty'].mean(),
-                                      sub['uncertainty'].std()))
-
-            if len(mean_uncs) >= 3:
-                sigmas = [x[0] for x in mean_uncs]
-                means = [x[1] for x in mean_uncs]
-                slope, intercept, r, _, _ = linregress(sigmas, means)
-                print(f"      Mean uncertainty vs σ: slope={slope:.4f}, r²={r**2:.4f}")
-                print(f"      (positive slope = uncertainty correctly increases with noise)")
-
-                # Print uncertainty progression
-                print(f"      σ=0.0: mean_unc={mean_uncs[0][1]:.4f} ± {mean_uncs[0][2]:.4f}")
-                print(f"      σ=0.5: mean_unc={mean_uncs[5][1]:.4f} ± {mean_uncs[5][2]:.4f}")
-                print(f"      σ=1.0: mean_unc={mean_uncs[-1][1]:.4f} ± {mean_uncs[-1][2]:.4f}")
+        print(f"\n  By model (mean across reps/strategies):")
+        mod_agg = working.groupby('model')[['baseline_r2', 'NDS_r2', 'retention_0.5']].mean()
+        print(mod_agg.round(4).to_string())
 
     return summary_df
 
@@ -1207,215 +771,91 @@ def run_dataset(dataset_name, task_type, data, results_dir):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Baseline Noise Robustness: OpenADMET + FLuID hERG')
+        description='Validation Noise Robustness: 3 Regression Datasets with Scaffold CV')
     parser.add_argument('--datasets', nargs='+',
                         choices=['logd', 'caco2', 'herg', 'all'],
                         default=['all'],
                         help='Which datasets to test (default: all)')
     parser.add_argument('--openadmet-csv', type=str, default=None,
-                        help='Path to cached OpenADMET CSV '
-                             '(skips download)')
-    parser.add_argument('--results-root', type=str, default='results',
+                        help='Path to cached OpenADMET CSV')
+    parser.add_argument('--results-root', type=str, default='results/validation',
                         help='Root directory for results')
     args = parser.parse_args()
 
-    ds_list = (['logd', 'caco2', 'herg'] if 'all' in args.datasets
-               else args.datasets)
+    ds_list = ['logd', 'caco2', 'herg'] if 'all' in args.datasets else args.datasets
 
     print("=" * 80)
-    print("Baseline Noise Robustness Experiment")
+    print("Validation Noise Robustness Experiment")
     print("=" * 80)
     print(f"  Datasets: {ds_list}")
+    print(f"  Split: {N_FOLDS}-fold scaffold CV")
     print(f"  Representations: ECFP4, PDV, SNS, MHG-GNN-pretrained")
-    print(f"  Regression strategies: {STRATEGIES_REGRESSION}")
-    print(f"  Classification strategies: {STRATEGIES_CLASSIFICATION}")
+    print(f"  Noise strategies: {STRATEGIES}")
     print(f"  Sigma levels: {SIGMA_LEVELS}")
     print(f"  Models: RF, QRF, XGBoost, GP(PDV), DNN"
-          + (", Full-BNN, LastLayer-BNN, Var-BNN" if HAS_BAYESIAN_TORCH
-             else " (BNNs skipped — no bayesian-torch)"))
+          + (", Full-BNN, LastLayer-BNN, Var-BNN" if HAS_BAYESIAN_TORCH else ""))
     print()
 
     all_summaries = []
 
-    # ── OpenADMET data (shared download) ──────────────────────────────
+    # Load OpenADMET data if needed
     openadmet_df = None
     if 'logd' in ds_list or 'caco2' in ds_list:
-        print("Downloading/loading OpenADMET-ExpansionRx dataset...")
+        print("Loading OpenADMET-ExpansionRx dataset...")
         openadmet_df = download_openadmet(csv_path=args.openadmet_csv)
         print(f"  Shape: {openadmet_df.shape}")
-        print(f"  Columns: {list(openadmet_df.columns)}")
 
-    # ── 1. OpenADMET-LogD ─────────────────────────────────────────────
+    # 1. OpenADMET-LogD
     if 'logd' in ds_list and openadmet_df is not None:
-        # Find LogD column
-        logd_col = next((c for c in openadmet_df.columns if 'LogD' in c),
-                        None)
-        if logd_col is None:
-            print("ERROR: Cannot find LogD column in OpenADMET data")
-        else:
+        logd_col = next((c for c in openadmet_df.columns if 'LogD' in c), None)
+        if logd_col:
             print(f"\nPreparing OpenADMET-LogD (column: {logd_col})...")
-            n_valid = openadmet_df[logd_col].notna().sum()
-            print(f"  {n_valid} molecules with LogD values")
-
-            data = load_openadmet_endpoint(openadmet_df, logd_col,
-                                            log_transform=False)
-            summary = run_dataset(
-                'OpenADMET-LogD', 'regression', data,
-                Path(args.results_root) / 'openadmet_logd')
+            smiles, labels = load_openadmet_endpoint(openadmet_df, logd_col, log_transform=False)
+            print(f"  {len(smiles)} molecules")
+            summary = run_dataset('OpenADMET-LogD', smiles, labels,
+                                  Path(args.results_root) / 'logd')
             all_summaries.append(summary)
+        else:
+            print("ERROR: Cannot find LogD column")
 
-    # ── 2. OpenADMET-Caco2 Efflux ────────────────────────────────────
+    # 2. OpenADMET-Caco2_Efflux
     if 'caco2' in ds_list and openadmet_df is not None:
-        # Find Caco-2 Efflux column
-        caco2_col = next(
-            (c for c in openadmet_df.columns
-             if 'Caco' in c and 'Efflux' in c), None)
-        if caco2_col is None:
-            print("ERROR: Cannot find Caco-2 Efflux column in OpenADMET data")
-        else:
+        caco2_col = next((c for c in openadmet_df.columns if 'Caco' in c and 'Efflux' in c), None)
+        if caco2_col:
             print(f"\nPreparing OpenADMET-Caco2_Efflux (column: {caco2_col})...")
-            n_valid = openadmet_df[caco2_col].notna().sum()
-            print(f"  {n_valid} molecules with Caco-2 Efflux values")
-
-            data = load_openadmet_endpoint(openadmet_df, caco2_col,
-                                            log_transform=True)
-            summary = run_dataset(
-                'OpenADMET-Caco2_Efflux', 'regression', data,
-                Path(args.results_root) / 'openadmet_caco2')
+            smiles, labels = load_openadmet_endpoint(openadmet_df, caco2_col, log_transform=True)
+            print(f"  {len(smiles)} molecules")
+            summary = run_dataset('OpenADMET-Caco2_Efflux', smiles, labels,
+                                  Path(args.results_root) / 'caco2')
             all_summaries.append(summary)
-
-    # ── 3. FLuID hERG ─────────────────────────────────────────────────
-    if 'herg' in ds_list:
-        if not HAS_HERG:
-            print("ERROR: kirby.datasets.herg not available — skipping hERG")
         else:
-            print("\nPreparing FLuID hERG...")
-            data = load_herg_fluid()
-            summary = run_dataset(
-                'hERG-FLuID', 'classification', data,
-                Path(args.results_root) / 'herg_fluid')
-            all_summaries.append(summary)
+            print("ERROR: Cannot find Caco2 Efflux column")
 
-    # ═════════════════════════════════════════════════════════════════════
-    # CROSS-DATASET COMPARISON
-    # ═════════════════════════════════════════════════════════════════════
+    # 3. ChEMBL-hERG-Ki
+    if 'herg' in ds_list:
+        print("\nPreparing ChEMBL-hERG-Ki...")
+        smiles, labels = load_chembl_herg()
+        print(f"  {len(smiles)} molecules")
+        summary = run_dataset('ChEMBL-hERG-Ki', smiles, labels,
+                              Path(args.results_root) / 'herg')
+        all_summaries.append(summary)
+
+    # Cross-dataset summary
     if len(all_summaries) > 1:
-        combined_summary = pd.concat(all_summaries, ignore_index=True)
-        combined_path = Path(args.results_root) / 'combined_summary.csv'
-        combined_summary.to_csv(combined_path, index=False)
+        combined = pd.concat(all_summaries, ignore_index=True)
+        combined.to_csv(Path(args.results_root) / 'combined_summary.csv', index=False)
 
         print("\n" + "=" * 80)
-        print("CROSS-DATASET COMPARISON")
+        print("CROSS-DATASET SUMMARY")
         print("=" * 80)
 
-        # Filter to working configurations for each dataset
-        working_configs = []
-        for ds_name, ds_grp in combined_summary.groupby('dataset'):
-            task = ds_grp['task'].iloc[0]
-            base_col = 'baseline_r2' if task == 'regression' else 'baseline_auc'
-            threshold = 0.5 if task == 'regression' else 0.6
-            working = ds_grp[ds_grp[base_col] >= threshold].copy()
-            working_configs.append(working)
-            print(f"\n  {ds_name}: {len(working)}/{len(ds_grp)} working configs "
-                  f"(baseline >= {threshold})")
-
-        if working_configs:
-            combined_working = pd.concat(working_configs, ignore_index=True)
-
-            # Find configurations that work well across multiple datasets
-            print("\n" + "-" * 40)
-            print("CONFIGURATIONS CONSISTENT ACROSS DATASETS")
-            print("-" * 40)
-
-            # Group by model+rep to find patterns
-            for (model, rep), grp in combined_working.groupby(['model', 'rep']):
-                datasets_present = grp['dataset'].unique()
-                if len(datasets_present) >= 2:
-                    print(f"\n  {model} + {rep} (works on {len(datasets_present)} datasets):")
-                    for ds in datasets_present:
-                        ds_data = grp[grp['dataset'] == ds]
-                        task = ds_data['task'].iloc[0]
-                        nds_col = 'NDS_r2' if task == 'regression' else 'NDS_auc'
-                        base_col = 'baseline_r2' if task == 'regression' else 'baseline_auc'
-                        best_strat = ds_data.loc[ds_data[nds_col].idxmax()]
-                        print(f"    {ds}: best_strategy={best_strat['strategy']}, "
-                              f"NDS={best_strat[nds_col]:.4f}, "
-                              f"baseline={best_strat[base_col]:.3f}")
-
-            # Summary: which model+rep combinations are most robust overall?
-            print("\n" + "-" * 40)
-            print("MOST ROBUST MODEL+REP COMBINATIONS (averaged across datasets)")
-            print("-" * 40)
-
-            # For each dataset, normalize NDS to [0,1] within that dataset
-            normalized_dfs = []
-            for ds_name, ds_grp in combined_working.groupby('dataset'):
-                task = ds_grp['task'].iloc[0]
-                nds_col = 'NDS_r2' if task == 'regression' else 'NDS_auc'
-                # More positive NDS = more robust
-                nds_min = ds_grp[nds_col].min()
-                nds_max = ds_grp[nds_col].max()
-                if nds_max > nds_min:
-                    ds_grp = ds_grp.copy()
-                    ds_grp['nds_normalized'] = ((ds_grp[nds_col] - nds_min) /
-                                                 (nds_max - nds_min))
-                    normalized_dfs.append(ds_grp)
-
-            if normalized_dfs:
-                all_normalized = pd.concat(normalized_dfs, ignore_index=True)
-                model_rep_scores = all_normalized.groupby(['model', 'rep']).agg({
-                    'nds_normalized': ['mean', 'std', 'count'],
-                }).round(3)
-                model_rep_scores.columns = ['mean_norm_nds', 'std', 'n_configs']
-                model_rep_scores = model_rep_scores.sort_values(
-                    'mean_norm_nds', ascending=False)
-                print("\n  Model + Rep ranked by normalized robustness:")
-                print(model_rep_scores.head(15).to_string())
-
-        # Compare representations across datasets (working configs only)
-        print("\n" + "-" * 40)
-        print("BY REPRESENTATION (working configs only)")
-        print("-" * 40)
-        for ds_name, ds_grp in combined_summary.groupby('dataset'):
-            task = ds_grp['task'].iloc[0]
-            nds_col = 'NDS_r2' if task == 'regression' else 'NDS_auc'
-            base_col = 'baseline_r2' if task == 'regression' else 'baseline_auc'
-            threshold = 0.5 if task == 'regression' else 0.6
-            working = ds_grp[ds_grp[base_col] >= threshold]
-            if len(working) == 0:
-                continue
-            print(f"\n  {ds_name} ({task}):")
-            agg = working.groupby('rep').agg({
-                base_col: ['mean', 'count'],
-                nds_col: ['mean', 'std'],
-                'retention_0.5': 'mean',
-            }).round(4)
-            agg.columns = ['baseline', 'n', 'NDS_mean', 'NDS_std', 'ret@0.5']
-            print(agg.to_string())
-
-        # Compare models across datasets (working configs only)
-        print("\n" + "-" * 40)
-        print("BY MODEL (working configs only)")
-        print("-" * 40)
-        for ds_name, ds_grp in combined_summary.groupby('dataset'):
-            task = ds_grp['task'].iloc[0]
-            nds_col = 'NDS_r2' if task == 'regression' else 'NDS_auc'
-            base_col = 'baseline_r2' if task == 'regression' else 'baseline_auc'
-            threshold = 0.5 if task == 'regression' else 0.6
-            working = ds_grp[ds_grp[base_col] >= threshold]
-            if len(working) == 0:
-                continue
-            print(f"\n  {ds_name} ({task}):")
-            agg = working.groupby('model').agg({
-                base_col: ['mean', 'count'],
-                nds_col: ['mean', 'std'],
-                'retention_0.5': 'mean',
-            }).round(4)
-            agg.columns = ['baseline', 'n', 'NDS_mean', 'NDS_std', 'ret@0.5']
-            print(agg.to_string())
+        for ds in combined['dataset'].unique():
+            ds_data = combined[combined['dataset'] == ds]
+            working = ds_data[ds_data['baseline_r2'] >= 0.3]
+            print(f"\n  {ds}: {len(working)}/{len(ds_data)} configs pass baseline >= 0.3")
 
     print("\n" + "=" * 80)
-    print("COMPLETE — Results saved to", args.results_root)
+    print(f"COMPLETE — Results saved to {args.results_root}")
     print("=" * 80)
 
 
