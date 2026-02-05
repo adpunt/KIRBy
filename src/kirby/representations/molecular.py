@@ -1435,15 +1435,78 @@ def create_chemformer(smiles_list, chemformer_dir=None, checkpoint_path=None,
     if _CHEMFORMER_MODEL is None:
         print(f"Loading Chemformer from {checkpoint_path}...")
 
-        # Load tokenizer first
-        from molbart.utils.tokenizers import ChemformerTokenizer
+        # Simple SMILES tokenizer (avoids pysmilesutils dependency)
+        import json
+        import re
+
+        class SimpleSMILESTokenizer:
+            """Minimal SMILES tokenizer compatible with Chemformer vocab."""
+
+            # SMILES tokenization regex pattern
+            PATTERN = r"(\[[^\]]+]|Br?|Cl?|N|O|S|P|F|I|b|c|n|o|s|p|\(|\)|\.|=|#|-|\+|\\\\|\/|:|~|@|\?|>|\*|\$|\%[0-9]{2}|[0-9])"
+
+            def __init__(self, vocab_path):
+                with open(vocab_path, 'r') as f:
+                    data = json.load(f)
+
+                # Vocab file has 'vocabulary' (list) and 'properties' (dict with special_tokens)
+                vocab_list = data.get('vocabulary', data)  # Handle both formats
+                if isinstance(vocab_list, list):
+                    # Build token -> id mapping from list
+                    self.token_to_id = {tok: idx for idx, tok in enumerate(vocab_list)}
+                    self.id_to_token = vocab_list
+                else:
+                    # Already a dict
+                    self.token_to_id = vocab_list
+                    self.id_to_token = {v: k for k, v in vocab_list.items()}
+
+                self.regex = re.compile(self.PATTERN)
+
+                # Get special tokens from properties if available
+                props = data.get('properties', {})
+                special_tokens = props.get('special_tokens', {})
+
+                # Chemformer uses: start='^', end='&', pad='<PAD>', unknown='?'
+                self.pad_token = special_tokens.get('pad', '<PAD>')
+                self.bos_token = special_tokens.get('start', '^')
+                self.eos_token = special_tokens.get('end', '&')
+                self.unk_token = special_tokens.get('unknown', '?')
+
+                self.pad_idx = self.token_to_id.get(self.pad_token, 0)
+                self.bos_idx = self.token_to_id.get(self.bos_token, 2)
+                self.eos_idx = self.token_to_id.get(self.eos_token, 3)
+                self.unk_idx = self.token_to_id.get(self.unk_token, 1)
+
+                self.vocab_size = len(self.token_to_id)
+
+            def tokenize(self, smiles):
+                """Tokenize SMILES string."""
+                return self.regex.findall(smiles)
+
+            def encode(self, smiles, max_len=512):
+                """Encode SMILES to token IDs with BOS/EOS."""
+                tokens = self.tokenize(smiles)
+                ids = [self.bos_idx]
+                for tok in tokens[:max_len - 2]:
+                    ids.append(self.token_to_id.get(tok, self.unk_idx))
+                ids.append(self.eos_idx)
+                return ids
+
+            def batch_encode(self, smiles_list, max_len=512):
+                """Batch encode with padding."""
+                encoded = [self.encode(s, max_len) for s in smiles_list]
+                max_seq_len = max(len(e) for e in encoded)
+                padded = []
+                for e in encoded:
+                    padded.append(e + [self.pad_idx] * (max_seq_len - len(e)))
+                return padded
 
         vocab_path = os.path.join(chemformer_dir, 'bart_vocab.json')
         if not os.path.exists(vocab_path):
             raise FileNotFoundError(f"Vocab file not found: {vocab_path}")
 
-        _CHEMFORMER_TOKENIZER = ChemformerTokenizer(filename=vocab_path)
-        vocab_size = len(_CHEMFORMER_TOKENIZER.vocabulary)
+        _CHEMFORMER_TOKENIZER = SimpleSMILESTokenizer(vocab_path)
+        vocab_size = _CHEMFORMER_TOKENIZER.vocab_size
         print(f"  Loaded tokenizer with {vocab_size} tokens")
 
         # Load checkpoint (using safe loader for PyTorch 2.6+ compatibility)
@@ -1479,7 +1542,7 @@ def create_chemformer(smiles_list, chemformer_dir=None, checkpoint_path=None,
                 d_feedforward=d_model * 4,
                 max_seq_len=512,
                 dropout=0.1,
-                pad_token_idx=_CHEMFORMER_TOKENIZER.vocabulary[_CHEMFORMER_TOKENIZER.special_tokens['pad']],
+                pad_token_idx=_CHEMFORMER_TOKENIZER.pad_idx,
             )
 
             # Load state dict (remove 'model.' prefix if present)
@@ -1554,23 +1617,16 @@ def create_chemformer(smiles_list, chemformer_dir=None, checkpoint_path=None,
             batch = smiles_list[i:i + batch_size]
 
             if _CHEMFORMER_TOKENIZER is not None:
-                # Use Chemformer's tokenizer
-                tokens_list = _CHEMFORMER_TOKENIZER.tokenize(batch)
-                token_ids_list = _CHEMFORMER_TOKENIZER.convert_tokens_to_ids(tokens_list)
-
-                # Convert to lists if tensors
-                if hasattr(token_ids_list[0], 'tolist'):
-                    token_ids_list = [ids.tolist() for ids in token_ids_list]
-
-                # Pad to max length in batch
-                max_len = max(len(ids) for ids in token_ids_list)
-                pad_id = _CHEMFORMER_TOKENIZER.vocabulary[_CHEMFORMER_TOKENIZER.special_tokens['pad']]
+                # Use our simple tokenizer
+                encoded = [_CHEMFORMER_TOKENIZER.encode(s) for s in batch]
+                max_len = max(len(e) for e in encoded)
+                pad_id = _CHEMFORMER_TOKENIZER.pad_idx
 
                 padded_ids = []
                 attention_masks = []
-                for ids in token_ids_list:
+                for ids in encoded:
                     pad_len = max_len - len(ids)
-                    padded_ids.append(list(ids) + [pad_id] * pad_len)
+                    padded_ids.append(ids + [pad_id] * pad_len)
                     attention_masks.append([1] * len(ids) + [0] * pad_len)
 
                 input_ids = torch.tensor(padded_ids, dtype=torch.long, device=device)
