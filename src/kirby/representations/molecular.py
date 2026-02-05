@@ -92,6 +92,11 @@ def get_models_dir():
 # PYTORCH COMPATIBILITY
 # =============================================================================
 
+# Store reference to original torch.load at import time (before any monkey-patching)
+import torch as _torch_module
+_original_torch_load = _torch_module.load
+
+
 def _safe_torch_load(path, map_location=None):
     """
     Load a PyTorch checkpoint with backwards compatibility.
@@ -107,17 +112,15 @@ def _safe_torch_load(path, map_location=None):
     Returns:
         Loaded checkpoint object
     """
-    import torch
-
     # Check PyTorch version
-    torch_version = tuple(int(x) for x in torch.__version__.split('.')[:2])
+    torch_version = tuple(int(x) for x in _torch_module.__version__.split('.')[:2])
 
     if torch_version >= (2, 6):
         # PyTorch 2.6+: explicitly set weights_only=False for legacy checkpoints
-        return torch.load(path, map_location=map_location, weights_only=False)
+        return _original_torch_load(path, map_location=map_location, weights_only=False)
     else:
         # Older PyTorch: use default behavior
-        return torch.load(path, map_location=map_location)
+        return _original_torch_load(path, map_location=map_location)
 
 
 # =============================================================================
@@ -829,12 +832,12 @@ def create_grover(smiles_list, grover_dir=None, checkpoint_path=None,
         logger.setLevel(logging.INFO)
 
         # Patch torch.load for PyTorch 2.6+ compatibility (GROVER uses legacy checkpoint format)
-        original_torch_load = torch.load
-        torch.load = lambda *args, **kwargs: _safe_torch_load(*args, **kwargs)
+        # Use _original_torch_load to avoid recursion if _safe_torch_load is used
+        torch.load = _safe_torch_load
         try:
             _GROVER_MODEL = load_checkpoint(checkpoint_path, cuda=cuda, current_args=_GROVER_ARGS, logger=logger)
         finally:
-            torch.load = original_torch_load
+            torch.load = _original_torch_load
         _GROVER_MODEL.eval()
         print(f"  Loaded on {'cuda' if cuda else 'cpu'}")
 
