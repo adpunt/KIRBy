@@ -42,7 +42,9 @@ Model-Representation Matrix (per dataset):
   Total: 4 reps × ~8 models × 6 strategies × 3 datasets
 
 Noise:
-  Strategies: legacy, outlier, quantile, hetero, threshold, valprop (6)
+  Regression strategies: legacy, outlier, quantile, hetero, threshold, valprop (6)
+  Classification strategies: uniform, class_imbalance, binary_asymmetric,
+                             instance_noise, class_dependent, confusion_directed (6)
   Sigma levels: 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0 (11)
 
 Key output metric:
@@ -138,14 +140,7 @@ from kirby.representations.molecular import (
     create_sns,
     create_mhg_gnn
 )
-from noiseInject import NoiseInjectorRegression, calculate_noise_metrics
-
-# Try classification noise injector; fall back to our own implementation
-try:
-    from noiseInject import NoiseInjectorClassification
-    HAS_NOISE_CLASSIFICATION = True
-except ImportError:
-    HAS_NOISE_CLASSIFICATION = False
+from noiseInject import NoiseInjectorRegression, NoiseInjectorClassification, calculate_noise_metrics
 
 # hERG data loader
 try:
@@ -160,7 +155,11 @@ except ImportError:
 # CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════
 
-STRATEGIES = ['legacy', 'outlier', 'quantile', 'hetero', 'threshold', 'valprop']
+# Separate strategies for regression vs classification (different noise injectors)
+STRATEGIES_REGRESSION = ['legacy', 'outlier', 'quantile', 'hetero', 'threshold', 'valprop']
+STRATEGIES_CLASSIFICATION = ['uniform', 'class_imbalance', 'binary_asymmetric',
+                             'instance_noise', 'class_dependent', 'confusion_directed']
+
 SIGMA_LEVELS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
 GP_MAX_N = 2000  # Subsample for GP (O(n³) cost)
 CACHE_DIR = Path('data_cache')
@@ -334,94 +333,6 @@ def load_herg_fluid():
     }
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# CLASSIFICATION NOISE INJECTOR (fallback if noiseInject doesn't have one)
-# ═══════════════════════════════════════════════════════════════════════════
-
-class _ClassificationNoiseInjector:
-    """Label-flipping noise for binary classification.
-
-    Mirrors the NoiseInjectorRegression interface but operates on {0,1} labels.
-    Each strategy creates a meaningfully different flipping pattern.
-    """
-
-    def __init__(self, strategy='legacy', random_state=42):
-        self.strategy = strategy
-        self.random_state = random_state
-
-    def inject(self, labels, sigma):
-        rng = np.random.RandomState(self.random_state)
-        noisy = labels.copy().astype(float)
-        n = len(labels)
-
-        if sigma == 0.0:
-            return noisy.astype(labels.dtype)
-
-        if self.strategy == 'legacy':
-            # Symmetric uniform flip
-            flip_mask = rng.random(n) < (sigma * 0.5)
-            noisy[flip_mask] = 1.0 - noisy[flip_mask]
-
-        elif self.strategy == 'outlier':
-            # Heavier flipping on the minority class
-            pos_rate = labels.mean()
-            minority = 1 if pos_rate < 0.5 else 0
-            min_mask = labels == minority
-            maj_mask = ~min_mask
-            noisy[min_mask] = np.where(
-                rng.random(min_mask.sum()) < sigma * 0.6,
-                1.0 - noisy[min_mask], noisy[min_mask])
-            noisy[maj_mask] = np.where(
-                rng.random(maj_mask.sum()) < sigma * 0.3,
-                1.0 - noisy[maj_mask], noisy[maj_mask])
-
-        elif self.strategy == 'quantile':
-            # Flip a fixed fraction of randomly chosen labels
-            n_flip = int(n * sigma * 0.5)
-            idx = rng.permutation(n)[:n_flip]
-            noisy[idx] = 1.0 - noisy[idx]
-
-        elif self.strategy == 'hetero':
-            # Class-conditional: positives flip faster
-            pos_mask = labels == 1
-            neg_mask = ~pos_mask
-            noisy[pos_mask] = np.where(
-                rng.random(pos_mask.sum()) < sigma * 0.6,
-                0.0, noisy[pos_mask])
-            noisy[neg_mask] = np.where(
-                rng.random(neg_mask.sum()) < sigma * 0.4,
-                1.0, noisy[neg_mask])
-
-        elif self.strategy == 'threshold':
-            # No noise until sigma > 0.3, then ramps up
-            if sigma > 0.3:
-                flip_prob = (sigma - 0.3) / 0.7 * 0.5
-                flip_mask = rng.random(n) < flip_prob
-                noisy[flip_mask] = 1.0 - noisy[flip_mask]
-
-        elif self.strategy == 'valprop':
-            # Noise scaled by class prevalence
-            pos_rate = max(labels.mean(), 0.01)
-            neg_rate = 1.0 - pos_rate
-            pos_mask = labels == 1
-            neg_mask = ~pos_mask
-            noisy[pos_mask] = np.where(
-                rng.random(pos_mask.sum()) < sigma * neg_rate * 0.5,
-                0.0, noisy[pos_mask])
-            noisy[neg_mask] = np.where(
-                rng.random(neg_mask.sum()) < sigma * pos_rate * 0.5,
-                1.0, noisy[neg_mask])
-
-        return noisy.astype(labels.dtype)
-
-
-def get_classification_injector(strategy, random_state=42):
-    """Return a classification noise injector (prefer library, fall back)."""
-    if HAS_NOISE_CLASSIFICATION:
-        return NoiseInjectorClassification(strategy=strategy,
-                                           random_state=random_state)
-    return _ClassificationNoiseInjector(strategy=strategy,
-                                        random_state=random_state)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -671,7 +582,7 @@ def run_regression_neural_experiment(X_train, y_train, X_val, y_val,
 def run_classification_tree_experiment(X_train, y_train, X_test, y_test,
                                        model_fn, strategy, sigma_levels):
     """Noise robustness for a tree-based classification model."""
-    injector = get_classification_injector(strategy, random_state=42)
+    injector = NoiseInjectorClassification(strategy=strategy, random_state=42)
     predictions, probabilities, uncertainties = {}, {}, {}
 
     for sigma in sigma_levels:
@@ -698,7 +609,7 @@ def run_classification_neural_experiment(X_train, y_train, X_val, y_val,
                                           X_test, y_test,
                                           model_type, strategy, sigma_levels):
     """Noise robustness for a neural classification model."""
-    injector = get_classification_injector(strategy, random_state=42)
+    injector = NoiseInjectorClassification(strategy=strategy, random_state=42)
     predictions, probabilities, uncertainties = {}, {}, {}
 
     for sigma in sigma_levels:
@@ -969,12 +880,14 @@ def run_dataset(dataset_name, task_type, data, results_dir):
     if task_type == 'regression':
         experiments = build_regression_experiments(
             reps, train_labels, val_labels, test_labels)
+        strategies = STRATEGIES_REGRESSION
     else:
         experiments = build_classification_experiments(
             reps, train_labels, val_labels, test_labels)
+        strategies = STRATEGIES_CLASSIFICATION
 
-    print(f"\n{len(experiments)} model-rep configs × {len(STRATEGIES)} strategies "
-          f"= {len(experiments) * len(STRATEGIES)} experiment runs")
+    print(f"\n{len(experiments)} model-rep configs × {len(strategies)} strategies "
+          f"= {len(experiments) * len(strategies)} experiment runs")
 
     # ── Run experiments ───────────────────────────────────────────────
     all_per_sigma = []
@@ -996,7 +909,7 @@ def run_dataset(dataset_name, task_type, data, results_dir):
         else:
             y_train_for_exp = train_labels
 
-        for strategy in STRATEGIES:
+        for strategy in strategies:
             print(f"  Strategy: {strategy}", flush=True)
 
             try:
@@ -1314,7 +1227,8 @@ def main():
     print("=" * 80)
     print(f"  Datasets: {ds_list}")
     print(f"  Representations: ECFP4, PDV, SNS, MHG-GNN-pretrained")
-    print(f"  Noise strategies: {STRATEGIES}")
+    print(f"  Regression strategies: {STRATEGIES_REGRESSION}")
+    print(f"  Classification strategies: {STRATEGIES_CLASSIFICATION}")
     print(f"  Sigma levels: {SIGMA_LEVELS}")
     print(f"  Models: RF, QRF, XGBoost, GP(PDV), DNN"
           + (", Full-BNN, LastLayer-BNN, Var-BNN" if HAS_BAYESIAN_TORCH
