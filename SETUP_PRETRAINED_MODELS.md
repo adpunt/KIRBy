@@ -153,7 +153,7 @@ mv ~/Downloads/step=1000000.ckpt ~/kirby_models/Chemformer/models/pre-trained/co
 
 **3. Install dependencies:**
 ```bash
-pip install pytorch-lightning pysmilesutils
+pip install pytorch-lightning
 ```
 
 **4. Test:**
