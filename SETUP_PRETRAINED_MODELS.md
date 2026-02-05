@@ -1,0 +1,331 @@
+# Pretrained Model Setup
+
+KIRBy supports 16 molecular representation models. Most work automatically; a few require manual setup.
+
+## Quick Start
+
+```bash
+# Install KIRBy with chemistry dependencies
+pip install -e ".[qsar]"
+
+# For RDKit (required for all models)
+conda install -c conda-forge rdkit
+```
+
+**That's it for most models.** The table below shows what works immediately vs. what needs extra steps.
+
+---
+
+## Model Overview
+
+| Model | Dimension | Setup | Notes |
+|-------|-----------|-------|-------|
+| ECFP4 | 2048 | None | Morgan fingerprints |
+| MACCS | 167 | None | Structural keys |
+| PDV | 200 | None | Physicochemical descriptors |
+| ChemBERTa | 768 | Auto | HuggingFace download |
+| MolFormer | 768 | Auto | HuggingFace download |
+| SELFormer | 768 | Auto | HuggingFace download |
+| ChemBERT | 256 | Auto | HuggingFace download |
+| Uni-Mol | 512 | Auto | Downloads on first use |
+| MHG-GNN | 1024 | Auto | HuggingFace download |
+| SMI-TED | 768 | Auto | HuggingFace download |
+| SchNet | 128 | Auto | 3D GNN (generates conformers) |
+| mol2vec | 300 | [Manual](#mol2vec) | Download 1 file |
+| GROVER | 4800 | [Manual](#grover) | Clone repo + download weights |
+| Chemformer | 512 | [Manual](#chemformer) | Clone repo + download weights |
+| MolCLR | 512 | [Manual](#molclr) | Clone repo (weights included) |
+| GraphMVP | 300 | [Manual](#graphmvp) | Clone repo + download weights |
+
+---
+
+## Automatic Models (No Setup Required)
+
+These models download weights automatically on first use:
+
+```python
+from kirby.representations.molecular import (
+    create_ecfp4,      # Fingerprints - instant
+    create_maccs,
+    create_pdv,
+    create_chemberta,  # HuggingFace - downloads ~500MB first time
+    create_molformer,
+    create_selformer,
+    create_chembert,
+    create_unimol,     # Downloads weights automatically
+    create_mhg_gnn,
+    create_smited,
+    create_schnet,
+)
+
+# Example usage
+embeddings = create_chemberta(['CCO', 'c1ccccc1'])
+print(embeddings.shape)  # (2, 768)
+```
+
+---
+
+## Manual Setup Models
+
+### Environment Variable (Optional)
+
+Set `KIRBY_MODELS_DIR` to specify where model files are stored:
+
+```bash
+# Add to ~/.bashrc or ~/.zshrc
+export KIRBY_MODELS_DIR="$HOME/kirby_models"
+```
+
+If not set, KIRBy searches `~/kirby_models`, `~/repos`, and common locations.
+
+---
+
+### mol2vec
+
+Word2vec embeddings on molecular substructures (300d).
+
+```bash
+# Download model file
+mkdir -p ~/kirby_models
+wget -P ~/kirby_models https://github.com/samoturk/mol2vec/raw/master/examples/models/model_300dim.pkl
+```
+
+```python
+from kirby.representations.molecular import create_mol2vec
+embeddings = create_mol2vec(['CCO', 'c1ccccc1'])  # (2, 300)
+```
+
+---
+
+### GROVER
+
+Self-supervised graph transformer pretrained on 10M molecules (4800d).
+
+**1. Clone repository:**
+```bash
+cd ~/kirby_models  # or ~/repos
+git clone https://github.com/tencent-ailab/grover.git
+```
+
+**2. Download weights (browser required):**
+
+Go to: https://1drv.ms/u/s!Ak4XFI0qaGjOhdlxC3mGn0LC1NFd6g
+
+Download `grover_large.pt` and place in the grover directory:
+```bash
+mv ~/Downloads/grover_large.pt ~/kirby_models/grover/
+```
+
+**3. Install dependencies:**
+```bash
+pip install typed-argument-parser descriptastorus
+```
+
+**4. Test:**
+```python
+from kirby.representations.molecular import create_grover
+embeddings = create_grover(['CCO', 'c1ccccc1'])  # (2, 4800)
+```
+
+---
+
+### Chemformer
+
+BART transformer from AstraZeneca pretrained on SMILES (512d).
+
+**1. Clone repository:**
+```bash
+cd ~/kirby_models  # or ~/repos
+git clone https://github.com/MolecularAI/Chemformer.git
+```
+
+**2. Download weights (browser required):**
+
+Go to: https://az.box.com/s/7eci3nd9vy0xplqniitpk02rbg9q2zcq
+
+Navigate to `models/pre-trained/combined/` and download `step=1000000.ckpt`.
+
+Place it at:
+```bash
+mkdir -p ~/kirby_models/Chemformer/models/pre-trained/combined
+mv ~/Downloads/step=1000000.ckpt ~/kirby_models/Chemformer/models/pre-trained/combined/
+```
+
+**3. Install dependencies:**
+```bash
+pip install pytorch-lightning pysmilesutils
+```
+
+**4. Test:**
+```python
+from kirby.representations.molecular import create_chemformer
+embeddings = create_chemformer(['CCO', 'c1ccccc1'])  # (2, 512)
+```
+
+---
+
+### MolCLR
+
+Contrastive learning on molecular graphs (512d). Weights are included in the repo.
+
+**1. Clone repository:**
+```bash
+cd ~/kirby_models
+git clone https://github.com/yuyangw/MolCLR.git
+```
+
+**2. Install dependencies:**
+```bash
+pip install torch-geometric
+
+# torch-scatter/torch-cluster (match your PyTorch version)
+pip install torch-scatter torch-cluster -f https://data.pyg.org/whl/torch-2.2.0+cpu.html
+# For CUDA: replace +cpu with +cu118 or your CUDA version
+```
+
+**3. Test:**
+```python
+from kirby.representations.molecular import create_molclr
+embeddings = create_molclr(['CCO', 'c1ccccc1'])  # (2, 512)
+```
+
+---
+
+### GraphMVP
+
+Multi-view pretraining with 2D graphs and 3D conformers (300d).
+
+**1. Clone repository:**
+```bash
+cd ~/kirby_models
+git clone https://github.com/chao1224/GraphMVP.git
+```
+
+**2. Download weights:**
+```bash
+cd ~/kirby_models/GraphMVP
+pip install huggingface_hub
+python -c "
+from huggingface_hub import hf_hub_download
+import os
+os.makedirs('MoleculeSTM_weights/pretrained_GraphMVP/GraphMVP_C', exist_ok=True)
+hf_hub_download(
+    repo_id='chao1224/MoleculeSTM',
+    filename='pretrained_GraphMVP/GraphMVP_C/model.pth',
+    local_dir='MoleculeSTM_weights'
+)
+"
+```
+
+**3. Install dependencies:**
+```bash
+pip install torch-geometric ogb
+
+# torch-scatter/torch-cluster (match your PyTorch version)
+pip install torch-scatter torch-cluster -f https://data.pyg.org/whl/torch-2.2.0+cpu.html
+```
+
+**4. Test:**
+```python
+from kirby.representations.molecular import create_graphmvp
+embeddings = create_graphmvp(['CCO', 'c1ccccc1'])  # (2, 300)
+```
+
+---
+
+## Server/HPC Setup
+
+For copying weights to a server without browser access:
+
+**On your local machine (after downloading weights):**
+```bash
+# Replace SERVER with your server address
+scp ~/kirby_models/grover/grover_large.pt SERVER:~/kirby_models/grover/
+scp ~/kirby_models/Chemformer/models/pre-trained/combined/step=1000000.ckpt SERVER:~/kirby_models/Chemformer/models/pre-trained/combined/
+scp ~/kirby_models/model_300dim.pkl SERVER:~/kirby_models/
+```
+
+**On the server:**
+```bash
+# Clone repos
+cd ~/kirby_models
+git clone https://github.com/tencent-ailab/grover.git
+git clone https://github.com/MolecularAI/Chemformer.git
+mkdir -p Chemformer/models/pre-trained/combined
+
+# Install dependencies
+pip install typed-argument-parser descriptastorus pytorch-lightning pysmilesutils
+```
+
+---
+
+## Verification
+
+Run the verification script to check all models:
+
+```bash
+python scripts/verify_models.py
+```
+
+Or test individual models:
+
+```python
+from kirby.representations.molecular import create_chemberta
+emb = create_chemberta(['CCO'])
+print(f"ChemBERTa: {emb.shape}")  # (1, 768)
+```
+
+---
+
+## Troubleshooting
+
+### HuggingFace models slow on first run
+First use downloads 500MB-1GB of weights to `~/.cache/huggingface/`. Subsequent runs use cache.
+
+### GROVER "module not found"
+Ensure the GROVER repo contains the `grover/` subdirectory with Python code:
+```bash
+ls ~/kirby_models/grover/grover/  # Should show data/, util/, etc.
+```
+
+### torch-scatter segfault (macOS)
+MolCLR and GraphMVP may crash on macOS due to torch-scatter version mismatches. These typically work on Linux. Reinstall with matching versions:
+```bash
+pip uninstall torch-scatter torch-cluster
+pip install torch-scatter torch-cluster -f https://data.pyg.org/whl/torch-X.X.X+cpu.html
+```
+
+### CUDA out of memory
+Reduce batch size:
+```python
+create_grover(smiles, batch_size=8)
+create_chemberta(smiles, batch_size=8)
+```
+
+### Tokenizer parallelism warning
+Handled automatically by setting `TOKENIZERS_PARALLELISM=false`.
+
+---
+
+## Dependencies by Use Case
+
+```bash
+# Minimal (fingerprints only) - just need RDKit
+conda install -c conda-forge rdkit
+
+# HuggingFace transformers
+pip install torch transformers huggingface_hub selfies
+
+# Full QSAR stack
+pip install -e ".[qsar]"
+
+# GROVER
+pip install typed-argument-parser descriptastorus
+
+# Chemformer
+pip install pytorch-lightning pysmilesutils
+
+# Graph models (MolCLR, GraphMVP)
+pip install torch-geometric ogb
+pip install torch-scatter torch-cluster -f https://data.pyg.org/whl/torch-2.2.0+cpu.html
+```
