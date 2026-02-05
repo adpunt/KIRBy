@@ -1349,8 +1349,7 @@ def create_chemformer(smiles_list, chemformer_dir=None, checkpoint_path=None,
     SETUP REQUIRED:
     1. Clone Chemformer repo: git clone https://github.com/MolecularAI/Chemformer.git
     2. Download weights from: https://az.box.com/s/7eci3nd9vy0xplqniitpk02rbg9q2zcq
-    3. Install dependencies: pip install pytorch-lightning pysmilesutils
-    4. Convert checkpoint if needed (see SETUP_PRETRAINED_MODELS.md)
+    3. Install dependencies: pip install pytorch-lightning
 
     Args:
         smiles_list: List of SMILES strings
@@ -1427,14 +1426,7 @@ def create_chemformer(smiles_list, chemformer_dir=None, checkpoint_path=None,
             )
 
     # Import Chemformer modules
-    try:
-        import torch
-        from pysmilesutils.augment import SMILESAugmenter
-    except ImportError as e:
-        raise ImportError(
-            f"Failed to import required modules: {e}\n"
-            f"Install with: pip install pytorch-lightning pysmilesutils"
-        )
+    import torch
 
     if device is None:
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
