@@ -1963,7 +1963,8 @@ def create_graphmvp(smiles_list, graphmvp_dir=None, checkpoint_path=None,
             from models.molecule_gnn_model import GNN
             model = GNN(num_layer=5, emb_dim=emb_dim, JK='last',
                        drop_ratio=0, gnn_type='gin')
-            model.from_pretrained(checkpoint_path)
+            state_dict = torch.load(checkpoint_path, map_location=device)
+            model.load_state_dict(state_dict)
             model = model.to(device).eval()
             _GRAPHMVP_MODEL = model
             print(f"  Loaded on {device}")
