@@ -1960,18 +1960,63 @@ def create_graphmvp(smiles_list, graphmvp_dir=None, checkpoint_path=None,
     if _GRAPHMVP_MODEL is None:
         print("Loading GraphMVP...")
         try:
-            from models.molecule_gnn_model import GNN
-            model = GNN(num_layer=5, emb_dim=emb_dim, JK='last',
-                       drop_ratio=0, gnn_type='gin')
+            # MoleculeSTM weights use OGB-style architecture, define it inline
+            import torch.nn as nn
+            import torch.nn.functional as F
+            from torch_geometric.nn import MessagePassing, global_mean_pool
+            from torch_geometric.utils import add_self_loops
+            from ogb.graphproppred.mol_encoder import AtomEncoder, BondEncoder
+
+            class GINConv(MessagePassing):
+                def __init__(self, emb_dim):
+                    super().__init__(aggr="add")
+                    self.mlp = nn.Sequential(
+                        nn.Linear(emb_dim, 2*emb_dim),
+                        nn.BatchNorm1d(2*emb_dim),
+                        nn.ReLU(),
+                        nn.Linear(2*emb_dim, emb_dim)
+                    )
+                    self.eps = nn.Parameter(torch.zeros(1))
+                    self.bond_encoder = BondEncoder(emb_dim=emb_dim)
+
+                def forward(self, x, edge_index, edge_attr):
+                    edge_embedding = self.bond_encoder(edge_attr)
+                    out = self.mlp((1 + self.eps) * x + self.propagate(edge_index, x=x, edge_attr=edge_embedding))
+                    return out
+
+                def message(self, x_j, edge_attr):
+                    return F.relu(x_j + edge_attr)
+
+            class GraphMVP_GNN(nn.Module):
+                def __init__(self, num_layer=5, emb_dim=300, drop_ratio=0.0):
+                    super().__init__()
+                    self.num_layer = num_layer
+                    self.drop_ratio = drop_ratio
+                    self.atom_encoder = AtomEncoder(emb_dim)
+                    self.gnns = nn.ModuleList([GINConv(emb_dim) for _ in range(num_layer)])
+                    self.batch_norms = nn.ModuleList([nn.BatchNorm1d(emb_dim) for _ in range(num_layer)])
+
+                def forward(self, x, edge_index, edge_attr, batch):
+                    h = self.atom_encoder(x)
+                    for layer in range(self.num_layer):
+                        h = self.gnns[layer](h, edge_index, edge_attr)
+                        h = self.batch_norms[layer](h)
+                        if layer < self.num_layer - 1:
+                            h = F.dropout(F.relu(h), self.drop_ratio, training=self.training)
+                        else:
+                            h = F.dropout(h, self.drop_ratio, training=self.training)
+                    return global_mean_pool(h, batch)
+
+            model = GraphMVP_GNN(num_layer=5, emb_dim=emb_dim, drop_ratio=0.0)
             state_dict = torch.load(checkpoint_path, map_location=device)
             model.load_state_dict(state_dict)
             model = model.to(device).eval()
             _GRAPHMVP_MODEL = model
             print(f"  Loaded on {device}")
-        except ImportError as e:
+        except Exception as e:
             raise ImportError(
-                f"Failed to import GraphMVP models: {e}\n"
-                "Make sure GraphMVP is properly set up."
+                f"Failed to load GraphMVP model: {e}\n"
+                "Make sure dependencies are installed: pip install torch-geometric ogb"
             )
 
     # Use OGB-style atom featurization
