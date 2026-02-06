@@ -1396,6 +1396,10 @@ def create_chemformer(smiles_list, chemformer_dir=None, checkpoint_path=None,
     # Find checkpoint
     if checkpoint_path is None:
         search_paths = [
+            # Simplified weights (no pytorch_lightning dependency) - prefer these
+            os.path.join(chemformer_dir, 'chemformer_weights.pt'),
+            os.path.join(chemformer_dir, 'models', 'pre-trained', 'combined', 'chemformer_weights.pt'),
+            os.path.join(models_dir, 'chemformer_weights.pt'),
             # Box download structure: models/pre-trained/combined/
             os.path.join(chemformer_dir, 'models', 'pre-trained', 'combined', 'step=1000000.ckpt'),
             os.path.join(chemformer_dir, 'models', 'pre-trained', 'step=1000000.ckpt'),
