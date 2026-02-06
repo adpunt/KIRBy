@@ -1960,7 +1960,7 @@ def create_graphmvp(smiles_list, graphmvp_dir=None, checkpoint_path=None,
     if _GRAPHMVP_MODEL is None:
         print("Loading GraphMVP...")
         try:
-            from models.gnn import GNN
+            from models.molecule_gnn_model import GNN
             model = GNN(num_layer=5, emb_dim=emb_dim, JK='last',
                        drop_ratio=0, gnn_type='gin')
             model.from_pretrained(checkpoint_path)
