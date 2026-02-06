@@ -233,39 +233,67 @@ embeddings = create_graphmvp(['CCO', 'c1ccccc1'])  # (2, 300)
 
 ## Server/HPC Setup
 
-For copying weights to a server without browser access:
+Complete setup for a fresh server environment.
 
-**On your local machine (after downloading weights):**
+### Step 1: Install all pip dependencies
+
 ```bash
-# Replace SERVER with your server address
-scp ~/kirby_models/grover/grover_large.pt SERVER:~/kirby_models/grover/
-scp ~/kirby_models/Chemformer/chemformer_weights.pt SERVER:~/kirby_models/Chemformer/
-scp ~/kirby_models/model_300dim.pkl SERVER:~/kirby_models/
+# All dependencies in one command (copy-paste friendly)
+pip install typed-argument-parser descriptastorus torch-geometric ogb ase gensim mol2vec huggingface_hub --user
+
+# torch-scatter (check your PyTorch version first)
+python -c "import torch; print(torch.__version__)"
+# Then install matching version (examples):
+pip install torch-scatter -f https://data.pyg.org/whl/torch-2.6.0+cpu.html --user
+# For CUDA: pip install torch-scatter -f https://data.pyg.org/whl/torch-2.6.0+cu118.html --user
 ```
 
-**On the server:**
+### Step 2: Clone repos and download weights
+
 ```bash
-# Clone repos
-cd ~/kirby_models
+mkdir -p ~/kirby_models && cd ~/kirby_models
+
+# Clone all repos
 git clone https://github.com/tencent-ailab/grover.git
 git clone https://github.com/MolecularAI/Chemformer.git
 git clone https://github.com/yuyangw/MolCLR.git
 git clone https://github.com/chao1224/GraphMVP.git
 
+# Download mol2vec weights
+wget https://github.com/samoturk/mol2vec/raw/master/examples/models/model_300dim.pkl
+
 # Download GraphMVP weights
 cd GraphMVP
 python -c "from huggingface_hub import hf_hub_download; import os; os.makedirs('MoleculeSTM_weights/pretrained_GraphMVP/GraphMVP_C', exist_ok=True); hf_hub_download(repo_id='chao1224/MoleculeSTM', filename='pretrained_GraphMVP/GraphMVP_C/model.pth', local_dir='MoleculeSTM_weights')"
 cd ..
-
-# Install all dependencies
-pip install typed-argument-parser descriptastorus  # GROVER
-pip install torch-geometric ogb ase                 # GraphMVP, MolCLR
-
-# torch-scatter (check your torch version first)
-# python -c "import torch; print(torch.__version__)"
-pip install torch-scatter -f https://data.pyg.org/whl/torch-2.6.0+cpu.html
-# For CUDA: use torch-X.X.X+cu118.html or your CUDA version
 ```
+
+### Step 3: Copy weights from local machine
+
+GROVER and Chemformer weights require browser download. On your **local machine**:
+
+```bash
+# Replace SERVER with your server address (e.g., user@server.edu)
+scp ~/kirby_models/grover/grover_large.pt SERVER:~/kirby_models/grover/
+scp ~/kirby_models/Chemformer/chemformer_weights.pt SERVER:~/kirby_models/Chemformer/
+```
+
+### Complete dependency list
+
+For reference, here are all pip packages needed for all 16 models:
+
+| Package | Models | Install |
+|---------|--------|---------|
+| torch-geometric | MolCLR, GraphMVP, SchNet | `pip install torch-geometric` |
+| torch-scatter | MolCLR, GraphMVP | See version-specific install above |
+| ogb | GraphMVP | `pip install ogb` |
+| ase | GraphMVP, SchNet | `pip install ase` |
+| typed-argument-parser | GROVER | `pip install typed-argument-parser` |
+| descriptastorus | GROVER | `pip install descriptastorus` |
+| gensim, mol2vec | mol2vec | `pip install gensim mol2vec` |
+| huggingface_hub | GraphMVP weights, HF models | `pip install huggingface_hub` |
+| transformers | ChemBERTa, MolFormer, etc. | `pip install transformers` |
+| selfies | SELFormer | `pip install selfies` |
 
 ---
 

@@ -44,22 +44,22 @@ setup(
         ],
 
         # Graph neural networks (SchNet, MHG-GNN, MolCLR, GraphMVP)
-        # NOTE: torch-scatter/torch-cluster can have version conflicts
+        # NOTE: torch-scatter must be installed separately - see docs
         "gnn": [
             "torch>=2.0.0",
             "torch-geometric>=2.3.0",
-            # torch-scatter, torch-cluster installed separately - see docs
+            "ogb>=1.3.0",  # For GraphMVP OGB-style encoders
+            "ase>=3.22.0",  # For SchNet/GraphMVP 3D
+            # torch-scatter installed separately - see docs
         ],
 
-        # External repos (GROVER, Chemformer) - need manual setup
+        # External repos (GROVER) - need manual setup
         "grover": [
             "typed-argument-parser>=1.7.0",
             "descriptastorus>=2.6.0",
         ],
-        "chemformer": [
-            "pytorch-lightning>=1.9.0",
-            "pysmilesutils>=0.5.0",
-        ],
+
+        # Chemformer - uses built-in tokenizer, no pysmilesutils needed
 
         # Uni-Mol (auto-downloads weights)
         "unimol": [
