@@ -1960,12 +1960,49 @@ def create_graphmvp(smiles_list, graphmvp_dir=None, checkpoint_path=None,
     if _GRAPHMVP_MODEL is None:
         print("Loading GraphMVP...")
         try:
-            # MoleculeSTM weights use OGB-style architecture, define it inline
+            # MoleculeSTM weights use specific embedding dims - define custom encoders
             import torch.nn as nn
             import torch.nn.functional as F
             from torch_geometric.nn import MessagePassing, global_mean_pool
-            from torch_geometric.utils import add_self_loops
-            from ogb.graphproppred.mol_encoder import AtomEncoder, BondEncoder
+
+            # Custom encoders matching MoleculeSTM checkpoint dimensions exactly
+            class CustomAtomEncoder(nn.Module):
+                # Dims from checkpoint: [119, 4, 12, 12, 10, 6, 6, 2, 2]
+                def __init__(self, emb_dim):
+                    super().__init__()
+                    self.atom_embedding_list = nn.ModuleList([
+                        nn.Embedding(119, emb_dim),  # atomic_num
+                        nn.Embedding(4, emb_dim),    # chirality
+                        nn.Embedding(12, emb_dim),   # degree
+                        nn.Embedding(12, emb_dim),   # formal_charge
+                        nn.Embedding(10, emb_dim),   # num_hs
+                        nn.Embedding(6, emb_dim),    # num_radical_electrons
+                        nn.Embedding(6, emb_dim),    # hybridization
+                        nn.Embedding(2, emb_dim),    # is_aromatic
+                        nn.Embedding(2, emb_dim),    # is_in_ring
+                    ])
+
+                def forward(self, x):
+                    out = 0
+                    for i, emb in enumerate(self.atom_embedding_list):
+                        out = out + emb(x[:, i])
+                    return out
+
+            class CustomBondEncoder(nn.Module):
+                # Dims from checkpoint: [5, 6, 2]
+                def __init__(self, emb_dim):
+                    super().__init__()
+                    self.bond_embedding_list = nn.ModuleList([
+                        nn.Embedding(5, emb_dim),   # bond_type
+                        nn.Embedding(6, emb_dim),   # bond_stereo
+                        nn.Embedding(2, emb_dim),   # is_conjugated
+                    ])
+
+                def forward(self, edge_attr):
+                    out = 0
+                    for i, emb in enumerate(self.bond_embedding_list):
+                        out = out + emb(edge_attr[:, i])
+                    return out
 
             class GINConv(MessagePassing):
                 def __init__(self, emb_dim):
@@ -1977,7 +2014,7 @@ def create_graphmvp(smiles_list, graphmvp_dir=None, checkpoint_path=None,
                         nn.Linear(2*emb_dim, emb_dim)
                     )
                     self.eps = nn.Parameter(torch.zeros(1))
-                    self.bond_encoder = BondEncoder(emb_dim=emb_dim)
+                    self.bond_encoder = CustomBondEncoder(emb_dim)
 
                 def forward(self, x, edge_index, edge_attr):
                     edge_embedding = self.bond_encoder(edge_attr)
@@ -1992,7 +2029,7 @@ def create_graphmvp(smiles_list, graphmvp_dir=None, checkpoint_path=None,
                     super().__init__()
                     self.num_layer = num_layer
                     self.drop_ratio = drop_ratio
-                    self.atom_encoder = AtomEncoder(emb_dim)
+                    self.atom_encoder = CustomAtomEncoder(emb_dim)
                     self.gnns = nn.ModuleList([GINConv(emb_dim) for _ in range(num_layer)])
                     self.batch_norms = nn.ModuleList([nn.BatchNorm1d(emb_dim) for _ in range(num_layer)])
 
@@ -2016,7 +2053,7 @@ def create_graphmvp(smiles_list, graphmvp_dir=None, checkpoint_path=None,
         except Exception as e:
             raise ImportError(
                 f"Failed to load GraphMVP model: {e}\n"
-                "Make sure dependencies are installed: pip install torch-geometric ogb"
+                "Make sure dependencies are installed: pip install torch-geometric"
             )
 
     # Use OGB-style atom featurization
