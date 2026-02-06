@@ -151,9 +151,13 @@ mkdir -p ~/kirby_models/Chemformer/models/pre-trained/combined
 mv ~/Downloads/step=1000000.ckpt ~/kirby_models/Chemformer/models/pre-trained/combined/
 ```
 
-**3. Install dependencies:**
+**3. Convert to simplified format (recommended for servers):**
+
+The original checkpoint requires pytorch-lightning to unpickle, which can cause version conflicts. Convert it to a simpler format:
+
 ```bash
-pip install pytorch-lightning
+cd ~/kirby_models/Chemformer
+python -c "import torch; ckpt = torch.load('models/pre-trained/combined/step=1000000.ckpt', map_location='cpu', weights_only=False); torch.save({'state_dict': ckpt.get('state_dict', ckpt), 'hyper_parameters': ckpt.get('hyper_parameters', {})}, 'chemformer_weights.pt'); print('Saved chemformer_weights.pt')"
 ```
 
 **4. Test:**
@@ -161,6 +165,8 @@ pip install pytorch-lightning
 from kirby.representations.molecular import create_chemformer
 embeddings = create_chemformer(['CCO', 'c1ccccc1'])  # (2, 512)
 ```
+
+Note: KIRBy includes a built-in SMILES tokenizer, so pysmilesutils is NOT required.
 
 ---
 
@@ -204,25 +210,17 @@ git clone https://github.com/chao1224/GraphMVP.git
 **2. Download weights:**
 ```bash
 cd ~/kirby_models/GraphMVP
-pip install huggingface_hub
-python -c "
-from huggingface_hub import hf_hub_download
-import os
-os.makedirs('MoleculeSTM_weights/pretrained_GraphMVP/GraphMVP_C', exist_ok=True)
-hf_hub_download(
-    repo_id='chao1224/MoleculeSTM',
-    filename='pretrained_GraphMVP/GraphMVP_C/model.pth',
-    local_dir='MoleculeSTM_weights'
-)
-"
+python -c "from huggingface_hub import hf_hub_download; import os; os.makedirs('MoleculeSTM_weights/pretrained_GraphMVP/GraphMVP_C', exist_ok=True); hf_hub_download(repo_id='chao1224/MoleculeSTM', filename='pretrained_GraphMVP/GraphMVP_C/model.pth', local_dir='MoleculeSTM_weights')"
 ```
 
 **3. Install dependencies:**
 ```bash
-pip install torch-geometric ogb
+pip install torch-geometric ogb ase
 
-# torch-scatter/torch-cluster (match your PyTorch version)
-pip install torch-scatter torch-cluster -f https://data.pyg.org/whl/torch-2.2.0+cpu.html
+# torch-scatter (match your PyTorch version)
+# Check version: python -c "import torch; print(torch.__version__)"
+pip install torch-scatter -f https://data.pyg.org/whl/torch-2.2.0+cpu.html
+# For CUDA: replace +cpu with +cu118 or your CUDA version
 ```
 
 **4. Test:**
@@ -241,7 +239,7 @@ For copying weights to a server without browser access:
 ```bash
 # Replace SERVER with your server address
 scp ~/kirby_models/grover/grover_large.pt SERVER:~/kirby_models/grover/
-scp ~/kirby_models/Chemformer/models/pre-trained/combined/step=1000000.ckpt SERVER:~/kirby_models/Chemformer/models/pre-trained/combined/
+scp ~/kirby_models/Chemformer/chemformer_weights.pt SERVER:~/kirby_models/Chemformer/
 scp ~/kirby_models/model_300dim.pkl SERVER:~/kirby_models/
 ```
 
@@ -251,10 +249,22 @@ scp ~/kirby_models/model_300dim.pkl SERVER:~/kirby_models/
 cd ~/kirby_models
 git clone https://github.com/tencent-ailab/grover.git
 git clone https://github.com/MolecularAI/Chemformer.git
-mkdir -p Chemformer/models/pre-trained/combined
+git clone https://github.com/yuyangw/MolCLR.git
+git clone https://github.com/chao1224/GraphMVP.git
 
-# Install dependencies
-pip install typed-argument-parser descriptastorus pytorch-lightning pysmilesutils
+# Download GraphMVP weights
+cd GraphMVP
+python -c "from huggingface_hub import hf_hub_download; import os; os.makedirs('MoleculeSTM_weights/pretrained_GraphMVP/GraphMVP_C', exist_ok=True); hf_hub_download(repo_id='chao1224/MoleculeSTM', filename='pretrained_GraphMVP/GraphMVP_C/model.pth', local_dir='MoleculeSTM_weights')"
+cd ..
+
+# Install all dependencies
+pip install typed-argument-parser descriptastorus  # GROVER
+pip install torch-geometric ogb ase                 # GraphMVP, MolCLR
+
+# torch-scatter (check your torch version first)
+# python -c "import torch; print(torch.__version__)"
+pip install torch-scatter -f https://data.pyg.org/whl/torch-2.6.0+cpu.html
+# For CUDA: use torch-X.X.X+cu118.html or your CUDA version
 ```
 
 ---
@@ -322,10 +332,9 @@ pip install -e ".[qsar]"
 # GROVER
 pip install typed-argument-parser descriptastorus
 
-# Chemformer
-pip install pytorch-lightning pysmilesutils
+# Chemformer (no extra deps needed - uses built-in tokenizer)
 
 # Graph models (MolCLR, GraphMVP)
-pip install torch-geometric ogb
-pip install torch-scatter torch-cluster -f https://data.pyg.org/whl/torch-2.2.0+cpu.html
+pip install torch-geometric ogb ase
+pip install torch-scatter -f https://data.pyg.org/whl/torch-2.2.0+cpu.html
 ```
