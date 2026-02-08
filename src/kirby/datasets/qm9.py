@@ -26,16 +26,30 @@ def _patch_torch_load_for_pyg():
             pass
 
 
+def _load_smiles_from_sdf(data_dir):
+    """Extract SMILES from QM9 SDF file using RDKit."""
+    from rdkit import Chem
+    sdf_path = osp.join(data_dir, 'raw', 'gdb9.sdf')
+    suppl = Chem.SDMolSupplier(sdf_path, removeHs=False)
+    smiles = []
+    for mol in suppl:
+        if mol is not None:
+            smiles.append(Chem.MolToSmiles(mol))
+        else:
+            smiles.append(None)
+    return smiles
+
+
 def load_qm9(n_samples=1000, property_idx=4, data_dir='data/QM9', random_seed=42):
     """
     Load QM9 dataset and extract SMILES + labels.
-    
+
     Args:
         n_samples: Number of molecules to sample
         property_idx: Which property to predict (0-11)
         data_dir: Directory to store/load QM9 data
         random_seed: Random seed for reproducibility
-    
+
     Returns:
         dict: {'smiles': [...], 'labels': [...], 'property_name': str}
     """
@@ -43,21 +57,25 @@ def load_qm9(n_samples=1000, property_idx=4, data_dir='data/QM9', random_seed=42
         from torch_geometric.datasets import QM9
     except ImportError as e:
         raise ImportError(f"QM9 loader requires torch-geometric: {e}")
-    
+
     import os.path as osp
-    
+
     property_names = [
-        'mu', 'alpha', 'homo', 'lumo', 'gap', 'r2', 
+        'mu', 'alpha', 'homo', 'lumo', 'gap', 'r2',
         'zpve', 'U0', 'U', 'H', 'G', 'Cv'
     ]
-    
+
     # Fix PyTorch 2.6+ weights_only compatibility
     _patch_torch_load_for_pyg()
 
     print(f"Loading QM9 (property: {property_names[property_idx]})...")
 
     qm9 = QM9(root=data_dir)
-    
+
+    # Extract SMILES from SDF (PyG QM9 may not have .smiles attribute)
+    print("  Extracting SMILES from SDF...")
+    all_smiles = _load_smiles_from_sdf(data_dir)
+
     n_samples = min(n_samples, len(qm9))
     smiles_list = []
     targets = []
@@ -70,9 +88,12 @@ def load_qm9(n_samples=1000, property_idx=4, data_dir='data/QM9', random_seed=42
     for i, index in enumerate(random_indices):
         if (i + 1) % 500 == 0:
             print(f"    Progress: {i + 1}/{n_samples}")
-        
+
+        smi = all_smiles[index]
+        if smi is None:
+            continue  # Skip molecules that failed SDF parsing
         data = qm9[index]
-        smiles_list.append(data.smiles)
+        smiles_list.append(smi)
         targets.append(data.y[0, property_idx].item())
     
     targets = np.array(targets)
