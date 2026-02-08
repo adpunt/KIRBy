@@ -63,9 +63,10 @@ class AnalysisConfig:
     step_size: int = 50           # Greedy step size (increased)
     augmentation_budget: int = 50 # Features per augmentation (increased)
 
-    # Which representations to test - ALL of them
+    # Which representations to test
+    # Note: SNS removed - too similar to ECFP4 (both use Morgan substructures)
     base_reps: List[str] = field(default_factory=lambda: [
-        'ecfp4', 'maccs', 'pdv', 'sns'  # Added SNS
+        'ecfp4', 'maccs', 'pdv'
     ])
     pretrained_reps: List[str] = field(default_factory=lambda: [
         'chemberta', 'molformer', 'mol2vec'  # Added mol2vec

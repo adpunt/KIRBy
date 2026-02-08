@@ -14,6 +14,18 @@ import torch
 import os.path as osp
 
 
+def _patch_torch_load_for_pyg():
+    """Patch torch.load for PyTorch 2.6+ compatibility with torch_geometric."""
+    torch_version = tuple(int(x) for x in torch.__version__.split('.')[:2])
+    if torch_version >= (2, 6):
+        try:
+            from torch_geometric.data.data import Data
+            from torch_geometric.data.storage import GlobalStorage
+            torch.serialization.add_safe_globals([Data, GlobalStorage])
+        except (ImportError, AttributeError):
+            pass
+
+
 def load_qm9(n_samples=1000, property_idx=4, data_dir='data/QM9', random_seed=42):
     """
     Load QM9 dataset and extract SMILES + labels.
@@ -39,8 +51,11 @@ def load_qm9(n_samples=1000, property_idx=4, data_dir='data/QM9', random_seed=42
         'zpve', 'U0', 'U', 'H', 'G', 'Cv'
     ]
     
+    # Fix PyTorch 2.6+ weights_only compatibility
+    _patch_torch_load_for_pyg()
+
     print(f"Loading QM9 (property: {property_names[property_idx]})...")
-    
+
     qm9 = QM9(root=data_dir)
     
     n_samples = min(n_samples, len(qm9))
