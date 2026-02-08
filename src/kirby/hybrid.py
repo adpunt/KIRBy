@@ -2,8 +2,10 @@
 Core hybrid representation creation functions - ENHANCED with Greedy Allocation
 
 Supports multiple feature importance methods and allocation strategies:
-- Allocation methods: 'fixed' (equal per rep) or 'greedy' (adaptive)
-- Importance methods: random_forest, shap, permutation, mutual_info, etc.
+- Allocation methods: 'fixed' (equal per rep), 'greedy' (adaptive), 'performance_weighted'
+- Importance methods: random_forest, permutation, treeshap, integrated_gradients, kernelshap,
+  drop_column, xgboost_gain/weight/cover, lightgbm_gain/split, deeplift, deepliftshap,
+  gradientshap, lime, boruta
 - Augmentation strategies: 'all', 'none', 'greedy_ablation'
 
 Default configuration (from testing):
@@ -12,6 +14,11 @@ Default configuration (from testing):
 - step_size=10
 - patience=3
 - apply_filters=True (quality filters: sparsity + variance)
+
+Note on removed methods:
+- mutual_info was removed (2024-02) - univariate filter method that achieved only
+  60-68% recall vs 92-96% for RF/permutation in synthetic benchmarks. Cannot capture
+  feature interactions and has high variance with the k-NN estimator.
 """
 
 import numpy as np
@@ -132,6 +139,156 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
     return best_allocation, history, best_feature_info
 
 
+def allocate_greedy_feature(rep_dict_train, rep_dict_val, train_labels, val_labels,
+                            total_budget=100, patience=5, importance_method='random_forest'):
+    """
+    Feature-level greedy allocation.
+
+    Unlike rep-based greedy which adds chunks of features from the best rep,
+    this adds one feature at a time from whichever rep has the best next feature.
+    More precise but slower.
+
+    Args:
+        rep_dict_train: Dict of {rep_name: train_features}
+        rep_dict_val: Dict of {rep_name: val_features}
+        train_labels: Training labels
+        val_labels: Validation labels
+        total_budget: Maximum total features to select (default: 100)
+        patience: Early stopping patience (default: 5)
+        importance_method: Method for ranking features ('random_forest', 'permutation', 'shap', etc.)
+
+    Returns:
+        tuple: (allocation, history, feature_info)
+    """
+    # Use configurable importance method for ranking
+    all_importance = compute_feature_importance(
+        rep_dict_train, train_labels, method=importance_method
+    )
+
+    # Get importance ranking for each rep
+    rep_importance = {}
+    for rep_name, importances in all_importance.items():
+        # Indices sorted by importance (descending)
+        ranked_indices = np.argsort(importances)[::-1]
+        rep_importance[rep_name] = {
+            'ranked_indices': ranked_indices,
+            'scores': importances,
+            'next_idx': 0,  # Pointer to next feature to consider
+        }
+
+    # Track selected features per rep
+    selected = {rep: [] for rep in rep_dict_train.keys()}
+
+    best_val_score = -np.inf
+    best_selected = None
+    best_feature_info = None
+    steps_without_improvement = 0
+    history = []
+
+    for iteration in range(total_budget):
+        iter_best_score = -np.inf
+        iter_best_rep = None
+        iter_best_feature_idx = None
+
+        # Try adding the next best feature from each rep
+        for rep_name in rep_dict_train.keys():
+            info = rep_importance[rep_name]
+
+            # Skip if we've used all features from this rep
+            if info['next_idx'] >= len(info['ranked_indices']):
+                continue
+
+            # Get next feature to try
+            feature_idx = info['ranked_indices'][info['next_idx']]
+
+            # Build trial feature set
+            trial_selected = {r: list(s) for r, s in selected.items()}
+            trial_selected[rep_name].append(feature_idx)
+
+            # Create hybrid with trial selection
+            X_train_trial, X_val_trial = _build_from_selection(
+                rep_dict_train, rep_dict_val, trial_selected
+            )
+
+            if X_train_trial.shape[1] == 0:
+                continue
+
+            # Evaluate
+            score = _evaluate_allocation(X_train_trial, X_val_trial, train_labels, val_labels)
+
+            if score > iter_best_score:
+                iter_best_score = score
+                iter_best_rep = rep_name
+                iter_best_feature_idx = feature_idx
+
+        # No valid feature found
+        if iter_best_rep is None:
+            break
+
+        # Commit the best feature
+        selected[iter_best_rep].append(iter_best_feature_idx)
+        rep_importance[iter_best_rep]['next_idx'] += 1
+
+        # Track best overall
+        if iter_best_score > best_val_score:
+            best_val_score = iter_best_score
+            best_selected = {r: list(s) for r, s in selected.items()}
+            steps_without_improvement = 0
+        else:
+            steps_without_improvement += 1
+
+        history.append({
+            'iteration': iteration + 1,
+            'rep': iter_best_rep,
+            'feature_idx': iter_best_feature_idx,
+            'val_score': iter_best_score,
+            'allocation': {r: len(s) for r, s in selected.items()},
+        })
+
+        # Early stopping
+        if patience and steps_without_improvement >= patience:
+            break
+
+    if best_selected is None:
+        raise ValueError("Greedy feature allocation found no valid features.")
+
+    # Build final feature_info from best_selected
+    feature_info = {}
+    for rep_name, indices in best_selected.items():
+        if len(indices) == 0:
+            continue
+        indices_arr = np.array(indices)
+        scores = rep_importance[rep_name]['scores'][indices_arr]
+        feature_info[rep_name] = {
+            'selected_indices': indices_arr,
+            'importance_scores': scores,
+            'n_features': len(indices),
+        }
+
+    allocation = {r: len(s) for r, s in best_selected.items()}
+    feature_info['allocation'] = allocation
+
+    return allocation, history, feature_info
+
+
+def _build_from_selection(rep_dict_train, rep_dict_val, selected):
+    """Helper: Build train/val arrays from explicit feature selection."""
+    train_parts = []
+    val_parts = []
+
+    for rep_name, indices in selected.items():
+        if len(indices) == 0:
+            continue
+        train_parts.append(rep_dict_train[rep_name][:, indices])
+        val_parts.append(rep_dict_val[rep_name][:, indices])
+
+    if not train_parts:
+        return np.array([]).reshape(rep_dict_train[list(rep_dict_train.keys())[0]].shape[0], 0), \
+               np.array([]).reshape(rep_dict_val[list(rep_dict_val.keys())[0]].shape[0], 0)
+
+    return np.hstack(train_parts), np.hstack(val_parts)
+
+
 def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, val_labels,
                                   total_budget=100):
     """
@@ -224,6 +381,101 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
             allocation[rep_name] -= reduce_by
             excess -= reduce_by
     
+    return allocation
+
+
+def allocate_mrmr(rep_dict_train, rep_dict_val, train_labels, val_labels,
+                  total_budget=100):
+    """
+    Allocate features using minimum Redundancy Maximum Relevance (mRMR).
+
+    mRMR balances two objectives:
+    1. Maximum relevance: features should be highly correlated with the target
+    2. Minimum redundancy: features should be uncorrelated with each other
+
+    This helps select diverse, informative features and works well with
+    linear models that suffer from multicollinearity.
+
+    Reference: Peng et al. (2005) "Feature Selection Based on Mutual Information"
+
+    Args:
+        rep_dict_train: Dict of {rep_name: train_features}
+        rep_dict_val: Dict of {rep_name: val_features}
+        train_labels: Training labels
+        val_labels: Validation labels
+        total_budget: Maximum total features to select (default: 100)
+
+    Returns:
+        dict: Allocation of {rep_name: n_features}
+    """
+    from sklearn.feature_selection import mutual_info_regression, mutual_info_classif
+
+    is_classification = _is_classification_task(train_labels)
+
+    # Concatenate all features to compute global mRMR
+    all_features = []
+    feature_to_rep = []  # Maps feature index to (rep_name, local_idx)
+
+    for rep_name, X_train in rep_dict_train.items():
+        X_clean = np.clip(X_train, -1e10, 1e10)
+        X_clean = np.nan_to_num(X_clean, nan=0.0, posinf=1e10, neginf=-1e10)
+
+        for local_idx in range(X_clean.shape[1]):
+            all_features.append(X_clean[:, local_idx])
+            feature_to_rep.append((rep_name, local_idx))
+
+    X_all = np.column_stack(all_features)
+    n_total_features = X_all.shape[1]
+
+    # Compute relevance (MI with target)
+    if is_classification:
+        relevance = mutual_info_classif(X_all, train_labels, random_state=42)
+    else:
+        relevance = mutual_info_regression(X_all, train_labels, random_state=42)
+
+    # Greedy mRMR selection
+    selected_indices = []
+    remaining_indices = list(range(n_total_features))
+
+    for _ in range(min(total_budget, n_total_features)):
+        if not remaining_indices:
+            break
+
+        best_score = -np.inf
+        best_idx = None
+
+        for idx in remaining_indices:
+            # Relevance term
+            rel = relevance[idx]
+
+            # Redundancy term (mean correlation with already selected)
+            if selected_indices:
+                redundancy = 0.0
+                for sel_idx in selected_indices:
+                    # Use absolute Pearson correlation as redundancy measure
+                    corr = np.corrcoef(X_all[:, idx], X_all[:, sel_idx])[0, 1]
+                    redundancy += np.abs(corr) if np.isfinite(corr) else 0.0
+                redundancy /= len(selected_indices)
+            else:
+                redundancy = 0.0
+
+            # mRMR score = relevance - redundancy
+            score = rel - redundancy
+
+            if score > best_score:
+                best_score = score
+                best_idx = idx
+
+        if best_idx is not None:
+            selected_indices.append(best_idx)
+            remaining_indices.remove(best_idx)
+
+    # Convert selected indices to per-rep allocation
+    allocation = {rep_name: 0 for rep_name in rep_dict_train.keys()}
+    for idx in selected_indices:
+        rep_name, _ = feature_to_rep[idx]
+        allocation[rep_name] += 1
+
     return allocation
 
 
@@ -515,123 +767,1124 @@ def greedy_augmentation_ablation(
 # FEATURE IMPORTANCE COMPUTATION
 # ============================================================================
 
-def compute_feature_importance(base_reps, labels, method='random_forest', **kwargs):
+def compute_feature_importance(base_reps, labels, method='random_forest', model=None, **kwargs):
     """
     Compute feature importance scores for each representation.
-    
+
+    Can either train a model internally (for feature selection) or explain a
+    pre-trained model (for model interpretation).
+
     Args:
         base_reps: Dict with representation names as keys and feature arrays as values
-        labels: Target values (n_samples,)
+        labels: Target values (n_samples,) - used for training if model=None
         method: Method for computing importance:
-            - 'random_forest' (default)
-            - 'shap'
-            - 'fasttreeshap'
-            - 'permutation'
-            - 'mutual_info'
-            - 'interpretml'
+            Tree-based methods:
+            - 'random_forest' (default): MDI/Gini importance from RandomForest
+            - 'treeshap': TreeSHAP values (handles correlated features better)
+            - 'xgboost_gain': XGBoost gain (avg improvement per split)
+            - 'xgboost_weight': XGBoost weight (split count)
+            - 'xgboost_cover': XGBoost cover (samples covered)
+            - 'lightgbm_gain': LightGBM gain importance
+            - 'lightgbm_split': LightGBM split count
+            Neural network methods:
+            - 'integrated_gradients': Path integral attribution (Captum)
+            - 'deeplift': DeepLIFT attribution (Captum)
+            - 'deepliftshap': DeepLIFT + SHAP (Captum)
+            - 'gradientshap': Gradient + SHAP sampling (Captum)
+            Model-agnostic methods:
+            - 'permutation': Permutation importance (stable, slower)
+            - 'kernelshap': KernelSHAP (slow, any model)
+            - 'lime': LIME local approximation
+            - 'drop_column': Retrain without feature (gold standard, very slow)
+            - 'boruta': Shadow feature selection (statistically sound, slow)
+        model: Pre-trained model to explain (optional). If None, trains a new model.
+            - For tree methods: sklearn RF/XGBoost/LightGBM model
+            - For NN methods: PyTorch nn.Module
+            - For model-agnostic: any model with predict/predict_proba
+            Note: drop_column and boruta always train internally (cannot use pre-trained)
         **kwargs: Additional arguments for the importance method
-        
+            - n_estimators: Number of trees (default: 50)
+            - max_depth: Max tree depth (default: 10)
+            - random_state: Random seed (default: 42)
+            - n_repeats: Permutation repeats, for 'permutation' only (default: 5)
+            - hidden_dims: MLP hidden layers, for NN methods (default: [64, 32])
+            - epochs: Training epochs, for NN methods (default: 100)
+            - n_steps: Integration steps, for 'integrated_gradients' (default: 50)
+            - background_samples: Background data size, for SHAP methods (default: 100)
+            - nsamples: SHAP samples per instance, for 'kernelshap' (default: 'auto')
+            - max_eval_samples: Max samples to evaluate (default: 100)
+            - cv_folds: Cross-validation folds, for 'drop_column' (default: 3)
+            - boruta_max_iter: Max Boruta iterations (default: 100)
+            - boruta_perc: Boruta percentile threshold (default: 100)
+
     Returns:
         dict: Dictionary with representation names as keys and importance score arrays as values
+
+    Example:
+        # Feature selection (trains internally):
+        scores = compute_feature_importance(reps, labels, method='treeshap')
+
+        # Explain pre-trained model:
+        my_model = XGBRegressor().fit(X, y)
+        scores = compute_feature_importance(reps, labels, method='treeshap', model=my_model)
+
+    Note:
+        mutual_info was removed - it's a univariate filter method that performed
+        poorly in testing (60-68% recall vs 92-96% for RF/permutation). It cannot
+        capture feature interactions and has high variance with limited samples.
     """
     importance_scores = {}
     is_classification = _is_classification_task(labels)
-    
+
     # RANDOM FOREST (DEFAULT)
     if method == 'random_forest':
-        n_estimators = kwargs.get('n_estimators', 50)  # Match original implementation
+        n_estimators = kwargs.get('n_estimators', 50)
         max_depth = kwargs.get('max_depth', 10)
         random_state = kwargs.get('random_state', 42)
-        
+
         for rep_name, X in base_reps.items():
             if X.shape[1] == 0:
                 raise ValueError(f"Representation '{rep_name}' has 0 features")
-            
-            # Clean data (match original implementation)
+
+            # Clean and scale data
             X_clipped = np.clip(X, -1e10, 1e10)
             X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
-            
-            # Scale data (match original implementation)
             scaler = StandardScaler()
             X_scaled = scaler.fit_transform(X_clipped)
-            
-            if is_classification:
-                rf = RandomForestClassifier(
-                    n_estimators=n_estimators,
-                    max_depth=max_depth,
-                    random_state=random_state,
-                    n_jobs=-1
-                )
+
+            # Use provided model or train new one
+            if model is not None:
+                rf = model
+                # Validate model has feature_importances_
+                if not hasattr(rf, 'feature_importances_'):
+                    raise ValueError("Provided model must have feature_importances_ attribute for 'random_forest' method")
             else:
-                rf = RandomForestRegressor(
-                    n_estimators=n_estimators,
-                    max_depth=max_depth,
-                    random_state=random_state,
-                    n_jobs=-1
-                )
-            
-            rf.fit(X_scaled, labels)
+                if is_classification:
+                    rf = RandomForestClassifier(n_estimators=n_estimators, max_depth=max_depth,
+                                               random_state=random_state, n_jobs=-1)
+                else:
+                    rf = RandomForestRegressor(n_estimators=n_estimators, max_depth=max_depth,
+                                              random_state=random_state, n_jobs=-1)
+                rf.fit(X_scaled, labels)
+
             importance_scores[rep_name] = np.nan_to_num(rf.feature_importances_, nan=0.0)
     
     # PERMUTATION IMPORTANCE
     elif method == 'permutation':
         from sklearn.inspection import permutation_importance
-        
+
         n_estimators = kwargs.get('n_estimators', 50)
         max_depth = kwargs.get('max_depth', 10)
         random_state = kwargs.get('random_state', 42)
         n_repeats = kwargs.get('n_repeats', 5)
-        
+
         for rep_name, X in base_reps.items():
             if X.shape[1] == 0:
                 raise ValueError(f"Representation '{rep_name}' has 0 features")
-            
+
             # Clean data (match random_forest implementation)
             X_clipped = np.clip(X, -1e10, 1e10)
             X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
-            
+
             scaler = StandardScaler()
             X_scaled = scaler.fit_transform(X_clipped)
-            
+
+            # Use provided model or train new one
+            if model is not None:
+                perm_model = model
+            else:
+                if is_classification:
+                    perm_model = RandomForestClassifier(n_estimators=n_estimators, max_depth=max_depth,
+                                                       random_state=random_state, n_jobs=-1)
+                else:
+                    perm_model = RandomForestRegressor(n_estimators=n_estimators, max_depth=max_depth,
+                                                      random_state=random_state, n_jobs=-1)
+                perm_model.fit(X_scaled, labels)
+
+            perm = permutation_importance(perm_model, X_scaled, labels, n_repeats=n_repeats,
+                                         random_state=random_state, n_jobs=-1)
+            importance_scores[rep_name] = np.nan_to_num(perm.importances_mean, nan=0.0)
+
+    # TREESHAP - SHAP values for tree-based models
+    elif method == 'treeshap':
+        try:
+            import shap
+        except ImportError:
+            raise ImportError(
+                "TreeSHAP requires the 'shap' package. "
+                "Install with: conda install shap (recommended) or pip install shap"
+            )
+
+        n_estimators = kwargs.get('n_estimators', 50)
+        max_depth = kwargs.get('max_depth', 10)
+        random_state = kwargs.get('random_state', 42)
+
+        for rep_name, X in base_reps.items():
+            if X.shape[1] == 0:
+                raise ValueError(f"Representation '{rep_name}' has 0 features")
+
+            # Clean data
+            X_clipped = np.clip(X, -1e10, 1e10)
+            X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
+
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X_clipped)
+
+            # Use provided model or train new one
+            if model is not None:
+                tree_model = model
+            else:
+                if is_classification:
+                    tree_model = RandomForestClassifier(n_estimators=n_estimators, max_depth=max_depth,
+                                                       random_state=random_state, n_jobs=-1)
+                else:
+                    tree_model = RandomForestRegressor(n_estimators=n_estimators, max_depth=max_depth,
+                                                      random_state=random_state, n_jobs=-1)
+                tree_model.fit(X_scaled, labels)
+
+            # Compute SHAP values using TreeExplainer (fast, exact for trees)
+            explainer = shap.TreeExplainer(tree_model)
+            shap_values = explainer.shap_values(X_scaled)
+
+            # Handle different SHAP output formats:
+            # - Older SHAP: list of arrays [class0_values, class1_values, ...]
+            # - Newer SHAP (0.40+): 3D array (n_samples, n_features, n_classes)
+            # - Regression: 2D array (n_samples, n_features)
+            if is_classification:
+                if isinstance(shap_values, list):
+                    # Older SHAP format: list of arrays
+                    if len(shap_values) == 2:
+                        # Binary: use positive class
+                        shap_values = shap_values[1]
+                    else:
+                        # Multiclass: average absolute values across classes
+                        shap_values = np.mean([np.abs(sv) for sv in shap_values], axis=0)
+                elif shap_values.ndim == 3:
+                    # Newer SHAP format: (n_samples, n_features, n_classes)
+                    if shap_values.shape[2] == 2:
+                        # Binary: use positive class
+                        shap_values = shap_values[:, :, 1]
+                    else:
+                        # Multiclass: average absolute values across classes
+                        shap_values = np.mean(np.abs(shap_values), axis=2)
+
+            # Feature importance = mean absolute SHAP value per feature
+            feature_importance = np.mean(np.abs(shap_values), axis=0)
+            importance_scores[rep_name] = np.nan_to_num(feature_importance, nan=0.0)
+
+    # INTEGRATED GRADIENTS - Neural network attribution
+    elif method == 'integrated_gradients':
+        try:
+            import torch
+            import torch.nn as nn
+            from captum.attr import IntegratedGradients
+        except ImportError:
+            raise ImportError(
+                "Integrated Gradients requires 'torch' and 'captum' packages. "
+                "Install with: pip install torch captum"
+            )
+
+        hidden_dims = kwargs.get('hidden_dims', [64, 32])
+        epochs = kwargs.get('epochs', 100)
+        lr = kwargs.get('lr', 0.001)
+        n_steps = kwargs.get('n_steps', 50)
+        random_state = kwargs.get('random_state', 42)
+        n_classes_hint = kwargs.get('n_classes', None)  # For multiclass with pre-trained model
+
+        torch.manual_seed(random_state)
+
+        for rep_name, X in base_reps.items():
+            if X.shape[1] == 0:
+                raise ValueError(f"Representation '{rep_name}' has 0 features")
+
+            # Clean data
+            X_clipped = np.clip(X, -1e10, 1e10)
+            X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
+
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X_clipped)
+
+            # Convert to tensors
+            X_tensor = torch.tensor(X_scaled, dtype=torch.float32)
+
+            # Use provided model or train new one
+            if model is not None:
+                nn_model = model
+                if not isinstance(nn_model, nn.Module):
+                    raise ValueError("Provided model for integrated_gradients must be a PyTorch nn.Module")
+                nn_model.eval()
+                # Infer n_classes from model output
+                with torch.no_grad():
+                    sample_output = nn_model(X_tensor[:1])
+                    if sample_output.dim() > 1 and sample_output.shape[1] > 1:
+                        n_classes = sample_output.shape[1]
+                    else:
+                        n_classes = 2 if is_classification else 1
+            else:
+                # Build MLP
+                input_dim = X_scaled.shape[1]
+                layers = []
+                prev_dim = input_dim
+                for hidden_dim in hidden_dims:
+                    layers.extend([
+                        nn.Linear(prev_dim, hidden_dim),
+                        nn.ReLU(),
+                        nn.Dropout(0.1)
+                    ])
+                    prev_dim = hidden_dim
+
+                if is_classification:
+                    n_classes = len(np.unique(labels))
+                    if n_classes == 2:
+                        # Binary classification: single output with sigmoid
+                        layers.append(nn.Linear(prev_dim, 1))
+                        nn_model = nn.Sequential(*layers)
+                        y_tensor = torch.tensor(labels, dtype=torch.float32).unsqueeze(1)
+                        criterion = nn.BCEWithLogitsLoss()
+                    else:
+                        # Multiclass: softmax output
+                        layers.append(nn.Linear(prev_dim, n_classes))
+                        nn_model = nn.Sequential(*layers)
+                        y_tensor = torch.tensor(labels, dtype=torch.long)
+                        criterion = nn.CrossEntropyLoss()
+                else:
+                    n_classes = 1
+                    # Regression: single output
+                    layers.append(nn.Linear(prev_dim, 1))
+                    nn_model = nn.Sequential(*layers)
+                    y_tensor = torch.tensor(labels, dtype=torch.float32).unsqueeze(1)
+                    criterion = nn.MSELoss()
+
+                # Train the model
+                optimizer = torch.optim.Adam(nn_model.parameters(), lr=lr)
+                nn_model.train()
+                for epoch in range(epochs):
+                    optimizer.zero_grad()
+                    outputs = nn_model(X_tensor)
+                    loss = criterion(outputs, y_tensor)
+                    loss.backward()
+                    optimizer.step()
+
+                nn_model.eval()
+
+            # Compute Integrated Gradients
+            # For multi-output models, we need a wrapper that returns scalar
+            if is_classification and n_classes > 2:
+                # For multiclass, compute IG for each class and average
+                all_attributions = []
+                for class_idx in range(n_classes):
+                    def forward_func(x, idx=class_idx):
+                        return nn_model(x)[:, idx]
+
+                    ig = IntegratedGradients(forward_func)
+                    baseline = torch.zeros_like(X_tensor)
+                    attr = ig.attribute(X_tensor, baselines=baseline, n_steps=n_steps)
+                    all_attributions.append(attr.detach().numpy())
+
+                # Average absolute attributions across classes
+                attributions = np.mean([np.abs(a) for a in all_attributions], axis=0)
+            else:
+                # Binary classification or regression: single output
+                def forward_func(x):
+                    out = nn_model(x)
+                    return out if out.dim() == 1 else out.squeeze(-1)
+
+                ig = IntegratedGradients(forward_func)
+                baseline = torch.zeros_like(X_tensor)
+                attributions = ig.attribute(X_tensor, baselines=baseline, n_steps=n_steps)
+                attributions = np.abs(attributions.detach().numpy())
+
+            # Feature importance = mean absolute attribution per feature
+            feature_importance = np.mean(attributions, axis=0)
+            importance_scores[rep_name] = np.nan_to_num(feature_importance, nan=0.0)
+
+    # KERNELSHAP - Model-agnostic SHAP (slow but works with any model)
+    elif method == 'kernelshap':
+        try:
+            import shap
+        except ImportError:
+            raise ImportError(
+                "KernelSHAP requires the 'shap' package. "
+                "Install with: conda install shap (recommended) or pip install shap"
+            )
+
+        n_estimators = kwargs.get('n_estimators', 50)
+        max_depth = kwargs.get('max_depth', 10)
+        random_state = kwargs.get('random_state', 42)
+        background_samples = kwargs.get('background_samples', 100)
+        nsamples = kwargs.get('nsamples', 'auto')
+        max_eval_samples = kwargs.get('max_eval_samples', 100)
+
+        for rep_name, X in base_reps.items():
+            if X.shape[1] == 0:
+                raise ValueError(f"Representation '{rep_name}' has 0 features")
+
+            # Clean data
+            X_clipped = np.clip(X, -1e10, 1e10)
+            X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
+
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X_clipped)
+
+            # Use provided model or train new one
+            if model is not None:
+                kernel_model = model
+                # Determine predict function based on model type
+                if hasattr(kernel_model, 'predict_proba') and is_classification:
+                    n_classes = len(np.unique(labels))
+                    if n_classes == 2:
+                        predict_fn = lambda x, m=kernel_model: m.predict_proba(x)[:, 1]
+                    else:
+                        predict_fn = kernel_model.predict_proba
+                else:
+                    predict_fn = kernel_model.predict
+            else:
+                # Train model (using RF as the underlying model)
+                if is_classification:
+                    kernel_model = RandomForestClassifier(n_estimators=n_estimators, max_depth=max_depth,
+                                                         random_state=random_state, n_jobs=-1)
+                    kernel_model.fit(X_scaled, labels)
+
+                    # For classification, use predict_proba
+                    n_classes = len(np.unique(labels))
+                    if n_classes == 2:
+                        # Binary: use probability of positive class
+                        predict_fn = lambda x, m=kernel_model: m.predict_proba(x)[:, 1]
+                    else:
+                        # Multiclass: use full probability matrix
+                        predict_fn = kernel_model.predict_proba
+                else:
+                    kernel_model = RandomForestRegressor(n_estimators=n_estimators, max_depth=max_depth,
+                                                        random_state=random_state, n_jobs=-1)
+                    kernel_model.fit(X_scaled, labels)
+                    predict_fn = kernel_model.predict
+
+            # Create background dataset (subsample for speed)
+            n_background = min(background_samples, X_scaled.shape[0])
+            background = shap.sample(X_scaled, n_background, random_state=random_state)
+
+            # Create KernelExplainer
+            explainer = shap.KernelExplainer(predict_fn, background)
+
+            # Compute SHAP values (subsample evaluation data for speed)
+            n_eval = min(max_eval_samples, X_scaled.shape[0])
+            np.random.seed(random_state)
+            eval_idx = np.random.choice(X_scaled.shape[0], n_eval, replace=False)
+            X_eval = X_scaled[eval_idx]
+
+            # Suppress progress bar for cleaner output
+            shap_values = explainer.shap_values(X_eval, nsamples=nsamples, silent=True)
+
+            # Handle multiclass output (list of arrays)
+            if isinstance(shap_values, list):
+                # Average absolute values across classes
+                shap_values = np.mean([np.abs(sv) for sv in shap_values], axis=0)
+
+            # Feature importance = mean absolute SHAP value per feature
+            feature_importance = np.mean(np.abs(shap_values), axis=0)
+            importance_scores[rep_name] = np.nan_to_num(feature_importance, nan=0.0)
+
+    # DROP-COLUMN IMPORTANCE - Retrain without each feature (gold standard)
+    elif method == 'drop_column':
+        from sklearn.model_selection import cross_val_score
+
+        n_estimators = kwargs.get('n_estimators', 50)
+        max_depth = kwargs.get('max_depth', 10)
+        random_state = kwargs.get('random_state', 42)
+        cv_folds = kwargs.get('cv_folds', 3)
+
+        for rep_name, X in base_reps.items():
+            n_features = X.shape[1]
+            if n_features == 0:
+                raise ValueError(f"Representation '{rep_name}' has 0 features")
+
+            # Clean data
+            X_clipped = np.clip(X, -1e10, 1e10)
+            X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
+
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X_clipped)
+
+            # Select model and scoring
             if is_classification:
                 model = RandomForestClassifier(n_estimators=n_estimators, max_depth=max_depth,
                                               random_state=random_state, n_jobs=-1)
+                scoring = 'accuracy'
             else:
                 model = RandomForestRegressor(n_estimators=n_estimators, max_depth=max_depth,
                                              random_state=random_state, n_jobs=-1)
-            
-            model.fit(X_scaled, labels)
-            perm = permutation_importance(model, X_scaled, labels, n_repeats=n_repeats,
-                                         random_state=random_state, n_jobs=-1)
-            importance_scores[rep_name] = np.nan_to_num(perm.importances_mean, nan=0.0)
-    
-    # MUTUAL INFORMATION
-    elif method == 'mutual_info':
-        from sklearn.feature_selection import mutual_info_regression, mutual_info_classif
-        
+                scoring = 'r2'
+
+            # Baseline score with all features
+            baseline_score = cross_val_score(
+                model, X_scaled, labels, cv=cv_folds, scoring=scoring, n_jobs=-1
+            ).mean()
+
+            # Drop each feature and measure performance drop
+            feature_importance = np.zeros(n_features)
+
+            for i in range(n_features):
+                # Remove feature i
+                X_dropped = np.delete(X_scaled, i, axis=1)
+
+                # Handle edge case: single feature
+                if X_dropped.shape[1] == 0:
+                    # Dropping the only feature - importance is the baseline score
+                    feature_importance[i] = baseline_score
+                    continue
+
+                # Score without feature i
+                dropped_score = cross_val_score(
+                    model, X_dropped, labels, cv=cv_folds, scoring=scoring, n_jobs=-1
+                ).mean()
+
+                # Importance = drop in performance (higher = more important)
+                # Can be negative if removing feature improves performance
+                feature_importance[i] = baseline_score - dropped_score
+
+            importance_scores[rep_name] = np.nan_to_num(feature_importance, nan=0.0)
+
+    # XGBOOST GAIN - Average improvement per split
+    elif method == 'xgboost_gain':
+        try:
+            import xgboost as xgb
+        except ImportError:
+            raise ImportError("XGBoost methods require 'xgboost'. Install with: pip install xgboost")
+
+        n_estimators = kwargs.get('n_estimators', 50)
+        max_depth = kwargs.get('max_depth', 6)
         random_state = kwargs.get('random_state', 42)
-        
+
         for rep_name, X in base_reps.items():
             if X.shape[1] == 0:
                 raise ValueError(f"Representation '{rep_name}' has 0 features")
-            
-            # Clean data (match random_forest implementation)
+
             X_clipped = np.clip(X, -1e10, 1e10)
             X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
-            
+
             scaler = StandardScaler()
             X_scaled = scaler.fit_transform(X_clipped)
-            
-            if is_classification:
-                mi_scores = mutual_info_classif(X_scaled, labels, random_state=random_state)
+
+            # Use provided model or train new one
+            if model is not None:
+                xgb_model = model
+                if not hasattr(xgb_model, 'get_booster'):
+                    raise ValueError("Provided model for xgboost_gain must be an XGBoost model with get_booster()")
             else:
-                mi_scores = mutual_info_regression(X_scaled, labels, random_state=random_state)
-            
-            importance_scores[rep_name] = np.nan_to_num(mi_scores, nan=0.0)
-    
+                if is_classification:
+                    xgb_model = xgb.XGBClassifier(n_estimators=n_estimators, max_depth=max_depth,
+                                                 random_state=random_state, n_jobs=-1, verbosity=0)
+                else:
+                    xgb_model = xgb.XGBRegressor(n_estimators=n_estimators, max_depth=max_depth,
+                                                random_state=random_state, n_jobs=-1, verbosity=0)
+                xgb_model.fit(X_scaled, labels)
+
+            booster = xgb_model.get_booster()
+            scores = booster.get_score(importance_type='gain')
+
+            # Convert to array (XGBoost uses f0, f1, ... naming)
+            feature_importance = np.zeros(X_scaled.shape[1])
+            for fname, score in scores.items():
+                idx = int(fname[1:])  # 'f0' -> 0
+                feature_importance[idx] = score
+
+            importance_scores[rep_name] = np.nan_to_num(feature_importance, nan=0.0)
+
+    # XGBOOST WEIGHT - Split count
+    elif method == 'xgboost_weight':
+        try:
+            import xgboost as xgb
+        except ImportError:
+            raise ImportError("XGBoost methods require 'xgboost'. Install with: pip install xgboost")
+
+        n_estimators = kwargs.get('n_estimators', 50)
+        max_depth = kwargs.get('max_depth', 6)
+        random_state = kwargs.get('random_state', 42)
+
+        for rep_name, X in base_reps.items():
+            if X.shape[1] == 0:
+                raise ValueError(f"Representation '{rep_name}' has 0 features")
+
+            X_clipped = np.clip(X, -1e10, 1e10)
+            X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
+
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X_clipped)
+
+            # Use provided model or train new one
+            if model is not None:
+                xgb_model = model
+                if not hasattr(xgb_model, 'get_booster'):
+                    raise ValueError("Provided model for xgboost_weight must be an XGBoost model with get_booster()")
+            else:
+                if is_classification:
+                    xgb_model = xgb.XGBClassifier(n_estimators=n_estimators, max_depth=max_depth,
+                                                 random_state=random_state, n_jobs=-1, verbosity=0)
+                else:
+                    xgb_model = xgb.XGBRegressor(n_estimators=n_estimators, max_depth=max_depth,
+                                                random_state=random_state, n_jobs=-1, verbosity=0)
+                xgb_model.fit(X_scaled, labels)
+
+            booster = xgb_model.get_booster()
+            scores = booster.get_score(importance_type='weight')
+
+            feature_importance = np.zeros(X_scaled.shape[1])
+            for fname, score in scores.items():
+                idx = int(fname[1:])
+                feature_importance[idx] = score
+
+            importance_scores[rep_name] = np.nan_to_num(feature_importance, nan=0.0)
+
+    # XGBOOST COVER - Samples covered
+    elif method == 'xgboost_cover':
+        try:
+            import xgboost as xgb
+        except ImportError:
+            raise ImportError("XGBoost methods require 'xgboost'. Install with: pip install xgboost")
+
+        n_estimators = kwargs.get('n_estimators', 50)
+        max_depth = kwargs.get('max_depth', 6)
+        random_state = kwargs.get('random_state', 42)
+
+        for rep_name, X in base_reps.items():
+            if X.shape[1] == 0:
+                raise ValueError(f"Representation '{rep_name}' has 0 features")
+
+            X_clipped = np.clip(X, -1e10, 1e10)
+            X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
+
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X_clipped)
+
+            # Use provided model or train new one
+            if model is not None:
+                xgb_model = model
+                if not hasattr(xgb_model, 'get_booster'):
+                    raise ValueError("Provided model for xgboost_cover must be an XGBoost model with get_booster()")
+            else:
+                if is_classification:
+                    xgb_model = xgb.XGBClassifier(n_estimators=n_estimators, max_depth=max_depth,
+                                                 random_state=random_state, n_jobs=-1, verbosity=0)
+                else:
+                    xgb_model = xgb.XGBRegressor(n_estimators=n_estimators, max_depth=max_depth,
+                                                random_state=random_state, n_jobs=-1, verbosity=0)
+                xgb_model.fit(X_scaled, labels)
+
+            booster = xgb_model.get_booster()
+            scores = booster.get_score(importance_type='cover')
+
+            feature_importance = np.zeros(X_scaled.shape[1])
+            for fname, score in scores.items():
+                idx = int(fname[1:])
+                feature_importance[idx] = score
+
+            importance_scores[rep_name] = np.nan_to_num(feature_importance, nan=0.0)
+
+    # LIGHTGBM GAIN
+    elif method == 'lightgbm_gain':
+        try:
+            import lightgbm as lgb
+        except ImportError:
+            raise ImportError("LightGBM methods require 'lightgbm'. Install with: pip install lightgbm")
+
+        n_estimators = kwargs.get('n_estimators', 50)
+        max_depth = kwargs.get('max_depth', 6)
+        random_state = kwargs.get('random_state', 42)
+
+        for rep_name, X in base_reps.items():
+            if X.shape[1] == 0:
+                raise ValueError(f"Representation '{rep_name}' has 0 features")
+
+            X_clipped = np.clip(X, -1e10, 1e10)
+            X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
+
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X_clipped)
+
+            # Use provided model or train new one
+            if model is not None:
+                lgb_model = model
+                if not hasattr(lgb_model, 'booster_'):
+                    raise ValueError("Provided model for lightgbm_gain must be a fitted LightGBM model with booster_")
+            else:
+                if is_classification:
+                    lgb_model = lgb.LGBMClassifier(n_estimators=n_estimators, max_depth=max_depth,
+                                                  random_state=random_state, n_jobs=-1, verbosity=-1)
+                else:
+                    lgb_model = lgb.LGBMRegressor(n_estimators=n_estimators, max_depth=max_depth,
+                                                 random_state=random_state, n_jobs=-1, verbosity=-1)
+                lgb_model.fit(X_scaled, labels)
+
+            feature_importance = lgb_model.booster_.feature_importance(importance_type='gain')
+            importance_scores[rep_name] = np.nan_to_num(feature_importance.astype(float), nan=0.0)
+
+    # LIGHTGBM SPLIT
+    elif method == 'lightgbm_split':
+        try:
+            import lightgbm as lgb
+        except ImportError:
+            raise ImportError("LightGBM methods require 'lightgbm'. Install with: pip install lightgbm")
+
+        n_estimators = kwargs.get('n_estimators', 50)
+        max_depth = kwargs.get('max_depth', 6)
+        random_state = kwargs.get('random_state', 42)
+
+        for rep_name, X in base_reps.items():
+            if X.shape[1] == 0:
+                raise ValueError(f"Representation '{rep_name}' has 0 features")
+
+            X_clipped = np.clip(X, -1e10, 1e10)
+            X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
+
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X_clipped)
+
+            # Use provided model or train new one
+            if model is not None:
+                lgb_model = model
+                if not hasattr(lgb_model, 'booster_'):
+                    raise ValueError("Provided model for lightgbm_split must be a fitted LightGBM model with booster_")
+            else:
+                if is_classification:
+                    lgb_model = lgb.LGBMClassifier(n_estimators=n_estimators, max_depth=max_depth,
+                                                  random_state=random_state, n_jobs=-1, verbosity=-1)
+                else:
+                    lgb_model = lgb.LGBMRegressor(n_estimators=n_estimators, max_depth=max_depth,
+                                                 random_state=random_state, n_jobs=-1, verbosity=-1)
+                lgb_model.fit(X_scaled, labels)
+
+            feature_importance = lgb_model.booster_.feature_importance(importance_type='split')
+            importance_scores[rep_name] = np.nan_to_num(feature_importance.astype(float), nan=0.0)
+
+    # DEEPLIFT - DeepLIFT attribution
+    elif method == 'deeplift':
+        try:
+            import torch
+            import torch.nn as nn
+            from captum.attr import DeepLift
+        except ImportError:
+            raise ImportError("DeepLIFT requires 'torch' and 'captum'. Install with: pip install torch captum")
+
+        hidden_dims = kwargs.get('hidden_dims', [64, 32])
+        epochs = kwargs.get('epochs', 100)
+        lr = kwargs.get('lr', 0.001)
+        random_state = kwargs.get('random_state', 42)
+
+        torch.manual_seed(random_state)
+
+        for rep_name, X in base_reps.items():
+            if X.shape[1] == 0:
+                raise ValueError(f"Representation '{rep_name}' has 0 features")
+
+            X_clipped = np.clip(X, -1e10, 1e10)
+            X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
+
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X_clipped)
+            X_tensor = torch.tensor(X_scaled, dtype=torch.float32)
+
+            # Use provided model or train new one
+            if model is not None:
+                nn_model = model
+                if not isinstance(nn_model, nn.Module):
+                    raise ValueError("Provided model for deeplift must be a PyTorch nn.Module")
+                nn_model.eval()
+                # Infer n_classes from model output
+                with torch.no_grad():
+                    sample_output = nn_model(X_tensor[:1])
+                    if sample_output.dim() > 1 and sample_output.shape[1] > 1:
+                        n_classes = sample_output.shape[1]
+                    else:
+                        n_classes = 2 if is_classification else 1
+            else:
+                # Build MLP
+                input_dim = X_scaled.shape[1]
+                layers = []
+                prev_dim = input_dim
+                for hidden_dim in hidden_dims:
+                    layers.extend([nn.Linear(prev_dim, hidden_dim), nn.ReLU()])
+                    prev_dim = hidden_dim
+
+                if is_classification:
+                    n_classes = len(np.unique(labels))
+                    if n_classes == 2:
+                        layers.append(nn.Linear(prev_dim, 1))
+                        nn_model = nn.Sequential(*layers)
+                        y_tensor = torch.tensor(labels, dtype=torch.float32).unsqueeze(1)
+                        criterion = nn.BCEWithLogitsLoss()
+                    else:
+                        layers.append(nn.Linear(prev_dim, n_classes))
+                        nn_model = nn.Sequential(*layers)
+                        y_tensor = torch.tensor(labels, dtype=torch.long)
+                        criterion = nn.CrossEntropyLoss()
+                else:
+                    n_classes = 1
+                    layers.append(nn.Linear(prev_dim, 1))
+                    nn_model = nn.Sequential(*layers)
+                    y_tensor = torch.tensor(labels, dtype=torch.float32).unsqueeze(1)
+                    criterion = nn.MSELoss()
+
+                optimizer = torch.optim.Adam(nn_model.parameters(), lr=lr)
+                nn_model.train()
+                for _ in range(epochs):
+                    optimizer.zero_grad()
+                    loss = criterion(nn_model(X_tensor), y_tensor)
+                    loss.backward()
+                    optimizer.step()
+
+                nn_model.eval()
+
+            # DeepLIFT attribution - need to use model directly, not lambda
+            baseline = torch.zeros_like(X_tensor)
+            dl = DeepLift(nn_model)
+
+            if is_classification and n_classes > 2:
+                # Multiclass: compute attribution for each class and average
+                all_attributions = []
+                for class_idx in range(n_classes):
+                    attr = dl.attribute(X_tensor, baselines=baseline, target=class_idx)
+                    all_attributions.append(np.abs(attr.detach().numpy()))
+                attributions = np.mean(all_attributions, axis=0)
+            else:
+                # Binary classification or regression
+                attributions = dl.attribute(X_tensor, baselines=baseline)
+                attributions = np.abs(attributions.detach().numpy())
+
+            feature_importance = np.mean(attributions, axis=0)
+            importance_scores[rep_name] = np.nan_to_num(feature_importance, nan=0.0)
+
+    # DEEPLIFTSHAP - DeepLIFT + SHAP
+    elif method == 'deepliftshap':
+        try:
+            import torch
+            import torch.nn as nn
+            from captum.attr import DeepLiftShap
+        except ImportError:
+            raise ImportError("DeepLiftSHAP requires 'torch' and 'captum'. Install with: pip install torch captum")
+
+        hidden_dims = kwargs.get('hidden_dims', [64, 32])
+        epochs = kwargs.get('epochs', 100)
+        lr = kwargs.get('lr', 0.001)
+        random_state = kwargs.get('random_state', 42)
+        background_samples = kwargs.get('background_samples', 50)
+
+        torch.manual_seed(random_state)
+
+        for rep_name, X in base_reps.items():
+            if X.shape[1] == 0:
+                raise ValueError(f"Representation '{rep_name}' has 0 features")
+
+            X_clipped = np.clip(X, -1e10, 1e10)
+            X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
+
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X_clipped)
+            X_tensor = torch.tensor(X_scaled, dtype=torch.float32)
+
+            # Use provided model or train new one
+            if model is not None:
+                nn_model = model
+                if not isinstance(nn_model, nn.Module):
+                    raise ValueError("Provided model for deepliftshap must be a PyTorch nn.Module")
+                nn_model.eval()
+                # Infer n_classes from model output
+                with torch.no_grad():
+                    sample_output = nn_model(X_tensor[:1])
+                    if sample_output.dim() > 1 and sample_output.shape[1] > 1:
+                        n_classes = sample_output.shape[1]
+                    else:
+                        n_classes = 2 if is_classification else 1
+            else:
+                # Build MLP (same as deeplift)
+                input_dim = X_scaled.shape[1]
+                layers = []
+                prev_dim = input_dim
+                for hidden_dim in hidden_dims:
+                    layers.extend([nn.Linear(prev_dim, hidden_dim), nn.ReLU()])
+                    prev_dim = hidden_dim
+
+                if is_classification:
+                    n_classes = len(np.unique(labels))
+                    if n_classes == 2:
+                        layers.append(nn.Linear(prev_dim, 1))
+                        nn_model = nn.Sequential(*layers)
+                        y_tensor = torch.tensor(labels, dtype=torch.float32).unsqueeze(1)
+                        criterion = nn.BCEWithLogitsLoss()
+                    else:
+                        layers.append(nn.Linear(prev_dim, n_classes))
+                        nn_model = nn.Sequential(*layers)
+                        y_tensor = torch.tensor(labels, dtype=torch.long)
+                        criterion = nn.CrossEntropyLoss()
+                else:
+                    n_classes = 1
+                    layers.append(nn.Linear(prev_dim, 1))
+                    nn_model = nn.Sequential(*layers)
+                    y_tensor = torch.tensor(labels, dtype=torch.float32).unsqueeze(1)
+                    criterion = nn.MSELoss()
+
+                optimizer = torch.optim.Adam(nn_model.parameters(), lr=lr)
+                nn_model.train()
+                for _ in range(epochs):
+                    optimizer.zero_grad()
+                    loss = criterion(nn_model(X_tensor), y_tensor)
+                    loss.backward()
+                    optimizer.step()
+
+                nn_model.eval()
+
+            # Background samples for SHAP
+            n_bg = min(background_samples, X_tensor.shape[0])
+            np.random.seed(random_state)
+            bg_idx = np.random.choice(X_tensor.shape[0], n_bg, replace=False)
+            baseline = X_tensor[bg_idx]
+
+            dls = DeepLiftShap(nn_model)
+
+            if is_classification and n_classes > 2:
+                all_attributions = []
+                for class_idx in range(n_classes):
+                    attr = dls.attribute(X_tensor, baselines=baseline, target=class_idx)
+                    all_attributions.append(np.abs(attr.detach().numpy()))
+                attributions = np.mean(all_attributions, axis=0)
+            else:
+                # Binary classification or regression
+                attributions = dls.attribute(X_tensor, baselines=baseline)
+                attributions = np.abs(attributions.detach().numpy())
+
+            feature_importance = np.mean(attributions, axis=0)
+            importance_scores[rep_name] = np.nan_to_num(feature_importance, nan=0.0)
+
+    # GRADIENTSHAP - Gradient + SHAP sampling
+    elif method == 'gradientshap':
+        try:
+            import torch
+            import torch.nn as nn
+            from captum.attr import GradientShap
+        except ImportError:
+            raise ImportError("GradientSHAP requires 'torch' and 'captum'. Install with: pip install torch captum")
+
+        hidden_dims = kwargs.get('hidden_dims', [64, 32])
+        epochs = kwargs.get('epochs', 100)
+        lr = kwargs.get('lr', 0.001)
+        random_state = kwargs.get('random_state', 42)
+        background_samples = kwargs.get('background_samples', 50)
+        n_samples = kwargs.get('n_samples', 50)
+
+        torch.manual_seed(random_state)
+
+        for rep_name, X in base_reps.items():
+            if X.shape[1] == 0:
+                raise ValueError(f"Representation '{rep_name}' has 0 features")
+
+            X_clipped = np.clip(X, -1e10, 1e10)
+            X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
+
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X_clipped)
+            X_tensor = torch.tensor(X_scaled, dtype=torch.float32)
+
+            # Use provided model or train new one
+            if model is not None:
+                nn_model = model
+                if not isinstance(nn_model, nn.Module):
+                    raise ValueError("Provided model for gradientshap must be a PyTorch nn.Module")
+                nn_model.eval()
+                # Infer n_classes from model output
+                with torch.no_grad():
+                    sample_output = nn_model(X_tensor[:1])
+                    if sample_output.dim() > 1 and sample_output.shape[1] > 1:
+                        n_classes = sample_output.shape[1]
+                    else:
+                        n_classes = 2 if is_classification else 1
+            else:
+                # Build MLP
+                input_dim = X_scaled.shape[1]
+                layers = []
+                prev_dim = input_dim
+                for hidden_dim in hidden_dims:
+                    layers.extend([nn.Linear(prev_dim, hidden_dim), nn.ReLU()])
+                    prev_dim = hidden_dim
+
+                if is_classification:
+                    n_classes = len(np.unique(labels))
+                    if n_classes == 2:
+                        layers.append(nn.Linear(prev_dim, 1))
+                        nn_model = nn.Sequential(*layers)
+                        y_tensor = torch.tensor(labels, dtype=torch.float32).unsqueeze(1)
+                        criterion = nn.BCEWithLogitsLoss()
+                    else:
+                        layers.append(nn.Linear(prev_dim, n_classes))
+                        nn_model = nn.Sequential(*layers)
+                        y_tensor = torch.tensor(labels, dtype=torch.long)
+                        criterion = nn.CrossEntropyLoss()
+                else:
+                    n_classes = 1
+                    layers.append(nn.Linear(prev_dim, 1))
+                    nn_model = nn.Sequential(*layers)
+                    y_tensor = torch.tensor(labels, dtype=torch.float32).unsqueeze(1)
+                    criterion = nn.MSELoss()
+
+                optimizer = torch.optim.Adam(nn_model.parameters(), lr=lr)
+                nn_model.train()
+                for _ in range(epochs):
+                    optimizer.zero_grad()
+                    loss = criterion(nn_model(X_tensor), y_tensor)
+                    loss.backward()
+                    optimizer.step()
+
+                nn_model.eval()
+
+            # Background samples
+            n_bg = min(background_samples, X_tensor.shape[0])
+            np.random.seed(random_state)
+            bg_idx = np.random.choice(X_tensor.shape[0], n_bg, replace=False)
+            baseline = X_tensor[bg_idx]
+
+            if is_classification and n_classes > 2:
+                all_attributions = []
+                for class_idx in range(n_classes):
+                    gs = GradientShap(lambda x, idx=class_idx, m=nn_model: m(x)[:, idx])
+                    attr = gs.attribute(X_tensor, baselines=baseline, n_samples=n_samples,
+                                       stdevs=0.0)
+                    all_attributions.append(attr.detach().numpy())
+                attributions = np.mean([np.abs(a) for a in all_attributions], axis=0)
+            else:
+                gs = GradientShap(lambda x, m=nn_model: m(x).squeeze(-1) if m(x).dim() > 1 else m(x))
+                attributions = gs.attribute(X_tensor, baselines=baseline, n_samples=n_samples,
+                                           stdevs=0.0)
+                attributions = np.abs(attributions.detach().numpy())
+
+            feature_importance = np.mean(attributions, axis=0)
+            importance_scores[rep_name] = np.nan_to_num(feature_importance, nan=0.0)
+
+    # LIME - Local Interpretable Model-agnostic Explanations
+    elif method == 'lime':
+        try:
+            import lime
+            import lime.lime_tabular
+        except ImportError:
+            raise ImportError("LIME requires 'lime'. Install with: pip install lime")
+
+        n_estimators = kwargs.get('n_estimators', 50)
+        max_depth = kwargs.get('max_depth', 10)
+        random_state = kwargs.get('random_state', 42)
+        max_eval_samples = kwargs.get('max_eval_samples', 100)
+        num_features = kwargs.get('num_features', None)  # None = all features
+
+        for rep_name, X in base_reps.items():
+            n_features = X.shape[1]
+            if n_features == 0:
+                raise ValueError(f"Representation '{rep_name}' has 0 features")
+
+            X_clipped = np.clip(X, -1e10, 1e10)
+            X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
+
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X_clipped)
+
+            # Use provided model or train new one
+            if model is not None:
+                lime_model = model
+                # Determine predict function and mode
+                if hasattr(lime_model, 'predict_proba') and is_classification:
+                    predict_fn = lime_model.predict_proba
+                    mode = 'classification'
+                else:
+                    predict_fn = lime_model.predict
+                    mode = 'regression'
+            else:
+                # Train model
+                if is_classification:
+                    lime_model = RandomForestClassifier(n_estimators=n_estimators, max_depth=max_depth,
+                                                       random_state=random_state, n_jobs=-1)
+                    lime_model.fit(X_scaled, labels)
+                    predict_fn = lime_model.predict_proba
+                    mode = 'classification'
+                else:
+                    lime_model = RandomForestRegressor(n_estimators=n_estimators, max_depth=max_depth,
+                                                      random_state=random_state, n_jobs=-1)
+                    lime_model.fit(X_scaled, labels)
+                    predict_fn = lime_model.predict
+                    mode = 'regression'
+
+            # Create LIME explainer
+            explainer = lime.lime_tabular.LimeTabularExplainer(
+                X_scaled,
+                mode=mode,
+                random_state=random_state
+            )
+
+            # Compute explanations for subset of samples
+            n_eval = min(max_eval_samples, X_scaled.shape[0])
+            np.random.seed(random_state)
+            eval_idx = np.random.choice(X_scaled.shape[0], n_eval, replace=False)
+
+            # Aggregate feature importance across samples
+            feature_importance = np.zeros(n_features)
+            n_feats = num_features if num_features else n_features
+
+            for idx in eval_idx:
+                exp = explainer.explain_instance(
+                    X_scaled[idx], predict_fn,
+                    num_features=n_feats
+                )
+                # exp.as_list() returns [(feature_idx, weight), ...]
+                for feat_idx, weight in exp.local_exp[1 if is_classification else 0]:
+                    feature_importance[feat_idx] += abs(weight)
+
+            feature_importance /= n_eval  # Average
+            importance_scores[rep_name] = np.nan_to_num(feature_importance, nan=0.0)
+
+    # BORUTA - Shadow feature selection
+    elif method == 'boruta':
+        try:
+            from boruta import BorutaPy
+        except ImportError:
+            raise ImportError("Boruta requires 'boruta'. Install with: pip install boruta")
+
+        n_estimators = kwargs.get('n_estimators', 100)
+        max_depth = kwargs.get('max_depth', 5)
+        random_state = kwargs.get('random_state', 42)
+        max_iter = kwargs.get('boruta_max_iter', 100)
+        perc = kwargs.get('boruta_perc', 100)
+
+        for rep_name, X in base_reps.items():
+            if X.shape[1] == 0:
+                raise ValueError(f"Representation '{rep_name}' has 0 features")
+
+            X_clipped = np.clip(X, -1e10, 1e10)
+            X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
+
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X_clipped)
+
+            # Boruta uses RF internally
+            if is_classification:
+                rf = RandomForestClassifier(n_estimators=n_estimators, max_depth=max_depth,
+                                           random_state=random_state, n_jobs=-1)
+            else:
+                rf = RandomForestRegressor(n_estimators=n_estimators, max_depth=max_depth,
+                                          random_state=random_state, n_jobs=-1)
+
+            # Run Boruta
+            boruta = BorutaPy(rf, n_estimators='auto', max_iter=max_iter, perc=perc,
+                             random_state=random_state, verbose=0)
+            boruta.fit(X_scaled, np.asarray(labels))
+
+            # ranking_: 1 = confirmed important, 2+ = tentative/rejected (lower = better)
+            # Convert to importance: importance = max_rank - rank + 1
+            max_rank = boruta.ranking_.max()
+            feature_importance = (max_rank - boruta.ranking_ + 1).astype(float)
+
+            importance_scores[rep_name] = np.nan_to_num(feature_importance, nan=0.0)
+
     else:
-        raise NotImplementedError(f"Method '{method}' not yet implemented. "
-                                 f"Choose from: random_forest, permutation, mutual_info")
+        raise NotImplementedError(
+            f"Method '{method}' not implemented. Choose from: "
+            "random_forest, permutation, treeshap, integrated_gradients, kernelshap, drop_column, "
+            "xgboost_gain, xgboost_weight, xgboost_cover, lightgbm_gain, lightgbm_split, "
+            "deeplift, deepliftshap, gradientshap, lime, boruta"
+        )
     
     return importance_scores
 
@@ -832,7 +2085,9 @@ def create_hybrid(base_reps, labels,
         
         allocation_method: Method for allocating features across representations
             - 'greedy': Adaptive allocation via greedy forward selection (default)
+            - 'greedy_feature': Feature-level greedy (slower but more precise)
             - 'performance_weighted': Allocate proportional to baseline R² scores
+            - 'mrmr': Minimum Redundancy Maximum Relevance allocation
             - 'fixed': Equal allocation (n_per_rep for all)
             
         n_per_rep: Number of features per rep (for 'fixed' method, default: 100)
@@ -1058,10 +2313,66 @@ def create_hybrid(base_reps, labels,
         hybrid_features = apply_feature_selection(original_base_reps, feature_info)
         
         feature_info['allocation'] = allocation
-    
+
+    # MRMR ALLOCATION
+    elif allocation_method == 'mrmr':
+        # Run mRMR allocation
+        allocation = allocate_mrmr(
+            rep_dict_train, rep_dict_val, train_labels, val_labels,
+            total_budget=budget
+        )
+
+        # Compute importance on TRAIN split (using RF for feature selection within allocation)
+        importance_scores = compute_feature_importance(
+            rep_dict_train, train_labels, method=importance_method, **kwargs
+        )
+
+        # Select features based on train importance, then apply to full data
+        _, feature_info = concatenate_features(
+            rep_dict_train, importance_scores, allocation
+        )
+
+        # If filters were applied, remap indices
+        if filter_index_maps:
+            for rep_name in list(feature_info.keys()):
+                if rep_name in filter_index_maps and 'selected_indices' in feature_info[rep_name]:
+                    filtered_indices = feature_info[rep_name]['selected_indices']
+                    original_indices = filter_index_maps[rep_name][filtered_indices]
+                    feature_info[rep_name]['selected_indices'] = original_indices
+
+        # Apply same feature selection to original data
+        hybrid_features = apply_feature_selection(original_base_reps, feature_info)
+
+        feature_info['allocation'] = allocation
+
+    # GREEDY FEATURE ALLOCATION (feature-level, high computation)
+    elif allocation_method == 'greedy_feature':
+        # Run feature-level greedy allocation
+        allocation, history, greedy_feature_info = allocate_greedy_feature(
+            rep_dict_train, rep_dict_val, train_labels, val_labels,
+            total_budget=budget, patience=patience,
+            importance_method=importance_method
+        )
+
+        # If filters were applied, remap indices
+        if filter_index_maps:
+            for rep_name in list(greedy_feature_info.keys()):
+                if rep_name in filter_index_maps and 'selected_indices' in greedy_feature_info[rep_name]:
+                    filtered_indices = greedy_feature_info[rep_name]['selected_indices']
+                    original_indices = filter_index_maps[rep_name][filtered_indices]
+                    greedy_feature_info[rep_name]['selected_indices'] = original_indices
+
+        # Apply the SAME feature selection from greedy to full data
+        hybrid_features = apply_feature_selection(original_base_reps, greedy_feature_info)
+
+        # Build feature_info with allocation metadata
+        feature_info = greedy_feature_info.copy()
+        feature_info['allocation'] = allocation
+        feature_info['greedy_feature_history'] = history
+
     else:
         raise ValueError(f"Unknown allocation_method: {allocation_method}. "
-                        f"Choose 'greedy', 'performance_weighted', or 'fixed'")
+                        f"Choose 'greedy', 'greedy_feature', 'performance_weighted', 'fixed', or 'mrmr'")
     
     # ========================================================================
     # AUGMENTATION HANDLING
