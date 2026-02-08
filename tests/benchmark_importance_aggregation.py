@@ -142,6 +142,29 @@ def load_qm9_homolumo(n_samples: int = 5000) -> Tuple[List[str], np.ndarray]:
         )
 
 
+def filter_valid_smiles(smiles: List[str], labels: np.ndarray) -> Tuple[List[str], np.ndarray]:
+    """Filter to SMILES that RDKit can parse and fingerprint."""
+    from rdkit import Chem
+    from rdkit.Chem import rdFingerprintGenerator
+
+    generator = rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=2048)
+    valid_idx = []
+    for i, smi in enumerate(smiles):
+        try:
+            mol = Chem.MolFromSmiles(smi)
+            if mol is not None:
+                generator.GetFingerprint(mol)
+                valid_idx.append(i)
+        except Exception:
+            pass
+
+    if len(valid_idx) < len(smiles):
+        print(f"  Filtered {len(smiles) - len(valid_idx)} invalid SMILES "
+              f"({len(valid_idx)}/{len(smiles)} remain)")
+
+    return [smiles[i] for i in valid_idx], labels[valid_idx]
+
+
 def generate_representations(smiles: List[str], rep_names: List[str]) -> Dict[str, np.ndarray]:
     """Generate molecular representations."""
     from kirby.representations.molecular import (
@@ -1052,6 +1075,9 @@ def run_benchmark(config: BenchmarkConfig, output_dir: str = 'results/importance
             continue
 
         print(f"  Loaded {len(smiles)} samples")
+
+        # Filter invalid SMILES before generating representations
+        smiles, labels = filter_valid_smiles(smiles, labels)
 
         # Generate representations
         print("\nGenerating representations...")
