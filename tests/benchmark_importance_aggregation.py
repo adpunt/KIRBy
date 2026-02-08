@@ -1023,6 +1023,147 @@ def evaluate_feature_selection(
     }
 
 
+def evaluate_weighted_knn(
+    X: np.ndarray,
+    y: np.ndarray,
+    importance_scores: np.ndarray,
+    scaffold_groups: np.ndarray,
+    n_folds: int = 3,
+    k_values: List[int] = None,
+) -> Dict[str, Dict[str, float]]:
+    """
+    Evaluate importance scores as feature weights for k-NN regression.
+
+    Compares unweighted vs importance-weighted k-NN.
+
+    Returns:
+        {k: {'unweighted_r2': float, 'weighted_r2': float, 'delta': float}}
+    """
+    from sklearn.neighbors import KNeighborsRegressor
+
+    if k_values is None:
+        k_values = [5, 10, 20]
+
+    # Normalize importance to use as feature weights (sqrt for distance scaling)
+    weights = np.sqrt(np.maximum(importance_scores, 0))
+    weights = weights / (weights.sum() + 1e-10)
+
+    gkf = GroupKFold(n_splits=n_folds)
+    results = {}
+
+    for k in k_values:
+        unweighted_scores = []
+        weighted_scores = []
+
+        for train_idx, val_idx in gkf.split(X, y, groups=scaffold_groups):
+            X_train, X_val = X[train_idx], X[val_idx]
+            y_train, y_val = y[train_idx], y[val_idx]
+
+            scaler = StandardScaler()
+            X_train_s = scaler.fit_transform(X_train)
+            X_val_s = scaler.transform(X_val)
+
+            # Unweighted
+            knn = KNeighborsRegressor(n_neighbors=k)
+            knn.fit(X_train_s, y_train)
+            unweighted_scores.append(r2_score(y_val, knn.predict(X_val_s)))
+
+            # Weighted: scale features by importance
+            X_train_w = X_train_s * weights
+            X_val_w = X_val_s * weights
+            knn_w = KNeighborsRegressor(n_neighbors=k)
+            knn_w.fit(X_train_w, y_train)
+            weighted_scores.append(r2_score(y_val, knn_w.predict(X_val_w)))
+
+        uw = float(np.mean(unweighted_scores))
+        w = float(np.mean(weighted_scores))
+        results[k] = {
+            'unweighted_r2': uw,
+            'weighted_r2': w,
+            'delta': w - uw,
+        }
+
+    return results
+
+
+def evaluate_similarity_retrieval(
+    X: np.ndarray,
+    y: np.ndarray,
+    importance_scores: np.ndarray,
+    scaffold_groups: np.ndarray,
+    n_folds: int = 3,
+    k_neighbors: int = 10,
+) -> Dict[str, float]:
+    """
+    Evaluate importance scores as weights for similarity-based retrieval.
+
+    For each test molecule, find k nearest neighbors in training set.
+    Measure how well neighbor target values predict the test target.
+    Compare weighted vs unweighted distance.
+
+    Returns:
+        {'unweighted_mae': float, 'weighted_mae': float, 'delta_mae': float,
+         'unweighted_r2': float, 'weighted_r2': float, 'delta_r2': float}
+    """
+    from sklearn.neighbors import NearestNeighbors
+
+    weights = np.sqrt(np.maximum(importance_scores, 0))
+    weights = weights / (weights.sum() + 1e-10)
+
+    gkf = GroupKFold(n_splits=n_folds)
+    all_unweighted_preds = []
+    all_weighted_preds = []
+    all_true = []
+
+    for train_idx, val_idx in gkf.split(X, y, groups=scaffold_groups):
+        X_train, X_val = X[train_idx], X[val_idx]
+        y_train, y_val = y[train_idx], y[val_idx]
+
+        scaler = StandardScaler()
+        X_train_s = scaler.fit_transform(X_train)
+        X_val_s = scaler.transform(X_val)
+
+        # Unweighted: find neighbors, predict as mean of neighbor targets
+        nn_uw = NearestNeighbors(n_neighbors=k_neighbors)
+        nn_uw.fit(X_train_s)
+        dists_uw, idx_uw = nn_uw.kneighbors(X_val_s)
+        # Distance-weighted mean of neighbor targets
+        w_uw = 1.0 / (dists_uw + 1e-10)
+        preds_uw = np.average(y_train[idx_uw], axis=1, weights=w_uw)
+
+        # Weighted: scale features by importance
+        X_train_w = X_train_s * weights
+        X_val_w = X_val_s * weights
+        nn_w = NearestNeighbors(n_neighbors=k_neighbors)
+        nn_w.fit(X_train_w)
+        dists_w, idx_w = nn_w.kneighbors(X_val_w)
+        w_w = 1.0 / (dists_w + 1e-10)
+        preds_w = np.average(y_train[idx_w], axis=1, weights=w_w)
+
+        all_unweighted_preds.extend(preds_uw)
+        all_weighted_preds.extend(preds_w)
+        all_true.extend(y_val)
+
+    all_true = np.array(all_true)
+    all_unweighted_preds = np.array(all_unweighted_preds)
+    all_weighted_preds = np.array(all_weighted_preds)
+
+    from sklearn.metrics import mean_absolute_error
+    uw_mae = mean_absolute_error(all_true, all_unweighted_preds)
+    w_mae = mean_absolute_error(all_true, all_weighted_preds)
+    uw_r2 = r2_score(all_true, all_unweighted_preds)
+    w_r2 = r2_score(all_true, all_weighted_preds)
+
+    return {
+        'unweighted_mae': float(uw_mae),
+        'weighted_mae': float(w_mae),
+        'delta_mae': float(uw_mae - w_mae),  # positive = weighted is better
+        'unweighted_r2': float(uw_r2),
+        'weighted_r2': float(w_r2),
+        'delta_r2': float(w_r2 - uw_r2),  # positive = weighted is better
+    }
+
+
 # =============================================================================
 # MAIN BENCHMARK
 # =============================================================================
@@ -1439,6 +1580,72 @@ def run_benchmark(config: BenchmarkConfig, output_dir: str = 'results/importance
 
         dataset_results['allocation'] = allocation_results
 
+        # PHASE 5: Test importance scores as feature weights
+        print(f"\n{'─'*40}")
+        print("PHASE 5: Importance scores as feature weights")
+        print(f"{'─'*40}")
+
+        weighting_results = {}
+
+        # Test each successful importance method + aggregation strategies
+        # as feature weights for k-NN and similarity retrieval
+        weight_sources = {}
+
+        # Individual methods
+        for method, result in importance_results.items():
+            if result['success']:
+                weight_sources[f"single_{method}"] = result['scores']
+
+        # Top aggregation strategies (test a few representative ones)
+        agg_candidates = ['avg_all', 'avg_perturbation', 'rrf_all', 'disagreement_aware_0.7']
+        for budget in config.budgets:
+            budget_agg = aggregation_results.get(budget, {})
+            for agg_name in agg_candidates:
+                if agg_name in budget_agg and isinstance(budget_agg[agg_name], dict):
+                    scores = budget_agg[agg_name].get('importance_scores')
+                    if scores is not None:
+                        weight_sources[f"agg_{agg_name}_b{budget}"] = scores
+
+        # If no aggregation scores stored, recompute the key ones
+        if not any(k.startswith('agg_') for k in weight_sources):
+            for agg_name, agg_fn in [
+                ('avg_all', lambda: aggregate_simple_average(importance_results)),
+                ('rrf_all', lambda: aggregate_rrf(importance_results)),
+            ]:
+                try:
+                    scores = agg_fn()
+                    if len(scores) == X.shape[1]:
+                        weight_sources[f"agg_{agg_name}"] = scores
+                except Exception:
+                    pass
+
+        for source_name, scores in weight_sources.items():
+            if len(scores) != X.shape[1]:
+                continue
+            try:
+                # Weighted k-NN
+                knn_result = evaluate_weighted_knn(
+                    X, y, scores, scaffold_groups, config.n_folds)
+                # Similarity retrieval
+                sim_result = evaluate_similarity_retrieval(
+                    X, y, scores, scaffold_groups, config.n_folds)
+
+                weighting_results[source_name] = {
+                    'knn': knn_result,
+                    'similarity': sim_result,
+                }
+
+                # Print k=10 k-NN result as summary
+                k10 = knn_result.get(10, knn_result.get(5, {}))
+                delta_knn = k10.get('delta', 0)
+                delta_sim = sim_result.get('delta_r2', 0)
+                print(f"  {source_name}: kNN Δ={delta_knn:+.4f}, similarity Δ={delta_sim:+.4f}")
+
+            except Exception as e:
+                print(f"  {source_name}: FAILED - {e}")
+
+        dataset_results['weighting'] = weighting_results
+
         all_results['datasets'][dataset_name] = dataset_results
 
     # =================================================================
@@ -1526,6 +1733,21 @@ def print_benchmark_summary(results: Dict[str, Any]):
                             best_strategy = strategy
 
                 print(f"  Allocation (budget={budget}): best={best_strategy} (R²={best_r2:.4f})")
+
+        # Best weighting result
+        weighting = dataset_results.get('weighting', {})
+        if weighting:
+            best_source = None
+            best_delta = -np.inf
+            for source, result in weighting.items():
+                knn = result.get('knn', {})
+                k10 = knn.get(10, knn.get(5, {}))
+                delta = k10.get('delta', 0)
+                if delta > best_delta:
+                    best_delta = delta
+                    best_source = source
+            sim_delta = weighting.get(best_source, {}).get('similarity', {}).get('delta_r2', 0)
+            print(f"  Weighting: best={best_source} (kNN Δ={best_delta:+.4f}, sim Δ={sim_delta:+.4f})")
 
 
 def main():
