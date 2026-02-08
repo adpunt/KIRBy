@@ -8,10 +8,6 @@
 #SBATCH --mem=64G
 #SBATCH --mail-user=adelaide.punt@stcatz.ox.ac.uk
 
-export MAMBA_EXE="/data/stat-cadd/scat9264/bin/micromamba"
-eval "$("$MAMBA_EXE" shell hook --shell bash)"
-export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
-
 cd /data/stat-cadd/scat9264/KIRBy
 . setup.sh
 cd tests
