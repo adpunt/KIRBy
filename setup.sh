@@ -6,4 +6,4 @@
 pip install --quiet -e . 2>/dev/null
 
 # Install any missing dependencies
-pip install --quiet shap captum lime boruta_py 2>/dev/null
+pip install --quiet shap captum lime Boruta 2>/dev/null
