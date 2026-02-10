@@ -1,20 +1,31 @@
 #!/bin/bash
-#SBATCH --job-name=complexity_theory
+#SBATCH --job-name=complexity
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --time=11:59:00
+#SBATCH --cpus-per-task=8
+#SBATCH --time=23:59:00
 #SBATCH --partition=long
 #SBATCH --mem=64G
 #SBATCH --mail-user=adelaide.punt@stcatz.ox.ac.uk
 
 cd /data/stat-cadd/scat9264/KIRBy
 . setup.sh
-cd tests
 
 # Complexity Theory Experiments
-# Tests: intrinsic dim, MI, learning curves, generalization gap, double descent, hybrid comparison
-# Datasets: LogD, QM9
-# Expected runtime: 1-2 hours
+# Quick: ~45 min (logd only, 3-fold, RF/kNN/ridge, Exp 1+2+6+9)
+# Full:  ~8-10 hours (logd/caco2/herg/qm9, 5-fold, all models, all 9 experiments)
 
-python complexity_theory_experiments.py --full --datasets logd,qm9 --output results/complexity_theory
+MODE=${1:-quick}
+
+if [ "$MODE" = "quick" ]; then
+    echo "=== QUICK VALIDATION (logd, Exp 1+2+6+9) ==="
+    python tests/complexity_theory_experiments.py --mode quick --experiments 1 2 6 9 \
+        --output tests/results/complexity_theory
+elif [ "$MODE" = "full" ]; then
+    echo "=== FULL RUN (all datasets, all experiments) ==="
+    python tests/complexity_theory_experiments.py --mode full --experiments 1 2 3 4 5 6 7 8 9 \
+        --output tests/results/complexity_theory
+else
+    echo "Usage: sbatch run_complexity_experiments.sh [quick|full]"
+    exit 1
+fi

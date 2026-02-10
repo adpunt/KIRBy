@@ -10,6 +10,7 @@ Datasets (all regression):
   - logd:  OpenADMET-LogD (7309 molecules, lipophilicity)
   - caco2: OpenADMET-Caco2_Efflux (3777 molecules, P-gp efflux ratio, log-transformed)
   - herg:  ChEMBL-hERG-Ki (1415 molecules, hERG binding affinity pKi)
+  - qm9:   QM9 HOMO-LUMO gap (2000 molecules, quantum mechanical property)
 
 Usage:
     # Quick local test
@@ -257,6 +258,7 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
       - logd:  OpenADMET-LogD (~7309 molecules)
       - caco2: OpenADMET-Caco2_Efflux (~3777 molecules, log-transformed)
       - herg:  ChEMBL-hERG-Ki (~1415 molecules, pKi)
+      - qm9:   QM9 HOMO-LUMO gap (~2000 molecules, normalized)
     """
     from rdkit import Chem
 
@@ -283,6 +285,14 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
     elif name_lower == 'herg':
         smiles, labels = _fetch_chembl_herg_ki()
         print(f"  Loaded {len(smiles)} molecules from ChEMBL-hERG-Ki (pKi)")
+        return smiles, labels, 'regression'
+
+    elif name_lower == 'qm9':
+        from kirby.datasets.qm9 import load_qm9
+        qm9_data = load_qm9(n_samples=2000, property_idx=4, random_seed=42)
+        smiles = qm9_data['smiles']
+        labels = qm9_data['labels']  # Normalized (mean=0, std=1); R² is scale-invariant
+        print(f"  Loaded {len(smiles)} molecules from QM9 (HOMO-LUMO gap)")
         return smiles, labels, 'regression'
 
     elif name_or_path.endswith('.csv') or os.path.exists(name_or_path):
@@ -327,7 +337,7 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
 
     else:
         raise ValueError(f"Unknown dataset: {name_or_path}. "
-                         f"Built-in options: logd, caco2, herg")
+                         f"Built-in options: logd, caco2, herg, qm9")
 
 
 # =============================================================================

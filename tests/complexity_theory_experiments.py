@@ -1,188 +1,100 @@
 #!/usr/bin/env python3
 """
-Complexity Theory Experiments for Molecular Representations
+Complexity Theory Experiments for Hybrid Molecular Representations
 
-Tests theoretical ML concepts empirically:
-1. Intrinsic dimensionality of representations
-2. Mutual information estimation (rep → target)
-3. Learning curves and noise floors
-4. Generalization gap vs representation complexity
-5. Double descent investigation
-6. Information bottleneck analysis
-7. Benign overfitting regime
+Tests the core thesis: there's an optimal pairing between model complexity and
+representation complexity — the hybrid methodology discovers it automatically.
 
-Datasets: LogD (OpenADMET), QM9 HOMO-LUMO gap
-Models: Ridge, RF, MLP, Deep NN
+Experiments:
+  1. Representation Characterization — profile each rep's complexity
+  2. Complexity Matching Grid — model complexity × rep complexity optimal pairings
+  3. Cross-Context Analysis — optimal config changes across datasets
+  4. Importance Weights as Learned Metrics — Phase 5 bridge
+  5. Learning Curves — hybrid advantage vs sample size
+  6. Within-Family Complexity Gradient — vary capacity within model families
+  7. Data Complexity via Scaffold Partitioning — optimal config by subpopulation
+  8. Uncertainty Calibration — conformal prediction at optimal vs suboptimal complexity
+  9. Formal Complexity Analysis — ANOVA, information retention, effective rank, bias-variance
+
+Datasets: logd, caco2, herg, qm9 (via load_dataset from molecular wrapper)
+Models: RF, kNN, ridge, XGBoost, MLP, LightGBM (ordered by complexity)
 
 Usage:
-    python tests/complexity_theory_experiments.py --quick
-    python tests/complexity_theory_experiments.py --full
+    python tests/complexity_theory_experiments.py --mode quick --experiments 1 2 6 9
+    python tests/complexity_theory_experiments.py --mode full --experiments 1 2 3 4 5 6 7 8 9
 """
 
-import argparse
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+import sys
 import json
 import time
+import argparse
 import warnings
-from dataclasses import dataclass, field
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Tuple, Any, Optional
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 from scipy import stats
+from scipy.special import digamma
+from scipy.stats import spearmanr, f as f_dist
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import Ridge
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.neural_network import MLPRegressor
-from sklearn.model_selection import GroupKFold, train_test_split
-from sklearn.metrics import r2_score, mean_squared_error
+from sklearn.model_selection import GroupKFold
+from sklearn.metrics import r2_score
 from sklearn.neighbors import NearestNeighbors
+
+# Add src to path
+sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+
+from kirby.hybrid import create_hybrid, apply_feature_selection, compute_feature_importance
+from kirby.find_best_hybrid import find_best_hybrid, SearchResult
 
 warnings.filterwarnings('ignore')
 
 
 # =============================================================================
-# METHODS AND STRATEGIES (from find_best_hybrid_molecular.py)
+# DATA LOADING (reuse from molecular wrapper)
 # =============================================================================
 
-# Importance methods by computation cost
-IMPORTANCE_METHODS_FAST = [
-    'random_forest', 'treeshap', 'xgboost_gain', 'xgboost_weight',
-    'xgboost_cover', 'lightgbm_gain', 'lightgbm_split',
-]
-
-IMPORTANCE_METHODS_MEDIUM = [
-    'permutation', 'integrated_gradients', 'deeplift', 'deepliftshap', 'gradientshap',
-]
-
-IMPORTANCE_METHODS_SLOW = [
-    'kernelshap', 'lime', 'drop_column', 'boruta',
-]
-
-ALL_IMPORTANCE_METHODS = IMPORTANCE_METHODS_FAST + IMPORTANCE_METHODS_MEDIUM + IMPORTANCE_METHODS_SLOW
-
-# Allocation methods
-ALLOCATION_METHODS = ['greedy', 'performance_weighted', 'fixed', 'mrmr']
-ALLOCATION_METHODS_SLOW = ['greedy_feature']  # Feature-level, more precise but slower
-
-# Budgets to test
-BUDGETS = [25, 50, 100, 200]
+# Import from find_best_hybrid_molecular
+sys.path.insert(0, str(Path(__file__).parent))
+from find_best_hybrid_molecular import load_dataset, get_representations, assign_scaffold_groups
 
 
-# =============================================================================
-# DATA LOADING (reuse from benchmark script)
-# =============================================================================
+def load_data(dataset_name: str, rep_preset: str = 'fast') -> dict:
+    """Load dataset, generate representations, assign scaffold groups.
 
-def load_logd_dataset() -> Tuple[List[str], np.ndarray]:
-    """Load LogD from OpenADMET."""
-    import pandas as pd
-    from rdkit import Chem
+    Returns dict with keys: smiles, labels, reps, groups, n_scaffolds, task_type.
+    """
+    smiles, labels, task_type = load_dataset(dataset_name)
+    reps = get_representations(smiles, rep_preset)
+    groups, n_scaffolds = assign_scaffold_groups(smiles)
 
-    cache_dir = Path.home() / '.cache' / 'kirby'
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    cached = cache_dir / 'openadmet_train.csv'
+    print(f"  {dataset_name}: {len(smiles)} samples, {n_scaffolds} scaffolds, "
+          f"{len(reps)} reps ({', '.join(f'{k}={v.shape[1]}' for k, v in reps.items())})")
 
-    if not cached.exists():
-        url = ("https://huggingface.co/datasets/openadmet/"
-               "openadmet-expansionrx-challenge-data/resolve/main/expansion_data_train.csv")
-        print(f"  Downloading OpenADMET data...")
-        import urllib.request
-        urllib.request.urlretrieve(url, cached)
-
-    df = pd.read_csv(cached)
-    logd_col = next((c for c in df.columns if 'LogD' in c), None)
-    if logd_col is None:
-        raise ValueError("Cannot find LogD column")
-
-    valid_smiles, valid_labels = [], []
-    for smi, label in zip(df['SMILES'], df[logd_col]):
-        if pd.isna(label) or pd.isna(smi):
-            continue
-        mol = Chem.MolFromSmiles(smi)
-        if mol is not None:
-            valid_smiles.append(smi)
-            valid_labels.append(label)
-
-    return valid_smiles, np.array(valid_labels)
-
-
-def load_qm9_homolumo(n_samples: int = 5000) -> Tuple[List[str], np.ndarray]:
-    """Load HOMO-LUMO gap from QM9."""
-    try:
-        from kirby.datasets.qm9 import load_qm9
-        data = load_qm9(n_samples=n_samples, property_idx=4)
-        return data['smiles'], data['labels']
-    except ImportError as e:
-        raise ImportError(f"QM9 requires torch-geometric: {e}")
-
-
-def generate_representations(smiles: List[str]) -> Dict[str, np.ndarray]:
-    """Generate multiple molecular representations."""
-    from kirby.representations.molecular import (
-        create_ecfp4, create_maccs, create_pdv,
-    )
-
-    print("Generating representations...")
-    reps = {
-        'ecfp4': create_ecfp4(smiles),
-        'maccs': create_maccs(smiles),
-        'pdv': create_pdv(smiles),
+    return {
+        'smiles': smiles,
+        'labels': labels,
+        'reps': reps,
+        'groups': groups,
+        'n_scaffolds': n_scaffolds,
+        'task_type': task_type,
     }
 
-    # Also create concatenated versions of different complexities
-    reps['ecfp4_only'] = reps['ecfp4']
-    reps['pdv_only'] = reps['pdv']
-    reps['ecfp4_pdv'] = np.hstack([reps['ecfp4'], reps['pdv']])
-    reps['all'] = np.hstack([reps['ecfp4'], reps['maccs'], reps['pdv']])
-
-    for name, X in reps.items():
-        print(f"  {name}: {X.shape}")
-
-    return reps
-
-
-def get_scaffold_groups(smiles: List[str]) -> np.ndarray:
-    """Get Murcko scaffold groups."""
-    from rdkit import Chem
-    from rdkit.Chem.Scaffolds import MurckoScaffold
-
-    scaffolds = []
-    for smi in smiles:
-        mol = Chem.MolFromSmiles(smi)
-        if mol:
-            try:
-                scaffold = MurckoScaffold.MurckoScaffoldSmiles(mol=mol, includeChirality=False)
-            except:
-                scaffold = smi
-        else:
-            scaffold = smi
-        scaffolds.append(scaffold)
-
-    unique = list(set(scaffolds))
-    scaffold_to_idx = {s: i for i, s in enumerate(unique)}
-    return np.array([scaffold_to_idx[s] for s in scaffolds])
-
 
 # =============================================================================
-# EXPERIMENT 1: INTRINSIC DIMENSIONALITY
+# SHARED UTILITIES
 # =============================================================================
 
-def compute_intrinsic_dimensionality(X: np.ndarray, methods: List[str] = None) -> Dict[str, Any]:
-    """
-    Compute intrinsic dimensionality using multiple methods.
-
-    Methods:
-    - PCA (explained variance threshold)
-    - MLE (maximum likelihood estimator)
-    - Correlation dimension (fractal-based)
-    """
-    if methods is None:
-        methods = ['pca_90', 'pca_95', 'pca_99', 'mle']
-
+def compute_intrinsic_dimensionality(X: np.ndarray) -> Dict[str, Any]:
+    """Compute intrinsic dimensionality using PCA and MLE methods."""
     results = {'nominal_dim': X.shape[1]}
 
-    # Standardize
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
@@ -193,109 +105,58 @@ def compute_intrinsic_dimensionality(X: np.ndarray, methods: List[str] = None) -
     cumvar = np.cumsum(pca.explained_variance_ratio_)
 
     for threshold in [0.90, 0.95, 0.99]:
-        key = f'pca_{int(threshold*100)}'
-        if key in methods or 'pca' in methods:
-            intrinsic_dim = np.searchsorted(cumvar, threshold) + 1
-            results[key] = int(min(intrinsic_dim, X.shape[1]))
+        key = f'pca_{int(threshold * 100)}'
+        intrinsic_dim = np.searchsorted(cumvar, threshold) + 1
+        results[key] = int(min(intrinsic_dim, X.shape[1]))
 
-    # MLE-based (Levina-Bickel estimator)
-    if 'mle' in methods:
-        try:
-            intrinsic_dim_mle = estimate_intrinsic_dim_mle(X_scaled, k=10)
-            results['mle'] = float(intrinsic_dim_mle)
-        except Exception as e:
-            results['mle'] = None
-            results['mle_error'] = str(e)
+    # MLE-based (Levina-Bickel 2004)
+    try:
+        results['mle'] = float(estimate_intrinsic_dim_mle(X_scaled, k=10))
+    except Exception:
+        results['mle'] = None
 
-    # Compression ratio
-    if 'pca_95' in results and results['pca_95']:
+    if results.get('pca_95'):
         results['compression_ratio'] = X.shape[1] / results['pca_95']
 
     return results
 
 
 def estimate_intrinsic_dim_mle(X: np.ndarray, k: int = 10) -> float:
-    """
-    MLE estimator of intrinsic dimensionality (Levina-Bickel 2004).
-
-    Based on the rate of growth of distances to k-nearest neighbors.
-    """
+    """MLE estimator of intrinsic dimensionality (Levina-Bickel 2004)."""
     n_samples = X.shape[0]
     k = min(k, n_samples - 1)
 
-    nn = NearestNeighbors(n_neighbors=k+1)
+    nn = NearestNeighbors(n_neighbors=k + 1)
     nn.fit(X)
     distances, _ = nn.kneighbors(X)
+    distances = distances[:, 1:]  # remove self
 
-    # Remove self-distance (first column)
-    distances = distances[:, 1:]
-
-    # MLE estimate per point
-    # d_mle = (k-1) / sum(log(T_k / T_j)) for j=1..k-1
     estimates = []
     for i in range(n_samples):
         dists = distances[i]
         if dists[-1] > 0:
-            # Log ratio of max distance to each distance
             log_ratios = np.log(dists[-1] / dists[:-1])
             if np.sum(log_ratios) > 0:
-                d_hat = (k - 1) / np.sum(log_ratios)
-                estimates.append(d_hat)
+                estimates.append((k - 1) / np.sum(log_ratios))
 
     return np.mean(estimates) if estimates else np.nan
 
 
-def run_intrinsic_dim_experiment(reps: Dict[str, np.ndarray]) -> Dict[str, Any]:
-    """Run intrinsic dimensionality analysis on all representations."""
-    print("\n" + "="*60)
-    print("EXPERIMENT 1: INTRINSIC DIMENSIONALITY")
-    print("="*60)
-
-    results = {}
-    for rep_name, X in reps.items():
-        print(f"\n  {rep_name}...")
-        dim_results = compute_intrinsic_dimensionality(X)
-        results[rep_name] = dim_results
-
-        print(f"    Nominal: {dim_results['nominal_dim']}")
-        print(f"    PCA 95%: {dim_results.get('pca_95', 'N/A')}")
-        print(f"    MLE: {dim_results.get('mle', 'N/A'):.1f}" if dim_results.get('mle') else "    MLE: N/A")
-        if 'compression_ratio' in dim_results:
-            print(f"    Compression: {dim_results['compression_ratio']:.1f}x")
-
-    return results
-
-
-# =============================================================================
-# EXPERIMENT 2: MUTUAL INFORMATION ESTIMATION
-# =============================================================================
-
 def estimate_mutual_information_knn(X: np.ndarray, y: np.ndarray, k: int = 5) -> float:
-    """
-    Estimate I(X; Y) using k-NN method (Kraskov et al. 2004).
-
-    This is a simplified version - for continuous Y, we use the
-    KSG estimator approximation.
-    """
-    from scipy.special import digamma
-
+    """Estimate I(X; Y) using KSG estimator (Kraskov et al. 2004)."""
     n_samples = X.shape[0]
     k = min(k, n_samples - 1)
 
-    # Standardize
     X_scaled = StandardScaler().fit_transform(X)
     y_scaled = (y - y.mean()) / (y.std() + 1e-10)
 
-    # Joint space
     XY = np.column_stack([X_scaled, y_scaled.reshape(-1, 1)])
 
-    # Find k-NN distances in joint space
-    nn_joint = NearestNeighbors(n_neighbors=k+1, metric='chebyshev')
+    nn_joint = NearestNeighbors(n_neighbors=k + 1, metric='chebyshev')
     nn_joint.fit(XY)
     distances_joint, _ = nn_joint.kneighbors(XY)
-    eps = distances_joint[:, -1]  # Distance to k-th neighbor
+    eps = distances_joint[:, -1]
 
-    # Count neighbors within eps in marginal spaces
     nn_x = NearestNeighbors(metric='chebyshev')
     nn_x.fit(X_scaled)
 
@@ -306,1027 +167,1940 @@ def estimate_mutual_information_knn(X: np.ndarray, y: np.ndarray, k: int = 5) ->
     n_y = np.zeros(n_samples)
 
     for i in range(n_samples):
-        # Count points within eps[i] in X space
-        n_x[i] = len(nn_x.radius_neighbors([X_scaled[i]], radius=eps[i], return_distance=False)[0]) - 1
-        # Count points within eps[i] in Y space
-        n_y[i] = len(nn_y.radius_neighbors([y_scaled[i:i+1]], radius=eps[i], return_distance=False)[0]) - 1
+        n_x[i] = len(nn_x.radius_neighbors([X_scaled[i]], radius=eps[i],
+                      return_distance=False)[0]) - 1
+        n_y[i] = len(nn_y.radius_neighbors([y_scaled[i:i + 1]], radius=eps[i],
+                      return_distance=False)[0]) - 1
 
-    # KSG estimator
     mi = digamma(k) - np.mean(digamma(n_x + 1) + digamma(n_y + 1)) + digamma(n_samples)
+    return max(0, mi)
 
-    return max(0, mi)  # MI should be non-negative
-
-
-def run_mutual_information_experiment(
-    reps: Dict[str, np.ndarray],
-    y: np.ndarray
-) -> Dict[str, Any]:
-    """Estimate mutual information between each representation and target."""
-    print("\n" + "="*60)
-    print("EXPERIMENT 2: MUTUAL INFORMATION I(Rep; Target)")
-    print("="*60)
-
-    results = {}
-    for rep_name, X in reps.items():
-        print(f"\n  {rep_name}...", end=' ')
-
-        # Use PCA to reduce dimensionality for MI estimation (more stable)
-        n_components = min(50, X.shape[1], X.shape[0] - 1)
-        pca = PCA(n_components=n_components)
-        X_reduced = pca.fit_transform(StandardScaler().fit_transform(X))
-
-        try:
-            mi = estimate_mutual_information_knn(X_reduced, y, k=5)
-            results[rep_name] = {
-                'mi_estimate': float(mi),
-                'n_components_used': n_components,
-            }
-            print(f"MI = {mi:.4f} nats")
-        except Exception as e:
-            results[rep_name] = {'error': str(e)}
-            print(f"FAILED: {e}")
-
-    # Rank by MI
-    print("\n  Ranking by MI:")
-    sorted_reps = sorted(
-        [(k, v['mi_estimate']) for k, v in results.items() if 'mi_estimate' in v],
-        key=lambda x: x[1], reverse=True
-    )
-    for i, (name, mi) in enumerate(sorted_reps):
-        print(f"    {i+1}. {name}: {mi:.4f}")
-
-    return results
-
-
-# =============================================================================
-# EXPERIMENT 3: LEARNING CURVES AND NOISE FLOORS
-# =============================================================================
 
 def fit_learning_curve(n_samples: np.ndarray, scores: np.ndarray) -> Dict[str, float]:
-    """
-    Fit asymptotic model: R² = R²_max - a/n^b
-
-    Returns estimated R²_max (noise floor) and fit parameters.
-    """
+    """Fit asymptotic model: R² = R²_max - a/n^b."""
     from scipy.optimize import curve_fit
 
     def model(n, r2_max, a, b):
         return r2_max - a / np.power(n, b)
 
     try:
-        # Initial guess
         p0 = [np.max(scores), 1.0, 0.5]
         bounds = ([0, 0, 0.1], [1, 100, 2])
-
-        popt, pcov = curve_fit(model, n_samples, scores, p0=p0, bounds=bounds, maxfev=5000)
+        popt, _ = curve_fit(model, n_samples, scores, p0=p0, bounds=bounds, maxfev=5000)
         r2_max, a, b = popt
 
-        # Compute fit quality
         predicted = model(n_samples, *popt)
         residuals = scores - predicted
-        ss_res = np.sum(residuals**2)
-        ss_tot = np.sum((scores - np.mean(scores))**2)
+        ss_res = np.sum(residuals ** 2)
+        ss_tot = np.sum((scores - np.mean(scores)) ** 2)
         fit_r2 = 1 - ss_res / ss_tot if ss_tot > 0 else 0
 
-        return {
-            'r2_max': float(r2_max),
-            'a': float(a),
-            'b': float(b),
-            'fit_r2': float(fit_r2),
-        }
+        return {'r2_max': float(r2_max), 'a': float(a), 'b': float(b), 'fit_r2': float(fit_r2)}
     except Exception as e:
         return {'error': str(e), 'r2_max': float(np.max(scores))}
 
 
-def run_learning_curve_experiment(
-    reps: Dict[str, np.ndarray],
-    y: np.ndarray,
-    scaffold_groups: np.ndarray,
-    sample_sizes: List[int] = None,
-    models: List[str] = None,
-    n_repeats: int = 3
-) -> Dict[str, Any]:
+def compute_effective_rank(X: np.ndarray) -> float:
+    """Effective rank: exp(entropy of normalised singular values)."""
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    _, s, _ = np.linalg.svd(X_scaled, full_matrices=False)
+    s = s[s > 1e-10]
+    p = s / s.sum()
+    return float(np.exp(-np.sum(p * np.log(p))))
+
+
+def evaluate_cv(
+    base_reps: Dict[str, np.ndarray],
+    labels: np.ndarray,
+    groups: np.ndarray,
+    model_factory,
+    n_folds: int = 5,
+    allocation_method: str = 'greedy',
+    importance_method: str = 'treeshap',
+    budget: int = 100,
+    seed: int = 42,
+) -> Tuple[float, float, int]:
+    """Proper per-fold CV: create_hybrid on train, apply_feature_selection on val.
+
+    Returns (mean_r2, std_r2, n_features).
     """
-    Generate learning curves for each representation and model.
+    gkf = GroupKFold(n_splits=n_folds)
+    sample_X = next(iter(base_reps.values()))
+    scores = []
+    n_feats = []
 
-    Tests: How does performance scale with data? Where does it plateau?
-    """
-    print("\n" + "="*60)
-    print("EXPERIMENT 3: LEARNING CURVES")
-    print("="*60)
+    for train_idx, val_idx in gkf.split(sample_X, labels, groups=groups):
+        train_reps = {k: v[train_idx] for k, v in base_reps.items()}
+        val_reps = {k: v[val_idx] for k, v in base_reps.items()}
+        y_train, y_val = labels[train_idx], labels[val_idx]
 
-    if sample_sizes is None:
-        max_n = len(y)
-        sample_sizes = [100, 200, 500, 1000, 2000, 5000]
-        sample_sizes = [s for s in sample_sizes if s < max_n * 0.8]
-        sample_sizes.append(int(max_n * 0.8))
-
-    if models is None:
-        models = ['ridge', 'rf']
-
-    results = {}
-
-    for rep_name in ['ecfp4_only', 'pdv_only', 'ecfp4_pdv', 'all']:
-        if rep_name not in reps:
+        try:
+            X_train, feature_info = create_hybrid(
+                train_reps, y_train,
+                allocation_method=allocation_method,
+                budget=budget,
+                importance_method=importance_method,
+            )
+            X_val = apply_feature_selection(val_reps, feature_info)
+        except Exception:
             continue
 
-        X = reps[rep_name]
-        print(f"\n  {rep_name} (dim={X.shape[1]}):")
-        results[rep_name] = {}
-
-        for model_name in models:
-            print(f"    {model_name}:", end=' ')
-            curve_scores = []
-
-            for n in sample_sizes:
-                repeat_scores = []
-                for seed in range(n_repeats):
-                    # Subsample
-                    np.random.seed(seed)
-                    idx = np.random.choice(len(y), min(n, len(y)), replace=False)
-                    X_sub, y_sub = X[idx], y[idx]
-                    groups_sub = scaffold_groups[idx]
-
-                    # Simple train/test split
-                    try:
-                        gkf = GroupKFold(n_splits=3)
-                        fold_scores = []
-                        for train_idx, test_idx in gkf.split(X_sub, y_sub, groups=groups_sub):
-                            X_train, X_test = X_sub[train_idx], X_sub[test_idx]
-                            y_train, y_test = y_sub[train_idx], y_sub[test_idx]
-
-                            scaler = StandardScaler()
-                            X_train = scaler.fit_transform(X_train)
-                            X_test = scaler.transform(X_test)
-
-                            if model_name == 'ridge':
-                                model = Ridge(alpha=1.0)
-                            elif model_name == 'rf':
-                                model = RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1)
-                            else:
-                                continue
-
-                            model.fit(X_train, y_train)
-                            fold_scores.append(r2_score(y_test, model.predict(X_test)))
-
-                        repeat_scores.append(np.mean(fold_scores))
-                    except Exception:
-                        continue
-
-                if repeat_scores:
-                    curve_scores.append((n, np.mean(repeat_scores), np.std(repeat_scores)))
-
-            if curve_scores:
-                n_vals = np.array([x[0] for x in curve_scores])
-                score_means = np.array([x[1] for x in curve_scores])
-
-                # Fit asymptotic model
-                fit_result = fit_learning_curve(n_vals, score_means)
-
-                results[rep_name][model_name] = {
-                    'sample_sizes': n_vals.tolist(),
-                    'scores': score_means.tolist(),
-                    'stds': [x[2] for x in curve_scores],
-                    'fit': fit_result,
-                }
-
-                r2_max = fit_result.get('r2_max', score_means[-1])
-                print(f"R²_max = {r2_max:.4f}")
-
-    return results
-
-
-# =============================================================================
-# EXPERIMENT 4: GENERALIZATION GAP VS COMPLEXITY
-# =============================================================================
-
-def run_generalization_gap_experiment(
-    reps: Dict[str, np.ndarray],
-    y: np.ndarray,
-    scaffold_groups: np.ndarray,
-    budgets: List[int] = None,
-    models: List[str] = None
-) -> Dict[str, Any]:
-    """
-    Measure generalization gap (train - test R²) vs representation complexity.
-
-    Tests: At what complexity does overfitting start?
-    """
-    print("\n" + "="*60)
-    print("EXPERIMENT 4: GENERALIZATION GAP VS COMPLEXITY")
-    print("="*60)
-
-    if budgets is None:
-        budgets = [20, 50, 100, 200, 500, 1000]
-
-    if models is None:
-        models = ['ridge', 'rf', 'mlp']
-
-    # Use the 'all' representation and vary feature count via PCA
-    X_full = reps.get('all', reps['ecfp4_pdv'])
-
-    results = {'budgets': budgets}
-
-    for model_name in models:
-        print(f"\n  {model_name}:")
-        model_results = {'train_r2': [], 'test_r2': [], 'gap': []}
-
-        for budget in budgets:
-            n_components = min(budget, X_full.shape[1], X_full.shape[0] - 1)
-
-            # Reduce to budget dimensions
-            scaler = StandardScaler()
-            X_scaled = scaler.fit_transform(X_full)
-            pca = PCA(n_components=n_components)
-            X_reduced = pca.fit_transform(X_scaled)
-
-            # Cross-validation
-            gkf = GroupKFold(n_splits=3)
-            train_scores, test_scores = [], []
-
-            for train_idx, test_idx in gkf.split(X_reduced, y, groups=scaffold_groups):
-                X_train, X_test = X_reduced[train_idx], X_reduced[test_idx]
-                y_train, y_test = y[train_idx], y[test_idx]
-
-                if model_name == 'ridge':
-                    model = Ridge(alpha=1.0)
-                elif model_name == 'rf':
-                    model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-                elif model_name == 'mlp':
-                    model = MLPRegressor(hidden_layer_sizes=(100,), random_state=42, max_iter=500)
-                else:
-                    continue
-
-                model.fit(X_train, y_train)
-                train_scores.append(r2_score(y_train, model.predict(X_train)))
-                test_scores.append(r2_score(y_test, model.predict(X_test)))
-
-            train_r2 = np.mean(train_scores)
-            test_r2 = np.mean(test_scores)
-            gap = train_r2 - test_r2
-
-            model_results['train_r2'].append(float(train_r2))
-            model_results['test_r2'].append(float(test_r2))
-            model_results['gap'].append(float(gap))
-
-            print(f"    dim={n_components}: train={train_r2:.4f}, test={test_r2:.4f}, gap={gap:.4f}")
-
-        results[model_name] = model_results
-
-    return results
-
-
-# =============================================================================
-# EXPERIMENT 5: DOUBLE DESCENT INVESTIGATION
-# =============================================================================
-
-def run_double_descent_experiment(
-    reps: Dict[str, np.ndarray],
-    y: np.ndarray,
-    scaffold_groups: np.ndarray
-) -> Dict[str, Any]:
-    """
-    Test for double descent: does test error decrease again past interpolation?
-
-    Theory: In overparameterized regime, test error can decrease after initial peak.
-    """
-    print("\n" + "="*60)
-    print("EXPERIMENT 5: DOUBLE DESCENT INVESTIGATION")
-    print("="*60)
-
-    X_full = reps.get('all', reps['ecfp4_pdv'])
-    n_samples = X_full.shape[0]
-
-    # Test across wide range of dimensions
-    # Key is to go past the interpolation threshold (n_features ≈ n_samples)
-    dim_range = [10, 25, 50, 100, 200, 500, 1000]
-    dim_range = [d for d in dim_range if d < X_full.shape[1]]
-
-    # Add dimensions around interpolation threshold
-    threshold_dims = [int(n_samples * 0.5), int(n_samples * 0.8), int(n_samples * 1.0),
-                      int(n_samples * 1.2), int(n_samples * 1.5)]
-    threshold_dims = [d for d in threshold_dims if d < X_full.shape[1] and d > 0]
-    dim_range = sorted(set(dim_range + threshold_dims))
-
-    print(f"  Testing dimensions: {dim_range}")
-    print(f"  Interpolation threshold (n_samples): {n_samples}")
-
-    results = {'dimensions': dim_range, 'n_samples': n_samples}
-
-    # Test with Ridge (no regularization) - most likely to show double descent
-    print("\n  Ridge (alpha=1e-10, near-interpolation):")
-    ridge_results = {'train_r2': [], 'test_r2': [], 'train_mse': [], 'test_mse': []}
-
-    for n_dim in dim_range:
         scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X_full)
-        pca = PCA(n_components=min(n_dim, X_scaled.shape[1]))
-        X_reduced = pca.fit_transform(X_scaled)
+        X_train_s = scaler.fit_transform(X_train)
+        X_val_s = scaler.transform(X_val)
 
-        gkf = GroupKFold(n_splits=3)
-        train_r2s, test_r2s, train_mses, test_mses = [], [], [], []
+        model = model_factory()
+        model.fit(X_train_s, y_train)
+        scores.append(r2_score(y_val, model.predict(X_val_s)))
+        n_feats.append(X_train.shape[1])
 
-        for train_idx, test_idx in gkf.split(X_reduced, y, groups=scaffold_groups):
-            X_train, X_test = X_reduced[train_idx], X_reduced[test_idx]
-            y_train, y_test = y[train_idx], y[test_idx]
+    if not scores:
+        return float('nan'), float('nan'), 0
+    return float(np.mean(scores)), float(np.std(scores)), int(np.mean(n_feats))
 
-            # Near-zero regularization to allow interpolation
-            model = Ridge(alpha=1e-10)
-            model.fit(X_train, y_train)
 
-            train_pred = model.predict(X_train)
-            test_pred = model.predict(X_test)
+def evaluate_single_rep_cv(
+    X: np.ndarray,
+    labels: np.ndarray,
+    groups: np.ndarray,
+    model_factory,
+    n_folds: int = 5,
+) -> Tuple[float, float]:
+    """Simple CV for a single representation matrix. Returns (mean_r2, std_r2)."""
+    gkf = GroupKFold(n_splits=n_folds)
+    scores = []
 
-            train_r2s.append(r2_score(y_train, train_pred))
-            test_r2s.append(r2_score(y_test, test_pred))
-            train_mses.append(mean_squared_error(y_train, train_pred))
-            test_mses.append(mean_squared_error(y_test, test_pred))
+    for train_idx, val_idx in gkf.split(X, labels, groups=groups):
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X[train_idx])
+        X_val = scaler.transform(X[val_idx])
 
-        ridge_results['train_r2'].append(float(np.mean(train_r2s)))
-        ridge_results['test_r2'].append(float(np.mean(test_r2s)))
-        ridge_results['train_mse'].append(float(np.mean(train_mses)))
-        ridge_results['test_mse'].append(float(np.mean(test_mses)))
+        model = model_factory()
+        model.fit(X_train, labels[train_idx])
+        scores.append(r2_score(labels[val_idx], model.predict(X_val)))
 
-        status = "INTERPOLATING" if n_dim >= n_samples * 0.8 else ""
-        print(f"    dim={n_dim}: test R²={np.mean(test_r2s):.4f} {status}")
-
-    results['ridge'] = ridge_results
-
-    # Check for double descent pattern
-    test_r2 = np.array(ridge_results['test_r2'])
-    dims = np.array(dim_range)
-
-    # Find local minimum (if exists)
-    if len(test_r2) > 3:
-        for i in range(1, len(test_r2) - 1):
-            if test_r2[i] < test_r2[i-1] and test_r2[i] < test_r2[i+1]:
-                print(f"\n  Potential double descent: local minimum at dim={dims[i]}")
-                if dims[i] > n_samples * 0.5:
-                    print(f"    This is near interpolation threshold - classic double descent!")
-                results['double_descent_detected'] = True
-                results['local_minimum_dim'] = int(dims[i])
-                break
-        else:
-            results['double_descent_detected'] = False
-            print("\n  No clear double descent pattern detected")
-
-    return results
+    return float(np.mean(scores)), float(np.std(scores))
 
 
 # =============================================================================
-# EXPERIMENT 6: MODEL COMPLEXITY × REP COMPLEXITY TRADEOFF
+# MODEL FACTORIES
 # =============================================================================
 
-def run_complexity_tradeoff_experiment(
-    reps: Dict[str, np.ndarray],
-    y: np.ndarray,
-    scaffold_groups: np.ndarray,
-    rep_budgets: List[int] = None,
-    allocation_methods: List[str] = None,
-    importance_methods: List[str] = None,
-) -> Dict[str, Any]:
-    """
-    CORE EXPERIMENT: Find optimal (model_complexity, rep_complexity) pairings.
+def _get_model_factories(model_names: List[str]) -> Dict[str, callable]:
+    """Return {name: factory_fn} for requested models."""
+    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.linear_model import Ridge
+    from sklearn.neighbors import KNeighborsRegressor
+    from sklearn.neural_network import MLPRegressor
 
-    Uses ACTUAL HYBRIDS from kirby.hybrid, not just PCA truncation.
-    Tests multiple importance methods and allocation strategies.
-
-    Key questions:
-    - Do simpler models need more curated (lower-dim) representations?
-    - Does allocation method matter differently for different model types?
-    - Does importance method matter for different models?
-    - Is there a matching principle between model and rep complexity?
-    """
-    print("\n" + "="*60)
-    print("EXPERIMENT 6: MODEL × REPRESENTATION COMPLEXITY TRADEOFF")
-    print("="*60)
-
-    from kirby.hybrid import create_hybrid
-
-    if rep_budgets is None:
-        rep_budgets = BUDGETS
-
-    if allocation_methods is None:
-        allocation_methods = ALLOCATION_METHODS
-
-    if importance_methods is None:
-        # Use fast methods by default, can expand in full mode
-        importance_methods = ['random_forest', 'treeshap', 'permutation']
-
-    base_reps = {k: reps[k] for k in ['ecfp4', 'maccs', 'pdv'] if k in reps}
-
-    # Define model complexity levels
-    model_configs = [
-        # Linear models - low complexity
-        ('ridge_high_reg', lambda: Ridge(alpha=100), 1),
-        ('ridge_med_reg', lambda: Ridge(alpha=1), 2),
-        ('ridge_low_reg', lambda: Ridge(alpha=0.01), 3),
-
-        # Tree models - varying complexity
-        ('rf_shallow', lambda: RandomForestRegressor(n_estimators=10, max_depth=3, random_state=42, n_jobs=-1), 2),
-        ('rf_medium', lambda: RandomForestRegressor(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1), 4),
-        ('rf_deep', lambda: RandomForestRegressor(n_estimators=100, max_depth=None, random_state=42, n_jobs=-1), 6),
-
-        # Neural networks - varying complexity
-        ('mlp_tiny', lambda: MLPRegressor(hidden_layer_sizes=(16,), random_state=42, max_iter=500), 3),
-        ('mlp_small', lambda: MLPRegressor(hidden_layer_sizes=(64,), random_state=42, max_iter=500), 4),
-        ('mlp_medium', lambda: MLPRegressor(hidden_layer_sizes=(128, 64), random_state=42, max_iter=500), 5),
-        ('mlp_large', lambda: MLPRegressor(hidden_layer_sizes=(256, 128, 64), random_state=42, max_iter=500), 7),
-    ]
-
-    results = {
-        'rep_budgets': rep_budgets,
-        'allocation_methods': allocation_methods,
-        'models': {},
-        'optimal_pairings': {},
+    catalog = {
+        'rf': lambda: RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1),
+        'knn': lambda: KNeighborsRegressor(n_neighbors=5, n_jobs=-1),
+        'ridge': lambda: Ridge(alpha=1.0),
+        'mlp': lambda: MLPRegressor(hidden_layer_sizes=(100, 50), random_state=42, max_iter=500),
     }
 
-    total_combos = len(model_configs) * len(rep_budgets) * len(allocation_methods)
-    print(f"\n  Testing {len(model_configs)} models × {len(rep_budgets)} budgets × {len(allocation_methods)} methods")
-    print(f"  = {total_combos} combinations\n")
+    # Optional imports
+    try:
+        from xgboost import XGBRegressor
+        catalog['xgboost'] = lambda: XGBRegressor(n_estimators=100, random_state=42, n_jobs=-1, verbosity=0)
+    except ImportError:
+        pass
 
-    # For each model, find optimal (budget, allocation_method) pairing
-    for model_name, model_factory, model_complexity in model_configs:
-        print(f"  {model_name} (complexity={model_complexity}):")
-        model_results = {
-            'complexity': model_complexity,
-            'configs': [],
-            'best_config': None,
-            'best_score': -np.inf
-        }
+    try:
+        from lightgbm import LGBMRegressor
+        catalog['lightgbm'] = lambda: LGBMRegressor(n_estimators=100, random_state=42, n_jobs=-1, verbose=-1)
+    except ImportError:
+        pass
 
-        for alloc_method in allocation_methods:
-            for budget in rep_budgets:
-                try:
-                    # Create hybrid using YOUR methodology
-                    X_hybrid, feature_info = create_hybrid(
-                        base_reps, y,
-                        allocation_method=alloc_method,
-                        budget=budget,
-                        importance_method='random_forest'
-                    )
-
-                    actual_dim = X_hybrid.shape[1]
-
-                    # Cross-validate with this model
-                    gkf = GroupKFold(n_splits=3)
-                    scores = []
-
-                    for train_idx, test_idx in gkf.split(X_hybrid, y, groups=scaffold_groups):
-                        scaler = StandardScaler()
-                        X_train = scaler.fit_transform(X_hybrid[train_idx])
-                        X_test = scaler.transform(X_hybrid[test_idx])
-
-                        model = model_factory()
-                        model.fit(X_train, y[train_idx])
-                        scores.append(r2_score(y[test_idx], model.predict(X_test)))
-
-                    mean_score = np.mean(scores)
-
-                    config_result = {
-                        'allocation': alloc_method,
-                        'budget': budget,
-                        'actual_dim': actual_dim,
-                        'r2': float(mean_score),
-                    }
-                    model_results['configs'].append(config_result)
-
-                    if mean_score > model_results['best_score']:
-                        model_results['best_score'] = float(mean_score)
-                        model_results['best_config'] = config_result
-
-                except Exception as e:
-                    print(f"      {alloc_method}/b={budget}: FAILED - {e}")
-                    continue
-
-        results['models'][model_name] = model_results
-
-        if model_results['best_config']:
-            best = model_results['best_config']
-            results['optimal_pairings'][model_name] = {
-                'model_complexity': model_complexity,
-                'optimal_allocation': best['allocation'],
-                'optimal_budget': best['budget'],
-                'optimal_dim': best['actual_dim'],
-                'best_r2': best['r2'],
-            }
-            print(f"    Best: {best['allocation']}/b={best['budget']} (dim={best['actual_dim']}) → R²={best['r2']:.4f}")
-
-    # Analyze: does model complexity predict optimal rep config?
-    print("\n  COMPLEXITY MATCHING ANALYSIS:")
-
-    complexities = []
-    optimal_dims = []
-    optimal_budgets = []
-
-    for model_name, pairing in results['optimal_pairings'].items():
-        complexities.append(pairing['model_complexity'])
-        optimal_dims.append(pairing['optimal_dim'])
-        optimal_budgets.append(pairing['optimal_budget'])
-
-    if len(complexities) > 2:
-        corr_dim = np.corrcoef(complexities, optimal_dims)[0, 1]
-        corr_budget = np.corrcoef(complexities, optimal_budgets)[0, 1]
-        results['complexity_vs_dim_correlation'] = float(corr_dim)
-        results['complexity_vs_budget_correlation'] = float(corr_budget)
-
-        print(f"    Corr(model_complexity, optimal_dim) = {corr_dim:.3f}")
-        print(f"    Corr(model_complexity, optimal_budget) = {corr_budget:.3f}")
-
-        if corr_budget > 0.3:
-            print("    → Complex models benefit from larger budgets")
-        elif corr_budget < -0.3:
-            print("    → Complex models prefer smaller, curated reps")
-        else:
-            print("    → Relationship is model-specific")
-
-    # Analyze: does allocation method matter differently for different models?
-    print("\n  ALLOCATION METHOD ANALYSIS:")
-    for alloc in allocation_methods:
-        wins = sum(1 for m in results['optimal_pairings'].values()
-                  if m.get('optimal_allocation') == alloc)
-        print(f"    {alloc}: optimal for {wins}/{len(results['optimal_pairings'])} models")
-
-    return results
-
-
-# =============================================================================
-# EXPERIMENT 7: LOW-DIMENSION REPRESENTATIONS FOR DOWNSTREAM TASKS
-# =============================================================================
-
-def run_low_dimension_experiment(
-    reps: Dict[str, np.ndarray],
-    y: np.ndarray,
-    smiles: List[str],
-    scaffold_groups: np.ndarray,
-    budgets: List[int] = None,
-) -> Dict[str, Any]:
-    """
-    Test ultra-compact HYBRID representations for downstream tasks.
-
-    Uses actual hybrids from kirby.hybrid, not PCA.
-
-    Not just prediction - also similarity search, clustering, visualization.
-    These compact reps may be used as embeddings for other tasks.
-    """
-    print("\n" + "="*60)
-    print("EXPERIMENT 7: LOW-DIMENSION HYBRID REPRESENTATIONS")
-    print("="*60)
-
-    from kirby.hybrid import create_hybrid
-    from sklearn.metrics import silhouette_score
-    from sklearn.cluster import KMeans
-
-    if budgets is None:
-        budgets = [5, 10, 20, 50]
-
-    base_reps = {k: reps[k] for k in ['ecfp4', 'maccs', 'pdv'] if k in reps}
-
-    results = {'budgets': budgets, 'tasks': {}, 'comparison': {}}
-
-    for budget in budgets:
-        print(f"\n  Budget: {budget} dimensions")
-        budget_results = {}
-
-        # Create HYBRID (not just PCA)
-        try:
-            X_hybrid, feature_info = create_hybrid(
-                base_reps, y,
-                allocation_method='greedy',
-                budget=budget,
-                importance_method='random_forest'
-            )
-            actual_dim = X_hybrid.shape[1]
-            budget_results['actual_dim'] = actual_dim
-            print(f"    Actual hybrid dim: {actual_dim}")
-
-            # Also create PCA baseline for comparison
-            X_full = np.hstack([reps[k] for k in sorted(base_reps.keys())])
-            n_comp = min(budget, X_full.shape[1])
-            pca = PCA(n_components=n_comp)
-            X_pca = pca.fit_transform(StandardScaler().fit_transform(X_full))
-
-        except Exception as e:
-            print(f"    Hybrid creation failed: {e}")
-            continue
-
-        # Task 1: Prediction - HYBRID vs PCA
-        gkf = GroupKFold(n_splits=3)
-
-        # Hybrid
-        hybrid_scores = []
-        for train_idx, test_idx in gkf.split(X_hybrid, y, groups=scaffold_groups):
-            model = RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1)
-            model.fit(X_hybrid[train_idx], y[train_idx])
-            hybrid_scores.append(r2_score(y[test_idx], model.predict(X_hybrid[test_idx])))
-        budget_results['hybrid_r2'] = float(np.mean(hybrid_scores))
-
-        # PCA baseline
-        pca_scores = []
-        for train_idx, test_idx in gkf.split(X_pca, y, groups=scaffold_groups):
-            model = RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1)
-            model.fit(X_pca[train_idx], y[train_idx])
-            pca_scores.append(r2_score(y[test_idx], model.predict(X_pca[test_idx])))
-        budget_results['pca_r2'] = float(np.mean(pca_scores))
-
-        budget_results['hybrid_vs_pca'] = float(np.mean(hybrid_scores) - np.mean(pca_scores))
-        print(f"    Prediction: Hybrid R²={np.mean(hybrid_scores):.4f}, PCA R²={np.mean(pca_scores):.4f}")
-        print(f"    Hybrid advantage: {budget_results['hybrid_vs_pca']:+.4f}")
-
-        # Task 2: Similarity preservation (NN property correlation)
-        try:
-            from sklearn.neighbors import NearestNeighbors
-
-            for name, X in [('hybrid', X_hybrid), ('pca', X_pca)]:
-                nn = NearestNeighbors(n_neighbors=6)
-                nn.fit(X)
-                _, indices = nn.kneighbors(X)
-
-                # Mean absolute property difference to 5 nearest neighbors
-                diffs = []
-                for i in range(len(y)):
-                    neighbor_props = y[indices[i, 1:]]
-                    diffs.append(np.mean(np.abs(neighbor_props - y[i])))
-
-                budget_results[f'{name}_neighbor_diff'] = float(np.mean(diffs))
-
-            print(f"    NN property diff: Hybrid={budget_results['hybrid_neighbor_diff']:.4f}, "
-                  f"PCA={budget_results['pca_neighbor_diff']:.4f}")
-        except Exception as e:
-            print(f"    NN analysis failed: {e}")
-
-        # Task 3: Clustering quality
-        try:
-            n_clusters = min(10, len(np.unique(scaffold_groups)))
-
-            for name, X in [('hybrid', X_hybrid), ('pca', X_pca)]:
-                kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-                labels = kmeans.fit_predict(X)
-                sil = silhouette_score(X, labels)
-                budget_results[f'{name}_silhouette'] = float(sil)
-
-            print(f"    Silhouette: Hybrid={budget_results['hybrid_silhouette']:.4f}, "
-                  f"PCA={budget_results['pca_silhouette']:.4f}")
-        except Exception as e:
-            print(f"    Clustering failed: {e}")
-
-        results['tasks'][budget] = budget_results
-
-    # Summary: where does hybrid beat PCA?
-    print("\n  HYBRID vs PCA SUMMARY:")
-    for budget in budgets:
-        if budget in results['tasks']:
-            task = results['tasks'][budget]
-            adv = task.get('hybrid_vs_pca', 0)
-            status = "✓ HYBRID WINS" if adv > 0.01 else ("≈ TIE" if adv > -0.01 else "✗ PCA wins")
-            print(f"    dim={budget}: {status} (Δ={adv:+.4f})")
-
-    return results
-
-
-# =============================================================================
-# EXPERIMENT 8: FORWARD COMPATIBILITY TEST
-# =============================================================================
-
-def run_forward_compatibility_experiment(
-    reps: Dict[str, np.ndarray],
-    y: np.ndarray,
-    scaffold_groups: np.ndarray,
-) -> Dict[str, Any]:
-    """
-    Test that the hybrid framework works with "new" models.
-
-    Key point: The framework is MODEL-AGNOSTIC. It doesn't rely on specific
-    architectures. Any future model can benefit.
-    """
-    print("\n" + "="*60)
-    print("EXPERIMENT 8: FORWARD COMPATIBILITY")
-    print("="*60)
-
-    from kirby.hybrid import create_hybrid
-
-    # Models the hybrid was NOT explicitly designed for
-    # Simulating "future" models by using less common sklearn models
-    novel_models = {}
-
-    # Try importing various models
     try:
         from sklearn.svm import SVR
-        novel_models['svr'] = lambda: SVR(kernel='rbf', C=1.0)
-    except ImportError:
-        pass
-
-    try:
-        from sklearn.gaussian_process import GaussianProcessRegressor
-        from sklearn.gaussian_process.kernels import RBF
-        novel_models['gp'] = lambda: GaussianProcessRegressor(kernel=RBF(), random_state=42)
-    except ImportError:
-        pass
-
-    try:
-        from sklearn.neighbors import KNeighborsRegressor
-        novel_models['knn'] = lambda: KNeighborsRegressor(n_neighbors=5)
+        catalog['svr'] = lambda: SVR(kernel='rbf', C=1.0)
     except ImportError:
         pass
 
     try:
         from sklearn.linear_model import ElasticNet
-        novel_models['elasticnet'] = lambda: ElasticNet(alpha=0.1, l1_ratio=0.5, random_state=42)
+        catalog['elasticnet'] = lambda: ElasticNet(alpha=0.1, l1_ratio=0.5, random_state=42)
     except ImportError:
         pass
 
-    try:
-        from sklearn.ensemble import GradientBoostingRegressor
-        novel_models['gbm'] = lambda: GradientBoostingRegressor(n_estimators=50, random_state=42)
-    except ImportError:
-        pass
-
-    try:
-        from sklearn.ensemble import AdaBoostRegressor
-        novel_models['adaboost'] = lambda: AdaBoostRegressor(n_estimators=50, random_state=42)
-    except ImportError:
-        pass
-
-    print(f"  Testing {len(novel_models)} 'novel' models: {list(novel_models.keys())}")
-
-    results = {'models': {}}
-    base_reps = {k: reps[k] for k in ['ecfp4', 'maccs', 'pdv'] if k in reps}
-
-    for model_name, model_factory in novel_models.items():
-        print(f"\n  {model_name}:")
-        model_results = {}
-
-        # Test 1: Single best rep
-        best_single_r2 = -np.inf
-        best_single_name = None
-
-        for rep_name in ['ecfp4', 'pdv']:
-            if rep_name not in reps:
-                continue
-            X = reps[rep_name]
-            gkf = GroupKFold(n_splits=3)
-            scores = []
-
-            for train_idx, test_idx in gkf.split(X, y, groups=scaffold_groups):
-                scaler = StandardScaler()
-                X_train = scaler.fit_transform(X[train_idx])
-                X_test = scaler.transform(X[test_idx])
-
-                try:
-                    model = model_factory()
-                    model.fit(X_train, y[train_idx])
-                    scores.append(r2_score(y[test_idx], model.predict(X_test)))
-                except Exception:
-                    continue
-
-            if scores:
-                mean_r2 = np.mean(scores)
-                if mean_r2 > best_single_r2:
-                    best_single_r2 = mean_r2
-                    best_single_name = rep_name
-
-        model_results['best_single'] = {'rep': best_single_name, 'r2': float(best_single_r2)}
-        print(f"    Best single ({best_single_name}): R²={best_single_r2:.4f}")
-
-        # Test 2: Hybrid
-        try:
-            X_hybrid, _ = create_hybrid(base_reps, y, allocation_method='greedy', budget=100)
-
-            gkf = GroupKFold(n_splits=3)
-            scores = []
-
-            for train_idx, test_idx in gkf.split(X_hybrid, y, groups=scaffold_groups):
-                scaler = StandardScaler()
-                X_train = scaler.fit_transform(X_hybrid[train_idx])
-                X_test = scaler.transform(X_hybrid[test_idx])
-
-                model = model_factory()
-                model.fit(X_train, y[train_idx])
-                scores.append(r2_score(y[test_idx], model.predict(X_test)))
-
-            hybrid_r2 = np.mean(scores)
-            model_results['hybrid'] = {'r2': float(hybrid_r2)}
-            print(f"    Hybrid: R²={hybrid_r2:.4f}")
-
-            improvement = hybrid_r2 - best_single_r2
-            model_results['improvement'] = float(improvement)
-            status = "✓ IMPROVED" if improvement > 0 else "✗ no improvement"
-            print(f"    Improvement: {improvement:+.4f} {status}")
-
-        except Exception as e:
-            print(f"    Hybrid failed: {e}")
-            model_results['hybrid'] = {'error': str(e)}
-
-        results['models'][model_name] = model_results
-
-    # Summary
-    n_improved = sum(1 for m in results['models'].values()
-                     if m.get('improvement', -1) > 0)
-    results['summary'] = {
-        'n_models_tested': len(novel_models),
-        'n_improved_with_hybrid': n_improved,
-        'forward_compatible': n_improved >= len(novel_models) * 0.5,
-    }
-
-    print(f"\n  SUMMARY: Hybrid improved {n_improved}/{len(novel_models)} novel models")
-    if results['summary']['forward_compatible']:
-        print("  → Framework is FORWARD COMPATIBLE")
-    else:
-        print("  → Mixed results - investigate model-specific patterns")
-
-    return results
+    factories = {}
+    for name in model_names:
+        if name in catalog:
+            factories[name] = catalog[name]
+        else:
+            print(f"  WARNING: model '{name}' not available, skipping")
+    return factories
 
 
 # =============================================================================
-# EXPERIMENT 9: HYBRID VS SINGLE REPRESENTATION
+# EXPERIMENT 1: REPRESENTATION CHARACTERIZATION
 # =============================================================================
 
-def run_hybrid_comparison_experiment(
-    reps: Dict[str, np.ndarray],
-    y: np.ndarray,
-    scaffold_groups: np.ndarray,
-    budgets: List[int] = None
-) -> Dict[str, Any]:
-    """
-    Compare hybrid representations to single representations.
+def run_characterization(data: dict, models: Dict[str, callable], n_folds: int) -> Dict[str, Any]:
+    """Profile each rep's complexity before hybrid construction."""
+    print("\n" + "=" * 70)
+    print("EXPERIMENT 1: REPRESENTATION CHARACTERIZATION")
+    print("=" * 70)
 
-    Key question: Does combining reps beat the best single rep?
-    """
-    print("\n" + "="*60)
-    print("EXPERIMENT 6: HYBRID VS SINGLE REPRESENTATION")
-    print("="*60)
-
-    if budgets is None:
-        budgets = [50, 100, 200]
-
-    from kirby.hybrid import create_hybrid
+    reps = data['reps']
+    labels = data['labels']
+    groups = data['groups']
 
     results = {}
 
-    for budget in budgets:
-        print(f"\n  Budget: {budget}")
-        budget_results = {}
+    for rep_name, X in reps.items():
+        print(f"\n  {rep_name} (dim={X.shape[1]}):")
+        rep_result = {}
 
-        # Single reps (truncated to budget)
-        for rep_name in ['ecfp4', 'maccs', 'pdv']:
-            X = reps[rep_name]
-            # Use PCA to reduce to budget
-            n_comp = min(budget, X.shape[1], X.shape[0] - 1)
-            X_reduced = PCA(n_components=n_comp).fit_transform(StandardScaler().fit_transform(X))
+        # Intrinsic dimensionality
+        dim_info = compute_intrinsic_dimensionality(X)
+        rep_result['intrinsic_dim'] = dim_info
+        print(f"    PCA95={dim_info.get('pca_95', '?')}, MLE={dim_info.get('mle', '?'):.1f}"
+              if dim_info.get('mle') else f"    PCA95={dim_info.get('pca_95', '?')}")
 
-            gkf = GroupKFold(n_splits=3)
-            scores = []
-            for train_idx, test_idx in gkf.split(X_reduced, y, groups=scaffold_groups):
-                model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-                model.fit(X_reduced[train_idx], y[train_idx])
-                scores.append(r2_score(y[test_idx], model.predict(X_reduced[test_idx])))
-
-            budget_results[rep_name] = float(np.mean(scores))
-            print(f"    {rep_name}: R²={np.mean(scores):.4f}")
-
-        # Hybrid
+        # Mutual information (use PCA-reduced for stability)
+        n_comp = min(50, X.shape[1], X.shape[0] - 1)
+        X_reduced = PCA(n_components=n_comp).fit_transform(StandardScaler().fit_transform(X))
         try:
-            base_reps = {k: reps[k] for k in ['ecfp4', 'maccs', 'pdv']}
-            X_hybrid, _ = create_hybrid(base_reps, y, allocation_method='greedy', budget=budget)
-
-            gkf = GroupKFold(n_splits=3)
-            scores = []
-            for train_idx, test_idx in gkf.split(X_hybrid, y, groups=scaffold_groups):
-                model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-                model.fit(X_hybrid[train_idx], y[train_idx])
-                scores.append(r2_score(y[test_idx], model.predict(X_hybrid[test_idx])))
-
-            budget_results['hybrid'] = float(np.mean(scores))
-            print(f"    hybrid: R²={np.mean(scores):.4f}")
-
-            # Calculate improvement over best single
-            best_single = max([budget_results[k] for k in ['ecfp4', 'maccs', 'pdv']])
-            improvement = budget_results['hybrid'] - best_single
-            budget_results['improvement_over_best'] = float(improvement)
-            print(f"    Improvement over best single: {improvement:+.4f}")
-
+            mi = estimate_mutual_information_knn(X_reduced, labels, k=5)
+            rep_result['mutual_info'] = float(mi)
+            print(f"    MI={mi:.4f}")
         except Exception as e:
-            print(f"    hybrid: FAILED - {e}")
+            rep_result['mutual_info'] = None
+            print(f"    MI failed: {e}")
 
-        results[budget] = budget_results
+        # Effective rank
+        rep_result['effective_rank'] = compute_effective_rank(X)
+        print(f"    Effective rank={rep_result['effective_rank']:.1f}")
+
+        # Per-model baseline R²
+        rep_result['baselines'] = {}
+        scores_str = []
+        for model_name, model_factory in models.items():
+            mean_r2, std_r2 = evaluate_single_rep_cv(X, labels, groups, model_factory, n_folds)
+            rep_result['baselines'][model_name] = {'r2_mean': mean_r2, 'r2_std': std_r2}
+            scores_str.append(f"{model_name}={mean_r2:.3f}")
+        print(f"    Baselines: {', '.join(scores_str)}")
+
+        results[rep_name] = rep_result
+
+    # Full concatenation baseline
+    X_concat = np.hstack(list(reps.values()))
+    concat_result = {'baselines': {}}
+    print(f"\n  all_concat (dim={X_concat.shape[1]}):")
+    scores_str = []
+    for model_name, model_factory in models.items():
+        mean_r2, std_r2 = evaluate_single_rep_cv(X_concat, labels, groups, model_factory, n_folds)
+        concat_result['baselines'][model_name] = {'r2_mean': mean_r2, 'r2_std': std_r2}
+        scores_str.append(f"{model_name}={mean_r2:.3f}")
+    print(f"    Baselines: {', '.join(scores_str)}")
+    results['all_concat'] = concat_result
 
     return results
 
 
 # =============================================================================
-# MAIN EXPERIMENT RUNNER
+# EXPERIMENT 2: COMPLEXITY MATCHING GRID
 # =============================================================================
 
-@dataclass
-class ExperimentConfig:
-    """Configuration for experiments."""
-    datasets: List[str] = field(default_factory=lambda: ['logd'])
-    experiments: List[str] = field(default_factory=lambda: [
-        # Original experiments (theory validation)
-        'intrinsic_dim', 'mutual_info', 'learning_curves',
-        'generalization_gap', 'double_descent',
-        # YOUR CORE THESIS experiments
-        'complexity_tradeoff',      # Model complexity × rep complexity matching
-        'low_dimension',            # Compact reps for downstream tasks
-        'forward_compatibility',    # Works with novel models
-        'hybrid_comparison',        # Hybrid vs single rep
-    ])
-    qm9_samples: int = 5000
+def run_complexity_matching_grid(
+    data: dict,
+    models: Dict[str, callable],
+    budgets: List[int],
+    allocation_methods: List[str],
+    importance_methods: List[str],
+    n_folds: int,
+) -> Dict[str, Any]:
+    """Central experiment: model complexity × rep complexity optimal pairing."""
+    print("\n" + "=" * 70)
+    print("EXPERIMENT 2: COMPLEXITY MATCHING GRID")
+    print("=" * 70)
+
+    reps = data['reps']
+    labels = data['labels']
+    groups = data['groups']
+
+    total_dim = sum(v.shape[1] for v in reps.values())
+    full_budgets = budgets + [total_dim]
+
+    total = len(models) * len(full_budgets) * len(allocation_methods) * len(importance_methods)
+    print(f"  {len(models)} models x {len(full_budgets)} budgets x "
+          f"{len(allocation_methods)} allocations x {len(importance_methods)} importance = {total} configs\n")
+
+    results = {'configs': [], 'best_by_model': {}, 'baselines': {}}
+    idx = 0
+
+    # Baselines: full concatenation per model
+    X_concat = np.hstack(list(reps.values()))
+    print("  Computing baselines (full concat)...")
+    for model_name, model_factory in models.items():
+        mean_r2, std_r2 = evaluate_single_rep_cv(X_concat, labels, groups, model_factory, n_folds)
+        results['baselines'][model_name] = {
+            'full_concat_r2': mean_r2, 'full_concat_std': std_r2, 'dimension': X_concat.shape[1],
+        }
+        print(f"    {model_name}: R²={mean_r2:.4f} (dim={X_concat.shape[1]})")
+
+    # Baselines: best single rep per model
+    print("  Computing baselines (best single rep)...")
+    for model_name, model_factory in models.items():
+        best_rep = None
+        best_r2 = -np.inf
+        for rep_name, X in reps.items():
+            mean_r2, _ = evaluate_single_rep_cv(X, labels, groups, model_factory, n_folds)
+            if mean_r2 > best_r2:
+                best_r2 = mean_r2
+                best_rep = rep_name
+        results['baselines'][model_name]['best_single_rep'] = best_rep
+        results['baselines'][model_name]['best_single_r2'] = best_r2
+        print(f"    {model_name}: best_single={best_rep} R²={best_r2:.4f}")
+
+    # Baselines: PCA to each budget per model
+    print("  Computing baselines (PCA)...")
+    pca_baselines = {}
+    for budget in budgets:
+        n_comp = min(budget, X_concat.shape[1], X_concat.shape[0] - 1)
+        pca_baselines[budget] = {}
+        for model_name, model_factory in models.items():
+            gkf = GroupKFold(n_splits=n_folds)
+            pca_scores = []
+            for train_idx, val_idx in gkf.split(X_concat, labels, groups=groups):
+                pca = PCA(n_components=n_comp)
+                scaler = StandardScaler()
+                X_train_s = scaler.fit_transform(X_concat[train_idx])
+                X_val_s = scaler.transform(X_concat[val_idx])
+                X_train_p = pca.fit_transform(X_train_s)
+                X_val_p = pca.transform(X_val_s)
+                m = model_factory()
+                m.fit(X_train_p, labels[train_idx])
+                pca_scores.append(r2_score(labels[val_idx], m.predict(X_val_p)))
+            pca_baselines[budget][model_name] = float(np.mean(pca_scores))
+    results['pca_baselines'] = pca_baselines
+
+    # Main grid search
+    print("\n  Running hybrid grid...")
+    for model_name, model_factory in models.items():
+        best_score = -np.inf
+        best_config = None
+
+        for alloc in allocation_methods:
+            for imp in importance_methods:
+                for budget in full_budgets:
+                    idx += 1
+                    try:
+                        mean_r2, std_r2, n_feat = evaluate_cv(
+                            reps, labels, groups, model_factory, n_folds,
+                            allocation_method=alloc,
+                            importance_method=imp,
+                            budget=budget,
+                        )
+
+                        config = {
+                            'model': model_name,
+                            'allocation': alloc,
+                            'importance': imp,
+                            'budget': budget,
+                            'r2_mean': mean_r2,
+                            'r2_std': std_r2,
+                            'n_features': n_feat,
+                        }
+                        results['configs'].append(config)
+
+                        if mean_r2 > best_score:
+                            best_score = mean_r2
+                            best_config = config
+
+                        print(f"    [{idx}/{total}] {model_name}/{alloc}/{imp}/b={budget}: "
+                              f"R²={mean_r2:.4f}+/-{std_r2:.3f} dim={n_feat}")
+
+                    except Exception as e:
+                        print(f"    [{idx}/{total}] {model_name}/{alloc}/{imp}/b={budget}: FAILED - {e}")
+
+        if best_config:
+            results['best_by_model'][model_name] = best_config
+            baseline_r2 = results['baselines'][model_name]['full_concat_r2']
+            delta = best_config['r2_mean'] - baseline_r2
+            print(f"  >> {model_name} BEST: {best_config['allocation']}/{best_config['importance']}"
+                  f"/b={best_config['budget']} -> R²={best_config['r2_mean']:.4f} "
+                  f"(vs full_concat {baseline_r2:.4f}, delta={delta:+.4f})")
+
+    # Analysis: heatmap data (model x budget -> best R²)
+    heatmap = {}
+    for model_name in models:
+        heatmap[model_name] = {}
+        model_configs = [c for c in results['configs'] if c['model'] == model_name]
+        for budget in full_budgets:
+            budget_configs = [c for c in model_configs if c['budget'] == budget]
+            if budget_configs:
+                best = max(budget_configs, key=lambda c: c['r2_mean'])
+                heatmap[model_name][budget] = best['r2_mean']
+    results['heatmap'] = heatmap
+
+    # Analysis: which importance method wins per model
+    importance_wins = {imp: 0 for imp in importance_methods}
+    for model_name, best in results['best_by_model'].items():
+        importance_wins[best['importance']] += 1
+    results['importance_wins'] = importance_wins
+
+    print("\n  IMPORTANCE METHOD WINS:")
+    for imp, count in sorted(importance_wins.items(), key=lambda x: -x[1]):
+        print(f"    {imp}: {count}/{len(models)}")
+
+    return results
 
 
-def run_all_experiments(config: ExperimentConfig, output_dir: str = 'results/complexity_theory'):
-    """Run all complexity theory experiments."""
-    output_path = Path(output_dir)
+# =============================================================================
+# EXPERIMENT 3: CROSS-CONTEXT ANALYSIS
+# =============================================================================
+
+def run_cross_context_analysis(
+    datasets: Dict[str, dict],
+    n_folds: int,
+) -> Dict[str, Any]:
+    """Optimal config changes across datasets — proving context-dependence."""
+    print("\n" + "=" * 70)
+    print("EXPERIMENT 3: CROSS-CONTEXT ANALYSIS")
+    print("=" * 70)
+
+    results = {}
+
+    for ds_name, data in datasets.items():
+        print(f"\n  Running find_best_hybrid on {ds_name}...")
+        start = time.time()
+
+        try:
+            # Add SVR and ElasticNet as custom novel models
+            from sklearn.svm import SVR
+            from sklearn.linear_model import ElasticNet
+
+            novel_models = {
+                'svr': SVR(kernel='rbf', C=1.0),
+                'elasticnet': ElasticNet(alpha=0.1, l1_ratio=0.5, random_state=42),
+            }
+
+            search_result = find_best_hybrid(
+                base_reps=data['reps'],
+                labels=data['labels'],
+                groups=data['groups'],
+                speed='medium',
+                verbose=False,
+            )
+
+            # Also test novel models at best config
+            best = search_result.best_overall
+            if best:
+                bp = best['blueprint']
+                novel_results = {}
+                for novel_name, novel_model in novel_models.items():
+                    try:
+                        gkf = GroupKFold(n_splits=n_folds)
+                        sample_X = next(iter(data['reps'].values()))
+                        novel_scores = []
+
+                        for train_idx, val_idx in gkf.split(sample_X, data['labels'], groups=data['groups']):
+                            train_reps = {k: v[train_idx] for k, v in data['reps'].items()}
+                            val_reps = {k: v[val_idx] for k, v in data['reps'].items()}
+                            y_train = data['labels'][train_idx]
+                            y_val = data['labels'][val_idx]
+
+                            X_train, fi = create_hybrid(
+                                train_reps, y_train,
+                                allocation_method=bp.allocation_method,
+                                budget=bp.budget,
+                                importance_method=bp.importance_method,
+                            )
+                            X_val = apply_feature_selection(val_reps, fi)
+
+                            scaler = StandardScaler()
+                            X_train_s = scaler.fit_transform(X_train)
+                            X_val_s = scaler.transform(X_val)
+
+                            m = deepcopy(novel_model)
+                            m.fit(X_train_s, y_train)
+                            novel_scores.append(r2_score(y_val, m.predict(X_val_s)))
+
+                        novel_results[novel_name] = float(np.mean(novel_scores))
+                        print(f"    {novel_name} on {ds_name}: R²={np.mean(novel_scores):.4f}")
+                    except Exception as e:
+                        print(f"    {novel_name} on {ds_name}: FAILED - {e}")
+
+            elapsed = time.time() - start
+
+            ds_result = {
+                'n_samples': len(data['labels']),
+                'elapsed_seconds': elapsed,
+                'best_model': best['model'] if best else None,
+                'best_r2': best['score_mean'] if best else None,
+                'best_allocation': best['blueprint'].allocation_method if best else None,
+                'best_importance': best['blueprint'].importance_method if best else None,
+                'best_budget': best['blueprint'].budget if best else None,
+                'best_dim': best['n_features'] if best else None,
+                'baselines': search_result.baselines,
+                'performance_matrix': search_result.performance_matrix,
+                'novel_models': novel_results if best else {},
+            }
+            results[ds_name] = ds_result
+
+            print(f"    Best: {ds_result['best_model']}, R²={ds_result['best_r2']:.4f}, "
+                  f"alloc={ds_result['best_allocation']}, imp={ds_result['best_importance']}, "
+                  f"budget={ds_result['best_budget']}")
+
+        except Exception as e:
+            print(f"    {ds_name}: FAILED - {e}")
+            results[ds_name] = {'error': str(e)}
+
+    # Cross-dataset comparison table
+    print("\n  CROSS-CONTEXT COMPARISON:")
+    print(f"  {'Dataset':<10} {'N':<6} {'Best Model':<12} {'Importance':<15} {'Budget':<8} {'R²':<8}")
+    print("  " + "-" * 65)
+    for ds_name, r in results.items():
+        if 'error' not in r:
+            print(f"  {ds_name:<10} {r['n_samples']:<6} {r['best_model']:<12} "
+                  f"{r['best_importance']:<15} {r['best_budget']:<8} {r['best_r2']:.4f}")
+
+    return results
+
+
+# =============================================================================
+# EXPERIMENT 4: IMPORTANCE WEIGHTS AS LEARNED METRICS
+# =============================================================================
+
+def run_importance_weight_metrics(
+    data: dict,
+    importance_methods: List[str],
+    n_folds: int,
+    budget: int = 25,
+) -> Dict[str, Any]:
+    """Bridge Phase 5 benchmark findings: importance scores define learned metric spaces."""
+    print("\n" + "=" * 70)
+    print("EXPERIMENT 4: IMPORTANCE WEIGHTS AS LEARNED METRICS")
+    print("=" * 70)
+
+    # Import evaluation functions from benchmark
+    from benchmark_importance_aggregation import evaluate_weighted_knn, evaluate_similarity_retrieval
+
+    reps = data['reps']
+    labels = data['labels']
+    groups = data['groups']
+
+    X_concat = np.hstack(list(reps.values()))
+    print(f"  Concatenated features: {X_concat.shape}")
+
+    results = {'methods': {}, 'cross_test': {}, 'low_dim': {}}
+
+    # Compute importance with each method
+    importances = {}
+    for method in importance_methods:
+        print(f"  Computing {method}...", end=' ', flush=True)
+        start = time.time()
+        try:
+            imp_dict = compute_feature_importance(reps, labels, method=method)
+            imp_concat = np.concatenate([imp_dict[rep] for rep in sorted(imp_dict.keys())])
+            importances[method] = imp_concat
+            elapsed = time.time() - start
+            print(f"done ({elapsed:.1f}s)")
+        except Exception as e:
+            print(f"FAILED: {e}")
+
+    # Evaluate each method: unweighted kNN vs weighted kNN
+    print("\n  Evaluating as kNN weights...")
+    for method, imp_scores in importances.items():
+        try:
+            knn_result = evaluate_weighted_knn(X_concat, labels, imp_scores, groups, n_folds)
+            sim_result = evaluate_similarity_retrieval(X_concat, labels, imp_scores, groups, n_folds)
+
+            k10 = knn_result.get(10, knn_result.get(5, {}))
+            results['methods'][method] = {
+                'knn': knn_result,
+                'similarity': sim_result,
+                'knn_delta_k10': k10.get('delta', 0),
+                'sim_delta_r2': sim_result.get('delta_r2', 0),
+            }
+
+            print(f"    {method}: kNN delta={k10.get('delta', 0):+.4f}, "
+                  f"sim delta={sim_result.get('delta_r2', 0):+.4f}")
+        except Exception as e:
+            print(f"    {method}: FAILED - {e}")
+
+    # Cross-test: selection by method A, weighting by method B
+    print("\n  Cross-test matrix (select × weight)...")
+    method_names = list(importances.keys())
+    if len(method_names) >= 2:
+        for select_method in method_names[:4]:  # limit to avoid explosion
+            select_scores = importances[select_method]
+            top_idx = np.argsort(select_scores)[-budget:]
+            X_subset = X_concat[:, top_idx]
+
+            for weight_method in method_names[:4]:
+                weight_scores = importances[weight_method][top_idx]
+                try:
+                    sim_result = evaluate_similarity_retrieval(
+                        X_subset, labels, weight_scores, groups, n_folds)
+                    key = f"{select_method}__x__{weight_method}"
+                    results['cross_test'][key] = sim_result['weighted_r2']
+                except Exception:
+                    pass
+
+    # Low-dim: budget=25 selected features + importance weighting
+    print(f"\n  Low-dim (budget={budget}) selected + weighted...")
+    for method, imp_scores in importances.items():
+        top_idx = np.argsort(imp_scores)[-budget:]
+        X_subset = X_concat[:, top_idx]
+        subset_scores = imp_scores[top_idx]
+        try:
+            sim_result = evaluate_similarity_retrieval(
+                X_subset, labels, subset_scores, groups, n_folds)
+            results['low_dim'][method] = {
+                'weighted_r2': sim_result['weighted_r2'],
+                'unweighted_r2': sim_result['unweighted_r2'],
+                'delta_r2': sim_result['delta_r2'],
+            }
+            print(f"    {method}: weighted R²={sim_result['weighted_r2']:.4f}, "
+                  f"unweighted R²={sim_result['unweighted_r2']:.4f}")
+        except Exception as e:
+            print(f"    {method}: FAILED - {e}")
+
+    # Summary: which method produces the best metric space?
+    if results['methods']:
+        best_knn = max(results['methods'].items(), key=lambda x: x[1].get('knn_delta_k10', -999))
+        best_sim = max(results['methods'].items(), key=lambda x: x[1].get('sim_delta_r2', -999))
+        print(f"\n  Best kNN weight source: {best_knn[0]} (delta={best_knn[1]['knn_delta_k10']:+.4f})")
+        print(f"  Best similarity weight source: {best_sim[0]} (delta={best_sim[1]['sim_delta_r2']:+.4f})")
+        results['best_knn_method'] = best_knn[0]
+        results['best_sim_method'] = best_sim[0]
+
+    return results
+
+
+# =============================================================================
+# EXPERIMENT 6: WITHIN-FAMILY MODEL COMPLEXITY GRADIENT
+# =============================================================================
+
+def _get_model_family_variants() -> Dict[str, List[Tuple[str, callable, float]]]:
+    """Return model families with complexity gradients.
+
+    Each family: list of (variant_name, factory_fn, capacity_index).
+    capacity_index is a monotonically increasing proxy for model capacity.
+    """
+    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.linear_model import Ridge
+    from sklearn.neighbors import KNeighborsRegressor
+    from sklearn.neural_network import MLPRegressor
+
+    families = {
+        'RF': [
+            ('depth=3', lambda: RandomForestRegressor(n_estimators=100, max_depth=3, random_state=42, n_jobs=-1), 1),
+            ('depth=5', lambda: RandomForestRegressor(n_estimators=100, max_depth=5, random_state=42, n_jobs=-1), 2),
+            ('depth=10', lambda: RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1), 3),
+            ('depth=None', lambda: RandomForestRegressor(n_estimators=100, max_depth=None, random_state=42, n_jobs=-1), 4),
+        ],
+        'Ridge': [
+            ('alpha=100', lambda: Ridge(alpha=100.0), 1),
+            ('alpha=10', lambda: Ridge(alpha=10.0), 2),
+            ('alpha=1', lambda: Ridge(alpha=1.0), 3),
+            ('alpha=0.01', lambda: Ridge(alpha=0.01), 4),
+        ],
+        'kNN': [
+            ('k=20', lambda: KNeighborsRegressor(n_neighbors=20, n_jobs=-1), 1),
+            ('k=10', lambda: KNeighborsRegressor(n_neighbors=10, n_jobs=-1), 2),
+            ('k=5', lambda: KNeighborsRegressor(n_neighbors=5, n_jobs=-1), 3),
+            ('k=1', lambda: KNeighborsRegressor(n_neighbors=1, n_jobs=-1), 4),
+        ],
+        'MLP': [
+            ('16', lambda: MLPRegressor(hidden_layer_sizes=(16,), random_state=42, max_iter=500), 1),
+            ('64', lambda: MLPRegressor(hidden_layer_sizes=(64,), random_state=42, max_iter=500), 2),
+            ('128,64', lambda: MLPRegressor(hidden_layer_sizes=(128, 64), random_state=42, max_iter=500), 3),
+            ('256,128,64', lambda: MLPRegressor(hidden_layer_sizes=(256, 128, 64), random_state=42, max_iter=500), 4),
+        ],
+    }
+
+    try:
+        from xgboost import XGBRegressor
+        families['XGBoost'] = [
+            ('depth=2', lambda: XGBRegressor(n_estimators=100, max_depth=2, random_state=42, n_jobs=-1, verbosity=0), 1),
+            ('depth=4', lambda: XGBRegressor(n_estimators=100, max_depth=4, random_state=42, n_jobs=-1, verbosity=0), 2),
+            ('depth=6', lambda: XGBRegressor(n_estimators=100, max_depth=6, random_state=42, n_jobs=-1, verbosity=0), 3),
+            ('depth=None', lambda: XGBRegressor(n_estimators=100, max_depth=0, random_state=42, n_jobs=-1, verbosity=0, tree_method='hist'), 4),
+        ]
+    except ImportError:
+        pass
+
+    return families
+
+
+def evaluate_cv_with_train(
+    base_reps: Dict[str, np.ndarray],
+    labels: np.ndarray,
+    groups: np.ndarray,
+    model_factory,
+    n_folds: int = 5,
+    allocation_method: str = 'greedy',
+    importance_method: str = 'treeshap',
+    budget: int = 100,
+) -> Tuple[float, float, float, float, int]:
+    """Like evaluate_cv but also returns train R².
+
+    Returns (val_r2_mean, val_r2_std, train_r2_mean, train_r2_std, n_features).
+    """
+    gkf = GroupKFold(n_splits=n_folds)
+    sample_X = next(iter(base_reps.values()))
+    val_scores = []
+    train_scores = []
+    n_feats = []
+
+    for train_idx, val_idx in gkf.split(sample_X, labels, groups=groups):
+        train_reps = {k: v[train_idx] for k, v in base_reps.items()}
+        val_reps = {k: v[val_idx] for k, v in base_reps.items()}
+        y_train, y_val = labels[train_idx], labels[val_idx]
+
+        try:
+            X_train, feature_info = create_hybrid(
+                train_reps, y_train,
+                allocation_method=allocation_method,
+                budget=budget,
+                importance_method=importance_method,
+            )
+            X_val = apply_feature_selection(val_reps, feature_info)
+        except Exception:
+            continue
+
+        scaler = StandardScaler()
+        X_train_s = scaler.fit_transform(X_train)
+        X_val_s = scaler.transform(X_val)
+
+        model = model_factory()
+        model.fit(X_train_s, y_train)
+        val_scores.append(r2_score(y_val, model.predict(X_val_s)))
+        train_scores.append(r2_score(y_train, model.predict(X_train_s)))
+        n_feats.append(X_train.shape[1])
+
+    if not val_scores:
+        return float('nan'), float('nan'), float('nan'), float('nan'), 0
+    return (
+        float(np.mean(val_scores)), float(np.std(val_scores)),
+        float(np.mean(train_scores)), float(np.std(train_scores)),
+        int(np.mean(n_feats)),
+    )
+
+
+def run_within_family_complexity(
+    data: dict,
+    budgets: List[int],
+    n_folds: int,
+    families: List[str] = None,
+    search_speed: str = 'fast',
+) -> Dict[str, Any]:
+    """Exp 6: Vary complexity within each model family to show optimal budget shifts.
+
+    For each model variant, runs find_best_hybrid() with that variant as the
+    sole model. The library searches importance methods, allocation methods, and
+    budgets to find the true best hybrid for that specific model capacity.
+    Then we also collect train R² for bias-variance analysis (Exp 9d).
+    """
+    print("\n" + "=" * 70)
+    print("EXPERIMENT 6: WITHIN-FAMILY MODEL COMPLEXITY GRADIENT")
+    print("=" * 70)
+
+    reps = data['reps']
+    labels = data['labels']
+    groups = data['groups']
+
+    all_families = _get_model_family_variants()
+    if families:
+        all_families = {k: v for k, v in all_families.items() if k in families}
+
+    results = {'families': {}, 'search_speed': search_speed}
+
+    for fam_name, variants in all_families.items():
+        print(f"\n  Family: {fam_name} ({len(variants)} variants, search_speed={search_speed})")
+        fam_result = {'heatmap': {}, 'optimal_budget': {}, 'train_val_gap': {}}
+
+        for var_name, var_factory, capacity_idx in variants:
+            print(f"\n    Variant: {var_name} (capacity={capacity_idx})")
+            fam_result['heatmap'][var_name] = {}
+
+            # Run find_best_hybrid with this variant as the sole model
+            try:
+                search = find_best_hybrid(
+                    reps, labels, groups=groups,
+                    models={var_name: var_factory()},
+                    speed=search_speed,
+                    budgets=budgets,
+                    verbose=False,
+                )
+            except Exception as e:
+                print(f"      find_best_hybrid failed: {e}")
+                fam_result['optimal_budget'][var_name] = {
+                    'budget': None, 'r2': float('nan'), 'capacity_index': capacity_idx,
+                }
+                continue
+
+            # Extract best score at each budget from all_results
+            for budget in budgets:
+                budget_results = [r for r in search.all_results
+                                  if r['budget'] == budget and not np.isnan(r['score_mean'])]
+                if budget_results:
+                    best_at_budget = max(budget_results, key=lambda r: r['score_mean'])
+                    bp = best_at_budget['blueprint']
+
+                    # Get train R² for bias-variance analysis
+                    try:
+                        val_r2, val_std, train_r2, train_std, n_feat = evaluate_cv_with_train(
+                            reps, labels, groups, var_factory, n_folds,
+                            allocation_method=bp.allocation_method,
+                            importance_method=bp.importance_method,
+                            budget=budget,
+                        )
+                    except Exception:
+                        val_r2 = best_at_budget['score_mean']
+                        val_std = best_at_budget['score_std']
+                        train_r2, train_std = float('nan'), float('nan')
+                        n_feat = best_at_budget.get('n_features', 0)
+
+                    fam_result['heatmap'][var_name][budget] = {
+                        'val_r2': val_r2, 'val_std': val_std,
+                        'train_r2': train_r2, 'train_std': train_std,
+                        'n_features': n_feat,
+                        'importance': bp.importance_method,
+                        'allocation': bp.allocation_method,
+                    }
+                    gap = train_r2 - val_r2 if not np.isnan(train_r2) else float('nan')
+                    fam_result['train_val_gap'][f"{var_name}_b{budget}"] = gap
+
+                    print(f"      b={budget}: R²={val_r2:.4f}±{val_std:.3f}, "
+                          f"train_R²={train_r2:.4f}, gap={gap:.3f} "
+                          f"[{bp.importance_method}/{bp.allocation_method}]")
+
+            # Optimal budget comes from find_best_hybrid's own search
+            best = search.best_overall
+            if best:
+                fam_result['optimal_budget'][var_name] = {
+                    'budget': best['blueprint'].budget,
+                    'r2': best['score_mean'],
+                    'capacity_index': capacity_idx,
+                    'importance': best['blueprint'].importance_method,
+                    'allocation': best['blueprint'].allocation_method,
+                }
+                print(f"      >> optimal: b={best['blueprint'].budget}, R²={best['score_mean']:.4f} "
+                      f"[{best['blueprint'].importance_method}/{best['blueprint'].allocation_method}]")
+            else:
+                fam_result['optimal_budget'][var_name] = {
+                    'budget': None, 'r2': float('nan'), 'capacity_index': capacity_idx,
+                }
+
+        # Correlation: capacity_index vs optimal_budget
+        capacities = []
+        opt_budgets = []
+        for var_name, info in fam_result['optimal_budget'].items():
+            if info.get('budget') is not None:
+                capacities.append(info['capacity_index'])
+                opt_budgets.append(info['budget'])
+
+        if len(capacities) >= 3:
+            rho, pval = spearmanr(capacities, opt_budgets)
+            fam_result['capacity_budget_correlation'] = {'rho': float(rho), 'p': float(pval)}
+            print(f"\n  >> {fam_name}: capacity vs optimal_budget: rho={rho:.3f}, p={pval:.3f}")
+        else:
+            fam_result['capacity_budget_correlation'] = None
+
+        results['families'][fam_name] = fam_result
+
+    # Summary across all families
+    print("\n  SUMMARY: optimal budget by variant")
+    for fam_name, fam_result in results['families'].items():
+        for var_name, info in fam_result['optimal_budget'].items():
+            b = info.get('budget', '?')
+            r2 = info.get('r2', float('nan'))
+            imp = info.get('importance', '?')
+            print(f"    {fam_name}/{var_name}: optimal_budget={b}, R²={r2:.4f} [{imp}]")
+
+    return results
+
+
+# =============================================================================
+# EXPERIMENT 7: DATA COMPLEXITY VIA SCAFFOLD PARTITIONING
+# =============================================================================
+
+def run_data_complexity_analysis(
+    data: dict,
+    models: Dict[str, callable],
+    budgets: List[int],
+    n_folds: int,
+    partitions: List[str] = None,
+    search_speed: str = 'fast',
+) -> Dict[str, Any]:
+    """Exp 7: Optimal config depends on data subpopulation complexity.
+
+    Uses find_best_hybrid() on each subpopulation so we get a properly-searched
+    optimal config per partition, not just greedy/treeshap.
+    """
+    print("\n" + "=" * 70)
+    print("EXPERIMENT 7: DATA COMPLEXITY VIA SCAFFOLD PARTITIONING")
+    print("=" * 70)
+
+    reps = data['reps']
+    labels = data['labels']
+    groups = data['groups']
+    smiles = data['smiles']
+
+    all_partitions = partitions or ['scaffold_frequency', 'molecular_complexity', 'target_variance']
+    results = {'partitions': {}, 'search_speed': search_speed}
+
+    for partition_name in all_partitions:
+        print(f"\n  Partition: {partition_name}")
+
+        # Compute partition masks
+        if partition_name == 'scaffold_frequency':
+            # Common (top 20% scaffolds) vs rare (bottom 80%)
+            unique_scaffolds, scaffold_counts = np.unique(groups, return_counts=True)
+            count_threshold = np.percentile(scaffold_counts, 80)  # top 20% most frequent
+            frequent_scaffolds = set(unique_scaffolds[scaffold_counts >= count_threshold])
+            mask_easy = np.array([g in frequent_scaffolds for g in groups])
+            mask_hard = ~mask_easy
+
+        elif partition_name == 'molecular_complexity':
+            # Heavy atom count: <= median vs > median
+            try:
+                from rdkit import Chem
+                from rdkit.Chem import Descriptors
+                hac = np.array([Descriptors.HeavyAtomCount(Chem.MolFromSmiles(s))
+                                if Chem.MolFromSmiles(s) else 0 for s in smiles])
+                median_hac = np.median(hac[hac > 0])
+                mask_easy = hac <= median_hac
+                mask_hard = hac > median_hac
+            except ImportError:
+                print("    RDKit not available, skipping molecular_complexity")
+                continue
+
+        elif partition_name == 'target_variance':
+            # Scaffolds with low target variance vs high
+            unique_scaffolds = np.unique(groups)
+            scaffold_var = {}
+            for s in unique_scaffolds:
+                s_labels = labels[groups == s]
+                if len(s_labels) >= 2:
+                    scaffold_var[s] = np.var(s_labels)
+            if not scaffold_var:
+                print("    Not enough scaffolds with 2+ members, skipping")
+                continue
+            median_var = np.median(list(scaffold_var.values()))
+            mask_easy = np.array([scaffold_var.get(g, 0) <= median_var for g in groups])
+            mask_hard = ~mask_easy
+        else:
+            print(f"    Unknown partition: {partition_name}, skipping")
+            continue
+
+        n_easy = mask_easy.sum()
+        n_hard = mask_hard.sum()
+        print(f"    easy={n_easy}, hard={n_hard}")
+
+        if n_easy < 50 or n_hard < 50:
+            print("    Subpopulation too small, skipping")
+            continue
+
+        part_result = {'easy': {}, 'hard': {}, 'n_easy': int(n_easy), 'n_hard': int(n_hard)}
+
+        for subpop_name, mask in [('easy', mask_easy), ('hard', mask_hard)]:
+            sub_reps = {k: v[mask] for k, v in reps.items()}
+            sub_labels = labels[mask]
+            sub_groups = groups[mask]
+            n_unique_groups = len(np.unique(sub_groups))
+
+            if n_unique_groups < 2:
+                print(f"    {subpop_name}: not enough groups for CV, skipping")
+                continue
+
+            # Complexity metrics
+            X_concat = np.hstack(list(sub_reps.values()))
+            metrics = {}
+            try:
+                n_comp = min(50, X_concat.shape[1], X_concat.shape[0] - 1)
+                X_reduced = PCA(n_components=n_comp).fit_transform(
+                    StandardScaler().fit_transform(X_concat))
+                metrics['mi'] = float(estimate_mutual_information_knn(X_reduced, sub_labels, k=5))
+            except Exception:
+                metrics['mi'] = None
+            metrics['effective_rank'] = compute_effective_rank(X_concat)
+            dim_info = compute_intrinsic_dimensionality(X_concat)
+            metrics['pca_95'] = dim_info.get('pca_95')
+            metrics['mle_dim'] = dim_info.get('mle')
+            metrics['n_samples'] = int(mask.sum())
+
+            print(f"    {subpop_name}: eff_rank={metrics['effective_rank']:.1f}, "
+                  f"MI={metrics.get('mi', '?')}, PCA95={metrics.get('pca_95', '?')}")
+
+            # Use find_best_hybrid for proper search
+            try:
+                search = find_best_hybrid(
+                    sub_reps, sub_labels, groups=sub_groups,
+                    speed=search_speed,
+                    budgets=budgets,
+                    verbose=False,
+                )
+                best = search.best_overall
+                best_config = {
+                    'model': best['model'],
+                    'budget': best['blueprint'].budget,
+                    'r2': best['score_mean'],
+                    'r2_std': best['score_std'],
+                    'allocation': best['blueprint'].allocation_method,
+                    'importance': best['blueprint'].importance_method,
+                    'n_features': best['n_features'],
+                } if best else None
+
+                # Also extract best-by-model for richer comparison
+                best_by_model = {}
+                for model_name, mbest in search.best_by_model.items():
+                    best_by_model[model_name] = {
+                        'r2': mbest['score_mean'],
+                        'budget': mbest['blueprint'].budget,
+                        'importance': mbest['blueprint'].importance_method,
+                    }
+
+            except Exception as e:
+                print(f"    {subpop_name}: find_best_hybrid failed - {e}")
+                best_config = None
+                best_by_model = {}
+
+            part_result[subpop_name] = {
+                'metrics': metrics,
+                'best': best_config,
+                'best_by_model': best_by_model,
+                'baselines': search.baselines if best_config else {},
+            }
+            if best_config:
+                print(f"    {subpop_name} best: {best_config['model']}/b={best_config['budget']} "
+                      f"R²={best_config['r2']:.4f} "
+                      f"[{best_config['importance']}/{best_config['allocation']}]")
+
+        # Compare easy vs hard
+        easy_best = part_result['easy'].get('best')
+        hard_best = part_result['hard'].get('best')
+        if easy_best and hard_best:
+            part_result['delta_budget'] = hard_best['budget'] - easy_best['budget']
+            part_result['config_differs'] = (
+                easy_best['model'] != hard_best['model']
+                or easy_best['budget'] != hard_best['budget']
+                or easy_best.get('importance') != hard_best.get('importance')
+            )
+            print(f"    >> Configs differ: {part_result['config_differs']} "
+                  f"(easy={easy_best['model']}/b={easy_best['budget']}/{easy_best.get('importance')}, "
+                  f"hard={hard_best['model']}/b={hard_best['budget']}/{hard_best.get('importance')})")
+
+        results['partitions'][partition_name] = part_result
+
+    return results
+
+
+# =============================================================================
+# EXPERIMENT 5: LEARNING CURVES
+# =============================================================================
+
+def run_learning_curves(
+    data: dict,
+    models: Dict[str, callable],
+    n_folds: int,
+    n_repeats: int = 3,
+    search_speed: str = 'fast',
+) -> Dict[str, Any]:
+    """How hybrid advantage changes with sample size.
+
+    At each sample size, runs find_best_hybrid() on the subsample to discover
+    the optimal config for that data regime. This tests whether the methodology
+    adapts to different data scales and whether the hybrid advantage persists.
+    """
+    print("\n" + "=" * 70)
+    print("EXPERIMENT 5: LEARNING CURVES")
+    print("=" * 70)
+
+    reps = data['reps']
+    labels = data['labels']
+    groups = data['groups']
+    n_total = len(labels)
+    model_names = list(models.keys())
+
+    fractions = [0.10, 0.25, 0.50, 0.75, 1.0]
+    sample_sizes = [max(50, int(n_total * f)) for f in fractions]
+    # Deduplicate and cap at total
+    sample_sizes = sorted(set(min(s, n_total) for s in sample_sizes))
+
+    X_concat = np.hstack(list(reps.values()))
+
+    results = {'sample_sizes': sample_sizes, 'models': {}, 'search_speed': search_speed}
+
+    # Initialize per-model result structure
+    for model_name in model_names:
+        results['models'][model_name] = {
+            'hybrid': [], 'best_single': [], 'full_concat': [],
+            'best_configs': [],
+        }
+
+    for n_sub in sample_sizes:
+        print(f"\n  n={n_sub}:")
+        # Collect scores across repeats per model
+        hybrid_by_model = {m: [] for m in model_names}
+        single_by_model = {m: [] for m in model_names}
+        concat_by_model = {m: [] for m in model_names}
+        configs_by_model = {m: [] for m in model_names}
+
+        for seed in range(n_repeats):
+            np.random.seed(seed)
+            idx = np.random.choice(n_total, n_sub, replace=False)
+            sub_reps = {k: v[idx] for k, v in reps.items()}
+            sub_labels = labels[idx]
+            sub_groups = groups[idx]
+            sub_concat = X_concat[idx]
+            n_unique_groups = len(np.unique(sub_groups))
+
+            if n_unique_groups < 2:
+                continue
+
+            sub_folds = min(n_folds, n_unique_groups)
+
+            # find_best_hybrid discovers optimal config per model at this sample size
+            try:
+                search = find_best_hybrid(
+                    sub_reps, sub_labels, groups=sub_groups,
+                    models=model_names,
+                    speed=search_speed,
+                    n_folds=sub_folds,
+                    verbose=False,
+                )
+                for model_name in model_names:
+                    if model_name in search.best_by_model:
+                        mbest = search.best_by_model[model_name]
+                        hybrid_by_model[model_name].append(mbest['score_mean'])
+                        configs_by_model[model_name].append({
+                            'budget': mbest['blueprint'].budget,
+                            'importance': mbest['blueprint'].importance_method,
+                            'allocation': mbest['blueprint'].allocation_method,
+                        })
+            except Exception as e:
+                print(f"    seed={seed}: find_best_hybrid failed - {e}")
+
+            # Baselines per model
+            for model_name, model_factory in models.items():
+                # Best single rep
+                best_single = -np.inf
+                for rep_name, X in sub_reps.items():
+                    try:
+                        r2, _ = evaluate_single_rep_cv(
+                            X, sub_labels, sub_groups, model_factory,
+                            n_folds=sub_folds,
+                        )
+                        best_single = max(best_single, r2)
+                    except Exception:
+                        pass
+                if best_single > -np.inf:
+                    single_by_model[model_name].append(best_single)
+
+                # Full concatenation
+                try:
+                    r2, _ = evaluate_single_rep_cv(
+                        sub_concat, sub_labels, sub_groups, model_factory,
+                        n_folds=sub_folds,
+                    )
+                    concat_by_model[model_name].append(r2)
+                except Exception:
+                    pass
+
+        # Aggregate across repeats
+        for model_name in model_names:
+            h = float(np.mean(hybrid_by_model[model_name])) if hybrid_by_model[model_name] else float('nan')
+            s = float(np.mean(single_by_model[model_name])) if single_by_model[model_name] else float('nan')
+            c = float(np.mean(concat_by_model[model_name])) if concat_by_model[model_name] else float('nan')
+
+            results['models'][model_name]['hybrid'].append(h)
+            results['models'][model_name]['best_single'].append(s)
+            results['models'][model_name]['full_concat'].append(c)
+            results['models'][model_name]['best_configs'].append(
+                configs_by_model[model_name] if configs_by_model[model_name] else None)
+
+            print(f"    {model_name}: hybrid={h:.4f}, single={s:.4f}, concat={c:.4f}")
+
+    # Fit learning curves per model
+    for model_name in model_names:
+        model_result = results['models'][model_name]
+        valid = [i for i, h in enumerate(model_result['hybrid']) if not np.isnan(h)]
+        if len(valid) >= 3:
+            n_arr = np.array([sample_sizes[i] for i in valid])
+            h_arr = np.array([model_result['hybrid'][i] for i in valid])
+            model_result['hybrid_fit'] = fit_learning_curve(n_arr, h_arr)
+
+    return results
+
+
+# =============================================================================
+# EXPERIMENT 8: UNCERTAINTY CALIBRATION
+# =============================================================================
+
+def run_uncertainty_calibration(
+    data: dict,
+    n_folds: int,
+    conditions: List[str] = None,
+    exp2_results: Dict[str, Any] = None,
+    search_speed: str = 'fast',
+) -> Dict[str, Any]:
+    """Exp 8: Complexity matching produces better-calibrated uncertainty estimates.
+
+    The 'optimal' condition uses find_best_hybrid() (or Exp 2 results) to
+    discover the actual best config. Suboptimal conditions are deliberately
+    constructed to show the contrast.
+    """
+    print("\n" + "=" * 70)
+    print("EXPERIMENT 8: UNCERTAINTY CALIBRATION AT OPTIMAL VS SUBOPTIMAL COMPLEXITY")
+    print("=" * 70)
+
+    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.linear_model import Ridge
+
+    reps = data['reps']
+    labels = data['labels']
+    groups = data['groups']
+    total_dim = sum(v.shape[1] for v in reps.values())
+
+    all_conditions = conditions or ['optimal', 'underfit', 'overfit', 'mismatched']
+
+    # Discover optimal config via find_best_hybrid or Exp 2 results
+    optimal_model_factory = None
+    optimal_budget = 100
+    optimal_alloc = 'greedy'
+    optimal_imp = 'treeshap'
+    optimal_desc = 'RF at budget=100 (default)'
+
+    if exp2_results and exp2_results.get('best_by_model'):
+        # Use best config from Exp 2
+        all_best = exp2_results['best_by_model']
+        overall_best = max(all_best.values(), key=lambda c: c['r2_mean'])
+        optimal_budget = overall_best['budget']
+        optimal_alloc = overall_best['allocation']
+        optimal_imp = overall_best['importance']
+        best_model = overall_best['model']
+        optimal_model_factory = _get_model_factories([best_model]).get(best_model)
+        optimal_desc = (f"{best_model} at budget={optimal_budget} "
+                        f"[{optimal_imp}/{optimal_alloc}] (from Exp 2)")
+        print(f"  Using Exp 2 optimal: {optimal_desc}")
+    else:
+        # Run find_best_hybrid to discover optimal
+        print(f"  Running find_best_hybrid(speed={search_speed}) to find optimal...")
+        try:
+            search = find_best_hybrid(
+                reps, labels, groups=groups,
+                speed=search_speed, verbose=False,
+            )
+            best = search.best_overall
+            if best:
+                optimal_budget = best['blueprint'].budget
+                optimal_alloc = best['blueprint'].allocation_method
+                optimal_imp = best['blueprint'].importance_method
+                best_model = best['model']
+                optimal_model_factory = _get_model_factories([best_model]).get(best_model)
+                optimal_desc = (f"{best_model} at budget={optimal_budget} "
+                                f"[{optimal_imp}/{optimal_alloc}] (from find_best_hybrid)")
+                print(f"  Discovered optimal: {optimal_desc}")
+        except Exception as e:
+            print(f"  find_best_hybrid failed ({e}), using RF/budget=100 default")
+
+    if optimal_model_factory is None:
+        optimal_model_factory = lambda: RandomForestRegressor(
+            n_estimators=100, random_state=42, n_jobs=-1)
+
+    # Define conditions: (model_factory, budget, alloc, imp, description)
+    condition_specs = {
+        'optimal': (optimal_model_factory, optimal_budget, optimal_alloc, optimal_imp,
+                    optimal_desc),
+        'underfit': (optimal_model_factory, 25, optimal_alloc, optimal_imp,
+                     f'Same model at budget=25 (too compressed)'),
+        'overfit': (optimal_model_factory, total_dim, optimal_alloc, optimal_imp,
+                    f'Same model at full dim={total_dim} (too many features)'),
+        'mismatched': (lambda: Ridge(alpha=0.01), total_dim, 'greedy', 'treeshap',
+                       'Ridge at full dim (low-capacity model, high-dim input)'),
+    }
+
+    results = {'conditions': {}}
+
+    for cond_name in all_conditions:
+        if cond_name not in condition_specs:
+            continue
+        model_factory, budget, alloc, imp, desc = condition_specs[cond_name]
+        print(f"\n  {cond_name}: {desc}")
+
+        gkf = GroupKFold(n_splits=n_folds)
+        sample_X = next(iter(reps.values()))
+
+        fold_metrics = []
+        for fold_i, (train_idx, val_idx) in enumerate(gkf.split(sample_X, labels, groups=groups)):
+            train_reps = {k: v[train_idx] for k, v in reps.items()}
+            val_reps = {k: v[val_idx] for k, v in reps.items()}
+            y_train, y_val = labels[train_idx], labels[val_idx]
+
+            try:
+                X_train, feature_info = create_hybrid(
+                    train_reps, y_train,
+                    allocation_method=alloc,
+                    budget=budget,
+                    importance_method=imp,
+                )
+                X_val = apply_feature_selection(val_reps, feature_info)
+            except Exception as e:
+                print(f"    fold {fold_i}: hybrid creation failed - {e}")
+                continue
+
+            scaler = StandardScaler()
+            X_train_s = scaler.fit_transform(X_train)
+            X_val_s = scaler.transform(X_val)
+
+            # Train base model
+            model = model_factory()
+            model.fit(X_train_s, y_train)
+            y_pred_val = model.predict(X_val_s)
+            val_r2 = r2_score(y_val, y_pred_val)
+
+            # Conformal calibration: split train into proper-train + cal
+            n_train = len(y_train)
+            n_cal = max(20, int(n_train * 0.2))
+            cal_perm = np.random.RandomState(42 + fold_i).permutation(n_train)
+            cal_idx = cal_perm[:n_cal]
+            ptrain_idx = cal_perm[n_cal:]
+
+            X_ptrain, y_ptrain = X_train_s[ptrain_idx], y_train[ptrain_idx]
+            X_cal, y_cal = X_train_s[cal_idx], y_train[cal_idx]
+
+            # Retrain on proper-train, calibrate on cal
+            model_conf = model_factory()
+            model_conf.fit(X_ptrain, y_ptrain)
+
+            y_pred_cal = model_conf.predict(X_cal)
+            cal_residuals = np.abs(y_cal - y_pred_cal)
+
+            # Conformal quantile (90% coverage target)
+            alpha = 0.1
+            q = np.quantile(cal_residuals, 1 - alpha)
+
+            # Predict on val with conformal intervals
+            y_pred_conf = model_conf.predict(X_val_s)
+            interval_lo = y_pred_conf - q
+            interval_hi = y_pred_conf + q
+
+            # Metrics
+            covered = (y_val >= interval_lo) & (y_val <= interval_hi)
+            picp = float(np.mean(covered))  # prediction interval coverage probability
+            mpiw = float(np.mean(interval_hi - interval_lo))  # mean interval width
+            target_range = float(np.ptp(y_val))
+            sharpness_ratio = mpiw / target_range if target_range > 0 else float('nan')
+            cal_error = abs(picp - (1 - alpha))
+
+            # Uncertainty-error correlation (per-sample uncertainty from RF tree variance)
+            errors = np.abs(y_val - y_pred_conf)
+            ue_corr = float('nan')
+            if hasattr(model_conf, 'estimators_') and len(errors) >= 3:
+                tree_preds = np.array([t.predict(X_val_s) for t in model_conf.estimators_])
+                per_sample_unc = tree_preds.std(axis=0)
+                ue_corr, _ = spearmanr(per_sample_unc, errors)
+                ue_corr = float(ue_corr)
+
+            fold_result = {
+                'val_r2': val_r2, 'picp': picp, 'mpiw': mpiw,
+                'sharpness_ratio': sharpness_ratio, 'cal_error': cal_error,
+                'conformal_q': float(q), 'n_val': len(y_val),
+                'ue_corr': ue_corr,
+            }
+            fold_metrics.append(fold_result)
+            print(f"    fold {fold_i}: R²={val_r2:.4f}, PICP={picp:.3f}, "
+                  f"MPIW={mpiw:.3f}, cal_error={cal_error:.3f}")
+
+        if fold_metrics:
+            avg = {}
+            for key in fold_metrics[0]:
+                vals = [fm[key] for fm in fold_metrics if not np.isnan(fm[key])]
+                avg[key] = float(np.mean(vals)) if vals else float('nan')
+            results['conditions'][cond_name] = {
+                'description': desc,
+                'budget': budget,
+                'avg': avg,
+                'folds': fold_metrics,
+            }
+            print(f"  >> {cond_name} avg: R²={avg['val_r2']:.4f}, PICP={avg['picp']:.3f}, "
+                  f"MPIW={avg['mpiw']:.3f}, cal_error={avg['cal_error']:.3f}")
+
+    # Summary table
+    print("\n  CALIBRATION SUMMARY:")
+    print(f"  {'Condition':<14} {'R²':<8} {'PICP':<8} {'MPIW':<8} {'Cal Error':<10} {'Budget':<8}")
+    print("  " + "-" * 56)
+    for cond_name, cond_data in results['conditions'].items():
+        a = cond_data['avg']
+        print(f"  {cond_name:<14} {a['val_r2']:.4f}  {a['picp']:.3f}  "
+              f"{a['mpiw']:.3f}  {a['cal_error']:.4f}    {cond_data['budget']}")
+
+    return results
+
+
+# =============================================================================
+# EXPERIMENT 9: FORMAL COMPLEXITY ANALYSIS
+# =============================================================================
+
+def _run_anova_decomposition(exp2_results: Dict[str, Any]) -> Dict[str, Any]:
+    """9a: ANOVA variance decomposition on Exp 2 grid results.
+
+    Tests whether model×budget interaction explains significant variance in R².
+    """
+    print("\n  9a: ANOVA Variance Decomposition")
+
+    configs = exp2_results.get('configs', [])
+    if not configs:
+        print("    No Exp 2 configs available")
+        return {'error': 'no_data'}
+
+    # Build data: each config is an observation with factors (model, budget) → R²
+    models_set = sorted(set(c['model'] for c in configs))
+    budgets_set = sorted(set(c['budget'] for c in configs))
+
+    if len(models_set) < 2 or len(budgets_set) < 2:
+        print("    Need at least 2 models and 2 budgets for ANOVA")
+        return {'error': 'insufficient_factors'}
+
+    # Collect R² values into cells: cell[model][budget] = list of r2 values
+    cells = {}
+    for c in configs:
+        key = (c['model'], c['budget'])
+        if key not in cells:
+            cells[key] = []
+        if not np.isnan(c['r2_mean']):
+            cells[key].append(c['r2_mean'])
+
+    # Compute means
+    grand_mean = np.mean([r2 for vals in cells.values() for r2 in vals])
+    n_total = sum(len(v) for v in cells.values())
+
+    model_means = {}
+    for m in models_set:
+        vals = [r2 for (mm, b), vv in cells.items() for r2 in vv if mm == m]
+        model_means[m] = np.mean(vals) if vals else grand_mean
+
+    budget_means = {}
+    for b in budgets_set:
+        vals = [r2 for (mm, bb), vv in cells.items() for r2 in vv if bb == b]
+        budget_means[b] = np.mean(vals) if vals else grand_mean
+
+    cell_means = {}
+    for key, vals in cells.items():
+        cell_means[key] = np.mean(vals) if vals else grand_mean
+
+    # Sum of squares
+    ss_total = sum((r2 - grand_mean) ** 2 for vals in cells.values() for r2 in vals)
+
+    ss_model = sum(
+        len([r2 for (mm, b), vv in cells.items() for r2 in vv if mm == m])
+        * (model_means[m] - grand_mean) ** 2
+        for m in models_set
+    )
+
+    ss_budget = sum(
+        len([r2 for (mm, b), vv in cells.items() for r2 in vv if b == bb])
+        * (budget_means[bb] - grand_mean) ** 2
+        for bb in budgets_set
+    )
+
+    ss_interaction = 0
+    for (m, b), vals in cells.items():
+        expected = model_means[m] + budget_means[b] - grand_mean
+        ss_interaction += len(vals) * (cell_means[(m, b)] - expected) ** 2
+
+    ss_residual = max(0, ss_total - ss_model - ss_budget - ss_interaction)
+
+    # Eta-squared (% variance)
+    eta2 = {}
+    if ss_total > 0:
+        eta2['model'] = float(ss_model / ss_total * 100)
+        eta2['budget'] = float(ss_budget / ss_total * 100)
+        eta2['interaction'] = float(ss_interaction / ss_total * 100)
+        eta2['residual'] = float(ss_residual / ss_total * 100)
+    else:
+        eta2 = {'model': 0, 'budget': 0, 'interaction': 0, 'residual': 0}
+
+    # Degrees of freedom and F-statistics
+    df_model = len(models_set) - 1
+    df_budget = len(budgets_set) - 1
+    df_interaction = df_model * df_budget
+    df_residual = max(1, n_total - len(models_set) * len(budgets_set))
+
+    ms_model = ss_model / df_model if df_model > 0 else 0
+    ms_budget = ss_budget / df_budget if df_budget > 0 else 0
+    ms_interaction = ss_interaction / df_interaction if df_interaction > 0 else 0
+    ms_residual = ss_residual / df_residual if df_residual > 0 else 1e-10
+
+    f_model = ms_model / ms_residual
+    f_budget = ms_budget / ms_residual
+    f_interaction = ms_interaction / ms_residual
+
+    p_model = 1 - f_dist.cdf(f_model, df_model, df_residual)
+    p_budget = 1 - f_dist.cdf(f_budget, df_budget, df_residual)
+    p_interaction = 1 - f_dist.cdf(f_interaction, df_interaction, df_residual)
+
+    result = {
+        'n_observations': n_total,
+        'n_models': len(models_set),
+        'n_budgets': len(budgets_set),
+        'grand_mean_r2': float(grand_mean),
+        'eta2': eta2,
+        'f_model': float(f_model), 'p_model': float(p_model),
+        'f_budget': float(f_budget), 'p_budget': float(p_budget),
+        'f_interaction': float(f_interaction), 'p_interaction': float(p_interaction),
+        'ss_total': float(ss_total),
+    }
+
+    print(f"    Grand mean R²: {grand_mean:.4f}")
+    print(f"    η² model:       {eta2['model']:.1f}%  (F={f_model:.2f}, p={p_model:.4f})")
+    print(f"    η² budget:      {eta2['budget']:.1f}%  (F={f_budget:.2f}, p={p_budget:.4f})")
+    print(f"    η² interaction: {eta2['interaction']:.1f}%  (F={f_interaction:.2f}, p={p_interaction:.4f})")
+    print(f"    η² residual:    {eta2['residual']:.1f}%")
+
+    return result
+
+
+def _run_information_retention(
+    data: dict,
+    budgets: List[int],
+    search_speed: str = 'fast',
+) -> Dict[str, Any]:
+    """9b: MI(X_selected, Y) and MI(X_selected, X_full) vs budget.
+
+    At each budget, uses find_best_hybrid to discover the best hybrid config,
+    then profiles its information content.
+    """
+    print("\n  9b: Information Retention Curves")
+
+    reps = data['reps']
+    labels = data['labels']
+    groups = data.get('groups')
+    X_concat = np.hstack(list(reps.values()))
+
+    results = {'budgets': [], 'mi_xy': [], 'mi_xx_full': [], 'best_configs': []}
+
+    for budget in sorted(budgets):
+        # Find best hybrid at this budget
+        try:
+            search = find_best_hybrid(
+                reps, labels, groups=groups,
+                speed=search_speed, budgets=[budget], verbose=False,
+            )
+            best = search.best_overall
+            if best:
+                bp = best['blueprint']
+            else:
+                bp = None
+        except Exception:
+            bp = None
+
+        # Create the best hybrid at this budget
+        alloc = bp.allocation_method if bp else 'greedy'
+        imp = bp.importance_method if bp else 'treeshap'
+        try:
+            X_hybrid, _ = create_hybrid(
+                reps, labels,
+                allocation_method=alloc,
+                importance_method=imp,
+                budget=budget,
+            )
+        except Exception as e:
+            print(f"    budget={budget}: hybrid creation failed - {e}")
+            continue
+
+        results['best_configs'].append({'budget': budget, 'importance': imp, 'allocation': alloc})
+
+        # MI(X_selected, Y)
+        n_comp = min(50, X_hybrid.shape[1], X_hybrid.shape[0] - 1)
+        X_red = PCA(n_components=n_comp).fit_transform(
+            StandardScaler().fit_transform(X_hybrid))
+        try:
+            mi_xy = estimate_mutual_information_knn(X_red, labels, k=5)
+        except Exception:
+            mi_xy = float('nan')
+
+        # MI(X_selected, X_full) — approximate via explained variance
+        # Project X_full onto space spanned by X_hybrid columns
+        scaler = StandardScaler()
+        X_full_s = scaler.fit_transform(X_concat)
+        X_hyb_s = StandardScaler().fit_transform(X_hybrid)
+        # Use canonical correlation proxy: R² of predicting X_full PCs from X_hybrid
+        n_pcs = min(20, X_hybrid.shape[1], X_full_s.shape[0] - 1)
+        pca_full = PCA(n_components=n_pcs)
+        X_full_pcs = pca_full.fit_transform(X_full_s)
+        explained_var_retained = 0
+        try:
+            from sklearn.linear_model import Ridge as _Ridge
+            for pc_i in range(n_pcs):
+                reg = _Ridge(alpha=1.0)
+                reg.fit(X_hyb_s, X_full_pcs[:, pc_i])
+                r2_pc = max(0, r2_score(X_full_pcs[:, pc_i], reg.predict(X_hyb_s)))
+                explained_var_retained += r2_pc * pca_full.explained_variance_ratio_[pc_i]
+            mi_xx = float(explained_var_retained)
+        except Exception:
+            mi_xx = float('nan')
+
+        results['budgets'].append(budget)
+        results['mi_xy'].append(float(mi_xy))
+        results['mi_xx_full'].append(mi_xx)
+
+        print(f"    budget={budget}: MI(X,Y)={mi_xy:.4f}, info_retained={mi_xx:.4f}")
+
+    # Find inflection: where MI(X,Y) gain drops below 10% of max gain
+    if len(results['mi_xy']) >= 3:
+        mi_arr = np.array(results['mi_xy'])
+        gains = np.diff(mi_arr)
+        max_gain = np.max(np.abs(gains)) if len(gains) > 0 else 0
+        if max_gain > 0:
+            plateau_mask = gains < 0.1 * max_gain
+            if np.any(plateau_mask):
+                inflection_idx = int(np.argmax(plateau_mask))
+                results['inflection_budget'] = results['budgets'][inflection_idx + 1]
+                print(f"    Inflection point: budget ~{results['inflection_budget']}")
+            else:
+                print("    No inflection detected (MI still increasing)")
+
+    return results
+
+
+def _run_effective_rank_analysis(
+    data: dict,
+    budgets: List[int],
+    search_speed: str = 'fast',
+) -> Dict[str, Any]:
+    """9c: Effective rank of hybrid vs PCA vs random at each budget.
+
+    At each budget, uses find_best_hybrid to discover the best config,
+    then compares effective rank: best hybrid vs PCA vs random subset.
+    """
+    print("\n  9c: Effective Rank Profile")
+
+    reps = data['reps']
+    labels = data['labels']
+    groups = data.get('groups')
+    X_concat = np.hstack(list(reps.values()))
+
+    results = {'budgets': [], 'hybrid_rank': [], 'pca_rank': [], 'random_rank': []}
+
+    for budget in sorted(budgets):
+        n_feat = min(budget, X_concat.shape[1], X_concat.shape[0] - 1)
+
+        # Find best hybrid at this budget, then compute its effective rank
+        try:
+            search = find_best_hybrid(
+                reps, labels, groups=groups,
+                speed=search_speed, budgets=[budget], verbose=False,
+            )
+            best = search.best_overall
+            bp = best['blueprint'] if best else None
+        except Exception:
+            bp = None
+
+        alloc = bp.allocation_method if bp else 'greedy'
+        imp = bp.importance_method if bp else 'treeshap'
+        try:
+            X_hybrid, _ = create_hybrid(
+                reps, labels,
+                allocation_method=alloc,
+                importance_method=imp,
+                budget=budget,
+            )
+            hybrid_rank = compute_effective_rank(X_hybrid)
+        except Exception:
+            hybrid_rank = float('nan')
+
+        # PCA
+        try:
+            pca = PCA(n_components=n_feat)
+            X_pca = pca.fit_transform(StandardScaler().fit_transform(X_concat))
+            pca_rank = compute_effective_rank(X_pca)
+        except Exception:
+            pca_rank = float('nan')
+
+        # Random subset
+        try:
+            rng = np.random.RandomState(42)
+            random_idx = rng.choice(X_concat.shape[1], n_feat, replace=False)
+            X_random = X_concat[:, random_idx]
+            random_rank = compute_effective_rank(X_random)
+        except Exception:
+            random_rank = float('nan')
+
+        results['budgets'].append(budget)
+        results['hybrid_rank'].append(float(hybrid_rank))
+        results['pca_rank'].append(float(pca_rank))
+        results['random_rank'].append(float(random_rank))
+
+        print(f"    budget={budget}: hybrid={hybrid_rank:.1f}, pca={pca_rank:.1f}, random={random_rank:.1f}")
+
+    return results
+
+
+def _run_bias_variance_analysis(
+    data: dict,
+    models: Dict[str, callable],
+    budgets: List[int],
+    n_folds: int,
+    exp6_results: Dict[str, Any] = None,
+    search_speed: str = 'fast',
+) -> Dict[str, Any]:
+    """9d: Bias-variance proxy from train-val gap across budgets."""
+    print("\n  9d: Bias-Variance Proxy")
+
+    reps = data['reps']
+    labels = data['labels']
+    groups = data['groups']
+
+    results = {'models': {}}
+
+    # If Exp 6 results are available, extract train-val gaps from there
+    if exp6_results and 'families' in exp6_results:
+        print("    Using Exp 6 data for bias-variance analysis")
+        for fam_name, fam_data in exp6_results['families'].items():
+            fam_bv = {}
+            for var_name, budget_data in fam_data.get('heatmap', {}).items():
+                for budget, metrics in budget_data.items():
+                    if isinstance(metrics, dict) and 'train_r2' in metrics:
+                        key = f"{var_name}_b{budget}"
+                        fam_bv[key] = {
+                            'train_r2': metrics['train_r2'],
+                            'val_r2': metrics['val_r2'],
+                            'gap': metrics['train_r2'] - metrics['val_r2'],
+                            'bias_proxy': 1 - metrics['train_r2'],
+                            'budget': int(budget) if isinstance(budget, (int, float)) else budget,
+                        }
+            if fam_bv:
+                results['models'][fam_name] = fam_bv
+        if results['models']:
+            # Print summary
+            for fam_name, fam_data in results['models'].items():
+                print(f"    {fam_name}:")
+                for key, vals in sorted(fam_data.items()):
+                    print(f"      {key}: gap={vals['gap']:.3f}, bias={vals['bias_proxy']:.3f}")
+            return results
+
+    # Fallback: discover best config at each budget via find_best_hybrid, then
+    # measure train-val gap with that config
+    print("    Computing bias-variance from scratch (using find_best_hybrid per budget)")
+    model_names = list(models.keys())
+    for budget in budgets:
+        # Find best config at this budget
+        try:
+            search = find_best_hybrid(
+                reps, labels, groups=groups,
+                models=model_names,
+                speed=search_speed,
+                budgets=[budget],
+                verbose=False,
+            )
+        except Exception as e:
+            print(f"    b={budget}: find_best_hybrid failed - {e}")
+            continue
+
+        for model_name, model_factory in models.items():
+            # Get best config for this model at this budget
+            if model_name in search.best_by_model:
+                bp = search.best_by_model[model_name]['blueprint']
+                alloc = bp.allocation_method
+                imp = bp.importance_method
+            else:
+                alloc, imp = 'greedy', 'treeshap'
+
+            try:
+                val_r2, val_std, train_r2, train_std, n_feat = evaluate_cv_with_train(
+                    reps, labels, groups, model_factory, n_folds,
+                    allocation_method=alloc,
+                    importance_method=imp,
+                    budget=budget,
+                )
+                if model_name not in results['models']:
+                    results['models'][model_name] = {}
+                results['models'][model_name][budget] = {
+                    'train_r2': train_r2, 'val_r2': val_r2,
+                    'gap': train_r2 - val_r2,
+                    'bias_proxy': 1 - train_r2,
+                    'budget': budget,
+                    'importance': imp,
+                    'allocation': alloc,
+                }
+                print(f"    {model_name}/b={budget}: gap={train_r2 - val_r2:.3f}, "
+                      f"bias={1 - train_r2:.3f}, val_R²={val_r2:.4f} [{imp}/{alloc}]")
+            except Exception as e:
+                print(f"    {model_name}/b={budget}: FAILED - {e}")
+
+    return results
+
+
+def run_formal_complexity_analysis(
+    data: dict,
+    models: Dict[str, callable],
+    budgets: List[int],
+    n_folds: int,
+    sub_analyses: List[str] = None,
+    exp2_results: Dict[str, Any] = None,
+    exp6_results: Dict[str, Any] = None,
+    search_speed: str = 'fast',
+) -> Dict[str, Any]:
+    """Exp 9: Formal theoretical grounding with 4 sub-analyses."""
+    print("\n" + "=" * 70)
+    print("EXPERIMENT 9: FORMAL COMPLEXITY ANALYSIS")
+    print("=" * 70)
+
+    all_subs = sub_analyses or ['anova', 'information', 'effective_rank', 'bias_variance']
+    results = {}
+
+    if 'anova' in all_subs and exp2_results:
+        results['anova'] = _run_anova_decomposition(exp2_results)
+
+    if 'information' in all_subs:
+        results['information'] = _run_information_retention(data, budgets, search_speed)
+
+    if 'effective_rank' in all_subs:
+        results['effective_rank'] = _run_effective_rank_analysis(data, budgets, search_speed)
+
+    if 'bias_variance' in all_subs:
+        results['bias_variance'] = _run_bias_variance_analysis(
+            data, models, budgets, n_folds, exp6_results, search_speed)
+
+    return results
+
+
+# =============================================================================
+# MAIN
+# =============================================================================
+
+def main():
+    parser = argparse.ArgumentParser(description='Complexity theory experiments')
+    parser.add_argument('--mode', type=str, default='quick', choices=['quick', 'full'],
+                        help='quick (~30min, logd only) or full (~4-6h, all datasets)')
+    parser.add_argument('--experiments', type=int, nargs='+', default=None,
+                        help='Which experiments to run (1-9). Default: all.')
+    parser.add_argument('--output', type=str, default='tests/results/complexity_theory')
+
+    args = parser.parse_args()
+
+    # Configuration based on mode
+    if args.mode == 'quick':
+        dataset_names = ['logd']
+        n_folds = 3
+        model_names = ['rf', 'knn', 'ridge']
+        budgets = [50, 100]
+        allocation_methods = ['greedy']
+        importance_methods = ['treeshap', 'lightgbm_gain']
+        exp4_importance = ['treeshap', 'lightgbm_gain', 'deeplift', 'permutation']
+        exp6_families = ['RF', 'Ridge']
+        exp7_partitions = ['scaffold_frequency']
+        exp8_conditions = ['optimal', 'overfit']
+        exp9_subs = ['anova', 'bias_variance']
+        search_speed = 'fast'
+    else:  # full
+        dataset_names = ['logd', 'caco2', 'herg', 'qm9']
+        n_folds = 5
+        model_names = ['rf', 'knn', 'ridge', 'xgboost', 'mlp', 'lightgbm']
+        budgets = [25, 50, 100, 200]
+        allocation_methods = ['greedy', 'greedy_feature', 'performance_weighted']
+        importance_methods = ['treeshap', 'lightgbm_gain', 'deeplift', 'permutation']
+        exp4_importance = [
+            'treeshap', 'xgboost_gain', 'lightgbm_gain', 'deeplift', 'permutation', 'kernelshap',
+        ]
+        exp6_families = None  # all families
+        exp7_partitions = None  # all partitions
+        exp8_conditions = None  # all conditions
+        exp9_subs = None  # all sub-analyses
+        search_speed = 'medium'
+
+    experiments = args.experiments if args.experiments else [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    models = _get_model_factories(model_names)
+
+    print(f"Mode: {args.mode}")
+    print(f"Datasets: {dataset_names}")
+    print(f"Models: {list(models.keys())}")
+    print(f"Experiments: {experiments}")
+
+    # Load all datasets
+    datasets = {}
+    for ds_name in dataset_names:
+        print(f"\nLoading {ds_name}...")
+        try:
+            datasets[ds_name] = load_data(ds_name)
+        except Exception as e:
+            print(f"  FAILED: {e}")
+
+    if not datasets:
+        print("No datasets loaded, exiting.")
+        return
+
+    # Output directory
+    output_path = Path(args.output)
     output_path.mkdir(parents=True, exist_ok=True)
 
     all_results = {
         'config': {
-            'datasets': config.datasets,
-            'experiments': config.experiments,
+            'mode': args.mode,
+            'datasets': dataset_names,
+            'models': list(models.keys()),
+            'experiments': experiments,
+            'n_folds': n_folds,
+            'budgets': budgets,
             'timestamp': datetime.now().isoformat(),
         },
         'datasets': {},
     }
 
-    for dataset_name in config.datasets:
-        print(f"\n{'#'*60}")
-        print(f"# DATASET: {dataset_name.upper()}")
-        print('#'*60)
+    for ds_name, data in datasets.items():
+        print(f"\n{'#' * 70}")
+        print(f"# DATASET: {ds_name.upper()} ({len(data['labels'])} samples)")
+        print('#' * 70)
 
-        # Load data
-        try:
-            if dataset_name == 'logd':
-                smiles, labels = load_logd_dataset()
-            elif dataset_name == 'qm9':
-                smiles, labels = load_qm9_homolumo(config.qm9_samples)
-            else:
-                print(f"Unknown dataset: {dataset_name}")
-                continue
-        except Exception as e:
-            print(f"Failed to load {dataset_name}: {e}")
-            continue
+        ds_results = {'n_samples': len(data['labels']), 'n_scaffolds': data['n_scaffolds']}
 
-        print(f"Loaded {len(smiles)} samples")
+        if 1 in experiments:
+            ds_results['exp1_characterization'] = run_characterization(data, models, n_folds)
 
-        # Generate representations
-        reps = generate_representations(smiles)
-        scaffold_groups = get_scaffold_groups(smiles)
+        if 2 in experiments:
+            ds_results['exp2_complexity_grid'] = run_complexity_matching_grid(
+                data, models, budgets, allocation_methods, importance_methods, n_folds)
 
-        dataset_results = {
-            'n_samples': len(smiles),
-            'n_scaffolds': len(np.unique(scaffold_groups)),
-        }
+        if 4 in experiments:
+            ds_results['exp4_importance_metrics'] = run_importance_weight_metrics(
+                data, exp4_importance, n_folds)
 
-        # Run experiments
-        if 'intrinsic_dim' in config.experiments:
-            dataset_results['intrinsic_dim'] = run_intrinsic_dim_experiment(reps)
+        if 5 in experiments:
+            ds_results['exp5_learning_curves'] = run_learning_curves(
+                data, models, n_folds, search_speed=search_speed)
 
-        if 'mutual_info' in config.experiments:
-            dataset_results['mutual_info'] = run_mutual_information_experiment(reps, labels)
+        if 6 in experiments:
+            ds_results['exp6_within_family'] = run_within_family_complexity(
+                data, budgets, n_folds, families=exp6_families,
+                search_speed=search_speed)
 
-        if 'learning_curves' in config.experiments:
-            dataset_results['learning_curves'] = run_learning_curve_experiment(
-                reps, labels, scaffold_groups
+        if 7 in experiments:
+            ds_results['exp7_data_complexity'] = run_data_complexity_analysis(
+                data, models, budgets, n_folds, partitions=exp7_partitions,
+                search_speed=search_speed)
+
+        if 8 in experiments:
+            ds_results['exp8_uncertainty'] = run_uncertainty_calibration(
+                data, n_folds, conditions=exp8_conditions,
+                exp2_results=ds_results.get('exp2_complexity_grid'),
+                search_speed=search_speed)
+
+        if 9 in experiments:
+            ds_results['exp9_formal'] = run_formal_complexity_analysis(
+                data, models, budgets, n_folds,
+                sub_analyses=exp9_subs,
+                exp2_results=ds_results.get('exp2_complexity_grid'),
+                exp6_results=ds_results.get('exp6_within_family'),
+                search_speed=search_speed,
             )
 
-        if 'generalization_gap' in config.experiments:
-            dataset_results['generalization_gap'] = run_generalization_gap_experiment(
-                reps, labels, scaffold_groups
-            )
+        all_results['datasets'][ds_name] = ds_results
 
-        if 'double_descent' in config.experiments:
-            dataset_results['double_descent'] = run_double_descent_experiment(
-                reps, labels, scaffold_groups
-            )
-
-        # NEW: Model × Rep complexity tradeoff (YOUR CORE THESIS)
-        if 'complexity_tradeoff' in config.experiments:
-            dataset_results['complexity_tradeoff'] = run_complexity_tradeoff_experiment(
-                reps, labels, scaffold_groups
-            )
-
-        # NEW: Low-dimension representations for downstream tasks
-        if 'low_dimension' in config.experiments:
-            dataset_results['low_dimension'] = run_low_dimension_experiment(
-                reps, labels, smiles, scaffold_groups
-            )
-
-        # NEW: Forward compatibility with novel models
-        if 'forward_compatibility' in config.experiments:
-            dataset_results['forward_compatibility'] = run_forward_compatibility_experiment(
-                reps, labels, scaffold_groups
-            )
-
-        if 'hybrid_comparison' in config.experiments:
-            dataset_results['hybrid_comparison'] = run_hybrid_comparison_experiment(
-                reps, labels, scaffold_groups
-            )
-
-        all_results['datasets'][dataset_name] = dataset_results
+    # Experiment 3 is cross-dataset (needs all datasets loaded)
+    if 3 in experiments and len(datasets) >= 1:
+        all_results['exp3_cross_context'] = run_cross_context_analysis(datasets, n_folds)
 
     # Save results
-    output_file = output_path / f"complexity_experiments_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-
     def convert_numpy(obj):
         if isinstance(obj, np.ndarray):
             return obj.tolist()
@@ -1334,56 +2108,21 @@ def run_all_experiments(config: ExperimentConfig, output_dir: str = 'results/com
             return float(obj)
         elif isinstance(obj, (np.integer, np.int64, np.int32)):
             return int(obj)
+        elif isinstance(obj, (np.bool_,)):
+            return bool(obj)
         elif isinstance(obj, dict):
-            return {k: convert_numpy(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
+            return {str(k): convert_numpy(v) for k, v in obj.items()}
+        elif isinstance(obj, (list, tuple)):
             return [convert_numpy(v) for v in obj]
         return obj
 
+    output_file = output_path / f"complexity_{args.mode}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     with open(output_file, 'w') as f:
         json.dump(convert_numpy(all_results), f, indent=2)
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 70}")
     print(f"Results saved to: {output_file}")
-    print('='*60)
-
-    return all_results
-
-
-def main():
-    parser = argparse.ArgumentParser(description='Complexity theory experiments')
-    parser.add_argument('--quick', action='store_true', help='Quick test')
-    parser.add_argument('--full', action='store_true', help='Full experiments')
-    parser.add_argument('--output', type=str, default='tests/results/complexity_theory')
-    parser.add_argument('--datasets', type=str, default='logd',
-                       help='Comma-separated: logd,qm9')
-    parser.add_argument('--experiments', type=str, default=None,
-                       help='Comma-separated list of experiments to run')
-
-    args = parser.parse_args()
-
-    if args.quick:
-        config = ExperimentConfig(
-            datasets=['logd'],
-            experiments=['intrinsic_dim', 'complexity_tradeoff'],  # Quick but meaningful
-            qm9_samples=1000,
-        )
-    else:
-        experiments = args.experiments.split(',') if args.experiments else [
-            # Original theory validation
-            'intrinsic_dim', 'mutual_info', 'learning_curves',
-            'generalization_gap', 'double_descent',
-            # YOUR CORE THESIS
-            'complexity_tradeoff', 'low_dimension', 'forward_compatibility',
-            'hybrid_comparison'
-        ]
-        config = ExperimentConfig(
-            datasets=args.datasets.split(','),
-            experiments=experiments,
-            qm9_samples=5000,
-        )
-
-    run_all_experiments(config, args.output)
+    print('=' * 70)
 
 
 if __name__ == '__main__':
