@@ -391,26 +391,45 @@ def run_hybrid_similarity(data: dict, n_folds: int,
     labels = data['labels']
     groups = data['groups']
 
-    results = {'weight_methods': {}}
+    results = {'weight_methods': {}, 'per_rep': {}}
 
-    # Concat baseline (from Exp 1 logic)
+    # Best individual rep baseline (the real-world comparison)
+    best_rep_sac = 0  # SAC ~ 0 is uncorrelated; we want most negative
+    best_rep_name = None
+    for rep_name, X in reps.items():
+        D_rep = compute_distance_matrix(X, standardize=True)
+        sac_rep, _ = similarity_activity_correlation(D_rep, labels, n_sample)
+        viol_rep = violation_rate(D_rep, labels, k=5)
+        results['per_rep'][rep_name] = {
+            'dim': X.shape[1], 'sac_rho': sac_rep, 'violation_rate': viol_rep,
+        }
+        if best_rep_name is None or sac_rep < best_rep_sac:
+            best_rep_sac = sac_rep
+            best_rep_name = rep_name
+        print(f"  {rep_name}: SAC={sac_rep:.4f}, viol={viol_rep:.3f}, dim={X.shape[1]}")
+
+    results['best_individual_rep'] = {
+        'name': best_rep_name, 'sac_rho': best_rep_sac,
+        'dim': reps[best_rep_name].shape[1],
+    }
+    print(f"\n  Best individual rep: {best_rep_name} (SAC={best_rep_sac:.4f})")
+
+    # Also compute concat as an additional data point (not standard practice)
     X_concat = np.hstack(list(reps.values()))
     D_concat = compute_distance_matrix(X_concat, standardize=True)
     sac_concat, _ = similarity_activity_correlation(D_concat, labels, n_sample)
     viol_concat = violation_rate(D_concat, labels, k=5)
-    sali_concat = compute_sali(D_concat, labels)
 
-    results['concat_baseline'] = {
+    results['concat'] = {
         'dim': X_concat.shape[1],
         'sac_rho': sac_concat,
         'violation_rate': viol_concat,
-        'sali_mean': sali_concat['mean'],
     }
-    print(f"\n  Concat baseline: SAC={sac_concat:.4f}, viol={viol_concat:.3f}, "
+    print(f"  Concat (reference only): SAC={sac_concat:.4f}, viol={viol_concat:.3f}, "
           f"dim={X_concat.shape[1]}")
 
-    best_sac = sac_concat
-    best_method = 'concat'
+    best_sac = best_rep_sac
+    best_method = best_rep_name
 
     # Run search once (selection is weight_method-independent), then vary weights
     print(f"\n  Running hybrid search ({search_speed})...")
@@ -475,8 +494,8 @@ def run_hybrid_similarity(data: dict, n_folds: int,
                 'violation_rate': viol_weighted,
                 'sali_mean': sali_weighted['mean'],
             },
+            'sac_delta_from_best_rep': sac_weighted - best_rep_sac,
             'sac_delta_from_concat': sac_weighted - sac_concat,
-            'viol_delta_from_concat': viol_weighted - viol_concat,
             'search_time_seconds': search_time,
             'blueprint': search.best_overall['blueprint'].to_dict() if search.best_overall else None,
         }
@@ -488,13 +507,26 @@ def run_hybrid_similarity(data: dict, n_folds: int,
             best_method = wm
 
         print(f"    Hybrid weighted:   SAC={sac_weighted:.4f}, viol={viol_weighted:.3f}")
-        print(f"    Delta SAC from concat: {sac_weighted - sac_concat:+.4f}")
+        print(f"    Delta SAC from best rep ({best_rep_name}): "
+              f"{sac_weighted - best_rep_sac:+.4f}")
 
     results['best_weight_method'] = best_method
     results['best_sac'] = best_sac
 
     # Summary
-    print(f"\n  Best weight method: {best_method} (SAC={best_sac:.4f})")
+    print(f"\n  Summary:")
+    print(f"    Best individual rep: {best_rep_name} (SAC={best_rep_sac:.4f}, "
+          f"dim={reps[best_rep_name].shape[1]})")
+    print(f"    Best hybrid:        {best_method} (SAC={best_sac:.4f}, dim={hybrid_dim})")
+    print(f"    Concat (reference): SAC={sac_concat:.4f}, dim={X_concat.shape[1]}")
+
+    # Flag if concat beats hybrid (concat is impractically large but worth noting)
+    if sac_concat < best_sac:
+        print(f"    WARNING: concat SAC ({sac_concat:.4f}) < best hybrid SAC "
+              f"({best_sac:.4f}), but concat dim={X_concat.shape[1]} is impractical")
+        results['concat_beats_hybrid'] = True
+    else:
+        results['concat_beats_hybrid'] = False
 
     return results
 
@@ -1393,9 +1425,50 @@ def run_optimal_similarity_dimension(data: dict, n_folds: int,
         print(f"    dim={actual_dim}: RF_R²={rf_r2:.4f}, kNN_R²={knn_r2:.4f}, "
               f"SAC={sac_rho:.4f}, viol={viol:.3f}, dist_corr={dist_corr:.3f}")
 
-    # Full-dim baseline
-    print(f"\n  Full dim={full_dim}:")
-    D_full = compute_distance_matrix(X_concat, standardize=True)
+    # Per-rep baselines (the real comparison: best individual rep)
+    print("\n  Individual rep baselines:")
+    results['per_rep'] = {}
+    best_rep_sac = 0
+    best_rep_name = None
+    for rep_name, X in reps.items():
+        D_rep = compute_distance_matrix(X, standardize=True)
+        sac_rep, _ = similarity_activity_correlation(D_rep, labels, n_sample)
+        viol_rep = violation_rate(D_rep, labels, k=5)
+
+        rf_rep = []
+        knn_rep = []
+        for train_idx, val_idx in gkf.split(sample_X, labels, groups=groups):
+            y_train, y_val = labels[train_idx], labels[val_idx]
+            scaler = StandardScaler()
+            X_tr = scaler.fit_transform(X[train_idx])
+            X_va = scaler.transform(X[val_idx])
+
+            rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+            rf.fit(X_tr, y_train)
+            rf_rep.append(r2_score(y_val, rf.predict(X_va)))
+
+            knn = KNeighborsRegressor(n_neighbors=min(5, len(y_train) - 1))
+            knn.fit(X_tr, y_train)
+            knn_rep.append(r2_score(y_val, knn.predict(X_va)))
+
+        results['per_rep'][rep_name] = {
+            'dim': X.shape[1],
+            'rf_r2': float(np.mean(rf_rep)),
+            'knn_r2': float(np.mean(knn_rep)),
+            'sac_rho': sac_rep,
+            'violation_rate': viol_rep,
+        }
+        if best_rep_name is None or sac_rep < best_rep_sac:
+            best_rep_sac = sac_rep
+            best_rep_name = rep_name
+        print(f"    {rep_name} (dim={X.shape[1]}): RF_R²={np.mean(rf_rep):.4f}, "
+              f"kNN_R²={np.mean(knn_rep):.4f}, SAC={sac_rep:.4f}")
+
+    results['best_individual_rep'] = best_rep_name
+    print(f"  Best individual rep: {best_rep_name} (SAC={best_rep_sac:.4f})")
+
+    # Concat (reference, not standard practice)
+    print(f"\n  Concat reference (dim={full_dim}):")
     sac_full, _ = similarity_activity_correlation(D_full, labels, n_sample)
     viol_full = violation_rate(D_full, labels, k=5)
 
@@ -1415,15 +1488,15 @@ def run_optimal_similarity_dimension(data: dict, n_folds: int,
         knn.fit(X_tr, y_train)
         knn_scores_full.append(r2_score(y_val, knn.predict(X_va)))
 
-    results['full_dim'] = {
+    results['concat_reference'] = {
         'dim': full_dim,
         'rf_r2': float(np.mean(rf_scores_full)),
         'knn_r2': float(np.mean(knn_scores_full)),
         'sac_rho': sac_full,
         'violation_rate': viol_full,
     }
-    print(f"    RF_R²={results['full_dim']['rf_r2']:.4f}, "
-          f"kNN_R²={results['full_dim']['knn_r2']:.4f}, "
+    print(f"    RF_R²={results['concat_reference']['rf_r2']:.4f}, "
+          f"kNN_R²={results['concat_reference']['knn_r2']:.4f}, "
           f"SAC={sac_full:.4f}, viol={viol_full:.3f}")
 
     # Find optimal budget for prediction vs similarity
@@ -1471,16 +1544,19 @@ def run_cross_dataset_summary(all_dataset_results: Dict[str, dict]) -> Dict[str,
         print(f"\n  {ds_name}:")
         ds_summary = {}
 
-        # Exp 1 -> Exp 2: SAC improvement
-        exp1 = ds_results.get('exp1_baseline')
+        # Exp 2: SAC improvement vs best individual rep
         exp2 = ds_results.get('exp2_hybrid_similarity')
-        if exp1 and exp2:
-            concat_sac = exp1.get('all_concat', {}).get('sac_rho', float('nan'))
+        if exp2:
+            best_rep_info = exp2.get('best_individual_rep', {})
+            best_rep_sac = best_rep_info.get('sac_rho', float('nan'))
+            best_rep_name = best_rep_info.get('name', '?')
             best_hybrid_sac = exp2.get('best_sac', float('nan'))
-            delta_sac = best_hybrid_sac - concat_sac
+            delta_sac = best_hybrid_sac - best_rep_sac
             ds_summary['sac_delta'] = delta_sac
+            ds_summary['best_rep'] = best_rep_name
             sac_deltas.append(delta_sac)
-            print(f"    SAC delta: {delta_sac:+.4f} (concat={concat_sac:.4f} -> "
+            print(f"    SAC delta: {delta_sac:+.4f} "
+                  f"(best_rep {best_rep_name}={best_rep_sac:.4f} -> "
                   f"hybrid={best_hybrid_sac:.4f})")
 
         # Exp 4: cliff reduction
