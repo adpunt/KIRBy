@@ -84,7 +84,8 @@ REP_PRESETS = {
     'all': [
         'ecfp4', 'maccs', 'pdv', 'mol2vec', 'chemberta', 'molformer',
         'selformer', 'chembert', 'molclr', 'graphmvp', 'smited',
-        'mhg_gnn', 'grover', 'graph_kernel'
+        'mhg_gnn', 'grover', 'graph_kernel', 'unimol', 'schnet',
+        'chemformer'
     ]
 }
 
@@ -339,7 +340,8 @@ def get_representations(smiles: List[str], preset_or_list: str) -> Dict[str, np.
         create_ecfp4, create_maccs, create_pdv, create_mol2vec,
         create_chemberta, create_molformer, create_selformer,
         create_chembert, create_molclr, create_graphmvp, create_smited,
-        create_mhg_gnn, create_grover, create_graph_kernel
+        create_mhg_gnn, create_grover, create_graph_kernel,
+        create_unimol, create_schnet, create_chemformer
     )
 
     if preset_or_list in REP_PRESETS:
@@ -364,6 +366,9 @@ def get_representations(smiles: List[str], preset_or_list: str) -> Dict[str, np.
         'mhg_gnn': create_mhg_gnn,
         'grover': create_grover,
         'graph_kernel': create_graph_kernel,
+        'unimol': create_unimol,
+        'schnet': create_schnet,
+        'chemformer': create_chemformer,
     }
 
     representations = {}
