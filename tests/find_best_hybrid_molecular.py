@@ -133,10 +133,57 @@ MODELS = {
 DIMENSION_TIERS = [50, 100, 200, 500]
 
 # Allocation methods
-ALLOCATION_METHODS = ['greedy', 'performance_weighted', 'fixed', 'mrmr']
+# NOTE: mrmr removed (too slow ~34min, no better than faster methods)
+# NOTE: diversity_greedy removed (broken, R²~0.5)
+# NOTE: two_stage added — uses stage2_method kwarg in create_hybrid:
+#   allocation_method='two_stage', importance_method='random_forest', stage2_method='permutation' (or 'treeshap')
+# NOTE: stability_selection added — uses n_bootstrap kwarg
+ALLOCATION_METHODS = ['greedy', 'performance_weighted', 'fixed', 'two_stage', 'stability_selection']
 ALLOCATION_METHODS_HIGH_COMPUTE = ['greedy_feature']  # Feature-level, slower but more precise
 
 # Importance methods by computation cost
+# TODO: Update tiers and SEARCH_CONFIGS after final benchmark re-run.
+# Benchmark findings (2026-02-10) that still need integration:
+#
+# TIER RECLASSIFICATION NEEDED:
+#   - deeplift (1.2s) should be FAST, not MEDIUM — faster than random_forest
+#   - deepliftshap (706s) should be SLOW, not MEDIUM — slower than kernelshap
+#   - xgboost_cover is universally bad (R²~0.07 at budget 50) — consider removing
+#   - lime is universally bad and harmful as weights — consider removing
+#
+# SEARCH_CONFIGS NEED UPDATING:
+#   - lightgbm_gain is the BEST importance method for feature weighting (kNN/similarity)
+#     and is fast (1.2s), yet it's absent from quick/balanced/medium/full configs.
+#   - Should be in every config that cares about downstream weighting quality.
+#
+# WEIGHTING FINDINGS (Phase 5):
+#   - Single importance methods >> aggregated scores for feature weighting.
+#   - DO NOT use aggregated importance (borda, rrf, avg) as feature weights.
+#   - Aggregation helps for feature SELECTION (Phase 3), hurts for WEIGHTING (Phase 5).
+#   - Best weight sources: lightgbm_gain > treeshap ≈ random_forest > lightgbm_split > permutation
+#   - Tier 2: xgboost_gain, kernelshap
+#   - Tier 3: xgboost_weight (gap on QM9)
+#   - Tier 4: neural methods (deepliftshap, gradientshap, IG, deeplift) ~0.08 behind tier 1
+#   - Bad weights: boruta, drop_column, xgboost_cover, lime (lime actively harmful)
+#
+# AGGREGATION FINDINGS (Phase 3):
+#   - borda_all: most consistent across datasets/budgets, MLP-safe on QM9
+#   - avg_fast3 (rf + xgboost_gain + lightgbm_gain): best on LogD, fast
+#   - Tree-subset strategies dominate RF/LGBM but can cause MLP collapse on QM9
+#   - All-method strategies needed for MLP safety
+#
+# ALLOCATION FINDINGS (Phase 4):
+#   - QM9 MLP collapse: strategies that over-optimize for trees destroy MLP.
+#     greedy_feature and performance_weighted are MLP-safe (preserve rep diversity).
+#   - two_stage_rf_perm: best on LogD, inconsistent MLP on QM9
+#   - two_stage_rf_shap: good on LogD, worse MLP stability than perm variant
+#
+# STILL NEEDED:
+#   - Phase 2 pairwise correlation matrix (re-run benchmark to get it)
+#   - Check which methods are too correlated to include together
+#   - Phase 5b results (budget=25 low-dim similarity)
+#   - Then finalize tiers, configs, and search methodology
+#
 IMPORTANCE_METHODS_FAST = [
     'random_forest',      # MDI/Gini importance
     'treeshap',           # TreeSHAP (handles correlations better)
