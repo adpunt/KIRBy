@@ -49,7 +49,6 @@ ALL_IMPORTANCE_METHODS = [
     'treeshap',
     'xgboost_gain',
     'xgboost_weight',
-    'xgboost_cover',
     'lightgbm_gain',
     'lightgbm_split',
     'permutation',
@@ -58,19 +57,15 @@ ALL_IMPORTANCE_METHODS = [
     'deepliftshap',
     'gradientshap',
     'kernelshap',
-    'lime',
-    'drop_column',
-    'boruta',
 ]
 
 # Categorized by type
 METHOD_CATEGORIES = {
     'tree_based': ['random_forest', 'treeshap', 'xgboost_gain', 'xgboost_weight',
-                   'xgboost_cover', 'lightgbm_gain', 'lightgbm_split'],
+                   'lightgbm_gain', 'lightgbm_split'],
     'gradient_based': ['integrated_gradients', 'deeplift', 'deepliftshap', 'gradientshap'],
-    'perturbation': ['permutation', 'drop_column'],
-    'approximation': ['kernelshap', 'lime'],
-    'selection': ['boruta'],
+    'perturbation': ['permutation'],
+    'approximation': ['kernelshap'],
 }
 
 # Quick subset for sanity checks
@@ -1295,11 +1290,8 @@ def run_benchmark(config: BenchmarkConfig, output_dir: str = 'results/importance
             }),
         }
 
-        # Also test single methods as baselines (exclude known-bad methods)
-        EXCLUDE_SINGLE = {'xgboost_cover', 'lime'}
+        # Also test single methods as baselines
         for method in config.importance_methods:
-            if method in EXCLUDE_SINGLE:
-                continue
             if importance_results.get(method, {}).get('success', False):
                 strategies[f'single_{method}'] = lambda m=method: importance_results[m]['scores']
 
