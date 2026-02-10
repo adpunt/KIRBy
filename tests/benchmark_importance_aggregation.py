@@ -43,33 +43,31 @@ warnings.filterwarnings('ignore')
 # IMPORTANCE METHODS
 # =============================================================================
 
-# All available methods from kirby.hybrid.compute_feature_importance
+# Final approved importance methods (after correlation/performance review)
 ALL_IMPORTANCE_METHODS = [
-    'random_forest',
     'treeshap',
     'xgboost_gain',
-    'xgboost_weight',
     'lightgbm_gain',
-    'lightgbm_split',
-    'permutation',
-    'integrated_gradients',
     'deeplift',
-    'deepliftshap',
-    'gradientshap',
+    'permutation',
     'kernelshap',
+    'integrated_gradients',  # long search only
+    'gradientshap',          # long search only
 ]
+
+# Methods only included in exhaustive/long searches (slow, correlated with deeplift)
+LONG_SEARCH_ONLY = {'integrated_gradients', 'gradientshap'}
 
 # Categorized by type
 METHOD_CATEGORIES = {
-    'tree_based': ['random_forest', 'treeshap', 'xgboost_gain', 'xgboost_weight',
-                   'lightgbm_gain', 'lightgbm_split'],
-    'gradient_based': ['integrated_gradients', 'deeplift', 'deepliftshap', 'gradientshap'],
+    'tree_based': ['treeshap', 'xgboost_gain', 'lightgbm_gain'],
+    'gradient_based': ['deeplift', 'integrated_gradients', 'gradientshap'],
     'perturbation': ['permutation'],
     'approximation': ['kernelshap'],
 }
 
 # Quick subset for sanity checks
-QUICK_METHODS = ['random_forest', 'permutation', 'treeshap', 'xgboost_gain']
+QUICK_METHODS = ['treeshap', 'permutation', 'xgboost_gain', 'lightgbm_gain']
 
 
 # =============================================================================

@@ -6,12 +6,17 @@ Thin molecular wrapper around kirby.find_best_hybrid. Handles SMILES loading,
 molecular representation generation, scaffold grouping, and output formatting.
 The actual search logic lives in the domain-agnostic library.
 
+Datasets (all regression):
+  - logd:  OpenADMET-LogD (7309 molecules, lipophilicity)
+  - caco2: OpenADMET-Caco2_Efflux (3777 molecules, P-gp efflux ratio, log-transformed)
+  - herg:  ChEMBL-hERG-Ki (1415 molecules, hERG binding affinity pKi)
+
 Usage:
     # Quick local test
-    python find_best_hybrid_molecular.py esol --reps fast --search fast
+    python find_best_hybrid_molecular.py logd --reps fast --search fast
 
     # Medium search with HuggingFace models
-    python find_best_hybrid_molecular.py herg --reps fast+hf --search medium
+    python find_best_hybrid_molecular.py caco2 --reps fast+hf --search medium
 
     # Full search with all models
     python find_best_hybrid_molecular.py data.csv --smiles-col SMILES --target-col pIC50 \\
@@ -102,67 +107,182 @@ _SEARCH_NAME_MAP = {
 # DATA LOADING
 # =============================================================================
 
+def _standardise_smiles(smi: str) -> Optional[str]:
+    """Canonicalise SMILES, keep largest fragment, remove salts."""
+    from rdkit import Chem
+    if not isinstance(smi, str) or not smi.strip():
+        return None
+    mol = Chem.MolFromSmiles(smi)
+    if mol is None:
+        return None
+    frags = Chem.GetMolFrags(mol, asMols=True, sanitizeFrags=True)
+    if not frags:
+        return None
+    mol = max(frags, key=lambda m: m.GetNumHeavyAtoms())
+    try:
+        return Chem.MolToSmiles(mol, canonical=True)
+    except Exception:
+        return None
+
+
+def _download_openadmet() -> pd.DataFrame:
+    """Download or load cached OpenADMET-ExpansionRx data."""
+    import requests
+
+    cache_dir = Path.home() / '.cache' / 'kirby'
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cached = cache_dir / 'openadmet_train.csv'
+
+    if not cached.exists():
+        url = ("https://huggingface.co/datasets/openadmet/"
+               "openadmet-expansionrx-challenge-data/resolve/main/expansion_data_train.csv")
+        print(f"  Downloading OpenADMET data from HuggingFace...")
+        resp = requests.get(url, timeout=120)
+        resp.raise_for_status()
+        cached.write_bytes(resp.content)
+
+    return pd.read_csv(cached)
+
+
+def _load_openadmet_endpoint(df: pd.DataFrame, endpoint_col: str,
+                             log_transform: bool = False) -> Tuple[List[str], np.ndarray]:
+    """Extract a single endpoint from OpenADMET, standardize, deduplicate."""
+    smiles_col = next(c for c in df.columns if c.upper() == 'SMILES')
+
+    sub = df[[smiles_col, endpoint_col]].dropna(subset=[endpoint_col]).copy()
+    sub[endpoint_col] = pd.to_numeric(sub[endpoint_col], errors='coerce')
+    sub = sub.dropna()
+
+    sub['std_smiles'] = sub[smiles_col].apply(_standardise_smiles)
+    sub = sub.dropna(subset=['std_smiles'])
+
+    # Deduplicate by canonical SMILES: take median target
+    sub = sub.groupby('std_smiles').agg({endpoint_col: 'median'}).reset_index()
+
+    smiles_arr = sub['std_smiles'].tolist()
+    labels_arr = sub[endpoint_col].values.astype(np.float64)
+
+    if log_transform:
+        labels_arr = np.log10(np.clip(labels_arr, 1e-10, None))
+        valid = np.isfinite(labels_arr)
+        smiles_arr = [s for s, v in zip(smiles_arr, valid) if v]
+        labels_arr = labels_arr[valid]
+
+    return smiles_arr, labels_arr
+
+
+def _fetch_chembl_herg_ki() -> Tuple[List[str], np.ndarray]:
+    """Fetch ChEMBL hERG (CHEMBL240) Ki data as regression (pKi). Cached."""
+    import requests
+    import time as _time
+
+    cache_dir = Path.home() / '.cache' / 'kirby'
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cached = cache_dir / 'chembl_herg_ki.csv'
+
+    if cached.exists():
+        print(f"  Loading cached ChEMBL hERG Ki from {cached}")
+        df = pd.read_csv(cached)
+        return df['SMILES'].tolist(), df['pKi'].values
+
+    print("  Fetching ChEMBL hERG Ki data...")
+    base_url = "https://www.ebi.ac.uk/chembl/api/data/activity.json"
+    all_records = []
+    offset = 0
+    limit = 1000
+
+    while True:
+        params = {
+            "target_chembl_id": "CHEMBL240",
+            "standard_type": "Ki",
+            "pchembl_value__isnull": "false",
+            "standard_relation": "=",
+            "data_validity_comment__isnull": "true",
+            "limit": limit, "offset": offset, "format": "json",
+        }
+        print(f"    Querying ChEMBL API (offset={offset})...")
+        resp = requests.get(base_url, params=params, timeout=60)
+        resp.raise_for_status()
+        data = resp.json()
+
+        activities = data.get("activities", [])
+        if not activities:
+            break
+        for act in activities:
+            all_records.append({
+                "canonical_smiles": act.get("canonical_smiles"),
+                "pchembl_value": act.get("pchembl_value"),
+                "assay_type": act.get("assay_type"),
+            })
+
+        if data.get("page_meta", {}).get("next") is None:
+            break
+        offset += limit
+        _time.sleep(0.5)
+
+    if not all_records:
+        raise RuntimeError("No hERG Ki records retrieved from ChEMBL!")
+
+    df = pd.DataFrame(all_records)
+    if "assay_type" in df.columns:
+        df = df[df["assay_type"] == "B"].copy()
+    df["pchembl_value"] = pd.to_numeric(df["pchembl_value"], errors="coerce")
+    df = df.dropna(subset=["pchembl_value", "canonical_smiles"])
+
+    # Deduplicate: median pKi per compound, remove high-variance (std > 1.0)
+    grouped = df.groupby("canonical_smiles")["pchembl_value"]
+    medians = grouped.median().reset_index()
+    stds = grouped.std().reset_index().rename(columns={"pchembl_value": "std"})
+    merged = medians.merge(stds, on="canonical_smiles")
+    merged = merged[(merged["std"].isna()) | (merged["std"] <= 1.0)]
+
+    # Standardize SMILES
+    merged['std_smiles'] = merged['canonical_smiles'].apply(_standardise_smiles)
+    merged = merged.dropna(subset=['std_smiles'])
+
+    result = merged[['std_smiles', 'pchembl_value']].copy()
+    result.columns = ['SMILES', 'pKi']
+    result.to_csv(cached, index=False)
+    print(f"    Cached {len(result)} compounds to {cached}")
+
+    return result['SMILES'].tolist(), result['pKi'].values
+
+
 def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
                  target_col: str = 'target') -> Tuple[List[str], np.ndarray, str]:
-    """Load dataset from built-in name or CSV path."""
+    """Load dataset from built-in name or CSV path.
+
+    Built-in datasets (all regression):
+      - logd:  OpenADMET-LogD (~7309 molecules)
+      - caco2: OpenADMET-Caco2_Efflux (~3777 molecules, log-transformed)
+      - herg:  ChEMBL-hERG-Ki (~1415 molecules, pKi)
+    """
     from rdkit import Chem
 
     name_lower = name_or_path.lower()
 
-    if name_lower == 'esol':
-        try:
-            from kirby.datasets.esol import load_esol
-            splits = load_esol(splitter='scaffold')
-            smiles = (splits['train']['smiles'] + splits['val']['smiles'] + splits['test']['smiles'])
-            labels = np.concatenate([splits['train']['labels'], splits['val']['labels'], splits['test']['labels']])
-            return smiles, labels, 'regression'
-        except ImportError:
-            from deepchem.molnet import load_delaney
-            _, datasets, _ = load_delaney(featurizer='Raw', splitter=None)
-            return list(datasets[0].ids), datasets[0].y.flatten(), 'regression'
-
-    elif name_lower == 'herg':
-        try:
-            from kirby.datasets.herg import load_herg_tdc
-            data = load_herg_tdc()
-            return data['smiles'], data['labels'], 'classification'
-        except ImportError:
-            from tdc.single_pred import Tox
-            data = Tox(name='hERG', label_name='hERG_at_10uM')
-            df = data.get_data()
-            return df['Drug'].tolist(), df['Y'].values, 'classification'
-
-    elif name_lower == 'logd':
-        import requests
-
-        cache_dir = Path.home() / '.cache' / 'kirby'
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        cached = cache_dir / 'openadmet_train.csv'
-
-        if not cached.exists():
-            url = ("https://huggingface.co/datasets/openadmet/"
-                   "openadmet-expansionrx-challenge-data/resolve/main/expansion_data_train.csv")
-            print(f"  Downloading OpenADMET data from HuggingFace...")
-            resp = requests.get(url, timeout=120)
-            resp.raise_for_status()
-            cached.write_bytes(resp.content)
-
-        df = pd.read_csv(cached)
+    if name_lower == 'logd':
+        df = _download_openadmet()
         logd_col = next((c for c in df.columns if 'LogD' in c), None)
         if logd_col is None:
             raise ValueError("Cannot find LogD column in OpenADMET data")
+        smiles, labels = _load_openadmet_endpoint(df, logd_col, log_transform=False)
+        print(f"  Loaded {len(smiles)} molecules from OpenADMET-LogD")
+        return smiles, labels, 'regression'
 
-        valid_smiles, valid_labels = [], []
-        for smi, label in zip(df['SMILES'], df[logd_col]):
-            if pd.isna(smi) or pd.isna(label):
-                continue
-            mol = Chem.MolFromSmiles(str(smi))
-            if mol is not None:
-                valid_smiles.append(str(smi))
-                valid_labels.append(float(label))
+    elif name_lower == 'caco2':
+        df = _download_openadmet()
+        caco2_col = next((c for c in df.columns if 'Caco' in c and 'Efflux' in c), None)
+        if caco2_col is None:
+            raise ValueError("Cannot find Caco2 Efflux column in OpenADMET data")
+        smiles, labels = _load_openadmet_endpoint(df, caco2_col, log_transform=True)
+        print(f"  Loaded {len(smiles)} molecules from OpenADMET-Caco2_Efflux")
+        return smiles, labels, 'regression'
 
-        print(f"  Loaded {len(valid_smiles)} molecules from OpenADMET-LogD")
-        return valid_smiles, np.array(valid_labels), 'regression'
+    elif name_lower == 'herg':
+        smiles, labels = _fetch_chembl_herg_ki()
+        print(f"  Loaded {len(smiles)} molecules from ChEMBL-hERG-Ki (pKi)")
+        return smiles, labels, 'regression'
 
     elif name_or_path.endswith('.csv') or os.path.exists(name_or_path):
         print(f"Loading custom dataset from {name_or_path}...")
@@ -205,7 +325,8 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
         return valid_smiles, labels, task_type
 
     else:
-        raise ValueError(f"Unknown dataset: {name_or_path}")
+        raise ValueError(f"Unknown dataset: {name_or_path}. "
+                         f"Built-in options: logd, caco2, herg")
 
 
 # =============================================================================
@@ -724,8 +845,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s esol --reps fast --search fast
-  %(prog)s herg --reps fast+hf --search medium
+  %(prog)s logd --reps fast --search fast
+  %(prog)s caco2 --reps fast+hf --search medium
   %(prog)s data.csv --smiles-col SMILES --target-col pIC50 --reps all --search long
 
 Output:
@@ -737,7 +858,7 @@ Output:
         """
     )
 
-    parser.add_argument('dataset', type=str, help="'esol', 'herg', 'logd', or path to CSV")
+    parser.add_argument('dataset', type=str, help="'logd', 'caco2', 'herg', or path to CSV")
     parser.add_argument('--smiles-col', type=str, default='smiles')
     parser.add_argument('--target-col', type=str, default='target')
     parser.add_argument('--reps', type=str, default='fast',
