@@ -384,19 +384,51 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
     return allocation
 
 
-def allocate_mrmr(rep_dict_train, rep_dict_val, train_labels, val_labels,
-                  total_budget=100):
+def _concat_rep_dicts(rep_dict):
+    """Concatenate rep dicts into flat array with offset tracking.
+
+    Returns:
+        (X_concat, rep_names, rep_offsets, rep_sizes)
     """
-    Allocate features using minimum Redundancy Maximum Relevance (mRMR).
+    rep_names = sorted(rep_dict.keys())
+    rep_offsets = {}
+    rep_sizes = {}
+    offset = 0
+    for name in rep_names:
+        rep_offsets[name] = offset
+        rep_sizes[name] = rep_dict[name].shape[1]
+        offset += rep_sizes[name]
+    X_concat = np.hstack([rep_dict[name] for name in rep_names])
+    return X_concat, rep_names, rep_offsets, rep_sizes
 
-    mRMR balances two objectives:
-    1. Maximum relevance: features should be highly correlated with the target
-    2. Minimum redundancy: features should be uncorrelated with each other
 
-    This helps select diverse, informative features and works well with
-    linear models that suffer from multicollinearity.
+def _global_to_per_rep_feature_info(selected_global, rep_names, rep_offsets,
+                                     rep_sizes, importance_scores):
+    """Convert global selected indices to per-rep feature_info dict."""
+    feature_info = {}
+    for name in rep_names:
+        offset = rep_offsets[name]
+        size = rep_sizes[name]
+        mask = (selected_global >= offset) & (selected_global < offset + size)
+        local_indices = selected_global[mask] - offset
+        if len(local_indices) > 0:
+            scores = importance_scores[selected_global[mask]]
+            feature_info[name] = {
+                'selected_indices': local_indices,
+                'importance_scores': scores,
+                'n_features': len(local_indices),
+            }
+    return feature_info
 
-    Reference: Peng et al. (2005) "Feature Selection Based on Mutual Information"
+
+def allocate_two_stage(rep_dict_train, rep_dict_val, train_labels, val_labels,
+                       total_budget=100, stage1_method='random_forest',
+                       stage2_method='permutation', stage1_multiplier=3):
+    """
+    Two-stage allocation: fast screening then precise selection.
+
+    Stage 1: Use fast method to reduce to stage1_multiplier * budget candidates.
+    Stage 2: Use slower method on candidates for final selection.
 
     Args:
         rep_dict_train: Dict of {rep_name: train_features}
@@ -404,79 +436,112 @@ def allocate_mrmr(rep_dict_train, rep_dict_val, train_labels, val_labels,
         train_labels: Training labels
         val_labels: Validation labels
         total_budget: Maximum total features to select (default: 100)
+        stage1_method: Fast importance method for screening (default: 'random_forest')
+        stage2_method: Precise importance method for final selection (default: 'permutation')
+        stage1_multiplier: Candidates = multiplier * budget (default: 3)
 
     Returns:
-        dict: Allocation of {rep_name: n_features}
+        tuple: (allocation, feature_info)
     """
-    from sklearn.feature_selection import mutual_info_regression, mutual_info_classif
+    X_train, rep_names, rep_offsets, rep_sizes = _concat_rep_dicts(rep_dict_train)
+    n_features = X_train.shape[1]
+    stage1_budget = min(stage1_multiplier * total_budget, n_features)
 
-    is_classification = _is_classification_task(train_labels)
+    # Stage 1: Fast screening
+    stage1_scores = compute_feature_importance(
+        {'features': X_train}, train_labels, method=stage1_method
+    )['features']
+    stage1_candidates = np.argsort(stage1_scores)[-stage1_budget:]
 
-    # Concatenate all features to compute global mRMR
-    all_features = []
-    feature_to_rep = []  # Maps feature index to (rep_name, local_idx)
+    # Stage 2: Precise selection on candidates
+    X_train_subset = X_train[:, stage1_candidates]
+    try:
+        stage2_scores = compute_feature_importance(
+            {'features': X_train_subset}, train_labels, method=stage2_method
+        )['features']
+        selected_local = np.argsort(stage2_scores)[-total_budget:]
+    except Exception:
+        selected_local = np.argsort(stage1_scores[stage1_candidates])[-total_budget:]
 
-    for rep_name, X_train in rep_dict_train.items():
-        X_clean = np.clip(X_train, -1e10, 1e10)
-        X_clean = np.nan_to_num(X_clean, nan=0.0, posinf=1e10, neginf=-1e10)
+    selected_global = stage1_candidates[selected_local]
 
-        for local_idx in range(X_clean.shape[1]):
-            all_features.append(X_clean[:, local_idx])
-            feature_to_rep.append((rep_name, local_idx))
+    feature_info = _global_to_per_rep_feature_info(
+        selected_global, rep_names, rep_offsets, rep_sizes, stage1_scores
+    )
+    allocation = {name: feature_info[name]['n_features']
+                  for name in rep_names if name in feature_info}
+    for name in rep_names:
+        if name not in allocation:
+            allocation[name] = 0
 
-    X_all = np.column_stack(all_features)
-    n_total_features = X_all.shape[1]
+    return allocation, feature_info
 
-    # Compute relevance (MI with target)
-    if is_classification:
-        relevance = mutual_info_classif(X_all, train_labels, random_state=42)
+
+def allocate_stability_selection(rep_dict_train, rep_dict_val, train_labels, val_labels,
+                                  total_budget=100, n_bootstrap=20,
+                                  importance_method='random_forest',
+                                  selection_threshold=0.6):
+    """
+    Stability selection via bootstrapping.
+
+    Runs importance on B bootstrap samples, keeps features that appear
+    in top-K for >= threshold fraction of samples.
+
+    Args:
+        rep_dict_train: Dict of {rep_name: train_features}
+        rep_dict_val: Dict of {rep_name: val_features}
+        train_labels: Training labels
+        val_labels: Validation labels
+        total_budget: Maximum total features to select (default: 100)
+        n_bootstrap: Number of bootstrap samples (default: 20)
+        importance_method: Importance method to use (default: 'random_forest')
+        selection_threshold: Minimum selection frequency to keep (default: 0.6)
+
+    Returns:
+        tuple: (allocation, feature_info)
+    """
+    X_train, rep_names, rep_offsets, rep_sizes = _concat_rep_dicts(rep_dict_train)
+    n_samples, n_features = X_train.shape
+    top_k = min(total_budget * 2, n_features)
+
+    selection_counts = np.zeros(n_features)
+
+    for b in range(n_bootstrap):
+        boot_idx = np.random.choice(n_samples, n_samples, replace=True)
+        X_boot = X_train[boot_idx]
+        y_boot = train_labels[boot_idx]
+
+        try:
+            scores = compute_feature_importance(
+                {'features': X_boot}, y_boot, method=importance_method
+            )['features']
+            top_indices = np.argsort(scores)[-top_k:]
+            selection_counts[top_indices] += 1
+        except Exception:
+            continue
+
+    selection_prob = selection_counts / n_bootstrap
+    above_threshold = np.where(selection_prob >= selection_threshold)[0]
+
+    if len(above_threshold) > total_budget:
+        prob_ranking = np.argsort(selection_prob[above_threshold])[::-1]
+        selected = above_threshold[prob_ranking[:total_budget]]
+    elif len(above_threshold) > 0:
+        selected = above_threshold
     else:
-        relevance = mutual_info_regression(X_all, train_labels, random_state=42)
+        selected = np.argsort(selection_prob)[-total_budget:]
 
-    # Greedy mRMR selection
-    selected_indices = []
-    remaining_indices = list(range(n_total_features))
+    # Use selection probability as importance scores
+    feature_info = _global_to_per_rep_feature_info(
+        selected, rep_names, rep_offsets, rep_sizes, selection_prob
+    )
+    allocation = {name: feature_info[name]['n_features']
+                  for name in rep_names if name in feature_info}
+    for name in rep_names:
+        if name not in allocation:
+            allocation[name] = 0
 
-    for _ in range(min(total_budget, n_total_features)):
-        if not remaining_indices:
-            break
-
-        best_score = -np.inf
-        best_idx = None
-
-        for idx in remaining_indices:
-            # Relevance term
-            rel = relevance[idx]
-
-            # Redundancy term (mean correlation with already selected)
-            if selected_indices:
-                redundancy = 0.0
-                for sel_idx in selected_indices:
-                    # Use absolute Pearson correlation as redundancy measure
-                    corr = np.corrcoef(X_all[:, idx], X_all[:, sel_idx])[0, 1]
-                    redundancy += np.abs(corr) if np.isfinite(corr) else 0.0
-                redundancy /= len(selected_indices)
-            else:
-                redundancy = 0.0
-
-            # mRMR score = relevance - redundancy
-            score = rel - redundancy
-
-            if score > best_score:
-                best_score = score
-                best_idx = idx
-
-        if best_idx is not None:
-            selected_indices.append(best_idx)
-            remaining_indices.remove(best_idx)
-
-    # Convert selected indices to per-rep allocation
-    allocation = {rep_name: 0 for rep_name in rep_dict_train.keys()}
-    for idx in selected_indices:
-        rep_name, _ = feature_to_rep[idx]
-        allocation[rep_name] += 1
-
-    return allocation
+    return allocation, feature_info
 
 
 def _is_classification_task(labels):
@@ -2087,7 +2152,8 @@ def create_hybrid(base_reps, labels,
             - 'greedy': Adaptive allocation via greedy forward selection (default)
             - 'greedy_feature': Feature-level greedy (slower but more precise)
             - 'performance_weighted': Allocate proportional to baseline R² scores
-            - 'mrmr': Minimum Redundancy Maximum Relevance allocation
+            - 'two_stage': Fast screening then precise selection (uses stage2_method kwarg)
+            - 'stability_selection': Bootstrap-resampled importance (uses n_bootstrap kwarg)
             - 'fixed': Equal allocation (n_per_rep for all)
             
         n_per_rep: Number of features per rep (for 'fixed' method, default: 100)
@@ -2314,35 +2380,51 @@ def create_hybrid(base_reps, labels,
         
         feature_info['allocation'] = allocation
 
-    # MRMR ALLOCATION
-    elif allocation_method == 'mrmr':
-        # Run mRMR allocation
-        allocation = allocate_mrmr(
+    # TWO-STAGE ALLOCATION
+    elif allocation_method == 'two_stage':
+        stage2 = kwargs.get('stage2_method', 'permutation')
+        stage1_multiplier = kwargs.get('stage1_multiplier', 3)
+
+        allocation, two_stage_feature_info = allocate_two_stage(
             rep_dict_train, rep_dict_val, train_labels, val_labels,
-            total_budget=budget
+            total_budget=budget, stage1_method=importance_method,
+            stage2_method=stage2, stage1_multiplier=stage1_multiplier
         )
 
-        # Compute importance on TRAIN split (using RF for feature selection within allocation)
-        importance_scores = compute_feature_importance(
-            rep_dict_train, train_labels, method=importance_method, **kwargs
-        )
-
-        # Select features based on train importance, then apply to full data
-        _, feature_info = concatenate_features(
-            rep_dict_train, importance_scores, allocation
-        )
-
-        # If filters were applied, remap indices
         if filter_index_maps:
-            for rep_name in list(feature_info.keys()):
-                if rep_name in filter_index_maps and 'selected_indices' in feature_info[rep_name]:
-                    filtered_indices = feature_info[rep_name]['selected_indices']
+            for rep_name in list(two_stage_feature_info.keys()):
+                if rep_name in filter_index_maps and 'selected_indices' in two_stage_feature_info[rep_name]:
+                    filtered_indices = two_stage_feature_info[rep_name]['selected_indices']
                     original_indices = filter_index_maps[rep_name][filtered_indices]
-                    feature_info[rep_name]['selected_indices'] = original_indices
+                    two_stage_feature_info[rep_name]['selected_indices'] = original_indices
 
-        # Apply same feature selection to original data
-        hybrid_features = apply_feature_selection(original_base_reps, feature_info)
+        hybrid_features = apply_feature_selection(original_base_reps, two_stage_feature_info)
 
+        feature_info = two_stage_feature_info.copy()
+        feature_info['allocation'] = allocation
+
+    # STABILITY SELECTION
+    elif allocation_method == 'stability_selection':
+        n_bootstrap = kwargs.get('n_bootstrap', 20)
+        selection_threshold = kwargs.get('selection_threshold', 0.6)
+
+        allocation, stability_feature_info = allocate_stability_selection(
+            rep_dict_train, rep_dict_val, train_labels, val_labels,
+            total_budget=budget, n_bootstrap=n_bootstrap,
+            importance_method=importance_method,
+            selection_threshold=selection_threshold
+        )
+
+        if filter_index_maps:
+            for rep_name in list(stability_feature_info.keys()):
+                if rep_name in filter_index_maps and 'selected_indices' in stability_feature_info[rep_name]:
+                    filtered_indices = stability_feature_info[rep_name]['selected_indices']
+                    original_indices = filter_index_maps[rep_name][filtered_indices]
+                    stability_feature_info[rep_name]['selected_indices'] = original_indices
+
+        hybrid_features = apply_feature_selection(original_base_reps, stability_feature_info)
+
+        feature_info = stability_feature_info.copy()
         feature_info['allocation'] = allocation
 
     # GREEDY FEATURE ALLOCATION (feature-level, high computation)
@@ -2372,7 +2454,8 @@ def create_hybrid(base_reps, labels,
 
     else:
         raise ValueError(f"Unknown allocation_method: {allocation_method}. "
-                        f"Choose 'greedy', 'greedy_feature', 'performance_weighted', 'fixed', or 'mrmr'")
+                        f"Choose 'greedy', 'greedy_feature', 'performance_weighted', "
+                        f"'fixed', 'two_stage', or 'stability_selection'")
     
     # ========================================================================
     # AUGMENTATION HANDLING

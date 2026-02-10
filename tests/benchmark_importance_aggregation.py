@@ -774,72 +774,6 @@ def aggregate_disagreement_aware(
 # ALLOCATION STRATEGIES
 # =============================================================================
 
-def allocate_diversity_greedy(
-    X_train: np.ndarray,
-    X_val: np.ndarray,
-    y_train: np.ndarray,
-    y_val: np.ndarray,
-    importance_scores: np.ndarray,
-    budget: int = 100,
-    lambda_diversity: float = 0.5
-) -> Tuple[np.ndarray, Dict[str, Any]]:
-    """
-    Diversity-penalized greedy selection.
-
-    At each step, select feature that maximizes:
-        importance[i] - lambda * max_correlation_with_selected[i]
-
-    Returns:
-        (selected_indices, info_dict)
-    """
-    n_features = X_train.shape[1]
-    budget = min(budget, n_features)
-
-    # Normalize importance
-    imp_norm = normalize_scores(importance_scores)
-
-    # Precompute correlation matrix (expensive but done once)
-    X_combined = np.vstack([X_train, X_val])
-    scaler = StandardScaler()
-    X_scaled = scaler.fit_transform(X_combined)
-
-    # Use absolute correlation
-    corr_matrix = np.abs(np.corrcoef(X_scaled.T))
-    np.fill_diagonal(corr_matrix, 0)  # Don't correlate with self
-
-    selected = []
-    remaining = set(range(n_features))
-
-    for _ in range(budget):
-        if not remaining:
-            break
-
-        best_score = -np.inf
-        best_idx = None
-
-        for idx in remaining:
-            # Diversity penalty: max correlation with already selected
-            if selected:
-                diversity_penalty = np.max(corr_matrix[idx, selected])
-            else:
-                diversity_penalty = 0.0
-
-            score = imp_norm[idx] - lambda_diversity * diversity_penalty
-
-            if score > best_score:
-                best_score = score
-                best_idx = idx
-
-        if best_idx is not None:
-            selected.append(best_idx)
-            remaining.remove(best_idx)
-
-    return np.array(selected), {
-        'method': 'diversity_greedy',
-        'lambda': lambda_diversity,
-        'n_selected': len(selected),
-    }
-
 
 def allocate_two_stage(
     X_train: np.ndarray,
@@ -1284,6 +1218,9 @@ def run_benchmark(config: BenchmarkConfig, output_dir: str = 'results/importance
             'max_correlation': agreement['max_correlation'],
             'std_correlation': agreement['std_correlation'],
             'high_agreement': agreement['high_agreement'],
+            'methods': agreement['methods'],
+            'correlation_matrix': agreement['correlation_matrix'].tolist(),
+            'top_k_matrix': agreement['top_k_matrix'].tolist(),
         }
 
         # =================================================================
@@ -1358,8 +1295,11 @@ def run_benchmark(config: BenchmarkConfig, output_dir: str = 'results/importance
             }),
         }
 
-        # Also test single methods as baselines
+        # Also test single methods as baselines (exclude known-bad methods)
+        EXCLUDE_SINGLE = {'xgboost_cover', 'lime'}
         for method in config.importance_methods:
+            if method in EXCLUDE_SINGLE:
+                continue
             if importance_results.get(method, {}).get('success', False):
                 strategies[f'single_{method}'] = lambda m=method: importance_results[m]['scores']
 
@@ -1457,13 +1397,13 @@ def run_benchmark(config: BenchmarkConfig, output_dir: str = 'results/importance
                     global_indices.extend(info['selected_indices'] + rep_offsets[rep_name])
             return np.array(global_indices, dtype=int)
 
-        # Get base importance for diversity_greedy
+        # Get base importance for baseline
         base_importance, _, _ = compute_importance_single_method(X_train, y_train, 'random_forest')
 
         # Import hybrid.py allocation functions
         from kirby.hybrid import (
             allocate_greedy_forward, allocate_greedy_feature,
-            allocate_performance_weighted, allocate_mrmr,
+            allocate_performance_weighted,
         )
 
         for budget in config.budgets:
@@ -1472,12 +1412,6 @@ def run_benchmark(config: BenchmarkConfig, output_dir: str = 'results/importance
 
             # --- Flat-X allocation strategies (work on concatenated features) ---
             flat_strategies = {
-                'diversity_greedy_0.3': lambda b=budget: allocate_diversity_greedy(
-                    X_train, X_val, y_train, y_val, base_importance, b, lambda_diversity=0.3),
-                'diversity_greedy_0.5': lambda b=budget: allocate_diversity_greedy(
-                    X_train, X_val, y_train, y_val, base_importance, b, lambda_diversity=0.5),
-                'diversity_greedy_0.7': lambda b=budget: allocate_diversity_greedy(
-                    X_train, X_val, y_train, y_val, base_importance, b, lambda_diversity=0.7),
                 'two_stage_rf_perm': lambda b=budget: allocate_two_stage(
                     X_train, X_val, y_train, y_val, b, 'random_forest', 'permutation'),
                 'two_stage_rf_shap': lambda b=budget: allocate_two_stage(
@@ -1522,9 +1456,6 @@ def run_benchmark(config: BenchmarkConfig, output_dir: str = 'results/importance
                 'performance_weighted': lambda b=budget: ('allocation',
                     allocate_performance_weighted(rep_dict_train, rep_dict_val, y_train, y_val,
                                                  total_budget=b)),
-                'mrmr': lambda b=budget: ('allocation',
-                    allocate_mrmr(rep_dict_train, rep_dict_val, y_train, y_val,
-                                  total_budget=b)),
             }
 
             for strategy_name, run_strategy in rep_strategies.items():
@@ -1645,6 +1576,46 @@ def run_benchmark(config: BenchmarkConfig, output_dir: str = 'results/importance
                 print(f"  {source_name}: FAILED - {e}")
 
         dataset_results['weighting'] = weighting_results
+
+        # Phase 5b: Low-dimension similarity (budget=25)
+        # At small dimensions, test ALL methods (even slow ones are affordable)
+        print(f"\n{'─'*40}")
+        print("PHASE 5b: Low-dimension similarity (budget=25)")
+        print(f"{'─'*40}")
+
+        low_dim_budget = 25
+        low_dim_results = {}
+
+        for source_name, scores in weight_sources.items():
+            if len(scores) != X.shape[1]:
+                continue
+            try:
+                # Select top-25 features by importance
+                top_idx = np.argsort(scores)[-low_dim_budget:]
+                X_subset = X[:, top_idx]
+                subset_scores = scores[top_idx]
+
+                # Similarity retrieval on the subset, weighted by importance
+                sim_result = evaluate_similarity_retrieval(
+                    X_subset, y, subset_scores, scaffold_groups, config.n_folds)
+
+                # Also unweighted (pure selection quality)
+                uniform_scores = np.ones(low_dim_budget)
+                sim_unweighted = evaluate_similarity_retrieval(
+                    X_subset, y, uniform_scores, scaffold_groups, config.n_folds)
+
+                low_dim_results[source_name] = {
+                    'similarity_weighted': sim_result,
+                    'similarity_unweighted': sim_unweighted,
+                }
+
+                print(f"  {source_name}: weighted R²={sim_result['weighted_r2']:.4f}, "
+                      f"unweighted R²={sim_unweighted['weighted_r2']:.4f}")
+
+            except Exception as e:
+                print(f"  {source_name}: FAILED - {e}")
+
+        dataset_results['low_dim_similarity'] = low_dim_results
 
         all_results['datasets'][dataset_name] = dataset_results
 
