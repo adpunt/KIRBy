@@ -2,29 +2,20 @@
 """
 Find Best Hybrid Molecular Representation
 
-A flexible CLI tool for finding the optimal hybrid molecular representation,
-with multi-model evaluation and reusable blueprints.
-
-Key Outputs:
-1. BEST OVERALL: Highest performing model+hybrid combination
-2. BEST BY DIMENSION: Best config at each dimension tier (50, 100, 200, 500)
-3. BEST BY MODEL: Optimal hybrid for each model type (RF, XGBoost, Ridge, MLP, KNN)
-4. PERFORMANCE MATRIX: Full Model × Dimension grid
-5. BASELINE COMPARISON: Hybrid vs full-dimension individual representations
-
-The output is a minimal blueprint (reps + method + budget + importance) that can
-be applied to new data - no need to store feature indices.
+Thin molecular wrapper around kirby.find_best_hybrid. Handles SMILES loading,
+molecular representation generation, scaffold grouping, and output formatting.
+The actual search logic lives in the domain-agnostic library.
 
 Usage:
     # Quick local test
-    python find_best_hybrid_molecular.py esol --reps fast --search quick
+    python find_best_hybrid_molecular.py esol --reps fast --search fast
 
     # Medium search with HuggingFace models
     python find_best_hybrid_molecular.py herg --reps fast+hf --search medium
 
     # Full search with all models
     python find_best_hybrid_molecular.py data.csv --smiles-col SMILES --target-col pIC50 \\
-        --reps all --search full
+        --reps all --search long
 """
 
 import os
@@ -38,20 +29,14 @@ import warnings
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
-from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import GroupKFold
-from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-from sklearn.linear_model import Ridge, LogisticRegression
-from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
-from sklearn.neural_network import MLPRegressor, MLPClassifier
-from sklearn.metrics import r2_score, accuracy_score
-from sklearn.preprocessing import StandardScaler
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+
+from kirby.find_best_hybrid import find_best_hybrid, SearchResult, Blueprint
 
 warnings.filterwarnings('ignore')
 
@@ -76,12 +61,7 @@ def get_murcko_scaffold(smiles: str) -> str:
 
 
 def assign_scaffold_groups(smiles_list: List[str]) -> Tuple[np.ndarray, int]:
-    """
-    Assign scaffold group IDs to molecules for GroupKFold.
-
-    Returns:
-        tuple: (groups array, number of unique scaffolds)
-    """
+    """Assign scaffold group IDs to molecules for GroupKFold."""
     scaffolds = [get_murcko_scaffold(smi) for smi in smiles_list]
     unique_scaffolds = list(set(scaffolds))
     scaffold_to_id = {s: i for i, s in enumerate(unique_scaffolds)}
@@ -93,7 +73,6 @@ def assign_scaffold_groups(smiles_list: List[str]) -> Tuple[np.ndarray, int]:
 # CONFIGURATION
 # =============================================================================
 
-# Representation presets
 REP_PRESETS = {
     'fast': ['ecfp4', 'maccs', 'pdv'],
     'fast+hf': ['ecfp4', 'maccs', 'pdv', 'chemberta', 'molformer', 'selformer'],
@@ -104,221 +83,19 @@ REP_PRESETS = {
     ]
 }
 
-# Models to evaluate
-# TODO: Add more models - SVR/SVC, LightGBM, CatBoost, GaussianProcess, ElasticNet, GBM
-MODELS = {
-    'rf': {
-        'regressor': lambda: RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1),
-        'classifier': lambda: RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1),
-    },
-    'xgboost': {
-        'regressor': lambda: _get_xgb_regressor(),
-        'classifier': lambda: _get_xgb_classifier(),
-    },
-    'ridge': {
-        'regressor': lambda: Ridge(alpha=1.0, random_state=42),
-        'classifier': lambda: LogisticRegression(C=1.0, random_state=42, max_iter=1000, n_jobs=-1),
-    },
-    'mlp': {
-        'regressor': lambda: MLPRegressor(hidden_layer_sizes=(100, 50), random_state=42, max_iter=500),
-        'classifier': lambda: MLPClassifier(hidden_layer_sizes=(100, 50), random_state=42, max_iter=500),
-    },
-    'knn': {
-        'regressor': lambda: KNeighborsRegressor(n_neighbors=5, n_jobs=-1),
-        'classifier': lambda: KNeighborsClassifier(n_neighbors=5, n_jobs=-1),
-    },
+# Map old search names to new speed tiers for backward compat
+_SEARCH_NAME_MAP = {
+    'quick': 'fast',
+    'balanced': 'fast',
+    'medium': 'medium',
+    'precise': 'medium',
+    'importance_compare': 'medium',
+    'full': 'long',
+    'exhaustive': 'long',
+    # Direct speed tier names also work
+    'fast': 'fast',
+    'long': 'long',
 }
-
-# Dimension tiers
-DIMENSION_TIERS = [50, 100, 200, 500]
-
-# Allocation methods
-# NOTE: mrmr removed (too slow ~34min, no better than faster methods)
-# NOTE: diversity_greedy removed (broken, R²~0.5)
-# NOTE: two_stage added — uses stage2_method kwarg in create_hybrid:
-#   allocation_method='two_stage', importance_method='random_forest', stage2_method='permutation' (or 'treeshap')
-# NOTE: stability_selection added — uses n_bootstrap kwarg
-ALLOCATION_METHODS = ['greedy', 'performance_weighted', 'fixed', 'two_stage', 'stability_selection']
-ALLOCATION_METHODS_HIGH_COMPUTE = ['greedy_feature']  # Feature-level, slower but more precise
-
-# Importance methods by computation cost
-# TODO: Update tiers and SEARCH_CONFIGS after final benchmark re-run.
-# Benchmark findings (2026-02-10) that still need integration:
-#
-# TIER RECLASSIFICATION NEEDED:
-#   - deeplift (1.2s) should be FAST, not MEDIUM — faster than random_forest
-#   - deepliftshap (706s) should be SLOW, not MEDIUM — slower than kernelshap
-#   - xgboost_cover is universally bad (R²~0.07 at budget 50) — consider removing
-#   - lime is universally bad and harmful as weights — consider removing
-#
-# SEARCH_CONFIGS NEED UPDATING:
-#   - lightgbm_gain is the BEST importance method for feature weighting (kNN/similarity)
-#     and is fast (1.2s), yet it's absent from quick/balanced/medium/full configs.
-#   - Should be in every config that cares about downstream weighting quality.
-#
-# WEIGHTING FINDINGS (Phase 5):
-#   - Single importance methods >> aggregated scores for feature weighting.
-#   - DO NOT use aggregated importance (borda, rrf, avg) as feature weights.
-#   - Aggregation helps for feature SELECTION (Phase 3), hurts for WEIGHTING (Phase 5).
-#   - Best weight sources: lightgbm_gain > treeshap ≈ random_forest > lightgbm_split > permutation
-#   - Tier 2: xgboost_gain, kernelshap
-#   - Tier 3: xgboost_weight (gap on QM9)
-#   - Tier 4: neural methods (deepliftshap, gradientshap, IG, deeplift) ~0.08 behind tier 1
-#   - Bad weights: boruta, drop_column, xgboost_cover, lime (lime actively harmful)
-#
-# AGGREGATION FINDINGS (Phase 3):
-#   - borda_all: most consistent across datasets/budgets, MLP-safe on QM9
-#   - avg_fast3 (rf + xgboost_gain + lightgbm_gain): best on LogD, fast
-#   - Tree-subset strategies dominate RF/LGBM but can cause MLP collapse on QM9
-#   - All-method strategies needed for MLP safety
-#
-# ALLOCATION FINDINGS (Phase 4):
-#   - QM9 MLP collapse: strategies that over-optimize for trees destroy MLP.
-#     greedy_feature and performance_weighted are MLP-safe (preserve rep diversity).
-#   - two_stage_rf_perm: best on LogD, inconsistent MLP on QM9
-#   - two_stage_rf_shap: good on LogD, worse MLP stability than perm variant
-#
-# STILL NEEDED:
-#   - Phase 2 pairwise correlation matrix (re-run benchmark to get it)
-#   - Check which methods are too correlated to include together
-#   - Phase 5b results (budget=25 low-dim similarity)
-#   - Then finalize tiers, configs, and search methodology
-#
-IMPORTANCE_METHODS_FAST = [
-    'random_forest',      # MDI/Gini importance
-    'treeshap',           # TreeSHAP (handles correlations better)
-    'xgboost_gain',       # XGBoost gain per split
-    'xgboost_weight',     # XGBoost split count
-    'xgboost_cover',      # XGBoost samples covered
-    'lightgbm_gain',      # LightGBM gain
-    'lightgbm_split',     # LightGBM split count
-]
-
-IMPORTANCE_METHODS_MEDIUM = [
-    'permutation',        # Permutation importance (model-agnostic)
-    'integrated_gradients',  # Path integral (neural net)
-    'deeplift',           # DeepLIFT attribution
-    'deepliftshap',       # DeepLIFT + SHAP
-    'gradientshap',       # Gradient + SHAP sampling
-]
-
-IMPORTANCE_METHODS_SLOW = [
-    'kernelshap',         # KernelSHAP (any model, slow)
-    'lime',               # LIME local approximation
-    'drop_column',        # Retrain without feature (gold standard)
-    'boruta',             # Shadow feature selection (statistically sound)
-]
-
-# Combined for reference
-IMPORTANCE_METHODS_ALL = IMPORTANCE_METHODS_FAST + IMPORTANCE_METHODS_MEDIUM + IMPORTANCE_METHODS_SLOW
-
-# Search configurations
-SEARCH_CONFIGS = {
-    'quick': {
-        # 1 config - fast sanity check
-        'methods': ['greedy'],
-        'budgets': [100],
-        'importance_methods': ['random_forest'],
-        'models': ['rf'],
-        'n_folds': 3,
-    },
-    'balanced': {
-        # 16 configs - tests dimension tiers with multiple importance methods
-        'methods': ['greedy', 'performance_weighted'],
-        'budgets': [50, 100, 200, 500],
-        'importance_methods': ['random_forest', 'treeshap'],
-        'models': ['rf'],
-        'n_folds': 5,
-    },
-    'medium': {
-        # 54 configs - adds model comparison + more importance methods
-        'methods': ['greedy', 'performance_weighted'],
-        'budgets': [50, 100, 200],
-        'importance_methods': ['random_forest', 'treeshap', 'permutation'],
-        'models': ['rf', 'xgboost', 'ridge'],
-        'n_folds': 5,
-    },
-    'precise': {
-        # 32 configs - feature-level greedy (HIGH COMPUTATION)
-        # Use for small budgets where precision matters
-        'methods': ['greedy_feature'],
-        'budgets': [25, 50, 75, 100],
-        'importance_methods': ['random_forest', 'treeshap', 'permutation', 'integrated_gradients'],
-        'models': ['rf', 'xgboost'],
-        'n_folds': 5,
-    },
-    'importance_compare': {
-        # 28 configs - compare ALL fast importance methods
-        'methods': ['greedy'],
-        'budgets': [50, 100],
-        'importance_methods': IMPORTANCE_METHODS_FAST,
-        'models': ['rf', 'xgboost'],
-        'n_folds': 5,
-    },
-    'full': {
-        # 240 configs - exhaustive search with more importance methods
-        'methods': ['greedy', 'performance_weighted', 'fixed'],
-        'budgets': [50, 100, 200, 500],
-        'importance_methods': ['random_forest', 'treeshap', 'permutation', 'xgboost_gain'],
-        'models': ['rf', 'xgboost', 'ridge', 'mlp', 'knn'],
-        'n_folds': 5,
-    },
-    'exhaustive': {
-        # ALL methods (VERY HIGH COMPUTATION) - for final analysis
-        'methods': ['greedy', 'greedy_feature', 'performance_weighted', 'mrmr'],
-        'budgets': [50, 100],
-        'importance_methods': IMPORTANCE_METHODS_FAST + ['permutation'],
-        'models': ['rf', 'xgboost'],
-        'n_folds': 5,
-    },
-}
-
-
-def _get_xgb_regressor():
-    try:
-        from xgboost import XGBRegressor
-        return XGBRegressor(n_estimators=100, random_state=42, n_jobs=-1, verbosity=0)
-    except ImportError:
-        return RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-
-
-def _get_xgb_classifier():
-    try:
-        from xgboost import XGBClassifier
-        return XGBClassifier(n_estimators=100, random_state=42, n_jobs=-1, verbosity=0)
-    except ImportError:
-        return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
-
-
-@dataclass
-class Blueprint:
-    """Minimal recipe for recreating a hybrid."""
-    reps: List[str]
-    method: str
-    budget: int
-    importance: str
-
-    def to_dict(self):
-        return {
-            'reps': self.reps,
-            'method': self.method,
-            'budget': self.budget,
-            'importance': self.importance,
-        }
-
-
-@dataclass
-class ConfigResult:
-    """Result for a single configuration."""
-    model: str
-    method: str
-    budget: int
-    importance: str
-    score_mean: float
-    score_std: float
-    n_features: int
-    blueprint: Blueprint
-    time_seconds: float
 
 
 # =============================================================================
@@ -356,9 +133,7 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
             return df['Drug'].tolist(), df['Y'].values, 'classification'
 
     elif name_lower == 'logd':
-        # OpenADMET-LogD dataset from HuggingFace
         import requests
-        from pathlib import Path
 
         cache_dir = Path.home() / '.cache' / 'kirby'
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -499,7 +274,6 @@ def get_augmentations(smiles: List[str]) -> Dict[str, np.ndarray]:
     print("\nGenerating augmented features...")
     augmentations = {}
 
-    # Graph topology features
     try:
         print("  Generating graph_topology...", end=' ', flush=True)
         start = time.time()
@@ -510,7 +284,6 @@ def get_augmentations(smiles: List[str]) -> Dict[str, np.ndarray]:
     except Exception as e:
         print(f"FAILED: {e}")
 
-    # Spectral features
     try:
         print("  Generating spectral...", end=' ', flush=True)
         start = time.time()
@@ -525,348 +298,77 @@ def get_augmentations(smiles: List[str]) -> Dict[str, np.ndarray]:
 
 
 # =============================================================================
-# BASELINE EVALUATION
+# OUTPUT FORMATTING
 # =============================================================================
 
-def evaluate_baselines(
-    base_reps: Dict[str, np.ndarray],
-    labels: np.ndarray,
-    task_type: str,
-    models_to_eval: List[str],
-    scaffold_groups: np.ndarray,
-    n_folds: int = 5,
-    seed: int = 42
-) -> Dict[str, Dict[str, float]]:
-    """
-    Evaluate full-dimension baselines for each representation and model.
-
-    Uses scaffold-based CV splits for chemically meaningful evaluation.
-
-    Returns dict: {rep_name: {model_name: score}}
-    """
-    print("\nEvaluating full-dimension baselines (scaffold CV)...")
-
-    baselines = {}
-
-    # Individual reps
-    for rep_name, X in base_reps.items():
-        baselines[rep_name] = {'dimension': X.shape[1]}
-
-        for model_name in models_to_eval:
-            score = evaluate_single_config(
-                X, labels, task_type, model_name, scaffold_groups, n_folds, seed
-            )
-            baselines[rep_name][model_name] = round(score, 4)
-
-        print(f"  {rep_name} (dim={X.shape[1]}): " +
-              ", ".join(f"{m}={baselines[rep_name][m]:.3f}" for m in models_to_eval))
-
-    # All concatenated
-    X_concat = np.hstack(list(base_reps.values()))
-    baselines['all_concat'] = {'dimension': X_concat.shape[1]}
-
-    for model_name in models_to_eval:
-        score = evaluate_single_config(
-            X_concat, labels, task_type, model_name, scaffold_groups, n_folds, seed
-        )
-        baselines['all_concat'][model_name] = round(score, 4)
-
-    print(f"  all_concat (dim={X_concat.shape[1]}): " +
-          ", ".join(f"{m}={baselines['all_concat'][m]:.3f}" for m in models_to_eval))
-
-    return baselines
+def _get(result, key):
+    """Access result field by key — works with both dicts and objects."""
+    if isinstance(result, dict):
+        return result[key]
+    return getattr(result, key)
 
 
-def evaluate_single_config(
-    X: np.ndarray,
-    labels: np.ndarray,
-    task_type: str,
-    model_name: str,
-    scaffold_groups: np.ndarray,
-    n_folds: int,
-    seed: int
-) -> float:
-    """Evaluate a single X matrix with a single model using scaffold CV."""
-    gkf = GroupKFold(n_splits=n_folds)
-    scores = []
-
-    for train_idx, val_idx in gkf.split(X, labels, groups=scaffold_groups):
-        X_train, X_val = X[train_idx], X[val_idx]
-        y_train, y_val = labels[train_idx], labels[val_idx]
-
-        scaler = StandardScaler()
-        X_train_scaled = scaler.fit_transform(X_train)
-        X_val_scaled = scaler.transform(X_val)
-
-        if task_type == 'classification':
-            model = MODELS[model_name]['classifier']()
-            model.fit(X_train_scaled, y_train)
-            score = accuracy_score(y_val, model.predict(X_val_scaled))
-        else:
-            model = MODELS[model_name]['regressor']()
-            model.fit(X_train_scaled, y_train)
-            score = r2_score(y_val, model.predict(X_val_scaled))
-
-        scores.append(score)
-
-    return np.mean(scores)
+_METRIC_DISPLAY = {
+    'r2': 'R²', 'rmse': 'RMSE', 'mae': 'MAE',
+    'accuracy': 'Accuracy', 'auc': 'AUC',
+}
 
 
-# =============================================================================
-# HYBRID EVALUATION
-# =============================================================================
-
-def evaluate_hybrid_config(
-    base_reps: Dict[str, np.ndarray],
-    labels: np.ndarray,
-    task_type: str,
-    method: str,
-    budget: int,
-    importance_method: str,
-    model_name: str,
-    scaffold_groups: np.ndarray,
-    n_folds: int,
-    seed: int = 42,
-    augmentations: Optional[Dict[str, np.ndarray]] = None
-) -> ConfigResult:
-    """Evaluate a single hybrid configuration with a single model using scaffold CV."""
-    from kirby.hybrid import create_hybrid, apply_feature_selection
-
-    start_time = time.time()
-
-    gkf = GroupKFold(n_splits=n_folds)
-    fold_scores = []
-    fold_n_features = []
-
-    # Get a sample X for splitting (all reps have same n_samples)
-    sample_X = next(iter(base_reps.values()))
-
-    for train_idx, val_idx in gkf.split(sample_X, labels, groups=scaffold_groups):
-        train_reps = {k: v[train_idx] for k, v in base_reps.items()}
-        val_reps = {k: v[val_idx] for k, v in base_reps.items()}
-        train_labels = labels[train_idx]
-        val_labels = labels[val_idx]
-
-        # Split augmentations if provided
-        train_augs = None
-        val_augs = None
-        if augmentations:
-            train_augs = {k: v[train_idx] for k, v in augmentations.items()}
-            val_augs = {k: v[val_idx] for k, v in augmentations.items()}
-
-        try:
-            X_train, feature_info = create_hybrid(
-                train_reps, train_labels,
-                allocation_method=method,
-                budget=budget,
-                importance_method=importance_method,
-                augmentations=train_augs,
-                augmentation_strategy='greedy_ablation' if train_augs else None,
-            )
-            X_val = apply_feature_selection(val_reps, feature_info, augmentations=val_augs)
-        except Exception as e:
-            continue
-
-        scaler = StandardScaler()
-        X_train_scaled = scaler.fit_transform(X_train)
-        X_val_scaled = scaler.transform(X_val)
-
-        if task_type == 'classification':
-            model = MODELS[model_name]['classifier']()
-            model.fit(X_train_scaled, train_labels)
-            score = accuracy_score(val_labels, model.predict(X_val_scaled))
-        else:
-            model = MODELS[model_name]['regressor']()
-            model.fit(X_train_scaled, train_labels)
-            score = r2_score(val_labels, model.predict(X_val_scaled))
-
-        fold_scores.append(score)
-        fold_n_features.append(X_train.shape[1])
-
-    if not fold_scores:
-        raise ValueError("All folds failed!")
-
-    elapsed = time.time() - start_time
-
-    blueprint = Blueprint(
-        reps=list(base_reps.keys()),
-        method=method,
-        budget=budget,
-        importance=importance_method,
-    )
-
-    return ConfigResult(
-        model=model_name,
-        method=method,
-        budget=budget,
-        importance=importance_method,
-        score_mean=np.mean(fold_scores),
-        score_std=np.std(fold_scores),
-        n_features=int(np.mean(fold_n_features)),
-        blueprint=blueprint,
-        time_seconds=elapsed,
-    )
-
-
-def run_search(
-    base_reps: Dict[str, np.ndarray],
-    labels: np.ndarray,
-    task_type: str,
-    scaffold_groups: np.ndarray,
-    search_mode: str,
-    seed: int = 42,
-    augmentations: Optional[Dict[str, np.ndarray]] = None,
-    models_override: Optional[List[str]] = None
-) -> List[ConfigResult]:
-    """Run grid search over all configurations using scaffold CV.
-
-    Args:
-        models_override: If provided, use these models instead of search config defaults.
-    """
-    config = SEARCH_CONFIGS[search_mode]
-    models_to_use = models_override if models_override else config['models']
-    results = []
-
-    total_configs = (
-        len(config['methods']) *
-        len(config['budgets']) *
-        len(config['importance_methods']) *
-        len(models_to_use)
-    )
-
-    aug_str = " +augment" if augmentations else ""
-    print(f"\nSearching {total_configs} configurations ({search_mode} mode, scaffold CV{aug_str})...")
-
-    config_idx = 0
-    for method in config['methods']:
-        for budget in config['budgets']:
-            for importance in config['importance_methods']:
-                for model_name in models_to_use:
-                    config_idx += 1
-
-                    try:
-                        result = evaluate_hybrid_config(
-                            base_reps=base_reps,
-                            labels=labels,
-                            task_type=task_type,
-                            method=method,
-                            budget=budget,
-                            importance_method=importance,
-                            model_name=model_name,
-                            scaffold_groups=scaffold_groups,
-                            n_folds=config['n_folds'],
-                            seed=seed,
-                            augmentations=augmentations,
-                        )
-                        results.append(result)
-
-                        metric = 'Acc' if task_type == 'classification' else 'R²'
-                        print(f"  [{config_idx}/{total_configs}] {model_name}/{method}/{importance}/b={budget}: "
-                              f"{metric}={result.score_mean:.4f}±{result.score_std:.3f}, dim={result.n_features}")
-
-                    except Exception as e:
-                        print(f"  [{config_idx}/{total_configs}] {model_name}/{method}/{importance}/b={budget}: FAILED - {e}")
-
-    return results
-
-
-# =============================================================================
-# RESULT AGGREGATION
-# =============================================================================
-
-def aggregate_results(
-    results: List[ConfigResult],
-    baselines: Dict[str, Dict[str, float]],
-    models_evaluated: List[str]
-) -> Dict[str, Any]:
-    """Aggregate results into best-by-dimension, best-by-model, and matrices."""
-
-    if not results:
-        return {}
-
-    # Best overall
-    best_overall = max(results, key=lambda x: x.score_mean)
-
-    # Best by dimension
-    best_by_dimension = {}
-    for tier in DIMENSION_TIERS:
-        eligible = [r for r in results if r.n_features <= tier]
-        if eligible:
-            best = max(eligible, key=lambda x: x.score_mean)
-            best_by_dimension[tier] = best
-
-    # Best by model
-    best_by_model = {}
-    for model_name in models_evaluated:
-        model_results = [r for r in results if r.model == model_name]
-        if model_results:
-            best = max(model_results, key=lambda x: x.score_mean)
-            best_by_model[model_name] = best
-
-    # Performance matrix: model × dimension
-    performance_matrix = {}
-    for model_name in models_evaluated:
-        performance_matrix[model_name] = {}
-        for tier in DIMENSION_TIERS:
-            eligible = [r for r in results if r.model == model_name and r.n_features <= tier]
-            if eligible:
-                best = max(eligible, key=lambda x: x.score_mean)
-                performance_matrix[model_name][str(tier)] = round(best.score_mean, 4)
-
-    return {
-        'best_overall': best_overall,
-        'best_by_dimension': best_by_dimension,
-        'best_by_model': best_by_model,
-        'performance_matrix': performance_matrix,
-        'baselines': baselines,
-    }
-
-
-# =============================================================================
-# OUTPUT
-# =============================================================================
-
-def print_summary(aggregated: Dict[str, Any], task_type: str, models_evaluated: List[str]):
+def print_summary(result: SearchResult, task_type: str):
     """Print formatted summary to console."""
-    metric = 'R²' if task_type == 'regression' else 'Accuracy'
+    metric = _METRIC_DISPLAY.get(result.metric_name, result.metric_name)
+    lower_is_better = result.lower_is_better
+    dimension_tiers = [50, 100, 200, 500]
 
     print("\n" + "=" * 80)
     print("RESULTS SUMMARY")
     print("=" * 80)
 
     # Best overall
-    best = aggregated['best_overall']
+    best = result.best_overall
+    if best is None:
+        print("\nNo results found.")
+        return
+
+    bp = _get(best, 'blueprint')
     print(f"\n=== BEST OVERALL ===")
-    print(f"Model: {best.model}, Method: {best.method}, Importance: {best.importance}, Budget: {best.budget}")
-    print(f"{metric}: {best.score_mean:.4f} ± {best.score_std:.4f}, Dimension: {best.n_features}")
+    print(f"Model: {_get(best, 'model')}, Method: {bp.allocation_method}, "
+          f"Importance: {bp.importance_method}, Budget: {bp.budget}")
+    print(f"{metric}: {_get(best, 'score_mean'):.4f} +/- {_get(best, 'score_std'):.4f}, "
+          f"Dimension: {_get(best, 'n_features')}")
 
     # Best by model
     print(f"\n=== BEST BY MODEL ===")
-    print(f"{'Model':<10} {'Dim':<6} {'Method':<15} {'Importance':<15} {metric:<14} {'Budget'}")
-    print("-" * 80)
-    for model_name, result in aggregated['best_by_model'].items():
-        bp = result.blueprint
-        print(f"{model_name:<10} {result.n_features:<6} {result.method:<15} {result.importance:<15} "
-              f"{result.score_mean:.4f}±{result.score_std:.2f}   {bp.budget}")
+    models_evaluated = list(result.best_by_model.keys())
+    print(f"{'Model':<10} {'Dim':<6} {'Method':<20} {'Importance':<18} {metric:<14} {'Budget'}")
+    print("-" * 85)
+    for model_name, r in result.best_by_model.items():
+        bp = _get(r, 'blueprint')
+        print(f"{model_name:<10} {_get(r, 'n_features'):<6} {bp.allocation_method:<20} "
+              f"{bp.importance_method:<18} "
+              f"{_get(r, 'score_mean'):.4f}+/-{_get(r, 'score_std'):.2f}   {bp.budget}")
 
     # Best by dimension
     print(f"\n=== BEST BY DIMENSION ===")
-    print(f"{'Dim':<8} {'Model':<10} {'Method':<15} {'Importance':<15} {metric:<12}")
-    print("-" * 70)
-    for tier, result in sorted(aggregated['best_by_dimension'].items()):
-        print(f"≤{tier:<7} {result.model:<10} {result.method:<15} {result.importance:<15} {result.score_mean:.4f}±{result.score_std:.2f}")
+    print(f"{'Dim':<8} {'Model':<10} {'Method':<20} {'Importance':<18} {metric:<12}")
+    print("-" * 75)
+    for tier, r in sorted(result.best_by_dimension.items()):
+        bp = _get(r, 'blueprint')
+        print(f"<={tier:<7} {_get(r, 'model'):<10} {bp.allocation_method:<20} "
+              f"{bp.importance_method:<18} "
+              f"{_get(r, 'score_mean'):.4f}+/-{_get(r, 'score_std'):.2f}")
 
     # Performance matrix
     print(f"\n=== PERFORMANCE MATRIX ({metric}) ===")
-    tiers = [str(t) for t in DIMENSION_TIERS]
-    header = f"{'Model':<12}" + "".join(f"{'≤'+t:<10}" for t in tiers)
+    tiers = [str(t) for t in dimension_tiers]
+    header = f"{'Model':<12}" + "".join(f"{'<='+t:<10}" for t in tiers)
     print(header)
     print("-" * len(header))
     for model_name in models_evaluated:
-        if model_name in aggregated['performance_matrix']:
+        if model_name in result.performance_matrix:
             row = f"{model_name:<12}"
             for tier in tiers:
-                score = aggregated['performance_matrix'][model_name].get(tier, None)
+                score = result.performance_matrix[model_name].get(tier, None)
                 if score is not None:
                     row += f"{score:<10.4f}"
                 else:
@@ -875,7 +377,7 @@ def print_summary(aggregated: Dict[str, Any], task_type: str, models_evaluated: 
 
     # Baselines comparison
     print(f"\n=== BASELINE COMPARISON (full dimension) ===")
-    baselines = aggregated['baselines']
+    baselines = result.baselines
     header = f"{'Baseline':<15} {'Dim':<8}" + "".join(f"{m:<10}" for m in models_evaluated)
     print(header)
     print("-" * len(header))
@@ -891,30 +393,39 @@ def print_summary(aggregated: Dict[str, Any], task_type: str, models_evaluated: 
 
     # Improvement summary
     print(f"\n=== HYBRID IMPROVEMENT ===")
-    for model_name, result in aggregated['best_by_model'].items():
-        hybrid_score = result.score_mean
+    for model_name, r in result.best_by_model.items():
+        hybrid_score = _get(r, 'score_mean')
+        hybrid_dim = _get(r, 'n_features')
 
-        # Find best individual baseline for this model
         best_baseline_name = None
-        best_baseline_score = -np.inf
+        best_baseline_score = None
         for baseline_name, baseline_scores in baselines.items():
             if baseline_name == 'all_concat':
                 continue
-            if model_name in baseline_scores and baseline_scores[model_name] > best_baseline_score:
-                best_baseline_score = baseline_scores[model_name]
+            if model_name not in baseline_scores:
+                continue
+            score = baseline_scores[model_name]
+            if best_baseline_score is None:
+                best_baseline_score = score
+                best_baseline_name = baseline_name
+            elif (lower_is_better and score < best_baseline_score) or \
+                 (not lower_is_better and score > best_baseline_score):
+                best_baseline_score = score
                 best_baseline_name = baseline_name
 
-        if best_baseline_name:
+        if best_baseline_name is not None:
             improvement = hybrid_score - best_baseline_score
             baseline_dim = baselines[best_baseline_name].get('dimension', '?')
-            print(f"  {model_name}: Hybrid({result.n_features}d) vs {best_baseline_name}({baseline_dim}d): "
-                  f"{hybrid_score:.4f} vs {best_baseline_score:.4f} ({improvement:+.4f})")
+            better = improvement < 0 if lower_is_better else improvement > 0
+            sign = '' if better else '(!)'
+            print(f"  {model_name}: Hybrid({hybrid_dim}d) vs {best_baseline_name}({baseline_dim}d): "
+                  f"{hybrid_score:.4f} vs {best_baseline_score:.4f} ({improvement:+.4f}) {sign}")
 
     print("=" * 80)
 
 
 def save_results(
-    aggregated: Dict[str, Any],
+    result: SearchResult,
     dataset_name: str,
     search_mode: str,
     reps_tested: List[str],
@@ -923,26 +434,26 @@ def save_results(
     labels: Optional[np.ndarray] = None
 ):
     """Save minimal blueprint JSON with optional importance weights."""
+    from kirby.hybrid import create_hybrid
 
-    def result_to_dict(r: ConfigResult, include_weights: bool = False):
+    def result_to_dict(r, include_weights: bool = False):
+        bp = _get(r, 'blueprint')
         d = {
-            'model': r.model,
-            'score_mean': round(r.score_mean, 4),
-            'score_std': round(r.score_std, 4),
-            'dimension': r.n_features,
-            'blueprint': r.blueprint.to_dict(),
+            'model': _get(r, 'model'),
+            'score_mean': round(_get(r, 'score_mean'), 4),
+            'score_std': round(_get(r, 'score_std'), 4),
+            'dimension': _get(r, 'n_features'),
+            'blueprint': bp.to_dict(),
         }
 
-        # Optionally add feature importance weights
         if include_weights and base_reps is not None and labels is not None:
             try:
                 _, feature_info = create_hybrid(
                     base_reps, labels,
-                    allocation_method=r.blueprint.method,
-                    budget=r.blueprint.budget,
-                    importance_method=r.blueprint.importance,
+                    allocation_method=bp.allocation_method,
+                    budget=bp.budget,
+                    importance_method=bp.importance_method,
                 )
-                # Extract weights in hybrid feature order
                 weights_by_rep = {}
                 for rep_name in feature_info:
                     if rep_name in ('allocation', 'greedy_history', 'greedy_feature_history'):
@@ -956,10 +467,11 @@ def save_results(
                         }
                 d['feature_weights'] = weights_by_rep
             except Exception as e:
-                print(f"  Warning: Could not extract weights for {r.model}: {e}")
+                print(f"  Warning: Could not extract weights for {_get(r, 'model')}: {e}")
 
         return d
 
+    best = result.best_overall
     output = {
         'metadata': {
             'dataset': dataset_name,
@@ -967,18 +479,17 @@ def save_results(
             'reps_available': reps_tested,
             'timestamp': datetime.now().isoformat(),
         },
-        # Include weights for best_overall (most commonly used)
-        'best_overall': result_to_dict(aggregated['best_overall'], include_weights=True),
+        'best_overall': result_to_dict(best, include_weights=True) if best else None,
         'best_by_dimension': {
             str(tier): result_to_dict(r)
-            for tier, r in aggregated['best_by_dimension'].items()
+            for tier, r in result.best_by_dimension.items()
         },
         'best_by_model': {
             model: result_to_dict(r, include_weights=True)
-            for model, r in aggregated['best_by_model'].items()
+            for model, r in result.best_by_model.items()
         },
-        'performance_matrix': aggregated['performance_matrix'],
-        'baselines': aggregated['baselines'],
+        'performance_matrix': result.performance_matrix,
+        'baselines': result.baselines,
     }
 
     with open(output_path, 'w') as f:
@@ -986,12 +497,11 @@ def save_results(
 
     print(f"\nResults saved to: {output_path}")
 
-    # Also save a Python blueprint file
     blueprint_path = output_path.replace('.json', '_blueprint.py')
-    save_blueprint_code(aggregated, reps_tested, blueprint_path)
+    save_blueprint_code(result, reps_tested, blueprint_path)
 
 
-def save_blueprint_code(aggregated: Dict[str, Any], reps_tested: List[str], output_path: str):
+def save_blueprint_code(result: SearchResult, reps_tested: List[str], output_path: str):
     """Generate importable Python code for reusing the hybrids."""
 
     lines = [
@@ -1026,18 +536,19 @@ def save_blueprint_code(aggregated: Dict[str, Any], reps_tested: List[str], outp
         '',
     ]
 
-    # Generate function for each model
-    for model_name, result in aggregated['best_by_model'].items():
-        bp = result.blueprint
+    for model_name, r in result.best_by_model.items():
+        bp = _get(r, 'blueprint')
+        n_features = _get(r, 'n_features')
+        score_mean = _get(r, 'score_mean')
 
         lines.extend([
             f"def create_{model_name}_hybrid(smiles_list, labels):",
             f'    """',
             f'    Create the optimal hybrid for {model_name.upper()} model.',
             f'    ',
-            f'    Blueprint: method={bp.method}, budget={bp.budget}, importance={bp.importance}',
-            f'    Expected dimension: ~{result.n_features}',
-            f'    Expected score: {result.score_mean:.4f}',
+            f'    Blueprint: method={bp.allocation_method}, budget={bp.budget}, importance={bp.importance_method}',
+            f'    Expected dimension: ~{n_features}',
+            f'    Expected score: {score_mean:.4f}',
             f'    """',
             f'    # Generate required representations',
             f'    reps = {{}}',
@@ -1051,9 +562,9 @@ def save_blueprint_code(aggregated: Dict[str, Any], reps_tested: List[str], outp
             f'    # Create hybrid with optimal settings',
             f'    X_hybrid, feature_info = create_hybrid(',
             f'        reps, labels,',
-            f"        allocation_method='{bp.method}',",
+            f"        allocation_method='{bp.allocation_method}',",
             f'        budget={bp.budget},',
-            f"        importance_method='{bp.importance}',",
+            f"        importance_method='{bp.importance_method}',",
             f'    )',
             f'    ',
             f'    return X_hybrid, feature_info',
@@ -1061,7 +572,6 @@ def save_blueprint_code(aggregated: Dict[str, Any], reps_tested: List[str], outp
             f'',
         ])
 
-    # Write file
     with open(output_path, 'w') as f:
         f.write('\n'.join(lines))
 
@@ -1075,25 +585,19 @@ def save_blueprint_code(aggregated: Dict[str, Any], reps_tested: List[str], outp
 def compare_importance_methods(
     base_reps: Dict[str, np.ndarray],
     labels: np.ndarray,
-    methods: List[str] = ['random_forest', 'permutation'],
+    methods: List[str] = ['treeshap', 'permutation'],
 ) -> Dict[str, Any]:
-    """
-    Compare how different importance methods rank features.
-
-    Returns correlation between methods and top feature overlap.
-    """
+    """Compare how different importance methods rank features."""
     from kirby.hybrid import compute_feature_importance
     from scipy.stats import spearmanr, kendalltau
 
     print("\n=== IMPORTANCE METHOD COMPARISON ===")
 
-    # Compute importance for each method
     all_importances = {}
     for method in methods:
         print(f"  Computing {method} importance...", end=' ', flush=True)
         try:
             imp = compute_feature_importance(base_reps, labels, method=method)
-            # Concatenate all reps
             concat_imp = np.concatenate([imp[rep] for rep in sorted(imp.keys())])
             all_importances[method] = concat_imp
             print("done")
@@ -1103,7 +607,6 @@ def compare_importance_methods(
     if len(all_importances) < 2:
         return {'error': 'Need at least 2 methods to compare'}
 
-    # Compute correlations between methods
     method_names = list(all_importances.keys())
     correlations = {}
 
@@ -1111,10 +614,7 @@ def compare_importance_methods(
         for m2 in method_names[i+1:]:
             imp1 = all_importances[m1]
             imp2 = all_importances[m2]
-
-            # Spearman rank correlation
             spearman_r, spearman_p = spearmanr(imp1, imp2)
-            # Kendall tau
             kendall_t, kendall_p = kendalltau(imp1, imp2)
 
             key = f"{m1}_vs_{m2}"
@@ -1124,9 +624,8 @@ def compare_importance_methods(
                 'kendall_tau': round(kendall_t, 4),
                 'kendall_p': round(kendall_p, 6),
             }
-            print(f"  {m1} vs {m2}: Spearman r={spearman_r:.3f}, Kendall τ={kendall_t:.3f}")
+            print(f"  {m1} vs {m2}: Spearman r={spearman_r:.3f}, Kendall tau={kendall_t:.3f}")
 
-    # Compare top-k overlap
     top_k_values = [10, 25, 50, 100]
     top_k_overlap = {}
 
@@ -1151,7 +650,7 @@ def compare_importance_methods(
 
 
 def generate_explanations(
-    best_result: ConfigResult,
+    best_result: dict,
     base_reps: Dict[str, np.ndarray],
     smiles: List[str],
     labels: np.ndarray,
@@ -1163,37 +662,31 @@ def generate_explanations(
 
     print("\n=== GENERATING EXPLANATIONS ===")
 
-    bp = best_result.blueprint
+    bp = _get(best_result, 'blueprint')
 
-    # Recreate the hybrid to get feature_info
-    print(f"  Recreating hybrid: method={bp.method}, budget={bp.budget}")
+    print(f"  Recreating hybrid: method={bp.allocation_method}, budget={bp.budget}")
     _, feature_info = create_hybrid(
         base_reps, labels,
-        allocation_method=bp.method,
+        allocation_method=bp.allocation_method,
         budget=bp.budget,
-        importance_method=bp.importance,
+        importance_method=bp.importance_method,
     )
 
-    # Generate explanations
     print("  Mapping features to interpretations...")
     explanations = explain_hybrid(
         feature_info=feature_info,
-        smiles_list=smiles[:100],  # Use subset for ECFP SMARTS extraction
+        smiles_list=smiles[:100],
         top_k=30,
     )
 
-    # Print summary
     print("\n" + format_explanation_summary(explanations, max_features=15))
 
-    # Compare importance methods
     importance_comparison = compare_importance_methods(base_reps, labels)
 
-    # Save to file
     explain_path = output_path.replace('.json', '_explanations.json')
 
-    # Convert to JSON-serializable format
     explain_output = {
-        'model': best_result.model,
+        'model': _get(best_result, 'model'),
         'blueprint': bp.to_dict(),
         'by_representation': explanations['by_representation'],
         'top_features': [
@@ -1213,7 +706,6 @@ def generate_explanations(
         },
     }
 
-    import json
     with open(explain_path, 'w') as f:
         json.dump(explain_output, f, indent=2)
 
@@ -1232,26 +724,27 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s esol --reps fast --search quick
+  %(prog)s esol --reps fast --search fast
   %(prog)s herg --reps fast+hf --search medium
-  %(prog)s data.csv --smiles-col SMILES --target-col pIC50 --reps all --search full
+  %(prog)s data.csv --smiles-col SMILES --target-col pIC50 --reps all --search long
 
 Output:
   - Best overall: single best model+hybrid combination
   - Best by dimension: optimal at each tier (50, 100, 200, 500)
-  - Best by model: optimal hybrid for RF, XGBoost, Ridge, MLP, KNN
-  - Performance matrix: full Model × Dimension grid
+  - Best by model: optimal hybrid per model type
+  - Performance matrix: full Model x Dimension grid
   - Baseline comparison: hybrid vs full-dimension baselines
         """
     )
 
-    parser.add_argument('dataset', type=str, help="'esol', 'herg', or path to CSV")
+    parser.add_argument('dataset', type=str, help="'esol', 'herg', 'logd', or path to CSV")
     parser.add_argument('--smiles-col', type=str, default='smiles')
     parser.add_argument('--target-col', type=str, default='target')
     parser.add_argument('--reps', type=str, default='fast',
                        help="'fast', 'fast+hf', 'all', or comma-separated list")
-    parser.add_argument('--search', type=str, default='quick',
-                       choices=['quick', 'balanced', 'medium', 'precise', 'importance_compare', 'full', 'exhaustive'])
+    parser.add_argument('--search', type=str, default='fast',
+                       choices=list(_SEARCH_NAME_MAP.keys()),
+                       help="Search speed: 'fast', 'medium', 'long' (or legacy: quick, full, etc.)")
     parser.add_argument('--output', type=str, default=None)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--explain', action='store_true',
@@ -1259,64 +752,60 @@ Output:
     parser.add_argument('--augment', action='store_true',
                        help='Include augmented features (graph topology, spectral)')
     parser.add_argument('--model', type=str, default=None,
-                       help="Override models: 'rf', 'xgboost', 'ridge', 'mlp', 'knn', or comma-separated")
+                       help="Override models: 'rf', 'xgboost', 'ridge', 'mlp', 'knn', etc. or comma-separated")
+    parser.add_argument('--save-weights', action='store_true',
+                       help='Fit best config on full data and save feature weights')
+    parser.add_argument('--weight-method', type=str, default='lightgbm_gain',
+                       help="Importance method for feature weights (default: lightgbm_gain)")
+    parser.add_argument('--test-rep-subsets', action='store_true',
+                       help='Also test leave-one-rep-out subsets (when >=3 reps)')
 
     args = parser.parse_args()
 
-    # Load dataset
+    # Map search name to speed tier
+    speed = _SEARCH_NAME_MAP.get(args.search, args.search)
+
+    # Load dataset (molecular-specific)
     print(f"Loading dataset: {args.dataset}")
     smiles, labels, task_type = load_dataset(
         args.dataset, args.smiles_col, args.target_col
     )
     print(f"  {len(smiles)} molecules, task: {task_type}")
 
-    # Compute scaffold groups for CV
+    # Compute scaffold groups for CV (molecular-specific)
     print("  Assigning scaffold groups...")
     scaffold_groups, n_scaffolds = assign_scaffold_groups(smiles)
     print(f"  {n_scaffolds} unique scaffolds")
 
-    # Generate representations
+    # Generate representations (molecular-specific)
     base_reps = get_representations(smiles, args.reps)
 
-    # Generate augmentations if requested
-    augmentations = None
+    # TODO: augmentations not yet wired into find_best_hybrid library
     if args.augment:
-        augmentations = get_augmentations(smiles)
+        print("WARNING: --augment not yet supported in library mode, ignoring")
 
-    # Get search config
-    search_config = SEARCH_CONFIGS[args.search]
-
-    # Determine models to evaluate (CLI override or search config default)
+    # Resolve model override
+    models_arg = None
     if args.model:
-        models_to_eval = [m.strip() for m in args.model.split(',')]
-        # Validate model names
-        invalid = [m for m in models_to_eval if m not in MODELS]
-        if invalid:
-            print(f"ERROR: Unknown model(s): {invalid}")
-            print(f"Valid models: {list(MODELS.keys())}")
-            return 1
-        print(f"Model override: {models_to_eval}")
-    else:
-        models_to_eval = search_config['models']
+        models_arg = [m.strip() for m in args.model.split(',')]
 
-    # Evaluate baselines
-    baselines = evaluate_baselines(
-        base_reps, labels, task_type, models_to_eval, scaffold_groups,
-        n_folds=search_config['n_folds'], seed=args.seed
+    # Call domain-agnostic search
+    result = find_best_hybrid(
+        base_reps=base_reps,
+        labels=labels,
+        groups=scaffold_groups,
+        models=models_arg,
+        metric='r2' if task_type == 'regression' else 'accuracy',
+        task_type=task_type,
+        speed=speed,
+        return_fitted=args.save_weights,
+        weight_method=args.weight_method if args.save_weights else None,
+        test_rep_subsets=args.test_rep_subsets,
+        seed=args.seed,
     )
 
-    # Run hybrid search
-    results = run_search(
-        base_reps, labels, task_type, scaffold_groups, args.search, args.seed,
-        augmentations=augmentations,
-        models_override=models_to_eval if args.model else None
-    )
-
-    # Aggregate
-    aggregated = aggregate_results(results, baselines, models_to_eval)
-
-    # Print summary
-    print_summary(aggregated, task_type, models_to_eval)
+    # Print summary (molecular-specific formatting)
+    print_summary(result, task_type)
 
     # Save results
     if args.output:
@@ -1325,13 +814,13 @@ Output:
         dataset_name = Path(args.dataset).stem if os.path.exists(args.dataset) else args.dataset
         output_path = f"results_{dataset_name}_{args.search}.json"
 
-    save_results(aggregated, args.dataset, args.search, list(base_reps.keys()), output_path,
+    save_results(result, args.dataset, args.search, list(base_reps.keys()), output_path,
                  base_reps=base_reps, labels=labels)
 
     # Generate explanations if requested
-    if args.explain and aggregated.get('best_overall'):
+    if args.explain and result.best_overall is not None:
         generate_explanations(
-            best_result=aggregated['best_overall'],
+            best_result=result.best_overall,
             base_reps=base_reps,
             smiles=smiles,
             labels=labels,
