@@ -110,6 +110,27 @@ except ImportError:
     print("WARNING: quantile_forest not installed, QRF experiments will be skipped")
     HAS_QRF = False
 
+try:
+    from ngboost import NGBRegressor
+    HAS_NGBOOST = True
+except ImportError:
+    print("WARNING: ngboost not installed, NGBoost experiments will be skipped")
+    HAS_NGBOOST = False
+
+try:
+    from lightgbm import LGBMRegressor
+    HAS_LGB = True
+except ImportError:
+    print("WARNING: lightgbm not installed, LightGBM experiments will be skipped")
+    HAS_LGB = False
+
+try:
+    from sklearn.svm import SVR
+    HAS_SVM = True
+except ImportError:
+    print("WARNING: sklearn.svm not available, SVM experiments will be skipped")
+    HAS_SVM = False
+
 # KIRBy imports
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 from kirby.representations.molecular import (
@@ -463,6 +484,10 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, strategy, si
             pm, ps = mdl.predict(X_test, return_std=True)
             predictions[sigma] = pm
             uncertainties[sigma] = ps
+        elif 'NGBRegressor' in str(type(mdl)):
+            dist = mdl.pred_dist(X_test)
+            predictions[sigma] = dist.loc
+            uncertainties[sigma] = dist.scale
         else:
             predictions[sigma] = mdl.predict(X_test)
             uncertainties[sigma] = None
@@ -540,7 +565,7 @@ def generate_representations(smiles_list):
 # MAIN EXPERIMENT RUNNER
 # ═══════════════════════════════════════════════════════════════════════════
 
-def run_dataset(dataset_name, smiles, labels, results_dir):
+def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None):
     """Run full scaffold CV experiment for one dataset."""
     results_dir = Path(results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -573,6 +598,20 @@ def run_dataset(dataset_name, smiles, labels, results_dir):
         if HAS_XGBOOST:
             experiments.append(('XGBoost', rname,
                 lambda: XGBRegressor(n_estimators=100, random_state=42), None))
+        # NGBoost
+        if HAS_NGBOOST:
+            experiments.append(('NGBoost', rname,
+                lambda: NGBRegressor(n_estimators=500, learning_rate=0.01, random_state=42,
+                                     verbose=False), None))
+        # LightGBM
+        if HAS_LGB:
+            experiments.append(('LightGBM', rname,
+                lambda: LGBMRegressor(n_estimators=100, random_state=42, verbose=-1,
+                                      n_jobs=-1), None))
+        # SVM
+        if HAS_SVM:
+            experiments.append(('SVM', rname,
+                lambda: SVR(kernel='rbf', C=1.0, gamma='scale'), None))
         # GP (PDV only)
         if HAS_GP and rname == 'PDV':
             experiments.append(('GP', rname,
@@ -587,6 +626,12 @@ def run_dataset(dataset_name, smiles, labels, results_dir):
             if mtype != 'deterministic' and not HAS_BAYESIAN_TORCH:
                 continue
             experiments.append((mname, rname, None, mtype))
+
+    # Filter to specific models if requested
+    if model_filter:
+        filter_set = set(model_filter)
+        experiments = [(n, r, fn, mt) for n, r, fn, mt in experiments if n in filter_set]
+        print(f"  Filtered to models: {sorted(filter_set)}")
 
     print(f"\n{len(experiments)} model-rep configs × {len(STRATEGIES)} strategies × {N_FOLDS} folds")
 
@@ -683,6 +728,16 @@ def run_dataset(dataset_name, smiles, labels, results_dir):
 
     # Combine results across folds
     combined = pd.concat(all_fold_results, ignore_index=True)
+
+    # Merge with existing results if running a subset of models
+    existing_path = results_dir / 'all_results.csv'
+    if model_filter and existing_path.exists():
+        existing = pd.read_csv(existing_path)
+        # Remove old rows for models we're re-running, keep the rest
+        existing = existing[~existing['model'].isin(model_filter)]
+        combined = pd.concat([existing, combined], ignore_index=True)
+        print(f"  Merged with existing results: {len(combined)} total rows")
+
     combined.to_csv(results_dir / 'all_results.csv', index=False)
 
     # Aggregate across folds and compute NDS
@@ -727,6 +782,14 @@ def run_dataset(dataset_name, smiles, labels, results_dir):
         })
 
     summary_df = pd.DataFrame(summary_rows)
+
+    # Merge with existing summary if running a subset of models
+    existing_summary = results_dir / 'summary.csv'
+    if model_filter and existing_summary.exists():
+        existing = pd.read_csv(existing_summary)
+        existing = existing[~existing['model'].isin(model_filter)]
+        summary_df = pd.concat([existing, summary_df], ignore_index=True)
+
     summary_df.to_csv(results_dir / 'summary.csv', index=False)
 
     # Save uncertainty data
@@ -780,6 +843,8 @@ def main():
                         help='Path to cached OpenADMET CSV')
     parser.add_argument('--results-root', type=str, default='results/validation',
                         help='Root directory for results')
+    parser.add_argument('--models', nargs='+', default=None,
+                        help='Only run these models (e.g. --models NGBoost SVM LightGBM)')
     args = parser.parse_args()
 
     ds_list = ['logd', 'caco2', 'herg'] if 'all' in args.datasets else args.datasets
@@ -792,8 +857,12 @@ def main():
     print(f"  Representations: ECFP4, PDV, SNS, MHG-GNN-pretrained")
     print(f"  Noise strategies: {STRATEGIES}")
     print(f"  Sigma levels: {SIGMA_LEVELS}")
-    print(f"  Models: RF, QRF, XGBoost, GP(PDV), DNN"
-          + (", Full-BNN, LastLayer-BNN, Var-BNN" if HAS_BAYESIAN_TORCH else ""))
+    model_list = "RF, QRF, XGBoost, NGBoost, LightGBM, SVM, GP(PDV), DNN"
+    if HAS_BAYESIAN_TORCH:
+        model_list += ", Full-BNN, LastLayer-BNN, Var-BNN"
+    if args.models:
+        model_list = ", ".join(args.models)
+    print(f"  Models: {model_list}")
     print()
 
     all_summaries = []
@@ -813,7 +882,8 @@ def main():
             smiles, labels = load_openadmet_endpoint(openadmet_df, logd_col, log_transform=False)
             print(f"  {len(smiles)} molecules")
             summary = run_dataset('OpenADMET-LogD', smiles, labels,
-                                  Path(args.results_root) / 'logd')
+                                  Path(args.results_root) / 'logd',
+                                  model_filter=args.models)
             all_summaries.append(summary)
         else:
             print("ERROR: Cannot find LogD column")
@@ -826,7 +896,8 @@ def main():
             smiles, labels = load_openadmet_endpoint(openadmet_df, caco2_col, log_transform=True)
             print(f"  {len(smiles)} molecules")
             summary = run_dataset('OpenADMET-Caco2_Efflux', smiles, labels,
-                                  Path(args.results_root) / 'caco2')
+                                  Path(args.results_root) / 'caco2',
+                                  model_filter=args.models)
             all_summaries.append(summary)
         else:
             print("ERROR: Cannot find Caco2 Efflux column")
@@ -837,13 +908,22 @@ def main():
         smiles, labels = load_chembl_herg()
         print(f"  {len(smiles)} molecules")
         summary = run_dataset('ChEMBL-hERG-Ki', smiles, labels,
-                              Path(args.results_root) / 'herg')
+                              Path(args.results_root) / 'herg',
+                              model_filter=args.models)
         all_summaries.append(summary)
 
     # Cross-dataset summary
     if len(all_summaries) > 1:
         combined = pd.concat(all_summaries, ignore_index=True)
-        combined.to_csv(Path(args.results_root) / 'combined_summary.csv', index=False)
+
+        # Merge with existing combined_summary if running a subset
+        combined_path = Path(args.results_root) / 'combined_summary.csv'
+        if args.models and combined_path.exists():
+            existing = pd.read_csv(combined_path)
+            existing = existing[~existing['model'].isin(args.models)]
+            combined = pd.concat([existing, combined], ignore_index=True)
+
+        combined.to_csv(combined_path, index=False)
 
         print("\n" + "=" * 80)
         print("CROSS-DATASET SUMMARY")
