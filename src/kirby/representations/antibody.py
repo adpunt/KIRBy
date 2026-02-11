@@ -1475,6 +1475,300 @@ def compute_cdr_length_features(
     return features
 
 
+def _extract_all_cdrs(
+    heavy_sequence: str,
+    light_sequence: Optional[str],
+    extract_fn,
+) -> Dict[str, str]:
+    """
+    Extract CDR sequences for heavy (and optionally light) chain.
+
+    Returns dict with keys: cdr_h1, cdr_h2, cdr_h3, cdr_l1, cdr_l2, cdr_l3.
+    Missing CDRs are empty strings.
+    """
+    result = {f'cdr_h{i}': '' for i in range(1, 4)}
+    result.update({f'cdr_l{i}': '' for i in range(1, 4)})
+
+    try:
+        cdrs = extract_fn(heavy_sequence, numbering='imgt', chain_type='heavy')
+        if cdrs is not None:
+            result['cdr_h1'] = cdrs.get('cdr1', '')
+            result['cdr_h2'] = cdrs.get('cdr2', '')
+            result['cdr_h3'] = cdrs.get('cdr3', '')
+    except Exception:
+        pass
+
+    if light_sequence:
+        try:
+            cdrs_l = extract_fn(light_sequence, numbering='imgt', chain_type='light')
+            if cdrs_l is not None:
+                result['cdr_l1'] = cdrs_l.get('cdr1', '')
+                result['cdr_l2'] = cdrs_l.get('cdr2', '')
+                result['cdr_l3'] = cdrs_l.get('cdr3', '')
+        except Exception:
+            pass
+
+    return result
+
+
+def compute_per_cdr_physicochemical(
+    heavy_sequences: List[str],
+    light_sequences: Optional[List[str]] = None,
+) -> np.ndarray:
+    """
+    Compute per-CDR charge and hydrophobicity features.
+
+    Per-CDR charge is strongly correlated with clearance, viscosity, and
+    polyspecificity. Per-CDR hydrophobicity is the primary driver of
+    aggregation propensity. (Ref: mAbs 2020, PROPERMAB 2025)
+
+    Features (12D):
+        0:  cdr_h1_charge          - Net charge of CDR-H1
+        1:  cdr_h1_hydrophobicity  - Mean Kyte-Doolittle of CDR-H1
+        2:  cdr_h2_charge
+        3:  cdr_h2_hydrophobicity
+        4:  cdr_h3_charge
+        5:  cdr_h3_hydrophobicity
+        6:  cdr_l1_charge          - (0 if no light chain)
+        7:  cdr_l1_hydrophobicity
+        8:  cdr_l2_charge
+        9:  cdr_l2_hydrophobicity
+        10: cdr_l3_charge
+        11: cdr_l3_hydrophobicity
+
+    Requires ANARCI for CDR extraction. Returns zeros if unavailable.
+
+    Args:
+        heavy_sequences: List of heavy chain sequences
+        light_sequences: Optional list of light chain sequences
+
+    Returns:
+        np.ndarray: (n_sequences, 12) per-CDR physicochemical features
+    """
+    n = len(heavy_sequences)
+    features = np.zeros((n, 12), dtype=np.float64)
+
+    try:
+        from ..datasets.sabdab import extract_cdr_sequences
+        use_anarci = True
+    except (ImportError, Exception):
+        use_anarci = False
+        warnings.warn(
+            "ANARCI not available. Per-CDR physicochemical features will be zeros. "
+            "Install ANARCI: conda install -c bioconda anarci"
+        )
+        return features
+
+    print(f"Computing per-CDR physicochemical features for {n} antibodies...")
+
+    cdr_keys = ['cdr_h1', 'cdr_h2', 'cdr_h3', 'cdr_l1', 'cdr_l2', 'cdr_l3']
+
+    for i in range(n):
+        heavy = heavy_sequences[i].strip()
+        light = light_sequences[i].strip() if light_sequences is not None else None
+
+        cdrs = _extract_all_cdrs(heavy, light, extract_cdr_sequences)
+
+        for j, key in enumerate(cdr_keys):
+            cdr_seq = cdrs[key].upper()
+            if not cdr_seq:
+                continue
+            charge = sum(AA_PROPERTIES.get(aa, {}).get('charge', 0.0) for aa in cdr_seq)
+            hydro = np.mean([AA_PROPERTIES.get(aa, {}).get('hydrophobicity', 0.0) for aa in cdr_seq])
+            features[i, j * 2] = charge
+            features[i, j * 2 + 1] = hydro
+
+    print(f"  Generated per-CDR physicochemical features: ({n}, 12)")
+    return features
+
+
+def compute_extended_liability_features(
+    heavy_sequences: List[str],
+    light_sequences: Optional[List[str]] = None,
+) -> np.ndarray:
+    """
+    Compute extended liability motif features with CDR/framework separation.
+
+    Extends the basic liability counts in compute_developability_features by:
+    1. Splitting counts into CDR vs framework (CDR liabilities matter more)
+    2. Adding DP fragmentation (defined in LIABILITY_MOTIFS but not counted)
+    3. Adding Trp oxidation in CDRs (W exposed in CDRs is high risk)
+    4. Computing a CDR liability concentration ratio
+
+    Ref: LAP (PLOS Comp Biol 2024), Lu et al. (mAbs 2019)
+
+    Features (9D):
+        0: cdr_deamidation       - Deamidation motifs (NG/NS) in CDRs
+        1: cdr_isomerization     - Isomerization motifs (DG/DS) in CDRs
+        2: cdr_oxidation         - Met/Trp oxidation risk in CDRs
+        3: cdr_glycosylation     - N-X-S/T sequons in CDRs
+        4: cdr_fragmentation     - DP clipping sites in CDRs
+        5: framework_deamidation - Deamidation motifs in framework
+        6: framework_isomerization - Isomerization motifs in framework
+        7: unpaired_cys          - Odd cysteine count (whole sequence)
+        8: cdr_liability_ratio   - CDR liabilities / total liabilities
+
+    Requires ANARCI for CDR extraction. Falls back to whole-sequence counts
+    (all assigned to CDR columns, ratio=1.0) if ANARCI unavailable.
+
+    Args:
+        heavy_sequences: List of heavy chain sequences
+        light_sequences: Optional list of light chain sequences
+
+    Returns:
+        np.ndarray: (n_sequences, 9) extended liability features
+    """
+    import re
+
+    n = len(heavy_sequences)
+    features = np.zeros((n, 9), dtype=np.float64)
+
+    try:
+        from ..datasets.sabdab import extract_cdr_sequences
+        use_anarci = True
+    except (ImportError, Exception):
+        use_anarci = False
+
+    # High-risk motifs (subset most relevant for developability)
+    deamid_motifs = ['NG', 'NS', 'NA']
+    isom_motifs = ['DG', 'DS', 'DT']
+    oxid_met_motifs = ['MW', 'MH', 'MD', 'MS']
+    frag_motifs = ['DP']
+
+    def count_motifs(seq, motif_list):
+        return sum(seq.count(m) for m in motif_list)
+
+    def count_trp_oxidation(seq):
+        """Count exposed Trp (W) — any W in CDR is oxidation risk."""
+        return seq.count('W')
+
+    def count_glycosylation(seq):
+        return len(re.findall(r'N[^P][ST]', seq))
+
+    print(f"Computing extended liability features for {n} antibodies "
+          f"(CDR/framework split={'yes' if use_anarci else 'no'})...")
+
+    for i in range(n):
+        heavy = heavy_sequences[i].upper().strip()
+        light = light_sequences[i].upper().strip() if light_sequences is not None else ''
+        combined = heavy + light
+
+        if use_anarci:
+            light_arg = light if light else None
+            cdrs = _extract_all_cdrs(heavy, light_arg, extract_cdr_sequences)
+            cdr_combined = ''.join(cdrs.values()).upper()
+
+            # Framework = whole sequence minus CDR residues
+            # Approximate: subtract CDR counts from whole-sequence counts
+            fw_seq = combined  # we count whole then subtract CDR
+        else:
+            cdr_combined = combined
+            fw_seq = ''
+
+        # CDR liabilities
+        cdr_deamid = count_motifs(cdr_combined, deamid_motifs)
+        cdr_isom = count_motifs(cdr_combined, isom_motifs)
+        cdr_oxid = count_motifs(cdr_combined, oxid_met_motifs) + count_trp_oxidation(cdr_combined)
+        cdr_glyco = count_glycosylation(cdr_combined)
+        cdr_frag = count_motifs(cdr_combined, frag_motifs)
+
+        features[i, 0] = cdr_deamid
+        features[i, 1] = cdr_isom
+        features[i, 2] = cdr_oxid
+        features[i, 3] = cdr_glyco
+        features[i, 4] = cdr_frag
+
+        # Framework liabilities (whole minus CDR)
+        if use_anarci and fw_seq:
+            whole_deamid = count_motifs(combined, deamid_motifs)
+            whole_isom = count_motifs(combined, isom_motifs)
+            features[i, 5] = max(0, whole_deamid - cdr_deamid)
+            features[i, 6] = max(0, whole_isom - cdr_isom)
+
+        # Unpaired cysteine (whole sequence)
+        cys_count = combined.count('C')
+        features[i, 7] = float(cys_count % 2 != 0)
+
+        # CDR liability ratio
+        cdr_total = cdr_deamid + cdr_isom + cdr_oxid + cdr_glyco + cdr_frag
+        whole_total = (count_motifs(combined, deamid_motifs)
+                       + count_motifs(combined, isom_motifs)
+                       + count_motifs(combined, oxid_met_motifs) + combined.count('W')
+                       + count_glycosylation(combined)
+                       + count_motifs(combined, frag_motifs))
+        features[i, 8] = cdr_total / whole_total if whole_total > 0 else 0.0
+
+    print(f"  Generated extended liability features: ({n}, 9)")
+    return features
+
+
+# CamSol intrinsic solubility propensity values per amino acid
+# From Sormanni, Aprile & Vendruscolo, J Mol Biol 427:478-490 (2015), Table 1
+CAMSOL_INTRINSIC = {
+    'A': -0.036, 'R':  0.602, 'N':  0.141, 'D':  0.549,
+    'C': -0.245, 'E':  0.486, 'Q':  0.077, 'G': -0.198,
+    'H': -0.011, 'I': -0.619, 'L': -0.538, 'K':  0.537,
+    'M': -0.324, 'F': -0.770, 'P': -0.179, 'S':  0.108,
+    'T': -0.021, 'W': -0.595, 'Y': -0.425, 'V': -0.463,
+}
+
+
+def compute_camsol_features(
+    sequences: List[str],
+    window_size: int = 7,
+    poor_threshold: float = -1.0,
+) -> np.ndarray:
+    """
+    Compute CamSol intrinsic solubility features.
+
+    CamSol assigns each amino acid a solubility propensity, then applies a
+    sliding window average to identify aggregation-prone patches. Distinct
+    from hydrophobicity — CamSol specifically captures colloidal stability.
+
+    Ref: Sormanni et al., J Mol Biol 427:478-490 (2015)
+
+    Features (3D):
+        0: camsol_mean         - Mean intrinsic solubility score
+        1: camsol_min_window   - Worst (minimum) window score (most aggregation-prone patch)
+        2: camsol_poor_frac    - Fraction of windows below poor_threshold
+
+    Args:
+        sequences: List of amino acid sequences
+        window_size: Sliding window size (default 7, as in original paper)
+        poor_threshold: Score below which a window is "poor" (default -1.0)
+
+    Returns:
+        np.ndarray: (n_sequences, 3) CamSol solubility features
+    """
+    n = len(sequences)
+    features = np.zeros((n, 3), dtype=np.float64)
+
+    print(f"Computing CamSol intrinsic solubility features for {n} sequences...")
+
+    for i, seq in enumerate(sequences):
+        seq = seq.upper().strip()
+        if not seq:
+            continue
+
+        # Per-residue intrinsic scores
+        scores = np.array([CAMSOL_INTRINSIC.get(aa, 0.0) for aa in seq])
+
+        # Feature 0: mean score
+        features[i, 0] = scores.mean()
+
+        # Sliding window averages
+        if len(scores) >= window_size:
+            windows = np.convolve(scores, np.ones(window_size) / window_size, mode='valid')
+            features[i, 1] = windows.min()
+            features[i, 2] = np.mean(windows < poor_threshold)
+        else:
+            features[i, 1] = scores.min()
+            features[i, 2] = float(scores.mean() < poor_threshold)
+
+    print(f"  Generated CamSol features: ({n}, 3)")
+    return features
+
+
 # ============================================================================
 # CONVENIENCE FUNCTIONS
 # ============================================================================
