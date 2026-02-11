@@ -449,7 +449,7 @@ def _evaluate_baselines(
             print(f"  {rep_name} (dim={X.shape[1]}): {scores_str}")
 
     # All concatenated
-    X_concat = np.hstack(list(base_reps.values()))
+    X_concat = np.hstack([base_reps[k] for k in sorted(base_reps.keys())])
     baselines['all_concat'] = {'dimension': X_concat.shape[1]}
     for model_name, model in models.items():
         mean_score, _ = _evaluate_single(

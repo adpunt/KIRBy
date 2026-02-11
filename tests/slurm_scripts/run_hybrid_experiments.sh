@@ -11,23 +11,24 @@
 cd /data/stat-cadd/scat9264/KIRBy
 . setup.sh
 
-echo "=== Experiment 1: Aggregated importance (LogD, fast4 methods) ==="
-echo "Tests borda/avg/RRF aggregation vs single-method selection"
+echo "=== Experiment 1: Aggregated importance (LogD, fast reps) ==="
 python tests/test_hybrid_aggregation.py logd --reps fast --budgets 50 100 200 --methods fast4
 
 echo ""
-echo "=== Experiment 2: Aggregated importance (LogD, all 6 cluster reps) ==="
-echo "Adds permutation + kernelshap to the aggregation"
-python tests/test_hybrid_aggregation.py logd --reps fast --budgets 50 100 200 --methods all_cluster
+echo "=== Experiment 2: Aggregated importance (LogD, ALL reps) ==="
+python tests/test_hybrid_aggregation.py logd --reps all --budgets 50 100 200 --methods fast4
 
 echo ""
-echo "=== Experiment 3: Low-dim optimization (LogD) ==="
-echo "Tests budgets 15/25/50 with RF, kNN, ridge"
-python tests/test_hybrid_low_dim.py logd --reps fast --budgets 15 25 50
+echo "=== Experiment 3: Low-dim (LogD, ALL reps) ==="
+python tests/test_hybrid_low_dim.py logd --reps all --budgets 15 25 50
 
 echo ""
-echo "=== Experiment 4: Low-dim optimization (Caco2) ==="
-python tests/test_hybrid_low_dim.py caco2 --reps fast --budgets 15 25 50
+echo "=== Experiment 4: Low-dim (Caco2, ALL reps) ==="
+python tests/test_hybrid_low_dim.py caco2 --reps all --budgets 15 25 50
+
+echo ""
+echo "=== Experiment 5: Low-dim (hERG, ALL reps) ==="
+python tests/test_hybrid_low_dim.py herg --reps all --budgets 15 25 50
 
 echo ""
 echo "=== All experiments complete ==="
