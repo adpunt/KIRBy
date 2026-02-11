@@ -710,6 +710,237 @@ def create_multiscale_embeddings(
 
 
 # ============================================================================
+# PART 4B: CLASSICAL SEQUENCE REPRESENTATIONS
+# ============================================================================
+
+def create_kmer_frequency(
+    sequences: List[str],
+    k: int = 2,
+) -> np.ndarray:
+    """
+    Compute k-mer (dipeptide/tripeptide) frequency features.
+
+    Captures local sequence motifs without requiring alignment. Dipeptides
+    (k=2) encode pairwise residue preferences; tripeptides (k=3) capture
+    longer-range patterns.
+
+    Args:
+        sequences: List of amino acid sequences (heavy, light, or concatenated)
+        k: k-mer size. 2 → 400D (20²), 3 → 8000D (20³). Default 2.
+
+    Returns:
+        np.ndarray: (n_sequences, 20^k) k-mer frequency matrix
+    """
+    aas = STANDARD_AAS
+    n_aas = len(aas)
+    dim = n_aas ** k
+    aa_to_idx = {aa: i for i, aa in enumerate(aas)}
+
+    n = len(sequences)
+    features = np.zeros((n, dim), dtype=np.float64)
+
+    print(f"Computing {k}-mer frequency features for {n} sequences (dim={dim})...")
+
+    for i, seq in enumerate(sequences):
+        seq = seq.upper().strip()
+        if len(seq) < k:
+            continue
+
+        count = 0
+        for j in range(len(seq) - k + 1):
+            kmer = seq[j:j + k]
+            # Compute index: e.g. for k=2, idx = aa1_idx * 20 + aa2_idx
+            idx = 0
+            valid = True
+            for c, char in enumerate(kmer):
+                if char not in aa_to_idx:
+                    valid = False
+                    break
+                idx += aa_to_idx[char] * (n_aas ** (k - 1 - c))
+            if valid:
+                features[i, idx] += 1
+                count += 1
+
+        if count > 0:
+            features[i] /= count
+
+    print(f"  Generated {k}-mer features: ({n}, {dim})")
+    return features
+
+
+# Amino acid groupings for physicochemical profile
+_AA_GROUPS = {
+    'aromatic': set('FWYH'),
+    'aliphatic': set('AVILM'),
+    'positive': set('RKH'),
+    'negative': set('DE'),
+    'polar': set('STNQ'),
+    'nonpolar': set('AVILMFWPG'),
+    'tiny': set('AGS'),
+    'small': set('AGSTCDNPV'),
+    'cysteine': set('C'),
+}
+
+
+def create_physicochemical_profile(
+    heavy_sequences: List[str],
+    light_sequences: Optional[List[str]] = None,
+) -> np.ndarray:
+    """
+    Compute comprehensive physicochemical profile from sequence.
+
+    Uses AA_PROPERTIES (6 properties: hydrophobicity, charge, mw, volume,
+    polarity, flexibility) with 4 summary statistics each (mean, std, min,
+    max), plus amino acid group composition fractions. Interpretable and
+    complementary to learned embeddings.
+
+    Features per chain (34D):
+        0-3:   hydrophobicity (mean, std, min, max)
+        4-7:   charge (mean, std, min, max)
+        8-11:  molecular weight (mean, std, min, max)
+        12-15: volume (mean, std, min, max)
+        16-19: polarity (mean, std, min, max)
+        20-23: flexibility (mean, std, min, max)
+        24: fraction aromatic  (F,W,Y,H)
+        25: fraction aliphatic (A,V,I,L,M)
+        26: fraction positive  (R,K,H)
+        27: fraction negative  (D,E)
+        28: fraction polar     (S,T,N,Q)
+        29: fraction nonpolar  (A,V,I,L,M,F,W,P,G)
+        30: fraction tiny      (A,G,S)
+        31: fraction small     (A,G,S,T,C,D,N,P,V)
+        32: fraction cysteine  (C)
+        33: sequence length (normalized by 150)
+
+    Heavy-only: 34D (light columns zero-padded to 68D).
+    Paired: 68D (34 heavy + 34 light).
+
+    Args:
+        heavy_sequences: List of heavy chain sequences
+        light_sequences: Optional list of light chain sequences
+
+    Returns:
+        np.ndarray: (n_sequences, 68) physicochemical profile
+    """
+    n = len(heavy_sequences)
+    features = np.zeros((n, 68), dtype=np.float64)
+    prop_keys = ['hydrophobicity', 'charge', 'mw', 'volume', 'polarity', 'flexibility']
+    group_names = list(_AA_GROUPS.keys())
+
+    def _compute_chain_features(seq: str) -> np.ndarray:
+        """Compute 34D feature vector for a single chain."""
+        out = np.zeros(34, dtype=np.float64)
+        seq = seq.upper().strip()
+        if not seq:
+            return out
+
+        valid_aas = [aa for aa in seq if aa in AA_PROPERTIES]
+        if not valid_aas:
+            return out
+
+        # 6 properties × 4 stats = 24D
+        for p_idx, prop in enumerate(prop_keys):
+            vals = np.array([AA_PROPERTIES[aa][prop] for aa in valid_aas])
+            out[p_idx * 4] = vals.mean()
+            out[p_idx * 4 + 1] = vals.std()
+            out[p_idx * 4 + 2] = vals.min()
+            out[p_idx * 4 + 3] = vals.max()
+
+        # 9 group fractions + length = 10D
+        seq_len = len(valid_aas)
+        for g_idx, group in enumerate(group_names):
+            group_set = _AA_GROUPS[group]
+            out[24 + g_idx] = sum(1 for aa in valid_aas if aa in group_set) / seq_len
+
+        # Normalized length
+        out[33] = seq_len / 150.0
+
+        return out
+
+    print(f"Computing physicochemical profile for {n} antibodies...")
+
+    for i in range(n):
+        features[i, :34] = _compute_chain_features(heavy_sequences[i])
+        if light_sequences is not None:
+            features[i, 34:] = _compute_chain_features(light_sequences[i])
+
+    print(f"  Generated physicochemical profile: ({n}, 68)")
+    return features
+
+
+def create_imgt_onehot(
+    heavy_sequences: List[str],
+    light_sequences: Optional[List[str]] = None,
+) -> np.ndarray:
+    """
+    Create full IMGT-numbered one-hot encoding (fixed-length).
+
+    Numbers each sequence with ANARCI (IMGT scheme), then one-hot encodes
+    each of 128 positions (1-128) × 20 amino acids. Provides alignment-free
+    fixed-length representation that preserves positional information.
+
+    FLAb2 (2025) showed IMGT one-hot matches billion-parameter PLMs given
+    enough training data, making this a strong non-learned baseline.
+
+    Heavy-only: 2560D (128 × 20).
+    Paired: 5120D (2560 heavy + 2560 light).
+
+    Requires ANARCI for IMGT numbering.
+
+    Args:
+        heavy_sequences: List of heavy chain sequences
+        light_sequences: Optional list of light chain sequences
+
+    Returns:
+        np.ndarray: (n_sequences, 5120) IMGT one-hot features
+    """
+    try:
+        from ..datasets.sabdab import extract_cdr_sequences
+    except ImportError:
+        raise ImportError(
+            "ANARCI required for IMGT one-hot encoding. "
+            "Install: conda install -c bioconda anarci"
+        )
+
+    n = len(heavy_sequences)
+    # Always allocate 5120D (heavy + light), light = zeros if not provided
+    features = np.zeros((n, 5120), dtype=np.float32)
+    aa_to_idx = {aa: i for i, aa in enumerate(STANDARD_AAS)}
+
+    def _encode_chain(sequence: str, chain_type: str) -> np.ndarray:
+        """One-hot encode 128 IMGT positions → 2560D."""
+        out = np.zeros(2560, dtype=np.float32)
+        try:
+            result = extract_cdr_sequences(
+                sequence, numbering='imgt', chain_type=chain_type
+            )
+            if result is None:
+                return out
+
+            for pos, aa in result['numbered_seq']:
+                # Only use integer positions 1-128
+                if isinstance(pos, int) and 1 <= pos <= 128:
+                    aa = aa.upper()
+                    if aa in aa_to_idx:
+                        offset = (pos - 1) * 20 + aa_to_idx[aa]
+                        out[offset] = 1.0
+        except Exception:
+            pass
+        return out
+
+    print(f"Computing IMGT one-hot encoding for {n} antibodies...")
+
+    for i in range(n):
+        features[i, :2560] = _encode_chain(heavy_sequences[i].strip(), 'heavy')
+        if light_sequences is not None:
+            features[i, 2560:] = _encode_chain(light_sequences[i].strip(), 'light')
+
+    n_nonzero = np.count_nonzero(features.sum(axis=1))
+    print(f"  Generated IMGT one-hot: ({n}, 5120), {n_nonzero}/{n} sequences numbered")
+    return features
+
+
+# ============================================================================
 # PART 5: FINE-TUNING FOR SPECIFIC TASKS
 # ============================================================================
 
