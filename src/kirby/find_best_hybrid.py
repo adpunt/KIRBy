@@ -354,9 +354,13 @@ def _evaluate_hybrid_config(
     n_folds: int,
     metric_fn: Callable,
     seed: int = 42,
+    augmentations: Optional[Dict[str, np.ndarray]] = None,
+    augmentation_strategy: str = 'greedy_ablation',
+    augmentation_threshold: Optional[float] = None,
+    augmentation_budget: int = 20,
 ) -> dict:
     """Evaluate a single hybrid configuration. Returns result dict."""
-    from kirby.hybrid import create_hybrid, apply_feature_selection
+    from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
 
     start_time = time.time()
     splitter, use_groups = _make_cv_splitter(groups, n_folds, seed)
@@ -371,14 +375,32 @@ def _evaluate_hybrid_config(
         val_reps = {k: v[val_idx] for k, v in base_reps.items()}
         y_train, y_val = labels[train_idx], labels[val_idx]
 
+        # Split augmentations per fold
+        train_augs = None
+        val_augs = None
+        if augmentations is not None:
+            train_augs = {name: X[train_idx] for name, X in augmentations.items()}
+            val_augs = {name: X[val_idx] for name, X in augmentations.items()}
+
         try:
             X_train, feature_info = create_hybrid(
                 train_reps, y_train,
                 allocation_method=allocation_method,
                 budget=budget,
                 importance_method=importance_method,
+                augmentations=train_augs,
+                augmentation_strategy=augmentation_strategy,
+                augmentation_threshold=augmentation_threshold,
+                augmentation_budget=augmentation_budget,
             )
             X_val = apply_feature_selection(val_reps, feature_info)
+
+            # Apply augmentation selection to val set
+            aug_info = feature_info.get('augmentation_info')
+            if aug_info and val_augs is not None:
+                aug_val_features = apply_augmentation_selection(val_augs, aug_info)
+                if aug_val_features is not None:
+                    X_val = np.hstack([X_val, aug_val_features])
         except Exception:
             continue
 
@@ -484,6 +506,10 @@ def _run_search(
     test_rep_subsets: bool = False,
     seed: int = 42,
     verbose: bool = True,
+    augmentations: Optional[Dict[str, np.ndarray]] = None,
+    augmentation_strategy: str = 'greedy_ablation',
+    augmentation_threshold: Optional[float] = None,
+    augmentation_budget: int = 20,
 ) -> List[dict]:
     """Main search loop over all configurations."""
     tier = SPEED_TIERS[speed]
@@ -532,6 +558,10 @@ def _run_search(
                                 n_folds=search_folds,
                                 metric_fn=metric_fn,
                                 seed=seed,
+                                augmentations=augmentations,
+                                augmentation_strategy=augmentation_strategy,
+                                augmentation_threshold=augmentation_threshold,
+                                augmentation_budget=augmentation_budget,
                             )
                             if rep_set_name != 'all':
                                 result['rep_subset'] = rep_set_name
@@ -622,6 +652,10 @@ def _compute_fitted_result(
     labels: np.ndarray,
     blueprint: Blueprint,
     weight_method: Optional[str] = 'lightgbm_gain',
+    augmentations: Optional[Dict[str, np.ndarray]] = None,
+    augmentation_strategy: str = 'greedy_ablation',
+    augmentation_threshold: Optional[float] = None,
+    augmentation_budget: int = 20,
 ) -> FittedResult:
     """Fit on full data and return concrete feature indices + optional weights."""
     from kirby.hybrid import create_hybrid, compute_feature_importance
@@ -634,6 +668,10 @@ def _compute_fitted_result(
         allocation_method=blueprint.allocation_method,
         budget=blueprint.budget,
         importance_method=blueprint.importance_method,
+        augmentations=augmentations,
+        augmentation_strategy=augmentation_strategy,
+        augmentation_threshold=augmentation_threshold,
+        augmentation_budget=augmentation_budget,
     )
 
     selected_indices = {}
@@ -686,6 +724,10 @@ def find_best_hybrid(
     return_fitted: bool = False,
     weight_method: Optional[str] = None,
     dimension_tiers: Optional[List[int]] = None,
+    augmentations: Optional[Dict[str, np.ndarray]] = None,
+    augmentation_strategy: str = 'greedy_ablation',
+    augmentation_threshold: Optional[float] = None,
+    augmentation_budget: int = 20,
     seed: int = 42,
     verbose: bool = True,
 ) -> SearchResult:
@@ -713,6 +755,14 @@ def find_best_hybrid(
         weight_method: Importance method for feature weights (only if return_fitted=True).
         dimension_tiers: Dimension breakpoints for best_by_dimension.
             Defaults to [50, 100, 200, 500].
+        augmentations: Dict of {aug_name: np.ndarray} supplementary feature arrays.
+            These are small feature sets (e.g. developability, humanness) that augment
+            the hybrid after main feature selection. Each is independently evaluated
+            and only kept if it improves validation performance.
+        augmentation_strategy: How to handle augmentations. 'greedy_ablation' (default)
+            tests each and keeps only those that help. 'all' includes all. 'none' ignores.
+        augmentation_threshold: Minimum improvement to keep an augmentation (default: any).
+        augmentation_budget: Max features per augmentation to select (default: 20).
         seed: Random seed.
         verbose: Print progress.
 
@@ -745,6 +795,18 @@ def find_best_hybrid(
 
     if dimension_tiers is None:
         dimension_tiers = [50, 100, 200, 500]
+
+    # --- Validate augmentations ---
+    if augmentations is not None:
+        for aug_name, X_aug in augmentations.items():
+            if X_aug.shape[0] != n_samples:
+                raise ValueError(
+                    f"Augmentation '{aug_name}' has {X_aug.shape[0]} samples, "
+                    f"expected {n_samples}"
+                )
+        if verbose:
+            aug_dims = {k: v.shape[1] for k, v in augmentations.items()}
+            print(f"Augmentations: {aug_dims} (strategy={augmentation_strategy})")
 
     # --- Auto-detect task type ---
     if task_type == 'auto':
@@ -780,6 +842,10 @@ def find_best_hybrid(
         test_rep_subsets=test_rep_subsets,
         seed=seed,
         verbose=verbose,
+        augmentations=augmentations,
+        augmentation_strategy=augmentation_strategy,
+        augmentation_threshold=augmentation_threshold,
+        augmentation_budget=augmentation_budget,
     )
 
     # --- Aggregate ---
@@ -791,7 +857,11 @@ def find_best_hybrid(
         if verbose:
             print("\nFitting best config on full data...")
         fitted = _compute_fitted_result(
-            base_reps, labels, agg['best_overall']['blueprint'], weight_method
+            base_reps, labels, agg['best_overall']['blueprint'], weight_method,
+            augmentations=augmentations,
+            augmentation_strategy=augmentation_strategy,
+            augmentation_threshold=augmentation_threshold,
+            augmentation_budget=augmentation_budget,
         )
 
     # --- Resolve metric name for display ---
