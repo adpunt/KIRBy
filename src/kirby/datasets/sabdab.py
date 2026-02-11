@@ -439,6 +439,12 @@ def load_sabdab_sequences(
         # print(f"  After X-ray filter: {before} → {len(df)}")
         # filters.append("X-ray structures")
     
+    if remove_redundancy:
+        warnings.warn(
+            "remove_redundancy is not yet implemented. Sequences may contain "
+            "near-duplicates (>95% identity). Consider manual filtering with cd-hit."
+        )
+
     print(f"Filters applied: {', '.join(filters)}")
     print(f"Remaining: {len(df)} structures")
     
@@ -490,12 +496,24 @@ def load_sabdab_sequences(
     if len(heavy_seqs) == 0:
         raise RuntimeError("No sequences found for selected structures")
     
-    # For structure prediction task, labels could be resolution
+    # Labels depend on task
     if task == 'structure':
         labels = df[df['pdb'].isin(pdb_ids)]['resolution'].values
+    elif task == 'humanness':
+        # Compute humanness labels from heavy chain sequences
+        from ..representations.antibody import compute_humanness_scores
+        humanness = compute_humanness_scores(heavy_seqs, chain_type='heavy')
+        labels = humanness[:, 0]  # best_germline_identity as primary label
+    elif task == 'developability':
+        # Compute developability labels from sequences
+        from ..representations.antibody import compute_developability_features
+        dev = compute_developability_features(heavy_seqs, light_seqs)
+        labels = dev[:, 15]  # total_liability_motifs as primary label
     else:
-        # For other tasks, we don't have labels yet
-        labels = np.zeros(len(heavy_seqs))
+        raise ValueError(
+            f"Unknown task '{task}'. Supported: 'structure', 'humanness', 'developability'. "
+            f"For affinity data, use load_sabdab_affinity() instead."
+        )
     
     data = {
         'heavy_seqs': heavy_seqs,
