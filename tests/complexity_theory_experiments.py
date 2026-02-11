@@ -97,21 +97,37 @@ def compute_intrinsic_dimensionality(X: np.ndarray) -> Dict[str, Any]:
 
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
+    n, d = X_scaled.shape
 
-    # PCA-based
-    n_components = min(X.shape[0], X.shape[1])
-    pca = PCA(n_components=n_components)
-    pca.fit(X_scaled)
-    cumvar = np.cumsum(pca.explained_variance_ratio_)
+    if d > 2000:
+        # Use randomized SVD for high-dim reps (e.g. graph_kernel ~71K)
+        from sklearn.decomposition import TruncatedSVD
+        max_comp = min(500, n - 1)
+        svd = TruncatedSVD(n_components=max_comp, random_state=42)
+        svd.fit(X_scaled)
+        cumvar = np.cumsum(svd.explained_variance_ratio_)
+        for threshold in [0.90, 0.95, 0.99]:
+            key = f'pca_{int(threshold * 100)}'
+            idx = np.searchsorted(cumvar, threshold)
+            results[key] = int(min(idx + 1, max_comp)) if idx < len(cumvar) else max_comp
+    else:
+        # Original PCA path for manageable dims
+        n_components = min(n, d)
+        pca = PCA(n_components=n_components)
+        pca.fit(X_scaled)
+        cumvar = np.cumsum(pca.explained_variance_ratio_)
+        for threshold in [0.90, 0.95, 0.99]:
+            key = f'pca_{int(threshold * 100)}'
+            intrinsic_dim = np.searchsorted(cumvar, threshold) + 1
+            results[key] = int(min(intrinsic_dim, d))
 
-    for threshold in [0.90, 0.95, 0.99]:
-        key = f'pca_{int(threshold * 100)}'
-        intrinsic_dim = np.searchsorted(cumvar, threshold) + 1
-        results[key] = int(min(intrinsic_dim, X.shape[1]))
-
-    # MLE-based (Levina-Bickel 2004)
+    # MLE: pre-reduce if high-dim
+    X_for_mle = X_scaled
+    if d > 2000:
+        from sklearn.decomposition import TruncatedSVD
+        X_for_mle = TruncatedSVD(n_components=min(200, n - 1), random_state=42).fit_transform(X_scaled)
     try:
-        results['mle'] = float(estimate_intrinsic_dim_mle(X_scaled, k=10))
+        results['mle'] = float(estimate_intrinsic_dim_mle(X_for_mle, k=10))
     except Exception:
         results['mle'] = None
 
@@ -204,7 +220,17 @@ def compute_effective_rank(X: np.ndarray) -> float:
     """Effective rank: exp(entropy of normalised singular values)."""
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
-    _, s, _ = np.linalg.svd(X_scaled, full_matrices=False)
+    n, d = X_scaled.shape
+
+    if d > 2000:
+        from sklearn.decomposition import TruncatedSVD
+        n_comp = min(500, n - 1)
+        svd = TruncatedSVD(n_components=n_comp, random_state=42)
+        svd.fit(X_scaled)
+        s = svd.singular_values_
+    else:
+        _, s, _ = np.linalg.svd(X_scaled, full_matrices=False)
+
     s = s[s > 1e-10]
     p = s / s.sum()
     return float(np.exp(-np.sum(p * np.log(p))))
@@ -240,8 +266,14 @@ def compute_dataset_complexity(reps: Dict[str, np.ndarray], labels: np.ndarray) 
 
     # Participation ratio from covariance eigenvalues
     X_scaled = StandardScaler().fit_transform(X_concat)
-    # Use SVD for numerical stability (eigenvalues = singular_values²/n)
-    _, s, _ = np.linalg.svd(X_scaled, full_matrices=False)
+    if d > 2000:
+        from sklearn.decomposition import TruncatedSVD
+        n_comp = min(500, n - 1)
+        svd = TruncatedSVD(n_components=n_comp, random_state=42)
+        svd.fit(X_scaled)
+        s = svd.singular_values_
+    else:
+        _, s, _ = np.linalg.svd(X_scaled, full_matrices=False)
     eigvals = s ** 2 / n
     eigvals = eigvals[eigvals > 1e-10]
     metrics['participation_ratio'] = float((eigvals.sum()) ** 2 / (eigvals ** 2).sum())
@@ -269,17 +301,23 @@ def compute_dataset_complexity(reps: Dict[str, np.ndarray], labels: np.ndarray) 
     metrics['C2'] = float(np.mean(abs_corrs))  # average feature quality
 
     # --- Linearity: Ridge fit residual (Lorena L1 adapted) ---
+    # Pre-reduce if high-dim (Ridge needs O(d²) for d > n, or O(n*d) otherwise)
+    X_for_model = X_scaled
+    if d > 2000:
+        from sklearn.decomposition import TruncatedSVD
+        X_for_model = TruncatedSVD(n_components=min(500, n - 1), random_state=42).fit_transform(X_scaled)
     from sklearn.linear_model import Ridge
     ridge = Ridge(alpha=1.0)
-    ridge.fit(X_scaled, y)
-    y_pred_linear = ridge.predict(X_scaled)
+    ridge.fit(X_for_model, y)
+    y_pred_linear = ridge.predict(X_for_model)
     y_range = y.max() - y.min()
     metrics['L1'] = float(np.mean(np.abs(y - y_pred_linear)) / y_range) if y_range > 0 else 0.0
 
     # --- Smoothness: 1-NN LOO error (Lorena S3 adapted) ---
+    # Use pre-reduced X for kNN if high-dim (brute-force kNN is O(n²d))
     nn = NearestNeighbors(n_neighbors=2, n_jobs=-1)
-    nn.fit(X_scaled)
-    _, indices = nn.kneighbors(X_scaled)
+    nn.fit(X_for_model)
+    _, indices = nn.kneighbors(X_for_model)
     y_nn = y[indices[:, 1]]  # nearest neighbor (not self)
     metrics['S3'] = float(np.mean(np.abs(y - y_nn)) / y_range) if y_range > 0 else 0.0
 
@@ -471,18 +509,6 @@ def run_characterization(data: dict, models: Dict[str, callable], n_folds: int) 
 
         results[rep_name] = rep_result
 
-    # Full concatenation baseline
-    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
-    concat_result = {'baselines': {}}
-    print(f"\n  all_concat (dim={X_concat.shape[1]}):")
-    scores_str = []
-    for model_name, model_factory in models.items():
-        mean_r2, std_r2 = evaluate_single_rep_cv(X_concat, labels, groups, model_factory, n_folds)
-        concat_result['baselines'][model_name] = {'r2_mean': mean_r2, 'r2_std': std_r2}
-        scores_str.append(f"{model_name}={mean_r2:.3f}")
-    print(f"    Baselines: {', '.join(scores_str)}")
-    results['all_concat'] = concat_result
-
     return results
 
 
@@ -565,9 +591,7 @@ def run_complexity_matching_grid(
     # Baselines: reshape library format {rep: {model: score}} to Exp 2 format
     baselines = {}
     lib_baselines = search.baselines
-    concat_dim = lib_baselines.get('all_concat', {}).get('dimension', total_dim)
     for model_name in models:
-        concat_r2 = lib_baselines.get('all_concat', {}).get(model_name, float('nan'))
         best_single_rep = None
         best_single_r2 = -np.inf
         for rep_name, rep_scores in lib_baselines.items():
@@ -578,14 +602,10 @@ def run_complexity_matching_grid(
                 best_single_r2 = rep_r2
                 best_single_rep = rep_name
         baselines[model_name] = {
-            'full_concat_r2': concat_r2,
-            'full_concat_std': 0.0,
-            'dimension': concat_dim,
             'best_single_rep': best_single_rep,
             'best_single_r2': best_single_r2,
         }
-        print(f"  {model_name}: concat R²={concat_r2:.4f}, "
-              f"best_single={best_single_rep} R²={best_single_r2:.4f}")
+        print(f"  {model_name}: best_rep={best_single_rep} R²={best_single_r2:.4f}")
 
     # PCA baselines (library doesn't compute these — keep manual)
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
@@ -630,11 +650,12 @@ def run_complexity_matching_grid(
     # Print summary
     print("\n  BEST BY MODEL:")
     for model_name, best in best_by_model.items():
-        baseline_r2 = baselines[model_name]['full_concat_r2']
+        baseline_r2 = baselines[model_name]['best_single_r2']
+        baseline_rep = baselines[model_name]['best_single_rep']
         delta = best['r2_mean'] - baseline_r2
         print(f"  >> {model_name}: {best['allocation']}/{best['importance']}"
               f"/b={best['budget']} -> R²={best['r2_mean']:.4f} "
-              f"(vs full_concat {baseline_r2:.4f}, delta={delta:+.4f})")
+              f"(vs {baseline_rep} {baseline_r2:.4f}, delta={delta:+.4f})")
 
     print("\n  IMPORTANCE METHOD WINS:")
     for imp, count in sorted(importance_wins.items(), key=lambda x: -x[1]):
@@ -1410,14 +1431,12 @@ def run_learning_curves(
     # Deduplicate and cap at total
     sample_sizes = sorted(set(min(s, n_total) for s in sample_sizes))
 
-    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
-
     results = {'sample_sizes': sample_sizes, 'models': {}, 'search_speed': search_speed}
 
     # Initialize per-model result structure
     for model_name in model_names:
         results['models'][model_name] = {
-            'hybrid': [], 'best_single': [], 'full_concat': [],
+            'hybrid': [], 'best_single': [],
             'best_configs': [],
         }
 
@@ -1426,7 +1445,6 @@ def run_learning_curves(
         # Collect scores across repeats per model
         hybrid_by_model = {m: [] for m in model_names}
         single_by_model = {m: [] for m in model_names}
-        concat_by_model = {m: [] for m in model_names}
         configs_by_model = {m: [] for m in model_names}
 
         for seed in range(n_repeats):
@@ -1435,7 +1453,6 @@ def run_learning_curves(
             sub_reps = {k: v[idx] for k, v in reps.items()}
             sub_labels = labels[idx]
             sub_groups = groups[idx]
-            sub_concat = X_concat[idx]
             n_unique_groups = len(np.unique(sub_groups))
 
             if n_unique_groups < 2:
@@ -1480,29 +1497,18 @@ def run_learning_curves(
                 if best_single > -np.inf:
                     single_by_model[model_name].append(best_single)
 
-                # Full concatenation
-                try:
-                    r2, _ = evaluate_single_rep_cv(
-                        sub_concat, sub_labels, sub_groups, model_factory,
-                        n_folds=sub_folds,
-                    )
-                    concat_by_model[model_name].append(r2)
-                except Exception:
-                    pass
-
         # Aggregate across repeats
         for model_name in model_names:
             h = float(np.mean(hybrid_by_model[model_name])) if hybrid_by_model[model_name] else float('nan')
             s = float(np.mean(single_by_model[model_name])) if single_by_model[model_name] else float('nan')
-            c = float(np.mean(concat_by_model[model_name])) if concat_by_model[model_name] else float('nan')
 
             results['models'][model_name]['hybrid'].append(h)
             results['models'][model_name]['best_single'].append(s)
-            results['models'][model_name]['full_concat'].append(c)
             results['models'][model_name]['best_configs'].append(
                 configs_by_model[model_name] if configs_by_model[model_name] else None)
 
-            print(f"    {model_name}: hybrid={h:.4f}, single={s:.4f}, concat={c:.4f}")
+            delta = h - s if not (np.isnan(h) or np.isnan(s)) else float('nan')
+            print(f"    {model_name}: hybrid={h:.4f}, best_single={s:.4f}, delta={delta:+.4f}")
 
     # Fit learning curves per model
     for model_name in model_names:

@@ -23,15 +23,21 @@ if [ "$MODE" = "quick" ]; then
         --experiments 1 2 6 9 --output tests/results/complexity_theory_fast
 
     echo ""
-    echo "=== QUICK 2: logd, ALL reps, Exp 1+2+6 ==="
-    python tests/complexity_theory_experiments.py --mode quick --reps all \
+    echo "=== QUICK 2: logd, all_no_gk reps, Exp 1+2+6 ==="
+    python tests/complexity_theory_experiments.py --mode quick --reps all_no_gk \
         --experiments 1 2 6 --output tests/results/complexity_theory_all
 
 elif [ "$MODE" = "full" ]; then
-    echo "=== FULL RUN (all datasets, ALL reps, all experiments) ==="
-    python tests/complexity_theory_experiments.py --mode full --reps all \
+    echo "=== FULL RUN (all datasets, all_no_gk reps, all experiments) ==="
+    python tests/complexity_theory_experiments.py --mode full --reps all_no_gk \
         --experiments 1 2 3 4 5 6 7 8 9 --output tests/results/complexity_theory
+
+elif [ "$MODE" = "gk" ]; then
+    echo "=== GK MODE: logd only, all reps (incl graph_kernel), fast search, Exp 1+2+6 ==="
+    python tests/complexity_theory_experiments.py --mode quick --reps all \
+        --experiments 1 2 6 --output tests/results/complexity_theory_gk
+
 else
-    echo "Usage: sbatch run_complexity_experiments.sh [quick|full]"
+    echo "Usage: sbatch run_complexity_experiments.sh [quick|full|gk]"
     exit 1
 fi

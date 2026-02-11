@@ -82,6 +82,11 @@ def assign_scaffold_groups(smiles_list: List[str]) -> Tuple[np.ndarray, int]:
 REP_PRESETS = {
     'fast': ['ecfp4', 'maccs', 'pdv'],
     'fast+hf': ['ecfp4', 'maccs', 'pdv', 'chemberta', 'molformer', 'selformer'],
+    'all_no_gk': [
+        'ecfp4', 'maccs', 'pdv', 'mol2vec', 'chemberta', 'molformer',
+        'selformer', 'chembert', 'molclr', 'graphmvp', 'smited',
+        'mhg_gnn', 'grover', 'unimol', 'schnet', 'chemformer'
+    ],
     'all': [
         'ecfp4', 'maccs', 'pdv', 'mol2vec', 'chemberta', 'molformer',
         'selformer', 'chembert', 'molclr', 'graphmvp', 'smited',
@@ -344,8 +349,25 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
 # REPRESENTATION GENERATION
 # =============================================================================
 
-def get_representations(smiles: List[str], preset_or_list: str) -> Dict[str, np.ndarray]:
-    """Generate representations based on preset or explicit list."""
+def _rep_cache_path(smiles: List[str], rep_name: str) -> Path:
+    """Get cache file path for a representation, keyed by SMILES hash."""
+    import hashlib
+    smiles_hash = hashlib.sha256('\n'.join(smiles).encode()).hexdigest()[:16]
+    cache_dir = Path.home() / '.cache' / 'kirby' / 'reps' / smiles_hash
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir / f'{rep_name}.npy'
+
+
+def get_representations(smiles: List[str], preset_or_list: str,
+                        cache: bool = True) -> Dict[str, np.ndarray]:
+    """Generate representations based on preset or explicit list.
+
+    Args:
+        smiles: List of SMILES strings.
+        preset_or_list: Preset name ('fast', 'fast+hf', 'all') or comma-separated rep names.
+        cache: If True, cache representations to ~/.cache/kirby/reps/ and load from
+               cache on subsequent calls with the same SMILES. Default True.
+    """
     from kirby.representations.molecular import (
         create_ecfp4, create_maccs, create_pdv, create_mol2vec,
         create_chemberta, create_molformer, create_selformer,
@@ -387,6 +409,15 @@ def get_representations(smiles: List[str], preset_or_list: str) -> Dict[str, np.
             print(f"  WARNING: Unknown representation '{rep_name}', skipping")
             continue
 
+        # Try loading from cache
+        if cache:
+            cache_file = _rep_cache_path(smiles, rep_name)
+            if cache_file.exists():
+                rep = np.load(cache_file)
+                print(f"  {rep_name}: loaded from cache ({rep.shape[1]} features)")
+                representations[rep_name] = rep
+                continue
+
         try:
             start = time.time()
             print(f"  Generating {rep_name}...", end=' ', flush=True)
@@ -394,6 +425,11 @@ def get_representations(smiles: List[str], preset_or_list: str) -> Dict[str, np.
             elapsed = time.time() - start
             print(f"done ({rep.shape[1]} features, {elapsed:.1f}s)")
             representations[rep_name] = rep
+
+            # Save to cache
+            if cache:
+                cache_file = _rep_cache_path(smiles, rep_name)
+                np.save(cache_file, rep)
         except Exception as e:
             print(f"FAILED: {e}")
 
