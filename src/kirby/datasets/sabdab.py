@@ -577,12 +577,16 @@ def extract_cdr_sequences(sequence, numbering='imgt', chain_type='heavy'):
     # Run ANARCI
     results = anarci([('seq', cleaned_sequence)], scheme=numbering, output=False)
     
-    if results is None or len(results[0]) == 0:
+    if results is None or len(results[0]) == 0 or results[0][0] is None or len(results[0][0]) == 0:
         warnings.warn(f"Could not number sequence: {cleaned_sequence[:20]}...")
         return None
-    
-    numbering_result, chain_type_result, species = results[0][0]
-    
+
+    # ANARCI returns: (numberings, alignments, hit_tables)
+    # numberings[0][0] = list of domains, each domain is (numbering_list, start, end)
+    # alignments[0][0] = dict with chain_type, species, etc.
+    domain = results[0][0][0]  # first domain of first sequence
+    numbering_result = domain[0]  # list of ((pos, ins), aa) tuples
+
     # ANARCI numbering format - handle flexibly
     numbered_seq = []
     for item in numbering_result:
