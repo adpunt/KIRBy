@@ -210,6 +210,90 @@ def compute_effective_rank(X: np.ndarray) -> float:
     return float(np.exp(-np.sum(p * np.log(p))))
 
 
+def compute_dataset_complexity(reps: Dict[str, np.ndarray], labels: np.ndarray) -> Dict[str, float]:
+    """Compute dataset complexity metrics (Lorena et al. 2018 inspired).
+
+    Returns dict of complexity metrics for cross-dataset correlation analysis.
+    Metrics:
+        erank: effective rank of X_concat (Roy & Vetterli 2007)
+        participation_ratio: (sum(λ))²/sum(λ²) of covariance eigenvalues
+        n_over_d: sample-to-feature ratio
+        n_over_erank: effective sample-to-feature ratio
+        C1: max |Spearman(feature, y)| across features (Lorena C1)
+        C2: mean |Spearman(feature, y)| across features (Lorena C2)
+        L1: mean absolute residual of Ridge fit (Lorena L1 adapted)
+        S3: 1-NN leave-one-out MAE normalised by y range (Lorena S3 adapted)
+        target_entropy: Shannon entropy of discretised y (20 bins)
+        label_std: standard deviation of y
+    """
+    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
+    n, d = X_concat.shape
+    y = labels
+
+    metrics = {'n_samples': n, 'n_features': d}
+
+    # --- Structural metrics ---
+    erank = compute_effective_rank(X_concat)
+    metrics['erank'] = erank
+    metrics['n_over_d'] = n / d
+    metrics['n_over_erank'] = n / erank
+
+    # Participation ratio from covariance eigenvalues
+    X_scaled = StandardScaler().fit_transform(X_concat)
+    # Use SVD for numerical stability (eigenvalues = singular_values²/n)
+    _, s, _ = np.linalg.svd(X_scaled, full_matrices=False)
+    eigvals = s ** 2 / n
+    eigvals = eigvals[eigvals > 1e-10]
+    metrics['participation_ratio'] = float((eigvals.sum()) ** 2 / (eigvals ** 2).sum())
+
+    # --- Feature-target correlation (Lorena C1, C2) ---
+    # Sample features if d > 1000 to keep computation tractable
+    max_features = min(d, 1000)
+    if d > max_features:
+        rng = np.random.RandomState(42)
+        feat_idx = rng.choice(d, max_features, replace=False)
+        X_sub = X_concat[:, feat_idx]
+    else:
+        X_sub = X_concat
+
+    abs_corrs = []
+    for j in range(X_sub.shape[1]):
+        col = X_sub[:, j]
+        if col.std() < 1e-10:
+            abs_corrs.append(0.0)
+            continue
+        rho, _ = spearmanr(col, y)
+        abs_corrs.append(abs(rho) if not np.isnan(rho) else 0.0)
+    abs_corrs = np.array(abs_corrs)
+    metrics['C1'] = float(np.max(abs_corrs))  # best single feature
+    metrics['C2'] = float(np.mean(abs_corrs))  # average feature quality
+
+    # --- Linearity: Ridge fit residual (Lorena L1 adapted) ---
+    from sklearn.linear_model import Ridge
+    ridge = Ridge(alpha=1.0)
+    ridge.fit(X_scaled, y)
+    y_pred_linear = ridge.predict(X_scaled)
+    y_range = y.max() - y.min()
+    metrics['L1'] = float(np.mean(np.abs(y - y_pred_linear)) / y_range) if y_range > 0 else 0.0
+
+    # --- Smoothness: 1-NN LOO error (Lorena S3 adapted) ---
+    nn = NearestNeighbors(n_neighbors=2, n_jobs=-1)
+    nn.fit(X_scaled)
+    _, indices = nn.kneighbors(X_scaled)
+    y_nn = y[indices[:, 1]]  # nearest neighbor (not self)
+    metrics['S3'] = float(np.mean(np.abs(y - y_nn)) / y_range) if y_range > 0 else 0.0
+
+    # --- Target complexity ---
+    metrics['label_std'] = float(np.std(y))
+    # Shannon entropy of discretised y
+    counts, _ = np.histogram(y, bins=20)
+    probs = counts / counts.sum()
+    probs = probs[probs > 0]
+    metrics['target_entropy'] = float(-np.sum(probs * np.log(probs)))
+
+    return metrics
+
+
 def evaluate_cv(
     base_reps: Dict[str, np.ndarray],
     labels: np.ndarray,
@@ -388,7 +472,7 @@ def run_characterization(data: dict, models: Dict[str, callable], n_folds: int) 
         results[rep_name] = rep_result
 
     # Full concatenation baseline
-    X_concat = np.hstack(list(reps.values()))
+    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
     concat_result = {'baselines': {}}
     print(f"\n  all_concat (dim={X_concat.shape[1]}):")
     scores_str = []
@@ -414,7 +498,12 @@ def run_complexity_matching_grid(
     importance_methods: List[str],
     n_folds: int,
 ) -> Dict[str, Any]:
-    """Central experiment: model complexity × rep complexity optimal pairing."""
+    """Central experiment: model complexity × rep complexity optimal pairing.
+
+    Delegates the core grid search to find_best_hybrid(), then reshapes the
+    SearchResult into the format expected by downstream experiments (8, 9a).
+    PCA baselines are computed separately (the library doesn't provide these).
+    """
     print("\n" + "=" * 70)
     print("EXPERIMENT 2: COMPLEXITY MATCHING GRID")
     print("=" * 70)
@@ -426,39 +515,81 @@ def run_complexity_matching_grid(
     total_dim = sum(v.shape[1] for v in reps.values())
     full_budgets = budgets + [total_dim]
 
-    total = len(models) * len(full_budgets) * len(allocation_methods) * len(importance_methods)
+    # Convert model factories to instances for the library
+    model_instances = {name: factory() for name, factory in models.items()}
+
     print(f"  {len(models)} models x {len(full_budgets)} budgets x "
-          f"{len(allocation_methods)} allocations x {len(importance_methods)} importance = {total} configs\n")
+          f"{len(allocation_methods)} allocations x {len(importance_methods)} importance")
+    print(f"  Delegating to find_best_hybrid()...\n")
 
-    results = {'configs': [], 'best_by_model': {}, 'baselines': {}}
-    idx = 0
+    search = find_best_hybrid(
+        base_reps=reps,
+        labels=labels,
+        groups=groups,
+        models=model_instances,
+        budgets=full_budgets,
+        allocation_methods=allocation_methods,
+        importance_methods=importance_methods,
+        n_folds=n_folds,
+        verbose=True,
+    )
 
-    # Baselines: full concatenation per model
-    X_concat = np.hstack(list(reps.values()))
-    print("  Computing baselines (full concat)...")
-    for model_name, model_factory in models.items():
-        mean_r2, std_r2 = evaluate_single_rep_cv(X_concat, labels, groups, model_factory, n_folds)
-        results['baselines'][model_name] = {
-            'full_concat_r2': mean_r2, 'full_concat_std': std_r2, 'dimension': X_concat.shape[1],
+    # --- Reshape SearchResult to downstream format ---
+
+    # Configs: rename fields for Exp 9a ANOVA compatibility
+    configs = []
+    for r in search.all_results:
+        configs.append({
+            'model': r['model'],
+            'allocation': r['allocation_method'],
+            'importance': r['importance_method'],
+            'budget': r['budget'],
+            'r2_mean': r['score_mean'],
+            'r2_std': r['score_std'],
+            'n_features': r['n_features'],
+        })
+
+    # Best by model: rename fields for Exp 8 compatibility
+    best_by_model = {}
+    for model_name, r in search.best_by_model.items():
+        best_by_model[model_name] = {
+            'model': model_name,
+            'allocation': r['allocation_method'],
+            'importance': r['importance_method'],
+            'budget': r['budget'],
+            'r2_mean': r['score_mean'],
+            'r2_std': r['score_std'],
+            'n_features': r['n_features'],
         }
-        print(f"    {model_name}: R²={mean_r2:.4f} (dim={X_concat.shape[1]})")
 
-    # Baselines: best single rep per model
-    print("  Computing baselines (best single rep)...")
-    for model_name, model_factory in models.items():
-        best_rep = None
-        best_r2 = -np.inf
-        for rep_name, X in reps.items():
-            mean_r2, _ = evaluate_single_rep_cv(X, labels, groups, model_factory, n_folds)
-            if mean_r2 > best_r2:
-                best_r2 = mean_r2
-                best_rep = rep_name
-        results['baselines'][model_name]['best_single_rep'] = best_rep
-        results['baselines'][model_name]['best_single_r2'] = best_r2
-        print(f"    {model_name}: best_single={best_rep} R²={best_r2:.4f}")
+    # Baselines: reshape library format {rep: {model: score}} to Exp 2 format
+    baselines = {}
+    lib_baselines = search.baselines
+    concat_dim = lib_baselines.get('all_concat', {}).get('dimension', total_dim)
+    for model_name in models:
+        concat_r2 = lib_baselines.get('all_concat', {}).get(model_name, float('nan'))
+        best_single_rep = None
+        best_single_r2 = -np.inf
+        for rep_name, rep_scores in lib_baselines.items():
+            if rep_name == 'all_concat':
+                continue
+            rep_r2 = rep_scores.get(model_name, -np.inf)
+            if rep_r2 > best_single_r2:
+                best_single_r2 = rep_r2
+                best_single_rep = rep_name
+        baselines[model_name] = {
+            'full_concat_r2': concat_r2,
+            'full_concat_std': 0.0,
+            'dimension': concat_dim,
+            'best_single_rep': best_single_rep,
+            'best_single_r2': best_single_r2,
+        }
+        print(f"  {model_name}: concat R²={concat_r2:.4f}, "
+              f"best_single={best_single_rep} R²={best_single_r2:.4f}")
 
-    # Baselines: PCA to each budget per model
-    print("  Computing baselines (PCA)...")
+    # PCA baselines (library doesn't compute these — keep manual)
+    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
+    print("\n  Computing PCA baselines...")
     pca_baselines = {}
     for budget in budgets:
         n_comp = min(budget, X_concat.shape[1], X_concat.shape[0] - 1)
@@ -477,78 +608,46 @@ def run_complexity_matching_grid(
                 m.fit(X_train_p, labels[train_idx])
                 pca_scores.append(r2_score(labels[val_idx], m.predict(X_val_p)))
             pca_baselines[budget][model_name] = float(np.mean(pca_scores))
-    results['pca_baselines'] = pca_baselines
 
-    # Main grid search
-    print("\n  Running hybrid grid...")
-    for model_name, model_factory in models.items():
-        best_score = -np.inf
-        best_config = None
-
-        for alloc in allocation_methods:
-            for imp in importance_methods:
-                for budget in full_budgets:
-                    idx += 1
-                    try:
-                        mean_r2, std_r2, n_feat = evaluate_cv(
-                            reps, labels, groups, model_factory, n_folds,
-                            allocation_method=alloc,
-                            importance_method=imp,
-                            budget=budget,
-                        )
-
-                        config = {
-                            'model': model_name,
-                            'allocation': alloc,
-                            'importance': imp,
-                            'budget': budget,
-                            'r2_mean': mean_r2,
-                            'r2_std': std_r2,
-                            'n_features': n_feat,
-                        }
-                        results['configs'].append(config)
-
-                        if mean_r2 > best_score:
-                            best_score = mean_r2
-                            best_config = config
-
-                        print(f"    [{idx}/{total}] {model_name}/{alloc}/{imp}/b={budget}: "
-                              f"R²={mean_r2:.4f}+/-{std_r2:.3f} dim={n_feat}")
-
-                    except Exception as e:
-                        print(f"    [{idx}/{total}] {model_name}/{alloc}/{imp}/b={budget}: FAILED - {e}")
-
-        if best_config:
-            results['best_by_model'][model_name] = best_config
-            baseline_r2 = results['baselines'][model_name]['full_concat_r2']
-            delta = best_config['r2_mean'] - baseline_r2
-            print(f"  >> {model_name} BEST: {best_config['allocation']}/{best_config['importance']}"
-                  f"/b={best_config['budget']} -> R²={best_config['r2_mean']:.4f} "
-                  f"(vs full_concat {baseline_r2:.4f}, delta={delta:+.4f})")
-
-    # Analysis: heatmap data (model x budget -> best R²)
+    # Heatmap: model x budget -> best R²
     heatmap = {}
     for model_name in models:
         heatmap[model_name] = {}
-        model_configs = [c for c in results['configs'] if c['model'] == model_name]
+        model_configs = [c for c in configs if c['model'] == model_name]
         for budget in full_budgets:
             budget_configs = [c for c in model_configs if c['budget'] == budget]
             if budget_configs:
                 best = max(budget_configs, key=lambda c: c['r2_mean'])
                 heatmap[model_name][budget] = best['r2_mean']
-    results['heatmap'] = heatmap
 
-    # Analysis: which importance method wins per model
+    # Importance method wins
     importance_wins = {imp: 0 for imp in importance_methods}
-    for model_name, best in results['best_by_model'].items():
-        importance_wins[best['importance']] += 1
-    results['importance_wins'] = importance_wins
+    for model_name, best in best_by_model.items():
+        imp = best['importance']
+        if imp in importance_wins:
+            importance_wins[imp] += 1
+
+    # Print summary
+    print("\n  BEST BY MODEL:")
+    for model_name, best in best_by_model.items():
+        baseline_r2 = baselines[model_name]['full_concat_r2']
+        delta = best['r2_mean'] - baseline_r2
+        print(f"  >> {model_name}: {best['allocation']}/{best['importance']}"
+              f"/b={best['budget']} -> R²={best['r2_mean']:.4f} "
+              f"(vs full_concat {baseline_r2:.4f}, delta={delta:+.4f})")
 
     print("\n  IMPORTANCE METHOD WINS:")
     for imp, count in sorted(importance_wins.items(), key=lambda x: -x[1]):
         print(f"    {imp}: {count}/{len(models)}")
 
-    return results
+    return {
+        'configs': configs,
+        'best_by_model': best_by_model,
+        'baselines': baselines,
+        'pca_baselines': pca_baselines,
+        'heatmap': heatmap,
+        'importance_wins': importance_wins,
+    }
 
 
 # =============================================================================
@@ -559,7 +658,11 @@ def run_cross_context_analysis(
     datasets: Dict[str, dict],
     n_folds: int,
 ) -> Dict[str, Any]:
-    """Optimal config changes across datasets — proving context-dependence."""
+    """Optimal config changes across datasets — proving context-dependence.
+
+    Includes dataset complexity profiling (Lorena et al. 2018 inspired) and
+    correlation of complexity metrics with optimal hybrid budget.
+    """
     print("\n" + "=" * 70)
     print("EXPERIMENT 3: CROSS-CONTEXT ANALYSIS")
     print("=" * 70)
@@ -567,11 +670,21 @@ def run_cross_context_analysis(
     results = {}
 
     for ds_name, data in datasets.items():
-        print(f"\n  Running find_best_hybrid on {ds_name}...")
+        print(f"\n  --- {ds_name} ---")
+
+        # Compute dataset complexity profile
+        print(f"  Computing complexity metrics...")
+        complexity = compute_dataset_complexity(data['reps'], data['labels'])
+        print(f"    erank={complexity['erank']:.1f}, PR={complexity['participation_ratio']:.1f}, "
+              f"n/d={complexity['n_over_d']:.2f}, n/erank={complexity['n_over_erank']:.1f}")
+        print(f"    C1={complexity['C1']:.3f}, C2={complexity['C2']:.3f}, "
+              f"L1={complexity['L1']:.3f}, S3={complexity['S3']:.3f}")
+
+        # Run hybrid search
+        print(f"  Running find_best_hybrid...")
         start = time.time()
 
         try:
-            # Add SVR and ElasticNet as custom novel models
             from sklearn.svm import SVR
             from sklearn.linear_model import ElasticNet
 
@@ -588,7 +701,6 @@ def run_cross_context_analysis(
                 verbose=False,
             )
 
-            # Also test novel models at best config
             best = search_result.best_overall
             if best:
                 bp = best['blueprint']
@@ -631,6 +743,7 @@ def run_cross_context_analysis(
             ds_result = {
                 'n_samples': len(data['labels']),
                 'elapsed_seconds': elapsed,
+                'complexity': complexity,
                 'best_model': best['model'] if best else None,
                 'best_r2': best['score_mean'] if best else None,
                 'best_allocation': best['blueprint'].allocation_method if best else None,
@@ -638,6 +751,10 @@ def run_cross_context_analysis(
                 'best_budget': best['blueprint'].budget if best else None,
                 'best_dim': best['n_features'] if best else None,
                 'baselines': search_result.baselines,
+                'best_by_model': {
+                    m: {'budget': r['budget'], 'r2': r['score_mean'], 'dim': r['n_features']}
+                    for m, r in search_result.best_by_model.items()
+                },
                 'performance_matrix': search_result.performance_matrix,
                 'novel_models': novel_results if best else {},
             }
@@ -659,6 +776,73 @@ def run_cross_context_analysis(
         if 'error' not in r:
             print(f"  {ds_name:<10} {r['n_samples']:<6} {r['best_model']:<12} "
                   f"{r['best_importance']:<15} {r['best_budget']:<8} {r['best_r2']:.4f}")
+
+    # --- Dataset complexity vs optimal hybrid dimension ---
+    valid = {ds: r for ds, r in results.items() if 'error' not in r and r.get('best_budget') is not None}
+    if len(valid) >= 2:
+        print("\n  DATASET COMPLEXITY vs OPTIMAL BUDGET:")
+        print(f"  {'Dataset':<10} {'erank':>7} {'PR':>7} {'n/erank':>8} {'C1':>6} {'C2':>6} "
+              f"{'L1':>6} {'S3':>6} {'Budget':>7} {'Dim':>5}")
+        print("  " + "-" * 82)
+
+        complexity_keys = ['erank', 'participation_ratio', 'n_over_erank', 'C1', 'C2', 'L1', 'S3']
+        ds_names = sorted(valid.keys())
+        budgets = np.array([valid[ds]['best_budget'] for ds in ds_names])
+        dims = np.array([valid[ds]['best_dim'] for ds in ds_names])
+
+        for ds in ds_names:
+            c = valid[ds]['complexity']
+            print(f"  {ds:<10} {c['erank']:>7.1f} {c['participation_ratio']:>7.1f} "
+                  f"{c['n_over_erank']:>8.1f} {c['C1']:>6.3f} {c['C2']:>6.3f} "
+                  f"{c['L1']:>6.3f} {c['S3']:>6.3f} "
+                  f"{valid[ds]['best_budget']:>7} {valid[ds]['best_dim']:>5}")
+
+        # Correlation of each complexity metric with optimal budget
+        correlations = {}
+        print("\n  Spearman correlation (complexity metric → optimal budget):")
+        for key in complexity_keys:
+            values = np.array([valid[ds]['complexity'][key] for ds in ds_names])
+            if np.std(values) < 1e-10:
+                continue
+            rho, p = spearmanr(values, budgets)
+            correlations[key] = {'rho_vs_budget': float(rho), 'p_vs_budget': float(p)}
+            # Also correlate with actual achieved dimension
+            rho_dim, p_dim = spearmanr(values, dims)
+            correlations[key]['rho_vs_dim'] = float(rho_dim)
+            correlations[key]['p_vs_dim'] = float(p_dim)
+            print(f"    {key:<20} → budget: rho={rho:+.3f} (p={p:.3f}), "
+                  f"dim: rho={rho_dim:+.3f} (p={p_dim:.3f})")
+
+        results['_complexity_correlation'] = correlations
+
+        # Key insight: does higher intrinsic complexity → higher optimal budget?
+        eranks = np.array([valid[ds]['complexity']['erank'] for ds in ds_names])
+        rho_erank, _ = spearmanr(eranks, budgets)
+        print(f"\n  KEY FINDING: erank → optimal budget correlation: rho={rho_erank:+.3f}")
+        if rho_erank > 0.3:
+            print("    → Higher intrinsic dimensionality correlates with larger optimal hybrid")
+        elif rho_erank < -0.3:
+            print("    → Higher intrinsic dimensionality correlates with smaller optimal hybrid")
+        else:
+            print("    → Weak correlation — optimal budget depends on more than raw dimensionality")
+
+        # Per-model optimal budget comparison across datasets
+        model_names = set()
+        for ds in ds_names:
+            model_names.update(valid[ds].get('best_by_model', {}).keys())
+        if model_names:
+            print("\n  PER-MODEL OPTIMAL BUDGET (cross-dataset):")
+            print(f"  {'Model':<12}" + "".join(f"{ds:<12}" for ds in ds_names))
+            print("  " + "-" * (12 + 12 * len(ds_names)))
+            for model in sorted(model_names):
+                row = f"  {model:<12}"
+                for ds in ds_names:
+                    bm = valid[ds].get('best_by_model', {}).get(model)
+                    if bm:
+                        row += f"b={bm['budget']:<8}"
+                    else:
+                        row += f"{'--':<12}"
+                print(row)
 
     return results
 
@@ -685,7 +869,7 @@ def run_importance_weight_metrics(
     labels = data['labels']
     groups = data['groups']
 
-    X_concat = np.hstack(list(reps.values()))
+    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
     print(f"  Concatenated features: {X_concat.shape}")
 
     results = {'methods': {}, 'cross_test': {}, 'low_dim': {}}
@@ -1113,7 +1297,7 @@ def run_data_complexity_analysis(
                 continue
 
             # Complexity metrics
-            X_concat = np.hstack(list(sub_reps.values()))
+            X_concat = np.hstack([sub_reps[k] for k in sorted(sub_reps.keys())])
             metrics = {}
             try:
                 n_comp = min(50, X_concat.shape[1], X_concat.shape[0] - 1)
@@ -1226,7 +1410,7 @@ def run_learning_curves(
     # Deduplicate and cap at total
     sample_sizes = sorted(set(min(s, n_total) for s in sample_sizes))
 
-    X_concat = np.hstack(list(reps.values()))
+    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
 
     results = {'sample_sizes': sample_sizes, 'models': {}, 'search_speed': search_speed}
 
@@ -1675,7 +1859,7 @@ def _run_information_retention(
     reps = data['reps']
     labels = data['labels']
     groups = data.get('groups')
-    X_concat = np.hstack(list(reps.values()))
+    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
 
     results = {'budgets': [], 'mi_xy': [], 'mi_xx_full': [], 'best_configs': []}
 
@@ -1778,7 +1962,7 @@ def _run_effective_rank_analysis(
     reps = data['reps']
     labels = data['labels']
     groups = data.get('groups')
-    X_concat = np.hstack(list(reps.values()))
+    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
 
     results = {'budgets': [], 'hybrid_rank': [], 'pca_rank': [], 'random_rank': []}
 
@@ -1975,6 +2159,9 @@ def main():
                         help='quick (~30min, logd only) or full (~4-6h, all datasets)')
     parser.add_argument('--experiments', type=int, nargs='+', default=None,
                         help='Which experiments to run (1-9). Default: all.')
+    parser.add_argument('--reps', type=str, default=None,
+                        help='Representation preset (fast, fast+hf, all) or comma-separated list. '
+                             'Default: fast for quick, fast+hf for full.')
     parser.add_argument('--output', type=str, default='tests/results/complexity_theory')
 
     args = parser.parse_args()
@@ -1982,6 +2169,7 @@ def main():
     # Configuration based on mode
     if args.mode == 'quick':
         dataset_names = ['logd']
+        rep_preset = args.reps or 'fast'
         n_folds = 3
         model_names = ['rf', 'knn', 'ridge']
         budgets = [50, 100]
@@ -1995,6 +2183,7 @@ def main():
         search_speed = 'fast'
     else:  # full
         dataset_names = ['logd', 'caco2', 'herg', 'qm9']
+        rep_preset = args.reps or 'fast+hf'
         n_folds = 5
         model_names = ['rf', 'knn', 'ridge', 'xgboost', 'mlp', 'lightgbm']
         budgets = [25, 50, 100, 200]
@@ -2014,6 +2203,7 @@ def main():
 
     print(f"Mode: {args.mode}")
     print(f"Datasets: {dataset_names}")
+    print(f"Reps: {rep_preset}")
     print(f"Models: {list(models.keys())}")
     print(f"Experiments: {experiments}")
 
@@ -2022,7 +2212,7 @@ def main():
     for ds_name in dataset_names:
         print(f"\nLoading {ds_name}...")
         try:
-            datasets[ds_name] = load_data(ds_name)
+            datasets[ds_name] = load_data(ds_name, rep_preset=rep_preset)
         except Exception as e:
             print(f"  FAILED: {e}")
 
@@ -2038,6 +2228,7 @@ def main():
         'config': {
             'mode': args.mode,
             'datasets': dataset_names,
+            'rep_preset': rep_preset,
             'models': list(models.keys()),
             'experiments': experiments,
             'n_folds': n_folds,
@@ -2110,6 +2301,11 @@ def main():
             return int(obj)
         elif isinstance(obj, (np.bool_,)):
             return bool(obj)
+        elif hasattr(obj, 'to_dict'):
+            return convert_numpy(obj.to_dict())
+        elif hasattr(obj, '__dataclass_fields__'):
+            from dataclasses import asdict
+            return convert_numpy(asdict(obj))
         elif isinstance(obj, dict):
             return {str(k): convert_numpy(v) for k, v in obj.items()}
         elif isinstance(obj, (list, tuple)):

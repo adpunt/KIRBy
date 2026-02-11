@@ -11,69 +11,47 @@
 cd /data/stat-cadd/scat9264/KIRBy
 . setup.sh
 
-echo "=== Test 1: Fast search (LogD) ==="
-python tests/find_best_hybrid_molecular.py logd --reps fast --search fast
+# Hybrid Validation
+# Quick: fast + fast+hf on logd (validates code runs with pretrained embeddings)
+# Full: every dataset tested with all reps
 
-echo ""
-echo "=== Test 2: Medium search (Caco2) ==="
-echo "4 models x 2 alloc x 3 budgets x 6 importance = 144 configs"
-python tests/find_best_hybrid_molecular.py caco2 --reps fast --search medium
+MODE=${1:-quick}
 
-echo ""
-echo "=== Test 3: Long search (hERG) ==="
-echo "7 models x 4 alloc x 4 budgets x 8 importance = 896 configs"
-python tests/find_best_hybrid_molecular.py herg --reps fast --search long
+if [ "$MODE" = "quick" ]; then
+    echo "=== Quick 1: LogD, fast reps, fast search ==="
+    python tests/find_best_hybrid_molecular.py logd --reps fast --search fast
 
-echo ""
-echo "=== Test 4: Direct library call with RMSE metric ==="
-python -c "
-import sys
-sys.path.insert(0, 'src')
-from kirby.find_best_hybrid import find_best_hybrid
-from kirby.representations.molecular import create_ecfp4, create_maccs, create_pdv
+    echo ""
+    echo "=== Quick 2: LogD, fast+hf reps (pretrained), fast search ==="
+    python tests/find_best_hybrid_molecular.py logd --reps fast+hf --search fast
 
-# Use the molecular wrapper to load LogD
-sys.path.insert(0, 'tests')
-from find_best_hybrid_molecular import load_dataset
+    echo ""
+    echo "=== Quick 3: LogD, ALL reps, fast search ==="
+    python tests/find_best_hybrid_molecular.py logd --reps all --search fast
 
-smiles, labels, _ = load_dataset('logd')
+elif [ "$MODE" = "full" ]; then
+    echo "=== Test 1: LogD, all reps, medium search ==="
+    python tests/find_best_hybrid_molecular.py logd --reps all --search medium
 
-reps = {
-    'ecfp4': create_ecfp4(smiles),
-    'maccs': create_maccs(smiles),
-    'pdv': create_pdv(smiles),
-}
+    echo ""
+    echo "=== Test 2: Caco2, all reps, medium search ==="
+    python tests/find_best_hybrid_molecular.py caco2 --reps all --search medium
 
-import numpy as np
-result = find_best_hybrid(reps, labels, metric='rmse', speed='fast')
-print(f'Best overall (RMSE): {result.best_overall[\"score_mean\"]:.4f}')
-print(f'Models tested: {list(result.best_by_model.keys())}')
-print(f'lower_is_better={result.lower_is_better}')
-"
+    echo ""
+    echo "=== Test 3: hERG, all reps, long search ==="
+    python tests/find_best_hybrid_molecular.py herg --reps all --search long
 
-echo ""
-echo "=== Test 5: Custom model ==="
-python -c "
-import sys
-sys.path.insert(0, 'src')
-sys.path.insert(0, 'tests')
-from kirby.find_best_hybrid import find_best_hybrid
-from kirby.representations.molecular import create_ecfp4, create_maccs, create_pdv
-from find_best_hybrid_molecular import load_dataset
-from sklearn.svm import SVR
-import numpy as np
+    echo ""
+    echo "=== Test 4: User scenarios (logd, fast reps) ==="
+    python tests/test_hybrid_user_scenarios.py --dataset logd --reps fast --scenarios all
 
-smiles, labels, _ = load_dataset('logd')
-
-reps = {
-    'ecfp4': create_ecfp4(smiles),
-    'maccs': create_maccs(smiles),
-    'pdv': create_pdv(smiles),
-}
-
-result = find_best_hybrid(reps, labels, models={'svm': SVR(kernel='rbf')}, speed='fast')
-print(f'SVM best score: {result.best_overall[\"score_mean\"]:.4f}')
-"
+    echo ""
+    echo "=== Test 5: User scenarios (caco2, fast reps) ==="
+    python tests/test_hybrid_user_scenarios.py --dataset caco2 --reps fast --scenarios 1 4 5
+else
+    echo "Usage: sbatch run_hybrid_validation.sh [quick|full]"
+    exit 1
+fi
 
 echo ""
 echo "=== All tests complete ==="

@@ -44,7 +44,6 @@ from typing import Any, Dict, List, Tuple, Optional
 
 import numpy as np
 from scipy.stats import spearmanr, wilcoxon
-from scipy.spatial.distance import pdist, squareform
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.model_selection import GroupKFold
@@ -186,15 +185,6 @@ def violation_rate(D: np.ndarray, y: np.ndarray, k: int = 5) -> float:
 
     return float(n_violations / n_total) if n_total > 0 else 0.0
 
-
-def compute_weighted_distances(X: np.ndarray,
-                               importance_scores: np.ndarray) -> np.ndarray:
-    """Apply sqrt(importance) weighting, standardize, compute Euclidean distances."""
-    scaler = StandardScaler()
-    X_std = scaler.fit_transform(X)
-    weights = np.sqrt(np.maximum(importance_scores, 0))
-    X_weighted = X_std * weights
-    return squareform(pdist(X_weighted, metric='euclidean'))
 
 
 def get_hybrid_features_and_weights(
@@ -341,7 +331,7 @@ def run_similarity_baseline(data: dict, n_folds: int,
               f"violation_rate={viol:.3f}, SALI_mean={sali['mean']:.3f}")
 
     # Concatenated baseline
-    X_concat = np.hstack(list(reps.values()))
+    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
     print(f"\n  all_concat (dim={X_concat.shape[1]}):")
     D_concat = compute_distance_matrix(X_concat, standardize=True)
     sac_rho, sac_p = similarity_activity_correlation(D_concat, labels, n_sample)
@@ -378,7 +368,8 @@ def run_similarity_baseline(data: dict, n_folds: int,
 def run_hybrid_similarity(data: dict, n_folds: int,
                           search_speed: str = 'fast',
                           weight_methods: List[str] = None,
-                          n_sample: int = 5000) -> Dict[str, Any]:
+                          n_sample: int = 5000,
+                          shared_search: Tuple = None) -> Dict[str, Any]:
     """The fix: find_best_hybrid + importance-weighted distance improves SAC."""
     print("\n" + "=" * 70)
     print("EXPERIMENT 2: HYBRID PROPERTY-AWARE SIMILARITY")
@@ -415,7 +406,7 @@ def run_hybrid_similarity(data: dict, n_folds: int,
     print(f"\n  Best individual rep: {best_rep_name} (SAC={best_rep_sac:.4f})")
 
     # Also compute concat as an additional data point (not standard practice)
-    X_concat = np.hstack(list(reps.values()))
+    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
     D_concat = compute_distance_matrix(X_concat, standardize=True)
     sac_concat, _ = similarity_activity_correlation(D_concat, labels, n_sample)
     viol_concat = violation_rate(D_concat, labels, k=5)
@@ -432,17 +423,22 @@ def run_hybrid_similarity(data: dict, n_folds: int,
     best_method = best_rep_name
 
     # Run search once (selection is weight_method-independent), then vary weights
-    print(f"\n  Running hybrid search ({search_speed})...")
     t0 = time.time()
-    try:
-        X_hybrid, _, search = get_hybrid_features_and_weights(
-            reps, labels, groups, search_speed, weight_methods[0])
+    if shared_search is not None:
+        X_hybrid, _, search = shared_search
         fitted = search.fitted_result
-    except Exception as e:
-        print(f"    Search FAILED: {e}")
-        results['best_weight_method'] = best_method
-        results['best_sac'] = best_sac
-        return results
+        print(f"  Using shared search (dim={X_hybrid.shape[1]})")
+    else:
+        print(f"  Running hybrid search ({search_speed})...")
+        try:
+            X_hybrid, _, search = get_hybrid_features_and_weights(
+                reps, labels, groups, search_speed, weight_methods[0])
+            fitted = search.fitted_result
+        except Exception as e:
+            print(f"    Search FAILED: {e}")
+            results['best_weight_method'] = best_method
+            results['best_sac'] = best_sac
+            return results
 
     search_time = time.time() - t0
     hybrid_dim = X_hybrid.shape[1]
@@ -476,7 +472,8 @@ def run_hybrid_similarity(data: dict, n_folds: int,
             continue
 
         # Hybrid weighted
-        D_weighted = compute_weighted_distances(X_hybrid, weights_flat)
+        D_weighted = compute_distance_matrix(X_hybrid, feature_weights=weights_flat,
+                                                 standardize=True)
         sac_weighted, _ = similarity_activity_correlation(D_weighted, labels, n_sample)
         viol_weighted = violation_rate(D_weighted, labels, k=5)
         sali_weighted = compute_sali(D_weighted, labels)
@@ -536,7 +533,8 @@ def run_hybrid_similarity(data: dict, n_folds: int,
 # =============================================================================
 
 def run_feature_concentration(data: dict, search_speed: str = 'fast',
-                              weight_methods: List[str] = None) -> Dict[str, Any]:
+                              weight_methods: List[str] = None,
+                              shared_search: Tuple = None) -> Dict[str, Any]:
     """Explain WHY hybrid similarity works: higher MI density, better effective
     rank distribution in selected features."""
     print("\n" + "=" * 70)
@@ -553,13 +551,18 @@ def run_feature_concentration(data: dict, search_speed: str = 'fast',
     results = {'per_rep': {}, 'gini': {}}
 
     # Get hybrid selection
-    try:
-        X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-            reps, labels, groups, search_speed, weight_methods[0])
+    if shared_search is not None:
+        X_hybrid, weights_flat, search = shared_search
         fitted = search.fitted_result
-    except Exception as e:
-        print(f"  find_best_hybrid failed: {e}")
-        return {'error': str(e)}
+        print(f"  Using shared search (dim={X_hybrid.shape[1]})")
+    else:
+        try:
+            X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
+                reps, labels, groups, search_speed, weight_methods[0])
+            fitted = search.fitted_result
+        except Exception as e:
+            print(f"  find_best_hybrid failed: {e}")
+            return {'error': str(e)}
 
     rng = np.random.RandomState(42)
 
@@ -667,7 +670,8 @@ def run_feature_concentration(data: dict, search_speed: str = 'fast',
 # =============================================================================
 
 def run_activity_cliff_analysis(data: dict, search_speed: str = 'fast',
-                                n_sample: int = 5000) -> Dict[str, Any]:
+                                n_sample: int = 5000,
+                                shared_search: Tuple = None) -> Dict[str, Any]:
     """Activity cliffs depend on representation. Different reps create different
     cliff sets. Hybrid representation reduces spurious cliffs."""
     print("\n" + "=" * 70)
@@ -704,7 +708,7 @@ def run_activity_cliff_analysis(data: dict, search_speed: str = 'fast',
         print(f"    Cliffs: {n_cliffs} ({pct:.1f}%), SALI_mean={sali['mean']:.3f}")
 
     # Concatenated
-    X_concat = np.hstack(list(reps.values()))
+    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
     D_concat = compute_distance_matrix(X_concat, standardize=True)
     detector = ActivityCliffDetector(precomputed_distances=D_concat)
     cliff_idx_concat = detector.identify_noise(X_concat, labels)
@@ -738,8 +742,12 @@ def run_activity_cliff_analysis(data: dict, search_speed: str = 'fast',
 
     # Hybrid cliff analysis
     try:
-        X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-            reps, labels, groups, search_speed, 'lightgbm_gain')
+        if shared_search is not None:
+            X_hybrid, weights_flat, search = shared_search
+            print(f"\n  Using shared search for hybrid (dim={X_hybrid.shape[1]})")
+        else:
+            X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
+                reps, labels, groups, search_speed, 'lightgbm_gain')
 
         D_hybrid = compute_distance_matrix(X_hybrid, feature_weights=weights_flat,
                                            standardize=True)
@@ -748,21 +756,34 @@ def run_activity_cliff_analysis(data: dict, search_speed: str = 'fast',
         sali_hybrid = compute_sali(D_hybrid, labels)
 
         n_cliffs_hybrid = len(cliff_idx_hybrid)
+
+        # Compare against best individual rep (fewest cliffs = best baseline)
+        best_rep_name = min(results['per_rep'],
+                            key=lambda r: results['per_rep'][r]['n_cliffs'])
+        n_cliffs_best_rep = results['per_rep'][best_rep_name]['n_cliffs']
+        reduction_vs_rep = ((n_cliffs_best_rep - n_cliffs_hybrid) / n_cliffs_best_rep * 100
+                            if n_cliffs_best_rep > 0 else 0)
+        # Also keep concat reference
         n_cliffs_concat = len(cliff_idx_concat)
-        reduction = ((n_cliffs_concat - n_cliffs_hybrid) / n_cliffs_concat * 100
-                     if n_cliffs_concat > 0 else 0)
+        reduction_vs_concat = ((n_cliffs_concat - n_cliffs_hybrid) / n_cliffs_concat * 100
+                               if n_cliffs_concat > 0 else 0)
 
         results['hybrid'] = {
             'n_cliffs': n_cliffs_hybrid,
             'pct_cliffs': 100.0 * n_cliffs_hybrid / len(labels),
             'sali_mean': sali_hybrid['mean'],
             'sali_max': sali_hybrid['max'],
-            'cliff_reduction_pct': reduction,
+            'cliff_reduction_vs_best_rep_pct': reduction_vs_rep,
+            'cliff_reduction_vs_concat_pct': reduction_vs_concat,
+            'baseline_rep': best_rep_name,
             'dim': X_hybrid.shape[1],
         }
         print(f"\n  Hybrid (weighted): Cliffs={n_cliffs_hybrid} "
-              f"({results['hybrid']['pct_cliffs']:.1f}%), "
-              f"reduction={reduction:.1f}%")
+              f"({results['hybrid']['pct_cliffs']:.1f}%)")
+        print(f"    vs best individual rep ({best_rep_name}, "
+              f"n={n_cliffs_best_rep}): {reduction_vs_rep:+.1f}%")
+        print(f"    vs all_concat (ref, n={n_cliffs_concat}): "
+              f"{reduction_vs_concat:+.1f}%")
         print(f"    SALI: concat={sali_concat['mean']:.3f} -> "
               f"hybrid={sali_hybrid['mean']:.3f}")
     except Exception as e:
@@ -779,7 +800,8 @@ def run_activity_cliff_analysis(data: dict, search_speed: str = 'fast',
 def run_knn_prediction(data: dict, n_folds: int,
                        search_speed: str = 'fast',
                        k_values: List[int] = None,
-                       conditions: List[str] = None) -> Dict[str, Any]:
+                       conditions: List[str] = None,
+                       shared_search: Tuple = None) -> Dict[str, Any]:
     """Downstream task validation: hybrid-weighted kNN outperforms standard kNN,
     especially on cliff molecules."""
     print("\n" + "=" * 70)
@@ -798,7 +820,7 @@ def run_knn_prediction(data: dict, n_folds: int,
     results = {'conditions': {}, 'cliff_analysis': {}}
 
     # Pre-compute concat
-    X_concat = np.hstack(list(reps.values()))
+    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
 
     # Get hybrid via find_best_hybrid — extract blueprint for per-fold CV
     X_hybrid = None
@@ -806,8 +828,12 @@ def run_knn_prediction(data: dict, n_folds: int,
     hybrid_blueprint = None
     if any(c.startswith('hybrid') for c in conditions):
         try:
-            X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-                reps, labels, groups, search_speed, 'lightgbm_gain')
+            if shared_search is not None:
+                X_hybrid, weights_flat, search = shared_search
+                print(f"  Using shared search (dim={X_hybrid.shape[1]})")
+            else:
+                X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
+                    reps, labels, groups, search_speed, 'lightgbm_gain')
             if search.best_overall:
                 hybrid_blueprint = search.best_overall['blueprint']
         except Exception as e:
@@ -849,7 +875,7 @@ def run_knn_prediction(data: dict, n_folds: int,
                     try:
                         imp = compute_feature_importance(train_reps, y_train,
                                                         method='lightgbm_gain')
-                        w = np.concatenate([imp[name] for name in reps.keys()])
+                        w = np.concatenate([imp[name] for name in sorted(reps.keys())])
                         w = np.sqrt(np.maximum(w, 0))
                     except Exception:
                         w = np.ones(X_concat.shape[1])
@@ -970,6 +996,31 @@ def run_knn_prediction(data: dict, n_folds: int,
             print(f"    k={k}: R²={r2_mean:.4f}+/-{r2_std:.3f}, "
                   f"cliff_R²={cliff_r2:.4f}, noncliff_R²={noncliff_r2:.4f}")
 
+    # Per-rep kNN baselines (individual representations — the real baselines)
+    print("\n  Individual representation kNN baselines:")
+    results['per_rep_baselines'] = {}
+    best_k = k_values[len(k_values) // 2]  # use middle k value
+    gkf2 = GroupKFold(n_splits=n_folds)
+    for rep_name, X_rep in reps.items():
+        fold_r2s = []
+        for train_idx, val_idx in gkf2.split(sample_X, labels, groups=groups):
+            scaler = StandardScaler()
+            X_tr = scaler.fit_transform(X_rep[train_idx])
+            X_va = scaler.transform(X_rep[val_idx])
+            model = KNeighborsRegressor(n_neighbors=min(best_k, len(train_idx) - 1))
+            model.fit(X_tr, labels[train_idx])
+            y_pred = model.predict(X_va)
+            fold_r2s.append(r2_score(labels[val_idx], y_pred))
+
+        r2_mean = float(np.mean(fold_r2s))
+        r2_std = float(np.std(fold_r2s))
+        results['per_rep_baselines'][rep_name] = {
+            'r2_mean': r2_mean, 'r2_std': r2_std,
+            'k': best_k, 'dim': X_rep.shape[1],
+        }
+        print(f"    {rep_name} (dim={X_rep.shape[1]}): "
+              f"kNN R²={r2_mean:.4f}+/-{r2_std:.3f}")
+
     # Summary: best k per condition
     print("\n  Summary (best k per condition):")
     for cond in conditions:
@@ -981,6 +1032,23 @@ def run_knn_prediction(data: dict, n_folds: int,
             print(f"    {cond}: best k={best['k']}, "
                   f"R²={best['r2_mean']:.4f}")
 
+    # Flag best individual rep
+    if results['per_rep_baselines']:
+        best_rep = max(results['per_rep_baselines'],
+                       key=lambda r: results['per_rep_baselines'][r]['r2_mean'])
+        best_rep_r2 = results['per_rep_baselines'][best_rep]['r2_mean']
+        print(f"\n  Best individual rep baseline: {best_rep} "
+              f"(kNN R²={best_rep_r2:.4f})")
+
+        # Compare hybrid_weighted to best individual rep
+        hw_results = {k: v for k, v in results['conditions'].items()
+                      if v['condition'] == 'hybrid_weighted'}
+        if hw_results:
+            best_hw = max(hw_results.values(), key=lambda v: v['r2_mean'])
+            delta = best_hw['r2_mean'] - best_rep_r2
+            print(f"  Hybrid weighted kNN R²={best_hw['r2_mean']:.4f} "
+                  f"(delta vs {best_rep}: {delta:+.4f})")
+
     return results
 
 
@@ -990,7 +1058,8 @@ def run_knn_prediction(data: dict, n_folds: int,
 
 def run_applicability_domain(data: dict, n_folds: int,
                              search_speed: str = 'fast',
-                             k_values: List[int] = None) -> Dict[str, Any]:
+                             k_values: List[int] = None,
+                             shared_search: Tuple = None) -> Dict[str, Any]:
     """Hybrid distance tracks prediction uncertainty better than standard
     distance. Molecules far in hybrid space have less reliable predictions."""
     print("\n" + "=" * 70)
@@ -1006,12 +1075,16 @@ def run_applicability_domain(data: dict, n_folds: int,
 
     results = {'distance_error_correlation': {}, 'reliability': {}, 'conformal': {}}
 
-    X_concat = np.hstack(list(reps.values()))
+    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
 
     # Get hybrid + blueprint for per-fold CV
     try:
-        X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-            reps, labels, groups, search_speed, 'lightgbm_gain')
+        if shared_search is not None:
+            X_hybrid, weights_flat, search = shared_search
+            print(f"  Using shared search (dim={X_hybrid.shape[1]})")
+        else:
+            X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
+                reps, labels, groups, search_speed, 'lightgbm_gain')
         bp = search.best_overall['blueprint']
     except Exception as e:
         print(f"  Hybrid search failed: {e}")
@@ -1140,35 +1213,83 @@ def run_applicability_domain(data: dict, n_folds: int,
                 'decile_counts': decile_counts,
             }
 
-    # Conformal calibration comparison
-    print("\n  Conformal calibration:")
+    # Conformal calibration comparison (proper CV — per-fold hybrid, no data leakage)
+    print("\n  Conformal calibration (CV):")
     try:
-        scaler_c = StandardScaler()
-        X_concat_s = scaler_c.fit_transform(X_concat)
-        conf_concat = ConformalEstimator(base_model='rf', alpha=0.1)
-        conf_concat.estimate(X_concat_s, labels)
+        gkf_conf = GroupKFold(n_splits=n_folds)
+        conf_picp = {'concat': [], 'hybrid': []}
+        conf_mpiw = {'concat': [], 'hybrid': []}
+        alpha = 0.1
 
-        scaler_h = StandardScaler()
-        X_hybrid_s = scaler_h.fit_transform(X_hybrid)
-        conf_hybrid = ConformalEstimator(base_model='rf', alpha=0.1)
-        conf_hybrid.estimate(X_hybrid_s, labels)
+        for train_idx, val_idx in gkf_conf.split(sample_X, labels, groups=groups):
+            y_train, y_val = labels[train_idx], labels[val_idx]
 
-        # PICP (prediction interval coverage probability)
-        picp_concat = np.mean(
-            np.abs(labels - conf_concat.predictions_) <= conf_concat.interval_widths_ / 2)
-        picp_hybrid = np.mean(
-            np.abs(labels - conf_hybrid.predictions_) <= conf_hybrid.interval_widths_ / 2)
+            # Per-fold hybrid using search blueprint (avoids data leakage)
+            train_reps_fold = {k: v[train_idx] for k, v in reps.items()}
+            val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
+            try:
+                X_hybrid_tr, fi = create_hybrid(
+                    train_reps_fold, y_train,
+                    allocation_method=bp.allocation_method,
+                    budget=bp.budget,
+                    importance_method=bp.importance_method,
+                )
+                X_hybrid_va = apply_feature_selection(val_reps_fold, fi)
+            except Exception:
+                continue
 
-        # MPIW (mean prediction interval width)
-        mpiw_concat = float(np.mean(conf_concat.interval_widths_))
-        mpiw_hybrid = float(np.mean(conf_hybrid.interval_widths_))
+            # Split train into proper-train and calibration
+            n_cal = max(int(len(y_train) * 0.2), 10)
+            rng = np.random.RandomState(42)
+            perm = rng.permutation(len(y_train))
+            cal_local, tr_local = perm[:n_cal], perm[n_cal:]
 
-        results['conformal'] = {
-            'concat': {'picp': float(picp_concat), 'mpiw': mpiw_concat},
-            'hybrid': {'picp': float(picp_hybrid), 'mpiw': mpiw_hybrid},
-        }
-        print(f"    Concat:  PICP={picp_concat:.3f}, MPIW={mpiw_concat:.3f}")
-        print(f"    Hybrid:  PICP={picp_hybrid:.3f}, MPIW={mpiw_hybrid:.3f}")
+            for feat_name, X_tr_all, X_va in [
+                ('concat', X_concat[train_idx], X_concat[val_idx]),
+                ('hybrid', X_hybrid_tr, X_hybrid_va),
+            ]:
+                scaler = StandardScaler()
+                X_tr_all_s = scaler.fit_transform(X_tr_all)
+                X_va_s = scaler.transform(X_va)
+
+                X_tr = X_tr_all_s[tr_local]
+                X_cal = X_tr_all_s[cal_local]
+                y_tr = y_train[tr_local]
+                y_cal = y_train[cal_local]
+
+                # Train RF, compute conformal quantile on calibration set
+                rf = RandomForestRegressor(n_estimators=100, random_state=42,
+                                           n_jobs=-1)
+                rf.fit(X_tr, y_tr)
+
+                # Calibration: residuals normalized by tree variance
+                y_pred_cal = rf.predict(X_cal)
+                tree_preds_cal = np.array([t.predict(X_cal) for t in rf.estimators_])
+                cal_std = tree_preds_cal.std(axis=0) + 1e-10
+                conformity = np.abs(y_cal - y_pred_cal) / cal_std
+                q = np.quantile(conformity, 1 - alpha)
+
+                # Val: predict + interval
+                y_pred_va = rf.predict(X_va_s)
+                tree_preds_va = np.array([t.predict(X_va_s) for t in rf.estimators_])
+                va_std = tree_preds_va.std(axis=0)
+                interval_width = 2 * q * va_std
+
+                picp = float(np.mean(np.abs(y_val - y_pred_va) <= interval_width / 2))
+                mpiw = float(np.mean(interval_width))
+                conf_picp[feat_name].append(picp)
+                conf_mpiw[feat_name].append(mpiw)
+
+        results['conformal'] = {}
+        for feat_name in ['concat', 'hybrid']:
+            if conf_picp[feat_name]:
+                picp_mean = float(np.mean(conf_picp[feat_name]))
+                mpiw_mean = float(np.mean(conf_mpiw[feat_name]))
+                results['conformal'][feat_name] = {
+                    'picp': picp_mean, 'mpiw': mpiw_mean,
+                }
+                print(f"    {feat_name.capitalize()}:  PICP={picp_mean:.3f}, "
+                      f"MPIW={mpiw_mean:.3f}")
     except Exception as e:
         print(f"    Conformal failed: {e}")
         results['conformal'] = {'error': str(e)}
@@ -1181,7 +1302,8 @@ def run_applicability_domain(data: dict, n_folds: int,
 # =============================================================================
 
 def run_noise_detection_bridge(data: dict, n_folds: int,
-                               search_speed: str = 'fast') -> Dict[str, Any]:
+                               search_speed: str = 'fast',
+                               shared_search: Tuple = None) -> Dict[str, Any]:
     """Standard noise detectors flag activity cliffs as noise (false positives).
     Hybrid distances reduce this FP rate."""
     print("\n" + "=" * 70)
@@ -1194,12 +1316,16 @@ def run_noise_detection_bridge(data: dict, n_folds: int,
 
     results = {}
 
-    X_concat = np.hstack(list(reps.values()))
+    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
 
     # Get hybrid
     try:
-        X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-            reps, labels, groups, search_speed, 'lightgbm_gain')
+        if shared_search is not None:
+            X_hybrid, weights_flat, search = shared_search
+            print(f"  Using shared search (dim={X_hybrid.shape[1]})")
+        else:
+            X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
+                reps, labels, groups, search_speed, 'lightgbm_gain')
     except Exception as e:
         print(f"  Hybrid search failed: {e}")
         return {'error': str(e)}
@@ -1327,7 +1453,7 @@ def run_optimal_similarity_dimension(data: dict, n_folds: int,
     results = {'budgets': {}}
 
     # Full-dim reference
-    X_concat = np.hstack(list(reps.values()))
+    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
     full_dim = X_concat.shape[1]
 
     gkf = GroupKFold(n_splits=n_folds)
@@ -1362,7 +1488,8 @@ def run_optimal_similarity_dimension(data: dict, n_folds: int,
         actual_dim = X_hybrid.shape[1]
 
         # Similarity quality
-        D_weighted = compute_weighted_distances(X_hybrid, weights_flat)
+        D_weighted = compute_distance_matrix(X_hybrid, feature_weights=weights_flat,
+                                                 standardize=True)
         sac_rho, _ = similarity_activity_correlation(D_weighted, labels, n_sample)
         viol = violation_rate(D_weighted, labels, k=5)
 
@@ -1561,8 +1688,8 @@ def run_cross_dataset_summary(all_dataset_results: Dict[str, dict]) -> Dict[str,
 
         # Exp 4: cliff reduction
         exp4 = ds_results.get('exp4_activity_cliffs')
-        if exp4 and 'hybrid' in exp4 and 'cliff_reduction_pct' in exp4['hybrid']:
-            reduction = exp4['hybrid']['cliff_reduction_pct']
+        if exp4 and 'hybrid' in exp4 and 'cliff_reduction_vs_best_rep_pct' in exp4['hybrid']:
+            reduction = exp4['hybrid']['cliff_reduction_vs_best_rep_pct']
             ds_summary['cliff_reduction_pct'] = reduction
             cliff_reductions.append(reduction)
             print(f"    Cliff reduction: {reduction:.1f}%")
@@ -1658,6 +1785,9 @@ def main():
                         help='quick (~30min, logd only) or full (~6-8h, all datasets)')
     parser.add_argument('--experiments', type=int, nargs='+', default=None,
                         help='Which experiments to run (1-9). Default: mode-dependent.')
+    parser.add_argument('--reps', type=str, default=None,
+                        help='Representation preset (fast, fast+hf, all) or comma-separated list. '
+                             'Default: fast for quick, fast+hf for full.')
     parser.add_argument('--output', type=str, default='tests/results/similarity')
 
     args = parser.parse_args()
@@ -1665,6 +1795,7 @@ def main():
     # Configuration
     if args.mode == 'quick':
         dataset_names = ['logd']
+        rep_preset = args.reps or 'fast'
         n_folds = 3
         search_speed = 'fast'
         experiments_default = [1, 2, 4, 5, 8]
@@ -1675,6 +1806,7 @@ def main():
         knn_conditions = ['concat_unweighted', 'hybrid_weighted', 'rf_baseline']
     else:  # full
         dataset_names = ['logd', 'caco2', 'herg', 'qm9']
+        rep_preset = args.reps or 'fast+hf'
         n_folds = 5
         search_speed = 'medium'
         experiments_default = [1, 2, 3, 4, 5, 6, 7, 8, 9]
@@ -1689,6 +1821,7 @@ def main():
 
     print(f"Mode: {args.mode}")
     print(f"Datasets: {dataset_names}")
+    print(f"Reps: {rep_preset}")
     print(f"Experiments: {experiments}")
     print(f"Search speed: {search_speed}")
     print(f"Weight methods: {weight_methods}")
@@ -1698,7 +1831,7 @@ def main():
     for ds_name in dataset_names:
         print(f"\nLoading {ds_name}...")
         try:
-            datasets[ds_name] = load_data(ds_name)
+            datasets[ds_name] = load_data(ds_name, rep_preset=rep_preset)
         except Exception as e:
             print(f"  FAILED: {e}")
 
@@ -1714,6 +1847,7 @@ def main():
         'config': {
             'mode': args.mode,
             'datasets': dataset_names,
+            'rep_preset': rep_preset,
             'experiments': experiments,
             'n_folds': n_folds,
             'search_speed': search_speed,
@@ -1735,33 +1869,52 @@ def main():
             'n_scaffolds': data['n_scaffolds'],
         }
 
+        # Shared search for experiments 2-7 (avoid redundant find_best_hybrid calls)
+        shared_search = None
+        needs_search = any(e in experiments for e in [2, 3, 4, 5, 6, 7])
+        if needs_search:
+            print(f"\n  Running shared hybrid search ({search_speed})...")
+            try:
+                shared_search = get_hybrid_features_and_weights(
+                    data['reps'], data['labels'], data['groups'],
+                    search_speed, 'lightgbm_gain')
+                print(f"  Shared search done (dim={shared_search[0].shape[1]})")
+            except Exception as e:
+                print(f"  Shared search FAILED: {e}")
+
         if 1 in experiments:
             ds_results['exp1_baseline'] = run_similarity_baseline(
                 data, n_folds, n_sample=n_sample)
 
         if 2 in experiments:
             ds_results['exp2_hybrid_similarity'] = run_hybrid_similarity(
-                data, n_folds, search_speed, weight_methods, n_sample)
+                data, n_folds, search_speed, weight_methods, n_sample,
+                shared_search=shared_search)
 
         if 3 in experiments:
             ds_results['exp3_feature_concentration'] = run_feature_concentration(
-                data, search_speed, weight_methods)
+                data, search_speed, weight_methods,
+                shared_search=shared_search)
 
         if 4 in experiments:
             ds_results['exp4_activity_cliffs'] = run_activity_cliff_analysis(
-                data, search_speed, n_sample)
+                data, search_speed, n_sample,
+                shared_search=shared_search)
 
         if 5 in experiments:
             ds_results['exp5_knn_prediction'] = run_knn_prediction(
-                data, n_folds, search_speed, k_values, knn_conditions)
+                data, n_folds, search_speed, k_values, knn_conditions,
+                shared_search=shared_search)
 
         if 6 in experiments:
             ds_results['exp6_applicability_domain'] = run_applicability_domain(
-                data, n_folds, search_speed, k_values[:2])
+                data, n_folds, search_speed, k_values[:2],
+                shared_search=shared_search)
 
         if 7 in experiments:
             ds_results['exp7_noise_bridge'] = run_noise_detection_bridge(
-                data, n_folds, search_speed)
+                data, n_folds, search_speed,
+                shared_search=shared_search)
 
         if 8 in experiments:
             ds_results['exp8_optimal_dimension'] = run_optimal_similarity_dimension(
@@ -1784,6 +1937,11 @@ def main():
             return int(obj)
         elif isinstance(obj, (np.bool_,)):
             return bool(obj)
+        elif hasattr(obj, 'to_dict'):
+            return convert_numpy(obj.to_dict())
+        elif hasattr(obj, '__dataclass_fields__'):
+            from dataclasses import asdict
+            return convert_numpy(asdict(obj))
         elif isinstance(obj, dict):
             return {str(k): convert_numpy(v) for k, v in obj.items()}
         elif isinstance(obj, (list, tuple)):
