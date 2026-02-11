@@ -730,8 +730,11 @@ def create_prot_t5_embeddings(
         from transformers import T5Tokenizer, T5EncoderModel
     except ImportError:
         raise ImportError(
-            "ProtT5-XL requires transformers: pip install transformers"
+            "ProtT5-XL requires transformers + sentencepiece:\n"
+            "  pip install transformers sentencepiece"
         )
+
+    import re as _re
 
     print(f"Loading ProtT5-XL (Rostlab/prot_t5_xl_bfd)...")
     tokenizer = T5Tokenizer.from_pretrained(
@@ -746,7 +749,7 @@ def create_prot_t5_embeddings(
         with torch.no_grad():
             for start in range(0, len(sequences), batch_size):
                 batch = [
-                    ' '.join(list(s.upper().strip()))
+                    _re.sub(r'[UZOB]', 'X', ' '.join(list(s.upper().strip())))
                     for s in sequences[start:start + batch_size]
                 ]
                 inputs = tokenizer(
@@ -843,6 +846,7 @@ def create_ab_roberta_embeddings(
 
 def create_balm_embeddings(
     sequences: List[str],
+    balm_repo_path: str = './BALM',
     device: str = 'cpu',
     batch_size: int = 8,
 ) -> np.ndarray:
@@ -854,24 +858,66 @@ def create_balm_embeddings(
     embeddings and adaptive masking. Trained on 336M sequences clustered at
     40% identity.
 
+    BALM is NOT on HuggingFace. Requires manual setup:
+      1. git clone https://github.com/BEAM-Labs/BALM.git
+      2. Download weights from Google Drive (link in repo README)
+      3. Pass balm_repo_path pointing to the cloned repo
+
+    Uses ESM tokenizer vocabulary with custom model architecture.
+
     Args:
         sequences: List of antibody sequences (heavy or light)
+        balm_repo_path: Path to cloned BALM repo containing
+            modeling_balm.py, tokenizer/, and pretrained-BALM/
         device: 'cpu' or 'cuda'
         batch_size: Number of sequences per batch
 
     Returns:
-        np.ndarray: (n_sequences, ~1280) embeddings
+        np.ndarray: (n_sequences, 1024) embeddings
     """
-    try:
-        from transformers import AutoTokenizer, AutoModel
-    except ImportError:
-        raise ImportError(
-            "BALM requires transformers: pip install transformers"
+    import sys
+    import os
+
+    balm_repo_path = os.path.abspath(balm_repo_path)
+    if not os.path.isdir(balm_repo_path):
+        raise FileNotFoundError(
+            f"BALM repo not found at: {balm_repo_path}\n"
+            "BALM requires manual setup:\n"
+            "  1. git clone https://github.com/BEAM-Labs/BALM.git\n"
+            "  2. Download weights from Google Drive (see repo README)\n"
+            "  3. Pass balm_repo_path='path/to/BALM'"
         )
 
-    print(f"Loading BALM (BEAM-Labs/BALM)...")
-    tokenizer = AutoTokenizer.from_pretrained("BEAM-Labs/BALM")
-    model = AutoModel.from_pretrained("BEAM-Labs/BALM").to(device).eval()
+    # Add repo to path for custom modules
+    if balm_repo_path not in sys.path:
+        sys.path.insert(0, balm_repo_path)
+
+    try:
+        from modeling_balm import BALMForMaskedLM
+        from transformers import EsmTokenizer
+    except ImportError as e:
+        raise ImportError(
+            f"Failed to import BALM modules from {balm_repo_path}: {e}\n"
+            "Ensure the repo contains modeling_balm.py and ba_position_embedding.py"
+        )
+
+    tokenizer_path = os.path.join(balm_repo_path, 'tokenizer')
+    weights_path = os.path.join(balm_repo_path, 'pretrained-BALM')
+
+    if not os.path.isdir(weights_path):
+        raise FileNotFoundError(
+            f"BALM weights not found at: {weights_path}\n"
+            "Download from Google Drive (see repo README) and place in pretrained-BALM/"
+        )
+
+    print(f"Loading BALM from {balm_repo_path}...")
+    tokenizer = EsmTokenizer.from_pretrained(
+        tokenizer_path, do_lower_case=False, model_max_length=168
+    )
+    model = BALMForMaskedLM.from_pretrained(weights_path).to(device).eval()
+
+    # Extract the base model (without MLM head) for embeddings
+    base_model = model.balm if hasattr(model, 'balm') else model
 
     all_embeddings = []
 
@@ -880,13 +926,14 @@ def create_balm_embeddings(
             batch = [s.upper().strip() for s in sequences[start:start + batch_size]]
             inputs = tokenizer(
                 batch, return_tensors='pt', padding=True,
-                truncation=True, max_length=512
+                truncation=True, max_length=168
             )
             inputs = {k: v.to(device) for k, v in inputs.items()}
-            outputs = model(**inputs)
+            outputs = base_model(**inputs)
             # Mean pool using attention mask
+            hidden = outputs.last_hidden_state if hasattr(outputs, 'last_hidden_state') else outputs[0]
             attention_mask = inputs['attention_mask'].unsqueeze(-1).float()
-            sum_emb = (outputs.last_hidden_state * attention_mask).sum(dim=1)
+            sum_emb = (hidden * attention_mask).sum(dim=1)
             count = attention_mask.sum(dim=1).clamp(min=1)
             batch_emb = (sum_emb / count).cpu().numpy()
             all_embeddings.append(batch_emb)
@@ -969,11 +1016,11 @@ def create_pigen_embeddings(
     """
     Extract p-IgGen embeddings for antibody sequences.
 
-    p-IgGen (Frith et al., Bioinformatics 2024) is a small autoregressive
+    p-IgGen (Frith et al., Bioinformatics 2024) is a GPT-2-based autoregressive
     transformer (17.3M params, 768D) from OPIG trained to generate paired
-    H+L sequences. Produces paired embeddings capturing H-L co-evolution.
+    H+L sequences. We extract hidden states as embeddings.
 
-    Requires: pip install p-IgGen (GitHub: oxpig/p-IgGen)
+    HuggingFace: ollieturnbull/p-IgGen
 
     Args:
         heavy_sequences: List of heavy chain sequences
@@ -984,16 +1031,20 @@ def create_pigen_embeddings(
         np.ndarray: (n_sequences, 768)
     """
     try:
-        from transformers import AutoTokenizer, AutoModel
+        from transformers import AutoTokenizer, AutoModelForCausalLM
     except ImportError:
         raise ImportError(
-            "p-IgGen requires transformers: pip install transformers\n"
-            "Model: pip install p-IgGen or from GitHub: oxpig/p-IgGen"
+            "p-IgGen requires transformers: pip install transformers"
         )
 
-    print(f"Loading p-IgGen (oxpig/p-IgGen)...")
-    tokenizer = AutoTokenizer.from_pretrained("oxpig/p-IgGen")
-    model = AutoModel.from_pretrained("oxpig/p-IgGen").to(device).eval()
+    print(f"Loading p-IgGen (ollieturnbull/p-IgGen)...")
+    tokenizer = AutoTokenizer.from_pretrained("ollieturnbull/p-IgGen")
+    model = AutoModelForCausalLM.from_pretrained(
+        "ollieturnbull/p-IgGen"
+    ).to(device).eval()
+
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
 
     embeddings = []
     n = len(heavy_sequences)
@@ -1001,9 +1052,9 @@ def create_pigen_embeddings(
     with torch.no_grad():
         for i in range(n):
             heavy = heavy_sequences[i].upper().strip()
-            # p-IgGen takes paired sequences separated by a delimiter
             if light_sequences is not None:
                 light = light_sequences[i].upper().strip()
+                # p-IgGen uses [SEP] between chains
                 seq_input = f"{heavy}[SEP]{light}"
             else:
                 seq_input = heavy
@@ -1012,10 +1063,13 @@ def create_pigen_embeddings(
                 seq_input, return_tensors='pt',
                 truncation=True, max_length=512
             )
+            # GPTNeoX doesn't accept token_type_ids
+            inputs.pop('token_type_ids', None)
             inputs = {k: v.to(device) for k, v in inputs.items()}
-            outputs = model(**inputs)
-            # Mean pool
-            emb = outputs.last_hidden_state[0].mean(dim=0).cpu().numpy()
+            outputs = model(**inputs, output_hidden_states=True)
+            # Extract last hidden state from the last transformer layer
+            last_hidden = outputs.hidden_states[-1][0]  # (seq_len, 768)
+            emb = last_hidden.mean(dim=0).cpu().numpy()
             embeddings.append(emb)
 
             if (i + 1) % 50 == 0:
