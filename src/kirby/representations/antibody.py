@@ -353,7 +353,7 @@ def create_antiberty_embeddings(
         device: 'cpu' or 'cuda'
     
     Returns:
-        np.ndarray: (n_sequences, 512) embeddings
+        np.ndarray: (n_sequences, 1024) embeddings (AntiBERTa2 hidden_size)
     """
     try:
         from transformers import RoFormerModel, RoFormerTokenizer
@@ -422,15 +422,15 @@ def create_ablang_embeddings(
     
     Args:
         heavy_sequences: Heavy chain sequences
-        light_sequences: Light chain sequences (optional)
-        output_type: 
-            - 'res-codings': 768D per residue
-            - 'seq-codings': 768D per sequence (mean pooled)
-            - 'paired': Concatenate heavy + light (1536D)
+        light_sequences: Light chain sequences (optional). If provided,
+            heavy and light embeddings are concatenated (1536D for seq-codings).
+        output_type:
+            - 'seq-codings': 768D per sequence (1536D if light_sequences provided)
+            - 'res-codings': 768D per residue, mean-pooled to per-sequence
         device: 'cpu' or 'cuda'
-    
+
     Returns:
-        np.ndarray: Embeddings
+        np.ndarray: Embeddings (768D heavy-only or 1536D paired)
     """
     try:
         import ablang
@@ -446,31 +446,28 @@ def create_ablang_embeddings(
     if output_type == 'seq-codings':
         # Sequence-level embeddings (768D per sequence)
         heavy_embs = heavy_ablang(heavy_sequences, mode='seqcoding')
-        
-        if light_sequences is None or output_type != 'paired':
-            return heavy_embs
-        
-        # Also get light chain
-        light_ablang = ablang.pretrained("light")
-        light_ablang.freeze()
-        light_embs = light_ablang(light_sequences, mode='seqcoding')
-        
-        # Concatenate
-        return np.concatenate([heavy_embs, light_embs], axis=1)
-    
+
+        if light_sequences is not None:
+            # Also get light chain and concatenate (1536D)
+            light_ablang = ablang.pretrained("light")
+            light_ablang.freeze()
+            light_embs = light_ablang(light_sequences, mode='seqcoding')
+            return np.concatenate([heavy_embs, light_embs], axis=1)
+
+        return heavy_embs
+
     elif output_type == 'res-codings':
-        # Per-residue embeddings
+        # Per-residue embeddings, mean-pooled
         heavy_embs = heavy_ablang(heavy_sequences, mode='rescoding')
-        
-        # Need to aggregate - use mean
+
         embeddings = []
         for emb in heavy_embs:
             embeddings.append(emb.mean(axis=0))
-        
+
         return np.array(embeddings)
-    
+
     else:
-        raise ValueError(f"Unknown output_type: {output_type}")
+        raise ValueError(f"Unknown output_type: {output_type}. Must be 'seq-codings' or 'res-codings'.")
 
 
 # ============================================================================
@@ -693,20 +690,22 @@ def create_multiscale_embeddings(
         dict: Multiple feature sets at different scales
     """
     features = {}
-    
+
     if 'global' in scales:
-        # Level 4: Global sequence representation
         features['global'] = base_embeddings
-    
+
     if 'cdr' in scales:
-        # Level 2: CDR-specific (already implemented above)
-        pass
-    
+        raise NotImplementedError(
+            "CDR-scale embeddings not implemented in create_multiscale_embeddings. "
+            "Use create_cdr_stratified_embeddings() instead."
+        )
+
     if 'residue_stats' in scales:
-        # Statistics over residue-level features
-        # Requires per-residue embeddings
-        pass
-    
+        raise NotImplementedError(
+            "Residue-stats scale not implemented. Requires per-residue embeddings "
+            "as input (base_embeddings must be 3D: n_seqs x seq_len x embed_dim)."
+        )
+
     return features
 
 
