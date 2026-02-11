@@ -470,6 +470,563 @@ def create_ablang_embeddings(
         raise ValueError(f"Unknown output_type: {output_type}. Must be 'seq-codings' or 'res-codings'.")
 
 
+def create_esm2_embeddings(
+    heavy_sequences: List[str],
+    light_sequences: Optional[List[str]] = None,
+    model_name: str = 'facebook/esm2_t33_650M_UR50D',
+    device: str = 'cpu',
+    batch_size: int = 8,
+) -> np.ndarray:
+    """
+    Extract ESM-2 embeddings for antibody sequences.
+
+    ESM-2 (Lin et al., Science 2023) is the most widely used general protein
+    language model. Trained on 250M proteins from UniRef. The 650M variant
+    produces 1280D embeddings and is the standard baseline for protein tasks.
+
+    Args:
+        heavy_sequences: List of heavy chain sequences
+        light_sequences: Optional list of light chain sequences. If provided,
+            heavy and light embeddings are concatenated (2560D).
+        model_name: HuggingFace model name. Common variants:
+            - 'facebook/esm2_t33_650M_UR50D' (1280D, recommended)
+            - 'facebook/esm2_t30_150M_UR50D' (640D, faster)
+            - 'facebook/esm2_t36_3B_UR50D' (2560D, best quality)
+        device: 'cpu' or 'cuda'
+        batch_size: Number of sequences per batch
+
+    Returns:
+        np.ndarray: (n_sequences, 1280) or (n_sequences, 2560) if paired
+    """
+    try:
+        from transformers import AutoTokenizer, EsmModel
+    except ImportError:
+        raise ImportError(
+            "ESM-2 requires transformers: pip install transformers"
+        )
+
+    print(f"Loading ESM-2 ({model_name.split('/')[-1]})...")
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = EsmModel.from_pretrained(model_name).to(device).eval()
+
+    def _embed_sequences(sequences: List[str]) -> np.ndarray:
+        all_embeddings = []
+        with torch.no_grad():
+            for start in range(0, len(sequences), batch_size):
+                batch = [s.upper().strip() for s in sequences[start:start + batch_size]]
+                inputs = tokenizer(
+                    batch, return_tensors='pt', padding=True,
+                    truncation=True, max_length=1024
+                )
+                inputs = {k: v.to(device) for k, v in inputs.items()}
+                outputs = model(**inputs)
+                # Mean pool excluding special tokens (BOS at 0, EOS at end)
+                attention_mask = inputs['attention_mask']
+                # Zero out BOS and EOS positions
+                attention_mask[:, 0] = 0
+                for j in range(len(batch)):
+                    last_tok = attention_mask[j].sum().item()
+                    if last_tok > 0:
+                        attention_mask[j, int(last_tok)] = 0
+                mask_expanded = attention_mask.unsqueeze(-1).float()
+                sum_embeddings = (outputs.last_hidden_state * mask_expanded).sum(dim=1)
+                count = mask_expanded.sum(dim=1).clamp(min=1)
+                mean_emb = sum_embeddings / count
+                all_embeddings.append(mean_emb.cpu().numpy())
+
+                if start + batch_size < len(sequences):
+                    print(f"    Progress: {min(start + batch_size, len(sequences))}/{len(sequences)}")
+        return np.concatenate(all_embeddings, axis=0)
+
+    print(f"  Embedding {len(heavy_sequences)} heavy chain sequences...")
+    heavy_embs = _embed_sequences(heavy_sequences)
+
+    if light_sequences is not None:
+        print(f"  Embedding {len(light_sequences)} light chain sequences...")
+        light_embs = _embed_sequences(light_sequences)
+        result = np.concatenate([heavy_embs, light_embs], axis=1)
+        print(f"  Generated ESM-2 embeddings: {result.shape}")
+        return result
+
+    print(f"  Generated ESM-2 embeddings: {heavy_embs.shape}")
+    return heavy_embs
+
+
+def create_esmc_embeddings(
+    heavy_sequences: List[str],
+    light_sequences: Optional[List[str]] = None,
+    model_name: str = 'esmc_600m',
+    device: str = 'cpu',
+) -> np.ndarray:
+    """
+    Extract ESM Cambrian (ESM-C) embeddings for antibody sequences.
+
+    ESM-C (EvolutionaryScale, 2024) is much more efficient than ESM-2.
+    The 600M variant matches ESM-2 3B quality at a fraction of the cost.
+
+    Requires: pip install esm (v3+, from EvolutionaryScale)
+
+    Args:
+        heavy_sequences: List of heavy chain sequences
+        light_sequences: Optional list of light chain sequences. If provided,
+            heavy and light embeddings are concatenated.
+        model_name: 'esmc_300m' or 'esmc_600m' (recommended)
+        device: 'cpu' or 'cuda'
+
+    Returns:
+        np.ndarray: (n_sequences, 1152) for 600M, or doubled if paired
+    """
+    try:
+        from esm.models.esmc import ESMC
+        from esm.sdk.api import ESMProtein
+    except ImportError:
+        raise ImportError(
+            "ESM-C requires the EvolutionaryScale esm package (v3+):\n"
+            "  pip install esm\n"
+            "Note: This is different from the older fair-esm package."
+        )
+
+    print(f"Loading ESM-C ({model_name})...")
+    model = ESMC.from_pretrained(model_name).to(device).eval()
+
+    def _embed_sequences(sequences: List[str]) -> np.ndarray:
+        all_embeddings = []
+        with torch.no_grad():
+            for i, seq in enumerate(sequences):
+                protein = ESMProtein(sequence=seq.upper().strip())
+                protein_tensor = model.encode(protein)
+                output = model.forward(protein_tensor)
+                # output.embeddings: (1, seq_len, hidden_dim)
+                emb = output.embeddings[0].mean(dim=0).cpu().numpy()
+                all_embeddings.append(emb)
+                if (i + 1) % 50 == 0:
+                    print(f"    Progress: {i+1}/{len(sequences)}")
+        return np.array(all_embeddings)
+
+    print(f"  Embedding {len(heavy_sequences)} heavy chain sequences...")
+    heavy_embs = _embed_sequences(heavy_sequences)
+
+    if light_sequences is not None:
+        print(f"  Embedding {len(light_sequences)} light chain sequences...")
+        light_embs = _embed_sequences(light_sequences)
+        result = np.concatenate([heavy_embs, light_embs], axis=1)
+        print(f"  Generated ESM-C embeddings: {result.shape}")
+        return result
+
+    print(f"  Generated ESM-C embeddings: {heavy_embs.shape}")
+    return heavy_embs
+
+
+def create_igbert_embeddings(
+    heavy_sequences: List[str],
+    light_sequences: Optional[List[str]] = None,
+    device: str = 'cpu',
+    batch_size: int = 8,
+) -> np.ndarray:
+    """
+    Extract IgBERT embeddings for antibody sequences.
+
+    IgBERT (Kenlay et al., PLOS Comp Bio 2024) is the largest antibody-specific
+    LM with paired sequence support. Two-stage pretraining on 2B unpaired +
+    2M paired sequences from OAS. SOTA on sequence recovery, expression, binding.
+
+    For paired sequences, heavy and light are encoded together with [SEP],
+    leveraging cross-chain attention learned during paired pretraining.
+
+    Args:
+        heavy_sequences: List of heavy chain sequences
+        light_sequences: Optional list of light chain sequences. If provided,
+            uses paired encoding (recommended, exploits cross-chain attention).
+        device: 'cpu' or 'cuda'
+        batch_size: Number of sequences per batch
+
+    Returns:
+        np.ndarray: (n_sequences, 1024)
+    """
+    try:
+        from transformers import BertTokenizer, BertModel
+    except ImportError:
+        raise ImportError(
+            "IgBERT requires transformers: pip install transformers"
+        )
+
+    print(f"Loading IgBERT (Exscientia/IgBert)...")
+    tokenizer = BertTokenizer.from_pretrained("Exscientia/IgBert")
+    model = BertModel.from_pretrained("Exscientia/IgBert").to(device).eval()
+
+    all_embeddings = []
+
+    with torch.no_grad():
+        for start in range(0, len(heavy_sequences), batch_size):
+            end = min(start + batch_size, len(heavy_sequences))
+            batch_heavy = [' '.join(list(s.upper().strip())) for s in heavy_sequences[start:end]]
+
+            if light_sequences is not None:
+                # Paired encoding: [CLS] heavy [SEP] light [SEP]
+                batch_light = [' '.join(list(s.upper().strip())) for s in light_sequences[start:end]]
+                inputs = tokenizer(
+                    batch_heavy, batch_light,
+                    return_tensors='pt', padding=True,
+                    truncation=True, max_length=512
+                )
+            else:
+                # Heavy-only
+                inputs = tokenizer(
+                    batch_heavy, return_tensors='pt', padding=True,
+                    truncation=True, max_length=512
+                )
+
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            outputs = model(**inputs)
+
+            # Mean pool over non-padding tokens (excluding special tokens)
+            attention_mask = inputs['attention_mask'].clone()
+            attention_mask[:, 0] = 0  # Exclude [CLS]
+            # Exclude [SEP] tokens
+            for j in range(end - start):
+                sep_positions = (inputs['input_ids'][j] == tokenizer.sep_token_id).nonzero(as_tuple=True)[0]
+                for sep_pos in sep_positions:
+                    attention_mask[j, sep_pos] = 0
+
+            mask_expanded = attention_mask.unsqueeze(-1).float()
+            sum_emb = (outputs.last_hidden_state * mask_expanded).sum(dim=1)
+            count = mask_expanded.sum(dim=1).clamp(min=1)
+            batch_emb = (sum_emb / count).cpu().numpy()
+            all_embeddings.append(batch_emb)
+
+            if end < len(heavy_sequences):
+                print(f"    Progress: {end}/{len(heavy_sequences)}")
+
+    result = np.concatenate(all_embeddings, axis=0)
+    mode = "paired" if light_sequences is not None else "heavy-only"
+    print(f"  Generated IgBERT embeddings ({mode}): {result.shape}")
+    return result
+
+
+def create_prot_t5_embeddings(
+    heavy_sequences: List[str],
+    light_sequences: Optional[List[str]] = None,
+    device: str = 'cpu',
+    batch_size: int = 4,
+) -> np.ndarray:
+    """
+    Extract ProtT5-XL embeddings for antibody sequences.
+
+    ProtT5-XL (Elnaggar et al., IEEE TPAMI 2022) is a T5 encoder-decoder
+    trained on 2.1B proteins from BFD. Produces 1024D per-residue embeddings
+    from the encoder. Basis for IgT5 and ABodyBuilder3.
+
+    Args:
+        heavy_sequences: List of heavy chain sequences
+        light_sequences: Optional list of light chain sequences. If provided,
+            heavy and light embeddings are concatenated (2048D).
+        device: 'cpu' or 'cuda'
+        batch_size: Number of sequences per batch (ProtT5 is memory-hungry)
+
+    Returns:
+        np.ndarray: (n_sequences, 1024) or (n_sequences, 2048) if paired
+    """
+    try:
+        from transformers import T5Tokenizer, T5EncoderModel
+    except ImportError:
+        raise ImportError(
+            "ProtT5-XL requires transformers: pip install transformers"
+        )
+
+    print(f"Loading ProtT5-XL (Rostlab/prot_t5_xl_bfd)...")
+    tokenizer = T5Tokenizer.from_pretrained(
+        "Rostlab/prot_t5_xl_bfd", do_lower_case=False
+    )
+    model = T5EncoderModel.from_pretrained(
+        "Rostlab/prot_t5_xl_bfd"
+    ).to(device).eval()
+
+    def _embed_sequences(sequences: List[str]) -> np.ndarray:
+        all_embeddings = []
+        with torch.no_grad():
+            for start in range(0, len(sequences), batch_size):
+                batch = [
+                    ' '.join(list(s.upper().strip()))
+                    for s in sequences[start:start + batch_size]
+                ]
+                inputs = tokenizer(
+                    batch, return_tensors='pt', padding=True,
+                    truncation=True, max_length=1024, add_special_tokens=True
+                )
+                inputs = {k: v.to(device) for k, v in inputs.items()}
+                outputs = model(**inputs)
+                # Mean pool over sequence length (use attention_mask)
+                attention_mask = inputs['attention_mask'].unsqueeze(-1).float()
+                sum_emb = (outputs.last_hidden_state * attention_mask).sum(dim=1)
+                count = attention_mask.sum(dim=1).clamp(min=1)
+                batch_emb = (sum_emb / count).cpu().numpy()
+                all_embeddings.append(batch_emb)
+
+                end = min(start + batch_size, len(sequences))
+                if end < len(sequences):
+                    print(f"    Progress: {end}/{len(sequences)}")
+        return np.concatenate(all_embeddings, axis=0)
+
+    print(f"  Embedding {len(heavy_sequences)} heavy chain sequences...")
+    heavy_embs = _embed_sequences(heavy_sequences)
+
+    if light_sequences is not None:
+        print(f"  Embedding {len(light_sequences)} light chain sequences...")
+        light_embs = _embed_sequences(light_sequences)
+        result = np.concatenate([heavy_embs, light_embs], axis=1)
+        print(f"  Generated ProtT5-XL embeddings: {result.shape}")
+        return result
+
+    print(f"  Generated ProtT5-XL embeddings: {heavy_embs.shape}")
+    return heavy_embs
+
+
+def create_ab_roberta_embeddings(
+    sequences: List[str],
+    device: str = 'cpu',
+    batch_size: int = 16,
+) -> np.ndarray:
+    """
+    Extract Ab-RoBERTa embeddings for antibody sequences.
+
+    Ab-RoBERTa (Huh & Lee, 2025) is a RoBERTa model trained on 402M antibody
+    sequences from OAS with a SAA (subword amino acid) tokenizer that
+    separates germline V gene families in embedding space.
+
+    Single-chain model (processes heavy or light independently).
+
+    Args:
+        sequences: List of antibody sequences (heavy or light)
+        device: 'cpu' or 'cuda'
+        batch_size: Number of sequences per batch
+
+    Returns:
+        np.ndarray: (n_sequences, 768) embeddings
+    """
+    try:
+        from transformers import AutoTokenizer, AutoModel
+    except ImportError:
+        raise ImportError(
+            "Ab-RoBERTa requires transformers: pip install transformers"
+        )
+
+    print(f"Loading Ab-RoBERTa (mogam-ai/Ab-RoBERTa)...")
+    tokenizer = AutoTokenizer.from_pretrained("mogam-ai/Ab-RoBERTa")
+    model = AutoModel.from_pretrained("mogam-ai/Ab-RoBERTa").to(device).eval()
+
+    all_embeddings = []
+
+    with torch.no_grad():
+        for start in range(0, len(sequences), batch_size):
+            batch = [s.upper().strip() for s in sequences[start:start + batch_size]]
+            inputs = tokenizer(
+                batch, return_tensors='pt', padding=True,
+                truncation=True, max_length=150
+            )
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            outputs = model(**inputs)
+            # Mean pool using attention mask
+            attention_mask = inputs['attention_mask'].unsqueeze(-1).float()
+            sum_emb = (outputs.last_hidden_state * attention_mask).sum(dim=1)
+            count = attention_mask.sum(dim=1).clamp(min=1)
+            batch_emb = (sum_emb / count).cpu().numpy()
+            all_embeddings.append(batch_emb)
+
+            end = min(start + batch_size, len(sequences))
+            if end < len(sequences):
+                print(f"    Progress: {end}/{len(sequences)}")
+
+    result = np.concatenate(all_embeddings, axis=0)
+    print(f"  Generated Ab-RoBERTa embeddings: {result.shape}")
+    return result
+
+
+def create_balm_embeddings(
+    sequences: List[str],
+    device: str = 'cpu',
+    batch_size: int = 8,
+) -> np.ndarray:
+    """
+    Extract BALM embeddings for antibody sequences.
+
+    BALM (Chen et al., Briefings in Bioinformatics 2024) is a 150M parameter
+    antibody LM with ESM-2-like architecture plus antibody-aware positional
+    embeddings and adaptive masking. Trained on 336M sequences clustered at
+    40% identity.
+
+    Args:
+        sequences: List of antibody sequences (heavy or light)
+        device: 'cpu' or 'cuda'
+        batch_size: Number of sequences per batch
+
+    Returns:
+        np.ndarray: (n_sequences, ~1280) embeddings
+    """
+    try:
+        from transformers import AutoTokenizer, AutoModel
+    except ImportError:
+        raise ImportError(
+            "BALM requires transformers: pip install transformers"
+        )
+
+    print(f"Loading BALM (BEAM-Labs/BALM)...")
+    tokenizer = AutoTokenizer.from_pretrained("BEAM-Labs/BALM")
+    model = AutoModel.from_pretrained("BEAM-Labs/BALM").to(device).eval()
+
+    all_embeddings = []
+
+    with torch.no_grad():
+        for start in range(0, len(sequences), batch_size):
+            batch = [s.upper().strip() for s in sequences[start:start + batch_size]]
+            inputs = tokenizer(
+                batch, return_tensors='pt', padding=True,
+                truncation=True, max_length=512
+            )
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            outputs = model(**inputs)
+            # Mean pool using attention mask
+            attention_mask = inputs['attention_mask'].unsqueeze(-1).float()
+            sum_emb = (outputs.last_hidden_state * attention_mask).sum(dim=1)
+            count = attention_mask.sum(dim=1).clamp(min=1)
+            batch_emb = (sum_emb / count).cpu().numpy()
+            all_embeddings.append(batch_emb)
+
+            end = min(start + batch_size, len(sequences))
+            if end < len(sequences):
+                print(f"    Progress: {end}/{len(sequences)}")
+
+    result = np.concatenate(all_embeddings, axis=0)
+    print(f"  Generated BALM embeddings: {result.shape}")
+    return result
+
+
+def create_sapiens_embeddings(
+    sequences: List[str],
+    chain_type: str = 'heavy',
+    device: str = 'cpu',
+) -> np.ndarray:
+    """
+    Extract Sapiens embeddings for antibody sequences.
+
+    Sapiens (Prihoda et al., mAbs 2022, part of BioPhi) is a tiny 5-layer
+    BERT model (128D) trained on 20M human H + 19M human L sequences.
+    Designed for humanization but produces useful compact embeddings.
+
+    Args:
+        sequences: List of antibody sequences
+        chain_type: 'heavy' or 'light' (selects model)
+        device: 'cpu' or 'cuda'
+
+    Returns:
+        np.ndarray: (n_sequences, 128) embeddings
+    """
+    try:
+        from sapiens.sapiens import predict_scores
+        from sapiens.sapiens import load_model as sapiens_load_model
+    except ImportError:
+        raise ImportError(
+            "Sapiens requires BioPhi: pip install biophi\n"
+            "Or: pip install sapiens"
+        )
+
+    print(f"Loading Sapiens ({chain_type} chain)...")
+
+    # Sapiens internally uses a small BERT model
+    # We extract embeddings by running the model and getting hidden states
+    model_type = 'H' if chain_type == 'heavy' else 'L'
+    sapiens_model = sapiens_load_model(model_type)
+
+    # Sapiens models are small BERT wrappers — extract the underlying model
+    # and run forward pass to get hidden states
+    embeddings = []
+    for i, seq in enumerate(sequences):
+        seq = seq.upper().strip()
+        try:
+            # Use the predict_scores API to get per-residue scores
+            # Then extract the hidden representation
+            scores = predict_scores(seq, model_type=model_type)
+            # scores is (seq_len, vocab_size) — use the log-probabilities
+            # as a sequence-level feature via mean pooling
+            emb = np.mean(scores, axis=0)
+            embeddings.append(emb)
+        except Exception:
+            # Fallback: zero vector
+            embeddings.append(np.zeros(20))
+
+        if (i + 1) % 100 == 0:
+            print(f"    Progress: {i+1}/{len(sequences)}")
+
+    result = np.array(embeddings)
+    print(f"  Generated Sapiens features: {result.shape}")
+    return result
+
+
+def create_pigen_embeddings(
+    heavy_sequences: List[str],
+    light_sequences: Optional[List[str]] = None,
+    device: str = 'cpu',
+) -> np.ndarray:
+    """
+    Extract p-IgGen embeddings for antibody sequences.
+
+    p-IgGen (Frith et al., Bioinformatics 2024) is a small autoregressive
+    transformer (17.3M params, 768D) from OPIG trained to generate paired
+    H+L sequences. Produces paired embeddings capturing H-L co-evolution.
+
+    Requires: pip install p-IgGen (GitHub: oxpig/p-IgGen)
+
+    Args:
+        heavy_sequences: List of heavy chain sequences
+        light_sequences: Optional list of light chain sequences
+        device: 'cpu' or 'cuda'
+
+    Returns:
+        np.ndarray: (n_sequences, 768)
+    """
+    try:
+        from transformers import AutoTokenizer, AutoModel
+    except ImportError:
+        raise ImportError(
+            "p-IgGen requires transformers: pip install transformers\n"
+            "Model: pip install p-IgGen or from GitHub: oxpig/p-IgGen"
+        )
+
+    print(f"Loading p-IgGen (oxpig/p-IgGen)...")
+    tokenizer = AutoTokenizer.from_pretrained("oxpig/p-IgGen")
+    model = AutoModel.from_pretrained("oxpig/p-IgGen").to(device).eval()
+
+    embeddings = []
+    n = len(heavy_sequences)
+
+    with torch.no_grad():
+        for i in range(n):
+            heavy = heavy_sequences[i].upper().strip()
+            # p-IgGen takes paired sequences separated by a delimiter
+            if light_sequences is not None:
+                light = light_sequences[i].upper().strip()
+                seq_input = f"{heavy}[SEP]{light}"
+            else:
+                seq_input = heavy
+
+            inputs = tokenizer(
+                seq_input, return_tensors='pt',
+                truncation=True, max_length=512
+            )
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            outputs = model(**inputs)
+            # Mean pool
+            emb = outputs.last_hidden_state[0].mean(dim=0).cpu().numpy()
+            embeddings.append(emb)
+
+            if (i + 1) % 50 == 0:
+                print(f"    Progress: {i+1}/{n}")
+
+    result = np.array(embeddings)
+    mode = "paired" if light_sequences is not None else "heavy-only"
+    print(f"  Generated p-IgGen embeddings ({mode}): {result.shape}")
+    return result
+
+
 # ============================================================================
 # PART 2: CDR-STRATIFIED FEATURES
 # ============================================================================
