@@ -181,14 +181,21 @@ kirby/
 ├── src/kirby/
 │   ├── datasets/
 │   │   ├── esol.py              # ESOL dataset loader
-│   │   └── qm9.py               # QM9 dataset loader
-│   └── representations/
-│       └── molecular.py         # All molecular representations
+│   │   ├── qm9.py               # QM9 dataset loader
+│   │   └── sabdab.py            # SAbDab antibody dataset + ANARCI utils
+│   ├── representations/
+│   │   ├── molecular.py         # Small molecule representations
+│   │   └── antibody.py          # Antibody representations (27 functions)
+│   ├── hybrid.py                # Core hybrid creation + feature selection
+│   └── find_best_hybrid.py      # Automated hybrid search (SearchResult)
 ├── tests/
-│   ├── test_esol.py            # Comprehensive ESOL test
-│   └── test_qm9.py             # Comprehensive QM9 test
-├── setup.py                     # Package configuration
-└── README.md                    # This file
+│   ├── find_best_hybrid_molecular.py   # CLI wrapper for molecular search
+│   ├── test_hybrid_user_scenarios.py   # User scenario tests
+│   ├── complexity_theory_experiments.py
+│   ├── similarity_experiments.py
+│   └── slurm_scripts/                 # SLURM job submission scripts
+├── setup.py
+└── README.md
 ```
 
 ## Available Representations
@@ -310,6 +317,111 @@ Each architecture learns different aspects:
 - **PDV**: Physical properties (static)
 
 The hybrid combines these complementary views, each optimized for YOUR specific property.
+
+## Antibody Representations
+
+KIRBy also supports antibody property prediction with a full suite of representations.
+
+### Available Antibody Representations
+
+**Pretrained Language Models:**
+
+| Function | Model | Dim | Paired? | Install |
+|----------|-------|-----|---------|---------|
+| `create_antiberty_embeddings` | AntiBERTy | 1024D | No | `pip install transformers` |
+| `create_ablang_embeddings` | AbLang v1 | 768/1536D | Yes | `pip install ablang` |
+| `create_ablang2_embeddings` | AbLang-2 | 480D | Yes | `pip install ablang2` |
+| `create_esm2_embeddings` | ESM-2 650M | 1280/2560D | Concat | `pip install transformers` |
+| `create_esmc_embeddings` | ESM-C 600M | 1152D | Concat | `pip install esm` (v3, EvolutionaryScale) |
+| `create_igbert_embeddings` | IgBERT | 1024D | Yes (cross-attn) | `pip install transformers` |
+| `create_prot_t5_embeddings` | ProtT5-XL | 1024/2048D | Concat | `pip install transformers sentencepiece` |
+| `create_ab_roberta_embeddings` | Ab-RoBERTa | 768D | No | `pip install transformers` |
+| `create_balm_embeddings` | BALM | 1024D | No | Manual (see below) |
+| `create_sapiens_embeddings` | Sapiens | ~20D | No | `pip install biophi` |
+| `create_pigen_embeddings` | p-IgGen | 768D | Yes | `pip install transformers` |
+
+**Classical (Non-Pretrained):**
+
+| Function | Dim | Description |
+|----------|-----|-------------|
+| `create_kmer_frequency` | 400D | Dipeptide composition |
+| `create_physicochemical_profile` | 68D | AA property stats + group fractions |
+| `create_imgt_onehot` | 5120D | Full IMGT-numbered one-hot encoding |
+
+**Augmented Features (94D total):**
+
+| Function | Dim | Description |
+|----------|-----|-------------|
+| `compute_developability_features` | 16D | Charge, hydrophobicity, liability motifs, pI |
+| `compute_humanness_scores` | 7D | Germline identity scoring |
+| `compute_aac_features` | 20D | Amino acid composition |
+| `compute_blosum62_features` | 20D | Mean-pooled BLOSUM62 encoding |
+| `compute_cdr_length_features` | 7D | CDR + VH lengths (ANARCI) |
+| `compute_per_cdr_physicochemical` | 12D | Per-CDR charge & hydrophobicity |
+| `compute_extended_liability_features` | 9D | CDR vs framework liability counts |
+| `compute_camsol_features` | 3D | CamSol intrinsic solubility |
+
+### Antibody Model Setup
+
+**HuggingFace models** (auto-download on first use):
+
+```bash
+# Set cache to a location with enough disk space
+export HF_HOME=/path/to/large/disk/.cache/huggingface
+
+# Pre-download models (run where you have internet access)
+python -c "from transformers import AutoModel, AutoTokenizer; AutoTokenizer.from_pretrained('facebook/esm2_t33_650M_UR50D'); AutoModel.from_pretrained('facebook/esm2_t33_650M_UR50D')"
+python -c "from transformers import BertTokenizer, BertModel; BertTokenizer.from_pretrained('Exscientia/IgBert'); BertModel.from_pretrained('Exscientia/IgBert')"
+python -c "from transformers import AutoTokenizer, AutoModel; AutoTokenizer.from_pretrained('mogam-ai/Ab-RoBERTa'); AutoModel.from_pretrained('mogam-ai/Ab-RoBERTa')"
+python -c "from transformers import T5Tokenizer, T5EncoderModel; T5Tokenizer.from_pretrained('Rostlab/prot_t5_xl_bfd', do_lower_case=False); T5EncoderModel.from_pretrained('Rostlab/prot_t5_xl_bfd')"
+python -c "from transformers import AutoTokenizer, AutoModelForCausalLM; AutoTokenizer.from_pretrained('ollieturnbull/p-IgGen'); AutoModelForCausalLM.from_pretrained('ollieturnbull/p-IgGen')"
+```
+
+**Model sizes:**
+
+| Model | HF ID | Size |
+|-------|-------|------|
+| ESM-2 650M | `facebook/esm2_t33_650M_UR50D` | ~2.5 GB |
+| IgBERT | `Exscientia/IgBert` | ~1.6 GB |
+| ProtT5-XL | `Rostlab/prot_t5_xl_bfd` | ~11 GB |
+| Ab-RoBERTa | `mogam-ai/Ab-RoBERTa` | ~500 MB |
+| p-IgGen | `ollieturnbull/p-IgGen` | ~90 MB |
+| AntiBERTy | `alchemab/antiberta2` | ~350 MB |
+
+**Non-HuggingFace models:**
+
+```bash
+# BALM (GitHub + Google Drive weights)
+git clone https://github.com/BEAM-Labs/BALM.git
+# Download weights from Google Drive link in repo README → place in BALM/pretrained-BALM/
+# Usage: create_balm_embeddings(sequences, balm_repo_path='path/to/BALM')
+
+# ESM-C (EvolutionaryScale package, not fair-esm)
+pip install esm
+
+# Sapiens (part of BioPhi)
+pip install biophi
+
+# ANARCI (required for CDR extraction, IMGT one-hot, per-CDR features)
+conda install -c bioconda anarci
+```
+
+### ARC Server Setup (Oxford)
+
+```bash
+ssh scat9264@arc-login.arc.ox.ac.uk
+cd /data/stat-cadd/scat9264/KIRBy
+. setup.sh
+
+# Point HF cache to data partition (home has limited quota)
+export HF_HOME=/data/stat-cadd/scat9264/.cache/huggingface
+# Add to setup.sh to persist:
+# echo 'export HF_HOME=/data/stat-cadd/scat9264/.cache/huggingface' >> setup.sh
+
+# Download models on login node (has internet; compute nodes may not)
+python -c "from transformers import AutoModel; AutoModel.from_pretrained('facebook/esm2_t33_650M_UR50D')"
+# ... repeat for each model above
+```
 
 ## Development
 
