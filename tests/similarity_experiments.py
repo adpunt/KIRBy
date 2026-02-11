@@ -1002,24 +1002,47 @@ def run_knn_prediction(data: dict, n_folds: int,
     best_k = k_values[len(k_values) // 2]  # use middle k value
     gkf2 = GroupKFold(n_splits=n_folds)
     for rep_name, X_rep in reps.items():
-        fold_r2s = []
+        fold_r2s_uw = []
+        fold_r2s_w = []
         for train_idx, val_idx in gkf2.split(sample_X, labels, groups=groups):
             scaler = StandardScaler()
             X_tr = scaler.fit_transform(X_rep[train_idx])
             X_va = scaler.transform(X_rep[val_idx])
+
+            # Unweighted
             model = KNeighborsRegressor(n_neighbors=min(best_k, len(train_idx) - 1))
             model.fit(X_tr, labels[train_idx])
-            y_pred = model.predict(X_va)
-            fold_r2s.append(r2_score(labels[val_idx], y_pred))
+            fold_r2s_uw.append(r2_score(labels[val_idx], model.predict(X_va)))
 
-        r2_mean = float(np.mean(fold_r2s))
-        r2_std = float(np.std(fold_r2s))
+            # Weighted by importance (computed on train only)
+            try:
+                imp = compute_feature_importance(
+                    {rep_name: X_rep[train_idx]}, labels[train_idx],
+                    method='lightgbm_gain')
+                w = np.sqrt(np.maximum(imp[rep_name], 0))
+                X_tr_w = X_tr * w
+                X_va_w = X_va * w
+                model_w = KNeighborsRegressor(
+                    n_neighbors=min(best_k, len(train_idx) - 1))
+                model_w.fit(X_tr_w, labels[train_idx])
+                fold_r2s_w.append(r2_score(labels[val_idx], model_w.predict(X_va_w)))
+            except Exception:
+                fold_r2s_w.append(float('nan'))
+
+        r2_mean = float(np.mean(fold_r2s_uw))
+        r2_std = float(np.std(fold_r2s_uw))
+        r2_w_mean = float(np.nanmean(fold_r2s_w)) if fold_r2s_w else float('nan')
+        r2_w_std = float(np.nanstd(fold_r2s_w)) if fold_r2s_w else float('nan')
         results['per_rep_baselines'][rep_name] = {
             'r2_mean': r2_mean, 'r2_std': r2_std,
+            'r2_weighted_mean': r2_w_mean, 'r2_weighted_std': r2_w_std,
             'k': best_k, 'dim': X_rep.shape[1],
         }
+        delta = r2_w_mean - r2_mean
         print(f"    {rep_name} (dim={X_rep.shape[1]}): "
-              f"kNN R²={r2_mean:.4f}+/-{r2_std:.3f}")
+              f"kNN R²={r2_mean:.4f}+/-{r2_std:.3f}, "
+              f"weighted R²={r2_w_mean:.4f}+/-{r2_w_std:.3f} "
+              f"(delta={delta:+.4f})")
 
     # Summary: best k per condition
     print("\n  Summary (best k per condition):")
