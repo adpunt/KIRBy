@@ -27,19 +27,19 @@ if [ "$MODE" = "quick" ]; then
 
     echo ""
     echo "=== Quick 3: LogD, ALL reps, fast search ==="
-    python tests/find_best_hybrid_molecular.py logd --reps all --search fast
+    python tests/find_best_hybrid_molecular.py logd --reps all_no_gk --search fast
 
 elif [ "$MODE" = "full" ]; then
     echo "=== Test 1: LogD, all reps, medium search ==="
-    python tests/find_best_hybrid_molecular.py logd --reps all --search medium
+    python tests/find_best_hybrid_molecular.py logd --reps all_no_gk --search medium
 
     echo ""
     echo "=== Test 2: Caco2, all reps, medium search ==="
-    python tests/find_best_hybrid_molecular.py caco2 --reps all --search medium
+    python tests/find_best_hybrid_molecular.py caco2 --reps all_no_gk --search medium
 
     echo ""
     echo "=== Test 3: hERG, all reps, long search ==="
-    python tests/find_best_hybrid_molecular.py herg --reps all --search long
+    python tests/find_best_hybrid_molecular.py herg --reps all_no_gk --search long
 
     echo ""
     echo "=== Test 4: User scenarios (logd, fast reps) ==="

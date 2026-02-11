@@ -116,7 +116,7 @@ def select_features_by_scores(base_reps, scores_concat, budget):
     remaining = budget
     for i, r in enumerate(rep_names):
         if i == len(rep_names) - 1:
-            allocation[r] = remaining
+            allocation[r] = max(0, remaining)
         else:
             n = max(1, round(budget * rep_dims[r] / total_dim))
             allocation[r] = min(n, rep_dims[r])
@@ -128,9 +128,12 @@ def select_features_by_scores(base_reps, scores_concat, budget):
     for r in rep_names:
         dim = rep_dims[r]
         rep_scores = scores_concat[offset:offset + dim]
-        n_select = min(allocation[r], dim)
-        top_idx = np.argsort(rep_scores)[-n_select:]
-        selected[r] = np.sort(top_idx)
+        n_select = max(0, min(allocation[r], dim))
+        if n_select == 0:
+            selected[r] = np.array([], dtype=int)
+        else:
+            top_idx = np.argsort(rep_scores)[-n_select:]
+            selected[r] = np.sort(top_idx)
         offset += dim
 
     return selected
@@ -182,18 +185,21 @@ def run_experiment(base_reps, labels, groups, budgets, methods, n_folds=5, seed=
     model_fn = lambda: RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
     rep_names = sorted(base_reps.keys())
 
-    # --- Baselines (full dimension) ---
-    print("\n=== BASELINES (full dimension) ===")
+    # --- Baselines (full dimension, individual reps) ---
+    print("\n=== BASELINES (full dimension, individual reps) ===")
     baselines = {}
+    best_rep_name = None
+    best_rep_r2 = -np.inf
     for r in rep_names:
         mean, std = evaluate_cv(base_reps[r], labels, model_fn, groups, n_folds, seed)
         baselines[r] = (mean, std)
         print(f"  {r} (dim={base_reps[r].shape[1]}): R²={mean:.4f}±{std:.3f}")
+        if mean > best_rep_r2:
+            best_rep_r2 = mean
+            best_rep_name = r
+    print(f"  Best individual rep: {best_rep_name} (R²={best_rep_r2:.4f})")
 
     X_concat = np.hstack([base_reps[r] for r in rep_names])
-    mean, std = evaluate_cv(X_concat, labels, model_fn, groups, n_folds, seed)
-    baselines['all_concat'] = (mean, std)
-    print(f"  all_concat (dim={X_concat.shape[1]}): R²={mean:.4f}±{std:.3f}")
 
     # --- Compute importance from all methods ---
     print(f"\n=== COMPUTING IMPORTANCE ({len(methods)} methods) ===")

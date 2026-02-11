@@ -16,10 +16,10 @@ Experiments:
   1. Similarity-Activity Correlation Baseline — how poorly standard distances work
   2. Hybrid Property-Aware Similarity — the fix via find_best_hybrid + weighting
   3. Feature Concentration Analysis — WHY hybrid similarity works (MI density)
-  4. Representation-Dependent Activity Cliffs — cliffs are rep artifacts
+  4. Prediction Performance on Activity Cliffs — RMSE_cliff (MoleculeACE-style)
   5. kNN Prediction with Hybrid Distance — downstream task validation
   6. Applicability Domain — hybrid distance tracks prediction uncertainty
-  7. Noise Detection Bridge — standard detectors flag cliffs as noise FPs
+  7. Noise Detection Bridge (Supplementary) — standard detectors flag cliffs as noise FPs
   8. Optimal Dimension for Similarity vs Prediction — different optima
   9. Cross-Dataset Summary — consolidate findings across datasets
 
@@ -44,10 +44,11 @@ from typing import Any, Dict, List, Tuple, Optional
 
 import numpy as np
 from scipy.stats import spearmanr, wilcoxon
+from scipy.spatial.distance import cdist as scipy_cdist
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.model_selection import GroupKFold
-from sklearn.metrics import r2_score
+from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.neighbors import KNeighborsRegressor, NearestNeighbors
 from sklearn.ensemble import RandomForestRegressor
 
@@ -186,6 +187,61 @@ def violation_rate(D: np.ndarray, y: np.ndarray, k: int = 5) -> float:
     return float(n_violations / n_total) if n_total > 0 else 0.0
 
 
+def identify_cliff_compounds(ecfp4: np.ndarray, y: np.ndarray,
+                             tanimoto_threshold: float = 0.9,
+                             activity_k: float = 2.0) -> Tuple[np.ndarray, Dict[str, Any]]:
+    """Identify activity cliff compounds using ECFP4 Tanimoto similarity.
+
+    Representation-independent definition (MoleculeACE-style):
+      - Structural similarity: Tanimoto(ECFP4) >= tanimoto_threshold
+      - Activity difference: |Δy| > activity_k * MAD(y)
+
+    The activity threshold adapts to each dataset via MAD(y).
+
+    Returns:
+        cliff_mask: boolean array, True for cliff compounds
+        info: dict with thresholds, counts, per-compound cliff pair counts
+    """
+    n = len(y)
+
+    # Adaptive activity threshold: k * MAD(y)
+    mad_y = float(np.median(np.abs(y - np.median(y))))
+    activity_threshold = activity_k * mad_y
+
+    # Tanimoto similarity from binary ECFP4 (Tanimoto = 1 - Jaccard distance)
+    jaccard_dist = scipy_cdist(ecfp4, ecfp4, metric='jaccard')
+    tanimoto_sim = 1.0 - jaccard_dist
+    np.fill_diagonal(tanimoto_sim, 0)
+
+    # Activity difference matrix
+    delta_y = np.abs(y[:, None] - y[None, :])
+
+    # Cliff pair mask: high similarity AND large activity difference
+    cliff_pair_mask = (tanimoto_sim >= tanimoto_threshold) & (delta_y > activity_threshold)
+
+    # Cliff compounds: involved in at least one cliff pair
+    cliff_mask = cliff_pair_mask.any(axis=1)
+
+    # Per-compound cliff pair count (how many cliff partners each molecule has)
+    cliff_pair_counts = cliff_pair_mask.sum(axis=1)
+
+    n_cliff_pairs = int(cliff_pair_mask.sum()) // 2  # symmetric
+    n_cliff_compounds = int(cliff_mask.sum())
+
+    info = {
+        'tanimoto_threshold': tanimoto_threshold,
+        'activity_k': activity_k,
+        'activity_threshold': activity_threshold,
+        'mad_y': mad_y,
+        'n_cliff_pairs': n_cliff_pairs,
+        'n_cliff_compounds': n_cliff_compounds,
+        'pct_cliff_compounds': float(100.0 * n_cliff_compounds / n),
+        'cliff_pair_counts': cliff_pair_counts,  # per-compound array
+    }
+
+    return cliff_mask, info
+
+
 
 def get_hybrid_features_and_weights(
     reps: Dict[str, np.ndarray],
@@ -287,7 +343,17 @@ def compute_effective_rank(X: np.ndarray) -> float:
     """Effective rank: exp(entropy of normalised singular values)."""
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
-    _, s, _ = np.linalg.svd(X_scaled, full_matrices=False)
+    n, d = X_scaled.shape
+
+    if d > 2000:
+        from sklearn.decomposition import TruncatedSVD
+        n_comp = min(500, n - 1)
+        svd = TruncatedSVD(n_components=n_comp, random_state=42)
+        svd.fit(X_scaled)
+        s = svd.singular_values_
+    else:
+        _, s, _ = np.linalg.svd(X_scaled, full_matrices=False)
+
     s = s[s > 1e-10]
     p = s / s.sum()
     return float(np.exp(-np.sum(p * np.log(p))))
@@ -492,7 +558,6 @@ def run_hybrid_similarity(data: dict, n_folds: int,
                 'sali_mean': sali_weighted['mean'],
             },
             'sac_delta_from_best_rep': sac_weighted - best_rep_sac,
-            'sac_delta_from_concat': sac_weighted - sac_concat,
             'search_time_seconds': search_time,
             'blueprint': search.best_overall['blueprint'].to_dict() if search.best_overall else None,
         }
@@ -515,15 +580,8 @@ def run_hybrid_similarity(data: dict, n_folds: int,
     print(f"    Best individual rep: {best_rep_name} (SAC={best_rep_sac:.4f}, "
           f"dim={reps[best_rep_name].shape[1]})")
     print(f"    Best hybrid:        {best_method} (SAC={best_sac:.4f}, dim={hybrid_dim})")
-    print(f"    Concat (reference): SAC={sac_concat:.4f}, dim={X_concat.shape[1]}")
-
-    # Flag if concat beats hybrid (concat is impractically large but worth noting)
-    if sac_concat < best_sac:
-        print(f"    WARNING: concat SAC ({sac_concat:.4f}) < best hybrid SAC "
-              f"({best_sac:.4f}), but concat dim={X_concat.shape[1]} is impractical")
-        results['concat_beats_hybrid'] = True
-    else:
-        results['concat_beats_hybrid'] = False
+    delta_sac = best_sac - best_rep_sac
+    print(f"    Delta vs best rep:  {delta_sac:+.4f}")
 
     return results
 
@@ -575,8 +633,12 @@ def run_feature_concentration(data: dict, search_speed: str = 'fast',
 
         # Full rep MI (use PCA-reduced for stability if high-dim)
         n_comp = min(50, n_features, n_samples - 1)
-        X_pca_full = PCA(n_components=n_comp).fit_transform(
-            StandardScaler().fit_transform(X))
+        X_scaled_full = StandardScaler().fit_transform(X)
+        if n_features > 2000:
+            from sklearn.decomposition import TruncatedSVD
+            X_pca_full = TruncatedSVD(n_components=n_comp, random_state=42).fit_transform(X_scaled_full)
+        else:
+            X_pca_full = PCA(n_components=n_comp).fit_transform(X_scaled_full)
         try:
             mi_full = estimate_mutual_information_knn(X_pca_full, labels, k=5)
         except Exception:
@@ -614,8 +676,13 @@ def run_feature_concentration(data: dict, search_speed: str = 'fast',
                 rep_result['effective_rank_random'] = compute_effective_rank(X_rand)
 
                 # PCA to same dim
-                X_pca_match = PCA(n_components=min(n_selected, n_samples - 1)).fit_transform(
-                    StandardScaler().fit_transform(X))
+                n_pca_comp = min(n_selected, n_samples - 1)
+                X_scaled_rep = StandardScaler().fit_transform(X)
+                if n_features > 2000:
+                    from sklearn.decomposition import TruncatedSVD
+                    X_pca_match = TruncatedSVD(n_components=n_pca_comp, random_state=42).fit_transform(X_scaled_rep)
+                else:
+                    X_pca_match = PCA(n_components=n_pca_comp).fit_transform(X_scaled_rep)
                 try:
                     mi_pca = estimate_mutual_information_knn(X_pca_match, labels, k=5)
                 except Exception:
@@ -669,126 +736,270 @@ def run_feature_concentration(data: dict, search_speed: str = 'fast',
 # EXPERIMENT 4: REPRESENTATION-DEPENDENT ACTIVITY CLIFFS
 # =============================================================================
 
-def run_activity_cliff_analysis(data: dict, search_speed: str = 'fast',
-                                n_sample: int = 5000,
-                                shared_search: Tuple = None) -> Dict[str, Any]:
-    """Activity cliffs depend on representation. Different reps create different
-    cliff sets. Hybrid representation reduces spurious cliffs."""
+def run_activity_cliff_analysis(data: dict, n_folds: int = 5,
+                                search_speed: str = 'fast',
+                                shared_search: Tuple = None,
+                                tanimoto_threshold: float = 0.9,
+                                activity_k: float = 2.0) -> Dict[str, Any]:
+    """Prediction performance on activity cliff compounds (MoleculeACE-style).
+
+    Uses representation-independent cliff definition:
+      - ECFP4 Tanimoto >= tanimoto_threshold
+      - |Δy| > activity_k * MAD(y)
+
+    Reports RMSE_cliff, R²_cliff, RMSE_noncliff, R²_noncliff for:
+      - Per-rep kNN baselines
+      - Hybrid kNN (unweighted and weighted)
+      - RF baseline
+    """
     print("\n" + "=" * 70)
-    print("EXPERIMENT 4: REPRESENTATION-DEPENDENT ACTIVITY CLIFFS")
+    print("EXPERIMENT 4: PREDICTION PERFORMANCE ON ACTIVITY CLIFFS")
     print("=" * 70)
 
     reps = data['reps']
     labels = data['labels']
     groups = data['groups']
 
-    results = {'per_rep': {}, 'overlap': {}, 'hybrid': {}}
-    cliff_sets = {}
+    # --- Identify cliff compounds using ECFP4 Tanimoto ---
+    if 'ecfp4' not in reps:
+        print("  ERROR: ecfp4 not in reps, cannot identify cliffs")
+        return {'error': 'ecfp4 not available'}
 
-    # Per-rep cliff detection
-    for rep_name, X in reps.items():
-        print(f"\n  {rep_name} (dim={X.shape[1]}):")
-        D = compute_distance_matrix(X, standardize=True)
-        detector = ActivityCliffDetector(precomputed_distances=D)
-        cliff_idx = detector.identify_noise(X, labels)
+    cliff_mask, cliff_info = identify_cliff_compounds(
+        reps['ecfp4'], labels,
+        tanimoto_threshold=tanimoto_threshold,
+        activity_k=activity_k,
+    )
+    cliff_indices = set(np.where(cliff_mask)[0].tolist())
 
-        cliff_sets[rep_name] = set(cliff_idx.tolist())
-        n_cliffs = len(cliff_idx)
-        pct = 100.0 * n_cliffs / len(labels)
+    print(f"  Cliff definition: Tanimoto>={tanimoto_threshold}, "
+          f"|Δy|>{activity_k}*MAD(y) = {cliff_info['activity_threshold']:.3f}")
+    print(f"  Cliff compounds: {cliff_info['n_cliff_compounds']} / {len(labels)} "
+          f"({cliff_info['pct_cliff_compounds']:.1f}%)")
+    print(f"  Cliff pairs: {cliff_info['n_cliff_pairs']}")
 
-        # SALI stats
-        sali = compute_sali(D, labels)
-
-        results['per_rep'][rep_name] = {
-            'n_cliffs': n_cliffs,
-            'pct_cliffs': pct,
-            'sali_mean': sali['mean'],
-            'sali_max': sali['max'],
-        }
-        print(f"    Cliffs: {n_cliffs} ({pct:.1f}%), SALI_mean={sali['mean']:.3f}")
-
-    # Concatenated
-    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
-    D_concat = compute_distance_matrix(X_concat, standardize=True)
-    detector = ActivityCliffDetector(precomputed_distances=D_concat)
-    cliff_idx_concat = detector.identify_noise(X_concat, labels)
-    cliff_set_concat = set(cliff_idx_concat.tolist())
-    sali_concat = compute_sali(D_concat, labels)
-
-    results['concat'] = {
-        'n_cliffs': len(cliff_idx_concat),
-        'pct_cliffs': 100.0 * len(cliff_idx_concat) / len(labels),
-        'sali_mean': sali_concat['mean'],
-        'sali_max': sali_concat['max'],
+    results = {
+        'cliff_definition': {
+            'tanimoto_threshold': tanimoto_threshold,
+            'activity_k': activity_k,
+            'activity_threshold': cliff_info['activity_threshold'],
+            'mad_y': cliff_info['mad_y'],
+            'n_cliff_compounds': cliff_info['n_cliff_compounds'],
+            'n_cliff_pairs': cliff_info['n_cliff_pairs'],
+            'pct_cliff_compounds': cliff_info['pct_cliff_compounds'],
+        },
+        'per_rep': {},
+        'hybrid': {},
     }
-    print(f"\n  all_concat: Cliffs={len(cliff_idx_concat)} "
-          f"({results['concat']['pct_cliffs']:.1f}%), "
-          f"SALI_mean={sali_concat['mean']:.3f}")
 
-    # Jaccard overlap between rep cliff sets
-    rep_names = list(cliff_sets.keys())
-    print("\n  Jaccard overlap between rep cliff sets:")
-    for i, r1 in enumerate(rep_names):
-        for j, r2 in enumerate(rep_names):
-            if j <= i:
-                continue
-            s1, s2 = cliff_sets[r1], cliff_sets[r2]
-            if len(s1 | s2) > 0:
-                jaccard = len(s1 & s2) / len(s1 | s2)
-            else:
-                jaccard = 0.0
-            results['overlap'][f"{r1}_vs_{r2}"] = jaccard
-            print(f"    {r1} vs {r2}: Jaccard={jaccard:.3f}")
-
-    # Hybrid cliff analysis
-    try:
-        if shared_search is not None:
-            X_hybrid, weights_flat, search = shared_search
-            print(f"\n  Using shared search for hybrid (dim={X_hybrid.shape[1]})")
-        else:
+    # --- Get hybrid blueprint for per-fold hybrid construction ---
+    hybrid_blueprint = None
+    if shared_search is not None:
+        X_hybrid, weights_flat, search = shared_search
+        if search.best_overall:
+            hybrid_blueprint = search.best_overall['blueprint']
+        print(f"  Using shared search (dim={X_hybrid.shape[1]})")
+    else:
+        try:
             X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
                 reps, labels, groups, search_speed, 'lightgbm_gain')
+            if search.best_overall:
+                hybrid_blueprint = search.best_overall['blueprint']
+        except Exception as e:
+            print(f"  Hybrid search failed: {e}")
 
-        D_hybrid = compute_distance_matrix(X_hybrid, feature_weights=weights_flat,
-                                           standardize=True)
-        detector_hybrid = ActivityCliffDetector(precomputed_distances=D_hybrid)
-        cliff_idx_hybrid = detector_hybrid.identify_noise(X_hybrid, labels)
-        sali_hybrid = compute_sali(D_hybrid, labels)
+    # --- CV evaluation of prediction on cliff vs non-cliff ---
+    gkf = GroupKFold(n_splits=n_folds)
+    sample_X = next(iter(reps.values()))
 
-        n_cliffs_hybrid = len(cliff_idx_hybrid)
+    def _evaluate_condition(get_Xy_fn, pre_scaled=False):
+        """Run CV for a condition, return cliff/noncliff metrics."""
+        fold_all, fold_cliff, fold_noncliff = [], [], []
+        fold_rmse_all, fold_rmse_cliff, fold_rmse_noncliff = [], [], []
 
-        # Compare against best individual rep (fewest cliffs = best baseline)
-        best_rep_name = min(results['per_rep'],
-                            key=lambda r: results['per_rep'][r]['n_cliffs'])
-        n_cliffs_best_rep = results['per_rep'][best_rep_name]['n_cliffs']
-        reduction_vs_rep = ((n_cliffs_best_rep - n_cliffs_hybrid) / n_cliffs_best_rep * 100
-                            if n_cliffs_best_rep > 0 else 0)
-        # Also keep concat reference
-        n_cliffs_concat = len(cliff_idx_concat)
-        reduction_vs_concat = ((n_cliffs_concat - n_cliffs_hybrid) / n_cliffs_concat * 100
-                               if n_cliffs_concat > 0 else 0)
+        for train_idx, val_idx in gkf.split(sample_X, labels, groups=groups):
+            y_train, y_val = labels[train_idx], labels[val_idx]
+            try:
+                X_tr, X_va = get_Xy_fn(train_idx, val_idx, y_train)
+            except Exception:
+                continue
+            if X_tr is None:
+                continue
 
-        results['hybrid'] = {
-            'n_cliffs': n_cliffs_hybrid,
-            'pct_cliffs': 100.0 * n_cliffs_hybrid / len(labels),
-            'sali_mean': sali_hybrid['mean'],
-            'sali_max': sali_hybrid['max'],
-            'cliff_reduction_vs_best_rep_pct': reduction_vs_rep,
-            'cliff_reduction_vs_concat_pct': reduction_vs_concat,
-            'baseline_rep': best_rep_name,
-            'dim': X_hybrid.shape[1],
+            if pre_scaled:
+                X_tr_s, X_va_s = X_tr, X_va
+            else:
+                scaler = StandardScaler()
+                X_tr_s = scaler.fit_transform(X_tr)
+                X_va_s = scaler.transform(X_va)
+
+            model = KNeighborsRegressor(n_neighbors=min(5, len(y_train) - 1))
+            model.fit(X_tr_s, y_train)
+            y_pred = model.predict(X_va_s)
+
+            # Overall
+            fold_all.append(r2_score(y_val, y_pred))
+            fold_rmse_all.append(float(np.sqrt(mean_squared_error(y_val, y_pred))))
+
+            # Stratify by cliff membership
+            val_cliff = np.array([i for i, vi in enumerate(val_idx) if vi in cliff_indices])
+            val_noncliff = np.array([i for i, vi in enumerate(val_idx) if vi not in cliff_indices])
+
+            if len(val_cliff) > 1:
+                fold_cliff.append(r2_score(y_val[val_cliff], y_pred[val_cliff]))
+                fold_rmse_cliff.append(float(np.sqrt(mean_squared_error(
+                    y_val[val_cliff], y_pred[val_cliff]))))
+            if len(val_noncliff) > 1:
+                fold_noncliff.append(r2_score(y_val[val_noncliff], y_pred[val_noncliff]))
+                fold_rmse_noncliff.append(float(np.sqrt(mean_squared_error(
+                    y_val[val_noncliff], y_pred[val_noncliff]))))
+
+        if not fold_all:
+            return None
+        return {
+            'r2_all': float(np.mean(fold_all)),
+            'r2_cliff': float(np.mean(fold_cliff)) if fold_cliff else float('nan'),
+            'r2_noncliff': float(np.mean(fold_noncliff)) if fold_noncliff else float('nan'),
+            'rmse_all': float(np.mean(fold_rmse_all)),
+            'rmse_cliff': float(np.mean(fold_rmse_cliff)) if fold_rmse_cliff else float('nan'),
+            'rmse_noncliff': float(np.mean(fold_rmse_noncliff)) if fold_rmse_noncliff else float('nan'),
         }
-        print(f"\n  Hybrid (weighted): Cliffs={n_cliffs_hybrid} "
-              f"({results['hybrid']['pct_cliffs']:.1f}%)")
-        print(f"    vs best individual rep ({best_rep_name}, "
-              f"n={n_cliffs_best_rep}): {reduction_vs_rep:+.1f}%")
-        print(f"    vs all_concat (ref, n={n_cliffs_concat}): "
-              f"{reduction_vs_concat:+.1f}%")
-        print(f"    SALI: concat={sali_concat['mean']:.3f} -> "
-              f"hybrid={sali_hybrid['mean']:.3f}")
-    except Exception as e:
-        print(f"\n  Hybrid analysis failed: {e}")
-        results['hybrid'] = {'error': str(e)}
+
+    # --- Per-rep kNN baselines ---
+    print("\n  Per-rep kNN baselines (k=5):")
+    for rep_name, X_rep in reps.items():
+        def _get_rep(tr, va, yt, _X=X_rep):
+            return _X[tr], _X[va]
+        res = _evaluate_condition(_get_rep)
+        if res:
+            results['per_rep'][rep_name] = res
+            print(f"    {rep_name:<15} R²_all={res['r2_all']:.4f}  "
+                  f"R²_cliff={res['r2_cliff']:.4f}  RMSE_cliff={res['rmse_cliff']:.4f}  "
+                  f"R²_noncliff={res['r2_noncliff']:.4f}")
+
+    # --- Hybrid kNN (unweighted) ---
+    if hybrid_blueprint is not None:
+        print("\n  Hybrid kNN (unweighted, k=5):")
+
+        def _get_hybrid_uw(tr, va, yt):
+            train_reps = {name: rep[tr] for name, rep in reps.items()}
+            val_reps = {name: rep[va] for name, rep in reps.items()}
+            X_tr_h, feat_info = create_hybrid(
+                train_reps, yt,
+                allocation_method=hybrid_blueprint.allocation_method,
+                budget=hybrid_blueprint.budget,
+                importance_method=hybrid_blueprint.importance_method,
+            )
+            X_va_h = apply_feature_selection(val_reps, feat_info)
+            return X_tr_h, X_va_h
+
+        res = _evaluate_condition(_get_hybrid_uw)
+        if res:
+            results['hybrid']['unweighted'] = res
+            print(f"    hybrid_uw      R²_all={res['r2_all']:.4f}  "
+                  f"R²_cliff={res['r2_cliff']:.4f}  RMSE_cliff={res['rmse_cliff']:.4f}  "
+                  f"R²_noncliff={res['r2_noncliff']:.4f}")
+
+        # --- Hybrid kNN (importance-weighted) ---
+        print("  Hybrid kNN (weighted, k=5):")
+
+        def _get_hybrid_w(tr, va, yt):
+            train_reps = {name: rep[tr] for name, rep in reps.items()}
+            val_reps = {name: rep[va] for name, rep in reps.items()}
+            X_tr_h, feat_info = create_hybrid(
+                train_reps, yt,
+                allocation_method=hybrid_blueprint.allocation_method,
+                budget=hybrid_blueprint.budget,
+                importance_method=hybrid_blueprint.importance_method,
+            )
+            X_va_h = apply_feature_selection(val_reps, feat_info)
+            imp = compute_feature_importance(train_reps, yt, method='lightgbm_gain')
+            w_parts = []
+            for rname in feat_info:
+                if not isinstance(feat_info[rname], dict):
+                    continue
+                if 'selected_indices' not in feat_info[rname]:
+                    continue
+                idx = feat_info[rname]['selected_indices']
+                if rname in imp:
+                    w_parts.append(imp[rname][idx])
+                else:
+                    w_parts.append(np.ones(len(idx)))
+            w = np.sqrt(np.maximum(np.concatenate(w_parts), 0))
+            # Scale-then-weight (matches Exp 5 and compute_distance_matrix convention)
+            scaler_w = StandardScaler()
+            return scaler_w.fit_transform(X_tr_h) * w, scaler_w.transform(X_va_h) * w
+
+        res = _evaluate_condition(_get_hybrid_w, pre_scaled=True)
+        if res:
+            results['hybrid']['weighted'] = res
+            print(f"    hybrid_w       R²_all={res['r2_all']:.4f}  "
+                  f"R²_cliff={res['r2_cliff']:.4f}  RMSE_cliff={res['rmse_cliff']:.4f}  "
+                  f"R²_noncliff={res['r2_noncliff']:.4f}")
+
+    # --- RF baseline (on best individual rep) ---
+    print("\n  RF baseline (per-rep, best rep):")
+    best_rep_name = max(results['per_rep'],
+                        key=lambda r: results['per_rep'][r]['r2_all']) if results['per_rep'] else None
+    if best_rep_name:
+        X_best = reps[best_rep_name]
+
+        fold_all, fold_cliff, fold_noncliff = [], [], []
+        fold_rmse_cliff = []
+        for train_idx, val_idx in gkf.split(sample_X, labels, groups=groups):
+            y_train, y_val = labels[train_idx], labels[val_idx]
+            scaler = StandardScaler()
+            X_tr = scaler.fit_transform(X_best[train_idx])
+            X_va = scaler.transform(X_best[val_idx])
+            rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+            rf.fit(X_tr, y_train)
+            y_pred = rf.predict(X_va)
+
+            fold_all.append(r2_score(y_val, y_pred))
+            val_cliff = np.array([i for i, vi in enumerate(val_idx) if vi in cliff_indices])
+            val_noncliff = np.array([i for i, vi in enumerate(val_idx) if vi not in cliff_indices])
+            if len(val_cliff) > 1:
+                fold_cliff.append(r2_score(y_val[val_cliff], y_pred[val_cliff]))
+                fold_rmse_cliff.append(float(np.sqrt(mean_squared_error(
+                    y_val[val_cliff], y_pred[val_cliff]))))
+            if len(val_noncliff) > 1:
+                fold_noncliff.append(r2_score(y_val[val_noncliff], y_pred[val_noncliff]))
+
+        results['rf_baseline'] = {
+            'rep': best_rep_name,
+            'r2_all': float(np.mean(fold_all)),
+            'r2_cliff': float(np.mean(fold_cliff)) if fold_cliff else float('nan'),
+            'r2_noncliff': float(np.mean(fold_noncliff)) if fold_noncliff else float('nan'),
+            'rmse_cliff': float(np.mean(fold_rmse_cliff)) if fold_rmse_cliff else float('nan'),
+        }
+        print(f"    RF({best_rep_name}) R²_all={results['rf_baseline']['r2_all']:.4f}  "
+              f"R²_cliff={results['rf_baseline']['r2_cliff']:.4f}  "
+              f"RMSE_cliff={results['rf_baseline']['rmse_cliff']:.4f}")
+
+    # --- Summary ---
+    print(f"\n  --- Summary (RMSE_cliff comparison) ---")
+    all_methods = []
+    for rname, rv in results['per_rep'].items():
+        all_methods.append((f"kNN({rname})", rv.get('rmse_cliff', float('nan')),
+                           rv.get('r2_cliff', float('nan'))))
+    if 'unweighted' in results.get('hybrid', {}):
+        rv = results['hybrid']['unweighted']
+        all_methods.append(("hybrid_kNN_uw", rv.get('rmse_cliff', float('nan')),
+                           rv.get('r2_cliff', float('nan'))))
+    if 'weighted' in results.get('hybrid', {}):
+        rv = results['hybrid']['weighted']
+        all_methods.append(("hybrid_kNN_w", rv.get('rmse_cliff', float('nan')),
+                           rv.get('r2_cliff', float('nan'))))
+    if 'rf_baseline' in results:
+        rv = results['rf_baseline']
+        all_methods.append((f"RF({rv['rep']})", rv.get('rmse_cliff', float('nan')),
+                           rv.get('r2_cliff', float('nan'))))
+
+    all_methods.sort(key=lambda x: x[1] if not np.isnan(x[1]) else 999)
+    print(f"  {'Method':<25} {'RMSE_cliff':<12} {'R²_cliff':<12}")
+    print("  " + "-" * 49)
+    for name, rmse, r2 in all_methods:
+        print(f"  {name:<25} {rmse:<12.4f} {r2:<12.4f}")
 
     return results
 
@@ -811,7 +1022,7 @@ def run_knn_prediction(data: dict, n_folds: int,
     if k_values is None:
         k_values = [5, 10]
     if conditions is None:
-        conditions = ['concat_unweighted', 'hybrid_weighted', 'rf_baseline']
+        conditions = ['hybrid_unweighted', 'hybrid_weighted', 'rf_baseline']
 
     reps = data['reps']
     labels = data['labels']
@@ -839,11 +1050,15 @@ def run_knn_prediction(data: dict, n_folds: int,
         except Exception as e:
             print(f"  Hybrid search failed: {e}")
 
-    # Identify cliff molecules for stratified analysis
-    D_concat_full = compute_distance_matrix(X_concat, standardize=True)
-    detector = ActivityCliffDetector(precomputed_distances=D_concat_full)
-    cliff_indices = set(detector.identify_noise(X_concat, labels).tolist())
-    print(f"  Cliff molecules: {len(cliff_indices)} / {len(labels)}")
+    # Identify cliff molecules for stratified analysis (representation-independent)
+    if 'ecfp4' in reps:
+        cliff_mask, cliff_info = identify_cliff_compounds(reps['ecfp4'], labels)
+        cliff_indices = set(np.where(cliff_mask)[0].tolist())
+        print(f"  Cliff molecules (ECFP4 Tanimoto): {len(cliff_indices)} / {len(labels)} "
+              f"({cliff_info['pct_cliff_compounds']:.1f}%)")
+    else:
+        cliff_indices = set()
+        print("  WARNING: ecfp4 not available, skipping cliff stratification")
 
     # CV evaluation
     gkf = GroupKFold(n_splits=n_folds)
@@ -1330,7 +1545,7 @@ def run_noise_detection_bridge(data: dict, n_folds: int,
     """Standard noise detectors flag activity cliffs as noise (false positives).
     Hybrid distances reduce this FP rate."""
     print("\n" + "=" * 70)
-    print("EXPERIMENT 7: NOISE DETECTION BRIDGE")
+    print("EXPERIMENT 7: NOISE DETECTION BRIDGE (Supplementary)")
     print("=" * 70)
 
     reps = data['reps']
@@ -1709,38 +1924,50 @@ def run_cross_dataset_summary(all_dataset_results: Dict[str, dict]) -> Dict[str,
                   f"(best_rep {best_rep_name}={best_rep_sac:.4f} -> "
                   f"hybrid={best_hybrid_sac:.4f})")
 
-        # Exp 4: cliff reduction
+        # Exp 4: RMSE_cliff improvement (hybrid vs best per-rep kNN)
         exp4 = ds_results.get('exp4_activity_cliffs')
-        if exp4 and 'hybrid' in exp4 and 'cliff_reduction_vs_best_rep_pct' in exp4['hybrid']:
-            reduction = exp4['hybrid']['cliff_reduction_vs_best_rep_pct']
-            ds_summary['cliff_reduction_pct'] = reduction
-            cliff_reductions.append(reduction)
-            print(f"    Cliff reduction: {reduction:.1f}%")
+        if exp4 and 'per_rep' in exp4 and 'hybrid' in exp4:
+            per_rep_rmse = [v.get('rmse_cliff', float('nan'))
+                           for v in exp4['per_rep'].values()]
+            valid_rmse = [r for r in per_rep_rmse if not np.isnan(r)]
+            best_rep_rmse = min(valid_rmse) if valid_rmse else float('nan')
+            hybrid_w = exp4['hybrid'].get('weighted', {})
+            hybrid_rmse = hybrid_w.get('rmse_cliff', float('nan'))
+            if not np.isnan(best_rep_rmse) and not np.isnan(hybrid_rmse) and best_rep_rmse > 0:
+                reduction = (best_rep_rmse - hybrid_rmse) / best_rep_rmse * 100
+                ds_summary['cliff_rmse_reduction_pct'] = reduction
+                cliff_reductions.append(reduction)
+                print(f"    RMSE_cliff reduction: {reduction:.1f}% "
+                      f"(best_rep={best_rep_rmse:.4f} -> hybrid={hybrid_rmse:.4f})")
+            ds_summary['n_cliff_compounds'] = exp4.get('cliff_definition', {}).get('n_cliff_compounds', 0)
 
-        # Exp 5: kNN improvement
+        # Exp 5: kNN improvement vs best individual rep
         exp5 = ds_results.get('exp5_knn_prediction')
         if exp5 and 'conditions' in exp5:
             conds = exp5['conditions']
-            # Best hybrid_weighted vs best concat_unweighted
             hw_scores = [v['r2_mean'] for k, v in conds.items()
                         if v.get('condition') == 'hybrid_weighted']
-            cu_scores = [v['r2_mean'] for k, v in conds.items()
-                        if v.get('condition') == 'concat_unweighted']
-            if hw_scores and cu_scores:
-                delta_knn = max(hw_scores) - max(cu_scores)
+            # Compare against best individual rep kNN baseline
+            per_rep = exp5.get('per_rep_baselines', {})
+            if hw_scores and per_rep:
+                best_rep_knn = max(v['r2_mean'] for v in per_rep.values())
+                delta_knn = max(hw_scores) - best_rep_knn
                 ds_summary['knn_delta_r2'] = delta_knn
                 knn_deltas.append(delta_knn)
-                print(f"    kNN delta R²: {delta_knn:+.4f}")
+                print(f"    kNN delta R² (vs best rep): {delta_knn:+.4f}")
 
-        # Exp 6: AD correlation
+        # Exp 6: AD correlation (hybrid_weighted vs unweighted hybrid)
         exp6 = ds_results.get('exp6_applicability_domain')
         if exp6 and 'distance_error_correlation' in exp6:
             for k_key, corrs in exp6['distance_error_correlation'].items():
-                if 'concat' in corrs and 'hybrid_weighted' in corrs:
-                    delta_ad = corrs['hybrid_weighted'] - corrs['concat']
+                if 'hybrid' in corrs and 'hybrid_weighted' in corrs:
+                    delta_ad = corrs['hybrid_weighted'] - corrs['hybrid']
                     ds_summary['ad_corr_delta'] = delta_ad
+                    ds_summary['ad_corr_weighted'] = corrs['hybrid_weighted']
                     ad_deltas.append(delta_ad)
-                    print(f"    AD corr delta ({k_key}): {delta_ad:+.4f}")
+                    print(f"    AD corr: weighted={corrs['hybrid_weighted']:.4f}, "
+                          f"unweighted={corrs['hybrid']:.4f} "
+                          f"(delta={delta_ad:+.4f})")
                     break
 
         # Exp 7: noise FP reduction
@@ -1768,7 +1995,7 @@ def run_cross_dataset_summary(all_dataset_results: Dict[str, dict]) -> Dict[str,
     # Summary statistics
     print("\n  Aggregate summary:")
     for name, values in [('SAC_delta', sac_deltas),
-                          ('cliff_reduction_%', cliff_reductions),
+                          ('RMSE_cliff_reduction_%', cliff_reductions),
                           ('kNN_delta_R2', knn_deltas),
                           ('AD_corr_delta', ad_deltas),
                           ('noise_FP_reduction_%', fp_reductions),
@@ -1826,7 +2053,7 @@ def main():
         k_values = [5, 10]
         weight_methods = ['lightgbm_gain']
         n_sample = 3000
-        knn_conditions = ['concat_unweighted', 'hybrid_weighted', 'rf_baseline']
+        knn_conditions = ['hybrid_unweighted', 'hybrid_weighted', 'rf_baseline']
     else:  # full
         dataset_names = ['logd', 'caco2', 'herg', 'qm9']
         rep_preset = args.reps or 'fast+hf'
@@ -1837,8 +2064,7 @@ def main():
         k_values = [3, 5, 10, 20]
         weight_methods = ['lightgbm_gain', 'treeshap', 'permutation']
         n_sample = 5000
-        knn_conditions = ['concat_unweighted', 'concat_weighted',
-                          'hybrid_unweighted', 'hybrid_weighted', 'rf_baseline']
+        knn_conditions = ['hybrid_unweighted', 'hybrid_weighted', 'rf_baseline']
 
     experiments = args.experiments if args.experiments else experiments_default
 
@@ -1921,7 +2147,7 @@ def main():
 
         if 4 in experiments:
             ds_results['exp4_activity_cliffs'] = run_activity_cliff_analysis(
-                data, search_speed, n_sample,
+                data, n_folds, search_speed,
                 shared_search=shared_search)
 
         if 5 in experiments:
