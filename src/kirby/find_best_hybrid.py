@@ -445,6 +445,7 @@ def _evaluate_hybrid_config(
         'model': model_name,
         'score_mean': float(np.mean(fold_scores)),
         'score_std': float(np.std(fold_scores)),
+        'fold_scores': [float(s) for s in fold_scores],
         'n_features': int(np.mean(fold_n_features)),
         'time_seconds': elapsed,
         'allocation_method': allocation_method,

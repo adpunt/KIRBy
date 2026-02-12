@@ -106,7 +106,8 @@ def similarity_activity_correlation(D: np.ndarray, y: np.ndarray,
                                     n_sample: int = 5000) -> Tuple[float, float]:
     """Spearman correlation between pairwise distance and |delta_y|.
 
-    Negative = good (close molecules have similar activity).
+    Positive = good (large distance → large activity difference means the
+    representation preserves the structure-activity relationship).
     Returns (rho, p_value).
     """
     n = len(y)
@@ -188,14 +189,16 @@ def violation_rate(D: np.ndarray, y: np.ndarray, k: int = 5) -> float:
 
 
 def identify_cliff_compounds(ecfp4: np.ndarray, y: np.ndarray,
-                             tanimoto_threshold: float = 0.9,
+                             tanimoto_threshold: float = 0.55,
                              activity_k: float = 2.0) -> Tuple[np.ndarray, Dict[str, Any]]:
     """Identify activity cliff compounds using ECFP4 Tanimoto similarity.
 
-    Representation-independent definition (MoleculeACE-style):
-      - Structural similarity: Tanimoto(ECFP4) >= tanimoto_threshold
+    Definition based on Bajorath standard for ECFP4 (Stumpfe & Bajorath 2019):
+      - Structural similarity: Tanimoto(ECFP4) >= tanimoto_threshold (default 0.55)
       - Activity difference: |Δy| > activity_k * MAD(y)
 
+    Note: MoleculeACE uses Tc>=0.9 for curated binding-affinity datasets.
+    For diverse property datasets (logD, logP), Tc>=0.55 is standard for ECFP4.
     The activity threshold adapts to each dataset via MAD(y).
 
     Returns:
@@ -452,7 +455,7 @@ def run_hybrid_similarity(data: dict, n_folds: int,
     results = {'weight_methods': {}, 'per_rep': {}}
 
     # Best individual rep baseline (the real-world comparison)
-    best_rep_sac = 0  # SAC ~ 0 is uncorrelated; we want most negative
+    best_rep_sac = -1  # SAC > 0 is good; we want highest
     best_rep_name = None
     for rep_name, X in reps.items():
         D_rep = compute_distance_matrix(X, standardize=True)
@@ -461,7 +464,7 @@ def run_hybrid_similarity(data: dict, n_folds: int,
         results['per_rep'][rep_name] = {
             'dim': X.shape[1], 'sac_rho': sac_rep, 'violation_rate': viol_rep,
         }
-        if best_rep_name is None or sac_rep < best_rep_sac:
+        if best_rep_name is None or sac_rep > best_rep_sac:
             best_rep_sac = sac_rep
             best_rep_name = rep_name
         print(f"  {rep_name}: SAC={sac_rep:.4f}, viol={viol_rep:.3f}, dim={X.shape[1]}")
@@ -565,7 +568,7 @@ def run_hybrid_similarity(data: dict, n_folds: int,
 
         results['weight_methods'][wm] = wm_result
 
-        if sac_weighted < best_sac:  # more negative = better
+        if sac_weighted > best_sac:  # higher = better distance-activity correlation
             best_sac = sac_weighted
             best_method = wm
 
@@ -740,11 +743,11 @@ def run_feature_concentration(data: dict, search_speed: str = 'fast',
 def run_activity_cliff_analysis(data: dict, n_folds: int = 5,
                                 search_speed: str = 'fast',
                                 shared_search: Tuple = None,
-                                tanimoto_threshold: float = 0.9,
+                                tanimoto_threshold: float = 0.55,
                                 activity_k: float = 2.0) -> Dict[str, Any]:
-    """Prediction performance on activity cliff compounds (MoleculeACE-style).
+    """Prediction performance on activity cliff compounds.
 
-    Uses representation-independent cliff definition:
+    Uses representation-independent cliff definition (Bajorath ECFP4 standard):
       - ECFP4 Tanimoto >= tanimoto_threshold
       - |Δy| > activity_k * MAD(y)
 
@@ -1872,9 +1875,9 @@ def run_optimal_similarity_dimension(data: dict, n_folds: int,
                              key=lambda b: results['budgets'][b].get('rf_r2', -999))
         best_knn_budget = max(budget_list,
                               key=lambda b: results['budgets'][b].get('knn_r2', -999))
-        # Most negative SAC = best similarity
-        best_sac_budget = min(budget_list,
-                              key=lambda b: results['budgets'][b].get('sac_rho', 999))
+        # Highest SAC = best distance-activity correlation
+        best_sac_budget = max(budget_list,
+                              key=lambda b: results['budgets'][b].get('sac_rho', -999))
 
         results['optimal'] = {
             'best_rf_budget': best_rf_budget,
@@ -2039,6 +2042,8 @@ def main():
     parser.add_argument('--reps', type=str, default=None,
                         help='Representation preset (fast, fast+hf, all) or comma-separated list. '
                              'Default: fast for quick, fast+hf for full.')
+    parser.add_argument('--datasets', type=str, nargs='+', default=None,
+                        help='Override dataset list (e.g., --datasets logd caco2)')
     parser.add_argument('--output', type=str, default='tests/results/similarity')
 
     args = parser.parse_args()
@@ -2050,7 +2055,7 @@ def main():
         n_folds = 3
         search_speed = 'fast'
         experiments_default = [1, 2, 4, 5, 8]
-        budgets = [25, 50, 100]
+        budgets = [25, 50, 100, 200]
         k_values = [5, 10]
         weight_methods = ['lightgbm_gain']
         n_sample = 3000
@@ -2066,6 +2071,9 @@ def main():
         weight_methods = ['lightgbm_gain', 'treeshap', 'permutation']
         n_sample = 5000
         knn_conditions = ['hybrid_unweighted', 'hybrid_weighted', 'rf_baseline']
+
+    if args.datasets:
+        dataset_names = args.datasets
 
     experiments = args.experiments if args.experiments else experiments_default
 

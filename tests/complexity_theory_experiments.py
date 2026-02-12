@@ -573,6 +573,7 @@ def run_complexity_matching_grid(
             'budget': r['budget'],
             'r2_mean': r['score_mean'],
             'r2_std': r['score_std'],
+            'fold_scores': r.get('fold_scores', []),
             'n_features': r['n_features'],
         })
 
@@ -1741,6 +1742,7 @@ def _run_anova_decomposition(exp2_results: Dict[str, Any]) -> Dict[str, Any]:
     """9a: ANOVA variance decomposition on Exp 2 grid results.
 
     Tests whether model×budget interaction explains significant variance in R².
+    Uses per-fold CV scores as replicates for proper within-cell variance estimation.
     """
     print("\n  9a: ANOVA Variance Decomposition")
 
@@ -1758,12 +1760,18 @@ def _run_anova_decomposition(exp2_results: Dict[str, Any]) -> Dict[str, Any]:
         return {'error': 'insufficient_factors'}
 
     # Collect R² values into cells: cell[model][budget] = list of r2 values
+    # Use per-fold scores as replicates (real variance) instead of mean R²
+    # which can produce zero within-cell variance with identical configs
     cells = {}
     for c in configs:
         key = (c['model'], c['budget'])
         if key not in cells:
             cells[key] = []
-        if not np.isnan(c['r2_mean']):
+        fold_scores = c.get('fold_scores', [])
+        if fold_scores:
+            cells[key].extend([s for s in fold_scores if not np.isnan(s)])
+        elif not np.isnan(c['r2_mean']):
+            # Fallback: use mean if fold_scores not available (old cached results)
             cells[key].append(c['r2_mean'])
 
     # Compute means
@@ -2177,6 +2185,8 @@ def main():
     parser.add_argument('--reps', type=str, default=None,
                         help='Representation preset (fast, fast+hf, all) or comma-separated list. '
                              'Default: fast for quick, fast+hf for full.')
+    parser.add_argument('--datasets', type=str, nargs='+', default=None,
+                        help='Override dataset list (e.g., --datasets logd caco2)')
     parser.add_argument('--output', type=str, default='tests/results/complexity_theory')
 
     args = parser.parse_args()
@@ -2187,9 +2197,9 @@ def main():
         rep_preset = args.reps or 'fast'
         n_folds = 3
         model_names = ['rf', 'knn', 'ridge']
-        budgets = [50, 100]
+        budgets = [25, 50, 100, 200]
         allocation_methods = ['greedy']
-        importance_methods = ['treeshap', 'lightgbm_gain']
+        importance_methods = ['treeshap']
         exp4_importance = ['treeshap', 'lightgbm_gain', 'deeplift', 'permutation']
         exp6_families = ['RF', 'Ridge']
         exp7_partitions = ['scaffold_frequency']
@@ -2201,7 +2211,7 @@ def main():
         rep_preset = args.reps or 'fast+hf'
         n_folds = 5
         model_names = ['rf', 'knn', 'ridge', 'xgboost', 'mlp', 'lightgbm']
-        budgets = [25, 50, 100, 200]
+        budgets = [10, 25, 50, 100, 200, 500]
         allocation_methods = ['greedy', 'greedy_feature', 'performance_weighted']
         importance_methods = ['treeshap', 'lightgbm_gain', 'deeplift', 'permutation']
         exp4_importance = [
@@ -2212,6 +2222,9 @@ def main():
         exp8_conditions = None  # all conditions
         exp9_subs = None  # all sub-analyses
         search_speed = 'medium'
+
+    if args.datasets:
+        dataset_names = args.datasets
 
     experiments = args.experiments if args.experiments else [1, 2, 3, 4, 5, 6, 7, 8, 9]
     models = _get_model_factories(model_names)
@@ -2276,8 +2289,10 @@ def main():
                 data, models, n_folds, search_speed=search_speed)
 
         if 6 in experiments:
+            # Exp 6 needs finer budget granularity to detect capacity-dimension interaction
+            exp6_budgets = sorted(set([10] + budgets))
             ds_results['exp6_within_family'] = run_within_family_complexity(
-                data, budgets, n_folds, families=exp6_families,
+                data, exp6_budgets, n_folds, families=exp6_families,
                 search_speed=search_speed)
 
         if 7 in experiments:
