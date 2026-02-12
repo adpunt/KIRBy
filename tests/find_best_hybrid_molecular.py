@@ -82,16 +82,17 @@ def assign_scaffold_groups(smiles_list: List[str]) -> Tuple[np.ndarray, int]:
 REP_PRESETS = {
     'fast': ['ecfp4', 'maccs', 'pdv'],
     'fast+hf': ['ecfp4', 'maccs', 'pdv', 'chemberta', 'molformer', 'selformer'],
-    'all_no_gk': [
-        'ecfp4', 'maccs', 'pdv', 'mol2vec', 'chemberta', 'molformer',
-        'selformer', 'chembert', 'molclr', 'graphmvp', 'smited',
-        'mhg_gnn', 'grover', 'schnet'
-    ],
     'all': [
         'ecfp4', 'maccs', 'pdv', 'mol2vec', 'chemberta', 'molformer',
         'selformer', 'chembert', 'molclr', 'graphmvp', 'smited',
         'mhg_gnn', 'grover', 'graph_kernel', 'schnet'
-    ]
+    ],
+    # Backward compat alias (graph_kernel is now auto-filtered, so no need to exclude it)
+    'all_no_gk': [
+        'ecfp4', 'maccs', 'pdv', 'mol2vec', 'chemberta', 'molformer',
+        'selformer', 'chembert', 'molclr', 'graphmvp', 'smited',
+        'mhg_gnn', 'grover', 'graph_kernel', 'schnet'
+    ],
 }
 
 # Map old search names to new speed tiers for backward compat
@@ -354,6 +355,9 @@ def _rep_cache_path(smiles: List[str], rep_name: str) -> Path:
     smiles_hash = hashlib.sha256('\n'.join(smiles).encode()).hexdigest()[:16]
     cache_dir = Path.home() / '.cache' / 'kirby' / 'reps' / smiles_hash
     cache_dir.mkdir(parents=True, exist_ok=True)
+    # graph_kernel_filtered replaces old graph_kernel cache (quality filter now default)
+    if rep_name == 'graph_kernel':
+        rep_name = 'graph_kernel_filtered'
     return cache_dir / f'{rep_name}.npy'
 
 

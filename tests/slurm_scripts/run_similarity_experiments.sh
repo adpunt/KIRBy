@@ -30,13 +30,13 @@ if [ "$MODE" = "quick" ]; then
         --experiments 1 2 4 5 8 --output tests/results/similarity_fast
 
     echo ""
-    echo "=== QUICK 2: logd, all_no_gk reps, Exp 1+2+5 ==="
-    python tests/similarity_experiments.py --mode quick --reps all_no_gk \
+    echo "=== QUICK 2: logd, all reps, Exp 1+2+5 ==="
+    python tests/similarity_experiments.py --mode quick --reps all \
         --experiments 1 2 5 --output tests/results/similarity_all
 
 elif [ "$MODE" = "full" ]; then
-    echo "=== FULL RUN: ${DATASET}, all_no_gk reps, all experiments ==="
-    python tests/similarity_experiments.py --mode full --reps all_no_gk \
+    echo "=== FULL RUN: ${DATASET}, all reps, all experiments ==="
+    python tests/similarity_experiments.py --mode full --reps all \
         --datasets ${DATASET} \
         --experiments 1 2 3 4 5 6 7 8 9 --output tests/results/similarity_${DATASET}
 else
