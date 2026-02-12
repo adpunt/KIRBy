@@ -925,7 +925,7 @@ def create_balm_embeddings(
     model = BALMForMaskedLM.from_pretrained(weights_path).to(device).eval()
 
     # Extract the base model (without MLM head) for embeddings
-    base_model = model.balm if hasattr(model, 'balm') else model
+    base_model = model.esm if hasattr(model, 'esm') else model
 
     all_embeddings = []
 

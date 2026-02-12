@@ -19,10 +19,13 @@ Usage:
     print(result.best_overall)
 """
 
+import hashlib
+import pickle
 import time
 import warnings
 from copy import deepcopy
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
@@ -50,6 +53,11 @@ class Blueprint:
     allocation_method: str
     importance_method: str
     budget: int
+    speed: str = ''
+    n_folds: int = 0
+    seed: int = 42
+    metric: str = 'r2'
+    task_type: str = 'regression'
 
     def to_dict(self) -> dict:
         return {
@@ -57,6 +65,11 @@ class Blueprint:
             'allocation_method': self.allocation_method,
             'importance_method': self.importance_method,
             'budget': self.budget,
+            'speed': self.speed,
+            'n_folds': self.n_folds,
+            'seed': self.seed,
+            'metric': self.metric,
+            'task_type': self.task_type,
         }
 
 
@@ -704,6 +717,27 @@ def _compute_fitted_result(
 
 
 # =============================================================================
+# CACHE
+# =============================================================================
+
+def _hybrid_cache_key(base_reps, labels, groups, speed, budgets, allocation_methods,
+                      importance_methods, n_folds, models, seed, metric, task_type) -> str:
+    """SHA256 hash of all search-affecting inputs."""
+    h = hashlib.sha256()
+    for name in sorted(base_reps.keys()):
+        arr = base_reps[name]
+        h.update(f"{name}:{arr.shape}:{arr.ravel()[:5].tobytes()}".encode())
+    h.update(labels.tobytes())
+    if groups is not None:
+        h.update(groups.tobytes())
+    h.update(f"{speed}|{budgets}|{allocation_methods}|{importance_methods}|{n_folds}|{seed}|{metric}|{task_type}".encode())
+    if models:
+        model_names = sorted(models.keys()) if isinstance(models, dict) else sorted(models)
+        h.update("|".join(model_names).encode())
+    return h.hexdigest()[:16]
+
+
+# =============================================================================
 # MAIN ENTRY POINT
 # =============================================================================
 
@@ -730,6 +764,8 @@ def find_best_hybrid(
     augmentation_budget: int = 20,
     seed: int = 42,
     verbose: bool = True,
+    cache: bool = False,
+    cache_dir: Optional[str] = None,
 ) -> SearchResult:
     """
     Find the best hybrid representation configuration.
@@ -765,10 +801,30 @@ def find_best_hybrid(
         augmentation_budget: Max features per augmentation to select (default: 20).
         seed: Random seed.
         verbose: Print progress.
+        cache: If True, cache results to disk and load from cache on subsequent
+            calls with identical inputs. Default False.
+        cache_dir: Directory for cache files. Defaults to ~/.cache/kirby/hybrid_search.
 
     Returns:
         SearchResult with best configs, baselines, and optional fitted result.
     """
+    # --- Check cache ---
+    cache_path = None
+    if cache:
+        key = _hybrid_cache_key(
+            base_reps, labels, groups, speed, budgets, allocation_methods,
+            importance_methods, n_folds, models, seed, metric, task_type,
+        )
+        cache_path = Path(cache_dir or Path.home() / '.cache' / 'kirby' / 'hybrid_search') / f'{key}.pkl'
+        if cache_path.exists():
+            try:
+                result = pickle.loads(cache_path.read_bytes())
+                if verbose:
+                    print(f"  Loaded cached result from {cache_path}")
+                return result
+            except Exception:
+                pass  # Corrupted cache, recompute
+
     # --- Validate inputs ---
     labels = np.asarray(labels).ravel()
 
@@ -866,8 +922,18 @@ def find_best_hybrid(
 
     # --- Resolve metric name for display ---
     metric_name = metric if isinstance(metric, str) else 'custom'
+    actual_folds = n_folds if n_folds is not None else SPEED_TIERS[speed]['n_folds']
 
-    return SearchResult(
+    # --- Populate Blueprint reproducibility fields ---
+    for r in all_results:
+        bp = r['blueprint']
+        bp.speed = speed
+        bp.n_folds = actual_folds
+        bp.seed = seed
+        bp.metric = metric_name
+        bp.task_type = task_type
+
+    search_result = SearchResult(
         best_overall=agg['best_overall'],
         best_by_model=agg['best_by_model'],
         best_by_dimension=agg['best_by_dimension'],
@@ -878,6 +944,18 @@ def find_best_hybrid(
         lower_is_better=lower_is_better,
         fitted_result=fitted,
     )
+
+    # --- Save to cache ---
+    if cache and cache_path is not None:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_bytes(pickle.dumps(search_result))
+            if verbose:
+                print(f"  Cached result to {cache_path}")
+        except Exception:
+            pass  # Cache write failure is non-fatal
+
+    return search_result
 
 
 # =============================================================================

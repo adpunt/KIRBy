@@ -558,6 +558,7 @@ def run_complexity_matching_grid(
         importance_methods=importance_methods,
         n_folds=n_folds,
         verbose=True,
+        cache=True,
     )
 
     # --- Reshape SearchResult to downstream format ---
@@ -720,6 +721,7 @@ def run_cross_context_analysis(
                 groups=data['groups'],
                 speed='medium',
                 verbose=False,
+                cache=True,
             )
 
             best = search_result.best_overall
@@ -1134,6 +1136,7 @@ def run_within_family_complexity(
                     speed=search_speed,
                     budgets=budgets,
                     verbose=False,
+                    cache=True,
                 )
             except Exception as e:
                 print(f"      find_best_hybrid failed: {e}")
@@ -1343,6 +1346,7 @@ def run_data_complexity_analysis(
                     speed=search_speed,
                     budgets=budgets,
                     verbose=False,
+                    cache=True,
                 )
                 best = search.best_overall
                 best_config = {
@@ -1468,6 +1472,7 @@ def run_learning_curves(
                     speed=search_speed,
                     n_folds=sub_folds,
                     verbose=False,
+                    cache=True,
                 )
                 for model_name in model_names:
                     if model_name in search.best_by_model:
@@ -1579,6 +1584,7 @@ def run_uncertainty_calibration(
             search = find_best_hybrid(
                 reps, labels, groups=groups,
                 speed=search_speed, verbose=False,
+                cache=True,
             )
             best = search.best_overall
             if best:
@@ -1875,6 +1881,7 @@ def _run_information_retention(
             search = find_best_hybrid(
                 reps, labels, groups=groups,
                 speed=search_speed, budgets=[budget], verbose=False,
+                cache=True,
             )
             best = search.best_overall
             if best:
@@ -1980,6 +1987,7 @@ def _run_effective_rank_analysis(
             search = find_best_hybrid(
                 reps, labels, groups=groups,
                 speed=search_speed, budgets=[budget], verbose=False,
+                cache=True,
             )
             best = search.best_overall
             bp = best['blueprint'] if best else None
@@ -2082,6 +2090,7 @@ def _run_bias_variance_analysis(
                 speed=search_speed,
                 budgets=[budget],
                 verbose=False,
+                cache=True,
             )
         except Exception as e:
             print(f"    b={budget}: find_best_hybrid failed - {e}")
