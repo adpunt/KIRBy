@@ -57,6 +57,7 @@ def scenario_1_basic(reps, labels, groups):
         labels=labels,
         groups=groups,
         speed='fast',
+        cache=True,
     )
 
     assert isinstance(result, SearchResult)
@@ -105,6 +106,7 @@ def scenario_2_custom_models(reps, labels, groups):
         groups=groups,
         models=custom_models,
         speed='fast',
+        cache=True,
     )
 
     assert set(result.best_by_model.keys()) == {'svm', 'mlp'}
@@ -130,6 +132,7 @@ def scenario_3_custom_metric(reps, labels, groups):
         groups=groups,
         metric='rmse',
         speed='fast',
+        cache=True,
     )
 
     assert result.metric_name == 'rmse'
@@ -151,6 +154,7 @@ def scenario_3_custom_metric(reps, labels, groups):
         metric=(custom_mae, True),  # (callable, lower_is_better)
         speed='fast',
         verbose=False,
+        cache=True,
     )
 
     assert result2.metric_name == 'custom'
@@ -179,6 +183,7 @@ def scenario_4_blueprint_reproduction(reps, labels, groups):
         labels=labels,
         groups=groups,
         speed='fast',
+        cache=True,
     )
 
     best = result.best_overall
@@ -274,6 +279,7 @@ def scenario_5_feature_weights(reps, labels, groups):
         speed='fast',
         return_fitted=True,
         weight_method='lightgbm_gain',
+        cache=True,
     )
 
     assert result.fitted_result is not None
@@ -339,6 +345,7 @@ def scenario_6_medium_search(reps, labels, groups):
         labels=labels,
         groups=groups,
         speed='medium',
+        cache=True,
     )
 
     # Medium should test more configs than fast
@@ -381,6 +388,7 @@ def scenario_7_override_params(reps, labels, groups):
         allocation_methods=['greedy', 'performance_weighted', 'greedy_feature'],
         importance_methods=['treeshap', 'lightgbm_gain'],
         n_folds=3,
+        cache=True,
     )
 
     allocs = set(r['allocation_method'] for r in result.all_results)
@@ -420,6 +428,7 @@ def scenario_8_multi_dataset(reps_primary, labels_primary, groups_primary,
         groups=groups_primary,
         speed='fast',
         verbose=False,
+        cache=True,
     )
     best1 = result1.best_overall
     bp1 = best1['blueprint']
@@ -438,6 +447,7 @@ def scenario_8_multi_dataset(reps_primary, labels_primary, groups_primary,
         groups=groups2,
         speed='fast',
         verbose=False,
+        cache=True,
     )
     best2 = result2.best_overall
     bp2 = best2['blueprint']
