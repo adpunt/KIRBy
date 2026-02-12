@@ -430,6 +430,39 @@ sbatch tests/slurm_scripts/run_similarity_experiments.sh full
 
 ---
 
+## 7b. Running Hybrid Search
+
+### Molecular
+
+```bash
+# Quick local test (3 reps, fast search)
+python tests/find_best_hybrid_molecular.py logd --reps fast --search fast
+
+# Full server run (16 reps, no graph kernel)
+python tests/find_best_hybrid_molecular.py logd --reps all_no_gk --search long
+```
+
+### Antibody
+
+```bash
+# Quick local test (4 classical reps)
+python tests/find_best_hybrid_antibody.py sabdab_affinity --reps fast --search fast
+
+# With language models
+python tests/find_best_hybrid_antibody.py sabdab_affinity --reps fast+lm --search medium
+
+# Custom CSV dataset
+python tests/find_best_hybrid_antibody.py data.csv --heavy-col VH --light-col VL --target-col ddG --reps all_server
+
+# With augmented features (developability, humanness, CDR lengths, etc.)
+python tests/find_best_hybrid_antibody.py sabdab_affinity --reps fast+lm --search medium --augment
+
+# Enable result caching (speeds up repeated runs)
+python tests/find_best_hybrid_antibody.py sabdab_affinity --reps fast --search fast --cache
+```
+
+---
+
 ## 8. Verification
 
 Run these to verify your installation works. Each test uses 2-3 sequences and

@@ -263,6 +263,7 @@ def get_hybrid_features_and_weights(
         return_fitted=True,
         weight_method=weight_method,
         verbose=False,
+        cache=True,
     )
     if budget is not None:
         kwargs['budgets'] = [budget]

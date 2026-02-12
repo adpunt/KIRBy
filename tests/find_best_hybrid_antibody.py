@@ -1,0 +1,824 @@
+#!/usr/bin/env python3
+"""
+Find Best Hybrid Antibody Representation
+
+Thin antibody wrapper around kirby.find_best_hybrid. Handles sequence loading,
+antibody representation generation, sequence identity grouping, and output
+formatting. The actual search logic lives in the domain-agnostic library.
+
+Datasets (all regression):
+  - sabdab_affinity: SKEMPI 2.0 ΔΔG (binding affinity changes)
+  - sabdab_structure: SAbDab resolution (X-ray structure quality)
+  - sabdab_humanness: germline identity score
+
+Usage:
+    # Quick local test
+    python find_best_hybrid_antibody.py sabdab_affinity --reps fast --search fast
+
+    # Medium search with language models
+    python find_best_hybrid_antibody.py sabdab_affinity --reps fast+lm --search medium
+
+    # Full search on server
+    python find_best_hybrid_antibody.py data.csv --heavy-col VH --light-col VL --target-col ddG \\
+        --reps all_server --search long
+"""
+
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+import sys
+import json
+import time
+import argparse
+import hashlib
+import warnings
+from pathlib import Path
+from datetime import datetime
+from typing import Dict, List, Tuple, Optional, Any
+
+import numpy as np
+import pandas as pd
+
+# Add src to path
+sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+
+from kirby.find_best_hybrid import find_best_hybrid, SearchResult, Blueprint
+
+warnings.filterwarnings('ignore')
+
+
+# =============================================================================
+# SEQUENCE IDENTITY GROUPING
+# =============================================================================
+
+def assign_identity_groups(heavy_sequences: List[str], threshold: float = 0.8) -> Tuple[np.ndarray, int]:
+    """Group antibodies by VH sequence identity for GroupKFold.
+
+    Simple greedy clustering:
+    1. For each sequence, compute normalized Levenshtein similarity to cluster centers
+    2. If >= threshold similarity to any center, assign to that cluster
+    3. Otherwise, start a new cluster
+
+    Args:
+        heavy_sequences: List of heavy chain amino acid sequences.
+        threshold: Minimum fractional identity to join a cluster (0-1). Default 0.8.
+
+    Returns:
+        (groups, n_groups): group label array and number of unique groups.
+    """
+    def _identity(s1: str, s2: str) -> float:
+        """Fractional identity = matches / max(len1, len2)."""
+        if not s1 or not s2:
+            return 0.0
+        n = max(len(s1), len(s2))
+        matches = sum(a == b for a, b in zip(s1, s2))
+        return matches / n
+
+    centers = []  # list of (index, sequence)
+    groups = np.zeros(len(heavy_sequences), dtype=int)
+
+    for i, seq in enumerate(heavy_sequences):
+        assigned = False
+        for center_idx, (_, center_seq) in enumerate(centers):
+            if _identity(seq, center_seq) >= threshold:
+                groups[i] = center_idx
+                assigned = True
+                break
+        if not assigned:
+            groups[i] = len(centers)
+            centers.append((i, seq))
+
+    return groups, len(centers)
+
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
+REP_PRESETS = {
+    'fast': ['kmer', 'physicochemical', 'aac', 'blosum62'],
+    'fast+lm': ['kmer', 'physicochemical', 'aac', 'blosum62',
+                'antiberty', 'ablang2', 'igbert'],
+    'all_server': [
+        'kmer', 'physicochemical', 'aac', 'blosum62',
+        'antiberty', 'ablang2', 'igbert', 'esm2', 'prot_t5',
+        'ab_roberta', 'balm', 'pigen',
+    ],
+    'all': [
+        'kmer', 'physicochemical', 'aac', 'blosum62',
+        'antiberty', 'ablang2', 'igbert', 'esm2', 'prot_t5',
+        'ab_roberta', 'balm', 'pigen', 'esmc', 'sapiens',
+    ],
+}
+
+_SEARCH_NAME_MAP = {
+    'quick': 'fast',
+    'balanced': 'fast',
+    'medium': 'medium',
+    'precise': 'medium',
+    'full': 'long',
+    'exhaustive': 'long',
+    'fast': 'fast',
+    'long': 'long',
+}
+
+
+# =============================================================================
+# DATA LOADING
+# =============================================================================
+
+def _download_skempi() -> pd.DataFrame:
+    """Download or load cached SKEMPI 2.0 data."""
+    import requests
+
+    cache_dir = Path.home() / '.cache' / 'kirby'
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cached = cache_dir / 'skempi_v2.csv'
+
+    if not cached.exists():
+        url = "https://life.bsc.es/pid/skempi2/database/download/skempi_v2.csv"
+        print(f"  Downloading SKEMPI 2.0 from {url}...")
+        resp = requests.get(url, timeout=120)
+        resp.raise_for_status()
+        cached.write_bytes(resp.content)
+
+    return pd.read_csv(cached, sep=';')
+
+
+def load_dataset(name_or_path: str, heavy_col: str = 'VH',
+                 light_col: str = 'VL', target_col: str = 'target'
+                 ) -> Tuple[List[str], Optional[List[str]], np.ndarray, str]:
+    """Load antibody dataset.
+
+    Built-in:
+      - sabdab_affinity: SKEMPI 2.0 ΔΔG (regression)
+
+    Custom: CSV with heavy_seq, light_seq (optional), target columns.
+
+    Returns:
+        (heavy_seqs, light_seqs_or_None, labels, task_type)
+    """
+    name_lower = name_or_path.lower()
+
+    if name_lower == 'sabdab_affinity':
+        df = _download_skempi()
+
+        # SKEMPI has Protein 1/2 sequences and ΔΔG
+        # Extract antibody VH sequences from the Mutation column entries
+        # Use a simplified approach: get unique Ab-Ag pairs
+        if 'Affinity_mut_parsed' in df.columns:
+            target = 'Affinity_mut_parsed'
+        elif 'DDG' in df.columns:
+            target = 'DDG'
+        else:
+            # Try to find ΔΔG column
+            ddg_cols = [c for c in df.columns if 'ddg' in c.lower() or 'DDG' in c]
+            if not ddg_cols:
+                raise ValueError(f"Cannot find ΔΔG column. Available: {list(df.columns)}")
+            target = ddg_cols[0]
+
+        # Get sequence columns
+        seq_cols = [c for c in df.columns if 'Sequence' in c or 'sequence' in c]
+        if len(seq_cols) >= 2:
+            heavy_seqs_raw = df[seq_cols[0]].tolist()
+            light_seqs_raw = df[seq_cols[1]].tolist() if len(seq_cols) > 1 else None
+        else:
+            # Fall back: use Protein column
+            prot_cols = [c for c in df.columns if 'Protein' in c]
+            heavy_seqs_raw = df[prot_cols[0]].tolist() if prot_cols else None
+            light_seqs_raw = None
+
+        if heavy_seqs_raw is None:
+            raise ValueError(f"Cannot find sequence columns. Available: {list(df.columns)}")
+
+        labels_raw = pd.to_numeric(df[target], errors='coerce')
+
+        # Filter valid entries
+        valid = labels_raw.notna()
+        if heavy_seqs_raw:
+            valid &= pd.Series(heavy_seqs_raw).notna() & (pd.Series(heavy_seqs_raw).str.len() > 10)
+
+        heavy_seqs = [s for s, v in zip(heavy_seqs_raw, valid) if v]
+        light_seqs = None
+        if light_seqs_raw:
+            light_seqs = [s for s, v in zip(light_seqs_raw, valid) if v]
+            # Remove entries with missing light chains
+            has_light = [isinstance(s, str) and len(s) > 10 for s in light_seqs]
+            if not all(has_light):
+                light_seqs = None  # Fall back to heavy-only
+
+        labels = labels_raw[valid].values.astype(np.float64)
+
+        # Deduplicate by heavy sequence: take median
+        dedup = pd.DataFrame({'heavy': heavy_seqs, 'label': labels})
+        if light_seqs:
+            dedup['light'] = light_seqs
+            dedup = dedup.groupby(['heavy', 'light']).agg({'label': 'median'}).reset_index()
+            heavy_seqs = dedup['heavy'].tolist()
+            light_seqs = dedup['light'].tolist()
+        else:
+            dedup = dedup.groupby('heavy').agg({'label': 'median'}).reset_index()
+            heavy_seqs = dedup['heavy'].tolist()
+
+        labels = dedup['label'].values
+        print(f"  Loaded {len(heavy_seqs)} antibodies from SKEMPI 2.0 (ΔΔG)")
+        return heavy_seqs, light_seqs, labels, 'regression'
+
+    elif name_or_path.endswith('.csv') or os.path.exists(name_or_path):
+        print(f"Loading custom dataset from {name_or_path}...")
+        df = pd.read_csv(name_or_path)
+
+        # Case-insensitive column matching
+        col_map = {c.lower(): c for c in df.columns}
+        h_col = col_map.get(heavy_col.lower())
+        l_col = col_map.get(light_col.lower())
+        t_col = col_map.get(target_col.lower())
+
+        if h_col is None:
+            raise ValueError(f"Heavy chain column '{heavy_col}' not found. Available: {list(df.columns)}")
+        if t_col is None:
+            raise ValueError(f"Target column '{target_col}' not found. Available: {list(df.columns)}")
+
+        valid = df[h_col].notna() & df[t_col].notna()
+        heavy_seqs = df.loc[valid, h_col].astype(str).tolist()
+        labels = pd.to_numeric(df.loc[valid, t_col], errors='coerce').values
+
+        light_seqs = None
+        if l_col is not None:
+            light_valid = df.loc[valid, l_col].notna()
+            if light_valid.sum() > len(heavy_seqs) * 0.5:
+                light_seqs = df.loc[valid, l_col].astype(str).tolist()
+                light_seqs = [s if isinstance(s, str) and len(s) > 5 else '' for s in light_seqs]
+
+        # Filter NaN labels
+        finite = np.isfinite(labels)
+        heavy_seqs = [s for s, v in zip(heavy_seqs, finite) if v]
+        if light_seqs:
+            light_seqs = [s for s, v in zip(light_seqs, finite) if v]
+        labels = labels[finite]
+
+        # Detect task type
+        unique = np.unique(labels)
+        if len(unique) <= 20 and np.allclose(labels, labels.astype(int)):
+            task_type = 'classification'
+        else:
+            task_type = 'regression'
+
+        print(f"  Loaded {len(heavy_seqs)} antibodies, task: {task_type}")
+        return heavy_seqs, light_seqs, labels, task_type
+
+    else:
+        raise ValueError(
+            f"Unknown dataset: {name_or_path}. "
+            f"Built-in options: sabdab_affinity. Or provide a CSV path."
+        )
+
+
+# =============================================================================
+# REPRESENTATION GENERATION
+# =============================================================================
+
+def _rep_cache_path(heavy_seqs: List[str], light_seqs: Optional[List[str]],
+                    rep_name: str) -> Path:
+    """Get cache file path keyed by sequence hash."""
+    seq_str = '\n'.join(heavy_seqs)
+    if light_seqs:
+        seq_str += '\n---\n' + '\n'.join(light_seqs)
+    seq_hash = hashlib.sha256(seq_str.encode()).hexdigest()[:16]
+    cache_dir = Path.home() / '.cache' / 'kirby' / 'reps' / seq_hash
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir / f'{rep_name}.npy'
+
+
+# Dispatch: (function, input_mode)
+# input_mode: 'single' = fn(sequences), 'paired' = fn(heavy, light),
+#             'single_chain' = fn(sequences) called per-chain then concat
+_REP_DISPATCH = {
+    # Classical: concat sequences, call fn(sequences)
+    'kmer': ('create_kmer_frequency', 'concat'),
+    'aac': ('compute_aac_features', 'concat'),
+    'blosum62': ('compute_blosum62_features', 'concat'),
+    # Paired native: fn(heavy, light)
+    'physicochemical': ('create_physicochemical_profile', 'paired'),
+    'ablang2': ('create_ablang2_embeddings', 'paired'),
+    'igbert': ('create_igbert_embeddings', 'paired'),
+    'esm2': ('create_esm2_embeddings', 'paired'),
+    'prot_t5': ('create_prot_t5_embeddings', 'paired'),
+    'pigen': ('create_pigen_embeddings', 'paired'),
+    'esmc': ('create_esmc_embeddings', 'paired'),
+    'imgt_onehot': ('create_imgt_onehot', 'paired'),
+    # Single-chain: fn(sequences) called on heavy + light, concat results
+    'antiberty': ('create_antiberty_embeddings', 'single_chain'),
+    'ab_roberta': ('create_ab_roberta_embeddings', 'single_chain'),
+    'balm': ('create_balm_embeddings', 'single_chain'),
+    'sapiens': ('create_sapiens_embeddings', 'single_chain'),
+}
+
+
+def get_representations(heavy_seqs: List[str], light_seqs: Optional[List[str]],
+                        preset_or_list: str, cache: bool = True) -> Dict[str, np.ndarray]:
+    """Generate antibody representations.
+
+    Handles paired vs single-chain transparently:
+    - Paired models (ablang2, igbert, pigen, esm2, prot_t5): pass both chains
+    - Single-chain models (antiberty, ab_roberta, balm, sapiens):
+      encode heavy + light separately, concatenate
+    - Classical (kmer, aac, blosum62): concatenate sequences, then encode
+    - Paired-native (physicochemical): pass both chains
+    """
+    from kirby.representations import antibody as ab
+
+    if preset_or_list in REP_PRESETS:
+        rep_names = REP_PRESETS[preset_or_list]
+    else:
+        rep_names = [r.strip().lower() for r in preset_or_list.split(',')]
+
+    print(f"\nGenerating {len(rep_names)} representations...")
+
+    representations = {}
+    for rep_name in rep_names:
+        if rep_name not in _REP_DISPATCH:
+            print(f"  WARNING: Unknown representation '{rep_name}', skipping")
+            continue
+
+        # Try loading from cache
+        if cache:
+            cache_file = _rep_cache_path(heavy_seqs, light_seqs, rep_name)
+            if cache_file.exists():
+                rep = np.load(cache_file)
+                print(f"  {rep_name}: loaded from cache ({rep.shape[1]} features)")
+                representations[rep_name] = rep
+                continue
+
+        func_name, mode = _REP_DISPATCH[rep_name]
+        func = getattr(ab, func_name)
+
+        try:
+            start = time.time()
+            print(f"  Generating {rep_name}...", end=' ', flush=True)
+
+            if mode == 'concat':
+                # Concatenate heavy+light sequences, call fn(sequences)
+                if light_seqs:
+                    concat_seqs = [h + l for h, l in zip(heavy_seqs, light_seqs)]
+                else:
+                    concat_seqs = heavy_seqs
+                rep = func(concat_seqs)
+
+            elif mode == 'paired':
+                # fn(heavy, light) — light may be optional
+                if light_seqs:
+                    rep = func(heavy_seqs, light_seqs)
+                else:
+                    rep = func(heavy_seqs)
+
+            elif mode == 'single_chain':
+                # fn(sequences) per chain, concatenate
+                rep_h = func(heavy_seqs)
+                if light_seqs:
+                    rep_l = func(light_seqs)
+                    rep = np.hstack([rep_h, rep_l])
+                else:
+                    rep = rep_h
+
+            else:
+                raise ValueError(f"Unknown mode '{mode}' for {rep_name}")
+
+            elapsed = time.time() - start
+            print(f"done ({rep.shape[1]} features, {elapsed:.1f}s)")
+            representations[rep_name] = rep
+
+            if cache:
+                cache_file = _rep_cache_path(heavy_seqs, light_seqs, rep_name)
+                np.save(cache_file, rep)
+
+        except Exception as e:
+            print(f"FAILED: {e}")
+
+    if not representations:
+        raise ValueError("No representations could be generated!")
+
+    return representations
+
+
+def get_augmentations(heavy_seqs: List[str],
+                      light_seqs: Optional[List[str]]) -> Dict[str, np.ndarray]:
+    """Generate augmented features (94D total)."""
+    from kirby.representations.antibody import (
+        compute_developability_features,
+        compute_humanness_scores,
+        compute_cdr_length_features,
+        compute_per_cdr_physicochemical,
+        compute_extended_liability_features,
+        compute_camsol_features,
+    )
+
+    print("\nGenerating augmented features...")
+    augmentations = {}
+
+    aug_funcs = [
+        ('developability', lambda: compute_developability_features(heavy_seqs, light_seqs)),
+        ('humanness', lambda: compute_humanness_scores(heavy_seqs)),
+        ('cdr_lengths', lambda: compute_cdr_length_features(heavy_seqs, light_seqs)),
+        ('per_cdr_physchem', lambda: compute_per_cdr_physicochemical(heavy_seqs, light_seqs)),
+        ('extended_liability', lambda: compute_extended_liability_features(heavy_seqs, light_seqs)),
+        ('camsol', lambda: compute_camsol_features(heavy_seqs)),
+    ]
+
+    for name, func in aug_funcs:
+        try:
+            start = time.time()
+            print(f"  Generating {name}...", end=' ', flush=True)
+            feat = func()
+            elapsed = time.time() - start
+            print(f"done ({feat.shape[1]} features, {elapsed:.1f}s)")
+            augmentations[name] = feat
+        except Exception as e:
+            print(f"FAILED: {e}")
+
+    return augmentations
+
+
+# =============================================================================
+# OUTPUT FORMATTING
+# =============================================================================
+
+def _get(result, key):
+    """Access result field by key — works with both dicts and objects."""
+    if isinstance(result, dict):
+        return result[key]
+    return getattr(result, key)
+
+
+_METRIC_DISPLAY = {
+    'r2': 'R²', 'rmse': 'RMSE', 'mae': 'MAE',
+    'accuracy': 'Accuracy', 'auc': 'AUC',
+}
+
+
+def print_summary(result: SearchResult, task_type: str):
+    """Print formatted summary to console."""
+    metric = _METRIC_DISPLAY.get(result.metric_name, result.metric_name)
+    lower_is_better = result.lower_is_better
+    dimension_tiers = [50, 100, 200, 500]
+
+    print("\n" + "=" * 80)
+    print("RESULTS SUMMARY")
+    print("=" * 80)
+
+    best = result.best_overall
+    if best is None:
+        print("\nNo results found.")
+        return
+
+    bp = _get(best, 'blueprint')
+    print(f"\n=== BEST OVERALL ===")
+    print(f"Model: {_get(best, 'model')}, Method: {bp.allocation_method}, "
+          f"Importance: {bp.importance_method}, Budget: {bp.budget}")
+    print(f"{metric}: {_get(best, 'score_mean'):.4f} +/- {_get(best, 'score_std'):.4f}, "
+          f"Dimension: {_get(best, 'n_features')}")
+
+    print(f"\n=== BEST BY MODEL ===")
+    models_evaluated = list(result.best_by_model.keys())
+    print(f"{'Model':<10} {'Dim':<6} {'Method':<20} {'Importance':<18} {metric:<14} {'Budget'}")
+    print("-" * 85)
+    for model_name, r in result.best_by_model.items():
+        bp = _get(r, 'blueprint')
+        print(f"{model_name:<10} {_get(r, 'n_features'):<6} {bp.allocation_method:<20} "
+              f"{bp.importance_method:<18} "
+              f"{_get(r, 'score_mean'):.4f}+/-{_get(r, 'score_std'):.2f}   {bp.budget}")
+
+    print(f"\n=== BEST BY DIMENSION ===")
+    print(f"{'Dim':<8} {'Model':<10} {'Method':<20} {'Importance':<18} {metric:<12}")
+    print("-" * 75)
+    for tier, r in sorted(result.best_by_dimension.items()):
+        bp = _get(r, 'blueprint')
+        print(f"<={tier:<7} {_get(r, 'model'):<10} {bp.allocation_method:<20} "
+              f"{bp.importance_method:<18} "
+              f"{_get(r, 'score_mean'):.4f}+/-{_get(r, 'score_std'):.2f}")
+
+    print(f"\n=== PERFORMANCE MATRIX ({metric}) ===")
+    tiers = [str(t) for t in dimension_tiers]
+    header = f"{'Model':<12}" + "".join(f"{'<='+t:<10}" for t in tiers)
+    print(header)
+    print("-" * len(header))
+    for model_name in models_evaluated:
+        if model_name in result.performance_matrix:
+            row = f"{model_name:<12}"
+            for tier in tiers:
+                score = result.performance_matrix[model_name].get(tier, None)
+                if score is not None:
+                    row += f"{score:<10.4f}"
+                else:
+                    row += f"{'--':<10}"
+            print(row)
+
+    print(f"\n=== BASELINE COMPARISON (full dimension) ===")
+    baselines = result.baselines
+    header = f"{'Baseline':<15} {'Dim':<8}" + "".join(f"{m:<10}" for m in models_evaluated)
+    print(header)
+    print("-" * len(header))
+    for baseline_name, baseline_scores in baselines.items():
+        row = f"{baseline_name:<15} {baseline_scores.get('dimension', '?'):<8}"
+        for m in models_evaluated:
+            score = baseline_scores.get(m, None)
+            if score is not None:
+                row += f"{score:<10.4f}"
+            else:
+                row += f"{'--':<10}"
+        print(row)
+
+    print(f"\n=== HYBRID IMPROVEMENT ===")
+    for model_name, r in result.best_by_model.items():
+        hybrid_score = _get(r, 'score_mean')
+        hybrid_dim = _get(r, 'n_features')
+
+        best_baseline_name = None
+        best_baseline_score = None
+        for baseline_name, baseline_scores in baselines.items():
+            if baseline_name == 'all_concat':
+                continue
+            if model_name not in baseline_scores:
+                continue
+            score = baseline_scores[model_name]
+            if best_baseline_score is None:
+                best_baseline_score = score
+                best_baseline_name = baseline_name
+            elif (lower_is_better and score < best_baseline_score) or \
+                 (not lower_is_better and score > best_baseline_score):
+                best_baseline_score = score
+                best_baseline_name = baseline_name
+
+        if best_baseline_name is not None:
+            improvement = hybrid_score - best_baseline_score
+            baseline_dim = baselines[best_baseline_name].get('dimension', '?')
+            better = improvement < 0 if lower_is_better else improvement > 0
+            sign = '' if better else '(!)'
+            print(f"  {model_name}: Hybrid({hybrid_dim}d) vs {best_baseline_name}({baseline_dim}d): "
+                  f"{hybrid_score:.4f} vs {best_baseline_score:.4f} ({improvement:+.4f}) {sign}")
+
+    print("=" * 80)
+
+
+def save_results(
+    result: SearchResult,
+    dataset_name: str,
+    search_mode: str,
+    reps_tested: List[str],
+    output_path: str,
+    base_reps: Optional[Dict[str, np.ndarray]] = None,
+    labels: Optional[np.ndarray] = None,
+):
+    """Save results JSON with blueprint code."""
+    from kirby.hybrid import create_hybrid
+
+    def result_to_dict(r, include_weights: bool = False):
+        bp = _get(r, 'blueprint')
+        d = {
+            'model': _get(r, 'model'),
+            'score_mean': round(_get(r, 'score_mean'), 4),
+            'score_std': round(_get(r, 'score_std'), 4),
+            'dimension': _get(r, 'n_features'),
+            'blueprint': bp.to_dict(),
+        }
+
+        if include_weights and base_reps is not None and labels is not None:
+            try:
+                _, feature_info = create_hybrid(
+                    base_reps, labels,
+                    allocation_method=bp.allocation_method,
+                    budget=bp.budget,
+                    importance_method=bp.importance_method,
+                )
+                weights_by_rep = {}
+                for rep_name in feature_info:
+                    if rep_name in ('allocation', 'greedy_history', 'greedy_feature_history'):
+                        continue
+                    if isinstance(feature_info[rep_name], dict) and 'importance_scores' in feature_info[rep_name]:
+                        scores = feature_info[rep_name]['importance_scores']
+                        indices = feature_info[rep_name]['selected_indices']
+                        weights_by_rep[rep_name] = {
+                            'indices': indices.tolist() if hasattr(indices, 'tolist') else list(indices),
+                            'scores': scores.tolist() if hasattr(scores, 'tolist') else list(scores),
+                        }
+                d['feature_weights'] = weights_by_rep
+            except Exception as e:
+                print(f"  Warning: Could not extract weights for {_get(r, 'model')}: {e}")
+
+        return d
+
+    best = result.best_overall
+    output = {
+        'metadata': {
+            'dataset': dataset_name,
+            'search_mode': search_mode,
+            'reps_available': reps_tested,
+            'timestamp': datetime.now().isoformat(),
+            'domain': 'antibody',
+        },
+        'best_overall': result_to_dict(best, include_weights=True) if best else None,
+        'best_by_dimension': {
+            str(tier): result_to_dict(r)
+            for tier, r in result.best_by_dimension.items()
+        },
+        'best_by_model': {
+            model: result_to_dict(r, include_weights=True)
+            for model, r in result.best_by_model.items()
+        },
+        'performance_matrix': result.performance_matrix,
+        'baselines': result.baselines,
+    }
+
+    with open(output_path, 'w') as f:
+        json.dump(output, f, indent=2)
+
+    print(f"\nResults saved to: {output_path}")
+
+    blueprint_path = output_path.replace('.json', '_blueprint.py')
+    save_blueprint_code(result, reps_tested, blueprint_path)
+
+
+def save_blueprint_code(result: SearchResult, reps_tested: List[str], output_path: str):
+    """Generate importable Python code for reusing the hybrids."""
+    lines = [
+        '"""',
+        'Auto-generated antibody hybrid blueprints.',
+        '',
+        'Usage:',
+        '    from results_blueprint import create_rf_hybrid',
+        '    X = create_rf_hybrid(heavy_seqs, light_seqs, labels)',
+        '"""',
+        '',
+        'from kirby.hybrid import create_hybrid, apply_feature_selection',
+        'from kirby.representations.antibody import (',
+        '    create_kmer_frequency, create_physicochemical_profile,',
+        '    create_ablang2_embeddings, create_antiberty_embeddings,',
+        '    create_igbert_embeddings, create_esm2_embeddings,',
+        '    create_prot_t5_embeddings, create_ab_roberta_embeddings,',
+        '    create_balm_embeddings, create_pigen_embeddings,',
+        '    create_esmc_embeddings, create_sapiens_embeddings,',
+        '    compute_aac_features, compute_blosum62_features,',
+        '    create_imgt_onehot,',
+        ')',
+        '',
+        '',
+    ]
+
+    for model_name, r in result.best_by_model.items():
+        bp = _get(r, 'blueprint')
+        n_features = _get(r, 'n_features')
+        score_mean = _get(r, 'score_mean')
+
+        lines.extend([
+            f"def create_{model_name}_hybrid(heavy_seqs, light_seqs, labels):",
+            f'    """',
+            f'    Create the optimal antibody hybrid for {model_name.upper()} model.',
+            f'    ',
+            f'    Blueprint: method={bp.allocation_method}, budget={bp.budget}, importance={bp.importance_method}',
+            f'    Expected dimension: ~{n_features}',
+            f'    Expected score: {score_mean:.4f}',
+            f'    """',
+            f'    # Generate required representations (see find_best_hybrid_antibody.py for dispatch)',
+            f'    reps = {{}}',
+            f'    # TODO: Fill in rep generation calls for: {bp.reps}',
+            f'    ',
+            f'    X_hybrid, feature_info = create_hybrid(',
+            f'        reps, labels,',
+            f"        allocation_method='{bp.allocation_method}',",
+            f'        budget={bp.budget},',
+            f"        importance_method='{bp.importance_method}',",
+            f'    )',
+            f'    return X_hybrid, feature_info',
+            f'',
+            f'',
+        ])
+
+    with open(output_path, 'w') as f:
+        f.write('\n'.join(lines))
+
+    print(f"Blueprint code saved to: {output_path}")
+
+
+# =============================================================================
+# MAIN
+# =============================================================================
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Find the optimal hybrid antibody representation for each model.',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s sabdab_affinity --reps fast --search fast
+  %(prog)s sabdab_affinity --reps fast+lm --search medium
+  %(prog)s data.csv --heavy-col VH --light-col VL --target-col ddG --reps all_server
+
+Output:
+  - Best overall: single best model+hybrid combination
+  - Best by dimension: optimal at each tier (50, 100, 200, 500)
+  - Best by model: optimal hybrid per model type
+  - Performance matrix: full Model x Dimension grid
+  - Baseline comparison: hybrid vs full-dimension baselines
+        """
+    )
+
+    parser.add_argument('dataset', type=str,
+                       help="'sabdab_affinity' or path to CSV")
+    parser.add_argument('--heavy-col', type=str, default='VH',
+                       help="Heavy chain column name (default: VH)")
+    parser.add_argument('--light-col', type=str, default='VL',
+                       help="Light chain column name (default: VL)")
+    parser.add_argument('--target-col', type=str, default='target',
+                       help="Target column name (default: target)")
+    parser.add_argument('--reps', type=str, default='fast',
+                       help="'fast', 'fast+lm', 'all_server', 'all', or comma-separated list")
+    parser.add_argument('--search', type=str, default='fast',
+                       choices=list(_SEARCH_NAME_MAP.keys()),
+                       help="Search speed: 'fast', 'medium', 'long'")
+    parser.add_argument('--output', type=str, default=None)
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--augment', action='store_true',
+                       help='Include augmented features (developability, humanness, etc.)')
+    parser.add_argument('--model', type=str, default=None,
+                       help="Override models: 'rf', 'xgboost', 'ridge', etc. or comma-separated")
+    parser.add_argument('--save-weights', action='store_true',
+                       help='Fit best config on full data and save feature weights')
+    parser.add_argument('--weight-method', type=str, default='lightgbm_gain',
+                       help="Importance method for feature weights (default: lightgbm_gain)")
+    parser.add_argument('--test-rep-subsets', action='store_true',
+                       help='Also test leave-one-rep-out subsets (when >=3 reps)')
+    parser.add_argument('--identity-threshold', type=float, default=0.8,
+                       help="Sequence identity threshold for GroupKFold (default: 0.8)")
+    parser.add_argument('--cache', action='store_true',
+                       help='Cache hybrid search results to disk')
+
+    args = parser.parse_args()
+
+    speed = _SEARCH_NAME_MAP.get(args.search, args.search)
+
+    # Load dataset
+    print(f"Loading dataset: {args.dataset}")
+    heavy_seqs, light_seqs, labels, task_type = load_dataset(
+        args.dataset, args.heavy_col, args.light_col, args.target_col
+    )
+    print(f"  {len(heavy_seqs)} antibodies, task: {task_type}")
+    if light_seqs:
+        print(f"  Paired (VH+VL)")
+    else:
+        print(f"  Heavy chain only")
+
+    # Compute sequence identity groups for CV
+    print("  Assigning sequence identity groups...")
+    groups, n_groups = assign_identity_groups(heavy_seqs, threshold=args.identity_threshold)
+    print(f"  {n_groups} groups (threshold={args.identity_threshold})")
+
+    # Generate representations
+    base_reps = get_representations(heavy_seqs, light_seqs, args.reps)
+
+    # Generate augmentations
+    augmentations = None
+    if args.augment:
+        augmentations = get_augmentations(heavy_seqs, light_seqs)
+        if not augmentations:
+            augmentations = None
+
+    # Resolve model override
+    models_arg = None
+    if args.model:
+        models_arg = [m.strip() for m in args.model.split(',')]
+
+    # Call domain-agnostic search
+    result = find_best_hybrid(
+        base_reps=base_reps,
+        labels=labels,
+        groups=groups,
+        models=models_arg,
+        metric='r2' if task_type == 'regression' else 'accuracy',
+        task_type=task_type,
+        speed=speed,
+        return_fitted=args.save_weights,
+        weight_method=args.weight_method if args.save_weights else None,
+        test_rep_subsets=args.test_rep_subsets,
+        seed=args.seed,
+        augmentations=augmentations,
+        cache=args.cache,
+    )
+
+    # Print summary
+    print_summary(result, task_type)
+
+    # Save results
+    if args.output:
+        output_path = args.output
+    else:
+        dataset_name = Path(args.dataset).stem if os.path.exists(args.dataset) else args.dataset
+        output_path = f"results_{dataset_name}_{args.search}.json"
+
+    save_results(result, args.dataset, args.search, list(base_reps.keys()), output_path,
+                 base_reps=base_reps, labels=labels)
+
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
