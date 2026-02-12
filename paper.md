@@ -47,7 +47,7 @@
 % Scaffold-split CV throughout (GroupKFold on Murcko scaffolds)
 
 \subsection{Molecular Representations}
-% Table of 16 representations (all_no_gk preset):
+% Table of 15 representations (all preset, graph_kernel quality-filtered ~290 features):
 % Classical: ECFP4 (1024), MACCS (167), PDV (200)
 % Pretrained: mol2vec, ChemBERTa, MolFormer, SelFormer, ChemBERT
 % Graph neural: MolCLR, GraphMVP, SMITED, MHG-GNN, Grover

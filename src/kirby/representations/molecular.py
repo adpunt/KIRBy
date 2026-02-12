@@ -2225,12 +2225,31 @@ def create_smited(smiles_list, smited_dir=None, model_variant='light', device=No
 # =============================================================================
 
 def create_graph_kernel(smiles_list, kernel='weisfeiler_lehman', n_iter=5,
-                        n_features=None, reference_vocabulary=None, return_vocabulary=False):
+                        n_features=None, reference_vocabulary=None,
+                        return_vocabulary=False, quality_filter=True,
+                        sparsity_threshold=0.95):
     """
-    Create graph kernel features using WL histogram approach.
+    Create graph kernel features using Weisfeiler-Lehman (WL) histogram approach.
 
-    Extracts WL label histograms as features - the proper way to use graph kernels
-    with non-kernel methods like Random Forest.
+    Extracts WL label histograms as explicit feature vectors — the standard way
+    to use graph kernels with non-kernel ML methods (Shervashidze et al. 2011).
+
+    Method:
+        1. Convert each molecule to a graph (atoms=nodes, bonds=edges)
+        2. Run WL label propagation for n_iter iterations
+        3. At each iteration, each node gets a new label encoding its neighbourhood
+        4. Histogram of all labels across iterations = feature vector
+
+    Quality filtering (default on):
+        Raw WL histograms are extremely high-dimensional and sparse (e.g. logD:
+        71,611 features, 99.8% sparse). Empirical testing (graph_kernel_analysis.py,
+        Exp B on logD) showed that removing features with >95% sparsity retains
+        290/71,611 features with negligible quality loss:
+            - Single-rep RF R²: 0.691 (full) → 0.687 (filtered), delta = -0.004
+            - Hybrid RF R²:     0.738 (full) → 0.737 (filtered), delta = -0.001
+            - Speedup: 24x (103 min → 4.4 min in hybrid pipeline)
+        PCA-based reduction was tested and rejected: R² drops to 0.45 because PCA
+        assumes Gaussian structure incompatible with sparse count data.
 
     Args:
         smiles_list: List of SMILES strings
@@ -2239,7 +2258,12 @@ def create_graph_kernel(smiles_list, kernel='weisfeiler_lehman', n_iter=5,
         n_features: Ignored (kept for API compatibility)
         reference_vocabulary: Set of WL labels from training (for test set)
         return_vocabulary: If True, return (features, vocabulary) tuple
-        
+        quality_filter: If True (default), remove features with sparsity above
+                       sparsity_threshold. Reduces dimensionality ~200x with
+                       negligible quality loss.
+        sparsity_threshold: Maximum allowed sparsity for quality filter (default: 0.95).
+                           Features with more than this fraction of zeros are removed.
+
     Returns:
         np.ndarray: WL histogram features (n_molecules, n_labels)
         or tuple: (features, vocabulary) if return_vocabulary=True
@@ -2306,7 +2330,21 @@ def create_graph_kernel(smiles_list, kernel='weisfeiler_lehman', n_iter=5,
     for i, histogram in enumerate(all_histograms):
         for j, label in enumerate(sorted_labels):
             features[i, j] = histogram.get(label, 0)
-    
+
+    print(f"  Shape: {features.shape[0]} x {features.shape[1]}")
+
+    # Quality filter: remove sparse features (>95% zeros by default)
+    if quality_filter and reference_vocabulary is None:
+        n_before = features.shape[1]
+        sparsity = (features == 0).sum(axis=0) / features.shape[0]
+        keep_mask = sparsity <= sparsity_threshold
+        features = features[:, keep_mask]
+        # Also filter vocabulary to match
+        sorted_labels_filtered = [l for l, k in zip(sorted_labels, keep_mask) if k]
+        vocabulary = set(sorted_labels_filtered)
+        print(f"  Quality filter: {n_before} → {features.shape[1]} features "
+              f"(removed {n_before - features.shape[1]} with >{sparsity_threshold*100:.0f}% sparsity)")
+
     if return_vocabulary:
         return features, vocabulary
     return features

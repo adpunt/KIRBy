@@ -438,8 +438,8 @@ sbatch tests/slurm_scripts/run_similarity_experiments.sh full
 # Quick local test (3 reps, fast search)
 python tests/find_best_hybrid_molecular.py logd --reps fast --search fast
 
-# Full server run (16 reps, no graph kernel)
-python tests/find_best_hybrid_molecular.py logd --reps all_no_gk --search long
+# Full server run (15 reps, incl quality-filtered graph kernel)
+python tests/find_best_hybrid_molecular.py logd --reps all --search long
 ```
 
 ### Antibody
