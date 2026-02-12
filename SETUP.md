@@ -189,9 +189,12 @@ pip install ablang2   # AbLang-2 (480D, paired)
 pip install sentencepiece
 
 # ESM-C (EvolutionaryScale package v3 — different from old fair-esm)
+# REQUIRES Python >=3.10. Will not install on Python 3.9.
+# ESM-2 650M is a comparable alternative if ESM-C is unavailable.
 pip install esm
 
 # Sapiens / BioPhi (humanization model, 20D features)
+# REQUIRES Python >=3.10.
 pip install biophi
 ```
 
