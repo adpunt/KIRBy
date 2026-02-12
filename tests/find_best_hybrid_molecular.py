@@ -85,13 +85,12 @@ REP_PRESETS = {
     'all_no_gk': [
         'ecfp4', 'maccs', 'pdv', 'mol2vec', 'chemberta', 'molformer',
         'selformer', 'chembert', 'molclr', 'graphmvp', 'smited',
-        'mhg_gnn', 'grover', 'unimol', 'schnet', 'chemformer'
+        'mhg_gnn', 'grover', 'schnet'
     ],
     'all': [
         'ecfp4', 'maccs', 'pdv', 'mol2vec', 'chemberta', 'molformer',
         'selformer', 'chembert', 'molclr', 'graphmvp', 'smited',
-        'mhg_gnn', 'grover', 'graph_kernel', 'unimol', 'schnet',
-        'chemformer'
+        'mhg_gnn', 'grover', 'graph_kernel', 'schnet'
     ]
 }
 
