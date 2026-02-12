@@ -188,6 +188,9 @@ pip install ablang2   # AbLang-2 (480D, paired)
 # ProtT5-XL tokenizer dependency
 pip install sentencepiece
 
+# AntiBERTy (RoFormer tokenizer dependency)
+pip install rjieba
+
 # ESM-C (EvolutionaryScale package v3 — different from old fair-esm)
 # REQUIRES Python >=3.10. Will not install on Python 3.9.
 # ESM-2 650M is a comparable alternative if ESM-C is unavailable.
