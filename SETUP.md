@@ -1,0 +1,571 @@
+# KIRBy Full Setup Guide
+
+From-zero-to-working setup for all molecular and antibody representations.
+
+---
+
+## Table of Contents
+
+1. [System Requirements](#1-system-requirements)
+2. [Base Installation](#2-base-installation)
+3. [Molecular Representations](#3-molecular-representations)
+4. [Antibody Representations](#4-antibody-representations)
+5. [Pretrained Model Downloads](#5-pretrained-model-downloads)
+6. [External Storage (Optional)](#6-external-storage-optional)
+7. [ARC Server Setup (Oxford)](#7-arc-server-setup-oxford)
+8. [Verification](#8-verification)
+
+---
+
+## 1. System Requirements
+
+| Requirement | Minimum | Recommended |
+|-------------|---------|-------------|
+| Python | 3.8+ | 3.10-3.11 |
+| RAM | 8 GB | 32 GB |
+| Disk | 20 GB | 50 GB (or use external storage) |
+| GPU | Not required | CUDA-capable (for pretrained models) |
+| OS | Linux / macOS | Linux (for ANARCI via bioconda) |
+
+### Disk space breakdown
+
+| Component | Size |
+|-----------|------|
+| KIRBy repo + code | ~100 MB |
+| Core pip dependencies | ~2 GB |
+| Molecular pretrained weights (mol2vec, MHG-GNN) | ~400 MB |
+| Antibody HF models (all 6) | ~16 GB |
+| Antibody non-HF models (BALM, ESM-C) | ~3 GB |
+| QM9 / test data | ~1.5 GB |
+| **Total** | **~23 GB** |
+
+---
+
+## 2. Base Installation
+
+### 2a. Create environment
+
+```bash
+# Conda (recommended — needed for ANARCI and RDKit)
+conda create -n kirby python=3.11
+conda activate kirby
+
+# RDKit (only available via conda)
+conda install -c conda-forge rdkit
+```
+
+### 2b. Clone and install KIRBy
+
+```bash
+git clone https://github.com/adpunt/KIRBy.git
+cd KIRBy
+pip install -e .
+```
+
+### 2c. Install extras based on your use case
+
+```bash
+# Molecular QSAR (transformers, GNNs, mol2vec, GPs, XGBoost, LightGBM)
+pip install -e ".[qsar]"
+
+# Antibody work (transformers, ablang2, biopython)
+pip install -e ".[antibody]"
+
+# Uncertainty quantification (NGBoost, quantile forests, BNNs)
+pip install -e ".[uncertainty]"
+
+# Everything
+pip install -e ".[qsar,antibody,uncertainty,interpret]"
+```
+
+### 2d. Install conda-only dependencies
+
+```bash
+# ANARCI — required for CDR extraction, IMGT one-hot, per-CDR features
+conda install -c bioconda anarci
+
+# torch-scatter — required for some GNN representations
+# Match your PyTorch + CUDA version:
+pip install torch-scatter -f https://data.pyg.org/whl/torch-$(python -c "import torch; print(torch.__version__)").html
+```
+
+---
+
+## 3. Molecular Representations
+
+### 3a. mol2vec pretrained weights (required)
+
+```bash
+cd KIRBy
+wget https://github.com/samoturk/mol2vec/raw/master/examples/models/model_300dim.pkl
+```
+
+This file must be in the repo root. KIRBy looks for `model_300dim.pkl` relative to the working directory.
+
+### 3b. MHG-GNN (optional)
+
+MHG-GNN requires a separate repository and pretrained weights:
+
+```bash
+# Clone the model code
+cd ~/repos  # or any of: ~/materials, ../materials, ../../materials
+git clone https://huggingface.co/ibm-research/materials.mhg-ged materials
+
+# Download pretrained weights from:
+# https://huggingface.co/ibm-research/materials.mhg-ged
+# File: mhggnn_pretrained_model_0724_2023.pickle
+# Place in: materials/
+
+# Install MHG dependencies
+cd KIRBy
+pip install -e ".[gnn]"
+```
+
+### 3c. GROVER (optional)
+
+```bash
+# Clone GROVER repo
+git clone https://github.com/tencent-ailab/grover.git
+cd grover
+pip install -e .
+
+# Download pretrained weights:
+# https://ai.tencent.com/ailab/ml/ml-data/grover-models/grover_large.tar.gz
+# Extract to: grover/pretrained/grover_large/
+```
+
+### 3d. Uni-Mol (optional)
+
+```bash
+pip install unimol-tools  # Auto-downloads weights on first use
+```
+
+### Molecular representation summary
+
+| Representation | Type | Dims | Extra Setup |
+|----------------|------|------|-------------|
+| ECFP4 | Static | 2048D | None (RDKit) |
+| MACCS | Static | 167D | None (RDKit) |
+| PDV | Static | 200D | None (RDKit) |
+| mol2vec | Pretrained | 300D | Download `model_300dim.pkl` |
+| Graph Kernel (WL) | Pretrained | Variable | None (grakel) |
+| MHG-GNN | Pretrained | 256D | Clone repo + weights |
+| ChemBERTa | Fine-tuned | 768D | None (auto-downloads from HF) |
+| MoLFormer | Fine-tuned | 768D | None (auto-downloads from HF) |
+| SELFormer | Fine-tuned | 768D | None (auto-downloads from HF) |
+| ChemBERT | Fine-tuned | 768D | None (auto-downloads from HF) |
+| Chemformer | Fine-tuned | 256D | None (auto-downloads from HF) |
+| SchNet | Fine-tuned | 256D | None (torch-geometric) |
+| MolCLR | Pretrained | 512D | None (auto-downloads from HF) |
+| GraphMVP | Pretrained | 300D | None (auto-downloads from HF) |
+| SMITED | Pretrained | 768D | None (auto-downloads from HF) |
+| GROVER | Pretrained | 1024D | Clone repo + weights |
+| Uni-Mol | Pretrained | 512D | `pip install unimol-tools` |
+
+---
+
+## 4. Antibody Representations
+
+### 4a. Core antibody dependencies
+
+```bash
+pip install -e ".[antibody]"
+
+# ANARCI (required for CDR extraction, IMGT features, per-CDR features)
+conda install -c bioconda anarci
+```
+
+### 4b. AbLang models
+
+```bash
+pip install ablang    # AbLang v1 (768D)
+pip install ablang2   # AbLang-2 (480D, paired)
+```
+
+### 4c. Additional packages
+
+```bash
+# ProtT5-XL tokenizer dependency
+pip install sentencepiece
+
+# ESM-C (EvolutionaryScale package v3 — different from old fair-esm)
+pip install esm
+
+# Sapiens / BioPhi (humanization model, 20D features)
+pip install biophi
+```
+
+### Antibody representation summary
+
+**Pretrained Language Models:**
+
+| Representation | Dims | Paired? | Package | Weights |
+|----------------|------|---------|---------|---------|
+| AntiBERTy | 1024D | No | transformers | Auto-download |
+| AbLang v1 | 768/1536D | Yes | ablang | Bundled |
+| AbLang-2 | 480D | Yes | ablang2 | Bundled |
+| ESM-2 650M | 1280/2560D | Concat | transformers | Auto-download (~2.5 GB) |
+| ESM-C 600M | 1152D | Concat | esm (v3) | Auto-download (~2.4 GB) |
+| IgBERT | 1024D | Yes (cross-attn) | transformers | Auto-download (~1.6 GB) |
+| ProtT5-XL | 1024/2048D | Concat | transformers + sentencepiece | Auto-download (~11 GB) |
+| Ab-RoBERTa | 768D | No | transformers | Auto-download (~500 MB) |
+| BALM | 1024D | No | Manual | GitHub + Google Drive (~600 MB) |
+| Sapiens | ~20D | No | biophi | Bundled |
+| p-IgGen | 768D | Yes | transformers | Auto-download (~90 MB) |
+
+**Classical (Non-Pretrained):**
+
+| Representation | Dims | Dependencies |
+|----------------|------|-------------|
+| k-mer frequency | 400D | None |
+| Physicochemical profile | 68D | None |
+| IMGT one-hot | 5120D | ANARCI |
+
+**Augmented Features (94D total):**
+
+| Feature | Dims | Dependencies |
+|---------|------|-------------|
+| Developability | 16D | None |
+| Humanness scores | 7D | None |
+| AAC | 20D | None |
+| BLOSUM62 | 20D | None |
+| CDR lengths | 7D | ANARCI |
+| Per-CDR physicochemical | 12D | ANARCI |
+| Extended liabilities | 9D | ANARCI |
+| CamSol solubility | 3D | None |
+
+---
+
+## 5. Pretrained Model Downloads
+
+HuggingFace models auto-download on first use, but you can pre-download them to
+avoid delays during experiments. Downloads go to `$HF_HOME/hub/` (default:
+`~/.cache/huggingface/hub/`).
+
+### 5a. Set cache location (important if disk is limited)
+
+```bash
+# Point to a location with enough space
+export HF_HOME=/path/to/large/disk/.cache/huggingface
+
+# Make persistent (add to your shell profile or setup.sh)
+echo 'export HF_HOME=/path/to/large/disk/.cache/huggingface' >> ~/.bashrc
+```
+
+### 5b. Download HuggingFace models
+
+Run these on a machine with internet access. Each line downloads one model.
+
+```bash
+# ESM-2 650M (~2.5 GB) — general protein LM, most important baseline
+python -c "from transformers import AutoTokenizer, EsmModel; AutoTokenizer.from_pretrained('facebook/esm2_t33_650M_UR50D'); EsmModel.from_pretrained('facebook/esm2_t33_650M_UR50D')"
+
+# IgBERT (~1.6 GB) — SOTA paired antibody model
+python -c "from transformers import BertTokenizer, BertModel; BertTokenizer.from_pretrained('Exscientia/IgBert'); BertModel.from_pretrained('Exscientia/IgBert')"
+
+# ProtT5-XL (~11 GB) — largest, best general protein encoder
+python -c "from transformers import T5Tokenizer, T5EncoderModel; T5Tokenizer.from_pretrained('Rostlab/prot_t5_xl_bfd', do_lower_case=False); T5EncoderModel.from_pretrained('Rostlab/prot_t5_xl_bfd')"
+
+# Ab-RoBERTa (~500 MB) — antibody-specific with SAA tokenizer
+python -c "from transformers import AutoTokenizer, AutoModel; AutoTokenizer.from_pretrained('mogam-ai/Ab-RoBERTa'); AutoModel.from_pretrained('mogam-ai/Ab-RoBERTa')"
+
+# AntiBERTy (~350 MB) — antibody LM (used by IgFold)
+python -c "from transformers import RoFormerTokenizer, RoFormerModel; RoFormerTokenizer.from_pretrained('alchemab/antiberta2'); RoFormerModel.from_pretrained('alchemab/antiberta2')"
+
+# p-IgGen (~90 MB) — paired antibody generative model
+python -c "from transformers import AutoTokenizer, AutoModelForCausalLM; AutoTokenizer.from_pretrained('ollieturnbull/p-IgGen'); AutoModelForCausalLM.from_pretrained('ollieturnbull/p-IgGen')"
+
+# Molecular models (auto-download, but can pre-cache)
+python -c "from transformers import AutoModel; AutoModel.from_pretrained('ibm/MoLFormer-XL-both-10pct')"
+python -c "from transformers import AutoModel; AutoModel.from_pretrained('seyonec/ChemBERTa-zinc-base-v1')"
+python -c "from transformers import AutoModel; AutoModel.from_pretrained('HUBioDataLab/SELFormer')"
+```
+
+### 5c. BALM (manual — not on HuggingFace)
+
+```bash
+# Clone repo
+git clone https://github.com/BEAM-Labs/BALM.git
+
+# Download pretrained weights from Google Drive:
+# https://drive.google.com/drive/folders/1foy264CIawBIT3QFTdc6JBVxw6MQfvQd
+# Place contents in BALM/pretrained-BALM/
+
+# Usage in Python:
+# create_balm_embeddings(sequences, balm_repo_path='/path/to/BALM')
+```
+
+### 5d. Model size reference
+
+| Model | HF ID | Size |
+|-------|-------|------|
+| ProtT5-XL | `Rostlab/prot_t5_xl_bfd` | ~11 GB |
+| ESM-2 650M | `facebook/esm2_t33_650M_UR50D` | ~2.5 GB |
+| IgBERT | `Exscientia/IgBert` | ~1.6 GB |
+| BALM | GitHub / Google Drive | ~600 MB |
+| Ab-RoBERTa | `mogam-ai/Ab-RoBERTa` | ~500 MB |
+| AntiBERTy | `alchemab/antiberta2` | ~350 MB |
+| MoLFormer | `ibm/MoLFormer-XL-both-10pct` | ~180 MB |
+| ChemBERTa | `seyonec/ChemBERTa-zinc-base-v1` | ~340 MB |
+| p-IgGen | `ollieturnbull/p-IgGen` | ~90 MB |
+| **Total (all HF)** | | **~17 GB** |
+
+---
+
+## 6. External Storage (Optional)
+
+If disk space is limited, you can offload large data and model weights to an
+external drive using symlinks. All code paths remain unchanged.
+
+### 6a. Move HuggingFace cache
+
+```bash
+# Copy cache to external drive
+rsync -a ~/.cache/huggingface/hub/ /Volumes/YOUR_DRIVE/huggingface/hub/
+
+# Replace with symlink
+rm -rf ~/.cache/huggingface/hub
+ln -s /Volumes/YOUR_DRIVE/huggingface/hub ~/.cache/huggingface/hub
+```
+
+### 6b. Move large data files
+
+```bash
+# Example: move QM9 dataset
+rsync -a /path/to/KIRBy/data/QM9/ /Volumes/YOUR_DRIVE/KIRBy/data/QM9/
+rm -rf /path/to/KIRBy/data/QM9
+ln -s /Volumes/YOUR_DRIVE/KIRBy/data/QM9 /path/to/KIRBy/data/QM9
+
+# Repeat for any large directories:
+# tests/data/QM9, tests/tybalt/data, tests/feats_pt.zip, etc.
+```
+
+### 6c. Alternative: set HF_HOME directly
+
+Instead of symlinks, you can point HuggingFace to the external drive:
+
+```bash
+export HF_HOME=/Volumes/YOUR_DRIVE/huggingface
+# Add to shell profile to persist
+```
+
+---
+
+## 7. ARC Server Setup (Oxford)
+
+For running on the ARC HPC cluster at Oxford.
+
+### 7a. First-time setup
+
+```bash
+ssh scat9264@arc-login.arc.ox.ac.uk
+cd /data/stat-cadd/scat9264
+
+# Clone repo
+git clone https://github.com/adpunt/KIRBy.git
+cd KIRBy
+
+# Create/activate environment
+# (use whatever conda/module system ARC provides)
+. setup.sh
+
+# Point HF cache to data partition (home has limited quota!)
+export HF_HOME=/data/stat-cadd/scat9264/.cache/huggingface
+echo 'export HF_HOME=/data/stat-cadd/scat9264/.cache/huggingface' >> setup.sh
+
+# Install
+pip install -e ".[qsar,antibody,uncertainty]"
+conda install -c bioconda anarci
+pip install ablang ablang2 sentencepiece
+```
+
+### 7b. Download models (on login node — has internet)
+
+Compute nodes may not have internet access. Download everything on the login node:
+
+```bash
+cd /data/stat-cadd/scat9264/KIRBy
+. setup.sh
+
+# mol2vec weights
+wget https://github.com/samoturk/mol2vec/raw/master/examples/models/model_300dim.pkl
+
+# HuggingFace models (run each line — they cache to $HF_HOME)
+python -c "from transformers import AutoTokenizer, EsmModel; AutoTokenizer.from_pretrained('facebook/esm2_t33_650M_UR50D'); EsmModel.from_pretrained('facebook/esm2_t33_650M_UR50D')"
+python -c "from transformers import BertTokenizer, BertModel; BertTokenizer.from_pretrained('Exscientia/IgBert'); BertModel.from_pretrained('Exscientia/IgBert')"
+python -c "from transformers import T5Tokenizer, T5EncoderModel; T5Tokenizer.from_pretrained('Rostlab/prot_t5_xl_bfd', do_lower_case=False); T5EncoderModel.from_pretrained('Rostlab/prot_t5_xl_bfd')"
+python -c "from transformers import AutoTokenizer, AutoModel; AutoTokenizer.from_pretrained('mogam-ai/Ab-RoBERTa'); AutoModel.from_pretrained('mogam-ai/Ab-RoBERTa')"
+python -c "from transformers import RoFormerTokenizer, RoFormerModel; RoFormerTokenizer.from_pretrained('alchemab/antiberta2'); RoFormerModel.from_pretrained('alchemab/antiberta2')"
+python -c "from transformers import AutoTokenizer, AutoModelForCausalLM; AutoTokenizer.from_pretrained('ollieturnbull/p-IgGen'); AutoModelForCausalLM.from_pretrained('ollieturnbull/p-IgGen')"
+python -c "from transformers import AutoModel; AutoModel.from_pretrained('ibm/MoLFormer-XL-both-10pct')"
+python -c "from transformers import AutoModel; AutoModel.from_pretrained('seyonec/ChemBERTa-zinc-base-v1')"
+python -c "from transformers import AutoModel; AutoModel.from_pretrained('HUBioDataLab/SELFormer')"
+```
+
+### 7c. Deploy code updates
+
+```bash
+# On your local machine:
+git push
+
+# On the server:
+cd /data/stat-cadd/scat9264/KIRBy
+git pull
+. setup.sh
+```
+
+### 7d. Submit jobs
+
+```bash
+# Example SLURM submission
+sbatch tests/slurm_scripts/run_complexity_experiments.sh quick
+sbatch tests/slurm_scripts/run_similarity_experiments.sh full
+```
+
+---
+
+## 8. Verification
+
+Run these to verify your installation works. Each test uses 2-3 sequences and
+takes seconds (no GPU needed).
+
+### 8a. Core KIRBy
+
+```bash
+python -c "
+from kirby.hybrid import create_hybrid
+from kirby.find_best_hybrid import find_best_hybrid
+import numpy as np
+X = {'a': np.random.randn(10, 5), 'b': np.random.randn(10, 3)}
+h = create_hybrid(X)
+print(f'Hybrid: {h.shape}')
+print('Core OK')
+"
+```
+
+### 8b. Molecular representations
+
+```bash
+python -c "
+from kirby.representations.molecular import create_ecfp4, create_pdv
+smiles = ['CCO', 'c1ccccc1', 'CC(=O)O']
+print(f'ECFP4: {create_ecfp4(smiles).shape}')
+print(f'PDV: {create_pdv(smiles).shape}')
+print('Molecular OK')
+"
+```
+
+### 8c. Antibody representations (non-pretrained)
+
+```bash
+python -c "
+from kirby.representations.antibody import (
+    create_kmer_frequency, create_physicochemical_profile,
+    create_imgt_onehot, compute_developability_features,
+    compute_humanness_scores, compute_aac_features,
+    compute_blosum62_features, compute_cdr_length_features,
+    compute_per_cdr_physicochemical, compute_extended_liability_features,
+    compute_camsol_features,
+)
+heavy = ['EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS']
+light = ['DIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSRSGTDFTLTISSLQPEDFATYYCQQHYTTPPTFGQGTKVEIK']
+
+print(f'k-mer:         {create_kmer_frequency(heavy).shape}')
+print(f'Physicochemical:{create_physicochemical_profile(heavy, light).shape}')
+print(f'IMGT one-hot:  {create_imgt_onehot(heavy, light).shape}')
+print(f'Developability: {compute_developability_features(heavy, light).shape}')
+print(f'Humanness:      {compute_humanness_scores(heavy).shape}')
+print(f'AAC:            {compute_aac_features(heavy).shape}')
+print(f'BLOSUM62:       {compute_blosum62_features(heavy).shape}')
+print(f'CDR lengths:    {compute_cdr_length_features(heavy, light).shape}')
+print(f'Per-CDR physchem:{compute_per_cdr_physicochemical(heavy, light).shape}')
+print(f'Ext liability:  {compute_extended_liability_features(heavy, light).shape}')
+print(f'CamSol:         {compute_camsol_features(heavy).shape}')
+print('All antibody non-pretrained OK')
+"
+```
+
+### 8d. Antibody pretrained models
+
+```bash
+# Test each model individually (each downloads weights on first run)
+
+# IgBERT (1024D, ~1.6 GB download)
+python -c "
+from kirby.representations.antibody import create_igbert_embeddings
+h = ['EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS']
+print(f'IgBERT: {create_igbert_embeddings(h).shape}')
+"
+
+# ESM-2 650M (1280D, ~2.5 GB download)
+python -c "
+from kirby.representations.antibody import create_esm2_embeddings
+h = ['EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS']
+print(f'ESM-2: {create_esm2_embeddings(h).shape}')
+"
+
+# Ab-RoBERTa (768D, ~500 MB download)
+python -c "
+from kirby.representations.antibody import create_ab_roberta_embeddings
+h = ['EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS']
+print(f'Ab-RoBERTa: {create_ab_roberta_embeddings(h).shape}')
+"
+
+# ProtT5-XL (1024D, ~11 GB download)
+python -c "
+from kirby.representations.antibody import create_prot_t5_embeddings
+h = ['EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS']
+print(f'ProtT5-XL: {create_prot_t5_embeddings(h).shape}')
+"
+
+# p-IgGen (768D, ~90 MB download)
+python -c "
+from kirby.representations.antibody import create_pigen_embeddings
+h = ['EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS']
+print(f'p-IgGen: {create_pigen_embeddings(h).shape}')
+"
+
+# AbLang-2 (480D, bundled with pip package)
+python -c "
+from kirby.representations.antibody import create_ablang2_embeddings
+h = ['EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS']
+l = ['DIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSRSGTDFTLTISSLQPEDFATYYCQQHYTTPPTFGQGTKVEIK']
+print(f'AbLang-2: {create_ablang2_embeddings(h, l).shape}')
+"
+```
+
+---
+
+## Troubleshooting
+
+**`T5Tokenizer requires the SentencePiece library`**
+```bash
+pip install sentencepiece
+```
+
+**`ANARCI not available` warnings**
+```bash
+conda install -c bioconda anarci
+# ANARCI is conda-only, not available via pip
+```
+
+**`Repository Not Found` when loading a model**
+- Check you have internet access
+- Check the exact HF model ID (see table in Section 5d)
+- For BALM: it's not on HuggingFace — see Section 5c
+
+**`GPTNeoXForCausalLM.forward() got an unexpected keyword argument 'token_type_ids'`**
+- This was a bug in p-IgGen loading, fixed in commit `aa05745`
+- Make sure you have the latest code: `git pull`
+
+**HuggingFace cache filling up disk**
+- Set `HF_HOME` to a larger drive (Section 6)
+- Or symlink `~/.cache/huggingface/hub` to external storage
+
+**`Not enough free disk space` for ProtT5-XL**
+- ProtT5-XL is ~11 GB. Use an external drive or skip it (it's optional).
+- Smaller alternative: use ESM-2 650M (~2.5 GB) which has similar performance
+
+**Server compute nodes can't download models**
+- Download everything on the login node first (Section 7b)
+- Set `HF_HOME` so compute nodes find the cached weights

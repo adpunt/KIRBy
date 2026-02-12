@@ -40,6 +40,8 @@ KIRBy creates task-optimized molecular representations by:
 
 ## Installation
 
+**For a comprehensive setup guide (new machine, server, external storage):** see **[SETUP.md](SETUP.md)**
+
 ### ONE-TIME SETUP (First Time Only)
 
 **Download mol2vec pretrained weights:**
