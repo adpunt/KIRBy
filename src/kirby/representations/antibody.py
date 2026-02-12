@@ -893,12 +893,12 @@ def create_balm_embeddings(
         sys.path.insert(0, balm_repo_path)
 
     # Patch transformers compatibility: BALM's modeling_balm.py imports
-    # find_pruneable_heads_and_indices from transformers.modeling_utils,
-    # but it moved to transformers.pytorch_utils in newer versions.
+    # find_pruneable_heads_and_indices and prune_linear_layer from
+    # transformers.modeling_utils, but they moved to pytorch_utils.
     import transformers.modeling_utils as _mu
-    if not hasattr(_mu, 'find_pruneable_heads_and_indices'):
-        from transformers.pytorch_utils import find_pruneable_heads_and_indices
-        _mu.find_pruneable_heads_and_indices = find_pruneable_heads_and_indices
+    for _fn_name in ('find_pruneable_heads_and_indices', 'prune_linear_layer'):
+        if not hasattr(_mu, _fn_name):
+            setattr(_mu, _fn_name, getattr(__import__('transformers.pytorch_utils', fromlist=[_fn_name]), _fn_name))
 
     try:
         from modeling_balm import BALMForMaskedLM
