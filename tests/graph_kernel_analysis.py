@@ -33,6 +33,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import r2_score
 from sklearn.model_selection import GroupKFold
 from sklearn.preprocessing import StandardScaler
+from lightgbm import LGBMRegressor
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
@@ -115,7 +116,6 @@ def characterize_graph_kernel(
     # 4. Feature importance distribution
     print("  Computing LightGBM importance distribution...")
     t0 = time.time()
-    from lightgbm import LGBMRegressor
     lgb = LGBMRegressor(n_estimators=100, random_state=42, n_jobs=-1, verbose=-1)
     lgb.fit(X_gk, labels)
     importances = lgb.feature_importances_.astype(float)
