@@ -721,7 +721,8 @@ def _compute_fitted_result(
 # =============================================================================
 
 def _hybrid_cache_key(base_reps, labels, groups, speed, budgets, allocation_methods,
-                      importance_methods, n_folds, models, seed, metric, task_type) -> str:
+                      importance_methods, n_folds, models, seed, metric, task_type,
+                      return_fitted=False, weight_method=None) -> str:
     """SHA256 hash of all search-affecting inputs."""
     h = hashlib.sha256()
     for name in sorted(base_reps.keys()):
@@ -730,7 +731,7 @@ def _hybrid_cache_key(base_reps, labels, groups, speed, budgets, allocation_meth
     h.update(labels.tobytes())
     if groups is not None:
         h.update(groups.tobytes())
-    h.update(f"{speed}|{budgets}|{allocation_methods}|{importance_methods}|{n_folds}|{seed}|{metric}|{task_type}".encode())
+    h.update(f"{speed}|{budgets}|{allocation_methods}|{importance_methods}|{n_folds}|{seed}|{metric}|{task_type}|{return_fitted}|{weight_method}".encode())
     if models:
         model_names = sorted(models.keys()) if isinstance(models, dict) else sorted(models)
         h.update("|".join(model_names).encode())
@@ -814,6 +815,7 @@ def find_best_hybrid(
         key = _hybrid_cache_key(
             base_reps, labels, groups, speed, budgets, allocation_methods,
             importance_methods, n_folds, models, seed, metric, task_type,
+            return_fitted=return_fitted, weight_method=weight_method,
         )
         cache_path = Path(cache_dir or Path.home() / '.cache' / 'kirby' / 'hybrid_search') / f'{key}.pkl'
         if cache_path.exists():
