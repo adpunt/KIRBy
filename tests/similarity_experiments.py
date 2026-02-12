@@ -343,6 +343,27 @@ def estimate_mutual_information_knn(X: np.ndarray, y: np.ndarray,
     return max(0, mi)
 
 
+def estimate_intrinsic_dim_mle(X: np.ndarray, k: int = 10) -> float:
+    """MLE estimator of intrinsic dimensionality (Levina-Bickel 2004)."""
+    n_samples = X.shape[0]
+    k = min(k, n_samples - 1)
+
+    nn = NearestNeighbors(n_neighbors=k + 1)
+    nn.fit(X)
+    distances, _ = nn.kneighbors(X)
+    distances = distances[:, 1:]  # remove self
+
+    estimates = []
+    for i in range(n_samples):
+        dists = distances[i]
+        if dists[-1] > 0:
+            log_ratios = np.log(dists[-1] / dists[:-1])
+            if np.sum(log_ratios) > 0:
+                estimates.append((k - 1) / np.sum(log_ratios))
+
+    return np.mean(estimates) if estimates else np.nan
+
+
 def compute_effective_rank(X: np.ndarray) -> float:
     """Effective rank: exp(entropy of normalised singular values)."""
     scaler = StandardScaler()
@@ -1729,6 +1750,13 @@ def run_optimal_similarity_dimension(data: dict, n_folds: int,
 
         actual_dim = X_hybrid.shape[1]
 
+        # MLE intrinsic dimensionality of the hybrid
+        try:
+            X_hybrid_scaled = StandardScaler().fit_transform(X_hybrid)
+            mle_id = float(estimate_intrinsic_dim_mle(X_hybrid_scaled, k=10))
+        except Exception:
+            mle_id = float('nan')
+
         # Similarity quality
         D_weighted = compute_distance_matrix(X_hybrid, feature_weights=weights_flat,
                                                  standardize=True)
@@ -1784,6 +1812,7 @@ def run_optimal_similarity_dimension(data: dict, n_folds: int,
 
         results['budgets'][budget] = {
             'actual_dim': actual_dim,
+            'mle_id': mle_id,
             'rf_r2': rf_r2,
             'knn_r2': knn_r2,
             'sac_rho': sac_rho,
@@ -1791,13 +1820,13 @@ def run_optimal_similarity_dimension(data: dict, n_folds: int,
             'dist_corr_with_full': dist_corr,
             'time_seconds': elapsed,
         }
-        print(f"    dim={actual_dim}: RF_R²={rf_r2:.4f}, kNN_R²={knn_r2:.4f}, "
+        print(f"    dim={actual_dim} (MLE_ID={mle_id:.1f}): RF_R²={rf_r2:.4f}, kNN_R²={knn_r2:.4f}, "
               f"SAC={sac_rho:.4f}, viol={viol:.3f}, dist_corr={dist_corr:.3f}")
 
     # Per-rep baselines (the real comparison: best individual rep)
     print("\n  Individual rep baselines:")
     results['per_rep'] = {}
-    best_rep_sac = 0
+    best_rep_sac = -1
     best_rep_name = None
     for rep_name, X in reps.items():
         D_rep = compute_distance_matrix(X, standardize=True)
@@ -1820,14 +1849,22 @@ def run_optimal_similarity_dimension(data: dict, n_folds: int,
             knn.fit(X_tr, y_train)
             knn_rep.append(r2_score(y_val, knn.predict(X_va)))
 
+        # MLE ID for individual rep
+        try:
+            rep_mle = float(estimate_intrinsic_dim_mle(
+                StandardScaler().fit_transform(X), k=10))
+        except Exception:
+            rep_mle = float('nan')
+
         results['per_rep'][rep_name] = {
             'dim': X.shape[1],
+            'mle_id': rep_mle,
             'rf_r2': float(np.mean(rf_rep)),
             'knn_r2': float(np.mean(knn_rep)),
             'sac_rho': sac_rep,
             'violation_rate': viol_rep,
         }
-        if best_rep_name is None or sac_rep < best_rep_sac:
+        if best_rep_name is None or sac_rep > best_rep_sac:
             best_rep_sac = sac_rep
             best_rep_name = rep_name
         print(f"    {rep_name} (dim={X.shape[1]}): RF_R²={np.mean(rf_rep):.4f}, "

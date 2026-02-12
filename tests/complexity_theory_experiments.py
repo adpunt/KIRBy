@@ -15,13 +15,14 @@ Experiments:
   7. Data Complexity via Scaffold Partitioning — optimal config by subpopulation
   8. Uncertainty Calibration — conformal prediction at optimal vs suboptimal complexity
   9. Formal Complexity Analysis — ANOVA, information retention, effective rank, bias-variance
+  10. Noise Robustness & Feature Stability — NDS across noise strategies, feature overlap vs noise
 
 Datasets: logd, caco2, herg, qm9 (via load_dataset from molecular wrapper)
 Models: RF, kNN, ridge, XGBoost, MLP, LightGBM (ordered by complexity)
 
 Usage:
-    python tests/complexity_theory_experiments.py --mode quick --experiments 1 2 6 9
-    python tests/complexity_theory_experiments.py --mode full --experiments 1 2 3 4 5 6 7 8 9
+    python tests/complexity_theory_experiments.py --mode quick --experiments 1 2 6 9 10
+    python tests/complexity_theory_experiments.py --mode full --experiments 1 2 3 4 5 6 7 8 9 10
 """
 
 import os
@@ -52,6 +53,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
 from kirby.hybrid import create_hybrid, apply_feature_selection, compute_feature_importance
 from kirby.find_best_hybrid import find_best_hybrid, SearchResult
+
+try:
+    from noiseInject import NoiseInjectorRegression
+    HAS_NOISEINJECT = True
+except ImportError:
+    HAS_NOISEINJECT = False
 
 warnings.filterwarnings('ignore')
 
@@ -328,6 +335,16 @@ def compute_dataset_complexity(reps: Dict[str, np.ndarray], labels: np.ndarray) 
     probs = counts / counts.sum()
     probs = probs[probs > 0]
     metrics['target_entropy'] = float(-np.sum(probs * np.log(probs)))
+
+    # --- MLE intrinsic dimensionality ---
+    X_for_mle = X_scaled
+    if d > 2000:
+        from sklearn.decomposition import TruncatedSVD
+        X_for_mle = TruncatedSVD(n_components=min(200, n - 1), random_state=42).fit_transform(X_scaled)
+    try:
+        metrics['mle_id'] = float(estimate_intrinsic_dim_mle(X_for_mle, k=10))
+    except Exception:
+        metrics['mle_id'] = None
 
     return metrics
 
@@ -698,8 +715,9 @@ def run_cross_context_analysis(
         # Compute dataset complexity profile
         print(f"  Computing complexity metrics...")
         complexity = compute_dataset_complexity(data['reps'], data['labels'])
+        mle_str = f", MLE_ID={complexity['mle_id']:.1f}" if complexity.get('mle_id') else ""
         print(f"    erank={complexity['erank']:.1f}, PR={complexity['participation_ratio']:.1f}, "
-              f"n/d={complexity['n_over_d']:.2f}, n/erank={complexity['n_over_erank']:.1f}")
+              f"n/d={complexity['n_over_d']:.2f}, n/erank={complexity['n_over_erank']:.1f}{mle_str}")
         print(f"    C1={complexity['C1']:.3f}, C2={complexity['C2']:.3f}, "
               f"L1={complexity['L1']:.3f}, S3={complexity['S3']:.3f}")
 
@@ -856,17 +874,76 @@ def run_cross_context_analysis(
             model_names.update(valid[ds].get('best_by_model', {}).keys())
         if model_names:
             print("\n  PER-MODEL OPTIMAL BUDGET (cross-dataset):")
-            print(f"  {'Model':<12}" + "".join(f"{ds:<12}" for ds in ds_names))
-            print("  " + "-" * (12 + 12 * len(ds_names)))
+            print(f"  {'Model':<12}" + "".join(f"{ds:>14}" for ds in ds_names))
+            print("  " + "-" * (12 + 14 * len(ds_names)))
             for model in sorted(model_names):
                 row = f"  {model:<12}"
                 for ds in ds_names:
                     bm = valid[ds].get('best_by_model', {}).get(model)
                     if bm:
-                        row += f"b={bm['budget']:<8}"
+                        row += f"b={bm['budget']:>3} R²={bm['r2']:.3f} "
                     else:
-                        row += f"{'--':<12}"
+                        row += f"{'--':>14}"
                 print(row)
+
+            # MODEL × DATASET INTERACTION ANALYSIS
+            # Quantify how much budget variation comes from model vs dataset vs interaction
+            model_list = sorted(model_names)
+            budget_matrix = []  # rows=models, cols=datasets
+            r2_matrix = []
+            for model in model_list:
+                model_budgets = []
+                model_r2s = []
+                for ds in ds_names:
+                    bm = valid[ds].get('best_by_model', {}).get(model)
+                    if bm:
+                        model_budgets.append(bm['budget'])
+                        model_r2s.append(bm['r2'])
+                    else:
+                        model_budgets.append(np.nan)
+                        model_r2s.append(np.nan)
+                budget_matrix.append(model_budgets)
+                r2_matrix.append(model_r2s)
+            budget_matrix = np.array(budget_matrix, dtype=float)
+            r2_matrix = np.array(r2_matrix, dtype=float)
+
+            # Budget variance decomposition (simple: row means, col means, residual)
+            if budget_matrix.shape[0] >= 2 and budget_matrix.shape[1] >= 2:
+                valid_mask = ~np.isnan(budget_matrix)
+                if valid_mask.all():
+                    grand_mean = np.nanmean(budget_matrix)
+                    row_means = np.nanmean(budget_matrix, axis=1)  # per-model
+                    col_means = np.nanmean(budget_matrix, axis=0)  # per-dataset
+                    ss_model = len(ds_names) * np.sum((row_means - grand_mean) ** 2)
+                    ss_dataset = len(model_list) * np.sum((col_means - grand_mean) ** 2)
+                    ss_total = np.sum((budget_matrix - grand_mean) ** 2)
+                    ss_interaction = ss_total - ss_model - ss_dataset
+
+                    print(f"\n  BUDGET VARIANCE DECOMPOSITION:")
+                    print(f"    Model effect:       {ss_model/ss_total*100:5.1f}% of variance" if ss_total > 0 else "")
+                    print(f"    Dataset effect:     {ss_dataset/ss_total*100:5.1f}% of variance" if ss_total > 0 else "")
+                    print(f"    Interaction effect: {ss_interaction/ss_total*100:5.1f}% of variance" if ss_total > 0 else "")
+
+                    results['_budget_variance'] = {
+                        'ss_model': float(ss_model),
+                        'ss_dataset': float(ss_dataset),
+                        'ss_interaction': float(ss_interaction),
+                        'ss_total': float(ss_total),
+                        'pct_model': float(ss_model / ss_total * 100) if ss_total > 0 else 0,
+                        'pct_dataset': float(ss_dataset / ss_total * 100) if ss_total > 0 else 0,
+                        'pct_interaction': float(ss_interaction / ss_total * 100) if ss_total > 0 else 0,
+                    }
+
+                    # Does budget range differ across models? (some models are dimension-sensitive)
+                    print(f"\n  MODEL DIMENSION SENSITIVITY:")
+                    print(f"  {'Model':<12} {'Budget Range':<15} {'Budget Std':<12} {'R² Range':<12}")
+                    print("  " + "-" * 51)
+                    for i, model in enumerate(model_list):
+                        b_row = budget_matrix[i]
+                        r2_row = r2_matrix[i]
+                        if not np.any(np.isnan(b_row)):
+                            print(f"  {model:<12} {int(b_row.min())}-{int(b_row.max()):<10} "
+                                  f"{np.std(b_row):>8.1f}    {np.ptp(r2_row):>8.4f}")
 
     return results
 
@@ -2176,12 +2253,303 @@ def run_formal_complexity_analysis(
 # MAIN
 # =============================================================================
 
+# =============================================================================
+# EXPERIMENT 10: NOISE ROBUSTNESS & FEATURE STABILITY
+# =============================================================================
+
+def run_noise_robustness(
+    data: dict,
+    models: Dict[str, callable],
+    budgets: List[int],
+    n_folds: int,
+    sigmas: List[float] = None,
+    strategies: List[str] = None,
+    search_speed: str = 'fast',
+) -> Dict[str, Any]:
+    """Exp 10: Noise Degradation Slope (NDS) across noise strategies.
+
+    Tests whether hybrids are more noise-robust than individual reps, and whether
+    the optimal hybrid config changes under noise. Also tracks feature stability
+    across noise levels (do the same features stay important when noise increases?).
+
+    NDS = slope of R² vs sigma. More negative = more noise-sensitive.
+    """
+    print("\n" + "=" * 70)
+    print("EXPERIMENT 10: NOISE ROBUSTNESS & FEATURE STABILITY")
+    print("=" * 70)
+
+    if not HAS_NOISEINJECT:
+        print("  NoiseInject not installed, skipping. Install: pip install noiseInject")
+        return {'error': 'noiseInject not installed'}
+
+    reps = data['reps']
+    labels = data['labels']
+    groups = data['groups']
+
+    if sigmas is None:
+        sigmas = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+    if strategies is None:
+        strategies = ['legacy', 'quantile', 'hetero']
+
+    results = {
+        'sigmas': sigmas,
+        'strategies': strategies,
+        'individual_reps': {},
+        'hybrids': {},
+        'feature_stability': {},
+    }
+
+    gkf = GroupKFold(n_splits=n_folds)
+    sample_X = next(iter(reps.values()))
+
+    from sklearn.ensemble import RandomForestRegressor as _RF
+
+    # --- Phase 1: Individual rep noise robustness ---
+    print("\n  Phase 1: Individual rep NDS")
+    for rep_name, X_rep in reps.items():
+        print(f"    {rep_name} (dim={X_rep.shape[1]}):")
+        rep_results = {}
+
+        for strategy in strategies:
+            noise_injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
+            sigma_scores = {}
+
+            for sigma in sigmas:
+                fold_scores = []
+                for train_idx, val_idx in gkf.split(sample_X, labels, groups=groups):
+                    y_train = labels[train_idx].copy()
+                    y_val = labels[val_idx]
+
+                    # Inject noise into training labels only
+                    if sigma > 0:
+                        y_train = noise_injector.inject(y_train, sigma=sigma)
+
+                    scaler = StandardScaler()
+                    X_tr = scaler.fit_transform(X_rep[train_idx])
+                    X_va = scaler.transform(X_rep[val_idx])
+
+                    rf = _RF(n_estimators=100, random_state=42, n_jobs=-1)
+                    rf.fit(X_tr, y_train)
+                    fold_scores.append(r2_score(y_val, rf.predict(X_va)))
+
+                sigma_scores[sigma] = float(np.mean(fold_scores))
+
+            # Compute NDS: slope of R² vs sigma
+            s_arr = np.array(list(sigma_scores.keys()))
+            r2_arr = np.array(list(sigma_scores.values()))
+            if len(s_arr) >= 2 and np.std(s_arr) > 0:
+                slope, _ = np.polyfit(s_arr, r2_arr, 1)
+                nds = float(slope)
+            else:
+                nds = 0.0
+
+            baseline_r2 = sigma_scores.get(0.0, sigma_scores.get(min(sigmas)))
+            max_noise_r2 = sigma_scores.get(max(sigmas), float('nan'))
+            retention = float(max_noise_r2 / baseline_r2 * 100) if baseline_r2 > 0 else 0.0
+
+            rep_results[strategy] = {
+                'scores_by_sigma': sigma_scores,
+                'nds': nds,
+                'baseline_r2': baseline_r2,
+                'retention_pct': retention,
+            }
+            print(f"      {strategy}: NDS={nds:.4f}, base_R²={baseline_r2:.4f}, "
+                  f"retention={retention:.1f}%")
+
+        results['individual_reps'][rep_name] = rep_results
+
+    # --- Phase 2: Hybrid noise robustness at each budget ---
+    print("\n  Phase 2: Hybrid NDS by budget")
+
+    for budget in budgets:
+        print(f"\n    Budget={budget}:")
+        budget_results = {}
+
+        for strategy in strategies:
+            noise_injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
+            sigma_scores = {}
+
+            for sigma in sigmas:
+                fold_scores = []
+                for train_idx, val_idx in gkf.split(sample_X, labels, groups=groups):
+                    y_train = labels[train_idx].copy()
+                    y_val = labels[val_idx]
+
+                    if sigma > 0:
+                        y_train = noise_injector.inject(y_train, sigma=sigma)
+
+                    train_reps = {k: v[train_idx] for k, v in reps.items()}
+                    val_reps = {k: v[val_idx] for k, v in reps.items()}
+
+                    try:
+                        X_train, fi = create_hybrid(
+                            train_reps, y_train,
+                            allocation_method='greedy',
+                            budget=budget,
+                            importance_method='treeshap',
+                        )
+                        X_val = apply_feature_selection(val_reps, fi)
+                    except Exception:
+                        continue
+
+                    scaler = StandardScaler()
+                    X_tr = scaler.fit_transform(X_train)
+                    X_va = scaler.transform(X_val)
+
+                    rf = _RF(n_estimators=100, random_state=42, n_jobs=-1)
+                    rf.fit(X_tr, y_train)
+                    fold_scores.append(r2_score(y_val, rf.predict(X_va)))
+
+                if fold_scores:
+                    sigma_scores[sigma] = float(np.mean(fold_scores))
+
+            # NDS
+            s_arr = np.array(list(sigma_scores.keys()))
+            r2_arr = np.array(list(sigma_scores.values()))
+            if len(s_arr) >= 2 and np.std(s_arr) > 0:
+                slope, _ = np.polyfit(s_arr, r2_arr, 1)
+                nds = float(slope)
+            else:
+                nds = 0.0
+
+            baseline_r2 = sigma_scores.get(0.0, sigma_scores.get(min(sigmas), 0))
+            max_noise_r2 = sigma_scores.get(max(sigmas), float('nan'))
+            retention = float(max_noise_r2 / baseline_r2 * 100) if baseline_r2 > 0 else 0.0
+
+            budget_results[strategy] = {
+                'scores_by_sigma': sigma_scores,
+                'nds': nds,
+                'baseline_r2': baseline_r2,
+                'retention_pct': retention,
+            }
+            print(f"      {strategy}: NDS={nds:.4f}, base_R²={baseline_r2:.4f}, "
+                  f"retention={retention:.1f}%")
+
+        results['hybrids'][budget] = budget_results
+
+    # --- Phase 3: Feature stability across noise levels ---
+    print("\n  Phase 3: Feature stability across noise")
+    budget_for_stability = budgets[len(budgets) // 2]  # middle budget
+    print(f"    Using budget={budget_for_stability}")
+
+    for strategy in strategies[:1]:  # just legacy for feature stability (expensive)
+        noise_injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
+        features_by_sigma = {}
+
+        for sigma in sigmas:
+            fold_features = []
+            for train_idx, val_idx in gkf.split(sample_X, labels, groups=groups):
+                y_train = labels[train_idx].copy()
+                if sigma > 0:
+                    y_train = noise_injector.inject(y_train, sigma=sigma)
+
+                train_reps = {k: v[train_idx] for k, v in reps.items()}
+                try:
+                    _, fi = create_hybrid(
+                        train_reps, y_train,
+                        allocation_method='greedy',
+                        budget=budget_for_stability,
+                        importance_method='treeshap',
+                    )
+                    # Collect selected feature identifiers: (rep_name, feature_idx) tuples
+                    selected = set()
+                    for rep_name, indices in fi.selected_indices.items():
+                        for idx in indices:
+                            selected.add((rep_name, int(idx)))
+                    fold_features.append(selected)
+                except Exception:
+                    continue
+
+            features_by_sigma[sigma] = fold_features
+
+        # Feature stability across folds (at sigma=0)
+        if features_by_sigma.get(0.0) and len(features_by_sigma[0.0]) >= 2:
+            fold_sets = features_by_sigma[0.0]
+            jaccard_across_folds = []
+            for i in range(len(fold_sets)):
+                for j in range(i + 1, len(fold_sets)):
+                    inter = len(fold_sets[i] & fold_sets[j])
+                    union = len(fold_sets[i] | fold_sets[j])
+                    jaccard_across_folds.append(inter / union if union > 0 else 0)
+            results['feature_stability']['fold_jaccard_sigma0'] = float(np.mean(jaccard_across_folds))
+            print(f"    Fold stability (sigma=0): Jaccard={np.mean(jaccard_across_folds):.3f}")
+
+        # Feature stability across noise levels (compare sigma=0 features to each sigma)
+        if features_by_sigma.get(0.0):
+            ref_features = set.union(*features_by_sigma[0.0])  # union across folds at sigma=0
+            noise_stability = {}
+            for sigma in sigmas:
+                if sigma == 0.0 or sigma not in features_by_sigma:
+                    continue
+                if not features_by_sigma[sigma]:
+                    continue
+                noisy_features = set.union(*features_by_sigma[sigma])
+                inter = len(ref_features & noisy_features)
+                union = len(ref_features | noisy_features)
+                jaccard = inter / union if union > 0 else 0.0
+                noise_stability[sigma] = float(jaccard)
+                print(f"    sigma={sigma:.1f} vs sigma=0: Jaccard={jaccard:.3f} "
+                      f"(shared={inter}/{len(ref_features)} ref features)")
+
+            results['feature_stability']['noise_jaccard'] = noise_stability
+
+            # NDS of feature stability (does feature overlap degrade linearly with noise?)
+            if len(noise_stability) >= 2:
+                s_arr = np.array(list(noise_stability.keys()))
+                j_arr = np.array(list(noise_stability.values()))
+                slope, _ = np.polyfit(s_arr, j_arr, 1)
+                results['feature_stability']['feature_nds'] = float(slope)
+                print(f"    Feature stability NDS: {slope:.4f} (negative = features change with noise)")
+
+        # Per-rep allocation stability across noise
+        if features_by_sigma.get(0.0):
+            print("\n    Per-rep feature count stability:")
+            for sigma in [0.0] + [s for s in sigmas if s > 0]:
+                if sigma not in features_by_sigma or not features_by_sigma[sigma]:
+                    continue
+                # Average feature count per rep across folds
+                rep_counts = {}
+                for fold_feats in features_by_sigma[sigma]:
+                    fold_reps = set(r for r, _ in fold_feats)
+                    for rep_name in fold_reps:
+                        rep_counts.setdefault(rep_name, [])
+                        count = sum(1 for r, _ in fold_feats if r == rep_name)
+                        rep_counts[rep_name].append(count)
+                counts_str = ", ".join(
+                    f"{r}={np.mean(c):.0f}" for r, c in sorted(rep_counts.items()))
+                print(f"      sigma={sigma:.1f}: {counts_str}")
+
+    # --- Summary table ---
+    print("\n  NOISE ROBUSTNESS SUMMARY (NDS, higher = more robust):")
+    print(f"  {'Representation':<20} " +
+          " ".join(f"{s:<12}" for s in strategies))
+    print("  " + "-" * (20 + 13 * len(strategies)))
+
+    # Individual reps
+    for rep_name in sorted(results['individual_reps'].keys()):
+        row = f"  {rep_name:<20} "
+        for s in strategies:
+            nds = results['individual_reps'][rep_name].get(s, {}).get('nds', float('nan'))
+            row += f"{nds:>+8.4f}    "
+        print(row)
+
+    # Hybrids
+    for budget in sorted(b for b in results['hybrids'] if isinstance(b, (int, float))):
+        row = f"  hybrid_b{budget:<11} "
+        for s in strategies:
+            nds = results['hybrids'][budget].get(s, {}).get('nds', float('nan'))
+            row += f"{nds:>+8.4f}    "
+        print(row)
+
+    return results
+
+
 def main():
     parser = argparse.ArgumentParser(description='Complexity theory experiments')
     parser.add_argument('--mode', type=str, default='quick', choices=['quick', 'full'],
                         help='quick (~30min, logd only) or full (~4-6h, all datasets)')
     parser.add_argument('--experiments', type=int, nargs='+', default=None,
-                        help='Which experiments to run (1-9). Default: all.')
+                        help='Which experiments to run (1-10). Default: all.')
     parser.add_argument('--reps', type=str, default=None,
                         help='Representation preset (fast, fast+hf, all) or comma-separated list. '
                              'Default: fast for quick, fast+hf for full.')
@@ -2201,10 +2569,12 @@ def main():
         allocation_methods = ['greedy']
         importance_methods = ['treeshap']
         exp4_importance = ['treeshap', 'lightgbm_gain', 'deeplift', 'permutation']
-        exp6_families = ['RF', 'Ridge']
+        exp6_families = ['RF', 'Ridge', 'MLP']
         exp7_partitions = ['scaffold_frequency']
         exp8_conditions = ['optimal', 'overfit']
         exp9_subs = ['anova', 'bias_variance']
+        exp10_sigmas = [0.0, 0.1, 0.3, 0.6]
+        exp10_strategies = ['legacy', 'quantile']
         search_speed = 'fast'
     else:  # full
         dataset_names = ['logd', 'caco2', 'herg', 'qm9']
@@ -2221,12 +2591,14 @@ def main():
         exp7_partitions = None  # all partitions
         exp8_conditions = None  # all conditions
         exp9_subs = None  # all sub-analyses
+        exp10_sigmas = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+        exp10_strategies = ['legacy', 'quantile', 'hetero', 'outlier', 'threshold', 'valprop']
         search_speed = 'medium'
 
     if args.datasets:
         dataset_names = args.datasets
 
-    experiments = args.experiments if args.experiments else [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    experiments = args.experiments if args.experiments else [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     models = _get_model_factories(model_names)
 
     print(f"Mode: {args.mode}")
@@ -2314,6 +2686,12 @@ def main():
                 exp6_results=ds_results.get('exp6_within_family'),
                 search_speed=search_speed,
             )
+
+        if 10 in experiments:
+            ds_results['exp10_noise'] = run_noise_robustness(
+                data, models, budgets, n_folds,
+                sigmas=exp10_sigmas, strategies=exp10_strategies,
+                search_speed=search_speed)
 
         all_results['datasets'][ds_name] = ds_results
 

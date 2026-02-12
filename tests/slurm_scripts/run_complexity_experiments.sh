@@ -25,9 +25,9 @@ MODE=${1:-quick}
 DATASET=${2:-logd}
 
 if [ "$MODE" = "quick" ]; then
-    echo "=== QUICK 1: logd, fast reps, Exp 1+2+6+9 ==="
+    echo "=== QUICK 1: logd, fast reps, Exp 1+2+6+9+10 ==="
     python tests/complexity_theory_experiments.py --mode quick --reps fast \
-        --experiments 1 2 6 9 --output tests/results/complexity_theory_fast
+        --experiments 1 2 6 9 10 --output tests/results/complexity_theory_fast
 
     echo ""
     echo "=== QUICK 2: logd, all_no_gk reps, Exp 1+2+6 ==="
@@ -38,7 +38,7 @@ elif [ "$MODE" = "full" ]; then
     echo "=== FULL RUN: ${DATASET}, all_no_gk reps, all experiments ==="
     python tests/complexity_theory_experiments.py --mode full --reps all_no_gk \
         --datasets ${DATASET} \
-        --experiments 1 2 3 4 5 6 7 8 9 --output tests/results/complexity_theory_${DATASET}
+        --experiments 1 2 3 4 5 6 7 8 9 10 --output tests/results/complexity_theory_${DATASET}
 
 elif [ "$MODE" = "gk" ]; then
     echo "=== GK MODE: logd only, all reps (incl graph_kernel), fast search, Exp 1+2+6 ==="
