@@ -2,10 +2,11 @@
 # Environment setup for KIRBy
 # Called by SLURM scripts before running experiments
 
-# Redirect all caches to /data/ (home quota is tiny on ARC)
+# Redirect all caches and user packages to /data/ (home quota is tiny on ARC)
 export HF_HOME=/data/stat-cadd/scat9264/.cache/huggingface
 export TORCH_HOME=/data/stat-cadd/scat9264/.cache/torch
 export PIP_CACHE_DIR=/data/stat-cadd/scat9264/.cache/pip
+export PYTHONUSERBASE=/data/stat-cadd/scat9264/.local
 
 # Install KIRBy in editable mode (picks up src/kirby)
 pip install --quiet -e . 2>/dev/null
