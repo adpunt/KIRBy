@@ -102,13 +102,24 @@ REP_PRESETS = {
     'all_server': [
         'kmer', 'physicochemical', 'aac', 'blosum62',
         'antiberty', 'ablang2', 'igbert', 'esm2', 'prot_t5',
-        'ab_roberta', 'balm', 'pigen',
+        'ab_roberta', 'balm', 'pigen', 'structural',
     ],
     'all': [
         'kmer', 'physicochemical', 'aac', 'blosum62',
         'antiberty', 'ablang2', 'igbert', 'esm2', 'prot_t5',
-        'ab_roberta', 'balm', 'pigen', 'esmc', 'sapiens',
+        'ab_roberta', 'balm', 'pigen', 'esmc', 'sapiens', 'structural',
     ],
+    # Mutation-aware presets (for intra-family FLAb datasets)
+    'mutation_fast': ['kmer', 'aac', 'blosum62', 'physicochemical',
+                      'positional', 'biophysical_delta'],
+    'mutation_full': ['kmer', 'aac', 'blosum62', 'physicochemical',
+                      'antiberty', 'ablang2',
+                      'positional', 'biophysical_delta', 'lm_score'],
+    # Mutation + structural (requires ImmuneBuilder on server)
+    'mutation_structural': ['kmer', 'aac', 'blosum62', 'physicochemical',
+                            'antiberty', 'ablang2',
+                            'positional', 'biophysical_delta', 'lm_score',
+                            'structural'],
 }
 
 _SEARCH_NAME_MAP = {
@@ -147,18 +158,73 @@ def _download_skempi() -> pd.DataFrame:
 
 def load_dataset(name_or_path: str, heavy_col: str = 'VH',
                  light_col: str = 'VL', target_col: str = 'target'
-                 ) -> Tuple[List[str], Optional[List[str]], np.ndarray, str]:
+                 ) -> Tuple[List[str], Optional[List[str]], np.ndarray, str, Dict]:
     """Load antibody dataset.
 
     Built-in:
       - sabdab_affinity: SKEMPI 2.0 ΔΔG (regression)
+      - flab_*: FLAb benchmark datasets (intra/inter-family)
+      - abcov_*: Ab-CoV therapeutic datasets (inter-family)
 
     Custom: CSV with heavy_seq, light_seq (optional), target columns.
 
     Returns:
-        (heavy_seqs, light_seqs_or_None, labels, task_type)
+        (heavy_seqs, light_seqs_or_None, labels, task_type, metadata)
+        metadata keys: wildtype_heavy, wildtype_light, mutations, is_intra_family
     """
     name_lower = name_or_path.lower()
+
+    # FLAb datasets
+    if name_lower.startswith('flab_'):
+        from kirby.datasets.flab import load_flab_dataset, FLAB_DATASETS
+        data = load_flab_dataset(name_lower)
+        metadata = {
+            'wildtype_heavy': data['wildtype_heavy'],
+            'wildtype_light': data['wildtype_light'],
+            'mutations': data['mutations'],
+            'is_intra_family': data['is_intra_family'],
+        }
+        return (data['heavy_seqs'], data['light_seqs'], data['labels'],
+                data['task_type'], metadata)
+
+    # Ab-CoV datasets
+    if name_lower.startswith('abcov_'):
+        from kirby.datasets.abcov import load_abcov_dataset
+        data = load_abcov_dataset(name_lower)
+        metadata = {
+            'wildtype_heavy': None,
+            'wildtype_light': None,
+            'mutations': data['mutations'],
+            'is_intra_family': False,
+        }
+        return (data['heavy_seqs'], data['light_seqs'], data['labels'],
+                data['task_type'], metadata)
+
+    # AbAgym datasets
+    if name_lower.startswith('abagym_'):
+        from kirby.datasets.abagym import load_abagym_dataset
+        data = load_abagym_dataset(name_or_path)
+        metadata = {
+            'wildtype_heavy': data['wildtype_heavy'],
+            'wildtype_light': data['wildtype_light'],
+            'mutations': data['mutations'],
+            'is_intra_family': data['is_intra_family'],
+        }
+        return (data['heavy_seqs'], data['light_seqs'], data['labels'],
+                data['task_type'], metadata)
+
+    # AbBind dataset
+    if name_lower == 'abbind':
+        from kirby.datasets.abbind import load_abbind_dataset
+        data = load_abbind_dataset()
+        metadata = {
+            'wildtype_heavy': data['wildtype_heavy'],
+            'wildtype_light': data['wildtype_light'],
+            'mutations': data['mutations'],
+            'is_intra_family': data['is_intra_family'],
+        }
+        return (data['heavy_seqs'], data['light_seqs'], data['labels'],
+                data['task_type'], metadata)
 
     if name_lower == 'sabdab_affinity':
         df = _download_skempi()
@@ -222,7 +288,9 @@ def load_dataset(name_or_path: str, heavy_col: str = 'VH',
 
         labels = dedup['label'].values
         print(f"  Loaded {len(heavy_seqs)} antibodies from SKEMPI 2.0 (ΔΔG)")
-        return heavy_seqs, light_seqs, labels, 'regression'
+        metadata = {'wildtype_heavy': None, 'wildtype_light': None,
+                     'mutations': [[] for _ in heavy_seqs], 'is_intra_family': False}
+        return heavy_seqs, light_seqs, labels, 'regression', metadata
 
     elif name_or_path.endswith('.csv') or os.path.exists(name_or_path):
         print(f"Loading custom dataset from {name_or_path}...")
@@ -265,12 +333,15 @@ def load_dataset(name_or_path: str, heavy_col: str = 'VH',
             task_type = 'regression'
 
         print(f"  Loaded {len(heavy_seqs)} antibodies, task: {task_type}")
-        return heavy_seqs, light_seqs, labels, task_type
+        metadata = {'wildtype_heavy': None, 'wildtype_light': None,
+                     'mutations': [[] for _ in heavy_seqs], 'is_intra_family': False}
+        return heavy_seqs, light_seqs, labels, task_type, metadata
 
     else:
         raise ValueError(
             f"Unknown dataset: {name_or_path}. "
-            f"Built-in options: sabdab_affinity. Or provide a CSV path."
+            f"Built-in options: sabdab_affinity, flab_*, abcov_*, abagym_*, abbind. "
+            f"Or provide a CSV path."
         )
 
 
@@ -312,11 +383,21 @@ _REP_DISPATCH = {
     'ab_roberta': ('create_ab_roberta_embeddings', 'single_chain'),
     'balm': ('create_balm_embeddings', 'single_chain'),
     'sapiens': ('create_sapiens_embeddings', 'single_chain'),
+    # Mutation-aware: require mutations/wildtype metadata
+    'positional': ('compute_mutation_positional_features', 'mutation'),
+    'biophysical_delta': ('compute_biophysical_delta', 'mutation'),
+    'lm_score': ('compute_lm_mutation_scores', 'mutation'),
+    # Structural: computed separately (not in antibody.py)
+    'structural': (None, 'structural'),
 }
 
 
 def get_representations(heavy_seqs: List[str], light_seqs: Optional[List[str]],
-                        preset_or_list: str, cache: bool = True) -> Dict[str, np.ndarray]:
+                        preset_or_list: str, cache: bool = True,
+                        wt_heavy: Optional[str] = None,
+                        wt_light: Optional[str] = None,
+                        mutations: Optional[List] = None,
+                        delta: bool = False) -> Dict[str, np.ndarray]:
     """Generate antibody representations.
 
     Handles paired vs single-chain transparently:
@@ -325,6 +406,10 @@ def get_representations(heavy_seqs: List[str], light_seqs: Optional[List[str]],
       encode heavy + light separately, concatenate
     - Classical (kmer, aac, blosum62): concatenate sequences, then encode
     - Paired-native (physicochemical): pass both chains
+    - Mutation-aware (positional, biophysical_delta, lm_score): require metadata
+
+    When delta=True, generates delta reps (ΔX = X_mutant - X_wildtype) for
+    every base rep, doubling the rep count. Requires wt_heavy.
     """
     from kirby.representations import antibody as ab
 
@@ -351,14 +436,17 @@ def get_representations(heavy_seqs: List[str], light_seqs: Optional[List[str]],
                 continue
 
         func_name, mode = _REP_DISPATCH[rep_name]
-        func = getattr(ab, func_name)
 
         try:
             start = time.time()
             print(f"  Generating {rep_name}...", end=' ', flush=True)
 
-            if mode == 'concat':
-                # Concatenate heavy+light sequences, call fn(sequences)
+            if mode == 'structural':
+                from kirby.representations.structural import compute_structural_features
+                rep = compute_structural_features(heavy_seqs, light_seqs)
+
+            elif mode == 'concat':
+                func = getattr(ab, func_name)
                 if light_seqs:
                     concat_seqs = [h + l for h, l in zip(heavy_seqs, light_seqs)]
                 else:
@@ -366,20 +454,35 @@ def get_representations(heavy_seqs: List[str], light_seqs: Optional[List[str]],
                 rep = func(concat_seqs)
 
             elif mode == 'paired':
-                # fn(heavy, light) — light may be optional
+                func = getattr(ab, func_name)
                 if light_seqs:
                     rep = func(heavy_seqs, light_seqs)
                 else:
                     rep = func(heavy_seqs)
 
             elif mode == 'single_chain':
-                # fn(sequences) per chain, concatenate
+                func = getattr(ab, func_name)
                 rep_h = func(heavy_seqs)
                 if light_seqs:
                     rep_l = func(light_seqs)
                     rep = np.hstack([rep_h, rep_l])
                 else:
                     rep = rep_h
+
+            elif mode == 'mutation':
+                func = getattr(ab, func_name)
+                # Mutation-aware reps require metadata
+                if mutations is None:
+                    print(f"SKIPPED (no mutation data)")
+                    continue
+                if rep_name == 'positional':
+                    rep = func(mutations, wt_heavy or '', wt_light)
+                elif rep_name == 'biophysical_delta':
+                    rep = func(mutations)
+                elif rep_name == 'lm_score':
+                    rep = func(wt_heavy or '', heavy_seqs, mutations)
+                else:
+                    raise ValueError(f"Unknown mutation rep: {rep_name}")
 
             else:
                 raise ValueError(f"Unknown mode '{mode}' for {rep_name}")
@@ -397,6 +500,56 @@ def get_representations(heavy_seqs: List[str], light_seqs: Optional[List[str]],
 
     if not representations:
         raise ValueError("No representations could be generated!")
+
+    # --- Delta representations ---
+    if delta and wt_heavy:
+        print(f"\n  Generating delta representations (ΔX = X_mutant - X_wildtype)...")
+        for rep_name, (func_name, mode) in _REP_DISPATCH.items():
+            if rep_name not in representations:
+                continue
+            if mode == 'mutation':
+                continue  # mutation reps are already "delta-like"
+            if mode == 'structural':
+                continue  # structural features are not differentiable per-sequence
+
+            cache_key = f"delta_{rep_name}"
+            if cache:
+                cache_file = _rep_cache_path(heavy_seqs, light_seqs, cache_key)
+                if cache_file.exists():
+                    rep = np.load(cache_file)
+                    print(f"  delta_{rep_name}: loaded from cache ({rep.shape[1]} features)")
+                    representations[cache_key] = rep
+                    continue
+
+            try:
+                func = getattr(ab, func_name)
+                if mode == 'concat':
+                    wt_seq = wt_heavy + (wt_light or '')
+                    wt_rep = func([wt_seq])
+                elif mode == 'paired':
+                    if wt_light:
+                        wt_rep = func([wt_heavy], [wt_light])
+                    else:
+                        wt_rep = func([wt_heavy])
+                elif mode == 'single_chain':
+                    wt_rep = func([wt_heavy])
+                    if wt_light:
+                        wt_rep_l = func([wt_light])
+                        wt_rep = np.hstack([wt_rep, wt_rep_l])
+                else:
+                    continue
+
+                # ΔX = X_mutant - X_wildtype (broadcast: wt_rep is 1×d)
+                delta_rep = representations[rep_name] - wt_rep
+                representations[cache_key] = delta_rep
+                print(f"  delta_{rep_name}: ({delta_rep.shape[1]} features)")
+
+                if cache:
+                    cache_file = _rep_cache_path(heavy_seqs, light_seqs, cache_key)
+                    np.save(cache_file, delta_rep)
+
+            except Exception as e:
+                print(f"  delta_{rep_name}: FAILED ({e})")
 
     return representations
 
@@ -751,6 +904,9 @@ Output:
                        help="Sequence identity threshold for GroupKFold (default: 0.8)")
     parser.add_argument('--cache', action='store_true',
                        help='Cache hybrid search results to disk')
+    parser.add_argument('--delta', action='store_true',
+                       help='Generate delta representations (ΔX = X_mut - X_wt). '
+                            'Requires intra-family dataset with wildtype info.')
 
     args = parser.parse_args()
 
@@ -758,7 +914,7 @@ Output:
 
     # Load dataset
     print(f"Loading dataset: {args.dataset}")
-    heavy_seqs, light_seqs, labels, task_type = load_dataset(
+    heavy_seqs, light_seqs, labels, task_type, metadata = load_dataset(
         args.dataset, args.heavy_col, args.light_col, args.target_col
     )
     print(f"  {len(heavy_seqs)} antibodies, task: {task_type}")
@@ -767,13 +923,25 @@ Output:
     else:
         print(f"  Heavy chain only")
 
+    wt_heavy = metadata.get('wildtype_heavy')
+    wt_light = metadata.get('wildtype_light')
+    mutations = metadata.get('mutations')
+
+    if args.delta and not wt_heavy:
+        print("  WARNING: --delta requested but no wildtype available. Skipping delta reps.")
+        args.delta = False
+
     # Compute sequence identity groups for CV
     print("  Assigning sequence identity groups...")
     groups, n_groups = assign_identity_groups(heavy_seqs, threshold=args.identity_threshold)
     print(f"  {n_groups} groups (threshold={args.identity_threshold})")
 
     # Generate representations
-    base_reps = get_representations(heavy_seqs, light_seqs, args.reps)
+    base_reps = get_representations(
+        heavy_seqs, light_seqs, args.reps,
+        wt_heavy=wt_heavy, wt_light=wt_light,
+        mutations=mutations, delta=args.delta,
+    )
 
     # Generate augmentations
     augmentations = None
