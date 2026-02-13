@@ -395,7 +395,7 @@ def experiment_b(reps, labels, groups, n_folds=3, target_dim=100, seed=42):
         verbose=False, cache=True,
     )
     baseline_time = time.time() - t0
-    baseline_r2 = baseline_result.best_overall.score_mean if baseline_result.best_overall else 0
+    baseline_r2 = baseline_result.best_overall['score_mean'] if baseline_result.best_overall else 0
     print(f"  Baseline hybrid R²={baseline_r2:.4f} [{baseline_time:.1f}s]")
 
     results = {
@@ -438,7 +438,7 @@ def experiment_b(reps, labels, groups, n_folds=3, target_dim=100, seed=42):
                 speed='fast', seed=seed, n_folds=n_folds,
                 verbose=False, cache=True,
             )
-            hybrid_r2 = result.best_overall.score_mean if result.best_overall else 0
+            hybrid_r2 = result.best_overall['score_mean'] if result.best_overall else 0
             elapsed = time.time() - t0
             delta = hybrid_r2 - baseline_r2
             print(f"  Hybrid R²={hybrid_r2:.4f} (delta={delta:+.4f}) [{elapsed:.1f}s]")
@@ -495,7 +495,7 @@ def experiment_c(reps, labels, groups, n_folds=3, seed=42):
         verbose=False, cache=True,
     )
     baseline_time = time.time() - t0
-    baseline_r2 = baseline_result.best_overall.score_mean if baseline_result.best_overall else 0
+    baseline_r2 = baseline_result.best_overall['score_mean'] if baseline_result.best_overall else 0
     print(f"  Baseline hybrid R²={baseline_r2:.4f} [{baseline_time:.1f}s]")
 
     results = {
@@ -547,7 +547,7 @@ def experiment_c(reps, labels, groups, n_folds=3, seed=42):
                     speed='fast', seed=seed, n_folds=n_folds,
                     verbose=False, cache=True,
                 )
-                hybrid_r2 = result.best_overall.score_mean if result.best_overall else 0
+                hybrid_r2 = result.best_overall['score_mean'] if result.best_overall else 0
                 elapsed = time.time() - t0
                 delta = hybrid_r2 - baseline_r2
                 print(f"    Hybrid R²={hybrid_r2:.4f} (delta={delta:+.4f}) [{elapsed:.1f}s]")
