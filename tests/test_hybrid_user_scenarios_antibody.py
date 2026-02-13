@@ -639,7 +639,7 @@ def scenario_12_multi_dataset(reps, labels, groups, args):
 
     # Load and run on dataset 2
     heavy2, light2, labels2, task2, meta2 = load_dataset(args.dataset2)
-    groups2, n_groups2 = assign_identity_groups(heavy2, threshold=args.identity_threshold)
+    groups2, n_groups2 = assign_identity_groups(heavy2, threshold=args.identity_threshold, min_groups=3)
 
     wt2 = meta2.get('wildtype_heavy')
     wl2 = meta2.get('wildtype_light')
@@ -761,7 +761,7 @@ def main():
     else:
         print(f"  Heavy chain only")
 
-    groups, n_groups = assign_identity_groups(heavy_seqs, threshold=args.identity_threshold)
+    groups, n_groups = assign_identity_groups(heavy_seqs, threshold=args.identity_threshold, min_groups=3)
     print(f"  {n_groups} identity groups (threshold={args.identity_threshold})")
 
     # Extract metadata for mutation-aware reps

@@ -338,10 +338,16 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
     total_score = sum(baseline_scores.values())
     
     if total_score == 0:
-        raise ValueError(
-            "All representations have zero or negative validation scores. "
-            "Cannot compute performance-weighted allocation. Use allocation_method='greedy' or 'fixed' instead."
-        )
+        # All reps have zero or negative scores — fall back to equal allocation
+        n_reps = len(baseline_scores)
+        base_alloc = total_budget // n_reps
+        remainder = total_budget - base_alloc * n_reps
+        allocation = {}
+        for i, rep_name in enumerate(sorted(baseline_scores.keys())):
+            alloc = base_alloc + (1 if i < remainder else 0)
+            max_features = rep_dict_train[rep_name].shape[1]
+            allocation[rep_name] = min(alloc, max_features)
+        return allocation
     
     allocation = {}
     for rep_name, score in baseline_scores.items():

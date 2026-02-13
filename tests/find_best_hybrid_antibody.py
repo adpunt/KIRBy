@@ -51,7 +51,8 @@ warnings.filterwarnings('ignore')
 # SEQUENCE IDENTITY GROUPING
 # =============================================================================
 
-def assign_identity_groups(heavy_sequences: List[str], threshold: float = 0.8) -> Tuple[np.ndarray, int]:
+def assign_identity_groups(heavy_sequences: List[str], threshold: float = 0.8,
+                           min_groups: int = 0) -> Tuple[Optional[np.ndarray], int]:
     """Group antibodies by VH sequence identity for GroupKFold.
 
     Simple greedy clustering:
@@ -59,12 +60,20 @@ def assign_identity_groups(heavy_sequences: List[str], threshold: float = 0.8) -
     2. If >= threshold similarity to any center, assign to that cluster
     3. Otherwise, start a new cluster
 
+    If min_groups > 0 and initial clustering yields fewer groups, progressively
+    tightens the threshold (0.9, 0.95, 0.98, 0.99). If still insufficient
+    (e.g., truly identical intra-family data), returns (None, 0) to signal
+    that GroupKFold is not appropriate and callers should use regular KFold.
+
     Args:
         heavy_sequences: List of heavy chain amino acid sequences.
         threshold: Minimum fractional identity to join a cluster (0-1). Default 0.8.
+        min_groups: Minimum number of groups required (e.g., n_folds for CV).
+                    If 0, no minimum is enforced.
 
     Returns:
         (groups, n_groups): group label array and number of unique groups.
+        If min_groups > 0 and cannot be satisfied, returns (None, 0).
     """
     def _identity(s1: str, s2: str) -> float:
         """Fractional identity = matches / max(len1, len2)."""
@@ -74,21 +83,38 @@ def assign_identity_groups(heavy_sequences: List[str], threshold: float = 0.8) -
         matches = sum(a == b for a, b in zip(s1, s2))
         return matches / n
 
-    centers = []  # list of (index, sequence)
-    groups = np.zeros(len(heavy_sequences), dtype=int)
+    def _cluster(seqs, thresh):
+        centers = []
+        groups = np.zeros(len(seqs), dtype=int)
+        for i, seq in enumerate(seqs):
+            assigned = False
+            for center_idx, (_, center_seq) in enumerate(centers):
+                if _identity(seq, center_seq) >= thresh:
+                    groups[i] = center_idx
+                    assigned = True
+                    break
+            if not assigned:
+                groups[i] = len(centers)
+                centers.append((i, seq))
+        return groups, len(centers)
 
-    for i, seq in enumerate(heavy_sequences):
-        assigned = False
-        for center_idx, (_, center_seq) in enumerate(centers):
-            if _identity(seq, center_seq) >= threshold:
-                groups[i] = center_idx
-                assigned = True
-                break
-        if not assigned:
-            groups[i] = len(centers)
-            centers.append((i, seq))
+    groups, n_groups = _cluster(heavy_sequences, threshold)
 
-    return groups, len(centers)
+    if min_groups > 0 and n_groups < min_groups:
+        for fallback_thresh in [0.9, 0.95, 0.98, 0.99]:
+            if fallback_thresh <= threshold:
+                continue
+            groups, n_groups = _cluster(heavy_sequences, fallback_thresh)
+            if n_groups >= min_groups:
+                print(f"  Identity grouping: raised threshold {threshold}->{fallback_thresh} "
+                      f"to get {n_groups} groups (needed {min_groups})")
+                return groups, n_groups
+        # Still not enough — grouping not meaningful for this data
+        print(f"  Identity grouping: only {n_groups} groups even at threshold=0.99 "
+              f"(need {min_groups}). Falling back to ungrouped CV.")
+        return None, 0
+
+    return groups, n_groups
 
 
 # =============================================================================
@@ -933,8 +959,12 @@ Output:
 
     # Compute sequence identity groups for CV
     print("  Assigning sequence identity groups...")
-    groups, n_groups = assign_identity_groups(heavy_seqs, threshold=args.identity_threshold)
-    print(f"  {n_groups} groups (threshold={args.identity_threshold})")
+    groups, n_groups = assign_identity_groups(heavy_seqs, threshold=args.identity_threshold,
+                                               min_groups=3)
+    if groups is None:
+        print(f"  Ungrouped CV (intra-family data, grouping not meaningful)")
+    else:
+        print(f"  {n_groups} groups (threshold={args.identity_threshold})")
 
     # Generate representations
     base_reps = get_representations(

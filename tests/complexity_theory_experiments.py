@@ -44,7 +44,7 @@ from scipy.special import digamma
 from scipy.stats import spearmanr, f as f_dist
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import GroupKFold
+from sklearn.model_selection import GroupKFold, KFold
 from sklearn.metrics import r2_score
 from sklearn.neighbors import NearestNeighbors
 
@@ -112,7 +112,7 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
             mutations=mutations, delta=delta,
         )
 
-        groups, n_groups = assign_identity_groups(heavy_seqs)
+        groups, n_groups = assign_identity_groups(heavy_seqs, min_groups=3)
 
         augmentations = None
         if augment:
@@ -410,6 +410,14 @@ def compute_dataset_complexity(reps: Dict[str, np.ndarray], labels: np.ndarray) 
     return metrics
 
 
+def _cv_split(groups, n_folds, X, labels, seed=42):
+    """Yield (train_idx, val_idx) using GroupKFold if groups available, else KFold."""
+    if groups is not None and len(np.unique(groups)) >= n_folds:
+        yield from GroupKFold(n_splits=n_folds).split(X, labels, groups=groups)
+    else:
+        yield from KFold(n_splits=n_folds, shuffle=True, random_state=seed).split(X, labels)
+
+
 def evaluate_cv(
     base_reps: Dict[str, np.ndarray],
     labels: np.ndarray,
@@ -425,12 +433,11 @@ def evaluate_cv(
 
     Returns (mean_r2, std_r2, n_features).
     """
-    gkf = GroupKFold(n_splits=n_folds)
     sample_X = next(iter(base_reps.values()))
     scores = []
     n_feats = []
 
-    for train_idx, val_idx in gkf.split(sample_X, labels, groups=groups):
+    for train_idx, val_idx in _cv_split(groups, n_folds, sample_X, labels, seed):
         train_reps = {k: v[train_idx] for k, v in base_reps.items()}
         val_reps = {k: v[val_idx] for k, v in base_reps.items()}
         y_train, y_val = labels[train_idx], labels[val_idx]
@@ -468,10 +475,9 @@ def evaluate_single_rep_cv(
     n_folds: int = 5,
 ) -> Tuple[float, float]:
     """Simple CV for a single representation matrix. Returns (mean_r2, std_r2)."""
-    gkf = GroupKFold(n_splits=n_folds)
     scores = []
 
-    for train_idx, val_idx in gkf.split(X, labels, groups=groups):
+    for train_idx, val_idx in _cv_split(groups, n_folds, X, labels):
         scaler = StandardScaler()
         X_train = scaler.fit_transform(X[train_idx])
         X_val = scaler.transform(X[val_idx])
@@ -697,9 +703,8 @@ def run_complexity_matching_grid(
         n_comp = min(budget, X_concat.shape[1], X_concat.shape[0] - 1)
         pca_baselines[budget] = {}
         for model_name, model_factory in models.items():
-            gkf = GroupKFold(n_splits=n_folds)
             pca_scores = []
-            for train_idx, val_idx in gkf.split(X_concat, labels, groups=groups):
+            for train_idx, val_idx in _cv_split(groups, n_folds, X_concat, labels):
                 pca = PCA(n_components=n_comp)
                 scaler = StandardScaler()
                 X_train_s = scaler.fit_transform(X_concat[train_idx])
@@ -813,11 +818,10 @@ def run_cross_context_analysis(
                 novel_results = {}
                 for novel_name, novel_model in novel_models.items():
                     try:
-                        gkf = GroupKFold(n_splits=n_folds)
                         sample_X = next(iter(data['reps'].values()))
                         novel_scores = []
 
-                        for train_idx, val_idx in gkf.split(sample_X, data['labels'], groups=data['groups']):
+                        for train_idx, val_idx in _cv_split(data['groups'], n_folds, sample_X, data['labels']):
                             train_reps = {k: v[train_idx] for k, v in data['reps'].items()}
                             val_reps = {k: v[val_idx] for k, v in data['reps'].items()}
                             y_train = data['labels'][train_idx]
@@ -1193,13 +1197,12 @@ def evaluate_cv_with_train(
 
     Returns (val_r2_mean, val_r2_std, train_r2_mean, train_r2_std, n_features).
     """
-    gkf = GroupKFold(n_splits=n_folds)
     sample_X = next(iter(base_reps.values()))
     val_scores = []
     train_scores = []
     n_feats = []
 
-    for train_idx, val_idx in gkf.split(sample_X, labels, groups=groups):
+    for train_idx, val_idx in _cv_split(groups, n_folds, sample_X, labels, seed):
         train_reps = {k: v[train_idx] for k, v in base_reps.items()}
         val_reps = {k: v[val_idx] for k, v in base_reps.items()}
         y_train, y_val = labels[train_idx], labels[val_idx]
@@ -1776,11 +1779,10 @@ def run_uncertainty_calibration(
         model_factory, budget, alloc, imp, desc = condition_specs[cond_name]
         print(f"\n  {cond_name}: {desc}")
 
-        gkf = GroupKFold(n_splits=n_folds)
         sample_X = next(iter(reps.values()))
 
         fold_metrics = []
-        for fold_i, (train_idx, val_idx) in enumerate(gkf.split(sample_X, labels, groups=groups)):
+        for fold_i, (train_idx, val_idx) in enumerate(_cv_split(groups, n_folds, sample_X, labels)):
             train_reps = {k: v[train_idx] for k, v in reps.items()}
             val_reps = {k: v[val_idx] for k, v in reps.items()}
             y_train, y_val = labels[train_idx], labels[val_idx]
@@ -2382,7 +2384,6 @@ def run_noise_robustness(
         'feature_stability': {},
     }
 
-    gkf = GroupKFold(n_splits=n_folds)
     sample_X = next(iter(reps.values()))
 
     from sklearn.ensemble import RandomForestRegressor as _RF
@@ -2399,7 +2400,7 @@ def run_noise_robustness(
 
             for sigma in sigmas:
                 fold_scores = []
-                for train_idx, val_idx in gkf.split(sample_X, labels, groups=groups):
+                for train_idx, val_idx in _cv_split(groups, n_folds, sample_X, labels):
                     y_train = labels[train_idx].copy()
                     y_val = labels[val_idx]
 
@@ -2454,7 +2455,7 @@ def run_noise_robustness(
 
             for sigma in sigmas:
                 fold_scores = []
-                for train_idx, val_idx in gkf.split(sample_X, labels, groups=groups):
+                for train_idx, val_idx in _cv_split(groups, n_folds, sample_X, labels):
                     y_train = labels[train_idx].copy()
                     y_val = labels[val_idx]
 
@@ -2521,7 +2522,7 @@ def run_noise_robustness(
 
         for sigma in sigmas:
             fold_features = []
-            for train_idx, val_idx in gkf.split(sample_X, labels, groups=groups):
+            for train_idx, val_idx in _cv_split(groups, n_folds, sample_X, labels):
                 y_train = labels[train_idx].copy()
                 if sigma > 0:
                     y_train = noise_injector.inject(y_train, sigma=sigma)

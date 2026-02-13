@@ -321,7 +321,10 @@ SPEED_TIERS = {
 def _make_cv_splitter(groups: Optional[np.ndarray], n_folds: int, seed: int):
     """Return (splitter, use_groups) depending on whether groups are provided."""
     if groups is not None:
-        return GroupKFold(n_splits=n_folds), True
+        n_unique = len(np.unique(groups))
+        if n_unique >= n_folds:
+            return GroupKFold(n_splits=n_folds), True
+        # Not enough groups for GroupKFold — fall back to regular KFold
     return KFold(n_splits=n_folds, shuffle=True, random_state=seed), False
 
 
