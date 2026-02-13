@@ -2682,5 +2682,265 @@ def create_antibody_hybrid(
             features['humanness_light'] = compute_humanness_scores(
                 light_sequences, chain_type='light'
             )
-    
+
+    return features
+
+
+# ============================================================================
+# PART 7: MUTATION-AWARE REPRESENTATIONS
+# ============================================================================
+
+def compute_biophysical_delta(
+    mutations: List[List[Dict]],
+) -> np.ndarray:
+    """Compute biophysical property changes at mutation sites.
+
+    For each sample, aggregates Δ(property) across all mutations:
+    Δcharge, Δhydrophobicity, Δmw, Δvolume, Δflexibility, Δpolarity.
+
+    Args:
+        mutations: Per-sample mutation lists from FLAb loader.
+            Each mutation: {'pos': int, 'wt_aa': str, 'mut_aa': str, 'chain': str}
+
+    Returns:
+        np.ndarray: (n_samples, 6) biophysical delta features.
+    """
+    props = ['hydrophobicity', 'charge', 'mw', 'volume', 'flexibility', 'polarity']
+    n = len(mutations)
+    features = np.zeros((n, 6), dtype=np.float64)
+
+    for i, muts in enumerate(mutations):
+        if not muts:
+            continue
+        for m in muts:
+            wt_aa = m.get('wt_aa', '-')
+            mut_aa = m.get('mut_aa', '-')
+            if wt_aa in AA_PROPERTIES and mut_aa in AA_PROPERTIES:
+                for j, prop in enumerate(props):
+                    features[i, j] += AA_PROPERTIES[mut_aa][prop] - AA_PROPERTIES[wt_aa][prop]
+
+    print(f"  Generated biophysical_delta features: ({n}, 6)")
+    return features
+
+
+def compute_mutation_positional_features(
+    mutations: List[List[Dict]],
+    wt_heavy: str,
+    wt_light: Optional[str] = None,
+) -> np.ndarray:
+    """Compute positional/structural features of mutation sites.
+
+    Features (per sample):
+    - CDR region one-hot: CDR1/CDR2/CDR3/FR1/FR2/FR3/FR4 (7D)
+    - Mean BLOSUM62 substitution score at mutation sites (1D)
+    - Mean relative position in sequence (1D)
+    - Number of mutations (1D)
+    - Max mutations in one region (1D)
+    Total: 11D
+
+    Uses simple Chothia-like CDR boundaries for heavy chain:
+        CDR-H1: 26-32, CDR-H2: 52-56, CDR-H3: 95-102 (approximate)
+
+    Args:
+        mutations: Per-sample mutation lists from FLAb loader.
+        wt_heavy: Wildtype heavy chain sequence.
+        wt_light: Wildtype light chain sequence (optional).
+
+    Returns:
+        np.ndarray: (n_samples, 11) positional features.
+    """
+    # Approximate CDR boundaries (Chothia, 0-indexed)
+    cdr_regions_heavy = {
+        'FR1': (0, 25), 'CDR1': (26, 32), 'FR2': (33, 51),
+        'CDR2': (52, 56), 'FR3': (57, 94), 'CDR3': (95, 102), 'FR4': (103, 200),
+    }
+    region_names = ['FR1', 'CDR1', 'FR2', 'CDR2', 'FR3', 'CDR3', 'FR4']
+
+    n = len(mutations)
+    features = np.zeros((n, 11), dtype=np.float64)
+
+    seq_len = max(len(wt_heavy), 1)
+
+    for i, muts in enumerate(mutations):
+        if not muts:
+            continue
+
+        # Filter to heavy chain mutations
+        heavy_muts = [m for m in muts if m.get('chain', 'heavy') == 'heavy']
+        if not heavy_muts:
+            features[i, 9] = len(muts)  # total mutation count
+            continue
+
+        # Region one-hot: fraction of mutations in each region
+        region_counts = np.zeros(7)
+        blosum_scores = []
+        positions = []
+
+        for m in heavy_muts:
+            pos = m['pos']
+            positions.append(pos / seq_len)
+
+            # Determine region
+            for r_idx, r_name in enumerate(region_names):
+                lo, hi = cdr_regions_heavy[r_name]
+                if lo <= pos <= hi:
+                    region_counts[r_idx] += 1
+                    break
+
+            # BLOSUM62 score
+            wt_aa = m.get('wt_aa', '-')
+            mut_aa = m.get('mut_aa', '-')
+            if wt_aa in BLOSUM62_MATRIX and mut_aa in BLOSUM62_MATRIX.get(wt_aa, {}):
+                blosum_scores.append(BLOSUM62_MATRIX[wt_aa][mut_aa])
+
+        total_muts = len(heavy_muts)
+        # Region fractions (7D)
+        features[i, :7] = region_counts / max(total_muts, 1)
+        # Mean BLOSUM62 score (1D)
+        features[i, 7] = np.mean(blosum_scores) if blosum_scores else 0.0
+        # Mean relative position (1D)
+        features[i, 8] = np.mean(positions) if positions else 0.0
+        # Number of mutations (1D)
+        features[i, 9] = total_muts
+        # Max mutations in one region (1D)
+        features[i, 10] = region_counts.max()
+
+    print(f"  Generated positional features: ({n}, 11)")
+    return features
+
+
+def compute_lm_mutation_scores(
+    wt_seq: str,
+    mut_seqs: List[str],
+    mutations: List[List[Dict]],
+    model_name: str = 'ablang2',
+) -> np.ndarray:
+    """Compute language model mutation scores.
+
+    For each mutation: score = log P(mut_aa | context) - log P(wt_aa | context)
+
+    Output features (5D per sample):
+    - Mean LM score across mutations (1D)
+    - Min LM score (most destabilizing) (1D)
+    - Max LM score (most favorable) (1D)
+    - Sum of LM scores (total predicted effect) (1D)
+    - Number of unfavorable mutations (score < 0) (1D)
+
+    Falls back to BLOSUM62 proxy if LM unavailable.
+
+    Args:
+        wt_seq: Wildtype sequence.
+        mut_seqs: List of mutant sequences.
+        mutations: Per-sample mutation lists.
+        model_name: 'ablang2' or 'esm2'.
+
+    Returns:
+        np.ndarray: (n_samples, 5) LM mutation score features.
+    """
+    n = len(mut_seqs)
+    features = np.zeros((n, 5), dtype=np.float64)
+
+    logits_fn = None
+    aa_order_str = 'ACDEFGHIKLMNPQRSTVWY'
+
+    if model_name == 'ablang2':
+        try:
+            import ablang2
+            abl_model = ablang2.pretrained(model_to_use='ablang2-paired',
+                                           random_init=False, device='cpu')
+            abl_model.freeze()
+
+            def _ablang2_logits(seq):
+                res = abl_model([seq], ['*'], mode='likelihood')
+                return res[0]  # (seq_len, vocab_size)
+
+            logits_fn = _ablang2_logits
+            print(f"  LM scoring with AbLang2...")
+        except Exception as e:
+            print(f"  AbLang2 failed ({e}), trying ESM-2...")
+            model_name = 'esm2'
+
+    if logits_fn is None and model_name == 'esm2':
+        try:
+            from transformers import AutoTokenizer, EsmForMaskedLM
+            esm_tokenizer = AutoTokenizer.from_pretrained('facebook/esm2_t33_650M_UR50D')
+            esm_model = EsmForMaskedLM.from_pretrained('facebook/esm2_t33_650M_UR50D')
+            esm_model.eval()
+
+            def _esm2_logits(seq):
+                inputs = esm_tokenizer(seq, return_tensors='pt',
+                                       truncation=True, max_length=512)
+                with torch.no_grad():
+                    output = esm_model(**inputs)
+                logprobs = torch.log_softmax(output.logits[0], dim=-1)
+                return logprobs[1:-1].numpy()  # strip BOS/EOS
+
+            logits_fn = _esm2_logits
+            print(f"  LM scoring with ESM-2...")
+        except Exception as e:
+            print(f"  ESM-2 also failed ({e}), using BLOSUM62 fallback")
+
+    if logits_fn is None:
+        # Fallback: BLOSUM62 proxy
+        print(f"  Using BLOSUM62 fallback for mutation scoring")
+        for i, muts in enumerate(mutations):
+            if not muts:
+                continue
+            scores = []
+            for m in muts:
+                wt_aa = m.get('wt_aa', '-')
+                mut_aa = m.get('mut_aa', '-')
+                if wt_aa in BLOSUM62_MATRIX and mut_aa in BLOSUM62_MATRIX.get(wt_aa, {}):
+                    self_score = BLOSUM62_MATRIX[wt_aa][wt_aa]
+                    mut_score = BLOSUM62_MATRIX[wt_aa][mut_aa]
+                    scores.append(mut_score - self_score)
+            if scores:
+                features[i, 0] = np.mean(scores)
+                features[i, 1] = np.min(scores)
+                features[i, 2] = np.max(scores)
+                features[i, 3] = np.sum(scores)
+                features[i, 4] = sum(1 for s in scores if s < 0)
+        print(f"  Generated lm_score features (BLOSUM62 fallback): ({n}, 5)")
+        return features
+
+    # Use actual LM logits
+    # Cache WT logits (compute once)
+    try:
+        wt_logprobs = logits_fn(wt_seq)
+    except Exception as e:
+        print(f"  LM logits failed for WT ({e}), falling back to zeros")
+        return features
+
+    for i, muts in enumerate(mutations):
+        if not muts:
+            continue
+        if (i + 1) % 500 == 0:
+            print(f"    LM scoring: {i+1}/{n}")
+
+        try:
+            scores = []
+            for m in muts:
+                if m.get('chain') != 'heavy':
+                    continue
+                pos = m['pos']
+                if pos >= len(wt_logprobs):
+                    continue
+                wt_aa = m.get('wt_aa', '-')
+                mut_aa = m.get('mut_aa', '-')
+                if wt_aa in aa_order_str and mut_aa in aa_order_str:
+                    wt_idx = aa_order_str.index(wt_aa)
+                    mut_idx = aa_order_str.index(mut_aa)
+                    if wt_logprobs.ndim == 2 and wt_logprobs.shape[1] >= 20:
+                        score = float(wt_logprobs[pos, mut_idx] - wt_logprobs[pos, wt_idx])
+                        scores.append(score)
+            if scores:
+                features[i, 0] = np.mean(scores)
+                features[i, 1] = np.min(scores)
+                features[i, 2] = np.max(scores)
+                features[i, 3] = np.sum(scores)
+                features[i, 4] = sum(1 for s in scores if s < 0)
+        except Exception:
+            pass  # Leave as zeros
+
+    print(f"  Generated lm_score features ({model_name}): ({n}, 5)")
     return features

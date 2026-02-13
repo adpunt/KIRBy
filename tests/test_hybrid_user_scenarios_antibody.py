@@ -14,10 +14,20 @@ Scenarios:
   5. Feature weights for similarity (return_fitted=True, weight_method)
   6. Medium search (more budgets, allocations, importance methods)
   7. Override search parameters (custom budgets, allocation_methods, importance_methods)
+  8. Augmented features (find_best_hybrid with augmentations=...)
+  9. Delta reps (base-only vs base+delta)
+  10. Mutation-aware preset (positional/biophysical_delta present + correct shapes)
+  11. Caching validation (two identical runs → same scores, second faster)
+  12. Multi-dataset comparison (compare optimal configs across two datasets)
+  13. Full pipeline (delta + augmentations combined)
 
 Usage:
     python tests/test_hybrid_user_scenarios_antibody.py --scenarios 1 2 3 4 5 7
     python tests/test_hybrid_user_scenarios_antibody.py --scenarios all --reps fast+lm
+    python tests/test_hybrid_user_scenarios_antibody.py --scenarios 9 10 \
+        --reps mutation_fast --dataset flab_expression_koenig --delta
+    python tests/test_hybrid_user_scenarios_antibody.py --scenarios 8 13 --augment --delta \
+        --reps mutation_fast --dataset flab_expression_koenig
 """
 
 import os
@@ -39,7 +49,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from kirby.find_best_hybrid import find_best_hybrid, SearchResult, Blueprint, FittedResult
 from kirby.hybrid import create_hybrid, apply_feature_selection
-from find_best_hybrid_antibody import load_dataset, get_representations, assign_identity_groups
+from find_best_hybrid_antibody import load_dataset, get_representations, get_augmentations, assign_identity_groups
 
 warnings.filterwarnings('ignore')
 
@@ -403,29 +413,348 @@ def scenario_7_override_params(reps, labels, groups):
     return result
 
 
+def scenario_8_augmented_features(reps, labels, groups, augmentations):
+    """Scenario 8: Augmented features via find_best_hybrid(augmentations=...)."""
+    print("\n" + "=" * 80)
+    print("SCENARIO 8: Augmented features")
+    print("=" * 80)
+
+    if augmentations is None or len(augmentations) == 0:
+        print("  SKIPPED: --augment not provided or no augmentations generated")
+        print("\nSCENARIO 8: SKIPPED")
+        return None
+
+    print(f"  Augmentations: {list(augmentations.keys())} "
+          f"({sum(v.shape[1] for v in augmentations.values())} features)")
+
+    # Run WITHOUT augmentations
+    result_base = find_best_hybrid(
+        base_reps=reps,
+        labels=labels,
+        groups=groups,
+        speed='fast',
+        verbose=False,
+        cache=True,
+    )
+    base_score = result_base.best_overall['score_mean']
+    print(f"\n  Base (no augmentations): R2={base_score:.4f}")
+
+    # Run WITH augmentations
+    result_aug = find_best_hybrid(
+        base_reps=reps,
+        labels=labels,
+        groups=groups,
+        speed='fast',
+        augmentations=augmentations,
+        verbose=False,
+        cache=True,
+    )
+    aug_score = result_aug.best_overall['score_mean']
+    print(f"  With augmentations:     R2={aug_score:.4f}")
+    print(f"  Difference: {aug_score - base_score:+.4f}")
+
+    assert isinstance(result_aug, SearchResult)
+    assert result_aug.best_overall is not None
+
+    print("\nSCENARIO 8: PASSED")
+    return result_aug
+
+
+def scenario_9_delta_reps(reps, labels, groups):
+    """Scenario 9: Delta representations — base-only vs base+delta."""
+    print("\n" + "=" * 80)
+    print("SCENARIO 9: Delta representations")
+    print("=" * 80)
+
+    delta_reps = {k: v for k, v in reps.items() if k.startswith('delta_')}
+    base_reps = {k: v for k, v in reps.items() if not k.startswith('delta_')}
+
+    if not delta_reps:
+        print("  SKIPPED: No delta reps found (run with --delta on intra-family dataset)")
+        print("\nSCENARIO 9: SKIPPED")
+        return None
+
+    print(f"  Base reps: {list(base_reps.keys())}")
+    print(f"  Delta reps: {list(delta_reps.keys())}")
+
+    # Run with base only
+    result_base = find_best_hybrid(
+        base_reps=base_reps,
+        labels=labels,
+        groups=groups,
+        speed='fast',
+        verbose=False,
+        cache=True,
+    )
+    base_score = result_base.best_overall['score_mean']
+
+    # Run with all (base + delta)
+    result_all = find_best_hybrid(
+        base_reps=reps,
+        labels=labels,
+        groups=groups,
+        speed='fast',
+        verbose=False,
+        cache=True,
+    )
+    all_score = result_all.best_overall['score_mean']
+
+    print(f"\n  Base only ({len(base_reps)} reps): R2={base_score:.4f}")
+    print(f"  Base+Delta ({len(reps)} reps): R2={all_score:.4f}")
+    print(f"  Difference: {all_score - base_score:+.4f}")
+
+    # Verify delta reps appear in baselines
+    for delta_name in delta_reps:
+        assert delta_name in result_all.baselines, \
+            f"Delta rep '{delta_name}' missing from baselines"
+    print(f"  All {len(delta_reps)} delta reps present in baselines")
+
+    print("\nSCENARIO 9: PASSED")
+    return result_all
+
+
+def scenario_10_mutation_aware(reps, labels, groups, metadata):
+    """Scenario 10: Mutation-aware reps present, correct shapes, in baselines."""
+    print("\n" + "=" * 80)
+    print("SCENARIO 10: Mutation-aware preset validation")
+    print("=" * 80)
+
+    mutation_reps = ['positional', 'biophysical_delta', 'lm_score']
+    found = [r for r in mutation_reps if r in reps]
+    missing = [r for r in mutation_reps if r not in reps]
+
+    if not found:
+        print("  SKIPPED: No mutation-aware reps found "
+              "(use --reps mutation_fast or mutation_full with flab_* dataset)")
+        print("\nSCENARIO 10: SKIPPED")
+        return None
+
+    n_samples = len(labels)
+    print(f"  Found mutation reps: {found}")
+    if missing:
+        print(f"  Missing: {missing}")
+
+    # Validate shapes
+    for rep_name in found:
+        rep = reps[rep_name]
+        assert rep.shape[0] == n_samples, \
+            f"{rep_name}: expected {n_samples} rows, got {rep.shape[0]}"
+        assert rep.shape[1] > 0, f"{rep_name}: has 0 features"
+        assert not np.all(np.isnan(rep)), f"{rep_name}: all NaN"
+        print(f"  {rep_name}: shape={rep.shape}, "
+              f"range=[{np.nanmin(rep):.3f}, {np.nanmax(rep):.3f}]")
+
+    # Run search and verify mutation reps appear in baselines
+    result = find_best_hybrid(
+        base_reps=reps,
+        labels=labels,
+        groups=groups,
+        speed='fast',
+        verbose=False,
+        cache=True,
+    )
+
+    for rep_name in found:
+        assert rep_name in result.baselines, \
+            f"Mutation rep '{rep_name}' missing from baselines"
+    print(f"  All {len(found)} mutation reps present in baselines")
+
+    # Check metadata was available
+    if metadata.get('mutations'):
+        n_with_mutations = sum(1 for m in metadata['mutations'] if m)
+        print(f"  Samples with mutations: {n_with_mutations}/{n_samples}")
+
+    print("\nSCENARIO 10: PASSED")
+    return result
+
+
+def scenario_11_caching(reps, labels, groups):
+    """Scenario 11: Caching validation — two identical runs yield same scores."""
+    print("\n" + "=" * 80)
+    print("SCENARIO 11: Caching validation")
+    print("=" * 80)
+
+    # First run (may or may not hit cache)
+    t1_start = time.time()
+    result1 = find_best_hybrid(
+        base_reps=reps,
+        labels=labels,
+        groups=groups,
+        speed='fast',
+        cache=True,
+    )
+    t1 = time.time() - t1_start
+
+    # Second run (should hit cache)
+    t2_start = time.time()
+    result2 = find_best_hybrid(
+        base_reps=reps,
+        labels=labels,
+        groups=groups,
+        speed='fast',
+        cache=True,
+    )
+    t2 = time.time() - t2_start
+
+    score1 = result1.best_overall['score_mean']
+    score2 = result2.best_overall['score_mean']
+    model1 = result1.best_overall['model']
+    model2 = result2.best_overall['model']
+
+    print(f"\n  Run 1: {model1} R2={score1:.4f} ({t1:.1f}s)")
+    print(f"  Run 2: {model2} R2={score2:.4f} ({t2:.1f}s)")
+    print(f"  Speedup: {t1/t2:.1f}x" if t2 > 0 else "  Speedup: instant")
+
+    assert abs(score1 - score2) < 1e-6, \
+        f"Scores differ: {score1:.6f} vs {score2:.6f}"
+    assert model1 == model2, f"Models differ: {model1} vs {model2}"
+
+    print("\nSCENARIO 11: PASSED")
+    return result2
+
+
+def scenario_12_multi_dataset(reps, labels, groups, args):
+    """Scenario 12: Multi-dataset comparison — compare optimal configs."""
+    print("\n" + "=" * 80)
+    print("SCENARIO 12: Multi-dataset comparison")
+    print("=" * 80)
+
+    print(f"  Dataset 1: {args.dataset}")
+    print(f"  Dataset 2: {args.dataset2}")
+
+    if args.dataset == args.dataset2:
+        print("  SKIPPED: dataset1 == dataset2")
+        print("\nSCENARIO 12: SKIPPED")
+        return None
+
+    # Run on dataset 1 (already have reps)
+    result1 = find_best_hybrid(
+        base_reps=reps,
+        labels=labels,
+        groups=groups,
+        speed='fast',
+        verbose=False,
+        cache=True,
+    )
+
+    # Load and run on dataset 2
+    heavy2, light2, labels2, task2, meta2 = load_dataset(args.dataset2)
+    groups2, n_groups2 = assign_identity_groups(heavy2, threshold=args.identity_threshold)
+
+    wt2 = meta2.get('wildtype_heavy')
+    wl2 = meta2.get('wildtype_light')
+    mut2 = meta2.get('mutations')
+    reps2 = get_representations(heavy2, light2, args.reps,
+                                wt_heavy=wt2, wt_light=wl2,
+                                mutations=mut2, delta=args.delta)
+
+    result2 = find_best_hybrid(
+        base_reps=reps2,
+        labels=labels2,
+        groups=groups2,
+        speed='fast',
+        verbose=False,
+        cache=True,
+    )
+
+    bp1 = result1.best_overall['blueprint']
+    bp2 = result2.best_overall['blueprint']
+
+    print(f"\n  {args.dataset}: {result1.best_overall['model']}, "
+          f"{bp1.allocation_method}/{bp1.importance_method}, "
+          f"budget={bp1.budget}, R2={result1.best_overall['score_mean']:.4f}")
+    print(f"  {args.dataset2}: {result2.best_overall['model']}, "
+          f"{bp2.allocation_method}/{bp2.importance_method}, "
+          f"budget={bp2.budget}, R2={result2.best_overall['score_mean']:.4f}")
+
+    # Check if configs differ
+    same_model = result1.best_overall['model'] == result2.best_overall['model']
+    same_budget = bp1.budget == bp2.budget
+    same_method = bp1.allocation_method == bp2.allocation_method
+    print(f"\n  Same model: {same_model}")
+    print(f"  Same budget: {same_budget}")
+    print(f"  Same allocation: {same_method}")
+
+    print("\nSCENARIO 12: PASSED")
+    return {'dataset1': result1, 'dataset2': result2}
+
+
+def scenario_13_full_pipeline(reps, labels, groups, augmentations):
+    """Scenario 13: Full pipeline — delta + augmentations combined."""
+    print("\n" + "=" * 80)
+    print("SCENARIO 13: Full pipeline (delta + augmentations)")
+    print("=" * 80)
+
+    delta_reps = {k: v for k, v in reps.items() if k.startswith('delta_')}
+    has_delta = len(delta_reps) > 0
+    has_augs = augmentations is not None and len(augmentations) > 0
+
+    print(f"  Has delta reps: {has_delta} ({len(delta_reps)} reps)")
+    print(f"  Has augmentations: {has_augs}")
+
+    if not has_delta and not has_augs:
+        print("  SKIPPED: Need --delta and/or --augment")
+        print("\nSCENARIO 13: SKIPPED")
+        return None
+
+    result = find_best_hybrid(
+        base_reps=reps,
+        labels=labels,
+        groups=groups,
+        speed='fast',
+        augmentations=augmentations,
+        verbose=True,
+        cache=True,
+    )
+
+    best = result.best_overall
+    bp = best['blueprint']
+    print(f"\n  Best: {best['model']}, {bp.allocation_method}/{bp.importance_method}, "
+          f"budget={bp.budget}")
+    print(f"  R2={best['score_mean']:.4f}+/-{best['score_std']:.3f}, dim={best['n_features']}")
+    print(f"  Total reps: {len(reps)}, Baselines: {len(result.baselines)}")
+
+    # Verify all reps (including delta) present in baselines
+    for rep_name in reps:
+        assert rep_name in result.baselines, \
+            f"Rep '{rep_name}' missing from baselines"
+
+    print("\nSCENARIO 13: PASSED")
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Antibody user-facing test scenarios for find_best_hybrid()')
     parser.add_argument('--scenarios', type=str, nargs='+', default=['1', '2', '3', '4', '5', '7'],
-                        help="Scenarios to run (1-7 or 'all')")
+                        help="Scenarios to run (1-13 or 'all')")
     parser.add_argument('--dataset', type=str, default='sabdab_affinity')
     parser.add_argument('--reps', type=str, default='fast',
-                        help="Rep preset: 'fast', 'fast+lm', 'all_server', 'all'")
+                        help="Rep preset: 'fast', 'fast+lm', 'all_server', 'all', "
+                             "'mutation_fast', 'mutation_full'")
     parser.add_argument('--identity-threshold', type=float, default=0.8)
+    parser.add_argument('--delta', action='store_true',
+                        help='Generate delta representations (ΔX = X_mut - X_wt)')
+    parser.add_argument('--augment', action='store_true',
+                        help='Include augmented features (developability, humanness, etc.)')
+    parser.add_argument('--dataset2', type=str, default='flab_binding_koenig',
+                        help='Second dataset for multi-dataset scenario 12')
 
     args = parser.parse_args()
 
     if 'all' in args.scenarios:
-        scenarios = list(range(1, 8))
+        scenarios = list(range(1, 14))
     else:
         scenarios = [int(s) for s in args.scenarios]
 
     print(f"Dataset: {args.dataset}")
     print(f"Reps: {args.reps}")
+    print(f"Delta: {args.delta}")
+    print(f"Augment: {args.augment}")
     print(f"Scenarios: {scenarios}")
 
     # Load data
-    heavy_seqs, light_seqs, labels, task_type = load_dataset(args.dataset)
+    heavy_seqs, light_seqs, labels, task_type, metadata = load_dataset(args.dataset)
     print(f"  {len(heavy_seqs)} antibodies, task: {task_type}")
     if light_seqs:
         print(f"  Paired (VH+VL)")
@@ -435,7 +764,24 @@ def main():
     groups, n_groups = assign_identity_groups(heavy_seqs, threshold=args.identity_threshold)
     print(f"  {n_groups} identity groups (threshold={args.identity_threshold})")
 
-    reps = get_representations(heavy_seqs, light_seqs, args.reps)
+    # Extract metadata for mutation-aware reps
+    wt_heavy = metadata.get('wildtype_heavy')
+    wt_light = metadata.get('wildtype_light')
+    mutations = metadata.get('mutations')
+
+    reps = get_representations(heavy_seqs, light_seqs, args.reps,
+                               wt_heavy=wt_heavy, wt_light=wt_light,
+                               mutations=mutations, delta=args.delta)
+
+    # Generate augmentations if requested
+    augmentations = None
+    if args.augment:
+        augmentations = get_augmentations(heavy_seqs, light_seqs)
+        if not augmentations:
+            augmentations = None
+        else:
+            print(f"  Augmentations: {list(augmentations.keys())} "
+                  f"({sum(v.shape[1] for v in augmentations.values())} features)")
 
     # Run scenarios
     passed = []
@@ -458,6 +804,18 @@ def main():
                 scenario_6_medium_search(reps, labels, groups)
             elif s == 7:
                 scenario_7_override_params(reps, labels, groups)
+            elif s == 8:
+                scenario_8_augmented_features(reps, labels, groups, augmentations)
+            elif s == 9:
+                scenario_9_delta_reps(reps, labels, groups)
+            elif s == 10:
+                scenario_10_mutation_aware(reps, labels, groups, metadata)
+            elif s == 11:
+                scenario_11_caching(reps, labels, groups)
+            elif s == 12:
+                scenario_12_multi_dataset(reps, labels, groups, args)
+            elif s == 13:
+                scenario_13_full_pipeline(reps, labels, groups, augmentations)
             else:
                 print(f"\nUnknown scenario {s}, skipping")
                 continue

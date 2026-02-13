@@ -461,6 +461,109 @@ python tests/find_best_hybrid_antibody.py sabdab_affinity --reps fast+lm --searc
 python tests/find_best_hybrid_antibody.py sabdab_affinity --reps fast --search fast --cache
 ```
 
+### FLAb Datasets (Antibody Fitness Landscapes)
+
+FLAb datasets are auto-downloaded from GitHub on first use. Available presets:
+
+| Name | Property | ~Samples | Intra-family? |
+|------|----------|----------|---------------|
+| `flab_expression_koenig` | Expression (enrichment ratio) | ~4,000 | Yes (G6 antibody) |
+| `flab_binding_koenig` | Binding (Kd) | ~4,000 | Yes (G6 antibody) |
+| `flab_thermo_jain` | Thermostability (Tm) | ~137 | No (diverse) |
+| `flab_aggregation_jain` | Aggregation (AC-SINS) | ~137 | No (diverse) |
+| `flab_thermo_hie` | Thermostability (Tm) | ~500+ | Yes (S309 DMS) |
+| `flab_binding_rosace` | Binding (Kd) | ~500+ | Yes (adalimumab DMS) |
+| `abcov_kd` | Binding (-log Kd) | ~1,780 | No (diverse CoV abs) |
+| `abcov_ic50` | Neutralization (IC50) | ~1,780 | No (diverse CoV abs) |
+
+```bash
+# FLAb with mutation-aware representations
+python tests/find_best_hybrid_antibody.py flab_expression_koenig --reps mutation_fast --search fast
+
+# With delta representations (ΔX = X_mutant - X_wildtype)
+python tests/find_best_hybrid_antibody.py flab_expression_koenig --reps mutation_fast --delta --search fast
+
+# Full mutation-aware preset with delta
+python tests/find_best_hybrid_antibody.py flab_binding_koenig --reps mutation_full --delta --search medium
+
+# Ab-CoV (inter-family, no delta)
+python tests/find_best_hybrid_antibody.py abcov_kd --reps fast --search fast
+```
+
+### AbAgym Datasets (Antibody-Side DMS)
+
+[AbAgym](https://github.com/3BioCompBio/AbAgym) — 68 DMS experiments, 5 mutate the antibody side.
+Auto-downloaded from GitHub on first use. Requires BioPython for PDB sequence extraction.
+
+| Name | Target | PDB | ~Mutations |
+|------|--------|-----|------------|
+| `abagym_all` | All 5 pooled | — | ~29K |
+| `abagym_Ang2_2017_G6` | Angiopoietin-2 | 4zfg | ~6K |
+| `abagym_EGFR_2013_Cetuximab` | EGFR | 1yy9 | ~12K |
+| `abagym_lysozyme_2019_D441` | Lysozyme | 1mlc | ~1.8K |
+| `abagym_VEGF_2017b_G6` | VEGF | 4zff | ~9.5K |
+| `abagym_HER2_2021_trastuzumab` | HER2 | 8pwh | ~184 |
+
+```bash
+# AbAgym pooled
+python tests/find_best_hybrid_antibody.py abagym_all --reps mutation_fast --search fast
+
+# Individual experiment
+python tests/find_best_hybrid_antibody.py abagym_Ang2_2017_G6 --reps mutation_full --delta --search medium
+```
+
+### AbBind Dataset (ΔΔG)
+
+[AB-Bind](https://github.com/sarahsirin/AB-Bind-Database) — ~754 Ab-Ag mutations with
+ΔΔG (kcal/mol) after filtering non-Ab-Ag PDBs. Auto-downloaded from GitHub.
+Requires BioPython for PDB sequence extraction (~100 PDBs, ~5MB total).
+
+```bash
+python tests/find_best_hybrid_antibody.py abbind --reps mutation_fast --search fast
+```
+
+### Structural Features (ImmuneBuilder)
+
+Structure-based features (28D) derived from ABodyBuilder2-predicted 3D structures.
+Includes SASA (15D), prediction confidence (5D), and paratope features (8D).
+
+**Server-only** — structure prediction is ~60s/structure on CPU, ~5s on GPU.
+Without ImmuneBuilder, falls back to sequence-only paratope features (8D).
+
+```bash
+# Install ImmuneBuilder (server)
+pip install ImmuneBuilder
+conda install -c conda-forge openmm pdbfixer
+```
+
+### Mutation-Aware Rep Presets
+
+| Preset | Reps | Description |
+|--------|------|-------------|
+| `mutation_fast` | kmer, aac, blosum62, physicochemical, positional, biophysical_delta | Classical + mutation features (6 reps) |
+| `mutation_full` | + antiberty, ablang2, lm_score | + LM embeddings and LM scoring (9 reps) |
+| `mutation_structural` | + structural | + structure-based features (10 reps, server-only) |
+
+With `--delta`: auto-adds `delta_*` for every non-mutation base rep, roughly doubling the rep count.
+
+### Antibody Complexity Experiments
+
+```bash
+# Quick test (FLAb + mutation reps, Exp 1+2+6)
+sbatch tests/slurm_scripts/run_antibody_complexity.sh quick
+
+# With delta reps
+sbatch tests/slurm_scripts/run_antibody_complexity.sh quick_delta
+
+# Full run on specific dataset
+sbatch tests/slurm_scripts/run_antibody_complexity.sh full flab_expression_koenig
+sbatch tests/slurm_scripts/run_antibody_complexity.sh full_delta flab_binding_koenig
+
+# AbAgym / AbBind datasets
+sbatch tests/slurm_scripts/run_antibody_complexity.sh full abagym_all
+sbatch tests/slurm_scripts/run_antibody_complexity.sh full abbind
+```
+
 ---
 
 ## 8. Verification

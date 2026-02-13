@@ -64,34 +64,95 @@ warnings.filterwarnings('ignore')
 
 
 # =============================================================================
-# DATA LOADING (reuse from molecular wrapper)
+# DATA LOADING (domain-aware: molecular or antibody)
 # =============================================================================
 
-# Import from find_best_hybrid_molecular
+# Import from molecular wrapper (default)
 sys.path.insert(0, str(Path(__file__).parent))
-from find_best_hybrid_molecular import load_dataset, get_representations, assign_scaffold_groups
+from find_best_hybrid_molecular import (
+    load_dataset as load_molecular_dataset,
+    get_representations as get_molecular_representations,
+    assign_scaffold_groups,
+)
+
+# Antibody dataset prefixes
+_ANTIBODY_PREFIXES = ('flab_', 'abcov_', 'sabdab_', 'abagym_', 'abbind')
 
 
-def load_data(dataset_name: str, rep_preset: str = 'fast') -> dict:
-    """Load dataset, generate representations, assign scaffold groups.
+def _is_antibody_dataset(name: str) -> bool:
+    return any(name.lower().startswith(p) for p in _ANTIBODY_PREFIXES)
 
-    Returns dict with keys: smiles, labels, reps, groups, n_scaffolds, task_type.
+
+def load_data(dataset_name: str, rep_preset: str = 'fast',
+              delta: bool = False, augment: bool = False) -> dict:
+    """Load dataset, generate representations, assign groups.
+
+    Domain-aware: detects antibody dataset names (flab_*, abcov_*, sabdab_*)
+    and dispatches to the antibody wrapper. Otherwise uses molecular wrapper.
+
+    Returns dict with keys: labels, reps, groups, n_groups, task_type,
+    augmentations, plus domain-specific keys (smiles or heavy_seqs, etc.).
     """
-    smiles, labels, task_type = load_dataset(dataset_name)
-    reps = get_representations(smiles, rep_preset)
-    groups, n_scaffolds = assign_scaffold_groups(smiles)
+    if _is_antibody_dataset(dataset_name):
+        from find_best_hybrid_antibody import (
+            load_dataset as load_ab_dataset,
+            get_representations as get_ab_representations,
+            get_augmentations as get_ab_augmentations,
+            assign_identity_groups,
+        )
 
-    print(f"  {dataset_name}: {len(smiles)} samples, {n_scaffolds} scaffolds, "
-          f"{len(reps)} reps ({', '.join(f'{k}={v.shape[1]}' for k, v in reps.items())})")
+        heavy_seqs, light_seqs, labels, task_type, metadata = load_ab_dataset(dataset_name)
+        wt_heavy = metadata.get('wildtype_heavy')
+        wt_light = metadata.get('wildtype_light')
+        mutations = metadata.get('mutations')
 
-    return {
-        'smiles': smiles,
-        'labels': labels,
-        'reps': reps,
-        'groups': groups,
-        'n_scaffolds': n_scaffolds,
-        'task_type': task_type,
-    }
+        reps = get_ab_representations(
+            heavy_seqs, light_seqs, rep_preset,
+            wt_heavy=wt_heavy, wt_light=wt_light,
+            mutations=mutations, delta=delta,
+        )
+
+        groups, n_groups = assign_identity_groups(heavy_seqs)
+
+        augmentations = None
+        if augment:
+            augmentations = get_ab_augmentations(heavy_seqs, light_seqs)
+            if not augmentations:
+                augmentations = None
+
+        print(f"  {dataset_name}: {len(heavy_seqs)} antibodies, {n_groups} identity groups, "
+              f"{len(reps)} reps ({', '.join(f'{k}={v.shape[1]}' for k, v in reps.items())})")
+
+        return {
+            'heavy_seqs': heavy_seqs,
+            'light_seqs': light_seqs,
+            'labels': labels,
+            'reps': reps,
+            'groups': groups,
+            'n_scaffolds': n_groups,  # compat key for experiment functions
+            'n_groups': n_groups,
+            'task_type': task_type,
+            'domain': 'antibody',
+            'augmentations': augmentations,
+        }
+    else:
+        smiles, labels, task_type = load_molecular_dataset(dataset_name)
+        reps = get_molecular_representations(smiles, rep_preset)
+        groups, n_scaffolds = assign_scaffold_groups(smiles)
+
+        print(f"  {dataset_name}: {len(smiles)} samples, {n_scaffolds} scaffolds, "
+              f"{len(reps)} reps ({', '.join(f'{k}={v.shape[1]}' for k, v in reps.items())})")
+
+        return {
+            'smiles': smiles,
+            'labels': labels,
+            'reps': reps,
+            'groups': groups,
+            'n_scaffolds': n_scaffolds,
+            'task_type': task_type,
+            'domain': 'molecular',
+            'augmentations': None,
+        }
 
 
 # =============================================================================
@@ -565,6 +626,7 @@ def run_complexity_matching_grid(
           f"{len(allocation_methods)} allocations x {len(importance_methods)} importance")
     print(f"  Delegating to find_best_hybrid()...\n")
 
+    augs = data.get('augmentations')
     search = find_best_hybrid(
         base_reps=reps,
         labels=labels,
@@ -574,6 +636,7 @@ def run_complexity_matching_grid(
         allocation_methods=allocation_methods,
         importance_methods=importance_methods,
         n_folds=n_folds,
+        augmentations=augs,
         verbose=True,
         cache=True,
     )
@@ -739,6 +802,7 @@ def run_cross_context_analysis(
                 labels=data['labels'],
                 groups=data['groups'],
                 speed='medium',
+                augmentations=data.get('augmentations'),
                 verbose=False,
                 cache=True,
             )
@@ -1207,12 +1271,14 @@ def run_within_family_complexity(
             fam_result['heatmap'][var_name] = {}
 
             # Run find_best_hybrid with this variant as the sole model
+            augs = data.get('augmentations')
             try:
                 search = find_best_hybrid(
                     reps, labels, groups=groups,
                     models={var_name: var_factory()},
                     speed=search_speed,
                     budgets=budgets,
+                    augmentations=augs,
                     verbose=False,
                     cache=True,
                 )
@@ -1388,10 +1454,12 @@ def run_data_complexity_analysis(
 
         part_result = {'easy': {}, 'hard': {}, 'n_easy': int(n_easy), 'n_hard': int(n_hard)}
 
+        full_augs = data.get('augmentations')
         for subpop_name, mask in [('easy', mask_easy), ('hard', mask_hard)]:
             sub_reps = {k: v[mask] for k, v in reps.items()}
             sub_labels = labels[mask]
             sub_groups = groups[mask]
+            sub_augs = {k: v[mask] for k, v in full_augs.items()} if full_augs else None
             n_unique_groups = len(np.unique(sub_groups))
 
             if n_unique_groups < 2:
@@ -1423,6 +1491,7 @@ def run_data_complexity_analysis(
                     sub_reps, sub_labels, groups=sub_groups,
                     speed=search_speed,
                     budgets=budgets,
+                    augmentations=sub_augs,
                     verbose=False,
                     cache=True,
                 )
@@ -1529,12 +1598,14 @@ def run_learning_curves(
         single_by_model = {m: [] for m in model_names}
         configs_by_model = {m: [] for m in model_names}
 
+        full_augs = data.get('augmentations')
         for seed in range(n_repeats):
             np.random.seed(seed)
             idx = np.random.choice(n_total, n_sub, replace=False)
             sub_reps = {k: v[idx] for k, v in reps.items()}
             sub_labels = labels[idx]
             sub_groups = groups[idx]
+            sub_augs = {k: v[idx] for k, v in full_augs.items()} if full_augs else None
             n_unique_groups = len(np.unique(sub_groups))
 
             if n_unique_groups < 2:
@@ -1549,6 +1620,7 @@ def run_learning_curves(
                     models=model_names,
                     speed=search_speed,
                     n_folds=sub_folds,
+                    augmentations=sub_augs,
                     verbose=False,
                     cache=True,
                 )
@@ -1658,10 +1730,13 @@ def run_uncertainty_calibration(
     else:
         # Run find_best_hybrid to discover optimal
         print(f"  Running find_best_hybrid(speed={search_speed}) to find optimal...")
+        augs = data.get('augmentations')
         try:
             search = find_best_hybrid(
                 reps, labels, groups=groups,
-                speed=search_speed, verbose=False,
+                speed=search_speed,
+                augmentations=augs,
+                verbose=False,
                 cache=True,
             )
             best = search.best_overall
@@ -1960,12 +2035,15 @@ def _run_information_retention(
 
     results = {'budgets': [], 'mi_xy': [], 'mi_xx_full': [], 'best_configs': []}
 
+    augs = data.get('augmentations')
     for budget in sorted(budgets):
         # Find best hybrid at this budget
         try:
             search = find_best_hybrid(
                 reps, labels, groups=groups,
-                speed=search_speed, budgets=[budget], verbose=False,
+                speed=search_speed, budgets=[budget],
+                augmentations=augs,
+                verbose=False,
                 cache=True,
             )
             best = search.best_overall
@@ -2064,6 +2142,7 @@ def _run_effective_rank_analysis(
 
     results = {'budgets': [], 'hybrid_rank': [], 'pca_rank': [], 'random_rank': []}
 
+    augs = data.get('augmentations')
     for budget in sorted(budgets):
         n_feat = min(budget, X_concat.shape[1], X_concat.shape[0] - 1)
 
@@ -2071,7 +2150,9 @@ def _run_effective_rank_analysis(
         try:
             search = find_best_hybrid(
                 reps, labels, groups=groups,
-                speed=search_speed, budgets=[budget], verbose=False,
+                speed=search_speed, budgets=[budget],
+                augmentations=augs,
+                verbose=False,
                 cache=True,
             )
             best = search.best_overall
@@ -2165,6 +2246,7 @@ def _run_bias_variance_analysis(
     # Fallback: discover best config at each budget via find_best_hybrid, then
     # measure train-val gap with that config
     print("    Computing bias-variance from scratch (using find_best_hybrid per budget)")
+    augs = data.get('augmentations')
     model_names = list(models.keys())
     for budget in budgets:
         # Find best config at this budget
@@ -2174,6 +2256,7 @@ def _run_bias_variance_analysis(
                 models=model_names,
                 speed=search_speed,
                 budgets=[budget],
+                augmentations=augs,
                 verbose=False,
                 cache=True,
             )
@@ -2556,6 +2639,12 @@ def main():
     parser.add_argument('--datasets', type=str, nargs='+', default=None,
                         help='Override dataset list (e.g., --datasets logd caco2)')
     parser.add_argument('--output', type=str, default='tests/results/complexity_theory')
+    parser.add_argument('--delta', action='store_true',
+                        help='Generate delta representations for antibody datasets '
+                             '(ΔX = X_mutant - X_wildtype). Only applies to flab_* datasets.')
+    parser.add_argument('--augment', action='store_true',
+                        help='Include augmented features (developability, humanness, etc.) '
+                             'for antibody datasets.')
 
     args = parser.parse_args()
 
@@ -2612,7 +2701,8 @@ def main():
     for ds_name in dataset_names:
         print(f"\nLoading {ds_name}...")
         try:
-            datasets[ds_name] = load_data(ds_name, rep_preset=rep_preset)
+            datasets[ds_name] = load_data(ds_name, rep_preset=rep_preset,
+                                          delta=args.delta, augment=args.augment)
         except Exception as e:
             print(f"  FAILED: {e}")
 
@@ -2633,6 +2723,8 @@ def main():
             'experiments': experiments,
             'n_folds': n_folds,
             'budgets': budgets,
+            'delta': args.delta,
+            'augment': args.augment,
             'timestamp': datetime.now().isoformat(),
         },
         'datasets': {},
