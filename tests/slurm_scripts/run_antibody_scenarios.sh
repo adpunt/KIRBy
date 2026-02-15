@@ -3,8 +3,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --time=04:00:00
-#SBATCH --partition=short
+#SBATCH --time=47:59:00
+#SBATCH --partition=long
 #SBATCH --mem=32G
 #SBATCH --mail-user=adelaide.punt@stcatz.ox.ac.uk
 
