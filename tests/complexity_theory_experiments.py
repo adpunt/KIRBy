@@ -98,6 +98,7 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
             load_dataset as load_ab_dataset,
             get_representations as get_ab_representations,
             get_augmentations as get_ab_augmentations,
+            get_mutation_augmentations as get_ab_mutation_augmentations,
             assign_identity_groups,
         )
 
@@ -115,10 +116,20 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
         groups, n_groups = assign_identity_groups(heavy_seqs, min_groups=3)
 
         augmentations = None
-        if augment:
-            augmentations = get_ab_augmentations(heavy_seqs, light_seqs)
+        # Mutation augmentations always included for mutation datasets
+        if mutations is not None:
+            augmentations = get_ab_mutation_augmentations(
+                mutations, wt_heavy, wt_light, heavy_seqs)
             if not augmentations:
                 augmentations = None
+        # Sequence-level augmentations are optional (--augment flag)
+        if augment:
+            seq_augs = get_ab_augmentations(heavy_seqs, light_seqs)
+            if seq_augs:
+                if augmentations:
+                    augmentations.update(seq_augs)
+                else:
+                    augmentations = seq_augs
 
         print(f"  {dataset_name}: {len(heavy_seqs)} antibodies, {n_groups} identity groups, "
               f"{len(reps)} reps ({', '.join(f'{k}={v.shape[1]}' for k, v in reps.items())})")
@@ -1192,6 +1203,7 @@ def evaluate_cv_with_train(
     allocation_method: str = 'greedy',
     importance_method: str = 'treeshap',
     budget: int = 100,
+    seed: int = 42,
 ) -> Tuple[float, float, float, float, int]:
     """Like evaluate_cv but also returns train R².
 
@@ -1892,6 +1904,109 @@ def run_uncertainty_calibration(
 # EXPERIMENT 9: FORMAL COMPLEXITY ANALYSIS
 # =============================================================================
 
+def _compute_icc_check(configs: list) -> Dict[str, Any]:
+    """Compute pairwise ICC(1,1) between ANOVA factor levels to detect redundancy.
+
+    Following qsar_qm_models pattern: check whether model/budget pairs are
+    redundant (ICC > 0.9) before running ANOVA.
+
+    ICC(1,1) = (BMS - WMS) / (BMS + (k-1)*WMS)
+    """
+    models_set = sorted(set(c['model'] for c in configs))
+    budgets_set = sorted(set(c['budget'] for c in configs))
+
+    # Build mean R² matrix: rows = budgets, columns = models
+    cell_means = {}
+    for c in configs:
+        key = (c['model'], c['budget'])
+        fold_scores = c.get('fold_scores', [])
+        vals = [s for s in fold_scores if not np.isnan(s)] if fold_scores else []
+        if not vals and not np.isnan(c['r2_mean']):
+            vals = [c['r2_mean']]
+        if vals:
+            cell_means[key] = float(np.mean(vals))
+
+    result = {'model_pairs': {}, 'budget_pairs': {}, 'redundant_models': [], 'redundant_budgets': []}
+
+    # --- Pairwise ICC between models (treating budgets as subjects) ---
+    print("\n    ICC(1,1) between model pairs (budgets as subjects):")
+    for i, m1 in enumerate(models_set):
+        for m2 in models_set[i+1:]:
+            # Get R² for each budget where both models have data
+            rows = []
+            for b in budgets_set:
+                v1 = cell_means.get((m1, b))
+                v2 = cell_means.get((m2, b))
+                if v1 is not None and v2 is not None:
+                    rows.append([v1, v2])
+
+            if len(rows) < 2:
+                continue
+
+            data = np.array(rows)  # shape: (n_budgets, 2)
+            n, k = data.shape
+            grand_mean = data.mean()
+            row_means = data.mean(axis=1)
+            bms = k * ((row_means - grand_mean) ** 2).sum() / (n - 1)
+            wms = ((data - row_means.reshape(-1, 1)) ** 2).sum() / (n * (k - 1))
+
+            if (bms + (k - 1) * wms) == 0:
+                icc = 1.0
+            else:
+                icc = (bms - wms) / (bms + (k - 1) * wms)
+
+            pair_key = f"{m1}_vs_{m2}"
+            result['model_pairs'][pair_key] = float(icc)
+
+            flag = " ** REDUNDANT" if icc > 0.9 else ""
+            print(f"      {m1} vs {m2}: ICC={icc:.4f}{flag}")
+
+            if icc > 0.9:
+                result['redundant_models'].append(pair_key)
+
+    # --- Pairwise ICC between budgets (treating models as subjects) ---
+    print("    ICC(1,1) between budget pairs (models as subjects):")
+    for i, b1 in enumerate(budgets_set):
+        for b2 in budgets_set[i+1:]:
+            rows = []
+            for m in models_set:
+                v1 = cell_means.get((m, b1))
+                v2 = cell_means.get((m, b2))
+                if v1 is not None and v2 is not None:
+                    rows.append([v1, v2])
+
+            if len(rows) < 2:
+                continue
+
+            data = np.array(rows)
+            n, k = data.shape
+            grand_mean = data.mean()
+            row_means = data.mean(axis=1)
+            bms = k * ((row_means - grand_mean) ** 2).sum() / (n - 1)
+            wms = ((data - row_means.reshape(-1, 1)) ** 2).sum() / (n * (k - 1))
+
+            if (bms + (k - 1) * wms) == 0:
+                icc = 1.0
+            else:
+                icc = (bms - wms) / (bms + (k - 1) * wms)
+
+            pair_key = f"b{b1}_vs_b{b2}"
+            result['budget_pairs'][pair_key] = float(icc)
+
+            flag = " ** REDUNDANT" if icc > 0.9 else ""
+            print(f"      b={b1} vs b={b2}: ICC={icc:.4f}{flag}")
+
+            if icc > 0.9:
+                result['redundant_budgets'].append(pair_key)
+
+    if result['redundant_models']:
+        print(f"    WARNING: {len(result['redundant_models'])} redundant model pair(s) detected")
+    if result['redundant_budgets']:
+        print(f"    WARNING: {len(result['redundant_budgets'])} redundant budget pair(s) detected")
+
+    return result
+
+
 def _run_anova_decomposition(exp2_results: Dict[str, Any]) -> Dict[str, Any]:
     """9a: ANOVA variance decomposition on Exp 2 grid results.
 
@@ -1904,6 +2019,9 @@ def _run_anova_decomposition(exp2_results: Dict[str, Any]) -> Dict[str, Any]:
     if not configs:
         print("    No Exp 2 configs available")
         return {'error': 'no_data'}
+
+    # ICC redundancy check (following qsar_qm_models pattern)
+    icc_results = _compute_icc_check(configs)
 
     # Build data: each config is an observation with factors (model, budget) → R²
     models_set = sorted(set(c['model'] for c in configs))
@@ -2007,6 +2125,7 @@ def _run_anova_decomposition(exp2_results: Dict[str, Any]) -> Dict[str, Any]:
         'f_budget': float(f_budget), 'p_budget': float(p_budget),
         'f_interaction': float(f_interaction), 'p_interaction': float(p_interaction),
         'ss_total': float(ss_total),
+        'icc': icc_results,
     }
 
     print(f"    Grand mean R²: {grand_mean:.4f}")

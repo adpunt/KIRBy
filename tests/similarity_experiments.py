@@ -1047,7 +1047,7 @@ def run_knn_prediction(data: dict, n_folds: int,
     if k_values is None:
         k_values = [5, 10]
     if conditions is None:
-        conditions = ['hybrid_unweighted', 'hybrid_weighted', 'rf_baseline']
+        conditions = ['hybrid_unweighted', 'hybrid_weighted']
 
     reps = data['reps']
     labels = data['labels']
@@ -2096,7 +2096,7 @@ def main():
         k_values = [5, 10]
         weight_methods = ['lightgbm_gain']
         n_sample = 3000
-        knn_conditions = ['hybrid_unweighted', 'hybrid_weighted', 'rf_baseline']
+        knn_conditions = ['hybrid_unweighted', 'hybrid_weighted']
     else:  # full
         dataset_names = ['logd', 'caco2', 'herg', 'qm9']
         rep_preset = args.reps or 'fast+hf'
@@ -2107,7 +2107,7 @@ def main():
         k_values = [3, 5, 10, 20]
         weight_methods = ['lightgbm_gain', 'treeshap', 'permutation']
         n_sample = 5000
-        knn_conditions = ['hybrid_unweighted', 'hybrid_weighted', 'rf_baseline']
+        knn_conditions = ['hybrid_unweighted', 'hybrid_weighted']
 
     if args.datasets:
         dataset_names = args.datasets
