@@ -16,12 +16,12 @@ cd /data/stat-cadd/scat9264/KIRBy
 # blueprint reproduction, feature weights extraction.
 #
 # Usage:
-#   sbatch run_antibody_scenarios.sh                                          # fast reps, sabdab
-#   sbatch run_antibody_scenarios.sh fast+lm                                  # with language models
-#   sbatch run_antibody_scenarios.sh mutation_fast flab_expression_koenig --delta --augment
+#   sbatch run_antibody_scenarios.sh                                          # mutation_fast, flab_expression_koenig
+#   sbatch run_antibody_scenarios.sh fast sabdab_affinity                     # fast reps, sabdab (small)
+#   sbatch run_antibody_scenarios.sh mutation_full flab_expression_koenig --delta --augment
 
-REPS=${1:-fast}
-DATASET=${2:-sabdab_affinity}
+REPS=${1:-mutation_fast}
+DATASET=${2:-flab_expression_koenig}
 EXTRA_FLAGS="${@:3}"
 
 echo "=== Antibody user scenarios (reps=$REPS, dataset=$DATASET) ==="

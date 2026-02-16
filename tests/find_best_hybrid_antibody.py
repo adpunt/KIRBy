@@ -136,16 +136,14 @@ REP_PRESETS = {
         'ab_roberta', 'balm', 'pigen', 'esmc', 'sapiens', 'structural',
     ],
     # Mutation-aware presets (for intra-family FLAb datasets)
-    'mutation_fast': ['kmer', 'aac', 'blosum62', 'physicochemical',
-                      'positional', 'biophysical_delta'],
+    # Mutation-specific features (positional, biophysical_delta, lm_score)
+    # are now augmentations, not base reps — see get_mutation_augmentations()
+    'mutation_fast': ['kmer', 'aac', 'blosum62', 'physicochemical'],
     'mutation_full': ['kmer', 'aac', 'blosum62', 'physicochemical',
-                      'antiberty', 'ablang2',
-                      'positional', 'biophysical_delta', 'lm_score'],
+                      'antiberty', 'ablang2'],
     # Mutation + structural (requires ImmuneBuilder on server)
     'mutation_structural': ['kmer', 'aac', 'blosum62', 'physicochemical',
-                            'antiberty', 'ablang2',
-                            'positional', 'biophysical_delta', 'lm_score',
-                            'structural'],
+                            'antiberty', 'ablang2', 'structural'],
 }
 
 _SEARCH_NAME_MAP = {
@@ -605,6 +603,49 @@ def get_augmentations(heavy_seqs: List[str],
     ]
 
     for name, func in aug_funcs:
+        try:
+            start = time.time()
+            print(f"  Generating {name}...", end=' ', flush=True)
+            feat = func()
+            elapsed = time.time() - start
+            print(f"done ({feat.shape[1]} features, {elapsed:.1f}s)")
+            augmentations[name] = feat
+        except Exception as e:
+            print(f"FAILED: {e}")
+
+    return augmentations
+
+
+def get_mutation_augmentations(
+    mutations: List,
+    wt_heavy: Optional[str],
+    wt_light: Optional[str],
+    heavy_seqs: List[str],
+) -> Dict[str, np.ndarray]:
+    """Generate mutation-specific augmentation features (up to 22D).
+
+    These describe what changed (biophysical properties, CDR position, LM score)
+    and are always included for mutation datasets. They complement the base
+    sequence-level representations.
+    """
+    from kirby.representations.antibody import (
+        compute_biophysical_delta,
+        compute_mutation_positional_features,
+        compute_lm_mutation_scores,
+    )
+
+    print("\nGenerating mutation augmentations...")
+    augmentations = {}
+
+    mut_funcs = [
+        ('biophysical_delta', lambda: compute_biophysical_delta(mutations)),
+        ('positional', lambda: compute_mutation_positional_features(
+            mutations, wt_heavy or '', wt_light)),
+        ('lm_score', lambda: compute_lm_mutation_scores(
+            wt_heavy or '', heavy_seqs, mutations)),
+    ]
+
+    for name, func in mut_funcs:
         try:
             start = time.time()
             print(f"  Generating {name}...", end=' ', flush=True)

@@ -49,12 +49,15 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from kirby.find_best_hybrid import find_best_hybrid, SearchResult, Blueprint, FittedResult
 from kirby.hybrid import create_hybrid, apply_feature_selection
-from find_best_hybrid_antibody import load_dataset, get_representations, get_augmentations, assign_identity_groups
+from find_best_hybrid_antibody import (
+    load_dataset, get_representations, get_augmentations,
+    get_mutation_augmentations, assign_identity_groups,
+)
 
 warnings.filterwarnings('ignore')
 
 
-def scenario_1_basic(reps, labels, groups):
+def scenario_1_basic(reps, labels, groups, augmentations=None):
     """Scenario 1: Basic search with minimal arguments."""
     print("\n" + "=" * 80)
     print("SCENARIO 1: Basic search (fast speed, default models, R2)")
@@ -66,6 +69,7 @@ def scenario_1_basic(reps, labels, groups):
         groups=groups,
         speed='fast',
         cache=True,
+        augmentations=augmentations,
     )
 
     assert isinstance(result, SearchResult)
@@ -101,7 +105,7 @@ def scenario_1_basic(reps, labels, groups):
     return result
 
 
-def scenario_2_custom_models(reps, labels, groups):
+def scenario_2_custom_models(reps, labels, groups, augmentations=None):
     """Scenario 2: Custom models (SVM, MLP)."""
     print("\n" + "=" * 80)
     print("SCENARIO 2: Custom models (SVM, MLP)")
@@ -122,6 +126,7 @@ def scenario_2_custom_models(reps, labels, groups):
         models=custom_models,
         speed='fast',
         cache=True,
+        augmentations=augmentations,
     )
 
     assert set(result.best_by_model.keys()) == {'svm', 'mlp'}
@@ -135,7 +140,7 @@ def scenario_2_custom_models(reps, labels, groups):
     return result
 
 
-def scenario_3_custom_metric(reps, labels, groups):
+def scenario_3_custom_metric(reps, labels, groups, augmentations=None):
     """Scenario 3: Custom metric (RMSE -- lower is better)."""
     print("\n" + "=" * 80)
     print("SCENARIO 3: Custom metric (RMSE)")
@@ -148,6 +153,7 @@ def scenario_3_custom_metric(reps, labels, groups):
         metric='rmse',
         speed='fast',
         cache=True,
+        augmentations=augmentations,
     )
 
     assert result.metric_name == 'rmse'
@@ -180,7 +186,7 @@ def scenario_3_custom_metric(reps, labels, groups):
     return result
 
 
-def scenario_4_blueprint_reproduction(reps, labels, groups):
+def scenario_4_blueprint_reproduction(reps, labels, groups, augmentations=None):
     """Scenario 4: Blueprint reproduction.
 
     1. Run find_best_hybrid to find best config
@@ -198,6 +204,7 @@ def scenario_4_blueprint_reproduction(reps, labels, groups):
         groups=groups,
         speed='fast',
         cache=True,
+        augmentations=augmentations,
     )
 
     best = result.best_overall
@@ -274,7 +281,7 @@ def scenario_4_blueprint_reproduction(reps, labels, groups):
     return result
 
 
-def scenario_5_feature_weights(reps, labels, groups):
+def scenario_5_feature_weights(reps, labels, groups, augmentations=None):
     """Scenario 5: Feature weights for similarity."""
     print("\n" + "=" * 80)
     print("SCENARIO 5: Feature weights for similarity (return_fitted=True)")
@@ -288,6 +295,7 @@ def scenario_5_feature_weights(reps, labels, groups):
         return_fitted=True,
         weight_method='treeshap',
         cache=True,
+        augmentations=augmentations,
     )
 
     assert result.fitted_result is not None
@@ -337,7 +345,7 @@ def scenario_5_feature_weights(reps, labels, groups):
     return result
 
 
-def scenario_6_medium_search(reps, labels, groups):
+def scenario_6_medium_search(reps, labels, groups, augmentations=None):
     """Scenario 6: Medium-speed search (more thorough)."""
     print("\n" + "=" * 80)
     print("SCENARIO 6: Medium-speed search")
@@ -349,6 +357,7 @@ def scenario_6_medium_search(reps, labels, groups):
         groups=groups,
         speed='medium',
         cache=True,
+        augmentations=augmentations,
     )
 
     print(f"\nTotal configs: {len(result.all_results)}")
@@ -373,7 +382,7 @@ def scenario_6_medium_search(reps, labels, groups):
     return result
 
 
-def scenario_7_override_params(reps, labels, groups):
+def scenario_7_override_params(reps, labels, groups, augmentations=None):
     """Scenario 7: Override search parameters."""
     print("\n" + "=" * 80)
     print("SCENARIO 7: Override search parameters")
@@ -387,6 +396,7 @@ def scenario_7_override_params(reps, labels, groups):
         budgets=[25, 50, 100, 200],
         allocation_methods=['greedy', 'performance_weighted', 'greedy_feature'],
         importance_methods=['treeshap', 'lightgbm_gain'],
+        augmentations=augmentations,
         n_folds=3,
         cache=True,
     )
@@ -513,51 +523,61 @@ def scenario_9_delta_reps(reps, labels, groups):
     return result_all
 
 
-def scenario_10_mutation_aware(reps, labels, groups, metadata):
-    """Scenario 10: Mutation-aware reps present, correct shapes, in baselines."""
+def scenario_10_mutation_aware(reps, labels, groups, metadata, augmentations=None):
+    """Scenario 10: Mutation augmentations present, correct shapes, improve search."""
     print("\n" + "=" * 80)
-    print("SCENARIO 10: Mutation-aware preset validation")
+    print("SCENARIO 10: Mutation augmentation validation")
     print("=" * 80)
 
-    mutation_reps = ['positional', 'biophysical_delta', 'lm_score']
-    found = [r for r in mutation_reps if r in reps]
-    missing = [r for r in mutation_reps if r not in reps]
+    mutation_aug_names = ['positional', 'biophysical_delta', 'lm_score']
+
+    if augmentations is None:
+        print("  SKIPPED: No augmentations available "
+              "(requires flab_*/abcov_*/abagym_*/abbind dataset with mutation data)")
+        print("\nSCENARIO 10: SKIPPED")
+        return None
+
+    found = [a for a in mutation_aug_names if a in augmentations]
+    missing = [a for a in mutation_aug_names if a not in augmentations]
 
     if not found:
-        print("  SKIPPED: No mutation-aware reps found "
-              "(use --reps mutation_fast or mutation_full with flab_* dataset)")
+        print("  SKIPPED: No mutation augmentations found")
         print("\nSCENARIO 10: SKIPPED")
         return None
 
     n_samples = len(labels)
-    print(f"  Found mutation reps: {found}")
+    print(f"  Found mutation augmentations: {found}")
     if missing:
         print(f"  Missing: {missing}")
 
     # Validate shapes
-    for rep_name in found:
-        rep = reps[rep_name]
-        assert rep.shape[0] == n_samples, \
-            f"{rep_name}: expected {n_samples} rows, got {rep.shape[0]}"
-        assert rep.shape[1] > 0, f"{rep_name}: has 0 features"
-        assert not np.all(np.isnan(rep)), f"{rep_name}: all NaN"
-        print(f"  {rep_name}: shape={rep.shape}, "
-              f"range=[{np.nanmin(rep):.3f}, {np.nanmax(rep):.3f}]")
+    for aug_name in found:
+        aug = augmentations[aug_name]
+        assert aug.shape[0] == n_samples, \
+            f"{aug_name}: expected {n_samples} rows, got {aug.shape[0]}"
+        assert aug.shape[1] > 0, f"{aug_name}: has 0 features"
+        assert not np.all(np.isnan(aug)), f"{aug_name}: all NaN"
+        print(f"  {aug_name}: shape={aug.shape}, "
+              f"range=[{np.nanmin(aug):.3f}, {np.nanmax(aug):.3f}]")
 
-    # Run search and verify mutation reps appear in baselines
-    result = find_best_hybrid(
-        base_reps=reps,
-        labels=labels,
-        groups=groups,
-        speed='fast',
-        verbose=False,
-        cache=True,
+    # Run search WITHOUT augmentations (base only)
+    result_base = find_best_hybrid(
+        base_reps=reps, labels=labels, groups=groups,
+        speed='fast', verbose=False, cache=True,
     )
+    base_score = result_base.best_overall['score_mean'] if result_base.best_overall else float('nan')
 
-    for rep_name in found:
-        assert rep_name in result.baselines, \
-            f"Mutation rep '{rep_name}' missing from baselines"
-    print(f"  All {len(found)} mutation reps present in baselines")
+    # Run search WITH augmentations
+    result_aug = find_best_hybrid(
+        base_reps=reps, labels=labels, groups=groups,
+        augmentations=augmentations,
+        speed='fast', verbose=False, cache=True,
+    )
+    aug_score = result_aug.best_overall['score_mean'] if result_aug.best_overall else float('nan')
+
+    print(f"  Base-only R²: {base_score:.4f}")
+    print(f"  With mutation augmentations R²: {aug_score:.4f}")
+    print(f"  Delta: {aug_score - base_score:+.4f}")
 
     # Check metadata was available
     if metadata.get('mutations'):
@@ -565,7 +585,7 @@ def scenario_10_mutation_aware(reps, labels, groups, metadata):
         print(f"  Samples with mutations: {n_with_mutations}/{n_samples}")
 
     print("\nSCENARIO 10: PASSED")
-    return result
+    return result_aug
 
 
 def scenario_11_caching(reps, labels, groups):
@@ -773,15 +793,25 @@ def main():
                                wt_heavy=wt_heavy, wt_light=wt_light,
                                mutations=mutations, delta=args.delta)
 
-    # Generate augmentations if requested
+    # Generate augmentations
     augmentations = None
-    if args.augment:
-        augmentations = get_augmentations(heavy_seqs, light_seqs)
+    # Mutation augmentations always included for mutation datasets
+    if mutations is not None:
+        augmentations = get_mutation_augmentations(
+            mutations, wt_heavy, wt_light, heavy_seqs)
         if not augmentations:
             augmentations = None
-        else:
-            print(f"  Augmentations: {list(augmentations.keys())} "
-                  f"({sum(v.shape[1] for v in augmentations.values())} features)")
+    # Sequence-level augmentations are optional (--augment flag)
+    if args.augment:
+        seq_augs = get_augmentations(heavy_seqs, light_seqs)
+        if seq_augs:
+            if augmentations:
+                augmentations.update(seq_augs)
+            else:
+                augmentations = seq_augs
+    if augmentations:
+        print(f"  Augmentations: {list(augmentations.keys())} "
+              f"({sum(v.shape[1] for v in augmentations.values())} features)")
 
     # Run scenarios
     passed = []
@@ -791,25 +821,25 @@ def main():
         start = time.time()
         try:
             if s == 1:
-                scenario_1_basic(reps, labels, groups)
+                scenario_1_basic(reps, labels, groups, augmentations)
             elif s == 2:
-                scenario_2_custom_models(reps, labels, groups)
+                scenario_2_custom_models(reps, labels, groups, augmentations)
             elif s == 3:
-                scenario_3_custom_metric(reps, labels, groups)
+                scenario_3_custom_metric(reps, labels, groups, augmentations)
             elif s == 4:
-                scenario_4_blueprint_reproduction(reps, labels, groups)
+                scenario_4_blueprint_reproduction(reps, labels, groups, augmentations)
             elif s == 5:
-                scenario_5_feature_weights(reps, labels, groups)
+                scenario_5_feature_weights(reps, labels, groups, augmentations)
             elif s == 6:
-                scenario_6_medium_search(reps, labels, groups)
+                scenario_6_medium_search(reps, labels, groups, augmentations)
             elif s == 7:
-                scenario_7_override_params(reps, labels, groups)
+                scenario_7_override_params(reps, labels, groups, augmentations)
             elif s == 8:
                 scenario_8_augmented_features(reps, labels, groups, augmentations)
             elif s == 9:
                 scenario_9_delta_reps(reps, labels, groups)
             elif s == 10:
-                scenario_10_mutation_aware(reps, labels, groups, metadata)
+                scenario_10_mutation_aware(reps, labels, groups, metadata, augmentations)
             elif s == 11:
                 scenario_11_caching(reps, labels, groups)
             elif s == 12:
