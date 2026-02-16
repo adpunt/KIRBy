@@ -1,6 +1,6 @@
 # KIRBy Experiment Tracker
 
-Last updated: 2026-02-15
+Last updated: 2026-02-16
 
 ## Papers
 
@@ -30,24 +30,34 @@ Last updated: 2026-02-15
 | 9 | Formal theory (4 sub-analyses) | 9a: ANOVA (now with ICC check), 9b: MLE model ID, 9c: cross-context, 9d: bias-variance | Core statistical analysis |
 | 10 | Noise degradation (NDS) | Noise resilience across strategies | Robustness |
 
-### Active/Recent Jobs
+### Active Jobs (Batch 5 — 2026-02-16, commit 110a3e9)
 
-| Job ID | Mode | Dataset | Reps | Experiments | Status | Notes |
-|--------|------|---------|------|-------------|--------|-------|
-| **11341476** | full | logd | fast+hf | 1-10 | Running (batch 3) | Full molecular, 6 models |
-| **11341477** | full | caco2 | fast+hf | 1-10 | Running (batch 3) | |
-| **11341478** | full | herg | fast+hf | 1-10 | Running (batch 3) | |
-| **11341479** | full | qm9 | fast+hf | 1-10 | Running (batch 3) | |
-| 11339363 | quick | logd | fast | 1,2,6,9,10 | **Completed** | JSON at `complexity_theory_fast/` |
-| 11337765 | quick | logd | fast | 1,2,6,9,10 | Completed (batch 2, pre-fix) | train_r2 NaN bug |
-| 11337766-69 | full | logd/caco2/herg/qm9 | fast+hf | 1-10 | Completed (batch 2) | train_r2 NaN, no ICC |
+| Job ID | Mode | Dataset | Reps | Experiments | Notes |
+|--------|------|---------|------|-------------|-------|
+| **11353056** | full_a | logd | fast+hf | 1,2,4,8,9 | |
+| **11353057** | full_b | logd | fast+hf | 5,6,7,10 | |
+| **11353060** | full_a | caco2 | fast+hf | 1,2,4,8,9 | |
+| **11353061** | full_b | caco2 | fast+hf | 5,6,7,10 | |
+| **11353064** | full_a | herg | fast+hf | 1,2,4,8,9 | |
+| **11353065** | full_b | herg | fast+hf | 5,6,7,10 | |
+| **11353068** | full_a | qm9 | fast+hf | 1,2,4,8,9 | |
+| **11353069** | full_b | qm9 | fast+hf | 5,6,7,10 | |
+| **11353132** | full_cross | all 4 | fast+hf | 3 | |
+
+### Completed
+
+| Job ID | Mode | Dataset | Reps | Experiments | Notes |
+|--------|------|---------|------|-------------|-------|
+| 11339363 | quick | logd | fast | 1,2,6,9,10 | JSON at `complexity_theory_fast/` |
+| 11337765 | quick | logd | fast | 1,2,6,9,10 | Batch 2, pre-fix (train_r2 NaN) |
+| 11341476-79 | full | all 4 | all | 1-10 | **Timed out** — stuck on graph_kernel generation, 0 results saved |
+| 11337766-69 | full | all 4 | all | 1-10 | Batch 2, timed out on graph_kernel |
 
 ### Key Preliminary Results (quick, logd, fast reps)
 
 - Hybrid R² 0.752 vs best single rep (pdv) 0.730 → +3% improvement
 - MLP shows clear model-capacity/rep-complexity interaction
 - ANOVA: model 53%, budget 28%, interaction 11% — all significant
-- **Needs**: ICC check (added), train_r2 fix (added) → rerun on server
 
 ---
 
@@ -68,23 +78,53 @@ Last updated: 2026-02-15
 | 8 | Optimal dim ratio | Best hybrid dimensionality relative to input | Analysis |
 | 9 | Cross-dataset transfer | Distance metric generalization across datasets | Supplementary |
 
-### Active/Recent Jobs
+### Active Jobs (Batch 5)
 
-| Job ID | Mode | Dataset | Reps | Experiments | Status | Notes |
-|--------|------|---------|------|-------------|--------|-------|
-| **11341480** | full | logd | fast+hf | 1-9 | Running (batch 3) | |
-| **11341481** | full | caco2 | fast+hf | 1-9 | Running (batch 3) | |
-| **11341482** | full | herg | fast+hf | 1-9 | Running (batch 3) | |
-| **11341483** | full | qm9 | fast+hf | 1-9 | Running (batch 3) | |
-| 11339369 | quick | logd | all | 1,2,4,5,8 | **Completed** | JSON at `similarity_all/` |
-| 11337770-74 | full | logd/caco2/herg/qm9 | fast+hf | 1-9 | Completed (batch 2) | rf_baseline still in Exp 5 |
+| Job ID | Mode | Dataset | Reps | Experiments | Notes |
+|--------|------|---------|------|-------------|-------|
+| **11353058** | full_a | logd | fast+hf | 1,2,4,5,6,8 | |
+| **11353059** | full_b | logd | fast+hf | 3,7 | |
+| **11353062** | full_a | caco2 | fast+hf | 1,2,4,5,6,8 | |
+| **11353063** | full_b | caco2 | fast+hf | 3,7 | |
+| **11353066** | full_a | herg | fast+hf | 1,2,4,5,6,8 | |
+| **11353067** | full_b | herg | fast+hf | 3,7 | |
+| **11353070** | full_a | qm9 | fast+hf | 1,2,4,5,6,8 | |
+| **11353131** | full_b | qm9 | fast+hf | 3,7 | |
+| (not yet submitted) | full_cross | all 4 | fast+hf | 9 | Submit after full_a completes |
+
+### Completed
+
+| Job ID | Mode | Dataset | Reps | Experiments | Notes |
+|--------|------|---------|------|-------------|-------|
+| 11339369 | quick | logd | all | 1,2,4,5,8 | JSON at `similarity_all/` |
+| 11341480-83 | full | all 4 | all | 1-9 | **Timed out** — stuck on graph_kernel, 0 results |
+| 11337770-74 | full | all 4 | fast+hf | 1-9 | Batch 2, timed out on graph_kernel |
 
 ### Key Preliminary Results (quick, logd, all reps)
 
 - SAC: hybrid weighted 0.336 vs best individual 0.152 → **+121% improvement**
 - kNN R²: hybrid weighted 0.775 vs best individual 0.730 → +6%
 - RMSE_cliff: hybrid 0.683 vs best per-rep 0.698 → 2% better (small effect)
-- **Needs**: rf_baseline removal (done) → batch 3 will have clean results
+
+---
+
+## Pre-cache (Graph Kernel)
+
+**Script:** `tests/slurm_scripts/run_precache_reps.sh`
+
+Generates and caches all 15 reps (incl graph_kernel) per dataset. After completion, experiment jobs can use `all` reps and load from cache.
+
+| Job ID | Dataset | Status | Notes |
+|--------|---------|--------|-------|
+| **11353199** | logd | Running | |
+| **11353200** | caco2 | Running | |
+| **11353201** | herg | Running | |
+| **11353202** | qm9 | Running | |
+
+After these complete, resubmit complexity/similarity with `all` reps:
+```
+sbatch run_complexity_experiments.sh full_a logd all
+```
 
 ---
 
@@ -99,28 +139,21 @@ Last updated: 2026-02-15
 | B | Reduction vs direct hybrid | Reduced-dim hybrid vs direct low-budget hybrid | Complexity paper |
 | C | Visualization quality | 2D projection quality metrics | Supplementary |
 
-### Active/Recent Jobs
-
-| Job ID | Mode | Dataset | Reps | Experiments | Status | Notes |
-|--------|------|---------|------|-------------|--------|-------|
-| **11352486** | — | logd | fast | A,B,C | Running (batch 4) | |
-| **11352487** | — | logd | all_no_gk | B,C | Running (batch 4) | |
-| 11337762-63 | — | logd | fast/all_no_gk | A-C / B-C | Completed (batch 2) | Pre-fix |
+| Job ID | Dataset | Reps | Experiments | Status | Notes |
+|--------|---------|------|-------------|--------|-------|
+| **11352486** | logd | fast | A,B,C | Running (batch 4) | |
+| **11352487** | logd | all_no_gk | B,C | Running (batch 4) | |
 
 ---
 
 ## Molecular User Scenarios
 
-**Script:** `tests/test_hybrid_user_scenarios_molecular.py` (via `find_best_hybrid_molecular.py`)
+**Script:** `tests/test_hybrid_user_scenarios_molecular.py`
 **SLURM:** `tests/slurm_scripts/run_molecular_scenarios.sh`
 
-Tests: full pipeline (data load → rep gen → hybrid search → blueprint → feature weights)
-
-### Active/Recent Jobs
-
-| Job ID | Mode | Dataset | Reps | Status | Notes |
-|--------|------|---------|------|--------|-------|
-| **11352483** | — | logd | fast | Running (batch 4) | |
+| Job ID | Dataset | Reps | Status | Notes |
+|--------|---------|------|--------|-------|
+| **11352483** | logd | fast | Running (batch 4) | |
 
 ---
 
@@ -129,21 +162,13 @@ Tests: full pipeline (data load → rep gen → hybrid search → blueprint → 
 **Script:** `tests/complexity_theory_experiments.py` (with antibody datasets)
 **SLURM:** `tests/slurm_scripts/run_antibody_complexity.sh`
 
-Same 10 experiments as molecular, but with FLAb datasets and mutation_fast/mutation_full reps. Mutation augmentations (positional 11D, biophysical_delta 6D, lm_score 5D) are now always appended as augmentations, not competing as base reps.
-
-### Active/Recent Jobs
+Mutation augmentations (positional 11D, biophysical_delta 6D, lm_score 5D) now always appended as augmentations, not base reps.
 
 | Job ID | Mode | Dataset | Reps | Experiments | Status | Notes |
 |--------|------|---------|------|-------------|--------|-------|
-| 11339380 | quick | flab_expression_koenig | mutation_fast | 1,2,6 | **Completed** | JSON at `ab_complexity_fast/`, pre-augmentation-fix |
-| — | — | — | — | — | **Needs resubmission** | After augmentation architecture fix |
-
-### Key Preliminary Results (quick, flab_expression_koenig, mutation_fast)
-
-- Hybrid R² 0.123 vs best single rep (aac) 0.235 → hybrid WORSE
-- All reps except aac/kmer had near-zero MI (bad reps dragging down hybrid)
-- **Root cause**: positional/biophysical_delta/lm_score were base reps, not augmentations → now fixed
-- **Needs**: resubmit with augmentation fix (mutation-aware features as augmentations)
+| **11353136** | quick | flab_expression_koenig | mutation_fast | 1,2,6 | Running (batch 5) | With augmentation fix |
+| **11353137** | quick_delta | flab_expression_koenig | mutation_fast+delta | 1,2,6 | Running (batch 5) | With augmentation fix |
+| 11339380 | quick | flab_expression_koenig | mutation_fast | 1,2,6 | Completed | Pre-augmentation-fix |
 
 ---
 
@@ -159,7 +184,6 @@ Same 10 experiments as molecular, but with FLAb datasets and mutation_fast/mutat
 | 3 | Blueprint reproduction | Exact score reproduction from blueprint |
 | 4 | Feature weights | Non-negative, sum-to-1 per rep |
 | 5 | Model comparison | Multiple models, different optimal configs |
-| 6 | (reserved) | — |
 | 7 | Allocation comparison | Greedy vs proportional allocation |
 | 8 | Augmented features | find_best_hybrid(augmentations=...) |
 | 9 | Delta reps | Base-only vs base+delta comparison |
@@ -168,73 +192,56 @@ Same 10 experiments as molecular, but with FLAb datasets and mutation_fast/mutat
 | 12 | Multi-dataset comparison | Compare optimal across two datasets |
 | 13 | Full pipeline | Delta + augmentations combined |
 
-### Active/Recent Jobs
-
 | Job ID | Dataset | Reps | Flags | Status | Notes |
 |--------|---------|------|-------|--------|-------|
-| **11352484** | flab_expression_koenig | mutation_fast | --delta | Running (batch 4) | Pre-augmentation-fix code |
-| **11352485** | flab_expression_koenig | mutation_full | --delta --augment | Running (batch 4) | Pre-augmentation-fix code |
-| 11339377 | flab_expression_koenig | mutation_fast | — | **Completed** | 13/13 passed (pre-fix) |
-| 11337136-38 | sabdab_affinity | fast/fast+lm/all_server | — | Completed (batch 2) | All negative R², too few samples (114) |
-
-### Status Notes
-
-- Batch 4 jobs (11352484-85) were submitted before the augmentation architecture fix
-- **Needs resubmission** with current code (mutation features as augmentations, not base reps)
-- Default changed from `sabdab_affinity` (114 samples) → `flab_expression_koenig` (4,275 samples)
+| **11353134** | flab_expression_koenig | mutation_fast | (defaults) | Running (batch 5) | With augmentation fix |
+| **11353135** | flab_expression_koenig | mutation_full | --delta --augment | Running (batch 5) | With augmentation fix |
+| 11352484 | flab_expression_koenig | mutation_fast | --delta | Running (batch 4) | Pre-augmentation-fix |
+| 11352485 | flab_expression_koenig | mutation_full | --delta --augment | Running (batch 4) | Pre-augmentation-fix |
+| 11339377 | flab_expression_koenig | mutation_fast | — | Completed | 13/13 passed (pre-fix) |
 
 ---
 
-## Graph Kernel Analysis
+## Other Running Jobs (not KIRBy experiments)
 
-**Script:** `tests/graph_kernel_analysis.py`
-**SLURM:** `tests/slurm_scripts/run_complexity_experiments.sh gk`
-
-Investigates WL histogram feature quality; auto-filters >95% sparse features (~71K → ~290).
-
-| Job ID | Status | Notes |
-|--------|--------|-------|
-| 11339368 | Running (batch 3) | `--mode gk --datasets logd` |
-| 11337764 | Completed (batch 2) | Pre-fix |
-
----
-
-## Code Fixes Pending Commit (2026-02-15)
-
-| Fix | File | Impact |
-|-----|------|--------|
-| train_r2 NaN | `complexity_theory_experiments.py` | All results had NaN train_r2; `seed` param missing from `evaluate_cv_with_train` |
-| ICC check for ANOVA | `complexity_theory_experiments.py` | Added `_compute_icc_check()` before ANOVA decomposition (Exp 9a) |
-| rf_baseline removed | `similarity_experiments.py` | Removed RF-vs-kNN comparison from Exp 5 conditions |
-| Antibody rep architecture | `find_best_hybrid_antibody.py` | Moved positional/biophysical_delta/lm_score from REP_PRESETS → `get_mutation_augmentations()` |
-| Augmentation threading | `test_hybrid_user_scenarios_antibody.py` | All scenarios now receive and pass mutation augmentations |
-| Augmentation in load_data | `complexity_theory_experiments.py` | `load_data()` auto-generates mutation augmentations for mutation datasets |
-| SLURM defaults | `run_antibody_scenarios.sh` | Changed from fast/sabdab → mutation_fast/flab_expression_koenig |
+| Job ID | Name | Notes |
+|--------|------|-------|
+| 11352483 | mol_scen | Molecular scenarios (batch 4) |
+| 11352486-87 | reductio | Reduction experiments (batch 4) |
+| 11352465-68 | dnn/mlp_full | External |
+| 11352470-73 | ngboost/val_ngbo | External |
+| 11352782-84 | paper_fi | Pending (BeginTime) |
 
 ---
 
 ## Batch Timeline
 
-| Batch | Date | Commit | Jobs | Key changes |
-|-------|------|--------|------|-------------|
-| 1 | 2026-02-11 | various | 11330937-42 | Initial full runs; timed out (short partition) |
-| 2 | 2026-02-12 | eeedd85 | 11337136-74 | Long partition, all experiments; train_r2 NaN, no ICC |
-| 3 | 2026-02-14 | 6b85cdf | 11339363-80, 11341476-83 | Quick tests completed; full molecular resubmitted |
-| 4 | 2026-02-15 | 6b85cdf | 11352483-87 | Scenarios + reduction; pre-augmentation-fix |
-| **5** | **pending** | **pending** | — | **Augmentation fix, ICC, train_r2 fix → resubmit antibody** |
+| Batch | Date | Commit | Key changes |
+|-------|------|--------|-------------|
+| 1 | 2026-02-11 | various | Initial full runs; timed out (short partition) |
+| 2 | 2026-02-12 | eeedd85 | Long partition; all timed out on graph_kernel |
+| 3 | 2026-02-14 | 6b85cdf | Quick tests completed; full timed out on graph_kernel |
+| 4 | 2026-02-15 | 6b85cdf | Scenarios + reduction (pre-augmentation-fix) |
+| **5** | **2026-02-16** | **110a3e9** | **Split A/B, fast+hf default, precache, checkpoints, all fixes** |
+
+## Code Fixes in Batch 5
+
+| Fix | File |
+|-----|------|
+| train_r2 NaN (missing seed param) | `complexity_theory_experiments.py` |
+| ICC check before ANOVA | `complexity_theory_experiments.py` |
+| rf_baseline removed from Exp 5 | `similarity_experiments.py` |
+| Mutation reps → augmentations | `find_best_hybrid_antibody.py` |
+| Augmentation threading (all scenarios) | `test_hybrid_user_scenarios_antibody.py` |
+| Incremental checkpoint saving | Both experiment scripts |
+| SLURM: split A/B, fast+hf default, precache | All SLURM scripts |
 
 ---
 
-## Next Steps (Priority Order)
+## Next Steps
 
-1. **Commit and push** the 7 pending fixes
-2. **Resubmit antibody experiments** with fixed augmentation architecture:
-   - `sbatch run_antibody_scenarios.sh` (defaults: mutation_fast, flab_expression_koenig)
-   - `sbatch run_antibody_scenarios.sh mutation_full flab_expression_koenig --delta --augment`
-   - `sbatch run_antibody_complexity.sh quick`
-   - `sbatch run_antibody_complexity.sh quick_delta`
-3. **Wait for batch 3 full molecular results** (11341476-83) → analyze for papers
-4. **Run full antibody complexity** once quick passes:
-   - `sbatch run_antibody_complexity.sh full flab_expression_koenig`
-   - `sbatch run_antibody_complexity.sh full flab_binding_koenig`
-5. **Compile results** for complexity and similarity papers
+1. **Wait for batch 5 fast+hf results** — first real full molecular results
+2. **Wait for precache** (11353199-202) → then resubmit with `all` reps
+3. **Check antibody results** from 11353134-37 (augmentation fix)
+4. **Full antibody complexity** once quick passes
+5. **Compile results** for papers
