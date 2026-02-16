@@ -26,24 +26,25 @@ echo "=== Pre-caching all representations for ${DATASET} ==="
 echo "Started: $(date)"
 echo ""
 
-python -c "
+python -c '
 import sys
-sys.path.insert(0, 'tests')
+sys.path.insert(0, "tests")
 from find_best_hybrid_molecular import load_dataset, get_representations
 
-print(f'Loading {\"${DATASET}\"}...')
-smiles, labels, task_type = load_dataset('${DATASET}')
-print(f'  {len(smiles)} molecules')
+dataset = "'"${DATASET}"'"
+print(f"Loading {dataset}...")
+smiles, labels, task_type = load_dataset(dataset)
+print(f"  {len(smiles)} molecules")
 
-print(f'Generating all representations (will cache to ~/.cache/kirby/reps/)...')
-reps = get_representations(smiles, 'all', cache=True)
+print("Generating all representations (will cache to ~/.cache/kirby/reps/)...")
+reps = get_representations(smiles, "all", cache=True)
 
 print()
-print('Cached representations:')
+print("Cached representations:")
 for name, arr in sorted(reps.items()):
-    print(f'  {name}: {arr.shape}')
-print(f'Total: {len(reps)} representations')
-"
+    print(f"  {name}: {arr.shape}")
+print(f"Total: {len(reps)} representations")
+'
 
 echo ""
 echo "Finished: $(date)"
