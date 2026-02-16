@@ -2850,68 +2850,7 @@ def main():
         'datasets': {},
     }
 
-    for ds_name, data in datasets.items():
-        print(f"\n{'#' * 70}")
-        print(f"# DATASET: {ds_name.upper()} ({len(data['labels'])} samples)")
-        print('#' * 70)
-
-        ds_results = {'n_samples': len(data['labels']), 'n_scaffolds': data['n_scaffolds']}
-
-        if 1 in experiments:
-            ds_results['exp1_characterization'] = run_characterization(data, models, n_folds)
-
-        if 2 in experiments:
-            ds_results['exp2_complexity_grid'] = run_complexity_matching_grid(
-                data, models, budgets, allocation_methods, importance_methods, n_folds)
-
-        if 4 in experiments:
-            ds_results['exp4_importance_metrics'] = run_importance_weight_metrics(
-                data, exp4_importance, n_folds)
-
-        if 5 in experiments:
-            ds_results['exp5_learning_curves'] = run_learning_curves(
-                data, models, n_folds, search_speed=search_speed)
-
-        if 6 in experiments:
-            # Exp 6 needs finer budget granularity to detect capacity-dimension interaction
-            exp6_budgets = sorted(set([10] + budgets))
-            ds_results['exp6_within_family'] = run_within_family_complexity(
-                data, exp6_budgets, n_folds, families=exp6_families,
-                search_speed=search_speed)
-
-        if 7 in experiments:
-            ds_results['exp7_data_complexity'] = run_data_complexity_analysis(
-                data, models, budgets, n_folds, partitions=exp7_partitions,
-                search_speed=search_speed)
-
-        if 8 in experiments:
-            ds_results['exp8_uncertainty'] = run_uncertainty_calibration(
-                data, n_folds, conditions=exp8_conditions,
-                exp2_results=ds_results.get('exp2_complexity_grid'),
-                search_speed=search_speed)
-
-        if 9 in experiments:
-            ds_results['exp9_formal'] = run_formal_complexity_analysis(
-                data, models, budgets, n_folds,
-                sub_analyses=exp9_subs,
-                exp2_results=ds_results.get('exp2_complexity_grid'),
-                exp6_results=ds_results.get('exp6_within_family'),
-                search_speed=search_speed,
-            )
-
-        if 10 in experiments:
-            ds_results['exp10_noise'] = run_noise_robustness(
-                data, models, budgets, n_folds,
-                sigmas=exp10_sigmas, strategies=exp10_strategies,
-                search_speed=search_speed)
-
-        all_results['datasets'][ds_name] = ds_results
-
-    # Experiment 3 is cross-dataset (needs all datasets loaded)
-    if 3 in experiments and len(datasets) >= 1:
-        all_results['exp3_cross_context'] = run_cross_context_analysis(datasets, n_folds)
-
-    # Save results
+    # Incremental save — write checkpoint after each experiment completes
     def convert_numpy(obj):
         if isinstance(obj, np.ndarray):
             return obj.tolist()
@@ -2932,12 +2871,95 @@ def main():
             return [convert_numpy(v) for v in obj]
         return obj
 
-    output_file = output_path / f"complexity_{args.mode}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    with open(output_file, 'w') as f:
-        json.dump(convert_numpy(all_results), f, indent=2)
+    checkpoint_file = output_path / f"complexity_{args.mode}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+
+    def _save_checkpoint(label=''):
+        with open(checkpoint_file, 'w') as f:
+            json.dump(convert_numpy(all_results), f, indent=2)
+        print(f"  [checkpoint saved{': ' + label if label else ''}]")
+
+    for ds_name, data in datasets.items():
+        print(f"\n{'#' * 70}")
+        print(f"# DATASET: {ds_name.upper()} ({len(data['labels'])} samples)")
+        print('#' * 70)
+
+        ds_results = {'n_samples': len(data['labels']), 'n_scaffolds': data['n_scaffolds']}
+
+        if 1 in experiments:
+            ds_results['exp1_characterization'] = run_characterization(data, models, n_folds)
+            all_results['datasets'][ds_name] = ds_results
+            _save_checkpoint(f'{ds_name} exp1')
+
+        if 2 in experiments:
+            ds_results['exp2_complexity_grid'] = run_complexity_matching_grid(
+                data, models, budgets, allocation_methods, importance_methods, n_folds)
+            all_results['datasets'][ds_name] = ds_results
+            _save_checkpoint(f'{ds_name} exp2')
+
+        if 4 in experiments:
+            ds_results['exp4_importance_metrics'] = run_importance_weight_metrics(
+                data, exp4_importance, n_folds)
+            all_results['datasets'][ds_name] = ds_results
+            _save_checkpoint(f'{ds_name} exp4')
+
+        if 5 in experiments:
+            ds_results['exp5_learning_curves'] = run_learning_curves(
+                data, models, n_folds, search_speed=search_speed)
+            all_results['datasets'][ds_name] = ds_results
+            _save_checkpoint(f'{ds_name} exp5')
+
+        if 6 in experiments:
+            # Exp 6 needs finer budget granularity to detect capacity-dimension interaction
+            exp6_budgets = sorted(set([10] + budgets))
+            ds_results['exp6_within_family'] = run_within_family_complexity(
+                data, exp6_budgets, n_folds, families=exp6_families,
+                search_speed=search_speed)
+            all_results['datasets'][ds_name] = ds_results
+            _save_checkpoint(f'{ds_name} exp6')
+
+        if 7 in experiments:
+            ds_results['exp7_data_complexity'] = run_data_complexity_analysis(
+                data, models, budgets, n_folds, partitions=exp7_partitions,
+                search_speed=search_speed)
+            all_results['datasets'][ds_name] = ds_results
+            _save_checkpoint(f'{ds_name} exp7')
+
+        if 8 in experiments:
+            ds_results['exp8_uncertainty'] = run_uncertainty_calibration(
+                data, n_folds, conditions=exp8_conditions,
+                exp2_results=ds_results.get('exp2_complexity_grid'),
+                search_speed=search_speed)
+            all_results['datasets'][ds_name] = ds_results
+            _save_checkpoint(f'{ds_name} exp8')
+
+        if 9 in experiments:
+            ds_results['exp9_formal'] = run_formal_complexity_analysis(
+                data, models, budgets, n_folds,
+                sub_analyses=exp9_subs,
+                exp2_results=ds_results.get('exp2_complexity_grid'),
+                exp6_results=ds_results.get('exp6_within_family'),
+                search_speed=search_speed,
+            )
+            all_results['datasets'][ds_name] = ds_results
+            _save_checkpoint(f'{ds_name} exp9')
+
+        if 10 in experiments:
+            ds_results['exp10_noise'] = run_noise_robustness(
+                data, models, budgets, n_folds,
+                sigmas=exp10_sigmas, strategies=exp10_strategies,
+                search_speed=search_speed)
+            all_results['datasets'][ds_name] = ds_results
+            _save_checkpoint(f'{ds_name} exp10')
+
+        all_results['datasets'][ds_name] = ds_results
+
+    # Experiment 3 is cross-dataset (needs all datasets loaded)
+    if 3 in experiments and len(datasets) >= 1:
+        all_results['exp3_cross_context'] = run_cross_context_analysis(datasets, n_folds)
+        _save_checkpoint('exp3 cross-context')
 
     print(f"\n{'=' * 70}")
-    print(f"Results saved to: {output_file}")
+    print(f"All experiments complete. Final save.")
     print('=' * 70)
 
 
