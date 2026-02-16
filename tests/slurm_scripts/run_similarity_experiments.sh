@@ -12,14 +12,23 @@ cd /data/stat-cadd/scat9264/KIRBy
 . setup.sh
 
 # Similarity Experiments
-# Quick: logd with fast + all reps (validates code with pretrained embeddings)
-# Full: single dataset with all reps, all experiments (submit 4x for all datasets)
+#
+# Quick mode: logd only, fast reps, subset of experiments
+# Full mode: split into parts to fit within 48h wall time
+#
 # Usage:
 #   sbatch run_similarity_experiments.sh quick
-#   sbatch run_similarity_experiments.sh full logd
-#   sbatch run_similarity_experiments.sh full caco2
-#   sbatch run_similarity_experiments.sh full herg
-#   sbatch run_similarity_experiments.sh full qm9
+#
+#   # Full mode — submit one job per dataset × part:
+#   sbatch run_similarity_experiments.sh full_a logd    # Exp 1,2,4,5,6,8 (core)
+#   sbatch run_similarity_experiments.sh full_b logd    # Exp 3,7 (supplementary)
+#   sbatch run_similarity_experiments.sh full_a caco2
+#   sbatch run_similarity_experiments.sh full_b caco2
+#   sbatch run_similarity_experiments.sh full_a herg
+#   sbatch run_similarity_experiments.sh full_b herg
+#   sbatch run_similarity_experiments.sh full_a qm9
+#   sbatch run_similarity_experiments.sh full_b qm9
+#   sbatch run_similarity_experiments.sh full_cross     # Exp 9 (cross-dataset summary)
 
 MODE=${1:-quick}
 DATASET=${2:-logd}
@@ -34,12 +43,31 @@ if [ "$MODE" = "quick" ]; then
     python tests/similarity_experiments.py --mode quick --reps all \
         --experiments 1 2 5 --output tests/results/similarity_all
 
-elif [ "$MODE" = "full" ]; then
-    echo "=== FULL RUN: ${DATASET}, all reps, all experiments ==="
-    python tests/similarity_experiments.py --mode full --reps all \
+elif [ "$MODE" = "full_a" ]; then
+    echo "=== FULL PART A: ${DATASET}, fast+hf reps, Exp 1+2+4+5+6+8 ==="
+    python tests/similarity_experiments.py --mode full \
         --datasets ${DATASET} \
-        --experiments 1 2 3 4 5 6 7 8 9 --output tests/results/similarity_${DATASET}
+        --experiments 1 2 4 5 6 8 --output tests/results/similarity_${DATASET}_a
+
+elif [ "$MODE" = "full_b" ]; then
+    echo "=== FULL PART B: ${DATASET}, fast+hf reps, Exp 3+7 ==="
+    python tests/similarity_experiments.py --mode full \
+        --datasets ${DATASET} \
+        --experiments 3 7 --output tests/results/similarity_${DATASET}_b
+
+elif [ "$MODE" = "full_cross" ]; then
+    echo "=== FULL CROSS-DATASET: all 4 datasets, fast+hf reps, Exp 9 ==="
+    python tests/similarity_experiments.py --mode full \
+        --datasets logd caco2 herg qm9 \
+        --experiments 9 --output tests/results/similarity_cross
+
 else
-    echo "Usage: sbatch run_similarity_experiments.sh [quick|full] [dataset]"
+    echo "Usage: sbatch run_similarity_experiments.sh [quick|full_a|full_b|full_cross] [dataset]"
+    echo "Datasets: logd, caco2, herg, qm9"
+    echo ""
+    echo "Full mode split:"
+    echo "  full_a    = Exp 1,2,4,5,6,8 (core similarity experiments)"
+    echo "  full_b    = Exp 3,7          (supplementary: neighbor preservation, noise FP)"
+    echo "  full_cross = Exp 9           (cross-dataset summary, loads all datasets)"
     exit 1
 fi
