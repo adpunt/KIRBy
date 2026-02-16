@@ -2154,6 +2154,34 @@ def main():
         'datasets': {},
     }
 
+    # Incremental save — write checkpoint after each experiment completes
+    def convert_numpy(obj):
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, (np.floating, np.float64, np.float32)):
+            return float(obj)
+        elif isinstance(obj, (np.integer, np.int64, np.int32)):
+            return int(obj)
+        elif isinstance(obj, (np.bool_,)):
+            return bool(obj)
+        elif hasattr(obj, 'to_dict'):
+            return convert_numpy(obj.to_dict())
+        elif hasattr(obj, '__dataclass_fields__'):
+            from dataclasses import asdict
+            return convert_numpy(asdict(obj))
+        elif isinstance(obj, dict):
+            return {str(k): convert_numpy(v) for k, v in obj.items()}
+        elif isinstance(obj, (list, tuple)):
+            return [convert_numpy(v) for v in obj]
+        return obj
+
+    checkpoint_file = output_path / f"similarity_{args.mode}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+
+    def _save_checkpoint(label=''):
+        with open(checkpoint_file, 'w') as f:
+            json.dump(convert_numpy(all_results), f, indent=2)
+        print(f"  [checkpoint saved{': ' + label if label else ''}]")
+
     for ds_name, data in datasets.items():
         print(f"\n{'#' * 70}")
         print(f"# DATASET: {ds_name.upper()} ({len(data['labels'])} samples)")
@@ -2180,40 +2208,56 @@ def main():
         if 1 in experiments:
             ds_results['exp1_baseline'] = run_similarity_baseline(
                 data, n_folds, n_sample=n_sample)
+            all_results['datasets'][ds_name] = ds_results
+            _save_checkpoint(f'{ds_name} exp1')
 
         if 2 in experiments:
             ds_results['exp2_hybrid_similarity'] = run_hybrid_similarity(
                 data, n_folds, search_speed, weight_methods, n_sample,
                 shared_search=shared_search)
+            all_results['datasets'][ds_name] = ds_results
+            _save_checkpoint(f'{ds_name} exp2')
 
         if 3 in experiments:
             ds_results['exp3_feature_concentration'] = run_feature_concentration(
                 data, search_speed, weight_methods,
                 shared_search=shared_search)
+            all_results['datasets'][ds_name] = ds_results
+            _save_checkpoint(f'{ds_name} exp3')
 
         if 4 in experiments:
             ds_results['exp4_activity_cliffs'] = run_activity_cliff_analysis(
                 data, n_folds, search_speed,
                 shared_search=shared_search)
+            all_results['datasets'][ds_name] = ds_results
+            _save_checkpoint(f'{ds_name} exp4')
 
         if 5 in experiments:
             ds_results['exp5_knn_prediction'] = run_knn_prediction(
                 data, n_folds, search_speed, k_values, knn_conditions,
                 shared_search=shared_search)
+            all_results['datasets'][ds_name] = ds_results
+            _save_checkpoint(f'{ds_name} exp5')
 
         if 6 in experiments:
             ds_results['exp6_applicability_domain'] = run_applicability_domain(
                 data, n_folds, search_speed, k_values[:2],
                 shared_search=shared_search)
+            all_results['datasets'][ds_name] = ds_results
+            _save_checkpoint(f'{ds_name} exp6')
 
         if 7 in experiments:
             ds_results['exp7_noise_bridge'] = run_noise_detection_bridge(
                 data, n_folds, search_speed,
                 shared_search=shared_search)
+            all_results['datasets'][ds_name] = ds_results
+            _save_checkpoint(f'{ds_name} exp7')
 
         if 8 in experiments:
             ds_results['exp8_optimal_dimension'] = run_optimal_similarity_dimension(
                 data, n_folds, search_speed, budgets, n_sample)
+            all_results['datasets'][ds_name] = ds_results
+            _save_checkpoint(f'{ds_name} exp8')
 
         all_results['datasets'][ds_name] = ds_results
 
@@ -2221,34 +2265,10 @@ def main():
     if 9 in experiments and len(all_results['datasets']) >= 1:
         all_results['exp9_cross_dataset'] = run_cross_dataset_summary(
             all_results['datasets'])
-
-    # Save results
-    def convert_numpy(obj):
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        elif isinstance(obj, (np.floating, np.float64, np.float32)):
-            return float(obj)
-        elif isinstance(obj, (np.integer, np.int64, np.int32)):
-            return int(obj)
-        elif isinstance(obj, (np.bool_,)):
-            return bool(obj)
-        elif hasattr(obj, 'to_dict'):
-            return convert_numpy(obj.to_dict())
-        elif hasattr(obj, '__dataclass_fields__'):
-            from dataclasses import asdict
-            return convert_numpy(asdict(obj))
-        elif isinstance(obj, dict):
-            return {str(k): convert_numpy(v) for k, v in obj.items()}
-        elif isinstance(obj, (list, tuple)):
-            return [convert_numpy(v) for v in obj]
-        return obj
-
-    output_file = output_path / f"similarity_{args.mode}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    with open(output_file, 'w') as f:
-        json.dump(convert_numpy(all_results), f, indent=2)
+        _save_checkpoint('exp9 cross-dataset')
 
     print(f"\n{'=' * 70}")
-    print(f"Results saved to: {output_file}")
+    print(f"All experiments complete. Final save.")
     print('=' * 70)
 
 
