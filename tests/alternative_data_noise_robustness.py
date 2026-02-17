@@ -722,6 +722,13 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None):
                     print(f"    ERROR: {e}", flush=True)
                     continue
 
+        # Incremental save after each fold (protection against timeout)
+        if all_fold_results:
+            _partial = pd.concat(all_fold_results, ignore_index=True)
+            _partial_path = results_dir / 'all_results_partial.csv'
+            _partial.to_csv(_partial_path, index=False)
+            print(f"  [Checkpoint] Saved {len(_partial)} rows after fold {fold_idx + 1}")
+
     if not all_fold_results:
         print(f"ERROR: No results for {dataset_name}")
         return pd.DataFrame()
