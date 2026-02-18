@@ -133,40 +133,88 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     results = {'weight_methods': {}, 'per_rep': {}}
 
+    # Compute importance for weighted baselines (once, used for all baselines)
+    print("  Computing feature importance (lgbm_gain) for weighted baselines...")
+    try:
+        importance = compute_feature_importance(reps, labels, method='lightgbm_gain')
+    except Exception as e:
+        print(f"  WARNING: importance failed ({e}), weighted baselines unavailable")
+        importance = None
+
     # Best individual rep baseline (the real-world comparison)
     best_rep_sac = -1  # SAC > 0 is good; we want highest
     best_rep_name = None
+    best_rep_sac_weighted = -1
+    best_rep_name_weighted = None
     for rep_name, X in reps.items():
         D_rep = compute_distance_matrix(X, standardize=True)
         sac_rep, _ = similarity_activity_correlation(D_rep, labels, n_sample)
         viol_rep = violation_rate(D_rep, labels, k=5)
-        results['per_rep'][rep_name] = {
+        rep_result = {
             'dim': X.shape[1], 'sac_rho': sac_rep, 'violation_rate': viol_rep,
         }
+
+        # Weighted version
+        if importance is not None and rep_name in importance:
+            D_rep_w = compute_distance_matrix(X, feature_weights=importance[rep_name],
+                                              standardize=True)
+            sac_rep_w, _ = similarity_activity_correlation(D_rep_w, labels, n_sample)
+            viol_rep_w = violation_rate(D_rep_w, labels, k=5)
+            rep_result['sac_rho_weighted'] = sac_rep_w
+            rep_result['violation_rate_weighted'] = viol_rep_w
+            if sac_rep_w > best_rep_sac_weighted:
+                best_rep_sac_weighted = sac_rep_w
+                best_rep_name_weighted = rep_name
+            print(f"  {rep_name}: SAC={sac_rep:.4f}, SAC_w={sac_rep_w:.4f}, dim={X.shape[1]}")
+        else:
+            print(f"  {rep_name}: SAC={sac_rep:.4f}, viol={viol_rep:.3f}, dim={X.shape[1]}")
+
+        results['per_rep'][rep_name] = rep_result
         if best_rep_name is None or sac_rep > best_rep_sac:
             best_rep_sac = sac_rep
             best_rep_name = rep_name
-        print(f"  {rep_name}: SAC={sac_rep:.4f}, viol={viol_rep:.3f}, dim={X.shape[1]}")
 
     results['best_individual_rep'] = {
         'name': best_rep_name, 'sac_rho': best_rep_sac,
         'dim': reps[best_rep_name].shape[1],
     }
+    if best_rep_name_weighted is not None:
+        results['best_individual_rep_weighted'] = {
+            'name': best_rep_name_weighted, 'sac_rho': best_rep_sac_weighted,
+            'dim': reps[best_rep_name_weighted].shape[1],
+        }
     print(f"\n  Best individual rep: {best_rep_name} (SAC={best_rep_sac:.4f})")
+    if best_rep_name_weighted:
+        print(f"  Best individual rep (weighted): {best_rep_name_weighted} "
+              f"(SAC_w={best_rep_sac_weighted:.4f})")
 
-    # Also compute concat as an additional data point (not standard practice)
+    # Concat baseline (unweighted + weighted)
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
     D_concat = compute_distance_matrix(X_concat, standardize=True)
     sac_concat, _ = similarity_activity_correlation(D_concat, labels, n_sample)
     viol_concat = violation_rate(D_concat, labels, k=5)
 
-    results['concat'] = {
+    concat_result = {
         'dim': X_concat.shape[1],
         'sac_rho': sac_concat,
         'violation_rate': viol_concat,
     }
-    print(f"  Concat (reference only): SAC={sac_concat:.4f}, viol={viol_concat:.3f}, "
-          f"dim={X_concat.shape[1]}")
+
+    if importance is not None:
+        w_concat = np.concatenate([importance[k] for k in sorted(reps.keys())])
+        D_concat_w = compute_distance_matrix(X_concat, feature_weights=w_concat,
+                                             standardize=True)
+        sac_concat_w, _ = similarity_activity_correlation(D_concat_w, labels, n_sample)
+        viol_concat_w = violation_rate(D_concat_w, labels, k=5)
+        concat_result['sac_rho_weighted'] = sac_concat_w
+        concat_result['violation_rate_weighted'] = viol_concat_w
+        print(f"  Concat: SAC={sac_concat:.4f}, SAC_w={sac_concat_w:.4f}, "
+              f"dim={X_concat.shape[1]}")
+    else:
+        print(f"  Concat (reference only): SAC={sac_concat:.4f}, viol={viol_concat:.3f}, "
+              f"dim={X_concat.shape[1]}")
+
+    results['concat'] = concat_result
 
     best_sac = best_rep_sac
     best_method = best_rep_name

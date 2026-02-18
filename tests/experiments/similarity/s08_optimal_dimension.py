@@ -220,15 +220,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"    dim={actual_dim} (MLE_ID={mle_id:.1f}): RF_R2={rf_r2:.4f}, kNN_R2={knn_r2:.4f}, "
               f"SAC={sac_rho:.4f}, viol={viol:.3f}, dist_corr={dist_corr:.3f}")
 
-    # Per-rep baselines (the real comparison: best individual rep)
+    # Per-rep baselines (unweighted + weighted)
     print("\n  Individual rep baselines:")
     results['per_rep'] = {}
     best_rep_sac = -1
     best_rep_name = None
+
+    # Compute importance once for weighted baselines
+    from kirby.hybrid import compute_feature_importance as _cfi
+    try:
+        importance = _cfi(reps, labels, method='lightgbm_gain')
+    except Exception:
+        importance = None
+
     for rep_name, X in reps.items():
         D_rep = compute_distance_matrix(X, standardize=True)
         sac_rep, _ = similarity_activity_correlation(D_rep, labels, n_sample)
         viol_rep = violation_rate(D_rep, labels, k=5)
+
+        # Weighted SAC
+        sac_rep_w = float('nan')
+        if importance is not None and rep_name in importance:
+            D_rep_w = compute_distance_matrix(X, feature_weights=importance[rep_name],
+                                              standardize=True)
+            sac_rep_w, _ = similarity_activity_correlation(D_rep_w, labels, n_sample)
 
         rf_rep = []
         knn_rep = []
@@ -259,13 +274,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'rf_r2': float(np.mean(rf_rep)),
             'knn_r2': float(np.mean(knn_rep)),
             'sac_rho': sac_rep,
+            'sac_rho_weighted': sac_rep_w,
             'violation_rate': viol_rep,
         }
         if best_rep_name is None or sac_rep > best_rep_sac:
             best_rep_sac = sac_rep
             best_rep_name = rep_name
         print(f"    {rep_name} (dim={X.shape[1]}): RF_R2={np.mean(rf_rep):.4f}, "
-              f"kNN_R2={np.mean(knn_rep):.4f}, SAC={sac_rep:.4f}")
+              f"kNN_R2={np.mean(knn_rep):.4f}, SAC={sac_rep:.4f}, SAC_w={sac_rep_w:.4f}")
 
     results['best_individual_rep'] = best_rep_name
     print(f"  Best individual rep: {best_rep_name} (SAC={best_rep_sac:.4f})")
@@ -291,16 +307,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         knn.fit(X_tr, y_train)
         knn_scores_full.append(r2_score(y_val, knn.predict(X_va)))
 
-    results['concat_reference'] = {
+    concat_ref = {
         'dim': full_dim,
         'rf_r2': float(np.mean(rf_scores_full)),
         'knn_r2': float(np.mean(knn_scores_full)),
         'sac_rho': sac_full,
         'violation_rate': viol_full,
     }
-    print(f"    RF_R2={results['concat_reference']['rf_r2']:.4f}, "
-          f"kNN_R2={results['concat_reference']['knn_r2']:.4f}, "
-          f"SAC={sac_full:.4f}, viol={viol_full:.3f}")
+    # Weighted concat SAC
+    if importance is not None:
+        w_concat = np.concatenate([importance[k] for k in sorted(reps.keys())
+                                   if k in importance])
+        D_full_w = compute_distance_matrix(X_concat, feature_weights=w_concat,
+                                           standardize=True)
+        sac_full_w, _ = similarity_activity_correlation(D_full_w, labels, n_sample)
+        concat_ref['sac_rho_weighted'] = sac_full_w
+        print(f"    RF_R2={concat_ref['rf_r2']:.4f}, "
+              f"kNN_R2={concat_ref['knn_r2']:.4f}, "
+              f"SAC={sac_full:.4f}, SAC_w={sac_full_w:.4f}")
+    else:
+        print(f"    RF_R2={concat_ref['rf_r2']:.4f}, "
+              f"kNN_R2={concat_ref['knn_r2']:.4f}, "
+              f"SAC={sac_full:.4f}, viol={viol_full:.3f}")
+    results['concat_reference'] = concat_ref
 
     # Find optimal budget for prediction vs similarity
     budget_list = sorted(results['budgets'].keys())

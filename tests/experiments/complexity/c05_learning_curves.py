@@ -114,6 +114,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         r2, _ = evaluate_single_rep_cv(
                             X, sub_labels, sub_groups, model_factory,
                             n_folds=sub_folds,
+                            mode='intermediary' if sub_folds == 1 else 'full',
                         )
                         best_single = max(best_single, r2)
                     except Exception:

@@ -70,8 +70,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     for k in k_values:
         print(f"\n  k={k}:")
         all_d_concat = []
+        all_d_concat_w = []
         all_d_hybrid = []
         all_d_weighted = []
+        all_d_per_rep = {rname: [] for rname in reps}
+        all_d_per_rep_w = {rname: [] for rname in reps}
         all_errors = []
 
         for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
@@ -116,8 +119,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             y_pred = rf.predict(X_va_s)
             errors = np.abs(y_val - y_pred)
 
+            # Concat weights for this fold
+            w_concat = np.concatenate([imp[name] for name in sorted(reps.keys())
+                                       if name in imp])
+            w_concat = np.sqrt(np.maximum(w_concat, 0))
+
             # Distance to k-NN in training set for each val molecule
-            # Concat space
+            # Concat space (unweighted)
             scaler_c = StandardScaler()
             Xtr_c = scaler_c.fit_transform(X_concat[train_idx])
             Xva_c = scaler_c.transform(X_concat[val_idx])
@@ -125,6 +133,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             nn_c.fit(Xtr_c)
             dists_c, _ = nn_c.kneighbors(Xva_c)
             d_concat = dists_c.mean(axis=1)
+
+            # Concat space (weighted)
+            nn_cw = NearestNeighbors(n_neighbors=min(k, len(y_train) - 1))
+            nn_cw.fit(Xtr_c * w_concat)
+            dists_cw, _ = nn_cw.kneighbors(Xva_c * w_concat)
+            d_concat_w = dists_cw.mean(axis=1)
+
+            # Per-rep distances (unweighted + weighted)
+            for rname, X_rep in reps.items():
+                scaler_r = StandardScaler()
+                Xtr_r = scaler_r.fit_transform(X_rep[train_idx])
+                Xva_r = scaler_r.transform(X_rep[val_idx])
+                nn_r = NearestNeighbors(n_neighbors=min(k, len(y_train) - 1))
+                nn_r.fit(Xtr_r)
+                dr, _ = nn_r.kneighbors(Xva_r)
+                all_d_per_rep[rname].extend(dr.mean(axis=1).tolist())
+
+                if rname in imp:
+                    w_r = np.sqrt(np.maximum(imp[rname], 0))
+                    nn_rw = NearestNeighbors(n_neighbors=min(k, len(y_train) - 1))
+                    nn_rw.fit(Xtr_r * w_r)
+                    drw, _ = nn_rw.kneighbors(Xva_r * w_r)
+                    all_d_per_rep_w[rname].extend(drw.mean(axis=1).tolist())
 
             # Hybrid space (unweighted)
             nn_h = NearestNeighbors(n_neighbors=min(k, len(y_train) - 1))
@@ -139,6 +170,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             d_weighted = dists_w.mean(axis=1)
 
             all_d_concat.extend(d_concat.tolist())
+            all_d_concat_w.extend(d_concat_w.tolist())
             all_d_hybrid.extend(d_hybrid.tolist())
             all_d_weighted.extend(d_weighted.tolist())
             all_errors.extend(errors.tolist())
@@ -147,22 +179,36 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             continue
 
         all_d_concat = np.array(all_d_concat)
+        all_d_concat_w = np.array(all_d_concat_w)
         all_d_hybrid = np.array(all_d_hybrid)
         all_d_weighted = np.array(all_d_weighted)
         all_errors = np.array(all_errors)
 
         # Spearman correlations: distance vs |error|
         rho_c, _ = spearmanr(all_d_concat, all_errors)
+        rho_cw, _ = spearmanr(all_d_concat_w, all_errors)
         rho_h, _ = spearmanr(all_d_hybrid, all_errors)
         rho_w, _ = spearmanr(all_d_weighted, all_errors)
 
-        results['distance_error_correlation'][f'k{k}'] = {
+        corr_result = {
             'concat': float(rho_c),
+            'concat_weighted': float(rho_cw),
             'hybrid': float(rho_h),
             'hybrid_weighted': float(rho_w),
         }
-        print(f"    Spearman(dist, |error|): concat={rho_c:.4f}, "
-              f"hybrid={rho_h:.4f}, weighted={rho_w:.4f}")
+
+        # Per-rep correlations
+        for rname in reps:
+            if all_d_per_rep[rname]:
+                rho_r, _ = spearmanr(np.array(all_d_per_rep[rname]), all_errors)
+                corr_result[rname] = float(rho_r)
+            if all_d_per_rep_w[rname]:
+                rho_rw, _ = spearmanr(np.array(all_d_per_rep_w[rname]), all_errors)
+                corr_result[f'{rname}_weighted'] = float(rho_rw)
+
+        results['distance_error_correlation'][f'k{k}'] = corr_result
+        print(f"    Spearman(dist, |error|): concat={rho_c:.4f}, concat_w={rho_cw:.4f}, "
+              f"hybrid={rho_h:.4f}, hybrid_w={rho_w:.4f}")
 
         # Reliability diagram: bin by distance decile
         for dist_name, dists in [('concat', all_d_concat),

@@ -97,7 +97,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("=" * 70)
 
     k_values = kwargs.get('k_values', [5, 10])
-    conditions = kwargs.get('conditions', ['hybrid_unweighted', 'hybrid_weighted'])
+    conditions = kwargs.get('conditions', [
+        'concat_unweighted', 'concat_weighted',
+        'hybrid_unweighted', 'hybrid_weighted',
+    ])
     shared_search = kwargs.get('shared_search', None)
     search_speed = config['search_speed']
     n_folds = config['n_splits']

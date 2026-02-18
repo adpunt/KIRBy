@@ -226,17 +226,32 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'rmse_noncliff': float(np.mean(fold_rmse_noncliff)) if fold_rmse_noncliff else float('nan'),
         }
 
-    # --- Per-rep kNN baselines ---
+    # --- Per-rep kNN baselines (unweighted + weighted) ---
     print("\n  Per-rep kNN baselines (k=5):")
     for rep_name, X_rep in reps.items():
+        # Unweighted
         def _get_rep(tr, va, yt, _X=X_rep):
             return _X[tr], _X[va]
         res = _evaluate_condition(_get_rep)
         if res:
             results['per_rep'][rep_name] = res
+
+            # Weighted: importance-weighted distance on this rep
+            def _get_rep_w(tr, va, yt, _X=X_rep, _rname=rep_name):
+                imp = compute_feature_importance({_rname: _X[tr]}, yt, method='lightgbm_gain')
+                w = np.sqrt(np.maximum(imp[_rname], 0))
+                scaler = StandardScaler()
+                return scaler.fit_transform(_X[tr]) * w, scaler.transform(_X[va]) * w
+            res_w = _evaluate_condition(_get_rep_w, pre_scaled=True)
+            if res_w:
+                results['per_rep'][rep_name]['r2_cliff_weighted'] = res_w['r2_cliff']
+                results['per_rep'][rep_name]['rmse_cliff_weighted'] = res_w['rmse_cliff']
+                results['per_rep'][rep_name]['r2_all_weighted'] = res_w['r2_all']
+
             print(f"    {rep_name:<15} R2_all={res['r2_all']:.4f}  "
                   f"R2_cliff={res['r2_cliff']:.4f}  RMSE_cliff={res['rmse_cliff']:.4f}  "
-                  f"R2_noncliff={res['r2_noncliff']:.4f}")
+                  f"R2_noncliff={res['r2_noncliff']:.4f}"
+                  + (f"  | weighted: RMSE_cliff={res_w['rmse_cliff']:.4f}" if res_w else ""))
 
     # --- Hybrid kNN (unweighted) ---
     if hybrid_blueprint is not None:
@@ -343,6 +358,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     for rname, rv in results['per_rep'].items():
         all_methods.append((f"kNN({rname})", rv.get('rmse_cliff', float('nan')),
                            rv.get('r2_cliff', float('nan'))))
+        if 'rmse_cliff_weighted' in rv:
+            all_methods.append((f"kNN({rname})_w", rv.get('rmse_cliff_weighted', float('nan')),
+                               rv.get('r2_cliff_weighted', float('nan'))))
     if 'unweighted' in results.get('hybrid', {}):
         rv = results['hybrid']['unweighted']
         all_methods.append(("hybrid_kNN_uw", rv.get('rmse_cliff', float('nan')),
