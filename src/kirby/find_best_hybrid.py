@@ -36,7 +36,7 @@ from sklearn.metrics import (
     r2_score,
     roc_auc_score,
 )
-from sklearn.model_selection import GroupKFold, KFold
+from sklearn.model_selection import GroupKFold, GroupShuffleSplit, KFold, ShuffleSplit
 from sklearn.preprocessing import StandardScaler
 
 warnings.filterwarnings('ignore')
@@ -320,6 +320,11 @@ SPEED_TIERS = {
 
 def _make_cv_splitter(groups: Optional[np.ndarray], n_folds: int, seed: int):
     """Return (splitter, use_groups) depending on whether groups are provided."""
+    if n_folds == 1:
+        # Single 80/20 split (intermediary mode)
+        if groups is not None:
+            return GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=seed), True
+        return ShuffleSplit(n_splits=1, test_size=0.2, random_state=seed), False
     if groups is not None:
         n_unique = len(np.unique(groups))
         if n_unique >= n_folds:
