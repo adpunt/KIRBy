@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+"""C08: Uncertainty Calibration at Optimal vs Suboptimal Complexity.
+
+Paper: Complexity
+Conclusion: Complexity matching improves calibration.
+Dependencies: c02 (optional, reads JSON for optimal config).
+"""
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+import numpy as np
+from scipy.stats import spearmanr
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import r2_score
+
+from experiments._shared import (
+    load_data, INTERMEDIARY, FULL, get_config, create_experiment_parser,
+    save_experiment_results, load_experiment_results, convert_numpy,
+    get_model_factories, _cv_split,
+    create_hybrid, apply_feature_selection,
+    find_best_hybrid,
+)
+
+
+def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir=None):
+    """Exp 8: Complexity matching produces better-calibrated uncertainty estimates.
+
+    The 'optimal' condition uses find_best_hybrid() (or Exp 2 results) to
+    discover the actual best config. Suboptimal conditions are deliberately
+    constructed to show the contrast.
+    """
+    print("\n" + "=" * 70)
+    print("EXPERIMENT 8: UNCERTAINTY CALIBRATION AT OPTIMAL VS SUBOPTIMAL COMPLEXITY")
+    print("=" * 70)
+
+    from sklearn.ensemble import RandomForestRegressor
+    from sklearn.linear_model import Ridge
+
+    reps = data['reps']
+    labels = data['labels']
+    groups = data['groups']
+    n_folds = config['n_splits']
+    search_speed = config['search_speed']
+    total_dim = sum(v.shape[1] for v in reps.values())
+
+    all_conditions = conditions or ['optimal', 'underfit', 'overfit', 'mismatched']
+
+    # Try to load Exp 2 results if a directory was provided
+    exp2_results = None
+    if c02_results_dir:
+        exp2_results = load_experiment_results(c02_results_dir, 'c02_complexity_matching_grid',
+                                               dataset_name)
+        if exp2_results:
+            print(f"  Loaded Exp 2 results from {c02_results_dir}")
+        else:
+            print(f"  No Exp 2 results found at {c02_results_dir}")
+
+    # Discover optimal config via find_best_hybrid or Exp 2 results
+    optimal_model_factory = None
+    optimal_budget = 100
+    optimal_alloc = 'greedy'
+    optimal_imp = 'treeshap'
+    optimal_desc = 'RF at budget=100 (default)'
+
+    if exp2_results and exp2_results.get('best_by_model'):
+        # Use best config from Exp 2
+        all_best = exp2_results['best_by_model']
+        overall_best = max(all_best.values(), key=lambda c: c['r2_mean'])
+        optimal_budget = overall_best['budget']
+        optimal_alloc = overall_best['allocation']
+        optimal_imp = overall_best['importance']
+        best_model = overall_best['model']
+        optimal_model_factory = get_model_factories([best_model]).get(best_model)
+        optimal_desc = (f"{best_model} at budget={optimal_budget} "
+                        f"[{optimal_imp}/{optimal_alloc}] (from Exp 2)")
+        print(f"  Using Exp 2 optimal: {optimal_desc}")
+    else:
+        # Run find_best_hybrid to discover optimal
+        print(f"  Running find_best_hybrid(speed={search_speed}) to find optimal...")
+        augs = data.get('augmentations')
+        try:
+            search = find_best_hybrid(
+                reps, labels, groups=groups,
+                speed=search_speed,
+                augmentations=augs,
+                verbose=False,
+                cache=True,
+            )
+            best = search.best_overall
+            if best:
+                optimal_budget = best['blueprint'].budget
+                optimal_alloc = best['blueprint'].allocation_method
+                optimal_imp = best['blueprint'].importance_method
+                best_model = best['model']
+                optimal_model_factory = get_model_factories([best_model]).get(best_model)
+                optimal_desc = (f"{best_model} at budget={optimal_budget} "
+                                f"[{optimal_imp}/{optimal_alloc}] (from find_best_hybrid)")
+                print(f"  Discovered optimal: {optimal_desc}")
+        except Exception as e:
+            print(f"  find_best_hybrid failed ({e}), using RF/budget=100 default")
+
+    if optimal_model_factory is None:
+        optimal_model_factory = lambda: RandomForestRegressor(
+            n_estimators=100, random_state=42, n_jobs=-1)
+
+    # Define conditions: (model_factory, budget, alloc, imp, description)
+    condition_specs = {
+        'optimal': (optimal_model_factory, optimal_budget, optimal_alloc, optimal_imp,
+                    optimal_desc),
+        'underfit': (optimal_model_factory, 25, optimal_alloc, optimal_imp,
+                     f'Same model at budget=25 (too compressed)'),
+        'overfit': (optimal_model_factory, total_dim, optimal_alloc, optimal_imp,
+                    f'Same model at full dim={total_dim} (too many features)'),
+        'mismatched': (lambda: Ridge(alpha=0.01), total_dim, 'greedy', 'treeshap',
+                       'Ridge at full dim (low-capacity model, high-dim input)'),
+    }
+
+    results = {'conditions': {}}
+
+    for cond_name in all_conditions:
+        if cond_name not in condition_specs:
+            continue
+        model_factory, budget, alloc, imp, desc = condition_specs[cond_name]
+        print(f"\n  {cond_name}: {desc}")
+
+        sample_X = next(iter(reps.values()))
+
+        fold_metrics = []
+        for fold_i, (train_idx, val_idx) in enumerate(_cv_split(groups, n_folds, sample_X, labels)):
+            train_reps = {k: v[train_idx] for k, v in reps.items()}
+            val_reps = {k: v[val_idx] for k, v in reps.items()}
+            y_train, y_val = labels[train_idx], labels[val_idx]
+
+            try:
+                X_train, feature_info = create_hybrid(
+                    train_reps, y_train,
+                    allocation_method=alloc,
+                    budget=budget,
+                    importance_method=imp,
+                )
+                X_val = apply_feature_selection(val_reps, feature_info)
+            except Exception as e:
+                print(f"    fold {fold_i}: hybrid creation failed - {e}")
+                continue
+
+            scaler = StandardScaler()
+            X_train_s = scaler.fit_transform(X_train)
+            X_val_s = scaler.transform(X_val)
+
+            # Train base model
+            model = model_factory()
+            model.fit(X_train_s, y_train)
+            y_pred_val = model.predict(X_val_s)
+            val_r2 = r2_score(y_val, y_pred_val)
+
+            # Conformal calibration: split train into proper-train + cal
+            n_train = len(y_train)
+            n_cal = max(20, int(n_train * 0.2))
+            cal_perm = np.random.RandomState(42 + fold_i).permutation(n_train)
+            cal_idx = cal_perm[:n_cal]
+            ptrain_idx = cal_perm[n_cal:]
+
+            X_ptrain, y_ptrain = X_train_s[ptrain_idx], y_train[ptrain_idx]
+            X_cal, y_cal = X_train_s[cal_idx], y_train[cal_idx]
+
+            # Retrain on proper-train, calibrate on cal
+            model_conf = model_factory()
+            model_conf.fit(X_ptrain, y_ptrain)
+
+            y_pred_cal = model_conf.predict(X_cal)
+            cal_residuals = np.abs(y_cal - y_pred_cal)
+
+            # Conformal quantile (90% coverage target)
+            alpha = 0.1
+            q = np.quantile(cal_residuals, 1 - alpha)
+
+            # Predict on val with conformal intervals
+            y_pred_conf = model_conf.predict(X_val_s)
+            interval_lo = y_pred_conf - q
+            interval_hi = y_pred_conf + q
+
+            # Metrics
+            covered = (y_val >= interval_lo) & (y_val <= interval_hi)
+            picp = float(np.mean(covered))  # prediction interval coverage probability
+            mpiw = float(np.mean(interval_hi - interval_lo))  # mean interval width
+            target_range = float(np.ptp(y_val))
+            sharpness_ratio = mpiw / target_range if target_range > 0 else float('nan')
+            cal_error = abs(picp - (1 - alpha))
+
+            # Uncertainty-error correlation (per-sample uncertainty from RF tree variance)
+            errors = np.abs(y_val - y_pred_conf)
+            ue_corr = float('nan')
+            if hasattr(model_conf, 'estimators_') and len(errors) >= 3:
+                tree_preds = np.array([t.predict(X_val_s) for t in model_conf.estimators_])
+                per_sample_unc = tree_preds.std(axis=0)
+                ue_corr, _ = spearmanr(per_sample_unc, errors)
+                ue_corr = float(ue_corr)
+
+            fold_result = {
+                'val_r2': val_r2, 'picp': picp, 'mpiw': mpiw,
+                'sharpness_ratio': sharpness_ratio, 'cal_error': cal_error,
+                'conformal_q': float(q), 'n_val': len(y_val),
+                'ue_corr': ue_corr,
+            }
+            fold_metrics.append(fold_result)
+            print(f"    fold {fold_i}: R²={val_r2:.4f}, PICP={picp:.3f}, "
+                  f"MPIW={mpiw:.3f}, cal_error={cal_error:.3f}")
+
+        if fold_metrics:
+            avg = {}
+            for key in fold_metrics[0]:
+                vals = [fm[key] for fm in fold_metrics if not np.isnan(fm[key])]
+                avg[key] = float(np.mean(vals)) if vals else float('nan')
+            results['conditions'][cond_name] = {
+                'description': desc,
+                'budget': budget,
+                'avg': avg,
+                'folds': fold_metrics,
+            }
+            print(f"  >> {cond_name} avg: R²={avg['val_r2']:.4f}, PICP={avg['picp']:.3f}, "
+                  f"MPIW={avg['mpiw']:.3f}, cal_error={avg['cal_error']:.3f}")
+
+    # Summary table
+    print("\n  CALIBRATION SUMMARY:")
+    print(f"  {'Condition':<14} {'R²':<8} {'PICP':<8} {'MPIW':<8} {'Cal Error':<10} {'Budget':<8}")
+    print("  " + "-" * 56)
+    for cond_name, cond_data in results['conditions'].items():
+        a = cond_data['avg']
+        print(f"  {cond_name:<14} {a['val_r2']:.4f}  {a['picp']:.3f}  "
+              f"{a['mpiw']:.3f}  {a['cal_error']:.4f}    {cond_data['budget']}")
+
+    return results
+
+
+if __name__ == '__main__':
+    parser = create_experiment_parser('C08: Uncertainty Calibration',
+                                     has_delta=True, has_augment=True)
+    parser.add_argument('--c02-results', type=str, default=None,
+                        help='Path to c02 output directory (reads optimal config from JSON)')
+    parser.add_argument('--conditions', type=str, nargs='+', default=None,
+                        choices=['optimal', 'underfit', 'overfit', 'mismatched'],
+                        help='Which conditions to test (default: all)')
+    args = parser.parse_args()
+    config = get_config(args)
+    data = load_data(args.dataset, args.reps,
+                     delta=getattr(args, 'delta', False),
+                     augment=getattr(args, 'augment', False))
+    results = run(data, config, args.output, args.dataset,
+                  conditions=args.conditions,
+                  c02_results_dir=args.c02_results)
+    save_experiment_results(results, args.output, 'c08_calibration', args.dataset)

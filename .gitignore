@@ -86,6 +86,7 @@ logs/
 checkpoints/
 outputs/
 experiments/
+!tests/experiments/
 models/
 *.npy
 *.npz
