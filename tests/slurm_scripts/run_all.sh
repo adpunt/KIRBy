@@ -108,8 +108,13 @@ echo ""
 echo ">>> S08: Optimal Dimension"
 python tests/experiments/similarity/s08_optimal_dimension.py $COMMON
 
+# --- Cross-dataset experiments (skipped — need all datasets loaded) ---
+# Run these separately for full runs:
+#   python tests/experiments/complexity/c03_cross_dataset_transfer.py --mode full --reps $REPS --output $OUTPUT --datasets logd caco2 herg qm9
+#   python tests/experiments/similarity/s09_cross_dataset_summary.py --mode full --reps $REPS --output $OUTPUT --datasets logd caco2 herg qm9
+
 echo ""
 echo "============================================================"
-echo "ALL EXPERIMENTS COMPLETE"
+echo "ALL EXPERIMENTS COMPLETE (except C03, S09 — run cross-dataset separately)"
 echo "Results in: $OUTPUT"
 echo "============================================================"
