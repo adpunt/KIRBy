@@ -17,7 +17,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import numpy as np
 from scipy.spatial.distance import cdist as scipy_cdist
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import GroupKFold
 from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.ensemble import RandomForestRegressor
@@ -25,7 +24,7 @@ from sklearn.ensemble import RandomForestRegressor
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results,
-    get_hybrid_features_and_weights,
+    get_hybrid_features_and_weights, make_cv_splitter,
 )
 
 from kirby.hybrid import create_hybrid, apply_feature_selection, compute_feature_importance
@@ -142,7 +141,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print("  WARNING: ecfp4 not available, skipping cliff stratification")
 
     # CV evaluation
-    gkf = GroupKFold(n_splits=n_folds)
+    splitter, use_groups = make_cv_splitter(n_folds, groups)
     sample_X = next(iter(reps.values()))
 
     for condition in conditions:
@@ -154,7 +153,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             fold_noncliff_scores = []
             fold_errors = []
 
-            for train_idx, val_idx in gkf.split(sample_X, labels, groups=groups):
+            for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
                 y_train, y_val = labels[train_idx], labels[val_idx]
                 scaler = StandardScaler()
 
@@ -296,11 +295,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("\n  Individual representation kNN baselines:")
     results['per_rep_baselines'] = {}
     best_k = k_values[len(k_values) // 2]  # use middle k value
-    gkf2 = GroupKFold(n_splits=n_folds)
+    splitter2, use_groups2 = make_cv_splitter(n_folds, groups)
     for rep_name, X_rep in reps.items():
         fold_r2s_uw = []
         fold_r2s_w = []
-        for train_idx, val_idx in gkf2.split(sample_X, labels, groups=groups):
+        for train_idx, val_idx in (splitter2.split(sample_X, labels, groups=groups) if use_groups2 else splitter2.split(sample_X, labels)):
             scaler = StandardScaler()
             X_tr = scaler.fit_transform(X_rep[train_idx])
             X_va = scaler.transform(X_rep[val_idx])

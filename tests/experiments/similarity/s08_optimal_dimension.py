@@ -19,7 +19,6 @@ import time
 import numpy as np
 from scipy.stats import spearmanr
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import GroupKFold
 from sklearn.metrics import r2_score
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.ensemble import RandomForestRegressor
@@ -27,7 +26,7 @@ from sklearn.ensemble import RandomForestRegressor
 from experiments._shared import (
     load_data, INTERMEDIARY, FULL, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    get_hybrid_features_and_weights, estimate_intrinsic_dim_mle,
+    get_hybrid_features_and_weights, estimate_intrinsic_dim_mle, make_cv_splitter,
     create_hybrid, apply_feature_selection,
 )
 
@@ -103,8 +102,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("=" * 70)
 
     n_folds = config['n_splits']
-    if n_folds < 2:
-        n_folds = 3  # need at least 2 folds for GroupKFold
     search_speed = config['search_speed']
     budgets = kwargs.get('budgets', [25, 50, 100])
     n_sample = kwargs.get('n_sample', 5000)
@@ -119,7 +116,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
     full_dim = X_concat.shape[1]
 
-    gkf = GroupKFold(n_splits=n_folds)
+    splitter, use_groups = make_cv_splitter(n_folds, groups)
     sample_X = next(iter(reps.values()))
 
     # Pre-compute full-dim distance matrix + sampled pair indices (reused per budget)
@@ -174,7 +171,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         rf_scores = []
         knn_scores = []
-        for train_idx, val_idx in gkf.split(sample_X, labels, groups=groups):
+        for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
             y_train, y_val = labels[train_idx], labels[val_idx]
 
             train_reps_fold = {name: rep[train_idx] for name, rep in reps.items()}
@@ -235,7 +232,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         rf_rep = []
         knn_rep = []
-        for train_idx, val_idx in gkf.split(sample_X, labels, groups=groups):
+        for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
             y_train, y_val = labels[train_idx], labels[val_idx]
             scaler = StandardScaler()
             X_tr = scaler.fit_transform(X[train_idx])
@@ -280,7 +277,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     rf_scores_full = []
     knn_scores_full = []
-    for train_idx, val_idx in gkf.split(sample_X, labels, groups=groups):
+    for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
         y_train, y_val = labels[train_idx], labels[val_idx]
         scaler = StandardScaler()
         X_tr = scaler.fit_transform(X_concat[train_idx])

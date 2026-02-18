@@ -83,11 +83,24 @@ def cv_split(groups, n_splits, X, labels, seed=42, mode='intermediary'):
 
 
 def _cv_split(groups, n_folds, X, labels, seed=42):
-    """Legacy wrapper — uses GroupKFold or KFold. For backward compat."""
+    """Legacy wrapper — delegates to cv_split."""
+    mode = 'intermediary' if n_folds == 1 else 'full'
+    yield from cv_split(groups, n_folds, X, labels, seed=seed, mode=mode)
+
+
+def make_cv_splitter(n_folds, groups=None, seed=42):
+    """Return (splitter, use_groups) for direct sklearn CV loops.
+
+    Handles n_folds=1 (intermediary) via GroupShuffleSplit/ShuffleSplit.
+    """
+    if n_folds == 1:
+        if groups is not None and len(np.unique(groups)) >= 2:
+            return GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=seed), True
+        from sklearn.model_selection import ShuffleSplit
+        return ShuffleSplit(n_splits=1, test_size=0.2, random_state=seed), False
     if groups is not None and len(np.unique(groups)) >= n_folds:
-        yield from GroupKFold(n_splits=n_folds).split(X, labels, groups=groups)
-    else:
-        yield from KFold(n_splits=n_folds, shuffle=True, random_state=seed).split(X, labels)
+        return GroupKFold(n_splits=n_folds), True
+    return KFold(n_splits=n_folds, shuffle=True, random_state=seed), False
 
 
 # =============================================================================
