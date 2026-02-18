@@ -14,19 +14,21 @@ cd /data/stat-cadd/scat9264/KIRBy
 # Run all refactored experiments (individual scripts).
 #
 # Usage:
-#   sbatch tests/slurm_scripts/run_all.sh [mode] [reps] [output_dir] [dataset]
+#   sbatch tests/slurm_scripts/run_all.sh [mode] [reps] [output_dir] [dataset] [extra_flags]
 #
 # Examples:
 #   sbatch tests/slurm_scripts/run_all.sh intermediary fast results_v2
+#   sbatch tests/slurm_scripts/run_all.sh intermediary mutation_fast results_v2_ab flab_expression_koenig "--delta"
+#   sbatch tests/slurm_scripts/run_all.sh intermediary mutation_full results_v2_ab flab_expression_koenig "--delta --augment"
 #   sbatch tests/slurm_scripts/run_all.sh full fast+hf results_full logd
 
 MODE=${1:-intermediary}
 REPS=${2:-fast}
 OUTPUT=${3:-tests/results}
 DATASET=${4:-logd}
+EXTRA=${5:-}
 
-COMMON="--mode $MODE --dataset $DATASET --reps $REPS --output $OUTPUT"
-COMMON_DA="$COMMON --delta --augment"
+COMMON="--mode $MODE --dataset $DATASET --reps $REPS --output $OUTPUT $EXTRA"
 
 echo "============================================================"
 echo "KIRBy full experiment run"
@@ -34,6 +36,7 @@ echo "  Mode:    $MODE"
 echo "  Reps:    $REPS"
 echo "  Dataset: $DATASET"
 echo "  Output:  $OUTPUT"
+echo "  Extra:   ${EXTRA:-none}"
 echo "============================================================"
 
 set -e  # stop on first error
