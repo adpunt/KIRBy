@@ -24,6 +24,7 @@ from experiments._shared import (
     save_experiment_results,
 )
 
+from kirby.hybrid import compute_feature_importance
 from kirby.utils.noise_mitigation_methods import (
     compute_distance_matrix, get_k_neighbors_from_distances,
 )
@@ -127,7 +128,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     results = {}
 
-    # Per-rep analysis
+    # Compute importance weights for weighted baselines
+    print("  Computing feature importance (lgbm_gain)...")
+    try:
+        importance = compute_feature_importance(reps, labels, method='lightgbm_gain')
+    except Exception as e:
+        print(f"  WARNING: importance computation failed ({e}), weighted baselines unavailable")
+        importance = None
+
+    # Per-rep analysis (unweighted + weighted)
     for rep_name, X in reps.items():
         print(f"\n  {rep_name} (dim={X.shape[1]}):")
         D = compute_distance_matrix(X, standardize=True)
@@ -135,7 +144,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         viol = violation_rate(D, labels, k=5)
         sali = compute_sali(D, labels)
 
-        results[rep_name] = {
+        rep_result = {
             'dim': X.shape[1],
             'sac_rho': sac_rho,
             'sac_p': sac_p,
@@ -144,10 +153,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'sali_max': sali['max'],
             'sali_std': sali['std'],
         }
-        print(f"    SAC rho={sac_rho:.4f} (p={sac_p:.2e}), "
-              f"violation_rate={viol:.3f}, SALI_mean={sali['mean']:.3f}")
 
-    # Concatenated baseline
+        # Weighted version: importance-weighted distance on this rep
+        if importance is not None and rep_name in importance:
+            D_w = compute_distance_matrix(X, feature_weights=importance[rep_name],
+                                          standardize=True)
+            sac_w, sac_w_p = similarity_activity_correlation(D_w, labels, n_sample)
+            viol_w = violation_rate(D_w, labels, k=5)
+            sali_w = compute_sali(D_w, labels)
+            rep_result['sac_rho_weighted'] = sac_w
+            rep_result['sac_p_weighted'] = sac_w_p
+            rep_result['violation_rate_weighted'] = viol_w
+            rep_result['sali_mean_weighted'] = sali_w['mean']
+            print(f"    SAC rho={sac_rho:.4f}, weighted={sac_w:.4f}, "
+                  f"viol={viol:.3f}/{viol_w:.3f}, SALI={sali['mean']:.3f}/{sali_w['mean']:.3f}")
+        else:
+            print(f"    SAC rho={sac_rho:.4f} (p={sac_p:.2e}), "
+                  f"violation_rate={viol:.3f}, SALI_mean={sali['mean']:.3f}")
+
+        results[rep_name] = rep_result
+
+    # Concatenated baseline (unweighted + weighted)
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
     print(f"\n  all_concat (dim={X_concat.shape[1]}):")
     D_concat = compute_distance_matrix(X_concat, standardize=True)
@@ -155,7 +181,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     viol = violation_rate(D_concat, labels, k=5)
     sali = compute_sali(D_concat, labels)
 
-    results['all_concat'] = {
+    concat_result = {
         'dim': X_concat.shape[1],
         'sac_rho': sac_rho,
         'sac_p': sac_p,
@@ -164,16 +190,43 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'sali_max': sali['max'],
         'sali_std': sali['std'],
     }
-    print(f"    SAC rho={sac_rho:.4f} (p={sac_p:.2e}), "
-          f"violation_rate={viol:.3f}, SALI_mean={sali['mean']:.3f}")
+
+    if importance is not None:
+        w_concat = np.concatenate([importance[k] for k in sorted(reps.keys())])
+        D_concat_w = compute_distance_matrix(X_concat, feature_weights=w_concat,
+                                             standardize=True)
+        sac_w, sac_w_p = similarity_activity_correlation(D_concat_w, labels, n_sample)
+        viol_w = violation_rate(D_concat_w, labels, k=5)
+        sali_w = compute_sali(D_concat_w, labels)
+        concat_result['sac_rho_weighted'] = sac_w
+        concat_result['sac_p_weighted'] = sac_w_p
+        concat_result['violation_rate_weighted'] = viol_w
+        concat_result['sali_mean_weighted'] = sali_w['mean']
+        print(f"    SAC rho={sac_rho:.4f}, weighted={sac_w:.4f}, "
+              f"viol={viol:.3f}/{viol_w:.3f}")
+    else:
+        print(f"    SAC rho={sac_rho:.4f} (p={sac_p:.2e}), "
+              f"violation_rate={viol:.3f}, SALI_mean={sali['mean']:.3f}")
+
+    results['all_concat'] = concat_result
 
     # Summary table
     print("\n  Summary:")
-    print(f"  {'Rep':<15} {'Dim':>5} {'SAC rho':>9} {'Viol%':>7} {'SALI':>8}")
-    print(f"  {'-'*15} {'-'*5} {'-'*9} {'-'*7} {'-'*8}")
-    for name, r in results.items():
-        print(f"  {name:<15} {r['dim']:>5} {r['sac_rho']:>9.4f} "
-              f"{r['violation_rate']:>7.3f} {r['sali_mean']:>8.3f}")
+    has_weighted = any('sac_rho_weighted' in r for r in results.values())
+    if has_weighted:
+        print(f"  {'Rep':<15} {'Dim':>5} {'SAC':>9} {'SAC_w':>9} {'Viol%':>7} {'Viol_w%':>7}")
+        print(f"  {'-'*15} {'-'*5} {'-'*9} {'-'*9} {'-'*7} {'-'*7}")
+        for name, r in results.items():
+            sac_w = r.get('sac_rho_weighted', float('nan'))
+            viol_w = r.get('violation_rate_weighted', float('nan'))
+            print(f"  {name:<15} {r['dim']:>5} {r['sac_rho']:>9.4f} "
+                  f"{sac_w:>9.4f} {r['violation_rate']:>7.3f} {viol_w:>7.3f}")
+    else:
+        print(f"  {'Rep':<15} {'Dim':>5} {'SAC rho':>9} {'Viol%':>7} {'SALI':>8}")
+        print(f"  {'-'*15} {'-'*5} {'-'*9} {'-'*7} {'-'*8}")
+        for name, r in results.items():
+            print(f"  {name:<15} {r['dim']:>5} {r['sac_rho']:>9.4f} "
+                  f"{r['violation_rate']:>7.3f} {r['sali_mean']:>8.3f}")
 
     return results
 

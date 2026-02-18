@@ -22,6 +22,7 @@ from experiments._shared import (
     load_data, INTERMEDIARY, FULL, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     compute_feature_importance,
+    evaluate_weighted_knn, evaluate_similarity_retrieval,
 )
 
 
@@ -30,9 +31,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("\n" + "=" * 70)
     print("EXPERIMENT C04: IMPORTANCE WEIGHTS AS LEARNED METRICS")
     print("=" * 70)
-
-    # Import evaluation functions from benchmark
-    from benchmark_importance_aggregation import evaluate_weighted_knn, evaluate_similarity_retrieval
 
     importance_methods = config['importance_methods']
     n_folds = config['n_splits']

@@ -40,8 +40,8 @@ warnings.filterwarnings('ignore')
 
 INTERMEDIARY = {
     'n_splits': 1,
-    'models': ['rf', 'ridge', 'lightgbm'],
-    'budgets': [10, 25, 50, 100, 200, 500],
+    'models': ['rf', 'knn', 'ridge', 'mlp', 'xgboost', 'lightgbm'],
+    'budgets': [5, 10, 25, 50, 75, 100, 150, 200, 300, 500, 750, 1000],
     'allocations': ['greedy', 'performance_weighted'],
     'importance_methods': ['treeshap', 'lgbm_gain'],
     'search_speed': 'fast',
@@ -64,10 +64,10 @@ FULL = {
 def cv_split(groups, n_splits, X, labels, seed=42, mode='intermediary'):
     """Yield (train_idx, val_idx) using appropriate CV strategy.
 
-    - mode='intermediary' with n_splits=1: single 80/20 GroupShuffleSplit
-    - mode='full' or n_splits>1: GroupKFold (or KFold if not enough groups)
+    - n_splits=1 (any mode): single 80/20 GroupShuffleSplit/ShuffleSplit
+    - n_splits>1: GroupKFold (or KFold if not enough groups)
     """
-    if n_splits == 1 and mode == 'intermediary':
+    if n_splits == 1:
         if groups is not None and len(np.unique(groups)) >= 2:
             gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=seed)
             yield from gss.split(X, labels, groups=groups)
@@ -233,6 +233,126 @@ def evaluate_single_rep_cv(
         scores.append(r2_score(labels[val_idx], model.predict(X_val)))
 
     return float(np.mean(scores)), float(np.std(scores))
+
+
+def evaluate_weighted_knn(
+    X: np.ndarray,
+    y: np.ndarray,
+    importance_scores: np.ndarray,
+    groups: np.ndarray,
+    n_folds: int = 3,
+    k_values: List[int] = None,
+) -> Dict[str, Dict[str, float]]:
+    """Evaluate importance scores as feature weights for k-NN regression.
+
+    Compares unweighted vs importance-weighted k-NN.
+    Returns {k: {'unweighted_r2', 'weighted_r2', 'delta'}}.
+    """
+    from sklearn.neighbors import KNeighborsRegressor as _KNR
+
+    if k_values is None:
+        k_values = [5, 10, 20]
+
+    weights = np.sqrt(np.maximum(importance_scores, 0))
+    weights = weights / (weights.sum() + 1e-10)
+
+    results = {}
+    for k in k_values:
+        unweighted_scores = []
+        weighted_scores = []
+
+        for train_idx, val_idx in cv_split(groups, n_folds, X, y):
+            X_train, X_val = X[train_idx], X[val_idx]
+            y_train, y_val = y[train_idx], y[val_idx]
+
+            scaler = StandardScaler()
+            X_train_s = scaler.fit_transform(X_train)
+            X_val_s = scaler.transform(X_val)
+
+            knn = _KNR(n_neighbors=min(k, len(y_train) - 1))
+            knn.fit(X_train_s, y_train)
+            unweighted_scores.append(r2_score(y_val, knn.predict(X_val_s)))
+
+            X_train_w = X_train_s * weights
+            X_val_w = X_val_s * weights
+            knn_w = _KNR(n_neighbors=min(k, len(y_train) - 1))
+            knn_w.fit(X_train_w, y_train)
+            weighted_scores.append(r2_score(y_val, knn_w.predict(X_val_w)))
+
+        uw = float(np.mean(unweighted_scores))
+        w = float(np.mean(weighted_scores))
+        results[k] = {'unweighted_r2': uw, 'weighted_r2': w, 'delta': w - uw}
+
+    return results
+
+
+def evaluate_similarity_retrieval(
+    X: np.ndarray,
+    y: np.ndarray,
+    importance_scores: np.ndarray,
+    groups: np.ndarray,
+    n_folds: int = 3,
+    k_neighbors: int = 10,
+) -> Dict[str, float]:
+    """Evaluate importance scores as weights for similarity-based retrieval.
+
+    For each test molecule, find k nearest neighbors in training set.
+    Measure how well neighbor target values predict the test target.
+    Returns {'unweighted_mae', 'weighted_mae', 'delta_mae',
+             'unweighted_r2', 'weighted_r2', 'delta_r2'}.
+    """
+    from sklearn.metrics import mean_absolute_error
+
+    weights = np.sqrt(np.maximum(importance_scores, 0))
+    weights = weights / (weights.sum() + 1e-10)
+
+    all_unweighted_preds = []
+    all_weighted_preds = []
+    all_true = []
+
+    for train_idx, val_idx in cv_split(groups, n_folds, X, y):
+        X_train, X_val = X[train_idx], X[val_idx]
+        y_train, y_val = y[train_idx], y[val_idx]
+
+        scaler = StandardScaler()
+        X_train_s = scaler.fit_transform(X_train)
+        X_val_s = scaler.transform(X_val)
+
+        nn_uw = NearestNeighbors(n_neighbors=min(k_neighbors, len(y_train) - 1))
+        nn_uw.fit(X_train_s)
+        dists_uw, idx_uw = nn_uw.kneighbors(X_val_s)
+        w_uw = 1.0 / (dists_uw + 1e-10)
+        preds_uw = np.average(y_train[idx_uw], axis=1, weights=w_uw)
+
+        X_train_w = X_train_s * weights
+        X_val_w = X_val_s * weights
+        nn_w = NearestNeighbors(n_neighbors=min(k_neighbors, len(y_train) - 1))
+        nn_w.fit(X_train_w)
+        dists_w, idx_w = nn_w.kneighbors(X_val_w)
+        w_w = 1.0 / (dists_w + 1e-10)
+        preds_w = np.average(y_train[idx_w], axis=1, weights=w_w)
+
+        all_unweighted_preds.extend(preds_uw)
+        all_weighted_preds.extend(preds_w)
+        all_true.extend(y_val)
+
+    all_true = np.array(all_true)
+    all_unweighted_preds = np.array(all_unweighted_preds)
+    all_weighted_preds = np.array(all_weighted_preds)
+
+    uw_mae = mean_absolute_error(all_true, all_unweighted_preds)
+    w_mae = mean_absolute_error(all_true, all_weighted_preds)
+    uw_r2 = r2_score(all_true, all_unweighted_preds)
+    w_r2 = r2_score(all_true, all_weighted_preds)
+
+    return {
+        'unweighted_mae': float(uw_mae),
+        'weighted_mae': float(w_mae),
+        'delta_mae': float(uw_mae - w_mae),
+        'unweighted_r2': float(uw_r2),
+        'weighted_r2': float(w_r2),
+        'delta_r2': float(w_r2 - uw_r2),
+    }
 
 
 # =============================================================================
