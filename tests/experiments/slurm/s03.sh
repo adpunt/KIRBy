@@ -16,5 +16,4 @@ REPS=${3:-fast}
 EXTRA="${@:4}"
 
 python tests/experiments/similarity/s03_feature_concentration.py \
-    --mode $MODE --dataset $DATASET --reps $REPS --output tests/results \
-    --s02-results tests/results/s02_hybrid_similarity $EXTRA
+    --mode $MODE --dataset $DATASET --reps $REPS --output tests/results $EXTRA

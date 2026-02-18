@@ -16,5 +16,4 @@ REPS=${3:-fast}
 EXTRA="${@:4}"
 
 python tests/experiments/similarity/s04_activity_cliffs.py \
-    --mode $MODE --dataset $DATASET --reps $REPS --output tests/results \
-    --s02-results tests/results/s02_hybrid_similarity $EXTRA
+    --mode $MODE --dataset $DATASET --reps $REPS --output tests/results $EXTRA

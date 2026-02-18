@@ -16,5 +16,4 @@ REPS=${3:-fast}
 EXTRA="${@:4}"
 
 python tests/experiments/complexity/c07_data_complexity_partitions.py \
-    --mode $MODE --dataset $DATASET --reps $REPS --output tests/results \
-    --c02-results tests/results/c02_complexity_grid $EXTRA
+    --mode $MODE --dataset $DATASET --reps $REPS --output tests/results $EXTRA
