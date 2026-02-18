@@ -20,14 +20,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import numpy as np
 from scipy.stats import spearmanr
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import GroupKFold
 from sklearn.neighbors import NearestNeighbors
 from sklearn.ensemble import RandomForestRegressor
 
 from experiments._shared import (
     load_data, INTERMEDIARY, FULL, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results, convert_numpy,
-    get_hybrid_features_and_weights,
+    get_hybrid_features_and_weights, make_cv_splitter,
     create_hybrid, apply_feature_selection, compute_feature_importance,
 )
 
@@ -39,8 +38,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("=" * 70)
 
     n_folds = config['n_splits']
-    if n_folds < 2:
-        n_folds = 3  # need at least 2 folds for GroupKFold
     search_speed = config['search_speed']
     k_values = kwargs.get('k_values', [5])
 
@@ -67,7 +64,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  Hybrid search failed: {e}")
         return {'error': str(e)}
 
-    gkf = GroupKFold(n_splits=n_folds)
+    splitter, use_groups = make_cv_splitter(n_folds, groups)
     sample_X = next(iter(reps.values()))
 
     for k in k_values:
@@ -77,7 +74,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         all_d_weighted = []
         all_errors = []
 
-        for train_idx, val_idx in gkf.split(sample_X, labels, groups=groups):
+        for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
             y_train, y_val = labels[train_idx], labels[val_idx]
 
             # Per-fold hybrid using search blueprint
@@ -193,12 +190,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Conformal calibration comparison (proper CV -- per-fold hybrid, no data leakage)
     print("\n  Conformal calibration (CV):")
     try:
-        gkf_conf = GroupKFold(n_splits=n_folds)
+        splitter_conf, use_groups_conf = make_cv_splitter(n_folds, groups)
         conf_picp = {'concat': [], 'hybrid': []}
         conf_mpiw = {'concat': [], 'hybrid': []}
         alpha = 0.1
 
-        for train_idx, val_idx in gkf_conf.split(sample_X, labels, groups=groups):
+        for train_idx, val_idx in (splitter_conf.split(sample_X, labels, groups=groups) if use_groups_conf else splitter_conf.split(sample_X, labels)):
             y_train, y_val = labels[train_idx], labels[val_idx]
 
             # Per-fold hybrid using search blueprint (avoids data leakage)

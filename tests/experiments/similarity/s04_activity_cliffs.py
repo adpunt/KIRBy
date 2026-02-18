@@ -18,7 +18,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import numpy as np
 from scipy.spatial.distance import cdist as scipy_cdist
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import GroupKFold
 from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.neighbors import KNeighborsRegressor
 from sklearn.ensemble import RandomForestRegressor
@@ -26,7 +25,7 @@ from sklearn.ensemble import RandomForestRegressor
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results,
-    get_hybrid_features_and_weights,
+    get_hybrid_features_and_weights, make_cv_splitter,
 )
 
 from kirby.hybrid import create_hybrid, apply_feature_selection, compute_feature_importance
@@ -171,7 +170,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"  Hybrid search failed: {e}")
 
     # --- CV evaluation of prediction on cliff vs non-cliff ---
-    gkf = GroupKFold(n_splits=n_folds)
+    splitter, use_groups = make_cv_splitter(n_folds, groups)
     sample_X = next(iter(reps.values()))
 
     def _evaluate_condition(get_Xy_fn, pre_scaled=False):
@@ -179,7 +178,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         fold_all, fold_cliff, fold_noncliff = [], [], []
         fold_rmse_all, fold_rmse_cliff, fold_rmse_noncliff = [], [], []
 
-        for train_idx, val_idx in gkf.split(sample_X, labels, groups=groups):
+        for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
             y_train, y_val = labels[train_idx], labels[val_idx]
             try:
                 X_tr, X_va = get_Xy_fn(train_idx, val_idx, y_train)
@@ -308,7 +307,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         fold_all, fold_cliff, fold_noncliff = [], [], []
         fold_rmse_cliff = []
-        for train_idx, val_idx in gkf.split(sample_X, labels, groups=groups):
+        for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
             y_train, y_val = labels[train_idx], labels[val_idx]
             scaler = StandardScaler()
             X_tr = scaler.fit_transform(X_best[train_idx])
