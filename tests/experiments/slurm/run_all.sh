@@ -9,9 +9,9 @@
 # Run all experiments sequentially in one job.
 #
 # Usage:
-#   sbatch run_all.sh                          # intermediary logd fast
-#   sbatch run_all.sh intermediary logd fast+hf
-#   sbatch run_all.sh full logd fast+hf
+#   sbatch run_all.sh                                        # intermediary logd fast tests/results
+#   sbatch run_all.sh intermediary logd fast+hf tests/results_fasthf
+#   sbatch run_all.sh full logd fast+hf tests/results_full
 #
 # Phase 1: independent (c01,c02,c04,c05,c06,c10,s01,s02,s08)
 # Phase 2: needs c02/c06/s02 results (c07,c08,c09,s03-s07)
@@ -22,9 +22,10 @@ cd /data/stat-cadd/scat9264/KIRBy
 MODE=${1:-intermediary}
 DATASET=${2:-logd}
 REPS=${3:-fast}
-EXTRA="${@:4}"
+OUTPUT=${4:-tests/results}
+EXTRA="${@:5}"
 
-COMMON="--mode $MODE --dataset $DATASET --reps $REPS --output tests/results $EXTRA"
+COMMON="--mode $MODE --dataset $DATASET --reps $REPS --output $OUTPUT $EXTRA"
 
 echo "=== KIRBy Experiment Pipeline ==="
 echo "Mode: $MODE, Dataset: $DATASET, Reps: $REPS, Extra: $EXTRA"
@@ -62,12 +63,12 @@ run "C10: Noise robustness"       tests/experiments/complexity/c10_noise_robustn
 # Phase 2: Depends on c02
 run "C07: Data complexity partitions" tests/experiments/complexity/c07_data_complexity_partitions.py
 run "C08: Calibration"            tests/experiments/complexity/c08_calibration.py \
-    --c02-results tests/results/c02_complexity_grid
+    --c02-results $OUTPUT/c02_complexity_grid
 
 # Depends on c02 + c06
 run "C09: Formal analysis"        tests/experiments/complexity/c09_formal_analysis.py \
-    --c02-results tests/results/c02_complexity_grid \
-    --c06-results tests/results/c06_within_family_gradient
+    --c02-results $OUTPUT/c02_complexity_grid \
+    --c06-results $OUTPUT/c06_within_family_gradient
 
 # Phase 2: Depends on s02
 run "S03: Feature concentration"  tests/experiments/similarity/s03_feature_concentration.py
