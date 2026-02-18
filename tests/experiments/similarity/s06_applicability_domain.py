@@ -1,0 +1,295 @@
+#!/usr/bin/env python3
+"""S06: Applicability Domain -- hybrid distance tracks prediction uncertainty.
+
+Paper: Similarity
+Conclusion: Hybrid distance correlates with prediction error (AD).
+Dependencies: s02 (reads JSON, optional -- falls back to fresh search).
+
+Per-fold CV with per-fold hybrid construction:
+  - kNN distances in concat, hybrid, and weighted hybrid spaces
+  - RF prediction |errors|
+  - Spearman correlation between distance and |error|
+  - Reliability diagram (distance decile -> mean error)
+  - Conformal calibration comparison: concat vs hybrid
+"""
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+import numpy as np
+from scipy.stats import spearmanr
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import GroupKFold
+from sklearn.neighbors import NearestNeighbors
+from sklearn.ensemble import RandomForestRegressor
+
+from experiments._shared import (
+    load_data, INTERMEDIARY, FULL, get_config, create_experiment_parser,
+    save_experiment_results, load_experiment_results, convert_numpy,
+    get_hybrid_features_and_weights,
+    create_hybrid, apply_feature_selection, compute_feature_importance,
+)
+
+
+def run(data, config, output_dir, dataset_name, **kwargs):
+    """Hybrid distance tracks prediction uncertainty better than standard distance."""
+    print("\n" + "=" * 70)
+    print("EXPERIMENT S06: APPLICABILITY DOMAIN")
+    print("=" * 70)
+
+    n_folds = config['n_splits']
+    if n_folds < 2:
+        n_folds = 3  # need at least 2 folds for GroupKFold
+    search_speed = config['search_speed']
+    k_values = kwargs.get('k_values', [5])
+
+    reps = data['reps']
+    labels = data['labels']
+    groups = data['groups']
+
+    results = {'distance_error_correlation': {}, 'reliability': {}, 'conformal': {}}
+
+    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
+
+    # Get hybrid + blueprint for per-fold CV
+    # Try to load from s02 results first
+    shared_search = kwargs.get('shared_search')
+    try:
+        if shared_search is not None:
+            X_hybrid, weights_flat, search = shared_search
+            print(f"  Using shared search (dim={X_hybrid.shape[1]})")
+        else:
+            X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
+                reps, labels, groups, search_speed, 'lightgbm_gain')
+        bp = search.best_overall['blueprint']
+    except Exception as e:
+        print(f"  Hybrid search failed: {e}")
+        return {'error': str(e)}
+
+    gkf = GroupKFold(n_splits=n_folds)
+    sample_X = next(iter(reps.values()))
+
+    for k in k_values:
+        print(f"\n  k={k}:")
+        all_d_concat = []
+        all_d_hybrid = []
+        all_d_weighted = []
+        all_errors = []
+
+        for train_idx, val_idx in gkf.split(sample_X, labels, groups=groups):
+            y_train, y_val = labels[train_idx], labels[val_idx]
+
+            # Per-fold hybrid using search blueprint
+            train_reps = {name: rep[train_idx] for name, rep in reps.items()}
+            val_reps = {name: rep[val_idx] for name, rep in reps.items()}
+            try:
+                X_tr_h, feat_info = create_hybrid(
+                    train_reps, y_train,
+                    allocation_method=bp.allocation_method,
+                    budget=bp.budget,
+                    importance_method=bp.importance_method,
+                )
+                X_va_h = apply_feature_selection(val_reps, feat_info)
+
+                # Importance weights for this fold
+                imp = compute_feature_importance(
+                    train_reps, y_train, method='lightgbm_gain')
+                w_parts = []
+                for rname in feat_info:
+                    if not isinstance(feat_info[rname], dict):
+                        continue
+                    if 'selected_indices' not in feat_info[rname]:
+                        continue
+                    idx = feat_info[rname]['selected_indices']
+                    if rname in imp:
+                        w_parts.append(imp[rname][idx])
+                    else:
+                        w_parts.append(np.ones(len(idx)))
+                w = np.sqrt(np.maximum(np.concatenate(w_parts), 0))
+            except Exception:
+                continue
+
+            # Train RF on hybrid features
+            scaler_h = StandardScaler()
+            X_tr_s = scaler_h.fit_transform(X_tr_h)
+            X_va_s = scaler_h.transform(X_va_h)
+            rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+            rf.fit(X_tr_s, y_train)
+            y_pred = rf.predict(X_va_s)
+            errors = np.abs(y_val - y_pred)
+
+            # Distance to k-NN in training set for each val molecule
+            # Concat space
+            scaler_c = StandardScaler()
+            Xtr_c = scaler_c.fit_transform(X_concat[train_idx])
+            Xva_c = scaler_c.transform(X_concat[val_idx])
+            nn_c = NearestNeighbors(n_neighbors=min(k, len(y_train) - 1))
+            nn_c.fit(Xtr_c)
+            dists_c, _ = nn_c.kneighbors(Xva_c)
+            d_concat = dists_c.mean(axis=1)
+
+            # Hybrid space (unweighted)
+            nn_h = NearestNeighbors(n_neighbors=min(k, len(y_train) - 1))
+            nn_h.fit(X_tr_s)
+            dists_h, _ = nn_h.kneighbors(X_va_s)
+            d_hybrid = dists_h.mean(axis=1)
+
+            # Weighted hybrid space
+            nn_w = NearestNeighbors(n_neighbors=min(k, len(y_train) - 1))
+            nn_w.fit(X_tr_s * w)
+            dists_w, _ = nn_w.kneighbors(X_va_s * w)
+            d_weighted = dists_w.mean(axis=1)
+
+            all_d_concat.extend(d_concat.tolist())
+            all_d_hybrid.extend(d_hybrid.tolist())
+            all_d_weighted.extend(d_weighted.tolist())
+            all_errors.extend(errors.tolist())
+
+        if not all_errors:
+            continue
+
+        all_d_concat = np.array(all_d_concat)
+        all_d_hybrid = np.array(all_d_hybrid)
+        all_d_weighted = np.array(all_d_weighted)
+        all_errors = np.array(all_errors)
+
+        # Spearman correlations: distance vs |error|
+        rho_c, _ = spearmanr(all_d_concat, all_errors)
+        rho_h, _ = spearmanr(all_d_hybrid, all_errors)
+        rho_w, _ = spearmanr(all_d_weighted, all_errors)
+
+        results['distance_error_correlation'][f'k{k}'] = {
+            'concat': float(rho_c),
+            'hybrid': float(rho_h),
+            'hybrid_weighted': float(rho_w),
+        }
+        print(f"    Spearman(dist, |error|): concat={rho_c:.4f}, "
+              f"hybrid={rho_h:.4f}, weighted={rho_w:.4f}")
+
+        # Reliability diagram: bin by distance decile
+        for dist_name, dists in [('concat', all_d_concat),
+                                  ('hybrid', all_d_hybrid),
+                                  ('hybrid_weighted', all_d_weighted)]:
+            deciles = np.percentile(dists, np.arange(0, 110, 10))
+            decile_errors = []
+            decile_counts = []
+            for di in range(10):
+                mask = (dists >= deciles[di]) & (dists < deciles[di + 1])
+                if di == 9:  # include upper bound in last bin
+                    mask = (dists >= deciles[di]) & (dists <= deciles[di + 1])
+                if mask.sum() > 0:
+                    decile_errors.append(float(np.mean(all_errors[mask])))
+                    decile_counts.append(int(mask.sum()))
+                else:
+                    decile_errors.append(float('nan'))
+                    decile_counts.append(0)
+
+            results['reliability'].setdefault(f'k{k}', {})[dist_name] = {
+                'decile_errors': decile_errors,
+                'decile_counts': decile_counts,
+            }
+
+    # Conformal calibration comparison (proper CV -- per-fold hybrid, no data leakage)
+    print("\n  Conformal calibration (CV):")
+    try:
+        gkf_conf = GroupKFold(n_splits=n_folds)
+        conf_picp = {'concat': [], 'hybrid': []}
+        conf_mpiw = {'concat': [], 'hybrid': []}
+        alpha = 0.1
+
+        for train_idx, val_idx in gkf_conf.split(sample_X, labels, groups=groups):
+            y_train, y_val = labels[train_idx], labels[val_idx]
+
+            # Per-fold hybrid using search blueprint (avoids data leakage)
+            train_reps_fold = {k: v[train_idx] for k, v in reps.items()}
+            val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
+            try:
+                X_hybrid_tr, fi = create_hybrid(
+                    train_reps_fold, y_train,
+                    allocation_method=bp.allocation_method,
+                    budget=bp.budget,
+                    importance_method=bp.importance_method,
+                )
+                X_hybrid_va = apply_feature_selection(val_reps_fold, fi)
+            except Exception:
+                continue
+
+            # Split train into proper-train and calibration
+            n_cal = max(int(len(y_train) * 0.2), 10)
+            rng = np.random.RandomState(42)
+            perm = rng.permutation(len(y_train))
+            cal_local, tr_local = perm[:n_cal], perm[n_cal:]
+
+            for feat_name, X_tr_all, X_va in [
+                ('concat', X_concat[train_idx], X_concat[val_idx]),
+                ('hybrid', X_hybrid_tr, X_hybrid_va),
+            ]:
+                scaler = StandardScaler()
+                X_tr_all_s = scaler.fit_transform(X_tr_all)
+                X_va_s = scaler.transform(X_va)
+
+                X_tr = X_tr_all_s[tr_local]
+                X_cal = X_tr_all_s[cal_local]
+                y_tr = y_train[tr_local]
+                y_cal = y_train[cal_local]
+
+                # Train RF, compute conformal quantile on calibration set
+                rf = RandomForestRegressor(n_estimators=100, random_state=42,
+                                           n_jobs=-1)
+                rf.fit(X_tr, y_tr)
+
+                # Calibration: residuals normalized by tree variance
+                y_pred_cal = rf.predict(X_cal)
+                tree_preds_cal = np.array([t.predict(X_cal) for t in rf.estimators_])
+                cal_std = tree_preds_cal.std(axis=0) + 1e-10
+                conformity = np.abs(y_cal - y_pred_cal) / cal_std
+                q = np.quantile(conformity, 1 - alpha)
+
+                # Val: predict + interval
+                y_pred_va = rf.predict(X_va_s)
+                tree_preds_va = np.array([t.predict(X_va_s) for t in rf.estimators_])
+                va_std = tree_preds_va.std(axis=0)
+                interval_width = 2 * q * va_std
+
+                picp = float(np.mean(np.abs(y_val - y_pred_va) <= interval_width / 2))
+                mpiw = float(np.mean(interval_width))
+                conf_picp[feat_name].append(picp)
+                conf_mpiw[feat_name].append(mpiw)
+
+        results['conformal'] = {}
+        for feat_name in ['concat', 'hybrid']:
+            if conf_picp[feat_name]:
+                picp_mean = float(np.mean(conf_picp[feat_name]))
+                mpiw_mean = float(np.mean(conf_mpiw[feat_name]))
+                results['conformal'][feat_name] = {
+                    'picp': picp_mean, 'mpiw': mpiw_mean,
+                }
+                print(f"    {feat_name.capitalize()}:  PICP={picp_mean:.3f}, "
+                      f"MPIW={mpiw_mean:.3f}")
+    except Exception as e:
+        print(f"    Conformal failed: {e}")
+        results['conformal'] = {'error': str(e)}
+
+    return results
+
+
+if __name__ == '__main__':
+    parser = create_experiment_parser('S06: Applicability Domain',
+                                     has_delta=True, has_augment=True)
+    parser.add_argument('--k-values', type=int, nargs='+', default=[5],
+                        help='k values for kNN distance (default: [5])')
+    args = parser.parse_args()
+    config = get_config(args)
+
+    print(f"Mode: {args.mode}")
+    print(f"Dataset: {args.dataset}")
+    print(f"Reps: {args.reps}")
+    print(f"k values: {args.k_values}")
+
+    data = load_data(args.dataset, args.reps,
+                     delta=getattr(args, 'delta', False),
+                     augment=getattr(args, 'augment', False))
+    results = run(data, config, args.output, args.dataset,
+                  k_values=args.k_values)
+    save_experiment_results(results, args.output, 's06_applicability_domain', args.dataset)
