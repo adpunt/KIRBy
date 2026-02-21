@@ -138,12 +138,13 @@ REP_PRESETS = {
     # Mutation-aware presets (for intra-family FLAb datasets)
     # Mutation-specific features (positional, biophysical_delta, lm_score)
     # are now augmentations, not base reps — see get_mutation_augmentations()
-    'mutation_fast': ['kmer', 'aac', 'blosum62', 'physicochemical'],
+    'mutation_fast': ['kmer', 'aac', 'blosum62', 'physicochemical',
+                      'esm2', 'prot_t5'],
     'mutation_full': ['kmer', 'aac', 'blosum62', 'physicochemical',
-                      'antiberty', 'ablang2'],
+                      'antiberty', 'ablang2', 'esm2', 'prot_t5'],
     # Mutation + structural (requires ImmuneBuilder on server)
     'mutation_structural': ['kmer', 'aac', 'blosum62', 'physicochemical',
-                            'antiberty', 'ablang2', 'structural'],
+                            'antiberty', 'ablang2', 'esm2', 'prot_t5', 'structural'],
 }
 
 _SEARCH_NAME_MAP = {

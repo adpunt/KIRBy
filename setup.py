@@ -125,6 +125,7 @@ setup(
         "antibody": [
             "torch>=2.0.0",
             "transformers>=4.41.0",
+            "sentencepiece>=0.1.99",  # For ProtT5 tokenizer
             "biopython>=1.79",
             "requests>=2.26.0",
             "ablang2",
