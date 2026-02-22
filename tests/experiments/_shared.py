@@ -43,7 +43,7 @@ INTERMEDIARY = {
     'models': ['rf', 'knn', 'ridge', 'mlp', 'xgboost', 'lightgbm'],
     'budgets': [5, 10, 25, 50, 75, 100, 150, 200, 300, 500, 750, 1000],
     'allocations': ['greedy', 'performance_weighted'],
-    'importance_methods': ['treeshap', 'lgbm_gain'],
+    'importance_methods': ['lgbm_gain'],
     'search_speed': 'fast',
 }
 
@@ -77,6 +77,17 @@ def cv_split(groups, n_splits, X, labels, seed=42, mode='intermediary'):
             yield from ss.split(X, labels)
     else:
         if groups is not None and len(np.unique(groups)) >= n_splits:
+            # Use StratifiedGroupKFold for classification (preserves class balance
+            # within site-grouped folds). Falls back to GroupKFold if unavailable.
+            if labels is not None and np.issubdtype(np.asarray(labels).dtype, np.integer):
+                try:
+                    from sklearn.model_selection import StratifiedGroupKFold
+                    yield from StratifiedGroupKFold(
+                        n_splits=n_splits, shuffle=True, random_state=seed
+                    ).split(X, labels, groups=groups)
+                    return
+                except ImportError:
+                    pass
             yield from GroupKFold(n_splits=n_splits).split(X, labels, groups=groups)
         else:
             yield from KFold(n_splits=n_splits, shuffle=True, random_state=seed).split(X, labels)
@@ -689,21 +700,63 @@ def compute_dataset_complexity(reps: Dict[str, np.ndarray], labels: np.ndarray) 
 # =============================================================================
 
 _ANTIBODY_PREFIXES = ('flab_', 'abcov_', 'sabdab_', 'abagym_', 'abbind')
+_TCGA_PREFIXES = ('tcga_',)
 
 
 def _is_antibody_dataset(name: str) -> bool:
     return any(name.lower().startswith(p) for p in _ANTIBODY_PREFIXES)
 
 
+def _is_tcga_dataset(name: str) -> bool:
+    return any(name.lower().startswith(p) for p in _TCGA_PREFIXES)
+
+
 def load_data(dataset_name: str, rep_preset: str = 'fast',
               delta: bool = False, augment: bool = False) -> dict:
     """Load dataset, generate representations, assign groups.
 
-    Domain-aware: detects antibody dataset names and dispatches accordingly.
+    Domain-aware: detects TCGA, antibody, or molecular dataset names and
+    dispatches accordingly.
     Returns dict with keys: labels, reps, groups, n_groups, task_type,
     augmentations, plus domain-specific keys.
     """
-    if _is_antibody_dataset(dataset_name):
+    if _is_tcga_dataset(dataset_name):
+        from find_best_hybrid_tcga import (
+            load_dataset as load_tcga_dataset,
+            get_representations as get_tcga_representations,
+            assign_tss_groups,
+        )
+
+        expression, labels, task_type, metadata = load_tcga_dataset(dataset_name)
+        sample_ids = metadata['sample_ids']
+        gene_names = metadata['gene_names']
+        wsi_dir = metadata.get('wsi_dir')
+        cohort = metadata.get('cohort', '')
+
+        reps = get_tcga_representations(
+            expression, gene_names, sample_ids, wsi_dir,
+            rep_preset, cohort=cohort,
+        )
+
+        tss_groups, n_groups = assign_tss_groups(sample_ids)
+
+        print(f"  {dataset_name}: {len(sample_ids)} samples, {n_groups} TSS sites, "
+              f"{len(reps)} reps ({', '.join(f'{k}={v.shape[1]}' for k, v in reps.items())})")
+
+        return {
+            'expression': expression,
+            'labels': labels,
+            'reps': reps,
+            'groups': tss_groups,
+            'n_groups': n_groups,
+            'n_scaffolds': n_groups,
+            'task_type': task_type,
+            'domain': 'tcga',
+            'augmentations': None,
+            'metadata': metadata,
+        }
+
+    elif _is_antibody_dataset(dataset_name):
         from find_best_hybrid_antibody import (
             load_dataset as load_ab_dataset,
             get_representations as get_ab_representations,
