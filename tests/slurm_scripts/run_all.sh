@@ -78,6 +78,10 @@ echo ""
 echo ">>> C10: Noise Robustness"
 python tests/experiments/complexity/c10_noise_robustness.py $COMMON
 
+echo ""
+echo ">>> C11: Allocation Strategies"
+python tests/experiments/complexity/c11_allocation_strategies.py $COMMON
+
 # --- Similarity experiments ---
 echo ""
 echo ">>> S01: Similarity Baseline"

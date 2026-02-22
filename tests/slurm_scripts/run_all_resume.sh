@@ -60,6 +60,7 @@ run_if_missing c07_data_complexity_partitions "C07: Data Complexity Partitions" 
 run_if_missing c08_calibration "C08: Calibration" tests/experiments/complexity/c08_calibration.py
 run_if_missing c09_formal_analysis "C09: Formal Analysis" tests/experiments/complexity/c09_formal_analysis.py
 run_if_missing c10_noise_robustness "C10: Noise Robustness" tests/experiments/complexity/c10_noise_robustness.py
+run_if_missing c11_allocation_strategies "C11: Allocation Strategies" tests/experiments/complexity/c11_allocation_strategies.py
 
 # --- Similarity experiments ---
 run_if_missing s01_similarity_baseline "S01: Similarity Baseline" tests/experiments/similarity/s01_similarity_baseline.py

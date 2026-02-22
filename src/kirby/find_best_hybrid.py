@@ -532,6 +532,8 @@ def _run_search(
     augmentation_strategy: str = 'greedy_ablation',
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
+    adaptive_pruning: bool = False,
+    pruning_threshold: float = 0.5,
 ) -> List[dict]:
     """Main search loop over all configurations."""
     tier = SPEED_TIERS[speed]
@@ -561,12 +563,28 @@ def _run_search(
     results = []
     idx = 0
 
+    # Adaptive pruning state
+    pruned_models = set()
+    model_best_scores = {}  # {model_name: best_score_so_far}
+    global_best_score = -np.inf
+    first_sweep_done = False
+
     for rep_set, rep_set_name in zip(rep_sets, rep_set_names):
         for alloc in search_allocation:
             for bgt in search_budgets:
                 for imp in search_importance:
                     for model_name, model in models.items():
                         idx += 1
+
+                        # Skip pruned models
+                        if adaptive_pruning and model_name in pruned_models:
+                            if verbose:
+                                print(
+                                    f"  [{idx}/{total}] {model_name}/{alloc}/{imp}/b={bgt}: "
+                                    f"PRUNED"
+                                )
+                            continue
+
                         try:
                             result = _evaluate_hybrid_config(
                                 base_reps=rep_set,
@@ -595,12 +613,37 @@ def _run_search(
                                     f"score={result['score_mean']:.4f}+/-{result['score_std']:.3f}, "
                                     f"dim={result['n_features']}"
                                 )
+
+                            # Track scores for pruning
+                            if adaptive_pruning:
+                                score = result['score_mean']
+                                if model_name not in model_best_scores or score > model_best_scores[model_name]:
+                                    model_best_scores[model_name] = score
+                                if score > global_best_score:
+                                    global_best_score = score
+
                         except Exception as e:
                             if verbose:
                                 print(
                                     f"  [{idx}/{total}] {model_name}/{alloc}/{imp}/b={bgt}: "
                                     f"FAILED - {e}"
                                 )
+
+                    # After each (alloc, budget, importance) sweep: prune underperformers
+                    if adaptive_pruning and first_sweep_done and global_best_score > 0:
+                        for mn in list(models.keys()):
+                            if mn in pruned_models:
+                                continue
+                            best = model_best_scores.get(mn, -np.inf)
+                            if best < pruning_threshold * global_best_score:
+                                pruned_models.add(mn)
+                                if verbose:
+                                    print(f"  >> Pruning {mn} (best={best:.4f} < "
+                                          f"{pruning_threshold}*{global_best_score:.4f})")
+
+                # Mark first sweep complete after all models have had at least one chance
+                if not first_sweep_done and idx >= len(models):
+                    first_sweep_done = True
 
     return results
 
@@ -772,6 +815,8 @@ def find_best_hybrid(
     augmentation_strategy: str = 'greedy_ablation',
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
+    adaptive_pruning: bool = False,
+    pruning_threshold: float = 0.5,
     seed: int = 42,
     verbose: bool = True,
     cache: bool = False,
@@ -913,6 +958,8 @@ def find_best_hybrid(
         augmentation_strategy=augmentation_strategy,
         augmentation_threshold=augmentation_threshold,
         augmentation_budget=augmentation_budget,
+        adaptive_pruning=adaptive_pruning,
+        pruning_threshold=pruning_threshold,
     )
 
     # --- Aggregate ---

@@ -284,8 +284,57 @@ def _build_from_selection(rep_dict_train, rep_dict_val, selected):
     return np.hstack(train_parts), np.hstack(val_parts)
 
 
+def _compute_allocation_weights(baseline_scores, scheme='linear', params=None):
+    """Compute allocation weights from baseline scores using various schemes.
+
+    Args:
+        baseline_scores: Dict of {rep_name: score} (already clipped to >= 0).
+        scheme: Weighting scheme name.
+        params: Dict of scheme-specific parameters.
+
+    Returns:
+        Dict of {rep_name: weight} (non-negative, not necessarily normalised).
+    """
+    params = params or {}
+
+    if scheme == 'linear':
+        return dict(baseline_scores)
+
+    elif scheme == 'softmax':
+        temperature = params.get('temperature', 1.0)
+        scores = np.array(list(baseline_scores.values()))
+        # Subtract max for numerical stability
+        exp_scores = np.exp((scores - scores.max()) / max(temperature, 1e-10))
+        return {k: float(w) for k, w in zip(baseline_scores.keys(), exp_scores)}
+
+    elif scheme == 'power_law':
+        power = params.get('power', 2.0)
+        return {k: float(v ** power) for k, v in baseline_scores.items()}
+
+    elif scheme == 'thresholded':
+        alpha = params.get('alpha', 0.5)
+        max_score = max(baseline_scores.values()) if baseline_scores else 0
+        threshold = alpha * max_score
+        return {k: (v if v >= threshold else 0.0) for k, v in baseline_scores.items()}
+
+    elif scheme == 'top_k':
+        k = params.get('k', 3)
+        sorted_reps = sorted(baseline_scores.items(), key=lambda x: x[1], reverse=True)
+        top_names = {name for name, _ in sorted_reps[:k]}
+        return {name: (score if name in top_names else 0.0)
+                for name, score in baseline_scores.items()}
+
+    elif scheme == 'min_floor':
+        # Special: handled in allocate_performance_weighted directly
+        return dict(baseline_scores)
+
+    else:
+        raise ValueError(f"Unknown weighting scheme: {scheme}")
+
+
 def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, val_labels,
-                                  total_budget=100):
+                                  total_budget=100, weighting_scheme='linear',
+                                  weighting_params=None):
     """
     Allocate features proportional to each representation's baseline performance.
     
@@ -299,7 +348,11 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
         train_labels: Training labels
         val_labels: Validation labels
         total_budget: Maximum total features to select (default: 100)
-        
+        weighting_scheme: How to transform baseline scores into weights.
+            'linear' (default, identical to original), 'softmax', 'power_law',
+            'thresholded', 'top_k', 'min_floor'.
+        weighting_params: Dict of scheme-specific parameters.
+
     Returns:
         dict: Allocation of {rep_name: n_features}
     """
@@ -334,26 +387,67 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
         
         baseline_scores[rep_name] = max(score, 0.0)  # Clip negative scores to 0
     
-    # Allocate proportional to performance
-    total_score = sum(baseline_scores.values())
-    
-    if total_score == 0:
-        # All reps have zero or negative scores — fall back to equal allocation
-        n_reps = len(baseline_scores)
+    # Apply weighting scheme to transform baseline scores into weights
+    weights = _compute_allocation_weights(baseline_scores, weighting_scheme,
+                                          weighting_params)
+
+    # Handle min_floor scheme: guarantee minimum allocation per rep
+    if weighting_scheme == 'min_floor':
+        floor = (weighting_params or {}).get('floor', 0.05)
+        n_reps = len(weights)
+        floor_per_rep = max(1, int(floor * total_budget))
+        floor_total = floor_per_rep * n_reps
+        remainder_budget = max(0, total_budget - floor_total)
+
+        total_w = sum(weights.values())
+        allocation = {}
+        for rep_name, w in weights.items():
+            max_features = rep_dict_train[rep_name].shape[1]
+            prop = int(round((w / total_w) * remainder_budget)) if total_w > 0 else 0
+            allocation[rep_name] = min(floor_per_rep + prop, max_features)
+
+        # Adjust to hit budget
+        current_total = sum(allocation.values())
+        if current_total < total_budget:
+            sorted_reps = sorted(weights.items(), key=lambda x: x[1], reverse=True)
+            remaining = total_budget - current_total
+            for rep_name, _ in sorted_reps:
+                if remaining <= 0:
+                    break
+                can_add = rep_dict_train[rep_name].shape[1] - allocation[rep_name]
+                add_amount = min(can_add, remaining)
+                allocation[rep_name] += add_amount
+                remaining -= add_amount
+        elif current_total > total_budget:
+            sorted_reps = sorted(weights.items(), key=lambda x: x[1])
+            excess = current_total - total_budget
+            for rep_name, _ in sorted_reps:
+                if excess <= 0:
+                    break
+                reduce_by = min(allocation[rep_name] - floor_per_rep, excess)
+                if reduce_by > 0:
+                    allocation[rep_name] -= reduce_by
+                    excess -= reduce_by
+        return allocation
+
+    # Standard path: proportional allocation from weights
+    total_w = sum(weights.values())
+
+    if total_w == 0:
+        # All weights zero — fall back to equal allocation
+        n_reps = len(weights)
         base_alloc = total_budget // n_reps
         remainder = total_budget - base_alloc * n_reps
         allocation = {}
-        for i, rep_name in enumerate(sorted(baseline_scores.keys())):
+        for i, rep_name in enumerate(sorted(weights.keys())):
             alloc = base_alloc + (1 if i < remainder else 0)
             max_features = rep_dict_train[rep_name].shape[1]
             allocation[rep_name] = min(alloc, max_features)
         return allocation
-    
+
     allocation = {}
-    for rep_name, score in baseline_scores.items():
-        # Allocate proportional to score
-        n_features = int(round((score / total_score) * total_budget))
-        # Ensure we don't exceed available features
+    for rep_name, w in weights.items():
+        n_features = int(round((w / total_w) * total_budget))
         max_features = rep_dict_train[rep_name].shape[1]
         allocation[rep_name] = min(n_features, max_features)
     
@@ -1880,9 +1974,11 @@ def create_hybrid(base_reps, labels,
     # PERFORMANCE-WEIGHTED ALLOCATION
     elif allocation_method == 'performance_weighted':
         # Run performance-weighted allocation
+        ws = kwargs.pop('weighting_scheme', 'linear')
+        wp = kwargs.pop('weighting_params', None)
         allocation = allocate_performance_weighted(
             rep_dict_train, rep_dict_val, train_labels, val_labels,
-            total_budget=budget
+            total_budget=budget, weighting_scheme=ws, weighting_params=wp,
         )
         
         # Compute importance on TRAIN split (consistent with allocation decision)
