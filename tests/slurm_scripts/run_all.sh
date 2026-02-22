@@ -82,6 +82,10 @@ echo ""
 echo ">>> C11: Allocation Strategies"
 python tests/experiments/complexity/c11_allocation_strategies.py $COMMON
 
+echo ""
+echo ">>> C12: Adaptive Pruning"
+python tests/experiments/complexity/c12_adaptive_pruning.py $COMMON
+
 # --- Similarity experiments ---
 echo ""
 echo ">>> S01: Similarity Baseline"
