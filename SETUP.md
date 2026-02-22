@@ -1,6 +1,6 @@
 # KIRBy Full Setup Guide
 
-From-zero-to-working setup for all molecular and antibody representations.
+From-zero-to-working setup for all molecular, antibody, and TCGA representations.
 
 ---
 
@@ -71,11 +71,14 @@ pip install -e ".[qsar]"
 # Antibody work (transformers, ablang2, biopython)
 pip install -e ".[antibody]"
 
+# TCGA genomics/histopathology (scanpy, gseapy, decoupler)
+pip install -e ".[tcga]"
+
 # Uncertainty quantification (NGBoost, quantile forests, BNNs)
 pip install -e ".[uncertainty]"
 
 # Everything
-pip install -e ".[qsar,antibody,uncertainty,interpret]"
+pip install -e ".[qsar,antibody,tcga,uncertainty,interpret]"
 ```
 
 ### 2d. Install conda-only dependencies
@@ -563,6 +566,84 @@ sbatch tests/slurm_scripts/run_antibody_complexity.sh full_delta flab_binding_ko
 sbatch tests/slurm_scripts/run_antibody_complexity.sh full abagym_all
 sbatch tests/slurm_scripts/run_antibody_complexity.sh full abbind
 ```
+
+---
+
+## 7c. TCGA Genomics / Histopathology
+
+### Dependencies
+
+```bash
+pip install -e ".[tcga]"
+# Installs: scanpy, anndata, gseapy, decoupler, requests
+```
+
+### Data Sources
+
+TCGA data is downloaded automatically on first use from UCSC Xena (open access).
+No GDC/dbGaP credentials needed. Alternative: `python scripts/download_tcga_gdc.py TCGA-BRCA`
+
+| Data Type | Source | Auto-download? | Cache Size |
+|-----------|--------|---------------|------------|
+| Gene expression | UCSC Xena (log2 TPM+1) | Yes | ~50-80 MB per cohort |
+| Clinical/phenotype | UCSC Xena | Yes | <5 MB |
+| Survival endpoints | TCGA-CDR (Liu et al. 2018) | Yes | <1 MB |
+| Somatic mutations | MC3 MAF (Xena) | Yes | ~50 MB |
+| WSI features | Mendeley GigaSSL | Yes (on first use) | ~50 MB |
+
+### Available Datasets
+
+| Name | Task | ~Samples | Description |
+|------|------|----------|-------------|
+| `tcga_luad_vs_lusc` | Binary classification | ~1,016 | Lung adenocarcinoma vs squamous cell |
+| `tcga_brca_pam50` | 4-class classification | ~900 | Breast cancer PAM50 subtypes |
+| `tcga_brca_survival` | Regression | ~400-500 | Overall survival (uncensored) |
+
+### Representation Presets
+
+| Preset | Reps | Description |
+|--------|------|-------------|
+| `fast` | gene_pca100, gene_hallmark, gene_progeny, wsi_ctranspath, wsi_phikon | 5 reps, CPU-only |
+| `fast+learned` | + gene_hvg2000, gene_kegg, gene_dorothea, gene_combined_pathway, wsi_conch, wsi_hoptimus0 | 11 reps |
+| `all` | + gene_mutation, wsi_gigapath | 13 reps (all genomic + WSI) |
+| `genomic_fast` | gene_pca100, gene_hallmark, gene_progeny | 3 reps, no WSI |
+| `genomic_all` | all 8 genomic reps, no WSI | 8 reps |
+
+### Running TCGA Experiments
+
+```bash
+# Quick local test (downloads data on first run)
+python tests/find_best_hybrid_tcga.py tcga_luad_vs_lusc --reps fast --search fast
+
+# BRCA PAM50 (multi-class)
+python tests/find_best_hybrid_tcga.py tcga_brca_pam50 --reps fast --search fast
+
+# Survival regression
+python tests/find_best_hybrid_tcga.py tcga_brca_survival --reps fast --search fast
+
+# Genomic-only (skip WSI features)
+python tests/find_best_hybrid_tcga.py tcga_luad_vs_lusc --reps fast --genomic-only --search fast
+
+# Full search on server
+python tests/find_best_hybrid_tcga.py tcga_luad_vs_lusc --reps all --search long
+```
+
+### SLURM (Server)
+
+```bash
+# Default: fast reps, LUAD vs LUSC
+sbatch tests/slurm_scripts/run_tcga_scenarios.sh
+
+# Custom
+sbatch tests/slurm_scripts/run_tcga_scenarios.sh fast+learned tcga_brca_pam50
+sbatch tests/slurm_scripts/run_tcga_scenarios.sh all tcga_brca_survival
+```
+
+### Cross-Validation Grouping
+
+TCGA experiments use **StratifiedGroupKFold by tissue source site (TSS)** to prevent
+data leakage from site-specific confounders (Howard et al. 2021). TSS codes are
+extracted from TCGA barcodes automatically.
 
 ---
 
