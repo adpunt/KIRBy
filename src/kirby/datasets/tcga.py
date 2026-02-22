@@ -55,25 +55,44 @@ _XENA_MC3_MAF = (
     "download/mc3.v0.2.8.PUBLIC.xena.gz"
 )
 
-# GigaSSL pre-computed WSI features (Mendeley Data v6)
-_GIGASSL_BASE = "https://data.mendeley.com/datasets/d573xfd9fg/6/files"
+# GigaSSL pre-computed WSI features (Mendeley Data v6, Lazard et al. 2024)
+# DOI: 10.17632/d573xfd9fg.6
+_GIGASSL_DOWNLOAD_BASE = (
+    "https://data.mendeley.com/public-files/datasets/d573xfd9fg/files"
+)
 
-# Known file IDs for GigaSSL models (Mendeley Data v6)
-# These map model names to Mendeley file UUIDs
+# GigaSSL model -> (mendeley_filename, mendeley_file_uuid)
 _GIGASSL_FILES = {
-    'ctranspath': 'a2c5f07e-be37-4fde-8e3e-e8bcb1f8c9c5',
-    'phikon': '5a8d5fc5-7f32-4cb7-b3b2-2729f5acdd27',
-    'hoptimus0': 'c7fc3e71-0de3-4cd4-bca0-7e2a9b0ac76e',
-    'gigapath': '8c84c1f4-e6b6-4b3d-b5f0-44b14f0856d2',
+    'ctranspath': ('TCGA-gigassl_ctranspath.npy', 'ccf402f7-34ee-4a74-8b8a-51d9e9cebea0'),
+    'phikon':     ('TCGA-gigassl_phikon.npy',     '6ab7211d-f850-47b7-9091-54dc87abb66b'),
+    'hoptimus0':  ('TCGA-gigassl_optimus.npy',    '400d7ad7-9e9f-48dd-b241-a054cc189a37'),
+    'gigapath':   ('TCGA-gigassl_gigapath.npy',    '03977666-5ca2-43cc-a588-0f067dd1fc09'),
+    'moco':       ('TCGA-gigassl_moco.npy',        '2006d37e-61b0-469c-95f1-fda3df1766c4'),
 }
 
-# WSI feature dimensions per model
+# TITAN slide-level features (MahmoodLab, 768D, CC-BY-NC-ND)
+_TITAN_HF_REPO = "MahmoodLab/TITAN"
+_TITAN_HF_FILE = "TCGA_TITAN_features.pkl"
+
+# UNI2-h patch-level features (MahmoodLab, 1536D, CC-BY-NC-ND, gated)
+_UNI2H_HF_REPO = "MahmoodLab/UNI2-h-features"
+
+# Local pre-computed CNN features (from Dropbox via download_tcga_features.sh)
+_LOCAL_CNN_PATHS = [
+    Path('/Volumes/seagate/tcga_lung_wsi_features/small_cnn_320/feats_pt'),
+    Path('/Volumes/seagate/KIRBy/large_data/tests/small_cnn_320/feats_pt'),
+]
+
+# WSI feature dimensions per model (fallback — actual dims auto-detected from data)
 _WSI_DIMS = {
-    'ctranspath': 768,
-    'phikon': 768,
-    'conch': 512,
-    'hoptimus0': 1536,
-    'gigapath': 1536,
+    'ctranspath': 512,     # GigaSSL + CTransPath
+    'phikon': 512,         # GigaSSL + Phikon
+    'hoptimus0': 512,      # GigaSSL + H-optimus-0
+    'gigapath': 512,       # GigaSSL + GigaPath
+    'moco': 512,           # GigaSSL + MoCo
+    'titan': 768,          # TITAN slide encoder
+    'uni2h': 1536,         # UNI2-h mean-pooled patches
+    'cnn320': 320,         # Local small CNN features
 }
 
 # Protein-coding gene count (GENCODE v23 compatible)
@@ -426,41 +445,241 @@ def _download_mutations(cohort: str) -> pd.DataFrame:
 # =============================================================================
 
 def _download_wsi_features() -> Path:
-    """Download GigaSSL pre-computed WSI features from Mendeley Data.
+    """Download/prepare all WSI features to a unified directory.
 
-    Downloads mean-pooled slide-level embeddings for TCGA slides.
-    Format: dict mapping slide_id -> embedding vector.
+    Sources:
+    1. GigaSSL (Mendeley, public, ~130 MB total) — 5 slide-level encoders
+    2. TITAN (HuggingFace, gated, ~37 MB) — slide-level, needs HF_TOKEN
+    3. Local CNN features (Seagate) — 320D per-slide from small_cnn_320
+    4. UNI2-h (HuggingFace, gated, ~35 GB/cohort) — patch-level, manual prep
 
-    Returns: path to directory containing per-model .npy files
+    All features are stored as .npy dicts: {slide_id: embedding_vector}.
+    Returns: path to directory containing per-model .npy files.
     """
-    import requests
-
     cache = _cache_dir()
     wsi_dir = cache / 'wsi_features'
     wsi_dir.mkdir(parents=True, exist_ok=True)
 
-    for model_name, file_uuid in _GIGASSL_FILES.items():
+    # 1. GigaSSL from Mendeley (public, automatic)
+    _download_gigassl_features(wsi_dir)
+
+    # 2. TITAN from HuggingFace (gated, needs HF token)
+    _prepare_titan_features(wsi_dir)
+
+    # 3. Local CNN 320D features from Seagate
+    _prepare_local_cnn_features(wsi_dir)
+
+    # 4. UNI2-h — too large for auto-download, just check if pre-prepared
+    uni2h_file = wsi_dir / 'uni2h.npy'
+    if uni2h_file.exists():
+        print(f"  UNI2-h features found at {uni2h_file}")
+    else:
+        print(f"  UNI2-h features not found. To prepare, run:")
+        print(f"    python -c \"from kirby.datasets.tcga import prepare_uni2h_features; "
+              f"prepare_uni2h_features()\"")
+
+    return wsi_dir
+
+
+def _download_gigassl_features(wsi_dir: Path):
+    """Download GigaSSL slide-level embeddings from Mendeley Data."""
+    import requests
+
+    for model_name, (filename, file_uuid) in _GIGASSL_FILES.items():
         model_file = wsi_dir / f'{model_name}.npy'
         if model_file.exists():
             continue
 
-        url = f"{_GIGASSL_BASE}/{file_uuid}?dl=1"
+        url = f"{_GIGASSL_DOWNLOAD_BASE}/{file_uuid}/file_downloaded"
         print(f"  Downloading GigaSSL {model_name} features...")
         try:
             resp = requests.get(url, timeout=300, stream=True)
             resp.raise_for_status()
 
-            # GigaSSL files are .npy with allow_pickle (dict: slide_id -> embedding)
             with open(model_file, 'wb') as f:
                 for chunk in resp.iter_content(chunk_size=8192):
                     f.write(chunk)
-            print(f"  Saved {model_name} features to {model_file}")
+            print(f"  Saved {model_name} ({model_file.stat().st_size / 1e6:.1f} MB)")
         except Exception as e:
-            print(f"  WARNING: Failed to download {model_name} WSI features: {e}")
+            print(f"  WARNING: Failed to download GigaSSL {model_name}: {e}")
             if model_file.exists():
                 model_file.unlink()
 
-    return wsi_dir
+
+def _prepare_titan_features(wsi_dir: Path):
+    """Download TITAN slide-level features from HuggingFace and convert to .npy dict.
+
+    Requires: pip install huggingface_hub
+    Requires: HF_TOKEN env var or huggingface-cli login (gated model)
+    """
+    titan_file = wsi_dir / 'titan.npy'
+    if titan_file.exists():
+        return
+
+    try:
+        from huggingface_hub import hf_hub_download
+    except ImportError:
+        print("  TITAN: huggingface_hub not installed, skipping")
+        return
+
+    print(f"  Downloading TITAN features from HuggingFace...")
+    try:
+        import pickle
+        pkl_path = hf_hub_download(
+            _TITAN_HF_REPO, filename=_TITAN_HF_FILE,
+            cache_dir=str(wsi_dir.parent / 'hf_cache'),
+        )
+        with open(pkl_path, 'rb') as f:
+            data = pickle.load(f)
+
+        # TITAN pickle has data['filenames'] and data['embeddings']
+        filenames = data['filenames']
+        embeddings = data['embeddings']
+        if hasattr(embeddings, 'numpy'):
+            embeddings = embeddings.numpy()
+
+        # Convert to dict: slide_id -> embedding
+        titan_dict = {}
+        for name, emb in zip(filenames, embeddings):
+            titan_dict[str(name)] = np.array(emb, dtype=np.float32)
+
+        np.save(titan_file, titan_dict, allow_pickle=True)
+        print(f"  TITAN: {len(titan_dict)} slides, {next(iter(titan_dict.values())).shape[-1]}D")
+    except Exception as e:
+        print(f"  WARNING: TITAN download failed: {e}")
+        print(f"  (Requires HF account with institutional email + accepted terms)")
+        if titan_file.exists():
+            titan_file.unlink()
+
+
+def _prepare_local_cnn_features(wsi_dir: Path):
+    """Load pre-computed small CNN 320D features from Seagate .pt files.
+
+    These are patch-level features; mean-pooled to slide-level.
+    Only available for TCGA lung (LUAD + LUSC).
+    """
+    cnn_file = wsi_dir / 'cnn320.npy'
+    if cnn_file.exists():
+        return
+
+    # Find .pt files
+    pt_dir = None
+    for candidate in _LOCAL_CNN_PATHS:
+        if candidate.exists() and list(candidate.glob('*.pt')):
+            pt_dir = candidate
+            break
+
+    if pt_dir is None:
+        return  # silently skip — local features not available
+
+    try:
+        import torch
+    except ImportError:
+        print("  CNN320: PyTorch not installed, skipping local CNN features")
+        return
+
+    print(f"  Loading local CNN 320D features from {pt_dir}...")
+    pt_files = sorted(pt_dir.glob('*.pt'))
+    cnn_dict = {}
+
+    for pt_file in pt_files:
+        # Filename: TCGA-XX-XXXX-01Z-00-DX1.uuid.pt
+        slide_id = pt_file.stem  # includes UUID suffix
+        try:
+            feats = torch.load(pt_file, map_location='cpu', weights_only=False)
+            if hasattr(feats, 'numpy'):
+                feats = feats.numpy()
+            if feats.ndim == 2:
+                # (n_patches, 320) -> mean pool to (320,)
+                slide_emb = feats.mean(axis=0).astype(np.float32)
+            elif feats.ndim == 1:
+                slide_emb = feats.astype(np.float32)
+            else:
+                continue
+            cnn_dict[slide_id] = slide_emb
+        except Exception:
+            continue
+
+    if cnn_dict:
+        np.save(cnn_file, cnn_dict, allow_pickle=True)
+        dim = next(iter(cnn_dict.values())).shape[-1]
+        print(f"  CNN320: {len(cnn_dict)} slides, {dim}D")
+
+
+def prepare_uni2h_features(cohorts: Optional[List[str]] = None):
+    """Prepare UNI2-h features from downloaded HuggingFace h5 files.
+
+    UNI2-h provides 1536D patch-level features. This function mean-pools
+    them to slide-level and saves as .npy dict for use with load_wsi_features().
+
+    Prerequisites:
+        1. pip install huggingface_hub h5py
+        2. huggingface-cli login (institutional email, accept terms)
+        3. Download cohort archives:
+           huggingface-cli download MahmoodLab/UNI2-h-features \\
+               TCGA/TCGA-LUAD.tar.gz --repo-type dataset --local-dir /Volumes/seagate/kirby/tcga/uni2h_raw
+        4. Extract: tar xzf TCGA-LUAD.tar.gz
+
+    Args:
+        cohorts: List of cohort slugs to process, e.g. ['TCGA-LUAD', 'TCGA-LUSC'].
+                 Defaults to LUAD + LUSC + BRCA.
+    """
+    import h5py
+
+    if cohorts is None:
+        cohorts = ['TCGA-LUAD', 'TCGA-LUSC', 'TCGA-BRCA_IDC', 'TCGA-BRCA_OTHERS']
+
+    cache = _cache_dir()
+    wsi_dir = cache / 'wsi_features'
+    wsi_dir.mkdir(parents=True, exist_ok=True)
+    uni2h_file = wsi_dir / 'uni2h.npy'
+
+    # Look for extracted h5 files
+    raw_dirs = [
+        cache / 'uni2h_raw',
+        Path('/Volumes/seagate/kirby/tcga/uni2h_raw'),
+    ]
+
+    uni2h_dict = {}
+    if uni2h_file.exists():
+        # Load existing and extend
+        uni2h_dict = np.load(uni2h_file, allow_pickle=True).item()
+        print(f"  Loaded {len(uni2h_dict)} existing UNI2-h embeddings")
+
+    for cohort in cohorts:
+        for raw_dir in raw_dirs:
+            h5_dir = raw_dir / 'TCGA' / cohort
+            if not h5_dir.exists():
+                h5_dir = raw_dir / cohort
+            if not h5_dir.exists():
+                continue
+
+            h5_files = list(h5_dir.glob('**/*.h5'))
+            if not h5_files:
+                continue
+
+            print(f"  Processing {len(h5_files)} UNI2-h h5 files from {cohort}...")
+            for h5_path in h5_files:
+                slide_id = h5_path.stem
+                if slide_id in uni2h_dict:
+                    continue
+                try:
+                    with h5py.File(h5_path, 'r') as f:
+                        features = f['features'][:]  # (1, n_patches, 1536)
+                        if features.ndim == 3:
+                            features = features[0]  # (n_patches, 1536)
+                        slide_emb = features.mean(axis=0).astype(np.float32)
+                    uni2h_dict[slide_id] = slide_emb
+                except Exception as e:
+                    print(f"    Failed {h5_path.name}: {e}")
+            break
+
+    if uni2h_dict:
+        np.save(uni2h_file, uni2h_dict, allow_pickle=True)
+        dim = next(iter(uni2h_dict.values())).shape[-1]
+        print(f"  UNI2-h: {len(uni2h_dict)} slides total, {dim}D → {uni2h_file}")
+    else:
+        print("  No UNI2-h h5 files found. See prepare_uni2h_features() docstring.")
 
 
 # =============================================================================

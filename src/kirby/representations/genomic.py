@@ -11,8 +11,11 @@ Gene expression representations:
 - Combined pathway: concatenation of PROGENy + Hallmark + DoRothEA
 - Mutation matrix: binary top-200 mutated gene matrix
 
-WSI representations:
-- Load pre-computed GigaSSL embeddings (CTransPath, Phikon, H-optimus-0, GigaPath)
+WSI representations (all stored as .npy dicts, auto-downloaded where possible):
+- GigaSSL slide-level (Mendeley): CTransPath, Phikon, H-optimus-0, GigaPath, MoCo
+- TITAN slide-level (HuggingFace, gated): 768D, ~11K TCGA slides
+- UNI2-h patch-level (HuggingFace, gated): 1536D, mean-pooled to slide-level
+- Local CNN 320D (Seagate): pre-computed from small_cnn_320 .pt files
 - Graceful fallback (zeros) for missing slides
 
 All functions follow KIRBy convention: take input, return np.ndarray(n_samples, d).
@@ -338,13 +341,14 @@ def load_wsi_features(sample_ids: List[str], wsi_dir: Optional[Path],
                       model_name: str) -> np.ndarray:
     """Load pre-computed WSI features for given samples.
 
-    GigaSSL features are stored as dict: slide_id -> embedding vector.
-    Matches TCGA barcodes using patient-level ID (12 chars).
+    All features stored as .npy dicts: {slide_id: embedding_vector}.
+    Matches TCGA barcodes flexibly (patient/sample/slide level).
 
     Args:
         sample_ids: TCGA sample barcodes
         wsi_dir: path to directory containing model .npy files
-        model_name: one of ctranspath, phikon, conch, hoptimus0, gigapath
+        model_name: ctranspath, phikon, hoptimus0, gigapath, moco (GigaSSL),
+                    titan (TITAN 768D), uni2h (UNI2-h 1536D), cnn320 (local 320D)
 
     Returns:
         (n_samples, d) feature matrix. Missing slides get zero vectors.

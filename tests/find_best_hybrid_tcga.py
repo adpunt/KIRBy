@@ -80,13 +80,15 @@ REP_PRESETS = {
     'fast+learned': [
         'gene_hvg2000', 'gene_pca100', 'gene_hallmark', 'gene_progeny',
         'gene_kegg', 'gene_dorothea', 'gene_combined_pathway',
-        'wsi_ctranspath', 'wsi_phikon', 'wsi_conch', 'wsi_hoptimus0',
-    ],  # 11 reps
+        'wsi_ctranspath', 'wsi_phikon', 'wsi_hoptimus0', 'wsi_moco',
+        'wsi_titan',
+    ],  # 12 reps
     'all': [
         'gene_hvg2000', 'gene_pca100', 'gene_hallmark', 'gene_progeny',
         'gene_kegg', 'gene_dorothea', 'gene_combined_pathway', 'gene_mutation',
-        'wsi_ctranspath', 'wsi_phikon', 'wsi_conch', 'wsi_hoptimus0', 'wsi_gigapath',
-    ],  # 13 reps
+        'wsi_ctranspath', 'wsi_phikon', 'wsi_hoptimus0', 'wsi_gigapath', 'wsi_moco',
+        'wsi_titan', 'wsi_uni2h', 'wsi_cnn320',
+    ],  # 16 reps
     # Genomic-only presets (no WSI)
     'genomic_fast': [
         'gene_pca100', 'gene_hallmark', 'gene_progeny',
@@ -126,12 +128,18 @@ _REP_DISPATCH = {
     'gene_pca100':           ('create_gene_pca100',       'genomic_expr'),
     # Mutation: fn(sample_ids, cohort) -> np.ndarray
     'gene_mutation':         ('create_mutation_matrix',   'mutation'),
-    # WSI: load_wsi_features(sample_ids, wsi_dir, model_key) -> np.ndarray
+    # WSI — GigaSSL (Mendeley, public, slide-level)
     'wsi_ctranspath':        ('load_wsi_features',        'wsi'),
     'wsi_phikon':            ('load_wsi_features',        'wsi'),
-    'wsi_conch':             ('load_wsi_features',        'wsi'),
     'wsi_hoptimus0':         ('load_wsi_features',        'wsi'),
     'wsi_gigapath':          ('load_wsi_features',        'wsi'),
+    'wsi_moco':              ('load_wsi_features',        'wsi'),
+    # WSI — TITAN (HuggingFace, gated, slide-level 768D)
+    'wsi_titan':             ('load_wsi_features',        'wsi'),
+    # WSI — UNI2-h (HuggingFace, gated, 1536D mean-pooled)
+    'wsi_uni2h':             ('load_wsi_features',        'wsi'),
+    # WSI — Local CNN 320D (Seagate, LUAD+LUSC only)
+    'wsi_cnn320':            ('load_wsi_features',        'wsi'),
 }
 
 
