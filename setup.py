@@ -132,6 +132,15 @@ setup(
             # ANARCI: conda install -c bioconda anarci
         ],
 
+        # TCGA genomics / histopathology
+        "tcga": [
+            "scanpy>=1.9.0",
+            "anndata>=0.9.0",
+            "gseapy>=1.0.0",
+            "decoupler>=1.4.0",
+            "requests>=2.26.0",
+        ],
+
         # Medical imaging / genomics
         "bio": [
             "h5py>=3.7.0",
@@ -139,6 +148,10 @@ setup(
             "tensorflow>=2.10.0",
             "keras>=2.10.0",
             "timm>=0.9.0",
+            "scanpy>=1.9.0",
+            "anndata>=0.9.0",
+            "gseapy>=1.0.0",
+            "decoupler>=1.4.0",
         ],
 
         # =================================================================

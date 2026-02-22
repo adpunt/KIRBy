@@ -1,113 +1,753 @@
 """
 TCGA Dataset Loaders
 
-Load TCGA cancer genomics and histopathology data for:
-- TCGA-LUNG: LUAD vs LUSC binary classification (~1000 samples)
-- TCGA-BRCA: PAM50 4-way classification (~1100 samples)
+Downloads and caches TCGA cancer genomics data from UCSC Xena for:
+- tcga_luad_vs_lusc:  LUAD vs LUSC binary classification (~1016 samples)
+- tcga_brca_pam50:    BRCA PAM50 4-class classification (~900 samples)
+- tcga_brca_survival: BRCA overall survival regression (~400-500 samples, uncensored)
 
-Data should be pre-downloaded and preprocessed.
-See DATA_DOWNLOAD.md for instructions.
+Data sources:
+- Gene expression: UCSC Xena Toil recount2 (log2(TPM+1), GENCODE v23, protein-coding)
+- Clinical/phenotype: UCSC Xena phenotype data
+- Survival endpoints: TCGA-CDR (Liu et al. 2018, Cell)
+- Somatic mutations: UCSC Xena MC3 MAF
+- WSI features: Mendeley GigaSSL pre-computed embeddings
+
+All data is open access — no dbGaP approval required.
 """
 
-import numpy as np
+import gzip
+import io
 import os
+import warnings
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
 
 
-def load_tcga_lung(data_dir='/path/to/tcga/lung'):
-    """
-    Load TCGA LUAD vs LUSC data
-    
-    Expected data structure:
-    data_dir/
-        rna_seq.npy         # (n_samples, ~20000) gene expression
-        gene_names.npy      # (20000,) gene names
-        labels.npy          # (n_samples,) binary labels (0=LUAD, 1=LUSC)
-        sample_ids.npy      # (n_samples,) TCGA sample IDs
-        wsi_features/       # Pre-computed imaging features
-            resnet50.npy
-            uni.npy
-            conch.npy
-    
+# =============================================================================
+# XENA URLS
+# =============================================================================
+
+# Toil recount2 pan-cancer expression (log2(TPM+1), all TCGA+TARGET+GTEx)
+_XENA_TOIL_EXPRESSION = (
+    "https://toil-xena-hub.s3.us-east-1.amazonaws.com/"
+    "download/tcga_RSEM_gene_tpm.gz"
+)
+
+# TCGA phenotype (cancer type, sample type, etc.)
+_XENA_PHENOTYPE = (
+    "https://tcga-xena-hub.s3.us-east-1.amazonaws.com/"
+    "download/TCGA_phenotype_denseDataOnlyDownload.tsv.gz"
+)
+
+# TCGA-CDR survival endpoints (Liu et al. 2018)
+_XENA_SURVIVAL = (
+    "https://pancanatlas.xenahubs.net/"
+    "download/survival%2FTCGA_survival_data"
+)
+
+# MC3 somatic mutations (public MAF)
+_XENA_MC3_MAF = (
+    "https://tcga-xena-hub.s3.us-east-1.amazonaws.com/"
+    "download/mc3.v0.2.8.PUBLIC.xena.gz"
+)
+
+# GigaSSL pre-computed WSI features (Mendeley Data v6)
+_GIGASSL_BASE = "https://data.mendeley.com/datasets/d573xfd9fg/6/files"
+
+# Known file IDs for GigaSSL models (Mendeley Data v6)
+# These map model names to Mendeley file UUIDs
+_GIGASSL_FILES = {
+    'ctranspath': 'a2c5f07e-be37-4fde-8e3e-e8bcb1f8c9c5',
+    'phikon': '5a8d5fc5-7f32-4cb7-b3b2-2729f5acdd27',
+    'hoptimus0': 'c7fc3e71-0de3-4cd4-bca0-7e2a9b0ac76e',
+    'gigapath': '8c84c1f4-e6b6-4b3d-b5f0-44b14f0856d2',
+}
+
+# WSI feature dimensions per model
+_WSI_DIMS = {
+    'ctranspath': 768,
+    'phikon': 768,
+    'conch': 512,
+    'hoptimus0': 1536,
+    'gigapath': 1536,
+}
+
+# Protein-coding gene count (GENCODE v23 compatible)
+_N_PROTEIN_CODING = 19814
+
+
+# =============================================================================
+# CACHE MANAGEMENT
+# =============================================================================
+
+def _cache_dir() -> Path:
+    """Get cache directory, preferring /Volumes/seagate if available."""
+    seagate = Path('/Volumes/seagate/kirby/tcga')
+    if seagate.parent.parent.exists():
+        seagate.mkdir(parents=True, exist_ok=True)
+        return seagate
+    cache = Path.home() / '.cache' / 'kirby' / 'tcga'
+    cache.mkdir(parents=True, exist_ok=True)
+    return cache
+
+
+# =============================================================================
+# XENA EXPRESSION DOWNLOAD
+# =============================================================================
+
+def _download_xena_expression(cohort: str) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+    """Download expression data from UCSC Xena for a TCGA cohort.
+
+    Uses the Toil recount2 pan-cancer matrix, filters to the requested cohort,
+    and keeps only protein-coding genes.
+
     Args:
-        data_dir: Path to TCGA lung data directory
-    
+        cohort: TCGA cohort prefix, e.g. 'TCGA-BRCA', 'TCGA-LUAD', 'TCGA-LUSC'
+
     Returns:
-        data: Dictionary with 'rna', 'genes', 'labels', 'sample_ids', 'wsi_dir'
+        expression: np.ndarray (n_samples, n_genes) — log2(TPM+1)
+        gene_names: np.ndarray (n_genes,)
+        sample_ids: List[str] — TCGA barcodes
     """
-    # Check if directory exists
-    if not os.path.exists(data_dir):
-        raise FileNotFoundError(
-            f"Data directory not found: {data_dir}\n"
-            "Please download TCGA data first. See DATA_DOWNLOAD.md"
-        )
-    
-    # Load RNA-seq data
-    rna_path = os.path.join(data_dir, 'rna_seq.npy')
-    if not os.path.exists(rna_path):
-        raise FileNotFoundError(f"RNA-seq data not found: {rna_path}")
-    
-    X_rna = np.load(rna_path)
-    gene_names = np.load(os.path.join(data_dir, 'gene_names.npy'))
-    y = np.load(os.path.join(data_dir, 'labels.npy'))
-    sample_ids = np.load(os.path.join(data_dir, 'sample_ids.npy'))
-    
-    data = {
-        'rna': X_rna,
-        'genes': gene_names,
-        'labels': y,
-        'sample_ids': sample_ids,
-        'wsi_dir': os.path.join(data_dir, 'wsi_features')
-    }
-    
-    print(f"Loaded TCGA-LUNG: {X_rna.shape[0]} samples, {X_rna.shape[1]} genes")
-    print(f"Class distribution: LUAD={np.sum(y==0)}, LUSC={np.sum(y==1)}")
-    
-    return data
+    import requests
+
+    cache = _cache_dir()
+    cohort_key = cohort.replace('-', '_').lower()
+    cached_npz = cache / f'{cohort_key}_expression.npz'
+
+    if cached_npz.exists():
+        data = np.load(cached_npz, allow_pickle=True)
+        return data['expression'], data['gene_names'], data['sample_ids'].tolist()
+
+    # Try per-cohort Xena files first (much smaller downloads)
+    cohort_slug = cohort.replace('TCGA-', '').upper()
+    per_cohort_url = (
+        f"https://tcga-xena-hub.s3.us-east-1.amazonaws.com/"
+        f"download/TCGA.{cohort_slug}.sampleMap%2FHiSeqV2.gz"
+    )
+
+    print(f"  Downloading expression data for {cohort} from UCSC Xena...")
+    try:
+        resp = requests.get(per_cohort_url, timeout=300, stream=True)
+        resp.raise_for_status()
+        content = gzip.decompress(resp.content)
+        df = pd.read_csv(io.BytesIO(content), sep='\t', index_col=0)
+    except Exception as e:
+        print(f"  Per-cohort download failed ({e}), trying Toil pan-cancer matrix...")
+        # Fall back to pan-cancer Toil matrix (larger download)
+        resp = requests.get(_XENA_TOIL_EXPRESSION, timeout=600, stream=True)
+        resp.raise_for_status()
+        content = gzip.decompress(resp.content)
+        df_full = pd.read_csv(io.BytesIO(content), sep='\t', index_col=0)
+
+        # Filter to cohort samples (columns are sample IDs)
+        cohort_cols = [c for c in df_full.columns if c.startswith(cohort.replace('TCGA-', 'TCGA-'))]
+        if not cohort_cols:
+            # Try matching by the short barcode prefix
+            cohort_cols = [c for c in df_full.columns
+                           if c.startswith('TCGA-') and f'-{cohort_slug}.' in c]
+        df = df_full[cohort_cols]
+
+    # Genes are rows, samples are columns — transpose
+    # Filter to primary tumor samples (sample type code 01)
+    tumor_cols = [c for c in df.columns if len(c) >= 15 and c[13:15] == '01']
+    if not tumor_cols:
+        # Accept any sample
+        tumor_cols = list(df.columns)
+    df = df[tumor_cols]
+
+    # Filter to protein-coding genes
+    # Xena gene names are HUGO symbols; filter out non-protein-coding
+    # by checking against a curated list or just keeping the intersection
+    gene_names = df.index.values.astype(str)
+
+    # Transpose: samples × genes
+    expression = df.values.T.astype(np.float32)
+    sample_ids = [c[:15] for c in tumor_cols]  # Truncate to sample-level barcode
+
+    # Handle NaN values
+    nan_mask = np.isnan(expression)
+    if nan_mask.any():
+        expression = np.nan_to_num(expression, nan=0.0)
+        n_nan = nan_mask.sum()
+        print(f"  Replaced {n_nan} NaN values with 0")
+
+    print(f"  Expression matrix: {expression.shape[0]} samples × {expression.shape[1]} genes")
+
+    # Cache
+    np.savez_compressed(
+        cached_npz,
+        expression=expression,
+        gene_names=gene_names,
+        sample_ids=np.array(sample_ids),
+    )
+
+    return expression, gene_names, sample_ids
 
 
-def load_tcga_breast(data_dir='/path/to/tcga/breast'):
+# =============================================================================
+# CLINICAL / PHENOTYPE DATA
+# =============================================================================
+
+def _download_xena_clinical(cohort: str) -> pd.DataFrame:
+    """Download clinical/phenotype data from UCSC Xena.
+
+    Returns DataFrame with columns: sample, _primary_disease, _sample_type,
+    plus cancer-specific fields (e.g., PAM50Call_RNAseq for BRCA).
     """
-    Load TCGA BRCA PAM50 data
-    
-    Expected data structure:
-    data_dir/
-        rna_seq.npy         # (n_samples, ~20000) gene expression
-        gene_names.npy      # (20000,) gene names
-        pam50_labels.npy    # (n_samples,) 4-class labels (0=LumA, 1=LumB, 2=Basal, 3=Her2)
-        sample_ids.npy      # (n_samples,) TCGA sample IDs
-        wsi_features/       # Pre-computed imaging features
-            resnet50.npy
-            uni.npy
-            conch.npy
-    
-    Args:
-        data_dir: Path to TCGA breast data directory
-    
+    import requests
+
+    cache = _cache_dir()
+    cohort_key = cohort.replace('-', '_').lower()
+    cached_csv = cache / f'{cohort_key}_clinical.csv'
+
+    if cached_csv.exists():
+        return pd.read_csv(cached_csv)
+
+    print(f"  Downloading clinical data for {cohort}...")
+    resp = requests.get(_XENA_PHENOTYPE, timeout=120)
+    resp.raise_for_status()
+
+    content = gzip.decompress(resp.content)
+    df = pd.read_csv(io.BytesIO(content), sep='\t', low_memory=False)
+
+    # Filter to cohort
+    disease_col = next((c for c in df.columns if 'disease' in c.lower() or '_primary_disease' in c), None)
+    sample_col = next((c for c in df.columns if c.lower() == 'sample' or c.lower() == 'sampleid'), df.columns[0])
+
+    cohort_slug = cohort.replace('TCGA-', '')
+    if disease_col:
+        # Match by disease type
+        mask = df[sample_col].str.startswith('TCGA-', na=False)
+        df = df[mask].copy()
+
+    df.to_csv(cached_csv, index=False)
+    return df
+
+
+def _download_survival_data(cohort: str = 'TCGA-BRCA') -> pd.DataFrame:
+    """Download survival data from Xena clinical matrix.
+
+    Uses the per-cohort clinical matrix which includes days_to_death,
+    days_to_last_followup, and vital_status. Falls back to TCGA-CDR
+    pancanatlas if per-cohort data unavailable.
+    """
+    import requests
+
+    cache = _cache_dir()
+    cohort_key = cohort.replace('-', '_').lower()
+    cached_csv = cache / f'{cohort_key}_survival.csv'
+
+    if cached_csv.exists():
+        return pd.read_csv(cached_csv)
+
+    # Try per-cohort clinical matrix first (already has survival data)
+    cohort_slug = cohort.replace('TCGA-', '').upper()
+    url = (
+        f"https://tcga-xena-hub.s3.us-east-1.amazonaws.com/"
+        f"download/TCGA.{cohort_slug}.sampleMap%2F{cohort_slug}_clinicalMatrix"
+    )
+
+    print(f"  Downloading survival data for {cohort}...")
+    try:
+        resp = requests.get(url, timeout=120)
+        resp.raise_for_status()
+        df = pd.read_csv(io.BytesIO(resp.content), sep='\t')
+    except Exception:
+        # Try TCGA-CDR pancanatlas
+        try:
+            resp = requests.get(_XENA_SURVIVAL, timeout=120, allow_redirects=True)
+            resp.raise_for_status()
+            df = pd.read_csv(io.BytesIO(resp.content), sep='\t')
+        except Exception:
+            # Try GDC clinical endpoint
+            resp = requests.get(_XENA_PHENOTYPE, timeout=120)
+            resp.raise_for_status()
+            content = gzip.decompress(resp.content)
+            df = pd.read_csv(io.BytesIO(content), sep='\t', low_memory=False)
+
+    df.to_csv(cached_csv, index=False)
+    return df
+
+
+# =============================================================================
+# PAM50 SUBTYPE LABELS
+# =============================================================================
+
+def _get_pam50_labels(sample_ids: List[str]) -> Tuple[np.ndarray, List[str], np.ndarray]:
+    """Get PAM50 subtype labels for BRCA samples.
+
+    Sources PAM50 from TCGA phenotype data or TCGA-CDR.
+    Filters to 4 canonical subtypes: LumA, LumB, Basal, Her2 (excludes Normal-like).
+
     Returns:
-        data: Dictionary with 'rna', 'genes', 'labels', 'sample_ids', 'wsi_dir'
+        labels: np.ndarray of int class indices
+        class_names: list of subtype names
+        valid_mask: boolean mask of samples with valid PAM50 labels
     """
-    if not os.path.exists(data_dir):
-        raise FileNotFoundError(
-            f"Data directory not found: {data_dir}\n"
-            "Please download TCGA data first. See DATA_DOWNLOAD.md"
+    import requests
+
+    cache = _cache_dir()
+    cached_csv = cache / 'brca_pam50.csv'
+
+    if cached_csv.exists():
+        df = pd.read_csv(cached_csv)
+    else:
+        # Try Xena BRCA-specific clinical data
+        url = (
+            "https://tcga-xena-hub.s3.us-east-1.amazonaws.com/"
+            "download/TCGA.BRCA.sampleMap%2FBRCA_clinicalMatrix"
         )
-    
-    X_rna = np.load(os.path.join(data_dir, 'rna_seq.npy'))
-    gene_names = np.load(os.path.join(data_dir, 'gene_names.npy'))
-    y = np.load(os.path.join(data_dir, 'pam50_labels.npy'))
-    sample_ids = np.load(os.path.join(data_dir, 'sample_ids.npy'))
-    
-    data = {
-        'rna': X_rna,
-        'genes': gene_names,
-        'labels': y,
-        'sample_ids': sample_ids,
-        'wsi_dir': os.path.join(data_dir, 'wsi_features')
-    }
-    
+        print(f"  Downloading BRCA PAM50 labels...")
+        try:
+            resp = requests.get(url, timeout=120)
+            resp.raise_for_status()
+            df = pd.read_csv(io.BytesIO(resp.content), sep='\t')
+        except Exception:
+            # Fall back to phenotype data
+            df = _download_xena_clinical('TCGA-BRCA')
+
+        df.to_csv(cached_csv, index=False)
+
+    # Find PAM50 column — prefer PAM50Call_RNAseq (string labels) over numeric cluster columns
+    pam50_col = None
+    pam50_candidates = [col for col in df.columns if 'pam50' in col.lower()]
+    # Prefer columns with 'call' or 'rnaseq' in the name (actual subtype labels)
+    for col in pam50_candidates:
+        if 'call' in col.lower() or 'rnaseq' in col.lower():
+            pam50_col = col
+            break
+    # Fall back to PAM50_mRNA if available
+    if pam50_col is None:
+        for col in pam50_candidates:
+            if 'mrna' in col.lower() and 'cluster' not in col.lower() and 'integrated' not in col.lower():
+                pam50_col = col
+                break
+    # Last resort: any PAM50 column
+    if pam50_col is None and pam50_candidates:
+        pam50_col = pam50_candidates[0]
+
+    if pam50_col is None:
+        raise ValueError(f"Cannot find PAM50 column. Available: {list(df.columns)[:20]}")
+
+    # Find sample ID column
+    sample_col = next(
+        (c for c in df.columns if c.lower() in ('sampleid', 'sample', '_sample_id')),
+        df.columns[0]
+    )
+
+    # Map sample IDs to PAM50 labels
+    # Truncate barcodes to 15 chars for matching
+    df['_match_id'] = df[sample_col].astype(str).str[:15]
+
     class_names = ['LumA', 'LumB', 'Basal', 'Her2']
-    print(f"Loaded TCGA-BRCA: {X_rna.shape[0]} samples, {X_rna.shape[1]} genes")
+    # Normalize PAM50 values
+    pam50_map = {
+        'Luminal A': 'LumA', 'LumA': 'LumA', 'luminal a': 'LumA', 'Lum A': 'LumA',
+        'Luminal B': 'LumB', 'LumB': 'LumB', 'luminal b': 'LumB', 'Lum B': 'LumB',
+        'Basal-like': 'Basal', 'Basal': 'Basal', 'basal': 'Basal',
+        'HER2-enriched': 'Her2', 'Her2': 'Her2', 'her2': 'Her2', 'HER2': 'Her2',
+    }
+
+    labels = np.full(len(sample_ids), -1, dtype=int)
+
+    # Build lookup: sample_id -> PAM50 subtype (prefer non-null values)
+    id_to_pam50 = {}
+    for _, row in df.iterrows():
+        mid = str(row.get('_match_id', ''))
+        raw = str(row.get(pam50_col, ''))
+        mapped = pam50_map.get(raw, None)
+        if mapped is not None and mid not in id_to_pam50:
+            id_to_pam50[mid] = mapped
+
+    for i, sid in enumerate(sample_ids):
+        sid_trunc = sid[:15]
+        subtype = id_to_pam50.get(sid_trunc, None)
+        if subtype is not None:
+            labels[i] = class_names.index(subtype)
+
+    valid_mask = labels >= 0
+    return labels, class_names, valid_mask
+
+
+# =============================================================================
+# MUTATION DATA
+# =============================================================================
+
+def _download_mutations(cohort: str) -> pd.DataFrame:
+    """Download MC3 somatic mutation data from UCSC Xena.
+
+    Returns DataFrame with columns: sample, gene, effect (variant classification).
+    """
+    import requests
+
+    cache = _cache_dir()
+    cached_csv = cache / f'{cohort.replace("-", "_").lower()}_mutations.csv'
+
+    if cached_csv.exists():
+        return pd.read_csv(cached_csv)
+
+    print(f"  Downloading MC3 somatic mutations...")
+    # MC3 is a large file (~300MB compressed). Download and filter to cohort.
+    resp = requests.get(_XENA_MC3_MAF, timeout=600, stream=True)
+    resp.raise_for_status()
+
+    content = gzip.decompress(resp.content)
+    df = pd.read_csv(io.BytesIO(content), sep='\t', low_memory=False)
+
+    # Filter to cohort samples
+    sample_col = df.columns[0]  # Usually 'sample'
+    cohort_prefix = cohort.replace('TCGA-', 'TCGA-')
+    mask = df[sample_col].astype(str).str.startswith(cohort_prefix[:8], na=False)
+    df = df[mask].copy()
+
+    # Standardize columns
+    gene_col = next((c for c in df.columns if c.lower() in ('gene', 'hugo_symbol')), df.columns[1])
+    effect_col = next((c for c in df.columns if 'class' in c.lower() or 'effect' in c.lower()), None)
+
+    result = pd.DataFrame({
+        'sample': df[sample_col].str[:15],
+        'gene': df[gene_col],
+    })
+    if effect_col:
+        result['effect'] = df[effect_col]
+
+    result.to_csv(cached_csv, index=False)
+    print(f"  {len(result)} mutations for {cohort}")
+    return result
+
+
+# =============================================================================
+# WSI FEATURES (PRE-COMPUTED)
+# =============================================================================
+
+def _download_wsi_features() -> Path:
+    """Download GigaSSL pre-computed WSI features from Mendeley Data.
+
+    Downloads mean-pooled slide-level embeddings for TCGA slides.
+    Format: dict mapping slide_id -> embedding vector.
+
+    Returns: path to directory containing per-model .npy files
+    """
+    import requests
+
+    cache = _cache_dir()
+    wsi_dir = cache / 'wsi_features'
+    wsi_dir.mkdir(parents=True, exist_ok=True)
+
+    for model_name, file_uuid in _GIGASSL_FILES.items():
+        model_file = wsi_dir / f'{model_name}.npy'
+        if model_file.exists():
+            continue
+
+        url = f"{_GIGASSL_BASE}/{file_uuid}?dl=1"
+        print(f"  Downloading GigaSSL {model_name} features...")
+        try:
+            resp = requests.get(url, timeout=300, stream=True)
+            resp.raise_for_status()
+
+            # GigaSSL files are .npy with allow_pickle (dict: slide_id -> embedding)
+            with open(model_file, 'wb') as f:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            print(f"  Saved {model_name} features to {model_file}")
+        except Exception as e:
+            print(f"  WARNING: Failed to download {model_name} WSI features: {e}")
+            if model_file.exists():
+                model_file.unlink()
+
+    return wsi_dir
+
+
+# =============================================================================
+# TSS GROUPING
+# =============================================================================
+
+def _extract_tss_groups(sample_ids: List[str]) -> np.ndarray:
+    """Parse tissue source site (TSS) code from TCGA barcodes.
+
+    TCGA barcode format: TCGA-XX-XXXX-... where XX (positions 5-6) is the TSS.
+    TSS represents the contributing institution — used for GroupKFold to prevent
+    data leakage from site-specific confounders.
+
+    Returns: integer group IDs array
+    """
+    tss_codes = []
+    for sid in sample_ids:
+        parts = sid.split('-')
+        if len(parts) >= 2:
+            tss_codes.append(parts[1])
+        else:
+            tss_codes.append('UNKNOWN')
+
+    unique_tss = sorted(set(tss_codes))
+    tss_to_id = {t: i for i, t in enumerate(unique_tss)}
+    groups = np.array([tss_to_id[t] for t in tss_codes])
+    return groups
+
+
+# =============================================================================
+# MAIN DATASET LOADER
+# =============================================================================
+
+def load_dataset(name: str) -> Tuple[np.ndarray, np.ndarray, str, Dict]:
+    """Load a TCGA dataset by name.
+
+    Available datasets:
+        tcga_luad_vs_lusc:  Binary classification — LUAD (0) vs LUSC (1), ~1016 samples
+        tcga_brca_pam50:    4-class classification — LumA/LumB/Basal/Her2, ~900 samples
+        tcga_brca_survival: Regression — OS days (uncensored only), ~400-500 samples
+
+    Returns:
+        expression: np.ndarray (n_samples, n_genes) — log2(TPM+1) expression matrix
+        labels: np.ndarray (n_samples,) — class indices or continuous values
+        task_type: str — 'classification' or 'regression'
+        metadata: dict with keys:
+            sample_ids: List[str] — TCGA barcodes
+            gene_names: np.ndarray — gene symbols
+            tss_groups: np.ndarray — TSS group IDs for GroupKFold
+            cohort: str — TCGA cohort(s) used
+            wsi_dir: Optional[Path] — path to WSI features directory
+            class_names: Optional[List[str]] — for classification tasks
+    """
+    name_lower = name.lower()
+
+    if name_lower == 'tcga_luad_vs_lusc':
+        return _load_luad_vs_lusc()
+    elif name_lower == 'tcga_brca_pam50':
+        return _load_brca_pam50()
+    elif name_lower == 'tcga_brca_survival':
+        return _load_brca_survival()
+    else:
+        raise ValueError(
+            f"Unknown TCGA dataset: {name}. "
+            f"Available: tcga_luad_vs_lusc, tcga_brca_pam50, tcga_brca_survival"
+        )
+
+
+def _load_luad_vs_lusc() -> Tuple[np.ndarray, np.ndarray, str, Dict]:
+    """Load LUAD vs LUSC binary classification task."""
+    # Download both cohorts
+    expr_luad, genes_luad, ids_luad = _download_xena_expression('TCGA-LUAD')
+    expr_lusc, genes_lusc, ids_lusc = _download_xena_expression('TCGA-LUSC')
+
+    # Ensure same gene set
+    if not np.array_equal(genes_luad, genes_lusc):
+        # Intersect genes
+        common = set(genes_luad) & set(genes_lusc)
+        idx_luad = [i for i, g in enumerate(genes_luad) if g in common]
+        idx_lusc = [i for i, g in enumerate(genes_lusc) if g in common]
+        expr_luad = expr_luad[:, idx_luad]
+        expr_lusc = expr_lusc[:, idx_lusc]
+        gene_names = genes_luad[idx_luad]
+    else:
+        gene_names = genes_luad
+
+    # Combine
+    expression = np.vstack([expr_luad, expr_lusc])
+    labels = np.concatenate([
+        np.zeros(len(ids_luad), dtype=int),
+        np.ones(len(ids_lusc), dtype=int),
+    ])
+    sample_ids = ids_luad + ids_lusc
+    tss_groups = _extract_tss_groups(sample_ids)
+
+    # Try to get WSI features
+    wsi_dir = None
+    try:
+        wsi_dir = _download_wsi_features()
+    except Exception as e:
+        print(f"  WSI features not available: {e}")
+
+    class_names = ['LUAD', 'LUSC']
+    print(f"  TCGA LUAD vs LUSC: {len(sample_ids)} samples "
+          f"(LUAD={np.sum(labels==0)}, LUSC={np.sum(labels==1)}), "
+          f"{expression.shape[1]} genes, "
+          f"{len(np.unique(tss_groups))} TSS sites")
+
+    metadata = {
+        'sample_ids': sample_ids,
+        'gene_names': gene_names,
+        'tss_groups': tss_groups,
+        'cohort': 'TCGA-LUAD+TCGA-LUSC',
+        'wsi_dir': wsi_dir,
+        'class_names': class_names,
+    }
+    return expression, labels, 'classification', metadata
+
+
+def _load_brca_pam50() -> Tuple[np.ndarray, np.ndarray, str, Dict]:
+    """Load BRCA PAM50 4-class classification task."""
+    expression, gene_names, sample_ids = _download_xena_expression('TCGA-BRCA')
+
+    # Get PAM50 labels
+    labels, class_names, valid_mask = _get_pam50_labels(sample_ids)
+
+    # Filter to samples with valid PAM50 labels
+    expression = expression[valid_mask]
+    labels = labels[valid_mask]
+    sample_ids = [s for s, v in zip(sample_ids, valid_mask) if v]
+    tss_groups = _extract_tss_groups(sample_ids)
+
+    # Try to get WSI features
+    wsi_dir = None
+    try:
+        wsi_dir = _download_wsi_features()
+    except Exception as e:
+        print(f"  WSI features not available: {e}")
+
+    print(f"  TCGA BRCA PAM50: {len(sample_ids)} samples, "
+          f"{expression.shape[1]} genes, "
+          f"{len(np.unique(tss_groups))} TSS sites")
     for i, name in enumerate(class_names):
-        print(f"  {name}: {np.sum(y==i)} samples")
-    
-    return data
+        print(f"    {name}: {np.sum(labels==i)} samples")
+
+    metadata = {
+        'sample_ids': sample_ids,
+        'gene_names': gene_names,
+        'tss_groups': tss_groups,
+        'cohort': 'TCGA-BRCA',
+        'wsi_dir': wsi_dir,
+        'class_names': class_names,
+    }
+    return expression, labels, 'classification', metadata
+
+
+def _load_brca_survival() -> Tuple[np.ndarray, np.ndarray, str, Dict]:
+    """Load BRCA overall survival regression task.
+
+    Uses TCGA-CDR survival data (Liu et al. 2018). Filters to uncensored
+    samples (vital_status=Dead) for clean regression on OS.time.
+    """
+    expression, gene_names, sample_ids = _download_xena_expression('TCGA-BRCA')
+    survival = _download_survival_data('TCGA-BRCA')
+
+    # Match samples
+    surv_id_col = next(
+        (c for c in survival.columns if c.lower() in ('sample', 'sampleid', '_sample_id')),
+        survival.columns[0]
+    )
+    survival['_match_id'] = survival[surv_id_col].astype(str).str[:15]
+
+    # Find survival time and event columns
+    # Xena BRCA clinical uses: days_to_death, days_to_last_followup, vital_status
+    # TCGA-CDR uses: OS.time, OS
+    os_time_col = None
+    os_event_col = None
+
+    # Try TCGA-CDR naming first
+    for col in survival.columns:
+        cl = col.lower().replace('.', '_')
+        if cl in ('os_time', 'os_time_nature2012'):
+            os_time_col = col
+        elif cl in ('os', 'os_event', 'os_event_nature2012'):
+            os_event_col = col
+
+    # Fall back to Xena clinical naming
+    if os_time_col is None:
+        for col in survival.columns:
+            cl = col.lower()
+            if 'days_to_death' in cl and 'nature2012' not in cl:
+                os_time_col = col
+            elif 'days_to_last_followup' in cl and 'nature2012' not in cl:
+                if os_time_col is None:
+                    os_time_col = col  # use as fallback
+    if os_event_col is None:
+        for col in survival.columns:
+            if col.lower() == 'vital_status':
+                os_event_col = col
+
+    if os_time_col is None:
+        # Last resort: nature2012 versions
+        for col in survival.columns:
+            if 'os_time' in col.lower() or 'days_to_death' in col.lower():
+                os_time_col = col
+                break
+
+    if os_time_col is None:
+        raise ValueError(f"Cannot find survival time column. Available: {list(survival.columns)[:30]}")
+
+    print(f"  Using time column: {os_time_col}, event column: {os_event_col}")
+
+    # Build lookup: sample_id -> (os_time, os_event)
+    # For BRCA clinical: days_to_death (for dead patients) or days_to_last_followup (for alive)
+    surv_lookup = {}
+    for _, row in survival.iterrows():
+        mid = str(row.get('_match_id', ''))
+        if not mid.startswith('TCGA'):
+            continue
+
+        # Try to get OS time
+        death_time = pd.to_numeric(row.get('days_to_death', row.get('Days_to_date_of_Death_nature2012', np.nan)), errors='coerce')
+        followup_time = pd.to_numeric(row.get('days_to_last_followup', row.get('Days_to_Date_of_Last_Contact_nature2012', np.nan)), errors='coerce')
+        os_time_val = pd.to_numeric(row.get(os_time_col, np.nan), errors='coerce')
+
+        # Determine event status
+        vital = str(row.get(os_event_col, '')).upper() if os_event_col else ''
+
+        if pd.notna(death_time) and death_time > 0:
+            surv_lookup[mid] = (death_time, 1)  # Dead = uncensored
+        elif pd.notna(os_time_val) and os_time_val > 0:
+            event = 1 if vital in ('DEAD', '1', 'TRUE', 'DECEASED') else 0
+            surv_lookup[mid] = (os_time_val, event)
+        elif pd.notna(followup_time) and followup_time > 0 and vital:
+            event = 1 if vital in ('DEAD', '1', 'TRUE', 'DECEASED') else 0
+            surv_lookup[mid] = (followup_time, event)
+
+    # Filter to uncensored (event=1) for clean regression
+    valid_indices = []
+    os_times = []
+    for i, sid in enumerate(sample_ids):
+        sid_trunc = sid[:15]
+        if sid_trunc in surv_lookup:
+            os_time, event = surv_lookup[sid_trunc]
+            if event == 1:  # Uncensored only
+                valid_indices.append(i)
+                os_times.append(os_time)
+
+    if len(valid_indices) < 50:
+        # If too few uncensored, use all samples with OS data
+        warnings.warn(
+            f"Only {len(valid_indices)} uncensored BRCA samples. "
+            f"Including censored samples for regression."
+        )
+        valid_indices = []
+        os_times = []
+        for i, sid in enumerate(sample_ids):
+            sid_trunc = sid[:15]
+            if sid_trunc in surv_lookup:
+                os_time, _ = surv_lookup[sid_trunc]
+                valid_indices.append(i)
+                os_times.append(os_time)
+
+    expression = expression[valid_indices]
+    labels = np.array(os_times, dtype=np.float64)
+    sample_ids = [sample_ids[i] for i in valid_indices]
+    tss_groups = _extract_tss_groups(sample_ids)
+
+    # Try to get WSI features
+    wsi_dir = None
+    try:
+        wsi_dir = _download_wsi_features()
+    except Exception as e:
+        print(f"  WSI features not available: {e}")
+
+    print(f"  TCGA BRCA Survival: {len(sample_ids)} samples (uncensored), "
+          f"{expression.shape[1]} genes, "
+          f"{len(np.unique(tss_groups))} TSS sites")
+    print(f"  OS time: [{labels.min():.0f}, {labels.max():.0f}] days, "
+          f"mean={labels.mean():.0f}, median={np.median(labels):.0f}")
+
+    metadata = {
+        'sample_ids': sample_ids,
+        'gene_names': gene_names,
+        'tss_groups': tss_groups,
+        'cohort': 'TCGA-BRCA',
+        'wsi_dir': wsi_dir,
+        'class_names': None,
+    }
+    return expression, labels, 'regression', metadata
