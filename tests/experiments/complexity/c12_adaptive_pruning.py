@@ -46,7 +46,7 @@ def simulate_pruning(all_results, thresholds=None):
         return {}
     true_best = max(valid, key=lambda r: r['score_mean'])
     true_best_model = true_best['model']
-    true_best_score = true_best['r2_mean']
+    true_best_score = true_best['score_mean']
 
     # Per-model best (ground truth)
     model_names = sorted(set(r['model'] for r in all_results))
@@ -103,7 +103,7 @@ def simulate_pruning(all_results, thresholds=None):
         surviving_valid = [r for r in surviving_results if not np.isnan(r['score_mean'])]
         if surviving_valid:
             pruned_best = max(surviving_valid, key=lambda r: r['score_mean'])
-            pruned_best_score = pruned_best['r2_mean']
+            pruned_best_score = pruned_best['score_mean']
             pruned_best_model = pruned_best['model']
         else:
             pruned_best_score = float('nan')
@@ -132,7 +132,7 @@ def simulate_pruning(all_results, thresholds=None):
             'pruned_best_model': pruned_best_model,
             'surviving_best_by_model': surviving_best_by_model,
             'lost_models': {
-                m: true_best_by_model[m]['r2_mean']
+                m: true_best_by_model[m]['score_mean']
                 for m in pruned_models if m in true_best_by_model
             },
         }
