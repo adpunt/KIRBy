@@ -46,7 +46,11 @@ echo ">>> C12: Adaptive Pruning Analysis"
 python tests/experiments/complexity/c12_adaptive_pruning.py $COMMON
 
 echo ""
+echo ">>> C13: Greedy Step Size & Patience"
+python tests/experiments/complexity/c13_greedy_step_size.py $COMMON
+
+echo ""
 echo "============================================================"
-echo "C11 + C12 COMPLETE"
+echo "C11 + C12 + C13 COMPLETE"
 echo "Results in: tests/results"
 echo "============================================================"
