@@ -159,6 +159,15 @@ setup(
             "decoupler>=1.4.0",
         ],
 
+        # Fine-tuning (LoRA, MLM, Geneformer)
+        "finetune": [
+            "torch>=2.0.0",
+            "transformers>=4.41.0",
+            "peft>=0.7.0",
+            "accelerate>=0.25.0",
+            "bitsandbytes>=0.41.0",
+        ],
+
         # =================================================================
         # DEVELOPMENT
         # =================================================================

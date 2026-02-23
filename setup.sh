@@ -12,6 +12,7 @@ export HF_HOME=/data/stat-cadd/scat9264/.cache/huggingface
 export TORCH_HOME=/data/stat-cadd/scat9264/.cache/torch
 export PIP_CACHE_DIR=/data/stat-cadd/scat9264/.cache/pip
 export PYTHONUSERBASE=/data/stat-cadd/scat9264/.local
+export KIRBY_CACHE_DIR=/data/stat-cadd/scat9264/.cache/kirby
 
 # Install KIRBy in editable mode (picks up src/kirby)
 pip install --quiet -e . 2>/dev/null

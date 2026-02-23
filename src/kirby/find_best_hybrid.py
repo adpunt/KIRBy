@@ -7,6 +7,10 @@ configuration across models, budgets, allocation methods, and importance methods
 Works for any domain (molecular, antibody, fMRI, gene expression, etc.) — the
 caller is responsible for generating representations and group labels.
 
+Supports fine-tuned representations via `rep_factories`: per-fold callables that
+produce train/val embeddings. These are pre-computed once and merged with frozen
+base_reps during evaluation.
+
 Usage:
     from kirby.find_best_hybrid import find_best_hybrid
 
@@ -17,6 +21,14 @@ Usage:
         speed='fast',
     )
     print(result.best_overall)
+
+    # With fine-tuned reps:
+    from kirby.finetuning import make_antibody_lora_factory
+    result = find_best_hybrid(
+        base_reps={'kmer': X_kmer, 'aac': X_aac},
+        labels=y,
+        rep_factories={'lora_esm2': make_antibody_lora_factory(seqs, ...)},
+    )
 """
 
 import hashlib
@@ -96,6 +108,7 @@ class SearchResult:
     metric_name: str = 'r2'
     lower_is_better: bool = False
     fitted_result: Optional[FittedResult] = None
+    finetuned_embeddings: Optional[Dict[str, np.ndarray]] = None
 
 
 # =============================================================================
@@ -336,6 +349,110 @@ def _make_cv_splitter(groups: Optional[np.ndarray], n_folds: int, seed: int):
     return KFold(n_splits=n_folds, shuffle=True, random_state=seed), False
 
 
+def _precompute_fold_reps(
+    rep_factories: Dict[str, Callable],
+    labels: np.ndarray,
+    groups: Optional[np.ndarray],
+    n_folds: int,
+    seed: int,
+    verbose: bool = True,
+) -> Tuple[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]], List[Tuple[np.ndarray, np.ndarray]]]:
+    """Pre-compute fine-tuned representations for each fold.
+
+    Calls each factory once per fold. This happens BEFORE the search grid,
+    so fine-tuning cost is n_folds × n_factories (NOT per search config).
+
+    Args:
+        rep_factories: {rep_name: factory_callable}
+        labels: Target values.
+        groups: Group labels for GroupKFold.
+        n_folds: Number of CV folds.
+        seed: Random seed.
+        verbose: Print progress.
+
+    Returns:
+        (fold_reps, precomputed_folds)
+        fold_reps: {fold_idx: {rep_name: (train_embs, val_embs)}}
+        precomputed_folds: [(train_idx, val_idx), ...] — materialized splits
+    """
+    if not rep_factories:
+        return {}, []
+
+    if verbose:
+        print(f"\nPre-computing fine-tuned representations "
+              f"({len(rep_factories)} factories × {n_folds} folds)...")
+
+    # Materialize fold splits (ensures identical splits downstream)
+    splitter, use_groups = _make_cv_splitter(groups, n_folds, seed)
+    # We need a dummy X for splitting
+    dummy_X = np.zeros((len(labels), 1))
+    split_args = (dummy_X, labels, groups) if use_groups else (dummy_X, labels)
+    precomputed_folds = list(splitter.split(*split_args))
+
+    fold_reps = {}
+    for fold_idx, (train_idx, val_idx) in enumerate(precomputed_folds):
+        fold_reps[fold_idx] = {}
+        train_labels = labels[train_idx]
+
+        for rep_name, factory in rep_factories.items():
+            start = time.time()
+            if verbose:
+                print(f"  Fold {fold_idx+1}/{n_folds}, {rep_name}...", end=' ', flush=True)
+
+            try:
+                train_embs, val_embs = factory(train_idx, val_idx, train_labels)
+                fold_reps[fold_idx][rep_name] = (train_embs, val_embs)
+                elapsed = time.time() - start
+                if verbose:
+                    print(f"done ({train_embs.shape[1]}D, {elapsed:.1f}s)")
+            except Exception as e:
+                if verbose:
+                    print(f"FAILED: {e}")
+
+    return fold_reps, precomputed_folds
+
+
+def _extract_full_embeddings(
+    rep_factories: Dict[str, Callable],
+    labels: np.ndarray,
+    verbose: bool = True,
+) -> Dict[str, np.ndarray]:
+    """Fine-tune each factory on ALL data and return full-dataset embeddings.
+
+    These full-data embeddings can be reused as standalone base_reps in
+    downstream experiments (e.g., passed directly to find_best_hybrid).
+
+    Each factory is called with train_idx=val_idx=all_idx so it trains on
+    the full dataset and extracts embeddings for every sample.
+    """
+    if not rep_factories:
+        return {}
+
+    if verbose:
+        print(f"\nExtracting full-dataset embeddings "
+              f"({len(rep_factories)} factories)...")
+
+    all_idx = np.arange(len(labels))
+    full_embeddings = {}
+
+    for rep_name, factory in rep_factories.items():
+        start = time.time()
+        if verbose:
+            print(f"  {rep_name}...", end=" ", flush=True)
+        try:
+            # Train on all data, extract for all data
+            train_embs, _ = factory(all_idx, all_idx, labels)
+            full_embeddings[rep_name] = train_embs
+            elapsed = time.time() - start
+            if verbose:
+                print(f"done ({train_embs.shape[1]}D, {elapsed:.1f}s)")
+        except Exception as e:
+            if verbose:
+                print(f"FAILED: {e}")
+
+    return full_embeddings
+
+
 def _evaluate_single(
     X: np.ndarray,
     y: np.ndarray,
@@ -383,22 +500,36 @@ def _evaluate_hybrid_config(
     augmentation_strategy: str = 'greedy_ablation',
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
+    fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
+    precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
 ) -> dict:
     """Evaluate a single hybrid configuration. Returns result dict."""
     from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
 
     start_time = time.time()
-    splitter, use_groups = _make_cv_splitter(groups, n_folds, seed)
-    sample_X = next(iter(base_reps.values()))
-    split_args = (sample_X, labels, groups) if use_groups else (sample_X, labels)
+
+    # Use precomputed folds if available (ensures identical splits with fine-tuned reps)
+    if precomputed_folds is not None:
+        fold_splits = precomputed_folds
+    else:
+        splitter, use_groups = _make_cv_splitter(groups, n_folds, seed)
+        sample_X = next(iter(base_reps.values()))
+        split_args = (sample_X, labels, groups) if use_groups else (sample_X, labels)
+        fold_splits = list(splitter.split(*split_args))
 
     fold_scores = []
     fold_n_features = []
 
-    for train_idx, val_idx in splitter.split(*split_args):
+    for fold_idx, (train_idx, val_idx) in enumerate(fold_splits):
         train_reps = {k: v[train_idx] for k, v in base_reps.items()}
         val_reps = {k: v[val_idx] for k, v in base_reps.items()}
         y_train, y_val = labels[train_idx], labels[val_idx]
+
+        # Merge fine-tuned reps into train/val reps for this fold
+        if fold_reps and fold_idx in fold_reps:
+            for rep_name, (ft_train, ft_val) in fold_reps[fold_idx].items():
+                train_reps[rep_name] = ft_train
+                val_reps[rep_name] = ft_val
 
         # Split augmentations per fold
         train_augs = None
@@ -444,7 +575,14 @@ def _evaluate_hybrid_config(
         raise ValueError("All folds failed")
 
     elapsed = time.time() - start_time
+    # Include both frozen and fine-tuned rep names
     rep_names = list(base_reps.keys())
+    if fold_reps:
+        # Add factory rep names from first fold
+        first_fold = next(iter(fold_reps.values()), {})
+        for name in first_fold:
+            if name not in rep_names:
+                rep_names.append(name)
 
     blueprint = Blueprint(
         reps=rep_names,
@@ -478,13 +616,20 @@ def _evaluate_baselines(
     metric_fn: Callable,
     seed: int = 42,
     verbose: bool = True,
+    fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
+    precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
 ) -> Dict[str, Dict[str, float]]:
-    """Evaluate full-dimension baselines for each rep x model."""
+    """Evaluate full-dimension baselines for each rep x model.
+
+    Factory reps (from fold_reps) are evaluated per-fold since they have
+    different train/val embeddings per fold.
+    """
     if verbose:
         print("\nEvaluating full-dimension baselines...")
 
     baselines = {}
 
+    # Frozen reps: standard global-array evaluation
     for rep_name, X in base_reps.items():
         baselines[rep_name] = {'dimension': X.shape[1]}
         for model_name, model in models.items():
@@ -499,7 +644,47 @@ def _evaluate_baselines(
             )
             print(f"  {rep_name} (dim={X.shape[1]}): {scores_str}")
 
-    # All concatenated
+    # Factory reps: per-fold evaluation
+    if fold_reps and precomputed_folds:
+        factory_rep_names = set()
+        for fold_data in fold_reps.values():
+            factory_rep_names.update(fold_data.keys())
+
+        for rep_name in sorted(factory_rep_names):
+            # Get dimension from first fold
+            first_fold = next(iter(fold_reps.values()))
+            if rep_name not in first_fold:
+                continue
+            dim = first_fold[rep_name][0].shape[1]
+            baselines[rep_name] = {'dimension': dim}
+
+            for model_name, model in models.items():
+                fold_scores = []
+                for fold_idx, (train_idx, val_idx) in enumerate(precomputed_folds):
+                    if fold_idx not in fold_reps or rep_name not in fold_reps[fold_idx]:
+                        continue
+                    ft_train, ft_val = fold_reps[fold_idx][rep_name]
+                    y_train, y_val = labels[train_idx], labels[val_idx]
+
+                    scaler = StandardScaler()
+                    X_train_s = scaler.fit_transform(ft_train)
+                    X_val_s = scaler.transform(ft_val)
+
+                    m = deepcopy(model)
+                    m.fit(X_train_s, y_train)
+                    y_pred = m.predict(X_val_s)
+                    fold_scores.append(metric_fn(y_val, y_pred))
+
+                if fold_scores:
+                    baselines[rep_name][model_name] = round(float(np.mean(fold_scores)), 4)
+
+            if verbose:
+                scores_str = ", ".join(
+                    f"{m}={baselines[rep_name].get(m, 'N/A')}" for m in models
+                )
+                print(f"  {rep_name} (dim={dim}, fine-tuned): {scores_str}")
+
+    # All concatenated (frozen reps only — fine-tuned reps have per-fold shape)
     X_concat = np.hstack([base_reps[k] for k in sorted(base_reps.keys())])
     baselines['all_concat'] = {'dimension': X_concat.shape[1]}
     for model_name, model in models.items():
@@ -541,6 +726,8 @@ def _run_search(
     augmentation_budget: int = 20,
     adaptive_pruning: bool = False,
     pruning_threshold: float = 0.5,
+    fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
+    precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
 ) -> List[dict]:
     """Main search loop over all configurations."""
     tier = SPEED_TIERS[speed]
@@ -609,6 +796,8 @@ def _run_search(
                                 augmentation_strategy=augmentation_strategy,
                                 augmentation_threshold=augmentation_threshold,
                                 augmentation_budget=augmentation_budget,
+                                fold_reps=fold_reps,
+                                precomputed_folds=precomputed_folds,
                             )
                             if rep_set_name != 'all':
                                 result['rep_subset'] = rep_set_name
@@ -679,6 +868,8 @@ def _run_refinement_phase(
     augmentation_strategy: str = 'greedy_ablation',
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
+    fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
+    precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
 ) -> List[dict]:
     """Phase 2: re-evaluate top configs from Phase 1 with alternative step_sizes.
 
@@ -757,6 +948,8 @@ def _run_refinement_phase(
                     augmentation_strategy=augmentation_strategy,
                     augmentation_threshold=augmentation_threshold,
                     augmentation_budget=augmentation_budget,
+                    fold_reps=fold_reps,
+                    precomputed_folds=precomputed_folds,
                 )
                 result['refinement_phase'] = True
                 refinement_results.append(result)
@@ -851,12 +1044,17 @@ def _compute_fitted_result(
     augmentation_strategy: str = 'greedy_ablation',
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
+    finetuned_embeddings: Optional[Dict[str, np.ndarray]] = None,
 ) -> FittedResult:
     """Fit on full data and return concrete feature indices + optional weights."""
     from kirby.hybrid import create_hybrid, compute_feature_importance
 
-    # Use only the reps in the blueprint
+    # Use only the reps in the blueprint (frozen + factory)
     reps_to_use = {k: v for k, v in base_reps.items() if k in blueprint.reps}
+    if finetuned_embeddings:
+        for k, v in finetuned_embeddings.items():
+            if k in blueprint.reps:
+                reps_to_use[k] = v
 
     _, feature_info = create_hybrid(
         reps_to_use, labels,
@@ -907,7 +1105,8 @@ def _hybrid_cache_key(base_reps, labels, groups, speed, budgets, allocation_meth
                       importance_methods, n_folds, models, seed, metric, task_type,
                       return_fitted=False, weight_method=None,
                       two_phase=False, refinement_top_n=5,
-                      refinement_step_sizes=None) -> str:
+                      refinement_step_sizes=None,
+                      rep_factory_names=None) -> str:
     """SHA256 hash of all search-affecting inputs."""
     h = hashlib.sha256()
     for name in sorted(base_reps.keys()):
@@ -920,6 +1119,8 @@ def _hybrid_cache_key(base_reps, labels, groups, speed, budgets, allocation_meth
     if models:
         model_names = sorted(models.keys()) if isinstance(models, dict) else sorted(models)
         h.update("|".join(model_names).encode())
+    if rep_factory_names:
+        h.update("|".join(sorted(rep_factory_names)).encode())
     return h.hexdigest()[:16]
 
 
@@ -953,6 +1154,7 @@ def find_best_hybrid(
     two_phase: bool = False,
     refinement_top_n: int = 5,
     refinement_step_sizes: Optional[List[int]] = None,
+    rep_factories: Optional[Dict[str, Callable]] = None,
     seed: int = 42,
     verbose: bool = True,
     cache: bool = False,
@@ -990,6 +1192,12 @@ def find_best_hybrid(
             tests each and keeps only those that help. 'all' includes all. 'none' ignores.
         augmentation_threshold: Minimum improvement to keep an augmentation (default: any).
         augmentation_budget: Max features per augmentation to select (default: 20).
+        rep_factories: Dict of {rep_name: factory_callable} for per-fold fine-tuned
+            representations. Each factory is called with (train_idx, val_idx, train_labels)
+            and returns (train_embeddings, val_embeddings). Fine-tuning happens once per
+            fold (NOT per search config). The resulting embeddings are merged with frozen
+            base_reps during evaluation. Requires peft + torch for actual fine-tuning
+            (but the interface itself is dependency-free).
         seed: Random seed.
         verbose: Print progress.
         cache: If True, cache results to disk and load from cache on subsequent
@@ -1002,12 +1210,14 @@ def find_best_hybrid(
     # --- Check cache ---
     cache_path = None
     if cache:
+        factory_names = sorted(rep_factories.keys()) if rep_factories else None
         key = _hybrid_cache_key(
             base_reps, labels, groups, speed, budgets, allocation_methods,
             importance_methods, n_folds, models, seed, metric, task_type,
             return_fitted=return_fitted, weight_method=weight_method,
             two_phase=two_phase, refinement_top_n=refinement_top_n,
             refinement_step_sizes=refinement_step_sizes,
+            rep_factory_names=factory_names,
         )
         cache_path = Path(cache_dir or Path.home() / '.cache' / 'kirby' / 'hybrid_search') / f'{key}.pkl'
         if cache_path.exists():
@@ -1024,7 +1234,8 @@ def find_best_hybrid(
 
     if not base_reps:
         raise ValueError("base_reps cannot be empty")
-    if len(base_reps) < 2:
+    total_reps = len(base_reps) + (len(rep_factories) if rep_factories else 0)
+    if total_reps < 2:
         raise ValueError("Need at least 2 representations for a hybrid")
 
     n_samples_list = [X.shape[0] for X in base_reps.values()]
@@ -1073,12 +1284,28 @@ def find_best_hybrid(
         print(f"Models: {list(resolved_models.keys())}")
         print(f"Representations: {list(base_reps.keys())} "
               f"(dims: {[X.shape[1] for X in base_reps.values()]})")
+        if rep_factories:
+            print(f"Fine-tuning factories: {list(rep_factories.keys())}")
+
+    # --- Pre-compute fine-tuned reps ---
+    fold_reps = {}
+    precomputed_folds = []
+    if rep_factories:
+        actual_folds_for_ft = n_folds if n_folds is not None else SPEED_TIERS[speed]['n_folds']
+        fold_reps, precomputed_folds = _precompute_fold_reps(
+            rep_factories, labels, groups, actual_folds_for_ft, seed, verbose
+        )
+    else:
+        fold_reps = None
+        precomputed_folds = None
 
     # --- Evaluate baselines ---
     baseline_folds = n_folds if n_folds is not None else SPEED_TIERS[speed]['n_folds']
     baselines = _evaluate_baselines(
         base_reps, labels, resolved_models, groups,
-        baseline_folds, metric_fn, seed, verbose
+        baseline_folds, metric_fn, seed, verbose,
+        fold_reps=fold_reps,
+        precomputed_folds=precomputed_folds,
     )
 
     # --- Run search ---
@@ -1098,6 +1325,8 @@ def find_best_hybrid(
         augmentation_budget=augmentation_budget,
         adaptive_pruning=adaptive_pruning,
         pruning_threshold=pruning_threshold,
+        fold_reps=fold_reps,
+        precomputed_folds=precomputed_folds,
     )
 
     # --- Two-phase refinement ---
@@ -1119,11 +1348,20 @@ def find_best_hybrid(
             augmentation_strategy=augmentation_strategy,
             augmentation_threshold=augmentation_threshold,
             augmentation_budget=augmentation_budget,
+            fold_reps=fold_reps,
+            precomputed_folds=precomputed_folds,
         )
         all_results.extend(refinement_results)
 
     # --- Aggregate ---
     agg = _aggregate_results(all_results, baselines, lower_is_better, dimension_tiers)
+
+    # --- Extract full-data factory embeddings ---
+    finetuned_embeddings = None
+    if rep_factories:
+        finetuned_embeddings = _extract_full_embeddings(
+            rep_factories, labels, verbose
+        )
 
     # --- Fitted result ---
     fitted = None
@@ -1136,6 +1374,7 @@ def find_best_hybrid(
             augmentation_strategy=augmentation_strategy,
             augmentation_threshold=augmentation_threshold,
             augmentation_budget=augmentation_budget,
+            finetuned_embeddings=finetuned_embeddings,
         )
 
     # --- Resolve metric name for display ---
@@ -1161,6 +1400,7 @@ def find_best_hybrid(
         metric_name=metric_name,
         lower_is_better=lower_is_better,
         fitted_result=fitted,
+        finetuned_embeddings=finetuned_embeddings,
     )
 
     # --- Save to cache ---

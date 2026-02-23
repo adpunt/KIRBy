@@ -947,6 +947,15 @@ Output:
                        help='Also test leave-one-rep-out subsets (when >=3 reps)')
     parser.add_argument('--adaptive-pruning', action='store_true',
                        help='Enable adaptive model pruning during search')
+    parser.add_argument('--finetune', type=str, default=None,
+                       help='Comma-separated fine-tuning methods: '
+                            'lora_chemberta, lora_molformer, mock_lora')
+    parser.add_argument('--finetune-epochs', type=int, default=5,
+                       help='Fine-tuning epochs per fold (default: 5)')
+    parser.add_argument('--lora-rank', type=int, default=8,
+                       help='LoRA rank (default: 8)')
+    parser.add_argument('--no-ft-cache', action='store_true',
+                       help='Disable fine-tuning cache')
 
     args = parser.parse_args()
 
@@ -977,6 +986,37 @@ Output:
     if args.model:
         models_arg = [m.strip() for m in args.model.split(',')]
 
+    # Build fine-tuning factories
+    rep_factories = None
+    if args.finetune:
+        ft_methods = [m.strip() for m in args.finetune.split(',')]
+        rep_factories = {}
+        ft_cache = not args.no_ft_cache
+        dataset_name = Path(args.dataset).stem if os.path.exists(args.dataset) else args.dataset
+
+        for method in ft_methods:
+            if method == 'mock_lora':
+                from kirby.finetuning._base import mock_factory
+                rep_factories['mock_lora'] = mock_factory(n_features=64, seed=args.seed)
+            elif method.startswith('lora_'):
+                from kirby.finetuning.molecular_lora import make_molecular_lora_factory
+                model_key = method.replace('lora_', '')
+                rep_factories[method] = make_molecular_lora_factory(
+                    smiles_list=smiles,
+                    dataset_name=dataset_name,
+                    base_model=model_key,
+                    lora_rank=args.lora_rank,
+                    epochs=args.finetune_epochs,
+                    cache=ft_cache,
+                )
+            else:
+                print(f"  WARNING: Unknown fine-tuning method '{method}', skipping")
+
+        if rep_factories:
+            print(f"\nFine-tuning factories: {list(rep_factories.keys())}")
+        else:
+            rep_factories = None
+
     # Call domain-agnostic search
     result = find_best_hybrid(
         base_reps=base_reps,
@@ -991,6 +1031,7 @@ Output:
         test_rep_subsets=args.test_rep_subsets,
         seed=args.seed,
         adaptive_pruning=args.adaptive_pruning,
+        rep_factories=rep_factories,
     )
 
     # Print summary (molecular-specific formatting)
