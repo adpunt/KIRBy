@@ -1074,6 +1074,16 @@ Output:
                             'Requires intra-family dataset with wildtype info.')
     parser.add_argument('--adaptive-pruning', action='store_true',
                        help='Enable adaptive model pruning during search')
+    parser.add_argument('--finetune', type=str, default=None,
+                       help='Comma-separated fine-tuning methods: '
+                            'lora_esm2, lora_esm2_small, lora_antiberty, lora_ablang2, '
+                            'mlm_esm2, mlm_esm2_small, mlm_antiberty, mock_lora')
+    parser.add_argument('--finetune-epochs', type=int, default=5,
+                       help='Fine-tuning epochs per fold (default: 5)')
+    parser.add_argument('--lora-rank', type=int, default=8,
+                       help='LoRA rank (default: 8)')
+    parser.add_argument('--no-ft-cache', action='store_true',
+                       help='Disable fine-tuning cache')
 
     args = parser.parse_args()
 
@@ -1126,6 +1136,50 @@ Output:
     if args.model:
         models_arg = [m.strip() for m in args.model.split(',')]
 
+    # Build fine-tuning factories
+    rep_factories = None
+    if args.finetune:
+        ft_methods = [m.strip() for m in args.finetune.split(',')]
+        rep_factories = {}
+        ft_cache = not args.no_ft_cache
+        dataset_name = Path(args.dataset).stem if os.path.exists(args.dataset) else args.dataset
+
+        for method in ft_methods:
+            if method == 'mock_lora':
+                from kirby.finetuning._base import mock_factory
+                rep_factories['mock_lora'] = mock_factory(n_features=64, seed=args.seed)
+            elif method.startswith('lora_'):
+                from kirby.finetuning.antibody_lora import make_antibody_lora_factory
+                model_key = method.replace('lora_', '')
+                rep_factories[method] = make_antibody_lora_factory(
+                    heavy_seqs=heavy_seqs,
+                    light_seqs=light_seqs,
+                    mutations=mutations,
+                    dataset_name=dataset_name,
+                    base_model=model_key,
+                    lora_rank=args.lora_rank,
+                    epochs=args.finetune_epochs,
+                    cache=ft_cache,
+                )
+            elif method.startswith('mlm_'):
+                from kirby.finetuning.antibody_mlm import make_antibody_mlm_factory
+                model_key = method.replace('mlm_', '')
+                rep_factories[method] = make_antibody_mlm_factory(
+                    heavy_seqs=heavy_seqs,
+                    mutations=mutations,
+                    dataset_name=dataset_name,
+                    base_model=model_key,
+                    mlm_epochs=args.finetune_epochs,
+                    cache=ft_cache,
+                )
+            else:
+                print(f"  WARNING: Unknown fine-tuning method '{method}', skipping")
+
+        if rep_factories:
+            print(f"\nFine-tuning factories: {list(rep_factories.keys())}")
+        else:
+            rep_factories = None
+
     # Call domain-agnostic search
     result = find_best_hybrid(
         base_reps=base_reps,
@@ -1142,6 +1196,7 @@ Output:
         augmentations=augmentations,
         cache=args.cache,
         adaptive_pruning=args.adaptive_pruning,
+        rep_factories=rep_factories,
     )
 
     # Print summary

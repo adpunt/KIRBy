@@ -564,6 +564,13 @@ Output:
                        help='Cache hybrid search results to disk')
     parser.add_argument('--adaptive-pruning', action='store_true',
                        help='Enable adaptive model pruning during search')
+    parser.add_argument('--finetune', type=str, default=None,
+                       help='Comma-separated fine-tuning methods: '
+                            'geneformer, mock_lora')
+    parser.add_argument('--finetune-epochs', type=int, default=3,
+                       help='Fine-tuning epochs per fold (default: 3)')
+    parser.add_argument('--no-ft-cache', action='store_true',
+                       help='Disable fine-tuning cache')
 
     args = parser.parse_args()
 
@@ -604,6 +611,35 @@ Output:
     else:
         metric = 'r2'
 
+    # Build fine-tuning factories
+    rep_factories = None
+    if args.finetune:
+        ft_methods = [m.strip() for m in args.finetune.split(',')]
+        rep_factories = {}
+        ft_cache = not args.no_ft_cache
+
+        for method in ft_methods:
+            if method == 'mock_lora':
+                from kirby.finetuning._base import mock_factory
+                rep_factories['mock_lora'] = mock_factory(n_features=64, seed=args.seed)
+            elif method == 'geneformer':
+                from kirby.finetuning.tcga_geneformer import make_geneformer_factory
+                rep_factories['geneformer'] = make_geneformer_factory(
+                    expression_data=expression,
+                    sample_ids=sample_ids,
+                    dataset_name=args.dataset,
+                    task_type=task_type,
+                    epochs=args.finetune_epochs,
+                    cache=ft_cache,
+                )
+            else:
+                print(f"  WARNING: Unknown fine-tuning method '{method}', skipping")
+
+        if rep_factories:
+            print(f"\nFine-tuning factories: {list(rep_factories.keys())}")
+        else:
+            rep_factories = None
+
     # Call domain-agnostic search
     result = find_best_hybrid(
         base_reps=base_reps,
@@ -619,6 +655,7 @@ Output:
         seed=args.seed,
         cache=args.cache,
         adaptive_pruning=args.adaptive_pruning,
+        rep_factories=rep_factories,
     )
 
     # Print summary
