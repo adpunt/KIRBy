@@ -56,6 +56,18 @@ AA_PROPERTIES = {
     'V': {'hydrophobicity':  4.2, 'charge':  0.0, 'mw': 117.15, 'volume': 140.0, 'polarity':  0.0, 'flexibility': 0.390},
 }
 
+# Physicochemical property normalization stats (z-score across 20 standard AAs)
+# Computed from AA_PROPERTIES above: mean and std for each property
+_PHYSCHEM_PROPS = ['hydrophobicity', 'charge', 'mw', 'volume', 'polarity', 'flexibility']
+_PHYSCHEM_NORM = {
+    'hydrophobicity': {'mean':  0.49, 'std': 3.16},
+    'charge':         {'mean':  0.005, 'std': 0.55},
+    'mw':             {'mean': 136.91, 'std': 32.73},
+    'volume':         {'mean': 141.28, 'std': 40.80},
+    'polarity':       {'mean':  0.45, 'std': 0.51},
+    'flexibility':    {'mean':  0.426, 'std': 0.074},
+}
+
 # Sequence liability motifs known to cause manufacturing/stability issues
 # Reference: Lu et al. (2019) "Deamidation and isomerization liability analysis..."
 LIABILITY_MOTIFS = {
@@ -2826,22 +2838,30 @@ def compute_lm_mutation_scores(
     - Sum of LM scores (total predicted effect) (1D)
     - Number of unfavorable mutations (score < 0) (1D)
 
+    Each model path returns (logprobs, aa_to_col) where aa_to_col maps
+    standard AA characters to their column index in the logprobs array,
+    ensuring correct vocabulary alignment regardless of tokenizer.
+
     Falls back to BLOSUM62 proxy if LM unavailable.
 
     Args:
         wt_seq: Wildtype sequence.
         mut_seqs: List of mutant sequences.
         mutations: Per-sample mutation lists.
-        model_name: 'ablang2' or 'esm2'.
+        model_name: 'ablang2', 'esm2', 'prot_t5', or 'antiberty'.
 
     Returns:
         np.ndarray: (n_samples, 5) LM mutation score features.
     """
     n = len(mut_seqs)
     features = np.zeros((n, 5), dtype=np.float64)
+    standard_aas = 'ACDEFGHIKLMNPQRSTVWY'
 
+    # Each model path sets logits_fn and aa_to_col.
+    # logits_fn(seq) -> (seq_len, vocab_size) log-probability array
+    # aa_to_col: dict mapping AA char -> column index in logprobs
     logits_fn = None
-    aa_order_str = 'ACDEFGHIKLMNPQRSTVWY'
+    aa_to_col = None
 
     if model_name == 'ablang2':
         try:
@@ -2850,22 +2870,44 @@ def compute_lm_mutation_scores(
                                            random_init=False, device='cpu')
             abl_model.freeze()
 
-            def _ablang2_logits(seq):
-                res = abl_model([seq], ['*'], mode='likelihood')
-                return res[0]  # (seq_len, vocab_size)
+            # AbLang2 tokenizer exposes aa_to_token dict:
+            # {'<': 0, 'M': 1, ..., 'A': 14, 'V': 15, ..., 'L': 20, '-': 21, ...}
+            # .likelihood() returns (seq_len, vocab_size) WITHOUT special tokens
+            _abl_aa_to_col = {}
+            _abl_tok = abl_model.tokenizer
+            if hasattr(_abl_tok, 'aa_to_token'):
+                for aa in standard_aas:
+                    if aa in _abl_tok.aa_to_token:
+                        _abl_aa_to_col[aa] = _abl_tok.aa_to_token[aa]
 
-            logits_fn = _ablang2_logits
-            print(f"  LM scoring with AbLang2...")
+            if len(_abl_aa_to_col) >= 18:
+                def _ablang2_logits(seq):
+                    res = abl_model.likelihood([seq], ['*'])
+                    return res[0]  # (seq_len, 26) — no special tokens
+
+                logits_fn = _ablang2_logits
+                aa_to_col = _abl_aa_to_col
+                print(f"  LM scoring with AbLang2 ({len(aa_to_col)} AAs mapped)...")
+            else:
+                print(f"  AbLang2 vocab mapping failed ({len(_abl_aa_to_col)} AAs), "
+                      f"using BLOSUM62 fallback")
+
         except Exception as e:
-            print(f"  AbLang2 failed ({e}), trying ESM-2...")
-            model_name = 'esm2'
+            print(f"  AbLang2 failed ({e}), using BLOSUM62 fallback")
 
-    if logits_fn is None and model_name == 'esm2':
+    elif model_name == 'esm2':
         try:
             from transformers import AutoTokenizer, EsmForMaskedLM
             esm_tokenizer = AutoTokenizer.from_pretrained('facebook/esm2_t33_650M_UR50D')
             esm_model = EsmForMaskedLM.from_pretrained('facebook/esm2_t33_650M_UR50D')
             esm_model.eval()
+
+            # ESM-2 vocab: map AA chars to token IDs
+            _esm_aa_to_col = {}
+            for aa in standard_aas:
+                tid = esm_tokenizer.convert_tokens_to_ids(aa)
+                if tid != esm_tokenizer.unk_token_id:
+                    _esm_aa_to_col[aa] = tid
 
             def _esm2_logits(seq):
                 inputs = esm_tokenizer(seq, return_tensors='pt',
@@ -2876,11 +2918,97 @@ def compute_lm_mutation_scores(
                 return logprobs[1:-1].numpy()  # strip BOS/EOS
 
             logits_fn = _esm2_logits
-            print(f"  LM scoring with ESM-2...")
+            aa_to_col = _esm_aa_to_col
+            print(f"  LM scoring with ESM-2 ({len(aa_to_col)} AAs mapped)...")
         except Exception as e:
-            print(f"  ESM-2 also failed ({e}), using BLOSUM62 fallback")
+            print(f"  ESM-2 failed ({e}), using BLOSUM62 fallback")
 
-    if logits_fn is None:
+    elif model_name == 'prot_t5':
+        try:
+            from transformers import T5Tokenizer, T5EncoderModel
+            import re as _re
+
+            t5_tokenizer = T5Tokenizer.from_pretrained(
+                'Rostlab/prot_t5_xl_bfd', do_lower_case=False
+            )
+            # Use encoder-only for masked marginal scoring.
+            # ProtT5 was trained with span corruption — the encoder is
+            # the useful part. We mask each mutation position and predict.
+            t5_encoder = T5EncoderModel.from_pretrained(
+                'Rostlab/prot_t5_xl_bfd'
+            ).eval()
+
+            # ProtT5 uses SentencePiece; map AAs to token IDs
+            _t5_aa_to_col = {}
+            for aa in standard_aas:
+                # SentencePiece encodes single chars; need the spaced form
+                tids = t5_tokenizer.encode(aa, add_special_tokens=False)
+                if len(tids) == 1:
+                    _t5_aa_to_col[aa] = tids[0]
+
+            # For ProtT5, masked marginal scoring is expensive (one forward
+            # pass per position). Instead, use the encoder hidden states and
+            # compute a simple linear probe: project hidden states to vocab
+            # logits using the shared embedding matrix.
+            _shared_emb = t5_encoder.shared.weight  # (vocab_size, 1024)
+
+            def _prot_t5_logits(seq):
+                seq_spaced = _re.sub(r'[UZOB]', 'X', ' '.join(list(seq.upper().strip())))
+                inputs = t5_tokenizer(
+                    seq_spaced, return_tensors='pt', truncation=True,
+                    max_length=1024, add_special_tokens=True
+                )
+                with torch.no_grad():
+                    outputs = t5_encoder(**inputs)
+                    hidden = outputs.last_hidden_state[0]  # (seq_len+1, 1024)
+                    # Project to vocab space via shared embedding
+                    logits = hidden @ _shared_emb.T  # (seq_len+1, vocab_size)
+                logprobs = torch.log_softmax(logits, dim=-1)
+                return logprobs[:-1].numpy()  # strip EOS
+
+            logits_fn = _prot_t5_logits
+            aa_to_col = _t5_aa_to_col
+            print(f"  LM scoring with ProtT5-XL encoder ({len(aa_to_col)} AAs mapped)...")
+        except Exception as e:
+            print(f"  ProtT5 failed ({e}), using BLOSUM62 fallback")
+
+    elif model_name == 'antiberty':
+        try:
+            from transformers import RoFormerTokenizer, RoFormerForMaskedLM
+
+            ab_tokenizer = RoFormerTokenizer.from_pretrained('alchemab/antiberta2')
+            ab_model = RoFormerForMaskedLM.from_pretrained('alchemab/antiberta2')
+            ab_model.eval()
+
+            # AntiBERTa2 vocab: map AA chars to token IDs
+            _ab_aa_to_col = {}
+            for aa in standard_aas:
+                tid = ab_tokenizer.convert_tokens_to_ids(aa)
+                if tid != ab_tokenizer.unk_token_id:
+                    _ab_aa_to_col[aa] = tid
+
+            def _antiberty_logits(seq):
+                seq_upper = seq.upper().strip()
+                # AntiBERTa2 RoFormerTokenizer: each AA becomes one token
+                # Tokenization: [CLS, AA1, AA2, ..., AAN, SEP, PAD...]
+                inputs = ab_tokenizer(
+                    ' '.join(list(seq_upper)), return_tensors='pt',
+                    truncation=True, max_length=256
+                )
+                with torch.no_grad():
+                    output = ab_model(**inputs)
+                logprobs = torch.log_softmax(output.logits[0], dim=-1)
+                # Strip CLS (pos 0) and find SEP position
+                n_real = inputs['attention_mask'][0].sum().item() - 2  # minus CLS, SEP
+                return logprobs[1:1 + n_real].numpy()  # AA positions only
+
+            logits_fn = _antiberty_logits
+            aa_to_col = _ab_aa_to_col
+            print(f"  LM scoring with AntiBERTy ({len(aa_to_col)} AAs mapped)...")
+        except Exception as e:
+            print(f"  AntiBERTy failed ({e}), using BLOSUM62 fallback")
+
+    if logits_fn is None or aa_to_col is None:
         # Fallback: BLOSUM62 proxy
         print(f"  Using BLOSUM62 fallback for mutation scoring")
         for i, muts in enumerate(mutations):
@@ -2903,7 +3031,7 @@ def compute_lm_mutation_scores(
         print(f"  Generated lm_score features (BLOSUM62 fallback): ({n}, 5)")
         return features
 
-    # Use actual LM logits
+    # Use actual LM logits with correct vocab mapping
     # Cache WT logits (compute once)
     try:
         wt_logprobs = logits_fn(wt_seq)
@@ -2927,11 +3055,11 @@ def compute_lm_mutation_scores(
                     continue
                 wt_aa = m.get('wt_aa', '-')
                 mut_aa = m.get('mut_aa', '-')
-                if wt_aa in aa_order_str and mut_aa in aa_order_str:
-                    wt_idx = aa_order_str.index(wt_aa)
-                    mut_idx = aa_order_str.index(mut_aa)
-                    if wt_logprobs.ndim == 2 and wt_logprobs.shape[1] >= 20:
-                        score = float(wt_logprobs[pos, mut_idx] - wt_logprobs[pos, wt_idx])
+                if wt_aa in aa_to_col and mut_aa in aa_to_col:
+                    wt_col = aa_to_col[wt_aa]
+                    mut_col = aa_to_col[mut_aa]
+                    if wt_logprobs.ndim == 2 and max(wt_col, mut_col) < wt_logprobs.shape[1]:
+                        score = float(wt_logprobs[pos, mut_col] - wt_logprobs[pos, wt_col])
                         scores.append(score)
             if scores:
                 features[i, 0] = np.mean(scores)
@@ -2944,3 +3072,298 @@ def compute_lm_mutation_scores(
 
     print(f"  Generated lm_score features ({model_name}): ({n}, 5)")
     return features
+
+
+def create_esm2_site_embedding(
+    wt_seq: str,
+    mut_seqs: List[str],
+    mutations: List[List[Dict]],
+    model_name: str = 'facebook/esm2_t33_650M_UR50D',
+    device: str = 'cpu',
+) -> np.ndarray:
+    """Extract ESM-2 per-residue embeddings at mutation site(s).
+
+    Instead of mean-pooling the entire sequence (which destroys mutation-specific
+    signal), extracts the hidden state vector at each mutation position from the
+    wildtype sequence. If multiple mutations, averages the site embeddings.
+
+    This preserves per-position structural/functional information that mean-pooling
+    discards — critical for DMS tasks where only 1-2 residues change.
+
+    Args:
+        wt_seq: Wildtype heavy chain sequence.
+        mut_seqs: List of mutant sequences (unused, but kept for API consistency).
+        mutations: Per-sample mutation lists from FLAb loader.
+        model_name: ESM-2 HuggingFace model name.
+        device: 'cpu' or 'cuda'.
+
+    Returns:
+        np.ndarray: (n_samples, 1280) site embeddings.
+    """
+    try:
+        from transformers import AutoTokenizer, EsmModel
+    except ImportError:
+        raise ImportError("ESM-2 site embedding requires transformers: pip install transformers")
+
+    print(f"  Loading ESM-2 for site embeddings ({model_name.split('/')[-1]})...")
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = EsmModel.from_pretrained(model_name).to(device).eval()
+
+    # Get per-residue embeddings for wildtype (compute once)
+    wt_upper = wt_seq.upper().strip()
+    inputs = tokenizer(wt_upper, return_tensors='pt', truncation=True, max_length=1024)
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+    with torch.no_grad():
+        outputs = model(**inputs)
+    # Shape: (1, seq_len+2, hidden_dim) — strip BOS/EOS
+    wt_hidden = outputs.last_hidden_state[0, 1:-1].cpu().numpy()  # (seq_len, 1280)
+    hidden_dim = wt_hidden.shape[1]
+
+    n = len(mutations)
+    features = np.zeros((n, hidden_dim), dtype=np.float32)
+
+    for i, muts in enumerate(mutations):
+        if not muts:
+            continue
+        heavy_muts = [m for m in muts if m.get('chain', 'heavy') == 'heavy']
+        if not heavy_muts:
+            continue
+
+        site_embs = []
+        for m in heavy_muts:
+            pos = m['pos']
+            if pos < len(wt_hidden):
+                site_embs.append(wt_hidden[pos])
+        if site_embs:
+            features[i] = np.mean(site_embs, axis=0)
+
+    print(f"  Generated esm2_site features: ({n}, {hidden_dim})")
+    return features
+
+
+# ============================================================================
+# VARIABLE-POSITION ENCODING (for intra-family DMS datasets)
+# ============================================================================
+
+def create_variable_position_encoding(
+    heavy_sequences: List[str],
+    light_sequences: Optional[List[str]] = None,
+    encoding: str = 'onehot',
+    region: str = 'all',
+    include_position_index: bool = True,
+    min_variation_fraction: float = 0.0,
+    max_variable_positions: int = 200,
+) -> np.ndarray:
+    """Encode only the variable positions across a set of aligned sequences.
+
+    For intra-family DMS datasets (e.g., FLAb expression_koenig with ~4,275
+    single-site mutants), full-sequence representations encode 99% invariant
+    information, drowning the mutation signal. This function identifies
+    positions that actually vary across samples and encodes only those,
+    yielding a compact, maximally discriminative representation.
+
+    Three encoding variants:
+    - 'onehot': 20D binary per variable position (maximum discrimination)
+    - 'blosum': 20D BLOSUM62 row per position (captures evolutionary similarity)
+    - 'physchem': 6D z-scored physicochemical properties (compact, interpretable)
+
+    Region filtering (approximate Chothia boundaries):
+    - 'all': All variable positions (default)
+    - 'cdr': Only CDR positions (H1+H2+H3, L1+L2+L3)
+    - 'cdr_h3': Only CDR-H3 positions (most variable, critical for binding)
+    - 'framework': Only framework positions (outside CDRs)
+
+    When include_position_index=True, appends a normalized position index
+    (pos / seq_len) per variable position, adding 1D per position.
+
+    Args:
+        heavy_sequences: List of heavy chain amino acid sequences.
+        light_sequences: Optional list of light chain sequences.
+        encoding: One of 'onehot', 'blosum', 'physchem'.
+        region: One of 'all', 'cdr', 'cdr_h3', 'framework'.
+        include_position_index: Whether to append normalized position index.
+        min_variation_fraction: Minimum fraction of samples that must differ
+            from consensus at a position for it to be considered variable.
+            0.0 means any variation counts.
+        max_variable_positions: Cap on number of variable positions (selects
+            the most variable if exceeded).
+
+    Returns:
+        np.ndarray: (n_samples, n_features) variable-position encoding.
+    """
+    # Approximate Chothia CDR boundaries (0-indexed)
+    _CDR_H = {'H1': (26, 32), 'H2': (52, 56), 'H3': (95, 102)}
+    _CDR_L = {'L1': (24, 34), 'L2': (50, 56), 'L3': (89, 97)}
+
+    def _in_cdr(pos: int, chain: str) -> bool:
+        """Check if position falls within any CDR."""
+        cdrs = _CDR_H if chain == 'heavy' else _CDR_L
+        return any(start <= pos <= end for start, end in cdrs.values())
+
+    def _in_cdr_h3(pos: int, chain: str) -> bool:
+        """Check if position falls within CDR-H3."""
+        if chain != 'heavy':
+            return False
+        start, end = _CDR_H['H3']
+        return start <= pos <= end
+
+    def _pos_filter(pos: int, chain: str) -> bool:
+        """Return True if this position should be included given the region."""
+        if region == 'all':
+            return True
+        elif region == 'cdr':
+            return _in_cdr(pos, chain)
+        elif region == 'cdr_h3':
+            return _in_cdr_h3(pos, chain)
+        elif region == 'framework':
+            return not _in_cdr(pos, chain)
+        else:
+            raise ValueError(f"Unknown region '{region}'. Use 'all', 'cdr', 'cdr_h3', 'framework'.")
+    n = len(heavy_sequences)
+    aa_order = list(STANDARD_AAS)  # 'ACDEFGHIKLMNPQRSTVWY'
+    aa_to_idx = {aa: i for i, aa in enumerate(aa_order)}
+
+    def _find_variable_positions(sequences: List[str], chain: str = 'heavy'):
+        """Find positions that vary across sequences.
+
+        Args:
+            sequences: List of amino acid sequences.
+            chain: 'heavy' or 'light' — used for region filtering.
+
+        Returns list of (position_index, variation_fraction) sorted by
+        descending variation fraction.
+        """
+        if not sequences:
+            return []
+
+        # Align by position (assumes same-length sequences for DMS)
+        max_len = max(len(s) for s in sequences)
+        variable = []
+
+        for pos in range(max_len):
+            # Apply region filter
+            if not _pos_filter(pos, chain):
+                continue
+
+            aas_at_pos = []
+            for seq in sequences:
+                if pos < len(seq):
+                    aa = seq[pos].upper()
+                    if aa in aa_to_idx:
+                        aas_at_pos.append(aa)
+
+            if not aas_at_pos:
+                continue
+
+            unique_aas = set(aas_at_pos)
+            if len(unique_aas) <= 1:
+                continue  # invariant position
+
+            # Compute consensus (mode) and variation fraction
+            from collections import Counter
+            counts = Counter(aas_at_pos)
+            consensus_count = counts.most_common(1)[0][1]
+            var_frac = 1.0 - consensus_count / len(aas_at_pos)
+
+            if var_frac >= min_variation_fraction:
+                variable.append((pos, var_frac))
+
+        # Sort by variation fraction (most variable first)
+        variable.sort(key=lambda x: -x[1])
+        return variable
+
+    def _encode_positions(sequences: List[str], var_positions: List[Tuple[int, float]]):
+        """Encode variable positions for all sequences.
+
+        Returns (n_samples, n_features) array.
+        """
+        if not var_positions:
+            return np.zeros((n, 0), dtype=np.float32)
+
+        # Cap at max_variable_positions
+        positions = var_positions[:max_variable_positions]
+
+        if encoding == 'onehot':
+            dim_per_pos = 20
+        elif encoding == 'blosum':
+            dim_per_pos = 20
+        elif encoding == 'physchem':
+            dim_per_pos = len(_PHYSCHEM_PROPS)
+        else:
+            raise ValueError(f"Unknown encoding '{encoding}'. Use 'onehot', 'blosum', or 'physchem'.")
+
+        if include_position_index:
+            dim_per_pos += 1
+
+        features = np.zeros((n, len(positions) * dim_per_pos), dtype=np.float32)
+
+        for i, seq in enumerate(sequences):
+            seq_upper = seq.upper()
+            seq_len = len(seq_upper)
+
+            for j, (pos, _) in enumerate(positions):
+                offset = j * dim_per_pos
+
+                if pos >= seq_len:
+                    continue
+
+                aa = seq_upper[pos]
+                if aa not in aa_to_idx:
+                    continue
+
+                if encoding == 'onehot':
+                    features[i, offset + aa_to_idx[aa]] = 1.0
+                elif encoding == 'blosum':
+                    row = BLOSUM62_MATRIX.get(aa, {})
+                    for k, target_aa in enumerate(aa_order):
+                        features[i, offset + k] = row.get(target_aa, 0.0)
+                elif encoding == 'physchem':
+                    props = AA_PROPERTIES.get(aa, {})
+                    for k, prop in enumerate(_PHYSCHEM_PROPS):
+                        raw = props.get(prop, 0.0)
+                        norm = _PHYSCHEM_NORM[prop]
+                        features[i, offset + k] = (raw - norm['mean']) / max(norm['std'], 1e-8)
+
+                if include_position_index:
+                    features[i, offset + dim_per_pos - 1] = pos / max(seq_len, 1)
+
+        return features
+
+    # Process heavy chain
+    heavy_var = _find_variable_positions(heavy_sequences, 'heavy')
+
+    # Process light chain (skip if cdr_h3 — only heavy chain relevant)
+    light_var = []
+    if light_sequences and region != 'cdr_h3':
+        light_var = _find_variable_positions(light_sequences, 'light')
+
+    total_var = len(heavy_var) + len(light_var)
+
+    # If more than max_variable_positions total, distribute proportionally
+    if total_var > max_variable_positions:
+        h_share = max(1, int(max_variable_positions * len(heavy_var) / total_var))
+        l_share = max_variable_positions - h_share
+        heavy_var = heavy_var[:h_share]
+        light_var = light_var[:l_share]
+
+    heavy_feat = _encode_positions(heavy_sequences, heavy_var)
+    light_feat = np.zeros((n, 0), dtype=np.float32)
+    if light_sequences and light_var:
+        light_feat = _encode_positions(light_sequences, light_var)
+
+    # Concatenate heavy + light
+    if light_feat.shape[1] > 0:
+        result = np.hstack([heavy_feat, light_feat])
+    else:
+        result = heavy_feat
+
+    # Edge case: no variable positions at all
+    if result.shape[1] == 0:
+        warnings.warn("No variable positions found — returning zeros. "
+                       "This may indicate all sequences are identical.")
+        result = np.zeros((n, 1), dtype=np.float32)
+
+    region_tag = f"_{region}" if region != 'all' else ''
+    print(f"  Generated varpos_{encoding}{region_tag} features: ({n}, {result.shape[1]}) "
+          f"[{len(heavy_var)} heavy + {len(light_var)} light variable positions]")
+    return result

@@ -132,6 +132,11 @@ setup(
             # ANARCI: conda install -c bioconda anarci
         ],
 
+        # Drug-target affinity (DAVIS, KIBA)
+        "dta": [
+            "PyTDC>=0.4.0",
+        ],
+
         # TCGA genomics / histopathology
         "tcga": [
             "scanpy>=1.9.0",

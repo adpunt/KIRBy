@@ -53,6 +53,7 @@ class Blueprint:
     allocation_method: str
     importance_method: str
     budget: int
+    step_size: int = 10
     speed: str = ''
     n_folds: int = 0
     seed: int = 42
@@ -65,6 +66,7 @@ class Blueprint:
             'allocation_method': self.allocation_method,
             'importance_method': self.importance_method,
             'budget': self.budget,
+            'step_size': self.step_size,
             'speed': self.speed,
             'n_folds': self.n_folds,
             'seed': self.seed,
@@ -295,7 +297,7 @@ SPEED_TIERS = {
             'treeshap', 'xgboost_gain', 'lightgbm_gain', 'deeplift',
             'permutation', 'kernelshap',
         ],
-        'allocation_methods': ['greedy', 'performance_weighted'],
+        'allocation_methods': ['greedy', 'performance_weighted', 'softmax_T5'],
         'budgets': [50, 100, 200],
         'n_folds': 5,
     },
@@ -306,7 +308,8 @@ SPEED_TIERS = {
             'integrated_gradients', 'gradientshap',
         ],
         'allocation_methods': [
-            'greedy', 'performance_weighted', 'two_stage', 'stability_selection',
+            'greedy', 'performance_weighted', 'softmax_T5', 'dominant_greedy',
+            'two_stage', 'stability_selection',
         ],
         'budgets': [50, 100, 200, 500],
         'n_folds': 5,
@@ -375,6 +378,7 @@ def _evaluate_hybrid_config(
     n_folds: int,
     metric_fn: Callable,
     seed: int = 42,
+    step_size: int = 10,
     augmentations: Optional[Dict[str, np.ndarray]] = None,
     augmentation_strategy: str = 'greedy_ablation',
     augmentation_threshold: Optional[float] = None,
@@ -408,6 +412,7 @@ def _evaluate_hybrid_config(
                 train_reps, y_train,
                 allocation_method=allocation_method,
                 budget=budget,
+                step_size=step_size,
                 importance_method=importance_method,
                 augmentations=train_augs,
                 augmentation_strategy=augmentation_strategy,
@@ -446,6 +451,7 @@ def _evaluate_hybrid_config(
         allocation_method=allocation_method,
         importance_method=importance_method,
         budget=budget,
+        step_size=step_size,
     )
 
     return {
@@ -459,6 +465,7 @@ def _evaluate_hybrid_config(
         'allocation_method': allocation_method,
         'importance_method': importance_method,
         'budget': budget,
+        'step_size': step_size,
     }
 
 
@@ -649,6 +656,129 @@ def _run_search(
 
 
 # =============================================================================
+# TWO-PHASE REFINEMENT
+# =============================================================================
+
+# Allocation methods where step_size has an effect (greedy-based methods)
+_STEP_SIZE_SENSITIVE = {'greedy', 'dominant_greedy', 'greedy_feature'}
+
+
+def _run_refinement_phase(
+    phase1_results: List[dict],
+    base_reps: Dict[str, np.ndarray],
+    labels: np.ndarray,
+    groups: Optional[np.ndarray],
+    models: Dict[str, Any],
+    metric_fn: Callable,
+    n_folds: int,
+    seed: int = 42,
+    top_n: int = 5,
+    step_sizes: Optional[List[int]] = None,
+    verbose: bool = True,
+    augmentations: Optional[Dict[str, np.ndarray]] = None,
+    augmentation_strategy: str = 'greedy_ablation',
+    augmentation_threshold: Optional[float] = None,
+    augmentation_budget: int = 20,
+) -> List[dict]:
+    """Phase 2: re-evaluate top configs from Phase 1 with alternative step_sizes.
+
+    Filters to greedy-based allocations only (step_size irrelevant for
+    performance_weighted/fixed). Deduplicates by (model, alloc, budget, importance)
+    before picking top N.
+
+    Returns list of result dicts (same shape as _run_search output).
+    """
+    from kirby.hybrid import NAMED_ALLOCATIONS
+
+    if step_sizes is None:
+        step_sizes = [1, 2, 5, 10, 25]
+
+    # Resolve named allocations to find which are step-size sensitive
+    def _is_step_sensitive(alloc_name):
+        base = alloc_name
+        if alloc_name in NAMED_ALLOCATIONS:
+            base = NAMED_ALLOCATIONS[alloc_name][0]
+        return base in _STEP_SIZE_SENSITIVE
+
+    # Filter to step-size sensitive configs
+    sensitive = [r for r in phase1_results if _is_step_sensitive(r['allocation_method'])]
+    if not sensitive:
+        if verbose:
+            print("  Refinement: no step-size-sensitive allocations to refine.")
+        return []
+
+    # Sort by score descending, deduplicate by (model, alloc, budget, importance)
+    sensitive.sort(key=lambda r: r['score_mean'], reverse=True)
+    seen = set()
+    unique = []
+    for r in sensitive:
+        key = (r['model'], r['allocation_method'], r['budget'], r['importance_method'])
+        if key not in seen:
+            seen.add(key)
+            unique.append(r)
+            if len(unique) >= top_n:
+                break
+
+    # Phase 1 default step_size
+    phase1_step = 10
+
+    # Evaluate each top config with alternative step_sizes
+    refinement_results = []
+    total = len(unique) * len([s for s in step_sizes if s != phase1_step])
+
+    if verbose:
+        print(f"\nRefinement phase: {len(unique)} configs x "
+              f"{len(step_sizes) - (1 if phase1_step in step_sizes else 0)} step_sizes "
+              f"= {total} evaluations")
+
+    idx = 0
+    for r in unique:
+        model_name = r['model']
+        model = models[model_name]
+        for ss in step_sizes:
+            if ss == r.get('step_size', phase1_step):
+                continue  # Already evaluated in phase 1
+            idx += 1
+            try:
+                result = _evaluate_hybrid_config(
+                    base_reps=base_reps,
+                    labels=labels,
+                    allocation_method=r['allocation_method'],
+                    budget=r['budget'],
+                    importance_method=r['importance_method'],
+                    model=model,
+                    model_name=model_name,
+                    groups=groups,
+                    n_folds=n_folds,
+                    metric_fn=metric_fn,
+                    seed=seed,
+                    step_size=ss,
+                    augmentations=augmentations,
+                    augmentation_strategy=augmentation_strategy,
+                    augmentation_threshold=augmentation_threshold,
+                    augmentation_budget=augmentation_budget,
+                )
+                result['refinement_phase'] = True
+                refinement_results.append(result)
+
+                if verbose:
+                    print(
+                        f"  [refine {idx}/{total}] {model_name}/"
+                        f"{r['allocation_method']}/b={r['budget']}/step={ss}: "
+                        f"score={result['score_mean']:.4f}+/-{result['score_std']:.3f}"
+                    )
+            except Exception as e:
+                if verbose:
+                    print(
+                        f"  [refine {idx}/{total}] {model_name}/"
+                        f"{r['allocation_method']}/b={r['budget']}/step={ss}: "
+                        f"FAILED - {e}"
+                    )
+
+    return refinement_results
+
+
+# =============================================================================
 # RESULT AGGREGATION
 # =============================================================================
 
@@ -732,6 +862,7 @@ def _compute_fitted_result(
         reps_to_use, labels,
         allocation_method=blueprint.allocation_method,
         budget=blueprint.budget,
+        step_size=blueprint.step_size,
         importance_method=blueprint.importance_method,
         augmentations=augmentations,
         augmentation_strategy=augmentation_strategy,
@@ -774,7 +905,9 @@ def _compute_fitted_result(
 
 def _hybrid_cache_key(base_reps, labels, groups, speed, budgets, allocation_methods,
                       importance_methods, n_folds, models, seed, metric, task_type,
-                      return_fitted=False, weight_method=None) -> str:
+                      return_fitted=False, weight_method=None,
+                      two_phase=False, refinement_top_n=5,
+                      refinement_step_sizes=None) -> str:
     """SHA256 hash of all search-affecting inputs."""
     h = hashlib.sha256()
     for name in sorted(base_reps.keys()):
@@ -783,7 +916,7 @@ def _hybrid_cache_key(base_reps, labels, groups, speed, budgets, allocation_meth
     h.update(labels.tobytes())
     if groups is not None:
         h.update(groups.tobytes())
-    h.update(f"{speed}|{budgets}|{allocation_methods}|{importance_methods}|{n_folds}|{seed}|{metric}|{task_type}|{return_fitted}|{weight_method}".encode())
+    h.update(f"{speed}|{budgets}|{allocation_methods}|{importance_methods}|{n_folds}|{seed}|{metric}|{task_type}|{return_fitted}|{weight_method}|{two_phase}|{refinement_top_n}|{refinement_step_sizes}".encode())
     if models:
         model_names = sorted(models.keys()) if isinstance(models, dict) else sorted(models)
         h.update("|".join(model_names).encode())
@@ -817,6 +950,9 @@ def find_best_hybrid(
     augmentation_budget: int = 20,
     adaptive_pruning: bool = False,
     pruning_threshold: float = 0.5,
+    two_phase: bool = False,
+    refinement_top_n: int = 5,
+    refinement_step_sizes: Optional[List[int]] = None,
     seed: int = 42,
     verbose: bool = True,
     cache: bool = False,
@@ -870,6 +1006,8 @@ def find_best_hybrid(
             base_reps, labels, groups, speed, budgets, allocation_methods,
             importance_methods, n_folds, models, seed, metric, task_type,
             return_fitted=return_fitted, weight_method=weight_method,
+            two_phase=two_phase, refinement_top_n=refinement_top_n,
+            refinement_step_sizes=refinement_step_sizes,
         )
         cache_path = Path(cache_dir or Path.home() / '.cache' / 'kirby' / 'hybrid_search') / f'{key}.pkl'
         if cache_path.exists():
@@ -961,6 +1099,28 @@ def find_best_hybrid(
         adaptive_pruning=adaptive_pruning,
         pruning_threshold=pruning_threshold,
     )
+
+    # --- Two-phase refinement ---
+    if two_phase and all_results:
+        actual_folds_for_refine = n_folds if n_folds is not None else SPEED_TIERS[speed]['n_folds']
+        refinement_results = _run_refinement_phase(
+            phase1_results=all_results,
+            base_reps=base_reps,
+            labels=labels,
+            groups=groups,
+            models=resolved_models,
+            metric_fn=metric_fn,
+            n_folds=actual_folds_for_refine,
+            seed=seed,
+            top_n=refinement_top_n,
+            step_sizes=refinement_step_sizes,
+            verbose=verbose,
+            augmentations=augmentations,
+            augmentation_strategy=augmentation_strategy,
+            augmentation_threshold=augmentation_threshold,
+            augmentation_budget=augmentation_budget,
+        )
+        all_results.extend(refinement_results)
 
     # --- Aggregate ---
     agg = _aggregate_results(all_results, baselines, lower_is_better, dimension_tiers)

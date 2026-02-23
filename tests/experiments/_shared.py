@@ -42,7 +42,7 @@ INTERMEDIARY = {
     'n_splits': 1,
     'models': ['rf', 'knn', 'ridge', 'mlp', 'xgboost', 'lightgbm'],
     'budgets': [5, 10, 25, 50, 75, 100, 150, 200, 300, 500, 750, 1000],
-    'allocations': ['greedy', 'performance_weighted'],
+    'allocations': ['greedy', 'performance_weighted', 'softmax_T5', 'dominant_greedy'],
     'importance_methods': ['lightgbm_gain'],
     'search_speed': 'fast',
 }
@@ -51,7 +51,7 @@ FULL = {
     'n_splits': 5,
     'models': ['rf', 'knn', 'ridge', 'mlp', 'xgboost', 'lightgbm'],
     'budgets': [10, 25, 50, 100, 200, 500],
-    'allocations': ['greedy', 'performance_weighted'],
+    'allocations': ['greedy', 'performance_weighted', 'softmax_T2', 'softmax_T5', 'dominant_greedy'],
     'importance_methods': ['treeshap', 'lightgbm_gain', 'permutation', 'shap'],
     'search_speed': 'medium',
 }

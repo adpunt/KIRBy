@@ -90,6 +90,10 @@ echo ""
 echo ">>> C13: Greedy Step Size"
 python tests/experiments/complexity/c13_greedy_step_size.py $COMMON
 
+echo ""
+echo ">>> C14: Two-Phase Search"
+python tests/experiments/complexity/c14_two_phase_search.py $COMMON
+
 # --- Similarity experiments ---
 echo ""
 echo ">>> S01: Similarity Baseline"
