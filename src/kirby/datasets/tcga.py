@@ -55,6 +55,24 @@ _XENA_MC3_MAF = (
     "download/mc3.v0.2.8.PUBLIC.xena.gz"
 )
 
+# GISTIC2 gene-level copy number (per-cohort)
+_XENA_CNV_TEMPLATE = (
+    "https://tcga-xena-hub.s3.us-east-1.amazonaws.com/"
+    "download/TCGA.{cohort}.sampleMap%2FGistic2_CopyNumber_Gistic2_all_data_by_genes.gz"
+)
+
+# RPPA protein expression (pan-cancer, ~260 proteins)
+_XENA_RPPA = (
+    "https://pancanatlas.xenahubs.net/"
+    "download/TCGA-RPPA-pancan-clean.xena.gz"
+)
+
+# miRNA expression (per-cohort, HiSeq)
+_XENA_MIRNA_TEMPLATE = (
+    "https://tcga-xena-hub.s3.us-east-1.amazonaws.com/"
+    "download/TCGA.{cohort}.sampleMap%2FmiRNA_HiSeq_gene.gz"
+)
+
 # GigaSSL pre-computed WSI features (Mendeley Data v6, Lazard et al. 2024)
 # DOI: 10.17632/d573xfd9fg.6
 _GIGASSL_DOWNLOAD_BASE = (
@@ -163,12 +181,18 @@ def _download_xena_expression(cohort: str) -> Tuple[np.ndarray, np.ndarray, List
         content = gzip.decompress(resp.content)
         df_full = pd.read_csv(io.BytesIO(content), sep='\t', index_col=0)
 
-        # Filter to cohort samples (columns are sample IDs)
-        cohort_cols = [c for c in df_full.columns if c.startswith(cohort.replace('TCGA-', 'TCGA-'))]
+        # Filter to TCGA samples only (Toil matrix also has TARGET + GTEx)
+        # NOTE: TCGA barcodes don't encode cohort/project, so we can't filter
+        # by cohort here. The per-cohort download above is the correct path.
+        # This fallback downloads ALL TCGA samples — wastes disk but still works
+        # because downstream code matches by sample ID.
+        cohort_cols = [c for c in df_full.columns if c.startswith('TCGA-')]
         if not cohort_cols:
-            # Try matching by the short barcode prefix
-            cohort_cols = [c for c in df_full.columns
-                           if c.startswith('TCGA-') and f'-{cohort_slug}.' in c]
+            raise ValueError(f"No TCGA samples found in Toil matrix")
+        warnings.warn(
+            f"Using pan-cancer fallback: got {len(cohort_cols)} TCGA samples "
+            f"(not filtered to {cohort}). Per-cohort download is preferred."
+        )
         df = df_full[cohort_cols]
 
     # Genes are rows, samples are columns — transpose
@@ -239,10 +263,15 @@ def _download_xena_clinical(cohort: str) -> pd.DataFrame:
     sample_col = next((c for c in df.columns if c.lower() == 'sample' or c.lower() == 'sampleid'), df.columns[0])
 
     cohort_slug = cohort.replace('TCGA-', '')
-    if disease_col:
-        # Match by disease type
-        mask = df[sample_col].str.startswith('TCGA-', na=False)
-        df = df[mask].copy()
+    # Filter to TCGA samples, then by disease type if possible
+    mask = df[sample_col].str.startswith('TCGA-', na=False)
+    df = df[mask].copy()
+    if disease_col and cohort_slug:
+        disease_mask = df[disease_col].astype(str).str.upper().str.contains(
+            cohort_slug.upper(), na=False
+        )
+        if disease_mask.any():
+            df = df[disease_mask].copy()
 
     df.to_csv(cached_csv, index=False)
     return df
@@ -397,31 +426,43 @@ def _get_pam50_labels(sample_ids: List[str]) -> Tuple[np.ndarray, List[str], np.
 # MUTATION DATA
 # =============================================================================
 
-def _download_mutations(cohort: str) -> pd.DataFrame:
-    """Download MC3 somatic mutation data from UCSC Xena.
+def _download_mutations(sample_ids: List[str]) -> pd.DataFrame:
+    """Download MC3 somatic mutation data from UCSC Xena, filtered to given samples.
 
-    Returns DataFrame with columns: sample, gene, effect (variant classification).
+    TCGA barcodes do NOT encode the project/cohort (LUAD, BRCA, etc.) —
+    the second field is a TSS code, not a disease code. So we filter by
+    the actual sample IDs rather than cohort name.
+
+    Args:
+        sample_ids: TCGA sample barcodes to keep (truncated to 12-char patient IDs)
+
+    Returns:
+        DataFrame with columns: sample, gene, effect (variant classification).
     """
     import requests
 
     cache = _cache_dir()
-    cached_csv = cache / f'{cohort.replace("-", "_").lower()}_mutations.csv'
+
+    # Cache key: hash of sorted sample IDs (so same sample set reuses cache)
+    import hashlib
+    sid_key = hashlib.sha256('\n'.join(sorted(set(s[:12] for s in sample_ids))).encode()).hexdigest()[:16]
+    cached_csv = cache / f'mutations_{sid_key}.csv'
 
     if cached_csv.exists():
         return pd.read_csv(cached_csv)
 
     print(f"  Downloading MC3 somatic mutations...")
-    # MC3 is a large file (~300MB compressed). Download and filter to cohort.
+    # MC3 is a large file (~300MB compressed). Download and filter to our samples.
     resp = requests.get(_XENA_MC3_MAF, timeout=600, stream=True)
     resp.raise_for_status()
 
     content = gzip.decompress(resp.content)
     df = pd.read_csv(io.BytesIO(content), sep='\t', low_memory=False)
 
-    # Filter to cohort samples
+    # Filter to our samples by patient ID (first 12 chars of barcode)
     sample_col = df.columns[0]  # Usually 'sample'
-    cohort_prefix = cohort.replace('TCGA-', 'TCGA-')
-    mask = df[sample_col].astype(str).str.startswith(cohort_prefix[:8], na=False)
+    patient_ids = set(s[:12] for s in sample_ids)
+    mask = df[sample_col].astype(str).str[:12].isin(patient_ids)
     df = df[mask].copy()
 
     # Standardize columns
@@ -436,8 +477,184 @@ def _download_mutations(cohort: str) -> pd.DataFrame:
         result['effect'] = df[effect_col]
 
     result.to_csv(cached_csv, index=False)
-    print(f"  {len(result)} mutations for {cohort}")
+    print(f"  {len(result)} mutations for {len(patient_ids)} patients")
     return result
+
+
+# =============================================================================
+# CNV DATA (GISTIC2)
+# =============================================================================
+
+def _download_xena_cnv(cohort: str) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+    """Download GISTIC2 gene-level copy number from UCSC Xena.
+
+    Args:
+        cohort: TCGA cohort, e.g. 'TCGA-LUAD'
+
+    Returns:
+        cnv_matrix: (n_samples, n_genes) GISTIC2 scores
+        gene_names: (n_genes,) gene symbols
+        sample_ids: TCGA barcodes (truncated to 15 chars)
+    """
+    import requests
+
+    cache = _cache_dir()
+    cohort_key = cohort.replace('-', '_').lower()
+    cached_npz = cache / f'{cohort_key}_cnv.npz'
+
+    if cached_npz.exists():
+        data = np.load(cached_npz, allow_pickle=True)
+        return data['cnv_matrix'], data['gene_names'], data['sample_ids'].tolist()
+
+    cohort_slug = cohort.replace('TCGA-', '').upper()
+    url = _XENA_CNV_TEMPLATE.format(cohort=cohort_slug)
+
+    print(f"  Downloading CNV data for {cohort} from UCSC Xena...")
+    resp = requests.get(url, timeout=300)
+    resp.raise_for_status()
+
+    content = gzip.decompress(resp.content)
+    df = pd.read_csv(io.BytesIO(content), sep='\t', index_col=0)
+
+    # Filter to primary tumor samples (sample type 01)
+    tumor_cols = [c for c in df.columns if len(c) >= 15 and c[13:15] == '01']
+    if not tumor_cols:
+        tumor_cols = list(df.columns)
+    df = df[tumor_cols]
+
+    gene_names = df.index.values.astype(str)
+    cnv_matrix = df.values.T.astype(np.float32)
+    sample_ids = [c[:15] for c in tumor_cols]
+
+    cnv_matrix = np.nan_to_num(cnv_matrix, nan=0.0)
+    print(f"  CNV matrix: {cnv_matrix.shape[0]} samples × {cnv_matrix.shape[1]} genes")
+
+    np.savez_compressed(cached_npz,
+                        cnv_matrix=cnv_matrix,
+                        gene_names=gene_names,
+                        sample_ids=np.array(sample_ids))
+    return cnv_matrix, gene_names, sample_ids
+
+
+# =============================================================================
+# RPPA DATA (protein expression)
+# =============================================================================
+
+def _download_xena_rppa(sample_ids: List[str]) -> Tuple[np.ndarray, np.ndarray]:
+    """Download RPPA pan-cancer protein expression from Xena.
+
+    Pan-cancer file (~260 proteins), filtered to matching sample_ids.
+
+    Args:
+        sample_ids: TCGA barcodes to match
+
+    Returns:
+        rppa_matrix: (n_samples, n_proteins) matched to input sample_ids order
+        protein_names: (n_proteins,) antibody/protein names
+    """
+    import requests
+
+    cache = _cache_dir()
+    cached_npz = cache / 'rppa_pancan.npz'
+
+    if cached_npz.exists():
+        data = np.load(cached_npz, allow_pickle=True)
+        all_matrix = data['rppa_matrix']
+        protein_names = data['protein_names']
+        all_ids = data['sample_ids'].tolist()
+    else:
+        print(f"  Downloading RPPA pan-cancer data from Xena...")
+        resp = requests.get(_XENA_RPPA, timeout=300)
+        resp.raise_for_status()
+
+        content = gzip.decompress(resp.content)
+        df = pd.read_csv(io.BytesIO(content), sep='\t', index_col=0)
+
+        protein_names = df.index.values.astype(str)
+        all_matrix = df.values.T.astype(np.float32)
+        all_ids = [c[:15] for c in df.columns]
+
+        all_matrix = np.nan_to_num(all_matrix, nan=0.0)
+        print(f"  RPPA pan-cancer: {all_matrix.shape[0]} samples × {all_matrix.shape[1]} proteins")
+
+        np.savez_compressed(cached_npz,
+                            rppa_matrix=all_matrix,
+                            protein_names=protein_names,
+                            sample_ids=np.array(all_ids))
+
+    # Match to requested sample_ids
+    id_to_idx = {}
+    for i, sid in enumerate(all_ids):
+        id_to_idx[sid] = i
+        id_to_idx[sid[:12]] = i  # patient-level fallback
+
+    n_proteins = len(protein_names)
+    result = np.zeros((len(sample_ids), n_proteins), dtype=np.float32)
+    n_found = 0
+    for i, sid in enumerate(sample_ids):
+        for trunc in [sid[:15], sid[:12]]:
+            if trunc in id_to_idx:
+                result[i] = all_matrix[id_to_idx[trunc]]
+                n_found += 1
+                break
+
+    print(f"  RPPA: {n_found}/{len(sample_ids)} samples matched, {n_proteins} proteins")
+    return result, protein_names
+
+
+# =============================================================================
+# miRNA DATA
+# =============================================================================
+
+def _download_xena_mirna(cohort: str) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+    """Download miRNA HiSeq expression from UCSC Xena.
+
+    Args:
+        cohort: TCGA cohort, e.g. 'TCGA-LUAD'
+
+    Returns:
+        mirna_matrix: (n_samples, n_mirnas) expression values
+        mirna_names: (n_mirnas,) miRNA identifiers
+        sample_ids: TCGA barcodes (truncated to 15 chars)
+    """
+    import requests
+
+    cache = _cache_dir()
+    cohort_key = cohort.replace('-', '_').lower()
+    cached_npz = cache / f'{cohort_key}_mirna.npz'
+
+    if cached_npz.exists():
+        data = np.load(cached_npz, allow_pickle=True)
+        return data['mirna_matrix'], data['mirna_names'], data['sample_ids'].tolist()
+
+    cohort_slug = cohort.replace('TCGA-', '').upper()
+    url = _XENA_MIRNA_TEMPLATE.format(cohort=cohort_slug)
+
+    print(f"  Downloading miRNA data for {cohort} from UCSC Xena...")
+    resp = requests.get(url, timeout=300)
+    resp.raise_for_status()
+
+    content = gzip.decompress(resp.content)
+    df = pd.read_csv(io.BytesIO(content), sep='\t', index_col=0)
+
+    # Filter to primary tumor samples
+    tumor_cols = [c for c in df.columns if len(c) >= 15 and c[13:15] == '01']
+    if not tumor_cols:
+        tumor_cols = list(df.columns)
+    df = df[tumor_cols]
+
+    mirna_names = df.index.values.astype(str)
+    mirna_matrix = df.values.T.astype(np.float32)
+    sample_ids = [c[:15] for c in tumor_cols]
+
+    mirna_matrix = np.nan_to_num(mirna_matrix, nan=0.0)
+    print(f"  miRNA matrix: {mirna_matrix.shape[0]} samples × {mirna_matrix.shape[1]} miRNAs")
+
+    np.savez_compressed(cached_npz,
+                        mirna_matrix=mirna_matrix,
+                        mirna_names=mirna_names,
+                        sample_ids=np.array(sample_ids))
+    return mirna_matrix, mirna_names, sample_ids
 
 
 # =============================================================================

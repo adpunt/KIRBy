@@ -77,26 +77,61 @@ REP_PRESETS = {
         'gene_pca100', 'gene_hallmark', 'gene_progeny',
         'wsi_ctranspath', 'wsi_phikon',
     ],  # 5 reps
+
+    'fast+diverse': [  # Maximally diverse paradigms, small footprint
+        'gene_pca100', 'gene_hallmark', 'gene_progeny',
+        'gene_nmf50', 'gene_stats', 'gene_immune',
+        'wsi_ctranspath', 'wsi_phikon',
+    ],  # 8 reps
+
+    'multimodal': [  # Cross-modality showcase
+        'gene_pca100', 'gene_hallmark', 'gene_immune',
+        'gene_nmf50', 'gene_stats',
+        'gene_mutation', 'cnv_gistic', 'rppa', 'mirna_top200', 'clinical',
+        'wsi_ctranspath', 'wsi_phikon',
+    ],  # 12 reps
+
     'fast+learned': [
         'gene_hvg2000', 'gene_pca100', 'gene_hallmark', 'gene_progeny',
         'gene_kegg', 'gene_dorothea', 'gene_combined_pathway',
+        'gene_nmf50', 'gene_ica50', 'gene_stats',
         'wsi_ctranspath', 'wsi_phikon', 'wsi_hoptimus0', 'wsi_moco',
         'wsi_titan',
-    ],  # 12 reps
+    ],  # 15 reps
+
     'all': [
+        # Expression-derived (14)
         'gene_hvg2000', 'gene_pca100', 'gene_hallmark', 'gene_progeny',
-        'gene_kegg', 'gene_dorothea', 'gene_combined_pathway', 'gene_mutation',
+        'gene_kegg', 'gene_dorothea', 'gene_combined_pathway',
+        'gene_nmf50', 'gene_ica50', 'gene_stats',
+        'gene_reactome', 'gene_oncogenic', 'gene_immune',
+        'gene_mutation',
+        # Multi-omic (5)
+        'cnv_gistic', 'cnv_pca50', 'rppa', 'mirna_top200', 'clinical',
+        # WSI (8)
         'wsi_ctranspath', 'wsi_phikon', 'wsi_hoptimus0', 'wsi_gigapath', 'wsi_moco',
         'wsi_titan', 'wsi_uni2h', 'wsi_cnn320',
-    ],  # 16 reps
+    ],  # 27 reps
+
     # Genomic-only presets (no WSI)
     'genomic_fast': [
         'gene_pca100', 'gene_hallmark', 'gene_progeny',
     ],  # 3 reps
+
+    'genomic_diverse': [  # Multi-omic without WSI
+        'gene_pca100', 'gene_hallmark', 'gene_immune',
+        'gene_nmf50', 'gene_stats', 'gene_mutation',
+        'cnv_gistic', 'rppa', 'mirna_top200', 'clinical',
+    ],  # 10 reps
+
     'genomic_all': [
         'gene_hvg2000', 'gene_pca100', 'gene_hallmark', 'gene_progeny',
-        'gene_kegg', 'gene_dorothea', 'gene_combined_pathway', 'gene_mutation',
-    ],  # 8 reps
+        'gene_kegg', 'gene_dorothea', 'gene_combined_pathway',
+        'gene_nmf50', 'gene_ica50', 'gene_stats',
+        'gene_reactome', 'gene_oncogenic', 'gene_immune',
+        'gene_mutation',
+        'cnv_gistic', 'cnv_pca50', 'rppa', 'mirna_top200',
+    ],  # 18 reps (clinical excluded — it's a different paradigm)
 }
 
 _SEARCH_NAME_MAP = {
@@ -124,10 +159,22 @@ _REP_DISPATCH = {
     'gene_kegg':             ('create_kegg_scores',       'genomic'),
     'gene_dorothea':         ('create_dorothea_scores',   'genomic'),
     'gene_combined_pathway': ('create_combined_pathway',  'genomic'),
+    'gene_reactome':         ('create_reactome_scores',   'genomic'),
+    'gene_oncogenic':        ('create_oncogenic_scores',  'genomic'),
+    'gene_immune':           ('create_immune_scores',     'genomic'),
     # Genomic expression-only: fn(expression) -> np.ndarray
     'gene_pca100':           ('create_gene_pca100',       'genomic_expr'),
-    # Mutation: fn(sample_ids, cohort) -> np.ndarray
+    'gene_nmf50':            ('create_nmf50',             'genomic_expr'),
+    'gene_ica50':            ('create_ica50',             'genomic_expr'),
+    'gene_stats':            ('create_gene_stats',        'genomic_expr'),
+    # Mutation-pattern: fn(sample_ids, cohort) -> np.ndarray
     'gene_mutation':         ('create_mutation_matrix',   'mutation'),
+    'cnv_gistic':            ('create_cnv_gistic',        'mutation'),
+    'cnv_pca50':             ('create_cnv_pca50',         'mutation'),
+    'mirna_top200':          ('create_mirna_top200',      'mutation'),
+    'clinical':              ('create_clinical',          'mutation'),
+    # RPPA: fn(sample_ids) -> np.ndarray (pan-cancer, no cohort needed)
+    'rppa':                  ('create_rppa',              'rppa'),
     # WSI — GigaSSL (Mendeley, public, slide-level)
     'wsi_ctranspath':        ('load_wsi_features',        'wsi'),
     'wsi_phikon':            ('load_wsi_features',        'wsi'),
@@ -242,6 +289,10 @@ def get_representations(
             elif rep_type == 'mutation':
                 func = getattr(gen, func_name)
                 rep = func(sample_ids, cohort)
+
+            elif rep_type == 'rppa':
+                func = getattr(gen, func_name)
+                rep = func(sample_ids)
 
             elif rep_type == 'wsi':
                 # Extract model name from rep key (e.g., 'wsi_ctranspath' -> 'ctranspath')
@@ -491,7 +542,9 @@ Output:
     parser.add_argument('dataset', type=str,
                        help="tcga_luad_vs_lusc, tcga_brca_pam50, or tcga_brca_survival")
     parser.add_argument('--reps', type=str, default='fast',
-                       help="'fast', 'fast+learned', 'all', 'genomic_fast', 'genomic_all', or comma-separated list")
+                       help="Preset: 'fast'(5), 'fast+diverse'(8), 'multimodal'(12), "
+                            "'fast+learned'(15), 'all'(27), 'genomic_fast'(3), "
+                            "'genomic_diverse'(10), 'genomic_all'(18), or comma-separated list")
     parser.add_argument('--search', type=str, default='fast',
                        choices=list(_SEARCH_NAME_MAP.keys()),
                        help="Search speed: 'fast', 'medium', 'long'")
