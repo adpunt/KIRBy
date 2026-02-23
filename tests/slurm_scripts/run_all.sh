@@ -86,6 +86,10 @@ echo ""
 echo ">>> C12: Adaptive Pruning"
 python tests/experiments/complexity/c12_adaptive_pruning.py $COMMON
 
+echo ""
+echo ">>> C13: Greedy Step Size"
+python tests/experiments/complexity/c13_greedy_step_size.py $COMMON
+
 # --- Similarity experiments ---
 echo ""
 echo ">>> S01: Similarity Baseline"
