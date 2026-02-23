@@ -41,10 +41,10 @@ def simulate_pruning(all_results, thresholds=None):
         thresholds = PRUNING_THRESHOLDS
 
     # Find the true best config
-    valid = [r for r in all_results if not np.isnan(r['r2_mean'])]
+    valid = [r for r in all_results if not np.isnan(r['score_mean'])]
     if not valid:
         return {}
-    true_best = max(valid, key=lambda r: r['r2_mean'])
+    true_best = max(valid, key=lambda r: r['score_mean'])
     true_best_model = true_best['model']
     true_best_score = true_best['r2_mean']
 
@@ -54,7 +54,7 @@ def simulate_pruning(all_results, thresholds=None):
     for m in model_names:
         m_results = [r for r in valid if r['model'] == m]
         if m_results:
-            true_best_by_model[m] = max(m_results, key=lambda r: r['r2_mean'])
+            true_best_by_model[m] = max(m_results, key=lambda r: r['score_mean'])
 
     analysis = {}
 
@@ -77,7 +77,7 @@ def simulate_pruning(all_results, thresholds=None):
                 continue
 
             surviving_results.append(r)
-            score = r['r2_mean']
+            score = r['score_mean']
             if not np.isnan(score):
                 if model_name not in model_best_scores or score > model_best_scores[model_name]:
                     model_best_scores[model_name] = score
@@ -100,9 +100,9 @@ def simulate_pruning(all_results, thresholds=None):
                         pruned_at_step[mn] = step
 
         # Find best from surviving results only
-        surviving_valid = [r for r in surviving_results if not np.isnan(r['r2_mean'])]
+        surviving_valid = [r for r in surviving_results if not np.isnan(r['score_mean'])]
         if surviving_valid:
-            pruned_best = max(surviving_valid, key=lambda r: r['r2_mean'])
+            pruned_best = max(surviving_valid, key=lambda r: r['score_mean'])
             pruned_best_score = pruned_best['r2_mean']
             pruned_best_model = pruned_best['model']
         else:
@@ -114,7 +114,7 @@ def simulate_pruning(all_results, thresholds=None):
         for m in model_names:
             m_results = [r for r in surviving_valid if r['model'] == m]
             if m_results:
-                surviving_best_by_model[m] = max(r['r2_mean'] for r in m_results)
+                surviving_best_by_model[m] = max(r['score_mean'] for r in m_results)
 
         analysis[threshold] = {
             'pruned_models': sorted(pruned_models),
@@ -221,8 +221,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         a = pruning_analysis[0.5]
         model_names = sorted(set(r['model'] for r in all_results))
         for m in model_names:
-            full = [r for r in all_results if r['model'] == m and not np.isnan(r['r2_mean'])]
-            full_best = max(r['r2_mean'] for r in full) if full else float('nan')
+            full = [r for r in all_results if r['model'] == m and not np.isnan(r['score_mean'])]
+            full_best = max(r['score_mean'] for r in full) if full else float('nan')
             pruned_best = a['surviving_best_by_model'].get(m, float('nan'))
             status = "PRUNED" if m in a['pruned_models'] else "kept"
             print(f"    {m:<12} full={full_best:>8.4f}  pruned={pruned_best:>8.4f}  [{status}]")

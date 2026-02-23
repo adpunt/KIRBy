@@ -68,7 +68,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     models = get_model_factories(config['models'])
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
-    importance_method = 'lgbm_gain'
+    importance_method = 'lightgbm_gain'
 
     reps = data['reps']
     labels = data['labels']
