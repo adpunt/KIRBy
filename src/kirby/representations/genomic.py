@@ -268,7 +268,7 @@ def create_hallmark_scores(expression: np.ndarray,
     # Run ssGSEA with Hallmark gene sets
     result = gp.ssgsea(
         data=df,
-        gene_sets='h.all.v2023.2.Hs.symbols.gmt',
+        gene_sets='MSigDB_Hallmark_2020',
         outdir=None,
         no_plot=True,
         min_size=5,
@@ -311,6 +311,18 @@ def create_progeny_scores(expression: np.ndarray,
     # Get PROGENy pathway model
     progeny = dc.get_progeny(organism='human', top=300)
 
+    # Normalize column names across decoupler versions
+    # Old versions: genesymbol/label/value; New versions: source/target/weight
+    col_map = {}
+    if 'genesymbol' in progeny.columns and 'target' not in progeny.columns:
+        col_map['genesymbol'] = 'target'
+    if 'label' in progeny.columns and 'source' not in progeny.columns:
+        col_map['label'] = 'source'
+    if 'value' in progeny.columns and 'weight' not in progeny.columns:
+        col_map['value'] = 'weight'
+    if col_map:
+        progeny = progeny.rename(columns=col_map)
+
     # Run multivariate linear model
     dc.run_mlm(mat=adata, net=progeny, source='source', target='target',
                weight='weight', use_raw=False)
@@ -348,7 +360,7 @@ def create_kegg_scores(expression: np.ndarray,
 
     result = gp.ssgsea(
         data=df,
-        gene_sets='c2.cp.kegg_legacy.v2023.2.Hs.symbols.gmt',
+        gene_sets='KEGG_2021_Human',
         outdir=None,
         no_plot=True,
         min_size=5,
@@ -388,6 +400,17 @@ def create_dorothea_scores(expression: np.ndarray,
 
     # Get DoRothEA regulon network (confidence levels A, B, C)
     dorothea = dc.get_dorothea(organism='human')
+
+    # Normalize column names across decoupler versions
+    col_map = {}
+    if 'genesymbol' in dorothea.columns and 'target' not in dorothea.columns:
+        col_map['genesymbol'] = 'target'
+    if 'label' in dorothea.columns and 'source' not in dorothea.columns:
+        col_map['label'] = 'source'
+    if 'value' in dorothea.columns and 'weight' not in dorothea.columns:
+        col_map['value'] = 'weight'
+    if col_map:
+        dorothea = dorothea.rename(columns=col_map)
 
     # Run multivariate linear model
     dc.run_mlm(mat=adata, net=dorothea, source='source', target='target',
@@ -603,7 +626,7 @@ def create_reactome_scores(expression: np.ndarray,
 
     result = gp.ssgsea(
         data=df,
-        gene_sets='c2.cp.reactome.v2023.2.Hs.symbols.gmt',
+        gene_sets='Reactome_2022',
         outdir=None,
         no_plot=True,
         min_size=5,
@@ -639,7 +662,7 @@ def create_oncogenic_scores(expression: np.ndarray,
 
     result = gp.ssgsea(
         data=df,
-        gene_sets='c6.all.v2023.2.Hs.symbols.gmt',
+        gene_sets='MSigDB_Oncogenic_Signatures',
         outdir=None,
         no_plot=True,
         min_size=5,
