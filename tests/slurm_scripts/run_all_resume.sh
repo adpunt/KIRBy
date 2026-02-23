@@ -63,6 +63,7 @@ run_if_missing c10_noise_robustness "C10: Noise Robustness" tests/experiments/co
 run_if_missing c11_allocation_strategies "C11: Allocation Strategies" tests/experiments/complexity/c11_allocation_strategies.py
 run_if_missing c12_adaptive_pruning "C12: Adaptive Pruning" tests/experiments/complexity/c12_adaptive_pruning.py
 run_if_missing c13_greedy_step_size "C13: Greedy Step Size" tests/experiments/complexity/c13_greedy_step_size.py
+run_if_missing c14_two_phase_search "C14: Two-Phase Search" tests/experiments/complexity/c14_two_phase_search.py
 
 # --- Similarity experiments ---
 run_if_missing s01_similarity_baseline "S01: Similarity Baseline" tests/experiments/similarity/s01_similarity_baseline.py

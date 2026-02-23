@@ -23,6 +23,31 @@ from sklearn.metrics import r2_score
 
 
 # ============================================================================
+# NAMED ALLOCATION REGISTRY
+# ============================================================================
+
+NAMED_ALLOCATIONS = {
+    'greedy': ('greedy', {}),
+    'performance_weighted': ('performance_weighted', {}),
+    'softmax_T0.5': ('performance_weighted', {'weighting_scheme': 'softmax', 'weighting_params': {'temperature': 0.5}}),
+    'softmax_T1': ('performance_weighted', {'weighting_scheme': 'softmax', 'weighting_params': {'temperature': 1.0}}),
+    'softmax_T2': ('performance_weighted', {'weighting_scheme': 'softmax', 'weighting_params': {'temperature': 2.0}}),
+    'softmax_T5': ('performance_weighted', {'weighting_scheme': 'softmax', 'weighting_params': {'temperature': 5.0}}),
+    'softmax_T10': ('performance_weighted', {'weighting_scheme': 'softmax', 'weighting_params': {'temperature': 10.0}}),
+    'power_2': ('performance_weighted', {'weighting_scheme': 'power_law', 'weighting_params': {'power': 2.0}}),
+    'power_3': ('performance_weighted', {'weighting_scheme': 'power_law', 'weighting_params': {'power': 3.0}}),
+    'thresh_0.5': ('performance_weighted', {'weighting_scheme': 'thresholded', 'weighting_params': {'alpha': 0.5}}),
+    'top_3': ('performance_weighted', {'weighting_scheme': 'top_k', 'weighting_params': {'k': 3}}),
+    'min_floor_0.05': ('performance_weighted', {'weighting_scheme': 'min_floor', 'weighting_params': {'floor': 0.05}}),
+    'dominant_greedy': ('dominant_greedy', {}),
+    'fixed': ('fixed', {}),
+    'two_stage': ('two_stage', {}),
+    'stability_selection': ('stability_selection', {}),
+    'greedy_feature': ('greedy_feature', {}),
+}
+
+
+# ============================================================================
 # GREEDY ALLOCATION
 # ============================================================================
 
@@ -477,6 +502,123 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
             excess -= reduce_by
     
     return allocation
+
+
+def allocate_dominant_greedy(rep_dict_train, rep_dict_val, train_labels, val_labels,
+                             total_budget=100, step_size=10, patience=3,
+                             dominant_fraction=0.7):
+    """
+    Dominant-greedy allocation: give the best rep a large share, greedy-fill the rest.
+
+    1. Evaluate each rep individually (reuses _evaluate_allocation helper).
+    2. Give the best rep int(total_budget * dominant_fraction) features.
+    3. Greedy-fill remaining budget: iteratively try adding step_size features from
+       each other rep, keep whichever improves validation most.
+    4. Patience-based early stopping on greedy phase.
+
+    Args:
+        rep_dict_train: Dict of {rep_name: train_features}
+        rep_dict_val: Dict of {rep_name: val_features}
+        train_labels: Training labels
+        val_labels: Validation labels
+        total_budget: Maximum total features to select (default: 100)
+        step_size: Features to add per greedy iteration (default: 10)
+        patience: Early stopping patience, None to disable (default: 3)
+        dominant_fraction: Fraction of budget for best rep (default: 0.7)
+
+    Returns:
+        tuple: (best_allocation, history, final_feature_info)
+    """
+    # --- Phase 1: evaluate each rep individually ---
+    rep_scores = {}
+    for rep_name in rep_dict_train:
+        X_tr = rep_dict_train[rep_name]
+        X_va = rep_dict_val[rep_name]
+        score = _evaluate_allocation(X_tr, X_va, train_labels, val_labels)
+        rep_scores[rep_name] = score
+
+    best_rep = max(rep_scores, key=rep_scores.get)
+    dominant_budget = int(total_budget * dominant_fraction)
+    max_feats_best = rep_dict_train[best_rep].shape[1]
+    dominant_budget = min(dominant_budget, max_feats_best)
+
+    # --- Phase 2: initialise allocation with dominant rep ---
+    allocation = {rep: 0 for rep in rep_dict_train}
+    allocation[best_rep] = dominant_budget
+    remaining_budget = total_budget - dominant_budget
+
+    # Build initial hybrid and score
+    X_train_init, init_feat_info = _create_hybrid_with_allocation(
+        rep_dict_train, train_labels, allocation
+    )
+    X_val_init = apply_feature_selection(rep_dict_val, init_feat_info)
+    best_val_score = _evaluate_allocation(X_train_init, X_val_init, train_labels, val_labels)
+
+    best_allocation = allocation.copy()
+    best_feature_info = init_feat_info
+    steps_without_improvement = 0
+    history = [{
+        'iteration': 0, 'phase': 'dominant', 'rep': best_rep,
+        'allocation': allocation.copy(), 'val_score': best_val_score,
+    }]
+
+    # --- Phase 3: greedy fill remaining budget ---
+    iteration = 0
+    while remaining_budget > 0:
+        iteration += 1
+        iter_best_gain = -np.inf
+        iter_best_rep = None
+        iter_best_feat_info = None
+        iter_best_trial_allocation = None
+
+        for rep_name in rep_dict_train:
+            max_features = rep_dict_train[rep_name].shape[1]
+            if allocation[rep_name] >= max_features:
+                continue
+
+            trial_allocation = allocation.copy()
+            features_to_add = min(step_size, max_features - allocation[rep_name],
+                                  remaining_budget)
+            if features_to_add <= 0:
+                continue
+            trial_allocation[rep_name] = allocation[rep_name] + features_to_add
+
+            X_train_trial, feat_info = _create_hybrid_with_allocation(
+                rep_dict_train, train_labels, trial_allocation
+            )
+            X_val_trial = apply_feature_selection(rep_dict_val, feat_info)
+            score = _evaluate_allocation(X_train_trial, X_val_trial, train_labels, val_labels)
+
+            if score > iter_best_gain:
+                iter_best_gain = score
+                iter_best_rep = rep_name
+                iter_best_feat_info = feat_info
+                iter_best_trial_allocation = trial_allocation
+
+        if iter_best_rep is None:
+            break
+
+        features_added = sum(iter_best_trial_allocation.values()) - sum(allocation.values())
+        allocation = iter_best_trial_allocation
+        remaining_budget -= features_added
+
+        if iter_best_gain > best_val_score:
+            best_val_score = iter_best_gain
+            best_allocation = allocation.copy()
+            best_feature_info = iter_best_feat_info
+            steps_without_improvement = 0
+        else:
+            steps_without_improvement += 1
+
+        history.append({
+            'iteration': iteration, 'phase': 'greedy', 'rep': iter_best_rep,
+            'allocation': allocation.copy(), 'val_score': iter_best_gain,
+        })
+
+        if patience is not None and steps_without_improvement >= patience:
+            break
+
+    return best_allocation, history, best_feature_info
 
 
 def _concat_rep_dicts(rep_dict):
@@ -1945,7 +2087,14 @@ def create_hybrid(base_reps, labels,
     # ========================================================================
     # BASE HYBRID CREATION
     # ========================================================================
-    
+
+    # Resolve named allocation methods
+    if allocation_method in NAMED_ALLOCATIONS:
+        _base, _extra = NAMED_ALLOCATIONS[allocation_method]
+        allocation_method = _base
+        for k, v in _extra.items():
+            kwargs.setdefault(k, v)
+
     # GREEDY ALLOCATION
     if allocation_method == 'greedy':
         # Run greedy allocation - now returns feature_info directly
@@ -2105,10 +2254,32 @@ def create_hybrid(base_reps, labels,
         feature_info['allocation'] = allocation
         feature_info['greedy_feature_history'] = history
 
+    # DOMINANT-GREEDY ALLOCATION
+    elif allocation_method == 'dominant_greedy':
+        dominant_fraction = kwargs.pop('dominant_fraction', 0.7)
+        allocation, history, dom_greedy_feature_info = allocate_dominant_greedy(
+            rep_dict_train, rep_dict_val, train_labels, val_labels,
+            total_budget=budget, step_size=step_size, patience=patience,
+            dominant_fraction=dominant_fraction,
+        )
+
+        if filter_index_maps:
+            for rep_name in list(dom_greedy_feature_info.keys()):
+                if rep_name in filter_index_maps and 'selected_indices' in dom_greedy_feature_info[rep_name]:
+                    filtered_indices = dom_greedy_feature_info[rep_name]['selected_indices']
+                    original_indices = filter_index_maps[rep_name][filtered_indices]
+                    dom_greedy_feature_info[rep_name]['selected_indices'] = original_indices
+
+        hybrid_features = apply_feature_selection(original_base_reps, dom_greedy_feature_info)
+
+        feature_info = dom_greedy_feature_info.copy()
+        feature_info['allocation'] = allocation
+        feature_info['dominant_greedy_history'] = history
+
     else:
         raise ValueError(f"Unknown allocation_method: {allocation_method}. "
                         f"Choose 'greedy', 'greedy_feature', 'performance_weighted', "
-                        f"'fixed', 'two_stage', or 'stability_selection'")
+                        f"'dominant_greedy', 'fixed', 'two_stage', or 'stability_selection'")
     
     # ========================================================================
     # AUGMENTATION HANDLING

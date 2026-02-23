@@ -945,6 +945,8 @@ Output:
                        help="Importance method for feature weights (default: lightgbm_gain)")
     parser.add_argument('--test-rep-subsets', action='store_true',
                        help='Also test leave-one-rep-out subsets (when >=3 reps)')
+    parser.add_argument('--adaptive-pruning', action='store_true',
+                       help='Enable adaptive model pruning during search')
 
     args = parser.parse_args()
 
@@ -988,6 +990,7 @@ Output:
         weight_method=args.weight_method if args.save_weights else None,
         test_rep_subsets=args.test_rep_subsets,
         seed=args.seed,
+        adaptive_pruning=args.adaptive_pruning,
     )
 
     # Print summary (molecular-specific formatting)

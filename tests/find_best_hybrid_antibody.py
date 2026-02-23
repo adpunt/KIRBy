@@ -139,12 +139,45 @@ REP_PRESETS = {
     # Mutation-specific features (positional, biophysical_delta, lm_score)
     # are now augmentations, not base reps — see get_mutation_augmentations()
     'mutation_fast': ['kmer', 'aac', 'blosum62', 'physicochemical',
-                      'esm2', 'prot_t5'],
+                      'esm2', 'prot_t5', 'varpos_physchem'],
     'mutation_full': ['kmer', 'aac', 'blosum62', 'physicochemical',
-                      'antiberty', 'ablang2', 'esm2', 'prot_t5'],
+                      'antiberty', 'ablang2', 'esm2', 'prot_t5',
+                      'varpos_onehot', 'varpos_physchem'],
     # Mutation + structural (requires ImmuneBuilder on server)
     'mutation_structural': ['kmer', 'aac', 'blosum62', 'physicochemical',
                             'antiberty', 'ablang2', 'esm2', 'prot_t5', 'structural'],
+
+    # --- DMS/intra-family: mutation-specific features as BASE reps ---
+    # Full-sequence LM embeddings are near-useless for DMS (published ρ = 0.08).
+    # Instead use per-model LM scores, positional, and biophysical delta.
+    # Variable-position encodings capture what ACTUALLY changes across samples.
+    # Region-filtered variants (cdr/cdr_h3/framework) use Chothia boundaries:
+    #   varpos_cdr_*     = CDR positions only (H1+H2+H3, L1+L2+L3)
+    #   varpos_cdrh3_*   = CDR-H3 only (most variable, binding-critical, lowest dim)
+    #   varpos_fw_*      = framework only (stability-relevant)
+    # USE 'dms' for intra-family DMS datasets; 'inter_family' for diverse datasets.
+    'dms': [
+        'lm_score_ablang2', 'lm_score_esm2',
+        'positional', 'biophysical_delta',
+        'aac', 'blosum62',
+        'varpos_physchem',                              # all positions, 6D/pos
+        'varpos_cdr_physchem', 'varpos_cdrh3_physchem', # CDR-focused, much lower dim
+    ],  # 9 reps — CDR variants are low-dim, fast
+    'dms_full': [
+        'lm_score_ablang2', 'lm_score_esm2', 'lm_score_prot_t5', 'lm_score_antiberty',
+        'positional', 'biophysical_delta',
+        'esm2_site',
+        'aac', 'blosum62', 'developability',
+        'varpos_onehot', 'varpos_blosum', 'varpos_physchem',      # all positions
+        'varpos_cdr_onehot', 'varpos_cdr_physchem',               # CDR only
+        'varpos_cdrh3_physchem', 'varpos_fw_physchem',            # H3 / framework
+    ],  # 17 reps — full arsenal (server only, high-dim onehot variants)
+
+    # --- Inter-family: full-sequence embeddings ARE appropriate ---
+    'inter_family': [
+        'ablang2', 'esm2', 'prot_t5',
+        'physicochemical', 'aac', 'developability',
+    ],  # 6 reps
 }
 
 _SEARCH_NAME_MAP = {
@@ -408,10 +441,31 @@ _REP_DISPATCH = {
     'ab_roberta': ('create_ab_roberta_embeddings', 'single_chain'),
     'balm': ('create_balm_embeddings', 'single_chain'),
     'sapiens': ('create_sapiens_embeddings', 'single_chain'),
+    # Developability: compute_developability_features(heavy, light)
+    'developability': ('compute_developability_features', 'paired'),
     # Mutation-aware: require mutations/wildtype metadata
     'positional': ('compute_mutation_positional_features', 'mutation'),
     'biophysical_delta': ('compute_biophysical_delta', 'mutation'),
     'lm_score': ('compute_lm_mutation_scores', 'mutation'),
+    # Per-model LM mutation scores (each produces 5D)
+    'lm_score_ablang2': ('compute_lm_mutation_scores', 'mutation_lm'),
+    'lm_score_esm2': ('compute_lm_mutation_scores', 'mutation_lm'),
+    'lm_score_prot_t5': ('compute_lm_mutation_scores', 'mutation_lm'),
+    'lm_score_antiberty': ('compute_lm_mutation_scores', 'mutation_lm'),
+    # ESM-2 per-residue at mutation site (1280D)
+    'esm2_site': ('create_esm2_site_embedding', 'mutation_site'),
+    # Variable-position encodings (for intra-family DMS datasets)
+    # Full-sequence variants
+    'varpos_onehot': ('create_variable_position_encoding', 'varpos'),
+    'varpos_blosum': ('create_variable_position_encoding', 'varpos'),
+    'varpos_physchem': ('create_variable_position_encoding', 'varpos'),
+    # CDR-only variants (lower-dim, focused on binding-relevant regions)
+    'varpos_cdr_onehot': ('create_variable_position_encoding', 'varpos'),
+    'varpos_cdr_physchem': ('create_variable_position_encoding', 'varpos'),
+    # CDR-H3-only (most variable region, critical for binding)
+    'varpos_cdrh3_physchem': ('create_variable_position_encoding', 'varpos'),
+    # Framework-only (stability-relevant mutations outside CDRs)
+    'varpos_fw_physchem': ('create_variable_position_encoding', 'varpos'),
     # Structural: computed separately (not in antibody.py)
     'structural': (None, 'structural'),
 }
@@ -437,6 +491,9 @@ def get_representations(heavy_seqs: List[str], light_seqs: Optional[List[str]],
     every base rep, doubling the rep count. Requires wt_heavy.
     """
     from kirby.representations import antibody as ab
+
+    # Check if mutation data is actually present (not just a list of empty lists)
+    has_mutations = (mutations is not None and any(len(m) > 0 for m in mutations))
 
     if preset_or_list in REP_PRESETS:
         rep_names = REP_PRESETS[preset_or_list]
@@ -496,8 +553,7 @@ def get_representations(heavy_seqs: List[str], light_seqs: Optional[List[str]],
 
             elif mode == 'mutation':
                 func = getattr(ab, func_name)
-                # Mutation-aware reps require metadata
-                if mutations is None:
+                if not has_mutations:
                     print(f"SKIPPED (no mutation data)")
                     continue
                 if rep_name == 'positional':
@@ -508,6 +564,47 @@ def get_representations(heavy_seqs: List[str], light_seqs: Optional[List[str]],
                     rep = func(wt_heavy or '', heavy_seqs, mutations)
                 else:
                     raise ValueError(f"Unknown mutation rep: {rep_name}")
+
+            elif mode == 'mutation_lm':
+                func = getattr(ab, func_name)
+                if not has_mutations:
+                    print(f"SKIPPED (no mutation data)")
+                    continue
+                # Extract model_name from rep_name: lm_score_ablang2 -> ablang2
+                lm_model = rep_name.replace('lm_score_', '')
+                rep = func(wt_heavy or '', heavy_seqs, mutations, model_name=lm_model)
+
+            elif mode == 'mutation_site':
+                func = getattr(ab, func_name)
+                if not has_mutations or not wt_heavy:
+                    print(f"SKIPPED (no mutation/wildtype data)")
+                    continue
+                rep = func(wt_heavy, heavy_seqs, mutations)
+
+            elif mode == 'varpos':
+                func = getattr(ab, func_name)
+                # Parse encoding and region from rep_name
+                # e.g. varpos_physchem -> enc=physchem, region=all
+                #      varpos_cdr_physchem -> enc=physchem, region=cdr
+                #      varpos_cdrh3_physchem -> enc=physchem, region=cdr_h3
+                #      varpos_fw_physchem -> enc=physchem, region=framework
+                suffix = rep_name.replace('varpos_', '')
+                region = 'all'
+                if suffix.startswith('cdrh3_'):
+                    region = 'cdr_h3'
+                    suffix = suffix.replace('cdrh3_', '')
+                elif suffix.startswith('cdr_'):
+                    region = 'cdr'
+                    suffix = suffix.replace('cdr_', '')
+                elif suffix.startswith('fw_'):
+                    region = 'framework'
+                    suffix = suffix.replace('fw_', '')
+                enc = suffix
+                kwargs = dict(encoding=enc, region=region)
+                if light_seqs:
+                    rep = func(heavy_seqs, light_seqs, **kwargs)
+                else:
+                    rep = func(heavy_seqs, **kwargs)
 
             else:
                 raise ValueError(f"Unknown mode '{mode}' for {rep_name}")
@@ -532,8 +629,8 @@ def get_representations(heavy_seqs: List[str], light_seqs: Optional[List[str]],
         for rep_name, (func_name, mode) in _REP_DISPATCH.items():
             if rep_name not in representations:
                 continue
-            if mode == 'mutation':
-                continue  # mutation reps are already "delta-like"
+            if mode in ('mutation', 'mutation_lm', 'mutation_site', 'varpos'):
+                continue  # mutation/varpos reps are already "delta-like"
             if mode == 'structural':
                 continue  # structural features are not differentiable per-sequence
 
@@ -975,6 +1072,8 @@ Output:
     parser.add_argument('--delta', action='store_true',
                        help='Generate delta representations (ΔX = X_mut - X_wt). '
                             'Requires intra-family dataset with wildtype info.')
+    parser.add_argument('--adaptive-pruning', action='store_true',
+                       help='Enable adaptive model pruning during search')
 
     args = parser.parse_args()
 
@@ -1042,6 +1141,7 @@ Output:
         seed=args.seed,
         augmentations=augmentations,
         cache=args.cache,
+        adaptive_pruning=args.adaptive_pruning,
     )
 
     # Print summary

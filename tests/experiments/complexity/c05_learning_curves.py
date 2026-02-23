@@ -32,6 +32,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     models = get_model_factories(config['models'])
     n_folds = config['n_splits']
+    # TODO: sweep budget (e.g. 100, 300, 500) — current fixed budget=100 is
+    #  suboptimal for most models (C02 shows Ridge peaks at 500, MLP at 300).
     search_speed = config.get('search_speed', 'fast')
     n_repeats = kwargs.get('n_repeats', 3)
 
