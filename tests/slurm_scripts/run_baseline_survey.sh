@@ -41,7 +41,7 @@ echo "============================================================"
 echo "KIRBy Baseline Survey (COMPREHENSIVE)"
 echo "  Domain:  $DOMAIN"
 echo "  Search:  $SEARCH"
-echo "  Flags:   --adaptive-pruning --test-rep-subsets"
+echo "  Flags:   --adaptive-pruning"
 echo "  Output:  $OUTPUT"
 echo "  Started: $(date)"
 echo "============================================================"
@@ -68,7 +68,7 @@ run() {
 
     if python "$script" "$dataset" \
         --reps "$preset" --search "$SEARCH" \
-        --adaptive-pruning --test-rep-subsets \
+        --adaptive-pruning \
         $extra \
         --output "${OUTPUT}/${tag}.json" 2>&1; then
         echo "  PASSED: $(date)"

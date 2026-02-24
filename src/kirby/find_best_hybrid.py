@@ -154,6 +154,20 @@ def _score_to_comparable(raw_score: float, lower_is_better: bool) -> float:
     return -raw_score if lower_is_better else raw_score
 
 
+def _should_prune(best_comparable: float, global_best_comparable: float,
+                  threshold: float) -> bool:
+    """Check if a search dimension should be pruned.
+
+    Uses gap-based comparison that works for both positive comparables
+    (R², accuracy) and negative comparables (negated RMSE/MAE).
+    Prunes if the gap from global best exceeds (1-threshold) * |global_best|.
+    """
+    if abs(global_best_comparable) < 1e-10:
+        return False  # global best near zero — pruning meaningless
+    gap = global_best_comparable - best_comparable
+    return gap > (1 - threshold) * abs(global_best_comparable)
+
+
 # =============================================================================
 # MODEL RESOLUTION
 # =============================================================================
@@ -726,6 +740,7 @@ def _run_search(
     augmentation_budget: int = 20,
     adaptive_pruning: bool = False,
     pruning_threshold: float = 0.5,
+    lower_is_better: bool = False,
     fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
 ) -> List[dict]:
@@ -757,16 +772,41 @@ def _run_search(
     results = []
     idx = 0
 
-    # Adaptive pruning state
+    # Adaptive pruning state — all tracking uses comparable scores (higher=better)
     pruned_models = set()
-    model_best_scores = {}  # {model_name: best_score_so_far}
-    global_best_score = -np.inf
-    first_sweep_done = False
+    model_best_scores = {}  # {model_name: best_comparable}
+    pruned_importance = set()
+    importance_best_scores = {}  # {imp_method: best_comparable}
+    pruned_alloc = set()
+    alloc_best_scores = {}  # {alloc_method: best_comparable}
+    global_best_comparable = -np.inf
+    first_model_sweep_done = False
+    first_importance_sweep_done = False
+    first_alloc_sweep_done = False
 
     for rep_set, rep_set_name in zip(rep_sets, rep_set_names):
         for alloc in search_allocation:
+            # Skip pruned allocation methods
+            if adaptive_pruning and alloc in pruned_alloc:
+                skipped = len(search_budgets) * len(search_importance) * len(models)
+                if verbose:
+                    print(f"  [skipping {skipped} configs] alloc={alloc}: PRUNED")
+                idx += skipped
+                continue
+
             for bgt in search_budgets:
                 for imp in search_importance:
+                    # Skip pruned importance methods
+                    if adaptive_pruning and imp in pruned_importance:
+                        skipped = len(models)
+                        if verbose:
+                            print(
+                                f"  [skipping {skipped} configs] {alloc}/{imp}/b={bgt}: "
+                                f"PRUNED (importance)"
+                            )
+                        idx += skipped
+                        continue
+
                     for model_name, model in models.items():
                         idx += 1
 
@@ -810,13 +850,18 @@ def _run_search(
                                     f"dim={result['n_features']}"
                                 )
 
-                            # Track scores for pruning
+                            # Track comparable scores for pruning
                             if adaptive_pruning:
-                                score = result['score_mean']
-                                if model_name not in model_best_scores or score > model_best_scores[model_name]:
-                                    model_best_scores[model_name] = score
-                                if score > global_best_score:
-                                    global_best_score = score
+                                comp = _score_to_comparable(result['score_mean'], lower_is_better)
+                                # Update per-dimension bests
+                                if model_name not in model_best_scores or comp > model_best_scores[model_name]:
+                                    model_best_scores[model_name] = comp
+                                if imp not in importance_best_scores or comp > importance_best_scores[imp]:
+                                    importance_best_scores[imp] = comp
+                                if alloc not in alloc_best_scores or comp > alloc_best_scores[alloc]:
+                                    alloc_best_scores[alloc] = comp
+                                if comp > global_best_comparable:
+                                    global_best_comparable = comp
 
                         except Exception as e:
                             if verbose:
@@ -825,21 +870,53 @@ def _run_search(
                                     f"FAILED - {e}"
                                 )
 
-                    # After each (alloc, budget, importance) sweep: prune underperformers
-                    if adaptive_pruning and first_sweep_done and global_best_score > 0:
+                    # After each (alloc, bgt, imp) model sweep: prune models
+                    if adaptive_pruning and first_model_sweep_done and global_best_comparable > -np.inf:
                         for mn in list(models.keys()):
                             if mn in pruned_models:
                                 continue
                             best = model_best_scores.get(mn, -np.inf)
-                            if best < pruning_threshold * global_best_score:
+                            if _should_prune(best, global_best_comparable, pruning_threshold):
                                 pruned_models.add(mn)
                                 if verbose:
-                                    print(f"  >> Pruning {mn} (best={best:.4f} < "
-                                          f"{pruning_threshold}*{global_best_score:.4f})")
+                                    print(f"  >> PRUNED model '{mn}' "
+                                          f"(best_comparable={best:.4f}, "
+                                          f"global_best={global_best_comparable:.4f})")
 
-                # Mark first sweep complete after all models have had at least one chance
-                if not first_sweep_done and idx >= len(models):
-                    first_sweep_done = True
+                    if not first_model_sweep_done and idx >= len(models):
+                        first_model_sweep_done = True
+
+                # After each (alloc, bgt) full imp×model sweep: prune importance methods
+                if adaptive_pruning and first_importance_sweep_done and global_best_comparable > -np.inf:
+                    for im in list(search_importance):
+                        if im in pruned_importance:
+                            continue
+                        best = importance_best_scores.get(im, -np.inf)
+                        if _should_prune(best, global_best_comparable, pruning_threshold):
+                            pruned_importance.add(im)
+                            if verbose:
+                                print(f"  >> PRUNED importance '{im}' "
+                                      f"(best_comparable={best:.4f}, "
+                                      f"global_best={global_best_comparable:.4f})")
+
+                if not first_importance_sweep_done and len(importance_best_scores) >= len(search_importance):
+                    first_importance_sweep_done = True
+
+            # After each alloc's full bgt×imp×model sweep: prune allocation methods
+            if adaptive_pruning and first_alloc_sweep_done and global_best_comparable > -np.inf:
+                for am in list(search_allocation):
+                    if am in pruned_alloc:
+                        continue
+                    best = alloc_best_scores.get(am, -np.inf)
+                    if _should_prune(best, global_best_comparable, pruning_threshold):
+                        pruned_alloc.add(am)
+                        if verbose:
+                            print(f"  >> PRUNED allocation '{am}' "
+                                  f"(best_comparable={best:.4f}, "
+                                  f"global_best={global_best_comparable:.4f})")
+
+            if not first_alloc_sweep_done and len(alloc_best_scores) >= len(search_allocation):
+                first_alloc_sweep_done = True
 
     return results
 
@@ -1325,6 +1402,7 @@ def find_best_hybrid(
         augmentation_budget=augmentation_budget,
         adaptive_pruning=adaptive_pruning,
         pruning_threshold=pruning_threshold,
+        lower_is_better=lower_is_better,
         fold_reps=fold_reps,
         precomputed_folds=precomputed_folds,
     )
