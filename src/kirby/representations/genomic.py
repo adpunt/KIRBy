@@ -312,16 +312,27 @@ def create_progeny_scores(expression: np.ndarray,
     progeny = dc.get_progeny(organism='human', top=300)
 
     # Normalize column names across decoupler versions
-    # Old versions: genesymbol/label/value; New versions: source/target/weight
-    col_map = {}
-    if 'genesymbol' in progeny.columns and 'target' not in progeny.columns:
-        col_map['genesymbol'] = 'target'
-    if 'label' in progeny.columns and 'source' not in progeny.columns:
-        col_map['label'] = 'source'
-    if 'value' in progeny.columns and 'weight' not in progeny.columns:
-        col_map['value'] = 'weight'
-    if col_map:
-        progeny = progeny.rename(columns=col_map)
+    # v1.x: genesymbol/label/value/record_id  →  v2.x: source/target/weight
+    _rename = {
+        'genesymbol': 'target', 'label': 'source', 'value': 'weight',
+        'gene': 'target', 'tf': 'source', 'pathway': 'source',
+    }
+    for old, new in _rename.items():
+        if old in progeny.columns and new not in progeny.columns:
+            progeny = progeny.rename(columns={old: new})
+
+    # Ensure required columns exist
+    required = {'source', 'target', 'weight'}
+    missing = required - set(progeny.columns)
+    if missing:
+        raise RuntimeError(
+            f"PROGENy network missing columns {missing}. "
+            f"Got: {list(progeny.columns)}. Try: pip install --upgrade decoupler"
+        )
+
+    # Drop NA weights (fixes NAType error in older decoupler/pandas combos)
+    progeny = progeny.dropna(subset=['weight'])
+    progeny['weight'] = progeny['weight'].astype(float)
 
     # Run multivariate linear model
     dc.run_mlm(mat=adata, net=progeny, source='source', target='target',
@@ -371,7 +382,10 @@ def create_kegg_scores(expression: np.ndarray,
     if scores.empty:
         scores = result.resultsOnSamples
 
-    X = scores.values.T if scores.shape[0] < scores.shape[1] else scores.values
+    n_samples = expression.shape[0]
+    X = scores.values
+    if X.shape[0] != n_samples and X.shape[1] == n_samples:
+        X = X.T
     X = np.nan_to_num(X, nan=0.0).astype(np.float32)
     return X
 
@@ -402,15 +416,26 @@ def create_dorothea_scores(expression: np.ndarray,
     dorothea = dc.get_dorothea(organism='human')
 
     # Normalize column names across decoupler versions
-    col_map = {}
-    if 'genesymbol' in dorothea.columns and 'target' not in dorothea.columns:
-        col_map['genesymbol'] = 'target'
-    if 'label' in dorothea.columns and 'source' not in dorothea.columns:
-        col_map['label'] = 'source'
-    if 'value' in dorothea.columns and 'weight' not in dorothea.columns:
-        col_map['value'] = 'weight'
-    if col_map:
-        dorothea = dorothea.rename(columns=col_map)
+    _rename = {
+        'genesymbol': 'target', 'label': 'source', 'value': 'weight',
+        'gene': 'target', 'tf': 'source',
+    }
+    for old, new in _rename.items():
+        if old in dorothea.columns and new not in dorothea.columns:
+            dorothea = dorothea.rename(columns={old: new})
+
+    # Ensure required columns exist
+    required = {'source', 'target', 'weight'}
+    missing = required - set(dorothea.columns)
+    if missing:
+        raise RuntimeError(
+            f"DoRothEA network missing columns {missing}. "
+            f"Got: {list(dorothea.columns)}. Try: pip install --upgrade decoupler"
+        )
+
+    # Drop NA weights (fixes NAType error in older decoupler/pandas combos)
+    dorothea = dorothea.dropna(subset=['weight'])
+    dorothea['weight'] = dorothea['weight'].astype(float)
 
     # Run multivariate linear model
     dc.run_mlm(mat=adata, net=dorothea, source='source', target='target',
@@ -637,7 +662,10 @@ def create_reactome_scores(expression: np.ndarray,
     if scores.empty:
         scores = result.resultsOnSamples
 
-    X = scores.values.T if scores.shape[0] < scores.shape[1] else scores.values
+    n_samples = expression.shape[0]
+    X = scores.values
+    if X.shape[0] != n_samples and X.shape[1] == n_samples:
+        X = X.T
     X = np.nan_to_num(X, nan=0.0).astype(np.float32)
     print(f"    Reactome: {X.shape[1]} pathways")
     return X
@@ -673,7 +701,10 @@ def create_oncogenic_scores(expression: np.ndarray,
     if scores.empty:
         scores = result.resultsOnSamples
 
-    X = scores.values.T if scores.shape[0] < scores.shape[1] else scores.values
+    n_samples = expression.shape[0]
+    X = scores.values
+    if X.shape[0] != n_samples and X.shape[1] == n_samples:
+        X = X.T
     X = np.nan_to_num(X, nan=0.0).astype(np.float32)
     print(f"    Oncogenic: {X.shape[1]} signatures")
     return X

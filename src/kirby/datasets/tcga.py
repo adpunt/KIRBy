@@ -38,10 +38,12 @@ _XENA_TOIL_EXPRESSION = (
 )
 
 # TCGA phenotype (cancer type, sample type, etc.)
-_XENA_PHENOTYPE = (
+_XENA_PHENOTYPE_URLS = [
     "https://tcga-xena-hub.s3.us-east-1.amazonaws.com/"
-    "download/TCGA_phenotype_denseDataOnlyDownload.tsv.gz"
-)
+    "download/TCGA_phenotype_denseDataOnlyDownload.tsv.gz",
+    "https://tcga.xenahubs.net/download/"
+    "TCGA_phenotype_denseDataOnlyDownload.tsv.gz",
+]
 
 # TCGA-CDR survival endpoints (Liu et al. 2018)
 _XENA_SURVIVAL = (
@@ -50,16 +52,22 @@ _XENA_SURVIVAL = (
 )
 
 # MC3 somatic mutations (public MAF)
-_XENA_MC3_MAF = (
+_XENA_MC3_MAF_URLS = [
     "https://tcga-xena-hub.s3.us-east-1.amazonaws.com/"
-    "download/mc3.v0.2.8.PUBLIC.xena.gz"
-)
+    "download/mc3.v0.2.8.PUBLIC.xena.gz",
+    "https://tcga.xenahubs.net/download/"
+    "mc3.v0.2.8.PUBLIC.xena.gz",
+    "https://gdc.xenahubs.net/download/"
+    "mc3.v0.2.8.PUBLIC.xena.gz",
+]
 
 # GISTIC2 gene-level copy number (per-cohort)
-_XENA_CNV_TEMPLATE = (
+_XENA_CNV_TEMPLATES = [
     "https://tcga-xena-hub.s3.us-east-1.amazonaws.com/"
-    "download/TCGA.{cohort}.sampleMap%2FGistic2_CopyNumber_Gistic2_all_data_by_genes.gz"
-)
+    "download/TCGA.{cohort}.sampleMap%2FGistic2_CopyNumber_Gistic2_all_data_by_genes.gz",
+    "https://tcga.xenahubs.net/download/"
+    "TCGA.{cohort}.sampleMap%2FGistic2_CopyNumber_Gistic2_all_data_by_genes.gz",
+]
 
 # RPPA protein expression (pan-cancer, ~260 proteins)
 _XENA_RPPA = (
@@ -68,10 +76,12 @@ _XENA_RPPA = (
 )
 
 # miRNA expression (per-cohort, HiSeq)
-_XENA_MIRNA_TEMPLATE = (
+_XENA_MIRNA_TEMPLATES = [
     "https://tcga-xena-hub.s3.us-east-1.amazonaws.com/"
-    "download/TCGA.{cohort}.sampleMap%2FmiRNA_HiSeq_gene.gz"
-)
+    "download/TCGA.{cohort}.sampleMap%2FmiRNA_HiSeq_gene.gz",
+    "https://tcga.xenahubs.net/download/"
+    "TCGA.{cohort}.sampleMap%2FmiRNA_HiSeq_gene.gz",
+]
 
 # GigaSSL pre-computed WSI features (Mendeley Data v6, Lazard et al. 2024)
 # DOI: 10.17632/d573xfd9fg.6
@@ -130,6 +140,22 @@ def _cache_dir() -> Path:
     cache = Path.home() / '.cache' / 'kirby' / 'tcga'
     cache.mkdir(parents=True, exist_ok=True)
     return cache
+
+
+def _download_with_fallback(urls: list, timeout: int = 120, **kwargs):
+    """Try each URL in order, return first successful response."""
+    import requests
+
+    last_err = None
+    for url in urls:
+        try:
+            resp = requests.get(url, timeout=timeout, **kwargs)
+            resp.raise_for_status()
+            return resp
+        except Exception as e:
+            last_err = e
+            continue
+    raise last_err
 
 
 # =============================================================================
@@ -252,8 +278,7 @@ def _download_xena_clinical(cohort: str) -> pd.DataFrame:
         return pd.read_csv(cached_csv)
 
     print(f"  Downloading clinical data for {cohort}...")
-    resp = requests.get(_XENA_PHENOTYPE, timeout=120)
-    resp.raise_for_status()
+    resp = _download_with_fallback(_XENA_PHENOTYPE_URLS, timeout=120)
 
     content = gzip.decompress(resp.content)
     df = pd.read_csv(io.BytesIO(content), sep='\t', low_memory=False)
@@ -295,15 +320,16 @@ def _download_survival_data(cohort: str = 'TCGA-BRCA') -> pd.DataFrame:
 
     # Try per-cohort clinical matrix first (already has survival data)
     cohort_slug = cohort.replace('TCGA-', '').upper()
-    url = (
+    cohort_urls = [
         f"https://tcga-xena-hub.s3.us-east-1.amazonaws.com/"
-        f"download/TCGA.{cohort_slug}.sampleMap%2F{cohort_slug}_clinicalMatrix"
-    )
+        f"download/TCGA.{cohort_slug}.sampleMap%2F{cohort_slug}_clinicalMatrix",
+        f"https://tcga.xenahubs.net/download/"
+        f"TCGA.{cohort_slug}.sampleMap%2F{cohort_slug}_clinicalMatrix",
+    ]
 
     print(f"  Downloading survival data for {cohort}...")
     try:
-        resp = requests.get(url, timeout=120)
-        resp.raise_for_status()
+        resp = _download_with_fallback(cohort_urls, timeout=120)
         df = pd.read_csv(io.BytesIO(resp.content), sep='\t')
     except Exception:
         # Try TCGA-CDR pancanatlas
@@ -313,8 +339,7 @@ def _download_survival_data(cohort: str = 'TCGA-BRCA') -> pd.DataFrame:
             df = pd.read_csv(io.BytesIO(resp.content), sep='\t')
         except Exception:
             # Try GDC clinical endpoint
-            resp = requests.get(_XENA_PHENOTYPE, timeout=120)
-            resp.raise_for_status()
+            resp = _download_with_fallback(_XENA_PHENOTYPE_URLS, timeout=120)
             content = gzip.decompress(resp.content)
             df = pd.read_csv(io.BytesIO(content), sep='\t', low_memory=False)
 
@@ -453,8 +478,7 @@ def _download_mutations(sample_ids: List[str]) -> pd.DataFrame:
 
     print(f"  Downloading MC3 somatic mutations...")
     # MC3 is a large file (~300MB compressed). Download and filter to our samples.
-    resp = requests.get(_XENA_MC3_MAF, timeout=600, stream=True)
-    resp.raise_for_status()
+    resp = _download_with_fallback(_XENA_MC3_MAF_URLS, timeout=600)
 
     content = gzip.decompress(resp.content)
     df = pd.read_csv(io.BytesIO(content), sep='\t', low_memory=False)
@@ -507,11 +531,10 @@ def _download_xena_cnv(cohort: str) -> Tuple[np.ndarray, np.ndarray, List[str]]:
         return data['cnv_matrix'], data['gene_names'], data['sample_ids'].tolist()
 
     cohort_slug = cohort.replace('TCGA-', '').upper()
-    url = _XENA_CNV_TEMPLATE.format(cohort=cohort_slug)
+    urls = [t.format(cohort=cohort_slug) for t in _XENA_CNV_TEMPLATES]
 
     print(f"  Downloading CNV data for {cohort} from UCSC Xena...")
-    resp = requests.get(url, timeout=300)
-    resp.raise_for_status()
+    resp = _download_with_fallback(urls, timeout=300)
 
     content = gzip.decompress(resp.content)
     df = pd.read_csv(io.BytesIO(content), sep='\t', index_col=0)
@@ -628,11 +651,10 @@ def _download_xena_mirna(cohort: str) -> Tuple[np.ndarray, np.ndarray, List[str]
         return data['mirna_matrix'], data['mirna_names'], data['sample_ids'].tolist()
 
     cohort_slug = cohort.replace('TCGA-', '').upper()
-    url = _XENA_MIRNA_TEMPLATE.format(cohort=cohort_slug)
+    urls = [t.format(cohort=cohort_slug) for t in _XENA_MIRNA_TEMPLATES]
 
     print(f"  Downloading miRNA data for {cohort} from UCSC Xena...")
-    resp = requests.get(url, timeout=300)
-    resp.raise_for_status()
+    resp = _download_with_fallback(urls, timeout=300)
 
     content = gzip.decompress(resp.content)
     df = pd.read_csv(io.BytesIO(content), sep='\t', index_col=0)
