@@ -268,9 +268,14 @@ def get_representations(
             cache_file = _rep_cache_path(sample_ids, rep_name)
             if cache_file.exists():
                 rep = np.load(cache_file)
-                print(f"  {rep_name}: loaded from cache ({rep.shape[1]} features)")
-                representations[rep_name] = rep
-                continue
+                # Validate cached shape matches expected n_samples
+                if rep.shape[0] != expression.shape[0]:
+                    print(f"  {rep_name}: cache stale ({rep.shape[0]} != {expression.shape[0]} samples), regenerating...")
+                    cache_file.unlink()
+                else:
+                    print(f"  {rep_name}: loaded from cache ({rep.shape[1]} features)")
+                    representations[rep_name] = rep
+                    continue
 
         func_name, rep_type = _REP_DISPATCH[rep_name]
 
@@ -303,6 +308,15 @@ def get_representations(
                 raise ValueError(f"Unknown rep type '{rep_type}' for {rep_name}")
 
             elapsed = time.time() - start
+
+            # Validate n_samples matches expected
+            expected_n = expression.shape[0]
+            if rep.shape[0] != expected_n:
+                raise RuntimeError(
+                    f"{rep_name} has {rep.shape[0]} samples, expected {expected_n}. "
+                    f"Shape: {rep.shape}"
+                )
+
             print(f"done ({rep.shape[1]} features, {elapsed:.1f}s)")
             representations[rep_name] = rep
 

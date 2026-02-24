@@ -247,6 +247,47 @@ def create_gene_pca100(expression: np.ndarray,
     return X_pca.astype(np.float32)
 
 
+def _extract_ssgsea_matrix(result, n_samples: int) -> np.ndarray:
+    """Extract (n_samples, n_gene_sets) matrix from gseapy ssgsea result.
+
+    Handles different gseapy versions where 'Name'/'Term' columns may swap
+    between sample names and gene set names. Uses sample name matching
+    (S0, S1, ...) to determine correct orientation.
+    """
+    sample_names = [f'S{i}' for i in range(n_samples)]
+    sample_set = set(sample_names)
+
+    scores = result.res2d.pivot(index='Name', columns='Term', values='NES')
+    if scores.empty:
+        try:
+            scores = result.resultsOnSamples
+        except AttributeError:
+            raise RuntimeError("ssGSEA returned empty results")
+
+    # Determine orientation by checking where sample names appear
+    row_matches = sum(1 for s in sample_names[:5] if s in scores.index)
+    col_matches = sum(1 for s in sample_names[:5] if s in scores.columns)
+
+    if col_matches > row_matches:
+        scores = scores.T
+
+    # Reindex to ensure correct sample order and count
+    if sample_set.issubset(set(scores.index)):
+        scores = scores.reindex(sample_names)
+
+    X = scores.values
+    if X.shape[0] != n_samples:
+        if X.shape[1] == n_samples:
+            X = X.T
+        else:
+            raise RuntimeError(
+                f"ssGSEA shape mismatch: got {X.shape}, expected "
+                f"({n_samples}, n_gene_sets)"
+            )
+
+    return np.nan_to_num(X, nan=0.0).astype(np.float32)
+
+
 def create_hallmark_scores(expression: np.ndarray,
                            gene_names: np.ndarray) -> np.ndarray:
     """ssGSEA scores for MSigDB Hallmark pathways (50 pathways).
@@ -261,9 +302,11 @@ def create_hallmark_scores(expression: np.ndarray,
     except ImportError:
         raise ImportError("gseapy required for Hallmark scores: pip install gseapy")
 
+    n_samples = expression.shape[0]
+
     # Create DataFrame: genes as rows, samples as columns (gseapy convention)
     df = pd.DataFrame(expression.T, index=gene_names,
-                       columns=[f'S{i}' for i in range(expression.shape[0])])
+                       columns=[f'S{i}' for i in range(n_samples)])
 
     # Run ssGSEA with Hallmark gene sets
     result = gp.ssgsea(
@@ -275,15 +318,39 @@ def create_hallmark_scores(expression: np.ndarray,
         threads=1,
     )
 
-    # Extract scores matrix
-    scores = result.res2d.pivot(index='Name', columns='Term', values='NES')
-    if scores.empty:
-        # Try alternative result format
-        scores = result.resultsOnSamples
+    return _extract_ssgsea_matrix(result, n_samples)
 
-    X = scores.values.T if scores.shape[0] < scores.shape[1] else scores.values
-    X = np.nan_to_num(X, nan=0.0).astype(np.float32)
-    return X
+
+def _normalize_decoupler_net(net, context: str = 'network'):
+    """Normalize decoupler network DataFrame column names across versions.
+
+    Handles v1.x (genesymbol/label/value) and v2.x (source/target/weight)
+    column naming conventions. Also handles pandas NAType values.
+    """
+    # Normalize column names across decoupler versions
+    _rename = {
+        'genesymbol': 'target', 'label': 'source', 'value': 'weight',
+        'gene': 'target', 'tf': 'source', 'pathway': 'source',
+        'mor': 'weight',
+    }
+    for old, new in _rename.items():
+        if old in net.columns and new not in net.columns:
+            net = net.rename(columns={old: new})
+
+    required = {'source', 'target', 'weight'}
+    missing = required - set(net.columns)
+    if missing:
+        raise RuntimeError(
+            f"{context} missing columns {missing}. "
+            f"Got: {list(net.columns)}. Try: pip install --upgrade decoupler"
+        )
+
+    # Convert weight column: handle NAType, mixed types, and NaN
+    net = net.copy()
+    net['weight'] = pd.to_numeric(net['weight'], errors='coerce')
+    net = net.dropna(subset=['weight'])
+
+    return net
 
 
 def create_progeny_scores(expression: np.ndarray,
@@ -310,29 +377,7 @@ def create_progeny_scores(expression: np.ndarray,
 
     # Get PROGENy pathway model
     progeny = dc.get_progeny(organism='human', top=300)
-
-    # Normalize column names across decoupler versions
-    # v1.x: genesymbol/label/value/record_id  →  v2.x: source/target/weight
-    _rename = {
-        'genesymbol': 'target', 'label': 'source', 'value': 'weight',
-        'gene': 'target', 'tf': 'source', 'pathway': 'source',
-    }
-    for old, new in _rename.items():
-        if old in progeny.columns and new not in progeny.columns:
-            progeny = progeny.rename(columns={old: new})
-
-    # Ensure required columns exist
-    required = {'source', 'target', 'weight'}
-    missing = required - set(progeny.columns)
-    if missing:
-        raise RuntimeError(
-            f"PROGENy network missing columns {missing}. "
-            f"Got: {list(progeny.columns)}. Try: pip install --upgrade decoupler"
-        )
-
-    # Drop NA weights (fixes NAType error in older decoupler/pandas combos)
-    progeny = progeny.dropna(subset=['weight'])
-    progeny['weight'] = progeny['weight'].astype(float)
+    progeny = _normalize_decoupler_net(progeny, 'PROGENy')
 
     # Run multivariate linear model
     dc.run_mlm(mat=adata, net=progeny, source='source', target='target',
@@ -366,8 +411,9 @@ def create_kegg_scores(expression: np.ndarray,
     except ImportError:
         raise ImportError("gseapy required for KEGG scores: pip install gseapy")
 
+    n_samples = expression.shape[0]
     df = pd.DataFrame(expression.T, index=gene_names,
-                       columns=[f'S{i}' for i in range(expression.shape[0])])
+                       columns=[f'S{i}' for i in range(n_samples)])
 
     result = gp.ssgsea(
         data=df,
@@ -378,16 +424,7 @@ def create_kegg_scores(expression: np.ndarray,
         threads=1,
     )
 
-    scores = result.res2d.pivot(index='Name', columns='Term', values='NES')
-    if scores.empty:
-        scores = result.resultsOnSamples
-
-    n_samples = expression.shape[0]
-    X = scores.values
-    if X.shape[0] != n_samples and X.shape[1] == n_samples:
-        X = X.T
-    X = np.nan_to_num(X, nan=0.0).astype(np.float32)
-    return X
+    return _extract_ssgsea_matrix(result, n_samples)
 
 
 def create_dorothea_scores(expression: np.ndarray,
@@ -414,28 +451,7 @@ def create_dorothea_scores(expression: np.ndarray,
 
     # Get DoRothEA regulon network (confidence levels A, B, C)
     dorothea = dc.get_dorothea(organism='human')
-
-    # Normalize column names across decoupler versions
-    _rename = {
-        'genesymbol': 'target', 'label': 'source', 'value': 'weight',
-        'gene': 'target', 'tf': 'source',
-    }
-    for old, new in _rename.items():
-        if old in dorothea.columns and new not in dorothea.columns:
-            dorothea = dorothea.rename(columns={old: new})
-
-    # Ensure required columns exist
-    required = {'source', 'target', 'weight'}
-    missing = required - set(dorothea.columns)
-    if missing:
-        raise RuntimeError(
-            f"DoRothEA network missing columns {missing}. "
-            f"Got: {list(dorothea.columns)}. Try: pip install --upgrade decoupler"
-        )
-
-    # Drop NA weights (fixes NAType error in older decoupler/pandas combos)
-    dorothea = dorothea.dropna(subset=['weight'])
-    dorothea['weight'] = dorothea['weight'].astype(float)
+    dorothea = _normalize_decoupler_net(dorothea, 'DoRothEA')
 
     # Run multivariate linear model
     dc.run_mlm(mat=adata, net=dorothea, source='source', target='target',
@@ -646,8 +662,9 @@ def create_reactome_scores(expression: np.ndarray,
     except ImportError:
         raise ImportError("gseapy required for Reactome scores: pip install gseapy")
 
+    n_samples = expression.shape[0]
     df = pd.DataFrame(expression.T, index=gene_names,
-                       columns=[f'S{i}' for i in range(expression.shape[0])])
+                       columns=[f'S{i}' for i in range(n_samples)])
 
     result = gp.ssgsea(
         data=df,
@@ -658,15 +675,7 @@ def create_reactome_scores(expression: np.ndarray,
         threads=1,
     )
 
-    scores = result.res2d.pivot(index='Name', columns='Term', values='NES')
-    if scores.empty:
-        scores = result.resultsOnSamples
-
-    n_samples = expression.shape[0]
-    X = scores.values
-    if X.shape[0] != n_samples and X.shape[1] == n_samples:
-        X = X.T
-    X = np.nan_to_num(X, nan=0.0).astype(np.float32)
+    X = _extract_ssgsea_matrix(result, n_samples)
     print(f"    Reactome: {X.shape[1]} pathways")
     return X
 
@@ -685,8 +694,9 @@ def create_oncogenic_scores(expression: np.ndarray,
     except ImportError:
         raise ImportError("gseapy required for oncogenic scores: pip install gseapy")
 
+    n_samples = expression.shape[0]
     df = pd.DataFrame(expression.T, index=gene_names,
-                       columns=[f'S{i}' for i in range(expression.shape[0])])
+                       columns=[f'S{i}' for i in range(n_samples)])
 
     result = gp.ssgsea(
         data=df,
@@ -697,15 +707,7 @@ def create_oncogenic_scores(expression: np.ndarray,
         threads=1,
     )
 
-    scores = result.res2d.pivot(index='Name', columns='Term', values='NES')
-    if scores.empty:
-        scores = result.resultsOnSamples
-
-    n_samples = expression.shape[0]
-    X = scores.values
-    if X.shape[0] != n_samples and X.shape[1] == n_samples:
-        X = X.T
-    X = np.nan_to_num(X, nan=0.0).astype(np.float32)
+    X = _extract_ssgsea_matrix(result, n_samples)
     print(f"    Oncogenic: {X.shape[1]} signatures")
     return X
 
@@ -755,20 +757,27 @@ def create_immune_scores(expression: np.ndarray,
             min_size=1,
             threads=1,
         )
+        # Use shared helper for correct orientation
+        X_immune = _extract_ssgsea_matrix(result, n_samples)
+        # Map columns from extracted matrix back to cell_type_names
         scores = result.res2d.pivot(index='Name', columns='Term', values='NES')
         if scores.empty:
-            scores = result.resultsOnSamples
-        # Align columns to cell_type_names
+            try:
+                scores = result.resultsOnSamples
+            except AttributeError:
+                pass
+        # Determine gene set names from pivot columns or rows
+        sample_names = [f'S{i}' for i in range(n_samples)]
+        if any(s in scores.columns for s in sample_names[:3]):
+            gene_set_names = list(scores.index)
+        else:
+            gene_set_names = list(scores.columns)
+        # Map to cell_type_names order
         for j, ct in enumerate(cell_type_names):
-            if ct in scores.columns:
-                col = scores[ct].values
-                if len(col) == n_samples:
-                    bindea_scores[:, j] = col
-                elif scores.shape[0] == n_samples:
-                    bindea_scores[:, j] = scores[ct].values
-                else:
-                    # Transposed
-                    bindea_scores[:, j] = scores.loc[ct].values[:n_samples]
+            if ct in gene_set_names:
+                ct_idx = gene_set_names.index(ct)
+                if ct_idx < X_immune.shape[1]:
+                    bindea_scores[:, j] = X_immune[:, ct_idx]
 
     # --- ESTIMATE scores ---
     gene_to_idx = {g: i for i, g in enumerate(gene_names)}
