@@ -7,7 +7,6 @@
 #SBATCH --partition=long
 #SBATCH --mem=64G
 #SBATCH --gres=gpu:1
-#SBATCH --constraint='gpu_mem:32GB'
 #SBATCH --mail-user=adelaide.punt@stcatz.ox.ac.uk
 
 cd /data/stat-cadd/scat9264/KIRBy
