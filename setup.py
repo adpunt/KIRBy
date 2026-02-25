@@ -129,6 +129,7 @@ setup(
             "biopython>=1.79",
             "requests>=2.26.0",
             "ablang2",
+            "antifold",
             # ANARCI: conda install -c bioconda anarci
         ],
 

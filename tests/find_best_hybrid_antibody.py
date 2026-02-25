@@ -36,6 +36,9 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
 
+# Block stale system bottleneck (Anaconda 2022.05, compiled against old numpy)
+sys.modules.setdefault('bottleneck', None)
+
 import numpy as np
 import pandas as pd
 
@@ -162,7 +165,8 @@ REP_PRESETS = {
         'aac', 'blosum62',
         'varpos_physchem',                              # all positions, 6D/pos
         'varpos_cdr_physchem', 'varpos_cdrh3_physchem', # CDR-focused, much lower dim
-    ],  # 9 reps — CDR variants are low-dim, fast
+        'antifold_score',                               # structure-conditioned, 5D
+    ],  # 10 reps
     'dms_full': [
         'lm_score_ablang2', 'lm_score_esm2', 'lm_score_prot_t5', 'lm_score_antiberty',
         'positional', 'biophysical_delta',
@@ -171,7 +175,8 @@ REP_PRESETS = {
         'varpos_onehot', 'varpos_blosum', 'varpos_physchem',      # all positions
         'varpos_cdr_onehot', 'varpos_cdr_physchem',               # CDR only
         'varpos_cdrh3_physchem', 'varpos_fw_physchem',            # H3 / framework
-    ],  # 17 reps — full arsenal (server only, high-dim onehot variants)
+        'antifold_score',                                          # structure-conditioned, 5D
+    ],  # 18 reps — full arsenal (server only, high-dim onehot variants)
 
     # --- Inter-family: full-sequence embeddings ARE appropriate ---
     'inter_family': [
@@ -468,6 +473,8 @@ _REP_DISPATCH = {
     'varpos_fw_physchem': ('create_variable_position_encoding', 'varpos'),
     # Structural: computed separately (not in antibody.py)
     'structural': (None, 'structural'),
+    # AntiFold inverse folding score (5D, structure-conditioned)
+    'antifold_score': ('compute_antifold_scores', 'antifold'),
 }
 
 
@@ -526,6 +533,16 @@ def get_representations(heavy_seqs: List[str], light_seqs: Optional[List[str]],
             if mode == 'structural':
                 from kirby.representations.structural import compute_structural_features
                 rep = compute_structural_features(heavy_seqs, light_seqs)
+
+            elif mode == 'antifold':
+                from kirby.representations.structural import compute_antifold_scores
+                if not has_mutations:
+                    print(f"SKIPPED (no mutation data)")
+                    continue
+                rep = compute_antifold_scores(
+                    wt_heavy or '', heavy_seqs, mutations,
+                    wt_light=wt_light,
+                )
 
             elif mode == 'concat':
                 func = getattr(ab, func_name)
@@ -631,8 +648,8 @@ def get_representations(heavy_seqs: List[str], light_seqs: Optional[List[str]],
                 continue
             if mode in ('mutation', 'mutation_lm', 'mutation_site', 'varpos'):
                 continue  # mutation/varpos reps are already "delta-like"
-            if mode == 'structural':
-                continue  # structural features are not differentiable per-sequence
+            if mode in ('structural', 'antifold'):
+                continue  # structure-based reps already encode per-sample differences
 
             cache_key = f"delta_{rep_name}"
             if cache:

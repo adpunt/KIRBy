@@ -498,3 +498,198 @@ def compute_structural_features(
     active_cols = np.any(features != 0, axis=0).sum()
     print(f"  Generated structural features: ({n}, 28), {active_cols} active columns")
     return features
+
+
+# ============================================================================
+# ANTIFOLD INVERSE FOLDING SCORES (5D)
+# ============================================================================
+
+_ANTIFOLD_MODEL_CACHE = {}
+
+
+def _run_antifold(model, pdb_path: Path, has_light: bool = True,
+                  cache_dir: Optional[Path] = None):
+    """Run AntiFold on a PDB, return heavy-chain log-probs array.
+
+    Args:
+        model: Loaded AntiFold model.
+        pdb_path: Path to PDB file (from ABodyBuilder2).
+        has_light: Whether the PDB contains a light chain.
+        cache_dir: Directory for caching logprobs. Defaults to structure cache.
+
+    Returns:
+        (logprobs_H, aa_list): logprobs_H is (n_H_residues, 20) numpy array,
+        aa_list is the 20 amino acid characters in column order.
+        Returns (None, None) on failure.
+    """
+    import pandas as pd
+    from antifold.antiscripts import get_pdbs_logits, df_logits_to_logprobs
+
+    pdb_path = Path(pdb_path)
+    if cache_dir is None:
+        cache_dir = _structure_cache_dir()
+
+    aa_list = list("ACDEFGHIKLMNPQRSTVWY")
+    af_cache = cache_dir / f'{pdb_path.stem}_antifold_logprobs.npy'
+
+    if af_cache.exists():
+        logprobs_H = np.load(af_cache)
+        return logprobs_H, aa_list
+
+    pdb_dir = str(pdb_path.parent)
+    pdb_name = pdb_path.stem
+
+    row = {"pdb": [pdb_name], "Hchain": ["H"]}
+    if has_light:
+        row["Lchain"] = ["L"]
+    pdbs_csv = pd.DataFrame(row)
+
+    try:
+        df_logits_list = get_pdbs_logits(
+            model=model,
+            pdbs_csv_or_dataframe=pdbs_csv,
+            pdb_dir=pdb_dir,
+        )
+        df_logprobs = df_logits_to_logprobs(df_logits_list[0])
+
+        # Filter to heavy chain only
+        df_H = df_logprobs[df_logprobs['pdb_chain'] == 'H'].reset_index(drop=True)
+        logprobs_H = df_H[aa_list].values.astype(np.float64)
+
+        np.save(af_cache, logprobs_H)
+        return logprobs_H, aa_list
+
+    except Exception as e:
+        warnings.warn(f"AntiFold failed on {pdb_path}: {e}")
+        return None, None
+
+
+def compute_antifold_scores(
+    wt_seq: str,
+    mut_seqs: List[str],
+    mutations: List[List[Dict]],
+    model_name: str = 'antifold',
+    wt_light: Optional[str] = None,
+) -> np.ndarray:
+    """Compute AntiFold inverse folding scores for mutations (5D).
+
+    Scores mutations using structure-conditioned log-probabilities from both
+    WT and mutant predicted structures (structural relaxation score):
+
+        score = log P(mut_aa | mut_structure) - log P(wt_aa | wt_structure)
+
+    This captures whether a mutation is self-consistent with the new predicted
+    fold — a positive score means AntiFold "agrees" with the mutation given
+    the relaxed structure.
+
+    Features per sample (5D):
+      0: mean score across mutations
+      1: min score
+      2: max score
+      3: sum of scores
+      4: number of unfavorable mutations (score < 0)
+
+    Args:
+        wt_seq: Wild-type heavy chain sequence.
+        mut_seqs: List of mutant heavy chain sequences.
+        mutations: Per-sample mutation lists. Each is a list of dicts with
+            keys: chain ('heavy'/'light'), position (0-indexed), wt_aa, mut_aa.
+        model_name: Kept for dispatch compatibility.
+        wt_light: Wild-type light chain sequence (optional).
+
+    Returns:
+        np.ndarray: (n_samples, 5) feature matrix. Zeros if AntiFold or
+        ImmuneBuilder is unavailable.
+    """
+    n = len(mut_seqs)
+    features = np.zeros((n, 5), dtype=np.float64)
+
+    try:
+        from antifold.antiscripts import load_model
+    except ImportError:
+        print("  WARNING: antifold not installed — returning zeros")
+        return features
+
+    print(f"  Computing AntiFold scores ({n} samples)...")
+
+    if 'antifold' not in _ANTIFOLD_MODEL_CACHE:
+        _ANTIFOLD_MODEL_CACHE['antifold'] = load_model()
+    model = _ANTIFOLD_MODEL_CACHE['antifold']
+
+    cache_dir = _structure_cache_dir()
+    aa_list = list("ACDEFGHIKLMNPQRSTVWY")
+    aa_to_col = {aa: i for i, aa in enumerate(aa_list)}
+    has_light = wt_light is not None and len(wt_light) > 0
+
+    # --- WT scoring ---
+    wt_pdb = predict_structure(wt_seq, wt_light)
+    if wt_pdb is None:
+        print("  WARNING: WT structure prediction failed — returning zeros")
+        return features
+
+    wt_logprobs, _ = _run_antifold(model, wt_pdb, has_light=has_light,
+                                   cache_dir=cache_dir)
+    if wt_logprobs is None:
+        print("  WARNING: AntiFold failed on WT — returning zeros")
+        return features
+
+    # --- Deduplicate mutant sequences ---
+    unique_seqs = {}
+    for i, seq in enumerate(mut_seqs):
+        if seq not in unique_seqs:
+            unique_seqs[seq] = []
+        unique_seqs[seq].append(i)
+    print(f"    {len(unique_seqs)} unique sequences (of {n} total)")
+
+    # --- Process each unique mutant ---
+    processed = 0
+    for seq, indices in unique_seqs.items():
+        mut_pdb = predict_structure(seq, wt_light)
+        if mut_pdb is None:
+            processed += len(indices)
+            continue
+
+        mut_logprobs, _ = _run_antifold(model, mut_pdb, has_light=has_light,
+                                        cache_dir=cache_dir)
+        if mut_logprobs is None:
+            processed += len(indices)
+            continue
+
+        for idx in indices:
+            sample_mutations = mutations[idx]
+            if not sample_mutations:
+                continue
+
+            scores = []
+            for mut in sample_mutations:
+                if mut.get('chain') != 'heavy':
+                    continue
+                pos = mut['position']
+                wt_aa = mut['wt_aa']
+                mut_aa = mut['mut_aa']
+
+                if pos >= len(wt_logprobs) or pos >= len(mut_logprobs):
+                    continue
+                if wt_aa not in aa_to_col or mut_aa not in aa_to_col:
+                    continue
+
+                score = float(
+                    mut_logprobs[pos, aa_to_col[mut_aa]]
+                    - wt_logprobs[pos, aa_to_col[wt_aa]]
+                )
+                scores.append(score)
+
+            if scores:
+                features[idx, 0] = np.mean(scores)
+                features[idx, 1] = np.min(scores)
+                features[idx, 2] = np.max(scores)
+                features[idx, 3] = np.sum(scores)
+                features[idx, 4] = sum(1 for s in scores if s < 0)
+
+        processed += len(indices)
+        if processed % 50 < len(indices) or processed == n:
+            print(f"    Progress: {processed}/{n}")
+
+    active = np.any(features != 0, axis=0).sum()
+    print(f"  Generated AntiFold scores: ({n}, 5), {active} active columns")
+    return features
