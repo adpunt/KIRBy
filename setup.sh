@@ -13,6 +13,7 @@ export TORCH_HOME=/data/stat-cadd/scat9264/.cache/torch
 export PIP_CACHE_DIR=/data/stat-cadd/scat9264/.cache/pip
 export PYTHONUSERBASE=/data/stat-cadd/scat9264/.local
 export KIRBY_CACHE_DIR=/data/stat-cadd/scat9264/.cache/kirby
+export KIRBY_MODELS_DIR=/data/stat-cadd/scat9264/kirby_models
 
 # Install KIRBy in editable mode (picks up src/kirby)
 pip install --quiet -e . 2>/dev/null
