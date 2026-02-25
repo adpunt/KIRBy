@@ -211,8 +211,8 @@ def explain_smiles_tokens(smiles_list, model_name='chemberta', importance_method
     else:
         raise ValueError(f"Unknown model: {model_name}. Choose 'chemberta' or 'molformer'")
 
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = AutoModel.from_pretrained(model_id, output_attentions=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    model = AutoModel.from_pretrained(model_id, output_attentions=True, trust_remote_code=True)
     model = model.to(device).eval()
 
     results = []

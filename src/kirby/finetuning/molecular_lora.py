@@ -53,7 +53,7 @@ def _finetune_and_extract(
     model_id, embed_dim, target_modules = _MODEL_CONFIGS[model_name]
     device = get_device()
 
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
     base_model = AutoModel.from_pretrained(model_id, trust_remote_code=True)
 
     # Apply LoRA
