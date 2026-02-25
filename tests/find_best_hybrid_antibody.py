@@ -166,7 +166,8 @@ REP_PRESETS = {
         'varpos_physchem',                              # all positions, 6D/pos
         'varpos_cdr_physchem', 'varpos_cdrh3_physchem', # CDR-focused, much lower dim
         'antifold_score',                               # structure-conditioned, 5D
-    ],  # 10 reps
+        'sapiens_score',                                # humanness-conditioned, 5D
+    ],  # 11 reps
     'dms_full': [
         'lm_score_ablang2', 'lm_score_esm2', 'lm_score_prot_t5', 'lm_score_antiberty',
         'positional', 'biophysical_delta',
@@ -176,7 +177,8 @@ REP_PRESETS = {
         'varpos_cdr_onehot', 'varpos_cdr_physchem',               # CDR only
         'varpos_cdrh3_physchem', 'varpos_fw_physchem',            # H3 / framework
         'antifold_score',                                          # structure-conditioned, 5D
-    ],  # 18 reps — full arsenal (server only, high-dim onehot variants)
+        'sapiens_score',                                           # humanness-conditioned, 5D
+    ],  # 19 reps — full arsenal (server only, high-dim onehot variants)
 
     # --- Inter-family: full-sequence embeddings ARE appropriate ---
     'inter_family': [
@@ -475,6 +477,8 @@ _REP_DISPATCH = {
     'structural': (None, 'structural'),
     # AntiFold inverse folding score (5D, structure-conditioned)
     'antifold_score': ('compute_antifold_scores', 'antifold'),
+    # Sapiens humanness score (5D, humanness-conditioned)
+    'sapiens_score': ('compute_sapiens_mutation_scores', 'mutation'),
 }
 
 
@@ -578,6 +582,8 @@ def get_representations(heavy_seqs: List[str], light_seqs: Optional[List[str]],
                 elif rep_name == 'biophysical_delta':
                     rep = func(mutations)
                 elif rep_name == 'lm_score':
+                    rep = func(wt_heavy or '', heavy_seqs, mutations)
+                elif rep_name == 'sapiens_score':
                     rep = func(wt_heavy or '', heavy_seqs, mutations)
                 else:
                     raise ValueError(f"Unknown mutation rep: {rep_name}")
