@@ -937,6 +937,10 @@ Output:
                        help='Generate feature explanations for best configs')
     parser.add_argument('--augment', action='store_true',
                        help='Include augmented features (graph topology, spectral)')
+    parser.add_argument('--allocation', type=str, default=None,
+                       help="Override allocation methods: comma-separated from "
+                            "'greedy', 'performance_weighted', 'softmax_T5', "
+                            "'dominant_greedy', 'two_stage', 'stability_selection'")
     parser.add_argument('--model', type=str, default=None,
                        help="Override models: 'rf', 'xgboost', 'ridge', 'mlp', 'knn', etc. or comma-separated")
     parser.add_argument('--save-weights', action='store_true',
@@ -988,6 +992,11 @@ Output:
     if args.model:
         models_arg = [m.strip() for m in args.model.split(',')]
 
+    # Resolve allocation override
+    alloc_arg = None
+    if args.allocation:
+        alloc_arg = [a.strip() for a in args.allocation.split(',')]
+
     # Build fine-tuning factories
     rep_factories = None
     if args.finetune:
@@ -1029,6 +1038,7 @@ Output:
         task_type=task_type,
         speed=speed,
         n_folds=args.n_folds,
+        allocation_methods=alloc_arg,
         return_fitted=args.save_weights,
         weight_method=args.weight_method if args.save_weights else None,
         test_rep_subsets=args.test_rep_subsets,

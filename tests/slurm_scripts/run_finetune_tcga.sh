@@ -33,7 +33,7 @@ echo "Started: $(date)"
 echo ""
 
 # Install fine-tuning deps
-pip install --quiet peft accelerate bitsandbytes 2>/dev/null
+pip install --quiet 'urllib3<2' 'peft>=0.7' 'accelerate>=0.25' bitsandbytes 2>/dev/null
 
 python tests/find_best_hybrid_tcga.py "$DATASET" \
     --reps "$REPS" \

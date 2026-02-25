@@ -95,9 +95,10 @@ REP_PRESETS = {
         'gene_hvg2000', 'gene_pca100', 'gene_hallmark', 'gene_progeny',
         'gene_kegg', 'gene_dorothea', 'gene_combined_pathway',
         'gene_nmf50', 'gene_ica50', 'gene_stats',
+        'gene_geneformer', 'gene_scfoundation',
         'wsi_ctranspath', 'wsi_phikon', 'wsi_hoptimus0', 'wsi_moco',
         'wsi_titan',
-    ],  # 15 reps
+    ],  # 17 reps
 
     'all': [
         # Expression-derived (14)
@@ -106,12 +107,14 @@ REP_PRESETS = {
         'gene_nmf50', 'gene_ica50', 'gene_stats',
         'gene_reactome', 'gene_oncogenic', 'gene_immune',
         'gene_mutation',
+        # Foundation model embeddings (2, GPU)
+        'gene_geneformer', 'gene_scfoundation',
         # Multi-omic (5)
         'cnv_gistic', 'cnv_pca50', 'rppa', 'mirna_top200', 'clinical',
         # WSI (8)
         'wsi_ctranspath', 'wsi_phikon', 'wsi_hoptimus0', 'wsi_gigapath', 'wsi_moco',
         'wsi_titan', 'wsi_uni2h', 'wsi_cnn320',
-    ],  # 27 reps
+    ],  # 29 reps
 
     # Genomic-only presets (no WSI)
     'genomic_fast': [
@@ -130,8 +133,9 @@ REP_PRESETS = {
         'gene_nmf50', 'gene_ica50', 'gene_stats',
         'gene_reactome', 'gene_oncogenic', 'gene_immune',
         'gene_mutation',
+        'gene_geneformer', 'gene_scfoundation',
         'cnv_gistic', 'cnv_pca50', 'rppa', 'mirna_top200',
-    ],  # 18 reps (clinical excluded — it's a different paradigm)
+    ],  # 20 reps (clinical excluded — it's a different paradigm)
 }
 
 _SEARCH_NAME_MAP = {
@@ -167,6 +171,9 @@ _REP_DISPATCH = {
     'gene_nmf50':            ('create_nmf50',             'genomic_expr'),
     'gene_ica50':            ('create_ica50',             'genomic_expr'),
     'gene_stats':            ('create_gene_stats',        'genomic_expr'),
+    # Foundation model embeddings: fn(expression, gene_names) -> np.ndarray (GPU)
+    'gene_geneformer':       ('create_geneformer_embeddings', 'genomic'),
+    'gene_scfoundation':     ('create_scfoundation_embeddings', 'genomic'),
     # Mutation-pattern: fn(sample_ids, cohort) -> np.ndarray
     'gene_mutation':         ('create_mutation_matrix',   'mutation'),
     'cnv_gistic':            ('create_cnv_gistic',        'mutation'),
@@ -566,6 +573,10 @@ Output:
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--genomic-only', action='store_true',
                        help='Skip WSI representations (genomic features only)')
+    parser.add_argument('--allocation', type=str, default=None,
+                       help="Override allocation methods: comma-separated from "
+                            "'greedy', 'performance_weighted', 'softmax_T5', "
+                            "'dominant_greedy', 'two_stage', 'stability_selection'")
     parser.add_argument('--model', type=str, default=None,
                        help="Override models: 'rf', 'xgboost', 'ridge', etc. or comma-separated")
     parser.add_argument('--save-weights', action='store_true',
@@ -621,6 +632,10 @@ Output:
     if args.model:
         models_arg = [m.strip() for m in args.model.split(',')]
 
+    alloc_arg = None
+    if args.allocation:
+        alloc_arg = [a.strip() for a in args.allocation.split(',')]
+
     # Select metric
     if task_type == 'classification':
         metric = 'accuracy'
@@ -666,6 +681,7 @@ Output:
         task_type=task_type,
         speed=speed,
         n_folds=args.n_folds,
+        allocation_methods=alloc_arg,
         return_fitted=args.save_weights,
         weight_method=args.weight_method if args.save_weights else None,
         test_rep_subsets=args.test_rep_subsets,

@@ -186,6 +186,13 @@ and BRCA PAM50. Models: rf, xgboost.
 | `gene_combined_pathway` | ~364 | Pathway (combined) | **PENDING** | **PENDING** | gseapy+decoupler | CONDITIONAL |
 | `gene_immune` | ~27 | Computed (immune) | rf=0.793 | rf=0.524 | gseapy (hardcoded) | YES |
 
+#### Foundation Model Embeddings (GPU)
+
+| Rep | Dim | Category | Lung Acc (best) | BRCA Acc (best) | Deps | Server? |
+|-----|-----|----------|----------------|----------------|------|---------|
+| `gene_geneformer` | 768 | Pretrained (frozen) | **PENDING** | **PENDING** | torch, transformers | GPU |
+| `gene_scfoundation` | 2048 | Pretrained (frozen) | **PENDING** | **PENDING** | torch, transformers | GPU |
+
 #### Multi-Omic
 
 | Rep | Dim | Category | Lung Acc (best) | BRCA Acc (best) | Deps | Server? |
@@ -216,11 +223,11 @@ and BRCA PAM50. Models: rf, xgboost.
 - `fast` (5): pca100, hallmark, progeny, ctranspath, phikon
 - `fast+diverse` (8): + nmf50, stats, immune
 - `multimodal` (12): + mutation, cnv_gistic, rppa, mirna_top200, clinical
-- `fast+learned` (15): expanded genomic + 5 WSI
-- `all` (27): everything
+- `fast+learned` (17): expanded genomic + geneformer + scfoundation + 5 WSI
+- `all` (29): everything
 - `genomic_fast` (3): pca100, hallmark, progeny
 - `genomic_diverse` (10): multi-omic without WSI
-- `genomic_all` (18): all genomic + multi-omic
+- `genomic_all` (20): all genomic + foundation models + multi-omic
 
 ### 2D. DTA Representations
 
