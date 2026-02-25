@@ -1073,15 +1073,22 @@ def compute_sapiens_mutation_scores(
             return features
 
     # Score the wildtype heavy chain once
+    # Standalone sapiens uses chain_type=; biophi uses model_type=
     print(f"  Scoring WT with Sapiens (heavy chain)...")
     try:
-        wt_scores = predict_scores(wt_seq.upper().strip(), model_type='H')
+        wt_scores = predict_scores(wt_seq.upper().strip(), chain_type='H')
+    except TypeError:
+        try:
+            wt_scores = predict_scores(wt_seq.upper().strip(), model_type='H')
+        except Exception as e:
+            print(f"  Sapiens scoring failed ({e}), returning zeros")
+            return features
     except Exception as e:
         print(f"  Sapiens scoring failed ({e}), returning zeros")
         return features
 
     # Build amino acid -> column index mapping
-    # predict_scores returns DataFrame with AA letter columns, or ndarray
+    # predict_scores returns DataFrame with AA letter columns
     if hasattr(wt_scores, 'columns'):
         aa_to_col = {col: i for i, col in enumerate(wt_scores.columns)}
         wt_arr = wt_scores.values
@@ -1089,6 +1096,12 @@ def compute_sapiens_mutation_scores(
         standard_aas = 'ACDEFGHIKLMNPQRSTVWY'
         aa_to_col = {aa: i for i, aa in enumerate(standard_aas)}
         wt_arr = np.asarray(wt_scores)
+
+    # Standalone sapiens returns probabilities by default; convert to log-space
+    # for consistency with lm_score (deltas are directionally the same either way,
+    # but log-space avoids near-zero differences dominating)
+    if wt_arr.min() >= 0 and wt_arr.max() <= 1.0:
+        wt_arr = np.log(np.clip(wt_arr, 1e-10, 1.0))
 
     for i, muts in enumerate(mutations):
         if not muts:
