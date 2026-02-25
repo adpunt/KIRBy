@@ -1064,10 +1064,13 @@ def compute_sapiens_mutation_scores(
     features = np.zeros((n, 5), dtype=np.float64)
 
     try:
-        from sapiens.sapiens import predict_scores
+        from sapiens import predict_scores  # standalone sapiens package
     except ImportError:
-        print("  Sapiens not available (pip install biophi), returning zeros")
-        return features
+        try:
+            from sapiens.sapiens import predict_scores  # biophi package
+        except ImportError:
+            print("  Sapiens not available (pip install sapiens), returning zeros")
+            return features
 
     # Score the wildtype heavy chain once
     print(f"  Scoring WT with Sapiens (heavy chain)...")
