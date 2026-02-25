@@ -319,9 +319,47 @@ a single run. It tests:
 
 ## 6. Fine-Tuning Factories
 
-| Factory | Domain | Base Model | Method | Output Dim | CLI Flag |
-|---------|--------|------------|--------|-----------|----------|
-| `make_molecular_lora_factory` | Molecular | ChemBERTa/MoLFormer | LoRA | 384/768 | `--finetune lora_chemberta` |
-| `make_antibody_lora_factory` | Antibody | AbLang2 | LoRA | 768 | `--finetune lora` |
-| `make_antibody_mlm_factory` | Antibody | AbLang2 | MLM | 768 | `--finetune mlm` |
-| `make_geneformer_factory` | TCGA | Geneformer | Freeze+head | 256 | `--finetune geneformer` |
+| Factory | Domain | Base Model(s) | Method | Output Dim | CLI Flag | GPU |
+|---------|--------|---------------|--------|-----------|----------|-----|
+| `make_molecular_lora_factory` | Molecular | ChemBERTa-77M-MLM | LoRA (rank=8) | 384D | `--finetune lora_chemberta` | Yes |
+| `make_molecular_lora_factory` | Molecular | MoLFormer-XL | LoRA (rank=8) | 768D | `--finetune lora_molformer` | Yes |
+| `make_antibody_lora_factory` | Antibody | ESM-2 (650M) | LoRA (rank=8) | 1280D | `--finetune lora_esm2` | Yes |
+| `make_antibody_lora_factory` | Antibody | ESM-2 (8M) | LoRA (rank=8) | 320D | `--finetune lora_esm2_small` | Yes |
+| `make_antibody_lora_factory` | Antibody | AntiBERTy | LoRA (rank=8) | 512D | `--finetune lora_antiberty` | Yes |
+| `make_antibody_lora_factory` | Antibody | AbLang2 | LoRA (rank=8) | 480D | `--finetune lora_ablang2` | Yes |
+| `make_antibody_mlm_factory` | Antibody | ESM-2 (650M) | Self-supervised MLM | 5D | `--finetune mlm_esm2` | Yes |
+| `make_antibody_mlm_factory` | Antibody | ESM-2 (8M) | Self-supervised MLM | 5D | `--finetune mlm_esm2_small` | Yes |
+| `make_antibody_mlm_factory` | Antibody | AntiBERTy | Self-supervised MLM | 5D | `--finetune mlm_antiberty` | Yes |
+| `make_geneformer_factory` | TCGA | Geneformer / BERT fallback | Freeze+head | 768/256D | `--finetune geneformer` | Yes |
+
+### Two-Phase Fine-Tuning Workflow
+
+**Phase 1: Survey** (cheap triage) — `run_finetune_survey.sh`
+- 2 folds, 2 epochs, fast search
+- Tests ALL fine-tuning methods on representative datasets per domain
+- Output: `tests/results/finetune_survey/`
+- Goal: determine which methods improve over frozen baselines
+- Depends on: baseline survey results (to have meaningful frozen baselines to compare against)
+
+| Domain | Datasets | Methods Tested | Frozen Reps |
+|--------|----------|----------------|-------------|
+| Molecular | logd, caco2, herg | lora_chemberta, lora_molformer | fast (3) |
+| Antibody | flab_expression_koenig, flab_binding_koenig, abagym_Ang2 | lora_esm2, lora_esm2_small, mlm_esm2 | dms (9) |
+| TCGA | tcga_luad_vs_lusc, tcga_brca_pam50 | geneformer | fast (5-8) |
+
+**Phase 2: Full run** (targeted) — existing `run_finetune_{molecular,antibody,tcga}.sh`
+- 5 folds (from speed tier), 5 epochs (default)
+- Only for methods that passed the survey
+- Embeddings cached per-fold to `~/.cache/kirby/finetuned_reps/`
+- Can be reused as frozen reps in subsequent searches
+
+**Submission:**
+```bash
+# Phase 1: launch all survey jobs
+bash tests/slurm_scripts/submit_finetune_survey.sh all
+
+# Phase 2: after reviewing survey results, launch full runs for winners
+sbatch tests/slurm_scripts/run_finetune_molecular.sh fast logd lora_chemberta
+sbatch tests/slurm_scripts/run_finetune_antibody.sh dms flab_expression_koenig lora_esm2
+sbatch tests/slurm_scripts/run_finetune_tcga.sh fast tcga_luad_vs_lusc geneformer
+```

@@ -464,6 +464,8 @@ Output:
                        help='Subsample to this many pairs (for KIBA which has 117K)')
     parser.add_argument('--adaptive-pruning', action='store_true',
                        help='Enable adaptive model pruning during search')
+    parser.add_argument('--n-folds', type=int, default=None,
+                       help='Override number of CV folds (default: from speed tier)')
 
     args = parser.parse_args()
 
@@ -520,6 +522,7 @@ Output:
         metric='r2',
         task_type=task_type,
         speed=speed,
+        n_folds=args.n_folds,
         return_fitted=args.save_weights,
         weight_method=args.weight_method if args.save_weights else None,
         test_rep_subsets=args.test_rep_subsets,
