@@ -5,7 +5,7 @@ performance. This document is the single source of truth for what KIRBy supports
 and what actually works. Representations without confirmed performance data should
 not be used in experiments until validated.
 
-**Last updated:** 2026-02-24
+**Last updated:** 2026-02-25
 
 ---
 
@@ -40,7 +40,7 @@ not be used in experiments until validated.
 |---------|--------|---------|--------|--------|
 | `sabdab_affinity` | SKEMPI 2.0 | ~4,000 | ΔΔG | Listed, no baselines yet |
 | `abcov_kd` | Ab-CoV (via FLAb) | varies | -log Kd | Listed, no baselines yet |
-| `flab_thermo_jain` | FLAb | varies | Tm | Listed, no baselines yet |
+| `flab_thermo_jain` | FLAb | ~137 | Tm | **Partial** (6 reps, see §2B) |
 | `flab_aggregation_jain` | FLAb | varies | AC-SINS | Listed, no baselines yet |
 | `abagym_all` | AbAgym (pooled) | ~2,247 | Fitness | Listed, no baselines yet |
 | `abbind` | AbBind | ~230 | ΔΔG | Listed, no baselines yet |
@@ -86,16 +86,17 @@ Models: rf, xgboost, ridge, knn, lightgbm, mlp, svm.
 | `molclr` | 512 | Pretrained (GNN) | **PENDING** | — | — | torch_geometric |
 | `graphmvp` | 300 | Pretrained (GNN) | **PENDING** | — | — | torch_geometric |
 | `smited` | 256 | Pretrained | **PENDING** | — | — | HuggingFace |
-| `mhg_gnn` | 64 | Pretrained (GNN) | **PENDING** | — | — | torch_geometric |
+| `mhg_gnn` | 64 | Pretrained (GNN) | **PENDING** | — | — | torch_geometric | **FRAGILE** (SIGBUS crashes) |
 | `grover` | 5000 | Pretrained (Transformer) | **PENDING** | — | — | grover |
 | `graph_kernel` | varies | Standard (kernel) | **PENDING** | — | — | grakel |
 | `schnet` | 128 | Pretrained (3D GNN) | **PENDING** | — | — | schnetpack |
-| `unimol` | 512 | Pretrained (3D) | **PENDING** | — | — | unimol_tools |
-| `chemformer` | 256 | Pretrained (Transformer) | **PENDING** | — | — | transformers |
+| `unimol` | 512 | Pretrained (3D) | **DROPPED** | — | — | unimol_tools | No path to install `unimol_tools` |
+| `chemformer` | 256 | Pretrained (Transformer) | **PENDING** | — | — | transformers | Not in `all` preset (in precache pipeline) |
 
 **Augmentations (not base reps):** `graph_topology`, `spectral`
 
-**Fine-tuning:** `lora_chemberta`, `lora_molformer` (LoRA per-fold)
+**Fine-tuning:** NONE — see §7 for survey results. `lora_chemberta` and `lora_molformer`
+were tested and performed **worse** than frozen baselines on all molecular datasets.
 
 **Presets:**
 - `fast` (3): ecfp4, maccs, pdv
@@ -109,50 +110,83 @@ Models: rf, knn, ridge, mlp, xgboost, lightgbm.
 
 #### Inter-Family Base Reps
 
-| Rep | Dim | Category | FLAb Expr R² (best) | Deps | Notes |
-|-----|-----|----------|---------------------|------|-------|
-| `kmer` | 400 | Standard (sequence) | lgbm=-0.138 | None | Negative R² = worse than mean |
-| `aac` | 20 | Standard (composition) | lgbm=0.217 | None | Low but positive |
-| `blosum62` | 20 | Standard (substitution) | mlp=0.184 | None | Low but positive |
-| `physicochemical` | 68 | Standard (biophysical) | ridge=0.010 | None | Near-zero on DMS |
-| `antiberty` | 512 | Pretrained (Ab LM) | **PENDING** | transformers | |
-| `ablang2` | 768 | Pretrained (Ab LM) | **PENDING** | ablang2 | |
-| `igbert` | 512 | Pretrained (Ab LM) | **PENDING** | transformers | |
-| `esm2` | 1280 | Pretrained (protein LM) | **PENDING** | transformers | |
-| `prot_t5` | 1024 | Pretrained (protein LM) | **PENDING** | transformers | |
-| `ab_roberta` | 768 | Pretrained (Ab LM) | **PENDING** | transformers | |
-| `balm` | 768 | Pretrained (Ab LM) | **PENDING** | transformers | |
-| `pigen` | 512 | Pretrained (Ab LM) | **PENDING** | transformers | |
-| `esmc` | varies | Pretrained (protein LM) | **PENDING** | esmc | |
-| `sapiens` | varies | Pretrained (humanization) | **PENDING** | sapiens | |
-| `structural` | 28 | Customizable (3D) | **PENDING** | ImmuneBuilder | Server only |
-| `developability` | varies | Customizable | **PENDING** | None | |
-| `imgt_onehot` | varies | Standard (positional) | **PENDING** | anarci | |
+**Sources:** abcov_kd baselines (slurm-11380416, 13 reps, incomplete search),
+flab_thermo_jain (baseline survey job 11384921, 6 reps only).
+
+| Rep | Dim | Category | abcov_kd R² | thermo_jain R² | Deps | Notes |
+|-----|-----|----------|------------|---------------|------|-------|
+| `kmer` | 400 | Standard (sequence) | rf=0.003 | rf=-0.072 | None | Near-zero |
+| `aac` | 20 | Standard (composition) | rf=-0.212 | rf=-0.177 | None | |
+| `blosum62` | 20 | Standard (substitution) | rf=-0.189 | rf=-0.235 | None | |
+| `physicochemical` | 68 | Standard (biophysical) | rf=-0.237 | rf=-0.127 | None | |
+| `antiberty` | 2048 | Pretrained (Ab LM) | rf=-0.085 | — | transformers | Concat H+L |
+| `ablang2` | 480 | Pretrained (Ab LM) | rf=-0.094 | rf=**0.149** | ablang2 | Best on thermo_jain |
+| `igbert` | 1024 | Pretrained (Ab LM) | rf=-0.085 | — | transformers | |
+| `esm2` | 2560 | Pretrained (protein LM) | rf=-0.177 | — | transformers | Concat H+L |
+| `prot_t5` | 2048 | Pretrained (protein LM) | rf=-0.171 | — | transformers | Concat H+L |
+| `ab_roberta` | 1536 | Pretrained (Ab LM) | rf=-0.052 | — | transformers | Best LM on abcov |
+| `balm` | 1024 | Pretrained (Ab LM) | **PENDING** | — | manual | Setup done (see §3) |
+| `pigen` | 768 | Pretrained (Ab LM) | rf=-0.225 | — | transformers | |
+| `esmc` | varies | Pretrained (protein LM) | **PENDING** | — | esmc | Never tested |
+| `sapiens` | varies | Pretrained (humanization) | **PENDING** | — | sapiens | Never tested |
+| `structural` | 28 | Customizable (3D) | ridge=-0.177 | rf=-0.416 | ImmuneBuilder | Server only |
+| `developability` | 16 | Customizable | — | — | None | Tested on DMS only (see below) |
+| `imgt_onehot` | varies | Standard (positional) | **PENDING** | — | anarci | Never tested |
+
+**Observation:** All inter-family reps are negative on abcov_kd (141 samples, very hard).
+Only ablang2 is positive on flab_thermo_jain. LM embeddings do not clearly help for
+inter-family antibody tasks on these small datasets. Needs testing on sabdab_affinity
+(~4,000 samples) for a fairer comparison.
 
 **Note:** Full-sequence LM embeddings are known to be near-useless for intra-family
 DMS (published ρ ≈ 0.08). The `dms` presets use mutation-specific reps instead.
 
+> **⚠ ANTIBODY DOMAIN NEEDS RETHINKING.** The fine-tuning survey (Feb 2025) showed
+> that LoRA and MLM fine-tuning of ESM-2 produced negative R² on all antibody datasets
+> tested (FLAb expression, FLAb binding, AbAgym Ang2). Combined with the known failure
+> of full-sequence LM embeddings on DMS data, the entire antibody representation
+> strategy needs to be revisited. Possible directions: inverse folding models (ESM-IF1,
+> ProteinMPNN scores), per-residue evolutionary conservation, structure-conditioned
+> embeddings, or abandoning LM-based reps entirely in favour of physics-based or
+> positional features. See §7 for full survey results.
+
 #### DMS / Mutation-Aware Reps
 
-| Rep | Dim | Category | FLAb Expr R² (best) | Notes |
-|-----|-----|----------|---------------------|-------|
-| `lm_score_ablang2` | 5 | Customizable (LM score) | **PENDING** | Per-model pseudo-likelihood |
-| `lm_score_esm2` | 5 | Customizable (LM score) | **PENDING** | |
-| `lm_score_prot_t5` | 5 | Customizable (LM score) | **PENDING** | |
-| `lm_score_antiberty` | 5 | Customizable (LM score) | **PENDING** | |
-| `positional` | 11 | Customizable (mutation) | **PENDING** | CDR region, BLOSUM, position |
-| `biophysical_delta` | 6 | Customizable (mutation) | **PENDING** | ΔCharge, ΔHydro, etc. |
-| `esm2_site` | 1280 | Customizable (mutation) | **PENDING** | Per-residue at mutation site |
-| `varpos_physchem` | 6/pos | Customizable (varpos) | **PENDING** | Physicochemical at variable positions |
-| `varpos_onehot` | 20/pos | Customizable (varpos) | **PENDING** | One-hot at variable positions |
-| `varpos_blosum` | 20/pos | Customizable (varpos) | **PENDING** | BLOSUM62 at variable positions |
-| `varpos_cdr_physchem` | reduced | Customizable (varpos) | **PENDING** | CDR-filtered |
-| `varpos_cdrh3_physchem` | minimal | Customizable (varpos) | **PENDING** | CDR-H3 only |
-| `varpos_fw_physchem` | varies | Customizable (varpos) | **PENDING** | Framework-only |
+**Sources:** flab_expression_koenig baselines (slurm-11380415, dms_full 17 reps),
+abagym_Ang2 baselines (finetune survey ft_ab_abagym_Ang2.json, 2-fold).
+
+| Rep | Dim | Category | flab_expr R² | Ang2 R² | Notes |
+|-----|-----|----------|-------------|---------|-------|
+| `aac` | 20 | Standard | xgb=**0.260** | rf=-0.206 | Top on flab_expr |
+| `blosum62` | 20 | Standard | rf=**0.258** | rf=-0.236 | |
+| `biophysical_delta` | 6 | Customizable (mutation) | rf=**0.257** | rf=-0.363 | |
+| `developability` | 16 | Customizable | rf=**0.225** | — | |
+| `esm2_site` | 1280 | Customizable (mutation) | ridge=**0.196** | — | Per-residue at mutation site |
+| `lm_score_prot_t5` | 5 | Customizable (LM score) | ridge=0.007 | — | |
+| `lm_score_ablang2` | 5 | Customizable (LM score) | ridge=0.002 | rf=**0.223** | |
+| `lm_score_esm2` | 5 | Customizable (LM score) | ridge=-0.009 | rf=**0.211** | |
+| `lm_score_antiberty` | 5 | Customizable (LM score) | ridge=-0.011 | — | |
+| `positional` | 11 | Customizable (mutation) | rf=-0.316 | rf=**0.377** | CDR region, BLOSUM, position |
+| `varpos_physchem` | 1400 | Customizable (varpos) | xgb=-0.010 | rf=**0.398** | |
+| `varpos_cdr_physchem` | 329 | Customizable (varpos) | rf=-0.011 | rf=**0.426** | Best on Ang2! |
+| `varpos_cdrh3_physchem` | 56 | Customizable (varpos) | rf=-0.010 | rf=0.214 | |
+| `varpos_onehot` | 4200 | Customizable (varpos) | xgb=-0.009 | — | Very high dim |
+| `varpos_blosum` | 4200 | Customizable (varpos) | xgb=-0.010 | — | Very high dim |
+| `varpos_fw_physchem` | 1246 | Customizable (varpos) | rf=-0.014 | — | Framework-only |
+| `antifold_score` | 5 | Customizable (structure) | **PENDING** | **PENDING** | Smoke test running (job 7217681) |
+| `sapiens_score` | 5 | Customizable (humanness) | **PENDING** | **PENDING** | Never tested |
+
+**Key insight:** Performance is highly dataset-dependent. Composition reps (aac, blosum62,
+biophysical_delta) win on flab_expression_koenig, while positional/varpos reps dominate
+on abagym_Ang2 (varpos_cdr_physchem R²=0.426). This makes the case for hybrids — different
+reps capture different signals depending on the DMS experiment.
 
 **Delta reps:** `--delta` flag generates ΔX = X_mut − X_wt for every base rep, doubling count.
 
-**Fine-tuning:** `antibody_lora` (AbLang2 LoRA), `antibody_mlm` (masked LM)
+**Fine-tuning:** NONE — see §7 for survey results. `lora_esm2`, `lora_esm2_small`,
+and `mlm_esm2` were all tested and produced **negative R²** on antibody datasets.
+`lora_antiberty`, `lora_ablang2`, `mlm_antiberty`, `mlm_esm2_small` are implemented
+but not expected to help given the ESM-2 results.
 
 **Presets:**
 - `fast` (4): kmer, physicochemical, aac, blosum62
@@ -160,8 +194,8 @@ DMS (published ρ ≈ 0.08). The `dms` presets use mutation-specific reps instea
 - `all_server` (13): + esm2, prot_t5, ab_roberta, balm, pigen, structural
 - `mutation_fast` (7): kmer, aac, blosum62, physicochemical, esm2, prot_t5, varpos_physchem
 - `mutation_full` (10): + antiberty, ablang2, varpos_onehot
-- `dms` (9): lm_score_ablang2, lm_score_esm2, positional, biophysical_delta, aac, blosum62, varpos_physchem, varpos_cdr_physchem, varpos_cdrh3_physchem
-- `dms_full` (17): all mutation-aware + full varpos arsenal
+- `dms` (10): lm_score_ablang2, lm_score_esm2, positional, biophysical_delta + augmentations (aac, blosum62, varpos_physchem, varpos_cdr_physchem, varpos_cdrh3_physchem, antifold_score, sapiens_score)
+- `dms_full` (19): all mutation-aware + full varpos arsenal + antifold_score + sapiens_score
 
 ### 2C. TCGA Representations
 
@@ -172,37 +206,37 @@ and BRCA PAM50. Models: rf, xgboost.
 
 | Rep | Dim | Category | Lung Acc (best) | BRCA Acc (best) | Deps | Server? |
 |-----|-----|----------|----------------|----------------|------|---------|
-| `gene_hvg2000` | 2000 | Standard | **PENDING** | xgb=0.866 | scanpy (opt) | YES |
-| `gene_pca100` | 100 | Standard | rf=0.928 | xgb=0.826 | sklearn | YES |
-| `gene_nmf50` | 50 | Standard | rf=0.951 | rf=0.834 | sklearn | YES |
-| `gene_ica50` | 50 | Standard | **PENDING** | **PENDING** | sklearn | YES |
+| `gene_hvg2000` | 2000 | Standard | xgb=**0.959** | xgb=**0.866** | scanpy (opt) | YES |
+| `gene_pca100` | 100 | Standard | xgb=0.939 | xgb=0.826 | sklearn | YES |
+| `gene_nmf50` | 50 | Standard | rf=**0.951** | rf=0.834 | sklearn | YES |
+| `gene_ica50` | 50 | Standard | xgb=0.896 | **PENDING** | sklearn | YES |
 | `gene_stats` | 15 | Standard | rf=0.710 | rf=0.502 | scipy | YES |
-| `gene_hallmark` | 50 | Pathway (ssGSEA) | **PENDING** | **PENDING** | gseapy | CONDITIONAL |
-| `gene_kegg` | ~318 | Pathway (ssGSEA) | **PENDING** | **PENDING** | gseapy | CONDITIONAL |
-| `gene_reactome` | ~1000 | Pathway (ssGSEA) | **PENDING** | **PENDING** | gseapy | CONDITIONAL |
-| `gene_oncogenic` | ~189 | Pathway (ssGSEA) | **PENDING** | **PENDING** | gseapy | CONDITIONAL |
-| `gene_progeny` | 14 | Pathway (decoupler) | **PENDING** | **PENDING** | decoupler | CONDITIONAL |
-| `gene_dorothea` | ~300 | Pathway (decoupler) | **PENDING** | **PENDING** | decoupler | CONDITIONAL |
-| `gene_combined_pathway` | ~364 | Pathway (combined) | **PENDING** | **PENDING** | gseapy+decoupler | CONDITIONAL |
-| `gene_immune` | ~27 | Computed (immune) | rf=0.793 | rf=0.524 | gseapy (hardcoded) | YES |
+| `gene_hallmark` | 50 | Pathway (ssGSEA) | FT-survey=0.818 | FT-survey=0.481 | gseapy | **BROKEN** (GMF files missing on server) |
+| `gene_kegg` | ~318 | Pathway (ssGSEA) | **FAILED** | **FAILED** | gseapy | **BROKEN** (GMF files missing) |
+| `gene_reactome` | ~1000 | Pathway (ssGSEA) | **FAILED** | **FAILED** | gseapy | **BROKEN** (ssGSEA n_samples bug) |
+| `gene_oncogenic` | ~189 | Pathway (ssGSEA) | **FAILED** | **FAILED** | gseapy | **BROKEN** (GMF files missing) |
+| `gene_progeny` | 14 | Pathway (decoupler) | **FAILED** | **FAILED** | decoupler | **BROKEN** (502 / NAType errors) |
+| `gene_dorothea` | ~300 | Pathway (decoupler) | **FAILED** | **FAILED** | decoupler | **BROKEN** (NAType errors) |
+| `gene_combined_pathway` | ~364 | Pathway (combined) | **FAILED** | **FAILED** | gseapy+decoupler | **BROKEN** (all deps broken) |
+| `gene_immune` | ~22 | Computed (immune) | rf=0.793 | rf=0.524 | hardcoded | YES |
 
 #### Foundation Model Embeddings (GPU)
 
 | Rep | Dim | Category | Lung Acc (best) | BRCA Acc (best) | Deps | Server? |
 |-----|-----|----------|----------------|----------------|------|---------|
-| `gene_geneformer` | 768 | Pretrained (frozen) | **PENDING** | **PENDING** | torch, transformers | GPU |
-| `gene_scfoundation` | 2048 | Pretrained (frozen) | **PENDING** | **PENDING** | torch, transformers | GPU |
+| `geneformer` (FT) | 1152 | Fine-tuned (per-fold) | xgb=**0.930** | xgb=0.789 | torch, transformers | GPU |
+| `gene_scfoundation` | 2048 | Pretrained (frozen) | **PENDING** | **PENDING** | torch, transformers | GPU, never tested |
 
 #### Multi-Omic
 
 | Rep | Dim | Category | Lung Acc (best) | BRCA Acc (best) | Deps | Server? |
 |-----|-----|----------|----------------|----------------|------|---------|
-| `gene_mutation` | 200 | Somatic | **PENDING** | **PENDING** | Xena MC3 | UNRELIABLE (403) |
-| `cnv_gistic` | 200 | CNV | xgb=0.820 | rf=0.596 | Xena | CONDITIONAL |
-| `cnv_pca50` | 50 | CNV | **PENDING** | **PENDING** | Xena | CONDITIONAL |
-| `rppa` | ~260 | Protein | rf=0.749 | xgb=0.773 | Xena | CONDITIONAL |
-| `mirna_top200` | 200 | miRNA | rf=0.888 | rf=0.663 | Xena | CONDITIONAL |
-| `clinical` | 10 | Phenotype | **PENDING** | **PENDING** | Xena | UNRELIABLE (403) |
+| `gene_mutation` | 200 | Somatic | **FAILED** | **FAILED** | Xena MC3 | **BROKEN** (403 Forbidden) |
+| `cnv_gistic` | 200 | CNV | xgb=0.820 | xgb=0.607 | Xena | YES |
+| `cnv_pca50` | 50 | CNV | xgb=0.877 | **PENDING** | Xena | YES |
+| `rppa` | 258 | Protein | rf=0.749 | xgb=0.773 | Xena | YES |
+| `mirna_top200` | 200 | miRNA | rf=0.888 | xgb=0.675 | Xena | YES |
+| `clinical` | 10 | Phenotype | **FAILED** | **FAILED** | Xena | **BROKEN** (403 Forbidden) |
 
 #### WSI (Pretrained Vision)
 
@@ -210,14 +244,18 @@ and BRCA PAM50. Models: rf, xgboost.
 |-----|-----|--------|----------------|----------------|--------|---------|
 | `wsi_ctranspath` | 512 | GigaSSL (Mendeley) | xgb=0.783 | rf=0.513 | Public | YES |
 | `wsi_phikon` | 512 | GigaSSL (Mendeley) | xgb=0.776 | rf=0.513 | Public | YES |
-| `wsi_hoptimus0` | 512 | GigaSSL (Mendeley) | **PENDING** | rf=0.641 | Public | YES |
-| `wsi_gigapath` | 512 | GigaSSL (Mendeley) | **PENDING** | **PENDING** | Public | YES |
-| `wsi_moco` | 512 | GigaSSL (Mendeley) | **PENDING** | rf=0.611 | Public | YES |
-| `wsi_titan` | 768 | HuggingFace (gated) | rf=0.513 | rf=0.513 | Gated | LIMITED |
-| `wsi_uni2h` | 1536 | HuggingFace (gated) | **PENDING** | **PENDING** | Manual | LIMITED |
-| `wsi_cnn320` | 320 | Local (Seagate) | **PENDING** | N/A | Local | LOCAL ONLY |
+| `wsi_hoptimus0` | 512 | GigaSSL (Mendeley) | xgb=0.823 | rf=0.648 | Public | YES |
+| `wsi_gigapath` | 512 | GigaSSL (Mendeley) | xgb=0.854 | **PENDING** | Public | YES |
+| `wsi_moco` | 512 | GigaSSL (Mendeley) | xgb=0.775 | rf=0.616 | Public | YES |
+| `wsi_titan` | 768 | HuggingFace (gated) | 0.429 | 0.513 | Gated | **GARBAGE** (~random, likely failed to load) |
+| `wsi_uni2h` | 1536 | HuggingFace (gated) | 0.429 | — | Manual | **GARBAGE** (~random, features not found) |
+| `wsi_cnn320` | 320 | Local (Seagate) | 0.429 | N/A | Local | **GARBAGE** (~random, Lung only) |
 
-**Fine-tuning:** `geneformer` (per-fold, rank-encoded expression)
+**Fine-tuning:** `geneformer` (per-fold, proper vocab tokenization → 1152D V2 embeddings).
+**Survey confirmed:** Geneformer FT is the best individual rep on LUAD vs LUSC (0.930 acc)
+and competitive on BRCA PAM50 (0.789). Hybrids with Geneformer reach 0.940 / 0.820.
+Geneformer was pretrained on single-cell data (Genecorpus-104M, non-cancer) — no TCGA
+data leakage. **Proceed to Phase 2 full run.**
 
 **Presets:**
 - `fast` (5): pca100, hallmark, progeny, ctranspath, phikon
@@ -263,6 +301,7 @@ and BRCA PAM50. Models: rf, xgboost.
 | `wsi_titan` | HuggingFace gated, awaiting access | MEDIUM | Skip unless access granted |
 | `wsi_uni2h` | Manual download + h5 processing required | HIGH | `prepare_uni2h_features()` must be run first |
 | `wsi_cnn320` | Local Seagate only, LUAD/LUSC only | LOW | Silently skipped if absent |
+| `balm` | Not on HuggingFace; needs manual clone + weight download | ~~MEDIUM~~ **RESOLVED** (2026-02-25) | Cloned to `BALM/` on server, weights in `pretrained-BALM/` |
 
 ### Stale Server Caches
 
@@ -287,29 +326,64 @@ to pick up commit `3ba481e`.
 
 ---
 
-## 4. Coverage Gaps (PENDING Items)
+## 4. Coverage Gaps and Actionable Status
 
-### What the baseline survey will fill
+### What we HAVE (confirmed baselines)
 
-The `run_baseline_survey.sh` script is designed to fill all PENDING cells above in
-a single run. It tests:
+- **Molecular:** ecfp4, maccs, pdv confirmed on logd/caco2/herg (3 reps × 3 datasets = 9 cells)
+- **Antibody inter:** 12 reps confirmed on abcov_kd; 6 reps on flab_thermo_jain
+- **Antibody DMS:** 16 reps confirmed on flab_expression_koenig; 13 reps on abagym_Ang2
+- **TCGA:** 13 reps confirmed on Lung; 11 reps on BRCA PAM50; geneformer FT on both
+- **DTA:** Nothing
 
-- **Molecular:** 4 datasets × `all` preset (15 reps) = ~60 baseline cells
-- **Antibody intra:** 9 datasets × `dms_full` preset (17 reps) = ~153 baseline cells
-- **Antibody inter:** 6 datasets × `all_server` preset (13 reps) = ~78 baseline cells
-- **TCGA:** 3 datasets × `all` preset (27 reps) = ~81 baseline cells
-- **DTA:** 2 datasets × `full` preset (10 reps) = ~20 baseline cells
+### What's still PENDING (needs compute)
 
-**Total: ~392 baseline cells to fill.**
+| Domain | Gap | Estimated cells | Blocker |
+|--------|-----|----------------|---------|
+| Molecular | 14 pretrained reps (chemberta→chemformer) on logd/caco2/herg/qm9 | ~56 | Baseline survey keeps timing out during rep generation |
+| Antibody inter | sabdab_affinity (~4K), abbind, abagym_all (larger datasets) | ~36 | Running (job 11384921) |
+| Antibody DMS | 7 remaining DMS datasets (flab_binding, flab_thermo_hie, 5× abagym) | ~119 | Running (job 11384920) |
+| Antibody DMS | antifold_score + sapiens_score on all 9 DMS datasets | ~18 | Smoke test running (job 7217681) |
+| TCGA | gene_ica50 on BRCA, cnv_pca50 on BRCA, wsi_gigapath on BRCA | ~3 | Needs re-run |
+| DTA | All 10 reps on davis + kiba | ~20 | Timed out during protein_kmer generation |
 
-### Prerequisites before re-running
+### What's BROKEN (needs fixing before re-run)
 
-1. `git pull` on server (picks up ssGSEA fix, decoupler fix, DTA loader fix)
+| Item | Issue | Fix |
+|------|-------|-----|
+| gene_hallmark, gene_kegg, gene_oncogenic | MSigDB `.gmt` files missing on server | Pre-download from login node: `gseapy.get_library()` |
+| gene_reactome | ssGSEA returns wrong n_samples | Code fix landed but stale cache may persist |
+| gene_progeny, gene_dorothea | decoupler API 502 / NAType errors | `pip install decoupler>=1.6`, pre-cache from login node |
+| gene_combined_pathway | All dependencies broken | Fix hallmark + progeny first |
+| gene_mutation, clinical | Xena 403 Forbidden | Pre-download MC3/phenotype from login node or remove from presets |
+| wsi_titan | HF gated, access denied | Apply for access or **DROP** |
+| wsi_uni2h | Features never prepared | Run `prepare_uni2h_features()` or **DROP** |
+| wsi_cnn320 | Local Seagate only, scored random | **DROP** from default presets |
+| DTA (protein_kmer) | Times out during generation | Increase timeout or generate separately |
+
+### Candidates to DROP
+
+Reps that are broken AND low-value should be removed from presets to save compute:
+
+| Rep | Reason to drop |
+|-----|---------------|
+| `wsi_titan` | Gated, scored random (~0.43 on binary), likely never loaded |
+| `wsi_uni2h` | Manual prep required, scored random, never worked |
+| `wsi_cnn320` | Local-only, scored random, Lung-only, 320D |
+| `gene_mutation` | Xena 403, unreliable download |
+| `clinical` | Xena 403, unreliable download |
+| `unimol` | **DROPPED** — `unimol_tools` package has no working install path |
+
+### Prerequisites before re-running baseline survey
+
+1. `git pull` on server (picks up all fixes)
 2. Delete stale caches: `rm ~/.cache/kirby/reps/tcga_*/gene_reactome.npy` etc.
-   (or let the auto-validation handle it)
-3. Ensure `gseapy>=1.0`, `decoupler>=1.4`, `anndata` are installed
-4. For TCGA: pre-download Xena data from login node (compute nodes may lack internet)
-5. For DTA: no special setup needed (downloads from GitHub)
+3. Pre-download on login node: `python -c "import gseapy; gseapy.get_library('h.all.v2023.2.Hs.symbols.gmt')"`
+4. Ensure `gseapy>=1.0`, `decoupler>=1.6`, `anndata` are installed
+5. For DTA: no PyTDC needed (fixed), but protein_kmer needs longer timeout
+6. **Molecular pretrained reps:** Run `bash scripts/setup_server_models.sh` (one-time),
+   then `sbatch tests/slurm_scripts/run_precache_molecular.sh` to precache all reps
+   in isolated subprocesses before running the baseline survey
 
 ---
 
@@ -326,47 +400,122 @@ a single run. It tests:
 
 ## 6. Fine-Tuning Factories
 
-| Factory | Domain | Base Model(s) | Method | Output Dim | CLI Flag | GPU |
-|---------|--------|---------------|--------|-----------|----------|-----|
-| `make_molecular_lora_factory` | Molecular | ChemBERTa-77M-MLM | LoRA (rank=8) | 384D | `--finetune lora_chemberta` | Yes |
-| `make_molecular_lora_factory` | Molecular | MoLFormer-XL | LoRA (rank=8) | 768D | `--finetune lora_molformer` | Yes |
-| `make_antibody_lora_factory` | Antibody | ESM-2 (650M) | LoRA (rank=8) | 1280D | `--finetune lora_esm2` | Yes |
-| `make_antibody_lora_factory` | Antibody | ESM-2 (8M) | LoRA (rank=8) | 320D | `--finetune lora_esm2_small` | Yes |
-| `make_antibody_lora_factory` | Antibody | AntiBERTy | LoRA (rank=8) | 512D | `--finetune lora_antiberty` | Yes |
-| `make_antibody_lora_factory` | Antibody | AbLang2 | LoRA (rank=8) | 480D | `--finetune lora_ablang2` | Yes |
-| `make_antibody_mlm_factory` | Antibody | ESM-2 (650M) | Self-supervised MLM | 5D | `--finetune mlm_esm2` | Yes |
-| `make_antibody_mlm_factory` | Antibody | ESM-2 (8M) | Self-supervised MLM | 5D | `--finetune mlm_esm2_small` | Yes |
-| `make_antibody_mlm_factory` | Antibody | AntiBERTy | Self-supervised MLM | 5D | `--finetune mlm_antiberty` | Yes |
-| `make_geneformer_factory` | TCGA | Geneformer / BERT fallback | Freeze+head | 768/256D | `--finetune geneformer` | Yes |
+### Active (proceed to Phase 2)
+
+| Factory | Domain | Base Model(s) | Method | Output Dim | CLI Flag | GPU | Survey Result |
+|---------|--------|---------------|--------|-----------|----------|-----|---------------|
+| `make_geneformer_factory` | TCGA | Geneformer V2 (104M) | Freeze+head | 1152D | `--finetune geneformer` | Yes | **PASS** — best individual rep on lung (0.930), BRCA (0.789) |
+
+### Retired (tested, does not help — do NOT run)
+
+| Factory | Domain | Base Model(s) | Method | Output Dim | CLI Flag | Survey Result |
+|---------|--------|---------------|--------|-----------|----------|---------------|
+| `make_molecular_lora_factory` | Molecular | ChemBERTa-77M-MLM | LoRA (rank=8) | 384D | `--finetune lora_chemberta` | **FAIL** — worse than frozen ecfp4/pdv on all 3 datasets |
+| `make_molecular_lora_factory` | Molecular | MoLFormer-XL | LoRA (rank=8) | 768D | `--finetune lora_molformer` | **FAIL** — worse than frozen ecfp4/pdv on all 3 datasets |
+| `make_antibody_lora_factory` | Antibody | ESM-2 (650M) | LoRA (rank=8) | 1280D | `--finetune lora_esm2` | **FAIL** — negative R² on FLAb expr, binding, AbAgym |
+| `make_antibody_lora_factory` | Antibody | ESM-2 (8M) | LoRA (rank=8) | 320D | `--finetune lora_esm2_small` | **FAIL** — negative R² on FLAb expr, binding, AbAgym |
+| `make_antibody_mlm_factory` | Antibody | ESM-2 (650M) | Self-supervised MLM | 5D | `--finetune mlm_esm2` | **FAIL** — negative R² on all antibody datasets |
+| `make_antibody_lora_factory` | Antibody | AntiBERTy | LoRA (rank=8) | 512D | `--finetune lora_antiberty` | Not tested (ESM-2 results make this unlikely to help) |
+| `make_antibody_lora_factory` | Antibody | AbLang2 | LoRA (rank=8) | 480D | `--finetune lora_ablang2` | Not tested |
+| `make_antibody_mlm_factory` | Antibody | ESM-2 (8M) | Self-supervised MLM | 5D | `--finetune mlm_esm2_small` | Not tested |
+| `make_antibody_mlm_factory` | Antibody | AntiBERTy | Self-supervised MLM | 5D | `--finetune mlm_antiberty` | Not tested |
 
 ### Two-Phase Fine-Tuning Workflow
 
-**Phase 1: Survey** (cheap triage) — `run_finetune_survey.sh`
-- 2 folds, 2 epochs, fast search
-- Tests ALL fine-tuning methods on representative datasets per domain
+**Phase 1: Survey** (COMPLETE) — `run_finetune_survey.sh`
+- 2 folds, 2 epochs, fast search, performance_weighted allocation
 - Output: `tests/results/finetune_survey/`
-- Goal: determine which methods improve over frozen baselines
-- Depends on: baseline survey results (to have meaningful frozen baselines to compare against)
 
-| Domain | Datasets | Methods Tested | Frozen Reps |
-|--------|----------|----------------|-------------|
-| Molecular | logd, caco2, herg | lora_chemberta, lora_molformer | fast (3) |
-| Antibody | flab_expression_koenig, flab_binding_koenig, abagym_Ang2 | lora_esm2, lora_esm2_small, mlm_esm2 | dms (9) |
-| TCGA | tcga_luad_vs_lusc, tcga_brca_pam50 | geneformer | fast (5-8) |
+| Domain | Datasets | Methods Tested | Frozen Reps | Verdict |
+|--------|----------|----------------|-------------|---------|
+| Molecular | logd, caco2, herg | lora_chemberta, lora_molformer | fast (3) | **All fail** — FT always worse than frozen |
+| Antibody | flab_expression_koenig, flab_binding_koenig, abagym_Ang2 | lora_esm2, lora_esm2_small, mlm_esm2 | dms (9) | **All fail** — negative R², worse than mean predictor |
+| TCGA | tcga_luad_vs_lusc, tcga_brca_pam50 | geneformer | fast (5-8) | **Geneformer passes** — best individual + improves hybrid |
 
-**Phase 2: Full run** (targeted) — existing `run_finetune_{molecular,antibody,tcga}.sh`
-- 5 folds (from speed tier), 5 epochs (default)
-- Only for methods that passed the survey
+**Phase 2: Full run** (targeted) — only Geneformer on TCGA
+- 5 folds, 5 epochs, medium search
 - Embeddings cached per-fold to `~/.cache/kirby/finetuned_reps/`
-- Can be reused as frozen reps in subsequent searches
 
 **Submission:**
 ```bash
-# Phase 1: launch all survey jobs
-bash tests/slurm_scripts/submit_finetune_survey.sh all
-
-# Phase 2: after reviewing survey results, launch full runs for winners
-sbatch tests/slurm_scripts/run_finetune_molecular.sh fast logd lora_chemberta
-sbatch tests/slurm_scripts/run_finetune_antibody.sh dms flab_expression_koenig lora_esm2
+# Phase 2: only Geneformer survived the survey
 sbatch tests/slurm_scripts/run_finetune_tcga.sh fast tcga_luad_vs_lusc geneformer
+sbatch tests/slurm_scripts/run_finetune_tcga.sh fast tcga_brca_pam50 geneformer
 ```
+
+---
+
+## 7. Fine-Tuning Survey Results (2026-02-25)
+
+Full results from Phase 1 survey (2 folds, 2 epochs, performance_weighted allocation).
+Raw JSON in `tests/results/finetune_survey/`.
+
+### 7A. Molecular — FT does NOT help
+
+| Dataset | Best Frozen Rep | R² | Best FT Rep | R² | Verdict |
+|---------|----------------|-----|-------------|-----|---------|
+| LogD | pdv (lgbm) | 0.772 | lora_chemberta (lgbm) | 0.697 | Frozen wins by 0.075 |
+| Caco2 | pdv (xgb) | 0.466 | lora_chemberta (lgbm) | 0.335 | Frozen wins by 0.131 |
+| hERG | ecfp4 (rf) | 0.504 | lora_chemberta (rf) | 0.398 | Frozen wins by 0.106 |
+
+**Conclusion:** LoRA fine-tuning of ChemBERTa and MoLFormer consistently degrades
+performance vs. frozen fingerprints/descriptors. The cheap standard reps (ecfp4, pdv)
+remain dominant. Fine-tuning is not worth the GPU cost for molecular property prediction.
+
+### 7B. Antibody — FT does NOT help (domain needs rethinking)
+
+| Dataset | Best Frozen Rep | R² | Best FT Rep | R² | Verdict |
+|---------|----------------|-----|-------------|-----|---------|
+| FLAb Expression (Koenig) | varpos_physchem (lgbm) | 0.382 | lora_esm2 (ridge) | -0.020 | Frozen wins; FT is negative |
+| FLAb Binding (Koenig) | biophysical_delta (ridge) | 0.009 | lora_esm2 (ridge) | -0.029 | Both near zero; FT negative |
+| AbAgym Ang2 | aac (lgbm) | 0.037 | lora_esm2 (ridge) | -0.106 | Both poor; FT worse |
+
+**Conclusion:** ESM-2 LoRA and MLM fine-tuning produce negative R² across all antibody
+datasets. This is consistent with the known failure of full-sequence LM embeddings for
+intra-family DMS prediction (published ρ ≈ 0.08). The antibody domain's best reps are
+mutation-aware features (varpos_physchem, biophysical_delta) that capture *positional*
+changes, not global sequence embeddings. The entire antibody representation strategy
+needs fundamental rethinking — see §8.
+
+### 7C. TCGA — Geneformer FT HELPS
+
+| Dataset | Best Frozen Rep | Acc | Geneformer FT | Acc | Hybrid (frozen+FT) | Acc |
+|---------|----------------|-----|---------------|-----|--------------------|----|
+| LUAD vs LUSC | gene_nmf50 (rf) | 0.951 | geneformer (xgb) | 0.930 | 4-rep hybrid | 0.940 |
+| BRCA PAM50 | gene_hvg2000 (xgb) | 0.866 | geneformer (xgb) | 0.789 | 5-rep hybrid | 0.820 |
+
+**Conclusion:** Geneformer fine-tuning produces competitive individual performance and
+improves hybrid quality on TCGA tasks. The 1152D V2 embeddings loaded correctly
+(confirming the tokenization fix worked). No data leakage concern: Geneformer was
+pretrained on single-cell data (Genecorpus-104M, non-cancer), not TCGA bulk RNA-seq.
+**Proceed to Phase 2 full run (5 folds, 5 epochs).**
+
+Note: gene_nmf50 outperforms Geneformer as an individual rep on lung (0.951 vs 0.930),
+but Geneformer captures complementary information — it adds value in hybrids. On BRCA,
+hvg2000 leads (0.866 vs 0.789), and the hybrid (0.820) doesn't beat the best individual;
+this may improve with more folds and epochs in Phase 2.
+
+---
+
+## 8. Open Problems
+
+### Antibody Representation Strategy (NEEDS RETHINKING)
+
+The current antibody pipeline relies on:
+1. **Full-sequence LM embeddings** (ESM-2, AbLang2, etc.) — known to fail on DMS (ρ ≈ 0.08)
+2. **LoRA fine-tuning** of those same LMs — produces negative R², no improvement
+3. **Mutation-aware features** (varpos, biophysical_delta, lm_score) — best performers but still modest (R² ≈ 0.38 on expression)
+
+The fundamental problem: DMS datasets contain families of very similar sequences where
+single-residue changes cause large functional shifts. Full-sequence embeddings compress
+these near-identical sequences to near-identical vectors, losing the mutation signal.
+Fine-tuning doesn't fix this because the pretraining objective (masked LM) doesn't
+learn residue-level functional effects.
+
+**Possible directions to explore:**
+- Inverse folding scores (ESM-IF1, ProteinMPNN) — capture structural plausibility of mutations
+- Per-residue evolutionary conservation (MSA-based, not LM-based)
+- Structure-conditioned embeddings (SaProt, ESM-IF1 encoder states)
+- Zero-shot fitness predictors as features (EVE, Tranception, ESM-1v marginals)
+- Abandoning LM embeddings entirely for antibodies; focus on positional + physics-based
+- Paratope-aware features: only embed the binding interface, not the full sequence

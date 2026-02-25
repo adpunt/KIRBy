@@ -353,10 +353,15 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
 # =============================================================================
 
 def _rep_cache_path(smiles: List[str], rep_name: str) -> Path:
-    """Get cache file path for a representation, keyed by SMILES hash."""
+    """Get cache file path for a representation, keyed by SMILES hash.
+
+    Respects KIRBY_CACHE_DIR env var (set by setup.sh on the server to
+    redirect caching to /data/).  Falls back to ~/.cache/kirby.
+    """
     import hashlib
     smiles_hash = hashlib.sha256('\n'.join(smiles).encode()).hexdigest()[:16]
-    cache_dir = Path.home() / '.cache' / 'kirby' / 'reps' / smiles_hash
+    base = Path(os.environ.get('KIRBY_CACHE_DIR', Path.home() / '.cache' / 'kirby'))
+    cache_dir = base / 'reps' / smiles_hash
     cache_dir.mkdir(parents=True, exist_ok=True)
     # graph_kernel_filtered replaces old graph_kernel cache (quality filter now default)
     if rep_name == 'graph_kernel':
