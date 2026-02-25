@@ -19,3 +19,4 @@ pip install --quiet -e . 2>/dev/null
 
 # Install any missing dependencies
 pip install --quiet shap captum lime Boruta 2>/dev/null
+pip install --quiet ImmuneBuilder antifold 2>/dev/null

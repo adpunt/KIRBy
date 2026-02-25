@@ -129,6 +129,7 @@ setup(
             "biopython>=1.79",
             "requests>=2.26.0",
             "ablang2",
+            "ImmuneBuilder",  # ABodyBuilder2 for structure prediction
             "antifold",
             "sapiens",  # Sapiens humanness scoring (Merck/Sapiens)
             # ANARCI: conda install -c bioconda anarci
