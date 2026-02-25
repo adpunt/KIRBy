@@ -1028,6 +1028,99 @@ def create_sapiens_embeddings(
     return result
 
 
+def compute_sapiens_mutation_scores(
+    wt_seq: str,
+    mut_seqs: List[str],
+    mutations: List[List[Dict]],
+) -> np.ndarray:
+    """Compute Sapiens humanness mutation scores.
+
+    Sapiens (Prihoda et al., BioPhi) is a BERT model trained on human antibody
+    sequences. Unlike evolutionary LMs (ESM-2, AbLang2) which score by general
+    protein fitness, Sapiens scores whether a mutation moves toward or away from
+    human germline — a distinct signal for therapeutic antibody engineering.
+
+    For each mutation: score = S(mut_aa | pos) - S(wt_aa | pos)
+    where S is the Sapiens per-position score (log-probabilities).
+
+    Positive = more human-like, negative = dehumanizing.
+
+    Output features (5D per sample):
+    - Mean humanness score across mutations
+    - Min humanness score (most dehumanizing)
+    - Max humanness score (most humanizing)
+    - Sum of humanness scores (total humanness effect)
+    - Number of dehumanizing mutations (score < 0)
+
+    Args:
+        wt_seq: Wildtype heavy chain sequence.
+        mut_seqs: List of mutant heavy chain sequences.
+        mutations: Per-sample mutation lists.
+
+    Returns:
+        np.ndarray: (n_samples, 5) humanness mutation score features.
+    """
+    n = len(mut_seqs)
+    features = np.zeros((n, 5), dtype=np.float64)
+
+    try:
+        from sapiens.sapiens import predict_scores
+    except ImportError:
+        print("  Sapiens not available (pip install biophi), returning zeros")
+        return features
+
+    # Score the wildtype heavy chain once
+    print(f"  Scoring WT with Sapiens (heavy chain)...")
+    try:
+        wt_scores = predict_scores(wt_seq.upper().strip(), model_type='H')
+    except Exception as e:
+        print(f"  Sapiens scoring failed ({e}), returning zeros")
+        return features
+
+    # Build amino acid -> column index mapping
+    # predict_scores returns DataFrame with AA letter columns, or ndarray
+    if hasattr(wt_scores, 'columns'):
+        aa_to_col = {col: i for i, col in enumerate(wt_scores.columns)}
+        wt_arr = wt_scores.values
+    else:
+        standard_aas = 'ACDEFGHIKLMNPQRSTVWY'
+        aa_to_col = {aa: i for i, aa in enumerate(standard_aas)}
+        wt_arr = np.asarray(wt_scores)
+
+    for i, muts in enumerate(mutations):
+        if not muts:
+            continue
+        if (i + 1) % 500 == 0:
+            print(f"    Sapiens scoring: {i+1}/{n}")
+
+        try:
+            scores = []
+            for m in muts:
+                if m.get('chain') != 'heavy':
+                    continue
+                pos = m['pos']
+                if pos >= len(wt_arr):
+                    continue
+                wt_aa = m.get('wt_aa', '-')
+                mut_aa = m.get('mut_aa', '-')
+                if wt_aa in aa_to_col and mut_aa in aa_to_col:
+                    wt_col = aa_to_col[wt_aa]
+                    mut_col = aa_to_col[mut_aa]
+                    score = float(wt_arr[pos, mut_col] - wt_arr[pos, wt_col])
+                    scores.append(score)
+            if scores:
+                features[i, 0] = np.mean(scores)
+                features[i, 1] = np.min(scores)
+                features[i, 2] = np.max(scores)
+                features[i, 3] = np.sum(scores)
+                features[i, 4] = sum(1 for s in scores if s < 0)
+        except Exception:
+            pass  # Leave as zeros
+
+    print(f"  Generated sapiens_score features: ({n}, 5)")
+    return features
+
+
 def create_pigen_embeddings(
     heavy_sequences: List[str],
     light_sequences: Optional[List[str]] = None,

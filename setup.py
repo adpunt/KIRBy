@@ -130,6 +130,7 @@ setup(
             "requests>=2.26.0",
             "ablang2",
             "antifold",
+            "biophi",  # Sapiens humanness scoring
             # ANARCI: conda install -c bioconda anarci
         ],
 
