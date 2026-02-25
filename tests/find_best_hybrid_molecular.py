@@ -947,6 +947,8 @@ Output:
                        help='Also test leave-one-rep-out subsets (when >=3 reps)')
     parser.add_argument('--adaptive-pruning', action='store_true',
                        help='Enable adaptive model pruning during search')
+    parser.add_argument('--n-folds', type=int, default=None,
+                       help='Override number of CV folds (default: from speed tier)')
     parser.add_argument('--finetune', type=str, default=None,
                        help='Comma-separated fine-tuning methods: '
                             'lora_chemberta, lora_molformer, mock_lora')
@@ -1026,6 +1028,7 @@ Output:
         metric='r2' if task_type == 'regression' else 'accuracy',
         task_type=task_type,
         speed=speed,
+        n_folds=args.n_folds,
         return_fitted=args.save_weights,
         weight_method=args.weight_method if args.save_weights else None,
         test_rep_subsets=args.test_rep_subsets,
