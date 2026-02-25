@@ -37,13 +37,13 @@ OUTPUT="tests/results/finetune_survey"
 
 mkdir -p "$OUTPUT"
 
-# Install fine-tuning deps
-pip install --quiet peft accelerate bitsandbytes 2>/dev/null
+# Install fine-tuning deps (pin urllib3 to avoid DEFAULT_CIPHERS removal in v2)
+pip install --quiet 'urllib3<2' 'peft>=0.7' 'accelerate>=0.25' bitsandbytes 2>/dev/null
 
 echo "============================================================"
 echo "KIRBy Fine-Tuning Survey (PHASE 1)"
 echo "  Domain:    $DOMAIN"
-echo "  Strategy:  2 folds, 2 epochs, fast search"
+echo "  Strategy:  2 folds, 2 epochs, fast search, performance_weighted allocation"
 echo "  Output:    $OUTPUT"
 echo "  GPU:       $(nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || echo 'none')"
 echo "  Started:   $(date)"
@@ -73,6 +73,7 @@ run() {
     if python "$script" "$dataset" \
         --reps "$preset" --search fast \
         --n-folds 2 \
+        --allocation performance_weighted \
         --finetune "$finetune" \
         --finetune-epochs 2 \
         $extra \

@@ -1185,6 +1185,146 @@ def _parse_cohorts(cohort: str) -> List[str]:
 
 
 # =============================================================================
+# PRETRAINED FOUNDATION MODEL REPRESENTATIONS (frozen embeddings)
+# =============================================================================
+
+def create_geneformer_embeddings(expression: np.ndarray,
+                                  gene_names: np.ndarray,
+                                  max_input_size: int = 2048) -> np.ndarray:
+    """Frozen Geneformer embeddings (no fine-tuning).
+
+    Rank-encodes expression per sample (most expressed genes first),
+    passes through pretrained Geneformer, extracts [CLS] token embedding.
+    Falls back to a small BERT model if Geneformer unavailable.
+
+    Requires: torch, transformers
+
+    Args:
+        expression: (n_samples, n_genes) log2(TPM+1) matrix
+        gene_names: (n_genes,) gene symbols (unused, kept for API consistency)
+        max_input_size: max genes to include per sample
+
+    Returns:
+        (n_samples, hidden_size) frozen embeddings (768D for Geneformer, 256D fallback)
+    """
+    import torch
+
+    n_samples = expression.shape[0]
+
+    # Rank-encode: sort genes by expression descending, use rank indices as tokens
+    ranks = np.argsort(-expression, axis=1)[:, :max_input_size]
+    input_ids = torch.LongTensor(ranks)
+    attention_mask = torch.ones_like(input_ids)
+
+    # Load model
+    try:
+        from transformers import AutoModel, AutoConfig
+        model_id = 'ctheodoris/Geneformer'
+        config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+        model = AutoModel.from_pretrained(model_id, trust_remote_code=True)
+        embed_dim = config.hidden_size
+        print(f"    Loaded Geneformer ({embed_dim}D)")
+    except Exception as e:
+        from transformers import BertConfig, BertModel
+        config = BertConfig(
+            vocab_size=30000,
+            hidden_size=256,
+            num_hidden_layers=4,
+            num_attention_heads=4,
+            intermediate_size=512,
+            max_position_embeddings=max_input_size + 2,
+        )
+        model = BertModel(config)
+        embed_dim = 256
+        print(f"    Geneformer unavailable ({e}), using BERT fallback ({embed_dim}D)")
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = model.to(device).eval()
+
+    # Extract embeddings in batches
+    embeddings = np.zeros((n_samples, embed_dim), dtype=np.float32)
+    batch_size = 16
+
+    with torch.no_grad():
+        for start in range(0, n_samples, batch_size):
+            end = min(start + batch_size, n_samples)
+            batch_ids = input_ids[start:end].to(device)
+            batch_mask = attention_mask[start:end].to(device)
+            outputs = model(input_ids=batch_ids, attention_mask=batch_mask)
+            # Use [CLS] token (first position)
+            cls_emb = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+            embeddings[start:end] = cls_emb
+
+    # Cleanup
+    del model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    return embeddings
+
+
+def create_scfoundation_embeddings(expression: np.ndarray,
+                                    gene_names: np.ndarray) -> np.ndarray:
+    """Frozen scFoundation embeddings for bulk RNA-seq.
+
+    scFoundation (Hao et al., Nature Methods 2024) uses continuous value
+    encoding covering 19,264 genes. Returns CLS token embedding.
+
+    Requires: torch, transformers, scFoundation (pip install or clone)
+
+    Args:
+        expression: (n_samples, n_genes) log2(TPM+1) matrix
+        gene_names: (n_genes,) gene symbols
+
+    Returns:
+        (n_samples, 2048) frozen embeddings
+    """
+    import torch
+
+    n_samples = expression.shape[0]
+
+    try:
+        from transformers import AutoModel, AutoTokenizer
+        model_id = 'biomap-research/scFoundation'
+        model = AutoModel.from_pretrained(model_id, trust_remote_code=True)
+        embed_dim = 2048
+        print(f"    Loaded scFoundation ({embed_dim}D)")
+    except Exception as e:
+        warnings.warn(f"scFoundation unavailable: {e} — returning zeros")
+        return np.zeros((n_samples, 2048), dtype=np.float32)
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = model.to(device).eval()
+
+    embeddings = np.zeros((n_samples, embed_dim), dtype=np.float32)
+    batch_size = 8
+
+    with torch.no_grad():
+        for start in range(0, n_samples, batch_size):
+            end = min(start + batch_size, n_samples)
+            batch = torch.FloatTensor(expression[start:end]).to(device)
+            try:
+                outputs = model(batch)
+                if hasattr(outputs, 'last_hidden_state'):
+                    cls_emb = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+                elif hasattr(outputs, 'pooler_output'):
+                    cls_emb = outputs.pooler_output.cpu().numpy()
+                else:
+                    cls_emb = outputs[0][:, 0, :].cpu().numpy()
+                embeddings[start:end] = cls_emb[:, :embed_dim]
+            except Exception as e:
+                warnings.warn(f"scFoundation batch {start}-{end} failed: {e}")
+            if start % 64 == 0 and start > 0:
+                print(f"    Progress: {start}/{n_samples}")
+
+    del model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    return embeddings
+
+
+# =============================================================================
 # WSI REPRESENTATIONS (pre-computed features)
 # =============================================================================
 
