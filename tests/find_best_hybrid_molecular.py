@@ -36,6 +36,9 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional, Any
 
+# Block stale system bottleneck (Anaconda 2022.05, compiled against old numpy)
+sys.modules.setdefault('bottleneck', None)
+
 import numpy as np
 import pandas as pd
 
