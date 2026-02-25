@@ -124,7 +124,7 @@ setup(
         # Antibody representations
         "antibody": [
             "torch>=2.0.0",
-            "transformers>=4.41.0",
+            "transformers>=4.41.0,<4.50.0",  # sapiens needs RobertaForMaskedLM (removed in 4.50+)
             "sentencepiece>=0.1.99",  # For ProtT5 tokenizer
             "biopython>=1.79",
             "requests>=2.26.0",
