@@ -348,7 +348,14 @@ def _normalize_decoupler_net(net, context: str = 'network'):
     # Convert weight column: handle NAType, mixed types, and NaN
     net = net.copy()
     net['weight'] = pd.to_numeric(net['weight'], errors='coerce')
-    net = net.dropna(subset=['weight'])
+    # Also ensure source/target are clean strings (no NAType)
+    net['source'] = net['source'].astype(str)
+    net['target'] = net['target'].astype(str)
+    # Drop any row with NA in any required column
+    net = net.dropna(subset=['source', 'target', 'weight'])
+    # Filter out rows where str conversion produced 'nan' or '<NA>'
+    net = net[~net['source'].isin(['nan', '<NA>', 'None', ''])]
+    net = net[~net['target'].isin(['nan', '<NA>', 'None', ''])]
 
     return net
 
@@ -378,6 +385,8 @@ def create_progeny_scores(expression: np.ndarray,
     # Get PROGENy pathway model
     progeny = dc.get_progeny(organism='human', top=300)
     progeny = _normalize_decoupler_net(progeny, 'PROGENy')
+    # Extra safety: force weight to float64 (prevents NAType leaking into MLM)
+    progeny['weight'] = progeny['weight'].astype(np.float64)
 
     # Run multivariate linear model
     dc.run_mlm(mat=adata, net=progeny, source='source', target='target',
@@ -452,6 +461,7 @@ def create_dorothea_scores(expression: np.ndarray,
     # Get DoRothEA regulon network (confidence levels A, B, C)
     dorothea = dc.get_dorothea(organism='human')
     dorothea = _normalize_decoupler_net(dorothea, 'DoRothEA')
+    dorothea['weight'] = dorothea['weight'].astype(np.float64)
 
     # Run multivariate linear model
     dc.run_mlm(mat=adata, net=dorothea, source='source', target='target',
@@ -1193,15 +1203,16 @@ def create_geneformer_embeddings(expression: np.ndarray,
                                   max_input_size: int = 2048) -> np.ndarray:
     """Frozen Geneformer embeddings (no fine-tuning).
 
-    Rank-encodes expression per sample (most expressed genes first),
+    Maps gene symbols to Geneformer vocabulary token IDs via Ensembl IDs,
+    normalizes by corpus gene medians, rank-orders descending,
     passes through pretrained Geneformer, extracts [CLS] token embedding.
     Falls back to a small BERT model if Geneformer unavailable.
 
-    Requires: torch, transformers
+    Requires: torch, transformers, huggingface_hub
 
     Args:
         expression: (n_samples, n_genes) log2(TPM+1) matrix
-        gene_names: (n_genes,) gene symbols (unused, kept for API consistency)
+        gene_names: (n_genes,) HUGO gene symbols
         max_input_size: max genes to include per sample
 
     Returns:
@@ -1211,10 +1222,13 @@ def create_geneformer_embeddings(expression: np.ndarray,
 
     n_samples = expression.shape[0]
 
-    # Rank-encode: sort genes by expression descending, use rank indices as tokens
-    ranks = np.argsort(-expression, axis=1)[:, :max_input_size]
-    input_ids = torch.LongTensor(ranks)
-    attention_mask = torch.ones_like(input_ids)
+    # Proper Geneformer tokenization: gene symbols → Ensembl → token IDs
+    from kirby.finetuning.tcga_geneformer import _tokenize_expression
+    tok_ids, tok_mask, proper_vocab = _tokenize_expression(
+        expression, gene_names, max_input_size,
+    )
+    input_ids = torch.LongTensor(tok_ids)
+    attention_mask = torch.LongTensor(tok_mask)
 
     # Load model
     try:

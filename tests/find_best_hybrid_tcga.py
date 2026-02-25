@@ -657,6 +657,7 @@ Output:
                 from kirby.finetuning.tcga_geneformer import make_geneformer_factory
                 rep_factories['geneformer'] = make_geneformer_factory(
                     expression_data=expression,
+                    gene_names=gene_names,
                     sample_ids=sample_ids,
                     dataset_name=args.dataset,
                     task_type=task_type,
