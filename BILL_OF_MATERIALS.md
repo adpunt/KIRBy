@@ -303,23 +303,31 @@ Best model per cell: Davis=XGBoost (paired), Ridge (standalone); KIBA=Ridge/XGBo
 
 | Rep | Dim | Category | Davis R² (paired) | KIBA R² (standalone) | Deps |
 |-----|-----|----------|:-:|:-:|------|
-| `drug_ecfp4` | 2048 | Standard (fingerprint) | 0.446 | 0.328 | rdkit |
-| `drug_maccs` | 167 | Standard (fingerprint) | 0.440 | 0.319 | rdkit |
-| `drug_pdv` | 200 | Standard (descriptor) | **0.457** | **0.338** | rdkit |
-| `drug_chemberta` | 384 | Pretrained (drug LM) | **PENDING** | **PENDING** | transformers |
-| `drug_molformer` | 768 | Pretrained (drug LM) | **PENDING** | **PENDING** | transformers |
-| `drug_selformer` | 768 | Pretrained (drug LM) | **PENDING** | **PENDING** | transformers |
-| `protein_esm2` | 1280 | Pretrained (protein LM) | **PENDING** | **PENDING** | transformers |
-| `protein_aac` | 20 | Standard (composition) | 0.446 | -0.006 | None |
-| `protein_descriptors` | 30 | Standard (biophysical) | 0.424 | -0.005 | None |
-| `protein_kmer` | 8000 | Standard (sequence) | **PENDING** | **PENDING** | None |
-| **all_concat** | 2465 | All lightweight | **0.463** | 0.329 | — |
+| `drug_ecfp4` | 2048 | Standard (fingerprint) | 0.454 | 0.322 | rdkit |
+| `drug_maccs` | 167 | Standard (fingerprint) | 0.445 | 0.317 | rdkit |
+| `drug_pdv` | 200 | Standard (descriptor) | 0.460 | 0.334 | rdkit |
+| `drug_chemberta` | 384 | Pretrained (drug LM) | 0.459 | **0.344** | transformers |
+| `drug_molformer` | 768 | Pretrained (drug LM) | **0.467** | 0.341 | transformers |
+| `drug_selformer` | 768 | Pretrained (drug LM) | 0.463 | 0.341 | transformers |
+| `protein_esm2` | 1280 | Pretrained (protein LM) | **0.538** | 0.007 | transformers |
+| `protein_aac` | 20 | Standard (composition) | 0.454 | 0.001 | None |
+| `protein_descriptors` | 30 | Standard (biophysical) | 0.429 | -0.003 | None |
+| `protein_kmer` | 8000 | Standard (sequence) | 0.501 | 0.018 | None |
+| **all_concat** | 13665 | All 10 reps | **0.548** | **0.369** | — |
+
+**Presets:**
+- `fast` (5): drug_ecfp4, drug_maccs, drug_pdv, protein_esm2, protein_aac
+- `fast+lm` (8): + drug_chemberta, drug_molformer, protein_descriptors
+- `full` (10): + drug_selformer, protein_kmer
 
 **Notes:**
-- Davis: Protein info is essential — paired R² ≈ 0.45 vs standalone ≈ 0.22. XGBoost captures drug-protein interactions.
+- Davis: Protein info is essential — paired R² ≈ 0.45–0.54 vs standalone ≈ 0.22. XGBoost dominates.
 - KIBA: Protein info *hurts* under cold-target split (only 229 targets). Drug-only standalone beats paired. Ridge dominates.
-- `drug_pdv` is the strongest drug rep on both datasets.
-- Remaining LM reps (4) + protein_kmer need server GPU run.
+- `protein_esm2` is the strongest single rep on Davis (0.538 paired) — huge uplift over hand-crafted protein reps.
+- `drug_chemberta` is the strongest drug rep on KIBA (0.344), beating fingerprints by ~1pp.
+- `drug_molformer` is the strongest drug rep on Davis (0.467 paired).
+- all_concat (13665D): 0.548 Davis, 0.369 KIBA — meaningful lift over best single rep.
+- Server job 7221614 (L40S GPU, 3.5h): all 10 reps, both datasets, zero failures.
 
 ---
 
