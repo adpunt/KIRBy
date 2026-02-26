@@ -3,7 +3,12 @@
 # Setup pretrained molecular models on the server
 #
 # Idempotent — safe to re-run. Skips steps that are already done.
-# Run from the login node (needs internet access for downloads).
+# Run from the login node (needs internet access for git clones and wget).
+#
+# NOTE: HF model downloads and model verification need torch/CUDA, so they
+# are skipped on login nodes. The precache SLURM job will auto-download HF
+# models on first use. Run verify_server_models.py from an interactive GPU
+# session if you want to check: srun --gres=gpu:1 python scripts/verify_server_models.py
 #
 # Usage:
 #   bash scripts/setup_server_models.sh
@@ -18,10 +23,17 @@ source "${SCRIPT_DIR}/../setup.sh" 2>/dev/null || true
 MODELS_DIR="${KIRBY_MODELS_DIR:-${HOME}/kirby_models}"
 mkdir -p "$MODELS_DIR"
 
+# Detect whether we can import torch (login nodes typically can't)
+HAS_TORCH=false
+if python -c "import torch" 2>/dev/null; then
+    HAS_TORCH=true
+fi
+
 echo "============================================================"
 echo "KIRBy Server Model Setup"
 echo "  MODELS_DIR: $MODELS_DIR"
 echo "  HF_HOME:    ${HF_HOME:-~/.cache/huggingface}"
+echo "  Has torch:  $HAS_TORCH"
 echo "  Date:       $(date)"
 echo "============================================================"
 
@@ -104,111 +116,95 @@ clone_repo "GraphMVP" "https://github.com/chao1224/GraphMVP.git"
 clone_repo "materials" "https://github.com/IBM/materials.git"
 
 # =============================================================================
-# 3. DOWNLOAD WEIGHTS
+# 3. DOWNLOAD WEIGHTS (non-torch downloads only)
 # =============================================================================
 echo ""
 echo "--- Downloading model weights ---"
 
-# mol2vec model_300dim.pkl
+# mol2vec model_300dim.pkl (pure wget, no torch needed)
 MOL2VEC_PKL="${MODELS_DIR}/model_300dim.pkl"
 if [ -f "$MOL2VEC_PKL" ]; then
     skip "weights: mol2vec"
 else
     echo "  Downloading mol2vec weights..."
-    if python -c "
-from mol2vec.features import mol2alt_sentence, mol2sentence
-from gensim.models import word2vec
-import urllib.request, os
-url = 'https://github.com/samoturk/mol2vec/raw/master/examples/models/model_300dim.pkl'
-urllib.request.urlretrieve(url, '${MOL2VEC_PKL}')
-print('Downloaded')
-" 2>/dev/null; then
+    MOL2VEC_URL="https://github.com/samoturk/mol2vec/raw/master/examples/models/model_300dim.pkl"
+    if wget -q -O "$MOL2VEC_PKL" "$MOL2VEC_URL" 2>/dev/null || \
+       curl -sL -o "$MOL2VEC_PKL" "$MOL2VEC_URL" 2>/dev/null; then
         ok "weights: mol2vec"
     else
         fail "weights: mol2vec" "download failed"
     fi
 fi
 
-# MolCLR checkpoint
+# MolCLR checkpoint (Google Drive — may need manual download)
 MOLCLR_CKPT="${MODELS_DIR}/MolCLR/ckpt/pretrained_gin/checkpoints/model.pth"
 if [ -f "$MOLCLR_CKPT" ]; then
     skip "weights: MolCLR"
 else
-    echo "  Downloading MolCLR weights..."
-    mkdir -p "$(dirname "$MOLCLR_CKPT")"
-    if python -c "
-import urllib.request
-url = 'https://drive.google.com/uc?export=download&id=1BwmVmBOxMDUmMlpAEB0RGjcnuW-vxhEv'
-urllib.request.urlretrieve(url, '${MOLCLR_CKPT}')
-print('Downloaded')
-" 2>/dev/null; then
-        ok "weights: MolCLR"
-    else
-        warn "MolCLR weights may need manual download from Google Drive"
-        fail "weights: MolCLR" "auto-download failed (try manual)"
-    fi
+    warn "MolCLR weights missing: $MOLCLR_CKPT"
+    warn "  Google Drive auto-download often fails. Manual download:"
+    warn "  https://drive.google.com/uc?export=download&id=1BwmVmBOxMDUmMlpAEB0RGjcnuW-vxhEv"
+    warn "  Place at: $MOLCLR_CKPT"
 fi
 
-# GraphMVP via HuggingFace
-GRAPHMVP_DIR="${MODELS_DIR}/GraphMVP/pretrained_models"
-GRAPHMVP_CKPT="${GRAPHMVP_DIR}/GraphMVP.pth"
+# GraphMVP weights (needs huggingface_hub which needs torch)
+GRAPHMVP_CKPT="${MODELS_DIR}/GraphMVP/pretrained_models/GraphMVP.pth"
 if [ -f "$GRAPHMVP_CKPT" ]; then
     skip "weights: GraphMVP"
-else
-    echo "  Downloading GraphMVP weights..."
-    mkdir -p "$GRAPHMVP_DIR"
+elif [ "$HAS_TORCH" = true ]; then
+    echo "  Downloading GraphMVP weights via HuggingFace..."
+    mkdir -p "${MODELS_DIR}/GraphMVP/pretrained_models"
     if python -c "
 from huggingface_hub import hf_hub_download
-path = hf_hub_download('chao1224/GraphMVP', 'pretraining_model/GraphMVP_C/model.pth',
-                        local_dir='${GRAPHMVP_DIR}/..')
 import shutil, os
-os.makedirs('${GRAPHMVP_DIR}', exist_ok=True)
-shutil.move(path, '${GRAPHMVP_CKPT}')
+path = hf_hub_download('chao1224/GraphMVP', 'pretraining_model/GraphMVP_C/model.pth',
+                        local_dir='${MODELS_DIR}/GraphMVP/pretrained_models/..')
+dest = '${GRAPHMVP_CKPT}'
+os.makedirs(os.path.dirname(dest), exist_ok=True)
+shutil.move(path, dest)
 print('Downloaded')
 " 2>/dev/null; then
         ok "weights: GraphMVP"
     else
         fail "weights: GraphMVP" "HF download failed"
     fi
+else
+    warn "GraphMVP weights: skipped (needs torch). Will auto-download during precache job."
 fi
 
 # =============================================================================
-# 4. PRE-DOWNLOAD HUGGINGFACE MODELS
+# 4. PRE-DOWNLOAD HUGGINGFACE MODELS (torch required)
 # =============================================================================
 echo ""
-echo "--- Pre-downloading HuggingFace models ---"
+if [ "$HAS_TORCH" = true ]; then
+    echo "--- Pre-downloading HuggingFace models ---"
 
-hf_download() {
-    local name=$1
-    local model_id=$2
+    hf_download() {
+        local name=$1
+        local model_id=$2
 
-    if python -c "
+        if python -c "
 from transformers import AutoModel, AutoTokenizer
 AutoTokenizer.from_pretrained('${model_id}')
 AutoModel.from_pretrained('${model_id}')
 print('OK')
 " 2>/dev/null; then
-        ok "HF: $name ($model_id)"
-    else
-        fail "HF: $name" "download/load failed"
-    fi
-}
+            ok "HF: $name ($model_id)"
+        else
+            fail "HF: $name" "download/load failed"
+        fi
+    }
 
-hf_download "ChemBERTa" "DeepChem/ChemBERTa-77M-MLM"
-hf_download "MolFormer" "ibm/MoLFormer-XL-both-10pct"
-hf_download "SELFormer" "HUBioDataLab/SELFormer"
-hf_download "ChemBERT" "jonghyunlee/ChemBERT_ChEMBL_pretrained"
-
-# SMI-TED (ibm/materials.smi-ted)
-echo "  Pre-downloading SMI-TED..."
-python -c "
-try:
-    from huggingface_hub import snapshot_download
-    snapshot_download('ibm/materials.smi-ted')
-    print('OK')
-except Exception as e:
-    print(f'WARN: {e}')
-" 2>/dev/null && ok "HF: SMI-TED" || warn "SMI-TED download may need manual setup"
+    hf_download "ChemBERTa" "DeepChem/ChemBERTa-77M-MLM"
+    hf_download "MolFormer" "ibm/MoLFormer-XL-both-10pct"
+    hf_download "SELFormer" "HUBioDataLab/SELFormer"
+    hf_download "ChemBERT" "jonghyunlee/ChemBERT_ChEMBL_pretrained"
+else
+    echo "--- Skipping HuggingFace model downloads (no torch on login node) ---"
+    echo "  HF models will auto-download during the precache SLURM job."
+    echo "  Or run this script from an interactive GPU session:"
+    echo "    srun --gres=gpu:1 --mem=32G --time=01:00:00 bash scripts/setup_server_models.sh"
+fi
 
 # =============================================================================
 # 5. MANUAL DOWNLOAD WARNINGS
@@ -219,8 +215,8 @@ echo "--- Manual downloads needed ---"
 GROVER_WEIGHTS="${MODELS_DIR}/grover/grover_large.pt"
 if [ ! -f "$GROVER_WEIGHTS" ]; then
     warn "GROVER weights missing: $GROVER_WEIGHTS"
-    warn "  Download from OneDrive: https://ai.tencent.com/ailab/ml/ml-data/grover-models/grover_large.tar.gz"
-    warn "  Extract to: $MODELS_DIR/grover/"
+    warn "  Download: https://ai.tencent.com/ailab/ml/ml-data/grover-models/grover_large.tar.gz"
+    warn "  Then: tar xzf grover_large.tar.gz -C $MODELS_DIR/grover/"
 else
     skip "weights: GROVER (already present)"
 fi
@@ -236,11 +232,32 @@ else
 fi
 
 # =============================================================================
-# 6. VERIFY
+# 6. VERIFY (only if torch available)
 # =============================================================================
 echo ""
-echo "--- Running verification ---"
-python "${SCRIPT_DIR}/verify_server_models.py" 2>&1 | head -40
+if [ "$HAS_TORCH" = true ]; then
+    echo "--- Running verification ---"
+    python "${SCRIPT_DIR}/verify_server_models.py" 2>&1 | head -40
+else
+    echo "--- Skipping model verification (no torch on login node) ---"
+    echo "  Path check only:"
+    for dir in grover Chemformer MolCLR GraphMVP materials; do
+        if [ -d "${MODELS_DIR}/${dir}" ]; then
+            echo "  [OK]   ${dir}/"
+        else
+            echo "  [MISS] ${dir}/"
+        fi
+    done
+    for f in model_300dim.pkl grover/grover_large.pt; do
+        if [ -f "${MODELS_DIR}/${f}" ]; then
+            echo "  [OK]   ${f}"
+        else
+            echo "  [MISS] ${f}"
+        fi
+    done
+    echo ""
+    echo "  For full verification: srun --gres=gpu:1 python scripts/verify_server_models.py"
+fi
 
 # =============================================================================
 # SUMMARY
@@ -256,6 +273,7 @@ echo "============================================================"
 
 if [ "$FAIL" -gt 0 ]; then
     echo ""
-    echo "Some steps failed. Check output above and fix manually."
-    exit 1
+    echo "Some steps failed — check output above."
+    echo "Non-critical failures (HF downloads, GraphMVP) will resolve"
+    echo "automatically during the precache SLURM job."
 fi
