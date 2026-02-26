@@ -131,12 +131,12 @@ REP_PRESETS = {
     'all_server': [
         'kmer', 'physicochemical', 'aac', 'blosum62',
         'antiberty', 'ablang2', 'igbert', 'esm2', 'prot_t5',
-        'ab_roberta', 'balm', 'pigen', 'structural',
+        'ab_roberta', 'balm', 'pigen', 'structural', 'saprot',
     ],
     'all': [
         'kmer', 'physicochemical', 'aac', 'blosum62',
         'antiberty', 'ablang2', 'igbert', 'esm2', 'prot_t5',
-        'ab_roberta', 'balm', 'pigen', 'esmc', 'sapiens', 'structural',
+        'ab_roberta', 'balm', 'pigen', 'esmc', 'sapiens', 'structural', 'saprot',
     ],
     # Mutation-aware presets (for intra-family FLAb datasets)
     # Mutation-specific features (positional, biophysical_delta, lm_score)
@@ -167,7 +167,8 @@ REP_PRESETS = {
         'varpos_cdr_physchem', 'varpos_cdrh3_physchem', # CDR-focused, much lower dim
         'antifold_score',                               # structure-conditioned, 5D
         'sapiens_score',                                # humanness-conditioned, 5D
-    ],  # 11 reps
+        'esm1v_score',                                  # ESM-1v variant-effect, 5D
+    ],  # 3 base + 9 aug (small reps auto-moved to augmentations)
     'dms_full': [
         'lm_score_ablang2', 'lm_score_esm2', 'lm_score_prot_t5', 'lm_score_antiberty',
         'positional', 'biophysical_delta',
@@ -178,7 +179,8 @@ REP_PRESETS = {
         'varpos_cdrh3_physchem', 'varpos_fw_physchem',            # H3 / framework
         'antifold_score',                                          # structure-conditioned, 5D
         'sapiens_score',                                           # humanness-conditioned, 5D
-    ],  # 19 reps — full arsenal (server only, high-dim onehot variants)
+        'esm1v_score',                                             # ESM-1v variant-effect, 5D
+    ],  # 8 base + 12 aug (small reps auto-moved to augmentations)
 
     # --- Inter-family: full-sequence embeddings ARE appropriate ---
     'inter_family': [
@@ -196,6 +198,23 @@ _SEARCH_NAME_MAP = {
     'exhaustive': 'long',
     'fast': 'fast',
     'long': 'long',
+}
+
+# Small-dim reps (<= 20D) that waste search budget as base reps in DMS presets.
+# Moved to augmentations: appended after hybrid is built, kept only if they help.
+_DMS_AUG_REPS = {
+    'dms': {
+        'lm_score_ablang2', 'lm_score_esm2',
+        'positional', 'biophysical_delta',
+        'aac', 'blosum62', 'antifold_score',
+        'sapiens_score', 'esm1v_score',
+    },
+    'dms_full': {
+        'lm_score_ablang2', 'lm_score_esm2', 'lm_score_prot_t5', 'lm_score_antiberty',
+        'positional', 'biophysical_delta',
+        'aac', 'blosum62', 'developability', 'antifold_score',
+        'sapiens_score', 'esm1v_score',
+    },
 }
 
 
@@ -278,10 +297,36 @@ def load_dataset(name_or_path: str, heavy_col: str = 'VH',
         return (data['heavy_seqs'], data['light_seqs'], data['labels'],
                 data['task_type'], metadata)
 
-    # AbBind dataset
+    # AB-Bind single-point mutations only
+    if name_lower == 'abbind_spm':
+        from kirby.datasets.abbind import load_abbind_dataset
+        data = load_abbind_dataset(single_point_only=True)
+        metadata = {
+            'wildtype_heavy': data['wildtype_heavy'],
+            'wildtype_light': data['wildtype_light'],
+            'mutations': data['mutations'],
+            'is_intra_family': data['is_intra_family'],
+        }
+        return (data['heavy_seqs'], data['light_seqs'], data['labels'],
+                data['task_type'], metadata)
+
+    # AbBind dataset (all mutations)
     if name_lower == 'abbind':
         from kirby.datasets.abbind import load_abbind_dataset
         data = load_abbind_dataset()
+        metadata = {
+            'wildtype_heavy': data['wildtype_heavy'],
+            'wildtype_light': data['wildtype_light'],
+            'mutations': data['mutations'],
+            'is_intra_family': data['is_intra_family'],
+        }
+        return (data['heavy_seqs'], data['light_seqs'], data['labels'],
+                data['task_type'], metadata)
+
+    # Combined ΔΔG dataset (SKEMPI 2.0 + AB-Bind, deduplicated)
+    if name_lower == 'ddg_combined':
+        from kirby.datasets.ddg_combined import load_ddg_combined_dataset
+        data = load_ddg_combined_dataset()
         metadata = {
             'wildtype_heavy': data['wildtype_heavy'],
             'wildtype_light': data['wildtype_light'],
@@ -405,8 +450,8 @@ def load_dataset(name_or_path: str, heavy_col: str = 'VH',
     else:
         raise ValueError(
             f"Unknown dataset: {name_or_path}. "
-            f"Built-in options: sabdab_affinity, flab_*, abcov_*, abagym_*, abbind. "
-            f"Or provide a CSV path."
+            f"Built-in options: sabdab_affinity, flab_*, abcov_*, abagym_*, "
+            f"abbind, abbind_spm, ddg_combined. Or provide a CSV path."
         )
 
 
@@ -479,6 +524,10 @@ _REP_DISPATCH = {
     'antifold_score': ('compute_antifold_scores', 'antifold'),
     # Sapiens humanness score (5D, humanness-conditioned)
     'sapiens_score': ('compute_sapiens_mutation_scores', 'mutation'),
+    # ESM-1v masked marginal mutation scores (5D, variant-effect)
+    'esm1v_score': ('compute_esm1v_mutation_scores', 'mutation'),
+    # SaProt structure-aware embeddings (1280D paired)
+    'saprot': ('create_saprot_embeddings', 'paired'),
 }
 
 
@@ -584,6 +633,8 @@ def get_representations(heavy_seqs: List[str], light_seqs: Optional[List[str]],
                 elif rep_name == 'lm_score':
                     rep = func(wt_heavy or '', heavy_seqs, mutations)
                 elif rep_name == 'sapiens_score':
+                    rep = func(wt_heavy or '', heavy_seqs, mutations)
+                elif rep_name == 'esm1v_score':
                     rep = func(wt_heavy or '', heavy_seqs, mutations)
                 else:
                     raise ValueError(f"Unknown mutation rep: {rep_name}")
@@ -1106,6 +1157,7 @@ Output:
     parser.add_argument('--finetune', type=str, default=None,
                        help='Comma-separated fine-tuning methods: '
                             'lora_esm2, lora_esm2_small, lora_antiberty, lora_ablang2, '
+                            'freeze_esm2, freeze_esm2_small, freeze_ablang2, '
                             'mlm_esm2, mlm_esm2_small, mlm_antiberty, mock_lora')
     parser.add_argument('--finetune-epochs', type=int, default=5,
                        help='Fine-tuning epochs per fold (default: 5)')
@@ -1153,12 +1205,27 @@ Output:
         mutations=mutations, delta=args.delta,
     )
 
-    # Generate augmentations
+    # Move small DMS reps from base to augmentations
     augmentations = None
+    aug_names = _DMS_AUG_REPS.get(args.reps, set())
+    if aug_names:
+        dms_augs = {}
+        for name in list(base_reps.keys()):
+            if name in aug_names:
+                dms_augs[name] = base_reps.pop(name)
+        if dms_augs:
+            augmentations = dms_augs
+            print(f"  Moved {len(dms_augs)} small reps to augmentations: "
+                  f"{sorted(dms_augs.keys())}")
+
+    # Generate additional augmentations (--augment flag)
     if args.augment:
-        augmentations = get_augmentations(heavy_seqs, light_seqs)
-        if not augmentations:
-            augmentations = None
+        extra_augs = get_augmentations(heavy_seqs, light_seqs)
+        if extra_augs:
+            if augmentations is None:
+                augmentations = extra_augs
+            else:
+                augmentations.update(extra_augs)
 
     # Resolve model override
     models_arg = None
@@ -1191,6 +1258,18 @@ Output:
                     dataset_name=dataset_name,
                     base_model=model_key,
                     lora_rank=args.lora_rank,
+                    epochs=args.finetune_epochs,
+                    cache=ft_cache,
+                )
+            elif method.startswith('freeze_'):
+                from kirby.finetuning.antibody_freeze import make_antibody_freeze_factory
+                model_key = method.replace('freeze_', '')
+                rep_factories[method] = make_antibody_freeze_factory(
+                    heavy_seqs=heavy_seqs,
+                    light_seqs=light_seqs,
+                    mutations=mutations,
+                    dataset_name=dataset_name,
+                    base_model=model_key,
                     epochs=args.finetune_epochs,
                     cache=ft_cache,
                 )

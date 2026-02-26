@@ -150,6 +150,9 @@ def _finetune_and_extract(
         # Space-separate for protein tokenizers that expect it
         if tok_cls == 'RoFormerTokenizer':
             seqs = [' '.join(list(s)) for s in seqs]
+        elif model_name == 'ablang2':
+            # AbLang2's tokenizer expects space-separated amino acids
+            seqs = [' '.join(list(s)) for s in seqs]
         return tokenizer(
             seqs, padding=True, truncation=True,
             max_length=max_length, return_tensors='pt',
