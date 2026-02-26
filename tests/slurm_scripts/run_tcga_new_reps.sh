@@ -3,7 +3,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --time=12:00:00
+#SBATCH --time=24:00:00
 #SBATCH --partition=long
 #SBATCH --mem=64G
 #SBATCH --mail-user=adelaide.punt@stcatz.ox.ac.uk
@@ -31,16 +31,8 @@ cd /data/stat-cadd/scat9264/KIRBy
 OUTPUT="tests/results/tcga_new_reps"
 mkdir -p "$OUTPUT"
 
-# Delete stale pathway caches (scoring method changed: ssGSEA/decoupler -> mean z-score/weighted)
-echo "Deleting stale pathway caches..."
-rm -f ~/.cache/kirby/reps/tcga_*/gene_hallmark.npy
-rm -f ~/.cache/kirby/reps/tcga_*/gene_kegg.npy
-rm -f ~/.cache/kirby/reps/tcga_*/gene_reactome.npy
-rm -f ~/.cache/kirby/reps/tcga_*/gene_oncogenic.npy
-rm -f ~/.cache/kirby/reps/tcga_*/gene_progeny.npy
-rm -f ~/.cache/kirby/reps/tcga_*/gene_dorothea.npy
-rm -f ~/.cache/kirby/reps/tcga_*/gene_combined_pathway.npy
-echo "Done."
+# Stale pathway caches already deleted in first run (job 7219430).
+# New reps are now cached from that run — rep generation will be fast.
 
 # 7 fixed pathway reps + 5 new reps + 6 known-working reference reps = 18
 REPS="gene_pca100,gene_nmf50,gene_ica50,gene_stats,gene_immune,gene_hvg2000,gene_hallmark,gene_kegg,gene_reactome,gene_oncogenic,gene_progeny,gene_dorothea,gene_combined_pathway,gene_quantile_rank,gene_corr_modules,gene_chromosome_arm,gene_autoencoder50,gene_sparse_pca50"
@@ -48,7 +40,7 @@ REPS="gene_pca100,gene_nmf50,gene_ica50,gene_stats,gene_immune,gene_hvg2000,gene
 echo "============================================================"
 echo "TCGA New/Fixed Reps Baseline Survey"
 echo "  Reps:    $REPS"
-echo "  Search:  medium"
+echo "  Search:  fast"
 echo "  Started: $(date)"
 echo "============================================================"
 
@@ -59,7 +51,7 @@ FAIL=0
 echo ""
 echo "--- LUAD vs LUSC ---"
 if python tests/find_best_hybrid_tcga.py tcga_luad_vs_lusc \
-    --reps "$REPS" --search medium --genomic-only \
+    --reps "$REPS" --search fast --genomic-only \
     --adaptive-pruning \
     --output "${OUTPUT}/tcga_luad_new_reps.json" 2>&1; then
     echo "  PASSED: $(date)"
@@ -73,7 +65,7 @@ fi
 echo ""
 echo "--- BRCA PAM50 ---"
 if python tests/find_best_hybrid_tcga.py tcga_brca_pam50 \
-    --reps "$REPS" --search medium --genomic-only \
+    --reps "$REPS" --search fast --genomic-only \
     --adaptive-pruning \
     --output "${OUTPUT}/tcga_brca_new_reps.json" 2>&1; then
     echo "  PASSED: $(date)"
