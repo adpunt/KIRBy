@@ -89,20 +89,21 @@ run_inter() {
     echo ""
     echo "========== INTER-FAMILY DATASETS =========="
     echo "Full-sequence LM embeddings appropriate here."
+    echo "Using all_server preset (14 reps) for comprehensive baseline survey."
     echo ""
 
-    # Ab-CoV binding affinity (1,780 entries)
-    run_one abcov_kd inter_family ""
+    # Combined ΔΔG (SKEMPI 2.0 + AB-Bind, deduplicated, 544 entries)
+    run_one ddg_combined all_server ""
 
-    # FLAb inter-family (Jain et al.)
-    run_one flab_thermo_jain inter_family ""
-    run_one flab_aggregation_jain inter_family ""
+    # AbAgym pooled (5 experiments, 2,247 entries)
+    run_one abagym_all all_server ""
 
-    # AbAgym pooled (mixed families)
-    run_one abagym_all inter_family ""
+    # Ab-CoV binding affinity (141 entries)
+    run_one abcov_kd all_server ""
 
-    # SAbDab (small, baseline — expect poor)
-    run_one sabdab_affinity inter_family ""
+    # FLAb inter-family (Jain et al., 137 entries each)
+    run_one flab_thermo_jain all_server ""
+    run_one flab_aggregation_jain all_server ""
 }
 
 if [ "$MODE" = "intra" ]; then

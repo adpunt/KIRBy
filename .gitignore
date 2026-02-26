@@ -56,10 +56,12 @@ coverage.xml
 !requirements.txt  # Allow requirements if it's CSV format
 *.json
 !package.json      # Allow package.json if needed
+!src/kirby/representations/data/*.json
 *.pkl
 *.pth
 *.mmap
 data/
+!src/kirby/representations/data/
 *.db
 *.sqlite
 

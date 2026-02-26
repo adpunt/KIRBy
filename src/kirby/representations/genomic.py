@@ -288,37 +288,109 @@ def _extract_ssgsea_matrix(result, n_samples: int) -> np.ndarray:
     return np.nan_to_num(X, nan=0.0).astype(np.float32)
 
 
-def create_hallmark_scores(expression: np.ndarray,
-                           gene_names: np.ndarray) -> np.ndarray:
-    """ssGSEA scores for MSigDB Hallmark pathways (50 pathways).
+def _score_gene_sets(expression: np.ndarray, gene_names: np.ndarray,
+                     gene_sets: dict) -> np.ndarray:
+    """Mean z-scored expression scoring for unweighted gene sets.
 
-    Requires gseapy >= 1.0.
+    Z-scores the full expression matrix once, then computes the mean z-score
+    across member genes for each gene set per sample.
+
+    Args:
+        expression: (n_samples, n_genes) expression matrix
+        gene_names: (n_genes,) gene symbols
+        gene_sets: {set_name: [gene1, gene2, ...]} — unweighted gene lists
 
     Returns:
-        (n_samples, 50) pathway enrichment scores
+        (n_samples, n_scored_sets) pathway scores
     """
-    try:
-        import gseapy as gp
-    except ImportError:
-        raise ImportError("gseapy required for Hallmark scores: pip install gseapy")
+    from sklearn.preprocessing import StandardScaler
 
-    n_samples = expression.shape[0]
+    # Z-score full matrix once
+    scaler = StandardScaler()
+    Z = scaler.fit_transform(expression)
 
-    # Create DataFrame: genes as rows, samples as columns (gseapy convention)
-    df = pd.DataFrame(expression.T, index=gene_names,
-                       columns=[f'S{i}' for i in range(n_samples)])
+    gene_to_idx = {g: i for i, g in enumerate(gene_names)}
 
-    # Run ssGSEA with Hallmark gene sets
-    result = gp.ssgsea(
-        data=df,
-        gene_sets='MSigDB_Hallmark_2020',
-        outdir=None,
-        no_plot=True,
-        min_size=5,
-        threads=1,
-    )
+    set_names = sorted(gene_sets.keys())
+    scores = np.zeros((expression.shape[0], len(set_names)), dtype=np.float32)
+    kept = []
 
-    return _extract_ssgsea_matrix(result, n_samples)
+    for j, name in enumerate(set_names):
+        members = gene_sets[name]
+        idx = [gene_to_idx[g] for g in members if g in gene_to_idx]
+        if len(idx) >= 3:  # minimum gene overlap
+            scores[:, j] = Z[:, idx].mean(axis=1)
+            kept.append(j)
+
+    # Keep only sets with sufficient gene overlap
+    if kept:
+        scores = scores[:, kept]
+    else:
+        raise RuntimeError("No gene sets had >=3 overlapping genes with expression data")
+
+    return scores
+
+
+def _score_weighted_pathways(expression: np.ndarray, gene_names: np.ndarray,
+                             pathway_weights: dict) -> np.ndarray:
+    """Weighted linear scoring for PROGENy/DoRothEA-style networks.
+
+    Score = sum(weight * z_expr) / n_genes per pathway per sample.
+
+    Args:
+        expression: (n_samples, n_genes) expression matrix
+        gene_names: (n_genes,) gene symbols
+        pathway_weights: {pathway: {gene: weight, ...}}
+
+    Returns:
+        (n_samples, n_scored_pathways) activity scores
+    """
+    from sklearn.preprocessing import StandardScaler
+
+    scaler = StandardScaler()
+    Z = scaler.fit_transform(expression)
+
+    gene_to_idx = {g: i for i, g in enumerate(gene_names)}
+
+    pathway_names = sorted(pathway_weights.keys())
+    scores = np.zeros((expression.shape[0], len(pathway_names)), dtype=np.float32)
+    kept = []
+
+    for j, name in enumerate(pathway_names):
+        members = pathway_weights[name]
+        idx = []
+        weights = []
+        for gene, w in members.items():
+            if gene in gene_to_idx:
+                idx.append(gene_to_idx[gene])
+                weights.append(w)
+        if len(idx) >= 3:
+            w_arr = np.array(weights, dtype=np.float64)
+            scores[:, j] = (Z[:, idx] * w_arr[np.newaxis, :]).sum(axis=1) / len(idx)
+            kept.append(j)
+
+    if kept:
+        scores = scores[:, kept]
+    else:
+        raise RuntimeError("No pathways had >=3 overlapping genes with expression data")
+
+    return scores
+
+
+def create_hallmark_scores(expression: np.ndarray,
+                           gene_names: np.ndarray) -> np.ndarray:
+    """Mean z-score enrichment for MSigDB Hallmark pathways (50 pathways).
+
+    Uses local gene sets (no runtime downloads).
+
+    Returns:
+        (n_samples, ~50) pathway enrichment scores
+    """
+    from kirby.representations.data import hallmark
+    gene_sets = hallmark()
+    X = _score_gene_sets(expression, gene_names, gene_sets)
+    print(f"    Hallmark: {X.shape[1]} pathways scored")
+    return X
 
 
 def _normalize_decoupler_net(net, context: str = 'network'):
@@ -364,119 +436,48 @@ def create_progeny_scores(expression: np.ndarray,
                           gene_names: np.ndarray) -> np.ndarray:
     """PROGENy pathway activity scores (14 signaling pathways).
 
-    Requires decoupler >= 1.4.
+    Uses local weighted gene sets (no runtime downloads).
 
     Returns:
         (n_samples, 14) pathway activity scores
     """
-    try:
-        import decoupler as dc
-    except ImportError:
-        raise ImportError("decoupler required for PROGENy scores: pip install decoupler")
-
-    try:
-        import anndata as ad
-    except ImportError:
-        raise ImportError("anndata required for PROGENy scores: pip install anndata")
-
-    adata = ad.AnnData(X=expression.copy(), var=pd.DataFrame(index=gene_names))
-    adata.obs_names = [f'S{i}' for i in range(expression.shape[0])]
-
-    # Get PROGENy pathway model
-    progeny = dc.get_progeny(organism='human', top=300)
-    progeny = _normalize_decoupler_net(progeny, 'PROGENy')
-    # Extra safety: force weight to float64 (prevents NAType leaking into MLM)
-    progeny['weight'] = progeny['weight'].astype(np.float64)
-
-    # Run multivariate linear model
-    dc.run_mlm(mat=adata, net=progeny, source='source', target='target',
-               weight='weight', use_raw=False)
-
-    # Extract activity scores from obsm
-    if 'mlm_estimate' in adata.obsm:
-        X = adata.obsm['mlm_estimate'].values
-    else:
-        # Try alternative key
-        key = next((k for k in adata.obsm if 'estimate' in k), None)
-        if key:
-            X = adata.obsm[key].values
-        else:
-            raise RuntimeError("PROGENy scores not found in adata.obsm")
-
-    return np.nan_to_num(X, nan=0.0).astype(np.float32)
+    from kirby.representations.data import progeny_weights
+    weights = progeny_weights()
+    X = _score_weighted_pathways(expression, gene_names, weights)
+    print(f"    PROGENy: {X.shape[1]} pathways scored")
+    return X
 
 
 def create_kegg_scores(expression: np.ndarray,
                        gene_names: np.ndarray) -> np.ndarray:
-    """ssGSEA scores for KEGG pathways (~186 pathways).
+    """Mean z-score enrichment for KEGG pathways (~320 pathways).
 
-    Requires gseapy >= 1.0.
+    Uses local gene sets (no runtime downloads).
 
     Returns:
-        (n_samples, ~186) pathway enrichment scores
+        (n_samples, ~320) pathway enrichment scores
     """
-    try:
-        import gseapy as gp
-    except ImportError:
-        raise ImportError("gseapy required for KEGG scores: pip install gseapy")
-
-    n_samples = expression.shape[0]
-    df = pd.DataFrame(expression.T, index=gene_names,
-                       columns=[f'S{i}' for i in range(n_samples)])
-
-    result = gp.ssgsea(
-        data=df,
-        gene_sets='KEGG_2021_Human',
-        outdir=None,
-        no_plot=True,
-        min_size=5,
-        threads=1,
-    )
-
-    return _extract_ssgsea_matrix(result, n_samples)
+    from kirby.representations.data import kegg
+    gene_sets = kegg()
+    X = _score_gene_sets(expression, gene_names, gene_sets)
+    print(f"    KEGG: {X.shape[1]} pathways scored")
+    return X
 
 
 def create_dorothea_scores(expression: np.ndarray,
                            gene_names: np.ndarray) -> np.ndarray:
-    """DoRothEA transcription factor activity scores (~300 TFs).
+    """DoRothEA transcription factor activity scores (~367 TFs).
 
-    Requires decoupler >= 1.4.
+    Uses local weighted regulons (no runtime downloads).
 
     Returns:
-        (n_samples, ~300) TF activity scores
+        (n_samples, ~367) TF activity scores
     """
-    try:
-        import decoupler as dc
-    except ImportError:
-        raise ImportError("decoupler required for DoRothEA scores: pip install decoupler")
-
-    try:
-        import anndata as ad
-    except ImportError:
-        raise ImportError("anndata required for DoRothEA scores: pip install anndata")
-
-    adata = ad.AnnData(X=expression.copy(), var=pd.DataFrame(index=gene_names))
-    adata.obs_names = [f'S{i}' for i in range(expression.shape[0])]
-
-    # Get DoRothEA regulon network (confidence levels A, B, C)
-    dorothea = dc.get_dorothea(organism='human')
-    dorothea = _normalize_decoupler_net(dorothea, 'DoRothEA')
-    dorothea['weight'] = dorothea['weight'].astype(np.float64)
-
-    # Run multivariate linear model
-    dc.run_mlm(mat=adata, net=dorothea, source='source', target='target',
-               weight='weight', use_raw=False)
-
-    if 'mlm_estimate' in adata.obsm:
-        X = adata.obsm['mlm_estimate'].values
-    else:
-        key = next((k for k in adata.obsm if 'estimate' in k), None)
-        if key:
-            X = adata.obsm[key].values
-        else:
-            raise RuntimeError("DoRothEA scores not found in adata.obsm")
-
-    return np.nan_to_num(X, nan=0.0).astype(np.float32)
+    from kirby.representations.data import dorothea_regulons
+    regulons = dorothea_regulons()
+    X = _score_weighted_pathways(expression, gene_names, regulons)
+    print(f"    DoRothEA: {X.shape[1]} TFs scored")
+    return X
 
 
 def create_combined_pathway(expression: np.ndarray,
@@ -660,65 +661,33 @@ def create_gene_stats(expression: np.ndarray) -> np.ndarray:
 
 def create_reactome_scores(expression: np.ndarray,
                            gene_names: np.ndarray) -> np.ndarray:
-    """ssGSEA scores for Reactome pathways (~600 pathways).
+    """Mean z-score enrichment for Reactome pathways (~1818 pathways).
 
-    Requires gseapy >= 1.0.
+    Uses local gene sets (no runtime downloads).
 
     Returns:
-        (n_samples, ~600) Reactome pathway enrichment scores
+        (n_samples, ~1818) Reactome pathway enrichment scores
     """
-    try:
-        import gseapy as gp
-    except ImportError:
-        raise ImportError("gseapy required for Reactome scores: pip install gseapy")
-
-    n_samples = expression.shape[0]
-    df = pd.DataFrame(expression.T, index=gene_names,
-                       columns=[f'S{i}' for i in range(n_samples)])
-
-    result = gp.ssgsea(
-        data=df,
-        gene_sets='Reactome_2022',
-        outdir=None,
-        no_plot=True,
-        min_size=5,
-        threads=1,
-    )
-
-    X = _extract_ssgsea_matrix(result, n_samples)
-    print(f"    Reactome: {X.shape[1]} pathways")
+    from kirby.representations.data import reactome
+    gene_sets = reactome()
+    X = _score_gene_sets(expression, gene_names, gene_sets)
+    print(f"    Reactome: {X.shape[1]} pathways scored")
     return X
 
 
 def create_oncogenic_scores(expression: np.ndarray,
                             gene_names: np.ndarray) -> np.ndarray:
-    """ssGSEA scores for MSigDB C6 oncogenic signatures (~189 gene sets).
+    """Mean z-score enrichment for MSigDB C6 oncogenic signatures (189 gene sets).
 
-    Requires gseapy >= 1.0.
+    Uses local gene sets (no runtime downloads).
 
     Returns:
         (n_samples, ~189) oncogenic signature enrichment scores
     """
-    try:
-        import gseapy as gp
-    except ImportError:
-        raise ImportError("gseapy required for oncogenic scores: pip install gseapy")
-
-    n_samples = expression.shape[0]
-    df = pd.DataFrame(expression.T, index=gene_names,
-                       columns=[f'S{i}' for i in range(n_samples)])
-
-    result = gp.ssgsea(
-        data=df,
-        gene_sets='MSigDB_Oncogenic_Signatures',
-        outdir=None,
-        no_plot=True,
-        min_size=5,
-        threads=1,
-    )
-
-    X = _extract_ssgsea_matrix(result, n_samples)
-    print(f"    Oncogenic: {X.shape[1]} signatures")
+    from kirby.representations.data import oncogenic
+    gene_sets = oncogenic()
+    X = _score_gene_sets(expression, gene_names, gene_sets)
+    print(f"    Oncogenic: {X.shape[1]} signatures scored")
     return X
 
 
@@ -811,6 +780,269 @@ def create_immune_scores(expression: np.ndarray,
     X = np.nan_to_num(X, nan=0.0)
     print(f"    Immune: {len(cell_type_names)} Bindea cell types + 3 ESTIMATE = {X.shape[1]} features")
     return X
+
+
+# =============================================================================
+# EXPRESSION-DERIVED REPRESENTATIONS (Part 2: new alternative reps)
+# =============================================================================
+
+def create_quantile_rank_pca(expression: np.ndarray,
+                             n_components: int = 50) -> np.ndarray:
+    """Rank-transform expression then PCA — robust to outliers and batch effects.
+
+    Rank-normalizing each gene across samples removes outlier sensitivity and
+    produces features orthogonal to standard PCA (which operates on raw values).
+
+    Returns:
+        (n_samples, n_components) PCA of rank-transformed expression
+    """
+    from sklearn.decomposition import PCA
+    from scipy.stats import rankdata
+
+    n_samples, n_genes = expression.shape
+    n_components = min(n_components, n_genes, n_samples)
+
+    # Rank-transform each gene (column) across samples
+    ranked = np.zeros_like(expression, dtype=np.float32)
+    for j in range(n_genes):
+        ranked[:, j] = rankdata(expression[:, j], method='average')
+    # Normalize ranks to [0, 1]
+    ranked /= (n_samples + 1)
+
+    pca = PCA(n_components=n_components, random_state=42)
+    X = pca.fit_transform(ranked)
+
+    explained = pca.explained_variance_ratio_.sum()
+    print(f"    Quantile-rank PCA: {n_components} components, {explained:.1%} variance")
+    return X.astype(np.float32)
+
+
+def create_corr_modules(expression: np.ndarray,
+                        n_modules: int = 30,
+                        n_top_genes: int = 3000) -> np.ndarray:
+    """Gene co-expression module eigengenes via spectral clustering.
+
+    Clusters genes by correlation, then takes the first principal component
+    of each cluster as the module eigengene. Captures co-regulation networks.
+
+    Returns:
+        (n_samples, n_modules) module eigengene matrix
+    """
+    from sklearn.cluster import SpectralClustering
+    from sklearn.preprocessing import StandardScaler
+
+    n_samples, n_genes = expression.shape
+    n_top_genes = min(n_top_genes, n_genes)
+    n_modules = min(n_modules, n_top_genes)
+
+    # Select top variable genes for tractable correlation matrix
+    variances = np.var(expression, axis=0)
+    top_idx = np.argsort(variances)[-n_top_genes:]
+    X_top = expression[:, top_idx]
+
+    # Standardize
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_top)
+
+    # Compute gene-gene correlation (absolute, for unsigned modules)
+    corr = np.abs(np.corrcoef(X_scaled.T))
+    corr = np.nan_to_num(corr, nan=0.0)
+
+    # Spectral clustering on correlation affinity
+    clustering = SpectralClustering(
+        n_clusters=n_modules,
+        affinity='precomputed',
+        random_state=42,
+        assign_labels='kmeans',
+    )
+    labels = clustering.fit_predict(corr)
+
+    # Module eigengenes: first PC of each cluster
+    eigengenes = np.zeros((n_samples, n_modules), dtype=np.float32)
+    from sklearn.decomposition import PCA
+
+    for k in range(n_modules):
+        member_idx = np.where(labels == k)[0]
+        if len(member_idx) < 2:
+            eigengenes[:, k] = X_scaled[:, member_idx[0]] if len(member_idx) == 1 else 0.0
+            continue
+        pca = PCA(n_components=1, random_state=42)
+        eigengenes[:, k] = pca.fit_transform(X_scaled[:, member_idx]).ravel()
+
+    print(f"    Corr modules: {n_modules} modules from {n_top_genes} genes")
+    return eigengenes
+
+
+def create_chromosome_arm(expression: np.ndarray,
+                          gene_names: np.ndarray) -> np.ndarray:
+    """Per-chromosome-arm mean expression — captures chromosomal instability.
+
+    Large-scale copy number alterations (e.g., arm-level gains/losses) shift
+    mean expression of all genes on that arm. This is a simple proxy for CIN
+    that requires only expression data.
+
+    Returns:
+        (n_samples, n_arms) arm-level mean expression (~39-44 arms)
+    """
+    from kirby.representations.data import gene_chr_arm_map
+
+    chr_map = gene_chr_arm_map()
+    gene_to_idx = {g: i for i, g in enumerate(gene_names)}
+
+    # Group genes by arm
+    arm_genes = {}
+    for gene, arm in chr_map.items():
+        if gene in gene_to_idx:
+            if arm not in arm_genes:
+                arm_genes[arm] = []
+            arm_genes[arm].append(gene_to_idx[gene])
+
+    arm_names = sorted(arm_genes.keys())
+    if not arm_names:
+        raise RuntimeError(
+            "No genes matched chromosome arm map. "
+            "Ensure gene_names contains HUGO symbols (e.g., TP53, EGFR)."
+        )
+
+    X = np.zeros((expression.shape[0], len(arm_names)), dtype=np.float32)
+
+    for j, arm in enumerate(arm_names):
+        idx = arm_genes[arm]
+        if idx:
+            X[:, j] = expression[:, idx].mean(axis=1)
+
+    print(f"    Chromosome arm: {len(arm_names)} arms")
+    return X
+
+
+def create_autoencoder50(expression: np.ndarray,
+                         n_bottleneck: int = 50,
+                         n_top_genes: int = 5000,
+                         epochs: int = 50,
+                         lr: float = 1e-3) -> np.ndarray:
+    """2-layer autoencoder bottleneck — nonlinear manifold representation.
+
+    Learns a compressed nonlinear representation via reconstruction loss.
+    Captures structure that PCA/NMF/ICA (all linear) cannot.
+
+    Returns:
+        (n_samples, n_bottleneck) bottleneck activations
+    """
+    try:
+        import torch
+        import torch.nn as nn
+        from torch.utils.data import DataLoader, TensorDataset
+    except ImportError:
+        raise ImportError("torch required for autoencoder: pip install torch")
+
+    from sklearn.preprocessing import StandardScaler
+
+    n_samples, n_genes = expression.shape
+    n_top_genes = min(n_top_genes, n_genes)
+
+    # Select top variable genes
+    variances = np.var(expression, axis=0)
+    top_idx = np.argsort(variances)[-n_top_genes:]
+    X_sub = expression[:, top_idx]
+
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_sub).astype(np.float32)
+
+    input_dim = X_scaled.shape[1]
+    hidden_dim = max(n_bottleneck * 4, 200)
+
+    class AE(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.encoder = nn.Sequential(
+                nn.Linear(input_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, n_bottleneck),
+                nn.ReLU(),
+            )
+            self.decoder = nn.Sequential(
+                nn.Linear(n_bottleneck, hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, input_dim),
+            )
+
+        def forward(self, x):
+            z = self.encoder(x)
+            return self.decoder(z), z
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = AE().to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    criterion = nn.MSELoss()
+
+    dataset = TensorDataset(torch.FloatTensor(X_scaled))
+    loader = DataLoader(dataset, batch_size=64, shuffle=True)
+
+    model.train()
+    for epoch in range(epochs):
+        total_loss = 0.0
+        for (batch,) in loader:
+            batch = batch.to(device)
+            recon, _ = model(batch)
+            loss = criterion(recon, batch)
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item() * batch.shape[0]
+
+    # Extract bottleneck activations
+    model.eval()
+    with torch.no_grad():
+        X_tensor = torch.FloatTensor(X_scaled).to(device)
+        _, Z = model(X_tensor)
+        bottleneck = Z.cpu().numpy()
+
+    del model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    final_loss = total_loss / n_samples
+    print(f"    Autoencoder: {n_bottleneck}D bottleneck, {epochs} epochs, "
+          f"final loss={final_loss:.4f}")
+    return bottleneck.astype(np.float32)
+
+
+def create_sparse_pca50(expression: np.ndarray,
+                        n_components: int = 50,
+                        n_top_genes: int = 5000) -> np.ndarray:
+    """Sparse PCA with L1 penalty — interpretable components with zero loadings.
+
+    SparsePCA encourages most gene loadings to be zero, producing components
+    that are easier to interpret biologically and orthogonal to standard PCA.
+
+    Returns:
+        (n_samples, n_components) sparse PCA features
+    """
+    from sklearn.decomposition import SparsePCA
+    from sklearn.preprocessing import StandardScaler
+
+    n_samples, n_genes = expression.shape
+    n_top_genes = min(n_top_genes, n_genes)
+    n_components = min(n_components, n_top_genes, n_samples)
+
+    # Select top variable genes for tractability
+    variances = np.var(expression, axis=0)
+    top_idx = np.argsort(variances)[-n_top_genes:]
+    X_sub = expression[:, top_idx]
+
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_sub)
+
+    spca = SparsePCA(n_components=n_components, random_state=42,
+                     max_iter=100, n_jobs=1)
+    X_sparse = spca.fit_transform(X_scaled)
+
+    # Report sparsity
+    n_nonzero = np.count_nonzero(spca.components_)
+    n_total = spca.components_.size
+    sparsity = 1.0 - n_nonzero / n_total
+    print(f"    Sparse PCA: {n_components} components, {sparsity:.1%} sparsity")
+    return X_sparse.astype(np.float32)
 
 
 # =============================================================================
