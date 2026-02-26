@@ -36,25 +36,27 @@ def main():
     print(f"\nKIRBY_MODELS_DIR: {os.environ.get('KIRBY_MODELS_DIR', '(not set)')}")
     print(f"Python: {sys.executable}")
 
-    # Check paths
-    print("\n--- Path Checks ---")
+    # Check paths — use KIRBY_MODELS_DIR if set, otherwise fall back to ~/kirby_models
+    models_dir = os.environ.get('KIRBY_MODELS_DIR', os.path.expanduser('~/kirby_models'))
+    print(f"\n--- Path Checks (models_dir={models_dir}) ---")
     checks = [
-        ("GROVER repo", ['~/kirby_models/grover', '~/repos/grover']),
-        ("GROVER weights", ['~/kirby_models/grover/grover_large.pt', '~/repos/grover/grover_large.pt']),
-        ("Chemformer repo", ['~/kirby_models/Chemformer', '~/repos/Chemformer']),
+        ("GROVER repo", [f'{models_dir}/grover', '~/kirby_models/grover', '~/repos/grover']),
+        ("GROVER weights", [f'{models_dir}/grover/grover_large.pt', '~/kirby_models/grover/grover_large.pt']),
+        ("Chemformer repo", [f'{models_dir}/Chemformer', '~/kirby_models/Chemformer', '~/repos/Chemformer']),
         ("Chemformer weights", [
-            '~/kirby_models/Chemformer/models/pre-trained/combined/step=1000000.ckpt',
+            f'{models_dir}/Chemformer/models/pre-trained/combined/step=1000000.ckpt',
+            f'{models_dir}/Chemformer/step=1000000.ckpt',
             '~/kirby_models/Chemformer/step=1000000.ckpt',
-            '~/repos/Chemformer/models/pre-trained/combined/step=1000000.ckpt',
         ]),
-        ("mol2vec weights", ['~/kirby_models/model_300dim.pkl']),
-        ("MolCLR repo", ['~/kirby_models/MolCLR', '~/repos/MolCLR']),
-        ("MolCLR weights", ['~/kirby_models/MolCLR/ckpt/pretrained_gin/checkpoints/model.pth']),
-        ("GraphMVP repo", ['~/kirby_models/GraphMVP', '~/repos/GraphMVP']),
+        ("mol2vec weights", [f'{models_dir}/model_300dim.pkl', '~/kirby_models/model_300dim.pkl']),
+        ("MolCLR repo", [f'{models_dir}/MolCLR', '~/kirby_models/MolCLR', '~/repos/MolCLR']),
+        ("MolCLR weights", [f'{models_dir}/MolCLR/ckpt/pretrained_gin/checkpoints/model.pth']),
+        ("GraphMVP repo", [f'{models_dir}/GraphMVP', '~/kirby_models/GraphMVP', '~/repos/GraphMVP']),
         ("GraphMVP weights", [
-            '~/kirby_models/GraphMVP/MoleculeSTM_weights/pretrained_GraphMVP/GraphMVP_C/model.pth',
-            '~/kirby_models/GraphMVP/pretrained_models/GraphMVP.pth',
+            f'{models_dir}/GraphMVP/MoleculeSTM_weights/pretrained_GraphMVP/GraphMVP_C/model.pth',
+            f'{models_dir}/GraphMVP/pretrained_models/GraphMVP.pth',
         ]),
+        ("materials repo (SMI-TED/MHG-GNN)", [f'{models_dir}/materials']),
     ]
 
     for name, paths in checks:
