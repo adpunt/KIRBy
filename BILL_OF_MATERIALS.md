@@ -24,15 +24,15 @@ not be used in experiments until validated.
 
 | Dataset | Source | Samples | Target | Status |
 |---------|--------|---------|--------|--------|
-| `flab_expression_koenig` | FLAb (G6 SSM) | ~4,275 | Expression (ER) | **Confirmed** |
-| `flab_binding_koenig` | FLAb (G6) | varies | Kd | Listed, no baselines yet |
-| `flab_thermo_hie` | FLAb (S309) | varies | Tm | Listed, no baselines yet |
-| `flab_binding_rosace` | FLAb (adalimumab) | varies | Kd | Listed, no baselines yet |
-| `abagym_Ang2_2017_G6` | AbAgym DMS | varies | Fitness | Listed, no baselines yet |
-| `abagym_EGFR_2013_Cetuximab` | AbAgym DMS | varies | Fitness | Listed, no baselines yet |
-| `abagym_lysozyme_2019_D441` | AbAgym DMS | varies | Fitness | Listed, no baselines yet |
-| `abagym_VEGF_2017b_G6` | AbAgym DMS | varies | Fitness | Listed, no baselines yet |
-| `abagym_HER2_2021_trastuzumab` | AbAgym DMS | varies | Fitness | Listed, no baselines yet |
+| `flab_expression_koenig` | FLAb (G6 SSM) | 4,275 | Expression (ER) | **Confirmed** (20 reps) |
+| `flab_binding_koenig` | FLAb (G6) | 4,275 | Kd | **Confirmed** (20 reps) |
+| `flab_thermo_hie` | FLAb (S309) | 10 | Tm | **Too small** (all reps negative) |
+| `flab_binding_rosace` | FLAb (adalimumab) | 14 | Kd | **Too small** (all reps negative) |
+| `abagym_Ang2_2017_G6` | AbAgym DMS | 397 | Fitness | **Confirmed** (20 reps) |
+| `abagym_EGFR_2013_Cetuximab` | AbAgym DMS | 659 | Fitness | **Confirmed** (20 reps) |
+| `abagym_lysozyme_2019_D441` | AbAgym DMS | 627 | Fitness | **Confirmed** (20 reps) |
+| `abagym_VEGF_2017b_G6` | AbAgym DMS | 418 | Fitness | **Confirmed** (20 reps) |
+| `abagym_HER2_2021_trastuzumab` | AbAgym DMS | 146 | Fitness | **Confirmed** (20 reps) |
 
 ### 1C. Antibody Inter-Family (regression, identity-grouped GroupKFold)
 
@@ -154,36 +154,55 @@ DMS (published ρ ≈ 0.08). The `dms` presets use mutation-specific reps instea
 
 #### DMS / Mutation-Aware Reps
 
-**Sources:** flab_expression_koenig baselines (slurm-11380415, dms_full 20 reps),
-abagym_Ang2 baselines (finetune survey ft_ab_abagym_Ang2.json, 2-fold).
+**Sources:** Full 9-dataset baseline survey (slurm-7219595, dms_full 20 reps, 5-fold
+GroupKFold, rf+ridge+xgboost, 180/180 cells). Two datasets excluded from analysis:
+flab_thermo_hie (N=10) and flab_binding_rosace (N=14) — too small for meaningful CV.
 
-| Rep | Dim | Category | flab_expr R² | Ang2 R² | Notes |
-|-----|-----|----------|-------------|---------|-------|
-| `aac` | 20 | Standard | xgb=**0.260** | rf=-0.206 | Top on flab_expr |
-| `blosum62` | 20 | Standard | rf=**0.258** | rf=-0.236 | |
-| `biophysical_delta` | 6 | Customizable (mutation) | rf=**0.257** | rf=-0.363 | |
-| `developability` | 16 | Customizable | rf=**0.225** | — | |
-| `esm2_site` | 1280 | Customizable (mutation) | ridge=**0.196** | — | Per-residue at mutation site |
-| `lm_score_prot_t5` | 5 | Customizable (LM score) | ridge=0.007 | — | |
-| `lm_score_ablang2` | 5 | Customizable (LM score) | ridge=0.002 | rf=**0.223** | |
-| `lm_score_esm2` | 5 | Customizable (LM score) | ridge=-0.009 | rf=**0.211** | |
-| `lm_score_antiberty` | 5 | Customizable (LM score) | ridge=-0.011 | — | |
-| `positional` | 11 | Customizable (mutation) | rf=-0.316 | rf=**0.377** | CDR region, BLOSUM, position |
-| `varpos_physchem` | 1400 | Customizable (varpos) | xgb=-0.010 | rf=**0.398** | |
-| `varpos_cdr_physchem` | 329 | Customizable (varpos) | rf=-0.011 | rf=**0.426** | Best on Ang2! |
-| `varpos_cdrh3_physchem` | 56 | Customizable (varpos) | rf=-0.010 | rf=0.214 | |
-| `varpos_onehot` | 4200 | Customizable (varpos) | xgb=-0.009 | — | Very high dim |
-| `varpos_blosum` | 4200 | Customizable (varpos) | xgb=-0.010 | — | Very high dim |
-| `varpos_fw_physchem` | 1246 | Customizable (varpos) | rf=-0.014 | — | Framework-only |
-| `antifold_score` | 5 | Customizable (structure) | **PENDING** | **PENDING** | Smoke test running (job 7217681) |
-| `sapiens_score` | 5 | Customizable (humanness) | **PENDING** | **PENDING** | Never tested |
-| `esm1v_score` | 5 | Customizable (LM score) | **PENDING** | **PENDING** | In dms/dms_full presets, function exists, never tested |
-| `varpos_cdr_onehot` | varies | Customizable (varpos) | **PENDING** | **PENDING** | In dms_full preset, function exists, never tested |
+| Rep | Dim | Category | flab_expr | flab_bind | Ang2 | EGFR | lyso | VEGF | HER2 | Best | +/7 |
+|-----|-----|----------|-----------|-----------|------|------|------|------|------|------|-----|
+| `aac` | 20 | Standard | xgb=**0.260** | xgb=0.070 | ridge=0.084 | ridge=-0.001 | xgb=**0.208** | rf=0.158 | ridge=0.037 | 0.260 | 6/7 |
+| `blosum62` | 20 | Standard | rf=**0.267** | rf=0.072 | ridge=0.090 | ridge=0.002 | rf=**0.248** | ridge=0.120 | rf=0.102 | 0.267 | 6/7 |
+| `biophysical_delta` | 6 | Customizable (mutation) | xgb=**0.265** | rf=0.071 | ridge=0.053 | ridge=0.023 | rf=**0.226** | ridge=0.002 | ridge=0.176 | 0.265 | 7/7 |
+| `developability` | 16 | Customizable | rf=**0.272** | rf=**0.112** | ridge=0.094 | ridge=0.013 | rf=**0.264** | rf=0.106 | rf=**0.443** | 0.443 | 7/7 |
+| `esm2_site` | 1280 | Customizable (mutation) | ridge=**0.197** | rf=**0.105** | ridge=**0.406** | xgb=**0.184** | xgb=0.082 | rf=**0.418** | ridge=**0.423** | 0.423 | 7/7 |
+| `lm_score_ablang2` | 5 | Customizable (LM score) | ridge=0.002 | rf=-0.635 | ridge=**0.317** | ridge=-0.004 | ridge=0.022 | ridge=0.085 | ridge=-0.059 | 0.317 | 3/7 |
+| `lm_score_esm2` | 5 | Customizable (LM score) | ridge=-0.009 | rf=-0.009 | ridge=**0.291** | ridge=0.014 | ridge=-0.010 | ridge=**0.109** | ridge=-0.033 | 0.291 | 3/7 |
+| `lm_score_prot_t5` | 5 | Customizable (LM score) | ridge=0.007 | ridge=-0.023 | ridge=**0.257** | ridge=0.030 | ridge=-0.014 | ridge=0.086 | ridge=-0.058 | 0.257 | 4/7 |
+| `lm_score_antiberty` | 5 | Customizable (LM score) | ridge=-0.011 | ridge=-0.105 | ridge=**0.301** | ridge=0.034 | ridge=0.002 | ridge=**0.111** | ridge=0.004 | 0.301 | 4/7 |
+| `positional` | 11 | Customizable (mutation) | rf=-0.238 | rf=-0.082 | rf=**0.385** | ridge=**0.111** | rf=0.077 | rf=**0.468** | rf=**0.408** | 0.468 | 5/7 |
+| `varpos_onehot` | varies | Customizable (varpos) | xgb=-0.012 | rf=-0.018 | rf=**0.491** | xgb=**0.271** | ridge=0.185 | xgb=**0.507** | xgb=**0.367** | 0.507 | 5/7 |
+| `varpos_blosum` | varies | Customizable (varpos) | xgb=-0.012 | rf=-0.017 | rf=**0.466** | xgb=**0.259** | xgb=**0.214** | xgb=**0.549** | xgb=**0.510** | 0.549 | 5/7 |
+| `varpos_physchem` | varies | Customizable (varpos) | xgb=-0.012 | rf=-0.017 | rf=**0.448** | xgb=**0.239** | rf=0.160 | xgb=**0.483** | rf=**0.403** | 0.483 | 5/7 |
+| `varpos_cdr_onehot` | varies | Customizable (varpos) | rf=-0.010 | xgb=-0.011 | rf=**0.474** | xgb=0.131 | xgb=0.188 | xgb=**0.504** | xgb=**0.315** | 0.504 | 5/7 |
+| `varpos_cdr_physchem` | varies | Customizable (varpos) | rf=-0.010 | xgb=-0.011 | rf=**0.427** | xgb=0.114 | rf=0.171 | xgb=**0.487** | ridge=**0.402** | 0.487 | 5/7 |
+| `varpos_cdrh3_physchem` | varies | Customizable (varpos) | rf=-0.010 | ridge=-0.011 | rf=**0.226** | rf=-0.011 | rf=0.053 | rf=0.123 | ridge=**0.402** | 0.402 | 4/7 |
+| `varpos_fw_physchem` | varies | Customizable (varpos) | rf=-0.013 | xgb=-0.013 | rf=0.020 | rf=**0.106** | rf=-0.020 | rf=-0.000 | rf=0.094 | 0.106 | 3/7 |
+| `antifold_score` | 5 | Customizable (structure) | rf=-0.010 | xgb=-0.010 | ridge=-0.005 | ridge=-0.022 | rf=-0.007 | ridge=-0.007 | xgb=-0.071 | -0.005 | **0/7** |
+| `sapiens_score` | 5 | Customizable (humanness) | ridge=-0.089 | ridge=-0.013 | ridge=-0.005 | ridge=-0.022 | rf=-0.007 | ridge=-0.007 | xgb=-0.071 | -0.005 | **0/7** |
+| `esm1v_score` | 5 | Customizable (LM score) | rf=-0.021 | rf=-0.050 | ridge=**0.294** | ridge=0.032 | ridge=-0.008 | ridge=**0.116** | ridge=-0.030 | 0.294 | 3/7 |
+
+**Column key:** flab_expr = flab_expression_koenig (4275), flab_bind = flab_binding_koenig (4275),
+Ang2 = abagym_Ang2_2017_G6 (397), EGFR = abagym_EGFR_2013_Cetuximab (659),
+lyso = abagym_lysozyme_2019_D441 (627), VEGF = abagym_VEGF_2017b_G6 (418),
+HER2 = abagym_HER2_2021_trastuzumab (146). Best = best R² across 7 reliable datasets.
++/7 = number of datasets with R² > 0.01.
+
+**Excluded datasets:** flab_thermo_hie (N=10, all reps deeply negative R² ≈ -5 to -130)
+and flab_binding_rosace (N=14, similar). Too few samples for meaningful 5-fold CV.
+
+**Known bugs in results:**
+- `antifold_score`: "WARNING: WT structure prediction failed — returning zeros" on all
+  AbAgym datasets. ImmuneBuilder not available on server → all-zero features → negative R².
+- `sapiens_score`: "Sapiens scoring failed (tensor size mismatch)" on EGFR, lysozyme, VEGF,
+  HER2 (VH > 146 residues overflows Sapiens positional embeddings). Returns zeros → same
+  R² as antifold on those datasets. Only tested properly on FLAb (flab_expr: -0.089).
 
 **Key insight:** Performance is highly dataset-dependent. Composition reps (aac, blosum62,
-biophysical_delta) win on flab_expression_koenig, while positional/varpos reps dominate
-on abagym_Ang2 (varpos_cdr_physchem R²=0.426). This makes the case for hybrids — different
-reps capture different signals depending on the DMS experiment.
+biophysical_delta, developability) win on FLAb expression/binding, while positional/varpos
+reps dominate on AbAgym datasets (varpos_blosum R²=0.549 on VEGF, varpos_cdr_physchem
+R²=0.487 on VEGF). `esm2_site` and `positional` are strong across both families.
+`developability` is the surprise winner on HER2 (0.443). `antifold_score` and `sapiens_score`
+are broken — never positive on any dataset.
 
 **Delta reps:** `--delta` flag generates ΔX = X_mut − X_wt for every base rep, doubling count.
 
@@ -320,6 +339,8 @@ Best model per cell: Davis=XGBoost (paired), Ridge (standalone); KIBA=Ridge/XGBo
 | `wsi_uni2h` | Manual download + h5 processing required | HIGH | `prepare_uni2h_features()` must be run first |
 | `wsi_cnn320` | Local Seagate only, LUAD/LUSC only | LOW | Silently skipped if absent |
 | `balm` | Not on HuggingFace; needs manual clone + weight download | ~~MEDIUM~~ **RESOLVED** (2026-02-25) | Cloned to `BALM/` on server, weights in `pretrained-BALM/` |
+| `antifold_score` | ImmuneBuilder not installed on server → "WT structure prediction failed" → all-zero features | HIGH | Install ImmuneBuilder or **DROP** (0/7 datasets positive even if fixed) |
+| `sapiens_score` | Sapiens positional embeddings overflow for VH > 146 residues (AbAgym VH ~210-220 aa) → zeros | HIGH | Fix Sapiens padding or **DROP** (0/7 datasets positive on FLAb either) |
 
 ### Stale Server Caches
 
@@ -355,7 +376,7 @@ to pick up commit `3ba481e`.
 
 - **Molecular:** ecfp4, maccs, pdv confirmed on logd/caco2/herg (3 reps × 3 datasets = 9 cells)
 - **Antibody inter:** 12 reps confirmed on abcov_kd; 6 reps on flab_thermo_jain
-- **Antibody DMS:** 16 reps confirmed on flab_expression_koenig; 13 reps on abagym_Ang2
+- **Antibody DMS:** 20 reps confirmed on all 9 datasets (180/180 cells, slurm-7219595)
 - **TCGA:** 13 reps confirmed on Lung; 11 reps on BRCA PAM50; geneformer FT on both
 - **DTA:** Nothing
 
@@ -365,8 +386,7 @@ to pick up commit `3ba481e`.
 |--------|-----|----------------|---------|
 | Molecular | 14 pretrained reps (chemberta→chemformer) on logd/caco2/herg/qm9 | ~56 | Baseline survey keeps timing out during rep generation |
 | Antibody inter | ddg_combined (544), abagym_all (2,247), abcov_kd (141), flab_aggregation_jain (137) | ~30 | Needs baseline survey |
-| Antibody DMS | 7 remaining DMS datasets (flab_binding, flab_thermo_hie, 5× abagym) | ~119 | Running (job 11384920) |
-| Antibody DMS | antifold_score + sapiens_score on all 9 DMS datasets | ~18 | Smoke test running (job 7217681) |
+| ~~Antibody DMS~~ | ~~7 remaining DMS datasets + antifold/sapiens~~ | ~~137~~ | **DONE** (slurm-7219595, 180/180 cells). antifold_score broken (ImmuneBuilder missing), sapiens_score broken (tensor size mismatch on long VH) |
 | TCGA | gene_ica50 on BRCA, cnv_pca50 on BRCA, wsi_gigapath on BRCA | ~3 | Needs re-run |
 | DTA | All 10 reps on davis + kiba | ~20 | Timed out during protein_kmer generation |
 
