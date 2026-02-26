@@ -5,7 +5,7 @@ performance. This document is the single source of truth for what KIRBy supports
 and what actually works. Representations without confirmed performance data should
 not be used in experiments until validated.
 
-**Last updated:** 2026-02-25
+**Last updated:** 2026-02-26
 
 ---
 
@@ -38,12 +38,14 @@ not be used in experiments until validated.
 
 | Dataset | Source | Samples | Target | Status |
 |---------|--------|---------|--------|--------|
-| `sabdab_affinity` | SKEMPI 2.0 | ~4,000 | ΔΔG | Listed, no baselines yet |
-| `abcov_kd` | Ab-CoV (via FLAb) | varies | -log Kd | Listed, no baselines yet |
-| `flab_thermo_jain` | FLAb | ~137 | Tm | **Partial** (6 reps, see §2B) |
-| `flab_aggregation_jain` | FLAb | varies | AC-SINS | Listed, no baselines yet |
-| `abagym_all` | AbAgym (pooled) | ~2,247 | Fitness | Listed, no baselines yet |
-| `abbind` | AbBind | ~230 | ΔΔG | Listed, no baselines yet |
+| `ddg_combined` | SKEMPI 2.0 + AB-Bind (deduplicated) | 544 | ΔΔG | **Confirmed** (loads OK, paired) |
+| `abcov_kd` | Ab-CoV (via FLAb) | 141 | -log Kd | **Confirmed** (loads OK, paired) |
+| `flab_thermo_jain` | FLAb (Jain 2017) | 137 | Tm | **Partial** (6 reps, R²=0.14, see §2B) |
+| `flab_aggregation_jain` | FLAb (Jain 2017) | 137 | AC-SINS | **Confirmed** (loads OK, paired) |
+| `abagym_all` | AbAgym (pooled 5 experiments) | 2,247 | Fitness | **Confirmed** (loads OK, paired) |
+
+**Dropped:** `sabdab_affinity` (was SKEMPI 2.0 only, replaced by `ddg_combined`),
+`abbind` / `abbind_spm` (strict subsets of `ddg_combined`).
 
 ### 1D. TCGA (classification/regression, TSS-grouped StratifiedGroupKFold)
 
@@ -135,8 +137,8 @@ flab_thermo_jain (baseline survey job 11384921, 6 reps only).
 
 **Observation:** All inter-family reps are negative on abcov_kd (141 samples, very hard).
 Only ablang2 is positive on flab_thermo_jain. LM embeddings do not clearly help for
-inter-family antibody tasks on these small datasets. Needs testing on sabdab_affinity
-(~4,000 samples) for a fairer comparison.
+inter-family antibody tasks on these small datasets. Needs testing on ddg_combined
+(~1,000-1,200 samples) for a fairer comparison.
 
 **Note:** Full-sequence LM embeddings are known to be near-useless for intra-family
 DMS (published ρ ≈ 0.08). The `dms` presets use mutation-specific reps instead.
@@ -152,7 +154,7 @@ DMS (published ρ ≈ 0.08). The `dms` presets use mutation-specific reps instea
 
 #### DMS / Mutation-Aware Reps
 
-**Sources:** flab_expression_koenig baselines (slurm-11380415, dms_full 17 reps),
+**Sources:** flab_expression_koenig baselines (slurm-11380415, dms_full 20 reps),
 abagym_Ang2 baselines (finetune survey ft_ab_abagym_Ang2.json, 2-fold).
 
 | Rep | Dim | Category | flab_expr R² | Ang2 R² | Notes |
@@ -175,6 +177,8 @@ abagym_Ang2 baselines (finetune survey ft_ab_abagym_Ang2.json, 2-fold).
 | `varpos_fw_physchem` | 1246 | Customizable (varpos) | rf=-0.014 | — | Framework-only |
 | `antifold_score` | 5 | Customizable (structure) | **PENDING** | **PENDING** | Smoke test running (job 7217681) |
 | `sapiens_score` | 5 | Customizable (humanness) | **PENDING** | **PENDING** | Never tested |
+| `esm1v_score` | 5 | Customizable (LM score) | **PENDING** | **PENDING** | In dms/dms_full presets, function exists, never tested |
+| `varpos_cdr_onehot` | varies | Customizable (varpos) | **PENDING** | **PENDING** | In dms_full preset, function exists, never tested |
 
 **Key insight:** Performance is highly dataset-dependent. Composition reps (aac, blosum62,
 biophysical_delta) win on flab_expression_koenig, while positional/varpos reps dominate
@@ -194,8 +198,8 @@ but not expected to help given the ESM-2 results.
 - `all_server` (13): + esm2, prot_t5, ab_roberta, balm, pigen, structural
 - `mutation_fast` (7): kmer, aac, blosum62, physicochemical, esm2, prot_t5, varpos_physchem
 - `mutation_full` (10): + antiberty, ablang2, varpos_onehot
-- `dms` (10): lm_score_ablang2, lm_score_esm2, positional, biophysical_delta + augmentations (aac, blosum62, varpos_physchem, varpos_cdr_physchem, varpos_cdrh3_physchem, antifold_score, sapiens_score)
-- `dms_full` (19): all mutation-aware + full varpos arsenal + antifold_score + sapiens_score
+- `dms` (12): lm_score_ablang2, lm_score_esm2, positional, biophysical_delta, aac, blosum62, varpos_physchem, varpos_cdr_physchem, varpos_cdrh3_physchem, antifold_score, sapiens_score, esm1v_score
+- `dms_full` (20): all mutation-aware + full varpos arsenal (incl. varpos_cdr_onehot) + antifold_score + sapiens_score + esm1v_score
 
 ### 2C. TCGA Representations
 
@@ -211,13 +215,18 @@ and BRCA PAM50. Models: rf, xgboost.
 | `gene_nmf50` | 50 | Standard | rf=**0.951** | rf=0.834 | sklearn | YES |
 | `gene_ica50` | 50 | Standard | xgb=0.896 | **PENDING** | sklearn | YES |
 | `gene_stats` | 15 | Standard | rf=0.710 | rf=0.502 | scipy | YES |
-| `gene_hallmark` | 50 | Pathway (ssGSEA) | FT-survey=0.818 | FT-survey=0.481 | gseapy | **BROKEN** (GMF files missing on server) |
-| `gene_kegg` | ~318 | Pathway (ssGSEA) | **FAILED** | **FAILED** | gseapy | **BROKEN** (GMF files missing) |
-| `gene_reactome` | ~1000 | Pathway (ssGSEA) | **FAILED** | **FAILED** | gseapy | **BROKEN** (ssGSEA n_samples bug) |
-| `gene_oncogenic` | ~189 | Pathway (ssGSEA) | **FAILED** | **FAILED** | gseapy | **BROKEN** (GMF files missing) |
-| `gene_progeny` | 14 | Pathway (decoupler) | **FAILED** | **FAILED** | decoupler | **BROKEN** (502 / NAType errors) |
-| `gene_dorothea` | ~300 | Pathway (decoupler) | **FAILED** | **FAILED** | decoupler | **BROKEN** (NAType errors) |
-| `gene_combined_pathway` | ~364 | Pathway (combined) | **FAILED** | **FAILED** | gseapy+decoupler | **BROKEN** (all deps broken) |
+| `gene_hallmark` | ~50 | Pathway (mean z-score) | FT-survey=0.818 | FT-survey=0.481 | local gene sets | **FIXED** (local Enrichr gene sets, no runtime downloads) |
+| `gene_kegg` | ~320 | Pathway (mean z-score) | **PENDING** | **PENDING** | local gene sets | **FIXED** (local Enrichr gene sets) |
+| `gene_reactome` | ~1818 | Pathway (mean z-score) | **PENDING** | **PENDING** | local gene sets | **FIXED** (local Enrichr gene sets) |
+| `gene_oncogenic` | ~189 | Pathway (mean z-score) | **PENDING** | **PENDING** | local gene sets | **FIXED** (local Enrichr gene sets) |
+| `gene_progeny` | 14 | Pathway (weighted) | **PENDING** | **PENDING** | local gene sets | **FIXED** (local OmniPath weights, no API calls) |
+| `gene_dorothea` | ~367 | Pathway (weighted) | **PENDING** | **PENDING** | local gene sets | **FIXED** (local OmniPath regulons, no API calls) |
+| `gene_combined_pathway` | ~431 | Pathway (combined) | **PENDING** | **PENDING** | local gene sets | **FIXED** (all deps now local) |
+| `gene_quantile_rank` | 50 | Expression (rank PCA) | **PENDING** | **PENDING** | sklearn | YES |
+| `gene_corr_modules` | 30 | Expression (eigengene) | **PENDING** | **PENDING** | sklearn | YES |
+| `gene_chromosome_arm` | ~44 | Genomic (chr arm) | **PENDING** | **PENDING** | local gene sets | YES |
+| `gene_autoencoder50` | 50 | Expression (AE) | **PENDING** | **PENDING** | torch | YES |
+| `gene_sparse_pca50` | 50 | Expression (sparse) | **PENDING** | **PENDING** | sklearn | YES |
 | `gene_immune` | ~22 | Computed (immune) | rf=0.793 | rf=0.524 | hardcoded | YES |
 
 #### Foundation Model Embeddings (GPU)
@@ -259,13 +268,13 @@ data leakage. **Proceed to Phase 2 full run.**
 
 **Presets:**
 - `fast` (5): pca100, hallmark, progeny, ctranspath, phikon
-- `fast+diverse` (8): + nmf50, stats, immune
+- `fast+diverse` (9): + nmf50, stats, immune, quantile_rank
 - `multimodal` (12): + mutation, cnv_gistic, rppa, mirna_top200, clinical
 - `fast+learned` (17): expanded genomic + geneformer + scfoundation + 5 WSI
-- `all` (29): everything
+- `all` (34): everything (19 expression + 2 foundation + 5 multi-omic + 8 WSI)
 - `genomic_fast` (3): pca100, hallmark, progeny
 - `genomic_diverse` (10): multi-omic without WSI
-- `genomic_all` (20): all genomic + foundation models + multi-omic
+- `genomic_all` (25): all genomic + 5 new reps + foundation models + multi-omic
 
 ### 2D. DTA Representations
 
@@ -294,10 +303,10 @@ data leakage. **Proceed to Phase 2 full run.**
 |-----|-------|----------|------------|
 | `gene_mutation` | Xena MC3 returns 403 | HIGH | Needs manual pre-download or removal from presets |
 | `clinical` | Xena phenotype returns 403 | HIGH | Needs manual pre-download or removal from presets |
-| `gene_hallmark` | Enrichr download may fail on compute nodes | MEDIUM | Works if gseapy cached from login node first |
-| `gene_progeny` | decoupler column name changes across versions | LOW | Fixed: `_normalize_decoupler_net()` handles v1+v2 |
-| `gene_dorothea` | decoupler NAType in weight column | LOW | Fixed: `pd.to_numeric(errors='coerce')` |
-| `gene_reactome` | ssGSEA orientation when n_pathways > n_samples | LOW | Fixed: `_extract_ssgsea_matrix()` sample-name matching |
+| `gene_hallmark` | ~~Enrichr download may fail~~ | ~~MEDIUM~~ **RESOLVED** | Now uses local gene sets, no runtime downloads |
+| `gene_progeny` | ~~decoupler API 502 / NAType~~ | ~~LOW~~ **RESOLVED** | Now uses local OmniPath weights, no API calls |
+| `gene_dorothea` | ~~decoupler NAType in weight column~~ | ~~LOW~~ **RESOLVED** | Now uses local OmniPath regulons, no API calls |
+| `gene_reactome` | ~~ssGSEA orientation bug~~ | ~~LOW~~ **RESOLVED** | Now uses local gene sets, no runtime downloads |
 | `wsi_titan` | HuggingFace gated, awaiting access | MEDIUM | Skip unless access granted |
 | `wsi_uni2h` | Manual download + h5 processing required | HIGH | `prepare_uni2h_features()` must be run first |
 | `wsi_cnn320` | Local Seagate only, LUAD/LUSC only | LOW | Silently skipped if absent |
@@ -308,14 +317,19 @@ data leakage. **Proceed to Phase 2 full run.**
 The following cached `.npy` files on the server are from buggy runs and must be
 invalidated before re-running:
 
-- `gene_reactome` — ssGSEA orientation bug produced (n_pathways, n_samples) instead of (n_samples, n_pathways)
-- `gene_kegg` — same bug, only visible when n_pathways > n_samples
-- `gene_oncogenic` — same bug
-- `gene_progeny` — decoupler column mismatch
-- `gene_dorothea` — decoupler NAType crash
+- `gene_reactome` — old ssGSEA orientation bug (now uses local gene sets, different dimensions)
+- `gene_kegg` — same (now ~320 features vs old ~186)
+- `gene_oncogenic` — same
+- `gene_progeny` — old decoupler format (now uses local weights)
+- `gene_dorothea` — old decoupler format (now ~367 TFs vs old ~300)
+- `gene_hallmark` — old ssGSEA format (now mean z-score, same ~50 features)
+- `gene_combined_pathway` — depends on all above
 
-The cache validation code in `find_best_hybrid_tcga.py` now detects stale caches
-automatically (n_samples mismatch → regenerate).
+**All pathway caches should be deleted after this update** since the scoring
+method changed from ssGSEA/decoupler to mean z-score/weighted linear scoring.
+The cache validation code detects n_samples mismatches but NOT dimension changes
+for the same n_samples, so manual deletion is recommended:
+`rm ~/.cache/kirby/reps/tcga_*/gene_{hallmark,kegg,reactome,oncogenic,progeny,dorothea,combined_pathway}.npy`
 
 ### DTA Import Issue
 
@@ -341,7 +355,7 @@ to pick up commit `3ba481e`.
 | Domain | Gap | Estimated cells | Blocker |
 |--------|-----|----------------|---------|
 | Molecular | 14 pretrained reps (chemberta→chemformer) on logd/caco2/herg/qm9 | ~56 | Baseline survey keeps timing out during rep generation |
-| Antibody inter | sabdab_affinity (~4K), abbind, abagym_all (larger datasets) | ~36 | Running (job 11384921) |
+| Antibody inter | ddg_combined (544), abagym_all (2,247), abcov_kd (141), flab_aggregation_jain (137) | ~30 | Needs baseline survey |
 | Antibody DMS | 7 remaining DMS datasets (flab_binding, flab_thermo_hie, 5× abagym) | ~119 | Running (job 11384920) |
 | Antibody DMS | antifold_score + sapiens_score on all 9 DMS datasets | ~18 | Smoke test running (job 7217681) |
 | TCGA | gene_ica50 on BRCA, cnv_pca50 on BRCA, wsi_gigapath on BRCA | ~3 | Needs re-run |
@@ -351,10 +365,10 @@ to pick up commit `3ba481e`.
 
 | Item | Issue | Fix |
 |------|-------|-----|
-| gene_hallmark, gene_kegg, gene_oncogenic | MSigDB `.gmt` files missing on server | Pre-download from login node: `gseapy.get_library()` |
-| gene_reactome | ssGSEA returns wrong n_samples | Code fix landed but stale cache may persist |
-| gene_progeny, gene_dorothea | decoupler API 502 / NAType errors | `pip install decoupler>=1.6`, pre-cache from login node |
-| gene_combined_pathway | All dependencies broken | Fix hallmark + progeny first |
+| ~~gene_hallmark, gene_kegg, gene_oncogenic~~ | ~~MSigDB `.gmt` files missing~~ | **FIXED**: Now uses local Enrichr gene sets (mean z-score scoring) |
+| ~~gene_reactome~~ | ~~ssGSEA returns wrong n_samples~~ | **FIXED**: Now uses local gene sets, no ssGSEA |
+| ~~gene_progeny, gene_dorothea~~ | ~~decoupler API 502 / NAType~~ | **FIXED**: Now uses local OmniPath weights |
+| ~~gene_combined_pathway~~ | ~~All dependencies broken~~ | **FIXED**: All deps now local |
 | gene_mutation, clinical | Xena 403 Forbidden | Pre-download MC3/phenotype from login node or remove from presets |
 | wsi_titan | HF gated, access denied | Apply for access or **DROP** |
 | wsi_uni2h | Features never prepared | Run `prepare_uni2h_features()` or **DROP** |
@@ -376,14 +390,15 @@ Reps that are broken AND low-value should be removed from presets to save comput
 
 ### Prerequisites before re-running baseline survey
 
-1. `git pull` on server (picks up all fixes)
-2. Delete stale caches: `rm ~/.cache/kirby/reps/tcga_*/gene_reactome.npy` etc.
-3. Pre-download on login node: `python -c "import gseapy; gseapy.get_library('h.all.v2023.2.Hs.symbols.gmt')"`
-4. Ensure `gseapy>=1.0`, `decoupler>=1.6`, `anndata` are installed
+1. `git pull` on server (picks up all fixes including local gene sets)
+2. Delete stale pathway caches: `rm ~/.cache/kirby/reps/tcga_*/gene_{hallmark,kegg,reactome,oncogenic,progeny,dorothea,combined_pathway}.npy`
+3. ~~Pre-download gseapy gene sets~~ **No longer needed** — gene sets are now bundled as JSON files
+4. ~~Ensure gseapy/decoupler installed~~ **No longer needed** for pathway reps (gseapy still needed for `gene_immune` Bindea ssGSEA)
 5. For DTA: no PyTDC needed (fixed), but protein_kmer needs longer timeout
 6. **Molecular pretrained reps:** Run `bash scripts/setup_server_models.sh` (one-time),
    then `sbatch tests/slurm_scripts/run_precache_molecular.sh` to precache all reps
    in isolated subprocesses before running the baseline survey
+7. **New reps:** `gene_autoencoder50` requires torch; all others use only sklearn/scipy
 
 ---
 
