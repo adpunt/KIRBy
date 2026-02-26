@@ -93,12 +93,12 @@ run_molecular() {
 }
 
 # =============================================================================
-# ANTIBODY INTRA-FAMILY (DMS): 9 datasets × 'dms_full' preset (17 reps)
+# ANTIBODY INTRA-FAMILY (DMS): 9 datasets × 'dms_full' preset (20 reps)
 # Variable-position reps incl. CDR-filtered variants + all LM scores.
 # =============================================================================
 run_antibody_intra() {
     echo ""
-    echo "========== ANTIBODY INTRA-FAMILY (dms_full preset, 17 reps) =========="
+    echo "========== ANTIBODY INTRA-FAMILY (dms_full preset, 20 reps) =========="
 
     for dataset in \
         flab_expression_koenig \
@@ -117,20 +117,21 @@ run_antibody_intra() {
 }
 
 # =============================================================================
-# ANTIBODY INTER-FAMILY: 6 datasets × 'all_server' preset (13 reps)
+# ANTIBODY INTER-FAMILY: 5 datasets × 'all_server' preset (14 reps)
 # Full-sequence LM embeddings + structural + hand-crafted.
+# Dropped: sabdab_affinity (was SKEMPI-only, replaced by ddg_combined),
+#          abbind/abbind_spm (strict subsets of ddg_combined).
 # =============================================================================
 run_antibody_inter() {
     echo ""
-    echo "========== ANTIBODY INTER-FAMILY (all_server preset, 13 reps) =========="
+    echo "========== ANTIBODY INTER-FAMILY (all_server preset, 14 reps) =========="
 
     for dataset in \
+        ddg_combined \
+        abagym_all \
         abcov_kd \
         flab_thermo_jain \
-        flab_aggregation_jain \
-        abagym_all \
-        sabdab_affinity \
-        abbind; do
+        flab_aggregation_jain; do
 
         run tests/find_best_hybrid_antibody.py \
             "$dataset" all_server "ab_inter_${dataset}" --augment

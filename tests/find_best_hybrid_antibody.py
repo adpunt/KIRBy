@@ -7,16 +7,17 @@ antibody representation generation, sequence identity grouping, and output
 formatting. The actual search logic lives in the domain-agnostic library.
 
 Datasets (all regression):
-  - sabdab_affinity: SKEMPI 2.0 ΔΔG (binding affinity changes)
-  - sabdab_structure: SAbDab resolution (X-ray structure quality)
-  - sabdab_humanness: germline identity score
+  - ddg_combined: SKEMPI 2.0 + AB-Bind ΔΔG, deduplicated (inter-family)
+  - flab_*: FLAb benchmark (intra- or inter-family)
+  - abcov_kd: Ab-CoV binding affinity (inter-family)
+  - abagym_*: AbAgym DMS (intra-family, or abagym_all pooled inter-family)
 
 Usage:
     # Quick local test
-    python find_best_hybrid_antibody.py sabdab_affinity --reps fast --search fast
+    python find_best_hybrid_antibody.py ddg_combined --reps fast --search fast
 
     # Medium search with language models
-    python find_best_hybrid_antibody.py sabdab_affinity --reps fast+lm --search medium
+    python find_best_hybrid_antibody.py ddg_combined --reps fast+lm --search medium
 
     # Full search on server
     python find_best_hybrid_antibody.py data.csv --heavy-col VH --light-col VL --target-col ddG \\
@@ -222,33 +223,17 @@ _DMS_AUG_REPS = {
 # DATA LOADING
 # =============================================================================
 
-def _download_skempi() -> pd.DataFrame:
-    """Download or load cached SKEMPI 2.0 data."""
-    import requests
-
-    cache_dir = Path.home() / '.cache' / 'kirby'
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    cached = cache_dir / 'skempi_v2.csv'
-
-    if not cached.exists():
-        url = "https://life.bsc.es/pid/skempi2/database/download/skempi_v2.csv"
-        print(f"  Downloading SKEMPI 2.0 from {url}...")
-        resp = requests.get(url, timeout=120)
-        resp.raise_for_status()
-        cached.write_bytes(resp.content)
-
-    return pd.read_csv(cached, sep=';')
-
-
 def load_dataset(name_or_path: str, heavy_col: str = 'VH',
                  light_col: str = 'VL', target_col: str = 'target'
                  ) -> Tuple[List[str], Optional[List[str]], np.ndarray, str, Dict]:
     """Load antibody dataset.
 
     Built-in:
-      - sabdab_affinity: SKEMPI 2.0 ΔΔG (regression)
+      - ddg_combined: SKEMPI 2.0 + AB-Bind ΔΔG, deduplicated (inter-family)
       - flab_*: FLAb benchmark datasets (intra/inter-family)
       - abcov_*: Ab-CoV therapeutic datasets (inter-family)
+      - abagym_*: AbAgym DMS datasets (intra-family, or abagym_all pooled)
+      - sabdab_affinity: DEPRECATED alias for ddg_combined
 
     Custom: CSV with heavy_seq, light_seq (optional), target columns.
 
@@ -297,32 +282,6 @@ def load_dataset(name_or_path: str, heavy_col: str = 'VH',
         return (data['heavy_seqs'], data['light_seqs'], data['labels'],
                 data['task_type'], metadata)
 
-    # AB-Bind single-point mutations only
-    if name_lower == 'abbind_spm':
-        from kirby.datasets.abbind import load_abbind_dataset
-        data = load_abbind_dataset(single_point_only=True)
-        metadata = {
-            'wildtype_heavy': data['wildtype_heavy'],
-            'wildtype_light': data['wildtype_light'],
-            'mutations': data['mutations'],
-            'is_intra_family': data['is_intra_family'],
-        }
-        return (data['heavy_seqs'], data['light_seqs'], data['labels'],
-                data['task_type'], metadata)
-
-    # AbBind dataset (all mutations)
-    if name_lower == 'abbind':
-        from kirby.datasets.abbind import load_abbind_dataset
-        data = load_abbind_dataset()
-        metadata = {
-            'wildtype_heavy': data['wildtype_heavy'],
-            'wildtype_light': data['wildtype_light'],
-            'mutations': data['mutations'],
-            'is_intra_family': data['is_intra_family'],
-        }
-        return (data['heavy_seqs'], data['light_seqs'], data['labels'],
-                data['task_type'], metadata)
-
     # Combined ΔΔG dataset (SKEMPI 2.0 + AB-Bind, deduplicated)
     if name_lower == 'ddg_combined':
         from kirby.datasets.ddg_combined import load_ddg_combined_dataset
@@ -337,72 +296,24 @@ def load_dataset(name_or_path: str, heavy_col: str = 'VH',
                 data['task_type'], metadata)
 
     if name_lower == 'sabdab_affinity':
-        df = _download_skempi()
+        import warnings
+        warnings.warn(
+            "'sabdab_affinity' is deprecated — it loaded SKEMPI 2.0, not SAbDab. "
+            "Use 'ddg_combined' instead (SKEMPI 2.0 + AB-Bind, deduplicated).",
+            DeprecationWarning, stacklevel=2,
+        )
+        from kirby.datasets.ddg_combined import load_ddg_combined_dataset
+        data = load_ddg_combined_dataset()
+        metadata = {
+            'wildtype_heavy': data['wildtype_heavy'],
+            'wildtype_light': data['wildtype_light'],
+            'mutations': data['mutations'],
+            'is_intra_family': data['is_intra_family'],
+        }
+        return (data['heavy_seqs'], data['light_seqs'], data['labels'],
+                data['task_type'], metadata)
 
-        # SKEMPI has Protein 1/2 sequences and ΔΔG
-        # Extract antibody VH sequences from the Mutation column entries
-        # Use a simplified approach: get unique Ab-Ag pairs
-        if 'Affinity_mut_parsed' in df.columns:
-            target = 'Affinity_mut_parsed'
-        elif 'DDG' in df.columns:
-            target = 'DDG'
-        else:
-            # Try to find ΔΔG column
-            ddg_cols = [c for c in df.columns if 'ddg' in c.lower() or 'DDG' in c]
-            if not ddg_cols:
-                raise ValueError(f"Cannot find ΔΔG column. Available: {list(df.columns)}")
-            target = ddg_cols[0]
-
-        # Get sequence columns
-        seq_cols = [c for c in df.columns if 'Sequence' in c or 'sequence' in c]
-        if len(seq_cols) >= 2:
-            heavy_seqs_raw = df[seq_cols[0]].tolist()
-            light_seqs_raw = df[seq_cols[1]].tolist() if len(seq_cols) > 1 else None
-        else:
-            # Fall back: use Protein column
-            prot_cols = [c for c in df.columns if 'Protein' in c]
-            heavy_seqs_raw = df[prot_cols[0]].tolist() if prot_cols else None
-            light_seqs_raw = None
-
-        if heavy_seqs_raw is None:
-            raise ValueError(f"Cannot find sequence columns. Available: {list(df.columns)}")
-
-        labels_raw = pd.to_numeric(df[target], errors='coerce')
-
-        # Filter valid entries
-        valid = labels_raw.notna()
-        if heavy_seqs_raw:
-            valid &= pd.Series(heavy_seqs_raw).notna() & (pd.Series(heavy_seqs_raw).str.len() > 10)
-
-        heavy_seqs = [s for s, v in zip(heavy_seqs_raw, valid) if v]
-        light_seqs = None
-        if light_seqs_raw:
-            light_seqs = [s for s, v in zip(light_seqs_raw, valid) if v]
-            # Remove entries with missing light chains
-            has_light = [isinstance(s, str) and len(s) > 10 for s in light_seqs]
-            if not all(has_light):
-                light_seqs = None  # Fall back to heavy-only
-
-        labels = labels_raw[valid].values.astype(np.float64)
-
-        # Deduplicate by heavy sequence: take median
-        dedup = pd.DataFrame({'heavy': heavy_seqs, 'label': labels})
-        if light_seqs:
-            dedup['light'] = light_seqs
-            dedup = dedup.groupby(['heavy', 'light']).agg({'label': 'median'}).reset_index()
-            heavy_seqs = dedup['heavy'].tolist()
-            light_seqs = dedup['light'].tolist()
-        else:
-            dedup = dedup.groupby('heavy').agg({'label': 'median'}).reset_index()
-            heavy_seqs = dedup['heavy'].tolist()
-
-        labels = dedup['label'].values
-        print(f"  Loaded {len(heavy_seqs)} antibodies from SKEMPI 2.0 (ΔΔG)")
-        metadata = {'wildtype_heavy': None, 'wildtype_light': None,
-                     'mutations': [[] for _ in heavy_seqs], 'is_intra_family': False}
-        return heavy_seqs, light_seqs, labels, 'regression', metadata
-
-    elif name_or_path.endswith('.csv') or os.path.exists(name_or_path):
+    if name_or_path.endswith('.csv') or os.path.exists(name_or_path):
         print(f"Loading custom dataset from {name_or_path}...")
         df = pd.read_csv(name_or_path)
 
@@ -450,8 +361,8 @@ def load_dataset(name_or_path: str, heavy_col: str = 'VH',
     else:
         raise ValueError(
             f"Unknown dataset: {name_or_path}. "
-            f"Built-in options: sabdab_affinity, flab_*, abcov_*, abagym_*, "
-            f"abbind, abbind_spm, ddg_combined. Or provide a CSV path."
+            f"Built-in options: ddg_combined, flab_*, abcov_*, abagym_*, "
+            f"sabdab_affinity (deprecated). Or provide a CSV path."
         )
 
 
@@ -1101,8 +1012,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  %(prog)s sabdab_affinity --reps fast --search fast
-  %(prog)s sabdab_affinity --reps fast+lm --search medium
+  %(prog)s ddg_combined --reps inter_family --search fast
+  %(prog)s ddg_combined --reps inter_family --search medium
   %(prog)s data.csv --heavy-col VH --light-col VL --target-col ddG --reps all_server
 
 Output:
@@ -1115,7 +1026,7 @@ Output:
     )
 
     parser.add_argument('dataset', type=str,
-                       help="'sabdab_affinity' or path to CSV")
+                       help="'ddg_combined', 'abcov_kd', 'flab_*', 'abagym_*', or path to CSV")
     parser.add_argument('--heavy-col', type=str, default='VH',
                        help="Heavy chain column name (default: VH)")
     parser.add_argument('--light-col', type=str, default='VL',

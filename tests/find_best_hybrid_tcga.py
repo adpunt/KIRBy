@@ -81,8 +81,9 @@ REP_PRESETS = {
     'fast+diverse': [  # Maximally diverse paradigms, small footprint
         'gene_pca100', 'gene_hallmark', 'gene_progeny',
         'gene_nmf50', 'gene_stats', 'gene_immune',
+        'gene_quantile_rank',
         'wsi_ctranspath', 'wsi_phikon',
-    ],  # 8 reps
+    ],  # 9 reps
 
     'multimodal': [  # Cross-modality showcase
         'gene_pca100', 'gene_hallmark', 'gene_immune',
@@ -101,11 +102,13 @@ REP_PRESETS = {
     ],  # 17 reps
 
     'all': [
-        # Expression-derived (14)
+        # Expression-derived (18) + mutation (1)
         'gene_hvg2000', 'gene_pca100', 'gene_hallmark', 'gene_progeny',
         'gene_kegg', 'gene_dorothea', 'gene_combined_pathway',
         'gene_nmf50', 'gene_ica50', 'gene_stats',
         'gene_reactome', 'gene_oncogenic', 'gene_immune',
+        'gene_quantile_rank', 'gene_corr_modules', 'gene_chromosome_arm',
+        'gene_autoencoder50', 'gene_sparse_pca50',
         'gene_mutation',
         # Foundation model embeddings (2, GPU)
         'gene_geneformer', 'gene_scfoundation',
@@ -114,7 +117,7 @@ REP_PRESETS = {
         # WSI (8)
         'wsi_ctranspath', 'wsi_phikon', 'wsi_hoptimus0', 'wsi_gigapath', 'wsi_moco',
         'wsi_titan', 'wsi_uni2h', 'wsi_cnn320',
-    ],  # 29 reps
+    ],  # 34 reps
 
     # Genomic-only presets (no WSI)
     'genomic_fast': [
@@ -132,10 +135,12 @@ REP_PRESETS = {
         'gene_kegg', 'gene_dorothea', 'gene_combined_pathway',
         'gene_nmf50', 'gene_ica50', 'gene_stats',
         'gene_reactome', 'gene_oncogenic', 'gene_immune',
+        'gene_quantile_rank', 'gene_corr_modules', 'gene_chromosome_arm',
+        'gene_autoencoder50', 'gene_sparse_pca50',
         'gene_mutation',
         'gene_geneformer', 'gene_scfoundation',
         'cnv_gistic', 'cnv_pca50', 'rppa', 'mirna_top200',
-    ],  # 20 reps (clinical excluded — it's a different paradigm)
+    ],  # 25 reps (clinical excluded — it's a different paradigm)
 }
 
 _SEARCH_NAME_MAP = {
@@ -171,6 +176,12 @@ _REP_DISPATCH = {
     'gene_nmf50':            ('create_nmf50',             'genomic_expr'),
     'gene_ica50':            ('create_ica50',             'genomic_expr'),
     'gene_stats':            ('create_gene_stats',        'genomic_expr'),
+    'gene_quantile_rank':    ('create_quantile_rank_pca', 'genomic_expr'),
+    'gene_corr_modules':     ('create_corr_modules',      'genomic_expr'),
+    'gene_autoencoder50':    ('create_autoencoder50',     'genomic_expr'),
+    'gene_sparse_pca50':     ('create_sparse_pca50',      'genomic_expr'),
+    # Genomic needing gene_names (chromosome arm map): fn(expression, gene_names)
+    'gene_chromosome_arm':   ('create_chromosome_arm',    'genomic'),
     # Foundation model embeddings: fn(expression, gene_names) -> np.ndarray (GPU)
     'gene_geneformer':       ('create_geneformer_embeddings', 'genomic'),
     'gene_scfoundation':     ('create_scfoundation_embeddings', 'genomic'),
