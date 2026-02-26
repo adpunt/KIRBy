@@ -87,47 +87,95 @@ run() {
 }
 
 # =============================================================================
-# MOLECULAR: LoRA ChemBERTa + LoRA MolFormer on representative datasets
-# 'fast' preset (3 frozen reps) + 2 fine-tuned = 5 total reps
+# MOLECULAR: All fine-tuning methods on representative datasets
 # =============================================================================
 run_molecular() {
     echo ""
     echo "========== MOLECULAR FINE-TUNING SURVEY =========="
 
+    # LoRA (existing)
     for dataset in logd caco2 herg; do
         run tests/find_best_hybrid_molecular.py \
             "$dataset" fast "lora_chemberta,lora_molformer" \
-            "ft_mol_${dataset}"
+            "ft_mol_lora_${dataset}"
+    done
+
+    # LoRA rank sweep (rank 2 and 4, default is 8)
+    for rank in 2 4; do
+        for dataset in logd caco2 herg; do
+            run tests/find_best_hybrid_molecular.py \
+                "$dataset" fast "lora_chemberta,lora_molformer" \
+                "ft_mol_lora_r${rank}_${dataset}" \
+                --lora-rank "$rank"
+        done
+    done
+
+    # Freeze+Head
+    for dataset in logd caco2 herg; do
+        run tests/find_best_hybrid_molecular.py \
+            "$dataset" fast "freeze_chemberta,freeze_molformer" \
+            "ft_mol_freeze_${dataset}"
+    done
+
+    # GNN fine-tuning
+    for dataset in logd caco2 herg; do
+        run tests/find_best_hybrid_molecular.py \
+            "$dataset" fast "gnn_molclr,gnn_graphmvp" \
+            "ft_mol_gnn_${dataset}"
+    done
+
+    # Contrastive fine-tuning
+    for dataset in logd caco2 herg; do
+        run tests/find_best_hybrid_molecular.py \
+            "$dataset" fast "contrastive_chemberta,contrastive_molformer" \
+            "ft_mol_contrastive_${dataset}"
+    done
+
+    # GROVER fine-tuning
+    for dataset in logd caco2 herg; do
+        run tests/find_best_hybrid_molecular.py \
+            "$dataset" fast "grover_ft" \
+            "ft_mol_grover_${dataset}"
     done
 }
 
 # =============================================================================
-# ANTIBODY: LoRA ESM-2 + LoRA ESM-2-small + MLM ESM-2 on representative DMS
-# 'dms' preset (9 frozen reps) + 3 fine-tuned = 12 total reps
+# ANTIBODY: All fine-tuning methods on representative DMS datasets
 # =============================================================================
 run_antibody() {
     echo ""
     echo "========== ANTIBODY FINE-TUNING SURVEY =========="
 
-    # Intra-family (DMS): test on the largest/most representative dataset
+    # LoRA + MLM (existing)
     run tests/find_best_hybrid_antibody.py \
         flab_expression_koenig dms "lora_esm2,lora_esm2_small,mlm_esm2" \
-        "ft_ab_flab_expression_koenig" --delta
+        "ft_ab_lora_flab_expression_koenig" --delta
 
-    # Also test on a binding dataset to see if FT helps there
     run tests/find_best_hybrid_antibody.py \
         flab_binding_koenig dms "lora_esm2,lora_esm2_small,mlm_esm2" \
-        "ft_ab_flab_binding_koenig" --delta
+        "ft_ab_lora_flab_binding_koenig" --delta
 
-    # One AbAgym dataset as a third reference point
     run tests/find_best_hybrid_antibody.py \
         abagym_Ang2_2017_G6 dms "lora_esm2,lora_esm2_small,mlm_esm2" \
-        "ft_ab_abagym_Ang2" --delta
+        "ft_ab_lora_abagym_Ang2" --delta
+
+    # AbLang2 LoRA (newly fixed)
+    run tests/find_best_hybrid_antibody.py \
+        flab_expression_koenig dms "lora_ablang2" \
+        "ft_ab_lora_ablang2_flab_expression_koenig" --delta
+
+    # Freeze+Head
+    run tests/find_best_hybrid_antibody.py \
+        flab_expression_koenig dms "freeze_esm2,freeze_esm2_small,freeze_ablang2" \
+        "ft_ab_freeze_flab_expression_koenig" --delta
+
+    run tests/find_best_hybrid_antibody.py \
+        flab_binding_koenig dms "freeze_esm2,freeze_esm2_small,freeze_ablang2" \
+        "ft_ab_freeze_flab_binding_koenig" --delta
 }
 
 # =============================================================================
-# TCGA: Geneformer on classification tasks
-# 'fast' preset (5-8 frozen reps) + 1 fine-tuned = 6-9 total reps
+# TCGA: Geneformer + scFoundation on classification tasks
 # =============================================================================
 run_tcga() {
     echo ""
@@ -136,7 +184,11 @@ run_tcga() {
     for dataset in tcga_luad_vs_lusc tcga_brca_pam50; do
         run tests/find_best_hybrid_tcga.py \
             "$dataset" fast "geneformer" \
-            "ft_tcga_${dataset}"
+            "ft_tcga_geneformer_${dataset}"
+
+        run tests/find_best_hybrid_tcga.py \
+            "$dataset" fast "scfoundation" \
+            "ft_tcga_scfoundation_${dataset}"
     done
 }
 

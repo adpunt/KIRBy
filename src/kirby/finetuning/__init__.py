@@ -42,3 +42,33 @@ def make_antibody_mlm_factory(*args, **kwargs):
 def make_geneformer_factory(*args, **kwargs):
     from kirby.finetuning.tcga_geneformer import make_geneformer_factory as _f
     return _f(*args, **kwargs)
+
+
+def make_molecular_freeze_factory(*args, **kwargs):
+    from kirby.finetuning.molecular_freeze import make_molecular_freeze_factory as _f
+    return _f(*args, **kwargs)
+
+
+def make_antibody_freeze_factory(*args, **kwargs):
+    from kirby.finetuning.antibody_freeze import make_antibody_freeze_factory as _f
+    return _f(*args, **kwargs)
+
+
+def make_molecular_gnn_factory(*args, **kwargs):
+    from kirby.finetuning.molecular_gnn import make_molecular_gnn_factory as _f
+    return _f(*args, **kwargs)
+
+
+def make_molecular_contrastive_factory(*args, **kwargs):
+    from kirby.finetuning.molecular_contrastive import make_molecular_contrastive_factory as _f
+    return _f(*args, **kwargs)
+
+
+def make_molecular_grover_factory(*args, **kwargs):
+    from kirby.finetuning.molecular_grover import make_molecular_grover_factory as _f
+    return _f(*args, **kwargs)
+
+
+def make_scfoundation_factory(*args, **kwargs):
+    from kirby.finetuning.tcga_scfoundation import make_scfoundation_factory as _f
+    return _f(*args, **kwargs)

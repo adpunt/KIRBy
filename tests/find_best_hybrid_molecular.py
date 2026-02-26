@@ -963,7 +963,11 @@ Output:
                        help='Override number of CV folds (default: from speed tier)')
     parser.add_argument('--finetune', type=str, default=None,
                        help='Comma-separated fine-tuning methods: '
-                            'lora_chemberta, lora_molformer, mock_lora')
+                            'lora_chemberta, lora_molformer, '
+                            'freeze_chemberta, freeze_molformer, '
+                            'gnn_molclr, gnn_graphmvp, '
+                            'contrastive_chemberta, contrastive_molformer, '
+                            'grover_ft, mock_lora')
     parser.add_argument('--finetune-epochs', type=int, default=5,
                        help='Fine-tuning epochs per fold (default: 5)')
     parser.add_argument('--lora-rank', type=int, default=8,
@@ -1025,6 +1029,45 @@ Output:
                     dataset_name=dataset_name,
                     base_model=model_key,
                     lora_rank=args.lora_rank,
+                    epochs=args.finetune_epochs,
+                    cache=ft_cache,
+                )
+            elif method.startswith('freeze_'):
+                from kirby.finetuning.molecular_freeze import make_molecular_freeze_factory
+                model_key = method.replace('freeze_', '')
+                rep_factories[method] = make_molecular_freeze_factory(
+                    smiles_list=smiles,
+                    dataset_name=dataset_name,
+                    base_model=model_key,
+                    epochs=args.finetune_epochs,
+                    cache=ft_cache,
+                )
+            elif method.startswith('gnn_'):
+                from kirby.finetuning.molecular_gnn import make_molecular_gnn_factory
+                model_key = method.replace('gnn_', '')
+                rep_factories[method] = make_molecular_gnn_factory(
+                    smiles_list=smiles,
+                    dataset_name=dataset_name,
+                    base_model=model_key,
+                    epochs=args.finetune_epochs,
+                    cache=ft_cache,
+                )
+            elif method.startswith('contrastive_'):
+                from kirby.finetuning.molecular_contrastive import make_molecular_contrastive_factory
+                model_key = method.replace('contrastive_', '')
+                rep_factories[method] = make_molecular_contrastive_factory(
+                    smiles_list=smiles,
+                    dataset_name=dataset_name,
+                    base_model=model_key,
+                    lora_rank=args.lora_rank,
+                    epochs=args.finetune_epochs,
+                    cache=ft_cache,
+                )
+            elif method == 'grover_ft':
+                from kirby.finetuning.molecular_grover import make_molecular_grover_factory
+                rep_factories[method] = make_molecular_grover_factory(
+                    smiles_list=smiles,
+                    dataset_name=dataset_name,
                     epochs=args.finetune_epochs,
                     cache=ft_cache,
                 )

@@ -19,6 +19,7 @@ References:
 - OASis: Prihoda et al. (2022) MAbs (humanness scoring)
 """
 
+import os
 import numpy as np
 import torch
 import torch.nn as nn
@@ -3475,4 +3476,282 @@ def create_variable_position_encoding(
     region_tag = f"_{region}" if region != 'all' else ''
     print(f"  Generated varpos_{encoding}{region_tag} features: ({n}, {result.shape[1]}) "
           f"[{len(heavy_var)} heavy + {len(light_var)} light variable positions]")
+    return result
+
+
+# ---------------------------------------------------------------------------
+# ESM-1v masked marginal mutation scores (5D)
+# ---------------------------------------------------------------------------
+
+def compute_esm1v_mutation_scores(
+    wt_seq: str,
+    mut_seqs: List[str],
+    mutations: List[List[Dict]],
+) -> np.ndarray:
+    """Compute masked marginal mutation scores using ESM-1v ensemble.
+
+    ESM-1v is specifically designed for variant effect prediction.
+    Loads each of the 5 ESM-1v models one at a time to save memory,
+    computes masked marginal scores, and averages across models.
+
+    For each mutation: score = log P(mut_aa | masked_context) - log P(wt_aa | masked_context)
+
+    Output features (5D per sample):
+    - Mean score across mutations (1D)
+    - Min score (most destabilizing) (1D)
+    - Max score (most favorable) (1D)
+    - Sum of scores (total predicted effect) (1D)
+    - Number of unfavorable mutations (score < 0) (1D)
+
+    Falls back to zeros if ESM-1v unavailable.
+
+    Args:
+        wt_seq: Wildtype heavy chain sequence.
+        mut_seqs: List of mutant sequences.
+        mutations: Per-sample mutation lists.
+
+    Returns:
+        np.ndarray: (n_samples, 5) ESM-1v mutation score features.
+    """
+    n = len(mut_seqs)
+    features = np.zeros((n, 5), dtype=np.float64)
+    standard_aas = 'ACDEFGHIKLMNPQRSTVWY'
+
+    try:
+        from transformers import AutoTokenizer, EsmForMaskedLM
+
+        model_ids = [f'facebook/esm1v_t33_650M_UR90S_{i}' for i in range(1, 6)]
+
+        # Build AA -> token ID mapping (same for all ESM-1v models)
+        tokenizer = AutoTokenizer.from_pretrained(model_ids[0])
+        aa_to_col = {}
+        for aa in standard_aas:
+            tid = tokenizer.convert_tokens_to_ids(aa)
+            if tid != tokenizer.unk_token_id:
+                aa_to_col[aa] = tid
+
+        if len(aa_to_col) < 18:
+            print(f"  ESM-1v vocab mapping failed ({len(aa_to_col)} AAs), returning zeros")
+            return features
+
+        # Collect per-model scores and average
+        all_model_wt_logprobs = []
+
+        for m_idx, model_id in enumerate(model_ids):
+            print(f"  ESM-1v model {m_idx + 1}/5: {model_id}...")
+            try:
+                model = EsmForMaskedLM.from_pretrained(model_id)
+                model.eval()
+
+                # Compute WT logprobs for this model
+                inputs = tokenizer(wt_seq, return_tensors='pt',
+                                   truncation=True, max_length=1024)
+                with torch.no_grad():
+                    output = model(**inputs)
+                logprobs = torch.log_softmax(output.logits[0], dim=-1)
+                wt_logprobs = logprobs[1:-1].numpy()  # strip BOS/EOS
+                all_model_wt_logprobs.append(wt_logprobs)
+
+                # Free memory before loading next model
+                del model
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+            except Exception as e:
+                print(f"    Model {m_idx + 1} failed: {e}")
+                continue
+
+        if not all_model_wt_logprobs:
+            print(f"  All ESM-1v models failed, returning zeros")
+            return features
+
+        # Average logprobs across successful models
+        avg_wt_logprobs = np.mean(all_model_wt_logprobs, axis=0)
+
+        # Score each sample's mutations
+        for i, muts in enumerate(mutations):
+            if not muts:
+                continue
+            scores = []
+            for m in muts:
+                if m.get('chain') != 'heavy':
+                    continue
+                pos = m['pos']
+                if pos >= len(avg_wt_logprobs):
+                    continue
+                wt_aa = m.get('wt_aa', '-')
+                mut_aa = m.get('mut_aa', '-')
+                if wt_aa in aa_to_col and mut_aa in aa_to_col:
+                    wt_col = aa_to_col[wt_aa]
+                    mut_col = aa_to_col[mut_aa]
+                    if max(wt_col, mut_col) < avg_wt_logprobs.shape[1]:
+                        score = float(avg_wt_logprobs[pos, mut_col]
+                                      - avg_wt_logprobs[pos, wt_col])
+                        scores.append(score)
+            if scores:
+                features[i, 0] = np.mean(scores)
+                features[i, 1] = np.min(scores)
+                features[i, 2] = np.max(scores)
+                features[i, 3] = np.sum(scores)
+                features[i, 4] = sum(1 for s in scores if s < 0)
+
+        n_models = len(all_model_wt_logprobs)
+        print(f"  Generated esm1v_score features ({n_models}/5 models): ({n}, 5)")
+
+    except Exception as e:
+        print(f"  ESM-1v unavailable ({e}), returning zeros")
+
+    return features
+
+
+# ---------------------------------------------------------------------------
+# SaProt structure-aware embeddings (1280D)
+# ---------------------------------------------------------------------------
+
+def create_saprot_embeddings(
+    heavy_seqs: List[str],
+    light_seqs: Optional[List[str]] = None,
+) -> np.ndarray:
+    """Create SaProt structure-aware protein embeddings.
+
+    SaProt interleaves amino acid tokens with 3Di structural tokens from
+    Foldseek, creating a structure-aware sequence representation.
+
+    Pipeline:
+    1. Predict structure with ABodyBuilder2 (reuse from structural.py)
+    2. Run Foldseek to get 3Di sequence (fallback: masked tokens '#')
+    3. Interleave AA + 3Di: 'M#d#V#p#...'
+    4. Encode with SaProt_650M_AF2 and mean-pool (1280D)
+
+    Args:
+        heavy_seqs: Heavy chain sequences.
+        light_seqs: Light chain sequences (optional, encoded separately and concatenated).
+
+    Returns:
+        np.ndarray: (n_samples, 1280 or 2560) SaProt embeddings.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+
+    n = len(heavy_seqs)
+
+    def _get_3di_sequence(aa_seq, pdb_path=None):
+        """Get 3Di sequence for a protein sequence using Foldseek."""
+        if pdb_path is None or not os.path.exists(pdb_path):
+            # No structure available — return masked tokens
+            return '#' * len(aa_seq)
+
+        foldseek_bin = shutil.which('foldseek')
+        if foldseek_bin is None:
+            return '#' * len(aa_seq)
+
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                db_path = os.path.join(tmpdir, 'query')
+                result = subprocess.run(
+                    [foldseek_bin, 'structurealphabet', pdb_path, db_path],
+                    capture_output=True, text=True, timeout=60,
+                )
+                # Read the 3Di sequence from the output
+                ss_file = db_path + '_ss'
+                if os.path.exists(ss_file):
+                    with open(ss_file) as f:
+                        lines = f.readlines()
+                        if len(lines) >= 2:
+                            tdi = lines[1].strip()
+                            if len(tdi) >= len(aa_seq):
+                                return tdi[:len(aa_seq)]
+            return '#' * len(aa_seq)
+        except Exception:
+            return '#' * len(aa_seq)
+
+    def _predict_structures(seqs):
+        """Predict structures using ABodyBuilder2 if available."""
+        pdb_paths = [None] * len(seqs)
+        try:
+            from ImmuneBuilder import ABodyBuilder2
+            predictor = ABodyBuilder2()
+            cache_dir = os.path.join(
+                os.environ.get('KIRBY_CACHE_DIR', os.path.expanduser('~/.cache/kirby')),
+                'saprot_structures',
+            )
+            os.makedirs(cache_dir, exist_ok=True)
+
+            import hashlib
+            for i, seq in enumerate(seqs):
+                seq_hash = hashlib.md5(seq.encode()).hexdigest()[:12]
+                pdb_path = os.path.join(cache_dir, f'{seq_hash}.pdb')
+                if os.path.exists(pdb_path):
+                    pdb_paths[i] = pdb_path
+                    continue
+                try:
+                    antibody = predictor.predict({'H': seq})
+                    antibody.save(pdb_path)
+                    pdb_paths[i] = pdb_path
+                except Exception:
+                    pass
+        except ImportError:
+            pass  # No ImmuneBuilder — all structures remain None
+        return pdb_paths
+
+    def _encode_chain(seqs):
+        """Encode a list of sequences with SaProt."""
+        from transformers import AutoTokenizer, AutoModel
+
+        model_id = 'westlake-repl/SaProt_650M_AF2'
+        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+        model = AutoModel.from_pretrained(model_id, trust_remote_code=True)
+        model.eval()
+
+        # Predict structures for 3Di tokens
+        pdb_paths = _predict_structures(seqs)
+
+        # Build SaProt input: interleave AA + 3Di
+        saprot_seqs = []
+        for seq, pdb_path in zip(seqs, pdb_paths):
+            tdi = _get_3di_sequence(seq, pdb_path)
+            # Interleave: 'MVLK...' + 'dpva...' -> 'Md#Vp#Lv#Ka#...'
+            interleaved = ''.join(
+                aa + (tdi[j] if j < len(tdi) else '#')
+                for j, aa in enumerate(seq)
+            )
+            saprot_seqs.append(interleaved)
+
+        # Encode in batches
+        all_embs = []
+        batch_size = 4
+
+        for i in range(0, len(saprot_seqs), batch_size):
+            batch = saprot_seqs[i:i + batch_size]
+            inputs = tokenizer(
+                batch, padding=True, truncation=True,
+                max_length=1024, return_tensors='pt',
+            )
+            with torch.no_grad():
+                outputs = model(**inputs)
+            # Mean pool over non-padding positions
+            hidden = outputs.last_hidden_state  # (B, L, 1280)
+            mask = inputs['attention_mask'].unsqueeze(-1)  # (B, L, 1)
+            pooled = (hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
+            all_embs.extend(pooled.cpu().numpy())
+
+        del model
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        return np.array(all_embs, dtype=np.float32)
+
+    # Encode heavy chain
+    print(f"  Encoding {n} heavy chains with SaProt...")
+    heavy_embs = _encode_chain(heavy_seqs)
+
+    if light_seqs:
+        print(f"  Encoding {n} light chains with SaProt...")
+        light_embs = _encode_chain(light_seqs)
+        result = np.hstack([heavy_embs, light_embs])
+    else:
+        result = heavy_embs
+
+    print(f"  Generated saprot features: ({n}, {result.shape[1]})")
     return result

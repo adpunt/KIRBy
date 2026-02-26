@@ -593,7 +593,7 @@ Output:
                        help='Override number of CV folds (default: from speed tier)')
     parser.add_argument('--finetune', type=str, default=None,
                        help='Comma-separated fine-tuning methods: '
-                            'geneformer, mock_lora')
+                            'geneformer, scfoundation, mock_lora')
     parser.add_argument('--finetune-epochs', type=int, default=3,
                        help='Fine-tuning epochs per fold (default: 3)')
     parser.add_argument('--no-ft-cache', action='store_true',
@@ -656,6 +656,17 @@ Output:
             elif method == 'geneformer':
                 from kirby.finetuning.tcga_geneformer import make_geneformer_factory
                 rep_factories['geneformer'] = make_geneformer_factory(
+                    expression_data=expression,
+                    gene_names=gene_names,
+                    sample_ids=sample_ids,
+                    dataset_name=args.dataset,
+                    task_type=task_type,
+                    epochs=args.finetune_epochs,
+                    cache=ft_cache,
+                )
+            elif method == 'scfoundation':
+                from kirby.finetuning.tcga_scfoundation import make_scfoundation_factory
+                rep_factories['scfoundation'] = make_scfoundation_factory(
                     expression_data=expression,
                     gene_names=gene_names,
                     sample_ids=sample_ids,
