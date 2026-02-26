@@ -278,20 +278,29 @@ data leakage. **Proceed to Phase 2 full run.**
 
 ### 2D. DTA Representations
 
-**No baselines yet.** Survey failed on old code (PyTDC import). Server needs updated code.
+Cold-target GroupKFold CV (5-fold). "Paired" = drug rep + protein_aac or protein rep + drug_ecfp4.
+Davis: 30K pairs (68 drugs × 442 proteins). KIBA: 30K subsample (2111 drugs × 229 proteins).
+Best model per cell: Davis=XGBoost (paired), Ridge (standalone); KIBA=Ridge/XGBoost varies.
 
-| Rep | Dim | Category | Davis R² | KIBA R² | Deps |
-|-----|-----|----------|----------|---------|------|
-| `drug_ecfp4` | 2048 | Standard (fingerprint) | **PENDING** | **PENDING** | rdkit |
-| `drug_maccs` | 167 | Standard (fingerprint) | **PENDING** | **PENDING** | rdkit |
-| `drug_pdv` | 200 | Standard (descriptor) | **PENDING** | **PENDING** | rdkit |
+| Rep | Dim | Category | Davis R² (paired) | KIBA R² (standalone) | Deps |
+|-----|-----|----------|:-:|:-:|------|
+| `drug_ecfp4` | 2048 | Standard (fingerprint) | 0.446 | 0.328 | rdkit |
+| `drug_maccs` | 167 | Standard (fingerprint) | 0.440 | 0.319 | rdkit |
+| `drug_pdv` | 200 | Standard (descriptor) | **0.457** | **0.338** | rdkit |
 | `drug_chemberta` | 384 | Pretrained (drug LM) | **PENDING** | **PENDING** | transformers |
 | `drug_molformer` | 768 | Pretrained (drug LM) | **PENDING** | **PENDING** | transformers |
 | `drug_selformer` | 768 | Pretrained (drug LM) | **PENDING** | **PENDING** | transformers |
 | `protein_esm2` | 1280 | Pretrained (protein LM) | **PENDING** | **PENDING** | transformers |
-| `protein_aac` | 20 | Standard (composition) | **PENDING** | **PENDING** | None |
-| `protein_descriptors` | 30 | Standard (biophysical) | **PENDING** | **PENDING** | None |
-| `protein_kmer` | varies | Standard (sequence) | **PENDING** | **PENDING** | None |
+| `protein_aac` | 20 | Standard (composition) | 0.446 | -0.006 | None |
+| `protein_descriptors` | 30 | Standard (biophysical) | 0.424 | -0.005 | None |
+| `protein_kmer` | 8000 | Standard (sequence) | **PENDING** | **PENDING** | None |
+| **all_concat** | 2465 | All lightweight | **0.463** | 0.329 | — |
+
+**Notes:**
+- Davis: Protein info is essential — paired R² ≈ 0.45 vs standalone ≈ 0.22. XGBoost captures drug-protein interactions.
+- KIBA: Protein info *hurts* under cold-target split (only 229 targets). Drug-only standalone beats paired. Ridge dominates.
+- `drug_pdv` is the strongest drug rep on both datasets.
+- Remaining LM reps (4) + protein_kmer need server GPU run.
 
 ---
 
