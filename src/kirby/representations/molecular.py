@@ -1315,7 +1315,7 @@ def create_chembert(smiles_list, batch_size=32, device=None):
                 batch,
                 padding=True,
                 truncation=True,
-                max_length=512,
+                max_length=128,  # ChemBERT max_position_embeddings is 128
                 return_tensors='pt'
             )
             inputs = {k: v.to(device) for k, v in encoded.items()}

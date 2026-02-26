@@ -9,6 +9,7 @@ References:
 - PyTorch Geometric QM9 dataset
 """
 
+import os
 import numpy as np
 import torch
 import os.path as osp
@@ -70,7 +71,20 @@ def load_qm9(n_samples=1000, property_idx=4, data_dir='data/QM9', random_seed=42
 
     print(f"Loading QM9 (property: {property_names[property_idx]})...")
 
-    qm9 = QM9(root=data_dir)
+    try:
+        qm9 = QM9(root=data_dir)
+    except (ValueError, RuntimeError):
+        # Stale processed file from an older PyG version — delete and retry
+        import glob
+        processed_dir = osp.join(data_dir, 'processed')
+        stale = glob.glob(osp.join(processed_dir, '*.pt'))
+        if stale:
+            print(f"  Removing stale PyG cache ({len(stale)} files) and reprocessing...")
+            for f in stale:
+                os.remove(f)
+            qm9 = QM9(root=data_dir)
+        else:
+            raise
 
     # Extract SMILES from SDF (PyG QM9 may not have .smiles attribute)
     print("  Extracting SMILES from SDF...")
