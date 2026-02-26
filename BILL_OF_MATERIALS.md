@@ -222,30 +222,30 @@ but not expected to help given the ESM-2 results.
 
 ### 2C. TCGA Representations
 
-**Source:** Baselines from SLURM jobs 11379620/11379734-11379737 on LUAD vs LUSC
-and BRCA PAM50. Models: rf, xgboost.
+**Source:** Baselines from SLURM jobs 11379620/11379734-11379737 (original) and
+7219430/7219506 (new/fixed reps) on LUAD vs LUSC and BRCA PAM50. Models: rf, xgboost, ridge, knn.
 
 #### Expression-Derived
 
 | Rep | Dim | Category | Lung Acc (best) | BRCA Acc (best) | Deps | Server? |
 |-----|-----|----------|----------------|----------------|------|---------|
 | `gene_hvg2000` | 2000 | Standard | xgb=**0.959** | xgb=**0.866** | scanpy (opt) | YES |
-| `gene_pca100` | 100 | Standard | xgb=0.939 | xgb=0.826 | sklearn | YES |
-| `gene_nmf50` | 50 | Standard | rf=**0.951** | rf=0.834 | sklearn | YES |
-| `gene_ica50` | 50 | Standard | xgb=0.896 | **PENDING** | sklearn | YES |
-| `gene_stats` | 15 | Standard | rf=0.710 | rf=0.502 | scipy | YES |
-| `gene_hallmark` | ~50 | Pathway (mean z-score) | FT-survey=0.818 | FT-survey=0.481 | local gene sets | **FIXED** (local Enrichr gene sets, no runtime downloads) |
-| `gene_kegg` | ~320 | Pathway (mean z-score) | **PENDING** | **PENDING** | local gene sets | **FIXED** (local Enrichr gene sets) |
-| `gene_reactome` | ~1818 | Pathway (mean z-score) | **PENDING** | **PENDING** | local gene sets | **FIXED** (local Enrichr gene sets) |
-| `gene_oncogenic` | ~189 | Pathway (mean z-score) | **PENDING** | **PENDING** | local gene sets | **FIXED** (local Enrichr gene sets) |
-| `gene_progeny` | 14 | Pathway (weighted) | **PENDING** | **PENDING** | local gene sets | **FIXED** (local OmniPath weights, no API calls) |
-| `gene_dorothea` | ~367 | Pathway (weighted) | **PENDING** | **PENDING** | local gene sets | **FIXED** (local OmniPath regulons, no API calls) |
-| `gene_combined_pathway` | ~431 | Pathway (combined) | **PENDING** | **PENDING** | local gene sets | **FIXED** (all deps now local) |
-| `gene_quantile_rank` | 50 | Expression (rank PCA) | **PENDING** | **PENDING** | sklearn | YES |
-| `gene_corr_modules` | 30 | Expression (eigengene) | **PENDING** | **PENDING** | sklearn | YES |
-| `gene_chromosome_arm` | ~44 | Genomic (chr arm) | **PENDING** | **PENDING** | local gene sets | YES |
-| `gene_autoencoder50` | 50 | Expression (AE) | **PENDING** | **PENDING** | torch | YES |
-| `gene_sparse_pca50` | 50 | Expression (sparse) | **PENDING** | **PENDING** | sklearn | YES |
+| `gene_pca100` | 100 | Standard | ridge=0.939 | xgb=0.826 | sklearn | YES |
+| `gene_nmf50` | 50 | Standard | rf=**0.950** | rf=0.834 | sklearn | YES |
+| `gene_ica50` | 50 | Standard | ridge=0.940 | xgb=0.751 | sklearn | YES |
+| `gene_stats` | 15 | Standard | ridge=0.757 | rf=0.502 | scipy | YES |
+| `gene_hallmark` | 50 | Pathway (mean z-score) | ridge=**0.933** | xgb=0.833 | local gene sets | YES |
+| `gene_kegg` | 320 | Pathway (mean z-score) | ridge=**0.941** | xgb=0.816 | local gene sets | YES |
+| `gene_reactome` | 1817 | Pathway (mean z-score) | xgb=**0.945** | xgb=0.859 | local gene sets | YES |
+| `gene_oncogenic` | 189 | Pathway (mean z-score) | ridge=**0.946** | xgb=0.833 | local gene sets | YES |
+| `gene_progeny` | 14 | Pathway (weighted) | ridge=**0.879** | rf=0.799 | local gene sets | YES |
+| `gene_dorothea` | 216 | Pathway (weighted) | ridge=**0.933** | xgb=0.839 | local gene sets | YES |
+| `gene_combined_pathway` | 280 | Pathway (combined) | ridge=**0.931** | xgb=0.839 | local gene sets | YES |
+| `gene_quantile_rank` | 50 | Expression (rank PCA) | ridge=**0.935** | xgb=0.818 | sklearn | YES |
+| `gene_corr_modules` | 30 | Expression (eigengene) | ridge=**0.943** | rf=0.836 | sklearn | YES |
+| `gene_chromosome_arm` | 42 | Genomic (chr arm) | ridge=**0.905** | xgb=0.713 | local gene sets | YES |
+| `gene_autoencoder50` | 50 | Expression (AE) | rf=**0.942** | xgb=0.827 | torch | YES |
+| `gene_sparse_pca50` | 50 | Expression (sparse) | knn=**0.944** | xgb=0.883 | sklearn | YES |
 | `gene_immune` | ~22 | Computed (immune) | rf=0.793 | rf=0.524 | hardcoded | YES |
 
 #### Foundation Model Embeddings (GPU)
