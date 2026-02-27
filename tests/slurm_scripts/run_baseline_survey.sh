@@ -22,8 +22,9 @@ cd /data/stat-cadd/scat9264/KIRBy
 # Fine-tuned reps are NOT included — all reps are pretrained/frozen.
 #
 # Usage:
-#   sbatch run_baseline_survey.sh              # everything
-#   sbatch run_baseline_survey.sh molecular    # molecular only
+#   sbatch run_baseline_survey.sh              # everything, medium search
+#   sbatch run_baseline_survey.sh molecular    # molecular only, medium
+#   sbatch run_baseline_survey.sh molecular fast  # molecular, fast search
 #   sbatch run_baseline_survey.sh antibody     # antibody only (intra + inter)
 #   sbatch run_baseline_survey.sh ab_intra     # antibody intra-family only
 #   sbatch run_baseline_survey.sh ab_inter     # antibody inter-family only
@@ -31,7 +32,7 @@ cd /data/stat-cadd/scat9264/KIRBy
 #   sbatch run_baseline_survey.sh dta          # drug-target only
 
 DOMAIN=${1:-all}
-SEARCH=medium
+SEARCH=${2:-medium}
 OUTPUT="tests/results/baseline_survey"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
