@@ -6,7 +6,6 @@
 #SBATCH --time=47:59:00
 #SBATCH --partition=long
 #SBATCH --mem=64G
-#SBATCH --gres=gpu:1
 #SBATCH --mail-user=adelaide.punt@stcatz.ox.ac.uk
 
 # =============================================================================
@@ -32,11 +31,10 @@ echo "============================================================"
 echo "KIRBy Molecular Precache (subprocess-isolated)"
 echo "  Dataset:  ${DATASET:-all}"
 echo "  Reps:     ${REPS:-all (16)}"
-echo "  GPU:      yes"
 echo "  Started:  $(date)"
 echo "============================================================"
 
-CMD="python scripts/precache_molecular_reps.py --gpu"
+CMD="python scripts/precache_molecular_reps.py"
 
 if [ -n "$DATASET" ]; then
     CMD="$CMD $DATASET"
