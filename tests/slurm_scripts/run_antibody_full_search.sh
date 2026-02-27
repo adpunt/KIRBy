@@ -51,7 +51,7 @@ run_one() {
     echo ""
     echo ">>> $tag (flags: ${flags:-none})"
     echo "    Started: $(date)"
-    python tests/find_best_hybrid_antibody.py "$dataset" \
+    python -u tests/find_best_hybrid_antibody.py "$dataset" \
         --reps "$preset" --search "$SEARCH" --augment $flags \
         --output "${OUTPUT}/results_${tag}.json" 2>&1
     echo "    Finished: $(date)"
