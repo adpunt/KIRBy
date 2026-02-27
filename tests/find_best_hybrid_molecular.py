@@ -297,7 +297,7 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
 
     elif name_lower == 'qm9':
         from kirby.datasets.qm9 import load_qm9
-        qm9_data = load_qm9(n_samples=2000, property_idx=4, random_seed=42)
+        qm9_data = load_qm9(n_samples=10000, property_idx=4, random_seed=42)
         smiles = qm9_data['smiles']
         labels = qm9_data['labels']  # Normalized (mean=0, std=1); R² is scale-invariant
         print(f"  Loaded {len(smiles)} molecules from QM9 (HOMO-LUMO gap)")
