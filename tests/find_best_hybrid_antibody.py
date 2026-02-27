@@ -602,6 +602,15 @@ def get_representations(heavy_seqs: List[str], light_seqs: Optional[List[str]],
                 cache_file = _rep_cache_path(heavy_seqs, light_seqs, rep_name)
                 np.save(cache_file, rep)
 
+            # Free model memory between reps to avoid OOM on large presets
+            import gc
+            gc.collect()
+            try:
+                import torch
+                torch.cuda.empty_cache()
+            except (ImportError, RuntimeError):
+                pass
+
         except Exception as e:
             print(f"FAILED: {e}")
 
