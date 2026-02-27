@@ -15,7 +15,15 @@
 cd /data/stat-cadd/scat9264/KIRBy
 . setup.sh
 
+DATASET=${1:-}
+
 echo "Started: $(date)"
-python -u scripts/run_molecular_baselines.py \
-    --output tests/results/baseline_survey/molecular_baselines.json
+if [ -n "$DATASET" ]; then
+    python -u scripts/run_molecular_baselines.py \
+        --dataset "$DATASET" \
+        --output "tests/results/baseline_survey/molecular_baselines_${DATASET}.json"
+else
+    python -u scripts/run_molecular_baselines.py \
+        --output tests/results/baseline_survey/molecular_baselines.json
+fi
 echo "Finished: $(date)"
