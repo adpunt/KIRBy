@@ -61,28 +61,23 @@ run_intra() {
     echo ""
     echo "========== INTRA-FAMILY DMS DATASETS =========="
     echo "Variable-position reps should shine here."
+    echo "Using modulo_position split (ProteinGym standard for DMS)."
     echo ""
 
     # FLAb expression (4,275 single-site mutants, G6 SSM) — best shot at R² > 0.5
-    run_one flab_expression_koenig dms ""
-    run_one flab_expression_koenig dms_full ""
+    run_one flab_expression_koenig dms "--split modulo_position"
+    run_one flab_expression_koenig dms_full "--split modulo_position"
 
     # FLAb expression with delta reps (mutation_fast now includes varpos_physchem)
-    run_one flab_expression_koenig mutation_fast "--delta"
+    run_one flab_expression_koenig mutation_fast "--delta --split modulo_position"
 
     # FLAb binding (same family, different property)
-    run_one flab_binding_koenig dms ""
-
-    # FLAb thermostability (Hie et al.)
-    run_one flab_thermo_hie dms ""
-
-    # FLAb binding ROSACE (adalimumab DMS)
-    run_one flab_binding_rosace dms ""
+    run_one flab_binding_koenig dms "--split modulo_position"
 
     # AbAgym intra-family DMS datasets
-    run_one abagym_Ang2_2017_G6 dms ""
-    run_one abagym_EGFR_2013_Cetuximab dms ""
-    run_one abagym_lysozyme_2019_D441 dms ""
+    run_one abagym_Ang2_2017_G6 dms "--split modulo_position"
+    run_one abagym_EGFR_2013_Cetuximab dms "--split modulo_position"
+    run_one abagym_lysozyme_2019_D441 dms "--split modulo_position"
 }
 
 run_inter() {
@@ -93,17 +88,17 @@ run_inter() {
     echo ""
 
     # Combined ΔΔG (SKEMPI 2.0 + AB-Bind, deduplicated, 544 entries)
-    run_one ddg_combined all_server ""
+    run_one ddg_combined all_server "--split identity"
 
-    # AbAgym pooled (5 experiments, 2,247 entries)
-    run_one abagym_all all_server ""
+    # AbAgym pooled (5 experiments, 2,247 entries) — leave-one-experiment-out
+    run_one abagym_all all_server "--split experiment"
 
     # Ab-CoV binding affinity (141 entries)
-    run_one abcov_kd all_server ""
+    run_one abcov_kd all_server "--split identity"
 
     # FLAb inter-family (Jain et al., 137 entries each)
-    run_one flab_thermo_jain all_server ""
-    run_one flab_aggregation_jain all_server ""
+    run_one flab_thermo_jain all_server "--split identity"
+    run_one flab_aggregation_jain all_server "--split identity"
 }
 
 if [ "$MODE" = "intra" ]; then

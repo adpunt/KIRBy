@@ -118,18 +118,24 @@ _SEARCH_NAME_MAP = {
 # =============================================================================
 
 def _standardise_smiles(smi: str) -> Optional[str]:
-    """Canonicalise SMILES, keep largest fragment, remove salts."""
+    """Canonicalise SMILES: largest fragment, neutralize charges, canonical tautomer, reject metals."""
     from rdkit import Chem
+    from rdkit.Chem.MolStandardize import rdMolStandardize
     if not isinstance(smi, str) or not smi.strip():
         return None
     mol = Chem.MolFromSmiles(smi)
     if mol is None:
         return None
-    frags = Chem.GetMolFrags(mol, asMols=True, sanitizeFrags=True)
-    if not frags:
-        return None
-    mol = max(frags, key=lambda m: m.GetNumHeavyAtoms())
     try:
+        mol = rdMolStandardize.Cleanup(mol)
+        mol = rdMolStandardize.FragmentParent(mol)
+        mol = rdMolStandardize.Uncharger().uncharge(mol)
+        mol = rdMolStandardize.TautomerEnumerator().Canonicalize(mol)
+        # Reject metal-containing compounds (organic descriptors unreliable)
+        _METALS = {3,4,11,12,13,19,20,21,22,23,24,25,26,27,28,29,30,31,37,38,
+                   39,40,41,42,44,45,46,47,48,49,50,55,56,72,73,74,75,76,77,78,79,80,81,82,83}
+        if any(a.GetAtomicNum() in _METALS for a in mol.GetAtoms()):
+            return None
         return Chem.MolToSmiles(mol, canonical=True)
     except Exception:
         return None
@@ -177,6 +183,11 @@ def _load_openadmet_endpoint(df: pd.DataFrame, endpoint_col: str,
         valid = np.isfinite(labels_arr)
         smiles_arr = [s for s, v in zip(smiles_arr, valid) if v]
         labels_arr = labels_arr[valid]
+
+    # Clip extreme outliers (1st / 99th percentile)
+    if len(labels_arr) > 10:
+        p1, p99 = np.percentile(labels_arr, [1, 99])
+        labels_arr = np.clip(labels_arr, p1, p99)
 
     return smiles_arr, labels_arr
 
@@ -299,7 +310,7 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
         from kirby.datasets.qm9 import load_qm9
         qm9_data = load_qm9(n_samples=10000, property_idx=4, random_seed=42)
         smiles = qm9_data['smiles']
-        labels = qm9_data['labels']  # Normalized (mean=0, std=1); R² is scale-invariant
+        labels = qm9_data['labels']  # Raw values; StandardScaler applied per fold
         print(f"  Loaded {len(smiles)} molecules from QM9 (HOMO-LUMO gap)")
         return smiles, labels, 'regression'
 
@@ -384,7 +395,7 @@ def get_representations(smiles: List[str], preset_or_list: str,
         create_chemberta, create_molformer, create_selformer,
         create_chembert, create_molclr, create_graphmvp, create_smited,
         create_mhg_gnn, create_grover, create_graph_kernel,
-        create_unimol, create_schnet, create_chemformer
+        create_unimol, create_schnet,
     )
 
     if preset_or_list in REP_PRESETS:
@@ -411,7 +422,6 @@ def get_representations(smiles: List[str], preset_or_list: str,
         'graph_kernel': create_graph_kernel,
         'unimol': create_unimol,
         'schnet': create_schnet,
-        'chemformer': create_chemformer,
     }
 
     representations = {}
@@ -702,7 +712,7 @@ def save_blueprint_code(result: SearchResult, reps_tested: List[str], output_pat
         '    create_chemberta, create_molformer, create_selformer,',
         '    create_chembert, create_molclr, create_graphmvp, create_smited,',
         '    create_mhg_gnn, create_grover, create_graph_kernel,',
-        '    create_unimol, create_schnet, create_chemformer,',
+        '    create_unimol, create_schnet,',
         ')',
         '',
         '',
@@ -724,7 +734,6 @@ def save_blueprint_code(result: SearchResult, reps_tested: List[str], output_pat
         "    'graph_kernel': create_graph_kernel,",
         "    'unimol': create_unimol,",
         "    'schnet': create_schnet,",
-        "    'chemformer': create_chemformer,",
         '}',
         '',
         '',

@@ -624,16 +624,30 @@ def load_ddg_combined_dataset(max_samples: int = 5000) -> Dict:
           f"- {n_overlap} overlap)")
 
     # Assemble output arrays
+    entries_list = list(combined.values())
+
+    # Remove extreme ddG outliers (> 3 std from mean, or |ddG| > 8 kcal/mol)
+    ddg_values = np.array([e['ddg'] for e in entries_list])
+    mu, sigma = ddg_values.mean(), ddg_values.std()
+    keep = [(abs(v - mu) < 3 * sigma and abs(v) <= 8.0) for v in ddg_values]
+    n_outliers = sum(1 for k in keep if not k)
+    if n_outliers > 0:
+        entries_list = [e for e, k in zip(entries_list, keep) if k]
+        print(f"  Outlier filter: removed {n_outliers} entries "
+              f"(|ddG|>8 or >3σ from mean)")
+
     all_heavy_seqs = []
     all_light_seqs = []
     all_labels = []
     all_mutations = []
+    all_pdb_ids = []
 
-    for entry in combined.values():
+    for entry in entries_list:
         all_heavy_seqs.append(entry['heavy_seq'])
         all_light_seqs.append(entry['light_seq'])
         all_labels.append(entry['ddg'])
         all_mutations.append(entry['mutation_records'])
+        all_pdb_ids.append(entry['pdb_id'])
 
     if not all_heavy_seqs:
         raise ValueError("No valid entries in combined ΔΔG dataset")
@@ -669,4 +683,13 @@ def load_ddg_combined_dataset(max_samples: int = 5000) -> Dict:
         'mutations': all_mutations,
         'is_intra_family': False,
         'property_name': 'ΔΔG (kcal/mol)',
+        'pdb_ids': all_pdb_ids,
     }
+
+
+def assign_complex_groups(pdb_ids: List[str]) -> Tuple[np.ndarray, int]:
+    """Assign group IDs by PDB complex for leave-one-complex-out GroupKFold."""
+    unique_pdbs = sorted(set(pdb_ids))
+    pdb_to_id = {p: i for i, p in enumerate(unique_pdbs)}
+    groups = np.array([pdb_to_id[p] for p in pdb_ids])
+    return groups, len(unique_pdbs)

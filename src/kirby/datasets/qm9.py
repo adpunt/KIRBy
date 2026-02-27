@@ -111,17 +111,14 @@ def load_qm9(n_samples=1000, property_idx=4, data_dir='data/QM9', random_seed=42
         targets.append(data.y[0, property_idx].item())
     
     targets = np.array(targets)
-    
-    mean = targets.mean()
-    std = targets.std()
-    targets_norm = (targets - mean) / std
-    
+
+    # Return raw targets — normalization happens per-fold in the evaluation pipeline
     print(f"  Loaded {len(smiles_list)} molecules")
-    print(f"  Range: [{targets.min():.3f}, {targets.max():.3f}], normalized to mean=0, std=1")
-    
+    print(f"  Range: [{targets.min():.3f}, {targets.max():.3f}]")
+
     return {
         'smiles': smiles_list,
-        'labels': targets_norm,
+        'labels': targets,
         'property_name': property_names[property_idx],
         'property_idx': property_idx
     }

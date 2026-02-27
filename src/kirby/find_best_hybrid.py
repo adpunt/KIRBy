@@ -222,9 +222,10 @@ DEFAULT_MODELS = {
         'tier': 'fast',
     },
     'ridge': {
-        'regressor': lambda: __import__('sklearn.linear_model', fromlist=['Ridge']).Ridge(alpha=1.0),
-        'classifier': lambda: __import__('sklearn.linear_model', fromlist=['LogisticRegression']).LogisticRegression(
-            C=1.0, random_state=42, max_iter=1000, n_jobs=-1),
+        'regressor': lambda: __import__('sklearn.linear_model', fromlist=['RidgeCV']).RidgeCV(
+            alphas=np.logspace(-6, 6, 13)),
+        'classifier': lambda: __import__('sklearn.linear_model', fromlist=['LogisticRegressionCV']).LogisticRegressionCV(
+            Cs=10, random_state=42, max_iter=1000, n_jobs=-1),
         'tier': 'medium',
     },
     'knn': {
@@ -233,6 +234,7 @@ DEFAULT_MODELS = {
         'classifier': lambda: __import__('sklearn.neighbors', fromlist=['KNeighborsClassifier']).KNeighborsClassifier(
             n_neighbors=5, n_jobs=-1),
         'tier': 'medium',
+        '_adaptive_k': True,
     },
     'lightgbm': {
         'regressor': _get_lgbm_regressor,
@@ -488,8 +490,14 @@ def _evaluate_single(
         scaler = StandardScaler()
         X_train_s = scaler.fit_transform(X_train)
         X_val_s = scaler.transform(X_val)
+        X_train_s = np.nan_to_num(X_train_s, nan=0.0, posinf=1e10, neginf=-1e10)
+        X_val_s = np.nan_to_num(X_val_s, nan=0.0, posinf=1e10, neginf=-1e10)
 
         m = deepcopy(model)
+        # Adaptive k for KNN: scale to sqrt(N_train), capped at 5
+        if hasattr(m, 'n_neighbors') and hasattr(m, 'set_params'):
+            k = min(5, max(1, int(np.sqrt(len(train_idx)))))
+            m.set_params(n_neighbors=k)
         m.fit(X_train_s, y_train)
         y_pred = m.predict(X_val_s)
         scores.append(metric_fn(y_val, y_pred))
@@ -578,8 +586,14 @@ def _evaluate_hybrid_config(
         scaler = StandardScaler()
         X_train_s = scaler.fit_transform(X_train)
         X_val_s = scaler.transform(X_val)
+        X_train_s = np.nan_to_num(X_train_s, nan=0.0, posinf=1e10, neginf=-1e10)
+        X_val_s = np.nan_to_num(X_val_s, nan=0.0, posinf=1e10, neginf=-1e10)
 
         m = deepcopy(model)
+        # Adaptive k for KNN: scale to sqrt(N_train), capped at 5
+        if hasattr(m, 'n_neighbors') and hasattr(m, 'set_params'):
+            k = min(5, max(1, int(np.sqrt(len(train_idx)))))
+            m.set_params(n_neighbors=k)
         m.fit(X_train_s, y_train)
         y_pred = m.predict(X_val_s)
         fold_scores.append(metric_fn(y_val, y_pred))

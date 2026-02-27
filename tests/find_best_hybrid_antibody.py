@@ -121,6 +121,63 @@ def assign_identity_groups(heavy_sequences: List[str], threshold: float = 0.8,
     return groups, n_groups
 
 
+def assign_modulo_position_groups(mutations: List, n_folds: int) -> Optional[np.ndarray]:
+    """Assign CV groups by mutation position modulo n_folds.
+
+    ProteinGym standard for intra-family DMS: tests generalization to unseen
+    positions. Each position maps to exactly one fold, so nearby positions
+    don't leak between train/val.
+
+    Args:
+        mutations: List of mutation info lists (each entry is a list of dicts
+                   with 'pos' key from dataset loader).
+        n_folds: Number of CV folds.
+
+    Returns:
+        Group array, or None if no position info available.
+    """
+    groups = np.zeros(len(mutations), dtype=int)
+    has_pos = False
+    for i, mut_list in enumerate(mutations):
+        if mut_list and 'pos' in mut_list[0]:
+            groups[i] = mut_list[0]['pos'] % n_folds
+            has_pos = True
+        else:
+            groups[i] = i % n_folds  # fallback for missing position
+    if not has_pos:
+        return None
+    n_groups = len(np.unique(groups))
+    print(f"  Modulo-position grouping: {n_groups} groups (n_folds={n_folds})")
+    return groups
+
+
+def assign_experiment_groups(mutations: List) -> Optional[np.ndarray]:
+    """Assign CV groups by experiment name (leave-one-experiment-out).
+
+    For pooled datasets like abagym_all: each experiment becomes one fold,
+    testing cross-family generalization.
+
+    Args:
+        mutations: List of mutation info lists (each entry is a list of dicts
+                   with 'experiment' key from dataset loader).
+
+    Returns:
+        Group array, or None if no experiment info available.
+    """
+    exp_names = []
+    for mut_list in mutations:
+        if mut_list and 'experiment' in mut_list[0]:
+            exp_names.append(mut_list[0]['experiment'])
+        else:
+            return None  # missing experiment info
+
+    unique_exps = sorted(set(exp_names))
+    exp_to_idx = {name: i for i, name in enumerate(unique_exps)}
+    groups = np.array([exp_to_idx[e] for e in exp_names], dtype=int)
+    print(f"  Experiment grouping: {len(unique_exps)} groups {unique_exps}")
+    return groups
+
+
 # =============================================================================
 # CONFIGURATION
 # =============================================================================
@@ -166,10 +223,8 @@ REP_PRESETS = {
         'aac', 'blosum62',
         'varpos_physchem',                              # all positions, 6D/pos
         'varpos_cdr_physchem', 'varpos_cdrh3_physchem', # CDR-focused, much lower dim
-        'antifold_score',                               # structure-conditioned, 5D
-        'sapiens_score',                                # humanness-conditioned, 5D
         'esm1v_score',                                  # ESM-1v variant-effect, 5D
-    ],  # 3 base + 9 aug (small reps auto-moved to augmentations)
+    ],  # 3 base + 7 aug (small reps auto-moved to augmentations)
     'dms_full': [
         'lm_score_ablang2', 'lm_score_esm2', 'lm_score_prot_t5', 'lm_score_antiberty',
         'positional', 'biophysical_delta',
@@ -178,10 +233,8 @@ REP_PRESETS = {
         'varpos_onehot', 'varpos_blosum', 'varpos_physchem',      # all positions
         'varpos_cdr_onehot', 'varpos_cdr_physchem',               # CDR only
         'varpos_cdrh3_physchem', 'varpos_fw_physchem',            # H3 / framework
-        'antifold_score',                                          # structure-conditioned, 5D
-        'sapiens_score',                                           # humanness-conditioned, 5D
         'esm1v_score',                                             # ESM-1v variant-effect, 5D
-    ],  # 8 base + 12 aug (small reps auto-moved to augmentations)
+    ],  # 8 base + 10 aug (small reps auto-moved to augmentations)
 
     # --- Inter-family: full-sequence embeddings ARE appropriate ---
     'inter_family': [
@@ -207,14 +260,12 @@ _DMS_AUG_REPS = {
     'dms': {
         'lm_score_ablang2', 'lm_score_esm2',
         'positional', 'biophysical_delta',
-        'aac', 'blosum62', 'antifold_score',
-        'sapiens_score', 'esm1v_score',
+        'aac', 'blosum62', 'esm1v_score',
     },
     'dms_full': {
         'lm_score_ablang2', 'lm_score_esm2', 'lm_score_prot_t5', 'lm_score_antiberty',
         'positional', 'biophysical_delta',
-        'aac', 'blosum62', 'developability', 'antifold_score',
-        'sapiens_score', 'esm1v_score',
+        'aac', 'blosum62', 'developability', 'esm1v_score',
     },
 }
 
@@ -431,10 +482,6 @@ _REP_DISPATCH = {
     'varpos_fw_physchem': ('create_variable_position_encoding', 'varpos'),
     # Structural: computed separately (not in antibody.py)
     'structural': (None, 'structural'),
-    # AntiFold inverse folding score (5D, structure-conditioned)
-    'antifold_score': ('compute_antifold_scores', 'antifold'),
-    # Sapiens humanness score (5D, humanness-conditioned)
-    'sapiens_score': ('compute_sapiens_mutation_scores', 'mutation'),
     # ESM-1v masked marginal mutation scores (5D, variant-effect)
     'esm1v_score': ('compute_esm1v_mutation_scores', 'mutation'),
     # SaProt structure-aware embeddings (1280D paired)
@@ -1065,6 +1112,13 @@ Output:
                        help='Also test leave-one-rep-out subsets (when >=3 reps)')
     parser.add_argument('--identity-threshold', type=float, default=0.8,
                        help="Sequence identity threshold for GroupKFold (default: 0.8)")
+    parser.add_argument('--split', type=str, default='auto',
+                       choices=['auto', 'identity', 'modulo_position', 'experiment', 'random'],
+                       help="CV split strategy: 'auto' (select by dataset type), "
+                            "'identity' (sequence identity GroupKFold), "
+                            "'modulo_position' (position %% n_folds, ProteinGym standard for DMS), "
+                            "'experiment' (leave-one-experiment-out), "
+                            "'random' (ungrouped KFold)")
     parser.add_argument('--cache', action='store_true',
                        help='Cache hybrid search results to disk')
     parser.add_argument('--delta', action='store_true',
@@ -1109,14 +1163,57 @@ Output:
         print("  WARNING: --delta requested but no wildtype available. Skipping delta reps.")
         args.delta = False
 
-    # Compute sequence identity groups for CV
-    print("  Assigning sequence identity groups...")
-    groups, n_groups = assign_identity_groups(heavy_seqs, threshold=args.identity_threshold,
-                                               min_groups=3)
-    if groups is None:
-        print(f"  Ungrouped CV (intra-family data, grouping not meaningful)")
+    # Determine CV split strategy
+    is_intra = metadata.get('is_intra_family', False)
+    has_mutations = mutations is not None and any(len(m) > 0 for m in mutations)
+    has_experiment = (has_mutations and mutations[0] and 'experiment' in mutations[0][0])
+    n_folds_for_groups = args.n_folds or 5  # default CV folds for group assignment
+
+    split_mode = args.split
+    if split_mode == 'auto':
+        if is_intra and has_mutations:
+            split_mode = 'modulo_position'
+        elif not is_intra and has_experiment:
+            split_mode = 'experiment'
+        else:
+            split_mode = 'identity'
+        print(f"  Auto-selected split strategy: {split_mode}")
     else:
-        print(f"  {n_groups} groups (threshold={args.identity_threshold})")
+        print(f"  Split strategy: {split_mode}")
+
+    groups = None
+    if split_mode == 'modulo_position':
+        groups = assign_modulo_position_groups(mutations, n_folds_for_groups)
+        if groups is None:
+            print("  WARNING: No position info in mutations, falling back to identity split")
+            split_mode = 'identity'
+    elif split_mode == 'experiment':
+        groups = assign_experiment_groups(mutations)
+        if groups is None:
+            print("  WARNING: No experiment info in mutations, falling back to identity split")
+            split_mode = 'identity'
+        else:
+            # Override n_folds to match number of experiments (leave-one-out)
+            n_exp_groups = len(np.unique(groups))
+            if args.n_folds is None:
+                args.n_folds = n_exp_groups
+                print(f"  Setting n_folds={n_exp_groups} for leave-one-experiment-out CV")
+            elif args.n_folds > n_exp_groups:
+                print(f"  WARNING: --n-folds {args.n_folds} > {n_exp_groups} experiment groups, "
+                      f"clamping to {n_exp_groups}")
+                args.n_folds = n_exp_groups
+    elif split_mode == 'random':
+        print(f"  Ungrouped CV (random split)")
+        groups = None
+
+    if split_mode == 'identity':
+        print("  Assigning sequence identity groups...")
+        groups, n_groups = assign_identity_groups(
+            heavy_seqs, threshold=args.identity_threshold, min_groups=3)
+        if groups is None:
+            print(f"  Ungrouped CV (intra-family data, grouping not meaningful)")
+        else:
+            print(f"  {n_groups} groups (threshold={args.identity_threshold})")
 
     # Generate representations
     base_reps = get_representations(

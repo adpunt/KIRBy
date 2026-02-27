@@ -195,6 +195,16 @@ def create_hvg2000(expression: np.ndarray, gene_names: np.ndarray,
     """
     from sklearn.preprocessing import StandardScaler
 
+    # Pre-filter: remove genes with >90% zero expression
+    nonzero_frac = (expression > 0).mean(axis=0)
+    keep = nonzero_frac >= 0.1
+    if keep.sum() < expression.shape[1]:
+        n_removed = expression.shape[1] - keep.sum()
+        expression = expression[:, keep]
+        if gene_names is not None:
+            gene_names = gene_names[keep]
+        print(f"    Zero-expression filter: removed {n_removed} genes, {keep.sum()} remain")
+
     n_top = min(n_top, expression.shape[1])
 
     try:
@@ -232,6 +242,14 @@ def create_gene_pca100(expression: np.ndarray,
     """
     from sklearn.decomposition import PCA
     from sklearn.preprocessing import StandardScaler
+
+    # Pre-filter: remove genes with >90% zero expression
+    nonzero_frac = (expression > 0).mean(axis=0)
+    keep = nonzero_frac >= 0.1
+    if keep.sum() < expression.shape[1]:
+        n_removed = expression.shape[1] - keep.sum()
+        expression = expression[:, keep]
+        print(f"    Zero-expression filter: removed {n_removed} genes, {keep.sum()} remain")
 
     n_components = min(n_components, expression.shape[1], expression.shape[0])
 
@@ -528,6 +546,17 @@ def create_mutation_matrix(sample_ids: List[str], cohort: str = '',
     from kirby.datasets.tcga import _download_mutations
 
     mutations = _download_mutations(sample_ids)
+
+    # Filter to non-silent variants only (standard practice)
+    if 'effect' in mutations.columns:
+        non_silent_types = {
+            'Missense_Mutation', 'Nonsense_Mutation', 'Frame_Shift_Del',
+            'Frame_Shift_Ins', 'Splice_Site', 'In_Frame_Del', 'In_Frame_Ins',
+            'Nonstop_Mutation', 'Translation_Start_Site',
+        }
+        before = len(mutations)
+        mutations = mutations[mutations['effect'].isin(non_silent_types)]
+        print(f"    Filtered to non-silent: {len(mutations)}/{before} mutations")
 
     # Count mutations per gene
     gene_counts = mutations['gene'].value_counts()
