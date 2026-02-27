@@ -30,8 +30,8 @@ _DATASETS = {
     },
     'kiba': {
         'property': 'KIBA integrated score',
-        'description': '~118K drug-target pairs (from 2111×229 matrix), integrated binding score',
-        'transform': None,  # already in KIBA units
+        'description': '~118K drug-target pairs (from 2111×229 matrix), integrated binding score (DeepDTA-transformed)',
+        'transform': 'kiba',  # negate so higher = stronger binding
     },
 }
 
@@ -147,9 +147,20 @@ def load_dataset(name: str) -> Dict:
 
         labels = np.array(labels, dtype=np.float64)
 
-        # Transform DAVIS Kd (nM) → pKd
+        # Re-canonicalize drug SMILES for consistency
+        from rdkit import Chem
+        for i, smi in enumerate(drug_smiles):
+            mol = Chem.MolFromSmiles(smi)
+            if mol is not None:
+                drug_smiles[i] = Chem.MolToSmiles(mol, canonical=True)
+
+        # Transform labels
         if info['transform'] == 'pkd':
+            # DAVIS: Kd (nM) → pKd
             labels = -np.log10(labels / 1e9)
+        elif info['transform'] == 'kiba':
+            # KIBA: negate so higher = stronger binding (like pKd)
+            labels = -labels
 
         print(f"  Downloaded {name_lower}: {len(labels)} pairs from "
               f"{len(drug_keys)} drugs × {len(protein_keys)} proteins")
@@ -216,3 +227,21 @@ def assign_cold_target_groups(protein_ids: List[str]) -> Tuple[np.ndarray, int]:
     protein_to_id = {p: i for i, p in enumerate(unique_proteins)}
     groups = np.array([protein_to_id[p] for p in protein_ids])
     return groups, len(unique_proteins)
+
+
+def assign_cold_drug_groups(drug_ids: List[str]) -> Tuple[np.ndarray, int]:
+    """Assign group IDs by drug for cold-drug GroupKFold.
+
+    Ensures that the same drug never appears in both train and test,
+    preventing data leakage from memorizing drug-specific binding patterns.
+
+    Args:
+        drug_ids: List of drug identifiers (one per pair).
+
+    Returns:
+        (group_ids, n_unique_drugs)
+    """
+    unique_drugs = sorted(set(drug_ids))
+    drug_to_id = {d: i for i, d in enumerate(unique_drugs)}
+    groups = np.array([drug_to_id[d] for d in drug_ids])
+    return groups, len(unique_drugs)

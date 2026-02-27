@@ -201,6 +201,7 @@ def load_abagym_dataset(
     all_labels = []
     all_mutations = []
     all_distances = []
+    all_exp_labels = []  # track experiment name per entry for z-scoring
     wt_heavy_final = None
     wt_light_final = None
 
@@ -284,6 +285,7 @@ def load_abagym_dataset(
             if pd.isna(label):
                 continue
             all_labels.append(float(label))
+            all_exp_labels.append(exp_name)
 
             # Record mutation info
             mut_info = {
@@ -306,6 +308,18 @@ def load_abagym_dataset(
         raise ValueError(f"No valid mutations found for {name}")
 
     labels = np.array(all_labels, dtype=np.float64)
+
+    # Z-score labels per experiment before concatenation (standard for pooling assays)
+    if name.lower() == 'abagym_all' and len(experiments) > 1:
+        exp_arr = np.array(all_exp_labels)
+        for exp_name in experiments:
+            mask = exp_arr == exp_name
+            if mask.sum() > 1:
+                mu, sigma = labels[mask].mean(), labels[mask].std()
+                if sigma > 0:
+                    labels[mask] = (labels[mask] - mu) / sigma
+                    print(f"    Z-scored {exp_name}: {mask.sum()} entries, "
+                          f"mu={mu:.3f}, sigma={sigma:.3f}")
 
     # Subsample if needed
     if len(all_heavy_seqs) > max_samples:
@@ -335,6 +349,6 @@ def load_abagym_dataset(
         'wildtype_light': wt_light_final,
         'mutations': all_mutations,
         'is_intra_family': is_intra_family,
-        'property_name': 'DMS score (MinMax normalized)',
+        'property_name': 'DMS score (z-scored per experiment)' if name.lower() == 'abagym_all' else 'DMS score (MinMax normalized)',
         'interface_distances': np.array(all_distances, dtype=np.float64),
     }

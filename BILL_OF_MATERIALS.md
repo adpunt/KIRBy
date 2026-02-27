@@ -5,7 +5,7 @@ performance. This document is the single source of truth for what KIRBy supports
 and what actually works. Representations without confirmed performance data should
 not be used in experiments until validated.
 
-**Last updated:** 2026-02-26
+**Last updated:** 2026-02-27 (preprocessing overhaul applied)
 
 ---
 
@@ -26,8 +26,6 @@ not be used in experiments until validated.
 |---------|--------|---------|--------|--------|
 | `flab_expression_koenig` | FLAb (G6 SSM) | 4,275 | Expression (ER) | **Confirmed** (20 reps) |
 | `flab_binding_koenig` | FLAb (G6) | 4,275 | Kd | **Confirmed** (20 reps) |
-| `flab_thermo_hie` | FLAb (S309) | 10 | Tm | **Too small** (all reps negative) |
-| `flab_binding_rosace` | FLAb (adalimumab) | 14 | Kd | **Too small** (all reps negative) |
 | `abagym_Ang2_2017_G6` | AbAgym DMS | 397 | Fitness | **Confirmed** (20 reps) |
 | `abagym_EGFR_2013_Cetuximab` | AbAgym DMS | 659 | Fitness | **Confirmed** (20 reps) |
 | `abagym_lysozyme_2019_D441` | AbAgym DMS | 627 | Fitness | **Confirmed** (20 reps) |
@@ -72,28 +70,29 @@ are from scaffold-split (molecular), identity-grouped (antibody), or TSS-grouped
 
 ### 2A. Molecular Representations
 
-**Source:** C01 baselines on LogD (~5,039 samples), hERG (~1,415), Caco2 (~2,161).
-Models: rf, xgboost, ridge, knn, lightgbm, mlp, svm.
+**Source:** 5-fold scaffold-split GroupKFold baselines on LogD (~5,039), Caco2 (~2,161),
+hERG (~1,415), QM9 (~1,981). Models: rf, xgboost, ridge, knn, lightgbm.
 
-| Rep | Dim | Category | LogD R² (best) | Caco2 R² | hERG R² | Deps |
-|-----|-----|----------|---------------|----------|---------|------|
-| `ecfp4` | 2048 | Standard (fingerprint) | lgbm=0.756 | rf=0.482 | rf=0.547 | rdkit |
-| `maccs` | 167 | Standard (fingerprint) | xgb=0.674 | rf=0.372 | rf=0.487 | rdkit |
-| `pdv` | 200 | Standard (descriptor) | lgbm=0.778 | xgb=0.488 | lgbm=0.543 | rdkit |
-| `chemberta` | 384 | Pretrained (Transformer) | **PENDING** | — | — | transformers |
-| `molformer` | 768 | Pretrained (Transformer) | **PENDING** | — | — | transformers |
-| `selformer` | 768 | Pretrained (Transformer) | **PENDING** | — | — | transformers |
-| `mol2vec` | 300 | Pretrained (Word2Vec) | **PENDING** | — | — | mol2vec |
-| `chembert` | 768 | Pretrained (Transformer) | **PENDING** | — | — | transformers |
-| `molclr` | 512 | Pretrained (GNN) | **PENDING** | — | — | torch_geometric |
-| `graphmvp` | 300 | Pretrained (GNN) | **PENDING** | — | — | torch_geometric |
-| `smited` | 256 | Pretrained | **PENDING** | — | — | HuggingFace |
-| `mhg_gnn` | 64 | Pretrained (GNN) | **PENDING** | — | — | torch_geometric | **FRAGILE** (SIGBUS crashes) |
-| `grover` | 5000 | Pretrained (Transformer) | **PENDING** | — | — | grover |
-| `graph_kernel` | varies | Standard (kernel) | **PENDING** | — | — | grakel |
-| `schnet` | 128 | Pretrained (3D GNN) | **PENDING** | — | — | schnetpack |
-| `unimol` | 512 | Pretrained (3D) | **DROPPED** | — | — | unimol_tools | No path to install `unimol_tools` |
-| `chemformer` | 256 | Pretrained (Transformer) | **PENDING** | — | — | transformers | Not in `all` preset (in precache pipeline) |
+| Rep | Dim | Category | LogD R² | Caco2 R² | hERG R² | QM9 R² | Deps |
+|-----|-----|----------|---------|----------|---------|--------|------|
+| `ecfp4` | 2048 | Standard (fingerprint) | lgbm=0.793 | xgb=0.516 | lgbm=0.558 | rf=0.071 | rdkit |
+| `maccs` | 167 | Standard (fingerprint) | lgbm=0.687 | lgbm=0.398 | rf=0.479 | rf=0.127 | rdkit |
+| `pdv` | 200 | Standard (descriptor) | xgb=0.808 | lgbm=0.535 | xgb=0.538 | rf=0.106 | rdkit |
+| `mol2vec` | 300 | Pretrained (Word2Vec) | lgbm=0.759 | lgbm=0.446 | lgbm=0.517 | rf=0.111 | mol2vec |
+| `chemberta` | 384 | Pretrained (Transformer) | ridge=0.728 | lgbm=0.414 | xgb=0.481 | rf=0.071 | transformers |
+| `molformer` | 768 | Pretrained (Transformer) | ridge=0.738 | xgb=0.409 | lgbm=0.504 | rf=0.080 | transformers |
+| `selformer` | 768 | Pretrained (Transformer) | ridge=0.686 | rf=0.339 | xgb=0.464 | rf=0.088 | transformers |
+| `chembert` | 256 | Pretrained (Transformer) | lgbm=0.682 | lgbm=0.403 | lgbm=0.509 | rf=0.098 | transformers |
+| `molclr` | 512 | Pretrained (GNN) | lgbm=0.576 | rf=0.299 | rf=0.397 | ridge=0.063 | torch_geometric |
+| `graphmvp` | 300 | Pretrained (GNN) | lgbm=0.669 | xgb=0.378 | xgb=0.453 | rf=0.100 | torch_geometric |
+| `smited` | 768 | Pretrained (Transformer) | ridge=0.750 | lgbm=0.455 | knn=0.473 | rf=0.114 | HuggingFace |
+| `mhg_gnn` | 1024 | Pretrained (GNN) | lgbm=**0.822** | lgbm=**0.526** | lgbm=**0.564** | rf=0.111 | torch_geometric |
+| `grover` | 4800 | Pretrained (Transformer) | ridge=0.774 | lgbm=0.496 | lgbm=0.527 | rf=0.119 | grover |
+| `graph_kernel` | ~290 | Standard (kernel) | lgbm=0.756 | lgbm=0.525 | lgbm=0.541 | ridge=0.068 | grakel |
+| `schnet` | 128 | Pretrained (3D GNN) | ridge=0.647 | lgbm=0.350 | xgb=0.348 | rf=0.057 | schnetpack |
+| `unimol` | 512 | Pretrained (3D) | **DROPPED** | — | — | — | unimol_tools |
+
+**Dropped:** `chemformer` (R² < 0.25 on all datasets, broken HF weights).
 
 **Augmentations (not base reps):** `graph_topology`, `spectral`
 
@@ -177,9 +176,10 @@ flab_thermo_hie (N=10) and flab_binding_rosace (N=14) — too small for meaningf
 | `varpos_cdr_physchem` | varies | Customizable (varpos) | rf=-0.010 | xgb=-0.011 | rf=**0.427** | xgb=0.114 | rf=0.171 | xgb=**0.487** | ridge=**0.402** | 0.487 | 5/7 |
 | `varpos_cdrh3_physchem` | varies | Customizable (varpos) | rf=-0.010 | ridge=-0.011 | rf=**0.226** | rf=-0.011 | rf=0.053 | rf=0.123 | ridge=**0.402** | 0.402 | 4/7 |
 | `varpos_fw_physchem` | varies | Customizable (varpos) | rf=-0.013 | xgb=-0.013 | rf=0.020 | rf=**0.106** | rf=-0.020 | rf=-0.000 | rf=0.094 | 0.106 | 3/7 |
-| `antifold_score` | 5 | Customizable (structure) | rf=-0.010 | xgb=-0.010 | ridge=-0.005 | ridge=-0.022 | rf=-0.007 | ridge=-0.007 | xgb=-0.071 | -0.005 | **0/7** |
-| `sapiens_score` | 5 | Customizable (humanness) | ridge=-0.089 | ridge=-0.013 | ridge=-0.005 | ridge=-0.022 | rf=-0.007 | ridge=-0.007 | xgb=-0.071 | -0.005 | **0/7** |
 | `esm1v_score` | 5 | Customizable (LM score) | rf=-0.021 | rf=-0.050 | ridge=**0.294** | ridge=0.032 | ridge=-0.008 | ridge=**0.116** | ridge=-0.030 | 0.294 | 3/7 |
+
+**Dropped from DMS presets:** `antifold_score` (0/7 datasets positive, ImmuneBuilder broken on server),
+`sapiens_score` (0/7 datasets positive, tensor overflow for VH > 146 residues).
 
 **Column key:** flab_expr = flab_expression_koenig (4275), flab_bind = flab_binding_koenig (4275),
 Ang2 = abagym_Ang2_2017_G6 (397), EGFR = abagym_EGFR_2013_Cetuximab (659),
@@ -217,8 +217,8 @@ but not expected to help given the ESM-2 results.
 - `all_server` (13): + esm2, prot_t5, ab_roberta, balm, pigen, structural
 - `mutation_fast` (7): kmer, aac, blosum62, physicochemical, esm2, prot_t5, varpos_physchem
 - `mutation_full` (10): + antiberty, ablang2, varpos_onehot
-- `dms` (12): lm_score_ablang2, lm_score_esm2, positional, biophysical_delta, aac, blosum62, varpos_physchem, varpos_cdr_physchem, varpos_cdrh3_physchem, antifold_score, sapiens_score, esm1v_score
-- `dms_full` (20): all mutation-aware + full varpos arsenal (incl. varpos_cdr_onehot) + antifold_score + sapiens_score + esm1v_score
+- `dms` (10): lm_score_ablang2, lm_score_esm2, positional, biophysical_delta, aac, blosum62, varpos_physchem, varpos_cdr_physchem, varpos_cdrh3_physchem, esm1v_score
+- `dms_full` (18): all mutation-aware + full varpos arsenal (incl. varpos_cdr_onehot) + esm1v_score
 
 ### 2C. TCGA Representations
 
@@ -259,12 +259,12 @@ but not expected to help given the ESM-2 results.
 
 | Rep | Dim | Category | Lung Acc (best) | BRCA Acc (best) | Deps | Server? |
 |-----|-----|----------|----------------|----------------|------|---------|
-| `gene_mutation` | 200 | Somatic | **FAILED** | **FAILED** | Xena MC3 | **BROKEN** (403 Forbidden) |
 | `cnv_gistic` | 200 | CNV | xgb=0.820 | xgb=0.607 | Xena | YES |
 | `cnv_pca50` | 50 | CNV | xgb=0.877 | **PENDING** | Xena | YES |
 | `rppa` | 258 | Protein | rf=0.749 | xgb=0.773 | Xena | YES |
 | `mirna_top200` | 200 | miRNA | rf=0.888 | xgb=0.675 | Xena | YES |
-| `clinical` | 10 | Phenotype | **FAILED** | **FAILED** | Xena | **BROKEN** (403 Forbidden) |
+
+**Dropped:** `gene_mutation` (Xena MC3 returns 403), `clinical` (Xena phenotype returns 403).
 
 #### WSI (Pretrained Vision)
 
@@ -275,9 +275,9 @@ but not expected to help given the ESM-2 results.
 | `wsi_hoptimus0` | 512 | GigaSSL (Mendeley) | xgb=0.823 | rf=0.648 | Public | YES |
 | `wsi_gigapath` | 512 | GigaSSL (Mendeley) | xgb=0.854 | **PENDING** | Public | YES |
 | `wsi_moco` | 512 | GigaSSL (Mendeley) | xgb=0.775 | rf=0.616 | Public | YES |
-| `wsi_titan` | 768 | HuggingFace (gated) | 0.429 | 0.513 | Gated | **GARBAGE** (~random, likely failed to load) |
-| `wsi_uni2h` | 1536 | HuggingFace (gated) | 0.429 | — | Manual | **GARBAGE** (~random, features not found) |
-| `wsi_cnn320` | 320 | Local (Seagate) | 0.429 | N/A | Local | **GARBAGE** (~random, Lung only) |
+
+**Dropped:** `wsi_titan` (gated, garbage results), `wsi_uni2h` (features not found),
+`wsi_cnn320` (local only, garbage results).
 
 **Fine-tuning:** `geneformer` (per-fold, proper vocab tokenization → 1152D V2 embeddings).
 **Survey confirmed:** Geneformer FT is the best individual rep on LUAD vs LUSC (0.930 acc)
@@ -288,12 +288,12 @@ data leakage. **Proceed to Phase 2 full run.**
 **Presets:**
 - `fast` (5): pca100, hallmark, progeny, ctranspath, phikon
 - `fast+diverse` (9): + nmf50, stats, immune, quantile_rank
-- `multimodal` (12): + mutation, cnv_gistic, rppa, mirna_top200, clinical
-- `fast+learned` (17): expanded genomic + geneformer + scfoundation + 5 WSI
-- `all` (34): everything (19 expression + 2 foundation + 5 multi-omic + 8 WSI)
+- `multimodal` (10): + cnv_gistic, rppa, mirna_top200
+- `fast+learned` (16): expanded genomic + geneformer + scfoundation + 4 WSI
+- `all` (29): everything (18 expression + 2 foundation + 4 multi-omic + 5 WSI)
 - `genomic_fast` (3): pca100, hallmark, progeny
-- `genomic_diverse` (10): multi-omic without WSI
-- `genomic_all` (25): all genomic + 5 new reps + foundation models + multi-omic
+- `genomic_diverse` (8): multi-omic without WSI
+- `genomic_all` (24): all genomic + foundation models + multi-omic
 
 ### 2D. DTA Representations
 
@@ -337,18 +337,18 @@ Best model per cell: Davis=XGBoost (paired), Ridge (standalone); KIBA=Ridge/XGBo
 
 | Rep | Issue | Severity | Workaround |
 |-----|-------|----------|------------|
-| `gene_mutation` | Xena MC3 returns 403 | HIGH | Needs manual pre-download or removal from presets |
-| `clinical` | Xena phenotype returns 403 | HIGH | Needs manual pre-download or removal from presets |
+| `gene_mutation` | Xena MC3 returns 403 | ~~HIGH~~ **RESOLVED** | **Dropped** from all presets/dispatch |
+| `clinical` | Xena phenotype returns 403 | ~~HIGH~~ **RESOLVED** | **Dropped** from all presets/dispatch |
 | `gene_hallmark` | ~~Enrichr download may fail~~ | ~~MEDIUM~~ **RESOLVED** | Now uses local gene sets, no runtime downloads |
 | `gene_progeny` | ~~decoupler API 502 / NAType~~ | ~~LOW~~ **RESOLVED** | Now uses local OmniPath weights, no API calls |
 | `gene_dorothea` | ~~decoupler NAType in weight column~~ | ~~LOW~~ **RESOLVED** | Now uses local OmniPath regulons, no API calls |
 | `gene_reactome` | ~~ssGSEA orientation bug~~ | ~~LOW~~ **RESOLVED** | Now uses local gene sets, no runtime downloads |
-| `wsi_titan` | HuggingFace gated, awaiting access | MEDIUM | Skip unless access granted |
-| `wsi_uni2h` | Manual download + h5 processing required | HIGH | `prepare_uni2h_features()` must be run first |
-| `wsi_cnn320` | Local Seagate only, LUAD/LUSC only | LOW | Silently skipped if absent |
+| `wsi_titan` | HuggingFace gated, garbage results | ~~MEDIUM~~ **RESOLVED** | **Dropped** from presets/dispatch |
+| `wsi_uni2h` | Manual download + h5 processing, features not found | ~~HIGH~~ **RESOLVED** | **Dropped** from presets/dispatch |
+| `wsi_cnn320` | Local Seagate only, garbage results | ~~LOW~~ **RESOLVED** | **Dropped** from presets/dispatch |
 | `balm` | Not on HuggingFace; needs manual clone + weight download | ~~MEDIUM~~ **RESOLVED** (2026-02-25) | Cloned to `BALM/` on server, weights in `pretrained-BALM/` |
-| `antifold_score` | ImmuneBuilder not installed on server → "WT structure prediction failed" → all-zero features | HIGH | Install ImmuneBuilder or **DROP** (0/7 datasets positive even if fixed) |
-| `sapiens_score` | Sapiens positional embeddings overflow for VH > 146 residues (AbAgym VH ~210-220 aa) → zeros | HIGH | Fix Sapiens padding or **DROP** (0/7 datasets positive on FLAb either) |
+| `antifold_score` | ImmuneBuilder not installed, 0/7 positive | ~~HIGH~~ **RESOLVED** | **Dropped** from DMS presets |
+| `sapiens_score` | Tensor overflow for VH > 146 aa, 0/7 positive | ~~HIGH~~ **RESOLVED** | **Dropped** from DMS presets |
 
 ### Stale Server Caches
 
@@ -382,7 +382,7 @@ to pick up commit `3ba481e`.
 
 ### What we HAVE (confirmed baselines)
 
-- **Molecular:** ecfp4, maccs, pdv confirmed on logd/caco2/herg (3 reps × 3 datasets = 9 cells)
+- **Molecular:** 16 reps confirmed on logd/caco2/herg/qm9 (16 × 4 = 64 cells) — **COMPLETE** (slurm-7226494)
 - **Antibody inter:** 12 reps confirmed on abcov_kd; 6 reps on flab_thermo_jain
 - **Antibody DMS:** 20 reps confirmed on all 9 datasets (180/180 cells, slurm-7219595)
 - **TCGA:** 13 reps confirmed on Lung; 11 reps on BRCA PAM50; geneformer FT on both
@@ -392,7 +392,7 @@ to pick up commit `3ba481e`.
 
 | Domain | Gap | Estimated cells | Blocker |
 |--------|-----|----------------|---------|
-| Molecular | 14 pretrained reps (chemberta→chemformer) on logd/caco2/herg/qm9 | ~56 | Baseline survey keeps timing out during rep generation |
+| ~~Molecular~~ | ~~14 pretrained reps~~ | ~~56~~ | **DONE** (slurm-7226494, 64/64 cells). chemformer broken (rf=0.23 best), all others confirmed. |
 | Antibody inter | ddg_combined (544), abagym_all (2,247), abcov_kd (141), flab_aggregation_jain (137) | ~30 | Needs baseline survey |
 | ~~Antibody DMS~~ | ~~7 remaining DMS datasets + antifold/sapiens~~ | ~~137~~ | **DONE** (slurm-7219595, 180/180 cells). antifold_score broken (ImmuneBuilder missing), sapiens_score broken (tensor size mismatch on long VH) |
 | TCGA | gene_ica50 on BRCA, cnv_pca50 on BRCA, wsi_gigapath on BRCA | ~3 | Needs re-run |
@@ -549,9 +549,55 @@ this may improve with more folds and epochs in Phase 2.
 
 ---
 
-## 8. Open Problems
+## 8. Preprocessing Pipeline (2026-02-27)
 
-### Antibody Representation Strategy (NEEDS RETHINKING)
+All baselines must be re-run after these changes. Cache invalidation required.
+
+### Molecular SMILES Standardization
+- `_standardise_smiles()` now applies: `Cleanup → FragmentParent → Uncharger → TautomerEnumerator.Canonicalize`
+- Metal-containing compounds rejected (organic descriptors unreliable)
+- OpenADMET endpoints: 1st/99th percentile outlier clipping after deduplication
+
+### QM9 Normalization Fix
+- **Data leak fixed:** QM9 labels were pre-normalized from the full sampled set. Now returns raw labels; `StandardScaler` is applied per-fold in the evaluation pipeline.
+
+### KIBA Score Transform
+- KIBA scores negated so higher = stronger binding (consistent with pKd convention)
+
+### DTA SMILES Re-canonicalization
+- Drug SMILES from DeepDTA re-canonicalized with RDKit for consistency
+
+### Antibody Label Preprocessing
+- `abagym_all`: labels z-scored per experiment before concatenation (standard for pooling assays)
+- `ddg_combined`: outlier filter removes entries with |ddG| > 8 kcal/mol or > 3σ from mean
+
+### TCGA Preprocessing
+- **ComBat batch correction:** expression data corrected across tissue source sites (TSS) using pyComBat, applied before caching so all downstream reps (HVG, PCA) get corrected data. Optional — falls back to uncorrected if `combat` not installed.
+- **Zero-expression filter:** genes with >90% zero expression removed before HVG selection and PCA
+- **Mutation matrix:** filtered to non-silent variants only (Missense, Nonsense, Frameshift, Splice_Site, etc.)
+
+### Model Improvements
+- **Ridge → RidgeCV:** internal LOO cross-validation selects best alpha from `np.logspace(-6, 6, 13)`. No extra compute cost.
+- **LogisticRegression → LogisticRegressionCV:** built-in Cs=10 alpha selection
+- **KNN adaptive k:** `n_neighbors = min(5, max(1, sqrt(N_train)))` — scales to dataset size
+
+### Cache Invalidation (REQUIRED)
+```bash
+rm -rf ~/.cache/kirby/reps/              # all rep caches (SMILES changed)
+rm -rf ~/.cache/kirby/openadmet_train.csv # re-download + re-standardize
+rm -rf ~/.cache/kirby/chembl_herg_ki.csv  # re-fetch + re-standardize
+rm -rf ~/.cache/kirby/dta/               # KIBA transform changed
+rm -rf ~/.cache/kirby/tcga/expression/   # ComBat changes expression data
+rm -rf ~/.cache/kirby/tcga/pathways/     # already documented as stale
+rm -rf ~/.cache/kirby/ddg_combined/      # outlier filter changes dataset
+rm -rf ~/.cache/kirby/abagym/            # z-scoring changes labels
+```
+
+---
+
+## 9. Open Problems
+
+### Antibody Representation Strategy
 
 The current antibody pipeline relies on:
 1. **Full-sequence LM embeddings** (ESM-2, AbLang2, etc.) — known to fail on DMS (ρ ≈ 0.08)

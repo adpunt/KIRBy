@@ -71,7 +71,7 @@ pip install -e ".[qsar]"
 # Antibody work (transformers, ablang2, biopython)
 pip install -e ".[antibody]"
 
-# TCGA genomics/histopathology (scanpy, gseapy, decoupler)
+# TCGA genomics/histopathology (scanpy, gseapy, decoupler, pyComBat)
 pip install -e ".[tcga]"
 
 # Uncertainty quantification (NGBoost, quantile forests, BNNs)
@@ -575,7 +575,7 @@ sbatch tests/slurm_scripts/run_antibody_complexity.sh full abbind
 
 ```bash
 pip install -e ".[tcga]"
-# Installs: scanpy, anndata, gseapy, decoupler, requests
+# Installs: scanpy, anndata, gseapy, decoupler, requests, combat (pyComBat)
 ```
 
 ### Data Sources

@@ -147,6 +147,7 @@ setup(
             "gseapy>=1.0.0",
             "decoupler>=1.4.0",
             "requests>=2.26.0",
+            "combat",  # pyComBat for batch correction across TSS sites
         ],
 
         # Medical imaging / genomics

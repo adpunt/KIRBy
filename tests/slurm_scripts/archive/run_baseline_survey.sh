@@ -94,18 +94,16 @@ run_molecular() {
 }
 
 # =============================================================================
-# ANTIBODY INTRA-FAMILY (DMS): 9 datasets × 'dms_full' preset (20 reps)
+# ANTIBODY INTRA-FAMILY (DMS): 7 datasets × 'dms_full' preset (18 reps)
 # Variable-position reps incl. CDR-filtered variants + all LM scores.
 # =============================================================================
 run_antibody_intra() {
     echo ""
-    echo "========== ANTIBODY INTRA-FAMILY (dms_full preset, 20 reps) =========="
+    echo "========== ANTIBODY INTRA-FAMILY (dms_full preset, 18 reps) =========="
 
     for dataset in \
         flab_expression_koenig \
         flab_binding_koenig \
-        flab_thermo_hie \
-        flab_binding_rosace \
         abagym_Ang2_2017_G6 \
         abagym_EGFR_2013_Cetuximab \
         abagym_lysozyme_2019_D441 \

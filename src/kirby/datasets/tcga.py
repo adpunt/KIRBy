@@ -247,6 +247,23 @@ def _download_xena_expression(cohort: str) -> Tuple[np.ndarray, np.ndarray, List
 
     print(f"  Expression matrix: {expression.shape[0]} samples × {expression.shape[1]} genes")
 
+    # ComBat batch correction across tissue source sites (TSS)
+    try:
+        from combat.pycombat import pycombat
+        tss_codes = [sid[5:7] for sid in sample_ids]
+        unique_tss = set(tss_codes)
+        if len(unique_tss) > 1:
+            expr_df = pd.DataFrame(expression.T, columns=sample_ids)
+            batch = pd.Series(tss_codes, index=sample_ids)
+            corrected = pycombat(expr_df, batch)
+            expression = corrected.values.T.astype(np.float32)
+            print(f"  ComBat: corrected {len(unique_tss)} TSS batches "
+                  f"({expression.shape[0]} samples × {expression.shape[1]} genes)")
+        else:
+            print(f"  ComBat: single TSS batch, skipping")
+    except ImportError:
+        print("  ComBat: pycombat not installed, using uncorrected expression")
+
     # Cache
     np.savez_compressed(
         cached_npz,

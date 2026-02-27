@@ -88,9 +88,9 @@ REP_PRESETS = {
     'multimodal': [  # Cross-modality showcase
         'gene_pca100', 'gene_hallmark', 'gene_immune',
         'gene_nmf50', 'gene_stats',
-        'gene_mutation', 'cnv_gistic', 'rppa', 'mirna_top200', 'clinical',
+        'cnv_gistic', 'rppa', 'mirna_top200',
         'wsi_ctranspath', 'wsi_phikon',
-    ],  # 12 reps
+    ],  # 10 reps
 
     'fast+learned': [
         'gene_hvg2000', 'gene_pca100', 'gene_hallmark', 'gene_progeny',
@@ -98,26 +98,23 @@ REP_PRESETS = {
         'gene_nmf50', 'gene_ica50', 'gene_stats',
         'gene_geneformer', 'gene_scfoundation',
         'wsi_ctranspath', 'wsi_phikon', 'wsi_hoptimus0', 'wsi_moco',
-        'wsi_titan',
-    ],  # 17 reps
+    ],  # 16 reps
 
     'all': [
-        # Expression-derived (18) + mutation (1)
+        # Expression-derived (18)
         'gene_hvg2000', 'gene_pca100', 'gene_hallmark', 'gene_progeny',
         'gene_kegg', 'gene_dorothea', 'gene_combined_pathway',
         'gene_nmf50', 'gene_ica50', 'gene_stats',
         'gene_reactome', 'gene_oncogenic', 'gene_immune',
         'gene_quantile_rank', 'gene_corr_modules', 'gene_chromosome_arm',
         'gene_autoencoder50', 'gene_sparse_pca50',
-        'gene_mutation',
         # Foundation model embeddings (2, GPU)
         'gene_geneformer', 'gene_scfoundation',
-        # Multi-omic (5)
-        'cnv_gistic', 'cnv_pca50', 'rppa', 'mirna_top200', 'clinical',
-        # WSI (8)
+        # Multi-omic (4)
+        'cnv_gistic', 'cnv_pca50', 'rppa', 'mirna_top200',
+        # WSI (5)
         'wsi_ctranspath', 'wsi_phikon', 'wsi_hoptimus0', 'wsi_gigapath', 'wsi_moco',
-        'wsi_titan', 'wsi_uni2h', 'wsi_cnn320',
-    ],  # 34 reps
+    ],  # 29 reps
 
     # Genomic-only presets (no WSI)
     'genomic_fast': [
@@ -126,9 +123,9 @@ REP_PRESETS = {
 
     'genomic_diverse': [  # Multi-omic without WSI
         'gene_pca100', 'gene_hallmark', 'gene_immune',
-        'gene_nmf50', 'gene_stats', 'gene_mutation',
-        'cnv_gistic', 'rppa', 'mirna_top200', 'clinical',
-    ],  # 10 reps
+        'gene_nmf50', 'gene_stats',
+        'cnv_gistic', 'rppa', 'mirna_top200',
+    ],  # 8 reps
 
     'genomic_all': [
         'gene_hvg2000', 'gene_pca100', 'gene_hallmark', 'gene_progeny',
@@ -137,10 +134,9 @@ REP_PRESETS = {
         'gene_reactome', 'gene_oncogenic', 'gene_immune',
         'gene_quantile_rank', 'gene_corr_modules', 'gene_chromosome_arm',
         'gene_autoencoder50', 'gene_sparse_pca50',
-        'gene_mutation',
         'gene_geneformer', 'gene_scfoundation',
         'cnv_gistic', 'cnv_pca50', 'rppa', 'mirna_top200',
-    ],  # 25 reps (clinical excluded — it's a different paradigm)
+    ],  # 24 reps
 }
 
 _SEARCH_NAME_MAP = {
@@ -186,11 +182,9 @@ _REP_DISPATCH = {
     'gene_geneformer':       ('create_geneformer_embeddings', 'genomic'),
     'gene_scfoundation':     ('create_scfoundation_embeddings', 'genomic'),
     # Mutation-pattern: fn(sample_ids, cohort) -> np.ndarray
-    'gene_mutation':         ('create_mutation_matrix',   'mutation'),
     'cnv_gistic':            ('create_cnv_gistic',        'mutation'),
     'cnv_pca50':             ('create_cnv_pca50',         'mutation'),
     'mirna_top200':          ('create_mirna_top200',      'mutation'),
-    'clinical':              ('create_clinical',          'mutation'),
     # RPPA: fn(sample_ids) -> np.ndarray (pan-cancer, no cohort needed)
     'rppa':                  ('create_rppa',              'rppa'),
     # WSI — GigaSSL (Mendeley, public, slide-level)
@@ -199,12 +193,6 @@ _REP_DISPATCH = {
     'wsi_hoptimus0':         ('load_wsi_features',        'wsi'),
     'wsi_gigapath':          ('load_wsi_features',        'wsi'),
     'wsi_moco':              ('load_wsi_features',        'wsi'),
-    # WSI — TITAN (HuggingFace, gated, slide-level 768D)
-    'wsi_titan':             ('load_wsi_features',        'wsi'),
-    # WSI — UNI2-h (HuggingFace, gated, 1536D mean-pooled)
-    'wsi_uni2h':             ('load_wsi_features',        'wsi'),
-    # WSI — Local CNN 320D (Seagate, LUAD+LUSC only)
-    'wsi_cnn320':            ('load_wsi_features',        'wsi'),
 }
 
 
