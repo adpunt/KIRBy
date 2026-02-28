@@ -311,6 +311,167 @@ def _detect_task_type(labels: np.ndarray) -> str:
 
 
 # =============================================================================
+# HYPERPARAMETER TUNING
+# =============================================================================
+
+_HP_SEARCH_SPACES = {
+    'rf': {
+        'n_estimators': [50, 100, 200, 500],
+        'max_depth': [5, 10, 20, None],
+        'min_samples_split': [2, 5, 10],
+        'min_samples_leaf': [1, 2, 4],
+    },
+    'xgboost': {
+        'n_estimators': [50, 100, 200],
+        'max_depth': [3, 5, 7, 10],
+        'learning_rate': [0.01, 0.05, 0.1, 0.3],
+        'subsample': [0.7, 0.8, 1.0],
+        'colsample_bytree': [0.7, 0.8, 1.0],
+    },
+    'lightgbm': {
+        'n_estimators': [50, 100, 200],
+        'max_depth': [-1, 5, 10, 20],
+        'learning_rate': [0.01, 0.05, 0.1],
+        'num_leaves': [31, 63, 127],
+    },
+    'knn': {
+        'n_neighbors': [3, 5, 7, 11, 15],
+        'weights': ['uniform', 'distance'],
+    },
+    'mlp': {
+        'hidden_layer_sizes': [(64,), (100,), (100, 50), (200, 100)],
+        'alpha': [0.0001, 0.001, 0.01],
+        'learning_rate_init': [0.001, 0.01],
+    },
+    'svm': {
+        'C': [0.1, 1, 10, 100],
+        'gamma': ['scale', 'auto'],
+    },
+    # ridge: skip — uses RidgeCV/LogisticRegressionCV internally
+}
+
+
+def _count_grid_size(param_grid: dict) -> int:
+    """Count total combinations in a parameter grid."""
+    size = 1
+    for values in param_grid.values():
+        size *= len(values)
+    return size
+
+
+def tune_models(
+    base_reps: Dict[str, np.ndarray],
+    labels: np.ndarray,
+    groups: Optional[np.ndarray] = None,
+    task_type: Optional[str] = None,
+    speed: str = 'fast',
+    n_iter: int = 20,
+    n_folds: int = 3,
+    seed: int = 42,
+) -> Dict[str, Any]:
+    """Tune model hyperparameters via RandomizedSearchCV on concatenated reps.
+
+    Runs RandomizedSearchCV for each model in the speed tier (except ridge)
+    using the concatenation of all base_reps as features. Returns a dict of
+    tuned model instances ready to pass to find_best_hybrid(models=...).
+
+    Args:
+        base_reps: Dict of {name: ndarray} base representations.
+        labels: Target values.
+        groups: Group labels for GroupKFold (optional).
+        task_type: 'regression' or 'classification' (auto-detected if None).
+        speed: Speed tier — determines which models to tune.
+        n_iter: Max RandomizedSearchCV iterations per model.
+        n_folds: Number of CV folds for tuning.
+        seed: Random seed.
+
+    Returns:
+        Dict[str, model] — tuned model instances keyed by model name.
+    """
+    from sklearn.model_selection import (
+        RandomizedSearchCV, GroupKFold, KFold, StratifiedKFold,
+    )
+
+    if task_type is None:
+        task_type = _detect_task_type(labels)
+
+    # Concatenate all base reps into a single feature matrix
+    X = np.hstack([base_reps[name] for name in sorted(base_reps.keys())])
+    scaler = StandardScaler()
+    X = scaler.fit_transform(X)
+    y = labels
+
+    # Build CV splitter
+    if groups is not None:
+        n_unique_groups = len(np.unique(groups))
+        actual_folds = min(n_folds, n_unique_groups)
+        cv = GroupKFold(n_splits=actual_folds)
+        cv_args = {'groups': groups}
+    elif task_type == 'classification':
+        cv = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=seed)
+        cv_args = {}
+    else:
+        cv = KFold(n_splits=n_folds, shuffle=True, random_state=seed)
+        cv_args = {}
+
+    # Scoring metric
+    if task_type == 'classification':
+        scoring = 'accuracy'
+    else:
+        scoring = 'r2'
+
+    # Resolve which models to tune
+    default_models = _resolve_models(None, task_type, speed)
+
+    tuned = {}
+    for model_name, model in default_models.items():
+        if model_name == 'ridge':
+            # RidgeCV/LogisticRegressionCV tunes internally
+            tuned[model_name] = model
+            print(f"  {model_name}: skip (uses internal CV)")
+            continue
+
+        param_grid = _HP_SEARCH_SPACES.get(model_name)
+        if param_grid is None:
+            tuned[model_name] = model
+            print(f"  {model_name}: skip (no search space defined)")
+            continue
+
+        # Cap n_iter at total grid size to avoid sampling duplicates
+        grid_size = _count_grid_size(param_grid)
+        actual_iter = min(n_iter, grid_size)
+
+        try:
+            search = RandomizedSearchCV(
+                model, param_grid,
+                n_iter=actual_iter,
+                cv=cv,
+                scoring=scoring,
+                random_state=seed,
+                n_jobs=-1,
+                error_score='raise',
+            )
+            search.fit(X, y, **cv_args)
+            best_model = search.best_estimator_
+
+            # Silence verbosity on tuned XGBoost/LightGBM
+            if hasattr(best_model, 'verbose'):
+                best_model.set_params(verbose=-1)
+            if hasattr(best_model, 'verbosity'):
+                best_model.set_params(verbosity=0)
+
+            tuned[model_name] = best_model
+            print(f"  {model_name}: {search.best_score_:.4f} "
+                  f"({actual_iter} iters, best: {search.best_params_})")
+
+        except Exception as e:
+            print(f"  {model_name}: tuning FAILED ({e}), using defaults")
+            tuned[model_name] = model
+
+    return tuned
+
+
+# =============================================================================
 # SPEED TIER CONFIGURATION
 # =============================================================================
 
