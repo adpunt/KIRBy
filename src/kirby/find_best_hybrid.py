@@ -449,7 +449,7 @@ def tune_models(
                 scoring=scoring,
                 random_state=seed,
                 n_jobs=-1,
-                error_score='raise',
+                error_score=np.nan,
             )
             search.fit(X, y, **cv_args)
             best_model = search.best_estimator_
