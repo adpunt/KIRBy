@@ -435,6 +435,45 @@ sbatch tests/slurm_scripts/run_similarity_experiments.sh full
 
 ## 7b. Running Hybrid Search
 
+### Model Hyperparameter Tuning
+
+All CLIs support `--tune` to run `RandomizedSearchCV` per model before the hybrid search.
+Tuning uses the concatenation of all base reps as features and tunes on 3-fold CV by default.
+Ridge is skipped (uses internal CV). Tuned models are passed directly to `find_best_hybrid()`.
+
+```bash
+# Tune models before search (any domain CLI)
+python tests/find_best_hybrid_molecular.py logd --reps fast --search fast --tune
+
+# Control iterations (default: 20, capped at grid size)
+python tests/find_best_hybrid_molecular.py logd --reps fast --search fast --tune --tune-iter 10
+
+# Full tuned survey on server
+bash tests/slurm_scripts/submit_tuned_survey.sh medium 20
+```
+
+**Search spaces** (defined in `src/kirby/find_best_hybrid.py`):
+
+| Model | Tuned Hyperparameters |
+|-------|----------------------|
+| RF | n_estimators, max_depth, min_samples_split, min_samples_leaf |
+| XGBoost | n_estimators, max_depth, learning_rate, subsample, colsample_bytree |
+| LightGBM | n_estimators, max_depth, learning_rate, num_leaves |
+| KNN | n_neighbors, weights |
+| MLP | hidden_layer_sizes, alpha, learning_rate_init |
+| SVM | C, gamma |
+| Ridge | Skipped (uses RidgeCV/LogisticRegressionCV internally) |
+
+**Output paths:** When `--tune` is used without `--output`, results auto-save to
+`results_{dataset}_{search}_tuned.json` (vs `results_{dataset}_{search}.json` for defaults).
+The SLURM tuned survey saves to `tests/results/tuned_survey/` (vs `tests/results/pp_survey/`).
+
+**TODO: Compare tuned vs default results.** After running both the default survey
+(`submit_post_preprocessing_survey.sh`) and tuned survey (`submit_tuned_survey.sh`),
+compare per-dataset best scores. The better of the two (tuned or default) should be
+reported in final results. Expected: tuning helps RF/XGB/SVM most; KNN/MLP less so;
+Ridge unaffected.
+
 ### Molecular
 
 ```bash

@@ -470,6 +470,10 @@ Output:
                        help='Enable adaptive model pruning during search')
     parser.add_argument('--n-folds', type=int, default=None,
                        help='Override number of CV folds (default: from speed tier)')
+    parser.add_argument('--tune', action='store_true',
+                       help='Tune model HPs via RandomizedSearchCV before hybrid search')
+    parser.add_argument('--tune-iter', type=int, default=20,
+                       help='RandomizedSearchCV iterations per model (default: 20)')
 
     args = parser.parse_args()
 
@@ -521,6 +525,17 @@ Output:
     if args.allocation:
         alloc_arg = [a.strip() for a in args.allocation.split(',')]
 
+    # Hyperparameter tuning
+    if args.tune:
+        from kirby.find_best_hybrid import tune_models
+        print("\n=== Hyperparameter Tuning ===")
+        tuned_models = tune_models(
+            base_reps=base_reps, labels=labels, groups=groups,
+            task_type=task_type, speed=speed, n_iter=args.tune_iter,
+            seed=args.seed,
+        )
+        models_arg = tuned_models
+
     # Call domain-agnostic search
     result = find_best_hybrid(
         base_reps=base_reps,
@@ -547,7 +562,8 @@ Output:
     if args.output:
         output_path = args.output
     else:
-        output_path = f"results_{args.dataset}_{args.search}.json"
+        tune_suffix = '_tuned' if args.tune else ''
+        output_path = f"results_{args.dataset}_{args.search}{tune_suffix}.json"
 
     save_results(result, args.dataset, args.search, list(base_reps.keys()), output_path,
                  base_reps=base_reps, labels=labels)
