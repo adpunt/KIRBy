@@ -454,9 +454,12 @@ def tune_models(
             search.fit(X, y, **cv_args)
             best_model = search.best_estimator_
 
-            # Silence verbosity on tuned XGBoost/LightGBM
-            if hasattr(best_model, 'verbose'):
+            # Silence verbosity on tuned estimators
+            # LightGBM: verbose=-1 (silent), RF/MLP: verbose=0 (silent)
+            if 'LGBM' in type(best_model).__name__:
                 best_model.set_params(verbose=-1)
+            elif hasattr(best_model, 'verbose'):
+                best_model.set_params(verbose=0)
             if hasattr(best_model, 'verbosity'):
                 best_model.set_params(verbosity=0)
 
