@@ -448,7 +448,7 @@ def tune_models(
                 cv=cv,
                 scoring=scoring,
                 random_state=seed,
-                n_jobs=-1,
+                n_jobs=1,
                 error_score=np.nan,
             )
             search.fit(X, y, **cv_args)
