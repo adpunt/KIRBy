@@ -541,32 +541,37 @@ def compute_metrics(y_true, predictions_dict):
 # REPRESENTATION GENERATION
 # ═══════════════════════════════════════════════════════════════════════════
 
-def generate_representations(smiles_list):
+def generate_representations(smiles_list, rep_filter=None):
     """Generate all representations for a SMILES list. Returns dict of arrays."""
     import gc
     reps = {}
+    wanted = set(rep_filter) if rep_filter else {'ECFP4', 'PDV', 'SNS', 'MHG-GNN-pretrained'}
 
-    print("  ECFP4...", flush=True)
-    reps['ECFP4'] = create_ecfp4(smiles_list, n_bits=2048)
-    print(f"    done: {reps['ECFP4'].shape}", flush=True)
+    if 'ECFP4' in wanted:
+        print("  ECFP4...", flush=True)
+        reps['ECFP4'] = create_ecfp4(smiles_list, n_bits=2048)
+        print(f"    done: {reps['ECFP4'].shape}", flush=True)
 
-    print("  PDV...", flush=True)
-    reps['PDV'] = create_pdv(smiles_list)
-    print(f"    done: {reps['PDV'].shape}", flush=True)
+    if 'PDV' in wanted:
+        print("  PDV...", flush=True)
+        reps['PDV'] = create_pdv(smiles_list)
+        print(f"    done: {reps['PDV'].shape}", flush=True)
 
-    print("  SNS...", flush=True)
-    reps['SNS'], _ = create_sns(smiles_list, return_featurizer=True)
-    print(f"    done: {reps['SNS'].shape}", flush=True)
+    if 'SNS' in wanted:
+        print("  SNS...", flush=True)
+        reps['SNS'], _ = create_sns(smiles_list, return_featurizer=True)
+        print(f"    done: {reps['SNS'].shape}", flush=True)
 
-    print("  MHG-GNN (pretrained)...", flush=True)
-    try:
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        reps['MHG-GNN-pretrained'] = create_mhg_gnn(smiles_list, batch_size=32)
-        print(f"    done: {reps['MHG-GNN-pretrained'].shape}", flush=True)
-    except Exception as e:
-        print(f"    FAILED: {e} — skipping MHG-GNN", flush=True)
+    if 'MHG-GNN-pretrained' in wanted:
+        print("  MHG-GNN (pretrained)...", flush=True)
+        try:
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            reps['MHG-GNN-pretrained'] = create_mhg_gnn(smiles_list, batch_size=32)
+            print(f"    done: {reps['MHG-GNN-pretrained'].shape}", flush=True)
+        except Exception as e:
+            print(f"    FAILED: {e} — skipping MHG-GNN", flush=True)
 
     return reps
 
@@ -575,7 +580,7 @@ def generate_representations(smiles_list):
 # MAIN EXPERIMENT RUNNER
 # ═══════════════════════════════════════════════════════════════════════════
 
-def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None):
+def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, rep_filter=None):
     """Run full scaffold CV experiment for one dataset."""
     results_dir = Path(results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -592,7 +597,7 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None):
 
     # Generate representations for ALL molecules
     print(f"\nGenerating representations for {len(smiles)} molecules...")
-    reps = generate_representations(smiles)
+    reps = generate_representations(smiles, rep_filter=rep_filter)
 
     # Build experiment configs
     experiments = []
@@ -746,12 +751,17 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None):
     # Combine results across folds
     combined = pd.concat(all_fold_results, ignore_index=True)
 
-    # Merge with existing results if running a subset of models
+    # Merge with existing results if running a subset of models/reps
     existing_path = results_dir / 'all_results.csv'
-    if model_filter and existing_path.exists():
+    if (model_filter or rep_filter) and existing_path.exists():
         existing = pd.read_csv(existing_path)
-        # Remove old rows for models we're re-running, keep the rest
-        existing = existing[~existing['model'].isin(model_filter)]
+        # Remove old rows for models/reps we're re-running, keep the rest
+        mask = pd.Series(False, index=existing.index)
+        if model_filter:
+            mask |= existing['model'].isin(model_filter)
+        if rep_filter:
+            mask |= existing['rep'].isin(rep_filter)
+        existing = existing[~mask]
         combined = pd.concat([existing, combined], ignore_index=True)
         print(f"  Merged with existing results: {len(combined)} total rows")
 
@@ -862,6 +872,9 @@ def main():
                         help='Root directory for results')
     parser.add_argument('--models', nargs='+', default=None,
                         help='Only run these models (e.g. --models NGBoost SVM LightGBM)')
+    parser.add_argument('--reps', nargs='+', default=None,
+                        choices=['ECFP4', 'PDV', 'SNS', 'MHG-GNN-pretrained'],
+                        help='Only run these reps (e.g. --reps PDV). Merges with existing results.')
     args = parser.parse_args()
 
     ds_list = ['logd', 'caco2', 'herg'] if 'all' in args.datasets else args.datasets
@@ -871,7 +884,8 @@ def main():
     print("=" * 80)
     print(f"  Datasets: {ds_list}")
     print(f"  Split: {N_FOLDS}-fold scaffold CV")
-    print(f"  Representations: ECFP4, PDV, SNS, MHG-GNN-pretrained")
+    rep_list = ", ".join(args.reps) if args.reps else "ECFP4, PDV, SNS, MHG-GNN-pretrained"
+    print(f"  Representations: {rep_list}")
     print(f"  Noise strategies: {STRATEGIES}")
     print(f"  Sigma levels: {SIGMA_LEVELS}")
     model_list = "RF, QRF, XGBoost, NGBoost, LightGBM, SVM, GP(PDV), DNN"
@@ -900,7 +914,7 @@ def main():
             print(f"  {len(smiles)} molecules")
             summary = run_dataset('OpenADMET-LogD', smiles, labels,
                                   Path(args.results_root) / 'logd',
-                                  model_filter=args.models)
+                                  model_filter=args.models, rep_filter=args.reps)
             all_summaries.append(summary)
         else:
             print("ERROR: Cannot find LogD column")
@@ -914,7 +928,7 @@ def main():
             print(f"  {len(smiles)} molecules")
             summary = run_dataset('OpenADMET-Caco2_Efflux', smiles, labels,
                                   Path(args.results_root) / 'caco2',
-                                  model_filter=args.models)
+                                  model_filter=args.models, rep_filter=args.reps)
             all_summaries.append(summary)
         else:
             print("ERROR: Cannot find Caco2 Efflux column")
@@ -926,7 +940,7 @@ def main():
         print(f"  {len(smiles)} molecules")
         summary = run_dataset('ChEMBL-hERG-Ki', smiles, labels,
                               Path(args.results_root) / 'herg',
-                              model_filter=args.models)
+                              model_filter=args.models, rep_filter=args.reps)
         all_summaries.append(summary)
 
     # Cross-dataset summary
@@ -935,9 +949,14 @@ def main():
 
         # Merge with existing combined_summary if running a subset
         combined_path = Path(args.results_root) / 'combined_summary.csv'
-        if args.models and combined_path.exists():
+        if (args.models or args.reps) and combined_path.exists():
             existing = pd.read_csv(combined_path)
-            existing = existing[~existing['model'].isin(args.models)]
+            mask = pd.Series(False, index=existing.index)
+            if args.models:
+                mask |= existing['model'].isin(args.models)
+            if args.reps:
+                mask |= existing['rep'].isin(args.reps)
+            existing = existing[~mask]
             combined = pd.concat([existing, combined], ignore_index=True)
 
         combined.to_csv(combined_path, index=False)
