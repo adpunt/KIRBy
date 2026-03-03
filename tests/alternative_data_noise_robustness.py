@@ -54,6 +54,7 @@ from torch.utils.data import TensorDataset, DataLoader
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import GroupKFold
 from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+from sklearn.preprocessing import StandardScaler
 from scipy.stats import linregress, spearmanr
 import sys
 import time
@@ -468,6 +469,10 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
 
 def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, strategy, sigma_levels):
     """Noise robustness for tree-based regression model."""
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_test = scaler.transform(X_test)
+
     injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
     predictions, uncertainties = {}, {}
 
@@ -498,6 +503,11 @@ def run_tree_experiment(X_train, y_train, X_test, y_test, model_fn, strategy, si
 def run_neural_experiment(X_train, y_train, X_val, y_val, X_test, y_test,
                           model_type, strategy, sigma_levels):
     """Noise robustness for neural regression model."""
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_val = scaler.transform(X_val)
+    X_test = scaler.transform(X_test)
+
     injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
     predictions, uncertainties = {}, {}
 
