@@ -6,9 +6,9 @@ Each factory is a closure that, given (train_idx, val_idx, train_labels),
 returns (train_embeddings, val_embeddings) as numpy arrays.
 
 Usage:
-    from kirby.finetuning import make_antibody_lora_factory
+    from kirby.finetuning import make_geneformer_factory
 
-    factory = make_antibody_lora_factory(seqs, mutations, dataset_name='my_dms')
+    factory = make_geneformer_factory(expression, gene_names, ...)
     train_embs, val_embs = factory(train_idx, val_idx, train_labels)
 """
 
@@ -24,18 +24,8 @@ __all__ = [
 # Lazy imports for domain-specific factories (avoid importing torch at module level)
 
 
-def make_antibody_lora_factory(*args, **kwargs):
-    from kirby.finetuning.antibody_lora import make_antibody_lora_factory as _f
-    return _f(*args, **kwargs)
-
-
 def make_molecular_lora_factory(*args, **kwargs):
     from kirby.finetuning.molecular_lora import make_molecular_lora_factory as _f
-    return _f(*args, **kwargs)
-
-
-def make_antibody_mlm_factory(*args, **kwargs):
-    from kirby.finetuning.antibody_mlm import make_antibody_mlm_factory as _f
     return _f(*args, **kwargs)
 
 
@@ -46,11 +36,6 @@ def make_geneformer_factory(*args, **kwargs):
 
 def make_molecular_freeze_factory(*args, **kwargs):
     from kirby.finetuning.molecular_freeze import make_molecular_freeze_factory as _f
-    return _f(*args, **kwargs)
-
-
-def make_antibody_freeze_factory(*args, **kwargs):
-    from kirby.finetuning.antibody_freeze import make_antibody_freeze_factory as _f
     return _f(*args, **kwargs)
 
 

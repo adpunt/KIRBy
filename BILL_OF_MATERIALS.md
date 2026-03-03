@@ -106,119 +106,27 @@ were tested and performed **worse** than frozen baselines on all molecular datas
 
 ### 2B. Antibody Representations
 
-**Source:** C01 baselines on FLAb Expression Koenig (~4,275 samples, intra-family DMS).
-Models: rf, knn, ridge, mlp, xgboost, lightgbm.
+**Approach (March 2026 rebuild):** Simple LM embeddings + sequence encodings → Ridge/RidgeCV
+→ Spearman ρ. Following compass document: property-dependent model selection, one-hot
+competitive with billion-param models at ≥1K samples.
 
-#### Inter-Family Base Reps
+**Script:** `tests/antibody_baseline_survey.py`
 
-**Sources:** abcov_kd baselines (slurm-11380416, 13 reps, incomplete search),
-flab_thermo_jain (baseline survey job 11384921, 6 reps only).
+| Rep | Dim | Category | Deps | Notes |
+|-----|-----|----------|------|-------|
+| `esm2` | 2560 | Pretrained (protein LM) | transformers | ESM-2 650M, H+L concat |
+| `ablang2` | 768 | Pretrained (Ab LM, paired) | ablang2 | Single forward pass |
+| `igbert` | 768 | Pretrained (Ab LM, paired) | transformers | IgBert paired |
+| `antiberty` | 1024 | Pretrained (Ab LM) | transformers | AntiBERTy, H+L concat |
+| `prot_t5` | 2048 | Pretrained (protein LM) | transformers | ProtT5-XL, H+L concat |
+| `onehot` | 5600 | Standard (positional) | None | Max 150H + 130L, 20 AA |
+| `blosum` | 5600 | Standard (positional) | None | BLOSUM62 row per residue |
+| `aac` | 40 | Standard (composition) | None | 20 frequencies per chain |
 
-| Rep | Dim | Category | abcov_kd R² | thermo_jain R² | Deps | Notes |
-|-----|-----|----------|------------|---------------|------|-------|
-| `kmer` | 400 | Standard (sequence) | rf=0.003 | rf=-0.072 | None | Near-zero |
-| `aac` | 20 | Standard (composition) | rf=-0.212 | rf=-0.177 | None | |
-| `blosum62` | 20 | Standard (substitution) | rf=-0.189 | rf=-0.235 | None | |
-| `physicochemical` | 68 | Standard (biophysical) | rf=-0.237 | rf=-0.127 | None | |
-| `antiberty` | 2048 | Pretrained (Ab LM) | rf=-0.085 | — | transformers | Concat H+L |
-| `ablang2` | 480 | Pretrained (Ab LM) | rf=-0.094 | rf=**0.149** | ablang2 | Best on thermo_jain |
-| `igbert` | 1024 | Pretrained (Ab LM) | rf=-0.085 | — | transformers | |
-| `esm2` | 2560 | Pretrained (protein LM) | rf=-0.177 | — | transformers | Concat H+L |
-| `prot_t5` | 2048 | Pretrained (protein LM) | rf=-0.171 | — | transformers | Concat H+L |
-| `ab_roberta` | 1536 | Pretrained (Ab LM) | rf=-0.052 | — | transformers | Best LM on abcov |
-| `balm` | 1024 | Pretrained (Ab LM) | **PENDING** | — | manual | Setup done (see §3) |
-| `pigen` | 768 | Pretrained (Ab LM) | rf=-0.225 | — | transformers | |
-| `esmc` | varies | Pretrained (protein LM) | **PENDING** | — | esmc | Never tested |
-| `sapiens` | varies | Pretrained (humanization) | **PENDING** | — | sapiens | Never tested |
-| `structural` | 28 | Customizable (3D) | ridge=-0.177 | rf=-0.416 | ImmuneBuilder | Server only |
-| `developability` | 16 | Customizable | — | — | None | Tested on DMS only (see below) |
-| `imgt_onehot` | varies | Standard (positional) | **PENDING** | — | anarci | Never tested |
+**Baselines:** Not yet computed — run `antibody_baseline_survey.py` on server.
 
-**Observation:** All inter-family reps are negative on abcov_kd (141 samples, very hard).
-Only ablang2 is positive on flab_thermo_jain. LM embeddings do not clearly help for
-inter-family antibody tasks on these small datasets. Needs testing on ddg_combined
-(~1,000-1,200 samples) for a fairer comparison.
-
-**Note:** Full-sequence LM embeddings are known to be near-useless for intra-family
-DMS (published ρ ≈ 0.08). The `dms` presets use mutation-specific reps instead.
-
-> **⚠ ANTIBODY DOMAIN NEEDS RETHINKING.** The fine-tuning survey (Feb 2025) showed
-> that LoRA and MLM fine-tuning of ESM-2 produced negative R² on all antibody datasets
-> tested (FLAb expression, FLAb binding, AbAgym Ang2). Combined with the known failure
-> of full-sequence LM embeddings on DMS data, the entire antibody representation
-> strategy needs to be revisited. Possible directions: inverse folding models (ESM-IF1,
-> ProteinMPNN scores), per-residue evolutionary conservation, structure-conditioned
-> embeddings, or abandoning LM-based reps entirely in favour of physics-based or
-> positional features. See §7 for full survey results.
-
-#### DMS / Mutation-Aware Reps
-
-**Sources:** Full 9-dataset baseline survey (slurm-7219595, dms_full 20 reps, 5-fold
-GroupKFold, rf+ridge+xgboost, 180/180 cells). Two datasets excluded from analysis:
-flab_thermo_hie (N=10) and flab_binding_rosace (N=14) — too small for meaningful CV.
-
-| Rep | Dim | Category | flab_expr | flab_bind | Ang2 | EGFR | lyso | VEGF | HER2 | Best | +/7 |
-|-----|-----|----------|-----------|-----------|------|------|------|------|------|------|-----|
-| `aac` | 20 | Standard | xgb=**0.260** | xgb=0.070 | ridge=0.084 | ridge=-0.001 | xgb=**0.208** | rf=0.158 | ridge=0.037 | 0.260 | 6/7 |
-| `blosum62` | 20 | Standard | rf=**0.267** | rf=0.072 | ridge=0.090 | ridge=0.002 | rf=**0.248** | ridge=0.120 | rf=0.102 | 0.267 | 6/7 |
-| `biophysical_delta` | 6 | Customizable (mutation) | xgb=**0.265** | rf=0.071 | ridge=0.053 | ridge=0.023 | rf=**0.226** | ridge=0.002 | ridge=0.176 | 0.265 | 7/7 |
-| `developability` | 16 | Customizable | rf=**0.272** | rf=**0.112** | ridge=0.094 | ridge=0.013 | rf=**0.264** | rf=0.106 | rf=**0.443** | 0.443 | 7/7 |
-| `esm2_site` | 1280 | Customizable (mutation) | ridge=**0.197** | rf=**0.105** | ridge=**0.406** | xgb=**0.184** | xgb=0.082 | rf=**0.418** | ridge=**0.423** | 0.423 | 7/7 |
-| `lm_score_ablang2` | 5 | Customizable (LM score) | ridge=0.002 | rf=-0.635 | ridge=**0.317** | ridge=-0.004 | ridge=0.022 | ridge=0.085 | ridge=-0.059 | 0.317 | 3/7 |
-| `lm_score_esm2` | 5 | Customizable (LM score) | ridge=-0.009 | rf=-0.009 | ridge=**0.291** | ridge=0.014 | ridge=-0.010 | ridge=**0.109** | ridge=-0.033 | 0.291 | 3/7 |
-| `lm_score_prot_t5` | 5 | Customizable (LM score) | ridge=0.007 | ridge=-0.023 | ridge=**0.257** | ridge=0.030 | ridge=-0.014 | ridge=0.086 | ridge=-0.058 | 0.257 | 4/7 |
-| `lm_score_antiberty` | 5 | Customizable (LM score) | ridge=-0.011 | ridge=-0.105 | ridge=**0.301** | ridge=0.034 | ridge=0.002 | ridge=**0.111** | ridge=0.004 | 0.301 | 4/7 |
-| `positional` | 11 | Customizable (mutation) | rf=-0.238 | rf=-0.082 | rf=**0.385** | ridge=**0.111** | rf=0.077 | rf=**0.468** | rf=**0.408** | 0.468 | 5/7 |
-| `varpos_onehot` | varies | Customizable (varpos) | xgb=-0.012 | rf=-0.018 | rf=**0.491** | xgb=**0.271** | ridge=0.185 | xgb=**0.507** | xgb=**0.367** | 0.507 | 5/7 |
-| `varpos_blosum` | varies | Customizable (varpos) | xgb=-0.012 | rf=-0.017 | rf=**0.466** | xgb=**0.259** | xgb=**0.214** | xgb=**0.549** | xgb=**0.510** | 0.549 | 5/7 |
-| `varpos_physchem` | varies | Customizable (varpos) | xgb=-0.012 | rf=-0.017 | rf=**0.448** | xgb=**0.239** | rf=0.160 | xgb=**0.483** | rf=**0.403** | 0.483 | 5/7 |
-| `varpos_cdr_onehot` | varies | Customizable (varpos) | rf=-0.010 | xgb=-0.011 | rf=**0.474** | xgb=0.131 | xgb=0.188 | xgb=**0.504** | xgb=**0.315** | 0.504 | 5/7 |
-| `varpos_cdr_physchem` | varies | Customizable (varpos) | rf=-0.010 | xgb=-0.011 | rf=**0.427** | xgb=0.114 | rf=0.171 | xgb=**0.487** | ridge=**0.402** | 0.487 | 5/7 |
-| `varpos_cdrh3_physchem` | varies | Customizable (varpos) | rf=-0.010 | ridge=-0.011 | rf=**0.226** | rf=-0.011 | rf=0.053 | rf=0.123 | ridge=**0.402** | 0.402 | 4/7 |
-| `varpos_fw_physchem` | varies | Customizable (varpos) | rf=-0.013 | xgb=-0.013 | rf=0.020 | rf=**0.106** | rf=-0.020 | rf=-0.000 | rf=0.094 | 0.106 | 3/7 |
-| `esm1v_score` | 5 | Customizable (LM score) | rf=-0.021 | rf=-0.050 | ridge=**0.294** | ridge=0.032 | ridge=-0.008 | ridge=**0.116** | ridge=-0.030 | 0.294 | 3/7 |
-
-**Dropped from DMS presets:** `antifold_score` (0/7 datasets positive, ImmuneBuilder broken on server),
-`sapiens_score` (0/7 datasets positive, tensor overflow for VH > 146 residues).
-
-**Column key:** flab_expr = flab_expression_koenig (4275), flab_bind = flab_binding_koenig (4275),
-Ang2 = abagym_Ang2_2017_G6 (397), EGFR = abagym_EGFR_2013_Cetuximab (659),
-lyso = abagym_lysozyme_2019_D441 (627), VEGF = abagym_VEGF_2017b_G6 (418),
-HER2 = abagym_HER2_2021_trastuzumab (146). Best = best R² across 7 reliable datasets.
-+/7 = number of datasets with R² > 0.01.
-
-**Excluded datasets:** flab_thermo_hie (N=10, all reps deeply negative R² ≈ -5 to -130)
-and flab_binding_rosace (N=14, similar). Too few samples for meaningful 5-fold CV.
-
-**Known bugs in results:**
-- `antifold_score`: "WARNING: WT structure prediction failed — returning zeros" on all
-  AbAgym datasets. ImmuneBuilder not available on server → all-zero features → negative R².
-- `sapiens_score`: "Sapiens scoring failed (tensor size mismatch)" on EGFR, lysozyme, VEGF,
-  HER2 (VH > 146 residues overflows Sapiens positional embeddings). Returns zeros → same
-  R² as antifold on those datasets. Only tested properly on FLAb (flab_expr: -0.089).
-
-**Key insight:** Performance is highly dataset-dependent. Composition reps (aac, blosum62,
-biophysical_delta, developability) win on FLAb expression/binding, while positional/varpos
-reps dominate on AbAgym datasets (varpos_blosum R²=0.549 on VEGF, varpos_cdr_physchem
-R²=0.487 on VEGF). `esm2_site` and `positional` are strong across both families.
-`developability` is the surprise winner on HER2 (0.443). `antifold_score` and `sapiens_score`
-are broken — never positive on any dataset.
-
-**Delta reps:** `--delta` flag generates ΔX = X_mut − X_wt for every base rep, doubling count.
-
-**Fine-tuning:** NONE — see §7 for survey results. `lora_esm2`, `lora_esm2_small`,
-and `mlm_esm2` were all tested and produced **negative R²** on antibody datasets.
-`lora_antiberty`, `lora_ablang2`, `mlm_antiberty`, `mlm_esm2_small` are implemented
-but not expected to help given the ESM-2 results.
-
-**Presets:**
-- `fast` (4): kmer, physicochemical, aac, blosum62
-- `fast+lm` (7): + antiberty, ablang2, igbert
-- `all_server` (13): + esm2, prot_t5, ab_roberta, balm, pigen, structural
-- `mutation_fast` (7): kmer, aac, blosum62, physicochemical, esm2, prot_t5, varpos_physchem
-- `mutation_full` (10): + antiberty, ablang2, varpos_onehot
-- `dms` (10): lm_score_ablang2, lm_score_esm2, positional, biophysical_delta, aac, blosum62, varpos_physchem, varpos_cdr_physchem, varpos_cdrh3_physchem, esm1v_score
-- `dms_full` (18): all mutation-aware + full varpos arsenal (incl. varpos_cdr_onehot) + esm1v_score
+**Fine-tuning:** Removed. All antibody FT methods (LoRA, MLM, freeze) produced negative
+R² and have been deleted. No antibody fine-tuning factories remain.
 
 ### 2C. TCGA Representations
 
@@ -347,8 +255,8 @@ Best model per cell: Davis=XGBoost (paired), Ridge (standalone); KIBA=Ridge/XGBo
 | `wsi_uni2h` | Manual download + h5 processing, features not found | ~~HIGH~~ **RESOLVED** | **Dropped** from presets/dispatch |
 | `wsi_cnn320` | Local Seagate only, garbage results | ~~LOW~~ **RESOLVED** | **Dropped** from presets/dispatch |
 | `balm` | Not on HuggingFace; needs manual clone + weight download | ~~MEDIUM~~ **RESOLVED** (2026-02-25) | Cloned to `BALM/` on server, weights in `pretrained-BALM/` |
-| `antifold_score` | ImmuneBuilder not installed, 0/7 positive | ~~HIGH~~ **RESOLVED** | **Dropped** from DMS presets |
-| `sapiens_score` | Tensor overflow for VH > 146 aa, 0/7 positive | ~~HIGH~~ **RESOLVED** | **Dropped** from DMS presets |
+| `antifold_score` | ImmuneBuilder not installed, 0/7 positive | ~~HIGH~~ **RESOLVED** | Deleted (March 2026 antibody rebuild) |
+| `sapiens_score` | Tensor overflow for VH > 146 aa, 0/7 positive | ~~HIGH~~ **RESOLVED** | Deleted (March 2026 antibody rebuild) |
 
 ### Stale Server Caches
 
@@ -383,8 +291,7 @@ to pick up commit `3ba481e`.
 ### What we HAVE (confirmed baselines)
 
 - **Molecular:** 16 reps confirmed on logd/caco2/herg/qm9 (16 × 4 = 64 cells) — **COMPLETE** (slurm-7226494)
-- **Antibody inter:** 12 reps confirmed on abcov_kd; 6 reps on flab_thermo_jain
-- **Antibody DMS:** 20 reps confirmed on all 9 datasets (180/180 cells, slurm-7219595)
+- **Antibody:** Rebuilt (March 2026). 8 simple reps, no baselines computed yet
 - **TCGA:** 13 reps confirmed on Lung; 11 reps on BRCA PAM50; geneformer FT on both
 - **DTA:** Nothing
 
@@ -393,8 +300,7 @@ to pick up commit `3ba481e`.
 | Domain | Gap | Estimated cells | Blocker |
 |--------|-----|----------------|---------|
 | ~~Molecular~~ | ~~14 pretrained reps~~ | ~~56~~ | **DONE** (slurm-7226494, 64/64 cells). chemformer broken (rf=0.23 best), all others confirmed. |
-| Antibody inter | ddg_combined (544), abagym_all (2,247), abcov_kd (141), flab_aggregation_jain (137) | ~30 | Needs baseline survey |
-| ~~Antibody DMS~~ | ~~7 remaining DMS datasets + antifold/sapiens~~ | ~~137~~ | **DONE** (slurm-7219595, 180/180 cells). antifold_score broken (ImmuneBuilder missing), sapiens_score broken (tensor size mismatch on long VH) |
+| Antibody (all) | 8 reps × 12 datasets | ~96 | Rebuilt — run `antibody_baseline_survey.py all` |
 | TCGA | gene_ica50 on BRCA, cnv_pca50 on BRCA, wsi_gigapath on BRCA | ~3 | Needs re-run |
 | DTA | All 10 reps on davis + kiba | ~20 | Timed out during protein_kmer generation |
 
@@ -445,7 +351,7 @@ Reps that are broken AND low-value should be removed from presets to save comput
 |----------|-------------|---------|
 | **Standard** | Computed from input data, no pretrained models | ecfp4, maccs, pdv, aac, kmer, gene_pca100, cnv_gistic |
 | **Pretrained** | Frozen embeddings from pretrained LMs | chemberta, molformer, esm2, ablang2, wsi_ctranspath |
-| **Fine-tuned** | Per-fold fine-tuned embeddings (LoRA/MLM/Geneformer) | lora_chemberta, antibody_lora, geneformer |
+| **Fine-tuned** | Per-fold fine-tuned embeddings (LoRA/Geneformer) | lora_chemberta, geneformer |
 | **Customizable** | Derived from metadata, mutations, or domain knowledge | varpos_*, lm_score_*, biophysical_delta, structural |
 
 ---
@@ -464,13 +370,9 @@ Reps that are broken AND low-value should be removed from presets to save comput
 |---------|--------|---------------|--------|-----------|----------|---------------|
 | `make_molecular_lora_factory` | Molecular | ChemBERTa-77M-MLM | LoRA (rank=8) | 384D | `--finetune lora_chemberta` | **FAIL** — worse than frozen ecfp4/pdv on all 3 datasets |
 | `make_molecular_lora_factory` | Molecular | MoLFormer-XL | LoRA (rank=8) | 768D | `--finetune lora_molformer` | **FAIL** — worse than frozen ecfp4/pdv on all 3 datasets |
-| `make_antibody_lora_factory` | Antibody | ESM-2 (650M) | LoRA (rank=8) | 1280D | `--finetune lora_esm2` | **FAIL** — negative R² on FLAb expr, binding, AbAgym |
-| `make_antibody_lora_factory` | Antibody | ESM-2 (8M) | LoRA (rank=8) | 320D | `--finetune lora_esm2_small` | **FAIL** — negative R² on FLAb expr, binding, AbAgym |
-| `make_antibody_mlm_factory` | Antibody | ESM-2 (650M) | Self-supervised MLM | 5D | `--finetune mlm_esm2` | **FAIL** — negative R² on all antibody datasets |
-| `make_antibody_lora_factory` | Antibody | AntiBERTy | LoRA (rank=8) | 512D | `--finetune lora_antiberty` | Not tested (ESM-2 results make this unlikely to help) |
-| `make_antibody_lora_factory` | Antibody | AbLang2 | LoRA (rank=8) | 480D | `--finetune lora_ablang2` | Not tested |
-| `make_antibody_mlm_factory` | Antibody | ESM-2 (8M) | Self-supervised MLM | 5D | `--finetune mlm_esm2_small` | Not tested |
-| `make_antibody_mlm_factory` | Antibody | AntiBERTy | Self-supervised MLM | 5D | `--finetune mlm_antiberty` | Not tested |
+
+**Deleted (March 2026):** All antibody fine-tuning factories (`antibody_lora`, `antibody_freeze`,
+`antibody_mlm`) removed. All produced negative R² on antibody datasets.
 
 ### Two-Phase Fine-Tuning Workflow
 
@@ -514,20 +416,18 @@ Raw JSON in `tests/results/finetune_survey/`.
 performance vs. frozen fingerprints/descriptors. The cheap standard reps (ecfp4, pdv)
 remain dominant. Fine-tuning is not worth the GPU cost for molecular property prediction.
 
-### 7B. Antibody — FT does NOT help (domain needs rethinking)
+### 7B. Antibody — FT does NOT help (code deleted March 2026)
 
-| Dataset | Best Frozen Rep | R² | Best FT Rep | R² | Verdict |
-|---------|----------------|-----|-------------|-----|---------|
-| FLAb Expression (Koenig) | varpos_physchem (lgbm) | 0.382 | lora_esm2 (ridge) | -0.020 | Frozen wins; FT is negative |
-| FLAb Binding (Koenig) | biophysical_delta (ridge) | 0.009 | lora_esm2 (ridge) | -0.029 | Both near zero; FT negative |
-| AbAgym Ang2 | aac (lgbm) | 0.037 | lora_esm2 (ridge) | -0.106 | Both poor; FT worse |
+All antibody fine-tuning code has been removed. Summary of what was tested before deletion:
 
-**Conclusion:** ESM-2 LoRA and MLM fine-tuning produce negative R² across all antibody
-datasets. This is consistent with the known failure of full-sequence LM embeddings for
-intra-family DMS prediction (published ρ ≈ 0.08). The antibody domain's best reps are
-mutation-aware features (varpos_physchem, biophysical_delta) that capture *positional*
-changes, not global sequence embeddings. The entire antibody representation strategy
-needs fundamental rethinking — see §8.
+- `lora_esm2` (650M, LoRA rank=8): Negative R² on FLAb expression, binding, AbAgym Ang2
+- `lora_esm2_small` (8M, LoRA rank=8): Negative R² on all datasets
+- `mlm_esm2` (self-supervised MLM): Negative R² on all datasets
+- Other variants (`lora_antiberty`, `lora_ablang2`, `mlm_antiberty`, `mlm_esm2_small`): Never tested, not expected to help
+
+The entire mutation-aware representation approach (40+ custom functions, varpos features,
+LM log-prob scores, delta reps) has been replaced with simple LM embeddings → Ridge →
+Spearman ρ, following the compass document. See `tests/antibody_baseline_survey.py`.
 
 ### 7C. TCGA — Geneformer FT HELPS
 
@@ -597,23 +497,16 @@ rm -rf ~/.cache/kirby/abagym/            # z-scoring changes labels
 
 ## 9. Open Problems
 
-### Antibody Representation Strategy
+### Antibody Representation Strategy (March 2026 rebuild)
 
-The current antibody pipeline relies on:
-1. **Full-sequence LM embeddings** (ESM-2, AbLang2, etc.) — known to fail on DMS (ρ ≈ 0.08)
-2. **LoRA fine-tuning** of those same LMs — produces negative R², no improvement
-3. **Mutation-aware features** (varpos, biophysical_delta, lm_score) — best performers but still modest (R² ≈ 0.38 on expression)
+The old approach (40+ mutation-aware custom features, complex presets, HP tuning) has been
+replaced with a simple baseline pipeline: LM embeddings → Ridge → Spearman ρ.
 
-The fundamental problem: DMS datasets contain families of very similar sequences where
-single-residue changes cause large functional shifts. Full-sequence embeddings compress
-these near-identical sequences to near-identical vectors, losing the mutation signal.
-Fine-tuning doesn't fix this because the pretraining objective (masked LM) doesn't
-learn residue-level functional effects.
+**Current approach:** 8 representations (5 LM + 3 sequence encodings) evaluated per
+dataset with RidgeCV. This matches the standard in the field (FLAb2 paper uses the same).
 
-**Possible directions to explore:**
-- Inverse folding scores (ESM-IF1, ProteinMPNN) — capture structural plausibility of mutations
-- Per-residue evolutionary conservation (MSA-based, not LM-based)
-- Structure-conditioned embeddings (SaProt, ESM-IF1 encoder states)
-- Zero-shot fitness predictors as features (EVE, Tranception, ESM-1v marginals)
-- Abandoning LM embeddings entirely for antibodies; focus on positional + physics-based
-- Paratope-aware features: only embed the binding interface, not the full sequence
+**Key questions to answer with the new baselines:**
+1. Which LM (ESM-2, AbLang2, IgBert, AntiBERTy, ProtT5) works best per task type?
+2. Does one-hot match or beat LMs at ≥1K samples (as claimed in literature)?
+3. Are inter-family datasets (ddg_combined, abcov_kd) still fundamentally too small/hard?
+4. Is Ridge sufficient or do tree models add value for antibody tasks?
