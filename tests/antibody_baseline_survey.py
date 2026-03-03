@@ -323,6 +323,9 @@ def run_survey(
         try:
             print(f"  Generating {rep_name}...", end='', flush=True)
             X = ANTIBODY_REPS[rep_name](heavy_seqs, light_seqs)
+            if X.ndim != 2:
+                print(f" FAILED: expected 2D array, got {X.ndim}D {X.shape}")
+                continue
             reps[rep_name] = X
             print(f" ({X.shape[1]}D)")
         except Exception as e:
