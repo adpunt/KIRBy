@@ -39,6 +39,7 @@ from sklearn.metrics import (
     recall_score, f1_score, matthews_corrcoef
 )
 from sklearn.calibration import CalibratedClassifierCV
+from sklearn.preprocessing import StandardScaler
 import sys
 from pathlib import Path
 
@@ -374,18 +375,21 @@ def run_experiment_tree_model(X_train, y_train, X_test, y_test,
                               model_fn, strategy, flip_prob_levels):
     """
     Run noise robustness experiment for tree-based classifier
-    
+
     Args:
         X_train, y_train: Training data
         X_test, y_test: Test data
         model_fn: Function that returns initialized model
         strategy: Noise strategy name
         flip_prob_levels: List of flip probability values to test
-    
+
     Returns:
         predictions: Dict mapping flip_prob -> predictions
         probabilities: Dict mapping flip_prob -> probabilities
     """
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_test = scaler.transform(X_test)
     injector = NoiseInjectorClassification(strategy=strategy, random_state=42)
     predictions = {}
     probabilities = {}
@@ -416,17 +420,21 @@ def run_experiment_tree_model(X_train, y_train, X_test, y_test,
 def run_experiment_neural(X_train, y_train, X_val, y_val, X_test, y_test,
                           model_type, strategy, flip_prob_levels):
     """Run noise robustness experiment for neural classifier"""
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_val = scaler.transform(X_val)
+    X_test = scaler.transform(X_test)
     injector = NoiseInjectorClassification(strategy=strategy, random_state=42)
     predictions = {}
     probabilities = {}
-    
+
     for flip_prob in flip_prob_levels:
         # Inject noise
         if flip_prob == 0.0:
             y_noisy = y_train
         else:
             y_noisy = injector.inject(y_train, flip_prob)
-        
+
         # Train
         preds, probs = train_neural_classifier(
             X_train, y_noisy, X_val, y_val, X_test,

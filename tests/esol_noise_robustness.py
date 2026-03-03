@@ -33,6 +33,7 @@ import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 import sys
 from pathlib import Path
 
@@ -368,22 +369,25 @@ def train_neural_model(X_train, y_train, X_val, y_val, X_test,
 # EXPERIMENT RUNNER
 # =============================================================================
 
-def run_experiment_tree_model(X_train, y_train, X_test, y_test, 
+def run_experiment_tree_model(X_train, y_train, X_test, y_test,
                               model_fn, strategy, sigma_levels):
     """
     Run noise robustness experiment for tree-based model
-    
+
     Args:
         X_train, y_train: Training data
         X_test, y_test: Test data
         model_fn: Function that returns initialized model
         strategy: Noise strategy name
         sigma_levels: List of sigma values to test
-    
+
     Returns:
         predictions: Dict mapping sigma -> predictions
         uncertainties: Dict mapping sigma -> uncertainties (or None)
     """
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_test = scaler.transform(X_test)
     injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
     predictions = {}
     uncertainties = {}
@@ -421,17 +425,21 @@ def run_experiment_tree_model(X_train, y_train, X_test, y_test,
 def run_experiment_neural(X_train, y_train, X_val, y_val, X_test, y_test,
                          model_type, strategy, sigma_levels):
     """Run noise robustness experiment for neural network"""
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_val = scaler.transform(X_val)
+    X_test = scaler.transform(X_test)
     injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
     predictions = {}
     uncertainties = {}
-    
+
     for sigma in sigma_levels:
         # Inject noise
         if sigma == 0.0:
             y_noisy = y_train
         else:
             y_noisy = injector.inject(y_train, sigma)
-        
+
         # Train
         preds, uncs = train_neural_model(
             X_train, y_noisy, X_val, y_val, X_test,
