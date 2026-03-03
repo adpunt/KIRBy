@@ -55,20 +55,7 @@ DATASET_REGISTRY = {
     'caco2': ('molecular', 'all'),
     'herg':  ('molecular', 'all'),
     'qm9':   ('molecular', 'all'),
-    # Antibody DMS (intra-family)
-    'flab_expression_koenig': ('ab_dms', 'dms'),
-    'flab_binding_koenig':    ('ab_dms', 'dms'),
-    'abagym_Ang2':            ('ab_dms', 'dms'),
-    'abagym_EGFR':            ('ab_dms', 'dms'),
-    'abagym_lysozyme':        ('ab_dms', 'dms'),
-    'abagym_VEGF':            ('ab_dms', 'dms'),
-    'abagym_HER2':            ('ab_dms', 'dms'),
-    # Antibody inter-family
-    'ddg_combined':          ('ab_inter', 'inter_family'),
-    'abagym_all':            ('ab_inter', 'inter_family'),
-    'abcov_kd':              ('ab_inter', 'inter_family'),
-    'flab_thermo_jain':      ('ab_inter', 'inter_family'),
-    'flab_aggregation_jain': ('ab_inter', 'inter_family'),
+    # Antibody — use antibody_baseline_survey.py instead for antibody datasets
     # TCGA
     'tcga_luad_vs_lusc':  ('tcga', 'genomic_fast'),
     'tcga_brca_pam50':    ('tcga', 'genomic_fast'),
@@ -293,44 +280,13 @@ def make_ft_factories(data, dataset_name, task_type, ft_epochs=3, ft_cache=True)
 # BEST-SCORE HELPERS
 # =============================================================================
 
-def _add_bests(entry):
-    """Add best_default, best_tuned, best_overall to a rep entry."""
-    if entry['default']:
-        best_def = max(entry['default'].items(), key=lambda x: x[1])
-        entry['best_default'] = {'model': best_def[0], 'score': best_def[1]}
-    else:
-        entry['best_default'] = None
-
-    if entry['tuned']:
-        best_tun = max(entry['tuned'].items(), key=lambda x: x[1])
-        entry['best_tuned'] = {'model': best_tun[0], 'score': best_tun[1]}
-    else:
-        entry['best_tuned'] = None
-
-    # Best overall across default + tuned
-    all_scores = {}
-    for m, s in entry['default'].items():
-        all_scores[(m, 'default')] = s
-    for m, s in entry['tuned'].items():
-        all_scores[(m, 'tuned')] = s
-
-    if all_scores:
-        best_key = max(all_scores, key=all_scores.get)
-        entry['best_overall'] = {
-            'model': best_key[0],
-            'score': all_scores[best_key],
-            'source': best_key[1],
-        }
-    else:
-        entry['best_overall'] = {'model': None, 'score': float('nan'), 'source': None}
 
 
 # =============================================================================
 # MAIN SURVEY LOOP
 # =============================================================================
 
-def run_survey(dataset_name, rep_preset, n_folds, do_tune, tune_iter,
-               do_finetune, seed):
+def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed):
     """Run the full baseline survey for one dataset. Returns result dict."""
     print(f"\n{'='*70}")
     print(f"SURVEY: {dataset_name}")
@@ -351,33 +307,7 @@ def run_survey(dataset_name, rep_preset, n_folds, do_tune, tune_iter,
     default_models = get_default_models(task_type)
     model_names = list(default_models.keys())
 
-    # 3. Tune models (on concatenated reps)
-    tuned_models = None
-    tuned_params = {}
-    if do_tune:
-        from kirby.find_best_hybrid import tune_models
-        print(f"\n--- Tuning models ({tune_iter} iters, {n_folds}-fold) ---")
-        tuned_models = tune_models(
-            base_reps=reps, labels=labels, groups=groups,
-            task_type=task_type, speed='long',
-            n_iter=tune_iter, n_folds=n_folds, seed=seed,
-        )
-        # Keep only the 5 survey models (tune_models returns all in the tier)
-        tuned_models = {k: v for k, v in tuned_models.items()
-                        if k in SURVEY_MODELS}
-        # Set n_jobs=1 for fork safety
-        for m in tuned_models.values():
-            if hasattr(m, 'n_jobs'):
-                m.n_jobs = 1
-        for name, model in tuned_models.items():
-            params = model.get_params()
-            tuned_params[name] = {
-                k: v for k, v in params.items()
-                if k not in ('verbose', 'verbosity', 'n_jobs', 'random_state',
-                             'callbacks', 'class_weight')
-            }
-
-    # 4. Evaluate each frozen rep
+    # 3. Evaluate each frozen rep
     baselines = {}
     print(f"\n--- Evaluating {len(reps)} reps x {len(model_names)} models ---")
 
@@ -386,30 +316,27 @@ def run_survey(dataset_name, rep_preset, n_folds, do_tune, tune_iter,
         dim = X.shape[1]
         print(f"  {rep_name} ({dim}d):", end='', flush=True)
 
-        entry = {'dimension': dim, 'default': {}, 'tuned': {}}
+        entry = {'dimension': dim, 'scores': {}}
 
-        # Default models
         for mname in model_names:
             mean_s, _ = evaluate_rep(
                 X, labels, groups, default_models[mname], n_folds, task_type)
-            entry['default'][mname] = round(mean_s, 4)
+            entry['scores'][mname] = round(mean_s, 4)
             print(f" {mname}={mean_s:.3f}", end='', flush=True)
 
-        # Tuned models
-        if tuned_models:
-            print(" | tuned:", end='', flush=True)
-            for mname in model_names:
-                if mname in tuned_models:
-                    mean_s, _ = evaluate_rep(
-                        X, labels, groups, tuned_models[mname], n_folds, task_type)
-                    entry['tuned'][mname] = round(mean_s, 4)
-                    print(f" {mname}={mean_s:.3f}", end='', flush=True)
+        # Best model for this rep
+        valid = [(m, s) for m, s in entry['scores'].items()
+                 if not np.isnan(s)]
+        if valid:
+            best = max(valid, key=lambda x: x[1])
+            entry['best'] = {'model': best[0], 'score': best[1]}
+        else:
+            entry['best'] = None
 
-        _add_bests(entry)
         baselines[rep_name] = entry
         print()
 
-    # 5. Fine-tuned reps (TCGA only)
+    # 4. Fine-tuned reps (TCGA only)
     ft_baselines = {}
     if do_finetune:
         ft_factories = make_ft_factories(data, dataset_name, task_type)
@@ -417,46 +344,41 @@ def run_survey(dataset_name, rep_preset, n_folds, do_tune, tune_iter,
             print(f"\n--- Fine-tuned reps: {list(ft_factories.keys())} ---")
             for ft_name, factory in ft_factories.items():
                 print(f"  {ft_name}:", end='', flush=True)
-                entry = {'dimension': '?', 'default': {}, 'tuned': {}}
+                entry = {'dimension': '?', 'scores': {}}
 
                 for mname in model_names:
                     mean_s, _ = evaluate_ft_rep(
                         factory, labels, groups, default_models[mname],
                         n_folds, task_type)
-                    entry['default'][mname] = round(mean_s, 4)
+                    entry['scores'][mname] = round(mean_s, 4)
                     print(f" {mname}={mean_s:.3f}", end='', flush=True)
 
-                if tuned_models:
-                    print(" | tuned:", end='', flush=True)
-                    for mname in model_names:
-                        if mname in tuned_models:
-                            mean_s, _ = evaluate_ft_rep(
-                                factory, labels, groups, tuned_models[mname],
-                                n_folds, task_type)
-                            entry['tuned'][mname] = round(mean_s, 4)
-                            print(f" {mname}={mean_s:.3f}", end='', flush=True)
+                valid = [(m, s) for m, s in entry['scores'].items()
+                         if not np.isnan(s)]
+                if valid:
+                    best = max(valid, key=lambda x: x[1])
+                    entry['best'] = {'model': best[0], 'score': best[1]}
+                else:
+                    entry['best'] = None
 
-                _add_bests(entry)
                 ft_baselines[ft_name] = entry
                 print()
 
     elapsed = time.time() - t0
 
-    # 6. Summary
+    # 5. Summary
     all_entries = {**baselines, **ft_baselines}
-    all_bests = [(name, e['best_overall']) for name, e in all_entries.items()
-                 if e['best_overall'] and e['best_overall']['score'] is not None]
+    all_bests = [(name, e['best']) for name, e in all_entries.items()
+                 if e['best'] is not None]
     if all_bests:
         overall = max(all_bests, key=lambda x: x[1]['score'])
         summary = {
             'best_rep': overall[0],
             'best_score': overall[1]['score'],
             'best_model': overall[1]['model'],
-            'source': overall[1]['source'],
         }
     else:
-        summary = {'best_rep': None, 'best_score': None, 'best_model': None,
-                   'source': None}
+        summary = {'best_rep': None, 'best_score': None, 'best_model': None}
 
     result = {
         'metadata': {
@@ -470,14 +392,11 @@ def run_survey(dataset_name, rep_preset, n_folds, do_tune, tune_iter,
             'models': model_names,
             'metric': metric_name,
             'task_type': task_type,
-            'tuned': do_tune,
-            'tune_iter': tune_iter if do_tune else None,
             'seed': seed,
             'elapsed_seconds': round(elapsed, 1),
             'timestamp': datetime.now().isoformat(),
         },
         'baselines': baselines,
-        'tuned_params': tuned_params or None,
         'finetuned_baselines': ft_baselines or None,
         'summary': summary,
     }
@@ -510,35 +429,16 @@ def print_summary_table(result):
     print(header)
     print("-" * len(header))
 
-    # Default scores
     for rep_name in sorted(baselines.keys()):
         r = baselines[rep_name]
         row = f"{rep_name:<25} {r['dimension']:>5}"
         for m in models:
-            s = r['default'].get(m, float('nan'))
+            s = r['scores'].get(m, float('nan'))
             row += f" {s:>8.4f}"
-        best = r.get('best_default')
+        best = r.get('best')
         if best:
             row += f"  {best['score']:>8.4f}"
         print(row)
-
-    # Tuned scores
-    if result.get('tuned_params'):
-        print()
-        print("TUNED:")
-        print("-" * len(header))
-        for rep_name in sorted(baselines.keys()):
-            r = baselines[rep_name]
-            if not r.get('tuned'):
-                continue
-            row = f"{rep_name:<25} {r['dimension']:>5}"
-            for m in models:
-                s = r['tuned'].get(m, float('nan'))
-                row += f" {s:>8.4f}"
-            best = r.get('best_tuned')
-            if best:
-                row += f"  {best['score']:>8.4f}"
-            print(row)
 
     # Fine-tuned scores
     ft = result.get('finetuned_baselines')
@@ -550,9 +450,9 @@ def print_summary_table(result):
             r = ft[ft_name]
             row = f"{ft_name:<25} {'?':>5}"
             for m in models:
-                s = r['default'].get(m, float('nan'))
+                s = r['scores'].get(m, float('nan'))
                 row += f" {s:>8.4f}"
-            best = r.get('best_default')
+            best = r.get('best')
             if best:
                 row += f"  {best['score']:>8.4f}"
             print(row)
@@ -561,7 +461,7 @@ def print_summary_table(result):
     print()
     if summary.get('best_rep'):
         print(f"WINNER: {summary['best_rep']} + {summary['best_model']} = "
-              f"{summary['best_score']:.4f} ({metric}, {summary['source']})")
+              f"{summary['best_score']:.4f} ({metric})")
     print(f"  Time: {meta['elapsed_seconds']:.0f}s")
 
 
@@ -576,23 +476,21 @@ def main():
         epilog="""
 Datasets:
   logd, caco2, herg, qm9                          (molecular)
-  flab_expression_koenig, flab_binding_koenig,     (antibody DMS)
-    abagym_Ang2/EGFR/lysozyme/VEGF/HER2
-  ddg_combined, abagym_all, abcov_kd,             (antibody inter-family)
-    flab_thermo_jain, flab_aggregation_jain
   tcga_luad_vs_lusc, tcga_brca_pam50,             (TCGA)
     tcga_brca_survival
   davis, kiba                                      (DTA)
 
 Shortcuts:
-  molecular, ab_dms, ab_inter, tcga, dta           (run all in domain)
+  molecular, tcga, dta                             (run all in domain)
   everything                                       (run all domains)
+
+Note: Antibody datasets moved to tests/antibody_baseline_survey.py
 
 Examples:
   %(prog)s logd --reps fast
-  %(prog)s molecular --tune --output tests/results/universal_survey/
-  %(prog)s everything --tune
-  %(prog)s tcga --finetune --tune
+  %(prog)s molecular --output tests/results/universal_survey/
+  %(prog)s everything
+  %(prog)s tcga --finetune
         """
     )
 
@@ -602,10 +500,6 @@ Examples:
                        help='Override rep preset (default: per-dataset from registry)')
     parser.add_argument('--n-folds', type=int, default=3,
                        help='Number of CV folds (default: 3)')
-    parser.add_argument('--tune', action='store_true',
-                       help='Also evaluate with tuned HPs (RandomizedSearchCV)')
-    parser.add_argument('--tune-iter', type=int, default=20,
-                       help='RandomizedSearchCV iterations per model (default: 20)')
     parser.add_argument('--finetune', action='store_true',
                        help='Include fine-tuned reps (TCGA: geneformer, scfoundation)')
     parser.add_argument('--seed', type=int, default=42)
@@ -630,7 +524,7 @@ Examples:
 
     print(f"Universal Baseline Survey")
     print(f"  Datasets: {len(datasets)} ({', '.join(datasets)})")
-    print(f"  Folds: {args.n_folds}, Tune: {args.tune}, Finetune: {args.finetune}")
+    print(f"  Folds: {args.n_folds}, Finetune: {args.finetune}")
 
     # Output handling
     output_dir = None
@@ -652,7 +546,7 @@ Examples:
     for ds in datasets:
         try:
             result = run_survey(
-                ds, args.reps, args.n_folds, args.tune, args.tune_iter,
+                ds, args.reps, args.n_folds,
                 args.finetune, args.seed,
             )
             result = convert_numpy(result)

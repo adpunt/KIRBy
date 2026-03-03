@@ -699,7 +699,7 @@ def compute_dataset_complexity(reps: Dict[str, np.ndarray], labels: np.ndarray) 
 # DATA LOADING (domain-aware)
 # =============================================================================
 
-_ANTIBODY_PREFIXES = ('flab_', 'abcov_', 'sabdab_', 'abagym_', 'abbind')
+_ANTIBODY_PREFIXES = ('flab_', 'abcov_', 'sabdab_', 'abagym_', 'abbind', 'ddg_')
 _TCGA_PREFIXES = ('tcga_',)
 
 
@@ -757,42 +757,30 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
         }
 
     elif _is_antibody_dataset(dataset_name):
-        from find_best_hybrid_antibody import (
-            load_dataset as load_ab_dataset,
-            get_representations as get_ab_representations,
-            get_augmentations as get_ab_augmentations,
-            get_mutation_augmentations as get_ab_mutation_augmentations,
-            assign_identity_groups,
-        )
+        from antibody_baseline_survey import load_dataset as load_ab_dataset
+        from kirby.representations.antibody import ANTIBODY_REPS, ANTIBODY_FAST_REPS
 
-        heavy_seqs, light_seqs, labels, task_type, metadata = load_ab_dataset(dataset_name)
-        wt_heavy = metadata.get('wildtype_heavy')
-        wt_light = metadata.get('wildtype_light')
-        mutations = metadata.get('mutations')
+        data = load_ab_dataset(dataset_name)
+        heavy_seqs = data['heavy_seqs']
+        light_seqs = data['light_seqs']
+        labels = data['labels']
+        groups = data['groups']
+        n_groups = data['n_groups']
 
-        reps = get_ab_representations(
-            heavy_seqs, light_seqs, rep_preset,
-            wt_heavy=wt_heavy, wt_light=wt_light,
-            mutations=mutations, delta=delta,
-        )
+        # Generate reps based on preset
+        if rep_preset in ('fast', 'skip_lm'):
+            rep_names = sorted(ANTIBODY_FAST_REPS)
+        else:
+            rep_names = sorted(ANTIBODY_REPS.keys())
 
-        groups, n_groups = assign_identity_groups(heavy_seqs, min_groups=3)
+        reps = {}
+        for rep_name in rep_names:
+            try:
+                reps[rep_name] = ANTIBODY_REPS[rep_name](heavy_seqs, light_seqs)
+            except Exception as e:
+                print(f"  WARNING: {rep_name} failed: {e}")
 
-        augmentations = None
-        if mutations is not None:
-            augmentations = get_ab_mutation_augmentations(
-                mutations, wt_heavy, wt_light, heavy_seqs)
-            if not augmentations:
-                augmentations = None
-        if augment:
-            seq_augs = get_ab_augmentations(heavy_seqs, light_seqs)
-            if seq_augs:
-                if augmentations:
-                    augmentations.update(seq_augs)
-                else:
-                    augmentations = seq_augs
-
-        print(f"  {dataset_name}: {len(heavy_seqs)} antibodies, {n_groups} identity groups, "
+        print(f"  {dataset_name}: {len(heavy_seqs)} antibodies, {n_groups} groups, "
               f"{len(reps)} reps ({', '.join(f'{k}={v.shape[1]}' for k, v in reps.items())})")
 
         return {
@@ -803,9 +791,9 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
             'groups': groups,
             'n_scaffolds': n_groups,
             'n_groups': n_groups,
-            'task_type': task_type,
+            'task_type': 'regression',
             'domain': 'antibody',
-            'augmentations': augmentations,
+            'augmentations': None,
         }
     else:
         from find_best_hybrid_molecular import (
