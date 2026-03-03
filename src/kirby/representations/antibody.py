@@ -231,7 +231,7 @@ def embed_ablang2(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
     for start in range(0, len(seqs), batch_size):
         batch = seqs[start:start + batch_size]
         # ablang2.encode returns (B, D) with rescoding="mean"
-        embs = model(batch, mode='rescoding')
+        embs = model(batch, mode='seqcoding')
         if isinstance(embs, torch.Tensor):
             embs = embs.cpu().numpy()
         all_embs.append(embs)

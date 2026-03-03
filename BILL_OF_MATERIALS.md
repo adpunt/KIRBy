@@ -207,35 +207,27 @@ data leakage. **Proceed to Phase 2 full run.**
 
 Cold-target GroupKFold CV (5-fold). "Paired" = drug rep + protein_aac or protein rep + drug_ecfp4.
 Davis: 30K pairs (68 drugs × 442 proteins). KIBA: 30K subsample (2111 drugs × 229 proteins).
-Best model per cell: Davis=XGBoost (paired), Ridge (standalone); KIBA=Ridge/XGBoost varies.
 
 | Rep | Dim | Category | Davis R² (paired) | KIBA R² (standalone) | Deps |
 |-----|-----|----------|:-:|:-:|------|
-| `drug_ecfp4` | 2048 | Standard (fingerprint) | 0.454 | 0.322 | rdkit |
-| `drug_maccs` | 167 | Standard (fingerprint) | 0.445 | 0.317 | rdkit |
-| `drug_pdv` | 200 | Standard (descriptor) | 0.460 | 0.334 | rdkit |
-| `drug_chemberta` | 384 | Pretrained (drug LM) | 0.459 | **0.344** | transformers |
-| `drug_molformer` | 768 | Pretrained (drug LM) | **0.467** | 0.341 | transformers |
-| `drug_selformer` | 768 | Pretrained (drug LM) | 0.463 | 0.341 | transformers |
-| `protein_esm2` | 1280 | Pretrained (protein LM) | **0.538** | 0.007 | transformers |
-| `protein_aac` | 20 | Standard (composition) | 0.454 | 0.001 | None |
-| `protein_descriptors` | 30 | Standard (biophysical) | 0.429 | -0.003 | None |
-| `protein_kmer` | 8000 | Standard (sequence) | 0.501 | 0.018 | None |
-| **all_concat** | 13665 | All 10 reps | **0.548** | **0.369** | — |
+| `drug_ecfp4` | 2048 | Standard (fingerprint) | **STALE** | **STALE** | rdkit |
+| `drug_maccs` | 167 | Standard (fingerprint) | **STALE** | **STALE** | rdkit |
+| `drug_pdv` | 200 | Standard (descriptor) | **STALE** | **STALE** | rdkit |
+| `drug_chemberta` | 384 | Pretrained (drug LM) | **STALE** | **STALE** | transformers |
+| `drug_molformer` | 768 | Pretrained (drug LM) | **STALE** | **STALE** | transformers |
+| `drug_selformer` | 768 | Pretrained (drug LM) | **STALE** | **STALE** | transformers |
+| `protein_esm2` | 1280 | Pretrained (protein LM) | **STALE** | **STALE** | transformers |
+| `protein_aac` | 20 | Standard (composition) | **STALE** | **STALE** | None |
+| `protein_descriptors` | 30 | Standard (biophysical) | **STALE** | **STALE** | None |
+| `protein_kmer` | 8000 | Standard (sequence) | **STALE** | **STALE** | None |
+
+**STALE:** Numbers from pre-preprocessing-overhaul run (Feb 26). KIBA scores were negated and
+SMILES re-canonicalized in the Feb 27 overhaul. Need re-run with `dta_baseline_survey.py`.
 
 **Presets:**
 - `fast` (5): drug_ecfp4, drug_maccs, drug_pdv, protein_esm2, protein_aac
 - `fast+lm` (8): + drug_chemberta, drug_molformer, protein_descriptors
 - `full` (10): + drug_selformer, protein_kmer
-
-**Notes:**
-- Davis: Protein info is essential — paired R² ≈ 0.45–0.54 vs standalone ≈ 0.22. XGBoost dominates.
-- KIBA: Protein info *hurts* under cold-target split (only 229 targets). Drug-only standalone beats paired. Ridge dominates.
-- `protein_esm2` is the strongest single rep on Davis (0.538 paired) — huge uplift over hand-crafted protein reps.
-- `drug_chemberta` is the strongest drug rep on KIBA (0.344), beating fingerprints by ~1pp.
-- `drug_molformer` is the strongest drug rep on Davis (0.467 paired).
-- all_concat (13665D): 0.548 Davis, 0.369 KIBA — meaningful lift over best single rep.
-- Server job 7221614 (L40S GPU, 3.5h): all 10 reps, both datasets, zero failures.
 
 ---
 
