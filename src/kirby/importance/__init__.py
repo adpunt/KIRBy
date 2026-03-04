@@ -25,6 +25,23 @@ from kirby.importance.hybrid import (
     aggregate_importance_by_rep,
     format_explanation_summary,
     visualize_molecule_importance,
+    FEATURE_NAME_REGISTRY,
+)
+
+from kirby.importance.feature_names import (
+    get_pdv_names,
+    get_pca_names,
+    get_protein_aac_names,
+    get_protein_descriptor_names,
+    get_antibody_aac_names,
+    get_structural_names,
+    get_hallmark_names,
+    get_progeny_names,
+    get_immune_names,
+    get_gene_stats_names,
+    get_chromosome_arm_names,
+    get_feature_description,
+    FEATURE_DESCRIPTIONS,
 )
 
 __all__ = [
@@ -44,4 +61,19 @@ __all__ = [
     'aggregate_importance_by_rep',
     'format_explanation_summary',
     'visualize_molecule_importance',
+    'FEATURE_NAME_REGISTRY',
+    # Feature names (most commonly used)
+    'get_pdv_names',
+    'get_pca_names',
+    'get_protein_aac_names',
+    'get_protein_descriptor_names',
+    'get_antibody_aac_names',
+    'get_structural_names',
+    'get_hallmark_names',
+    'get_progeny_names',
+    'get_immune_names',
+    'get_gene_stats_names',
+    'get_chromosome_arm_names',
+    'get_feature_description',
+    'FEATURE_DESCRIPTIONS',
 ]

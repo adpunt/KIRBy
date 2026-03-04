@@ -450,6 +450,68 @@ def save_results(
 
 
 # =============================================================================
+# EXPLAINABILITY
+# =============================================================================
+
+def generate_explanations(
+    best_result: dict,
+    base_reps: Dict[str, np.ndarray],
+    drug_smiles: List[str],
+    labels: np.ndarray,
+    output_path: str,
+):
+    """Generate and save feature explanations for the best DTA configuration."""
+    from kirby.hybrid import create_hybrid
+    from kirby.importance.hybrid import explain_hybrid, format_explanation_summary
+
+    print("\n=== GENERATING EXPLANATIONS ===")
+
+    bp = _get(best_result, 'blueprint')
+
+    print(f"  Recreating hybrid: method={bp.allocation_method}, budget={bp.budget}")
+    _, feature_info = create_hybrid(
+        base_reps, labels,
+        allocation_method=bp.allocation_method,
+        budget=bp.budget,
+        importance_method=bp.importance_method,
+    )
+
+    print("  Mapping features to interpretations...")
+    explanations = explain_hybrid(
+        feature_info=feature_info,
+        smiles_list=drug_smiles[:100],
+        top_k=30,
+    )
+
+    print("\n" + format_explanation_summary(explanations, max_features=15))
+
+    explain_path = output_path.replace('.json', '_explanations.json')
+
+    explain_output = {
+        'model': _get(best_result, 'model'),
+        'blueprint': bp.to_dict(),
+        'by_representation': explanations['by_representation'],
+        'top_features': [
+            {
+                'rank': i + 1,
+                'rep': f['rep_name'],
+                'local_idx': f['local_idx'],
+                'importance': round(f['importance'], 6),
+                'description': f['interpretation'].get('description', ''),
+                'type': f['interpretation'].get('type', ''),
+            }
+            for i, f in enumerate(explanations['top_features'])
+        ],
+    }
+
+    with open(explain_path, 'w') as f:
+        json.dump(explain_output, f, indent=2)
+
+    print(f"\nExplanations saved to: {explain_path}")
+    return explanations
+
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
@@ -512,6 +574,8 @@ Output:
                        help='Tune model HPs via RandomizedSearchCV before hybrid search')
     parser.add_argument('--tune-iter', type=int, default=20,
                        help='RandomizedSearchCV iterations per model (default: 20)')
+    parser.add_argument('--explain', action='store_true',
+                       help='Generate feature explanations for best hybrid config')
 
     args = parser.parse_args()
 
@@ -632,6 +696,10 @@ Output:
 
     save_results(result, args.dataset, args.search, list(base_reps.keys()), output_path,
                  base_reps=base_reps, labels=labels)
+
+    # Explanations
+    if args.explain and result.best_overall is not None:
+        generate_explanations(result.best_overall, base_reps, drug_smiles, labels, output_path)
 
     return 0
 
