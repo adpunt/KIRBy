@@ -230,6 +230,60 @@ def create_esmc_protein_embeddings(
     return result
 
 
+def create_amplify_protein_embeddings(
+    sequences: List[str],
+    model_name: str = 'chandar-lab/AMPLIFY_350M',
+    device: str = 'cpu',
+    batch_size: int = 4,
+) -> np.ndarray:
+    """Extract AMPLIFY 350M mean-pooled embeddings for protein sequences.
+
+    Drop-in ESM-2 alternative. 350M parameter protein LM from Mila/Chandar Lab.
+
+    Args:
+        sequences: List of protein amino acid sequences.
+        model_name: HuggingFace model name.
+        device: 'cpu' or 'cuda'.
+        batch_size: Sequences per batch.
+
+    Returns:
+        np.ndarray: (n_sequences, 960) embeddings.
+
+    Requires: pip install transformers
+    """
+    import torch
+    from transformers import AutoTokenizer, AutoModel
+
+    print(f"  Loading AMPLIFY ({model_name.split('/')[-1]}) for protein embeddings...")
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModel.from_pretrained(model_name).to(device).eval()
+
+    all_embeddings = []
+    n = len(sequences)
+
+    with torch.no_grad():
+        for start in range(0, n, batch_size):
+            batch = [s.upper().strip()[:1022] for s in sequences[start:start + batch_size]]
+            inputs = tokenizer(
+                batch, return_tensors='pt', padding=True,
+                truncation=True, max_length=1024
+            )
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            outputs = model(**inputs)
+            # Mean pool over non-padding tokens
+            mask = inputs['attention_mask'].unsqueeze(-1).float()
+            pooled = (outputs.last_hidden_state * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
+            all_embeddings.append(pooled.cpu().numpy())
+
+            end = min(start + batch_size, n)
+            if end < n and end % 50 == 0:
+                print(f"    Progress: {end}/{n}")
+
+    result = np.concatenate(all_embeddings, axis=0)
+    print(f"  Generated AMPLIFY protein embeddings: {result.shape}")
+    return result
+
+
 def create_protein_aac(sequences: List[str]) -> np.ndarray:
     """Compute amino acid composition for protein sequences.
 

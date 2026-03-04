@@ -85,6 +85,21 @@ pip install drfp
 
 # Optuna HP tuning (optional)
 pip install optuna
+
+# MAP4 fingerprints (optional)
+pip install map4
+
+# Uni-Mol v2 molecular embeddings (optional)
+pip install unimol-tools
+
+# scGPT single-cell foundation model (optional, for TCGA)
+pip install scgpt
+
+# UCE universal cell embeddings (optional, for TCGA)
+pip install uce-model
+
+# AMPLIFY protein LM (optional — uses transformers, auto-downloads from HF)
+# Model: chandar-lab/AMPLIFY_350M (~350M params, 960D embeddings)
 ```
 
 ### 2d. Install conda-only dependencies
@@ -169,11 +184,12 @@ pip install git+https://github.com/gmum/huggingmolecules.git#subdirectory=src
 # Weights auto-download from Google Drive on first use (~50MB)
 ```
 
-### 3f. Uni-Mol (optional, DROPPED)
+### 3f. Uni-Mol v2 (optional)
 
 ```bash
-# Dropped — unimol_tools has no working install path
-# pip install unimol-tools
+# Uni-Mol v2 (NeurIPS 2024) — 768D 3D molecular embeddings
+pip install unimol-tools
+# If install fails: pip install unimol-tools --no-deps
 ```
 
 ### Molecular representation summary
@@ -198,6 +214,8 @@ pip install git+https://github.com/gmum/huggingmolecules.git#subdirectory=src
 | GROVER | Pretrained | ~5000D | Clone repo + weights |
 | CLAMP | Pretrained | 768D | Clone repo + `mhnreact` |
 | R-MAT | Pretrained | 768D | `huggingmolecules` (gmum) |
+| MAP4 | Static | 1024D | `map4` |
+| Uni-Mol v2 | Pretrained (3D) | 768D | `unimol-tools` |
 
 ---
 
@@ -261,6 +279,8 @@ CDR-specific and midlayer variants. See `BILL_OF_MATERIALS.md` §2B for full lis
 | `antiberty_cdr` | 1024 | CDR-pooled LM | transformers + anarci | CDR residues only |
 | `prot_t5_cdr` | 2048 | CDR-pooled LM | transformers + anarci | CDR residues only |
 | `esm2_midlayers` | 2560 | Intermediate LM | transformers | Avg layers 20-33 |
+| `amplify` | 1920 | Pretrained LM | transformers | AMPLIFY 350M, H+L concat |
+| `amplify_cdr` | 1920 | CDR-pooled LM | transformers + anarci | AMPLIFY 350M, CDR-only |
 
 ---
 
@@ -744,28 +764,13 @@ print('Molecular OK')
 
 ```bash
 python -c "
-from kirby.representations.antibody import (
-    create_kmer_frequency, create_physicochemical_profile,
-    create_imgt_onehot, compute_developability_features,
-    compute_humanness_scores, compute_aac_features,
-    compute_blosum62_features, compute_cdr_length_features,
-    compute_per_cdr_physicochemical, compute_extended_liability_features,
-    compute_camsol_features,
-)
+from kirby.representations.antibody import aac_encode, onehot_encode, blosum_encode
 heavy = ['EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS']
 light = ['DIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSRSGTDFTLTISSLQPEDFATYYCQQHYTTPPTFGQGTKVEIK']
 
-print(f'k-mer:         {create_kmer_frequency(heavy).shape}')
-print(f'Physicochemical:{create_physicochemical_profile(heavy, light).shape}')
-print(f'IMGT one-hot:  {create_imgt_onehot(heavy, light).shape}')
-print(f'Developability: {compute_developability_features(heavy, light).shape}')
-print(f'Humanness:      {compute_humanness_scores(heavy).shape}')
-print(f'AAC:            {compute_aac_features(heavy).shape}')
-print(f'BLOSUM62:       {compute_blosum62_features(heavy).shape}')
-print(f'CDR lengths:    {compute_cdr_length_features(heavy, light).shape}')
-print(f'Per-CDR physchem:{compute_per_cdr_physicochemical(heavy, light).shape}')
-print(f'Ext liability:  {compute_extended_liability_features(heavy, light).shape}')
-print(f'CamSol:         {compute_camsol_features(heavy).shape}')
+print(f'AAC:     {aac_encode(heavy, light).shape}')
+print(f'One-hot: {onehot_encode(heavy, light).shape}')
+print(f'BLOSUM:  {blosum_encode(heavy, light).shape}')
 print('All antibody non-pretrained OK')
 "
 ```
@@ -775,47 +780,44 @@ print('All antibody non-pretrained OK')
 ```bash
 # Test each model individually (each downloads weights on first run)
 
-# IgBERT (1024D, ~1.6 GB download)
+# IgBERT (768D, ~1.6 GB download)
 python -c "
-from kirby.representations.antibody import create_igbert_embeddings
-h = ['EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS']
-print(f'IgBERT: {create_igbert_embeddings(h).shape}')
-"
-
-# ESM-2 650M (1280D, ~2.5 GB download)
-python -c "
-from kirby.representations.antibody import create_esm2_embeddings
-h = ['EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS']
-print(f'ESM-2: {create_esm2_embeddings(h).shape}')
-"
-
-# Ab-RoBERTa (768D, ~500 MB download)
-python -c "
-from kirby.representations.antibody import create_ab_roberta_embeddings
-h = ['EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS']
-print(f'Ab-RoBERTa: {create_ab_roberta_embeddings(h).shape}')
-"
-
-# ProtT5-XL (1024D, ~11 GB download)
-python -c "
-from kirby.representations.antibody import create_prot_t5_embeddings
-h = ['EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS']
-print(f'ProtT5-XL: {create_prot_t5_embeddings(h).shape}')
-"
-
-# p-IgGen (768D, ~90 MB download)
-python -c "
-from kirby.representations.antibody import create_pigen_embeddings
-h = ['EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS']
-print(f'p-IgGen: {create_pigen_embeddings(h).shape}')
-"
-
-# AbLang-2 (480D, bundled with pip package)
-python -c "
-from kirby.representations.antibody import create_ablang2_embeddings
+from kirby.representations.antibody import embed_igbert
 h = ['EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS']
 l = ['DIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSRSGTDFTLTISSLQPEDFATYYCQQHYTTPPTFGQGTKVEIK']
-print(f'AbLang-2: {create_ablang2_embeddings(h, l).shape}')
+print(f'IgBERT: {embed_igbert(h, l).shape}')
+"
+
+# ESM-2 650M (2560D, ~2.5 GB download)
+python -c "
+from kirby.representations.antibody import embed_esm2
+h = ['EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS']
+l = ['DIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSRSGTDFTLTISSLQPEDFATYYCQQHYTTPPTFGQGTKVEIK']
+print(f'ESM-2: {embed_esm2(h, l).shape}')
+"
+
+# ProtT5-XL (2048D, ~11 GB download)
+python -c "
+from kirby.representations.antibody import embed_prot_t5
+h = ['EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS']
+l = ['DIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSRSGTDFTLTISSLQPEDFATYYCQQHYTTPPTFGQGTKVEIK']
+print(f'ProtT5-XL: {embed_prot_t5(h, l).shape}')
+"
+
+# AbLang-2 (768D, bundled with pip package)
+python -c "
+from kirby.representations.antibody import embed_ablang2
+h = ['EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS']
+l = ['DIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSRSGTDFTLTISSLQPEDFATYYCQQHYTTPPTFGQGTKVEIK']
+print(f'AbLang-2: {embed_ablang2(h, l).shape}')
+"
+
+# AntiBERTy (1024D, ~350 MB download)
+python -c "
+from kirby.representations.antibody import embed_antiberty
+h = ['EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS']
+l = ['DIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSRSGTDFTLTISSLQPEDFATYYCQQHYTTPPTFGQGTKVEIK']
+print(f'AntiBERTy: {embed_antiberty(h, l).shape}')
 "
 ```
 

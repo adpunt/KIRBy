@@ -244,6 +244,74 @@ def create_pdv(smiles_list, descriptor_list=None):
     return np.array(descriptors)
 
 
+def create_pdv_binary_mean(smiles_list, descriptor_list=None):
+    """
+    Binarize PDV: each descriptor becomes 1 if above the column mean, else 0.
+
+    Useful for converting continuous descriptors into categorical flags that are
+    robust to outliers and scale-invariant.
+
+    Args:
+        smiles_list: List of SMILES strings
+        descriptor_list: List of RDKit descriptor names (default: 200 descriptors)
+
+    Returns:
+        np.ndarray: Binary matrix (n_molecules, n_descriptors), dtype float32
+    """
+    pdv = create_pdv(smiles_list, descriptor_list)
+    col_means = pdv.mean(axis=0)
+    return (pdv > col_means).astype(np.float32)
+
+
+def create_pdv_rank(smiles_list, descriptor_list=None):
+    """
+    Rank-transform PDV: each descriptor column replaced by its fractional rank in [0, 1].
+
+    Makes descriptors non-parametric and robust to skew/outliers.
+    Ties are averaged (method='average').
+
+    Args:
+        smiles_list: List of SMILES strings
+        descriptor_list: List of RDKit descriptor names (default: 200 descriptors)
+
+    Returns:
+        np.ndarray: Rank-transformed matrix (n_molecules, n_descriptors), dtype float32
+    """
+    from scipy.stats import rankdata
+    pdv = create_pdv(smiles_list, descriptor_list)
+    n = pdv.shape[0]
+    ranked = np.zeros_like(pdv)
+    for j in range(pdv.shape[1]):
+        ranked[:, j] = rankdata(pdv[:, j], method='average') / n
+    return ranked.astype(np.float32)
+
+
+def create_pca_rep(smiles_list, base_fn, n_components=50):
+    """
+    PCA-reduce a base representation.
+
+    Computes the base representation, then applies StandardScaler + PCA.
+    Useful for high-dimensional LM embeddings where most variance is in a
+    low-dimensional subspace.
+
+    Args:
+        smiles_list: List of SMILES strings
+        base_fn: Callable that takes smiles_list and returns np.ndarray
+        n_components: Number of PCA components (default: 50)
+
+    Returns:
+        np.ndarray: PCA-reduced matrix (n_molecules, n_components), dtype float32
+    """
+    from sklearn.decomposition import PCA
+    from sklearn.preprocessing import StandardScaler
+
+    X = base_fn(smiles_list)
+    n_components = min(n_components, X.shape[1], X.shape[0])
+    X = StandardScaler().fit_transform(X)
+    X = PCA(n_components=n_components, random_state=42).fit_transform(X)
+    return X.astype(np.float32)
+
+
 def create_sns(smiles_list, reference_featurizer=None, return_featurizer=False,
                max_radius=2, pharm_atom_invs=False, bond_invs=True,
                chirality=False, sub_counts=True, vec_dimension=1024):
@@ -2045,7 +2113,7 @@ def create_graphmvp(smiles_list, graphmvp_dir=None, checkpoint_path=None,
                     return global_mean_pool(h, batch)
 
             model = GraphMVP_GNN(num_layer=5, emb_dim=emb_dim, drop_ratio=0.0)
-            state_dict = torch.load(checkpoint_path, map_location=device)
+            state_dict = _safe_torch_load(checkpoint_path, map_location=device)
             model.load_state_dict(state_dict)
             model = model.to(device).eval()
             _GRAPHMVP_MODEL = model
@@ -2402,6 +2470,115 @@ def create_rmat(smiles_list, pretrained_name='rmat_4M_rdkit', device=None):
         print(f"  WARNING: {failed}/{len(smiles_list)} molecules failed featurization")
 
     return np.concatenate(all_embeddings, axis=0).astype(np.float32)
+
+
+# =============================================================================
+# UNI-MOL V2
+# =============================================================================
+
+def create_unimol_v2(smiles_list, remove_hs=True):
+    """
+    Create Uni-Mol v2 embeddings (NeurIPS 2024).
+
+    Uni-Mol v2 is a two-track transformer that jointly encodes atomic
+    coordinates, pair distances, and molecular graphs. The pretrained model
+    produces 768D molecular representations.
+
+    Reference: Lu et al. "Uni-Mol2: Exploring Molecular Pretraining Model
+    at Scale" (NeurIPS 2024).
+
+    Args:
+        smiles_list: List of SMILES strings
+        remove_hs: Whether to remove hydrogens (default: True)
+
+    Returns:
+        np.ndarray: Uni-Mol v2 embeddings (n_molecules, 768)
+
+    Requires: pip install unimol-tools
+    """
+    try:
+        from unimol_tools import UniMolRepr
+    except ImportError:
+        raise ImportError(
+            "Uni-Mol v2 requires unimol-tools: pip install unimol-tools\n"
+            "If install fails, try: pip install unimol-tools --no-deps"
+        )
+
+    print("  Loading Uni-Mol v2...")
+    model = UniMolRepr(data_type='molecule', remove_hs=remove_hs)
+
+    batch_size = 32
+    all_embeddings = []
+    failed = 0
+
+    for i in range(0, len(smiles_list), batch_size):
+        batch = smiles_list[i:i + batch_size]
+        try:
+            reprs = model.get_repr(batch, return_atomic_reprs=False)
+            # reprs['cls_repr'] is list of arrays, each (768,)
+            cls_repr = np.array(reprs['cls_repr'], dtype=np.float32)
+            all_embeddings.append(cls_repr)
+        except Exception as e:
+            print(f"  WARNING: Uni-Mol v2 batch {i} failed: {e}")
+            all_embeddings.append(np.zeros((len(batch), 768), dtype=np.float32))
+            failed += len(batch)
+
+    if failed > 0:
+        print(f"  WARNING: {failed}/{len(smiles_list)} molecules failed Uni-Mol v2")
+
+    result = np.concatenate(all_embeddings, axis=0)
+    print(f"  Uni-Mol v2 embeddings: {result.shape}")
+    return result
+
+
+# =============================================================================
+# MAP4 FINGERPRINTS
+# =============================================================================
+
+def create_map4(smiles_list, n_bits=1024):
+    """
+    Create MAP4 (MinHashed Atom-Pair) fingerprints.
+
+    MAP4 encodes circular substructures around atom pairs using MinHash,
+    producing topological fingerprints that capture both local and global
+    molecular structure. Particularly effective for peptide-like molecules.
+
+    Reference: Capecchi et al. "One molecular fingerprint to rule them all"
+    (J. Cheminformatics, 2020).
+
+    Args:
+        smiles_list: List of SMILES strings
+        n_bits: Fingerprint length (default: 1024)
+
+    Returns:
+        np.ndarray: MAP4 fingerprints (n_molecules, n_bits)
+
+    Requires: pip install map4
+    """
+    try:
+        from map4 import MAP4Calculator
+    except ImportError:
+        raise ImportError("MAP4 requires the map4 package: pip install map4")
+
+    calc = MAP4Calculator(dimensions=n_bits)
+    all_fps = []
+    failed = 0
+
+    for smi in smiles_list:
+        mol = Chem.MolFromSmiles(smi)
+        if mol is None:
+            all_fps.append(np.zeros(n_bits, dtype=np.float32))
+            failed += 1
+            continue
+        fp = calc.calculate(mol)
+        all_fps.append(np.array(fp, dtype=np.float32))
+
+    if failed > 0:
+        print(f"  WARNING: {failed}/{len(smiles_list)} molecules failed MAP4 featurization")
+
+    result = np.vstack(all_fps)
+    print(f"  MAP4 fingerprints: {result.shape}")
+    return result
 
 
 # =============================================================================

@@ -22,7 +22,7 @@ import numpy as np
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from kirby.representations.antibody import AA_PROPERTIES
+from kirby.representations.protein import AA_PROPERTIES
 
 
 # ============================================================================

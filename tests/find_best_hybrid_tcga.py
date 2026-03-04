@@ -88,17 +88,18 @@ REP_PRESETS = {
     'multimodal': [  # Cross-modality showcase
         'gene_pca100', 'gene_hallmark', 'gene_immune',
         'gene_nmf50', 'gene_stats',
-        'cnv_gistic', 'rppa', 'mirna_top200',
+        'cnv_gistic', 'rppa', 'mirna_top200', 'methyl_pca50',
         'wsi_ctranspath', 'wsi_phikon',
-    ],  # 10 reps
+    ],  # 11 reps
 
     'fast+learned': [
         'gene_hvg2000', 'gene_pca100', 'gene_hallmark', 'gene_progeny',
         'gene_kegg', 'gene_dorothea', 'gene_combined_pathway',
         'gene_nmf50', 'gene_ica50', 'gene_stats',
         'gene_geneformer', 'gene_bulkrnabert', 'gene_scfoundation',
+        'gene_scgpt', 'gene_uce',
         'wsi_ctranspath', 'wsi_phikon', 'wsi_hoptimus0', 'wsi_moco',
-    ],  # 17 reps
+    ],  # 19 reps
 
     'all': [
         # Expression-derived (18)
@@ -108,13 +109,15 @@ REP_PRESETS = {
         'gene_reactome', 'gene_oncogenic', 'gene_immune',
         'gene_quantile_rank', 'gene_corr_modules', 'gene_chromosome_arm',
         'gene_autoencoder50', 'gene_sparse_pca50',
-        # Foundation model embeddings (3, GPU)
+        # Foundation model embeddings (5, GPU)
         'gene_geneformer', 'gene_bulkrnabert', 'gene_scfoundation',
-        # Multi-omic (4)
+        'gene_scgpt', 'gene_uce',
+        # Multi-omic (6)
         'cnv_gistic', 'cnv_pca50', 'rppa', 'mirna_top200',
+        'methyl_pca50', 'methyl_hvg',
         # WSI (5)
         'wsi_ctranspath', 'wsi_phikon', 'wsi_hoptimus0', 'wsi_gigapath', 'wsi_moco',
-    ],  # 29 reps
+    ],  # 34 reps
 
     # Genomic-only presets (no WSI)
     'genomic_fast': [
@@ -124,8 +127,8 @@ REP_PRESETS = {
     'genomic_diverse': [  # Multi-omic without WSI
         'gene_pca100', 'gene_hallmark', 'gene_immune',
         'gene_nmf50', 'gene_stats',
-        'cnv_gistic', 'rppa', 'mirna_top200',
-    ],  # 8 reps
+        'cnv_gistic', 'rppa', 'mirna_top200', 'methyl_pca50',
+    ],  # 9 reps
 
     'genomic_all': [
         'gene_hvg2000', 'gene_pca100', 'gene_hallmark', 'gene_progeny',
@@ -135,8 +138,10 @@ REP_PRESETS = {
         'gene_quantile_rank', 'gene_corr_modules', 'gene_chromosome_arm',
         'gene_autoencoder50', 'gene_sparse_pca50',
         'gene_geneformer', 'gene_bulkrnabert', 'gene_scfoundation',
+        'gene_scgpt', 'gene_uce',
         'cnv_gistic', 'cnv_pca50', 'rppa', 'mirna_top200',
-    ],  # 25 reps
+        'methyl_pca50', 'methyl_hvg',
+    ],  # 29 reps
 }
 
 _SEARCH_NAME_MAP = {
@@ -182,10 +187,15 @@ _REP_DISPATCH = {
     'gene_geneformer':       ('create_geneformer_embeddings', 'genomic'),
     'gene_bulkrnabert':      ('create_bulkrnabert_embeddings', 'genomic'),
     'gene_scfoundation':     ('create_scfoundation_embeddings', 'genomic'),
+    'gene_scgpt':            ('create_scgpt_embeddings',        'genomic'),
+    'gene_uce':              ('create_uce_embeddings',          'genomic'),
     # Mutation-pattern: fn(sample_ids, cohort) -> np.ndarray
     'cnv_gistic':            ('create_cnv_gistic',        'mutation'),
     'cnv_pca50':             ('create_cnv_pca50',         'mutation'),
     'mirna_top200':          ('create_mirna_top200',      'mutation'),
+    # DNA methylation: fn(sample_ids, cohort) -> np.ndarray
+    'methyl_pca50':          ('create_methylation_pca50', 'mutation'),
+    'methyl_hvg':            ('create_methylation_hvg',   'mutation'),
     # RPPA: fn(sample_ids) -> np.ndarray (pan-cancer, no cohort needed)
     'rppa':                  ('create_rppa',              'rppa'),
     # WSI — GigaSSL (Mendeley, public, slide-level)

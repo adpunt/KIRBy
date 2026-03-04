@@ -86,15 +86,13 @@ REP_PRESETS = {
     'fast': ['ecfp4', 'maccs', 'pdv'],
     'fast+hf': ['ecfp4', 'maccs', 'pdv', 'chemberta', 'molformer', 'selformer'],
     'all': [
-        'ecfp4', 'maccs', 'pdv', 'mol2vec', 'chemberta', 'molformer',
+        'ecfp4', 'maccs', 'pdv', 'pdv_binary_mean', 'pdv_rank',
+        'mol2vec', 'chemberta', 'molformer',
         'selformer', 'chembert', 'molclr', 'graphmvp', 'smited',
-        'mhg_gnn', 'grover', 'graph_kernel', 'schnet', 'clamp', 'rmat'
-    ],
-    # Backward compat alias (graph_kernel is now auto-filtered, so no need to exclude it)
-    'all_no_gk': [
-        'ecfp4', 'maccs', 'pdv', 'mol2vec', 'chemberta', 'molformer',
-        'selformer', 'chembert', 'molclr', 'graphmvp', 'smited',
-        'mhg_gnn', 'grover', 'graph_kernel', 'schnet', 'clamp', 'rmat'
+        'mhg_gnn', 'grover', 'graph_kernel', 'schnet', 'clamp', 'rmat',
+        'map4', 'unimol_v2',
+        'chemberta_pca50', 'molformer_pca50', 'selformer_pca50',
+        'molclr_pca50', 'smited_pca50', 'mhg_gnn_pca50', 'grover_pca50',
     ],
 }
 
@@ -308,7 +306,7 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
 
     elif name_lower == 'qm9':
         from kirby.datasets.qm9 import load_qm9
-        qm9_data = load_qm9(n_samples=10000, property_idx=4, random_seed=42)
+        qm9_data = load_qm9(n_samples=5000, property_idx=4, random_seed=42)
         smiles = qm9_data['smiles']
         labels = qm9_data['labels']  # Raw values; StandardScaler applied per fold
         print(f"  Loaded {len(smiles)} molecules from QM9 (HOMO-LUMO gap)")
@@ -390,12 +388,16 @@ def get_representations(smiles: List[str], preset_or_list: str,
         cache: If True, cache representations to ~/.cache/kirby/reps/ and load from
                cache on subsequent calls with the same SMILES. Default True.
     """
+    from functools import partial
     from kirby.representations.molecular import (
-        create_ecfp4, create_maccs, create_pdv, create_mol2vec,
+        create_ecfp4, create_maccs, create_pdv,
+        create_pdv_binary_mean, create_pdv_rank, create_pca_rep,
+        create_mol2vec,
         create_chemberta, create_molformer, create_selformer,
         create_chembert, create_molclr, create_graphmvp, create_smited,
         create_mhg_gnn, create_grover, create_graph_kernel,
         create_unimol, create_schnet, create_clamp, create_rmat,
+        create_map4, create_unimol_v2,
     )
 
     if preset_or_list in REP_PRESETS:
@@ -409,6 +411,8 @@ def get_representations(smiles: List[str], preset_or_list: str,
         'ecfp4': create_ecfp4,
         'maccs': create_maccs,
         'pdv': create_pdv,
+        'pdv_binary_mean': create_pdv_binary_mean,
+        'pdv_rank': create_pdv_rank,
         'mol2vec': create_mol2vec,
         'chemberta': create_chemberta,
         'molformer': create_molformer,
@@ -424,6 +428,16 @@ def get_representations(smiles: List[str], preset_or_list: str,
         'schnet': create_schnet,
         'clamp': create_clamp,
         'rmat': create_rmat,
+        'map4': create_map4,
+        'unimol_v2': create_unimol_v2,
+        # PCA-reduced LM embeddings (50D)
+        'chemberta_pca50': partial(create_pca_rep, base_fn=create_chemberta),
+        'molformer_pca50': partial(create_pca_rep, base_fn=create_molformer),
+        'selformer_pca50': partial(create_pca_rep, base_fn=create_selformer),
+        'molclr_pca50': partial(create_pca_rep, base_fn=create_molclr),
+        'smited_pca50': partial(create_pca_rep, base_fn=create_smited),
+        'mhg_gnn_pca50': partial(create_pca_rep, base_fn=create_mhg_gnn),
+        'grover_pca50': partial(create_pca_rep, base_fn=create_grover),
     }
 
     representations = {}
@@ -710,7 +724,9 @@ def save_blueprint_code(result: SearchResult, reps_tested: List[str], output_pat
         '',
         'from kirby.hybrid import create_hybrid, apply_feature_selection',
         'from kirby.representations.molecular import (',
-        '    create_ecfp4, create_maccs, create_pdv, create_mol2vec,',
+        '    create_ecfp4, create_maccs, create_pdv,',
+        '    create_pdv_binary_mean, create_pdv_rank,',
+        '    create_mol2vec,',
         '    create_chemberta, create_molformer, create_selformer,',
         '    create_chembert, create_molclr, create_graphmvp, create_smited,',
         '    create_mhg_gnn, create_grover, create_graph_kernel,',
@@ -723,6 +739,8 @@ def save_blueprint_code(result: SearchResult, reps_tested: List[str], output_pat
         "    'ecfp4': create_ecfp4,",
         "    'maccs': create_maccs,",
         "    'pdv': create_pdv,",
+        "    'pdv_binary_mean': create_pdv_binary_mean,",
+        "    'pdv_rank': create_pdv_rank,",
         "    'mol2vec': create_mol2vec,",
         "    'chemberta': create_chemberta,",
         "    'molformer': create_molformer,",

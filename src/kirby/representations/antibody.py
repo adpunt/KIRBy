@@ -567,6 +567,32 @@ def embed_esm2_midlayers(heavy_seqs: List[str], light_seqs: List[str]) -> np.nda
     )
 
 
+# ── AMPLIFY 350M ──────────────────────────────────────────────────────────────
+
+
+def embed_amplify(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """AMPLIFY 350M embeddings: H+L concatenated → (N, 1920).
+
+    Drop-in ESM-2 alternative. 350M parameter protein language model
+    from Mila/Chandar Lab.
+
+    Requires: pip install transformers
+    HF model: chandar-lab/AMPLIFY_350M
+    """
+    return _embed_single_chain_model(
+        heavy_seqs, light_seqs,
+        'chandar-lab/AMPLIFY_350M',
+    )
+
+
+def embed_amplify_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """AMPLIFY 350M CDR-only pooled: H+L concatenated → (N, 1920)."""
+    return _embed_single_chain_cdr(
+        heavy_seqs, light_seqs,
+        'chandar-lab/AMPLIFY_350M',
+    )
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 ANTIBODY_REPS = {
@@ -586,13 +612,16 @@ ANTIBODY_REPS = {
     'prot_t5_cdr': embed_prot_t5_cdr,  # 2048D
     # Intermediate layer averaged
     'esm2_midlayers': embed_esm2_midlayers,  # 2560D (layers 20-33 avg)
+    # AMPLIFY 350M (Mila/Chandar Lab)
+    'amplify': embed_amplify,                # 1920D (960 × 2)
+    'amplify_cdr': embed_amplify_cdr,        # 1920D (CDR-pooled)
 }
 
 # LM reps (require GPU / torch / transformers)
 ANTIBODY_LM_REPS = {
     'esm2', 'esmc', 'ablang2', 'igbert', 'antiberty', 'prot_t5',
     'esm2_cdr', 'esmc_cdr', 'antiberty_cdr', 'prot_t5_cdr',
-    'esm2_midlayers',
+    'esm2_midlayers', 'amplify', 'amplify_cdr',
 }
 
 # Fast reps (no dependencies beyond numpy)

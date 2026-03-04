@@ -43,14 +43,14 @@ the auditor's claims are themselves wrong. Sorted into confirmed vs rejected.
 
 ### 1D. Suggested Additions (from auditor, evaluate priority)
 
-| Domain | Suggestion | Priority | Notes |
-|--------|-----------|----------|-------|
-| Molecular | Uni-Mol v2 (NeurIPS 2024) | LOW | Already dropped uni-mol v1 due to install issues |
-| Molecular | MAP4 fingerprints | LOW | Useful for peptide-like, but out of scope |
-| Antibody | FLAb2 benchmark (Dec 2025) | MEDIUM | 4M+ antibodies, supersedes FLAb — evaluate as dataset |
-| Antibody | ProteinGym, FLIP2, AbDev | LOW | Complementary but scope creep |
-| TCGA | scGPT, UCE | LOW | Direct Geneformer alternatives, but Geneformer already works |
-| DTA | DeepDTA, GraphDTA | **HIGH** | Fundamental DTA baselines, cited in every DTA paper. Major gap. |
+| Domain | Suggestion | Priority | Status |
+|--------|-----------|----------|--------|
+| Molecular | Uni-Mol v2 (NeurIPS 2024) | LOW | **DONE** — `create_unimol_v2()` in molecular.py (768D) |
+| Molecular | MAP4 fingerprints | LOW | **DONE** — `create_map4()` in molecular.py (1024D) |
+| Antibody | FLAb2 benchmark (Dec 2025) | MEDIUM | **DONE** — 12 new datasets in `FLAB_DATASETS` (7 properties) |
+| Antibody | ProteinGym, FLIP2, AbDev | LOW | Deferred — complementary but scope creep |
+| TCGA | scGPT, UCE | LOW | **DONE** — `create_scgpt_embeddings()` (512D), `create_uce_embeddings()` (1280D) |
+| DTA | DeepDTA, GraphDTA | **HIGH** | **DONE** — `tests/experiments/dta_e2e_comparison.py` (needs server run) |
 
 ---
 
@@ -210,16 +210,17 @@ server code was stale). This is the lowest-hanging fruit.
 
 **What exists:**
 - `src/kirby/datasets/dta.py` — Davis (30K pairs) and KIBA (118K pairs)
+- `src/kirby/datasets/pdbbind.py` — PDBBind refined (~5316) and core (~290) sets
 - `tests/dta_baseline_survey.py` — pairs drug+protein reps via `np.hstack`
 - `tests/find_best_hybrid_dta.py` — hybrid search over drug+protein reps
-- 6 drug reps: ecfp4, maccs, pdv, chemberta, molformer, selformer
-- 4 protein reps: esm2, aac, descriptors, kmer
+- `tests/experiments/dta_e2e_comparison.py` — DeepDTA/GraphDTA vs KIRBy frozen comparison
+- 11 drug reps: ecfp4, maccs, pdv, mol2vec, chemberta, molformer, selformer, clamp, rmat, map4, unimol_v2
+- 7 protein reps: esm2, esmc, esm2_midlayers, amplify, aac, descriptors, kmer
 
 **What's needed:**
-- Actually run the survey (fix protein_kmer timeout or skip it)
-- Add ESM-C 600M as `protein_esmc` (drop-in ESM-2 replacement)
-- Consider CLAMP as `drug_clamp` (if it beats drug_ecfp4 on DTA)
-- Test all drug×protein combinations in the hybrid search
+- Actually run the survey on server (all drug×protein combos)
+- Run DeepDTA/GraphDTA comparison on server
+- Fill BOM §2D with fresh numbers
 
 **Graph+sequence idea:** Already works. The hybrid search freely mixes drug graph/FP
 reps with protein sequence reps. No code changes needed — just run it.
@@ -262,9 +263,12 @@ reps with protein sequence reps. No code changes needed — just run it.
 - Standard: concatenated reactant/product ECFP4 as baseline
 - GraphMVP/MolCLR graph reps of reactants (where graph topology actually helps)
 
-**What exists:** Nothing. No datasets, no fingerprints, no infrastructure.
+**What exists (implemented session 2):**
+- `src/kirby/datasets/reaction_yields.py` — Buchwald-Hartwig (~3955) + Suzuki-Miyaura (~5760)
+- `src/kirby/representations/reaction.py` — DRFP (2048D) + concat ECFP4
+- `tests/run_reaction_yield_survey.py` — full survey script (DRFP + concat ECFP4 × Ridge/RF/XGB × 10 splits)
 
-**Effort:** HIGH — new dataset loaders, new rep functions, new survey script.
+**What's needed:** Run on server (`pip install drfp`).
 
 ### 3E. Missing Pipeline 4: Structure-Based Binding Affinity (New)
 
@@ -274,10 +278,13 @@ co-crystal structures — the 3D arrangement of drug in the binding pocket.
 **KIRBy approach:** Frozen protein pocket embeddings + frozen ligand embeddings →
 Ridge/XGBoost. Compare against OnionNet, PLIP features, structure-based methods.
 
-**What exists:** Nothing. `pdb_utils.py` is antibody PDB parsing, not PDBBind.
+**What exists (implemented session 3):**
+- `src/kirby/datasets/pdbbind.py` — Loader for refined (~5316) and core (~290) sets
+- Sequence-based approach: extracts protein seq from PDB + ligand SMILES from SDF
+- Returns DTA-compatible dict → plugs into existing DTA pipeline
+- Registered in `dta_baseline_survey.py`, `find_best_hybrid_dta.py`, `run_baseline_survey.py`
 
-**Effort:** HIGH — new dataset, new featurization (pocket extraction, PLIP), 3D
-structure handling. Out of scope unless thesis specifically needs structure-based.
+**What's needed:** Manual data download from pdbbind.org.cn (registration required).
 
 ### 3F. Multi-Modal Concatenation (Already Works)
 
@@ -296,10 +303,10 @@ No architectural changes needed. The infrastructure is modality-agnostic by desi
 
 | Pipeline | Exists? | Effort | Impact | Priority |
 |----------|---------|--------|--------|----------|
-| DTA baselines | YES (just run it) | LOW | HIGH | **P0** — already have data+code |
-| Full QM9 (end-to-end) | Partial (loader exists) | MEDIUM | HIGH (thesis argument) | **P1** |
-| Reaction yield | NO | HIGH | MEDIUM | **P2** |
-| PDBBind structure-based | NO | HIGH | LOW (scope) | **P3** (defer) |
+| DTA baselines | YES (code complete, need server run) | LOW | HIGH | **P0** — run surveys + DeepDTA/GraphDTA comparison |
+| Full QM9 (end-to-end) | YES (loader + comparison script) | LOW | HIGH (thesis argument) | **P1** — run 3-way comparison on server |
+| Reaction yield | YES (datasets + reps + survey) | LOW | MEDIUM | **P2** — run survey on server (`pip install drfp`) |
+| PDBBind structure-based | YES (loader + DTA integration) | LOW | LOW (scope) | **P3** — needs manual data download |
 
 ---
 
@@ -360,9 +367,12 @@ No architectural changes needed. The infrastructure is modality-agnostic by desi
 - [x] R-MAT molecular rep (768D, 3D-aware transformer via huggingmolecules)
 - [x] Optuna HP tuning for downstream models (`--tune 50` flag + `tune_xgboost_optuna()` in _shared.py)
 - [x] L2-normalize embeddings before Ridge (`--l2-norm` flag → `ridge_l2norm` model)
-- [ ] FLAb2 as antibody benchmark dataset
-- [ ] DNA methylation modality for TCGA
-- [ ] PDBBind structure-based binding (HIGH effort, unclear scope fit)
-- [ ] Uni-Mol v2, MAP4, scGPT, UCE, AMPLIFY, TwinBooster, GP-MoLFormer
+- [x] FLAb2 as antibody benchmark dataset (12 new datasets spanning 7 properties)
+- [x] DNA methylation modality for TCGA (HM450 via Xena, PCA50 + HVG reps)
+- [x] PDBBind structure-based binding (loader for refined/core sets, sequence-based)
+- [x] Uni-Mol v2 (768D, NeurIPS 2024), MAP4 (1024D fingerprints)
+- [x] scGPT (512D), UCE (1280D) genomic foundation models
+- [x] AMPLIFY 350M (960D protein LM, antibody + DTA)
+- [ ] TwinBooster, GP-MoLFormer (deferred)
 
 *(Duplicate section removed — see above for canonical checklist)*

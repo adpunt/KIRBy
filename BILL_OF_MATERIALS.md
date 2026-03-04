@@ -18,7 +18,7 @@ not be used in experiments until validated.
 | `logd` | OpenADMET-ExpansionRx | ~5,039 | ~2,387 | LogD | R² | **Confirmed** |
 | `caco2` | OpenADMET-ExpansionRx | ~2,161 | ~1,069 | Caco2 Efflux (log) | R² | **Confirmed** |
 | `herg` | ChEMBL (CHEMBL240) | ~1,415 | ~767 | pKi | R² | **Confirmed** |
-| `qm9` | QM9 | 2,000 | varies | HOMO-LUMO gap | R² | **Confirmed** |
+| `qm9` | QM9 | 5,000 | varies | HOMO-LUMO gap | R² | **Confirmed** |
 
 ### 1B. Antibody Intra-Family / DMS (regression, GroupKFold by family)
 
@@ -31,6 +31,9 @@ not be used in experiments until validated.
 | `abagym_lysozyme_2019_D441` | AbAgym DMS | 627 | Fitness | **Confirmed** (20 reps) |
 | `abagym_VEGF_2017b_G6` | AbAgym DMS | 418 | Fitness | **Confirmed** (20 reps) |
 | `abagym_HER2_2021_trastuzumab` | AbAgym DMS | 146 | Fitness | **Confirmed** (20 reps) |
+| `flab_binding_phillips_h3` | FLAb2 (Phillips 2021) | 32,768 | Binding (SPR Kd) | Listed, no baselines yet |
+| `flab_binding_adams` | FLAb2 (Adams 2017) | ~10K | Binding (Kd) | Listed, no baselines yet |
+| `flab_expression_adams` | FLAb2 (Adams 2017) | 10,970 | Expression (ER) | Listed, no baselines yet |
 
 ### 1C. Antibody Inter-Family (regression, identity-grouped GroupKFold)
 
@@ -41,6 +44,15 @@ not be used in experiments until validated.
 | `flab_thermo_jain` | FLAb (Jain 2017) | 137 | Tm | **Partial** (6 reps, R²=0.14, see §2B) |
 | `flab_aggregation_jain` | FLAb (Jain 2017) | 137 | AC-SINS | **Confirmed** (loads OK, paired) |
 | `abagym_all` | AbAgym (pooled 5 experiments) | 2,247 | Fitness | **Confirmed** (loads OK, paired) |
+| `flab_thermo_tresanco` | FLAb2 (Tresanco 2023) | 673 | Tm | Listed, no baselines yet |
+| `flab_thermo_hutchinson` | FLAb2 (Hutchinson 2023) | 192 | Tm | Listed, no baselines yet |
+| `flab_immunogenicity_marks` | FLAb2 (Marks 2021) | 217 | Immunogenicity | Listed, no baselines yet |
+| `flab_aggregation_jain_hicrt` | FLAb2 (Jain 2017) | 137 | HIC RT | Listed, no baselines yet |
+| `flab_aggregation_jain_sas` | FLAb2 (Jain 2017) | 137 | SAS | Listed, no baselines yet |
+| `flab_polyreact_jain_bvp` | FLAb2 (Jain 2017) | 137 | BVP ELISA | Listed, no baselines yet |
+| `flab_polyreact_jain_cic` | FLAb2 (Jain 2017) | 137 | CIC RT | Listed, no baselines yet |
+| `flab_pk_jain_fcrnrt` | FLAb2 (Jain 2023) | 132 | FcRn RT | Listed, no baselines yet |
+| `flab_pk_jain_heprt` | FLAb2 (Jain 2023) | 130 | Heparin RT | Listed, no baselines yet |
 
 **Dropped:** `sabdab_affinity` (was SKEMPI 2.0 only, replaced by `ddg_combined`),
 `abbind` / `abbind_spm` (strict subsets of `ddg_combined`).
@@ -71,6 +83,18 @@ not be used in experiments until validated.
 **Representations:** DRFP (2048D reaction fingerprints), Concat ECFP4 (per-component Morgan FPs).
 **Deps:** `pip install drfp` for DRFP fingerprints.
 
+### 1G. PDBBind (structure-based binding affinity, regression)
+
+| Dataset | Samples | Source | Target | Status |
+|---------|---------|--------|--------|--------|
+| `pdbbind_refined` | ~5,316 complexes | PDBBind v2020 refined | -log(Kd/Ki) | Listed, manual download needed |
+| `pdbbind_core` | ~290 complexes | PDBBind v2020 core | -log(Kd/Ki) | Listed, manual download needed |
+
+**Data source:** pdbbind.org.cn (free registration, manual download required).
+**Approach:** Sequence-based — extracts protein sequences from PDB + ligand SMILES from SDF.
+Returns same dict format as DTA loader → plugs into existing DTA pipeline.
+**Splits:** LP-PDBBind leak-proof via protein sequence clustering (Volkov et al. 2022).
+
 ---
 
 ## 2. Representations with Baseline Performance
@@ -82,7 +106,7 @@ are from scaffold-split (molecular), identity-grouped (antibody), or TSS-grouped
 ### 2A. Molecular Representations
 
 **Source:** 5-fold scaffold-split GroupKFold baselines on LogD (~5,039), Caco2 (~2,161),
-hERG (~1,415), QM9 (~1,981). Models: rf, xgboost, ridge, knn, lightgbm.
+hERG (~1,415), QM9 (~5,000). Models: rf, xgboost, ridge, knn, lightgbm.
 
 **⚠ ALL SCORES PENDING** — HP defaults changed (RF max_features, XGB colsample_bytree,
 RidgeCV grid). Server caches must be cleared before re-run. See §8.
@@ -92,6 +116,8 @@ RidgeCV grid). Server caches must be cleared before re-run. See §8.
 | `ecfp4` | 2048 | Standard (fingerprint) | PENDING | PENDING | PENDING | PENDING | rdkit |
 | `maccs` | 167 | Standard (fingerprint) | PENDING | PENDING | PENDING | PENDING | rdkit |
 | `pdv` | 200 | Standard (descriptor) | PENDING | PENDING | PENDING | PENDING | rdkit |
+| `pdv_binary_mean` | 200 | Transformed (binary) | PENDING | PENDING | PENDING | PENDING | rdkit |
+| `pdv_rank` | 200 | Transformed (rank) | PENDING | PENDING | PENDING | PENDING | rdkit |
 | `mol2vec` | 300 | Pretrained (Word2Vec) | PENDING | PENDING | PENDING | PENDING | mol2vec |
 | `chemberta` | 768 | Pretrained (Transformer) | PENDING | PENDING | PENDING | PENDING | transformers |
 | `molformer` | 768 | Pretrained (Transformer) | PENDING | PENDING | PENDING | PENDING | transformers |
@@ -106,7 +132,16 @@ RidgeCV grid). Server caches must be cleared before re-run. See §8.
 | `schnet` | 128 | Pretrained (3D GNN) | PENDING | PENDING | PENDING | PENDING | schnetpack |
 | `clamp` | 768 | Pretrained (contrastive MLP) | PENDING | PENDING | PENDING | PENDING | clamp (ml-jku), mhnreact |
 | `rmat` | 768 | Pretrained (3D Transformer) | PENDING | PENDING | PENDING | PENDING | huggingmolecules (gmum) |
-| `unimol` | 512 | Pretrained (3D) | **DROPPED** | — | — | — | unimol_tools |
+| `unimol` | 512 | Pretrained (3D) | **DROPPED** | — | — | — | unimol_tools (v1, broken install) |
+| `unimol_v2` | 768 | Pretrained (3D) | PENDING | PENDING | PENDING | PENDING | unimol-tools (NeurIPS 2024) |
+| `map4` | 1024 | Standard (fingerprint) | PENDING | PENDING | PENDING | PENDING | map4 |
+| `chemberta_pca50` | 50 | Transformed (PCA) | PENDING | PENDING | PENDING | PENDING | transformers, sklearn |
+| `molformer_pca50` | 50 | Transformed (PCA) | PENDING | PENDING | PENDING | PENDING | transformers, sklearn |
+| `selformer_pca50` | 50 | Transformed (PCA) | PENDING | PENDING | PENDING | PENDING | transformers, sklearn |
+| `molclr_pca50` | 50 | Transformed (PCA) | PENDING | PENDING | PENDING | PENDING | torch_geometric, sklearn |
+| `smited_pca50` | 50 | Transformed (PCA) | PENDING | PENDING | PENDING | PENDING | smi-ted, sklearn |
+| `mhg_gnn_pca50` | 50 | Transformed (PCA) | PENDING | PENDING | PENDING | PENDING | torch_geometric, sklearn |
+| `grover_pca50` | 50 | Transformed (PCA) | PENDING | PENDING | PENDING | PENDING | grover, sklearn |
 
 **Dropped:** `chemformer` (R² < 0.25 on all datasets, broken HF weights).
 
@@ -118,7 +153,7 @@ were tested and performed **worse** than frozen baselines on all molecular datas
 **Presets:**
 - `fast` (3): ecfp4, maccs, pdv
 - `fast+hf` (6): + chemberta, molformer, selformer
-- `all` (17): all reps including GNN, graph_kernel, clamp, rmat
+- `all` (28): all reps including GNN, graph_kernel, clamp, rmat, map4, unimol_v2, pdv_binary_mean, pdv_rank, 7 PCA-50 variants
 
 ### 2B. Antibody Representations
 
@@ -144,6 +179,8 @@ competitive with billion-param models at ≥1K samples.
 | `antiberty_cdr` | 1024 | CDR-pooled (Ab LM) | transformers, anarci | AntiBERTy, CDR-only |
 | `prot_t5_cdr` | 2048 | CDR-pooled (protein LM) | transformers, anarci | ProtT5, CDR-only |
 | `esm2_midlayers` | 2560 | Intermediate layers (LM) | transformers | ESM-2, avg layers 20-33 |
+| `amplify` | 1920 | Pretrained (protein LM) | transformers | AMPLIFY 350M (Mila), H+L concat |
+| `amplify_cdr` | 1920 | CDR-pooled (protein LM) | transformers, anarci | AMPLIFY 350M, CDR-only |
 
 **Baselines:** Not yet computed — run `antibody_baseline_survey.py` on server.
 
@@ -187,6 +224,8 @@ BRCA PAM50. Models: rf, xgboost, ridge, knn.
 | `geneformer` (FT) | 1152 | Fine-tuned (per-fold) | PENDING | PENDING | torch, transformers | GPU |
 | `gene_bulkrnabert` | 256 | Pretrained (frozen) | PENDING | PENDING | transformers (from source) | GPU. Purpose-built for bulk RNA-seq (pretrained on TCGA). |
 | `gene_scfoundation` | 2048 | Pretrained (frozen) | PENDING | PENDING | torch, transformers | GPU, never tested |
+| `gene_scgpt` | 512 | Pretrained (frozen) | PENDING | PENDING | scgpt | GPU. Single-cell FM on bulk RNA-seq. |
+| `gene_uce` | 1280 | Pretrained (frozen) | PENDING | PENDING | uce-model | GPU. Universal cell embeddings via ESM-2. |
 
 #### Multi-Omic
 
@@ -196,6 +235,8 @@ BRCA PAM50. Models: rf, xgboost, ridge, knn.
 | `cnv_pca50` | 50 | CNV | PENDING | PENDING | Xena | YES |
 | `rppa` | 258 | Protein | PENDING | PENDING | Xena | YES |
 | `mirna_top200` | 200 | miRNA | PENDING | PENDING | Xena | YES |
+| `methyl_pca50` | 50 | DNA methylation | PENDING | PENDING | Xena (HM450) | YES |
+| `methyl_hvg` | 5000 | DNA methylation | PENDING | PENDING | Xena (HM450) | YES |
 
 **Dropped:** `gene_mutation` (Xena MC3 returns 403), `clinical` (Xena phenotype returns 403).
 
@@ -220,12 +261,12 @@ data leakage. Previous survey showed it competitive as individual rep and in hyb
 **Presets:**
 - `fast` (5): pca100, hallmark, progeny, ctranspath, phikon
 - `fast+diverse` (9): + nmf50, stats, immune, quantile_rank
-- `multimodal` (10): + cnv_gistic, rppa, mirna_top200
-- `fast+learned` (16): expanded genomic + geneformer + scfoundation + 4 WSI
-- `all` (29): everything (18 expression + 2 foundation + 4 multi-omic + 5 WSI)
+- `multimodal` (11): + cnv_gistic, rppa, mirna_top200, methyl_pca50, ctranspath, phikon
+- `fast+learned` (19): expanded genomic + 5 foundation models + 4 WSI
+- `all` (34): everything (18 expression + 5 foundation + 6 multi-omic + 5 WSI)
 - `genomic_fast` (3): pca100, hallmark, progeny
-- `genomic_diverse` (8): multi-omic without WSI
-- `genomic_all` (24): all genomic + foundation models + multi-omic
+- `genomic_diverse` (9): multi-omic without WSI
+- `genomic_all` (29): all genomic + 5 foundation models + 6 multi-omic
 
 ### 2D. DTA Representations
 
@@ -239,16 +280,28 @@ Davis: 30K pairs (68 drugs × 442 proteins). KIBA: 30K subsample (2111 drugs × 
 | `drug_ecfp4` | 2048 | Standard (fingerprint) | PENDING | PENDING | rdkit |
 | `drug_maccs` | 167 | Standard (fingerprint) | PENDING | PENDING | rdkit |
 | `drug_pdv` | 200 | Standard (descriptor) | PENDING | PENDING | rdkit |
+| `drug_pdv_binary_mean` | 200 | Transformed (binary) | PENDING | PENDING | rdkit |
+| `drug_pdv_rank` | 200 | Transformed (rank) | PENDING | PENDING | rdkit |
 | `drug_chemberta` | 768 | Pretrained (drug LM) | PENDING | PENDING | transformers |
 | `drug_molformer` | 768 | Pretrained (drug LM) | PENDING | PENDING | transformers |
 | `drug_selformer` | 768 | Pretrained (drug LM) | PENDING | PENDING | transformers |
 | `drug_clamp` | 768 | Pretrained (contrastive MLP) | PENDING | PENDING | clamp (ml-jku), mhnreact |
+| `drug_mol2vec` | 300 | Pretrained (Word2Vec) | PENDING | PENDING | mol2vec |
 | `protein_esm2` | 1280 | Pretrained (protein LM) | PENDING | PENDING | transformers |
 | `protein_esmc` | 1152 | Pretrained (protein LM) | PENDING | PENDING | esm (EvolutionaryScale). Non-commercial license. |
 | `protein_esm2_midlayers` | 1280 | Intermediate layers (LM) | PENDING | PENDING | transformers. Avg layers 20-33. |
 | `protein_aac` | 20 | Standard (composition) | PENDING | PENDING | None |
 | `protein_descriptors` | 30 | Standard (biophysical) | PENDING | PENDING | None |
 | `protein_kmer` | 200 | Standard (sequence, filtered) | PENDING | PENDING | None |
+| `protein_amplify` | 960 | Pretrained (protein LM) | PENDING | PENDING | transformers. AMPLIFY 350M (Mila). |
+| `drug_rmat` | 768 | Pretrained (3D Transformer) | PENDING | PENDING | huggingmolecules (gmum) |
+| `drug_map4` | 1024 | Standard (fingerprint) | PENDING | PENDING | map4 |
+| `drug_unimol_v2` | 768 | Pretrained (3D) | PENDING | PENDING | unimol-tools |
+| `drug_chemberta_pca50` | 50 | Transformed (PCA) | PENDING | PENDING | transformers, sklearn |
+| `drug_molformer_pca50` | 50 | Transformed (PCA) | PENDING | PENDING | transformers, sklearn |
+| `drug_selformer_pca50` | 50 | Transformed (PCA) | PENDING | PENDING | transformers, sklearn |
+| `drug_clamp_pca50` | 50 | Transformed (PCA) | PENDING | PENDING | clamp, sklearn |
+| `drug_rmat_pca50` | 50 | Transformed (PCA) | PENDING | PENDING | huggingmolecules, sklearn |
 
 **Note:** `protein_kmer` reduced from 8000D to 200D via feature-importance pre-filtering
 (RF importance on subsample → top 200 features). Fixes timeout and improves tractability.
@@ -256,12 +309,21 @@ Davis: 30K pairs (68 drugs × 442 proteins). KIBA: 30K subsample (2111 drugs × 
 **Presets:**
 - `fast` (5): drug_ecfp4, drug_maccs, drug_pdv, protein_esm2, protein_aac
 - `fast+lm` (10): + drug_chemberta, drug_molformer, drug_clamp, protein_esmc, protein_descriptors
-- `full` (12): + drug_selformer, protein_esm2_midlayers, protein_kmer
+- `full` (25): + drug_pdv_binary_mean, drug_pdv_rank, drug_mol2vec, drug_selformer, drug_rmat, drug_map4, drug_unimol_v2, 5 drug PCA-50 variants, protein_esm2_midlayers, protein_amplify, protein_kmer
 
 **Fine-tuning:**
 - `protein_esm2_lora`: ESM-2 650M LoRA (rank 8) on protein side, trained with frozen drug
   ECFP4 context. Returns 1280D protein embeddings. Recommended for >5K samples (Davis 30K,
-  KIBA 118K). Usage: `--finetune protein_esm2_lora --finetune-epochs 5`
+  KIBA 118K). Factory: `src/kirby/finetuning/dta_protein_lora.py`. Not yet integrated into
+  DTA baseline survey — requires standalone runner or `run_baseline_survey.py --finetune` (TCGA only).
+
+### 2E. Comparison Experiments (standalone scripts, not part of baseline surveys)
+
+| Experiment | Script | What it tests | Status |
+|-----------|--------|---------------|--------|
+| DeepDTA/GraphDTA vs KIRBy | `tests/experiments/dta_e2e_comparison.py` | 3-way: frozen ECFP4+ESM2+XGB vs DeepDTA vs GraphDTA-GIN on Davis/KIBA | Needs server |
+| QM9 3D end-to-end | `tests/experiments/qm9_3d_comparison.py` | 3-way: frozen ECFP4+XGB vs frozen SchNet+Ridge vs end-to-end SchNet | Needs server |
+| WSI ABMIL aggregation | `tests/experiments/wsi_abmil_comparison.py` | Mean pool vs gated attention vs ABMIL on TCGA WSI tasks | Needs server |
 
 ---
 
@@ -323,10 +385,10 @@ All scores reset to PENDING. Full re-run required across all domains.
 
 | Domain | Gap | Estimated cells | Blocker |
 |--------|-----|----------------|---------|
-| Molecular | All 15+ reps × 4 datasets | ~64 | HP defaults changed; server cache clear needed |
-| Antibody | 8+ reps × 12 datasets | ~96+ | HP defaults changed; run `antibody_baseline_survey.py all` |
-| TCGA | All 20+ reps × 2 datasets | ~44+ | HP defaults changed; pathway caches stale |
-| DTA | All 10 reps × 2 datasets | ~20 | HP defaults changed; protein_kmer now pre-filtered |
+| Molecular | All 19 reps × 4 datasets | ~76 | HP defaults changed; server cache clear needed |
+| Antibody | 16 reps × 18 datasets | ~288 | HP defaults changed; run `antibody_baseline_survey.py all` |
+| TCGA | All 34 reps × 3 datasets | ~102 | HP defaults changed; pathway caches stale |
+| DTA | All 18 reps × 2 datasets | ~36 | HP defaults changed; protein_kmer now pre-filtered |
 
 ### What's BROKEN (needs fixing before re-run)
 

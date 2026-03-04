@@ -697,6 +697,82 @@ def _download_xena_mirna(cohort: str) -> Tuple[np.ndarray, np.ndarray, List[str]
 
 
 # =============================================================================
+# DNA METHYLATION (HM450)
+# =============================================================================
+
+# Xena HumanMethylation450 URLs (per-cohort)
+_XENA_METHYLATION_TEMPLATES = [
+    "https://tcga-xena-hub.s3.us-east-1.amazonaws.com/"
+    "download/TCGA.{cohort}.sampleMap%2FHumanMethylation450.gz",
+    "https://tcga.xenahubs.net/download/"
+    "TCGA.{cohort}.sampleMap%2FHumanMethylation450.gz",
+]
+
+
+def _download_xena_methylation(cohort: str) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+    """Download HM450 DNA methylation beta values from UCSC Xena.
+
+    Illumina HumanMethylation450 BeadChip (~485K CpG probes).
+    Beta values range [0, 1] representing methylation fraction.
+
+    Args:
+        cohort: TCGA cohort, e.g. 'TCGA-BRCA'
+
+    Returns:
+        methylation: (n_samples, n_probes) beta values
+        probe_names: (n_probes,) CpG probe IDs
+        sample_ids: TCGA barcodes (truncated to 15 chars)
+    """
+    import requests
+
+    cache = _cache_dir()
+    cohort_key = cohort.replace('-', '_').lower()
+    cached_npz = cache / f'{cohort_key}_methylation.npz'
+
+    if cached_npz.exists():
+        data = np.load(cached_npz, allow_pickle=True)
+        return data['methylation'], data['probe_names'], data['sample_ids'].tolist()
+
+    cohort_slug = cohort.replace('TCGA-', '').upper()
+    urls = [t.format(cohort=cohort_slug) for t in _XENA_METHYLATION_TEMPLATES]
+
+    print(f"  Downloading HM450 methylation data for {cohort} from UCSC Xena...")
+    resp = _download_with_fallback(urls, timeout=600)
+
+    content = gzip.decompress(resp.content)
+    df = pd.read_csv(io.BytesIO(content), sep='\t', index_col=0)
+
+    # Filter to primary tumor samples (sample type code 01)
+    tumor_cols = [c for c in df.columns if len(c) >= 15 and c[13:15] == '01']
+    if not tumor_cols:
+        tumor_cols = list(df.columns)
+    df = df[tumor_cols]
+
+    probe_names = df.index.values.astype(str)
+    methylation = df.values.T.astype(np.float32)
+    sample_ids = [c[:15] for c in tumor_cols]
+
+    # Replace NaN with probe median (common for methylation)
+    nan_mask = np.isnan(methylation)
+    if nan_mask.any():
+        probe_medians = np.nanmedian(methylation, axis=0)
+        for j in range(methylation.shape[1]):
+            col_nans = np.isnan(methylation[:, j])
+            if col_nans.any():
+                methylation[col_nans, j] = probe_medians[j]
+        methylation = np.nan_to_num(methylation, nan=0.0)
+        print(f"  Imputed {nan_mask.sum()} NaN methylation values with probe medians")
+
+    print(f"  Methylation matrix: {methylation.shape[0]} samples × {methylation.shape[1]} probes")
+
+    np.savez_compressed(cached_npz,
+                        methylation=methylation,
+                        probe_names=probe_names,
+                        sample_ids=np.array(sample_ids))
+    return methylation, probe_names, sample_ids
+
+
+# =============================================================================
 # WSI FEATURES (PRE-COMPUTED)
 # =============================================================================
 
