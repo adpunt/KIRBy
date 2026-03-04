@@ -345,7 +345,7 @@ def make_ft_factories(data, dataset_name, task_type, ft_epochs=3, ft_cache=True)
 # =============================================================================
 
 def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
-               tune_trials=0, l2_norm=False):
+               tune_trials=0, l2_norm=False, augment=False):
     """Run the full baseline survey for one dataset. Returns result dict."""
     print(f"\n{'='*70}")
     print(f"SURVEY: {dataset_name}")
@@ -456,9 +456,50 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
                 ft_baselines[ft_name] = entry
                 print()
 
+    # 5. Augmentation test: concat small reps with top base, check if it helps
+    augmentations = {}
+    if augment and baselines:
+        # Find the top-scoring base rep (by best model score)
+        scored = [(name, e['best']['score']) for name, e in baselines.items()
+                  if e.get('best') is not None]
+        if scored:
+            top_rep, top_score = max(scored, key=lambda x: x[1])
+            top_model = baselines[top_rep]['best']['model']
+            X_top = reps[top_rep]
+
+            # Small reps = ≤200D, excluding the top rep itself
+            small_reps = {k: v for k, v in reps.items()
+                          if v.shape[1] <= 200 and k != top_rep}
+
+            if small_reps:
+                print(f"\n--- Augmentation test: {top_rep} (R²={top_score:.4f}) "
+                      f"+ {len(small_reps)} small reps ---")
+
+                model = default_models[top_model]
+                for aug_name in sorted(small_reps.keys()):
+                    X_aug = np.hstack([X_top, small_reps[aug_name]])
+                    mean_s, _ = evaluate_rep(
+                        X_aug, labels, groups, model, n_folds, task_type,
+                        prebuilt_splits=prebuilt_splits)
+                    delta = mean_s - top_score
+                    sign = '+' if delta >= 0 else ''
+                    print(f"  {top_rep}+{aug_name} ({X_aug.shape[1]}d): "
+                          f"{mean_s:.4f} ({sign}{delta:.4f})")
+                    augmentations[f"{top_rep}+{aug_name}"] = {
+                        'base': top_rep,
+                        'augment': aug_name,
+                        'base_dim': X_top.shape[1],
+                        'aug_dim': small_reps[aug_name].shape[1],
+                        'concat_dim': X_aug.shape[1],
+                        'model': top_model,
+                        'base_score': round(top_score, 4),
+                        'concat_score': round(mean_s, 4),
+                        'delta': round(delta, 4),
+                    }
+
     elapsed = time.time() - t0
 
-    # 5. Summary
+    # 6. Summary
     all_entries = {**baselines, **ft_baselines}
     all_bests = [(name, e['best']) for name, e in all_entries.items()
                  if e['best'] is not None]
@@ -490,6 +531,7 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
         },
         'baselines': baselines,
         'finetuned_baselines': ft_baselines or None,
+        'augmentations': augmentations or None,
         'summary': summary,
     }
 
@@ -599,6 +641,8 @@ Examples:
                        help='Optuna-tune XGBoost with N trials (e.g., --tune 50)')
     parser.add_argument('--l2-norm', action='store_true',
                        help='Add ridge_l2norm model (L2-normalize before Ridge)')
+    parser.add_argument('--augment', action='store_true',
+                       help='Test augmentation: concat each small rep (<=200D) with top base rep')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--output', type=str, default=None,
                        help='Output path (JSON file or directory for multi-dataset)')
@@ -646,6 +690,7 @@ Examples:
                 ds, args.reps, args.n_folds,
                 args.finetune, args.seed,
                 tune_trials=args.tune, l2_norm=args.l2_norm,
+                augment=args.augment,
             )
             result = convert_numpy(result)
             print_summary_table(result)
