@@ -2,18 +2,17 @@
 # Submit universal baseline survey as parallel SLURM jobs (one per domain).
 # Run on the login node: bash tests/slurm_scripts/submit_universal_survey.sh
 #
-# Covers: molecular (4), TCGA (3), DTA (2), reaction (2) datasets.
+# Covers: molecular (4), TCGA (3), DTA (4), reaction (2) datasets.
 # Antibody datasets use submit_antibody_survey.sh instead.
 #
 # Usage:
 #   bash tests/slurm_scripts/submit_universal_survey.sh           # all domains
 #   bash tests/slurm_scripts/submit_universal_survey.sh molecular # single domain
-#   bash tests/slurm_scripts/submit_universal_survey.sh reaction  # reaction yield
-#   bash tests/slurm_scripts/submit_universal_survey.sh tcga_ft   # TCGA with fine-tuning (GPU)
+#   bash tests/slurm_scripts/submit_universal_survey.sh all_ft    # all with fine-tuning (GPU)
 
 MODE=${1:-all}
 OUTPUT="tests/results/universal_survey"
-COMMON="--n-folds 3 --output ${OUTPUT}/"
+COMMON="--n-folds 3 --augment --output ${OUTPUT}/"
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
 
 submit() {
@@ -43,6 +42,9 @@ case "$MODE" in
     quick|molecular)
         submit molecular
         ;;
+    molecular_ft)
+        submit molecular 64G 23:59:00 "--finetune" gpu
+        ;;
     tcga)
         submit tcga 96G
         ;;
@@ -51,6 +53,9 @@ case "$MODE" in
         ;;
     dta)
         submit dta 96G
+        ;;
+    dta_ft)
+        submit dta 96G 23:59:00 "--finetune" gpu
         ;;
     reaction)
         submit reaction 32G 06:00:00
@@ -61,29 +66,32 @@ case "$MODE" in
         submit dta 96G
         submit reaction 32G 06:00:00
         echo ""
-        echo "  Total: 4 jobs, 11 datasets"
+        echo "  Total: 4 jobs, 13 datasets (with --augment)"
         ;;
     all_ft)
-        submit molecular
+        submit molecular 64G 23:59:00 "--finetune" gpu
         submit tcga 96G 23:59:00 "--finetune" gpu
-        submit dta 96G
+        submit dta 96G 23:59:00 "--finetune" gpu
         submit reaction 32G 06:00:00
         echo ""
-        echo "  Total: 4 jobs, 11 datasets (TCGA with fine-tuning)"
+        echo "  Total: 4 jobs, 13 datasets (with --finetune --augment, GPU)"
         ;;
     *)
         echo "Usage: bash submit_universal_survey.sh [MODE]"
         echo ""
         echo "Modes:"
-        echo "  all         All 3 domains in parallel (default)"
-        echo "  all_ft      All domains, TCGA with fine-tuning (GPU)"
-        echo "  quick       Molecular only (fastest)"
-        echo "  molecular   Molecular domain (4 datasets, 15 reps)"
-        echo "  tcga        TCGA domain (3 datasets, 3 reps)"
-        echo "  tcga_ft     TCGA with fine-tuning (3 datasets, 3+2 reps, GPU)"
-        echo "  dta         DTA domain (2 datasets, 5 reps)"
-        echo "  reaction    Reaction yield (2 datasets, 2 reps, needs: pip install drfp)"
+        echo "  all           All domains, frozen reps + augment (default)"
+        echo "  all_ft        All domains with fine-tuning + augment (GPU)"
+        echo "  quick         Molecular only (fastest)"
+        echo "  molecular     Molecular domain (4 datasets)"
+        echo "  molecular_ft  Molecular + ChemBERTa/MolFormer LoRA (GPU)"
+        echo "  tcga          TCGA domain (3 datasets)"
+        echo "  tcga_ft       TCGA + Geneformer/scFoundation FT (GPU)"
+        echo "  dta           DTA domain (4 datasets)"
+        echo "  dta_ft        DTA + ESM-2 protein LoRA (GPU)"
+        echo "  reaction      Reaction yield (2 datasets, needs: pip install drfp)"
         echo ""
+        echo "All modes include --augment (concat small reps with top base)."
         echo "For antibody datasets: bash submit_antibody_survey.sh"
         exit 1
         ;;

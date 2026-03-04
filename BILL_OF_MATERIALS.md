@@ -147,8 +147,10 @@ RidgeCV grid). Server caches must be cleared before re-run. See §8.
 
 **Augmentations (not base reps):** `graph_topology`, `spectral`
 
-**Fine-tuning:** NONE — see §7 for survey results. `lora_chemberta` and `lora_molformer`
-were tested and performed **worse** than frozen baselines on all molecular datasets.
+**Fine-tuning (via `--finetune`):**
+- `lora_chemberta` (384D): ChemBERTa LoRA, per-fold. Previously worse than frozen — re-testing with updated HP.
+- `lora_molformer` (768D): MolFormer LoRA, per-fold. Previously worse than frozen — re-testing with updated HP.
+Factory: `src/kirby/finetuning/molecular_lora.py`. Integrated into `run_baseline_survey.py --finetune`.
 
 **Presets:**
 - `fast` (3): ecfp4, maccs, pdv
@@ -157,8 +159,8 @@ were tested and performed **worse** than frozen baselines on all molecular datas
 
 ### 2B. Antibody Representations
 
-**Approach (March 2026 rebuild):** Simple LM embeddings + sequence encodings → Ridge/RidgeCV
-→ Spearman ρ. Following compass document: property-dependent model selection, one-hot
+**Approach (March 2026 rebuild):** Simple LM embeddings + sequence encodings → Ridge/RF/XGBoost
+→ R². Following compass document: property-dependent model selection, one-hot
 competitive with billion-param models at ≥1K samples.
 
 **Script:** `tests/antibody_baseline_survey.py`
@@ -184,8 +186,10 @@ competitive with billion-param models at ≥1K samples.
 
 **Baselines:** Not yet computed — run `antibody_baseline_survey.py` on server.
 
-**Fine-tuning:** Removed. All antibody FT methods (LoRA, MLM, freeze) produced negative
-R² and have been deleted. No antibody fine-tuning factories remain.
+**Fine-tuning (via `--finetune`):**
+- `esm2_lora` (1280D): ESM-2 650M LoRA on VH, frozen ESM-2 light chain context during training.
+  Factory: `src/kirby/finetuning/antibody_lora.py`. Integrated into `antibody_baseline_survey.py --finetune`.
+  Previous FT attempts (LoRA, MLM, freeze on old pipeline) failed — this is a clean re-implementation.
 
 ### 2C. TCGA Representations
 
@@ -311,13 +315,13 @@ Davis: 30K pairs (68 drugs × 442 proteins). KIBA: 30K subsample (2111 drugs × 
 - `fast+lm` (10): + drug_chemberta, drug_molformer, drug_clamp, protein_esmc, protein_descriptors
 - `full` (25): + drug_pdv_binary_mean, drug_pdv_rank, drug_mol2vec, drug_selformer, drug_rmat, drug_map4, drug_unimol_v2, 5 drug PCA-50 variants, protein_esm2_midlayers, protein_amplify, protein_kmer
 
-**Fine-tuning:**
-- `protein_esm2_lora`: ESM-2 650M LoRA (rank 8) on protein side, trained with frozen drug
+**Fine-tuning (via `--finetune`):**
+- `protein_esm2_lora` (1280D): ESM-2 650M LoRA (rank 8) on protein side, trained with frozen drug
   ECFP4 context. Returns 1280D protein embeddings. Recommended for >5K samples (Davis 30K,
-  KIBA 118K). Factory: `src/kirby/finetuning/dta_protein_lora.py`. Not yet integrated into
-  DTA baseline survey — requires standalone runner or `run_baseline_survey.py --finetune` (TCGA only).
+  KIBA 118K). Factory: `src/kirby/finetuning/dta_protein_lora.py`. Integrated into
+  `run_baseline_survey.py --finetune`.
 
-### 2E. Comparison Experiments (standalone scripts, not part of baseline surveys)
+### 2E. Comparison Experiments (BOM results from standalone scripts)
 
 | Experiment | Script | What it tests | Status |
 |-----------|--------|---------------|--------|
