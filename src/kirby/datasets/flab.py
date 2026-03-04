@@ -62,7 +62,7 @@ FLAB_DATASETS = {
         'intra_family': True,
     },
     'flab_binding_adams': {
-        'path': 'binding/adams2017measuring_4420-fluorescein_kd.csv',
+        'path': 'binding/adams2017measuring_4420-fluorescein_kd-titeseq.csv',
         'property': 'Binding (Kd)',
         'intra_family': True,
     },

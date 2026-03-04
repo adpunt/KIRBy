@@ -2,7 +2,7 @@
 """
 Antibody Baseline Survey
 
-Simple LM embeddings → Ridge → Spearman rho, per the compass document.
+Simple LM embeddings → Ridge → R², per the compass document.
 No hybrids, no tuning, no complex presets.
 
 Usage:
@@ -27,7 +27,6 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-from scipy.stats import spearmanr
 from sklearn.base import clone
 from sklearn.linear_model import RidgeCV
 from sklearn.metrics import r2_score
@@ -249,15 +248,13 @@ def evaluate_rep(
 ) -> Dict[str, float]:
     """Evaluate one (rep, model) pair via GroupKFold.
 
-    Returns dict with r2_mean, r2_std, spearman_mean, spearman_std, per_fold.
+    Returns dict with r2_mean, r2_std, per_fold.
     """
     n_unique = len(np.unique(groups))
     actual_folds = min(n_folds, n_unique)
 
     if actual_folds < 2:
-        # Can't do CV with < 2 groups
         return {'r2_mean': float('nan'), 'r2_std': float('nan'),
-                'spearman_mean': float('nan'), 'spearman_std': float('nan'),
                 'per_fold': []}
 
     if n_unique >= actual_folds:
@@ -268,7 +265,6 @@ def evaluate_rep(
         splits = list(cv.split(X, labels))
 
     r2_scores = []
-    spearman_scores = []
     fold_details = []
 
     for fold_i, (train_idx, val_idx) in enumerate(splits):
@@ -282,16 +278,10 @@ def evaluate_rep(
             y_pred = m.predict(X_val)
 
             r2 = r2_score(labels[val_idx], y_pred)
-            rho, pval = spearmanr(labels[val_idx], y_pred)
-            if np.isnan(rho):
-                rho = 0.0  # constant predictions → no correlation
-
             r2_scores.append(r2)
-            spearman_scores.append(rho)
             fold_details.append({
                 'fold': fold_i,
                 'r2': round(float(r2), 4),
-                'spearman': round(float(rho), 4),
                 'n_train': len(train_idx),
                 'n_val': len(val_idx),
             })
@@ -300,14 +290,11 @@ def evaluate_rep(
 
     if not r2_scores:
         return {'r2_mean': float('nan'), 'r2_std': float('nan'),
-                'spearman_mean': float('nan'), 'spearman_std': float('nan'),
                 'per_fold': fold_details}
 
     return {
         'r2_mean': round(float(np.mean(r2_scores)), 4),
         'r2_std': round(float(np.std(r2_scores)), 4),
-        'spearman_mean': round(float(np.mean(spearman_scores)), 4),
-        'spearman_std': round(float(np.std(spearman_scores)), 4),
         'per_fold': fold_details,
     }
 
@@ -321,6 +308,7 @@ def run_survey(
     rep_names: List[str],
     model_names: List[str],
     n_folds: int = 5,
+    augment: bool = False,
 ) -> dict:
     """Run baseline survey for one dataset. Returns result dict."""
     print(f"\n{'='*70}")
@@ -373,42 +361,55 @@ def run_survey(
         for mname, model in models.items():
             result = evaluate_rep(X, labels, groups, model, n_folds)
             entry['scores'][mname] = result
-            rho = result['spearman_mean']
             r2 = result['r2_mean']
-            print(f" {mname}(rho={rho:.3f},r2={r2:.3f})", end='', flush=True)
-
-        # Best model for this rep
-        valid = [(m, s) for m, s in entry['scores'].items()
-                 if not np.isnan(s['spearman_mean'])]
-        if valid:
-            best = max(valid, key=lambda x: x[1]['spearman_mean'])
-            entry['best'] = {
-                'model': best[0],
-                'spearman': best[1]['spearman_mean'],
-                'r2': best[1]['r2_mean'],
-            }
-        else:
-            entry['best'] = None
+            print(f" {mname}={r2:.3f}", end='', flush=True)
 
         baselines[rep_name] = entry
         print()
 
-    elapsed = time.time() - t0
+    # 5. Augmentation test: concat small reps with top base
+    augmentations = {}
+    if augment and baselines:
+        # Find top-scoring rep by best R² across models
+        scored = []
+        for name, e in baselines.items():
+            for mname, s in e['scores'].items():
+                if not np.isnan(s['r2_mean']):
+                    scored.append((name, mname, s['r2_mean']))
+        if scored:
+            top_rep, top_model_name, top_score = max(scored, key=lambda x: x[2])
+            X_top = reps[top_rep]
+            top_model = models[top_model_name]
 
-    # 5. Summary
-    all_bests = [(name, e['best']) for name, e in baselines.items()
-                 if e['best'] is not None]
-    if all_bests:
-        winner = max(all_bests, key=lambda x: x[1]['spearman'])
-        summary = {
-            'best_rep': winner[0],
-            'best_model': winner[1]['model'],
-            'best_spearman': winner[1]['spearman'],
-            'best_r2': winner[1]['r2'],
-        }
-    else:
-        summary = {'best_rep': None, 'best_model': None,
-                   'best_spearman': None, 'best_r2': None}
+            # Small reps = ≤200D, excluding the top rep
+            small_reps = {k: v for k, v in reps.items()
+                          if v.shape[1] <= 200 and k != top_rep}
+
+            if small_reps:
+                print(f"\n--- Augmentation test: {top_rep} (R²={top_score:.4f}) "
+                      f"+ {len(small_reps)} small reps ---")
+
+                for aug_name in sorted(small_reps.keys()):
+                    X_aug = np.hstack([X_top, small_reps[aug_name]])
+                    result = evaluate_rep(X_aug, labels, groups, top_model, n_folds)
+                    mean_s = result['r2_mean']
+                    delta = mean_s - top_score
+                    sign = '+' if delta >= 0 else ''
+                    print(f"  {top_rep}+{aug_name} ({X_aug.shape[1]}d): "
+                          f"{mean_s:.4f} ({sign}{delta:.4f})")
+                    augmentations[f"{top_rep}+{aug_name}"] = {
+                        'base': top_rep,
+                        'augment': aug_name,
+                        'base_dim': X_top.shape[1],
+                        'aug_dim': small_reps[aug_name].shape[1],
+                        'concat_dim': X_aug.shape[1],
+                        'model': top_model_name,
+                        'base_score': round(top_score, 4),
+                        'concat_score': round(mean_s, 4),
+                        'delta': round(delta, 4),
+                    }
+
+    elapsed = time.time() - t0
 
     return {
         'metadata': {
@@ -422,7 +423,7 @@ def run_survey(
             'timestamp': datetime.now().isoformat(),
         },
         'baselines': baselines,
-        'summary': summary,
+        'augmentations': augmentations or None,
     }
 
 
@@ -459,33 +460,22 @@ def print_summary_table(result):
     print(f"{'='*70}")
 
     # Header
-    model_cols = []
+    header = f"{'Rep':<25} {'Dim':>5}"
     for m in models:
-        model_cols.append(f"{'rho_'+m:>12}")
-        model_cols.append(f"{'r2_'+m:>10}")
-    header = f"{'Rep':<15} {'Dim':>5}" + ''.join(model_cols) + f"  {'Best rho':>10}"
+        header += f" {m:>8}"
     print(header)
     print("-" * len(header))
 
     for rep_name in sorted(baselines.keys()):
         r = baselines[rep_name]
-        row = f"{rep_name:<15} {r['dimension']:>5}"
+        row = f"{rep_name:<25} {r['dimension']:>5}"
         for m in models:
             s = r['scores'].get(m, {})
-            rho = s.get('spearman_mean', float('nan'))
             r2 = s.get('r2_mean', float('nan'))
-            row += f" {rho:>11.4f} {r2:>9.4f}"
-        best = r.get('best')
-        if best:
-            row += f"  {best['spearman']:>10.4f}"
+            row += f" {r2:>8.4f}"
         print(row)
 
-    summary = result['summary']
-    print()
-    if summary.get('best_rep'):
-        print(f"WINNER: {summary['best_rep']} + {summary['best_model']} = "
-              f"rho={summary['best_spearman']:.4f}, R2={summary['best_r2']:.4f}")
-    print(f"  Time: {meta['elapsed_seconds']:.0f}s")
+    print(f"\n  Time: {meta['elapsed_seconds']:.0f}s")
 
 
 # =============================================================================
@@ -494,7 +484,7 @@ def print_summary_table(result):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Antibody baseline survey: simple LM embeddings + Ridge + Spearman rho.',
+        description='Antibody baseline survey: LM embeddings + Ridge/RF/XGBoost + R2.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Datasets:
@@ -525,6 +515,8 @@ Examples:
                         help='Comma-separated model names (default: ridge)')
     parser.add_argument('--n-folds', type=int, default=5,
                         help='Number of CV folds (default: 5)')
+    parser.add_argument('--augment', action='store_true',
+                        help='Test augmentation: concat each small rep (<=200D) with top base rep')
     parser.add_argument('--output', type=str, default=None,
                         help='Output path (JSON file or directory for multi-dataset)')
     parser.add_argument('--seed', type=int, default=42)
@@ -581,7 +573,8 @@ Examples:
 
     for ds in datasets:
         try:
-            result = run_survey(ds, rep_names, model_names, args.n_folds)
+            result = run_survey(ds, rep_names, model_names, args.n_folds,
+                                augment=args.augment)
             result = _convert_numpy(result)
             print_summary_table(result)
             all_results[ds] = result
@@ -612,10 +605,15 @@ Examples:
         print("CROSS-DATASET SUMMARY")
         print(f"{'='*70}")
         for ds, r in all_results.items():
-            s = r['summary']
-            if s.get('best_rep'):
-                print(f"  {ds:<30} {s['best_rep']:<12} + {s['best_model']:<8} = "
-                      f"rho={s['best_spearman']:.4f}")
+            baselines = r.get('baselines', {})
+            if baselines:
+                print(f"\n  {ds}:")
+                for rep_name in sorted(baselines.keys()):
+                    scores = baselines[rep_name]['scores']
+                    parts = []
+                    for mname, s in scores.items():
+                        parts.append(f"{mname}={s['r2_mean']:.4f}")
+                    print(f"    {rep_name:<20} {', '.join(parts)}")
             else:
                 print(f"  {ds:<30} FAILED")
 
