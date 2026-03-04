@@ -580,8 +580,10 @@ def generate_representations(smiles_list, rep_filter=None):
 # MAIN EXPERIMENT RUNNER
 # ═══════════════════════════════════════════════════════════════════════════
 
-def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, rep_filter=None):
+def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, rep_filter=None, sigma_levels=None):
     """Run full scaffold CV experiment for one dataset."""
+    if sigma_levels is None:
+        sigma_levels = SIGMA_LEVELS
     results_dir = Path(results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
 
@@ -623,10 +625,17 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
             experiments.append(('LightGBM', rname,
                 lambda: LGBMRegressor(n_estimators=100, random_state=42, verbose=-1,
                                       n_jobs=-1), None))
-        # SVM
+        # SVM (tuned hyperparameters per representation)
         if HAS_SVM:
+            _svm_tuned = {
+                'ECFP4': {'C': 1.4217, 'gamma': 'scale', 'kernel': 'rbf'},
+                'PDV': {'C': 2.0420, 'gamma': 'scale', 'kernel': 'poly', 'degree': 2, 'coef0': 1.9113},
+                'SNS': {'C': 1.0838, 'gamma': 'scale', 'kernel': 'poly', 'degree': 2, 'coef0': 2.7126},
+            }
+            _sp = _svm_tuned.get(rname, {'C': 1.0, 'gamma': 'scale', 'kernel': 'rbf'})
+            _sp_copy = dict(_sp)  # capture for lambda
             experiments.append(('SVM', rname,
-                lambda: SVR(kernel='rbf', C=1.0, gamma='scale'), None))
+                lambda _p=_sp_copy: SVR(**_p), None))
         # GP (PDV only)
         if HAS_GP and rname == 'PDV':
             experiments.append(('GP', rname,
@@ -648,7 +657,7 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
         experiments = [(n, r, fn, mt) for n, r, fn, mt in experiments if n in filter_set]
         print(f"  Filtered to models: {sorted(filter_set)}")
 
-    print(f"\n{len(experiments)} model-rep configs × {len(STRATEGIES)} strategies × {N_FOLDS} folds")
+    print(f"\n{len(experiments)} model-rep configs × {len(STRATEGIES)} strategies × {len(sigma_levels)} sigmas × {N_FOLDS} folds")
 
     # Scaffold CV
     gkf = GroupKFold(n_splits=N_FOLDS)
@@ -700,15 +709,15 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                         if model_name == 'GP':
                             predictions, uncertainties = run_tree_experiment(
                                 X_train_gp, y_train_gp, X_test, y_test,
-                                model_fn, strategy, SIGMA_LEVELS)
+                                model_fn, strategy, sigma_levels)
                         else:
                             predictions, uncertainties = run_tree_experiment(
                                 X_train, y_train, X_test, y_test,
-                                model_fn, strategy, SIGMA_LEVELS)
+                                model_fn, strategy, sigma_levels)
                     else:
                         predictions, uncertainties = run_neural_experiment(
                             X_train, y_train, X_val, y_val, X_test, y_test,
-                            model_type, strategy, SIGMA_LEVELS)
+                            model_type, strategy, sigma_levels)
 
                     per_sigma = compute_metrics(y_test, predictions)
                     per_sigma['model'] = model_name
@@ -721,7 +730,7 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                     # Save uncertainty data (legacy strategy only)
                     if strategy == 'legacy' and uncertainties.get(0.0) is not None:
                         unc_rows = []
-                        for sigma in SIGMA_LEVELS:
+                        for sigma in sigma_levels:
                             for i in range(len(y_test)):
                                 unc_rows.append({
                                     'sigma': sigma,
@@ -755,12 +764,13 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
     existing_path = results_dir / 'all_results.csv'
     if (model_filter or rep_filter) and existing_path.exists():
         existing = pd.read_csv(existing_path)
-        # Remove old rows for models/reps we're re-running, keep the rest
-        mask = pd.Series(False, index=existing.index)
-        if model_filter:
-            mask |= existing['model'].isin(model_filter)
-        if rep_filter:
-            mask |= existing['rep'].isin(rep_filter)
+        # Remove old rows ONLY for the exact model+rep combos we're re-running
+        if model_filter and rep_filter:
+            mask = existing['model'].isin(model_filter) & existing['rep'].isin(rep_filter)
+        elif model_filter:
+            mask = existing['model'].isin(model_filter)
+        else:
+            mask = existing['rep'].isin(rep_filter)
         existing = existing[~mask]
         combined = pd.concat([existing, combined], ignore_index=True)
         print(f"  Merged with existing results: {len(combined)} total rows")
@@ -781,8 +791,11 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
         baseline_r2 = r2_vals[0]
         baseline_rmse = rmse_vals[0]
 
-        sl_r2, _, rv, _, _ = linregress(sigmas, r2_vals)
-        sl_rmse, _, _, _, _ = linregress(sigmas, rmse_vals)
+        if len(sigmas) >= 2:
+            sl_r2, _, rv, _, _ = linregress(sigmas, r2_vals)
+            sl_rmse, _, _, _, _ = linregress(sigmas, rmse_vals)
+        else:
+            sl_r2, sl_rmse, rv = np.nan, np.nan, np.nan
 
         # Retention at sigma=0.5 and 1.0
         r2_at_05 = fold_avgs[fold_avgs['sigma'] == 0.5]['r2'].values
@@ -810,11 +823,17 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
 
     summary_df = pd.DataFrame(summary_rows)
 
-    # Merge with existing summary if running a subset of models
+    # Merge with existing summary if running a subset of models/reps
     existing_summary = results_dir / 'summary.csv'
-    if model_filter and existing_summary.exists():
+    if (model_filter or rep_filter) and existing_summary.exists():
         existing = pd.read_csv(existing_summary)
-        existing = existing[~existing['model'].isin(model_filter)]
+        if model_filter and rep_filter:
+            mask = existing['model'].isin(model_filter) & existing['rep'].isin(rep_filter)
+        elif model_filter:
+            mask = existing['model'].isin(model_filter)
+        else:
+            mask = existing['rep'].isin(rep_filter)
+        existing = existing[~mask]
         summary_df = pd.concat([existing, summary_df], ignore_index=True)
 
     summary_df.to_csv(results_dir / 'summary.csv', index=False)
@@ -875,9 +894,12 @@ def main():
     parser.add_argument('--reps', nargs='+', default=None,
                         choices=['ECFP4', 'PDV', 'SNS', 'MHG-GNN-pretrained'],
                         help='Only run these reps (e.g. --reps PDV). Merges with existing results.')
+    parser.add_argument('--sigmas', nargs='+', type=float, default=None,
+                        help='Only run these sigma levels (e.g. --sigmas 0.0 0.5 1.0). Default: all 11.')
     args = parser.parse_args()
 
     ds_list = ['logd', 'caco2', 'herg'] if 'all' in args.datasets else args.datasets
+    sigma_levels = args.sigmas if args.sigmas else SIGMA_LEVELS
 
     print("=" * 80)
     print("Validation Noise Robustness Experiment")
@@ -914,7 +936,8 @@ def main():
             print(f"  {len(smiles)} molecules")
             summary = run_dataset('OpenADMET-LogD', smiles, labels,
                                   Path(args.results_root) / 'logd',
-                                  model_filter=args.models, rep_filter=args.reps)
+                                  model_filter=args.models, rep_filter=args.reps,
+                                  sigma_levels=sigma_levels)
             all_summaries.append(summary)
         else:
             print("ERROR: Cannot find LogD column")
@@ -928,7 +951,8 @@ def main():
             print(f"  {len(smiles)} molecules")
             summary = run_dataset('OpenADMET-Caco2_Efflux', smiles, labels,
                                   Path(args.results_root) / 'caco2',
-                                  model_filter=args.models, rep_filter=args.reps)
+                                  model_filter=args.models, rep_filter=args.reps,
+                                  sigma_levels=sigma_levels)
             all_summaries.append(summary)
         else:
             print("ERROR: Cannot find Caco2 Efflux column")
@@ -951,11 +975,12 @@ def main():
         combined_path = Path(args.results_root) / 'combined_summary.csv'
         if (args.models or args.reps) and combined_path.exists():
             existing = pd.read_csv(combined_path)
-            mask = pd.Series(False, index=existing.index)
-            if args.models:
-                mask |= existing['model'].isin(args.models)
-            if args.reps:
-                mask |= existing['rep'].isin(args.reps)
+            if args.models and args.reps:
+                mask = existing['model'].isin(args.models) & existing['rep'].isin(args.reps)
+            elif args.models:
+                mask = existing['model'].isin(args.models)
+            else:
+                mask = existing['rep'].isin(args.reps)
             existing = existing[~mask]
             combined = pd.concat([existing, combined], ignore_index=True)
 
