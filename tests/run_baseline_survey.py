@@ -147,6 +147,8 @@ def _load_dta(dataset_name: str, rep_preset: str) -> dict:
         'task_type': task_type,
         'domain': 'dta',
         'augmentations': None,
+        'drug_smiles': drug_smiles,
+        'protein_seqs': protein_seqs,
     }
 
 
@@ -270,7 +272,7 @@ def evaluate_ft_rep(factory, labels, groups, model, n_folds, task_type):
 
     for train_idx, val_idx in cv.split(dummy_X, labels, **cv_kwargs):
         try:
-            X_train, X_val = factory(train_idx, val_idx, labels)
+            X_train, X_val = factory(train_idx, val_idx, labels[train_idx])
         except Exception as e:
             print(f" [ft error: {e}]", end='')
             continue
@@ -292,44 +294,79 @@ def evaluate_ft_rep(factory, labels, groups, model, n_folds, task_type):
 
 
 # =============================================================================
-# FINE-TUNING FACTORY CREATION (TCGA only)
+# FINE-TUNING FACTORY CREATION
 # =============================================================================
 
 def make_ft_factories(data, dataset_name, task_type, ft_epochs=3, ft_cache=True):
-    """Create fine-tuning factories for TCGA datasets. Returns {} for non-TCGA."""
+    """Create fine-tuning factories for the dataset's domain.
+
+    Supported domains:
+        - tcga: Geneformer, scFoundation
+        - molecular: ChemBERTa LoRA, MolFormer LoRA
+        - dta: ESM-2 protein LoRA
+    """
     domain = data.get('domain', '')
-    if domain != 'tcga':
-        return {}
-
-    expression = data.get('expression')
-    metadata = data.get('metadata', {})
-    gene_names = metadata.get('gene_names')
-    sample_ids = metadata.get('sample_ids')
-
-    if expression is None or gene_names is None:
-        return {}
-
     factories = {}
 
-    try:
-        from kirby.finetuning.tcga_geneformer import make_geneformer_factory
-        factories['geneformer'] = make_geneformer_factory(
-            expression_data=expression, gene_names=gene_names,
-            sample_ids=sample_ids, dataset_name=dataset_name,
-            task_type=task_type, epochs=ft_epochs, cache=ft_cache,
-        )
-    except Exception as e:
-        print(f"  geneformer factory failed: {e}")
+    if domain == 'tcga':
+        expression = data.get('expression')
+        metadata = data.get('metadata', {})
+        gene_names = metadata.get('gene_names')
+        sample_ids = metadata.get('sample_ids')
 
-    try:
-        from kirby.finetuning.tcga_scfoundation import make_scfoundation_factory
-        factories['scfoundation'] = make_scfoundation_factory(
-            expression_data=expression, gene_names=gene_names,
-            sample_ids=sample_ids, dataset_name=dataset_name,
-            task_type=task_type, epochs=ft_epochs, cache=ft_cache,
-        )
-    except Exception as e:
-        print(f"  scfoundation factory failed: {e}")
+        if expression is None or gene_names is None:
+            return {}
+
+        try:
+            from kirby.finetuning.tcga_geneformer import make_geneformer_factory
+            factories['geneformer'] = make_geneformer_factory(
+                expression_data=expression, gene_names=gene_names,
+                sample_ids=sample_ids, dataset_name=dataset_name,
+                task_type=task_type, epochs=ft_epochs, cache=ft_cache,
+            )
+        except Exception as e:
+            print(f"  geneformer factory failed: {e}")
+
+        try:
+            from kirby.finetuning.tcga_scfoundation import make_scfoundation_factory
+            factories['scfoundation'] = make_scfoundation_factory(
+                expression_data=expression, gene_names=gene_names,
+                sample_ids=sample_ids, dataset_name=dataset_name,
+                task_type=task_type, epochs=ft_epochs, cache=ft_cache,
+            )
+        except Exception as e:
+            print(f"  scfoundation factory failed: {e}")
+
+    elif domain == 'molecular':
+        smiles = data.get('smiles')
+        if smiles is None:
+            return {}
+
+        for base_model in ('chemberta', 'molformer'):
+            try:
+                from kirby.finetuning.molecular_lora import make_molecular_lora_factory
+                factories[f'lora_{base_model}'] = make_molecular_lora_factory(
+                    smiles_list=smiles, dataset_name=dataset_name,
+                    base_model=base_model, epochs=ft_epochs, cache=ft_cache,
+                )
+            except Exception as e:
+                print(f"  lora_{base_model} factory failed: {e}")
+
+    elif domain == 'dta':
+        protein_seqs = data.get('protein_seqs')
+        drug_smiles = data.get('drug_smiles')
+        if protein_seqs is None or drug_smiles is None:
+            return {}
+
+        try:
+            from kirby.finetuning.dta_protein_lora import make_dta_protein_lora_factory
+            factories['protein_esm2_lora'] = make_dta_protein_lora_factory(
+                protein_seqs=protein_seqs, drug_smiles=drug_smiles,
+                dataset_name=dataset_name, base_model='esm2',
+                epochs=ft_epochs, cache=ft_cache,
+            )
+        except Exception as e:
+            print(f"  protein_esm2_lora factory failed: {e}")
 
     return factories
 
@@ -636,7 +673,8 @@ Examples:
     parser.add_argument('--n-folds', type=int, default=3,
                        help='Number of CV folds (default: 3)')
     parser.add_argument('--finetune', action='store_true',
-                       help='Include fine-tuned reps (TCGA: geneformer, scfoundation)')
+                       help='Include fine-tuned reps (TCGA: geneformer/scfoundation, '
+                            'molecular: ChemBERTa/MolFormer LoRA, DTA: ESM-2 protein LoRA)')
     parser.add_argument('--tune', type=int, default=0, metavar='N',
                        help='Optuna-tune XGBoost with N trials (e.g., --tune 50)')
     parser.add_argument('--l2-norm', action='store_true',

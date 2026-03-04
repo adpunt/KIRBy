@@ -303,12 +303,66 @@ def evaluate_rep(
 # SURVEY
 # =============================================================================
 
+def evaluate_ft_rep(factory, labels, groups, model, n_folds=5):
+    """Evaluate a fine-tuning factory via CV. Returns dict with r2_mean, r2_std."""
+    n_unique = len(np.unique(groups))
+    actual_folds = min(n_folds, n_unique)
+
+    if actual_folds < 2:
+        return {'r2_mean': float('nan'), 'r2_std': float('nan'), 'per_fold': []}
+
+    if n_unique >= actual_folds:
+        cv = GroupKFold(n_splits=actual_folds)
+        splits = list(cv.split(np.zeros(len(labels)), labels, groups=groups))
+    else:
+        cv = KFold(n_splits=actual_folds, shuffle=True, random_state=42)
+        splits = list(cv.split(np.zeros(len(labels)), labels))
+
+    r2_scores = []
+    fold_details = []
+
+    for fold_i, (train_idx, val_idx) in enumerate(splits):
+        try:
+            X_train, X_val = factory(train_idx, val_idx, labels[train_idx])
+        except Exception as e:
+            fold_details.append({'fold': fold_i, 'error': str(e)})
+            continue
+
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_train)
+        X_val = scaler.transform(X_val)
+
+        try:
+            m = clone(model)
+            m.fit(X_train, labels[train_idx])
+            y_pred = m.predict(X_val)
+            r2 = r2_score(labels[val_idx], y_pred)
+            r2_scores.append(r2)
+            fold_details.append({
+                'fold': fold_i, 'r2': round(float(r2), 4),
+                'n_train': len(train_idx), 'n_val': len(val_idx),
+            })
+        except Exception as e:
+            fold_details.append({'fold': fold_i, 'error': str(e)})
+
+    if not r2_scores:
+        return {'r2_mean': float('nan'), 'r2_std': float('nan'),
+                'per_fold': fold_details}
+
+    return {
+        'r2_mean': round(float(np.mean(r2_scores)), 4),
+        'r2_std': round(float(np.std(r2_scores)), 4),
+        'per_fold': fold_details,
+    }
+
+
 def run_survey(
     dataset_name: str,
     rep_names: List[str],
     model_names: List[str],
     n_folds: int = 5,
     augment: bool = False,
+    do_finetune: bool = False,
 ) -> dict:
     """Run baseline survey for one dataset. Returns result dict."""
     print(f"\n{'='*70}")
@@ -367,7 +421,32 @@ def run_survey(
         baselines[rep_name] = entry
         print()
 
-    # 5. Augmentation test: concat small reps with top base
+    # 5. Fine-tuned reps (ESM-2 LoRA)
+    ft_baselines = {}
+    if do_finetune:
+        try:
+            from kirby.finetuning.antibody_lora import make_antibody_lora_factory
+            factory = make_antibody_lora_factory(
+                heavy_seqs=heavy_seqs, light_seqs=light_seqs,
+                dataset_name=dataset_name, base_model='esm2',
+            )
+            ft_name = 'esm2_lora'
+            print(f"\n--- Fine-tuned reps: [{ft_name}] ---")
+            print(f"  {ft_name}:", end='', flush=True)
+
+            entry = {'dimension': 1280, 'scores': {}}
+            for mname, model in models.items():
+                result = evaluate_ft_rep(factory, labels, groups, model, n_folds)
+                entry['scores'][mname] = result
+                r2 = result['r2_mean']
+                print(f" {mname}={r2:.3f}", end='', flush=True)
+
+            ft_baselines[ft_name] = entry
+            print()
+        except Exception as e:
+            print(f"\n  esm2_lora factory failed: {e}")
+
+    # 6. Augmentation test: concat small reps with top base
     augmentations = {}
     if augment and baselines:
         # Find top-scoring rep by best R² across models
@@ -423,6 +502,7 @@ def run_survey(
             'timestamp': datetime.now().isoformat(),
         },
         'baselines': baselines,
+        'finetuned_baselines': ft_baselines or None,
         'augmentations': augmentations or None,
     }
 
@@ -475,6 +555,22 @@ def print_summary_table(result):
             row += f" {r2:>8.4f}"
         print(row)
 
+    # Fine-tuned scores
+    ft = result.get('finetuned_baselines')
+    if ft:
+        print()
+        print("FINE-TUNED:")
+        print("-" * len(header))
+        for ft_name in sorted(ft.keys()):
+            r = ft[ft_name]
+            dim = r.get('dimension', '?')
+            row = f"{ft_name:<25} {dim:>5}"
+            for m in models:
+                s = r['scores'].get(m, {})
+                r2 = s.get('r2_mean', float('nan'))
+                row += f" {r2:>8.4f}"
+            print(row)
+
     print(f"\n  Time: {meta['elapsed_seconds']:.0f}s")
 
 
@@ -517,6 +613,8 @@ Examples:
                         help='Number of CV folds (default: 5)')
     parser.add_argument('--augment', action='store_true',
                         help='Test augmentation: concat each small rep (<=200D) with top base rep')
+    parser.add_argument('--finetune', action='store_true',
+                        help='Include fine-tuned reps (ESM-2 LoRA on VH, GPU required)')
     parser.add_argument('--output', type=str, default=None,
                         help='Output path (JSON file or directory for multi-dataset)')
     parser.add_argument('--seed', type=int, default=42)
@@ -574,7 +672,8 @@ Examples:
     for ds in datasets:
         try:
             result = run_survey(ds, rep_names, model_names, args.n_folds,
-                                augment=args.augment)
+                                augment=args.augment,
+                                do_finetune=args.finetune)
             result = _convert_numpy(result)
             print_summary_table(result)
             all_results[ds] = result

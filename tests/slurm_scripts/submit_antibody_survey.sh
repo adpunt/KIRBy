@@ -6,8 +6,7 @@
 #   bash tests/slurm_scripts/submit_antibody_survey.sh           # all (fast + LM)
 #   bash tests/slurm_scripts/submit_antibody_survey.sh fast      # one-hot, blosum, aac only (CPU)
 #   bash tests/slurm_scripts/submit_antibody_survey.sh lm        # LM reps only (GPU)
-#   bash tests/slurm_scripts/submit_antibody_survey.sh dms       # DMS datasets only
-#   bash tests/slurm_scripts/submit_antibody_survey.sh inter     # inter-family only
+#   bash tests/slurm_scripts/submit_antibody_survey.sh all_ft    # all + ESM-2 LoRA fine-tuning (GPU)
 
 MODE=${1:-all}
 OUTPUT="tests/results/antibody_survey"
@@ -28,7 +27,7 @@ submit() {
         --mem="${mem}" \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
         ${gpu:+--gres=gpu:1} \
-        --wrap="cd /data/stat-cadd/scat9264/KIRBy && . ./setup.sh && mkdir -p ${OUTPUT} && python tests/antibody_baseline_survey.py ${dataset} --output ${OUTPUT}/ --n-folds 5 ${extra}" \
+        --wrap="cd /data/stat-cadd/scat9264/KIRBy && . ./setup.sh && mkdir -p ${OUTPUT} && python tests/antibody_baseline_survey.py ${dataset} --output ${OUTPUT}/ --n-folds 5 --augment ${extra}" \
         | awk '{print $4}')
     echo "  $J  ${name}  (mem=${mem}, time=${wall}${gpu:+, GPU})"
 }
@@ -39,30 +38,30 @@ echo ""
 
 case "$MODE" in
     fast)
-        # Fast reps (CPU): 12 datasets x 3 reps x 1 model
+        # Fast reps (CPU): datasets x 3 reps x 1 model
         submit fast_dms all_dms "--skip-lm" 32G 02:00:00
         submit fast_inter all_inter "--skip-lm" 32G 02:00:00
         echo ""
-        echo "  Total: 2 jobs (fast reps, CPU only)"
+        echo "  Total: 2 jobs (fast reps, CPU only, with --augment)"
         ;;
     lm)
-        # LM reps (GPU): 12 datasets x 5 reps x 1 model
+        # LM reps (GPU): datasets x LM reps x 1 model
         submit lm_dms all_dms "--reps esm2,ablang2,igbert,antiberty,prot_t5" 64G 12:00:00 gpu
         submit lm_inter all_inter "--reps esm2,ablang2,igbert,antiberty,prot_t5" 64G 12:00:00 gpu
         echo ""
-        echo "  Total: 2 jobs (LM reps, GPU)"
+        echo "  Total: 2 jobs (LM reps, GPU, with --augment)"
         ;;
     dms)
         submit fast_dms all_dms "--skip-lm" 32G 02:00:00
         submit lm_dms all_dms "--reps esm2,ablang2,igbert,antiberty,prot_t5" 64G 12:00:00 gpu
         echo ""
-        echo "  Total: 2 jobs (DMS: fast + LM)"
+        echo "  Total: 2 jobs (DMS: fast + LM, with --augment)"
         ;;
     inter)
         submit fast_inter all_inter "--skip-lm" 32G 02:00:00
         submit lm_inter all_inter "--reps esm2,ablang2,igbert,antiberty,prot_t5" 64G 12:00:00 gpu
         echo ""
-        echo "  Total: 2 jobs (inter: fast + LM)"
+        echo "  Total: 2 jobs (inter: fast + LM, with --augment)"
         ;;
     all)
         submit fast_dms all_dms "--skip-lm" 32G 02:00:00
@@ -70,17 +69,28 @@ case "$MODE" in
         submit lm_dms all_dms "--reps esm2,ablang2,igbert,antiberty,prot_t5" 64G 12:00:00 gpu
         submit lm_inter all_inter "--reps esm2,ablang2,igbert,antiberty,prot_t5" 64G 12:00:00 gpu
         echo ""
-        echo "  Total: 4 jobs (12 datasets x 8 reps)"
+        echo "  Total: 4 jobs (all reps, with --augment)"
+        ;;
+    all_ft)
+        submit fast_dms all_dms "--skip-lm" 32G 02:00:00
+        submit fast_inter all_inter "--skip-lm" 32G 02:00:00
+        submit lm_ft_dms all_dms "--reps esm2,ablang2,igbert,antiberty,prot_t5 --finetune" 96G 23:59:00 gpu
+        submit lm_ft_inter all_inter "--reps esm2,ablang2,igbert,antiberty,prot_t5 --finetune" 96G 23:59:00 gpu
+        echo ""
+        echo "  Total: 4 jobs (all reps + ESM-2 LoRA FT, with --augment, GPU)"
         ;;
     *)
         echo "Usage: bash submit_antibody_survey.sh [MODE]"
         echo ""
         echo "Modes:"
-        echo "  all    All reps, all datasets (4 jobs: 2 CPU + 2 GPU)"
-        echo "  fast   Fast reps only (one-hot, blosum, aac) — CPU"
-        echo "  lm     LM reps only (ESM-2, AbLang2, IgBert, AntiBERTy, ProtT5) — GPU"
-        echo "  dms    DMS datasets only (fast + LM)"
-        echo "  inter  Inter-family datasets only (fast + LM)"
+        echo "  all      All reps, all datasets (4 jobs: 2 CPU + 2 GPU)"
+        echo "  all_ft   All reps + ESM-2 LoRA fine-tuning (4 jobs, GPU)"
+        echo "  fast     Fast reps only (one-hot, blosum, aac) — CPU"
+        echo "  lm       LM reps only (ESM-2, AbLang2, IgBert, AntiBERTy, ProtT5) — GPU"
+        echo "  dms      DMS datasets only (fast + LM)"
+        echo "  inter    Inter-family datasets only (fast + LM)"
+        echo ""
+        echo "All modes include --augment (concat small reps with top base)."
         exit 1
         ;;
 esac
