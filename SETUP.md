@@ -79,6 +79,12 @@ pip install -e ".[uncertainty]"
 
 # Everything
 pip install -e ".[qsar,antibody,tcga,uncertainty,interpret]"
+
+# Reaction yield prediction (optional)
+pip install drfp
+
+# Optuna HP tuning (optional)
+pip install optuna
 ```
 
 ### 2d. Install conda-only dependencies

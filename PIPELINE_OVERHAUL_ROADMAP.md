@@ -328,6 +328,10 @@ No architectural changes needed. The infrastructure is modality-agnostic by desi
 - [x] Add ESM-C as `protein_esmc` in DTA pipeline (fast+lm and full presets)
 - [x] Add CLAMP as `drug_clamp` in DTA pipeline (fast+lm and full presets) + baseline survey
 
+### DeepDTA/GraphDTA Comparison
+- [x] Add DeepDTA + GraphDTA-GIN end-to-end comparison experiment (`tests/experiments/dta_e2e_comparison.py`)
+- [ ] Run on Davis/KIBA with cold-target GroupKFold — needs server
+
 ### P1: Full QM9 Pipeline
 - [x] Expose 3D coordinates from QM9 loader (`load_qm9_with_3d()` in qm9.py)
 - [x] Increase QM9 default sample size to full 134K (n_samples=None → full dataset)
@@ -346,15 +350,16 @@ No architectural changes needed. The infrastructure is modality-agnostic by desi
 - [x] DTA protein-side LoRA fine-tuning (`dta_protein_lora.py`, `--finetune protein_esm2_lora`)
 
 ### P2: Reaction Yield Pipeline (if scope allows)
-- [ ] Add Buchwald-Hartwig and Suzuki coupling dataset loaders
-- [ ] Add rxnfp / drfp reaction fingerprints
-- [ ] Create reaction baseline survey script
-- [ ] Test GraphMVP/MolCLR on reactions (where graph topology matters)
+- [x] Add Buchwald-Hartwig and Suzuki coupling dataset loaders (`datasets/reaction_yields.py`)
+- [x] Add DRFP + concat ECFP4 reaction fingerprints (`representations/reaction.py`)
+- [x] Create reaction baseline survey script (`tests/run_reaction_yield_survey.py`)
+- [ ] Test GraphMVP/MolCLR on reactions (where graph topology matters) — needs server
+- [ ] Run reaction yield survey — needs server + `pip install drfp`
 
 ### Low Priority (evaluate later)
 - [x] R-MAT molecular rep (768D, 3D-aware transformer via huggingmolecules)
-- [ ] Optuna HP tuning for downstream models (50-100 trials)
-- [ ] L2-normalize embeddings before Ridge
+- [x] Optuna HP tuning for downstream models (`--tune 50` flag + `tune_xgboost_optuna()` in _shared.py)
+- [x] L2-normalize embeddings before Ridge (`--l2-norm` flag → `ridge_l2norm` model)
 - [ ] FLAb2 as antibody benchmark dataset
 - [ ] DNA methylation modality for TCGA
 - [ ] PDBBind structure-based binding (HIGH effort, unclear scope fit)

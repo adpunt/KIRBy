@@ -880,6 +880,55 @@ def _flatten_weights(fitted) -> np.ndarray:
 
 
 # =============================================================================
+# OPTUNA HP TUNING
+# =============================================================================
+
+def tune_xgboost_optuna(X_train, y_train, n_trials=50, n_cv_folds=3,
+                        task_type='regression', seed=42, verbose=False):
+    """Tune XGBoost hyperparameters with Optuna. Returns best model instance.
+
+    Requires: pip install optuna xgboost
+    """
+    import optuna
+    if not verbose:
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+    from xgboost import XGBRegressor, XGBClassifier
+    from sklearn.model_selection import cross_val_score
+
+    is_clf = task_type == 'classification'
+    scoring = 'accuracy' if is_clf else 'r2'
+    ModelClass = XGBClassifier if is_clf else XGBRegressor
+
+    def objective(trial):
+        params = {
+            'n_estimators': trial.suggest_int('n_estimators', 100, 1000, step=100),
+            'max_depth': trial.suggest_int('max_depth', 3, 10),
+            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3, log=True),
+            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.3, 1.0),
+            'subsample': trial.suggest_float('subsample', 0.5, 1.0),
+            'min_child_weight': trial.suggest_int('min_child_weight', 1, 10),
+            'reg_alpha': trial.suggest_float('reg_alpha', 1e-8, 10.0, log=True),
+            'reg_lambda': trial.suggest_float('reg_lambda', 1e-8, 10.0, log=True),
+            'random_state': seed,
+            'n_jobs': -1,
+            'verbosity': 0,
+        }
+        model = ModelClass(**params)
+        scores = cross_val_score(model, X_train, y_train, cv=n_cv_folds,
+                                 scoring=scoring)
+        return scores.mean()
+
+    study = optuna.create_study(direction='maximize',
+                                sampler=optuna.samplers.TPESampler(seed=seed))
+    study.optimize(objective, n_trials=n_trials)
+
+    best = ModelClass(**study.best_params, random_state=seed, n_jobs=-1, verbosity=0)
+    best.fit(X_train, y_train)
+    return best
+
+
+# =============================================================================
 # IO HELPERS
 # =============================================================================
 
