@@ -59,14 +59,14 @@ REP_PRESETS = {
     ],  # 5 reps
     'fast+lm': [
         'drug_ecfp4', 'drug_maccs', 'drug_pdv',
-        'drug_chemberta', 'drug_molformer',
-        'protein_esm2', 'protein_aac', 'protein_descriptors',
-    ],  # 8 reps
+        'drug_chemberta', 'drug_molformer', 'drug_clamp',
+        'protein_esm2', 'protein_esmc', 'protein_aac', 'protein_descriptors',
+    ],  # 10 reps
     'full': [
         'drug_ecfp4', 'drug_maccs', 'drug_pdv',
-        'drug_chemberta', 'drug_molformer', 'drug_selformer',
-        'protein_esm2', 'protein_aac', 'protein_descriptors', 'protein_kmer',
-    ],  # 10 reps
+        'drug_chemberta', 'drug_molformer', 'drug_selformer', 'drug_clamp',
+        'protein_esm2', 'protein_esmc', 'protein_aac', 'protein_descriptors', 'protein_kmer',
+    ],  # 12 reps
 }
 
 _SEARCH_NAME_MAP = {
@@ -91,11 +91,15 @@ _REP_DISPATCH = {
     'drug_molformer':  ('create_molformer',   'molecular', 'drug'),
     'drug_selformer':  ('create_selformer',   'molecular', 'drug'),
     'drug_mol2vec':    ('create_mol2vec',     'molecular', 'drug'),
+    'drug_clamp':      ('create_clamp',       'molecular', 'drug'),
+    'drug_rmat':       ('create_rmat',        'molecular', 'drug'),
     # Protein reps (from kirby.representations.protein)
     'protein_esm2':        ('create_esm2_protein_embeddings', 'protein', 'protein'),
     'protein_aac':         ('create_protein_aac',             'protein', 'protein'),
     'protein_descriptors': ('create_protein_descriptors',     'protein', 'protein'),
     'protein_kmer':        ('create_protein_kmer',            'protein', 'protein'),
+    'protein_esmc':        ('create_esmc_protein_embeddings', 'protein', 'protein'),
+    'protein_esm2_midlayers': ('create_esm2_midlayers_protein_embeddings', 'protein', 'protein'),
 }
 
 
@@ -470,6 +474,13 @@ Output:
                        help='Enable adaptive model pruning during search')
     parser.add_argument('--n-folds', type=int, default=None,
                        help='Override number of CV folds (default: from speed tier)')
+    parser.add_argument('--finetune', type=str, default=None,
+                       help='Comma-separated fine-tuning methods: '
+                            'protein_esm2_lora')
+    parser.add_argument('--finetune-epochs', type=int, default=5,
+                       help='Fine-tuning epochs per fold (default: 5)')
+    parser.add_argument('--no-ft-cache', action='store_true',
+                       help='Disable fine-tuning cache')
     parser.add_argument('--tune', action='store_true',
                        help='Tune model HPs via RandomizedSearchCV before hybrid search')
     parser.add_argument('--tune-iter', type=int, default=20,
@@ -536,6 +547,32 @@ Output:
         )
         models_arg = tuned_models
 
+    # Build fine-tuning factories
+    rep_factories = None
+    if args.finetune:
+        ft_methods = [m.strip() for m in args.finetune.split(',')]
+        rep_factories = {}
+        ft_cache = not args.no_ft_cache
+
+        for method in ft_methods:
+            if method == 'protein_esm2_lora':
+                from kirby.finetuning.dta_protein_lora import make_dta_protein_lora_factory
+                rep_factories['protein_esm2_lora'] = make_dta_protein_lora_factory(
+                    protein_seqs=protein_seqs,
+                    drug_smiles=drug_smiles,
+                    dataset_name=args.dataset,
+                    base_model='esm2',
+                    epochs=args.finetune_epochs,
+                    cache=ft_cache,
+                )
+            else:
+                print(f"  WARNING: Unknown fine-tuning method '{method}', skipping")
+
+        if rep_factories:
+            print(f"\nFine-tuning factories: {list(rep_factories.keys())}")
+        else:
+            rep_factories = None
+
     # Call domain-agnostic search
     result = find_best_hybrid(
         base_reps=base_reps,
@@ -553,6 +590,7 @@ Output:
         seed=args.seed,
         cache=args.cache,
         adaptive_pruning=args.adaptive_pruning,
+        rep_factories=rep_factories,
     )
 
     # Print summary

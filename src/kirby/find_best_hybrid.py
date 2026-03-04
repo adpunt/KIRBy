@@ -175,19 +175,23 @@ def _should_prune(best_comparable: float, global_best_comparable: float,
 def _get_xgb_regressor():
     try:
         from xgboost import XGBRegressor
-        return XGBRegressor(n_estimators=100, random_state=42, n_jobs=-1, verbosity=0)
+        return XGBRegressor(n_estimators=100, colsample_bytree=0.5,
+                            random_state=42, n_jobs=-1, verbosity=0)
     except ImportError:
         from sklearn.ensemble import RandomForestRegressor
-        return RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+        return RandomForestRegressor(n_estimators=100, max_features='sqrt',
+                                     random_state=42, n_jobs=-1)
 
 
 def _get_xgb_classifier():
     try:
         from xgboost import XGBClassifier
-        return XGBClassifier(n_estimators=100, random_state=42, n_jobs=-1, verbosity=0)
+        return XGBClassifier(n_estimators=100, colsample_bytree=0.5,
+                             random_state=42, n_jobs=-1, verbosity=0)
     except ImportError:
         from sklearn.ensemble import RandomForestClassifier
-        return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+        return RandomForestClassifier(n_estimators=100, max_features='sqrt',
+                                      random_state=42, n_jobs=-1)
 
 
 def _get_lgbm_regressor():
@@ -196,7 +200,8 @@ def _get_lgbm_regressor():
         return LGBMRegressor(n_estimators=100, random_state=42, n_jobs=-1, verbose=-1)
     except ImportError:
         from sklearn.ensemble import RandomForestRegressor
-        return RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+        return RandomForestRegressor(n_estimators=100, max_features='sqrt',
+                                     random_state=42, n_jobs=-1)
 
 
 def _get_lgbm_classifier():
@@ -205,15 +210,16 @@ def _get_lgbm_classifier():
         return LGBMClassifier(n_estimators=100, random_state=42, n_jobs=-1, verbose=-1)
     except ImportError:
         from sklearn.ensemble import RandomForestClassifier
-        return RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+        return RandomForestClassifier(n_estimators=100, max_features='sqrt',
+                                      random_state=42, n_jobs=-1)
 
 
 DEFAULT_MODELS = {
     'rf': {
         'regressor': lambda: __import__('sklearn.ensemble', fromlist=['RandomForestRegressor']).RandomForestRegressor(
-            n_estimators=100, random_state=42, n_jobs=-1),
+            n_estimators=100, max_features='sqrt', random_state=42, n_jobs=-1),
         'classifier': lambda: __import__('sklearn.ensemble', fromlist=['RandomForestClassifier']).RandomForestClassifier(
-            n_estimators=100, random_state=42, n_jobs=-1),
+            n_estimators=100, max_features='sqrt', random_state=42, n_jobs=-1),
         'tier': 'fast',
     },
     'xgboost': {
@@ -223,7 +229,7 @@ DEFAULT_MODELS = {
     },
     'ridge': {
         'regressor': lambda: __import__('sklearn.linear_model', fromlist=['RidgeCV']).RidgeCV(
-            alphas=np.logspace(-6, 6, 13)),
+            alphas=np.logspace(-4, 4, 50)),
         'classifier': lambda: __import__('sklearn.linear_model', fromlist=['LogisticRegressionCV']).LogisticRegressionCV(
             Cs=10, random_state=42, max_iter=1000, n_jobs=-1),
         'tier': 'medium',
@@ -318,6 +324,7 @@ _HP_SEARCH_SPACES = {
     'rf': {
         'n_estimators': [50, 100, 200, 500],
         'max_depth': [5, 10, 20, None],
+        'max_features': ['sqrt', 'log2', 0.3, 0.5],
         'min_samples_split': [2, 5, 10],
         'min_samples_leaf': [1, 2, 4],
     },
@@ -326,7 +333,7 @@ _HP_SEARCH_SPACES = {
         'max_depth': [3, 5, 7, 10],
         'learning_rate': [0.01, 0.05, 0.1, 0.3],
         'subsample': [0.7, 0.8, 1.0],
-        'colsample_bytree': [0.7, 0.8, 1.0],
+        'colsample_bytree': [0.3, 0.5, 0.7, 1.0],
     },
     'lightgbm': {
         'n_estimators': [50, 100, 200],

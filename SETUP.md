@@ -33,11 +33,11 @@ From-zero-to-working setup for all molecular, antibody, and TCGA representations
 |-----------|------|
 | KIRBy repo + code | ~100 MB |
 | Core pip dependencies | ~2 GB |
-| Molecular pretrained weights (mol2vec, MHG-GNN) | ~400 MB |
-| Antibody HF models (all 6) | ~16 GB |
-| Antibody non-HF models (BALM, ESM-C) | ~3 GB |
+| Molecular pretrained weights (mol2vec, MHG-GNN, CLAMP, R-MAT) | ~1.1 GB |
+| Antibody HF models (ESM-2, IgBERT, ProtT5, etc.) | ~16 GB |
+| Protein / ESM-C models | ~3 GB |
 | QM9 / test data | ~1.5 GB |
-| **Total** | **~23 GB** |
+| **Total** | **~24 GB** |
 
 ---
 
@@ -137,10 +137,37 @@ pip install -e .
 # Extract to: grover/pretrained/grover_large/
 ```
 
-### 3d. Uni-Mol (optional)
+### 3d. CLAMP (optional)
+
+CLAMP = contrastive learning over concatenated fingerprints. The ONLY model that
+statistically significantly beat ECFP in the Praski 2025 benchmark.
 
 ```bash
-pip install unimol-tools  # Auto-downloads weights on first use
+# Clone the CLAMP repo (sibling of KIRBy src)
+cd KIRBy/src
+git clone https://github.com/ml-jku/clamp.git
+cd clamp && pip install -e .
+
+# Install mhnreact dependency
+pip install mhnreact
+
+# Weights auto-download to src/clamp/data/models/clamp_clip/ on first use (~636MB)
+```
+
+### 3e. R-MAT (optional)
+
+R-MAT = Relative Molecule Self-Attention Transformer. #2 in Praski 2025 benchmark.
+
+```bash
+pip install git+https://github.com/gmum/huggingmolecules.git#subdirectory=src
+# Weights auto-download from Google Drive on first use (~50MB)
+```
+
+### 3f. Uni-Mol (optional, DROPPED)
+
+```bash
+# Dropped — unimol_tools has no working install path
+# pip install unimol-tools
 ```
 
 ### Molecular representation summary
@@ -161,9 +188,10 @@ pip install unimol-tools  # Auto-downloads weights on first use
 | SchNet | Fine-tuned | 256D | None (torch-geometric) |
 | MolCLR | Pretrained | 512D | None (auto-downloads from HF) |
 | GraphMVP | Pretrained | 300D | None (auto-downloads from HF) |
-| SMITED | Pretrained | 768D | None (auto-downloads from HF) |
-| GROVER | Pretrained | 1024D | Clone repo + weights |
-| Uni-Mol | Pretrained | 512D | `pip install unimol-tools` |
+| SMITED | Pretrained | 512D | None (auto-downloads from HF) |
+| GROVER | Pretrained | ~5000D | Clone repo + weights |
+| CLAMP | Pretrained | 768D | Clone repo + `mhnreact` |
+| R-MAT | Pretrained | 768D | `huggingmolecules` (gmum) |
 
 ---
 
@@ -182,7 +210,7 @@ conda install -c bioconda anarci
 
 ```bash
 pip install ablang    # AbLang v1 (768D)
-pip install ablang2   # AbLang-2 (480D, paired)
+pip install ablang2   # AbLang-2 (768D, paired, seqcoding mode)
 ```
 
 ### 4c. Additional packages
@@ -199,49 +227,34 @@ pip install rjieba
 # ESM-2 650M is a comparable alternative if ESM-C is unavailable.
 pip install esm
 
-# Sapiens / BioPhi (humanization model, 20D features)
-# REQUIRES Python >=3.10.
-pip install biophi
+# ANARCI — required for CDR-specific embeddings (esm2_cdr, esmc_cdr, etc.)
+conda install -c bioconda anarci
+
+# LoRA fine-tuning (for DTA protein-side fine-tuning)
+pip install peft
 ```
 
 ### Antibody representation summary
 
-**Pretrained Language Models:**
+**Current reps (March 2026 rebuild):** 8 base reps (5 LM + 3 sequence) plus
+CDR-specific and midlayer variants. See `BILL_OF_MATERIALS.md` §2B for full list.
 
-| Representation | Dims | Paired? | Package | Weights |
-|----------------|------|---------|---------|---------|
-| AntiBERTy | 1024D | No | transformers | Auto-download |
-| AbLang v1 | 768/1536D | Yes | ablang | Bundled |
-| AbLang-2 | 480D | Yes | ablang2 | Bundled |
-| ESM-2 650M | 1280/2560D | Concat | transformers | Auto-download (~2.5 GB) |
-| ESM-C 600M | 1152D | Concat | esm (v3) | Auto-download (~2.4 GB) |
-| IgBERT | 1024D | Yes (cross-attn) | transformers | Auto-download (~1.6 GB) |
-| ProtT5-XL | 1024/2048D | Concat | transformers + sentencepiece | Auto-download (~11 GB) |
-| Ab-RoBERTa | 768D | No | transformers | Auto-download (~500 MB) |
-| BALM | 1024D | No | Manual | GitHub + Google Drive (~600 MB) |
-| Sapiens | ~20D | No | biophi | Bundled |
-| p-IgGen | 768D | Yes | transformers | Auto-download (~90 MB) |
-
-**Classical (Non-Pretrained):**
-
-| Representation | Dims | Dependencies |
-|----------------|------|-------------|
-| k-mer frequency | 400D | None |
-| Physicochemical profile | 68D | None |
-| IMGT one-hot | 5120D | ANARCI |
-
-**Augmented Features (94D total):**
-
-| Feature | Dims | Dependencies |
-|---------|------|-------------|
-| Developability | 16D | None |
-| Humanness scores | 7D | None |
-| AAC | 20D | None |
-| BLOSUM62 | 20D | None |
-| CDR lengths | 7D | ANARCI |
-| Per-CDR physicochemical | 12D | ANARCI |
-| Extended liabilities | 9D | ANARCI |
-| CamSol solubility | 3D | None |
+| Representation | Dims | Category | Package | Notes |
+|----------------|------|----------|---------|-------|
+| `esm2` | 2560 | Pretrained LM | transformers | ESM-2 650M, H+L concat |
+| `esmc` | 2304 | Pretrained LM | esm (v3) | ESM-C 600M, H+L concat. Non-commercial. |
+| `ablang2` | 768 | Pretrained Ab LM | ablang2 | Paired, seqcoding mode |
+| `igbert` | 768 | Pretrained Ab LM | transformers | IgBert paired |
+| `antiberty` | 1024 | Pretrained LM | transformers | AntiBERTy, H+L concat |
+| `prot_t5` | 2048 | Pretrained LM | transformers + sentencepiece | ProtT5-XL, H+L concat |
+| `onehot` | 5600 | Sequence | None | Max 150H + 130L, 20 AA |
+| `blosum` | 5600 | Sequence | None | BLOSUM62 row per residue |
+| `aac` | 40 | Sequence | None | 20 frequencies per chain |
+| `esm2_cdr` | 2560 | CDR-pooled LM | transformers + anarci | CDR residues only |
+| `esmc_cdr` | 2304 | CDR-pooled LM | esm + anarci | CDR residues only |
+| `antiberty_cdr` | 1024 | CDR-pooled LM | transformers + anarci | CDR residues only |
+| `prot_t5_cdr` | 2048 | CDR-pooled LM | transformers + anarci | CDR residues only |
+| `esm2_midlayers` | 2560 | Intermediate LM | transformers | Avg layers 20-33 |
 
 ---
 
@@ -615,6 +628,10 @@ sbatch tests/slurm_scripts/run_antibody_complexity.sh full abbind
 ```bash
 pip install -e ".[tcga]"
 # Installs: scanpy, anndata, gseapy, decoupler, requests, combat (pyComBat)
+
+# BulkRNABert (InstaDeep, purpose-built for bulk RNA-seq)
+# Requires transformers from source for custom model architecture
+pip install --upgrade git+https://github.com/huggingface/transformers.git
 ```
 
 ### Data Sources

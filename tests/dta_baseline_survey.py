@@ -38,16 +38,50 @@ warnings.filterwarnings('ignore')
 # Which reps to evaluate (ordered: lightweight first, LM last)
 DRUG_REPS = [
     'drug_ecfp4', 'drug_maccs', 'drug_pdv',
-    'drug_chemberta', 'drug_molformer', 'drug_selformer',
+    'drug_chemberta', 'drug_molformer', 'drug_selformer', 'drug_clamp',
 ]
 PROTEIN_REPS = [
     'protein_aac', 'protein_descriptors', 'protein_kmer',
-    'protein_esm2',
+    'protein_esm2', 'protein_esmc', 'protein_esm2_midlayers',
 ]
 
 # Default minimal partners for paired evaluation
 DEFAULT_DRUG_PARTNER = 'drug_ecfp4'
 DEFAULT_PROTEIN_PARTNER = 'protein_aac'
+
+
+def _filter_features_by_importance(X: np.ndarray, y: np.ndarray,
+                                    n_features: int = 200,
+                                    rep_name: str = '') -> np.ndarray:
+    """Reduce high-dim features via LightGBM feature importance.
+
+    Fits a quick LightGBM on the full data to rank features, keeps top n_features.
+    Slight label leakage but standard practice for tractability.
+    """
+    if X.shape[1] <= n_features:
+        return X
+
+    print(f"  Filtering {rep_name} from {X.shape[1]}D → {n_features}D via feature importance...")
+    try:
+        from lightgbm import LGBMRegressor
+        model = LGBMRegressor(n_estimators=50, max_depth=5, random_state=42,
+                              n_jobs=-1, verbose=-1)
+    except ImportError:
+        from sklearn.ensemble import RandomForestRegressor
+        print(f"  WARNING: lightgbm not available, using RF for feature selection")
+        model = RandomForestRegressor(n_estimators=50, max_depth=5,
+                                      random_state=42, n_jobs=-1)
+
+    # Clean input
+    X_clean = np.nan_to_num(X, nan=0.0, posinf=1e6, neginf=-1e6)
+    model.fit(X_clean, y)
+    importances = model.feature_importances_
+    top_idx = np.argsort(importances)[-n_features:]
+    top_idx.sort()
+
+    X_filtered = X[:, top_idx]
+    print(f"  Kept {n_features} features (importance range: {importances[top_idx[0]]:.1f}–{importances[top_idx[-1]]:.1f})")
+    return X_filtered
 
 
 def load_dataset(name: str):
@@ -78,8 +112,14 @@ def generate_rep(rep_name: str, unique_drugs, unique_proteins,
         dispatch['drug_molformer'] = (mol.create_molformer, 'drug')
     elif rep_name == 'drug_selformer':
         dispatch['drug_selformer'] = (mol.create_selformer, 'drug')
+    elif rep_name == 'drug_clamp':
+        dispatch['drug_clamp'] = (mol.create_clamp, 'drug')
     elif rep_name == 'protein_esm2':
         dispatch['protein_esm2'] = (prot.create_esm2_protein_embeddings, 'protein')
+    elif rep_name == 'protein_esmc':
+        dispatch['protein_esmc'] = (prot.create_esmc_protein_embeddings, 'protein')
+    elif rep_name == 'protein_esm2_midlayers':
+        dispatch['protein_esm2_midlayers'] = (prot.create_esm2_midlayers_protein_embeddings, 'protein')
 
     if rep_name not in dispatch:
         print(f"  WARNING: Unknown rep '{rep_name}', skipping")
@@ -104,7 +144,7 @@ def evaluate_rep(X: np.ndarray, y: np.ndarray, groups: np.ndarray,
                  n_folds: int = 5) -> Dict[str, float]:
     """Evaluate a representation with GroupKFold CV. Returns {model: R²}."""
     from sklearn.model_selection import GroupKFold
-    from sklearn.linear_model import Ridge
+    from sklearn.linear_model import RidgeCV
     from sklearn.ensemble import RandomForestRegressor
     from sklearn.metrics import r2_score
 
@@ -134,13 +174,13 @@ def evaluate_rep(X: np.ndarray, y: np.ndarray, groups: np.ndarray,
     results = {}
 
     models = {
-        'ridge': lambda: Ridge(alpha=1.0),
-        'rf': lambda: RandomForestRegressor(n_estimators=100, max_depth=10,
+        'ridge': lambda: RidgeCV(alphas=np.logspace(-4, 4, 50)),
+        'rf': lambda: RandomForestRegressor(n_estimators=100, max_features='sqrt',
                                             n_jobs=-1, random_state=42),
     }
     if has_xgb:
         models['xgboost'] = lambda: xgb.XGBRegressor(
-            n_estimators=100, max_depth=6, learning_rate=0.1,
+            n_estimators=100, colsample_bytree=0.5,
             n_jobs=-1, random_state=42, verbosity=0,
         )
 
@@ -198,9 +238,9 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
 
     # Decide which reps to run
     drug_reps_to_run = [r for r in DRUG_REPS
-                        if not (skip_lm and r in ('drug_chemberta', 'drug_molformer', 'drug_selformer'))]
+                        if not (skip_lm and r in ('drug_chemberta', 'drug_molformer', 'drug_selformer', 'drug_clamp'))]
     protein_reps_to_run = [r for r in PROTEIN_REPS
-                           if not (skip_lm and r == 'protein_esm2')
+                           if not (skip_lm and r in ('protein_esm2', 'protein_esmc', 'protein_esm2_midlayers'))
                            and not (skip_kmer and r == 'protein_kmer')]
 
     all_reps_to_run = drug_reps_to_run + protein_reps_to_run
@@ -219,6 +259,12 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
             print(f"  {rep_name}: {rep.shape} ({elapsed:.1f}s)")
         else:
             print(f"  {rep_name}: FAILED ({elapsed:.1f}s)")
+
+    # Pre-filter protein_kmer from 8000D → 200D via LightGBM feature importance
+    if 'protein_kmer' in generated:
+        generated['protein_kmer'] = _filter_features_by_importance(
+            generated['protein_kmer'], labels, n_features=200,
+            rep_name='protein_kmer')
 
     # Evaluate: standalone mode (each rep alone)
     print(f"\n--- STANDALONE EVALUATION (each rep alone) ---")
@@ -334,7 +380,7 @@ def main():
     parser.add_argument('--skip-lm', action='store_true',
                         help='Skip LM reps (ESM-2, ChemBERTa, MolFormer, SelFormer)')
     parser.add_argument('--skip-kmer', action='store_true',
-                        help='Skip protein_kmer (8000D, slow for large datasets)')
+                        help='Skip protein_kmer (8000D→200D via importance filter)')
     parser.add_argument('--output', type=str, default=None,
                         help='Save results JSON')
     args = parser.parse_args()

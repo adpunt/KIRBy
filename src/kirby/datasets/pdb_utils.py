@@ -7,7 +7,7 @@ and applies single-site mutations.
 
 import warnings
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import numpy as np
 
@@ -94,6 +94,40 @@ def extract_chain_sequence(pdb_path: Path, chain_id: str) -> str:
     # Concatenate all polypeptide fragments (handles chain breaks)
     sequence = ''.join(str(pp.get_sequence()) for pp in polypeptides)
     return sequence
+
+
+def build_pdb_resnum_mapping(pdb_path: Path, chain_id: str) -> Dict[int, int]:
+    """Build mapping from PDB residue number → 0-indexed sequence position.
+
+    Iterates over standard residues (hetfield == ' ') in the given chain
+    and maps each PDB residue number to its sequential position.
+
+    Args:
+        pdb_path: Path to PDB file.
+        chain_id: Chain identifier (e.g. 'H', 'L', 'A').
+
+    Returns:
+        Dict mapping PDB residue numbers to 0-indexed sequence positions.
+    """
+    from Bio.PDB import PDBParser
+
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        parser = PDBParser(QUIET=True)
+        structure = parser.get_structure('pdb', str(pdb_path))
+
+    chain = structure[0][chain_id]
+    mapping = {}
+    seq_pos = 0
+    for residue in chain.get_residues():
+        hetfield = residue.get_id()[0]
+        if hetfield != ' ':
+            continue
+        resnum = residue.get_id()[1]
+        mapping[resnum] = seq_pos
+        seq_pos += 1
+
+    return mapping
 
 
 def apply_mutation(wt_seq: str, position: int, mut_aa: str) -> str:

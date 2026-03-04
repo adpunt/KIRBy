@@ -73,23 +73,28 @@ are from scaffold-split (molecular), identity-grouped (antibody), or TSS-grouped
 **Source:** 5-fold scaffold-split GroupKFold baselines on LogD (~5,039), Caco2 (~2,161),
 hERG (~1,415), QM9 (~1,981). Models: rf, xgboost, ridge, knn, lightgbm.
 
+**⚠ ALL SCORES PENDING** — HP defaults changed (RF max_features, XGB colsample_bytree,
+RidgeCV grid). Server caches must be cleared before re-run. See §8.
+
 | Rep | Dim | Category | LogD R² | Caco2 R² | hERG R² | QM9 R² | Deps |
 |-----|-----|----------|---------|----------|---------|--------|------|
-| `ecfp4` | 2048 | Standard (fingerprint) | lgbm=0.793 | xgb=0.516 | lgbm=0.558 | rf=0.071 | rdkit |
-| `maccs` | 167 | Standard (fingerprint) | lgbm=0.687 | lgbm=0.398 | rf=0.479 | rf=0.127 | rdkit |
-| `pdv` | 200 | Standard (descriptor) | xgb=0.808 | lgbm=0.535 | xgb=0.538 | rf=0.106 | rdkit |
-| `mol2vec` | 300 | Pretrained (Word2Vec) | lgbm=0.759 | lgbm=0.446 | lgbm=0.517 | rf=0.111 | mol2vec |
-| `chemberta` | 384 | Pretrained (Transformer) | ridge=0.728 | lgbm=0.414 | xgb=0.481 | rf=0.071 | transformers |
-| `molformer` | 768 | Pretrained (Transformer) | ridge=0.738 | xgb=0.409 | lgbm=0.504 | rf=0.080 | transformers |
-| `selformer` | 768 | Pretrained (Transformer) | ridge=0.686 | rf=0.339 | xgb=0.464 | rf=0.088 | transformers |
-| `chembert` | 256 | Pretrained (Transformer) | lgbm=0.682 | lgbm=0.403 | lgbm=0.509 | rf=0.098 | transformers |
-| `molclr` | 512 | Pretrained (GNN) | lgbm=0.576 | rf=0.299 | rf=0.397 | ridge=0.063 | torch_geometric |
-| `graphmvp` | 300 | Pretrained (GNN) | lgbm=0.669 | xgb=0.378 | xgb=0.453 | rf=0.100 | torch_geometric |
-| `smited` | 768 | Pretrained (Transformer) | ridge=0.750 | lgbm=0.455 | knn=0.473 | rf=0.114 | HuggingFace |
-| `mhg_gnn` | 1024 | Pretrained (GNN) | lgbm=**0.822** | lgbm=**0.526** | lgbm=**0.564** | rf=0.111 | torch_geometric |
-| `grover` | 4800 | Pretrained (Transformer) | ridge=0.774 | lgbm=0.496 | lgbm=0.527 | rf=0.119 | grover |
-| `graph_kernel` | ~290 | Standard (kernel) | lgbm=0.756 | lgbm=0.525 | lgbm=0.541 | ridge=0.068 | grakel |
-| `schnet` | 128 | Pretrained (3D GNN) | ridge=0.647 | lgbm=0.350 | xgb=0.348 | rf=0.057 | schnetpack |
+| `ecfp4` | 2048 | Standard (fingerprint) | PENDING | PENDING | PENDING | PENDING | rdkit |
+| `maccs` | 167 | Standard (fingerprint) | PENDING | PENDING | PENDING | PENDING | rdkit |
+| `pdv` | 200 | Standard (descriptor) | PENDING | PENDING | PENDING | PENDING | rdkit |
+| `mol2vec` | 300 | Pretrained (Word2Vec) | PENDING | PENDING | PENDING | PENDING | mol2vec |
+| `chemberta` | 768 | Pretrained (Transformer) | PENDING | PENDING | PENDING | PENDING | transformers |
+| `molformer` | 768 | Pretrained (Transformer) | PENDING | PENDING | PENDING | PENDING | transformers |
+| `selformer` | 768 | Pretrained (Transformer) | PENDING | PENDING | PENDING | PENDING | transformers |
+| `chembert` | 256 | Pretrained (Transformer) | PENDING | PENDING | PENDING | PENDING | transformers |
+| `molclr` | 512 | Pretrained (GNN) | PENDING | PENDING | PENDING | PENDING | torch_geometric |
+| `graphmvp` | 300 | Pretrained (GNN) | PENDING | PENDING | PENDING | PENDING | torch_geometric |
+| `smited` | 512 | Pretrained (Transformer) | PENDING | PENDING | PENDING | PENDING | smi-ted (IBM, local clone) |
+| `mhg_gnn` | 1024 | Pretrained (GNN) | PENDING | PENDING | PENDING | PENDING | torch_geometric |
+| `grover` | ~5000 | Pretrained (Transformer) | PENDING | PENDING | PENDING | PENDING | grover |
+| `graph_kernel` | ~290 | Standard (kernel) | PENDING | PENDING | PENDING | PENDING | grakel |
+| `schnet` | 128 | Pretrained (3D GNN) | PENDING | PENDING | PENDING | PENDING | schnetpack |
+| `clamp` | 768 | Pretrained (contrastive MLP) | PENDING | PENDING | PENDING | PENDING | clamp (ml-jku), mhnreact |
+| `rmat` | 768 | Pretrained (3D Transformer) | PENDING | PENDING | PENDING | PENDING | huggingmolecules (gmum) |
 | `unimol` | 512 | Pretrained (3D) | **DROPPED** | — | — | — | unimol_tools |
 
 **Dropped:** `chemformer` (R² < 0.25 on all datasets, broken HF weights).
@@ -102,7 +107,7 @@ were tested and performed **worse** than frozen baselines on all molecular datas
 **Presets:**
 - `fast` (3): ecfp4, maccs, pdv
 - `fast+hf` (6): + chemberta, molformer, selformer
-- `all` (15): all reps including GNN and graph_kernel
+- `all` (17): all reps including GNN, graph_kernel, clamp, rmat
 
 ### 2B. Antibody Representations
 
@@ -115,6 +120,7 @@ competitive with billion-param models at ≥1K samples.
 | Rep | Dim | Category | Deps | Notes |
 |-----|-----|----------|------|-------|
 | `esm2` | 2560 | Pretrained (protein LM) | transformers | ESM-2 650M, H+L concat |
+| `esmc` | 2304 | Pretrained (protein LM) | esm (EvolutionaryScale) | ESM-C 600M, H+L concat. Non-commercial license. |
 | `ablang2` | 768 | Pretrained (Ab LM, paired) | ablang2 | Single forward pass |
 | `igbert` | 768 | Pretrained (Ab LM, paired) | transformers | IgBert paired |
 | `antiberty` | 1024 | Pretrained (Ab LM) | transformers | AntiBERTy, H+L concat |
@@ -122,6 +128,11 @@ competitive with billion-param models at ≥1K samples.
 | `onehot` | 5600 | Standard (positional) | None | Max 150H + 130L, 20 AA |
 | `blosum` | 5600 | Standard (positional) | None | BLOSUM62 row per residue |
 | `aac` | 40 | Standard (composition) | None | 20 frequencies per chain |
+| `esm2_cdr` | 2560 | CDR-pooled (protein LM) | transformers, anarci | ESM-2, pooled over CDR residues only |
+| `esmc_cdr` | 2304 | CDR-pooled (protein LM) | esm, anarci | ESM-C, pooled over CDR residues only |
+| `antiberty_cdr` | 1024 | CDR-pooled (Ab LM) | transformers, anarci | AntiBERTy, CDR-only |
+| `prot_t5_cdr` | 2048 | CDR-pooled (protein LM) | transformers, anarci | ProtT5, CDR-only |
+| `esm2_midlayers` | 2560 | Intermediate layers (LM) | transformers | ESM-2, avg layers 20-33 |
 
 **Baselines:** Not yet computed — run `antibody_baseline_survey.py` on server.
 
@@ -130,47 +141,50 @@ R² and have been deleted. No antibody fine-tuning factories remain.
 
 ### 2C. TCGA Representations
 
-**Source:** Baselines from SLURM jobs 11379620/11379734-11379737 (original) and
-7219430/7219506 (new/fixed reps) on LUAD vs LUSC and BRCA PAM50. Models: rf, xgboost, ridge, knn.
+**Source:** 5-fold TSS-grouped StratifiedGroupKFold baselines on LUAD vs LUSC and
+BRCA PAM50. Models: rf, xgboost, ridge, knn.
+
+**⚠ ALL SCORES PENDING** — HP defaults changed. Server caches must be cleared.
 
 #### Expression-Derived
 
 | Rep | Dim | Category | Lung Acc (best) | BRCA Acc (best) | Deps | Server? |
 |-----|-----|----------|----------------|----------------|------|---------|
-| `gene_hvg2000` | 2000 | Standard | xgb=**0.959** | xgb=**0.866** | scanpy (opt) | YES |
-| `gene_pca100` | 100 | Standard | ridge=0.939 | xgb=0.826 | sklearn | YES |
-| `gene_nmf50` | 50 | Standard | rf=**0.950** | rf=0.834 | sklearn | YES |
-| `gene_ica50` | 50 | Standard | ridge=0.940 | xgb=0.751 | sklearn | YES |
-| `gene_stats` | 15 | Standard | ridge=0.757 | rf=0.502 | scipy | YES |
-| `gene_hallmark` | 50 | Pathway (mean z-score) | ridge=**0.933** | xgb=0.833 | local gene sets | YES |
-| `gene_kegg` | 320 | Pathway (mean z-score) | ridge=**0.941** | xgb=0.816 | local gene sets | YES |
-| `gene_reactome` | 1817 | Pathway (mean z-score) | xgb=**0.945** | xgb=0.859 | local gene sets | YES |
-| `gene_oncogenic` | 189 | Pathway (mean z-score) | ridge=**0.946** | xgb=0.833 | local gene sets | YES |
-| `gene_progeny` | 14 | Pathway (weighted) | ridge=**0.879** | rf=0.799 | local gene sets | YES |
-| `gene_dorothea` | 216 | Pathway (weighted) | ridge=**0.933** | xgb=0.839 | local gene sets | YES |
-| `gene_combined_pathway` | 280 | Pathway (combined) | ridge=**0.931** | xgb=0.839 | local gene sets | YES |
-| `gene_quantile_rank` | 50 | Expression (rank PCA) | ridge=**0.935** | xgb=0.818 | sklearn | YES |
-| `gene_corr_modules` | 30 | Expression (eigengene) | ridge=**0.943** | rf=0.836 | sklearn | YES |
-| `gene_chromosome_arm` | 42 | Genomic (chr arm) | ridge=**0.905** | xgb=0.713 | local gene sets | YES |
-| `gene_autoencoder50` | 50 | Expression (AE) | rf=**0.942** | xgb=0.827 | torch | YES |
-| `gene_sparse_pca50` | 50 | Expression (sparse) | knn=**0.944** | xgb=0.883 | sklearn | YES |
-| `gene_immune` | ~22 | Computed (immune) | rf=0.793 | rf=0.524 | hardcoded | YES |
+| `gene_hvg2000` | 2000 | Standard | PENDING | PENDING | scanpy (opt) | YES |
+| `gene_pca100` | 100 | Standard | PENDING | PENDING | sklearn | YES |
+| `gene_nmf50` | 50 | Standard | PENDING | PENDING | sklearn | YES |
+| `gene_ica50` | 50 | Standard | PENDING | PENDING | sklearn | YES |
+| `gene_stats` | 15 | Standard | PENDING | PENDING | scipy | YES |
+| `gene_hallmark` | 50 | Pathway (mean z-score) | PENDING | PENDING | local gene sets | YES |
+| `gene_kegg` | 320 | Pathway (mean z-score) | PENDING | PENDING | local gene sets | YES |
+| `gene_reactome` | 1817 | Pathway (mean z-score) | PENDING | PENDING | local gene sets | YES |
+| `gene_oncogenic` | 189 | Pathway (mean z-score) | PENDING | PENDING | local gene sets | YES |
+| `gene_progeny` | 14 | Pathway (weighted) | PENDING | PENDING | local gene sets | YES |
+| `gene_dorothea` | 216 | Pathway (weighted) | PENDING | PENDING | local gene sets | YES |
+| `gene_combined_pathway` | 280 | Pathway (combined) | PENDING | PENDING | local gene sets | YES |
+| `gene_quantile_rank` | 50 | Expression (rank PCA) | PENDING | PENDING | sklearn | YES |
+| `gene_corr_modules` | 30 | Expression (eigengene) | PENDING | PENDING | sklearn | YES |
+| `gene_chromosome_arm` | 42 | Genomic (chr arm) | PENDING | PENDING | local gene sets | YES |
+| `gene_autoencoder50` | 50 | Expression (AE) | PENDING | PENDING | torch | YES |
+| `gene_sparse_pca50` | 50 | Expression (sparse) | PENDING | PENDING | sklearn | YES |
+| `gene_immune` | ~22 | Computed (immune) | PENDING | PENDING | hardcoded | YES |
 
 #### Foundation Model Embeddings (GPU)
 
 | Rep | Dim | Category | Lung Acc (best) | BRCA Acc (best) | Deps | Server? |
 |-----|-----|----------|----------------|----------------|------|---------|
-| `geneformer` (FT) | 1152 | Fine-tuned (per-fold) | xgb=**0.930** | xgb=0.789 | torch, transformers | GPU |
-| `gene_scfoundation` | 2048 | Pretrained (frozen) | **PENDING** | **PENDING** | torch, transformers | GPU, never tested |
+| `geneformer` (FT) | 1152 | Fine-tuned (per-fold) | PENDING | PENDING | torch, transformers | GPU |
+| `gene_bulkrnabert` | 256 | Pretrained (frozen) | PENDING | PENDING | transformers (from source) | GPU. Purpose-built for bulk RNA-seq (pretrained on TCGA). |
+| `gene_scfoundation` | 2048 | Pretrained (frozen) | PENDING | PENDING | torch, transformers | GPU, never tested |
 
 #### Multi-Omic
 
 | Rep | Dim | Category | Lung Acc (best) | BRCA Acc (best) | Deps | Server? |
 |-----|-----|----------|----------------|----------------|------|---------|
-| `cnv_gistic` | 200 | CNV | xgb=0.820 | xgb=0.607 | Xena | YES |
-| `cnv_pca50` | 50 | CNV | xgb=0.877 | **PENDING** | Xena | YES |
-| `rppa` | 258 | Protein | rf=0.749 | xgb=0.773 | Xena | YES |
-| `mirna_top200` | 200 | miRNA | rf=0.888 | xgb=0.675 | Xena | YES |
+| `cnv_gistic` | 200 | CNV | PENDING | PENDING | Xena | YES |
+| `cnv_pca50` | 50 | CNV | PENDING | PENDING | Xena | YES |
+| `rppa` | 258 | Protein | PENDING | PENDING | Xena | YES |
+| `mirna_top200` | 200 | miRNA | PENDING | PENDING | Xena | YES |
 
 **Dropped:** `gene_mutation` (Xena MC3 returns 403), `clinical` (Xena phenotype returns 403).
 
@@ -178,20 +192,19 @@ R² and have been deleted. No antibody fine-tuning factories remain.
 
 | Rep | Dim | Source | Lung Acc (best) | BRCA Acc (best) | Access | Server? |
 |-----|-----|--------|----------------|----------------|--------|---------|
-| `wsi_ctranspath` | 512 | GigaSSL (Mendeley) | xgb=0.783 | rf=0.513 | Public | YES |
-| `wsi_phikon` | 512 | GigaSSL (Mendeley) | xgb=0.776 | rf=0.513 | Public | YES |
-| `wsi_hoptimus0` | 512 | GigaSSL (Mendeley) | xgb=0.823 | rf=0.648 | Public | YES |
-| `wsi_gigapath` | 512 | GigaSSL (Mendeley) | xgb=0.854 | **PENDING** | Public | YES |
-| `wsi_moco` | 512 | GigaSSL (Mendeley) | xgb=0.775 | rf=0.616 | Public | YES |
+| `wsi_ctranspath` | 512 | GigaSSL (Mendeley) | PENDING | PENDING | Public | YES |
+| `wsi_phikon` | 512 | GigaSSL (Mendeley) | PENDING | PENDING | Public | YES |
+| `wsi_hoptimus0` | 512 | GigaSSL (Mendeley) | PENDING | PENDING | Public | YES |
+| `wsi_gigapath` | 512 | GigaSSL (Mendeley) | PENDING | PENDING | Public | YES |
+| `wsi_moco` | 512 | GigaSSL (Mendeley) | PENDING | PENDING | Public | YES |
 
 **Dropped:** `wsi_titan` (gated, garbage results), `wsi_uni2h` (features not found),
 `wsi_cnn320` (local only, garbage results).
 
 **Fine-tuning:** `geneformer` (per-fold, proper vocab tokenization → 1152D V2 embeddings).
-**Survey confirmed:** Geneformer FT is the best individual rep on LUAD vs LUSC (0.930 acc)
-and competitive on BRCA PAM50 (0.789). Hybrids with Geneformer reach 0.940 / 0.820.
 Geneformer was pretrained on single-cell data (Genecorpus-104M, non-cancer) — no TCGA
-data leakage. **Proceed to Phase 2 full run.**
+data leakage. Previous survey showed it competitive as individual rep and in hybrids.
+**All scores pending re-run with updated HP defaults.**
 
 **Presets:**
 - `fast` (5): pca100, hallmark, progeny, ctranspath, phikon
@@ -208,26 +221,36 @@ data leakage. **Proceed to Phase 2 full run.**
 Cold-target GroupKFold CV (5-fold). "Paired" = drug rep + protein_aac or protein rep + drug_ecfp4.
 Davis: 30K pairs (68 drugs × 442 proteins). KIBA: 30K subsample (2111 drugs × 229 proteins).
 
+**⚠ ALL SCORES PENDING** — HP defaults changed, preprocessing overhauled. Server caches must be cleared.
+
 | Rep | Dim | Category | Davis R² (paired) | KIBA R² (standalone) | Deps |
 |-----|-----|----------|:-:|:-:|------|
-| `drug_ecfp4` | 2048 | Standard (fingerprint) | **STALE** | **STALE** | rdkit |
-| `drug_maccs` | 167 | Standard (fingerprint) | **STALE** | **STALE** | rdkit |
-| `drug_pdv` | 200 | Standard (descriptor) | **STALE** | **STALE** | rdkit |
-| `drug_chemberta` | 384 | Pretrained (drug LM) | **STALE** | **STALE** | transformers |
-| `drug_molformer` | 768 | Pretrained (drug LM) | **STALE** | **STALE** | transformers |
-| `drug_selformer` | 768 | Pretrained (drug LM) | **STALE** | **STALE** | transformers |
-| `protein_esm2` | 1280 | Pretrained (protein LM) | **STALE** | **STALE** | transformers |
-| `protein_aac` | 20 | Standard (composition) | **STALE** | **STALE** | None |
-| `protein_descriptors` | 30 | Standard (biophysical) | **STALE** | **STALE** | None |
-| `protein_kmer` | 8000 | Standard (sequence) | **STALE** | **STALE** | None |
+| `drug_ecfp4` | 2048 | Standard (fingerprint) | PENDING | PENDING | rdkit |
+| `drug_maccs` | 167 | Standard (fingerprint) | PENDING | PENDING | rdkit |
+| `drug_pdv` | 200 | Standard (descriptor) | PENDING | PENDING | rdkit |
+| `drug_chemberta` | 768 | Pretrained (drug LM) | PENDING | PENDING | transformers |
+| `drug_molformer` | 768 | Pretrained (drug LM) | PENDING | PENDING | transformers |
+| `drug_selformer` | 768 | Pretrained (drug LM) | PENDING | PENDING | transformers |
+| `drug_clamp` | 768 | Pretrained (contrastive MLP) | PENDING | PENDING | clamp (ml-jku), mhnreact |
+| `protein_esm2` | 1280 | Pretrained (protein LM) | PENDING | PENDING | transformers |
+| `protein_esmc` | 1152 | Pretrained (protein LM) | PENDING | PENDING | esm (EvolutionaryScale). Non-commercial license. |
+| `protein_esm2_midlayers` | 1280 | Intermediate layers (LM) | PENDING | PENDING | transformers. Avg layers 20-33. |
+| `protein_aac` | 20 | Standard (composition) | PENDING | PENDING | None |
+| `protein_descriptors` | 30 | Standard (biophysical) | PENDING | PENDING | None |
+| `protein_kmer` | 200 | Standard (sequence, filtered) | PENDING | PENDING | None |
 
-**STALE:** Numbers from pre-preprocessing-overhaul run (Feb 26). KIBA scores were negated and
-SMILES re-canonicalized in the Feb 27 overhaul. Need re-run with `dta_baseline_survey.py`.
+**Note:** `protein_kmer` reduced from 8000D to 200D via feature-importance pre-filtering
+(RF importance on subsample → top 200 features). Fixes timeout and improves tractability.
 
 **Presets:**
 - `fast` (5): drug_ecfp4, drug_maccs, drug_pdv, protein_esm2, protein_aac
-- `fast+lm` (8): + drug_chemberta, drug_molformer, protein_descriptors
-- `full` (10): + drug_selformer, protein_kmer
+- `fast+lm` (10): + drug_chemberta, drug_molformer, drug_clamp, protein_esmc, protein_descriptors
+- `full` (12): + drug_selformer, protein_esm2_midlayers, protein_kmer
+
+**Fine-tuning:**
+- `protein_esm2_lora`: ESM-2 650M LoRA (rank 8) on protein side, trained with frozen drug
+  ECFP4 context. Returns 1280D protein embeddings. Recommended for >5K samples (Davis 30K,
+  KIBA 118K). Usage: `--finetune protein_esm2_lora --finetune-epochs 5`
 
 ---
 
@@ -282,19 +305,17 @@ to pick up commit `3ba481e`.
 
 ### What we HAVE (confirmed baselines)
 
-- **Molecular:** 16 reps confirmed on logd/caco2/herg/qm9 (16 × 4 = 64 cells) — **COMPLETE** (slurm-7226494)
-- **Antibody:** Rebuilt (March 2026). 8 simple reps, no baselines computed yet
-- **TCGA:** 13 reps confirmed on Lung; 11 reps on BRCA PAM50; geneformer FT on both
-- **DTA:** Nothing
+**NOTHING** — all baselines invalidated by HP default changes (March 2026 overhaul).
+All scores reset to PENDING. Full re-run required across all domains.
 
-### What's still PENDING (needs compute)
+### What's PENDING (needs compute)
 
 | Domain | Gap | Estimated cells | Blocker |
 |--------|-----|----------------|---------|
-| ~~Molecular~~ | ~~14 pretrained reps~~ | ~~56~~ | **DONE** (slurm-7226494, 64/64 cells). chemformer broken (rf=0.23 best), all others confirmed. |
-| Antibody (all) | 8 reps × 12 datasets | ~96 | Rebuilt — run `antibody_baseline_survey.py all` |
-| TCGA | gene_ica50 on BRCA, cnv_pca50 on BRCA, wsi_gigapath on BRCA | ~3 | Needs re-run |
-| DTA | All 10 reps on davis + kiba | ~20 | Timed out during protein_kmer generation |
+| Molecular | All 15+ reps × 4 datasets | ~64 | HP defaults changed; server cache clear needed |
+| Antibody | 8+ reps × 12 datasets | ~96+ | HP defaults changed; run `antibody_baseline_survey.py all` |
+| TCGA | All 20+ reps × 2 datasets | ~44+ | HP defaults changed; pathway caches stale |
+| DTA | All 10 reps × 2 datasets | ~20 | HP defaults changed; protein_kmer now pre-filtered |
 
 ### What's BROKEN (needs fixing before re-run)
 
@@ -473,8 +494,14 @@ All baselines must be re-run after these changes. Cache invalidation required.
 - **LogisticRegression → LogisticRegressionCV:** built-in Cs=10 alpha selection
 - **KNN adaptive k:** `n_neighbors = min(5, max(1, sqrt(N_train)))` — scales to dataset size
 
-### Cache Invalidation (REQUIRED)
+### Cache Invalidation (REQUIRED — March 2026 overhaul)
+
+**⚠ SERVER ACTION NEEDED:** Clear ALL caches before re-running any baselines.
+HP defaults changed (RF max_features, XGB colsample_bytree, RidgeCV alpha grid),
+preprocessing changed, all old numbers are invalid.
+
 ```bash
+# FULL CACHE CLEAR (run on server before any re-runs)
 rm -rf ~/.cache/kirby/reps/              # all rep caches (SMILES changed)
 rm -rf ~/.cache/kirby/openadmet_train.csv # re-download + re-standardize
 rm -rf ~/.cache/kirby/chembl_herg_ki.csv  # re-fetch + re-standardize
@@ -483,6 +510,7 @@ rm -rf ~/.cache/kirby/tcga/expression/   # ComBat changes expression data
 rm -rf ~/.cache/kirby/tcga/pathways/     # already documented as stale
 rm -rf ~/.cache/kirby/ddg_combined/      # outlier filter changes dataset
 rm -rf ~/.cache/kirby/abagym/            # z-scoring changes labels
+rm -rf ~/.cache/kirby/finetuned_reps/    # FT embeddings from old HP regime
 ```
 
 ---

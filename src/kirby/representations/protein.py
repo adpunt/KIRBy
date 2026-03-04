@@ -104,6 +104,132 @@ def create_esm2_protein_embeddings(
     return result
 
 
+def create_esm2_midlayers_protein_embeddings(
+    sequences: List[str],
+    model_name: str = 'facebook/esm2_t33_650M_UR50D',
+    device: str = 'cpu',
+    batch_size: int = 4,
+    layer_start: int = 20,
+    layer_end: int = 33,
+) -> np.ndarray:
+    """ESM-2 intermediate layer averaged embeddings for protein sequences.
+
+    Averages hidden states from layers [layer_start, layer_end] instead of using
+    the final layer only. Published evidence shows this improves unsupervised
+    clustering ARI from 0.268 → 0.354 for ESM-2 650M.
+
+    Args:
+        sequences: List of protein amino acid sequences.
+        model_name: HuggingFace ESM-2 model name.
+        device: 'cpu' or 'cuda'.
+        batch_size: Sequences per batch.
+        layer_start: First layer to average (0-indexed).
+        layer_end: Last layer to average (inclusive).
+
+    Returns:
+        np.ndarray: (n_sequences, 1280) embeddings.
+    """
+    import torch
+    try:
+        from transformers import AutoTokenizer, EsmModel
+    except ImportError:
+        raise ImportError("ESM-2 requires transformers: pip install transformers")
+
+    print(f"  Loading ESM-2 midlayers ({model_name.split('/')[-1]}, layers {layer_start}-{layer_end})...")
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = EsmModel.from_pretrained(model_name, output_hidden_states=True).to(device).eval()
+
+    all_embeddings = []
+    n = len(sequences)
+
+    with torch.no_grad():
+        for start in range(0, n, batch_size):
+            batch = [s.upper().strip()[:1022] for s in sequences[start:start + batch_size]]
+            inputs = tokenizer(
+                batch, return_tensors='pt', padding=True,
+                truncation=True, max_length=1024
+            )
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            outputs = model(**inputs)
+            # Average selected hidden layers
+            selected = torch.stack(
+                outputs.hidden_states[layer_start:layer_end + 1], dim=0
+            ).mean(dim=0)  # (B, L, D)
+            # Mean pool excluding BOS/EOS
+            attention_mask = inputs['attention_mask'].clone()
+            attention_mask[:, 0] = 0
+            for j in range(len(batch)):
+                last_tok = attention_mask[j].sum().item()
+                if last_tok > 0:
+                    attention_mask[j, int(last_tok)] = 0
+            mask_expanded = attention_mask.unsqueeze(-1).float()
+            sum_emb = (selected * mask_expanded).sum(dim=1)
+            count = mask_expanded.sum(dim=1).clamp(min=1)
+            mean_emb = (sum_emb / count).cpu().numpy()
+            all_embeddings.append(mean_emb)
+
+            end = min(start + batch_size, n)
+            if end < n and end % 50 == 0:
+                print(f"    Progress: {end}/{n}")
+
+    result = np.concatenate(all_embeddings, axis=0)
+    print(f"  Generated ESM-2 midlayer protein embeddings: {result.shape}")
+    return result
+
+
+def create_esmc_protein_embeddings(
+    sequences: List[str],
+    device: str = 'cpu',
+) -> np.ndarray:
+    """Extract ESM-C 600M mean-pooled embeddings for protein sequences.
+
+    Drop-in ESM-2 replacement. Matches ESM-2 3B quality at 5x fewer params.
+    Uses EvolutionaryScale's `esm` package.
+
+    Note: Non-commercial license (EvolutionaryScale Cambrian).
+
+    Args:
+        sequences: List of protein amino acid sequences.
+        device: 'cpu' or 'cuda'.
+
+    Returns:
+        np.ndarray: (n_sequences, 1152) embeddings.
+
+    Requires: pip install esm
+    """
+    import torch
+    try:
+        from esm.models.esmc import ESMC
+        from esm.sdk.api import ESMProtein, LogitsConfig
+    except ImportError:
+        raise ImportError("ESM-C requires the esm package: pip install esm")
+
+    print("  Loading ESM-C 600M for protein embeddings...")
+    model = ESMC.from_pretrained("esmc_600m").to(device)
+    model.eval()
+
+    config = LogitsConfig(sequence=True, return_embeddings=True)
+    all_embeddings = []
+    n = len(sequences)
+
+    with torch.no_grad():
+        for i, seq in enumerate(sequences):
+            seq = seq.upper().strip()[:2048]  # ESM-C max length
+            protein = ESMProtein(sequence=seq)
+            protein_tensor = model.encode(protein)
+            output = model.logits(protein_tensor, config)
+            # output.embeddings: (1, L, 1152) — mean-pool over residues
+            emb = output.embeddings.mean(dim=1).squeeze(0).cpu().numpy()
+            all_embeddings.append(emb)
+
+            if (i + 1) % 50 == 0:
+                print(f"    Progress: {i + 1}/{n}")
+
+    result = np.vstack(all_embeddings)
+    print(f"  Generated ESM-C protein embeddings: {result.shape}")
+    return result
+
+
 def create_protein_aac(sequences: List[str]) -> np.ndarray:
     """Compute amino acid composition for protein sequences.
 
