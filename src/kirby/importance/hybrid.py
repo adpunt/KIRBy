@@ -19,6 +19,18 @@ Usage:
 import numpy as np
 from typing import Dict, List, Optional, Any, Tuple
 
+from kirby.importance.feature_names import (
+    get_pdv_names, get_pca_names,
+    get_protein_aac_names, get_protein_descriptor_names, get_protein_kmer_names,
+    get_antibody_aac_names, get_onehot_names, get_structural_names, get_antifold_names,
+    get_hallmark_names, get_progeny_names, get_kegg_names, get_reactome_names,
+    get_oncogenic_names, get_dorothea_names, get_combined_pathway_names,
+    get_immune_names, get_gene_stats_names, get_chromosome_arm_names,
+    get_feature_description, FEATURE_DESCRIPTIONS,
+    _get_chr_arm_description, _get_pathway_description,
+    get_concat_ecfp4_names,
+)
+
 
 # =============================================================================
 # MACCS KEY DEFINITIONS (166 keys from RDKit)
@@ -233,6 +245,71 @@ def interpret_pdv_index(idx: int) -> str:
 
 
 # =============================================================================
+# FEATURE NAME REGISTRY
+# =============================================================================
+#
+# (substring, interpretation_type, name_getter_fn_or_None)
+# More specific patterns must come first. Walked top-down; first match wins.
+# Types:
+#   'named'           -> use name_getter(n_features) for human-readable names
+#   'ecfp_bit'        -> existing ECFP SMARTS resolution (needs smiles_list)
+#   'maccs_key'       -> existing MACCS key definitions
+#   'fingerprint_bit' -> generic fingerprint bit (no SMARTS, just bit index)
+#
+FEATURE_NAME_REGISTRY = [
+    # DTA-prefixed protein reps (must match before bare 'aac'/'descriptors')
+    ('protein_aac',          'named', get_protein_aac_names),
+    ('protein_descriptors',  'named', get_protein_descriptor_names),
+    ('protein_kmer',         'named', get_protein_kmer_names),
+    # concat_ecfp4 before 'ecfp' (contains 'ecfp' as substring)
+    ('concat_ecfp4', 'named', get_concat_ecfp4_names),
+    # Molecular fingerprints (keep existing special handling)
+    ('ecfp',      'ecfp_bit',        None),
+    ('morgan',    'ecfp_bit',        None),
+    ('maccs',     'maccs_key',       None),
+    ('map4',      'fingerprint_bit', None),
+    ('drfp',      'fingerprint_bit', None),
+    # PDV variants (before generic 'pdv')
+    ('pdv_binary', 'named', get_pdv_names),
+    ('pdv_rank',   'named', get_pdv_names),
+    ('pdv',        'named', get_pdv_names),
+    # PCA variants (match '_pca' anywhere in name)
+    ('_pca',       'named', get_pca_names),
+    # Antibody
+    ('aac',        'named', get_antibody_aac_names),
+    ('onehot',     'named', get_onehot_names),
+    ('blosum',     'named', get_onehot_names),
+    ('structural', 'named', get_structural_names),
+    ('antifold',   'named', get_antifold_names),
+    # Genomic/TCGA (more specific before less specific)
+    ('combined_pathway', 'named', get_combined_pathway_names),
+    ('hallmark',   'named', get_hallmark_names),
+    ('progeny',    'named', get_progeny_names),
+    ('kegg',       'named', get_kegg_names),
+    ('reactome',   'named', get_reactome_names),
+    ('oncogenic',  'named', get_oncogenic_names),
+    ('dorothea',   'named', get_dorothea_names),
+    ('immune',     'named', get_immune_names),
+    ('gene_stats', 'named', get_gene_stats_names),
+    ('chromosome_arm', 'named', get_chromosome_arm_names),
+    # Everything else falls through to embedding_dim
+]
+
+
+def _resolve_rep_type(rep_name: str):
+    """Walk registry and return (type, name_getter) for rep_name.
+
+    Returns:
+        (interp_type, name_fn) or ('embedding_dim', None) if no match.
+    """
+    rep_lower = rep_name.lower()
+    for substring, interp_type, name_fn in FEATURE_NAME_REGISTRY:
+        if substring in rep_lower:
+            return interp_type, name_fn
+    return 'embedding_dim', None
+
+
+# =============================================================================
 # ECFP BIT INTERPRETATION
 # =============================================================================
 
@@ -429,8 +506,8 @@ def explain_hybrid(
     current_idx = 0
     feature_map = []
 
-    # Get PDV descriptor names once
-    pdv_names = None
+    # Cache name lists per rep to avoid recomputation
+    _name_cache = {}
 
     for rep_name, info in feature_info.items():
         # Skip metadata keys
@@ -440,6 +517,16 @@ def explain_hybrid(
         selected_indices = info['selected_indices']
         n_features = len(selected_indices)
         rep_importances = info.get('importance_scores', np.ones(n_features))
+
+        # Resolve interpretation type once per rep
+        interp_type, name_fn = _resolve_rep_type(rep_name)
+
+        # Build/cache name list for 'named' reps
+        if interp_type == 'named' and name_fn is not None:
+            if rep_name not in _name_cache:
+                # n for name_fn = max possible index + 1 in the original rep
+                max_idx = int(max(selected_indices)) + 1 if len(selected_indices) > 0 else 0
+                _name_cache[rep_name] = name_fn(max_idx)
 
         # Track representation stats
         result['by_representation'][rep_name] = {
@@ -452,36 +539,22 @@ def explain_hybrid(
             local_idx = int(local_idx)
             importance = float(rep_importances[i]) if i < len(rep_importances) else 0.0
 
-            # Get interpretation based on representation type
-            interpretation = None
-            rep_lower = rep_name.lower()
-
-            if 'ecfp' in rep_lower or 'morgan' in rep_lower:
+            # Build interpretation based on resolved type
+            if interp_type == 'ecfp_bit':
                 interpretation = {
                     'type': 'ecfp_bit',
                     'bit_idx': local_idx,
                     'description': f"ECFP bit {local_idx}"
                 }
-                # Try multiple molecules to find SMARTS for this bit
                 if smiles_list:
-                    for smi in smiles_list[:50]:  # Check up to 50 molecules
+                    for smi in smiles_list[:50]:
                         bit_info = interpret_ecfp_bit(local_idx, smi, ecfp_radius, ecfp_n_bits)
                         if bit_info.get('smarts'):
                             interpretation['smarts'] = bit_info['smarts']
                             interpretation['description'] = f"ECFP: {bit_info['smarts']}"
                             break
 
-            elif 'pdv' in rep_lower or 'descriptor' in rep_lower:
-                if pdv_names is None:
-                    pdv_names = get_pdv_descriptor_names()
-                desc_name = pdv_names[local_idx] if local_idx < len(pdv_names) else f"descriptor_{local_idx}"
-                interpretation = {
-                    'type': 'descriptor',
-                    'name': desc_name,
-                    'description': f"PDV: {desc_name}"
-                }
-
-            elif 'maccs' in rep_lower:
+            elif interp_type == 'maccs_key':
                 maccs_info = interpret_maccs_key(local_idx)
                 interpretation = {
                     'type': 'maccs_key',
@@ -491,8 +564,52 @@ def explain_hybrid(
                     'description': f"MACCS: {maccs_info['short_name']} ({maccs_info['description']})"
                 }
 
+            elif interp_type == 'fingerprint_bit':
+                interpretation = {
+                    'type': 'fingerprint_bit',
+                    'bit_idx': local_idx,
+                    'description': f"{rep_name} bit {local_idx}"
+                }
+
+            elif interp_type == 'named':
+                names = _name_cache.get(rep_name, [])
+                feat_name = names[local_idx] if local_idx < len(names) else f"{rep_name}_dim_{local_idx}"
+                # Look up biological description
+                desc = get_feature_description(feat_name)
+                if desc is None:
+                    # Try category-level descriptions for dynamic features
+                    rep_lower = rep_name.lower()
+                    if 'chromosome_arm' in rep_lower:
+                        desc = _get_chr_arm_description(feat_name)
+                    elif 'hallmark' in rep_lower:
+                        desc = _get_pathway_description(feat_name, 'hallmark')
+                    elif 'progeny' in rep_lower:
+                        desc = _get_pathway_description(feat_name, 'progeny')
+                    elif 'kegg' in rep_lower:
+                        desc = _get_pathway_description(feat_name, 'kegg')
+                    elif 'reactome' in rep_lower:
+                        desc = _get_pathway_description(feat_name, 'reactome')
+                    elif 'oncogenic' in rep_lower:
+                        desc = _get_pathway_description(feat_name, 'oncogenic')
+                    elif 'dorothea' in rep_lower:
+                        desc = _get_pathway_description(feat_name, 'dorothea')
+                    elif 'combined_pathway' in rep_lower:
+                        desc = _get_pathway_description(feat_name, 'hallmark')
+                    elif 'onehot' in rep_lower or 'blosum' in rep_lower:
+                        desc = f"Position-specific amino acid encoding at {feat_name}"
+                    elif 'kmer' in rep_lower:
+                        desc = f"Frequency of amino acid 3-mer '{feat_name}' in protein sequence"
+                    elif 'concat_ecfp4' in rep_lower:
+                        desc = f"Morgan fingerprint bit for reaction component ({feat_name})"
+                    else:
+                        desc = f"{rep_name}: {feat_name}"
+                interpretation = {
+                    'type': 'named_feature',
+                    'name': feat_name,
+                    'description': desc,
+                }
+
             else:
-                # Embedding or unknown - just use index
                 interpretation = {
                     'type': 'embedding_dim',
                     'dim_idx': local_idx,
