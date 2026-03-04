@@ -63,6 +63,9 @@ DATASET_REGISTRY = {
     # DTA
     'davis': ('dta', 'fast'),
     'kiba':  ('dta', 'fast'),
+    # Reaction Yield
+    'buchwald_hartwig': ('reaction', 'all'),
+    'suzuki':           ('reaction', 'all'),
 }
 
 # Build domain -> datasets mapping
@@ -71,6 +74,15 @@ for _ds, (_dom, _) in DATASET_REGISTRY.items():
     DOMAIN_DATASETS.setdefault(_dom, []).append(_ds)
 
 SURVEY_MODELS = ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm']
+
+
+def _make_ridge_l2norm(task_type='regression'):
+    """Ridge with L2-normalized features (recommended for high-dim embeddings)."""
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import Normalizer
+    from sklearn.linear_model import RidgeCV
+    return make_pipeline(Normalizer(norm='l2'),
+                         RidgeCV(alphas=np.logspace(-4, 4, 50)))
 
 
 # =============================================================================
@@ -84,6 +96,8 @@ def load_dataset_and_reps(dataset_name: str, rep_preset: Optional[str] = None) -
 
     if domain == 'dta':
         return _load_dta(dataset_name, preset)
+    if domain == 'reaction':
+        return _load_reaction(dataset_name)
 
     # Molecular, antibody, TCGA — handled by _shared.load_data
     from experiments._shared import load_data
@@ -130,6 +144,42 @@ def _load_dta(dataset_name: str, rep_preset: str) -> dict:
         'n_groups': n_groups,
         'task_type': task_type,
         'domain': 'dta',
+        'augmentations': None,
+    }
+
+
+def _load_reaction(dataset_name: str) -> dict:
+    """Load reaction yield dataset with DRFP + concat ECFP4 reps."""
+    from kirby.datasets.reaction_yields import load_buchwald_hartwig, load_suzuki
+    from kirby.representations.reaction import create_drfp, create_concat_ecfp4
+
+    if dataset_name == 'buchwald_hartwig':
+        data = load_buchwald_hartwig()
+    else:
+        data = load_suzuki()
+
+    reps = {}
+
+    # Concat ECFP4 (always available — uses RDKit only)
+    reps['concat_ecfp4'] = create_concat_ecfp4(data['components'])
+
+    # DRFP (requires `pip install drfp`)
+    try:
+        reps['drfp_2048'] = create_drfp(data['rxn_smiles'])
+    except ImportError:
+        print("  WARNING: drfp not installed, skipping DRFP rep")
+
+    n = len(data['labels'])
+    print(f"  {dataset_name}: {n} reactions, {len(reps)} reps "
+          f"({', '.join(f'{k}={v.shape[1]}' for k, v in reps.items())})")
+
+    return {
+        'labels': data['labels'],
+        'reps': reps,
+        'groups': None,  # random KFold (no scaffold/group structure)
+        'n_groups': 0,
+        'task_type': 'regression',
+        'domain': 'reaction',
         'augmentations': None,
     }
 
@@ -286,7 +336,8 @@ def make_ft_factories(data, dataset_name, task_type, ft_epochs=3, ft_cache=True)
 # MAIN SURVEY LOOP
 # =============================================================================
 
-def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed):
+def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
+               tune_trials=0, l2_norm=False):
     """Run the full baseline survey for one dataset. Returns result dict."""
     print(f"\n{'='*70}")
     print(f"SURVEY: {dataset_name}")
@@ -305,6 +356,11 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed):
 
     # 2. Default models
     default_models = get_default_models(task_type)
+
+    # Optional: add L2-normalized Ridge
+    if l2_norm:
+        default_models['ridge_l2norm'] = _make_ridge_l2norm(task_type)
+
     model_names = list(default_models.keys())
 
     # 3. Evaluate each frozen rep
@@ -323,6 +379,28 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed):
                 X, labels, groups, default_models[mname], n_folds, task_type)
             entry['scores'][mname] = round(mean_s, 4)
             print(f" {mname}={mean_s:.3f}", end='', flush=True)
+
+        # Optional: Optuna-tuned XGBoost
+        if tune_trials > 0:
+            try:
+                from experiments._shared import tune_xgboost_optuna
+                cv, cv_kwargs = _make_cv(groups, n_folds, labels)
+                tune_scores = []
+                for train_idx, val_idx in cv.split(X, labels, **cv_kwargs):
+                    scaler = StandardScaler()
+                    X_tr = scaler.fit_transform(X[train_idx])
+                    X_va = scaler.transform(X[val_idx])
+                    tuned = tune_xgboost_optuna(
+                        X_tr, labels[train_idx],
+                        n_trials=tune_trials, task_type=task_type, seed=seed,
+                    )
+                    tune_scores.append(_score(
+                        labels[val_idx], tuned.predict(X_va), task_type))
+                mean_s = float(np.mean(tune_scores))
+                entry['scores']['xgb_tuned'] = round(mean_s, 4)
+                print(f" xgb_tuned={mean_s:.3f}", end='', flush=True)
+            except ImportError:
+                print(" (optuna not installed)", end='', flush=True)
 
         # Best model for this rep
         valid = [(m, s) for m, s in entry['scores'].items()
@@ -479,9 +557,10 @@ Datasets:
   tcga_luad_vs_lusc, tcga_brca_pam50,             (TCGA)
     tcga_brca_survival
   davis, kiba                                      (DTA)
+  buchwald_hartwig, suzuki                         (reaction yield)
 
 Shortcuts:
-  molecular, tcga, dta                             (run all in domain)
+  molecular, tcga, dta, reaction                   (run all in domain)
   everything                                       (run all domains)
 
 Note: Antibody datasets moved to tests/antibody_baseline_survey.py
@@ -502,6 +581,10 @@ Examples:
                        help='Number of CV folds (default: 3)')
     parser.add_argument('--finetune', action='store_true',
                        help='Include fine-tuned reps (TCGA: geneformer, scfoundation)')
+    parser.add_argument('--tune', type=int, default=0, metavar='N',
+                       help='Optuna-tune XGBoost with N trials (e.g., --tune 50)')
+    parser.add_argument('--l2-norm', action='store_true',
+                       help='Add ridge_l2norm model (L2-normalize before Ridge)')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--output', type=str, default=None,
                        help='Output path (JSON file or directory for multi-dataset)')
@@ -548,6 +631,7 @@ Examples:
             result = run_survey(
                 ds, args.reps, args.n_folds,
                 args.finetune, args.seed,
+                tune_trials=args.tune, l2_norm=args.l2_norm,
             )
             result = convert_numpy(result)
             print_summary_table(result)

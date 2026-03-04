@@ -60,6 +60,17 @@ not be used in experiments until validated.
 | `davis` | 30,056 pairs | 68 | 442 | pKd | Listed, no baselines yet |
 | `kiba` | ~118K pairs | 2,111 | 229 | KIBA score | Listed, no baselines yet |
 
+### 1F. Reaction Yield (regression, random 70/30 × 10 splits)
+
+| Dataset | Samples | Components | Target | Status |
+|---------|---------|------------|--------|--------|
+| `buchwald_hartwig` | ~3,955 | 15 aryl halides × 4 ligands × 3 bases × 23 additives | Yield (0-100%) | Listed, no baselines yet |
+| `suzuki` | ~5,760 | 15 substrate pairs × 12 ligands × 8 reagents × 4 solvents | Yield (0-100%) | Listed, no baselines yet |
+
+**Data source:** rxn4chemistry/rxn_yields (Schwaller et al. 2021).
+**Representations:** DRFP (2048D reaction fingerprints), Concat ECFP4 (per-component Morgan FPs).
+**Deps:** `pip install drfp` for DRFP fingerprints.
+
 ---
 
 ## 2. Representations with Baseline Performance
