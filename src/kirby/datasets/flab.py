@@ -55,6 +55,67 @@ FLAB_DATASETS = {
         'property': 'Binding (Kd)',
         'intra_family': True,
     },
+    # ── FLAb2 expansion (Dec 2025) ──────────────────────────────────────────
+    'flab_binding_phillips_h3': {
+        'path': 'binding/phillips2021binding_cr9114_h3_kd.csv',
+        'property': 'Binding (SPR Kd)',
+        'intra_family': True,
+    },
+    'flab_binding_adams': {
+        'path': 'binding/adams2017measuring_4420-fluorescein_kd.csv',
+        'property': 'Binding (Kd)',
+        'intra_family': True,
+    },
+    'flab_expression_adams': {
+        'path': 'expression/adams2017measuring_4420-fluorescein_exp_er.csv',
+        'property': 'Expression (enrichment ratio)',
+        'intra_family': True,
+    },
+    'flab_thermo_tresanco': {
+        'path': 'thermostability/tresanco2023nbthermo_tm.csv',
+        'property': 'Thermostability (Tm)',
+        'intra_family': False,
+    },
+    'flab_thermo_hutchinson': {
+        'path': 'thermostability/hutchinson2023enhancement_top200tm1_igg.csv',
+        'property': 'Thermostability (Tm)',
+        'intra_family': False,
+    },
+    'flab_immunogenicity_marks': {
+        'path': 'immunogenicity/marks2021humanization_immunogenicity.csv',
+        'property': 'Immunogenicity',
+        'intra_family': False,
+    },
+    'flab_aggregation_jain_hicrt': {
+        'path': 'aggregation/jain2017biophyscial_HICRT.csv',
+        'property': 'Aggregation (HIC RT)',
+        'intra_family': False,
+    },
+    'flab_polyreact_jain_bvp': {
+        'path': 'polyreactivity/jain2017biophysical_BVPELISA.csv',
+        'property': 'Polyreactivity (BVP ELISA)',
+        'intra_family': False,
+    },
+    'flab_polyreact_jain_cic': {
+        'path': 'polyreactivity/jain2017biophysical_CICRT.csv',
+        'property': 'Polyreactivity (CIC RT)',
+        'intra_family': False,
+    },
+    'flab_pk_jain_fcrnrt': {
+        'path': 'pharmacokinetics/jain2023identifying_FcRnRelRT3.csv',
+        'property': 'PK (FcRn retention time)',
+        'intra_family': False,
+    },
+    'flab_pk_jain_heprt': {
+        'path': 'pharmacokinetics/jain2023identifying_HEPRT3.csv',
+        'property': 'PK (heparin retention time)',
+        'intra_family': False,
+    },
+    'flab_aggregation_jain_sas': {
+        'path': 'aggregation/jain2017biophysical_SAS.csv',
+        'property': 'Aggregation (SAS)',
+        'intra_family': False,
+    },
 }
 
 

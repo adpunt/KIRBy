@@ -56,20 +56,6 @@ def encode_protein(seq, max_len=1000):
     return x
 
 
-def concordance_index(y_true, y_pred):
-    """Ranking metric: P(pred_i > pred_j | y_i > y_j)."""
-    pairs = concordant = 0
-    for i in range(len(y_true)):
-        for j in range(i + 1, len(y_true)):
-            if y_true[i] != y_true[j]:
-                pairs += 1
-                if (y_true[i] - y_true[j]) * (y_pred[i] - y_pred[j]) > 0:
-                    concordant += 1
-                elif y_pred[i] == y_pred[j]:
-                    concordant += 0.5
-    return concordant / pairs if pairs > 0 else 0
-
-
 # ── DeepDTA model ────────────────────────────────────────────────────────────
 
 def _build_deepdta(smi_vocab_size, prot_vocab_size, smi_max_len, prot_max_len):
@@ -186,7 +172,7 @@ def _build_graphdta_gin(prot_vocab_size):
 
             # Protein CNN (same as DeepDTA)
             self.prot_embed = nn.Embedding(prot_vocab_size + 2, 128, padding_idx=0)
-            self.prot_conv = nn.Conv1d(128, 32, kernel_size=8)
+            self.prot_conv = nn.Conv1d(128, 128, kernel_size=8)
             self.prot_pool = nn.AdaptiveMaxPool1d(1)
 
             self.fc = nn.Sequential(
@@ -207,10 +193,7 @@ def _build_graphdta_gin(prot_vocab_size):
             # Protein CNN
             p = self.prot_embed(protein).permute(0, 2, 1)
             p = self.relu(self.prot_conv(p))
-            p = self.prot_pool(p).squeeze(-1)  # (batch, 32)
-
-            # Pad protein to 128D
-            p = torch.nn.functional.pad(p, (0, 128 - 32))
+            p = self.prot_pool(p).squeeze(-1)  # (batch, 128)
 
             return self.fc(torch.cat([x, p], dim=1)).squeeze(-1)
 
@@ -428,16 +411,23 @@ def main():
         y_train, y_test = labels[train_idx], labels[test_idx]
 
         # ── Method 1: Frozen ECFP4+ESM2 + XGBoost ──
-        print("  [1] Frozen ECFP4 + XGBoost...")
+        print("  [1] Frozen ECFP4+ESM2 + XGBoost...")
         t0 = time.time()
         try:
             from kirby.representations.molecular import create_ecfp4
-            # Deduplicate drugs for efficiency
+            from kirby.representations.protein import create_esm2_protein_embeddings
+            # Deduplicate drugs and proteins for efficiency
             unique_drugs = sorted(set(drug_smiles))
             drug_to_idx = {s: i for i, s in enumerate(unique_drugs)}
             drug_feats = create_ecfp4(unique_drugs)
-            X = drug_feats[np.array([drug_to_idx[drug_smiles[i]] for i in range(n)])]
+            X_drug = drug_feats[np.array([drug_to_idx[drug_smiles[i]] for i in range(n)])]
 
+            unique_prots = sorted(set(protein_seqs))
+            prot_to_idx = {s: i for i, s in enumerate(unique_prots)}
+            prot_feats = create_esm2_protein_embeddings(unique_prots)
+            X_prot = prot_feats[np.array([prot_to_idx[protein_seqs[i]] for i in range(n)])]
+
+            X = np.hstack([X_drug, X_prot])
             X_train, X_test = X[train_idx], X[test_idx]
 
             try:

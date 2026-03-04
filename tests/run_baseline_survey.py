@@ -57,12 +57,14 @@ DATASET_REGISTRY = {
     'qm9':   ('molecular', 'all'),
     # Antibody — use antibody_baseline_survey.py instead for antibody datasets
     # TCGA
-    'tcga_luad_vs_lusc':  ('tcga', 'genomic_fast'),
-    'tcga_brca_pam50':    ('tcga', 'genomic_fast'),
-    'tcga_brca_survival': ('tcga', 'genomic_fast'),
+    'tcga_luad_vs_lusc':  ('tcga', 'all'),
+    'tcga_brca_pam50':    ('tcga', 'all'),
+    'tcga_brca_survival': ('tcga', 'all'),
     # DTA
-    'davis': ('dta', 'fast'),
-    'kiba':  ('dta', 'fast'),
+    'davis': ('dta', 'full'),
+    'kiba':  ('dta', 'full'),
+    'pdbbind_refined': ('dta', 'full'),
+    'pdbbind_core':    ('dta', 'full'),
     # Reaction Yield
     'buchwald_hartwig': ('reaction', 'all'),
     'suzuki':           ('reaction', 'all'),
@@ -176,11 +178,12 @@ def _load_reaction(dataset_name: str) -> dict:
     return {
         'labels': data['labels'],
         'reps': reps,
-        'groups': None,  # random KFold (no scaffold/group structure)
+        'groups': None,
         'n_groups': 0,
         'task_type': 'regression',
         'domain': 'reaction',
         'augmentations': None,
+        'prebuilt_splits': data.get('splits'),  # 70/30 × 10 splits
     }
 
 
@@ -232,12 +235,17 @@ def _score(y_true, y_pred, task_type):
     return r2_score(y_true, y_pred)
 
 
-def evaluate_rep(X, labels, groups, model, n_folds, task_type):
+def evaluate_rep(X, labels, groups, model, n_folds, task_type,
+                 prebuilt_splits=None):
     """Evaluate one (rep, model) pair via CV. Returns (mean, std)."""
-    cv, cv_kwargs = _make_cv(groups, n_folds, labels)
+    if prebuilt_splits is not None:
+        splits = prebuilt_splits
+    else:
+        cv, cv_kwargs = _make_cv(groups, n_folds, labels)
+        splits = list(cv.split(X, labels, **cv_kwargs))
     scores = []
 
-    for train_idx, val_idx in cv.split(X, labels, **cv_kwargs):
+    for train_idx, val_idx in splits:
         scaler = StandardScaler()
         X_train = scaler.fit_transform(X[train_idx])
         X_val = scaler.transform(X[val_idx])
@@ -350,8 +358,9 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
     reps = data['reps']
     labels = data['labels']
     groups = data['groups']
+    prebuilt_splits = data.get('prebuilt_splits')
     task_type = data.get('task_type', 'regression')
-    n_groups = len(np.unique(groups))
+    n_groups = len(np.unique(groups)) if groups is not None else 0
     metric_name = 'accuracy' if task_type == 'classification' else 'r2'
 
     # 2. Default models
@@ -376,7 +385,8 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
 
         for mname in model_names:
             mean_s, _ = evaluate_rep(
-                X, labels, groups, default_models[mname], n_folds, task_type)
+                X, labels, groups, default_models[mname], n_folds, task_type,
+                prebuilt_splits=prebuilt_splits)
             entry['scores'][mname] = round(mean_s, 4)
             print(f" {mname}={mean_s:.3f}", end='', flush=True)
 
@@ -384,9 +394,13 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
         if tune_trials > 0:
             try:
                 from experiments._shared import tune_xgboost_optuna
-                cv, cv_kwargs = _make_cv(groups, n_folds, labels)
+                if prebuilt_splits is not None:
+                    tune_splits = prebuilt_splits
+                else:
+                    cv, cv_kwargs = _make_cv(groups, n_folds, labels)
+                    tune_splits = list(cv.split(X, labels, **cv_kwargs))
                 tune_scores = []
-                for train_idx, val_idx in cv.split(X, labels, **cv_kwargs):
+                for train_idx, val_idx in tune_splits:
                     scaler = StandardScaler()
                     X_tr = scaler.fit_transform(X[train_idx])
                     X_va = scaler.transform(X[val_idx])

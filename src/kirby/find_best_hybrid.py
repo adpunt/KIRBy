@@ -486,18 +486,25 @@ def tune_models(
 # =============================================================================
 
 SPEED_TIERS = {
+    # Effective unique configs per model (importance-insensitive allocs run once):
+    #   fast:   1×1(greedy) + 2×2(perf_weighted, softmax_T5) = 5
+    #   medium: 1×3(greedy) + 1×3(dom_greedy) + 4×4×3(4 sensitive allocs) = 54
+    #   long:   1×4(greedy) + 1×4(dom_greedy) + 8×13×4(13 sensitive allocs) = 424
+    # All tiers use adaptive pruning, so actual runtime is much lower.
     'fast': {
-        'importance_methods': ['treeshap', 'xgboost_gain', 'lightgbm_gain', 'deeplift'],
-        'allocation_methods': ['greedy'],
+        'importance_methods': ['treeshap', 'lightgbm_gain'],
+        'allocation_methods': ['greedy', 'performance_weighted', 'softmax_T5'],
         'budgets': [100],
         'n_folds': 3,
     },
     'medium': {
         'importance_methods': [
-            'treeshap', 'xgboost_gain', 'lightgbm_gain', 'deeplift',
-            'permutation', 'kernelshap',
+            'treeshap', 'xgboost_gain', 'lightgbm_gain', 'permutation',
         ],
-        'allocation_methods': ['greedy', 'performance_weighted', 'softmax_T5'],
+        'allocation_methods': [
+            'greedy', 'performance_weighted', 'softmax_T1', 'softmax_T5',
+            'dominant_greedy', 'power_2',
+        ],
         'budgets': [50, 100, 200],
         'n_folds': 5,
     },
@@ -508,8 +515,10 @@ SPEED_TIERS = {
             'integrated_gradients', 'gradientshap',
         ],
         'allocation_methods': [
-            'greedy', 'performance_weighted', 'softmax_T5', 'dominant_greedy',
-            'two_stage', 'stability_selection',
+            'greedy', 'performance_weighted', 'softmax_T0.5', 'softmax_T1',
+            'softmax_T5', 'softmax_T10', 'power_2', 'power_3', 'thresh_0.5',
+            'top_3', 'min_floor_0.05', 'dominant_greedy', 'two_stage',
+            'stability_selection', 'greedy_feature',
         ],
         'budgets': [50, 100, 200, 500],
         'n_folds': 5,
@@ -923,7 +932,7 @@ def _run_search(
     augmentation_strategy: str = 'greedy_ablation',
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
-    adaptive_pruning: bool = False,
+    adaptive_pruning: bool = True,
     pruning_threshold: float = 0.5,
     lower_is_better: bool = False,
     fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
@@ -946,13 +955,14 @@ def _run_search(
             rep_sets.append(subset)
             rep_set_names.append(f'no_{leave_out}')
 
-    total = (
-        len(rep_sets) * len(search_allocation) * len(search_budgets)
-        * len(search_importance) * len(models)
-    )
+    # Compute effective config count accounting for importance-insensitive allocs
+    total = 0
+    for alloc in search_allocation:
+        n_imp = 1 if not _is_importance_sensitive(alloc) else len(search_importance)
+        total += len(rep_sets) * len(search_budgets) * n_imp * len(models)
 
     if verbose:
-        print(f"\nSearching {total} configurations ({speed} mode)...")
+        print(f"\nSearching {total} unique configurations ({speed} mode)...")
 
     results = []
     idx = 0
@@ -971,18 +981,23 @@ def _run_search(
 
     for rep_set, rep_set_name in zip(rep_sets, rep_set_names):
         for alloc in search_allocation:
+            # Importance-insensitive allocs (greedy, dominant_greedy) produce
+            # identical results regardless of importance_method — run once.
+            imp_sensitive = _is_importance_sensitive(alloc)
+            effective_importance = search_importance if imp_sensitive else [search_importance[0]]
+
             # Skip pruned allocation methods
             if adaptive_pruning and alloc in pruned_alloc:
-                skipped = len(search_budgets) * len(search_importance) * len(models)
+                skipped = len(search_budgets) * len(effective_importance) * len(models)
                 if verbose:
                     print(f"  [skipping {skipped} configs] alloc={alloc}: PRUNED")
                 idx += skipped
                 continue
 
             for bgt in search_budgets:
-                for imp in search_importance:
-                    # Skip pruned importance methods
-                    if adaptive_pruning and imp in pruned_importance:
+                for imp in effective_importance:
+                    # Skip pruned importance methods (only relevant for sensitive allocs)
+                    if imp_sensitive and adaptive_pruning and imp in pruned_importance:
                         skipped = len(models)
                         if verbose:
                             print(
@@ -1113,6 +1128,23 @@ def _run_search(
 # Allocation methods where step_size has an effect (greedy-based methods)
 _STEP_SIZE_SENSITIVE = {'greedy', 'dominant_greedy', 'greedy_feature'}
 
+# Allocation methods that ignore importance_method (use internal RF feature_importances_)
+_IMPORTANCE_INSENSITIVE = {'greedy', 'dominant_greedy'}
+
+
+def _is_importance_sensitive(alloc_name: str) -> bool:
+    """Check if an allocation method actually uses importance_method.
+
+    Greedy and dominant_greedy use internal RF feature_importances_ regardless
+    of the importance_method parameter, so iterating over importance methods
+    for these allocations produces duplicate results.
+    """
+    from kirby.hybrid import NAMED_ALLOCATIONS
+    base = alloc_name
+    if alloc_name in NAMED_ALLOCATIONS:
+        base = NAMED_ALLOCATIONS[alloc_name][0]
+    return base not in _IMPORTANCE_INSENSITIVE
+
 
 def _run_refinement_phase(
     phase1_results: List[dict],
@@ -1160,12 +1192,14 @@ def _run_refinement_phase(
             print("  Refinement: no step-size-sensitive allocations to refine.")
         return []
 
-    # Sort by score descending, deduplicate by (model, alloc, budget, importance)
+    # Sort by score descending, deduplicate by (model, alloc, budget, importance).
+    # Normalize importance for insensitive allocations to avoid duplicate entries.
     sensitive.sort(key=lambda r: r['score_mean'], reverse=True)
     seen = set()
     unique = []
     for r in sensitive:
-        key = (r['model'], r['allocation_method'], r['budget'], r['importance_method'])
+        dedup_imp = r['importance_method'] if _is_importance_sensitive(r['allocation_method']) else '_any_'
+        key = (r['model'], r['allocation_method'], r['budget'], dedup_imp)
         if key not in seen:
             seen.add(key)
             unique.append(r)
@@ -1411,7 +1445,7 @@ def find_best_hybrid(
     augmentation_strategy: str = 'greedy_ablation',
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
-    adaptive_pruning: bool = False,
+    adaptive_pruning: bool = True,
     pruning_threshold: float = 0.5,
     two_phase: bool = False,
     refinement_top_n: int = 5,

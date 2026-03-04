@@ -41,7 +41,7 @@ def _load_smiles_from_sdf(data_dir):
     return smiles
 
 
-def load_qm9(n_samples=1000, property_idx=4, data_dir='data/QM9', random_seed=42):
+def load_qm9(n_samples=5000, property_idx=4, data_dir='data/QM9', random_seed=42):
     """
     Load QM9 dataset and extract SMILES + labels.
 

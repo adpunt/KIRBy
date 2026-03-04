@@ -1075,6 +1075,105 @@ def create_sparse_pca50(expression: np.ndarray,
 
 
 # =============================================================================
+# DNA METHYLATION REPRESENTATIONS
+# =============================================================================
+
+
+def _load_methylation_for_samples(sample_ids: List[str], cohort: str):
+    """Load and align methylation data with sample IDs."""
+    from kirby.datasets.tcga import _download_xena_methylation
+
+    cohorts = [c.strip() for c in cohort.split('+') if c.strip()]
+    if not cohorts:
+        raise ValueError("cohort must be specified for methylation (e.g. 'TCGA-BRCA')")
+
+    all_methyl = []
+    probe_names = None
+    for coh in cohorts:
+        m, pn, mids = _download_xena_methylation(coh)
+        all_methyl.append((m, mids))
+        probe_names = pn
+
+    if len(all_methyl) == 1:
+        methyl_matrix, methyl_ids = all_methyl[0]
+    else:
+        methyl_matrix = np.vstack([x[0] for x in all_methyl])
+        methyl_ids = []
+        for x in all_methyl:
+            methyl_ids.extend(x[1])
+
+    # Align to sample_ids
+    id_to_idx = {sid: i for i, sid in enumerate(methyl_ids)}
+    aligned = np.zeros((len(sample_ids), methyl_matrix.shape[1]), dtype=np.float32)
+    found = 0
+    for i, sid in enumerate(sample_ids):
+        if sid in id_to_idx:
+            aligned[i] = methyl_matrix[id_to_idx[sid]]
+            found += 1
+    print(f"    Methylation: matched {found}/{len(sample_ids)} samples")
+    return aligned, probe_names
+
+
+def create_methylation_pca50(sample_ids: List[str], cohort: str = '',
+                             n_components: int = 50) -> np.ndarray:
+    """PCA of HM450 DNA methylation beta values.
+
+    Reduces ~485K CpG probes to n_components via PCA.
+
+    Args:
+        sample_ids: TCGA sample barcodes
+        cohort: TCGA cohort (e.g. 'TCGA-BRCA')
+        n_components: PCA dimensions (default: 50)
+
+    Returns:
+        (n_samples, n_components) PCA-transformed methylation
+    """
+    from sklearn.decomposition import PCA
+    from sklearn.preprocessing import StandardScaler
+
+    methyl, _ = _load_methylation_for_samples(sample_ids, cohort)
+
+    # Remove low-variance probes first (speeds up PCA)
+    variances = np.var(methyl, axis=0)
+    keep = variances > np.percentile(variances, 50)
+    methyl_filtered = methyl[:, keep]
+
+    scaler = StandardScaler()
+    methyl_scaled = scaler.fit_transform(methyl_filtered)
+
+    n_comp = min(n_components, methyl_scaled.shape[0], methyl_scaled.shape[1])
+    pca = PCA(n_components=n_comp, random_state=42)
+    X = pca.fit_transform(methyl_scaled).astype(np.float32)
+
+    explained = pca.explained_variance_ratio_.sum()
+    print(f"    Methylation PCA{n_comp}: {X.shape}, {explained:.1%} variance explained")
+    return X
+
+
+def create_methylation_hvg(sample_ids: List[str], cohort: str = '',
+                           n_top: int = 5000) -> np.ndarray:
+    """Top highly variable CpG probes from HM450 methylation.
+
+    Args:
+        sample_ids: TCGA sample barcodes
+        cohort: TCGA cohort (e.g. 'TCGA-BRCA')
+        n_top: Number of top variable probes (default: 5000)
+
+    Returns:
+        (n_samples, n_top) methylation beta values for most variable probes
+    """
+    methyl, _ = _load_methylation_for_samples(sample_ids, cohort)
+
+    variances = np.var(methyl, axis=0)
+    n_top = min(n_top, methyl.shape[1])
+    top_idx = np.argsort(variances)[-n_top:]
+    X = methyl[:, top_idx].astype(np.float32)
+
+    print(f"    Methylation HVG: top {n_top} variable probes, shape {X.shape}")
+    return X
+
+
+# =============================================================================
 # MULTI-OMIC REPRESENTATIONS (Part 2: require Xena downloads)
 # =============================================================================
 
@@ -1700,13 +1799,39 @@ def create_scfoundation_embeddings(expression: np.ndarray,
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     model = model.to(device).eval()
 
+    # Reorder genes to match scFoundation's expected vocabulary (19,264 genes)
+    # The model expects genes in a specific order — passing raw expression
+    # with arbitrary gene ordering produces meaningless embeddings.
+    try:
+        vocab = model.config.gene_vocab  # list of expected gene symbols
+        gene_to_pos = {g: i for i, g in enumerate(vocab)}
+        reordered = np.zeros((n_samples, len(vocab)), dtype=np.float32)
+        mapped = 0
+        for i, gname in enumerate(gene_names):
+            gname_str = str(gname)
+            pos = gene_to_pos.get(gname_str) or gene_to_pos.get(gname_str.upper())
+            if pos is not None:
+                reordered[:, pos] = expression[:, i]
+                mapped += 1
+        print(f"    Mapped {mapped}/{len(gene_names)} genes to scFoundation's {len(vocab)} gene vocabulary")
+        if mapped == 0:
+            warnings.warn("No genes mapped to scFoundation vocabulary — returning zeros")
+            return np.zeros((n_samples, embed_dim), dtype=np.float32)
+        input_expr = reordered
+    except (AttributeError, TypeError):
+        # If model config doesn't expose gene_vocab, fall back to raw expression
+        # with a warning that results may be unreliable
+        warnings.warn("scFoundation model config has no gene_vocab attribute — "
+                       "using raw expression order (results may be unreliable)")
+        input_expr = expression
+
     embeddings = np.zeros((n_samples, embed_dim), dtype=np.float32)
     batch_size = 8
 
     with torch.no_grad():
         for start in range(0, n_samples, batch_size):
             end = min(start + batch_size, n_samples)
-            batch = torch.FloatTensor(expression[start:end]).to(device)
+            batch = torch.FloatTensor(input_expr[start:end]).to(device)
             try:
                 outputs = model(batch)
                 if hasattr(outputs, 'last_hidden_state'):
@@ -1726,6 +1851,194 @@ def create_scfoundation_embeddings(expression: np.ndarray,
         torch.cuda.empty_cache()
 
     return embeddings
+
+
+# =============================================================================
+# scGPT + UCE (SINGLE-CELL FOUNDATION MODELS ON BULK RNA-SEQ)
+# =============================================================================
+
+
+def create_scgpt_embeddings(expression: np.ndarray,
+                            gene_names: np.ndarray) -> np.ndarray:
+    """Frozen scGPT embeddings applied to bulk RNA-seq.
+
+    scGPT (Cui et al., Nature Methods 2024) is a generative pretrained
+    transformer for single-cell data (33M parameters). Applied to bulk
+    RNA-seq by treating each sample as a pseudo-cell.
+
+    Returns CLS token embedding (512D).
+
+    Requires: pip install scgpt
+
+    Args:
+        expression: (n_samples, n_genes) log2(TPM+1) matrix
+        gene_names: (n_genes,) gene symbols
+
+    Returns:
+        (n_samples, 512) frozen embeddings
+    """
+    import torch
+
+    n_samples = expression.shape[0]
+
+    try:
+        import scgpt
+        from scgpt.model import TransformerModel
+        from scgpt.tokenizer.gene_tokenizer import GeneVocab
+        from scgpt.utils import load_pretrained
+    except ImportError:
+        raise ImportError("scGPT requires the scgpt package: pip install scgpt")
+
+    print("  Loading scGPT for bulk RNA-seq embeddings...")
+
+    try:
+        model_dir = scgpt.utils.default_cache_dir / "scGPT_human"
+        if not model_dir.exists():
+            print("    Downloading scGPT_human pretrained model...")
+            scgpt.utils.download_pretrained_model("scGPT_human")
+
+        vocab = GeneVocab.from_file(model_dir / "vocab.json")
+        model_config = torch.load(model_dir / "args.pt", weights_only=False)
+
+        model = TransformerModel(
+            ntoken=len(vocab),
+            d_model=model_config.get("embsize", 512),
+            nhead=model_config.get("nheads", 8),
+            d_hid=model_config.get("d_hid", 512),
+            nlayers=model_config.get("nlayers", 12),
+            vocab=vocab,
+        )
+        load_pretrained(model, torch.load(model_dir / "best_model.pt", weights_only=False))
+
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        model = model.to(device).eval()
+        embed_dim = model_config.get("embsize", 512)
+
+        # Map gene names to vocab indices
+        gene_to_idx = {g: vocab[g] for g in gene_names if g in vocab}
+        print(f"    Matched {len(gene_to_idx)}/{len(gene_names)} genes to scGPT vocab")
+
+        if len(gene_to_idx) == 0:
+            print("    WARNING: No genes matched scGPT vocab. Returning zeros.")
+            return np.zeros((n_samples, embed_dim), dtype=np.float32)
+
+        # Build gene token IDs and expression values
+        gene_indices = []
+        gene_col_indices = []
+        for i, g in enumerate(gene_names):
+            if g in vocab:
+                gene_indices.append(vocab[g])
+                gene_col_indices.append(i)
+
+        gene_ids = torch.LongTensor(gene_indices)
+        n_genes_matched = len(gene_indices)
+
+        embeddings = np.zeros((n_samples, embed_dim), dtype=np.float32)
+        batch_size = 8
+
+        with torch.no_grad():
+            for start in range(0, n_samples, batch_size):
+                end = min(start + batch_size, n_samples)
+                batch_expr = expression[start:end][:, gene_col_indices]
+                batch_values = torch.FloatTensor(batch_expr).to(device)
+                batch_genes = gene_ids.unsqueeze(0).expand(end - start, -1).to(device)
+
+                try:
+                    output = model._encode(batch_genes, batch_values, None, None)
+                    # Mean pool over gene tokens
+                    emb = output.mean(dim=1).cpu().numpy()
+                    embeddings[start:end] = emb[:, :embed_dim]
+                except Exception as e:
+                    warnings.warn(f"scGPT batch {start}-{end} failed: {e}")
+
+                if start % 64 == 0 and start > 0:
+                    print(f"    Progress: {start}/{n_samples}")
+
+        del model
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        print(f"  Generated scGPT embeddings: ({n_samples}, {embed_dim})")
+        return embeddings
+
+    except Exception as e:
+        warnings.warn(f"scGPT failed: {e} — returning zeros")
+        return np.zeros((n_samples, 512), dtype=np.float32)
+
+
+def create_uce_embeddings(expression: np.ndarray,
+                          gene_names: np.ndarray) -> np.ndarray:
+    """Frozen UCE (Universal Cell Embeddings) applied to bulk RNA-seq.
+
+    UCE (Rosen et al., 2024) produces universal cell embeddings by
+    combining protein language model (ESM-2) gene embeddings with
+    expression values. 1280D output.
+
+    Requires: pip install uce-model (or clone from GitHub)
+
+    Args:
+        expression: (n_samples, n_genes) log2(TPM+1) matrix
+        gene_names: (n_genes,) gene symbols
+
+    Returns:
+        (n_samples, 1280) frozen embeddings
+    """
+    import torch
+
+    n_samples = expression.shape[0]
+    embed_dim = 1280
+
+    try:
+        from uce import UCEModel
+    except ImportError:
+        try:
+            from uce_model import UCEModel
+        except ImportError:
+            raise ImportError(
+                "UCE requires the uce-model package: pip install uce-model\n"
+                "Or clone: git clone https://github.com/snap-stanford/UCE.git"
+            )
+
+    print("  Loading UCE for bulk RNA-seq embeddings...")
+
+    try:
+        model = UCEModel.from_pretrained()
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        model = model.to(device).eval()
+
+        # Convert expression: log2(TPM+1) → raw counts (approximate)
+        # UCE expects raw counts internally
+        tpm = np.power(2, expression) - 1
+        tpm = np.maximum(tpm, 0)
+
+        embeddings = np.zeros((n_samples, embed_dim), dtype=np.float32)
+        batch_size = 8
+
+        with torch.no_grad():
+            for start in range(0, n_samples, batch_size):
+                end = min(start + batch_size, n_samples)
+                batch = torch.FloatTensor(tpm[start:end]).to(device)
+                try:
+                    emb = model.get_cell_embeddings(batch, list(gene_names))
+                    if isinstance(emb, torch.Tensor):
+                        emb = emb.cpu().numpy()
+                    embeddings[start:end] = emb[:, :embed_dim]
+                except Exception as e:
+                    warnings.warn(f"UCE batch {start}-{end} failed: {e}")
+
+                if start % 64 == 0 and start > 0:
+                    print(f"    Progress: {start}/{n_samples}")
+
+        del model
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        print(f"  Generated UCE embeddings: ({n_samples}, {embed_dim})")
+        return embeddings
+
+    except Exception as e:
+        warnings.warn(f"UCE failed: {e} — returning zeros")
+        return np.zeros((n_samples, embed_dim), dtype=np.float32)
 
 
 # =============================================================================

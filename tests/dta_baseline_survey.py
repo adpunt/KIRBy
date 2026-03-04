@@ -37,12 +37,14 @@ warnings.filterwarnings('ignore')
 
 # Which reps to evaluate (ordered: lightweight first, LM last)
 DRUG_REPS = [
-    'drug_ecfp4', 'drug_maccs', 'drug_pdv',
+    'drug_ecfp4', 'drug_maccs', 'drug_pdv', 'drug_map4', 'drug_mol2vec',
     'drug_chemberta', 'drug_molformer', 'drug_selformer', 'drug_clamp',
+    'drug_rmat', 'drug_unimol_v2',
 ]
 PROTEIN_REPS = [
     'protein_aac', 'protein_descriptors', 'protein_kmer',
     'protein_esm2', 'protein_esmc', 'protein_esm2_midlayers',
+    'protein_amplify',
 ]
 
 # Default minimal partners for paired evaluation
@@ -85,6 +87,9 @@ def _filter_features_by_importance(X: np.ndarray, y: np.ndarray,
 
 
 def load_dataset(name: str):
+    if name.startswith('pdbbind'):
+        from kirby.datasets.pdbbind import load_dataset as _load_pdbbind
+        return _load_pdbbind(name)
     from kirby.datasets.dta import load_dataset as _load
     return _load(name)
 
@@ -100,6 +105,7 @@ def generate_rep(rep_name: str, unique_drugs, unique_proteins,
         'drug_ecfp4':      (mol.create_ecfp4,      'drug'),
         'drug_maccs':      (mol.create_maccs,       'drug'),
         'drug_pdv':        (mol.create_pdv,         'drug'),
+        'drug_mol2vec':    (mol.create_mol2vec,     'drug'),
         'protein_aac':     (prot.create_protein_aac,         'protein'),
         'protein_descriptors': (prot.create_protein_descriptors, 'protein'),
         'protein_kmer':    (prot.create_protein_kmer,        'protein'),
@@ -120,6 +126,14 @@ def generate_rep(rep_name: str, unique_drugs, unique_proteins,
         dispatch['protein_esmc'] = (prot.create_esmc_protein_embeddings, 'protein')
     elif rep_name == 'protein_esm2_midlayers':
         dispatch['protein_esm2_midlayers'] = (prot.create_esm2_midlayers_protein_embeddings, 'protein')
+    elif rep_name == 'drug_map4':
+        dispatch['drug_map4'] = (mol.create_map4, 'drug')
+    elif rep_name == 'drug_rmat':
+        dispatch['drug_rmat'] = (mol.create_rmat, 'drug')
+    elif rep_name == 'drug_unimol_v2':
+        dispatch['drug_unimol_v2'] = (mol.create_unimol_v2, 'drug')
+    elif rep_name == 'protein_amplify':
+        dispatch['protein_amplify'] = (prot.create_amplify_protein_embeddings, 'protein')
 
     if rep_name not in dispatch:
         print(f"  WARNING: Unknown rep '{rep_name}', skipping")
@@ -146,6 +160,7 @@ def evaluate_rep(X: np.ndarray, y: np.ndarray, groups: np.ndarray,
     from sklearn.model_selection import GroupKFold
     from sklearn.linear_model import RidgeCV
     from sklearn.ensemble import RandomForestRegressor
+    from sklearn.preprocessing import StandardScaler
     from sklearn.metrics import r2_score
 
     try:
@@ -187,9 +202,12 @@ def evaluate_rep(X: np.ndarray, y: np.ndarray, groups: np.ndarray,
     for model_name, model_fn in models.items():
         fold_scores = []
         for train_idx, test_idx in gkf.split(X, y, groups):
+            scaler = StandardScaler()
+            X_train = scaler.fit_transform(X[train_idx])
+            X_test = scaler.transform(X[test_idx])
             model = model_fn()
-            model.fit(X[train_idx], y[train_idx])
-            pred = model.predict(X[test_idx])
+            model.fit(X_train, y[train_idx])
+            pred = model.predict(X_test)
             fold_scores.append(r2_score(y[test_idx], pred))
 
         mean_r2 = np.mean(fold_scores)
@@ -222,6 +240,8 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
         protein_seqs = [protein_seqs[i] for i in idx]
         labels = labels[idx]
         metadata['protein_ids'] = [metadata['protein_ids'][i] for i in idx]
+        metadata['n_drugs'] = len(set(drug_smiles))
+        metadata['n_proteins'] = len(set(protein_seqs))
         print(f"  Subsampled to {max_pairs} pairs")
 
     # Cold-target groups
@@ -238,9 +258,9 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
 
     # Decide which reps to run
     drug_reps_to_run = [r for r in DRUG_REPS
-                        if not (skip_lm and r in ('drug_chemberta', 'drug_molformer', 'drug_selformer', 'drug_clamp'))]
+                        if not (skip_lm and r in ('drug_chemberta', 'drug_molformer', 'drug_selformer', 'drug_clamp', 'drug_rmat', 'drug_unimol_v2'))]
     protein_reps_to_run = [r for r in PROTEIN_REPS
-                           if not (skip_lm and r in ('protein_esm2', 'protein_esmc', 'protein_esm2_midlayers'))
+                           if not (skip_lm and r in ('protein_esm2', 'protein_esmc', 'protein_esm2_midlayers', 'protein_amplify'))
                            and not (skip_kmer and r == 'protein_kmer')]
 
     all_reps_to_run = drug_reps_to_run + protein_reps_to_run
@@ -373,7 +393,7 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
 
 def main():
     parser = argparse.ArgumentParser(description='DTA Baseline Survey for BOM')
-    parser.add_argument('dataset', choices=['davis', 'kiba', 'all'],
+    parser.add_argument('dataset', choices=['davis', 'kiba', 'pdbbind_refined', 'pdbbind_core', 'all'],
                         help='Dataset to evaluate')
     parser.add_argument('--max-pairs', type=int, default=None,
                         help='Subsample KIBA (default: 30000 for kiba)')
@@ -385,7 +405,7 @@ def main():
                         help='Save results JSON')
     args = parser.parse_args()
 
-    datasets = ['davis', 'kiba'] if args.dataset == 'all' else [args.dataset]
+    datasets = ['davis', 'kiba', 'pdbbind_refined', 'pdbbind_core'] if args.dataset == 'all' else [args.dataset]
     all_results = {}
 
     for ds in datasets:

@@ -266,7 +266,7 @@ def run_e2e_schnet(data_list, labels, train_idx, val_idx, test_idx,
                 batch = batch.to(device)
                 pred = model(batch.z, batch.pos, batch.batch)
                 val_preds.append(pred.squeeze().cpu() * y_std + y_mean)
-                val_true.append(batch.y.squeeze().cpu() * y_std + y_mean)
+                val_true.append(batch.y.squeeze().cpu())
 
         val_preds = torch.cat(val_preds).numpy()
         val_true = torch.cat(val_true).numpy()
@@ -293,7 +293,7 @@ def run_e2e_schnet(data_list, labels, train_idx, val_idx, test_idx,
             batch = batch.to(device)
             pred = model(batch.z, batch.pos, batch.batch)
             test_preds.append(pred.squeeze().cpu() * y_std + y_mean)
-            test_true.append(batch.y.squeeze().cpu() * y_std + y_mean)
+            test_true.append(batch.y.squeeze().cpu())
 
     test_preds = torch.cat(test_preds).numpy()
     test_true = torch.cat(test_true).numpy()

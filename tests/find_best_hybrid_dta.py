@@ -63,10 +63,15 @@ REP_PRESETS = {
         'protein_esm2', 'protein_esmc', 'protein_aac', 'protein_descriptors',
     ],  # 10 reps
     'full': [
-        'drug_ecfp4', 'drug_maccs', 'drug_pdv',
+        'drug_ecfp4', 'drug_maccs', 'drug_pdv', 'drug_pdv_binary_mean',
+        'drug_pdv_rank', 'drug_map4', 'drug_mol2vec',
         'drug_chemberta', 'drug_molformer', 'drug_selformer', 'drug_clamp',
-        'protein_esm2', 'protein_esmc', 'protein_aac', 'protein_descriptors', 'protein_kmer',
-    ],  # 12 reps
+        'drug_rmat', 'drug_unimol_v2',
+        'drug_chemberta_pca50', 'drug_molformer_pca50', 'drug_selformer_pca50',
+        'drug_clamp_pca50', 'drug_rmat_pca50',
+        'protein_esm2', 'protein_esmc', 'protein_esm2_midlayers',
+        'protein_amplify', 'protein_aac', 'protein_descriptors', 'protein_kmer',
+    ],  # 25 reps
 }
 
 _SEARCH_NAME_MAP = {
@@ -87,12 +92,22 @@ _REP_DISPATCH = {
     'drug_ecfp4':      ('create_ecfp4',      'molecular', 'drug'),
     'drug_maccs':      ('create_maccs',       'molecular', 'drug'),
     'drug_pdv':        ('create_pdv',         'molecular', 'drug'),
+    'drug_pdv_binary_mean': ('create_pdv_binary_mean', 'molecular', 'drug'),
+    'drug_pdv_rank':   ('create_pdv_rank',    'molecular', 'drug'),
     'drug_chemberta':  ('create_chemberta',   'molecular', 'drug'),
     'drug_molformer':  ('create_molformer',   'molecular', 'drug'),
     'drug_selformer':  ('create_selformer',   'molecular', 'drug'),
     'drug_mol2vec':    ('create_mol2vec',     'molecular', 'drug'),
     'drug_clamp':      ('create_clamp',       'molecular', 'drug'),
     'drug_rmat':       ('create_rmat',        'molecular', 'drug'),
+    'drug_map4':       ('create_map4',        'molecular', 'drug'),
+    'drug_unimol_v2':  ('create_unimol_v2',   'molecular', 'drug'),
+    # PCA-reduced drug LM embeddings (50D) — only for reps already in DTA
+    'drug_chemberta_pca50':  ('create_chemberta',  'molecular', 'drug', 'pca50'),
+    'drug_molformer_pca50':  ('create_molformer',  'molecular', 'drug', 'pca50'),
+    'drug_selformer_pca50':  ('create_selformer',  'molecular', 'drug', 'pca50'),
+    'drug_clamp_pca50':      ('create_clamp',      'molecular', 'drug', 'pca50'),
+    'drug_rmat_pca50':       ('create_rmat',       'molecular', 'drug', 'pca50'),
     # Protein reps (from kirby.representations.protein)
     'protein_esm2':        ('create_esm2_protein_embeddings', 'protein', 'protein'),
     'protein_aac':         ('create_protein_aac',             'protein', 'protein'),
@@ -100,6 +115,7 @@ _REP_DISPATCH = {
     'protein_kmer':        ('create_protein_kmer',            'protein', 'protein'),
     'protein_esmc':        ('create_esmc_protein_embeddings', 'protein', 'protein'),
     'protein_esm2_midlayers': ('create_esm2_midlayers_protein_embeddings', 'protein', 'protein'),
+    'protein_amplify':     ('create_amplify_protein_embeddings', 'protein', 'protein'),
 }
 
 
@@ -108,7 +124,10 @@ _REP_DISPATCH = {
 # =============================================================================
 
 def load_dataset(name: str):
-    """Load DTA dataset. Thin wrapper around kirby.datasets.dta.load_dataset."""
+    """Load DTA dataset. Thin wrapper around kirby.datasets.dta/pdbbind."""
+    if name.startswith('pdbbind'):
+        from kirby.datasets.pdbbind import load_dataset as _load_pdbbind
+        return _load_pdbbind(name)
     from kirby.datasets.dta import load_dataset as _load
     return _load(name)
 
@@ -187,7 +206,9 @@ def get_representations(
                 representations[rep_name] = rep
                 continue
 
-        func_name, module_name, rep_type = _REP_DISPATCH[rep_name]
+        dispatch_entry = _REP_DISPATCH[rep_name]
+        func_name, module_name, rep_type = dispatch_entry[:3]
+        transform = dispatch_entry[3] if len(dispatch_entry) > 3 else None
 
         try:
             start = time.time()
@@ -195,6 +216,12 @@ def get_representations(
 
             mod = module_map[module_name]
             func = getattr(mod, func_name)
+
+            # Wrap with PCA if requested
+            if transform == 'pca50':
+                from kirby.representations.molecular import create_pca_rep
+                from functools import partial
+                func = partial(create_pca_rep, base_fn=func)
 
             if rep_type == 'drug':
                 # Compute on unique drugs, then expand to all pairs

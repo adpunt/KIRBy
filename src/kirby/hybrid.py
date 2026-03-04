@@ -3,12 +3,22 @@ Core hybrid representation creation functions - ENHANCED with Greedy Allocation
 
 Supports multiple feature importance methods and allocation strategies:
 - Allocation methods: 'greedy', 'greedy_feature', 'performance_weighted', 'two_stage',
-  'stability_selection', 'fixed'
+  'stability_selection', 'fixed', 'dominant_greedy', plus named variants (softmax_T*,
+  power_*, thresh_*, top_*, min_floor_*) — see NAMED_ALLOCATIONS.
 - Importance methods (8 approved after benchmark correlation analysis):
   Fast: treeshap, xgboost_gain, lightgbm_gain, deeplift
   Slower: permutation, kernelshap
   Long search only: integrated_gradients, gradientshap
 - Augmentation strategies: 'all', 'none', 'greedy_ablation'
+
+Importance-sensitive vs insensitive allocations:
+  'greedy' and 'dominant_greedy' use internal RF feature_importances_ for
+  feature selection, so they produce identical results regardless of the
+  importance_method parameter. All other allocation methods (performance_weighted,
+  two_stage, stability_selection, greedy_feature, and named variants) use the
+  specified importance_method and will produce different results per method.
+  find_best_hybrid accounts for this — insensitive allocations are only evaluated
+  once per (budget, model) rather than N times for N importance methods.
 
 Default configuration (from testing):
 - allocation_method='greedy'
@@ -797,9 +807,14 @@ def _is_classification_task(labels):
 
 
 def _create_hybrid_with_allocation(rep_dict, labels, allocation):
-    """Helper: Create hybrid with specific allocation.
-    
-    Note: Always uses RandomForest for importance (fast and reliable for greedy inner loop).
+    """Helper: Create hybrid with a pre-computed allocation dict {rep_name: n_features}.
+
+    Always uses RandomForest feature_importances_ for within-rep feature selection.
+    This is intentional: the importance_method parameter in create_hybrid() controls
+    how allocations are *computed* (for methods like performance_weighted), but once
+    we have an allocation, feature selection within each rep uses RF for speed.
+    Greedy/dominant_greedy bypass importance_method entirely — they evaluate
+    allocations by training RF models and using feature_importances_ directly.
     """
     selected_features = []
     feature_info = {}
@@ -1956,7 +1971,11 @@ def create_hybrid(base_reps, labels,
         validation_split: Fraction for validation in greedy (default: 0.2)
         
         apply_filters: Apply quality filters (sparsity + variance) before allocation (default: False)
-        importance_method: Method for feature importance (default: 'treeshap')
+        importance_method: Method for feature importance (default: 'treeshap').
+            NOTE: 'greedy' and 'dominant_greedy' allocations ignore this parameter —
+            they use internal RF feature_importances_. All other allocation methods
+            (performance_weighted, two_stage, stability_selection, greedy_feature,
+            and named variants like softmax_T*) use the specified importance_method.
         
         augmentations: Dict of {aug_name: feature_array} for supplementary features (default: None)
             These are evaluated separately from base_reps via greedy ablation

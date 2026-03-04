@@ -61,17 +61,36 @@ DATASET_REGISTRY = {
     'abcov_kd':               ('abcov', 'identity'),
     'flab_thermo_jain':       ('flab', 'identity'),
     'flab_aggregation_jain':  ('flab', 'identity'),
+    # FLAb2 expansion
+    'flab_binding_phillips_h3':   ('flab', 'identity'),
+    'flab_binding_adams':         ('flab', 'identity'),
+    'flab_expression_adams':      ('flab', 'identity'),
+    'flab_thermo_tresanco':       ('flab', 'identity'),
+    'flab_thermo_hutchinson':     ('flab', 'identity'),
+    'flab_immunogenicity_marks':  ('flab', 'identity'),
+    'flab_aggregation_jain_hicrt':('flab', 'identity'),
+    'flab_polyreact_jain_bvp':    ('flab', 'identity'),
+    'flab_polyreact_jain_cic':    ('flab', 'identity'),
+    'flab_pk_jain_fcrnrt':        ('flab', 'identity'),
+    'flab_pk_jain_heprt':         ('flab', 'identity'),
+    'flab_aggregation_jain_sas':  ('flab', 'identity'),
 }
 
 DOMAIN_GROUPS = {
     'all_dms': [
         'flab_expression_koenig', 'flab_binding_koenig',
+        'flab_binding_phillips_h3', 'flab_binding_adams', 'flab_expression_adams',
         'abagym_Ang2', 'abagym_EGFR', 'abagym_lysozyme',
         'abagym_VEGF', 'abagym_HER2',
     ],
     'all_inter': [
         'ddg_combined', 'abagym_all', 'abcov_kd',
         'flab_thermo_jain', 'flab_aggregation_jain',
+        'flab_thermo_tresanco', 'flab_thermo_hutchinson',
+        'flab_immunogenicity_marks',
+        'flab_aggregation_jain_hicrt', 'flab_aggregation_jain_sas',
+        'flab_polyreact_jain_bvp', 'flab_polyreact_jain_cic',
+        'flab_pk_jain_fcrnrt', 'flab_pk_jain_heprt',
     ],
     'all': list(DATASET_REGISTRY.keys()),
 }
@@ -159,6 +178,7 @@ def _assign_groups(heavy_seqs, light_seqs, strategy, data):
 
 def _identity_groups(seqs, min_groups=3):
     """Assign groups by unique sequence identity."""
+    import hashlib
     unique = {}
     groups = np.zeros(len(seqs), dtype=int)
     for i, s in enumerate(seqs):
@@ -166,10 +186,13 @@ def _identity_groups(seqs, min_groups=3):
             unique[s] = len(unique)
         groups[i] = unique[s]
     n_groups = len(unique)
-    # If too few groups (e.g. DMS with identical-ish seqs), hash-based
+    # If too few groups (e.g. DMS with identical-ish seqs), deterministic hash
     if n_groups < min_groups:
-        groups = np.array([hash(s) % max(min_groups, len(seqs) // 5)
-                           for s in seqs])
+        n_buckets = max(min_groups, len(seqs) // 5)
+        groups = np.array([
+            int(hashlib.sha256(s.encode()).hexdigest(), 16) % n_buckets
+            for s in seqs
+        ])
         n_groups = len(np.unique(groups))
     return groups, n_groups
 
