@@ -2221,6 +2221,190 @@ def create_smited(smiles_list, smited_dir=None, model_variant='light', device=No
 
 
 # =============================================================================
+# CLAMP (Contrastive Learning of Assay and Molecule Pairs)
+# =============================================================================
+
+_CLAMP_MODEL = None
+
+def create_clamp(smiles_list, clamp_dir=None, device=None):
+    """
+    Create CLAMP embeddings (contrastive learning over concatenated fingerprints).
+
+    CLAMP concatenates ECFP + RDKit + MACCS fingerprints and passes them through
+    a 2-layer MLP trained with supervised contrastive learning on ChEMBL bioactivity.
+    It is the ONLY model that statistically significantly beat ECFP in the Praski 2025
+    benchmark (25 models x 25 datasets).
+
+    Reference: Seidl et al. "Enhancing Activity Prediction Models in Drug Discovery
+    with the Ability to Learn from Unbalanced Data" (ICML 2023).
+
+    Args:
+        smiles_list: List of SMILES strings
+        clamp_dir: Path to clamp repo root (default: $KIRBY_MODELS_DIR/../clamp or
+                   sibling of kirby src)
+        device: 'cpu' or 'cuda' (default: auto-detect)
+
+    Returns:
+        np.ndarray: CLAMP embeddings (n_molecules, 768)
+
+    SETUP REQUIRED:
+        1. Clone the CLAMP repo:
+           cd $KIRBY_ROOT/src
+           git clone https://github.com/ml-jku/clamp.git
+           cd clamp && pip install -e .
+
+        2. Weights auto-download on first use (~636MB checkpoint)
+    """
+    import sys
+    import torch
+
+    global _CLAMP_MODEL
+
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    # Find clamp repo directory
+    if clamp_dir is None:
+        search_paths = [
+            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+                os.path.abspath(__file__)))), 'clamp'),  # src/clamp (sibling)
+            os.path.join(get_models_dir(), '..', 'clamp'),
+            os.path.expanduser('~/repos/clamp'),
+        ]
+        for path in search_paths:
+            model_dir = os.path.join(path, 'data', 'models', 'clamp_clip')
+            if os.path.exists(os.path.join(model_dir, 'hp.json')):
+                clamp_dir = os.path.abspath(path)
+                break
+
+    if clamp_dir is None:
+        raise FileNotFoundError(
+            "CLAMP repo not found. Setup:\n"
+            "  cd $KIRBY_ROOT/src\n"
+            "  git clone https://github.com/ml-jku/clamp.git\n"
+            "  cd clamp && pip install -e ."
+        )
+
+    # Ensure clamp is importable
+    if clamp_dir not in sys.path:
+        sys.path.insert(0, clamp_dir)
+
+    if _CLAMP_MODEL is None:
+        print("Loading CLAMP...", flush=True)
+        from clamp.models.pretrained import PretrainedCLAMP
+        model_path = os.path.join(clamp_dir, 'data', 'models', 'clamp_clip')
+        _CLAMP_MODEL = PretrainedCLAMP(path_dir=model_path, device=device)
+        _CLAMP_MODEL.eval()
+        print("  Loaded")
+
+    # Encode in batches to avoid OOM
+    batch_size = 512
+    all_embeddings = []
+    with torch.no_grad():
+        for i in range(0, len(smiles_list), batch_size):
+            batch = smiles_list[i:i + batch_size]
+            emb = _CLAMP_MODEL.encode_smiles(batch)
+            all_embeddings.append(emb.cpu().numpy())
+
+    return np.concatenate(all_embeddings, axis=0).astype(np.float32)
+
+
+# =============================================================================
+# R-MAT (Relative Molecule Self-Attention Transformer)
+# =============================================================================
+
+_RMAT_MODEL = None
+_RMAT_FEATURIZER = None
+
+def create_rmat(smiles_list, pretrained_name='rmat_4M_rdkit', device=None):
+    """
+    Create R-MAT embeddings (Relative Molecule Self-Attention Transformer).
+
+    R-MAT extends the Molecule Attention Transformer with relative self-attention
+    that fuses distance, bond, and neighborhood information. Pretrained on 4M
+    molecules with local atom context masking and global graph-based prediction.
+
+    #2 performer in Praski 2025 benchmark (mean rank 7.23 across 25 datasets).
+
+    Reference: Maziarka et al. "Relative Molecule Self-Attention Transformer"
+    (J. Cheminformatics, 2024).
+
+    Args:
+        smiles_list: List of SMILES strings
+        pretrained_name: Pretrained model name ('rmat_4M' or 'rmat_4M_rdkit')
+        device: 'cpu' or 'cuda' (default: auto-detect)
+
+    Returns:
+        np.ndarray: R-MAT embeddings (n_molecules, 768)
+
+    SETUP REQUIRED:
+        pip install git+https://github.com/gmum/huggingmolecules.git#subdirectory=src
+    """
+    import torch
+
+    global _RMAT_MODEL, _RMAT_FEATURIZER
+
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    if _RMAT_MODEL is None:
+        print("Loading R-MAT...", flush=True)
+        from huggingmolecules import RMatConfig, RMatModel, RMatFeaturizer
+
+        config = RMatConfig.from_pretrained(pretrained_name)
+        _RMAT_MODEL = RMatModel.from_pretrained(pretrained_name, config=config)
+        _RMAT_MODEL = _RMAT_MODEL.to(device)
+        _RMAT_MODEL.eval()
+        _RMAT_FEATURIZER = RMatFeaturizer.from_pretrained(pretrained_name, config=config)
+        print(f"  Loaded (d_model={config.d_model})")
+
+    batch_size = 64
+    all_embeddings = []
+    failed = 0
+
+    with torch.no_grad():
+        for i in range(0, len(smiles_list), batch_size):
+            batch_smiles = smiles_list[i:i + batch_size]
+
+            # Featurize — some SMILES may fail
+            batch = _RMAT_FEATURIZER(batch_smiles)
+            if batch is None:
+                # All failed in this batch
+                all_embeddings.append(np.zeros((len(batch_smiles), 768), dtype=np.float32))
+                failed += len(batch_smiles)
+                continue
+
+            # Move batch tensors to device
+            batch.node_features = batch.node_features.to(device)
+            batch.bond_features = batch.bond_features.to(device)
+            batch.distance_matrix = batch.distance_matrix.to(device)
+            batch.relative_matrix = batch.relative_matrix.to(device)
+            if hasattr(batch, 'generated_features') and batch.generated_features is not None:
+                batch.generated_features = batch.generated_features.to(device)
+
+            # Forward through encoder only (skip generator/prediction head)
+            batch_mask = torch.sum(torch.abs(batch.node_features), dim=-1) != 0
+            embedded = _RMAT_MODEL.src_embed(batch.node_features)
+            distances_matrix = _RMAT_MODEL.dist_rbf(batch.distance_matrix)
+            edges_att = torch.cat(
+                (batch.bond_features, batch.relative_matrix, distances_matrix),
+                dim=1,
+            )
+            encoded = _RMAT_MODEL.encoder(embedded, batch_mask, edges_att=edges_att)
+
+            # Mean pool over valid atoms (exclude padding)
+            # encoded: (batch, n_atoms, d_model), batch_mask: (batch, n_atoms)
+            mask_expanded = batch_mask.unsqueeze(-1).float()
+            pooled = (encoded * mask_expanded).sum(dim=1) / mask_expanded.sum(dim=1).clamp(min=1)
+            all_embeddings.append(pooled.cpu().numpy())
+
+    if failed > 0:
+        print(f"  WARNING: {failed}/{len(smiles_list)} molecules failed featurization")
+
+    return np.concatenate(all_embeddings, axis=0).astype(np.float32)
+
+
+# =============================================================================
 # GRAPH KERNEL FEATURES
 # =============================================================================
 

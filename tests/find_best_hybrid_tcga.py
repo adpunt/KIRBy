@@ -96,9 +96,9 @@ REP_PRESETS = {
         'gene_hvg2000', 'gene_pca100', 'gene_hallmark', 'gene_progeny',
         'gene_kegg', 'gene_dorothea', 'gene_combined_pathway',
         'gene_nmf50', 'gene_ica50', 'gene_stats',
-        'gene_geneformer', 'gene_scfoundation',
+        'gene_geneformer', 'gene_bulkrnabert', 'gene_scfoundation',
         'wsi_ctranspath', 'wsi_phikon', 'wsi_hoptimus0', 'wsi_moco',
-    ],  # 16 reps
+    ],  # 17 reps
 
     'all': [
         # Expression-derived (18)
@@ -108,8 +108,8 @@ REP_PRESETS = {
         'gene_reactome', 'gene_oncogenic', 'gene_immune',
         'gene_quantile_rank', 'gene_corr_modules', 'gene_chromosome_arm',
         'gene_autoencoder50', 'gene_sparse_pca50',
-        # Foundation model embeddings (2, GPU)
-        'gene_geneformer', 'gene_scfoundation',
+        # Foundation model embeddings (3, GPU)
+        'gene_geneformer', 'gene_bulkrnabert', 'gene_scfoundation',
         # Multi-omic (4)
         'cnv_gistic', 'cnv_pca50', 'rppa', 'mirna_top200',
         # WSI (5)
@@ -134,9 +134,9 @@ REP_PRESETS = {
         'gene_reactome', 'gene_oncogenic', 'gene_immune',
         'gene_quantile_rank', 'gene_corr_modules', 'gene_chromosome_arm',
         'gene_autoencoder50', 'gene_sparse_pca50',
-        'gene_geneformer', 'gene_scfoundation',
+        'gene_geneformer', 'gene_bulkrnabert', 'gene_scfoundation',
         'cnv_gistic', 'cnv_pca50', 'rppa', 'mirna_top200',
-    ],  # 24 reps
+    ],  # 25 reps
 }
 
 _SEARCH_NAME_MAP = {
@@ -180,6 +180,7 @@ _REP_DISPATCH = {
     'gene_chromosome_arm':   ('create_chromosome_arm',    'genomic'),
     # Foundation model embeddings: fn(expression, gene_names) -> np.ndarray (GPU)
     'gene_geneformer':       ('create_geneformer_embeddings', 'genomic'),
+    'gene_bulkrnabert':      ('create_bulkrnabert_embeddings', 'genomic'),
     'gene_scfoundation':     ('create_scfoundation_embeddings', 'genomic'),
     # Mutation-pattern: fn(sample_ids, cohort) -> np.ndarray
     'cnv_gistic':            ('create_cnv_gistic',        'mutation'),

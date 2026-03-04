@@ -136,6 +136,9 @@ gdc-client_v1.6.1_*
 target/
 Cargo.lock
 
+# External model repos (cloned, not committed)
+src/clamp/
+
 # Allow these specific files even if they match patterns above
 !.gitignore
 !.gitattributes

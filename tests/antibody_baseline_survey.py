@@ -181,19 +181,20 @@ def _identity_groups(seqs, min_groups=3):
 def get_models(model_names: List[str]) -> Dict[str, object]:
     """Return model instances by name."""
     catalog = {
-        'ridge': RidgeCV(alphas=np.logspace(-6, 6, 13)),
+        'ridge': RidgeCV(alphas=np.logspace(-4, 4, 50)),
     }
 
     if 'rf' in model_names:
         from sklearn.ensemble import RandomForestRegressor
         catalog['rf'] = RandomForestRegressor(
-            n_estimators=100, random_state=42, n_jobs=1)
+            n_estimators=100, max_features='sqrt', random_state=42, n_jobs=1)
 
     if 'xgboost' in model_names:
         try:
             from xgboost import XGBRegressor
             catalog['xgboost'] = XGBRegressor(
-                n_estimators=100, random_state=42, n_jobs=1, verbosity=0)
+                n_estimators=100, colsample_bytree=0.5,
+                random_state=42, n_jobs=1, verbosity=0)
         except ImportError:
             print("  WARNING: xgboost not available")
 

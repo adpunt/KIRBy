@@ -119,6 +119,51 @@ def blosum_encode(
     return X
 
 
+# ── CDR extraction ────────────────────────────────────────────────────────────
+
+# IMGT CDR boundaries (inclusive)
+_IMGT_CDR_RANGES = {
+    'CDR1': (27, 38),
+    'CDR2': (56, 65),
+    'CDR3': (105, 117),
+}
+
+
+def get_cdr_residue_indices(sequence: str) -> List[int]:
+    """Get 0-based residue indices of CDR positions in a sequence using ANARCI/IMGT.
+
+    Returns indices into the raw sequence (not tokenized). If ANARCI fails to
+    number the sequence, returns all residue indices (falls back to full pooling).
+    """
+    try:
+        from anarci import anarci as run_anarci
+    except ImportError:
+        return list(range(len(sequence)))
+
+    results = run_anarci([('q', sequence)], scheme='imgt')
+    numbering = results[0]
+
+    if not numbering or not numbering[0]:
+        return list(range(len(sequence)))
+
+    positions = numbering[0][0][0]  # first domain of first query
+
+    # Walk through numbered positions, tracking raw sequence index
+    cdr_indices = []
+    raw_idx = 0
+    for (pos_num, _insertion), aa in positions:
+        if aa == '-':
+            continue
+        if any(lo <= pos_num <= hi for lo, hi in _IMGT_CDR_RANGES.values()):
+            cdr_indices.append(raw_idx)
+        raw_idx += 1
+
+    if not cdr_indices:
+        return list(range(len(sequence)))
+
+    return cdr_indices
+
+
 # ── LM embeddings ────────────────────────────────────────────────────────────
 
 def _mean_pool(outputs, attention_mask):
@@ -128,6 +173,32 @@ def _mean_pool(outputs, attention_mask):
     mask = attention_mask.unsqueeze(-1).float()  # (B, L, 1)
     pooled = (hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
     return pooled.cpu().numpy()
+
+
+def _cdr_pool(hidden_states, cdr_indices_list, bos_offset: int = 1):
+    """Mean-pool hidden states over CDR residue positions only.
+
+    Args:
+        hidden_states: (B, L, D) tensor of hidden states
+        cdr_indices_list: list of lists of 0-based residue indices per sequence
+        bos_offset: number of special tokens before residues (1 for BOS/CLS)
+
+    Returns:
+        np.ndarray: (B, D) CDR-pooled embeddings
+    """
+    import torch
+    B, L, D = hidden_states.shape
+    pooled = []
+    for i in range(B):
+        # Offset indices to account for BOS/CLS token
+        token_indices = [idx + bos_offset for idx in cdr_indices_list[i]
+                        if idx + bos_offset < L]
+        if not token_indices:
+            # Fallback: mean over all non-special tokens
+            pooled.append(hidden_states[i, bos_offset:, :].mean(dim=0))
+        else:
+            pooled.append(hidden_states[i, token_indices, :].mean(dim=0))
+    return torch.stack(pooled).cpu().numpy()
 
 
 def _embed_single_chain_model(
@@ -268,10 +339,239 @@ def embed_igbert(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
     return np.vstack(all_embs).astype(np.float32)
 
 
+def embed_esmc(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """ESM-C 600M embeddings: H+L concatenated → (N, 2304).
+
+    Drop-in ESM-2 replacement. Matches ESM-2 3B quality at 5x fewer params.
+    Uses EvolutionaryScale's `esm` package (not HuggingFace transformers).
+
+    Note: Non-commercial license (EvolutionaryScale Cambrian).
+
+    Requires: pip install esm
+    """
+    import torch
+    from esm.models.esmc import ESMC
+    from esm.sdk.api import ESMProtein, LogitsConfig
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = ESMC.from_pretrained("esmc_600m").to(device)
+    model.eval()
+
+    config = LogitsConfig(sequence=True, return_embeddings=True)
+    batch_size = 8
+
+    def _embed_seqs(seqs):
+        all_embs = []
+        for start in range(0, len(seqs), batch_size):
+            batch = seqs[start:start + batch_size]
+            batch_embs = []
+            for seq in batch:
+                protein = ESMProtein(sequence=seq)
+                protein_tensor = model.encode(protein)
+                with torch.no_grad():
+                    output = model.logits(protein_tensor, config)
+                # output.embeddings: (1, L, 1152) — mean-pool over residues
+                emb = output.embeddings.mean(dim=1).squeeze(0).cpu().numpy()
+                batch_embs.append(emb)
+            all_embs.append(np.vstack(batch_embs))
+        return np.vstack(all_embs)
+
+    h_embs = _embed_seqs(heavy_seqs)
+    l_embs = _embed_seqs(light_seqs)
+    return np.hstack([h_embs, l_embs]).astype(np.float32)
+
+
+# ── CDR-specific LM embeddings ───────────────────────────────────────────────
+
+
+def _embed_single_chain_cdr(
+    heavy_seqs: List[str],
+    light_seqs: List[str],
+    model_name: str,
+    batch_size: int = 8,
+) -> np.ndarray:
+    """Embed H and L with CDR-only pooling, concatenate.
+
+    Same as _embed_single_chain_model but mean-pools only over CDR residues
+    (IMGT positions 27-38, 56-65, 105-117) instead of all residues.
+    """
+    import torch
+    from transformers import AutoTokenizer, AutoModel
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModel.from_pretrained(model_name).eval().to(device)
+
+    def _embed_seqs(seqs):
+        # Pre-compute CDR indices for all sequences
+        all_cdr_indices = [get_cdr_residue_indices(s) for s in seqs]
+
+        all_embs = []
+        for start in range(0, len(seqs), batch_size):
+            batch = seqs[start:start + batch_size]
+            batch_cdr = all_cdr_indices[start:start + batch_size]
+            inputs = tokenizer(batch, return_tensors='pt', padding=True,
+                               truncation=True, max_length=512).to(device)
+            with torch.no_grad():
+                outputs = model(**inputs)
+            # CDR-pool instead of mean-pool
+            all_embs.append(_cdr_pool(outputs.last_hidden_state, batch_cdr))
+        return np.vstack(all_embs)
+
+    h_embs = _embed_seqs(heavy_seqs)
+    l_embs = _embed_seqs(light_seqs)
+    return np.hstack([h_embs, l_embs]).astype(np.float32)
+
+
+def embed_esm2_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """ESM-2 CDR-only pooled: H+L concatenated → (N, 2560)."""
+    return _embed_single_chain_cdr(
+        heavy_seqs, light_seqs,
+        'facebook/esm2_t33_650M_UR50D',
+    )
+
+
+def embed_antiberty_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """AntiBERTy CDR-only pooled: H+L concatenated → (N, 1024)."""
+    return _embed_single_chain_cdr(
+        heavy_seqs, light_seqs,
+        'Exscientia/AntiBERTy',
+    )
+
+
+def embed_prot_t5_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """ProtT5 CDR-only pooled: H+L concatenated → (N, 2048).
+
+    ProtT5 uses space-separated sequences and T5EncoderModel (no decoder).
+    BOS offset = 0 for T5 (no CLS token, uses pad_token at start).
+    """
+    import torch
+    from transformers import T5Tokenizer, T5EncoderModel
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model_name = 'Rostlab/prot_t5_xl_uniref50'
+    tokenizer = T5Tokenizer.from_pretrained(model_name, do_lower_case=False)
+    model = T5EncoderModel.from_pretrained(model_name).eval().to(device)
+    batch_size = 4
+
+    def _embed_seqs(seqs):
+        all_cdr_indices = [get_cdr_residue_indices(s) for s in seqs]
+        spaced = [' '.join(list(s)) for s in seqs]
+        all_embs = []
+        for start in range(0, len(spaced), batch_size):
+            batch = spaced[start:start + batch_size]
+            batch_cdr = all_cdr_indices[start:start + batch_size]
+            inputs = tokenizer(batch, return_tensors='pt', padding=True,
+                               truncation=True, max_length=512).to(device)
+            with torch.no_grad():
+                outputs = model(**inputs)
+            # T5 has no BOS token; residues start at position 0
+            all_embs.append(_cdr_pool(outputs.last_hidden_state, batch_cdr,
+                                      bos_offset=0))
+        return np.vstack(all_embs)
+
+    h_embs = _embed_seqs(heavy_seqs)
+    l_embs = _embed_seqs(light_seqs)
+    return np.hstack([h_embs, l_embs]).astype(np.float32)
+
+
+def embed_esmc_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """ESM-C 600M CDR-only pooled: H+L concatenated → (N, 2304)."""
+    import torch
+    from esm.models.esmc import ESMC
+    from esm.sdk.api import ESMProtein, LogitsConfig
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = ESMC.from_pretrained("esmc_600m").to(device)
+    model.eval()
+
+    config = LogitsConfig(sequence=True, return_embeddings=True)
+
+    def _embed_seqs(seqs):
+        all_cdr_indices = [get_cdr_residue_indices(s) for s in seqs]
+        all_embs = []
+        for i, seq in enumerate(seqs):
+            protein = ESMProtein(sequence=seq)
+            protein_tensor = model.encode(protein)
+            with torch.no_grad():
+                output = model.logits(protein_tensor, config)
+            # CDR-pool over embeddings (1, L, 1152)
+            emb = _cdr_pool(output.embeddings, [all_cdr_indices[i]])[0]
+            all_embs.append(emb)
+        return np.vstack(all_embs)
+
+    h_embs = _embed_seqs(heavy_seqs)
+    l_embs = _embed_seqs(light_seqs)
+    return np.hstack([h_embs, l_embs]).astype(np.float32)
+
+
+# ── Intermediate layer extraction ────────────────────────────────────────────
+
+
+def _embed_single_chain_midlayers(
+    heavy_seqs: List[str],
+    light_seqs: List[str],
+    model_name: str,
+    layer_start: int,
+    layer_end: int,
+    batch_size: int = 8,
+) -> np.ndarray:
+    """Embed H and L by averaging intermediate hidden layers, concatenate.
+
+    Instead of using the last layer (which may be too task-specific for the
+    pretraining objective), average layers [layer_start, layer_end] inclusive.
+    For ESM-2 650M (33 layers): averaging layers 20-33 improved unsupervised
+    clustering ARI from 0.268 → 0.354.
+
+    Args:
+        layer_start: First layer to include (0-indexed, layer 0 = embedding layer)
+        layer_end: Last layer to include (inclusive)
+    """
+    import torch
+    from transformers import AutoTokenizer, AutoModel
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModel.from_pretrained(model_name, output_hidden_states=True).eval().to(device)
+
+    def _embed_seqs(seqs):
+        all_embs = []
+        for start in range(0, len(seqs), batch_size):
+            batch = seqs[start:start + batch_size]
+            inputs = tokenizer(batch, return_tensors='pt', padding=True,
+                               truncation=True, max_length=512).to(device)
+            with torch.no_grad():
+                outputs = model(**inputs)
+            # outputs.hidden_states: tuple of (B, L, D), one per layer + embedding
+            # Average selected layers
+            selected = torch.stack(
+                outputs.hidden_states[layer_start:layer_end + 1], dim=0
+            ).mean(dim=0)  # (B, L, D)
+            # Mean-pool over non-padding tokens
+            mask = inputs['attention_mask'].unsqueeze(-1).float()
+            pooled = (selected * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
+            all_embs.append(pooled.cpu().numpy())
+        return np.vstack(all_embs)
+
+    h_embs = _embed_seqs(heavy_seqs)
+    l_embs = _embed_seqs(light_seqs)
+    return np.hstack([h_embs, l_embs]).astype(np.float32)
+
+
+def embed_esm2_midlayers(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """ESM-2 650M mid-layer averaged (layers 20-33): H+L → (N, 2560)."""
+    return _embed_single_chain_midlayers(
+        heavy_seqs, light_seqs,
+        'facebook/esm2_t33_650M_UR50D',
+        layer_start=20, layer_end=33,
+    )
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 ANTIBODY_REPS = {
     'esm2': embed_esm2,                # 2560D
+    'esmc': embed_esmc,                # 2304D
     'ablang2': embed_ablang2,           # 768D
     'igbert': embed_igbert,             # 768D
     'antiberty': embed_antiberty,       # 1024D
@@ -279,10 +579,21 @@ ANTIBODY_REPS = {
     'onehot': onehot_encode,            # 5600D
     'blosum': blosum_encode,            # 5600D
     'aac': aac_encode,                  # 40D
+    # CDR-specific (same dims, pooled over CDR residues only)
+    'esm2_cdr': embed_esm2_cdr,        # 2560D
+    'esmc_cdr': embed_esmc_cdr,        # 2304D
+    'antiberty_cdr': embed_antiberty_cdr,  # 1024D
+    'prot_t5_cdr': embed_prot_t5_cdr,  # 2048D
+    # Intermediate layer averaged
+    'esm2_midlayers': embed_esm2_midlayers,  # 2560D (layers 20-33 avg)
 }
 
 # LM reps (require GPU / torch / transformers)
-ANTIBODY_LM_REPS = {'esm2', 'ablang2', 'igbert', 'antiberty', 'prot_t5'}
+ANTIBODY_LM_REPS = {
+    'esm2', 'esmc', 'ablang2', 'igbert', 'antiberty', 'prot_t5',
+    'esm2_cdr', 'esmc_cdr', 'antiberty_cdr', 'prot_t5_cdr',
+    'esm2_midlayers',
+}
 
 # Fast reps (no dependencies beyond numpy)
 ANTIBODY_FAST_REPS = {'onehot', 'blosum', 'aac'}

@@ -20,7 +20,9 @@ import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from kirby.datasets.pdb_utils import download_pdb, extract_chain_sequence, apply_mutation
+from kirby.datasets.pdb_utils import (
+    download_pdb, extract_chain_sequence, apply_mutation, build_pdb_resnum_mapping,
+)
 
 
 # PDB IDs that are NOT antibody-antigen complexes
@@ -112,33 +114,14 @@ def _identify_ab_chains(partners_str: str) -> Tuple[set, set]:
     return ab_chains, ag_chains
 
 
-def _pdb_resnum_to_seqpos(pdb_path: Path, chain_id: str) -> Dict[int, int]:
-    """Build mapping from PDB residue number → 0-indexed sequence position."""
-    import warnings
-    from Bio.PDB import PDBParser
-
-    with warnings.catch_warnings():
-        warnings.simplefilter('ignore')
-        parser = PDBParser(QUIET=True)
-        structure = parser.get_structure('pdb', str(pdb_path))
-
-    chain = structure[0][chain_id]
-    mapping = {}
-    seq_pos = 0
-    for residue in chain.get_residues():
-        hetfield = residue.get_id()[0]
-        if hetfield != ' ':
-            continue
-        resnum = residue.get_id()[1]
-        mapping[resnum] = seq_pos
-        seq_pos += 1
-
-    return mapping
+# Backward-compatible alias (now lives in pdb_utils)
+_pdb_resnum_to_seqpos = build_pdb_resnum_mapping
 
 
 def load_abbind_dataset(
     max_samples: int = 5000,
     antibody_mutations_only: bool = True,
+    single_point_only: bool = False,
 ) -> Dict:
     """Load AB-Bind dataset.
 
@@ -146,6 +129,8 @@ def load_abbind_dataset(
         max_samples: Subsample large datasets to this size.
         antibody_mutations_only: If True, only include entries where at least
             one mutation is on an antibody chain (H or L). Default True.
+        single_point_only: If True, only include entries with exactly one
+            mutation (before antibody filtering). Default False.
 
     Returns:
         dict with keys: heavy_seqs, light_seqs, labels, task_type,
@@ -176,6 +161,11 @@ def load_abbind_dataset(
         # Parse mutations
         parsed_muts = _parse_mutations(mutation_str)
         if not parsed_muts:
+            n_skipped += 1
+            continue
+
+        # Filter to single-point mutations only (before antibody filtering)
+        if single_point_only and len(parsed_muts) != 1:
             n_skipped += 1
             continue
 

@@ -57,3 +57,8 @@ def make_molecular_grover_factory(*args, **kwargs):
 def make_scfoundation_factory(*args, **kwargs):
     from kirby.finetuning.tcga_scfoundation import make_scfoundation_factory as _f
     return _f(*args, **kwargs)
+
+
+def make_dta_protein_lora_factory(*args, **kwargs):
+    from kirby.finetuning.dta_protein_lora import make_dta_protein_lora_factory as _f
+    return _f(*args, **kwargs)

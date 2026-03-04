@@ -123,6 +123,99 @@ def load_qm9(n_samples=1000, property_idx=4, data_dir='data/QM9', random_seed=42
         'property_idx': property_idx
     }
 
+
+def load_qm9_with_3d(n_samples=None, property_idx=4, data_dir='data/QM9',
+                      random_seed=42):
+    """Load QM9 with 3D coordinates for end-to-end 3D models (SchNet, DimeNet++).
+
+    Unlike load_qm9(), this returns PyG Data objects with atomic positions,
+    atomic numbers, and edge information for 3D GNN training.
+
+    Args:
+        n_samples: Number of molecules (None = full dataset, ~130K)
+        property_idx: Which property to predict (0-11)
+        data_dir: Directory to store/load QM9 data
+        random_seed: Random seed for subsampling
+
+    Returns:
+        dict with keys:
+            'data_list': list of PyG Data objects with .pos, .z, .y
+            'smiles': list of SMILES strings
+            'labels': np.ndarray of target values
+            'property_name': str
+    """
+    try:
+        from torch_geometric.datasets import QM9
+    except ImportError as e:
+        raise ImportError(f"QM9 loader requires torch-geometric: {e}")
+
+    property_names = [
+        'mu', 'alpha', 'homo', 'lumo', 'gap', 'r2',
+        'zpve', 'U0', 'U', 'H', 'G', 'Cv'
+    ]
+
+    _patch_torch_load_for_pyg()
+
+    print(f"Loading QM9 with 3D coords (property: {property_names[property_idx]})...")
+    try:
+        qm9 = QM9(root=data_dir)
+    except (ValueError, RuntimeError):
+        import glob
+        processed_dir = osp.join(data_dir, 'processed')
+        stale = glob.glob(osp.join(processed_dir, '*.pt'))
+        if stale:
+            for f in stale:
+                os.remove(f)
+            qm9 = QM9(root=data_dir)
+        else:
+            raise
+
+    # Extract SMILES
+    print("  Extracting SMILES from SDF...")
+    all_smiles = _load_smiles_from_sdf(data_dir)
+
+    # Subsample if requested
+    total = len(qm9)
+    if n_samples is not None and n_samples < total:
+        import random
+        random.seed(random_seed)
+        indices = sorted(random.sample(range(total), n_samples))
+    else:
+        indices = list(range(total))
+        n_samples = total
+
+    print(f"  Extracting {len(indices)} molecules with 3D coordinates...")
+    data_list = []
+    smiles_list = []
+    targets = []
+
+    for i, index in enumerate(indices):
+        smi = all_smiles[index]
+        if smi is None:
+            continue
+
+        data = qm9[index]
+        # Verify 3D coordinates exist
+        if not hasattr(data, 'pos') or data.pos is None:
+            continue
+
+        smiles_list.append(smi)
+        targets.append(data.y[0, property_idx].item())
+        data_list.append(data)
+
+    targets = np.array(targets)
+    print(f"  Loaded {len(data_list)} molecules with 3D coords")
+    print(f"  Range: [{targets.min():.3f}, {targets.max():.3f}]")
+    print(f"  Avg atoms/molecule: {np.mean([d.pos.shape[0] for d in data_list]):.1f}")
+
+    return {
+        'data_list': data_list,
+        'smiles': smiles_list,
+        'labels': targets,
+        'property_name': property_names[property_idx],
+        'property_idx': property_idx,
+    }
+
 def get_qm9_splits(data, splitter='scaffold', train_ratio=0.8, val_ratio=0.1, random_seed=42):
     """
     Split QM9 data into train/val/test sets.

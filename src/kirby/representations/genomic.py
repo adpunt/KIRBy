@@ -1538,6 +1538,135 @@ def create_geneformer_embeddings(expression: np.ndarray,
     return embeddings
 
 
+def create_bulkrnabert_embeddings(expression: np.ndarray,
+                                   gene_names: np.ndarray) -> np.ndarray:
+    """Frozen BulkRNABert embeddings for bulk RNA-seq.
+
+    BulkRNABert (InstaDeep, ML4H 2024) is a transformer pretrained ON TCGA bulk
+    RNA-seq via masked gene expression modeling. Unlike Geneformer (single-cell),
+    it was designed for bulk data and should be the primary foundation model for
+    TCGA expression.
+
+    Maps HUGO gene symbols → Ensembl IDs to match BulkRNABert's expected 19062-gene
+    input order. Unmapped genes are zero-filled.
+
+    Requires: transformers (from source for custom code), torch
+
+    Args:
+        expression: (n_samples, n_genes) log2(TPM+1) matrix
+        gene_names: (n_genes,) HUGO gene symbols
+
+    Returns:
+        (n_samples, 256) frozen embeddings (layer 4 mean-pooled)
+    """
+    import torch
+    from huggingface_hub import hf_hub_download
+
+    n_samples, n_genes = expression.shape
+
+    # 1. Get BulkRNABert's expected gene order (Ensembl IDs)
+    csv_path = hf_hub_download(
+        repo_id='InstaDeepAI/BulkRNABert',
+        filename='data/tcga_sample.csv',
+        repo_type='model',
+    )
+    import pandas as pd
+    sample_df = pd.read_csv(csv_path, nrows=0)  # just headers
+    expected_ensembl_ids = [c for c in sample_df.columns if c.startswith('ENSG')]
+    n_expected = len(expected_ensembl_ids)
+    print(f"    BulkRNABert expects {n_expected} genes (Ensembl IDs)")
+
+    # 2. Map HUGO → Ensembl using Geneformer dictionaries (already available)
+    try:
+        from kirby.finetuning.tcga_geneformer import _load_geneformer_dictionaries
+        _, _, name_id_dict = _load_geneformer_dictionaries()
+    except Exception:
+        # Fallback: try mygene for mapping
+        name_id_dict = None
+
+    if name_id_dict is not None:
+        hugo_to_ensembl = {}
+        for hugo, ensembl in name_id_dict.items():
+            hugo_to_ensembl[hugo] = ensembl
+            hugo_to_ensembl[hugo.upper()] = ensembl
+    else:
+        # Without mapping, we can't match genes. Return zeros with warning.
+        print("    WARNING: No HUGO→Ensembl mapping available. Returning zero embeddings.")
+        return np.zeros((n_samples, 256), dtype=np.float32)
+
+    # 3. Build mapping: our gene columns → BulkRNABert's expected positions
+    # Create lookup: ensembl_id → position in BulkRNABert's expected order
+    ensembl_to_pos = {eid: i for i, eid in enumerate(expected_ensembl_ids)}
+
+    # Map our gene names to BulkRNABert positions
+    mapped = 0
+    our_col_to_brb_pos = {}
+    for i, gname in enumerate(gene_names):
+        gname_str = str(gname)
+        ensembl = hugo_to_ensembl.get(gname_str) or hugo_to_ensembl.get(gname_str.upper())
+        if ensembl and ensembl in ensembl_to_pos:
+            our_col_to_brb_pos[i] = ensembl_to_pos[ensembl]
+            mapped += 1
+
+    print(f"    Mapped {mapped}/{n_genes} HUGO genes to BulkRNABert's {n_expected} Ensembl IDs")
+
+    if mapped == 0:
+        print("    WARNING: No genes mapped. Returning zero embeddings.")
+        return np.zeros((n_samples, 256), dtype=np.float32)
+
+    # 4. Reorder expression to match BulkRNABert's expected gene order
+    # Convert from log2(TPM+1) → TPM, then apply log10(1+x)
+    tpm = np.power(2, expression) - 1
+    tpm = np.maximum(tpm, 0)
+
+    reordered = np.zeros((n_samples, n_expected), dtype=np.float32)
+    for our_col, brb_pos in our_col_to_brb_pos.items():
+        reordered[:, brb_pos] = tpm[:, our_col]
+
+    # Apply BulkRNABert's expected preprocessing
+    reordered = np.log10(1 + reordered)
+
+    # 5. Load model and extract embeddings
+    from transformers import AutoConfig, AutoModel, AutoTokenizer
+
+    config = AutoConfig.from_pretrained('InstaDeepAI/BulkRNABert', trust_remote_code=True)
+    config.embeddings_layers_to_save = (4,)
+    tokenizer = AutoTokenizer.from_pretrained('InstaDeepAI/BulkRNABert', trust_remote_code=True)
+    model = AutoModel.from_pretrained(
+        'InstaDeepAI/BulkRNABert', config=config, trust_remote_code=True
+    )
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = model.to(device).eval()
+    print(f"    Loaded BulkRNABert ({config.embed_dim}D, device={device})")
+
+    # 6. Tokenize and extract embeddings in batches
+    embed_dim = config.embed_dim  # 256
+    embeddings = np.zeros((n_samples, embed_dim), dtype=np.float32)
+    batch_size = 8  # 19062-length sequences are memory-intensive
+
+    with torch.no_grad():
+        for start in range(0, n_samples, batch_size):
+            end = min(start + batch_size, n_samples)
+            batch = reordered[start:end]
+            input_ids = tokenizer.batch_encode_plus(
+                batch, return_tensors='pt'
+            )['input_ids'].to(device)
+            out = model(input_ids)
+            emb = out['embeddings_4'].mean(axis=1).cpu().numpy()
+            embeddings[start:end] = emb
+
+            if end < n_samples and end % 50 == 0:
+                print(f"      Progress: {end}/{n_samples}")
+
+    # Cleanup
+    del model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    return embeddings
+
+
 def create_scfoundation_embeddings(expression: np.ndarray,
                                     gene_names: np.ndarray) -> np.ndarray:
     """Frozen scFoundation embeddings for bulk RNA-seq.
@@ -1690,3 +1819,243 @@ def load_wsi_features(sample_ids: List[str], wsi_dir: Optional[Path],
     print(f"    WSI {model_name}: {n_found}/{len(sample_ids)} matched, dim={d}")
 
     return X
+
+
+# =============================================================================
+# WSI: ABMIL Aggregation (Attention-Based Multiple Instance Learning)
+# =============================================================================
+
+
+def _load_wsi_patch_embeddings(sample_ids, wsi_dir, model_name):
+    """Load raw patch-level embeddings (not aggregated).
+
+    Returns:
+        list of np.ndarray: Each entry is (n_patches, d) or None if missing.
+        int: embedding dimension
+    """
+    from kirby.datasets.tcga import _WSI_DIMS
+
+    d = _WSI_DIMS.get(model_name, 768)
+    wsi_dir = Path(wsi_dir) if wsi_dir else None
+
+    if wsi_dir is None or not (wsi_dir / f'{model_name}.npy').exists():
+        return [None] * len(sample_ids), d
+
+    data = np.load(wsi_dir / f'{model_name}.npy', allow_pickle=True).item()
+
+    # Build lookup
+    slide_lookup = {}
+    for slide_id, embedding in data.items():
+        sid = str(slide_id)
+        if sid.startswith('TCGA'):
+            slide_lookup[sid[:12]] = embedding
+            if len(sid) >= 15:
+                slide_lookup[sid[:15]] = embedding
+            slide_lookup[sid] = embedding
+        else:
+            slide_lookup[sid] = embedding
+
+    # Auto-detect dim
+    first_emb = next(iter(data.values()))
+    if hasattr(first_emb, 'shape'):
+        d = first_emb.shape[-1] if first_emb.ndim > 0 else d
+
+    patches = []
+    for sid in sample_ids:
+        found = None
+        for trunc in [sid[:15], sid[:12], sid]:
+            if trunc in slide_lookup:
+                emb = slide_lookup[trunc]
+                if hasattr(emb, 'shape') and emb.ndim == 2:
+                    found = emb
+                elif hasattr(emb, 'shape') and emb.ndim == 1:
+                    found = emb.reshape(1, -1)
+                break
+        patches.append(found)
+
+    return patches, d
+
+
+def gated_attention_pool(patches, d):
+    """Frozen gated attention pooling (unsupervised, no training required).
+
+    Computes attention weights based on patch norms and variance from the
+    mean patch embedding. Patches that deviate more from the mean get higher
+    weight, capturing informative (e.g., tumor) regions.
+
+    Args:
+        patches: list of (n_patches_i, d) arrays or None
+        d: embedding dimension
+
+    Returns:
+        (n_samples, d) aggregated features
+    """
+    n = len(patches)
+    X = np.zeros((n, d), dtype=np.float32)
+
+    for i, patch_emb in enumerate(patches):
+        if patch_emb is None or len(patch_emb) == 0:
+            continue
+        if patch_emb.shape[0] == 1:
+            X[i] = patch_emb[0, :d]
+            continue
+
+        # Compute attention: patches far from mean get higher weight
+        mean_patch = patch_emb.mean(axis=0)
+        diffs = np.linalg.norm(patch_emb - mean_patch, axis=1)  # (n_patches,)
+        # Gating: sigmoid of norm deviation (scaled)
+        scale = np.std(diffs) + 1e-8
+        gates = 1.0 / (1.0 + np.exp(-(diffs - np.mean(diffs)) / scale))
+        # Normalize to sum to 1
+        weights = gates / (gates.sum() + 1e-10)
+        X[i] = (patch_emb[:, :d] * weights[:, None]).sum(axis=0)
+
+    return X
+
+
+def load_wsi_gated_attention(sample_ids, wsi_dir, model_name):
+    """Load WSI features with frozen gated attention pooling."""
+    patches, d = _load_wsi_patch_embeddings(sample_ids, wsi_dir, model_name)
+    n_found = sum(1 for p in patches if p is not None)
+    print(f"    WSI {model_name} (gated attention): {n_found}/{len(sample_ids)} matched, dim={d}")
+    return gated_attention_pool(patches, d)
+
+
+class ABMIL:
+    """Attention-Based MIL aggregator (Ilse et al., ICML 2018).
+
+    Learns a small attention network to weight-pool patch embeddings into a
+    fixed-size slide-level representation. Trained with slide-level labels.
+
+    Architecture:
+        h_k = tanh(V * z_k)           (projection)
+        a_k = softmax(w^T * h_k)      (attention weights)
+        z_slide = sum_k a_k * z_k     (weighted pool)
+
+    Usage:
+        abmil = ABMIL(input_dim=512, hidden_dim=128)
+        abmil.fit(train_patches, train_labels)
+        X_test = abmil.transform(test_patches)
+    """
+
+    def __init__(self, input_dim, hidden_dim=128, lr=1e-3, epochs=20,
+                 batch_size=32):
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        self.lr = lr
+        self.epochs = epochs
+        self.batch_size = batch_size
+        self.model = None
+
+    def _build_model(self):
+        import torch
+        import torch.nn as nn
+
+        class ABMILNet(nn.Module):
+            def __init__(self, input_dim, hidden_dim):
+                super().__init__()
+                self.attention_V = nn.Sequential(
+                    nn.Linear(input_dim, hidden_dim),
+                    nn.Tanh(),
+                )
+                self.attention_w = nn.Linear(hidden_dim, 1)
+
+            def forward(self, bag):
+                # bag: (n_patches, input_dim)
+                h = self.attention_V(bag)        # (n_patches, hidden_dim)
+                a = self.attention_w(h)           # (n_patches, 1)
+                a = torch.softmax(a, dim=0)       # (n_patches, 1)
+                z = (a * bag).sum(dim=0)          # (input_dim,)
+                return z, a.squeeze()
+
+        return ABMILNet(self.input_dim, self.hidden_dim)
+
+    def fit(self, patches_list, labels, task_type='regression'):
+        """Train ABMIL attention weights on slide-level labels.
+
+        Args:
+            patches_list: list of (n_patches_i, d) arrays (None = skip)
+            labels: (n_samples,) target values
+            task_type: 'regression' or 'classification'
+        """
+        import torch
+        import torch.nn as nn
+
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.model = self._build_model().to(device)
+
+        # Filter out missing slides
+        valid = [(p, y) for p, y in zip(patches_list, labels) if p is not None]
+        if len(valid) < 10:
+            print("    ABMIL: too few slides, falling back to mean pool")
+            self.model = None
+            return self
+
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
+        if task_type == 'classification':
+            criterion = nn.CrossEntropyLoss()
+        else:
+            criterion = nn.MSELoss()
+            # Add a linear head for training
+            head = nn.Linear(self.input_dim, 1).to(device)
+            optimizer = torch.optim.Adam(
+                list(self.model.parameters()) + list(head.parameters()),
+                lr=self.lr
+            )
+
+        self.model.train()
+        for epoch in range(self.epochs):
+            np.random.shuffle(valid)
+            epoch_loss = 0
+            for patches, y in valid:
+                bag = torch.FloatTensor(patches).to(device)
+                z, _ = self.model(bag)
+
+                if task_type == 'regression':
+                    pred = head(z.unsqueeze(0)).squeeze()
+                    target = torch.FloatTensor([y]).to(device)
+                else:
+                    pred = z.unsqueeze(0)
+                    target = torch.LongTensor([int(y)]).to(device)
+
+                loss = criterion(pred, target)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                epoch_loss += loss.item()
+
+        self.model.eval()
+        self._head = head if task_type == 'regression' else None
+        return self
+
+    def transform(self, patches_list):
+        """Apply learned attention to get slide-level embeddings.
+
+        Args:
+            patches_list: list of (n_patches_i, d) arrays (None → zeros)
+
+        Returns:
+            (n_samples, input_dim) aggregated features
+        """
+        import torch
+
+        n = len(patches_list)
+        X = np.zeros((n, self.input_dim), dtype=np.float32)
+
+        if self.model is None:
+            # Fallback to mean pool
+            for i, p in enumerate(patches_list):
+                if p is not None:
+                    X[i] = p.mean(axis=0)[:self.input_dim]
+            return X
+
+        device = next(self.model.parameters()).device
+        with torch.no_grad():
+            for i, patches in enumerate(patches_list):
+                if patches is None:
+                    continue
+                bag = torch.FloatTensor(patches).to(device)
+                z, _ = self.model(bag)
+                X[i] = z.cpu().numpy()[:self.input_dim]
+
+        return X

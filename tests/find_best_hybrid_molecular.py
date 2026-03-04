@@ -88,13 +88,13 @@ REP_PRESETS = {
     'all': [
         'ecfp4', 'maccs', 'pdv', 'mol2vec', 'chemberta', 'molformer',
         'selformer', 'chembert', 'molclr', 'graphmvp', 'smited',
-        'mhg_gnn', 'grover', 'graph_kernel', 'schnet'
+        'mhg_gnn', 'grover', 'graph_kernel', 'schnet', 'clamp', 'rmat'
     ],
     # Backward compat alias (graph_kernel is now auto-filtered, so no need to exclude it)
     'all_no_gk': [
         'ecfp4', 'maccs', 'pdv', 'mol2vec', 'chemberta', 'molformer',
         'selformer', 'chembert', 'molclr', 'graphmvp', 'smited',
-        'mhg_gnn', 'grover', 'graph_kernel', 'schnet'
+        'mhg_gnn', 'grover', 'graph_kernel', 'schnet', 'clamp', 'rmat'
     ],
 }
 
@@ -395,7 +395,7 @@ def get_representations(smiles: List[str], preset_or_list: str,
         create_chemberta, create_molformer, create_selformer,
         create_chembert, create_molclr, create_graphmvp, create_smited,
         create_mhg_gnn, create_grover, create_graph_kernel,
-        create_unimol, create_schnet,
+        create_unimol, create_schnet, create_clamp, create_rmat,
     )
 
     if preset_or_list in REP_PRESETS:
@@ -422,6 +422,8 @@ def get_representations(smiles: List[str], preset_or_list: str,
         'graph_kernel': create_graph_kernel,
         'unimol': create_unimol,
         'schnet': create_schnet,
+        'clamp': create_clamp,
+        'rmat': create_rmat,
     }
 
     representations = {}

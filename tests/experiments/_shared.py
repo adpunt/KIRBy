@@ -373,20 +373,21 @@ def evaluate_similarity_retrieval(
 def get_model_factories(model_names: List[str]) -> Dict[str, callable]:
     """Return {name: factory_fn} for requested models."""
     from sklearn.ensemble import RandomForestRegressor
-    from sklearn.linear_model import Ridge
+    from sklearn.linear_model import RidgeCV
     from sklearn.neighbors import KNeighborsRegressor
     from sklearn.neural_network import MLPRegressor
 
     catalog = {
-        'rf': lambda: RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1),
+        'rf': lambda: RandomForestRegressor(n_estimators=100, max_features='sqrt', random_state=42, n_jobs=-1),
         'knn': lambda: KNeighborsRegressor(n_neighbors=5, n_jobs=-1),
-        'ridge': lambda: Ridge(alpha=1.0),
+        'ridge': lambda: RidgeCV(alphas=np.logspace(-4, 4, 50)),
         'mlp': lambda: MLPRegressor(hidden_layer_sizes=(100, 50), random_state=42, max_iter=500),
     }
 
     try:
         from xgboost import XGBRegressor
-        catalog['xgboost'] = lambda: XGBRegressor(n_estimators=100, random_state=42, n_jobs=-1, verbosity=0)
+        catalog['xgboost'] = lambda: XGBRegressor(n_estimators=100, colsample_bytree=0.5,
+                                                   random_state=42, n_jobs=-1, verbosity=0)
     except ImportError:
         pass
 
