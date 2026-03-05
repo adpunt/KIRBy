@@ -28,7 +28,7 @@ submit() {
         --mem="${mem}" \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
         ${gpu:+--gres=gpu:1} \
-        --wrap="cd /data/stat-cadd/scat9264/KIRBy && . ./setup.sh && mkdir -p ${OUTPUT} && python tests/find_best_hybrid_dta.py ${dataset} --reps full --search fast --n-folds 5 --output ${OUTPUT}/${name}.json ${extra}" \
+        --wrap="cd /data/stat-cadd/scat9264/KIRBy && git pull && . ./setup.sh && mkdir -p ${OUTPUT} && python tests/find_best_hybrid_dta.py ${dataset} --reps full --search fast --n-folds 5 --output ${OUTPUT}/${name}.json ${extra}" \
         | awk '{print $4}')
     echo "  $J  ${name}  (mem=${mem}, time=${wall}${gpu:+, GPU})"
 }
