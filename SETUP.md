@@ -83,6 +83,9 @@ pip install -e ".[qsar,antibody,tcga,uncertainty,interpret]"
 # Reaction yield prediction (optional)
 pip install drfp
 
+# openpyxl — required for Buchwald-Hartwig Excel loading (pandas needs >=3.1.0)
+pip install --upgrade openpyxl
+
 # Optuna HP tuning (optional)
 pip install optuna
 
@@ -109,8 +112,9 @@ pip install uce-model
 conda install -c bioconda anarci
 
 # torch-scatter — required for some GNN representations
+# torch-cluster — required for SchNet end-to-end (QM9 3D comparison)
 # Match your PyTorch + CUDA version:
-pip install torch-scatter -f https://data.pyg.org/whl/torch-$(python -c "import torch; print(torch.__version__)").html
+pip install torch-scatter torch-cluster -f https://data.pyg.org/whl/torch-$(python -c "import torch; print(torch.__version__)").html
 ```
 
 ---
