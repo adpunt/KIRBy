@@ -103,6 +103,13 @@ pip install uce-model
 
 # AMPLIFY protein LM (optional — uses transformers, auto-downloads from HF)
 # Model: chandar-lab/AMPLIFY_350M (~350M params, 960D embeddings)
+
+# ESMFold structure prediction (optional, for protein structural features)
+# Uses facebook/esmfold_v1 (~700M params, ~3GB download)
+pip install transformers torch
+
+# DimeNet++ 3D molecular embeddings (optional, uses torch-geometric)
+# Already covered by torch-geometric install for SchNet
 ```
 
 ### 2d. Install conda-only dependencies

@@ -89,8 +89,8 @@ REP_PRESETS = {
         'ecfp4', 'maccs', 'pdv', 'pdv_binary_mean', 'pdv_rank',
         'mol2vec', 'chemberta', 'molformer',
         'selformer', 'chembert', 'molclr', 'graphmvp', 'smited',
-        'mhg_gnn', 'grover', 'graph_kernel', 'schnet', 'clamp', 'rmat',
-        'map4', 'unimol_v2',
+        'mhg_gnn', 'grover', 'graph_kernel', 'schnet', 'dimenetpp',
+        'clamp', 'rmat', 'map4', 'unimol_v2',
         'chemberta_pca50', 'molformer_pca50', 'selformer_pca50',
         'molclr_pca50', 'smited_pca50', 'mhg_gnn_pca50', 'grover_pca50',
     ],
@@ -306,7 +306,7 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
 
     elif name_lower == 'qm9':
         from kirby.datasets.qm9 import load_qm9
-        qm9_data = load_qm9(n_samples=5000, property_idx=4, random_seed=42)
+        qm9_data = load_qm9(n_samples=10000, property_idx=4, random_seed=42)
         smiles = qm9_data['smiles']
         labels = qm9_data['labels']  # Raw values; StandardScaler applied per fold
         print(f"  Loaded {len(smiles)} molecules from QM9 (HOMO-LUMO gap)")
@@ -396,8 +396,8 @@ def get_representations(smiles: List[str], preset_or_list: str,
         create_chemberta, create_molformer, create_selformer,
         create_chembert, create_molclr, create_graphmvp, create_smited,
         create_mhg_gnn, create_grover, create_graph_kernel,
-        create_unimol, create_schnet, create_clamp, create_rmat,
-        create_map4, create_unimol_v2,
+        create_unimol, create_schnet, create_dimenetpp, create_clamp,
+        create_rmat, create_map4, create_unimol_v2,
     )
 
     if preset_or_list in REP_PRESETS:
@@ -426,6 +426,7 @@ def get_representations(smiles: List[str], preset_or_list: str,
         'graph_kernel': create_graph_kernel,
         'unimol': create_unimol,
         'schnet': create_schnet,
+        'dimenetpp': create_dimenetpp,
         'clamp': create_clamp,
         'rmat': create_rmat,
         'map4': create_map4,
@@ -996,7 +997,7 @@ Output:
                             'freeze_chemberta, freeze_molformer, '
                             'gnn_molclr, gnn_graphmvp, '
                             'contrastive_chemberta, contrastive_molformer, '
-                            'grover_ft, mock_lora')
+                            'grover_ft, ft_schnet, ft_dimenetpp, mock_lora')
     parser.add_argument('--finetune-epochs', type=int, default=5,
                        help='Fine-tuning epochs per fold (default: 5)')
     parser.add_argument('--lora-rank', type=int, default=8,
@@ -1102,6 +1103,16 @@ Output:
                     smiles_list=smiles,
                     dataset_name=dataset_name,
                     epochs=args.finetune_epochs,
+                    cache=ft_cache,
+                )
+            elif method in ('ft_schnet', 'ft_dimenetpp'):
+                from kirby.finetuning.molecular_3d import make_molecular_3d_factory
+                model_3d = method.replace('ft_', '')
+                rep_factories[method] = make_molecular_3d_factory(
+                    smiles_list=smiles,
+                    dataset_name=dataset_name,
+                    base_model=model_3d,
+                    epochs=100,
                     cache=ft_cache,
                 )
             else:

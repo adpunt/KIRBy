@@ -70,8 +70,9 @@ REP_PRESETS = {
         'drug_chemberta_pca50', 'drug_molformer_pca50', 'drug_selformer_pca50',
         'drug_clamp_pca50', 'drug_rmat_pca50',
         'protein_esm2', 'protein_esmc', 'protein_esm2_midlayers',
-        'protein_amplify', 'protein_aac', 'protein_descriptors', 'protein_kmer',
-    ],  # 25 reps
+        'protein_amplify', 'protein_esmfold', 'protein_alphafold_db',
+        'protein_aac', 'protein_descriptors', 'protein_kmer',
+    ],  # 27 reps
 }
 
 _SEARCH_NAME_MAP = {
@@ -116,6 +117,8 @@ _REP_DISPATCH = {
     'protein_esmc':        ('create_esmc_protein_embeddings', 'protein', 'protein'),
     'protein_esm2_midlayers': ('create_esm2_midlayers_protein_embeddings', 'protein', 'protein'),
     'protein_amplify':     ('create_amplify_protein_embeddings', 'protein', 'protein'),
+    'protein_esmfold':     ('create_esmfold_protein_features',   'protein', 'protein'),
+    'protein_alphafold_db': ('create_alphafold_db_features',     'protein', 'protein'),
 }
 
 

@@ -2582,6 +2582,137 @@ def create_map4(smiles_list, n_bits=1024):
 
 
 # =============================================================================
+# DimeNet++ (3D DIRECTIONAL MESSAGE PASSING)
+# =============================================================================
+
+_DIMENETPP_MODEL = None
+
+
+def create_dimenetpp(smiles_list, hidden_channels=128, out_channels=1,
+                     num_blocks=4, int_emb_size=64, basis_emb_size=8,
+                     out_emb_channels=256, num_spherical=7, num_radial=6,
+                     cutoff=5.0, batch_size=32, device=None):
+    """
+    Create DimeNet++ embeddings (directional message passing on 3D graphs).
+
+    DimeNet++ extends SchNet by incorporating directional information through
+    angles between atom triplets, enabling richer 3D geometric representations.
+    Significantly outperforms SchNet on QM9 properties.
+
+    Reference:
+        Klicpera et al. "Fast and Uncertainty-Aware Directional Message Passing
+        for Non-Equilibrium Molecules" (2020, arXiv:2011.14115)
+
+    Args:
+        smiles_list: List of SMILES strings
+        hidden_channels: Hidden embedding dimension (default: 128)
+        out_channels: Output channels before pooling (default: 1)
+        num_blocks: Number of interaction blocks (default: 4)
+        int_emb_size: Intermediate embedding size (default: 64)
+        basis_emb_size: Basis embedding size (default: 8)
+        out_emb_channels: Output embedding channels (default: 256)
+        num_spherical: Number of spherical harmonics (default: 7)
+        num_radial: Number of radial basis functions (default: 6)
+        cutoff: Cutoff distance in Angstroms (default: 5.0)
+        batch_size: Batch size for encoding (default: 32)
+        device: 'cpu' or 'cuda' (default: auto-detect)
+
+    Returns:
+        np.ndarray: DimeNet++ embeddings (n_molecules, hidden_channels)
+
+    Requires:
+        pip install torch-geometric rdkit
+    """
+    import torch
+    from torch_geometric.nn.models import DimeNetPlusPlus
+    from torch_geometric.data import Data, Batch
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    global _DIMENETPP_MODEL
+
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    if _DIMENETPP_MODEL is None:
+        print(f"Creating DimeNet++ (hidden={hidden_channels}, blocks={num_blocks})...")
+        # out_channels=hidden_channels so forward() returns (batch, hidden_channels)
+        # graph-level embeddings directly (no need for hooks)
+        _DIMENETPP_MODEL = DimeNetPlusPlus(
+            hidden_channels=hidden_channels,
+            out_channels=hidden_channels,
+            num_blocks=num_blocks,
+            int_emb_size=int_emb_size,
+            basis_emb_size=basis_emb_size,
+            out_emb_channels=out_emb_channels,
+            num_spherical=num_spherical,
+            num_radial=num_radial,
+            cutoff=cutoff,
+        )
+        _DIMENETPP_MODEL = _DIMENETPP_MODEL.to(device)
+        _DIMENETPP_MODEL.eval()
+        print(f"  Loaded on {device}")
+
+    def smiles_to_data(smiles):
+        """Convert SMILES to PyG Data with 3D coordinates."""
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            raise ValueError(f"Invalid SMILES: {smiles}")
+        mol = Chem.AddHs(mol)
+        result = AllChem.EmbedMolecule(mol, randomSeed=42)
+        if result == -1:
+            AllChem.EmbedMolecule(mol, useRandomCoords=True, randomSeed=42)
+        try:
+            AllChem.MMFFOptimizeMolecule(mol, maxIters=200)
+        except Exception:
+            pass
+        conf = mol.GetConformer()
+        z = torch.tensor([atom.GetAtomicNum() for atom in mol.GetAtoms()], dtype=torch.long)
+        pos = torch.tensor(conf.GetPositions(), dtype=torch.float)
+        return Data(z=z, pos=pos)
+
+    # Convert all molecules
+    print(f"Generating 3D conformers for {len(smiles_list)} molecules...")
+    data_list = []
+    for i, smiles in enumerate(smiles_list):
+        try:
+            data = smiles_to_data(smiles)
+            data_list.append(data)
+        except Exception as e:
+            print(f"  Warning: Failed on molecule {i} ({smiles[:30]}...): {e}")
+            data = Data(z=torch.tensor([6], dtype=torch.long),
+                       pos=torch.tensor([[0.0, 0.0, 0.0]], dtype=torch.float))
+            data_list.append(data)
+
+    # With out_channels=hidden_channels, forward() returns (batch, hidden_channels)
+    # graph-level embeddings directly — no hooks needed.
+    all_embeddings = []
+    model = _DIMENETPP_MODEL
+
+    print(f"Extracting DimeNet++ embeddings ({len(data_list)} molecules)...")
+    with torch.no_grad():
+        for start in range(0, len(data_list), batch_size):
+            batch_data = data_list[start:start + batch_size]
+            batch = Batch.from_data_list(batch_data).to(device)
+
+            try:
+                h = model(batch.z, batch.pos, batch.batch)
+                all_embeddings.append(h.cpu().numpy())
+            except Exception as e:
+                print(f"  Warning: DimeNet++ failed on batch {start}: {e}")
+                n_batch = len(batch_data)
+                all_embeddings.append(
+                    np.zeros((n_batch, hidden_channels), dtype=np.float32))
+
+            if (start + batch_size) % 200 == 0:
+                print(f"  Progress: {min(start + batch_size, len(data_list))}/{len(data_list)}")
+
+    result = np.vstack(all_embeddings).astype(np.float32)
+    print(f"  DimeNet++ embeddings: {result.shape}")
+    return result
+
+
+# =============================================================================
 # GRAPH KERNEL FEATURES
 # =============================================================================
 

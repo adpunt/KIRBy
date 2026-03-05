@@ -164,6 +164,82 @@ def get_cdr_residue_indices(sequence: str) -> List[int]:
     return cdr_indices
 
 
+# IMGT region boundaries (inclusive) — all 7 regions of a variable domain
+_IMGT_REGION_RANGES = {
+    'FR1': (1, 26), 'CDR1': (27, 38), 'FR2': (39, 55),
+    'CDR2': (56, 65), 'FR3': (66, 104), 'CDR3': (105, 117), 'FR4': (118, 128),
+}
+
+
+def get_region_indices(sequence: str) -> dict:
+    """Get 0-based residue indices for each of the 7 IMGT regions.
+
+    Returns dict mapping region name → list of 0-based raw sequence indices.
+    Falls back to {'FULL': list(range(len(sequence)))} if ANARCI fails.
+    """
+    try:
+        from anarci import anarci as run_anarci
+    except ImportError:
+        return {'FULL': list(range(len(sequence)))}
+
+    results = run_anarci([('q', sequence)], scheme='imgt')
+    numbering = results[0]
+
+    if not numbering or not numbering[0]:
+        return {'FULL': list(range(len(sequence)))}
+
+    positions = numbering[0][0][0]
+
+    region_indices = {r: [] for r in _IMGT_REGION_RANGES}
+    raw_idx = 0
+    for (pos_num, _insertion), aa in positions:
+        if aa == '-':
+            continue
+        for region, (lo, hi) in _IMGT_REGION_RANGES.items():
+            if lo <= pos_num <= hi:
+                region_indices[region].append(raw_idx)
+                break
+        raw_idx += 1
+
+    # If no regions matched at all, fall back
+    if not any(region_indices.values()):
+        return {'FULL': list(range(len(sequence)))}
+
+    return region_indices
+
+
+def get_imgt_position_map(sequence: str) -> dict:
+    """Map IMGT position numbers to 0-based raw sequence indices.
+
+    Returns dict {imgt_pos: raw_idx}. Insertion codes are collapsed
+    (e.g., 111A → 111). If ANARCI fails, returns empty dict.
+    """
+    try:
+        from anarci import anarci as run_anarci
+    except ImportError:
+        return {}
+
+    results = run_anarci([('q', sequence)], scheme='imgt')
+    numbering = results[0]
+
+    if not numbering or not numbering[0]:
+        return {}
+
+    positions = numbering[0][0][0]
+
+    pos_map = {}
+    raw_idx = 0
+    for (pos_num, _insertion), aa in positions:
+        if aa == '-':
+            continue
+        # Store first occurrence for each IMGT position number
+        if pos_num not in pos_map:
+            pos_map[pos_num] = raw_idx
+        raw_idx += 1
+
+    return pos_map
+
+
 # ── LM embeddings ────────────────────────────────────────────────────────────
 
 def _mean_pool(outputs, attention_mask):
@@ -619,6 +695,36 @@ def embed_amplify_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarra
     )
 
 
+# ── Structural features (from structural.py) ─────────────────────────────────
+
+
+def embed_structural(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """Combined structural features: SASA + confidence + paratope → (N, 28).
+
+    Uses ABodyBuilder2 (ImmuneBuilder) for structure prediction.
+    Falls back to paratope-only (8D, zero-padded to 28D) if unavailable.
+
+    Requires: pip install ImmuneBuilder biopython
+    """
+    from kirby.representations.structural import compute_structural_features
+    return compute_structural_features(heavy_seqs, list(light_seqs)).astype(np.float32)
+
+
+def embed_paratope(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """Sequence-based paratope features → (N, 8).
+
+    No structure prediction needed — purely from CDR boundaries.
+    Fast, CPU-only, no dependencies beyond BioPython.
+    """
+    from kirby.representations.structural import compute_paratope_features
+    n = len(heavy_seqs)
+    features = np.zeros((n, 8), dtype=np.float32)
+    for i in range(n):
+        light = light_seqs[i] if light_seqs else None
+        features[i] = compute_paratope_features(heavy_seqs[i], light)
+    return features
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 ANTIBODY_REPS = {
@@ -641,6 +747,9 @@ ANTIBODY_REPS = {
     # AMPLIFY 350M (Mila/Chandar Lab)
     'amplify': embed_amplify,                # 1920D (960 × 2)
     'amplify_cdr': embed_amplify_cdr,        # 1920D (CDR-pooled)
+    # Structural (from structural.py, requires ImmuneBuilder for full 28D)
+    'structural': embed_structural,          # 28D (SASA + confidence + paratope)
+    'paratope': embed_paratope,              # 8D (sequence-based, no deps)
 }
 
 # LM reps (require GPU / torch / transformers)
@@ -650,5 +759,8 @@ ANTIBODY_LM_REPS = {
     'esm2_midlayers', 'amplify', 'amplify_cdr',
 }
 
-# Fast reps (no dependencies beyond numpy)
-ANTIBODY_FAST_REPS = {'onehot', 'blosum', 'aac'}
+# Structural reps (require ImmuneBuilder + biopython, CPU-heavy)
+ANTIBODY_STRUCTURAL_REPS = {'structural'}
+
+# Fast reps (no dependencies beyond numpy/biopython)
+ANTIBODY_FAST_REPS = {'onehot', 'blosum', 'aac', 'paratope'}
