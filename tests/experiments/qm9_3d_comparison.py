@@ -194,8 +194,22 @@ def run_frozen_schnet(smiles, labels, train_idx, val_idx, test_idx):
 
 def run_e2e_schnet(data_list, labels, train_idx, val_idx, test_idx,
                    prop_idx=4, epochs=100):
-    """End-to-end SchNet trained on 3D coordinates."""
+    """End-to-end SchNet trained on 3D coordinates.
+
+    Requires: torch-cluster (for radius_graph in SchNet interaction layer).
+    Install: pip install torch-cluster -f https://data.pyg-team.org/whl/torch-{TORCH_VERSION}+{CUDA}.html
+    """
     import torch
+    try:
+        import torch_cluster  # noqa: F401
+    except ImportError:
+        raise ImportError(
+            "torch-cluster is required for SchNet end-to-end training. "
+            "Install: pip install torch-cluster -f "
+            "https://data.pyg-team.org/whl/torch-$(python -c 'import torch; print(torch.__version__)')+"
+            "$(python -c 'import torch; print(\"cu\" + torch.version.cuda.replace(\".\",\"\") if torch.cuda.is_available() else \"cpu\")')"
+            ".html"
+        )
     from torch_geometric.loader import DataLoader
 
     try:

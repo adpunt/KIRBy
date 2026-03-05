@@ -102,7 +102,15 @@ def load_buchwald_hartwig(n_splits: int = 10, data_dir=None) -> Dict:
         _download_file(url, xlsx_path)
 
     print("  Parsing Buchwald-Hartwig Excel...")
-    df = pd.read_excel(xlsx_path, sheet_name='FullCV_01')
+    try:
+        df = pd.read_excel(xlsx_path, sheet_name='FullCV_01')
+    except ImportError as e:
+        if 'openpyxl' in str(e):
+            raise ImportError(
+                "openpyxl>=3.1.0 required for Excel loading. "
+                "Fix: pip install --upgrade openpyxl"
+            ) from e
+        raise
 
     # Cache product SMILES per unique aryl halide
     aryl_products: Dict[str, Optional[str]] = {}
