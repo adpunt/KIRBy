@@ -29,7 +29,7 @@ submit() {
         --mem="${mem}" \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
         ${gpu:+--gres=gpu:1} \
-        --wrap="cd /data/stat-cadd/scat9264/KIRBy && . ./setup.sh && mkdir -p ${OUTPUT} && python tests/run_baseline_survey.py ${domain} ${COMMON} ${extra}" \
+        --wrap="cd /data/stat-cadd/scat9264/KIRBy && git pull && . ./setup.sh && mkdir -p ${OUTPUT} && python tests/run_baseline_survey.py ${domain} ${COMMON} ${extra}" \
         | awk '{print $4}')
     echo "  $J  ${domain}  (mem=${mem}, time=${wall}${gpu:+, GPU})"
 }
