@@ -16,9 +16,16 @@ export PYTHONUSERBASE=/data/stat-cadd/scat9264/.local
 export KIRBY_CACHE_DIR=/data/stat-cadd/scat9264/.cache/kirby
 export KIRBY_MODELS_DIR=/data/stat-cadd/scat9264/kirby_models
 
+# Ensure user packages override system Anaconda packages (e.g., openpyxl 3.0.9)
+USER_SITE=$(python -c "import site; print(site.getusersitepackages())" 2>/dev/null)
+if [ -n "$USER_SITE" ] && [ -d "$USER_SITE" ]; then
+    export PYTHONPATH="$USER_SITE${PYTHONPATH:+:$PYTHONPATH}"
+fi
+
 # Install KIRBy in editable mode (picks up src/kirby)
 pip install --quiet -e . 2>/dev/null
 
 # Install any missing dependencies
 pip install --quiet shap captum lime Boruta 2>/dev/null
 pip install --quiet ImmuneBuilder antifold 2>/dev/null
+pip install --quiet 'openpyxl>=3.1.0' 2>/dev/null

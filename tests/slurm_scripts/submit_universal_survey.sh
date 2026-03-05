@@ -46,10 +46,10 @@ case "$MODE" in
         submit molecular 64G 23:59:00 "--finetune" gpu
         ;;
     tcga)
-        submit tcga 128G
+        submit tcga 256G
         ;;
     tcga_ft)
-        submit tcga 128G 23:59:00 "--finetune" gpu
+        submit tcga 256G 23:59:00 "--finetune" gpu
         ;;
     dta)
         submit dta 96G
@@ -62,7 +62,7 @@ case "$MODE" in
         ;;
     all)
         submit molecular
-        submit tcga 128G
+        submit tcga 256G
         submit dta 96G
         submit reaction 32G 06:00:00
         echo ""
@@ -70,7 +70,7 @@ case "$MODE" in
         ;;
     all_ft)
         submit molecular 64G 23:59:00 "--finetune" gpu
-        submit tcga 128G 23:59:00 "--finetune" gpu
+        submit tcga 256G 23:59:00 "--finetune" gpu
         submit dta 96G 23:59:00 "--finetune" gpu
         submit reaction 32G 06:00:00
         echo ""
