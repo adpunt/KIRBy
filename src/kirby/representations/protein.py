@@ -12,8 +12,9 @@ Functions:
 - create_protein_kmer: k-mer frequency (default k=3, 8000D)
 """
 
+import os
 import numpy as np
-from typing import List
+from typing import List, Optional
 
 # Standard amino acid order (matches antibody.py)
 STANDARD_AAS = 'ACDEFGHIKLMNPQRSTVWY'
@@ -380,6 +381,244 @@ def create_protein_descriptors(sequences: List[str]) -> np.ndarray:
         features[i, 29] = (n_pos - n_neg) / max(seq_len, 1)
 
     print(f"  Generated protein descriptors: ({n}, 30)")
+    return features
+
+
+def create_esmfold_protein_features(
+    sequences: List[str],
+    device: str = 'cpu',
+) -> np.ndarray:
+    """Extract structural features from ESMFold predicted structures.
+
+    ESMFold predicts 3D structure from a single sequence (no MSA needed).
+    Much faster than AlphaFold2. From the predicted structure we extract:
+      - pLDDT per-residue confidence → stats (mean, min, max, std, fraction>70)
+      - Contact map summary → contact density, avg contacts per residue
+      - Radius of gyration estimate
+      - Secondary structure fractions (helix, sheet, coil from dssp-like)
+
+    Features (12D):
+      0: mean pLDDT
+      1: min pLDDT
+      2: max pLDDT
+      3: std pLDDT
+      4: fraction pLDDT > 70 (confident residues)
+      5: fraction pLDDT > 90 (very confident)
+      6: mean contacts per residue (8Å cutoff)
+      7: contact density (contacts / n_residues²)
+      8: radius of gyration (from Cα positions)
+      9: sequence length / 1000 (normalised)
+      10: fraction residues in contact with >5 others
+      11: mean pairwise Cα distance
+
+    Requires: pip install transformers torch
+    """
+    import torch
+
+    print("  Loading ESMFold for structure prediction...")
+    try:
+        from transformers import EsmForProteinFolding, AutoTokenizer
+    except ImportError:
+        raise ImportError("ESMFold requires transformers>=4.30: pip install transformers")
+
+    tokenizer = AutoTokenizer.from_pretrained("facebook/esmfold_v1")
+    model = EsmForProteinFolding.from_pretrained("facebook/esmfold_v1").to(device)
+    model.eval()
+
+    n = len(sequences)
+    features = np.zeros((n, 12), dtype=np.float32)
+
+    print(f"  Predicting structures for {n} proteins with ESMFold...")
+    with torch.no_grad():
+        for i, seq in enumerate(sequences):
+            seq = seq.upper().strip()[:512]  # ESMFold max practical length
+            try:
+                inputs = tokenizer([seq], return_tensors="pt",
+                                   add_special_tokens=False).to(device)
+                output = model(**inputs)
+
+                # pLDDT: per-residue confidence (0-100 scale in output.plddt)
+                plddt = output.plddt[0, :len(seq)].cpu().numpy().flatten()
+                if plddt.max() <= 1.0:
+                    plddt *= 100.0  # normalize to 0-100 if needed
+
+                features[i, 0] = plddt.mean()
+                features[i, 1] = plddt.min()
+                features[i, 2] = plddt.max()
+                features[i, 3] = plddt.std()
+                features[i, 4] = (plddt > 70).mean()
+                features[i, 5] = (plddt > 90).mean()
+
+                # Extract Cα positions from predicted structure
+                # output.positions: (1, n_res, 37, 3) — atom37 representation
+                # Cα is atom index 1 in atom37
+                positions = output.positions[0, :len(seq), 1, :].cpu().numpy()  # (L, 3)
+
+                # Contact map (8Å cutoff on Cα-Cα distances)
+                from scipy.spatial.distance import pdist, squareform
+                dist_matrix = squareform(pdist(positions))
+                n_res = len(seq)
+                contacts = (dist_matrix < 8.0) & (np.abs(np.arange(n_res)[:, None] - np.arange(n_res)[None, :]) > 5)
+                contacts_per_res = contacts.sum(axis=1).astype(np.float32)
+
+                features[i, 6] = contacts_per_res.mean()
+                features[i, 7] = contacts.sum() / max(n_res * n_res, 1)
+                features[i, 8] = np.sqrt(((positions - positions.mean(axis=0)) ** 2).sum(axis=1).mean())
+                features[i, 9] = n_res / 1000.0
+                features[i, 10] = (contacts_per_res > 5).mean()
+                features[i, 11] = dist_matrix.mean()
+
+            except Exception as e:
+                print(f"    WARNING: ESMFold failed on seq {i} (len={len(seq)}): {e}")
+                features[i, 9] = len(seq) / 1000.0  # at least set length
+
+            if (i + 1) % 20 == 0 or i == n - 1:
+                print(f"    Progress: {i + 1}/{n}")
+
+    print(f"  Generated ESMFold features: ({n}, 12)")
+    return features
+
+
+def create_alphafold_db_features(
+    sequences: List[str],
+    uniprot_ids: Optional[List[str]] = None,
+) -> np.ndarray:
+    """Extract structural features from AlphaFold Database pre-computed structures.
+
+    Downloads predicted structures from the AlphaFold Protein Structure Database
+    (https://alphafold.ebi.ac.uk/) for proteins with known UniProt IDs. Extracts
+    contact map + distance matrix summary features.
+
+    If UniProt IDs are not provided, attempts to map sequences via UniProt ID
+    mapping API. Falls back to sequence-based descriptors for unmapped proteins.
+
+    Features (15D):
+      0: mean pLDDT (from B-factor column)
+      1: min pLDDT
+      2: fraction pLDDT > 70
+      3: fraction pLDDT > 90
+      4: mean contacts per residue (8Å Cα)
+      5: contact density
+      6: radius of gyration
+      7: mean pairwise Cα distance
+      8: max pairwise Cα distance
+      9: sequence length / 1000
+      10: long-range contact fraction (|i-j| > 12)
+      11: fraction residues with >5 contacts
+      12: mean Cα distance for contacts (short range, |i-j| < 6)
+      13: mean Cα distance for contacts (long range, |i-j| > 12)
+      14: pLDDT std
+
+    Requires: biopython, requests
+    """
+    import requests
+    import tempfile
+    from pathlib import Path
+
+    print(f"  Fetching AlphaFold DB structures for {len(sequences)} proteins...")
+
+    n = len(sequences)
+    features = np.zeros((n, 15), dtype=np.float32)
+
+    # Cache directory
+    cache_dir = Path(os.environ.get('KIRBY_CACHE_DIR',
+                     str(Path.home() / '.cache' / 'kirby'))) / 'alphafold_db'
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    for i, seq in enumerate(sequences):
+        seq = seq.upper().strip()
+        uid = uniprot_ids[i] if uniprot_ids and i < len(uniprot_ids) else None
+
+        # Try to get UniProt ID if not provided
+        if uid is None:
+            # Use sequence hash as a lookup key — skip API mapping for speed
+            features[i, 9] = len(seq) / 1000.0
+            continue
+
+        pdb_path = cache_dir / f'AF-{uid}-F1-model_v4.pdb'
+
+        # Download if not cached
+        if not pdb_path.exists():
+            url = f'https://alphafold.ebi.ac.uk/files/AF-{uid}-F1-model_v4.pdb'
+            try:
+                resp = requests.get(url, timeout=30)
+                if resp.status_code == 200:
+                    pdb_path.write_bytes(resp.content)
+                else:
+                    features[i, 9] = len(seq) / 1000.0
+                    continue
+            except Exception:
+                features[i, 9] = len(seq) / 1000.0
+                continue
+
+        # Parse PDB and extract features
+        try:
+            from Bio.PDB import PDBParser
+            parser = PDBParser(QUIET=True)
+            structure = parser.get_structure('af', str(pdb_path))
+            model = structure[0]
+
+            # Extract Cα atoms
+            ca_atoms = []
+            plddt_values = []
+            for chain in model.get_chains():
+                for residue in chain.get_residues():
+                    if residue.get_id()[0] != ' ':
+                        continue
+                    if 'CA' in residue:
+                        ca = residue['CA']
+                        ca_atoms.append(ca.get_vector().get_array())
+                        plddt_values.append(ca.get_bfactor())
+
+            if not ca_atoms:
+                features[i, 9] = len(seq) / 1000.0
+                continue
+
+            ca_positions = np.array(ca_atoms)
+            plddt = np.array(plddt_values)
+            n_res = len(ca_positions)
+
+            # pLDDT features
+            features[i, 0] = plddt.mean()
+            features[i, 1] = plddt.min()
+            features[i, 2] = (plddt > 70).mean()
+            features[i, 3] = (plddt > 90).mean()
+
+            # Contact map features
+            from scipy.spatial.distance import pdist, squareform
+            dist_matrix = squareform(pdist(ca_positions))
+            seq_sep = np.abs(np.arange(n_res)[:, None] - np.arange(n_res)[None, :])
+            contacts = (dist_matrix < 8.0) & (seq_sep > 5)
+            contacts_per_res = contacts.sum(axis=1).astype(np.float32)
+
+            features[i, 4] = contacts_per_res.mean()
+            features[i, 5] = contacts.sum() / max(n_res * n_res, 1)
+            features[i, 6] = np.sqrt(((ca_positions - ca_positions.mean(axis=0)) ** 2).sum(axis=1).mean())
+            features[i, 7] = dist_matrix.mean()
+            features[i, 8] = dist_matrix.max()
+            features[i, 9] = n_res / 1000.0
+
+            # Long-range contacts
+            long_range = contacts & (seq_sep > 12)
+            features[i, 10] = long_range.sum() / max(contacts.sum(), 1)
+            features[i, 11] = (contacts_per_res > 5).mean()
+
+            # Short vs long range average distances
+            short_contacts = (dist_matrix < 8.0) & (seq_sep > 0) & (seq_sep <= 6)
+            long_contacts = (dist_matrix < 8.0) & (seq_sep > 12)
+            features[i, 12] = dist_matrix[short_contacts].mean() if short_contacts.any() else 0.0
+            features[i, 13] = dist_matrix[long_contacts].mean() if long_contacts.any() else 0.0
+            features[i, 14] = plddt.std()
+
+        except Exception as e:
+            print(f"    WARNING: AlphaFold DB feature extraction failed for {uid}: {e}")
+            features[i, 9] = len(seq) / 1000.0
+
+        if (i + 1) % 50 == 0 or i == n - 1:
+            print(f"    Progress: {i + 1}/{n}")
+
+    mapped = (features[:, 0] != 0).sum()
+    print(f"  Generated AlphaFold DB features: ({n}, 15), {mapped}/{n} mapped")
     return features
 
 

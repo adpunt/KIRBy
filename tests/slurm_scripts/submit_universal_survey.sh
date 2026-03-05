@@ -12,7 +12,7 @@
 
 MODE=${1:-all}
 OUTPUT="tests/results/universal_survey"
-COMMON="--n-folds 3 --augment --output ${OUTPUT}/"
+COMMON="--n-folds 5 --augment --output ${OUTPUT}/"
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
 
 submit() {
@@ -84,7 +84,7 @@ case "$MODE" in
         echo "  all_ft        All domains with fine-tuning + augment (GPU)"
         echo "  quick         Molecular only (fastest)"
         echo "  molecular     Molecular domain (4 datasets)"
-        echo "  molecular_ft  Molecular + ChemBERTa/MolFormer LoRA (GPU)"
+        echo "  molecular_ft  Molecular + ChemBERTa/MolFormer LoRA + SchNet E2E (GPU)"
         echo "  tcga          TCGA domain (3 datasets)"
         echo "  tcga_ft       TCGA + Geneformer/scFoundation FT (GPU)"
         echo "  dta           DTA domain (4 datasets)"

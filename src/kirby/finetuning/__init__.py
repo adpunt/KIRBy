@@ -67,3 +67,8 @@ def make_dta_protein_lora_factory(*args, **kwargs):
 def make_antibody_lora_factory(*args, **kwargs):
     from kirby.finetuning.antibody_lora import make_antibody_lora_factory as _f
     return _f(*args, **kwargs)
+
+
+def make_molecular_3d_factory(*args, **kwargs):
+    from kirby.finetuning.molecular_3d import make_molecular_3d_factory as _f
+    return _f(*args, **kwargs)

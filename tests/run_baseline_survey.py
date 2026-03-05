@@ -352,6 +352,17 @@ def make_ft_factories(data, dataset_name, task_type, ft_epochs=3, ft_cache=True)
             except Exception as e:
                 print(f"  lora_{base_model} factory failed: {e}")
 
+        # 3D GNN fine-tuning (SchNet E2E → 128D embeddings)
+        for model_3d in ('schnet',):
+            try:
+                from kirby.finetuning.molecular_3d import make_molecular_3d_factory
+                factories[f'ft_{model_3d}'] = make_molecular_3d_factory(
+                    smiles_list=smiles, dataset_name=dataset_name,
+                    base_model=model_3d, epochs=100, cache=ft_cache,
+                )
+            except Exception as e:
+                print(f"  ft_{model_3d} factory failed: {e}")
+
     elif domain == 'dta':
         protein_seqs = data.get('protein_seqs')
         drug_smiles = data.get('drug_smiles')
@@ -670,8 +681,8 @@ Examples:
                        help='Dataset name, domain shortcut, or "everything"')
     parser.add_argument('--reps', type=str, default=None,
                        help='Override rep preset (default: per-dataset from registry)')
-    parser.add_argument('--n-folds', type=int, default=3,
-                       help='Number of CV folds (default: 3)')
+    parser.add_argument('--n-folds', type=int, default=5,
+                       help='Number of CV folds (default: 5)')
     parser.add_argument('--finetune', action='store_true',
                        help='Include fine-tuned reps (TCGA: geneformer/scfoundation, '
                             'molecular: ChemBERTa/MolFormer LoRA, DTA: ESM-2 protein LoRA)')
