@@ -240,11 +240,17 @@ def embed_esm2(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
 
 
 def embed_antiberty(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
-    """AntiBERTy embeddings: H+L concatenated → (N, 1024)."""
-    return _embed_single_chain_model(
-        heavy_seqs, light_seqs,
-        'Exscientia/AntiBERTy',
-    )
+    """AntiBERTy embeddings: H+L concatenated → (N, 1024).
+
+    Uses the `antiberty` pip package (jeffreyruffolo/AntiBERTy).
+    Install: pip install antiberty
+    """
+    from antiberty import AntiBERTyRunner
+
+    runner = AntiBERTyRunner()
+    h_embs = [e.numpy().mean(axis=0) for e in runner.embed(list(heavy_seqs))]
+    l_embs = [e.numpy().mean(axis=0) for e in runner.embed(list(light_seqs))]
+    return np.hstack([np.vstack(h_embs), np.vstack(l_embs)]).astype(np.float32)
 
 
 def embed_prot_t5(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
@@ -432,11 +438,31 @@ def embed_esm2_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
 
 
 def embed_antiberty_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
-    """AntiBERTy CDR-only pooled: H+L concatenated → (N, 1024)."""
-    return _embed_single_chain_cdr(
-        heavy_seqs, light_seqs,
-        'Exscientia/AntiBERTy',
-    )
+    """AntiBERTy CDR-only pooled: H+L concatenated → (N, 1024).
+
+    Uses the `antiberty` pip package. CDR residues identified by ANARCI,
+    then pooled from AntiBERTy's per-residue embeddings.
+    """
+    from antiberty import AntiBERTyRunner
+
+    runner = AntiBERTyRunner()
+
+    def _cdr_pool_antiberty(seqs):
+        all_cdr_indices = [get_cdr_residue_indices(s) for s in seqs]
+        per_residue = runner.embed(list(seqs))  # list of (L_i, 512) tensors
+        pooled = []
+        for emb, cdr_idx in zip(per_residue, all_cdr_indices):
+            arr = emb.numpy()
+            valid = [i for i in cdr_idx if i < arr.shape[0]]
+            if valid:
+                pooled.append(arr[valid].mean(axis=0))
+            else:
+                pooled.append(arr.mean(axis=0))
+        return np.vstack(pooled)
+
+    h_embs = _cdr_pool_antiberty(heavy_seqs)
+    l_embs = _cdr_pool_antiberty(light_seqs)
+    return np.hstack([h_embs, l_embs]).astype(np.float32)
 
 
 def embed_prot_t5_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:

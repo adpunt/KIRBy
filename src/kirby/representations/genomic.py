@@ -1742,7 +1742,7 @@ def create_bulkrnabert_embeddings(expression: np.ndarray,
     # 6. Tokenize and extract embeddings in batches
     embed_dim = config.embed_dim  # 256
     embeddings = np.zeros((n_samples, embed_dim), dtype=np.float32)
-    batch_size = 8  # 19062-length sequences are memory-intensive
+    batch_size = 1  # 19062-token sequences cause O(n²) attention; batch>1 OOMs
 
     with torch.no_grad():
         for start in range(0, n_samples, batch_size):
