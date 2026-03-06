@@ -22,16 +22,17 @@ if [ -n "$USER_SITE" ] && [ -d "$USER_SITE" ]; then
     export PYTHONPATH="$USER_SITE${PYTHONPATH:+:$PYTHONPATH}"
 fi
 
-# Core scientific stack — all pinned to last versions supporting Python 3.9.
-# If any import fails (corrupted/mismatched .so), force-reinstall the lot.
-CORE_PKGS='numpy==1.26.4 pandas==2.0.3 scipy==1.13.1 scikit-learn==1.5.2'
+# Core scientific stack — pinned to known-working versions (requirements-working.txt)
+CORE_PKGS='numpy==1.26.4 pandas==2.2.0 scipy==1.11.4 scikit-learn==1.4.0 pytz==2023.3.post1'
 if ! python -c "import numpy, pandas, scipy, sklearn" 2>/dev/null; then
     echo "Fixing broken scientific stack..."
-    pip install --ignore-installed $CORE_PKGS \
+    pip install $CORE_PKGS \
         || { echo "FATAL: core scientific stack install failed"; return 1 2>/dev/null || exit 1; }
 else
     pip install --quiet $CORE_PKGS 2>/dev/null || true
 fi
+
+PY_MINOR=$(python -c "import sys; print(sys.version_info.minor)" 2>/dev/null)
 
 # Load CUDA module (ARC cluster) — must come first so real CUPTI libs take
 # priority over PyTorch's stub libcupti.so
@@ -59,10 +60,12 @@ if [ ! -d "$CLAMP_DIR" ]; then
     pip install --quiet mhnreact 2>/dev/null || true
 fi
 pip install --quiet "git+https://github.com/gmum/huggingmolecules.git#subdirectory=src" 2>/dev/null || true  # R-MAT
-pip install --quiet unimol-tools 2>/dev/null || true  # Uni-Mol v2
 
-# Protein/antibody LMs: ESM-C
-pip install --quiet esm 2>/dev/null || true
+# Packages requiring Python >=3.10 or numpy>=2 — skip on 3.9
+if [ "${PY_MINOR:-9}" -ge 10 ]; then
+    pip install --quiet unimol-tools 2>/dev/null || true   # Uni-Mol v2 (requires numpy>=2)
+    pip install --quiet esm 2>/dev/null || true            # ESM-C (requires Python>=3.10)
+fi
 
 # Always succeed so && chains in SLURM wraps don't break
 true
