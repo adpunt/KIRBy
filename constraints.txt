@@ -1,0 +1,8 @@
+# Pin core scientific stack — prevents ANY pip install from upgrading these.
+# All versions from requirements-working.txt, last to support Python 3.9.
+# Used by setup.sh via: pip install -c constraints.txt ...
+numpy==1.26.4
+pandas==2.2.0
+scipy==1.11.4
+scikit-learn==1.4.0
+pytz==2023.3.post1
