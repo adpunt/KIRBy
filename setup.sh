@@ -22,6 +22,17 @@ if [ -n "$USER_SITE" ] && [ -d "$USER_SITE" ]; then
     export PYTHONPATH="$USER_SITE${PYTHONPATH:+:$PYTHONPATH}"
 fi
 
+# Core scientific stack — all pinned to last versions supporting Python 3.9.
+# If any import fails (corrupted/mismatched .so), force-reinstall the lot.
+CORE_PKGS='numpy==1.26.4 pandas==2.0.3 scipy==1.13.1 scikit-learn==1.5.2'
+if ! python -c "import numpy, pandas, scipy, sklearn" 2>/dev/null; then
+    echo "Fixing broken scientific stack..."
+    pip install --force-reinstall $CORE_PKGS \
+        || { echo "FATAL: core scientific stack install failed"; return 1 2>/dev/null || exit 1; }
+else
+    pip install --quiet $CORE_PKGS 2>/dev/null || true
+fi
+
 # Load CUDA module (ARC cluster) — must come first so real CUPTI libs take
 # priority over PyTorch's stub libcupti.so
 module load CUDA 2>/dev/null || true
@@ -37,7 +48,6 @@ pip install --quiet -e . 2>/dev/null || true
 pip install --quiet shap captum lime Boruta 2>/dev/null || true
 pip install --quiet ImmuneBuilder antifold antiberty 2>/dev/null || true
 pip install --quiet 'openpyxl>=3.1.0' 2>/dev/null || true
-pip install --quiet 'numpy<2' 'pandas>=1.5,<2.1' 2>/dev/null || true  # numpy 2.x breaks pandas on Py3.9
 
 # Molecular reps: CLAMP, R-MAT, Uni-Mol v2
 CLAMP_DIR="$(dirname "$SCRIPT_DIR" 2>/dev/null)/src/clamp"
