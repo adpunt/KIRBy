@@ -29,3 +29,18 @@ pip install --quiet -e . 2>/dev/null
 pip install --quiet shap captum lime Boruta 2>/dev/null
 pip install --quiet ImmuneBuilder antifold antiberty 2>/dev/null
 pip install --quiet 'openpyxl>=3.1.0' 2>/dev/null
+
+# Molecular reps: CLAMP, R-MAT, Uni-Mol v2
+CLAMP_DIR="$(dirname "$SCRIPT_DIR" 2>/dev/null)/src/clamp"
+[ -z "$CLAMP_DIR" ] && CLAMP_DIR="$PWD/src/clamp"
+if [ ! -d "$CLAMP_DIR" ]; then
+    echo "Installing CLAMP..."
+    git clone --quiet https://github.com/ml-jku/clamp.git "$CLAMP_DIR" 2>/dev/null
+    pip install --quiet -e "$CLAMP_DIR" 2>/dev/null
+    pip install --quiet mhnreact 2>/dev/null
+fi
+pip install --quiet "git+https://github.com/gmum/huggingmolecules.git#subdirectory=src" 2>/dev/null  # R-MAT
+pip install --quiet unimol-tools 2>/dev/null  # Uni-Mol v2
+
+# Protein/antibody LMs: ESM-C
+pip install --quiet esm 2>/dev/null

@@ -288,8 +288,8 @@ def _embed_single_chain_model(
     from transformers import AutoTokenizer, AutoModel
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name).eval().to(device)
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    model = AutoModel.from_pretrained(model_name, trust_remote_code=True).eval().to(device)
 
     def _embed_seqs(seqs):
         all_embs = []
@@ -481,8 +481,8 @@ def _embed_single_chain_cdr(
     from transformers import AutoTokenizer, AutoModel
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name).eval().to(device)
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    model = AutoModel.from_pretrained(model_name, trust_remote_code=True).eval().to(device)
 
     def _embed_seqs(seqs):
         # Pre-compute CDR indices for all sequences
@@ -633,8 +633,8 @@ def _embed_single_chain_midlayers(
     from transformers import AutoTokenizer, AutoModel
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name, output_hidden_states=True).eval().to(device)
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    model = AutoModel.from_pretrained(model_name, output_hidden_states=True, trust_remote_code=True).eval().to(device)
 
     def _embed_seqs(seqs):
         all_embs = []
