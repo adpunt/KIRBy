@@ -702,6 +702,7 @@ def save_results(
         'baselines': result.baselines,
     }
 
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, 'w') as f:
         json.dump(output, f, indent=2)
 
@@ -796,6 +797,7 @@ def save_blueprint_code(result: SearchResult, reps_tested: List[str], output_pat
             f'',
         ])
 
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, 'w') as f:
         f.write('\n'.join(lines))
 
@@ -908,6 +910,7 @@ def generate_explanations(
     importance_comparison = compare_importance_methods(base_reps, labels)
 
     explain_path = output_path.replace('.json', '_explanations.json')
+    Path(explain_path).parent.mkdir(parents=True, exist_ok=True)
 
     explain_output = {
         'model': _get(best_result, 'model'),

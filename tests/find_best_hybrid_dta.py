@@ -446,6 +446,7 @@ def save_results(
         'baselines': result.baselines,
     }
 
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, 'w') as f:
         json.dump(output, f, indent=2)
 
@@ -489,6 +490,7 @@ def generate_explanations(
     print("\n" + format_explanation_summary(explanations, max_features=15))
 
     explain_path = output_path.replace('.json', '_explanations.json')
+    Path(explain_path).parent.mkdir(parents=True, exist_ok=True)
 
     explain_output = {
         'model': _get(best_result, 'model'),

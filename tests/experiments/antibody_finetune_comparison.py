@@ -633,13 +633,19 @@ def main():
             print(f"    {name}: R²={r['r2_mean']:.4f}")
 
     # Save
-    output_path = args.output or 'tests/results/comparisons/antibody_finetune_comparison.json'
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    output_path = args.output or 'tests/results/comparisons'
+    p = Path(output_path)
+    if p.suffix == '.json':
+        out_file = p
+    else:
+        p.mkdir(parents=True, exist_ok=True)
+        out_file = p / 'antibody_finetune_comparison.json'
+    out_file.parent.mkdir(parents=True, exist_ok=True)
 
     from experiments._shared import convert_numpy
-    with open(output_path, 'w') as f:
+    with open(out_file, 'w') as f:
         json.dump(all_results, f, indent=2, default=convert_numpy)
-    print(f"\nResults saved: {output_path}")
+    print(f"\nResults saved: {out_file}")
 
 
 if __name__ == '__main__':
