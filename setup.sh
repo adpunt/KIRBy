@@ -22,6 +22,13 @@ if [ -n "$USER_SITE" ] && [ -d "$USER_SITE" ]; then
     export PYTHONPATH="$USER_SITE${PYTHONPATH:+:$PYTHONPATH}"
 fi
 
+# Load CUDA module (ARC cluster) and add PyTorch bundled libs to LD_LIBRARY_PATH
+module load CUDA 2>/dev/null || true
+TORCH_LIB=$(python -c "import torch; print(torch.__path__[0] + '/lib')" 2>/dev/null)
+if [ -n "$TORCH_LIB" ] && [ -d "$TORCH_LIB" ]; then
+    export LD_LIBRARY_PATH="$TORCH_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
+
 # Install KIRBy in editable mode (picks up src/kirby)
 pip install --quiet -e . 2>/dev/null || true
 
