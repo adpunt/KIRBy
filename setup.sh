@@ -46,7 +46,14 @@ fi
 pip install --quiet -e . 2>/dev/null || true
 
 # Install any missing dependencies (|| true so failures don't break && chains)
-pip install --quiet shap captum lime Boruta 2>/dev/null || true
+# lightgbm + xgboost (used by all surveys)
+# xgboost >=3.0 requires Python >=3.10
+if [ "${PY_MINOR:-9}" -ge 10 ]; then
+    pip install --quiet lightgbm xgboost 2>/dev/null || true
+else
+    pip install --quiet lightgbm 'xgboost<3' 2>/dev/null || true
+fi
+pip install --quiet 'shap<0.50' captum lime Boruta 2>/dev/null || true  # shap >=0.50 requires numpy>=2
 pip install --quiet ImmuneBuilder antifold antiberty 2>/dev/null || true
 pip install --quiet 'openpyxl>=3.1.0' 2>/dev/null || true
 
