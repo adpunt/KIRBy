@@ -27,7 +27,7 @@ fi
 CORE_PKGS='numpy==1.26.4 pandas==2.0.3 scipy==1.13.1 scikit-learn==1.5.2'
 if ! python -c "import numpy, pandas, scipy, sklearn" 2>/dev/null; then
     echo "Fixing broken scientific stack..."
-    pip install --force-reinstall $CORE_PKGS \
+    pip install --ignore-installed $CORE_PKGS \
         || { echo "FATAL: core scientific stack install failed"; return 1 2>/dev/null || exit 1; }
 else
     pip install --quiet $CORE_PKGS 2>/dev/null || true
