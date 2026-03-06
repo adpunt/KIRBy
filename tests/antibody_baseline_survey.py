@@ -267,6 +267,9 @@ def evaluate_rep(
 
     Returns dict with r2_mean, r2_std, per_fold.
     """
+    X = np.asarray(X, dtype=np.float64)
+    labels = np.asarray(labels, dtype=np.float64)
+
     n_unique = len(np.unique(groups))
     actual_folds = min(n_folds, n_unique)
 
@@ -408,10 +411,12 @@ def run_survey(
         cache_file = _rep_cache_path(heavy_seqs, light_seqs, rep_name)
         if cache_file.exists():
             try:
-                X = np.load(cache_file)
-                print(f"  {rep_name}: loaded from cache ({X.shape[1]}D)")
-                reps[rep_name] = X
-                continue
+                X = np.load(cache_file, allow_pickle=False)
+                X = np.asarray(X, dtype=np.float64)
+                if X.ndim == 2:
+                    print(f"  {rep_name}: loaded from cache ({X.shape[1]}D)")
+                    reps[rep_name] = X
+                    continue
             except Exception:
                 pass  # corrupted cache, recompute
 
@@ -439,18 +444,26 @@ def run_survey(
     baselines = {}
     for rep_name in sorted(reps.keys()):
         X = reps[rep_name]
+        try:
+            X = np.asarray(X, dtype=np.float64)
+        except Exception:
+            print(f"  {rep_name}: SKIPPED (array conversion failed)")
+            continue
         dim = X.shape[1]
         print(f"  {rep_name} ({dim}D):", end='', flush=True)
 
-        entry = {'dimension': dim, 'scores': {}}
-        for mname, model in models.items():
-            result = evaluate_rep(X, labels, groups, model, n_folds)
-            entry['scores'][mname] = result
-            r2 = result['r2_mean']
-            print(f" {mname}={r2:.3f}", end='', flush=True)
+        try:
+            entry = {'dimension': dim, 'scores': {}}
+            for mname, model in models.items():
+                result = evaluate_rep(X, labels, groups, model, n_folds)
+                entry['scores'][mname] = result
+                r2 = result['r2_mean']
+                print(f" {mname}={r2:.3f}", end='', flush=True)
 
-        baselines[rep_name] = entry
-        print()
+            baselines[rep_name] = entry
+            print()
+        except Exception as e:
+            print(f" EVAL FAILED: {e}")
 
     # 5. Fine-tuned reps (ESM-2 LoRA)
     ft_baselines = {}

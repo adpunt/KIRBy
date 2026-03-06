@@ -426,55 +426,63 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
 
     for rep_name in sorted(reps.keys()):
         X = reps[rep_name]
+        try:
+            X = np.asarray(X, dtype=np.float64)
+        except Exception:
+            print(f"  {rep_name}: SKIPPED (array conversion failed)")
+            continue
         dim = X.shape[1]
         print(f"  {rep_name} ({dim}d):", end='', flush=True)
 
-        entry = {'dimension': dim, 'scores': {}}
+        try:
+            entry = {'dimension': dim, 'scores': {}}
 
-        for mname in model_names:
-            mean_s, _ = evaluate_rep(
-                X, labels, groups, default_models[mname], n_folds, task_type,
-                prebuilt_splits=prebuilt_splits)
-            entry['scores'][mname] = round(mean_s, 4)
-            print(f" {mname}={mean_s:.3f}", end='', flush=True)
+            for mname in model_names:
+                mean_s, _ = evaluate_rep(
+                    X, labels, groups, default_models[mname], n_folds, task_type,
+                    prebuilt_splits=prebuilt_splits)
+                entry['scores'][mname] = round(mean_s, 4)
+                print(f" {mname}={mean_s:.3f}", end='', flush=True)
 
-        # Optional: Optuna-tuned XGBoost
-        if tune_trials > 0:
-            try:
-                from experiments._shared import tune_xgboost_optuna
-                if prebuilt_splits is not None:
-                    tune_splits = prebuilt_splits
-                else:
-                    cv, cv_kwargs = _make_cv(groups, n_folds, labels)
-                    tune_splits = list(cv.split(X, labels, **cv_kwargs))
-                tune_scores = []
-                for train_idx, val_idx in tune_splits:
-                    scaler = StandardScaler()
-                    X_tr = scaler.fit_transform(X[train_idx])
-                    X_va = scaler.transform(X[val_idx])
-                    tuned = tune_xgboost_optuna(
-                        X_tr, labels[train_idx],
-                        n_trials=tune_trials, task_type=task_type, seed=seed,
-                    )
-                    tune_scores.append(_score(
-                        labels[val_idx], tuned.predict(X_va), task_type))
-                mean_s = float(np.mean(tune_scores))
-                entry['scores']['xgb_tuned'] = round(mean_s, 4)
-                print(f" xgb_tuned={mean_s:.3f}", end='', flush=True)
-            except ImportError:
-                print(" (optuna not installed)", end='', flush=True)
+            # Optional: Optuna-tuned XGBoost
+            if tune_trials > 0:
+                try:
+                    from experiments._shared import tune_xgboost_optuna
+                    if prebuilt_splits is not None:
+                        tune_splits = prebuilt_splits
+                    else:
+                        cv, cv_kwargs = _make_cv(groups, n_folds, labels)
+                        tune_splits = list(cv.split(X, labels, **cv_kwargs))
+                    tune_scores = []
+                    for train_idx, val_idx in tune_splits:
+                        scaler = StandardScaler()
+                        X_tr = scaler.fit_transform(X[train_idx])
+                        X_va = scaler.transform(X[val_idx])
+                        tuned = tune_xgboost_optuna(
+                            X_tr, labels[train_idx],
+                            n_trials=tune_trials, task_type=task_type, seed=seed,
+                        )
+                        tune_scores.append(_score(
+                            labels[val_idx], tuned.predict(X_va), task_type))
+                    mean_s = float(np.mean(tune_scores))
+                    entry['scores']['xgb_tuned'] = round(mean_s, 4)
+                    print(f" xgb_tuned={mean_s:.3f}", end='', flush=True)
+                except ImportError:
+                    print(" (optuna not installed)", end='', flush=True)
 
-        # Best model for this rep
-        valid = [(m, s) for m, s in entry['scores'].items()
-                 if not np.isnan(s)]
-        if valid:
-            best = max(valid, key=lambda x: x[1])
-            entry['best'] = {'model': best[0], 'score': best[1]}
-        else:
-            entry['best'] = None
+            # Best model for this rep
+            valid = [(m, s) for m, s in entry['scores'].items()
+                     if not np.isnan(s)]
+            if valid:
+                best = max(valid, key=lambda x: x[1])
+                entry['best'] = {'model': best[0], 'score': best[1]}
+            else:
+                entry['best'] = None
 
-        baselines[rep_name] = entry
-        print()
+            baselines[rep_name] = entry
+            print()
+        except Exception as e:
+            print(f" EVAL FAILED: {e}")
 
     # 4. Fine-tuned reps (TCGA only)
     ft_baselines = {}
