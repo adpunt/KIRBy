@@ -175,6 +175,23 @@ def _assign_groups(heavy_seqs, light_seqs, strategy, data):
         return _identity_groups(heavy_seqs)
 
 
+def _rep_cache_path(heavy_seqs: List[str], light_seqs: List[str],
+                    rep_name: str) -> Path:
+    """Get cache file path for a representation, keyed by sequence hash.
+
+    Respects KIRBY_CACHE_DIR env var (set by setup.sh on the server).
+    Falls back to ~/.cache/kirby.
+    """
+    import hashlib
+    content = '\n'.join(heavy_seqs) + '\n\n' + '\n'.join(light_seqs)
+    data_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
+    base = Path(os.environ.get('KIRBY_CACHE_DIR',
+                               str(Path.home() / '.cache' / 'kirby')))
+    cache_dir = base / 'reps' / f'ab_{data_hash}'
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir / f'{rep_name}.npy'
+
+
 def _identity_groups(seqs, min_groups=3):
     """Assign groups by unique sequence identity."""
     import hashlib
@@ -379,13 +396,25 @@ def run_survey(
 
     print(f"  {data['n_samples']} samples, {data['n_groups']} groups")
 
-    # 2. Generate representations
+    # 2. Generate representations (with .npy caching)
     from kirby.representations.antibody import ANTIBODY_REPS
     reps = {}
     for rep_name in rep_names:
         if rep_name not in ANTIBODY_REPS:
             print(f"  WARNING: unknown rep '{rep_name}', skipping")
             continue
+
+        # Try loading from cache
+        cache_file = _rep_cache_path(heavy_seqs, light_seqs, rep_name)
+        if cache_file.exists():
+            try:
+                X = np.load(cache_file)
+                print(f"  {rep_name}: loaded from cache ({X.shape[1]}D)")
+                reps[rep_name] = X
+                continue
+            except Exception:
+                pass  # corrupted cache, recompute
+
         try:
             print(f"  Generating {rep_name}...", end='', flush=True)
             X = ANTIBODY_REPS[rep_name](heavy_seqs, light_seqs)
@@ -394,6 +423,8 @@ def run_survey(
                 continue
             reps[rep_name] = X
             print(f" ({X.shape[1]}D)")
+            # Save to cache
+            np.save(cache_file, X)
         except Exception as e:
             print(f" FAILED: {e}")
 
