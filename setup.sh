@@ -23,24 +23,27 @@ if [ -n "$USER_SITE" ] && [ -d "$USER_SITE" ]; then
 fi
 
 # Install KIRBy in editable mode (picks up src/kirby)
-pip install --quiet -e . 2>/dev/null
+pip install --quiet -e . 2>/dev/null || true
 
-# Install any missing dependencies
-pip install --quiet shap captum lime Boruta 2>/dev/null
-pip install --quiet ImmuneBuilder antifold antiberty 2>/dev/null
-pip install --quiet 'openpyxl>=3.1.0' 2>/dev/null
+# Install any missing dependencies (|| true so failures don't break && chains)
+pip install --quiet shap captum lime Boruta 2>/dev/null || true
+pip install --quiet ImmuneBuilder antifold antiberty 2>/dev/null || true
+pip install --quiet 'openpyxl>=3.1.0' 2>/dev/null || true
 
 # Molecular reps: CLAMP, R-MAT, Uni-Mol v2
 CLAMP_DIR="$(dirname "$SCRIPT_DIR" 2>/dev/null)/src/clamp"
 [ -z "$CLAMP_DIR" ] && CLAMP_DIR="$PWD/src/clamp"
 if [ ! -d "$CLAMP_DIR" ]; then
     echo "Installing CLAMP..."
-    git clone --quiet https://github.com/ml-jku/clamp.git "$CLAMP_DIR" 2>/dev/null
-    pip install --quiet -e "$CLAMP_DIR" 2>/dev/null
-    pip install --quiet mhnreact 2>/dev/null
+    git clone --quiet https://github.com/ml-jku/clamp.git "$CLAMP_DIR" 2>/dev/null || true
+    pip install --quiet -e "$CLAMP_DIR" 2>/dev/null || true
+    pip install --quiet mhnreact 2>/dev/null || true
 fi
-pip install --quiet "git+https://github.com/gmum/huggingmolecules.git#subdirectory=src" 2>/dev/null  # R-MAT
-pip install --quiet unimol-tools 2>/dev/null  # Uni-Mol v2
+pip install --quiet "git+https://github.com/gmum/huggingmolecules.git#subdirectory=src" 2>/dev/null || true  # R-MAT
+pip install --quiet unimol-tools 2>/dev/null || true  # Uni-Mol v2
 
 # Protein/antibody LMs: ESM-C
-pip install --quiet esm 2>/dev/null
+pip install --quiet esm 2>/dev/null || true
+
+# Always succeed so && chains in SLURM wraps don't break
+true
