@@ -21,7 +21,7 @@ From-zero-to-working setup for all molecular, antibody, and TCGA representations
 
 | Requirement | Minimum | Recommended |
 |-------------|---------|-------------|
-| Python | 3.8+ | 3.10-3.11 |
+| Python | 3.9+ | 3.10-3.11 (3.9 on ARC server — see §7 for constraints) |
 | RAM | 8 GB | 32 GB |
 | Disk | 20 GB | 50 GB (or use external storage) |
 | GPU | Not required | CUDA-capable (for pretrained models) |
@@ -226,7 +226,9 @@ pip install unimol-tools
 | CLAMP | Pretrained | 768D | Clone repo + `mhnreact` |
 | R-MAT | Pretrained | 768D | `huggingmolecules` (gmum) |
 | MAP4 | Static | 1024D | `map4` |
-| Uni-Mol v2 | Pretrained (3D) | 768D | `unimol-tools` |
+| Uni-Mol v2 | Pretrained (3D) | 768D | `unimol-tools` (**requires numpy>=2, Python>=3.10**) |
+| DimeNet++ | Pretrained (3D) | 256D | None (torch-geometric) |
+| PDV variants | Static | 200D | None (RDKit) — `pdv_binary_mean`, `pdv_rank` |
 
 ---
 
@@ -254,13 +256,17 @@ pip install ablang2   # AbLang-2 (768D, paired, seqcoding mode)
 # ProtT5-XL tokenizer dependency
 pip install sentencepiece
 
-# AntiBERTy (RoFormer tokenizer dependency)
-pip install rjieba
+# AntiBERTy (uses pip package, NOT HuggingFace)
+pip install antiberty
 
 # ESM-C (EvolutionaryScale package v3 — different from old fair-esm)
 # REQUIRES Python >=3.10. Will not install on Python 3.9.
 # ESM-2 650M is a comparable alternative if ESM-C is unavailable.
 pip install esm
+
+# AMPLIFY protein LM (auto-downloads from HF: chandar-lab/AMPLIFY_350M)
+# Requires trust_remote_code=True — handled automatically by KIRBy
+pip install transformers
 
 # ANARCI — required for CDR-specific embeddings (esm2_cdr, esmc_cdr, etc.)
 conda install -c bioconda anarci
@@ -271,27 +277,29 @@ pip install peft
 
 ### Antibody representation summary
 
-**Current reps (March 2026 rebuild):** 8 base reps (5 LM + 3 sequence) plus
-CDR-specific and midlayer variants. See `BILL_OF_MATERIALS.md` §2B for full list.
+**Current reps (18 total, March 2026 rebuild):** 7 LM + 4 sequence + 5 CDR-pooled +
+1 midlayer + 1 structural. See `BILL_OF_MATERIALS.md` §2B for full list.
 
 | Representation | Dims | Category | Package | Notes |
 |----------------|------|----------|---------|-------|
 | `esm2` | 2560 | Pretrained LM | transformers | ESM-2 650M, H+L concat |
-| `esmc` | 2304 | Pretrained LM | esm (v3) | ESM-C 600M, H+L concat. Non-commercial. |
-| `ablang2` | 768 | Pretrained Ab LM | ablang2 | Paired, seqcoding mode |
-| `igbert` | 768 | Pretrained Ab LM | transformers | IgBert paired |
-| `antiberty` | 1024 | Pretrained LM | transformers | AntiBERTy, H+L concat |
+| `esmc` | 2304 | Pretrained LM | esm (v3) | ESM-C 600M, H+L concat. **Requires Python >=3.10.** |
+| `ablang2` | 480 | Pretrained Ab LM | ablang2 | Paired, seqcoding mode |
+| `igbert` | 1024 | Pretrained Ab LM | transformers | IgBert paired |
+| `antiberty` | 1024 | Pretrained LM | antiberty (pip) | Uses `antiberty` pip package, NOT HuggingFace |
 | `prot_t5` | 2048 | Pretrained LM | transformers + sentencepiece | ProtT5-XL, H+L concat |
+| `amplify` | 1920 | Pretrained LM | transformers | AMPLIFY 350M, H+L concat. `trust_remote_code=True` |
 | `onehot` | 5600 | Sequence | None | Max 150H + 130L, 20 AA |
 | `blosum` | 5600 | Sequence | None | BLOSUM62 row per residue |
 | `aac` | 40 | Sequence | None | 20 frequencies per chain |
+| `paratope` | 8 | Sequence | None | CDR length + charge + hydrophobicity features |
 | `esm2_cdr` | 2560 | CDR-pooled LM | transformers + anarci | CDR residues only |
 | `esmc_cdr` | 2304 | CDR-pooled LM | esm + anarci | CDR residues only |
-| `antiberty_cdr` | 1024 | CDR-pooled LM | transformers + anarci | CDR residues only |
+| `antiberty_cdr` | 1024 | CDR-pooled LM | antiberty + anarci | CDR residues only |
 | `prot_t5_cdr` | 2048 | CDR-pooled LM | transformers + anarci | CDR residues only |
-| `esm2_midlayers` | 2560 | Intermediate LM | transformers | Avg layers 20-33 |
-| `amplify` | 1920 | Pretrained LM | transformers | AMPLIFY 350M, H+L concat |
 | `amplify_cdr` | 1920 | CDR-pooled LM | transformers + anarci | AMPLIFY 350M, CDR-only |
+| `esm2_midlayers` | 2560 | Intermediate LM | transformers | Avg layers 20-33 |
+| `structural` | 28 | Structure | ImmuneBuilder | SASA + confidence + paratope (ABodyBuilder2) |
 
 ---
 
@@ -412,30 +420,51 @@ export HF_HOME=/Volumes/YOUR_DRIVE/huggingface
 
 ## 7. ARC Server Setup (Oxford)
 
-For running on the ARC HPC cluster at Oxford.
+For running on the ARC HPC cluster at Oxford. **Python 3.9** (system Anaconda).
+
+### Critical: Python 3.9 constraints
+
+The ARC server runs Python 3.9. These packages are **incompatible** and must NOT
+be installed (they pull in numpy>=2 which breaks everything on Py3.9):
+
+| Package | Reason | Alternative |
+|---------|--------|-------------|
+| `unimol-tools` | Requires numpy>=2.0 | Skip (no Uni-Mol on server) |
+| `esm` (ESM-C) | Requires Python>=3.10 | Use ESM-2 instead |
+| `decoupler>=1.9` | Requires numpy>=2 | Pin `decoupler==1.8.0` |
+
+`setup.sh` handles this automatically (guards behind Python version check).
 
 ### 7a. First-time setup
 
 ```bash
-ssh scat9264@arc-login.arc.ox.ac.uk
+ssh scat9264@gateway.arc.ox.ac.uk
 cd /data/stat-cadd/scat9264
 
 # Clone repo
 git clone https://github.com/adpunt/KIRBy.git
 cd KIRBy
 
-# Create/activate environment
-# (use whatever conda/module system ARC provides)
+# Source setup.sh (sets cache dirs, pins core deps, loads CUDA)
 . setup.sh
 
-# Point HF cache to data partition (home has limited quota!)
-export HF_HOME=/data/stat-cadd/scat9264/.cache/huggingface
-echo 'export HF_HOME=/data/stat-cadd/scat9264/.cache/huggingface' >> setup.sh
-
-# Install
+# Install KIRBy + extras
 pip install -e ".[qsar,antibody,uncertainty]"
 conda install -c bioconda anarci
-pip install ablang ablang2 sentencepiece
+pip install antiberty ablang2 sentencepiece
+```
+
+### 7a-fix. Repair broken environment
+
+If numpy/pandas/scipy get corrupted (e.g. `numpy.dtype size changed`,
+`No module named 'scipy._lib'`, `Cannot convert numpy.ndarray`):
+
+```bash
+cd /data/stat-cadd/scat9264/.local/lib/python3.9/site-packages
+rm -rf numpy* pandas* scipy* scikit_learn* sklearn* pytz* joblib* threadpoolctl*
+cd /data/stat-cadd/scat9264/KIRBy
+pip install numpy==1.26.4 pandas==2.2.0 scipy==1.11.4 scikit-learn==1.4.0 pytz==2023.3.post1
+python -c "import numpy, pandas, scipy, sklearn; print('OK')"
 ```
 
 ### 7b. Download models (on login node — has internet)
@@ -867,3 +896,19 @@ conda install -c bioconda anarci
 **Server compute nodes can't download models**
 - Download everything on the login node first (Section 7b)
 - Set `HF_HOME` so compute nodes find the cached weights
+
+**`numpy.dtype size changed` / `Cannot convert numpy.ndarray` / `No module named 'scipy._lib'`**
+- Binary incompatibility: packages compiled against numpy 2.x but numpy 1.x is installed
+- Common cause: `pip install unimol-tools` or `pip install decoupler>=1.9` upgrades numpy to 2.x
+- Fix: see Section 7a-fix for the complete repair procedure
+- Prevention: `setup.py` pins `numpy>=1.26.4,<2`; `setup.sh` guards incompatible packages behind Python version check
+
+**`cuptiActivityEnableDriverApi` / CUPTI symbol errors**
+- PyTorch ships a stub `libcupti.so` that shadows the real CUDA CUPTI library
+- `setup.sh` appends (not prepends) torch/lib to `LD_LIBRARY_PATH` so real CUDA libs take priority
+- If still failing: `module load CUDA && echo $LD_LIBRARY_PATH` to verify CUDA paths come first
+
+**`pip install` fails with `OSError: No such file or directory` on dist-info**
+- Corrupted package metadata in user-site
+- Fix: `rm -rf /data/stat-cadd/scat9264/.local/lib/python3.9/site-packages/<package>*`
+- Then reinstall: `pip install <package>==<version>`

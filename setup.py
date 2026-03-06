@@ -20,10 +20,10 @@ setup(
     python_requires=">=3.8",
     install_requires=[
         # Core
-        "numpy>=1.26.4",
-        "pandas>=1.3.0",
-        "scipy>=1.7.0",
-        "scikit-learn>=1.0.0",
+        "numpy>=1.26.4,<2",
+        "pandas>=2.2.0,<3",
+        "scipy>=1.11.4,<2",
+        "scikit-learn>=1.4.0,<2",
         "joblib>=1.2.0",
         "tqdm>=4.66.0",
     ],
