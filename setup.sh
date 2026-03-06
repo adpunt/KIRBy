@@ -56,11 +56,11 @@ else
 fi
 pip install --quiet $CONSTRAINTS 'shap<0.50' captum lime Boruta 2>/dev/null || true
 pip install --quiet $CONSTRAINTS ImmuneBuilder antifold antiberty 2>/dev/null || true
+pip install --quiet $CONSTRAINTS xformers 2>/dev/null || true  # required by AMPLIFY
 pip install --quiet $CONSTRAINTS 'openpyxl>=3.1.0' 2>/dev/null || true
 
 # Molecular reps: CLAMP, R-MAT
-CLAMP_DIR="$(dirname "$SCRIPT_DIR" 2>/dev/null)/src/clamp"
-[ -z "$CLAMP_DIR" ] && CLAMP_DIR="$PWD/src/clamp"
+CLAMP_DIR="${SCRIPT_DIR}/src/clamp"
 if [ ! -d "$CLAMP_DIR" ]; then
     echo "Installing CLAMP..."
     git clone --quiet https://github.com/ml-jku/clamp.git "$CLAMP_DIR" 2>/dev/null || true

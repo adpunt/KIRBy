@@ -324,8 +324,8 @@ def embed_antiberty(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
     from antiberty import AntiBERTyRunner
 
     runner = AntiBERTyRunner()
-    h_embs = [e.numpy().mean(axis=0) for e in runner.embed(list(heavy_seqs))]
-    l_embs = [e.numpy().mean(axis=0) for e in runner.embed(list(light_seqs))]
+    h_embs = [e.cpu().numpy().mean(axis=0) for e in runner.embed(list(heavy_seqs))]
+    l_embs = [e.cpu().numpy().mean(axis=0) for e in runner.embed(list(light_seqs))]
     return np.hstack([np.vstack(h_embs), np.vstack(l_embs)]).astype(np.float32)
 
 
@@ -528,7 +528,7 @@ def embed_antiberty_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndar
         per_residue = runner.embed(list(seqs))  # list of (L_i, 512) tensors
         pooled = []
         for emb, cdr_idx in zip(per_residue, all_cdr_indices):
-            arr = emb.numpy()
+            arr = emb.cpu().numpy()
             valid = [i for i in cdr_idx if i < arr.shape[0]]
             if valid:
                 pooled.append(arr[valid].mean(axis=0))
