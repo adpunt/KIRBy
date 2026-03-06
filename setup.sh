@@ -22,11 +22,12 @@ if [ -n "$USER_SITE" ] && [ -d "$USER_SITE" ]; then
     export PYTHONPATH="$USER_SITE${PYTHONPATH:+:$PYTHONPATH}"
 fi
 
-# Load CUDA module (ARC cluster) and add PyTorch bundled libs to LD_LIBRARY_PATH
+# Load CUDA module (ARC cluster) — must come first so real CUPTI libs take
+# priority over PyTorch's stub libcupti.so
 module load CUDA 2>/dev/null || true
 TORCH_LIB=$(python -c "import torch; print(torch.__path__[0] + '/lib')" 2>/dev/null)
 if [ -n "$TORCH_LIB" ] && [ -d "$TORCH_LIB" ]; then
-    export LD_LIBRARY_PATH="$TORCH_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$TORCH_LIB"
 fi
 
 # Install KIRBy in editable mode (picks up src/kirby)
@@ -36,6 +37,7 @@ pip install --quiet -e . 2>/dev/null || true
 pip install --quiet shap captum lime Boruta 2>/dev/null || true
 pip install --quiet ImmuneBuilder antifold antiberty 2>/dev/null || true
 pip install --quiet 'openpyxl>=3.1.0' 2>/dev/null || true
+pip install --quiet 'numpy<2' 'pandas>=1.5,<2.1' 2>/dev/null || true  # numpy 2.x breaks pandas on Py3.9
 
 # Molecular reps: CLAMP, R-MAT, Uni-Mol v2
 CLAMP_DIR="$(dirname "$SCRIPT_DIR" 2>/dev/null)/src/clamp"
