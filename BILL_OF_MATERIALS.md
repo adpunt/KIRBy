@@ -156,12 +156,12 @@ Best score per rep shown (max across models).
 
 ### 2B. Antibody Representations
 
-**Approach (March 2026 rebuild):** LM embeddings → Ridge → R².
-4 reps ran on all 24 datasets (LM survey). Only `ridge` model used.
+**Approach (March 2026 rebuild):** LM embeddings → Ridge + LightGBM → R².
+4 reps ran on all 24 datasets (LM survey). Models: ridge, lightgbm.
 
 **Script:** `tests/antibody_baseline_survey.py`
 
-**Per-rep R² across key datasets (ridge only):**
+**Per-rep R² across key datasets (best of ridge, lightgbm — pending resubmit):**
 
 | Rep | Dim | phillips_h3 | expr_koenig | bind_koenig | bind_adams | tresanco | heprt | HER2 |
 |-----|-----|-------------|-------------|-------------|------------|----------|-------|------|

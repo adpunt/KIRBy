@@ -651,8 +651,8 @@ Examples:
                         help='Skip LM reps (only one-hot, blosum, aac)')
     parser.add_argument('--reps', type=str, default=None,
                         help='Comma-separated rep names to use (overrides --skip-lm)')
-    parser.add_argument('--models', type=str, default='ridge',
-                        help='Comma-separated model names (default: ridge)')
+    parser.add_argument('--models', type=str, default='ridge,lightgbm',
+                        help='Comma-separated model names (default: ridge,lightgbm)')
     parser.add_argument('--n-folds', type=int, default=5,
                         help='Number of CV folds (default: 5)')
     parser.add_argument('--augment', action='store_true',
