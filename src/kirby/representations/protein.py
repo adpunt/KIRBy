@@ -256,8 +256,8 @@ def create_amplify_protein_embeddings(
     from transformers import AutoTokenizer, AutoModel
 
     print(f"  Loading AMPLIFY ({model_name.split('/')[-1]}) for protein embeddings...")
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name).to(device).eval()
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    model = AutoModel.from_pretrained(model_name, trust_remote_code=True).to(device).eval()
 
     all_embeddings = []
     n = len(sequences)
