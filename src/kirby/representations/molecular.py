@@ -2417,7 +2417,15 @@ def create_rmat(smiles_list, pretrained_name='rmat_4M_rdkit', device=None):
 
     if _RMAT_MODEL is None:
         print("Loading R-MAT...", flush=True)
-        from huggingmolecules import RMatConfig, RMatModel, RMatFeaturizer
+        # pip install is broken (missing submodules), fall back to cloned repo
+        try:
+            from huggingmolecules import RMatConfig, RMatModel, RMatFeaturizer
+        except (ImportError, ModuleNotFoundError):
+            import sys as _sys
+            _clone = os.path.join(os.path.dirname(__file__), '..', '..', 'huggingmolecules_repo', 'src')
+            if os.path.isdir(_clone) and _clone not in _sys.path:
+                _sys.path.insert(0, os.path.abspath(_clone))
+            from huggingmolecules import RMatConfig, RMatModel, RMatFeaturizer
 
         config = RMatConfig.from_pretrained(pretrained_name)
         _RMAT_MODEL = RMatModel.from_pretrained(pretrained_name, config=config)
