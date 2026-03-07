@@ -105,49 +105,34 @@ are from scaffold-split (molecular), identity-grouped (antibody), or TSS-grouped
 
 ### 2A. Molecular Representations
 
-**Source:** 5-fold scaffold-split GroupKFold baselines on LogD (5,028), Caco2 (2,158),
-hERG (1,415), QM9 (~10,000). Models: rf, xgboost, ridge, knn, lightgbm.
-Best score per rep shown (max across models).
-"Best Aug" = best augmented (concat with smaller rep) R² using the same base model.
+**Source:** 3-fold scaffold-split GroupKFold baselines on LogD (5,028), Caco2 (2,158),
+hERG (1,415). Models: ridge, lightgbm (both shown).
+QM9 results are STALE (old 5K/3-fold run) — rerun in progress.
 
-| Rep | Dim | LogD R² | LogD Aug | Caco2 R² | Caco2 Aug | hERG R² | hERG Aug | QM9 R² |
-|-----|-----|---------|----------|----------|-----------|---------|----------|--------|
-| `grover` | 4800 | **0.841** | **0.853** (+pdv) | 0.460 | — | 0.489 | — | 0.127 |
-| `mhg_gnn` | 1024 | 0.813 | — | 0.489 | — | 0.543 | — | 0.134 |
-| `ecfp4` | 2048 | 0.756 | — | 0.481 | — | **0.552** | **0.567** (+pdv_rank) | 0.134 |
-| `pdv` | 200 | 0.788 | — | 0.491 | — | 0.530 | — | 0.133 |
-| `pdv_rank` | 200 | 0.788 | — | 0.495 | — | 0.546 | — | **0.139** |
-| `pdv_binary_mean` | 200 | 0.754 | — | 0.488 | — | 0.522 | — | 0.138 |
-| `graph_kernel` | ~290 | 0.740 | — | **0.519** | **0.552** (+pdv_bm) | 0.539 | — | 0.067 |
-| `molformer` | 768 | 0.753 | — | 0.429 | — | 0.516 | — | 0.109 |
-| `mol2vec` | 300 | 0.753 | — | 0.436 | — | 0.511 | — | 0.131 |
-| `smited` | 768 | 0.747 | — | 0.441 | — | 0.482 | — | 0.121 |
-| `chemberta` | 384 | 0.722 | — | 0.397 | — | 0.500 | — | 0.119 |
-| `graphmvp` | 300 | 0.692 | — | 0.351 | — | 0.457 | — | 0.123 |
-| `selformer` | 768 | 0.689 | — | 0.352 | — | 0.458 | — | 0.106 |
-| `chembert` | 256 | 0.665 | — | 0.387 | — | 0.499 | — | 0.122 |
-| `maccs` | 167 | 0.676 | — | 0.385 | — | 0.479 | — | 0.131 |
-| `schnet` | 128 | 0.640 | — | 0.327 | — | 0.345 | — | 0.090 |
-| `dimenetpp` | — | — | — | — | — | — | — | — |
-| `molclr` | 512 | 0.545 | — | 0.289 | — | 0.367 | — | 0.103 |
-| PCA-50 variants | 50 | 0.556–0.706 | — | 0.308–0.420 | — | 0.418–0.475 | — | 0.101–0.122 |
+| Rep | Dim | LogD ridge | LogD lgbm | Caco2 ridge | Caco2 lgbm | hERG ridge | hERG lgbm |
+|-----|-----|-----------|-----------|-------------|------------|-----------|-----------|
+| `grover` | 4800 | **0.841** | 0.752 | 0.442 | 0.460 | 0.489 | 0.485 |
+| `mhg_gnn` | 1024 | 0.813 | 0.795 | 0.451 | 0.489 | 0.455 | 0.528 |
+| `ecfp4` | 2048 | 0.723 | 0.756 | 0.442 | 0.480 | 0.509 | **0.552** |
+| `pdv` | 200 | 0.736 | 0.788 | 0.427 | 0.491 | 0.349 | 0.529 |
+| `pdv_rank` | 200 | 0.734 | 0.788 | 0.434 | 0.495 | 0.404 | 0.546 |
+| `pdv_binary_mean` | 200 | 0.671 | 0.747 | 0.395 | 0.488 | 0.392 | 0.498 |
+| `graph_kernel` | ~290 | 0.670 | 0.740 | 0.444 | **0.519** | 0.431 | 0.512 |
+| `molformer` | 768 | 0.753 | 0.685 | 0.424 | 0.429 | 0.505 | 0.516 |
+| `mol2vec` | 300 | 0.752 | 0.735 | 0.436 | 0.415 | 0.488 | 0.511 |
+| `smited` | 768 | 0.747 | 0.721 | 0.409 | 0.441 | 0.425 | 0.482 |
+| `chemberta` | 384 | 0.722 | 0.622 | 0.397 | 0.394 | 0.425 | 0.500 |
+| `graphmvp` | 300 | 0.692 | 0.640 | 0.351 | 0.350 | 0.414 | 0.457 |
+| `selformer` | 768 | 0.689 | 0.595 | 0.352 | 0.330 | 0.458 | 0.441 |
+| `chembert` | 256 | 0.665 | 0.659 | 0.364 | 0.387 | 0.422 | 0.499 |
+| `maccs` | 167 | 0.548 | 0.657 | 0.311 | 0.385 | 0.284 | 0.437 |
+| `schnet` | 128 | 0.640 | 0.633 | 0.311 | 0.327 | 0.320 | 0.345 |
+| `molclr` | 512 | 0.434 | 0.545 | 0.276 | 0.289 | 0.196 | 0.363 |
 
-**Augmentation summary (base = best rep per dataset):**
-- **LogD:** grover+pdv → 0.853 (+0.012), 10/12 augmentations improved
-- **Caco2:** graph_kernel+pdv_binary_mean → 0.552 (+0.033)
-- **hERG:** ecfp4+pdv_rank → 0.567 (+0.015)
-- **QM9:** pdv_rank+mhg_gnn_pca50 → 0.143 (+0.004, marginal)
-
-**Not in this run (new, need resubmit):** clamp, rmat, map4, unimol_v2, dimenetpp.
-**Fine-tuned reps (via `--finetune`):** ft_schnet (E2E SchNet → 128D embeddings, QM9 R²=0.888).
-
+**Not in this run (need resubmit):** clamp, rmat, map4, unimol_v2, dimenetpp.
+**QM9:** Stale results (5K/3-fold, R²~0.14). Rerun with 10K/5-fold in progress. User's qsar_qm_models pipeline gets R²>0.7 — investigate discrepancy.
+**Fine-tuned:** ft_schnet (E2E SchNet → 128D, QM9 R²=0.888).
 **Dropped:** `chemformer` (broken HF weights), `unimol` v1 (broken install).
-
-**Key findings:**
-- LightGBM dominates on fingerprints/descriptors; Ridge dominates on high-dim LM reps
-- QM9 was using 5K/3-fold (67% train, R²=0.14) — now fixed to 10K/5-fold (80% train) to match paper protocol (10K, 80/10/10 scaffold, R²~0.83 with PDV)
-- Augmentations: PDV/PDV-rank is the most consistent augmenter across molecular datasets
-- PCA-50 variants retain 70-85% of full-dim performance, useful for low-dim hybrids
 
 **Presets:**
 - `fast` (3): ecfp4, maccs, pdv
@@ -156,12 +141,12 @@ Best score per rep shown (max across models).
 
 ### 2B. Antibody Representations
 
-**Approach (March 2026 rebuild):** LM embeddings → Ridge + LightGBM → R².
-4 reps ran on all 24 datasets (LM survey). Models: ridge, lightgbm.
+**Approach (March 2026 rebuild):** LM embeddings → Ridge → R².
+4/18 reps ran on 24 datasets. Ridge only — **LightGBM missing** (not installed when these ran). Full 18-rep + lightgbm resubmit in progress.
 
 **Script:** `tests/antibody_baseline_survey.py`
 
-**Per-rep R² across key datasets (best of ridge, lightgbm — pending resubmit):**
+**Per-rep R² across key datasets (ridge only):**
 
 | Rep | Dim | phillips_h3 | expr_koenig | bind_koenig | bind_adams | tresanco | heprt | HER2 |
 |-----|-----|-------------|-------------|-------------|------------|----------|-------|------|
@@ -170,19 +155,11 @@ Best score per rep shown (max across models).
 | `ablang2` | 480 | 0.860 | 0.433 | 0.223 | 0.354 | — | 0.494 | 0.437 |
 | `igbert` | 1024 | -0.002 | -0.002 | -0.007 | -0.002 | -158K | -0.027 | -0.065 |
 
-**Key findings:**
-- **ESM-2** wins on large DMS datasets (phillips_h3 R²=0.96, binding/expression ~0.3-0.5)
-- **ProtT5** wins on inter-family developability (Tm, PK, polyreactivity)
-- **AbLang2** most stable on small datasets (480D avoids overfitting catastrophes)
-- **IgBert** consistently predicts the mean (~0 R²) — embeddings carry no useful signal
-- **AntiBERTy** not tested (model unavailable on HuggingFace, rewritten to use pip package)
-- High-dim reps (ESM-2 2560D, ProtT5 2048D) show catastrophic R² blowups on small AbAgym datasets
-- No augmentations or fine-tuning in these results
+**Status:** Waiting on resubmit with lightgbm + all 18 reps (antiberty, esmc, amplify, CDR variants, seq encodings, structural all missing).
 
 **Registered reps (18 total):** esm2, esmc, ablang2, igbert, antiberty, prot_t5,
 amplify, onehot, blosum, aac, paratope, esm2_cdr, esmc_cdr, antiberty_cdr, prot_t5_cdr,
 amplify_cdr, esm2_midlayers, structural (28D: SASA+confidence+paratope via ImmuneBuilder).
-Full 18-rep survey needs GPU resubmit (updated submission script ready).
 
 ### 2C. TCGA Representations
 
