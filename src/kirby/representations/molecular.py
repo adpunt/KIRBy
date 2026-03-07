@@ -2428,10 +2428,17 @@ def create_rmat(smiles_list, pretrained_name='rmat_4M_rdkit', device=None):
             from huggingmolecules import RMatConfig, RMatModel, RMatFeaturizer
 
         config = RMatConfig.from_pretrained(pretrained_name)
-        _RMAT_MODEL = RMatModel.from_pretrained(pretrained_name, config=config)
+        try:
+            _RMAT_MODEL = RMatModel.from_pretrained(pretrained_name, config=config)
+        except TypeError:
+            # Cloned repo API doesn't accept config kwarg
+            _RMAT_MODEL = RMatModel.from_pretrained(pretrained_name)
         _RMAT_MODEL = _RMAT_MODEL.to(device)
         _RMAT_MODEL.eval()
-        _RMAT_FEATURIZER = RMatFeaturizer.from_pretrained(pretrained_name, config=config)
+        try:
+            _RMAT_FEATURIZER = RMatFeaturizer.from_pretrained(pretrained_name, config=config)
+        except TypeError:
+            _RMAT_FEATURIZER = RMatFeaturizer.from_pretrained(pretrained_name)
         print(f"  Loaded (d_model={config.d_model})")
 
     batch_size = 64
