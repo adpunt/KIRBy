@@ -22,17 +22,14 @@ if [ -n "$USER_SITE" ] && [ -d "$USER_SITE" ]; then
     export PYTHONPATH="$USER_SITE${PYTHONPATH:+:$PYTHONPATH}"
 fi
 
-# constraints.txt locks numpy/pandas/scipy/sklearn so NO pip install can upgrade them
+# constraints.txt locks numpy/pandas/scipy/sklearn/torch so NO pip install can upgrade them
 CONSTRAINTS="-c ${SCRIPT_DIR}/constraints.txt"
 
-# Core scientific stack — pinned to known-working versions (requirements-working.txt)
-CORE_PKGS='numpy==1.26.4 pandas==2.2.0 scipy==1.11.4 scikit-learn==1.4.0 pytz==2023.3.post1'
+# Core scientific stack — only install if broken
 if ! python -c "import numpy, pandas, scipy, sklearn" 2>/dev/null; then
     echo "Fixing broken scientific stack..."
-    pip install $CORE_PKGS \
+    pip install numpy==1.26.4 pandas==2.2.0 scipy==1.11.4 scikit-learn==1.4.0 pytz==2023.3.post1 \
         || { echo "FATAL: core scientific stack install failed"; return 1 2>/dev/null || exit 1; }
-else
-    pip install --quiet $CORE_PKGS 2>/dev/null || true
 fi
 
 PY_MINOR=$(python -c "import sys; print(sys.version_info.minor)" 2>/dev/null)
@@ -45,19 +42,29 @@ if [ -n "$TORCH_LIB" ] && [ -d "$TORCH_LIB" ]; then
     export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$TORCH_LIB"
 fi
 
-# All subsequent pip installs use $CONSTRAINTS to prevent upgrading core stack
+# Install kirby package (editable)
 pip install --quiet $CONSTRAINTS -e . 2>/dev/null || true
 
-# lightgbm + xgboost (used by all surveys); xgboost >=3 requires Python >=3.10
+# Only install packages if not already present — avoids breaking torch-cluster/PyG
+_install_if_missing() {
+    python -c "import $1" 2>/dev/null || pip install --quiet $CONSTRAINTS "$2" 2>/dev/null || true
+}
+
+_install_if_missing lightgbm lightgbm
 if [ "${PY_MINOR:-9}" -ge 10 ]; then
-    pip install --quiet $CONSTRAINTS lightgbm xgboost 2>/dev/null || true
+    _install_if_missing xgboost xgboost
 else
-    pip install --quiet $CONSTRAINTS lightgbm 'xgboost<3' 2>/dev/null || true
+    _install_if_missing xgboost 'xgboost<3'
 fi
-pip install --quiet $CONSTRAINTS 'shap<0.50' captum lime Boruta 2>/dev/null || true
-pip install --quiet $CONSTRAINTS ImmuneBuilder antifold antiberty 2>/dev/null || true
-pip install --quiet $CONSTRAINTS xformers 2>/dev/null || true  # required by AMPLIFY
-pip install --quiet $CONSTRAINTS 'openpyxl>=3.1.0' 2>/dev/null || true
+_install_if_missing shap 'shap<0.50'
+_install_if_missing captum captum
+_install_if_missing lime lime
+_install_if_missing boruta boruta
+_install_if_missing ImmuneBuilder ImmuneBuilder
+_install_if_missing antifold antifold
+_install_if_missing antiberty antiberty
+_install_if_missing xformers 'xformers==0.0.25'
+_install_if_missing openpyxl 'openpyxl>=3.1.0'
 
 # Molecular reps: CLAMP, R-MAT
 CLAMP_DIR="${SCRIPT_DIR}/src/clamp"
@@ -67,12 +74,14 @@ if [ ! -d "$CLAMP_DIR" ]; then
     pip install --quiet $CONSTRAINTS -e "$CLAMP_DIR" 2>/dev/null || true
     pip install --quiet $CONSTRAINTS mhnreact 2>/dev/null || true
 fi
-pip install --quiet $CONSTRAINTS "git+https://github.com/gmum/huggingmolecules.git#subdirectory=src" 2>/dev/null || true
+
+# huggingmolecules — only install if not present
+_install_if_missing huggingmolecules "git+https://github.com/gmum/huggingmolecules.git#subdirectory=src"
 
 # Packages requiring Python >=3.10 or numpy>=2 — skip on 3.9
 if [ "${PY_MINOR:-9}" -ge 10 ]; then
-    pip install --quiet unimol-tools 2>/dev/null || true
-    pip install --quiet esm 2>/dev/null || true
+    _install_if_missing unimol_tools unimol-tools
+    _install_if_missing esm esm
 fi
 
 # Always succeed so && chains in SLURM wraps don't break
