@@ -31,7 +31,7 @@ submit() {
         --time="${wall}" --partition=long \
         --mem="${mem}" --gres=gpu:1 \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
-        --wrap="cd /data/stat-cadd/scat9264/KIRBy && git pull && . ./setup.sh && mkdir -p ${OUTPUT} && ${cmd}" \
+        --wrap="cd /data/stat-cadd/scat9264/KIRBy && git pull 2>/dev/null; . ./setup.sh && mkdir -p ${OUTPUT} && ${cmd}" \
         | awk '{print $4}')
     echo "  $J  ${name}  (mem=${mem}, time=${wall}, GPU)"
 }
