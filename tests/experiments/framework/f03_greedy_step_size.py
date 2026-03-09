@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""C13: Greedy step size and patience — how granular should greedy search be?
+"""F03: Greedy step size and patience — how granular should greedy search be?
 
-Paper: Complexity
+Paper: Framework
 Conclusion: Whether fine-grained greedy (step=1) outperforms coarse (step=50).
 Dependencies: None (standalone).
 
@@ -35,7 +35,7 @@ BUDGETS = [50, 100, 200, 500]
 def run(data, config, output_dir, dataset_name, **kwargs):
     """Run greedy step size comparison."""
     print("\n" + "=" * 70)
-    print("EXPERIMENT C13: GREEDY STEP SIZE & PATIENCE")
+    print("EXPERIMENT F03: GREEDY STEP SIZE & PATIENCE")
     print("=" * 70)
 
     models = get_model_factories(config['models'])
@@ -313,7 +313,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
 
 if __name__ == '__main__':
-    parser = create_experiment_parser('C13: Greedy Step Size & Patience',
+    parser = create_experiment_parser('F03: Greedy Step Size & Patience',
                                      has_delta=True, has_augment=True)
     args = parser.parse_args()
     config = get_config(args)
@@ -326,4 +326,4 @@ if __name__ == '__main__':
                      delta=getattr(args, 'delta', False),
                      augment=getattr(args, 'augment', False))
     results = run(data, config, args.output, args.dataset)
-    save_experiment_results(results, args.output, 'c13_greedy_step_size', args.dataset)
+    save_experiment_results(results, args.output, 'f03_greedy_step_size', args.dataset)

@@ -118,10 +118,14 @@ pip install transformers torch
 # ANARCI — required for CDR extraction, IMGT one-hot, per-CDR features
 conda install -c bioconda anarci
 
-# torch-scatter — required for some GNN representations
-# torch-cluster — required for SchNet end-to-end (QM9 3D comparison)
-# Match your PyTorch + CUDA version:
-pip install torch-scatter torch-cluster -f https://data.pyg.org/whl/torch-$(python -c "import torch; print(torch.__version__)").html
+# PyG extensions — required for SchNet E2E, DimeNet++, GraphDTA GIN
+# MUST use --no-deps to prevent numpy 2.x from being pulled in.
+# MUST match your exact PyTorch + CUDA versions.
+# If broken (undefined symbol errors), run: bash fix_pyg.sh
+pip install --no-deps pyg_lib torch_scatter torch_sparse torch_cluster torch_spline_conv \
+    -f https://data.pyg.org/whl/torch-$(python -c "import torch; print(torch.__version__)")+cu$(python -c "import torch; print(torch.version.cuda.replace('.',''))").html
+# torch-geometric: pin <2.7 on Python 3.9 (2.7+ requires Python >=3.10)
+pip install --no-deps 'torch-geometric>=2.5,<2.7'
 ```
 
 ---
@@ -907,6 +911,12 @@ conda install -c bioconda anarci
 - PyTorch ships a stub `libcupti.so` that shadows the real CUDA CUPTI library
 - `setup.sh` appends (not prepends) torch/lib to `LD_LIBRARY_PATH` so real CUDA libs take priority
 - If still failing: `module load CUDA && echo $LD_LIBRARY_PATH` to verify CUDA paths come first
+
+**`undefined symbol: _ZN5torch3jit17parseSchemaOrNameERKSs` in torch_cluster/torch_scatter**
+- C++ ABI mismatch: extension .so files compiled against a different torch version than installed
+- Common cause: torch was upgraded (e.g., by xformers) then downgraded, leaving stale .so binaries
+- Fix: `bash fix_pyg.sh` from an interactive GPU session (nuclear uninstall + reinstall from correct wheel URL)
+- Prevention: `constraints.txt` pins torch==2.2.2; xformers pinned to 0.0.25; setup.sh warns on broken PyG
 
 **`pip install` fails with `OSError: No such file or directory` on dist-info**
 - Corrupted package metadata in user-site

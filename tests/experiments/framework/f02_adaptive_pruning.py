@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""C12: Adaptive pruning analysis — what would pruning cut, and at what cost?
+"""F02: Adaptive pruning analysis — what would pruning cut, and at what cost?
 
-Paper: Complexity
+Paper: Framework
 Conclusion: Whether aggressive pruning can halve search time without losing best configs.
 Dependencies: None (standalone, reuses cached search results from find_best_hybrid).
 
@@ -143,7 +143,7 @@ def simulate_pruning(all_results, thresholds=None):
 def run(data, config, output_dir, dataset_name, **kwargs):
     """Run full grid search then simulate pruning at multiple thresholds."""
     print("\n" + "=" * 70)
-    print("EXPERIMENT C12: ADAPTIVE PRUNING ANALYSIS")
+    print("EXPERIMENT F02: ADAPTIVE PRUNING ANALYSIS")
     print("=" * 70)
 
     models = get_model_factories(config['models'])
@@ -235,7 +235,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
 
 if __name__ == '__main__':
-    parser = create_experiment_parser('C12: Adaptive Pruning Analysis',
+    parser = create_experiment_parser('F02: Adaptive Pruning Analysis',
                                      has_delta=True, has_augment=True)
     args = parser.parse_args()
     config = get_config(args)
@@ -248,4 +248,4 @@ if __name__ == '__main__':
                      delta=getattr(args, 'delta', False),
                      augment=getattr(args, 'augment', False))
     results = run(data, config, args.output, args.dataset)
-    save_experiment_results(results, args.output, 'c12_adaptive_pruning', args.dataset)
+    save_experiment_results(results, args.output, 'f02_adaptive_pruning', args.dataset)

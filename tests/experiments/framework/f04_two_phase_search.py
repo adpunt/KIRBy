@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""C14: Two-phase search validation — does two-phase match full grid?
+"""F04: Two-phase search validation — does two-phase match full grid?
 
-Paper: Complexity
+Paper: Framework
 Conclusion: Two-phase (coarse grid + step_size refinement) recovers full-grid
 quality with ~75% fewer evaluations.
 Dependencies: None (standalone).
@@ -155,7 +155,7 @@ def _run_two_phase(data, config):
 def run(data, config, output_dir, dataset_name, **kwargs):
     """Run two-phase validation experiment."""
     print("\n" + "=" * 70)
-    print("EXPERIMENT C14: TWO-PHASE SEARCH VALIDATION")
+    print("EXPERIMENT F04: TWO-PHASE SEARCH VALIDATION")
     print("=" * 70)
 
     # --- Full grid ---
@@ -240,7 +240,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
 
 if __name__ == '__main__':
-    parser = create_experiment_parser('C14: Two-Phase Search Validation',
+    parser = create_experiment_parser('F04: Two-Phase Search Validation',
                                      has_delta=True, has_augment=True)
     args = parser.parse_args()
     config = get_config(args)
@@ -253,4 +253,4 @@ if __name__ == '__main__':
                      delta=getattr(args, 'delta', False),
                      augment=getattr(args, 'augment', False))
     results = run(data, config, args.output, args.dataset)
-    save_experiment_results(results, args.output, 'c14_two_phase_search', args.dataset)
+    save_experiment_results(results, args.output, 'f04_two_phase_search', args.dataset)

@@ -84,5 +84,22 @@ if [ "${PY_MINOR:-9}" -ge 10 ]; then
     _install_if_missing esm esm
 fi
 
+# PyG health check: detect broken C++ extensions (ABI mismatch from torch upgrades)
+# _install_if_missing only checks Python import, which succeeds even with broken .so files.
+# We test actual C++ ops — if they fail, warn but don't block (surveys work without PyG).
+if python -c "import torch_cluster" 2>/dev/null; then
+    if ! python -c "
+import torch, torch_cluster
+x = torch.randn(4, 3)
+b = torch.zeros(4, dtype=torch.long)
+torch_cluster.radius_graph(x, r=2.0, batch=b)
+" 2>/dev/null; then
+        echo "WARNING: PyG extensions have broken C++ binaries (ABI mismatch)."
+        echo "  QM9 and DTA e2e comparison experiments will fail."
+        echo "  Fix: bash fix_pyg.sh (from interactive GPU session)"
+        echo "  Surveys and frozen reps still work fine."
+    fi
+fi
+
 # Always succeed so && chains in SLURM wraps don't break
 true
