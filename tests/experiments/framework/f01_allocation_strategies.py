@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""C11: Allocation strategy comparison — does smarter budget allocation help?
+"""F01: Allocation strategy comparison — does smarter budget allocation help?
 
-Paper: Complexity
+Paper: Framework
 Conclusion: Whether softmax/power-law/thresholding outperforms linear-proportional.
 Dependencies: None (standalone).
 
@@ -62,7 +62,7 @@ STRATEGY_GRID = [
 def run(data, config, output_dir, dataset_name, **kwargs):
     """Run allocation strategy comparison."""
     print("\n" + "=" * 70)
-    print("EXPERIMENT C11: ALLOCATION STRATEGY COMPARISON")
+    print("EXPERIMENT F01: ALLOCATION STRATEGY COMPARISON")
     print("=" * 70)
 
     models = get_model_factories(config['models'])
@@ -213,7 +213,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
 
 if __name__ == '__main__':
-    parser = create_experiment_parser('C11: Allocation Strategy Comparison',
+    parser = create_experiment_parser('F01: Allocation Strategy Comparison',
                                      has_delta=True, has_augment=True)
     args = parser.parse_args()
     config = get_config(args)
@@ -227,4 +227,4 @@ if __name__ == '__main__':
                      delta=getattr(args, 'delta', False),
                      augment=getattr(args, 'augment', False))
     results = run(data, config, args.output, args.dataset)
-    save_experiment_results(results, args.output, 'c11_allocation_strategies', args.dataset)
+    save_experiment_results(results, args.output, 'f01_allocation_strategies', args.dataset)
