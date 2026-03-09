@@ -35,9 +35,23 @@ echo "CUDA: ${CUDA_VER}"
 echo ""
 
 if [ "$TORCH_VER" = "MISSING" ]; then
-    echo "ERROR: PyTorch not installed. Install torch first:"
-    echo "  pip install torch==2.2.2 --index-url https://download.pytorch.org/whl/cu121"
-    exit 1
+    echo "ERROR: PyTorch not installed. Installing torch 2.2.2..."
+    pip install torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cu121
+    TORCH_VER=$(python -c "import torch; print(torch.__version__)")
+    CUDA_VER=$(python -c "import torch; print(torch.version.cuda)")
+fi
+
+# If torch is wrong version, fix it — constraints.txt says 2.2.2 but something
+# (usually xformers or another transitive dep) upgrades it silently.
+if ! echo "$TORCH_VER" | grep -q '^2\.2'; then
+    echo "ERROR: torch ${TORCH_VER} detected, expected 2.2.x"
+    echo "  Something upgraded torch past constraints.txt pin."
+    echo "  Downgrading to torch 2.2.2+cu121..."
+    pip install torch==2.2.2 torchvision==0.17.2 --index-url https://download.pytorch.org/whl/cu121
+    TORCH_VER=$(python -c "import torch; print(torch.__version__)")
+    CUDA_VER=$(python -c "import torch; print(torch.version.cuda)")
+    echo "  Now: torch ${TORCH_VER}, CUDA ${CUDA_VER}"
+    echo ""
 fi
 
 # Determine PyG wheel URL based on installed torch + CUDA
