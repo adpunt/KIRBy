@@ -8,3 +8,4 @@ scikit-learn==1.4.0
 pytz==2023.3.post1
 torch==2.2.2
 torch-geometric<2.7
+bitsandbytes<0.43
