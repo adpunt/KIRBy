@@ -126,18 +126,13 @@ def main():
 def run_ecfp4_xgb(smiles, labels, train_idx, val_idx, test_idx):
     """Frozen ECFP4 fingerprints + XGBoost."""
     from kirby.representations.molecular import create_ecfp4
-    from sklearn.preprocessing import StandardScaler
 
     print("  Generating ECFP4...")
     X = create_ecfp4(smiles)
     print(f"  ECFP4 shape: {X.shape}")
 
-    X_train, X_test = X[train_idx], X[test_idx]
+    X_train, X_test = X[train_idx].astype(np.float32), X[test_idx].astype(np.float32)
     y_train, y_test = labels[train_idx], labels[test_idx]
-
-    scaler = StandardScaler()
-    X_train = scaler.fit_transform(X_train)
-    X_test = scaler.transform(X_test)
 
     try:
         from xgboost import XGBRegressor
