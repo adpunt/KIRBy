@@ -34,7 +34,7 @@ submit() {
         --mem="${mem}" \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
         ${gpu:+--gres=gpu:1} \
-        --wrap="cd /data/stat-cadd/scat9264/KIRBy && git pull 2>/dev/null; . ./setup.sh && mkdir -p ${OUTPUT} && python tests/antibody_baseline_survey.py ${dataset} --output ${OUTPUT}/ --n-folds 5 --augment ${extra}" \
+        --wrap="cd /data/stat-cadd/scat9264/KIRBy && git pull 2>/dev/null; . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error && mkdir -p ${OUTPUT} && python tests/antibody_baseline_survey.py ${dataset} --output ${OUTPUT}/ --n-folds 5 --augment ${extra}" \
         | awk '{print $4}')
     echo "  $J  ${name}  (mem=${mem}, time=${wall}${gpu:+, GPU})"
 }
