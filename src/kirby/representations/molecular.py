@@ -653,7 +653,7 @@ def create_schnet(smiles_list, hidden_channels=128, num_interactions=6,
         """Convert SMILES to PyG Data with 3D coordinates."""
         mol = _safe_mol(smiles)
         if mol is None:
-            continue
+            return None
 
         # Add hydrogens and generate 3D conformer
         mol = Chem.AddHs(mol)
@@ -2684,7 +2684,7 @@ def create_dimenetpp(smiles_list, hidden_channels=128, out_channels=1,
         """Convert SMILES to PyG Data with 3D coordinates."""
         mol = _safe_mol(smiles)
         if mol is None:
-            continue
+            return None
         mol = Chem.AddHs(mol)
         result = AllChem.EmbedMolecule(mol, randomSeed=42)
         if result == -1:
@@ -3166,8 +3166,8 @@ def finetune_gnn(train_smiles, train_labels, val_smiles, val_labels,
     def smiles_to_graph(smiles):
         mol = _safe_mol(smiles)
         if mol is None:
-            continue
-        
+            return None
+
         atom_features = []
         for atom in mol.GetAtoms():
             atom_features.append([
@@ -3313,8 +3313,8 @@ def encode_from_model(finetuned_model_dict, smiles_list, batch_size=32):
     def smiles_to_graph(smiles):
         mol = _safe_mol(smiles)
         if mol is None:
-            continue
-        
+            return None
+
         atom_features = []
         for atom in mol.GetAtoms():
             atom_features.append([
