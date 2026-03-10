@@ -256,6 +256,14 @@ def get_models(model_names: List[str]) -> Dict[str, object]:
 # EVALUATION
 # =============================================================================
 
+def _is_binary_rep(X):
+    """Check if feature matrix is binary (0/1) — should NOT be StandardScaled."""
+    if X.dtype == np.uint8:
+        return True
+    uniq = np.unique(X)
+    return len(uniq) <= 2 and set(uniq).issubset({0, 0.0, 1, 1.0})
+
+
 def evaluate_rep(
     X: np.ndarray,
     labels: np.ndarray,
@@ -287,10 +295,19 @@ def evaluate_rep(
     r2_scores = []
     fold_details = []
 
+    # Only z-score continuous features; leave binary reps (onehot, blosum) raw
+    is_binary = _is_binary_rep(X)
+
     for fold_i, (train_idx, val_idx) in enumerate(splits):
-        scaler = StandardScaler()
-        X_train = scaler.fit_transform(X[train_idx])
-        X_val = scaler.transform(X[val_idx])
+        if is_binary:
+            X_train = X[train_idx].astype(np.float32)
+            X_val = X[val_idx].astype(np.float32)
+        else:
+            scaler = StandardScaler()
+            X_train = scaler.fit_transform(X[train_idx])
+            X_val = scaler.transform(X[val_idx])
+            X_train = np.nan_to_num(X_train, nan=0.0, posinf=1e10, neginf=-1e10)
+            X_val = np.nan_to_num(X_val, nan=0.0, posinf=1e10, neginf=-1e10)
 
         try:
             m = clone(model)
@@ -348,9 +365,12 @@ def evaluate_ft_rep(factory, labels, groups, model, n_folds=5):
             fold_details.append({'fold': fold_i, 'error': str(e)})
             continue
 
+        # FT reps are always continuous (LM embeddings) — always scale
         scaler = StandardScaler()
         X_train = scaler.fit_transform(X_train)
         X_val = scaler.transform(X_val)
+        X_train = np.nan_to_num(X_train, nan=0.0, posinf=1e10, neginf=-1e10)
+        X_val = np.nan_to_num(X_val, nan=0.0, posinf=1e10, neginf=-1e10)
 
         try:
             m = clone(model)

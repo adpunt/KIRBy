@@ -153,9 +153,12 @@ def _load_dta(dataset_name: str, rep_preset: str) -> dict:
 
 
 def _load_reaction(dataset_name: str) -> dict:
-    """Load reaction yield dataset with DRFP + concat ECFP4 reps."""
+    """Load reaction yield dataset with multiple representation types."""
     from kirby.datasets.reaction_yields import load_buchwald_hartwig, load_suzuki
-    from kirby.representations.reaction import create_drfp, create_concat_ecfp4
+    from kirby.representations.reaction import (
+        create_drfp, create_concat_ecfp4, create_concat_maccs,
+        create_concat_pdv, create_product_ecfp4, create_reactant_ecfp4,
+    )
 
     if dataset_name == 'buchwald_hartwig':
         data = load_buchwald_hartwig()
@@ -164,14 +167,32 @@ def _load_reaction(dataset_name: str) -> dict:
 
     reps = {}
 
-    # Concat ECFP4 (always available — uses RDKit only)
+    # Concat fingerprints per component
     reps['concat_ecfp4'] = create_concat_ecfp4(data['components'])
+    try:
+        reps['concat_maccs'] = create_concat_maccs(data['components'])
+    except Exception as e:
+        print(f"  WARNING: concat_maccs failed: {e}")
+    try:
+        reps['concat_pdv'] = create_concat_pdv(data['components'])
+    except Exception as e:
+        print(f"  WARNING: concat_pdv failed: {e}")
 
-    # DRFP (requires `pip install drfp`)
+    # Reaction-level fingerprints
     try:
         reps['drfp_2048'] = create_drfp(data['rxn_smiles'])
     except ImportError:
         print("  WARNING: drfp not installed, skipping DRFP rep")
+
+    # Product-only and reactant-only fingerprints
+    try:
+        reps['product_ecfp4'] = create_product_ecfp4(data['rxn_smiles'])
+    except Exception as e:
+        print(f"  WARNING: product_ecfp4 failed: {e}")
+    try:
+        reps['reactant_ecfp4'] = create_reactant_ecfp4(data['rxn_smiles'])
+    except Exception as e:
+        print(f"  WARNING: reactant_ecfp4 failed: {e}")
 
     n = len(data['labels'])
     print(f"  {dataset_name}: {n} reactions, {len(reps)} reps "
@@ -237,6 +258,31 @@ def _score(y_true, y_pred, task_type):
     return r2_score(y_true, y_pred)
 
 
+def _is_binary_rep(X):
+    """Check if feature matrix is binary (0/1) — should NOT be StandardScaled.
+
+    Binary fingerprints (ECFP, MACCS, DRFP, onehot, blosum) should be used raw.
+    Only continuous features (PDV, LM embeddings, descriptors) need z-scoring.
+    Matches qsar_qm_models behavior where only continuous_pdv is scaled.
+    """
+    if X.dtype == np.uint8:
+        return True
+    uniq = np.unique(X)
+    return len(uniq) <= 2 and set(uniq).issubset({0, 0.0, 1, 1.0})
+
+
+def _maybe_scale(X_train, X_val):
+    """Scale features only if continuous. Binary features are left raw."""
+    if _is_binary_rep(X_train):
+        return X_train.astype(np.float32), X_val.astype(np.float32)
+    scaler = StandardScaler()
+    X_train_s = scaler.fit_transform(X_train)
+    X_val_s = scaler.transform(X_val)
+    X_train_s = np.nan_to_num(X_train_s, nan=0.0, posinf=1e10, neginf=-1e10)
+    X_val_s = np.nan_to_num(X_val_s, nan=0.0, posinf=1e10, neginf=-1e10)
+    return X_train_s, X_val_s
+
+
 def evaluate_rep(X, labels, groups, model, n_folds, task_type,
                  prebuilt_splits=None):
     """Evaluate one (rep, model) pair via CV. Returns (mean, std)."""
@@ -248,9 +294,7 @@ def evaluate_rep(X, labels, groups, model, n_folds, task_type,
     scores = []
 
     for train_idx, val_idx in splits:
-        scaler = StandardScaler()
-        X_train = scaler.fit_transform(X[train_idx])
-        X_val = scaler.transform(X[val_idx])
+        X_train, X_val = _maybe_scale(X[train_idx], X[val_idx])
 
         try:
             m = clone(model)
@@ -277,9 +321,12 @@ def evaluate_ft_rep(factory, labels, groups, model, n_folds, task_type):
             print(f" [ft error: {e}]", end='')
             continue
 
+        # FT reps are always continuous (LM embeddings) — always scale
         scaler = StandardScaler()
         X_train = scaler.fit_transform(X_train)
         X_val = scaler.transform(X_val)
+        X_train = np.nan_to_num(X_train, nan=0.0, posinf=1e10, neginf=-1e10)
+        X_val = np.nan_to_num(X_val, nan=0.0, posinf=1e10, neginf=-1e10)
 
         try:
             m = clone(model)
