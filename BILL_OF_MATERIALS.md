@@ -5,7 +5,7 @@ performance. This document is the single source of truth for what KIRBy supports
 and what actually works. Representations without confirmed performance data should
 not be used in experiments until validated.
 
-**Last updated:** 2026-03-05 (augmented columns, comparison results, new reps added)
+**Last updated:** 2026-03-10 (7 mutation/variation antibody reps added)
 
 ---
 
@@ -155,11 +155,18 @@ QM9 results are STALE (old 5K/3-fold run) — rerun in progress.
 | `ablang2` | 480 | 0.860 | 0.433 | 0.223 | 0.354 | — | 0.494 | 0.437 |
 | `igbert` | 1024 | -0.002 | -0.002 | -0.007 | -0.002 | -158K | -0.027 | -0.065 |
 
-**Status:** Waiting on resubmit with lightgbm + all 18 reps (antiberty, esmc, amplify, CDR variants, seq encodings, structural all missing).
+**Status:** Waiting on resubmit with lightgbm + all 25 reps (antiberty, esmc, amplify, CDR variants, seq encodings, structural, mutation, variation all missing).
 
-**Registered reps (18 total):** esm2, esmc, ablang2, igbert, antiberty, prot_t5,
-amplify, onehot, blosum, aac, paratope, esm2_cdr, esmc_cdr, antiberty_cdr, prot_t5_cdr,
-amplify_cdr, esm2_midlayers, structural (28D: SASA+confidence+paratope via ImmuneBuilder).
+**Registered reps (25 total):**
+- **LM full-seq (7):** esm2, esmc, ablang2, igbert, antiberty, prot_t5, amplify
+- **LM CDR-pooled (5):** esm2_cdr, esmc_cdr, antiberty_cdr, prot_t5_cdr, amplify_cdr
+- **LM midlayer (1):** esm2_midlayers
+- **Seq encoding (4):** onehot, blosum, aac, paratope
+- **Structural (1):** structural (28D: SASA+confidence+paratope via ImmuneBuilder)
+- **Variation-pool (3):** esm2_entropy_top20 (2560D, top-20 IMGT entropy positions), esm2_per_cdr (7680D, CDR1/2/3 separate), esm2_per_region (17920D, all 7 IMGT regions separate)
+- **Mutation-aware (4):** mutation_features (48D, hand-crafted AA deltas), esm2_mutsite (1280D, ±3 window at mutation site), esm2_wt_delta (2560D, mutant−wildtype embedding delta), esm2_llr (3D, masked marginal log-likelihood ratio)
+
+Mutation reps require mutation metadata (pos, wt_aa, mut_aa, chain) from dataset loaders; silently skipped for datasets without mutations (e.g. AbCoV). Variation reps use IMGT numbering via ANARCI — no mutation metadata needed.
 
 ### 2C. TCGA Representations
 
@@ -379,7 +386,7 @@ for the same n_samples, so manual deletion is recommended:
 | Domain | Datasets | Reps | Status |
 |--------|----------|------|--------|
 | Molecular | 4/4 | 24/29 | **Done** (missing: clamp, rmat, map4, unimol_v2, dimenetpp) |
-| Antibody | 24/24 | 4/18 | **Partial** (LM survey only: esm2, prot_t5, ablang2, igbert) |
+| Antibody | 24/24 | 4/25 | **Partial** (LM survey only: esm2, prot_t5, ablang2, igbert) |
 | TCGA | 3/3 | 31/34 | **Partial** (missing: bulkrnabert, scgpt, uce — resubmit running) |
 | DTA | 2/2 | 17/27 | **Done** (missing: clamp, rmat, map4, unimol_v2, esmc, amplify, esmfold, alphafold_db, PCA variants) |
 | Reaction | 2/2 | 2/2 | **Done** |
@@ -390,7 +397,7 @@ for the same n_samples, so manual deletion is recommended:
 
 | Item | Gap | Blocker |
 |------|-----|---------|
-| Antibody full 18-rep survey | 14 reps × 24 datasets | GPU resubmit (updated script ready: `submit_antibody_survey.sh all`) |
+| Antibody full 25-rep survey | 21 reps × 24 datasets | GPU resubmit (updated script ready: `submit_antibody_survey.sh all`, 10 jobs) |
 | TCGA 3 foundation reps | bulkrnabert, scgpt, uce | Resubmit running (bulkrnabert OOM fixed batch_size=1) |
 | Molecular 5 missing reps | clamp, rmat, map4, unimol_v2, dimenetpp | Need resubmit with updated 'all' preset (29 reps) |
 | DTA 10 missing reps | clamp, rmat, map4, unimol_v2, esmc, amplify, esmfold, alphafold_db, PCA variants | Need resubmit with updated 'full' preset (27 reps) |
@@ -491,9 +498,12 @@ All antibody fine-tuning code has been removed. Summary of what was tested befor
 - `mlm_esm2` (self-supervised MLM): Negative R² on all datasets
 - Other variants (`lora_antiberty`, `lora_ablang2`, `mlm_antiberty`, `mlm_esm2_small`): Never tested, not expected to help
 
-The entire mutation-aware representation approach (40+ custom functions, varpos features,
-LM log-prob scores, delta reps) has been replaced with simple LM embeddings → Ridge →
-Spearman ρ, following the compass document. See `tests/antibody_baseline_survey.py`.
+The original mutation-aware representation approach (40+ custom functions) was replaced with
+simple LM embeddings → Ridge → R². A targeted set of 4 mutation-aware reps has been
+re-introduced in `src/kirby/representations/mutation.py` (mutation_features, esm2_mutsite,
+esm2_wt_delta, esm2_llr) — these are lightweight and use mutation metadata from dataset
+loaders. Additionally, 3 variation-pool reps (esm2_entropy_top20, esm2_per_cdr,
+esm2_per_region) provide finer-grained ESM-2 pooling without requiring mutation metadata.
 
 ### 7C. TCGA — Geneformer FT HELPS
 
@@ -575,11 +585,12 @@ rm -rf ~/.cache/kirby/finetuned_reps/    # FT embeddings from old HP regime
 The old approach (40+ mutation-aware custom features, complex presets, HP tuning) has been
 replaced with a simple baseline pipeline: LM embeddings → Ridge → Spearman ρ.
 
-**Current approach:** 8 representations (5 LM + 3 sequence encodings) evaluated per
-dataset with RidgeCV. This matches the standard in the field (FLAb2 paper uses the same).
+**Current approach:** 25 representations (7 LM + 5 CDR-pooled + 1 midlayer + 4 seq + 1 structural + 3 variation-pool + 4 mutation-aware) evaluated per dataset with RidgeCV + LightGBM.
 
 **Key questions to answer with the new baselines:**
 1. Which LM (ESM-2, AbLang2, IgBert, AntiBERTy, ProtT5) works best per task type?
 2. Does one-hot match or beat LMs at ≥1K samples (as claimed in literature)?
 3. Are inter-family datasets (ddg_combined, abcov_kd) still fundamentally too small/hard?
 4. Is Ridge sufficient or do tree models add value for antibody tasks?
+5. Do mutation-aware reps (esm2_mutsite, esm2_wt_delta, esm2_llr) rescue ΔΔG prediction (currently R²=-0.137)?
+6. Does finer-grained pooling (per-CDR, per-region, entropy-top20) improve DMS prediction over full-sequence mean-pool?
