@@ -204,9 +204,23 @@ def load_qm9_with_3d(n_samples=None, property_idx=4, data_dir='data/QM9',
         else:
             raise
 
-    # Extract SMILES
-    print("  Extracting SMILES from SDF...")
-    all_smiles = _load_smiles_from_sdf(data_dir)
+    # Filter to RDKit-valid molecules (matches qsar_qm_models)
+    valid_indices_path = osp.join(osp.dirname(data_dir), 'valid_qm9_indices.pth')
+    if not osp.exists(valid_indices_path):
+        valid_indices_path = osp.join('data', 'valid_qm9_indices.pth')
+    if osp.exists(valid_indices_path):
+        valid_indices = torch.load(valid_indices_path, weights_only=True)
+        qm9 = qm9.index_select(valid_indices)
+        print(f"  Filtered to {len(qm9)} RDKit-valid molecules")
+    else:
+        print("  WARNING: valid_qm9_indices.pth not found, using all molecules")
+
+    # Use PyG's data.smiles if available
+    has_smiles_attr = hasattr(qm9[0], 'smiles') and qm9[0].smiles is not None
+    sdf_smiles = None
+    if not has_smiles_attr:
+        print("  Extracting SMILES from SDF...")
+        sdf_smiles = _load_smiles_from_sdf(data_dir)
 
     # Subsample if requested
     total = len(qm9)
@@ -224,11 +238,16 @@ def load_qm9_with_3d(n_samples=None, property_idx=4, data_dir='data/QM9',
     targets = []
 
     for i, index in enumerate(indices):
-        smi = all_smiles[index]
+        data = qm9[index]
+
+        if has_smiles_attr:
+            smi = data.smiles
+        else:
+            smi = sdf_smiles[index] if sdf_smiles and index < len(sdf_smiles) else None
+
         if smi is None:
             continue
 
-        data = qm9[index]
         # Verify 3D coordinates exist
         if not hasattr(data, 'pos') or data.pos is None:
             continue
