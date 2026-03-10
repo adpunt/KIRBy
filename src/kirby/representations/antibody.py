@@ -725,6 +725,197 @@ def embed_paratope(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
     return features
 
 
+# ── Per-residue helpers for entropy/region pooling ────────────────────────
+
+
+def _extract_per_residue_esm2_chain(
+    sequences: List[str],
+    batch_size: int = 4,
+) -> List[np.ndarray]:
+    """Extract per-residue ESM-2 hidden states. Returns list of (L_i, 1280)."""
+    import torch
+    from transformers import AutoTokenizer, AutoModel
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model_name = 'facebook/esm2_t33_650M_UR50D'
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModel.from_pretrained(model_name).eval().to(device)
+
+    all_embs = []
+    for start in range(0, len(sequences), batch_size):
+        batch = sequences[start:start + batch_size]
+        inputs = tokenizer(batch, return_tensors='pt', padding=True,
+                           truncation=True, max_length=512).to(device)
+        with torch.no_grad():
+            outputs = model(**inputs)
+        hidden = outputs.last_hidden_state
+        for j in range(len(batch)):
+            seq_len = len(batch[j])
+            emb = hidden[j, 1:seq_len + 1, :].cpu().numpy().astype(np.float32)
+            all_embs.append(emb)
+
+    del model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return all_embs
+
+
+def _compute_entropy_from_maps(
+    sequences: List[str],
+    pos_maps_list: List[dict],
+) -> dict:
+    """Compute Shannon entropy at each IMGT position across sequences."""
+    from collections import Counter, defaultdict
+
+    position_aas = defaultdict(list)
+    for seq, pos_map in zip(sequences, pos_maps_list):
+        for imgt_pos, raw_idx in pos_map.items():
+            if raw_idx < len(seq):
+                position_aas[imgt_pos].append(seq[raw_idx])
+
+    entropy_map = {}
+    for imgt_pos, aas in position_aas.items():
+        counts = Counter(aas)
+        total = len(aas)
+        if total == 0:
+            entropy_map[imgt_pos] = 0.0
+            continue
+        probs = np.array([c / total for c in counts.values()])
+        probs = probs[probs > 0]
+        entropy_map[imgt_pos] = float(-np.sum(probs * np.log2(probs)))
+
+    return entropy_map
+
+
+def _get_top_k_variable_indices(
+    pos_map: dict,
+    entropy_map: dict,
+    k: int,
+    seq_len: int,
+) -> List[int]:
+    """Get 0-based raw indices of top-k highest-entropy IMGT positions."""
+    if not pos_map:
+        return list(range(min(k, seq_len)))
+
+    scored = [(entropy_map.get(imgt_pos, 0.0), raw_idx)
+              for imgt_pos, raw_idx in pos_map.items()]
+    scored.sort(key=lambda x: -x[0])
+    indices = sorted([raw_idx for _, raw_idx in scored[:k]])
+    return indices if indices else list(range(min(k, seq_len)))
+
+
+def _pool_indices(token_embs: np.ndarray, indices: List[int]) -> np.ndarray:
+    """Mean-pool token embeddings at given indices. Returns (D,) vector."""
+    if not indices:
+        return token_embs.mean(axis=0)
+    valid = [i for i in indices if i < token_embs.shape[0]]
+    if not valid:
+        return token_embs.mean(axis=0)
+    return token_embs[valid].mean(axis=0)
+
+
+# ── Entropy/region-aware pooling reps ─────────────────────────────────────
+
+
+def embed_esm2_entropy_top20(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """ESM-2 entropy-guided pooling: top-20 variable positions → (N, 2560).
+
+    Computes per-position Shannon entropy across the dataset using IMGT
+    numbering, then pools ESM-2 per-residue embeddings at the 20
+    highest-entropy positions per chain.
+    """
+    def _process_chain(sequences):
+        if not sequences or all(s == '' for s in sequences):
+            return np.zeros((len(heavy_seqs), 1280), dtype=np.float32)
+
+        print(f"    Extracting per-residue ESM-2...", flush=True)
+        token_embs = _extract_per_residue_esm2_chain(sequences)
+
+        print(f"    Computing IMGT position maps...", flush=True)
+        pos_maps = [get_imgt_position_map(s) for s in sequences]
+
+        print(f"    Computing positional entropy...", flush=True)
+        entropy_map = _compute_entropy_from_maps(sequences, pos_maps)
+
+        pooled = []
+        for i in range(len(sequences)):
+            indices = _get_top_k_variable_indices(
+                pos_maps[i], entropy_map, k=20, seq_len=token_embs[i].shape[0])
+            pooled.append(_pool_indices(token_embs[i], indices))
+
+        return np.vstack(pooled)
+
+    h_embs = _process_chain(heavy_seqs)
+    l_embs = _process_chain(light_seqs)
+    return np.hstack([h_embs, l_embs]).astype(np.float32)
+
+
+def embed_esm2_per_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """ESM-2 per-CDR pooling: CDR1, CDR2, CDR3 separately → (N, 7680).
+
+    Unlike esm2_cdr which pools ALL CDR tokens together into one vector,
+    this keeps each CDR region separate and concatenates them.
+    """
+    cdr_regions = ['CDR1', 'CDR2', 'CDR3']
+
+    def _process_chain(sequences):
+        if not sequences or all(s == '' for s in sequences):
+            return np.zeros((len(heavy_seqs), 1280 * 3), dtype=np.float32)
+
+        print(f"    Extracting per-residue ESM-2...", flush=True)
+        token_embs = _extract_per_residue_esm2_chain(sequences)
+
+        print(f"    Computing IMGT regions...", flush=True)
+        regions_list = [get_region_indices(s) for s in sequences]
+
+        pooled = []
+        for i in range(len(sequences)):
+            parts = []
+            for r in cdr_regions:
+                indices = regions_list[i].get(r, [])
+                parts.append(_pool_indices(token_embs[i], indices))
+            pooled.append(np.concatenate(parts))
+
+        return np.vstack(pooled)
+
+    h_embs = _process_chain(heavy_seqs)
+    l_embs = _process_chain(light_seqs)
+    return np.hstack([h_embs, l_embs]).astype(np.float32)
+
+
+def embed_esm2_per_region(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """ESM-2 per-region pooling: all 7 IMGT regions separately → (N, 17920).
+
+    Pools FR1, CDR1, FR2, CDR2, FR3, CDR3, FR4 separately per chain,
+    then concatenates H + L.
+    """
+    region_order = ['FR1', 'CDR1', 'FR2', 'CDR2', 'FR3', 'CDR3', 'FR4']
+
+    def _process_chain(sequences):
+        if not sequences or all(s == '' for s in sequences):
+            return np.zeros((len(heavy_seqs), 1280 * 7), dtype=np.float32)
+
+        print(f"    Extracting per-residue ESM-2...", flush=True)
+        token_embs = _extract_per_residue_esm2_chain(sequences)
+
+        print(f"    Computing IMGT regions...", flush=True)
+        regions_list = [get_region_indices(s) for s in sequences]
+
+        pooled = []
+        for i in range(len(sequences)):
+            parts = []
+            for r in region_order:
+                indices = regions_list[i].get(r, [])
+                parts.append(_pool_indices(token_embs[i], indices))
+            pooled.append(np.concatenate(parts))
+
+        return np.vstack(pooled)
+
+    h_embs = _process_chain(heavy_seqs)
+    l_embs = _process_chain(light_seqs)
+    return np.hstack([h_embs, l_embs]).astype(np.float32)
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 ANTIBODY_REPS = {
@@ -750,6 +941,10 @@ ANTIBODY_REPS = {
     # Structural (from structural.py, requires ImmuneBuilder for full 28D)
     'structural': embed_structural,          # 28D (SASA + confidence + paratope)
     'paratope': embed_paratope,              # 8D (sequence-based, no deps)
+    # Entropy/region-aware pooling
+    'esm2_entropy_top20': embed_esm2_entropy_top20,  # 2560D
+    'esm2_per_cdr': embed_esm2_per_cdr,              # 7680D
+    'esm2_per_region': embed_esm2_per_region,        # 17920D
 }
 
 # LM reps (require GPU / torch / transformers)
@@ -757,6 +952,7 @@ ANTIBODY_LM_REPS = {
     'esm2', 'esmc', 'ablang2', 'igbert', 'antiberty', 'prot_t5',
     'esm2_cdr', 'esmc_cdr', 'antiberty_cdr', 'prot_t5_cdr',
     'esm2_midlayers', 'amplify', 'amplify_cdr',
+    'esm2_entropy_top20', 'esm2_per_cdr', 'esm2_per_region',
 }
 
 # Structural reps (require ImmuneBuilder + biopython, CPU-heavy)

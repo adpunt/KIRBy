@@ -13,11 +13,13 @@ MODE=${1:-all}
 OUTPUT="tests/results/antibody_survey"
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
 
-# All 18 rep names
+# All 25 rep names
 ALL_LM="esm2,esmc,ablang2,igbert,antiberty,prot_t5,amplify,esm2_cdr,esmc_cdr,antiberty_cdr,prot_t5_cdr,amplify_cdr,esm2_midlayers"
 ALL_FAST="onehot,blosum,aac,paratope"
 ALL_STRUCT="structural"
-ALL_REPS="${ALL_LM},${ALL_FAST},${ALL_STRUCT}"
+ALL_MUTATION="mutation_features,esm2_mutsite,esm2_wt_delta,esm2_llr"
+ALL_VARIATION="esm2_entropy_top20,esm2_per_cdr,esm2_per_region"
+ALL_REPS="${ALL_LM},${ALL_FAST},${ALL_STRUCT},${ALL_MUTATION},${ALL_VARIATION}"
 
 submit() {
     local name=$1
@@ -79,6 +81,20 @@ case "$MODE" in
         echo ""
         echo "  Total: 3 jobs (inter: fast + LM + structural, with --augment)"
         ;;
+    mutation)
+        # Mutation-aware reps (GPU): 4 reps, only useful for ΔΔG/DMS datasets with mutation metadata
+        submit mut_dms all_dms "--reps ${ALL_MUTATION}" 96G 23:59:00 gpu
+        submit mut_inter all_inter "--reps ${ALL_MUTATION}" 96G 23:59:00 gpu
+        echo ""
+        echo "  Total: 2 jobs (4 mutation reps, GPU, with --augment)"
+        ;;
+    variation)
+        # Variation/entropy-aware pooling reps (GPU): 3 reps
+        submit var_dms all_dms "--reps ${ALL_VARIATION}" 96G 23:59:00 gpu
+        submit var_inter all_inter "--reps ${ALL_VARIATION}" 96G 23:59:00 gpu
+        echo ""
+        echo "  Total: 2 jobs (3 variation reps, GPU, with --augment)"
+        ;;
     all)
         submit fast_dms all_dms "--reps ${ALL_FAST}" 32G 02:00:00
         submit fast_inter all_inter "--reps ${ALL_FAST}" 32G 02:00:00
@@ -86,8 +102,12 @@ case "$MODE" in
         submit lm_inter all_inter "--reps ${ALL_LM}" 96G 23:59:00 gpu
         submit struct_dms all_dms "--reps ${ALL_STRUCT}" 64G 23:59:00 gpu
         submit struct_inter all_inter "--reps ${ALL_STRUCT}" 64G 23:59:00 gpu
+        submit mut_dms all_dms "--reps ${ALL_MUTATION}" 96G 23:59:00 gpu
+        submit mut_inter all_inter "--reps ${ALL_MUTATION}" 96G 23:59:00 gpu
+        submit var_dms all_dms "--reps ${ALL_VARIATION}" 96G 23:59:00 gpu
+        submit var_inter all_inter "--reps ${ALL_VARIATION}" 96G 23:59:00 gpu
         echo ""
-        echo "  Total: 6 jobs (18 reps: 4 fast + 13 LM + 1 structural, with --augment)"
+        echo "  Total: 10 jobs (25 reps: 4 fast + 13 LM + 1 structural + 4 mutation + 3 variation, with --augment)"
         ;;
     all_ft)
         submit fast_dms all_dms "--reps ${ALL_FAST}" 32G 02:00:00
@@ -96,30 +116,40 @@ case "$MODE" in
         submit lm_ft_inter all_inter "--reps ${ALL_LM} --finetune" 96G 23:59:00 gpu
         submit struct_dms all_dms "--reps ${ALL_STRUCT}" 64G 23:59:00 gpu
         submit struct_inter all_inter "--reps ${ALL_STRUCT}" 64G 23:59:00 gpu
+        submit mut_dms all_dms "--reps ${ALL_MUTATION}" 96G 23:59:00 gpu
+        submit mut_inter all_inter "--reps ${ALL_MUTATION}" 96G 23:59:00 gpu
+        submit var_dms all_dms "--reps ${ALL_VARIATION}" 96G 23:59:00 gpu
+        submit var_inter all_inter "--reps ${ALL_VARIATION}" 96G 23:59:00 gpu
         echo ""
-        echo "  Total: 6 jobs (18 reps + ESM-2 LoRA FT, with --augment, GPU)"
+        echo "  Total: 10 jobs (25 reps + ESM-2 LoRA FT, with --augment, GPU)"
         ;;
     *)
         echo "Usage: bash submit_antibody_survey.sh [MODE]"
         echo ""
         echo "Modes:"
-        echo "  all      All 18 reps, all datasets (6 jobs: 2 CPU + 4 GPU)"
-        echo "  all_ft   All 18 reps + ESM-2 LoRA fine-tuning (6 jobs, GPU)"
-        echo "  fast     Fast reps only (onehot, blosum, aac, paratope) — CPU"
-        echo "  lm       LM reps (13: ESM-2, ESM-C, AbLang2, IgBert, AntiBERTy,"
-        echo "           ProtT5, AMPLIFY, + CDR variants + midlayers) — GPU"
-        echo "  struct   Structural reps (SASA + confidence + paratope, ImmuneBuilder)"
-        echo "  dms      DMS datasets only (fast + LM + structural)"
-        echo "  inter    Inter-family datasets only (fast + LM + structural)"
+        echo "  all       All 25 reps, all datasets (10 jobs: 2 CPU + 8 GPU)"
+        echo "  all_ft    All 25 reps + ESM-2 LoRA fine-tuning (10 jobs, GPU)"
+        echo "  fast      Fast reps only (onehot, blosum, aac, paratope) — CPU"
+        echo "  lm        LM reps (13: ESM-2, ESM-C, AbLang2, IgBert, AntiBERTy,"
+        echo "            ProtT5, AMPLIFY, + CDR variants + midlayers) — GPU"
+        echo "  struct    Structural reps (SASA + confidence + paratope, ImmuneBuilder)"
+        echo "  mutation  Mutation-aware reps (4: mutation_features, esm2_mutsite,"
+        echo "            esm2_wt_delta, esm2_llr) — GPU"
+        echo "  variation Variation/entropy-aware pooling (3: esm2_entropy_top20,"
+        echo "            esm2_per_cdr, esm2_per_region) — GPU"
+        echo "  dms       DMS datasets only (fast + LM + structural)"
+        echo "  inter     Inter-family datasets only (fast + LM + structural)"
         echo ""
         echo "All modes include --augment (concat small reps with top base)."
         echo ""
-        echo "Rep categories (18 total):"
-        echo "  LM full-seq (7):  esm2, esmc, ablang2, igbert, antiberty, prot_t5, amplify"
-        echo "  LM CDR-pooled (5): esm2_cdr, esmc_cdr, antiberty_cdr, prot_t5_cdr, amplify_cdr"
-        echo "  LM midlayer (1):  esm2_midlayers"
-        echo "  Seq encoding (4): onehot, blosum, aac, paratope"
-        echo "  Structural (1):   structural (28D: SASA + confidence + paratope)"
+        echo "Rep categories (25 total):"
+        echo "  LM full-seq (7):    esm2, esmc, ablang2, igbert, antiberty, prot_t5, amplify"
+        echo "  LM CDR-pooled (5):  esm2_cdr, esmc_cdr, antiberty_cdr, prot_t5_cdr, amplify_cdr"
+        echo "  LM midlayer (1):    esm2_midlayers"
+        echo "  Seq encoding (4):   onehot, blosum, aac, paratope"
+        echo "  Structural (1):     structural (28D: SASA + confidence + paratope)"
+        echo "  Mutation (4):       mutation_features, esm2_mutsite, esm2_wt_delta, esm2_llr"
+        echo "  Variation (3):      esm2_entropy_top20, esm2_per_cdr, esm2_per_region"
         exit 1
         ;;
 esac
