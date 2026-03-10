@@ -22,6 +22,12 @@ if [ -n "$USER_SITE" ] && [ -d "$USER_SITE" ]; then
     export PYTHONPATH="$USER_SITE${PYTHONPATH:+:$PYTHONPATH}"
 fi
 
+# Fix threadpoolctl crash from system Anaconda's old version (2022.05).
+# The old threadpoolctl crashes on get_config().split() → NoneType in ctypes callbacks.
+# These are C-level "Exception ignored" errors that bypass Python stderr filters.
+# Real fix: install a newer threadpoolctl in user site so it shadows the system one.
+pip install --user "threadpoolctl>=3.1" -q 2>/dev/null
+
 # constraints.txt locks numpy/pandas/scipy/sklearn/torch so NO pip install can upgrade them
 CONSTRAINTS="-c ${SCRIPT_DIR}/constraints.txt"
 
