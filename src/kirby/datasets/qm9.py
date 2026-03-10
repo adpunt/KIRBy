@@ -45,8 +45,14 @@ def load_qm9(n_samples=5000, property_idx=4, data_dir='data/QM9', random_seed=42
     """
     Load QM9 dataset and extract SMILES + labels.
 
+    Matches qsar_qm_models pipeline:
+      1. Load full QM9 via PyG
+      2. Filter to RDKit-valid molecules (valid_qm9_indices.pth)
+      3. Use data.smiles from PyG (not SDF extraction)
+      4. Subsample if n_samples < total
+
     Args:
-        n_samples: Number of molecules to sample
+        n_samples: Number of molecules to sample (None = all valid)
         property_idx: Which property to predict (0-11)
         data_dir: Directory to store/load QM9 data
         random_seed: Random seed for reproducibility
@@ -86,30 +92,58 @@ def load_qm9(n_samples=5000, property_idx=4, data_dir='data/QM9', random_seed=42
         else:
             raise
 
-    # Extract SMILES from SDF (PyG QM9 may not have .smiles attribute)
-    print("  Extracting SMILES from SDF...")
-    all_smiles = _load_smiles_from_sdf(data_dir)
+    # Filter to RDKit-valid molecules (matches qsar_qm_models/process_and_train.py)
+    valid_indices_path = osp.join(osp.dirname(data_dir), 'valid_qm9_indices.pth')
+    if not osp.exists(valid_indices_path):
+        # Fallback: check KIRBy data/ root
+        valid_indices_path = osp.join('data', 'valid_qm9_indices.pth')
+    if osp.exists(valid_indices_path):
+        valid_indices = torch.load(valid_indices_path, weights_only=True)
+        qm9 = qm9.index_select(valid_indices)
+        print(f"  Filtered to {len(qm9)} RDKit-valid molecules")
+    else:
+        print("  WARNING: valid_qm9_indices.pth not found, using all molecules")
 
-    n_samples = min(n_samples, len(qm9))
+    # Use PyG's data.smiles attribute (matches qsar repo)
+    # Fall back to SDF extraction only if .smiles not available
+    has_smiles_attr = hasattr(qm9[0], 'smiles') and qm9[0].smiles is not None
+    if has_smiles_attr:
+        print("  Using PyG SMILES attribute")
+    else:
+        print("  PyG SMILES not available, extracting from SDF...")
+
+    total = len(qm9)
+    if n_samples is not None and n_samples < total:
+        import random
+        random.seed(random_seed)
+        indices = sorted(random.sample(range(total), n_samples))
+    else:
+        indices = list(range(total))
+        n_samples = total
+
     smiles_list = []
     targets = []
 
-    import random
-    random.seed(random_seed)
-    random_indices = random.sample(range(len(qm9)), n_samples)
+    # SDF fallback SMILES (only loaded if needed)
+    sdf_smiles = None
+    if not has_smiles_attr:
+        sdf_smiles = _load_smiles_from_sdf(data_dir)
 
-    print(f"  Extracting {n_samples} molecules...")
-    for i, index in enumerate(random_indices):
-        if (i + 1) % 500 == 0:
-            print(f"    Progress: {i + 1}/{n_samples}")
-
-        smi = all_smiles[index]
-        if smi is None:
-            continue  # Skip molecules that failed SDF parsing
+    print(f"  Extracting {len(indices)} molecules...")
+    for index in indices:
         data = qm9[index]
+
+        if has_smiles_attr:
+            smi = data.smiles
+        else:
+            smi = sdf_smiles[index] if index < len(sdf_smiles) else None
+
+        if smi is None:
+            continue
+
         smiles_list.append(smi)
         targets.append(data.y[0, property_idx].item())
-    
+
     targets = np.array(targets)
 
     # Return raw targets — normalization happens per-fold in the evaluation pipeline

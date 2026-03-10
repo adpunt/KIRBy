@@ -663,15 +663,24 @@ def _evaluate_single(
     split_args = (X, y, groups) if use_groups else (X, y)
     scores = []
 
+    # Only scale continuous features; leave binary (ECFP, MACCS, etc.) raw
+    is_binary = (X.dtype == np.uint8 or
+                 (len(np.unique(X)) <= 2 and
+                  set(np.unique(X).tolist()).issubset({0, 0.0, 1, 1.0})))
+
     for train_idx, val_idx in splitter.split(*split_args):
         X_train, X_val = X[train_idx], X[val_idx]
         y_train, y_val = y[train_idx], y[val_idx]
 
-        scaler = StandardScaler()
-        X_train_s = scaler.fit_transform(X_train)
-        X_val_s = scaler.transform(X_val)
-        X_train_s = np.nan_to_num(X_train_s, nan=0.0, posinf=1e10, neginf=-1e10)
-        X_val_s = np.nan_to_num(X_val_s, nan=0.0, posinf=1e10, neginf=-1e10)
+        if is_binary:
+            X_train_s = X_train.astype(np.float32)
+            X_val_s = X_val.astype(np.float32)
+        else:
+            scaler = StandardScaler()
+            X_train_s = scaler.fit_transform(X_train)
+            X_val_s = scaler.transform(X_val)
+            X_train_s = np.nan_to_num(X_train_s, nan=0.0, posinf=1e10, neginf=-1e10)
+            X_val_s = np.nan_to_num(X_val_s, nan=0.0, posinf=1e10, neginf=-1e10)
 
         m = deepcopy(model)
         # Adaptive k for KNN: scale to sqrt(N_train), capped at 5
