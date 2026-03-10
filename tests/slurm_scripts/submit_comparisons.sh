@@ -51,7 +51,7 @@ case "$MODE" in
         echo "  Total: 2 jobs (Davis + KIBA)"
         ;;
     ab_ft)
-        submit ab_ft "python tests/experiments/antibody_finetune_comparison.py --n-folds 5 --output ${OUTPUT}" 96G 23:59:00
+        submit ab_ft "python tests/experiments/antibody_finetune_comparison.py --n-folds 5 --output ${OUTPUT}" 96G 47:59:00
         ;;
     ab_region)
         submit ab_region "python tests/experiments/antibody_region_ablation.py --n-folds 5 --output ${OUTPUT}" 96G 23:59:00
@@ -60,7 +60,7 @@ case "$MODE" in
         submit qm9_gap "python tests/experiments/qm9_3d_comparison.py --property gap --n-samples 10000 --output ${OUTPUT}" 64G 06:00:00
         submit dta_davis "python tests/experiments/dta_e2e_comparison.py davis --output ${OUTPUT}" 96G 23:59:00
         submit dta_kiba "python tests/experiments/dta_e2e_comparison.py kiba --max-pairs 30000 --output ${OUTPUT}" 96G 23:59:00
-        submit ab_ft "python tests/experiments/antibody_finetune_comparison.py --n-folds 5 --output ${OUTPUT}" 96G 23:59:00
+        submit ab_ft "python tests/experiments/antibody_finetune_comparison.py --n-folds 5 --output ${OUTPUT}" 96G 47:59:00
         submit ab_region "python tests/experiments/antibody_region_ablation.py --n-folds 5 --output ${OUTPUT}" 96G 23:59:00
         echo ""
         echo "  Total: 5 jobs (QM9 + Davis + KIBA + Antibody FT + Region Ablation)"
