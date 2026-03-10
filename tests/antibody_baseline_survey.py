@@ -150,6 +150,7 @@ def load_dataset(name: str) -> dict:
         'groups': groups,
         'n_groups': n_groups,
         'n_samples': len(labels),
+        'mutations': data.get('mutations'),
     }
 
 
@@ -421,10 +422,12 @@ def run_survey(
 
     # 2. Generate representations (with .npy caching)
     from kirby.representations.antibody import ANTIBODY_REPS
+    from kirby.representations.mutation import MUTATION_REPS
     reps = {}
     for rep_name in rep_names:
         if rep_name not in ANTIBODY_REPS:
-            print(f"  WARNING: unknown rep '{rep_name}', skipping")
+            if rep_name not in MUTATION_REPS:
+                print(f"  WARNING: unknown rep '{rep_name}', skipping")
             continue
 
         # Try loading from cache
@@ -452,6 +455,35 @@ def run_survey(
             np.save(cache_file, X)
         except Exception as e:
             print(f" FAILED: {e}")
+
+    # 2b. Mutation-aware reps (require mutation metadata)
+    mutations = data.get('mutations')
+    has_mutations = mutations and any(len(m) > 0 for m in mutations)
+    if has_mutations:
+        for rep_name in rep_names:
+            if rep_name in MUTATION_REPS and rep_name not in reps:
+                cache_file = _rep_cache_path(heavy_seqs, light_seqs, rep_name)
+                if cache_file.exists():
+                    try:
+                        X = np.load(cache_file, allow_pickle=False)
+                        X = np.asarray(X, dtype=np.float64)
+                        if X.ndim == 2:
+                            print(f"  {rep_name}: loaded from cache ({X.shape[1]}D)")
+                            reps[rep_name] = X
+                            continue
+                    except Exception:
+                        pass
+                try:
+                    print(f"  Generating {rep_name}...", end='', flush=True)
+                    X = MUTATION_REPS[rep_name](heavy_seqs, light_seqs, mutations)
+                    if X.ndim != 2:
+                        print(f" FAILED: expected 2D, got {X.ndim}D")
+                        continue
+                    reps[rep_name] = X
+                    print(f" ({X.shape[1]}D)")
+                    np.save(cache_file, X)
+                except Exception as e:
+                    print(f" FAILED: {e}")
 
     if not reps:
         raise RuntimeError("No representations generated successfully")
