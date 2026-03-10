@@ -56,6 +56,17 @@ def main():
     smiles = data['smiles']
     labels = data['labels']
     data_list = data['data_list']
+
+    # Filter to RDKit-valid SMILES (some QM9 SMILES have exotic valences)
+    from rdkit import Chem
+    valid = [i for i, s in enumerate(smiles) if Chem.MolFromSmiles(s) is not None]
+    if len(valid) < len(smiles):
+        print(f"  Filtered {len(smiles) - len(valid)} invalid SMILES "
+              f"({len(valid)} remaining)")
+        smiles = [smiles[i] for i in valid]
+        labels = labels[valid]
+        data_list = [data_list[i] for i in valid]
+
     n = len(labels)
     print(f"\n{n} molecules, property: {args.property}")
 
