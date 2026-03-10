@@ -39,24 +39,24 @@ echo ""
 
 case "$MODE" in
     davis)
-        submit davis_frozen davis "" 64G 23:59:00 gpu
+        submit davis_frozen davis "" 64G 47:59:00 gpu
         echo ""
         echo "  Total: 1 job (davis frozen, 27 reps)"
         ;;
     kiba)
-        submit kiba_frozen kiba "--max-pairs 30000" 64G 23:59:00 gpu
+        submit kiba_frozen kiba "--max-pairs 30000" 64G 47:59:00 gpu
         echo ""
         echo "  Total: 1 job (kiba frozen, 27 reps)"
         ;;
     kiba_ft)
-        submit kiba_ft kiba "--max-pairs 30000 --finetune protein_esm2_lora --finetune-epochs 5" 96G 23:59:00 gpu
+        submit kiba_ft kiba "--max-pairs 30000 --finetune protein_esm2_lora --finetune-epochs 5" 96G 47:59:00 gpu
         echo ""
         echo "  Total: 1 job (kiba with ESM-2 LoRA fine-tuning, GPU)"
         ;;
     all)
-        submit davis_frozen davis "" 64G 23:59:00 gpu
-        submit kiba_frozen kiba "--max-pairs 30000" 64G 23:59:00 gpu
-        submit kiba_ft kiba "--max-pairs 30000 --finetune protein_esm2_lora --finetune-epochs 5" 96G 23:59:00 gpu
+        submit davis_frozen davis "" 64G 47:59:00 gpu
+        submit kiba_frozen kiba "--max-pairs 30000" 64G 47:59:00 gpu
+        submit kiba_ft kiba "--max-pairs 30000 --finetune protein_esm2_lora --finetune-epochs 5" 96G 47:59:00 gpu
         echo ""
         echo "  Total: 3 jobs (davis frozen + kiba frozen + kiba FT)"
         ;;
