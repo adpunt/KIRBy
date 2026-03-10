@@ -31,7 +31,7 @@ submit() {
         --time="${wall}" --partition=long \
         --mem="${mem}" --gres=gpu:1 \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
-        --wrap="cd /data/stat-cadd/scat9264/KIRBy && git pull 2>/dev/null; . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error && mkdir -p ${OUTPUT} && ${cmd}" \
+        --wrap="cd /data/stat-cadd/scat9264/KIRBy && git pull 2>/dev/null; . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error && mkdir -p ${OUTPUT} && ${cmd} 2> >(grep -v -e 'DEPRECATION WARNING' -e 'threadpoolctl' -e 'ctypes callback' -e 'NoneType.*split' >&2)" \
         | awk '{print $4}')
     echo "  $J  ${name}  (mem=${mem}, time=${wall}, GPU)"
 }

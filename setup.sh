@@ -16,19 +16,10 @@ export PYTHONUSERBASE=/data/stat-cadd/scat9264/.local
 export KIRBY_CACHE_DIR=/data/stat-cadd/scat9264/.cache/kirby
 export KIRBY_MODELS_DIR=/data/stat-cadd/scat9264/kirby_models
 
-# Suppress RDKit deprecation warnings (GetValence, etc.) that flood logs.
-# RDLogger.DisableLog in molecular.py runs too late — some warnings fire during
-# import. usercustomize.py runs before any script imports, catching them early.
-if [ -n "$USER_SITE" ]; then
-    mkdir -p "$USER_SITE"
-    cat > "$USER_SITE/usercustomize.py" << 'PYEOF'
-try:
-    from rdkit import RDLogger
-    RDLogger.DisableLog('rdApp.*')
-except ImportError:
-    pass
-PYEOF
-fi
+# Suppress RDKit C++ deprecation warnings (GetValence etc.) and threadpoolctl
+# ctypes crashes. Both are harmless stderr noise from C extensions that can't be
+# caught by Python's warnings module or RDLogger.DisableLog.
+export KIRBY_STDERR_FILTER="grep -v -e 'DEPRECATION WARNING' -e 'threadpoolctl' -e 'ctypes callback' -e 'AttributeError.*split'"
 
 # Ensure user packages override system Anaconda packages (e.g., openpyxl 3.0.9)
 USER_SITE=$(python -c "import site; print(site.getusersitepackages())" 2>/dev/null)
