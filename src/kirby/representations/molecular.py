@@ -55,6 +55,14 @@ from rdkit.ML.Descriptors.MoleculeDescriptors import MolecularDescriptorCalculat
 RDLogger.DisableLog('rdApp.*')
 
 
+def _safe_mol(smiles):
+    """Parse SMILES to RDKit mol, returning None on failure (no exceptions)."""
+    try:
+        return Chem.MolFromSmiles(smiles)
+    except Exception:
+        return None
+
+
 # =============================================================================
 # MODEL PATH CONFIGURATION
 # =============================================================================
@@ -182,11 +190,15 @@ def create_ecfp4(smiles_list, radius=2, n_bits=2048):
     generator = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=n_bits)
     
     for i, smiles in enumerate(smiles_list):
-        mol = Chem.MolFromSmiles(smiles)
+        mol = _safe_mol(smiles)
         if mol is None:
-            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
-        fp = generator.GetFingerprint(mol)
-        fingerprints.append(np.array(fp))
+            fingerprints.append(np.zeros(n_bits, dtype=np.float32))
+            continue
+        try:
+            fp = generator.GetFingerprint(mol)
+            fingerprints.append(np.array(fp))
+        except Exception:
+            fingerprints.append(np.zeros(n_bits, dtype=np.float32))
     
     return np.array(fingerprints, dtype=np.float32)
 
@@ -207,9 +219,9 @@ def create_maccs(smiles_list):
     fingerprints = []
     
     for i, smiles in enumerate(smiles_list):
-        mol = Chem.MolFromSmiles(smiles)
+        mol = _safe_mol(smiles)
         if mol is None:
-            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
+            continue
         fp = MACCSkeys.GenMACCSKeys(mol)
         fingerprints.append(np.array(fp))
     
@@ -234,9 +246,9 @@ def create_pdv(smiles_list, descriptor_list=None):
     descriptors = []
     
     for i, smiles in enumerate(smiles_list):
-        mol = Chem.MolFromSmiles(smiles)
+        mol = _safe_mol(smiles)
         if mol is None:
-            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
+            continue
         desc = np.array(calc.CalcDescriptors(mol), dtype=np.float32)
         desc = np.nan_to_num(desc, nan=0.0, posinf=0.0, neginf=0.0)
         descriptors.append(desc)
@@ -351,9 +363,9 @@ def create_sns(smiles_list, reference_featurizer=None, return_featurizer=False,
     
     mols = []
     for i, smiles in enumerate(smiles_list):
-        mol = Chem.MolFromSmiles(smiles)
+        mol = _safe_mol(smiles)
         if mol is None:
-            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
+            continue
         mols.append(mol)
     
     if pharm_atom_invs:
@@ -414,9 +426,9 @@ def _transform_sns(smiles_list, featurizer):
     features = np.zeros((len(smiles_list), vec_dimension), dtype=np.float32)
     
     for i, smiles in enumerate(smiles_list):
-        mol = Chem.MolFromSmiles(smiles)
+        mol = _safe_mol(smiles)
         if mol is None:
-            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
+            continue
         
         fp = morgan_generator.GetSparseCountFingerprint(mol)
         sub_id_counts = fp.GetNonzeroElements()
@@ -489,9 +501,9 @@ def create_mol2vec(smiles_list, model_path=None, radius=1, unseen='UNK'):
     
     embeddings = []
     for i, smiles in enumerate(smiles_list):
-        mol = Chem.MolFromSmiles(smiles)
+        mol = _safe_mol(smiles)
         if mol is None:
-            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
+            continue
         
         sentence = MolSentence(mol2alt_sentence(mol, radius))
         vec = np.zeros(_MOL2VEC_MODEL.wv.vector_size)
@@ -639,9 +651,9 @@ def create_schnet(smiles_list, hidden_channels=128, num_interactions=6,
 
     def smiles_to_data(smiles):
         """Convert SMILES to PyG Data with 3D coordinates."""
-        mol = Chem.MolFromSmiles(smiles)
+        mol = _safe_mol(smiles)
         if mol is None:
-            raise ValueError(f"Invalid SMILES: {smiles}")
+            continue
 
         # Add hydrogens and generate 3D conformer
         mol = Chem.AddHs(mol)
@@ -1849,7 +1861,7 @@ def create_molclr(smiles_list, molclr_dir=None, model_type='gin', device=None):
     ]
 
     def smiles_to_graph(smiles):
-        mol = Chem.MolFromSmiles(smiles)
+        mol = _safe_mol(smiles)
         if mol is None:
             return None
 
@@ -2129,7 +2141,7 @@ def create_graphmvp(smiles_list, graphmvp_dir=None, checkpoint_path=None,
     from ogb.utils.features import atom_to_feature_vector, bond_to_feature_vector
 
     def smiles_to_graph(smiles):
-        mol = Chem.MolFromSmiles(smiles)
+        mol = _safe_mol(smiles)
         if mol is None:
             return None
 
@@ -2580,7 +2592,7 @@ def create_map4(smiles_list, n_bits=1024):
     failed = 0
 
     for smi in smiles_list:
-        mol = Chem.MolFromSmiles(smi)
+        mol = _safe_mol(smi)
         if mol is None:
             all_fps.append(np.zeros(n_bits, dtype=np.float32))
             failed += 1
@@ -2670,9 +2682,9 @@ def create_dimenetpp(smiles_list, hidden_channels=128, out_channels=1,
 
     def smiles_to_data(smiles):
         """Convert SMILES to PyG Data with 3D coordinates."""
-        mol = Chem.MolFromSmiles(smiles)
+        mol = _safe_mol(smiles)
         if mol is None:
-            raise ValueError(f"Invalid SMILES: {smiles}")
+            continue
         mol = Chem.AddHs(mol)
         result = AllChem.EmbedMolecule(mol, randomSeed=42)
         if result == -1:
@@ -2782,9 +2794,9 @@ def create_graph_kernel(smiles_list, kernel='weisfeiler_lehman', n_iter=5,
     graphs_data = []
     
     for i, smiles in enumerate(smiles_list):
-        mol = Chem.MolFromSmiles(smiles)
+        mol = _safe_mol(smiles)
         if mol is None:
-            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
+            continue
         if mol.GetNumBonds() == 0:
             raise ValueError(f"Molecule at index {i} has no bonds: {smiles}")
         
@@ -2888,9 +2900,9 @@ def compute_graph_topology(smiles_list):
     features = []
     
     for i, smiles in enumerate(smiles_list):
-        mol = Chem.MolFromSmiles(smiles)
+        mol = _safe_mol(smiles)
         if mol is None:
-            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
+            continue
         
         G = nx.Graph()
         for atom in mol.GetAtoms():
@@ -2943,9 +2955,9 @@ def compute_spectral_features(smiles_list, k=10):
     features = []
     
     for i, smiles in enumerate(smiles_list):
-        mol = Chem.MolFromSmiles(smiles)
+        mol = _safe_mol(smiles)
         if mol is None:
-            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
+            continue
         
         num_atoms = mol.GetNumAtoms()
         
@@ -3008,9 +3020,9 @@ def compute_subgraph_counts(smiles_list):
     features = []
     
     for i, smiles in enumerate(smiles_list):
-        mol = Chem.MolFromSmiles(smiles)
+        mol = _safe_mol(smiles)
         if mol is None:
-            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
+            continue
         
         feat = []
         
@@ -3068,9 +3080,9 @@ def compute_graph_distances(smiles_list):
     features = []
     
     for i, smiles in enumerate(smiles_list):
-        mol = Chem.MolFromSmiles(smiles)
+        mol = _safe_mol(smiles)
         if mol is None:
-            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
+            continue
         
         G = nx.Graph()
         for atom in mol.GetAtoms():
@@ -3152,9 +3164,9 @@ def finetune_gnn(train_smiles, train_labels, val_smiles, val_labels,
     from torch.utils.data import DataLoader
     
     def smiles_to_graph(smiles):
-        mol = Chem.MolFromSmiles(smiles)
+        mol = _safe_mol(smiles)
         if mol is None:
-            raise ValueError(f"Invalid SMILES: {smiles}")
+            continue
         
         atom_features = []
         for atom in mol.GetAtoms():
@@ -3299,9 +3311,9 @@ def encode_from_model(finetuned_model_dict, smiles_list, batch_size=32):
     model.eval()
     
     def smiles_to_graph(smiles):
-        mol = Chem.MolFromSmiles(smiles)
+        mol = _safe_mol(smiles)
         if mol is None:
-            raise ValueError(f"Invalid SMILES: {smiles}")
+            continue
         
         atom_features = []
         for atom in mol.GetAtoms():
@@ -3370,9 +3382,9 @@ def train_gauche_gp(train_smiles, train_labels, kernel='weisfeiler_lehman',
     print(f"Converting {len(train_smiles)} molecules to graphs...")
     graphs = []
     for i, smiles in enumerate(train_smiles):
-        mol = Chem.MolFromSmiles(smiles)
+        mol = _safe_mol(smiles)
         if mol is None:
-            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
+            continue
         
         node_labels = {}
         edges = {}
@@ -3473,9 +3485,9 @@ def predict_gauche_gp(gp_dict, test_smiles):
     print(f"Converting {len(test_smiles)} test molecules to graphs...")
     test_graphs = []
     for i, smiles in enumerate(test_smiles):
-        mol = Chem.MolFromSmiles(smiles)
+        mol = _safe_mol(smiles)
         if mol is None:
-            raise ValueError(f"Invalid SMILES at index {i}: {smiles}")
+            continue
         
         node_labels = {}
         edges = {}
