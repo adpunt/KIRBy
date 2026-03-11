@@ -128,8 +128,17 @@ if [ ! -d "$CLAMP_DIR" ]; then
     pip install --quiet $CONSTRAINTS mhnreact 2>/dev/null || true
 fi
 
-# huggingmolecules — only install if not present
-_install_if_missing huggingmolecules "git+https://github.com/gmum/huggingmolecules.git#subdirectory=src"
+# huggingmolecules (R-MAT) — clone locally, don't use git+https (hangs on auth)
+HMOL_DIR="${SCRIPT_DIR}/src/huggingmolecules"
+if ! python -c "import huggingmolecules" 2>/dev/null; then
+    if [ -d "$HMOL_DIR" ]; then
+        pip install --quiet $CONSTRAINTS -e "$HMOL_DIR/src" 2>/dev/null || true
+    else
+        echo "huggingmolecules not installed. Clone manually:"
+        echo "  git clone https://github.com/gmum/huggingmolecules.git $HMOL_DIR"
+        echo "  pip install -e $HMOL_DIR/src"
+    fi
+fi
 
 # --- Packages requiring Python >=3.10 (Phase 4B) ---
 if [ "${PY_MINOR:-9}" -ge 10 ]; then
