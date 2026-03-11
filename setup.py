@@ -2,7 +2,7 @@
 KIRBy: Knowledge Integration by Representation Borrowing
 Automated Representation Optimization Through Complexity-Guided Feature Selection
 """
-from setuptools import setup, find_packages
+from setuptools import setup, find_namespace_packages
 
 setup(
     name="kirby",
@@ -14,7 +14,7 @@ setup(
         "multiple feature types through complexity-guided selection."
     ),
     long_description_content_type="text/plain",
-    packages=find_packages(where="src"),
+    packages=find_namespace_packages(where="src"),
     package_dir={"": "src"},
     include_package_data=True,
     python_requires=">=3.8",
