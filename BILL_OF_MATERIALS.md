@@ -374,54 +374,80 @@ DRFP is clearly superior on Suzuki (+0.107). Both tied on Buchwald-Hartwig.
 
 **DTA End-to-End (5-fold cold-target CV, 100 epochs):**
 
-| Method | Davis R² | Davis MSE | KIBA R² | KIBA MSE |
-|--------|----------|-----------|---------|----------|
-| **KIRBy Frozen** (ECFP4+ESM2+XGB) | 0.552 | 0.350 | 0.314 | 0.472 |
-| **DeepDTA** (CNN on SMILES+protein) | 0.559 | 0.353 | **0.379** | **0.429** |
-| **GraphDTA-GIN** (GIN on graphs) | 0.525 | 0.382 | 0.131 | 0.601 |
+| Method | Davis CI | Davis R² | Davis Spearman | KIBA CI | KIBA R² | KIBA Spearman | Status |
+|--------|----------|----------|----------------|---------|---------|---------------|--------|
+| **KIRBy Frozen** (ECFP4+ESM2+XGB) | — | 0.552 | — | — | 0.314 | — | **Stale** (CI+Spearman not computed) |
+| **DeepDTA** (CNN on SMILES+protein) | — | 0.559 | — | — | **0.379** | — | **Stale** |
+| **GraphDTA-GIN** (GIN on graphs) | — | 0.525 | — | — | 0.131 | — | **Stale** |
 
-- KIRBy frozen is competitive with DeepDTA on Davis (delta -0.007 R²) without any training
-- DeepDTA wins KIBA (+0.065 R²); GraphDTA-GIN fails on KIBA
-- Script: `tests/experiments/dta_e2e_comparison.py`
+**⚠ Stale** — pre-Phase 1 metrics. CI (primary DTA metric) and Spearman ρ now computed but not yet reported. Script updated.
+Script: `tests/experiments/dta_e2e_comparison.py`
 
-**QM9 3D Gap Prediction (4,950 molecules, random split):**
+**QM9 3D Gap Prediction:**
 
-| Method | Test R² | Test MAE | Time (s) |
-|--------|---------|----------|----------|
-| **E2E SchNet** (100 epochs) | **0.888** | **0.330** | 50.0 |
-| Frozen SchNet + Ridge | 0.134 | 0.962 | 219.1 |
-| ECFP4 + XGBoost | 0.111 | 0.973 | 7.0 |
+| Method | R² (mean±std) | MAE (mean±std) | Spearman | Status |
+|--------|---------------|----------------|----------|--------|
+| **E2E SchNet** (100 epochs) | — | — | — | **Stale** (was random split, now scaffold GroupKFold) |
+| Frozen SchNet + Ridge | — | — | — | **Stale** |
+| ECFP4 + XGBoost | — | — | — | **Stale** |
 
-- End-to-end 3D training crushes frozen 2D baselines on quantum properties
-- Frozen SchNet ≈ ECFP4 (no benefit without task-specific learning)
-- Script: `tests/experiments/qm9_3d_comparison.py`
+**⚠ Stale** — old results used random 80/10/10 split on 4,950 molecules. Now uses scaffold-split 5-fold GroupKFold on 10K molecules with Spearman ρ. All numbers will change.
+Script: `tests/experiments/qm9_3d_comparison.py`
 
-**Design implications (thesis boundary):**
+**Antibody Fine-Tuning Comparison:**
 
-The comparison experiments delineate when frozen reps are sufficient vs. when E2E training is needed:
+| Method | phillips_h3 R² | phillips_h3 ρ | koenig_expr R² | koenig_expr ρ | tresanco R² | tresanco ρ | Status |
+|--------|----------------|---------------|----------------|---------------|-------------|------------|--------|
+| Frozen ESM-2 → Ridge | — | — | — | — | — | — | **Needs run** |
+| LoRA ESM-2 → Ridge | — | — | — | — | — | — | **Needs run** |
+| Frozen AbLang2 → Ridge | — | — | — | — | — | — | **Needs run** |
+| FT AbLang2 → Ridge | — | — | — | — | — | — | **Needs run** |
+| Frozen AntiBERTy → Ridge | — | — | — | — | — | — | **Needs run** |
+| FT AntiBERTy → Ridge | — | — | — | — | — | — | **Needs run** |
 
-1. **Frozen reps sufficient:** DTA on small drug spaces (Davis: 68 drugs). KIRBy frozen ties DeepDTA
-   (0.552 vs 0.559 R²) despite zero training. Frozen ECFP4+ESM2+XGB is a strong default for
-   binding affinity prediction when the chemical diversity is limited.
+Tests whether fine-tuning antibody LMs (LoRA/full) improves on frozen embeddings. 6 datasets, GroupKFold (no random splits).
+Script: `tests/experiments/antibody_finetune_comparison.py`
 
-2. **Frozen reps competitive but with ceiling:** DTA on diverse drug spaces (KIBA: 2,111 drugs).
-   DeepDTA pulls ahead (+0.065 R²). The frozen fingerprint can't capture enough structural
-   variation. The `--finetune` LoRA path is the escape hatch for larger-scale DTA.
+**Antibody Region Ablation:**
 
-3. **Frozen reps benefit from E2E 3D training:** QM9 gap E2E SchNet R²=0.888. Frozen 2D reps
-   achieve ~0.83 with proper setup (10K samples, 80/20 scaffold split, per paper protocol)
-   but E2E SchNet still outperforms. The ft_schnet factory extracts 128D embeddings from
-   E2E-trained SchNet for use as a fine-tuned rep in the standard pipeline.
+| Method | Dim | phillips_h3 R² | phillips_h3 ρ | koenig_expr R² | koenig_expr ρ | Status |
+|--------|-----|----------------|---------------|----------------|---------------|--------|
+| full_seq (baseline) | 1280 | — | — | — | — | **Needs run** |
+| cdr_combined | 1280 | — | — | — | — | **Needs run** |
+| per_cdr | 3840 | — | — | — | — | **Needs run** |
+| fw_only | 1280 | — | — | — | — | **Needs run** |
+| all_7_regions | 8960 | — | — | — | — | **Needs run** |
+| var_top20 | 1280 | — | — | — | — | **Needs run** |
+| region_var_k5 | 8960 | — | — | — | — | **Needs run** |
 
-4. **GraphDTA-GIN fails cold-target:** 0.525 Davis, 0.131 KIBA. The graph architecture doesn't
-   generalize to unseen proteins under cold-target splits. This validates KIRBy's explicit
-   drug+protein feature approach over implicit graph learning for generalization.
+Tests 12 ESM-2 pooling strategies (per-CDR, framework, entropy-guided) on DMS + inter-family datasets. GroupKFold (no random splits).
+Script: `tests/experiments/antibody_region_ablation.py`
+
+**Forward Compatibility Experiments:**
+
+| Experiment | Model | Domains | Thesis claim | Status |
+|-----------|-------|---------|-------------|--------|
+| Exp 1: MINT | MINT (Jan 2026, 1280D) | DTA, Antibody | MINT alone < MINT + KIRBy | **Needs run** |
+| Exp 2: SaProt | SaProt (ICLR 2024, 1280D) | DTA, Antibody | SaProt alone < SaProt + KIRBy | **Needs run** |
+| Exp 3: MolE/MiniMol | MolE, MiniMol, GP-MoLFormer | Molecular | New FM alone < New FM + KIRBy | **Needs run** |
+| Exp 4: IgT5/AbRoBERTa | IgT5, Ab-RoBERTa | Antibody | New AbLM alone < New AbLM + KIRBy | **Needs run** |
+| Exp 5: Boltz-2 | Boltz-2 (384D) | DTA | Boltz-2 alone < Boltz-2 + KIRBy | **Needs run** |
+| ESM3 | ESM3 (1536D) | Antibody, DTA | ESM3 alone < ESM3 + KIRBy | **Needs run** |
+
+Each experiment: (1) baseline survey → individual rep score, (2) hybrid search → which reps augment the new model, (3) proves new model + KIRBy > new model alone.
+Script: `tests/slurm_scripts/submit_forward_compat.sh`
+
+**Ensemble vs Hybrid (c11):**
+
+| Experiment | Script | Status |
+|-----------|--------|--------|
+| Best single rep vs model ensemble vs feature-level hybrid | `tests/experiments/complexity/c11_ensemble_vs_hybrid.py` | **Needs run** (select datasets from BOM results) |
 
 **TCGA Modality Ablation (c12):**
 
 | Experiment | Script | Status |
 |-----------|--------|--------|
-| Per-modality + pairwise + full combination evaluation | `tests/experiments/complexity/c12_modality_ablation.py` | Needs server |
+| Per-modality + pairwise + full combination evaluation | `tests/experiments/complexity/c12_modality_ablation.py` | **Needs run** |
 
 Evaluates every TCGA modality group (expression, methylation, mutation, CNV, miRNA, RPPA, immune, clinical, WSI) individually, all pairwise combinations, and the full combination. Annotates which modalities help/hurt per task.
 
@@ -429,7 +455,40 @@ Evaluates every TCGA modality group (expression, methylation, mutation, CNV, miR
 
 | Experiment | Script | Status |
 |-----------|--------|--------|
-| Mean pool vs gated attention vs ABMIL | `tests/experiments/wsi_abmil_comparison.py` | Needs server |
+| Mean pool vs gated attention vs ABMIL | `tests/experiments/wsi_abmil_comparison.py` | **Needs run** |
+
+**Design implications (thesis boundary):**
+
+The comparison experiments delineate when frozen reps are sufficient vs. when E2E training is needed. Interpretations below are based on stale results — will be updated after Phase 5 rerun.
+
+1. **Frozen reps sufficient:** DTA on small drug spaces (Davis: 68 drugs). KIRBy frozen ties DeepDTA despite zero training.
+2. **Frozen reps competitive but with ceiling:** DTA on diverse drug spaces (KIBA: 2,111 drugs). DeepDTA pulls ahead. The `--finetune` LoRA path is the escape hatch.
+3. **Frozen reps benefit from E2E 3D training:** QM9 gap E2E SchNet expected to outperform frozen 2D reps significantly. The ft_schnet factory extracts 128D embeddings for use as a fine-tuned rep.
+4. **GraphDTA-GIN fails cold-target:** Graph architectures don't generalize to unseen proteins under cold-target splits.
+
+### 2G. Complexity & Similarity Experiments (BOM-driven)
+
+**Status:** Waiting for Phase 5 baseline results to select configurations.
+
+After baselines populate the BOM, select (dataset, rep, model) configurations for targeted experiments:
+
+| Experiment Suite | Scripts | What to select from BOM | Status |
+|-----------------|---------|------------------------|--------|
+| c01: Rep characterization | `c01_rep_characterization.py` | Top 3-5 reps per domain | **Waiting for BOM** |
+| c02: Complexity grid | `c02_complexity_grid.py` | 2-3 datasets per domain, best + worst rep families | **Waiting for BOM** |
+| c03: Cross-dataset transfer | `c03_cross_dataset_transfer.py` | Molecular: logd↔caco2↔herg; TCGA: luad↔brca | **Waiting for BOM** |
+| c04: Importance as metric | `c04_importance_as_metric.py` | Same configs as c01 | **Waiting for BOM** |
+| c05: Learning curves | `c05_learning_curves.py` | 1-2 large datasets per domain, best model | **Waiting for BOM** |
+| c06: Within-family gradient | `c06_within_family_gradient.py` | Rep families with PCA variants (chemberta, molformer, grover) | **Waiting for BOM** |
+| c07: Data complexity partitions | `c07_data_complexity_partitions.py` | 1-2 datasets with high variance across reps | **Waiting for BOM** |
+| c08: Calibration | `c08_calibration.py` | Best model per domain | **Waiting for BOM** |
+| c09: Formal analysis | `c09_formal_analysis.py` | Top 5 reps per domain, all models | **Waiting for BOM** |
+| s01-s09: Similarity suite | `tests/experiments/similarity/` | 1-2 molecular datasets, top 3 reps | **Waiting for BOM** |
+
+**Selection criteria (apply after Phase 5 baselines):**
+- **"Interesting"** = reps where top model varies (ridge vs tree vs neural), reps that rank differently across datasets, reps near the top but from different families (fingerprint vs LM vs descriptor)
+- **Skip** reps that fail or produce negative R²/CI everywhere
+- **Prioritize** datasets with enough samples for learning curves (>1000) and enough group diversity for GroupKFold
 
 ---
 
@@ -490,7 +549,7 @@ for the same n_samples, so manual deletion is recommended:
 | TCGA | 3/3 | 31/57 | 5/10 | Acc / AUROC+F1+ρ+RMSE | **Stale** (26 new reps; 5 models unrun) |
 | DTA | 2/3 | 17/34 | ~3/9 | R² / CI+ρ+RMSE | **Stale** (bindingdb_kd new; 17 reps unrun; 6 models unrun) |
 | Reaction | 2/3 | 2/8 | 1/9 | R² / R²+ρ+RMSE+MAE | **Stale** (bh_doyle_plates new; 6 reps unrun; 8 models unrun; splits changed) |
-| Comparisons | DTA e2e, QM9 3D | — | — | — | **Done** (c12 + WSI ABMIL pending server) |
+| Comparisons | 6 experiments | — | — | — | **Stale/Needs run** (DTA e2e + QM9 stale; Ab FT, Ab region, fwd compat, c11/c12 need run) |
 | PDBBind | 0/2 | — | — | — | **Blocked** (manual download) |
 
 ### What's STILL PENDING
