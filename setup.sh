@@ -9,29 +9,46 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
     export $(grep -v '^#' "$SCRIPT_DIR/.env" | xargs)
 fi
 
+# ---------------------------------------------------------------
+# Activate venv if available. The py311-kirby venv has Python 3.11
+# which is required for ESM-C, ESM3, SaProt, Boltz-2 (Phase 4B).
+# If the venv doesn't exist, fall back to system Python.
+# ---------------------------------------------------------------
+VENV_DIR="/data/stat-cadd/scat9264/py311-kirby"
+if [ -d "$VENV_DIR" ] && [ -f "$VENV_DIR/bin/activate" ]; then
+    source "$VENV_DIR/bin/activate"
+    echo "Activated venv: $VENV_DIR ($(python --version 2>&1))"
+else
+    echo "No venv found at $VENV_DIR — using system Python ($(python --version 2>&1))"
+    echo "  Phase 4B models (ESM3, SaProt, Boltz-2) require Python >=3.10."
+    echo "  Create venv: python3.11 -m venv $VENV_DIR"
+fi
+
 export HF_HOME=/data/stat-cadd/scat9264/.cache/huggingface
 export TORCH_HOME=/data/stat-cadd/scat9264/.cache/torch
 export PIP_CACHE_DIR=/data/stat-cadd/scat9264/.cache/pip
-export PYTHONUSERBASE=/data/stat-cadd/scat9264/.local
 export KIRBY_CACHE_DIR=/data/stat-cadd/scat9264/.cache/kirby
 export KIRBY_MODELS_DIR=/data/stat-cadd/scat9264/kirby_models
+# PYTHONUSERBASE only matters outside venv — inside venv, pip installs to venv
+if [ -z "$VIRTUAL_ENV" ]; then
+    export PYTHONUSERBASE=/data/stat-cadd/scat9264/.local
+fi
 
 # Suppress RDKit C++ deprecation warnings (GetValence etc.) and threadpoolctl
 # ctypes crashes. Both are harmless stderr noise from C extensions that can't be
 # caught by Python's warnings module or RDLogger.DisableLog.
 export KIRBY_STDERR_FILTER="grep -v -e 'DEPRECATION WARNING' -e 'threadpoolctl' -e 'ctypes callback' -e 'AttributeError.*split'"
 
-# Ensure user packages override system Anaconda packages (e.g., openpyxl 3.0.9)
-USER_SITE=$(python -c "import site; print(site.getusersitepackages())" 2>/dev/null)
-if [ -n "$USER_SITE" ] && [ -d "$USER_SITE" ]; then
-    export PYTHONPATH="$USER_SITE${PYTHONPATH:+:$PYTHONPATH}"
-fi
+# Ensure user packages override system Anaconda packages (only outside venv)
+if [ -z "$VIRTUAL_ENV" ]; then
+    USER_SITE=$(python -c "import site; print(site.getusersitepackages())" 2>/dev/null)
+    if [ -n "$USER_SITE" ] && [ -d "$USER_SITE" ]; then
+        export PYTHONPATH="$USER_SITE${PYTHONPATH:+:$PYTHONPATH}"
+    fi
 
-# Fix threadpoolctl crash from system Anaconda's old version (2022.05).
-# The old threadpoolctl crashes on get_config().split() → NoneType in ctypes callbacks.
-# These are C-level "Exception ignored" errors that bypass Python stderr filters.
-# Real fix: install a newer threadpoolctl in user site so it shadows the system one.
-pip install --user "threadpoolctl>=3.1" -q 2>/dev/null
+    # Fix threadpoolctl crash from system Anaconda's old version (2022.05).
+    pip install --user "threadpoolctl>=3.1" -q 2>/dev/null
+fi
 
 # constraints.txt locks numpy/pandas/scipy/sklearn/torch so NO pip install can upgrade them
 CONSTRAINTS="-c ${SCRIPT_DIR}/constraints.txt"
@@ -61,21 +78,43 @@ _install_if_missing() {
     python -c "import $1" 2>/dev/null || pip install --quiet $CONSTRAINTS "$2" 2>/dev/null || true
 }
 
+# --- Core ML models (Phase 2) ---
 _install_if_missing lightgbm lightgbm
 if [ "${PY_MINOR:-9}" -ge 10 ]; then
     _install_if_missing xgboost xgboost
 else
     _install_if_missing xgboost 'xgboost<3'
 fi
+_install_if_missing catboost catboost
+
+# --- Feature importance / interpretability ---
 _install_if_missing shap 'shap<0.50'
 _install_if_missing captum captum
 _install_if_missing lime lime
 _install_if_missing boruta boruta
+
+# --- Antibody ---
 _install_if_missing ImmuneBuilder ImmuneBuilder
 _install_if_missing antifold antifold
 _install_if_missing antiberty antiberty
+_install_if_missing ablang2 ablang2
+_install_if_missing sentencepiece sentencepiece
+
+# --- Misc ---
 _install_if_missing xformers 'xformers==0.0.25'
 _install_if_missing openpyxl 'openpyxl>=3.1.0'
+
+# --- Phase 3B: Molecular descriptors + reaction reps ---
+_install_if_missing mordred mordred
+_install_if_missing drfp drfp
+_install_if_missing rxnfp rxnfp
+_install_if_missing polaris polaris-lib
+
+# --- Phase 4A: Forward compatibility models ---
+_install_if_missing minimol minimol
+# MINT: requires manual install (git+https://github.com/EMCarrami/MINT.git)
+# MolE: requires manual install (git+https://github.com/recursionpharma/mole.git)
+# GP-MoLFormer: auto-downloads from HF, no extra pip install needed
 
 # Molecular reps: CLAMP, R-MAT
 CLAMP_DIR="${SCRIPT_DIR}/src/clamp"
@@ -89,10 +128,12 @@ fi
 # huggingmolecules — only install if not present
 _install_if_missing huggingmolecules "git+https://github.com/gmum/huggingmolecules.git#subdirectory=src"
 
-# Packages requiring Python >=3.10 or numpy>=2 — skip on 3.9
+# --- Packages requiring Python >=3.10 (Phase 4B) ---
 if [ "${PY_MINOR:-9}" -ge 10 ]; then
     _install_if_missing unimol_tools unimol-tools
-    _install_if_missing esm esm
+    _install_if_missing esm esm         # ESM-C, ESM3
+    _install_if_missing boltz boltz     # Boltz-2
+    # SaProt: uses transformers (HF) + ProstT5 — no extra install
 fi
 
 # PyG health check: detect broken C++ extensions (ABI mismatch from torch upgrades)
