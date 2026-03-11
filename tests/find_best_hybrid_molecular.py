@@ -86,14 +86,27 @@ REP_PRESETS = {
     'fast': ['ecfp4', 'maccs', 'pdv'],
     'fast+hf': ['ecfp4', 'maccs', 'pdv', 'chemberta', 'molformer', 'selformer'],
     'all': [
-        'ecfp4', 'maccs', 'pdv', 'pdv_binary_mean', 'pdv_rank',
+        'ecfp4', 'maccs', 'avalon', 'pdv', 'mordred',
         'mol2vec', 'chemberta', 'molformer',
         'selformer', 'chembert', 'molclr', 'graphmvp', 'smited',
         'mhg_gnn', 'grover', 'graph_kernel', 'schnet', 'dimenetpp',
         'clamp', 'rmat', 'map4', 'unimol_v2',
+        'minimol', 'gp_molformer', 'mole',
+        # Per-fold factory reps (moved from base_reps to rep_factories):
+        'pdv_binary_mean', 'pdv_rank', 'sns',
         'chemberta_pca50', 'molformer_pca50', 'selformer_pca50',
         'molclr_pca50', 'smited_pca50', 'mhg_gnn_pca50', 'grover_pca50',
+        'mordred_pca50',
     ],
+}
+
+# Reps that require per-fold fitting (data-dependent transforms).
+# These are created as rep_factories instead of base_reps to prevent leakage.
+FACTORY_REPS = {
+    'pdv_binary_mean', 'pdv_rank', 'sns',
+    'chemberta_pca50', 'molformer_pca50', 'selformer_pca50',
+    'molclr_pca50', 'smited_pca50', 'mhg_gnn_pca50', 'grover_pca50',
+    'mordred_pca50',
 }
 
 # Map old search names to new speed tiers for backward compat
@@ -116,27 +129,9 @@ _SEARCH_NAME_MAP = {
 # =============================================================================
 
 def _standardise_smiles(smi: str) -> Optional[str]:
-    """Canonicalise SMILES: largest fragment, neutralize charges, canonical tautomer, reject metals."""
-    from rdkit import Chem
-    from rdkit.Chem.MolStandardize import rdMolStandardize
-    if not isinstance(smi, str) or not smi.strip():
-        return None
-    mol = Chem.MolFromSmiles(smi)
-    if mol is None:
-        return None
-    try:
-        mol = rdMolStandardize.Cleanup(mol)
-        mol = rdMolStandardize.FragmentParent(mol)
-        mol = rdMolStandardize.Uncharger().uncharge(mol)
-        mol = rdMolStandardize.TautomerEnumerator().Canonicalize(mol)
-        # Reject metal-containing compounds (organic descriptors unreliable)
-        _METALS = {3,4,11,12,13,19,20,21,22,23,24,25,26,27,28,29,30,31,37,38,
-                   39,40,41,42,44,45,46,47,48,49,50,55,56,72,73,74,75,76,77,78,79,80,81,82,83}
-        if any(a.GetAtomicNum() in _METALS for a in mol.GetAtoms()):
-            return None
-        return Chem.MolToSmiles(mol, canonical=True)
-    except Exception:
-        return None
+    """Canonicalise SMILES via library standardizer."""
+    from kirby.representations.molecular import standardize_smiles
+    return standardize_smiles(smi)
 
 
 def _download_openadmet() -> pd.DataFrame:
@@ -159,7 +154,8 @@ def _download_openadmet() -> pd.DataFrame:
 
 
 def _load_openadmet_endpoint(df: pd.DataFrame, endpoint_col: str,
-                             log_transform: bool = False) -> Tuple[List[str], np.ndarray]:
+                             log_transform: bool = False,
+                             clip: bool = True) -> Tuple[List[str], np.ndarray]:
     """Extract a single endpoint from OpenADMET, standardize, deduplicate."""
     smiles_col = next(c for c in df.columns if c.upper() == 'SMILES')
 
@@ -183,7 +179,7 @@ def _load_openadmet_endpoint(df: pd.DataFrame, endpoint_col: str,
         labels_arr = labels_arr[valid]
 
     # Clip extreme outliers (1st / 99th percentile)
-    if len(labels_arr) > 10:
+    if clip and len(labels_arr) > 10:
         p1, p99 = np.percentile(labels_arr, [1, 99])
         labels_arr = np.clip(labels_arr, p1, p99)
 
@@ -267,42 +263,107 @@ def _fetch_chembl_herg_ki() -> Tuple[List[str], np.ndarray]:
     return result['SMILES'].tolist(), result['pKi'].values
 
 
+# Polaris ADME-Fang endpoints (biogen/adme-fang-v1, 3521 molecules)
+POLARIS_ADME_TARGETS = {
+    'adme_hlm': ('LOG_HLM_CLint', 'human liver microsome clearance'),
+    'adme_rlm': ('LOG_RLM_CLint', 'rat liver microsome clearance'),
+    'adme_mdr1': ('LOG_MDR1-MDCK_ER', 'MDR1-MDCK efflux ratio'),
+    'adme_solubility': ('LOG_SOLUBILITY', 'aqueous solubility'),
+}
+
+
+def _load_polaris_adme(target_key: str):
+    """Load a Polaris ADME-Fang endpoint. Caches the raw table as CSV.
+
+    Returns:
+        (smiles, labels) — filtered to valid RDKit SMILES with non-NaN targets.
+    """
+    from rdkit import Chem
+
+    col_name, description = POLARIS_ADME_TARGETS[target_key]
+
+    cache_dir = Path.home() / '.cache' / 'kirby'
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cached = cache_dir / 'polaris_adme_fang.csv'
+
+    if cached.exists():
+        df = pd.read_csv(cached)
+    else:
+        import polaris as po
+        print("  Downloading Polaris ADME-Fang dataset...")
+        ds = po.load_dataset("biogen/adme-fang-v1")
+        table = ds.table
+        rows = []
+        for i in range(ds.n_rows):
+            row = {col: table[col][i] for col in ds.columns}
+            rows.append(row)
+        df = pd.DataFrame(rows)
+        df.to_csv(cached, index=False)
+        print(f"  Cached {len(df)} rows to {cached}")
+
+    # Filter to valid SMILES + non-NaN target
+    df = df.dropna(subset=['SMILES', col_name])
+    smiles, labels = [], []
+    for smi, val in zip(df['SMILES'], df[col_name]):
+        mol = Chem.MolFromSmiles(str(smi))
+        if mol is not None:
+            smiles.append(str(smi))
+            labels.append(float(val))
+
+    return smiles, np.array(labels)
+
+
 def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
-                 target_col: str = 'target') -> Tuple[List[str], np.ndarray, str]:
+                 target_col: str = 'target',
+                 clip: bool = True) -> Tuple[List[str], np.ndarray, str]:
     """Load dataset from built-in name or CSV path.
+
+    All datasets are post-processed with InChIKey deduplication to prevent
+    the same molecule (different SMILES notation) appearing in train+test.
 
     Built-in datasets (all regression):
       - logd:  OpenADMET-LogD (~7309 molecules)
       - caco2: OpenADMET-Caco2_Efflux (~3777 molecules, log-transformed)
       - herg:  ChEMBL-hERG-Ki (~1415 molecules, pKi)
       - qm9:   QM9 HOMO-LUMO gap (~2000 molecules, normalized)
+      - adme_hlm:  Polaris ADME-Fang — human liver microsome clearance (~3087 molecules)
+      - adme_rlm:  Polaris ADME-Fang — rat liver microsome clearance (~3054 molecules)
+      - adme_mdr1: Polaris ADME-Fang — MDR1-MDCK efflux ratio (~2642 molecules)
+      - adme_solubility: Polaris ADME-Fang — aqueous solubility (~2173 molecules)
     """
     from rdkit import Chem
+    from kirby.representations.molecular import deduplicate_by_inchikey
 
     name_lower = name_or_path.lower()
 
-    if name_lower == 'logd':
+    if name_lower in POLARIS_ADME_TARGETS:
+        col_name, description = POLARIS_ADME_TARGETS[name_lower]
+        smiles, labels = _load_polaris_adme(name_lower)
+        print(f"  Loaded {len(smiles)} molecules from Polaris ADME-Fang ({description})")
+        smiles, labels, task_type = smiles, labels, 'regression'
+
+    elif name_lower == 'logd':
         df = _download_openadmet()
         logd_col = next((c for c in df.columns if 'LogD' in c), None)
         if logd_col is None:
             raise ValueError("Cannot find LogD column in OpenADMET data")
-        smiles, labels = _load_openadmet_endpoint(df, logd_col, log_transform=False)
+        smiles, labels = _load_openadmet_endpoint(df, logd_col, log_transform=False, clip=clip)
         print(f"  Loaded {len(smiles)} molecules from OpenADMET-LogD")
-        return smiles, labels, 'regression'
+        smiles, labels, task_type = smiles, labels, 'regression'
 
     elif name_lower == 'caco2':
         df = _download_openadmet()
         caco2_col = next((c for c in df.columns if 'Caco' in c and 'Efflux' in c), None)
         if caco2_col is None:
             raise ValueError("Cannot find Caco2 Efflux column in OpenADMET data")
-        smiles, labels = _load_openadmet_endpoint(df, caco2_col, log_transform=True)
+        smiles, labels = _load_openadmet_endpoint(df, caco2_col, log_transform=True, clip=clip)
         print(f"  Loaded {len(smiles)} molecules from OpenADMET-Caco2_Efflux")
-        return smiles, labels, 'regression'
+        smiles, labels, task_type = smiles, labels, 'regression'
 
     elif name_lower == 'herg':
         smiles, labels = _fetch_chembl_herg_ki()
         print(f"  Loaded {len(smiles)} molecules from ChEMBL-hERG-Ki (pKi)")
-        return smiles, labels, 'regression'
+        smiles, labels, task_type = smiles, labels, 'regression'
 
     elif name_lower == 'qm9':
         from kirby.datasets.qm9 import load_qm9
@@ -310,7 +371,7 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
         smiles = qm9_data['smiles']
         labels = qm9_data['labels']  # Raw values; StandardScaler applied per fold
         print(f"  Loaded {len(smiles)} molecules from QM9 (HOMO-LUMO gap)")
-        return smiles, labels, 'regression'
+        smiles, labels, task_type = smiles, labels, 'regression'
 
     elif name_or_path.endswith('.csv') or os.path.exists(name_or_path):
         print(f"Loading custom dataset from {name_or_path}...")
@@ -349,12 +410,23 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
         else:
             task_type = 'regression'
 
-        print(f"  Loaded {len(valid_smiles)} valid molecules, task: {task_type}")
-        return valid_smiles, labels, task_type
+        smiles = valid_smiles
+        print(f"  Loaded {len(smiles)} valid molecules, task: {task_type}")
 
     else:
         raise ValueError(f"Unknown dataset: {name_or_path}. "
-                         f"Built-in options: logd, caco2, herg, qm9")
+                         f"Built-in options: logd, caco2, herg, qm9, "
+                         f"adme_hlm, adme_rlm, adme_mdr1, adme_solubility")
+
+    # InChIKey deduplication: same molecule with different SMILES notation
+    # → prevent data leakage across train/test folds
+    n_before = len(smiles)
+    smiles, labels = deduplicate_by_inchikey(smiles, labels)
+    n_removed = n_before - len(smiles)
+    if n_removed > 0:
+        print(f"  InChIKey dedup: {n_before} → {len(smiles)} ({n_removed} duplicates removed)")
+
+    return smiles, labels, task_type
 
 
 # =============================================================================
@@ -388,16 +460,15 @@ def get_representations(smiles: List[str], preset_or_list: str,
         cache: If True, cache representations to ~/.cache/kirby/reps/ and load from
                cache on subsequent calls with the same SMILES. Default True.
     """
-    from functools import partial
     from kirby.representations.molecular import (
-        create_ecfp4, create_maccs, create_pdv,
-        create_pdv_binary_mean, create_pdv_rank, create_pca_rep,
+        create_ecfp4, create_maccs, create_avalon, create_pdv, create_mordred,
         create_mol2vec,
         create_chemberta, create_molformer, create_selformer,
         create_chembert, create_molclr, create_graphmvp, create_smited,
         create_mhg_gnn, create_grover, create_graph_kernel,
         create_unimol, create_schnet, create_dimenetpp, create_clamp,
         create_rmat, create_map4, create_unimol_v2,
+        create_minimol, create_gp_molformer, create_mole,
     )
 
     if preset_or_list in REP_PRESETS:
@@ -405,14 +476,18 @@ def get_representations(smiles: List[str], preset_or_list: str,
     else:
         rep_names = [r.strip().lower() for r in preset_or_list.split(',')]
 
-    print(f"\nGenerating {len(rep_names)} representations...")
+    # Filter out factory reps — these are handled by get_rep_factories()
+    base_rep_names = [r for r in rep_names if r not in FACTORY_REPS]
+
+    print(f"\nGenerating {len(base_rep_names)} base representations "
+          f"(+ {len(rep_names) - len(base_rep_names)} per-fold factory reps)...")
 
     rep_funcs = {
         'ecfp4': create_ecfp4,
         'maccs': create_maccs,
+        'avalon': create_avalon,
         'pdv': create_pdv,
-        'pdv_binary_mean': create_pdv_binary_mean,
-        'pdv_rank': create_pdv_rank,
+        'mordred': create_mordred,
         'mol2vec': create_mol2vec,
         'chemberta': create_chemberta,
         'molformer': create_molformer,
@@ -431,18 +506,13 @@ def get_representations(smiles: List[str], preset_or_list: str,
         'rmat': create_rmat,
         'map4': create_map4,
         'unimol_v2': create_unimol_v2,
-        # PCA-reduced LM embeddings (50D)
-        'chemberta_pca50': partial(create_pca_rep, base_fn=create_chemberta),
-        'molformer_pca50': partial(create_pca_rep, base_fn=create_molformer),
-        'selformer_pca50': partial(create_pca_rep, base_fn=create_selformer),
-        'molclr_pca50': partial(create_pca_rep, base_fn=create_molclr),
-        'smited_pca50': partial(create_pca_rep, base_fn=create_smited),
-        'mhg_gnn_pca50': partial(create_pca_rep, base_fn=create_mhg_gnn),
-        'grover_pca50': partial(create_pca_rep, base_fn=create_grover),
+        'minimol': create_minimol,
+        'gp_molformer': create_gp_molformer,
+        'mole': create_mole,
     }
 
     representations = {}
-    for rep_name in rep_names:
+    for rep_name in base_rep_names:
         if rep_name not in rep_funcs:
             print(f"  WARNING: Unknown representation '{rep_name}', skipping")
             continue
@@ -475,6 +545,80 @@ def get_representations(smiles: List[str], preset_or_list: str,
         raise ValueError("No representations could be generated!")
 
     return representations
+
+
+def get_rep_factories(smiles: List[str], preset_or_list: str) -> Dict[str, Any]:
+    """Create per-fold rep factories for data-dependent representations.
+
+    These reps require fitting on training data (PCA, rank, binary mean, SNS)
+    and are passed as rep_factories to find_best_hybrid() to prevent leakage.
+
+    Args:
+        smiles: List of SMILES strings
+        preset_or_list: Preset name or comma-separated rep names
+
+    Returns:
+        Dict of {rep_name: factory_callable} for reps that need per-fold fitting
+    """
+    from kirby.representations.molecular import (
+        create_chemberta, create_molformer, create_selformer,
+        create_molclr, create_smited, create_mhg_gnn, create_grover,
+        create_mordred,
+        make_pdv_binary_mean_factory, make_pdv_rank_factory,
+        make_pca_factory, make_sns_factory,
+    )
+
+    if preset_or_list in REP_PRESETS:
+        rep_names = REP_PRESETS[preset_or_list]
+    else:
+        rep_names = [r.strip().lower() for r in preset_or_list.split(',')]
+
+    # Only create factories for requested reps that are in FACTORY_REPS
+    requested_factories = [r for r in rep_names if r in FACTORY_REPS]
+    if not requested_factories:
+        return {}
+
+    print(f"\nCreating {len(requested_factories)} per-fold rep factories...")
+
+    # Map factory rep names to their factory constructors
+    # PCA factories need the base_fn for their full-data embedding
+    pca_base_fns = {
+        'chemberta_pca50': create_chemberta,
+        'molformer_pca50': create_molformer,
+        'selformer_pca50': create_selformer,
+        'molclr_pca50': create_molclr,
+        'smited_pca50': create_smited,
+        'mhg_gnn_pca50': create_mhg_gnn,
+        'grover_pca50': create_grover,
+        'mordred_pca50': create_mordred,
+    }
+
+    factories = {}
+    for rep_name in requested_factories:
+        try:
+            start = time.time()
+            print(f"  Setting up {rep_name} factory...", end=' ', flush=True)
+
+            if rep_name == 'pdv_binary_mean':
+                factories[rep_name] = make_pdv_binary_mean_factory(smiles)
+            elif rep_name == 'pdv_rank':
+                factories[rep_name] = make_pdv_rank_factory(smiles)
+            elif rep_name == 'sns':
+                factories[rep_name] = make_sns_factory(smiles)
+            elif rep_name in pca_base_fns:
+                factories[rep_name] = make_pca_factory(
+                    smiles, base_fn=pca_base_fns[rep_name]
+                )
+            else:
+                print(f"WARNING: no factory for '{rep_name}'")
+                continue
+
+            elapsed = time.time() - start
+            print(f"done ({elapsed:.1f}s)")
+        except Exception as e:
+            print(f"FAILED: {e}")
+
+    return factories
 
 
 def get_augmentations(smiles: List[str]) -> Dict[str, np.ndarray]:
@@ -521,6 +665,8 @@ def _get(result, key):
 _METRIC_DISPLAY = {
     'r2': 'R²', 'rmse': 'RMSE', 'mae': 'MAE',
     'accuracy': 'Accuracy', 'auc': 'AUC',
+    'spearman': 'Spearman ρ', 'pearson': 'Pearson r',
+    'ci': 'CI', 'f1_weighted': 'F1w',
 }
 
 
@@ -600,6 +746,32 @@ def print_summary(result: SearchResult, task_type: str):
             else:
                 row += f"{'--':<10}"
         print(row)
+
+    # Secondary metrics for baselines
+    sec_keys = set()
+    for baseline_scores in baselines.values():
+        if '_secondary' in baseline_scores:
+            sec_keys.update(baseline_scores['_secondary'].keys())
+    if sec_keys:
+        print(f"\n=== SECONDARY METRICS (baselines) ===")
+        # Group by metric name
+        sec_metric_names = sorted(set(k.split('_', 1)[1] for k in sec_keys if '_' in k))
+        for sec_metric in sec_metric_names:
+            display_name = _METRIC_DISPLAY.get(sec_metric, sec_metric)
+            print(f"\n  {display_name}:")
+            header = f"  {'Baseline':<15} {'Dim':<8}" + "".join(f"{m:<10}" for m in models_evaluated)
+            print(header)
+            for baseline_name, baseline_scores in baselines.items():
+                sec = baseline_scores.get('_secondary', {})
+                row = f"  {baseline_name:<15} {baseline_scores.get('dimension', '?'):<8}"
+                for m in models_evaluated:
+                    key = f'{m}_{sec_metric}'
+                    val = sec.get(key, {}).get('mean')
+                    if val is not None:
+                        row += f"{val:<10.4f}"
+                    else:
+                        row += f"{'--':<10}"
+                print(row)
 
     # Improvement summary
     print(f"\n=== HYBRID IMPROVEMENT ===")
@@ -964,7 +1136,7 @@ Output:
         """
     )
 
-    parser.add_argument('dataset', type=str, help="'logd', 'caco2', 'herg', or path to CSV")
+    parser.add_argument('dataset', type=str, help="'logd', 'caco2', 'herg', 'qm9', 'adme_hlm', 'adme_rlm', 'adme_mdr1', 'adme_solubility', or path to CSV")
     parser.add_argument('--smiles-col', type=str, default='smiles')
     parser.add_argument('--target-col', type=str, default='target')
     parser.add_argument('--reps', type=str, default='fast',
@@ -1011,6 +1183,8 @@ Output:
                        help='Tune model HPs via RandomizedSearchCV before hybrid search')
     parser.add_argument('--tune-iter', type=int, default=20,
                        help='RandomizedSearchCV iterations per model (default: 20)')
+    parser.add_argument('--no-clip', action='store_true',
+                       help='Disable outlier clipping (1st/99th percentile) for OpenADMET endpoints')
 
     args = parser.parse_args()
 
@@ -1020,7 +1194,8 @@ Output:
     # Load dataset (molecular-specific)
     print(f"Loading dataset: {args.dataset}")
     smiles, labels, task_type = load_dataset(
-        args.dataset, args.smiles_col, args.target_col
+        args.dataset, args.smiles_col, args.target_col,
+        clip=not args.no_clip,
     )
     print(f"  {len(smiles)} molecules, task: {task_type}")
 
@@ -1031,6 +1206,9 @@ Output:
 
     # Generate representations (molecular-specific)
     base_reps = get_representations(smiles, args.reps)
+
+    # Create per-fold factories for data-dependent reps (prevents leakage)
+    leakage_free_factories = get_rep_factories(smiles, args.reps)
 
     # TODO: augmentations not yet wired into find_best_hybrid library
     if args.augment:
@@ -1126,6 +1304,12 @@ Output:
         else:
             rep_factories = None
 
+    # Merge leakage-free factories with fine-tuning factories
+    if leakage_free_factories:
+        if rep_factories is None:
+            rep_factories = {}
+        rep_factories.update(leakage_free_factories)
+
     # Hyperparameter tuning
     if args.tune:
         from kirby.find_best_hybrid import tune_models
@@ -1143,7 +1327,8 @@ Output:
         labels=labels,
         groups=scaffold_groups,
         models=models_arg,
-        metric='r2' if task_type == 'regression' else 'accuracy',
+        metric='rmse' if task_type == 'regression' else 'accuracy',
+        secondary_metrics=['r2', 'spearman'] if task_type == 'regression' else None,
         task_type=task_type,
         speed=speed,
         n_folds=args.n_folds,

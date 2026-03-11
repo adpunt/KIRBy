@@ -55,7 +55,8 @@ def main():
 
     # --- Import the rep function ---
     from kirby.representations.molecular import (
-        create_ecfp4, create_maccs, create_pdv, create_mol2vec,
+        create_ecfp4, create_maccs, create_pdv, create_mordred,
+        create_mol2vec,
         create_chemberta, create_molformer, create_selformer,
         create_chembert, create_molclr, create_graphmvp, create_smited,
         create_mhg_gnn, create_grover, create_graph_kernel,
@@ -66,6 +67,7 @@ def main():
         'ecfp4': create_ecfp4,
         'maccs': create_maccs,
         'pdv': create_pdv,
+        'mordred': create_mordred,
         'mol2vec': create_mol2vec,
         'chemberta': create_chemberta,
         'molformer': create_molformer,

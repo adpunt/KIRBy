@@ -47,6 +47,7 @@ AUGMENTATIONS:
 """
 
 import os
+from typing import Optional
 import numpy as np
 from rdkit import Chem, RDLogger
 from rdkit.Chem import rdFingerprintGenerator, MACCSkeys
@@ -61,6 +62,89 @@ def _safe_mol(smiles):
         return Chem.MolFromSmiles(smiles)
     except Exception:
         return None
+
+
+# Metals whose presence invalidates organic descriptors
+_METALS = {3,4,11,12,13,19,20,21,22,23,24,25,26,27,28,29,30,31,37,38,
+           39,40,41,42,44,45,46,47,48,49,50,55,56,72,73,74,75,76,77,78,79,80,81,82,83}
+
+
+def standardize_smiles(smi: str) -> Optional[str]:
+    """QSAR-Ready SMILES standardization.
+
+    Pipeline: Cleanup → FragmentParent → Uncharger → TautomerCanonical → metal rejection.
+
+    Args:
+        smi: Input SMILES string.
+
+    Returns:
+        Optional[str]: Canonical SMILES, or None if invalid/metal-containing.
+    """
+    from rdkit.Chem.MolStandardize import rdMolStandardize
+    if not isinstance(smi, str) or not smi.strip():
+        return None
+    mol = Chem.MolFromSmiles(smi)
+    if mol is None:
+        return None
+    try:
+        mol = rdMolStandardize.Cleanup(mol)
+        mol = rdMolStandardize.FragmentParent(mol)
+        mol = rdMolStandardize.Uncharger().uncharge(mol)
+        mol = rdMolStandardize.TautomerEnumerator().Canonicalize(mol)
+        if any(a.GetAtomicNum() in _METALS for a in mol.GetAtoms()):
+            return None
+        return Chem.MolToSmiles(mol, canonical=True)
+    except Exception:
+        return None
+
+
+def deduplicate_by_inchikey(smiles_list, labels, groups=None):
+    """Remove duplicate molecules (same InChIKey, different SMILES).
+
+    InChIKey deduplication catches cases where distinct SMILES strings encode
+    the same molecule (e.g. after tautomer canonicalization). Keeps the first
+    occurrence of each InChIKey.
+
+    Args:
+        smiles_list: list or array of SMILES strings (already standardized).
+        labels: array-like of targets, same length as smiles_list.
+        groups: optional array-like of group IDs (e.g. scaffold groups), same
+                length as smiles_list. Pass None if not applicable.
+
+    Returns:
+        If groups is None: (filtered_smiles, filtered_labels)
+        Otherwise:         (filtered_smiles, filtered_labels, filtered_groups)
+    """
+    from rdkit.Chem.inchi import MolToInchi, InchiToInchiKey
+
+    seen = {}
+    keep = []
+    for i, smi in enumerate(smiles_list):
+        mol = _safe_mol(smi) if smi is not None else None
+        if mol is None:
+            # Keep invalid SMILES as-is; downstream functions already handle None
+            keep.append(i)
+            continue
+        try:
+            inchi = MolToInchi(mol)
+            key = InchiToInchiKey(inchi) if inchi else None
+        except Exception:
+            key = None
+        if key is None or key not in seen:
+            if key is not None:
+                seen[key] = i
+            keep.append(i)
+
+    keep = np.array(keep, dtype=int)
+    labels = np.asarray(labels)
+    filtered_smiles = [smiles_list[i] for i in keep]
+    filtered_labels = labels[keep]
+
+    if groups is None:
+        return filtered_smiles, filtered_labels
+
+    groups = np.asarray(groups)
+    return filtered_smiles, filtered_labels, groups[keep]
 
 
 # =============================================================================
@@ -203,6 +287,35 @@ def create_ecfp4(smiles_list, radius=2, n_bits=2048):
     return np.array(fingerprints, dtype=np.float32)
 
 
+def create_avalon(smiles_list, n_bits=2048):
+    """Avalon fingerprints (2048-bit).
+
+    Strong Caco2 performer per CaliciBoost benchmark.
+
+    Args:
+        smiles_list: List of SMILES strings
+        n_bits: Number of bits (default: 2048)
+
+    Returns:
+        np.ndarray: Binary fingerprint matrix (n_molecules, n_bits)
+    """
+    from rdkit.Avalon import pyAvalonTools
+    fingerprints = []
+
+    for smiles in smiles_list:
+        mol = _safe_mol(smiles)
+        if mol is None:
+            fingerprints.append(np.zeros(n_bits, dtype=np.float32))
+            continue
+        try:
+            fp = pyAvalonTools.GetAvalonFP(mol, nBits=n_bits)
+            fingerprints.append(np.array(fp, dtype=np.float32))
+        except Exception:
+            fingerprints.append(np.zeros(n_bits, dtype=np.float32))
+
+    return np.array(fingerprints, dtype=np.float32)
+
+
 def create_maccs(smiles_list):
     """
     Create MACCS keys fingerprints (167 bits).
@@ -221,10 +334,11 @@ def create_maccs(smiles_list):
     for i, smiles in enumerate(smiles_list):
         mol = _safe_mol(smiles)
         if mol is None:
+            fingerprints.append(np.zeros(167, dtype=np.float32))
             continue
         fp = MACCSkeys.GenMACCSKeys(mol)
         fingerprints.append(np.array(fp))
-    
+
     return np.array(fingerprints, dtype=np.float32)
 
 
@@ -245,15 +359,57 @@ def create_pdv(smiles_list, descriptor_list=None):
     calc = MolecularDescriptorCalculator(descriptor_list)
     descriptors = []
     
+    n_desc = len(descriptor_list)
     for i, smiles in enumerate(smiles_list):
         mol = _safe_mol(smiles)
         if mol is None:
+            descriptors.append(np.zeros(n_desc, dtype=np.float32))
             continue
         desc = np.array(calc.CalcDescriptors(mol), dtype=np.float32)
         desc = np.nan_to_num(desc, nan=0.0, posinf=0.0, neginf=0.0)
         descriptors.append(desc)
-    
+
     return np.array(descriptors)
+
+
+def create_mordred(smiles_list, ignore_3D=True):
+    """Compute Mordred 2D descriptors (~1613 features).
+
+    Superset of RDKit PDV (200D). Pure Python + RDKit backend.
+    Requires: pip install mordred (or mordredcommunity as fallback).
+
+    Args:
+        smiles_list: List of SMILES strings.
+        ignore_3D: Skip 3D descriptors (default True — no conformer needed).
+
+    Returns:
+        np.ndarray of shape (n_molecules, ~1613), float32.
+    """
+    import pandas as pd
+    from mordred import Calculator, descriptors
+    calc = Calculator(descriptors, ignore_3D=ignore_3D)
+    mols = [_safe_mol(smi) for smi in smiles_list]
+
+    # mordred crashes on None mols — filter them out and re-insert zero rows
+    valid_idx = [i for i, m in enumerate(mols) if m is not None]
+    valid_mols = [mols[i] for i in valid_idx]
+
+    if not valid_mols:
+        n_desc = len(calc.descriptors)
+        return np.zeros((len(smiles_list), n_desc), dtype=np.float32)
+
+    df = calc.pandas(valid_mols)
+    # mordred returns Missing/error objects for failed descriptors — coerce to NaN
+    X_valid = df.apply(pd.to_numeric, errors='coerce').fillna(0.0).values.astype(np.float32)
+    X_valid = np.nan_to_num(X_valid, nan=0.0, posinf=0.0, neginf=0.0)
+
+    # Re-insert zero rows for invalid molecules
+    if len(valid_idx) == len(smiles_list):
+        return X_valid
+    X = np.zeros((len(smiles_list), X_valid.shape[1]), dtype=np.float32)
+    for out_i, src_i in enumerate(valid_idx):
+        X[src_i] = X_valid[out_i]
+    return X
 
 
 def create_pdv_binary_mean(smiles_list, descriptor_list=None):
@@ -445,6 +601,129 @@ def _transform_sns(smiles_list, featurizer):
 
 
 # =============================================================================
+# PER-FOLD FACTORIES (no data leakage — fit on train, transform both)
+# =============================================================================
+# These return factory callables compatible with find_best_hybrid's rep_factories
+# parameter: factory(train_idx, val_idx, train_labels) -> (train_embs, val_embs)
+
+
+def make_pdv_binary_mean_factory(smiles_list, descriptor_list=None):
+    """Factory for per-fold PDV binary mean (no data leakage).
+
+    Computes column means on training data only, applies threshold to both.
+    Raw PDV is pre-computed once (deterministic, no leakage).
+
+    Returns:
+        Callable: factory(train_idx, val_idx, train_labels) -> (train, val)
+    """
+    full_pdv = create_pdv(smiles_list, descriptor_list)
+
+    def factory(train_idx, val_idx, train_labels):
+        train_pdv = full_pdv[train_idx]
+        val_pdv = full_pdv[val_idx]
+        col_means = train_pdv.mean(axis=0)
+        train_out = (train_pdv > col_means).astype(np.float32)
+        val_out = (val_pdv > col_means).astype(np.float32)
+        return train_out, val_out
+
+    return factory
+
+
+def make_pdv_rank_factory(smiles_list, descriptor_list=None):
+    """Factory for per-fold PDV rank transform (no data leakage).
+
+    Ranks training data, maps test data to train percentiles via searchsorted.
+    Raw PDV is pre-computed once (deterministic, no leakage).
+
+    Returns:
+        Callable: factory(train_idx, val_idx, train_labels) -> (train, val)
+    """
+    full_pdv = create_pdv(smiles_list, descriptor_list)
+
+    def factory(train_idx, val_idx, train_labels):
+        from scipy.stats import rankdata
+        train_pdv = full_pdv[train_idx]
+        val_pdv = full_pdv[val_idx]
+        n_train = train_pdv.shape[0]
+
+        train_ranked = np.zeros_like(train_pdv)
+        val_ranked = np.zeros_like(val_pdv)
+
+        for j in range(train_pdv.shape[1]):
+            train_ranked[:, j] = rankdata(train_pdv[:, j], method='average') / n_train
+            # Map test values to train percentiles via sorted insertion point
+            sorted_train = np.sort(train_pdv[:, j])
+            val_ranked[:, j] = np.searchsorted(sorted_train, val_pdv[:, j]) / n_train
+
+        return train_ranked.astype(np.float32), val_ranked.astype(np.float32)
+
+    return factory
+
+
+def make_pca_factory(smiles_list, base_fn, n_components=50):
+    """Factory for per-fold PCA reduction (no data leakage).
+
+    Pre-computes the base representation once (deterministic), then fits
+    StandardScaler + PCA on training data only per fold.
+
+    Args:
+        smiles_list: List of SMILES strings
+        base_fn: Callable that takes smiles_list and returns np.ndarray
+        n_components: Number of PCA components (default: 50)
+
+    Returns:
+        Callable: factory(train_idx, val_idx, train_labels) -> (train, val)
+    """
+    full_X = base_fn(smiles_list)
+
+    def factory(train_idx, val_idx, train_labels):
+        from sklearn.decomposition import PCA
+        from sklearn.preprocessing import StandardScaler
+
+        X_train = full_X[train_idx]
+        X_val = full_X[val_idx]
+        nc = min(n_components, X_train.shape[1], X_train.shape[0])
+
+        scaler = StandardScaler()
+        X_train_s = scaler.fit_transform(X_train)
+        X_val_s = scaler.transform(X_val)
+
+        pca = PCA(n_components=nc, random_state=42)
+        X_train_pca = pca.fit_transform(X_train_s)
+        X_val_pca = pca.transform(X_val_s)
+
+        return X_train_pca.astype(np.float32), X_val_pca.astype(np.float32)
+
+    return factory
+
+
+def make_sns_factory(smiles_list, **kwargs):
+    """Factory for per-fold SNS (Sort & Slice) features (no data leakage).
+
+    Fits substructure prevalence on training SMILES only, transforms both.
+
+    Args:
+        smiles_list: List of SMILES strings
+        **kwargs: Passed to create_sns (max_radius, vec_dimension, etc.)
+
+    Returns:
+        Callable: factory(train_idx, val_idx, train_labels) -> (train, val)
+    """
+    def factory(train_idx, val_idx, train_labels):
+        train_smiles = [smiles_list[i] for i in train_idx]
+        val_smiles = [smiles_list[i] for i in val_idx]
+
+        train_features, featurizer = create_sns(
+            train_smiles, return_featurizer=True, **kwargs
+        )
+        val_features = create_sns(val_smiles, reference_featurizer=featurizer)
+
+        return train_features, val_features
+
+    return factory
+
+
+# =============================================================================
 # PRETRAINED REPRESENTATIONS (FROZEN)
 # =============================================================================
 
@@ -503,8 +782,9 @@ def create_mol2vec(smiles_list, model_path=None, radius=1, unseen='UNK'):
     for i, smiles in enumerate(smiles_list):
         mol = _safe_mol(smiles)
         if mol is None:
+            embeddings.append(np.zeros(_MOL2VEC_MODEL.wv.vector_size, dtype=np.float32))
             continue
-        
+
         sentence = MolSentence(mol2alt_sentence(mol, radius))
         vec = np.zeros(_MOL2VEC_MODEL.wv.vector_size)
         count = 0
@@ -2736,6 +3016,271 @@ def create_dimenetpp(smiles_list, hidden_channels=128, out_channels=1,
 
     result = np.vstack(all_embeddings).astype(np.float32)
     print(f"  DimeNet++ embeddings: {result.shape}")
+    return result
+
+
+# =============================================================================
+# MiniMol (GINE GNN molecular encoder)
+# =============================================================================
+
+_MINIMOL_MODEL = None
+
+
+def create_minimol(smiles_list, device=None):
+    """
+    Create MiniMol embeddings (pretrained GINE GNN molecular encoder).
+
+    MiniMol is a lightweight graph neural network pretrained on large-scale
+    molecular data. Produces fixed-size molecular embeddings from SMILES.
+
+    Args:
+        smiles_list: List of SMILES strings
+        device: 'cpu' or 'cuda' (default: auto-detect)
+
+    Returns:
+        np.ndarray: MiniMol embeddings (n_molecules, D)
+
+    Requires: pip install minimol
+    """
+    import torch
+
+    global _MINIMOL_MODEL
+
+    try:
+        from minimol import MiniMol
+    except ImportError:
+        raise ImportError(
+            "MiniMol requires the minimol package: pip install minimol"
+        )
+
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    if _MINIMOL_MODEL is None:
+        print("Loading MiniMol...")
+        _MINIMOL_MODEL = MiniMol(device=device)
+        print(f"  Loaded on {device}")
+
+    all_embeddings = []
+    failed = 0
+
+    for smi in smiles_list:
+        try:
+            emb = _MINIMOL_MODEL.encode([smi])
+            if isinstance(emb, torch.Tensor):
+                emb = emb.cpu().numpy()
+            emb = np.atleast_2d(emb)
+            all_embeddings.append(emb)
+        except Exception:
+            failed += 1
+            all_embeddings.append(None)
+
+    # Determine embedding dim from first successful embedding
+    dim = None
+    for emb in all_embeddings:
+        if emb is not None:
+            dim = emb.shape[-1]
+            break
+    if dim is None:
+        raise RuntimeError("MiniMol: all molecules failed encoding")
+
+    result = []
+    for emb in all_embeddings:
+        if emb is None:
+            result.append(np.zeros((1, dim), dtype=np.float32))
+        else:
+            result.append(emb)
+
+    if failed > 0:
+        print(f"  WARNING: {failed}/{len(smiles_list)} molecules failed MiniMol")
+
+    result = np.vstack(result).astype(np.float32)
+    print(f"  MiniMol embeddings: {result.shape}")
+    return result
+
+
+# =============================================================================
+# GP-MoLFormer (IBM Research, HuggingFace)
+# =============================================================================
+
+_GP_MOLFORMER_MODEL = None
+_GP_MOLFORMER_TOKENIZER = None
+
+
+def create_gp_molformer(smiles_list, batch_size=32, device=None):
+    """
+    Create GP-MoLFormer embeddings (frozen, no fine-tuning).
+
+    GP-MoLFormer is IBM's improved MoLFormer variant trained on unique
+    SMILES with enhanced pretraining. Uses the same linear attention
+    architecture as MoLFormer-XL.
+
+    Args:
+        smiles_list: List of SMILES strings
+        batch_size: Batch size for encoding (default: 32)
+        device: 'cpu' or 'cuda' (default: auto-detect)
+
+    Returns:
+        np.ndarray: GP-MoLFormer embeddings (n_molecules, 768)
+
+    Requires: pip install transformers
+    """
+    import os
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+    import torch
+    from transformers import AutoModel, AutoTokenizer
+
+    global _GP_MOLFORMER_MODEL, _GP_MOLFORMER_TOKENIZER
+
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    if _GP_MOLFORMER_MODEL is None:
+        print("Loading GP-MoLFormer...")
+        _GP_MOLFORMER_TOKENIZER = AutoTokenizer.from_pretrained(
+            "ibm-research/GP-MoLFormer-Uniq",
+            trust_remote_code=True
+        )
+        _GP_MOLFORMER_MODEL = AutoModel.from_pretrained(
+            "ibm-research/GP-MoLFormer-Uniq",
+            trust_remote_code=True
+        )
+        _GP_MOLFORMER_MODEL = _GP_MOLFORMER_MODEL.to(device).eval()
+        print(f"  Loaded on {device}")
+
+    all_embeddings = []
+
+    with torch.no_grad():
+        for i in range(0, len(smiles_list), batch_size):
+            batch = smiles_list[i:i + batch_size]
+
+            encoded = _GP_MOLFORMER_TOKENIZER(
+                batch,
+                padding=True,
+                truncation=True,
+                max_length=512,
+                return_tensors='pt'
+            )
+            inputs = {k: v.to(device) for k, v in encoded.items()}
+
+            outputs = _GP_MOLFORMER_MODEL(**inputs)
+
+            # Mean pooling over sequence length (excluding padding)
+            attention_mask = inputs['attention_mask'].unsqueeze(-1)
+            token_embeddings = outputs.last_hidden_state
+            sum_embeddings = torch.sum(token_embeddings * attention_mask, dim=1)
+            sum_mask = attention_mask.sum(dim=1)
+            embeddings = sum_embeddings / sum_mask
+
+            all_embeddings.append(embeddings.cpu().numpy())
+
+    result = np.vstack(all_embeddings).astype(np.float32)
+    print(f"  GP-MoLFormer embeddings: {result.shape}")
+    return result
+
+
+# =============================================================================
+# MolE (Molecular Learned Embeddings)
+# =============================================================================
+
+
+def create_mole(smiles_list, pretrained_model=None, batch_size=32):
+    """
+    Create MolE embeddings (Molecular Learned Embeddings).
+
+    MolE is a molecular encoder trained via contrastive learning.
+    Requires manual download of pretrained weights (not on PyPI).
+
+    License: CC-BY-NC 4.0
+
+    Args:
+        smiles_list: List of SMILES strings
+        pretrained_model: Path to pretrained model directory. If None,
+            searches $KIRBY_MODELS_DIR/mole/, ~/kirby_models/mole/,
+            and repo-local fallbacks.
+        batch_size: Batch size for encoding (default: 32)
+
+    Returns:
+        np.ndarray: MolE embeddings (n_molecules, D)
+
+    Requires: pip install git+https://github.com/recursionpharma/mole.git
+    """
+    try:
+        from mole import mole_predict
+    except ImportError:
+        raise ImportError(
+            "MolE requires the mole package: "
+            "pip install git+https://github.com/recursionpharma/mole.git\n"
+            "Weights: download from https://github.com/recursionpharma/mole "
+            "and place in $KIRBY_MODELS_DIR/mole/ or ~/kirby_models/mole/"
+        )
+
+    if pretrained_model is None:
+        search_paths = [
+            os.path.join(os.environ.get('KIRBY_MODELS_DIR', ''), 'mole'),
+            os.path.expanduser('~/kirby_models/mole'),
+            'mole_model',
+            '../mole_model',
+        ]
+        found = None
+        for p in search_paths:
+            if p and os.path.isdir(p):
+                found = p
+                break
+        if found is None:
+            raise FileNotFoundError(
+                f"Could not find MolE model in: {search_paths}\n"
+                "Download from https://github.com/recursionpharma/mole "
+                "and set KIRBY_MODELS_DIR or place in ~/kirby_models/mole/"
+            )
+        pretrained_model = found
+
+    print(f"Loading MolE from {pretrained_model}...")
+
+    all_embeddings = []
+    failed = 0
+
+    for i in range(0, len(smiles_list), batch_size):
+        batch = smiles_list[i:i + batch_size]
+        try:
+            embs = mole_predict.encode(
+                smiles=batch, pretrained_model=pretrained_model
+            )
+            embs = np.array(embs, dtype=np.float32)
+            # Guard against NaN/Inf
+            bad_mask = ~np.isfinite(embs).all(axis=1)
+            if bad_mask.any():
+                embs[bad_mask] = 0.0
+                failed += int(bad_mask.sum())
+            all_embeddings.append(embs)
+        except Exception as e:
+            print(f"  WARNING: MolE batch {i} failed: {e}")
+            all_embeddings.append(None)
+            failed += len(batch)
+
+    # Determine dim from first success
+    dim = None
+    for emb in all_embeddings:
+        if emb is not None:
+            dim = emb.shape[-1]
+            break
+    if dim is None:
+        raise RuntimeError("MolE: all batches failed encoding")
+
+    result = []
+    for j, emb in enumerate(all_embeddings):
+        if emb is None:
+            batch_len = len(smiles_list[j * batch_size:(j + 1) * batch_size])
+            result.append(np.zeros((batch_len, dim), dtype=np.float32))
+        else:
+            result.append(emb)
+
+    if failed > 0:
+        print(f"  WARNING: {failed}/{len(smiles_list)} molecules failed MolE")
+
+    result = np.vstack(result).astype(np.float32)
+    print(f"  MolE embeddings: {result.shape}")
     return result
 
 

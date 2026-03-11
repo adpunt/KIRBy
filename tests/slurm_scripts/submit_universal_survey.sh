@@ -2,7 +2,7 @@
 # Submit universal baseline survey as parallel SLURM jobs (one per domain).
 # Run on the login node: bash tests/slurm_scripts/submit_universal_survey.sh
 #
-# Covers: molecular (4), TCGA (3), DTA (4), reaction (2) datasets.
+# Covers: molecular (8), TCGA (3), DTA (5), reaction (3) datasets.
 # Antibody datasets use submit_antibody_survey.sh instead.
 #
 # Usage:
@@ -66,7 +66,7 @@ case "$MODE" in
         submit dta 96G
         submit reaction 32G 06:00:00
         echo ""
-        echo "  Total: 4 jobs, 13 datasets (with --augment)"
+        echo "  Total: 4 jobs, 19 datasets (with --augment)"
         ;;
     all_ft)
         submit molecular 64G 23:59:00 "--finetune" gpu
@@ -74,7 +74,7 @@ case "$MODE" in
         submit dta 96G 23:59:00 "--finetune" gpu
         submit reaction 32G 06:00:00
         echo ""
-        echo "  Total: 4 jobs, 13 datasets (with --finetune --augment, GPU)"
+        echo "  Total: 4 jobs, 19 datasets (with --finetune --augment, GPU)"
         ;;
     *)
         echo "Usage: bash submit_universal_survey.sh [MODE]"
@@ -83,13 +83,13 @@ case "$MODE" in
         echo "  all           All domains, frozen reps + augment (default)"
         echo "  all_ft        All domains with fine-tuning + augment (GPU)"
         echo "  quick         Molecular only (fastest)"
-        echo "  molecular     Molecular domain (4 datasets)"
+        echo "  molecular     Molecular domain (8 datasets: logd, caco2, herg, qm9, adme_hlm/rlm/mdr1/solubility, 10 models)"
         echo "  molecular_ft  Molecular + ChemBERTa/MolFormer LoRA + SchNet E2E (GPU)"
         echo "  tcga          TCGA domain (3 datasets)"
         echo "  tcga_ft       TCGA + Geneformer/scFoundation FT (GPU)"
         echo "  dta           DTA domain (4 datasets)"
         echo "  dta_ft        DTA + ESM-2 protein LoRA (GPU)"
-        echo "  reaction      Reaction yield (2 datasets, needs: pip install drfp)"
+        echo "  reaction      Reaction yield (3 datasets: BH, Suzuki, BH Doyle plates, needs: pip install drfp rxnfp)"
         echo ""
         echo "All modes include --augment (concat small reps with top base)."
         echo "For antibody datasets: bash submit_antibody_survey.sh"

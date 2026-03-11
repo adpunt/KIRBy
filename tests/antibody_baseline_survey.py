@@ -28,8 +28,8 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from sklearn.base import clone
-from sklearn.linear_model import RidgeCV
-from sklearn.metrics import r2_score
+from scipy.stats import spearmanr, pearsonr
+from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import GroupKFold, KFold
 from sklearn.preprocessing import StandardScaler
 
@@ -43,27 +43,35 @@ warnings.filterwarnings('ignore')
 # DATASET REGISTRY
 # =============================================================================
 
-# {name: (loader_module, loader_func, group_strategy)}
-# group_strategy: 'identity' (hash sequences), 'complex' (PDB ID), 'experiment'
+# {name: (loader_module, group_strategy)}
+# group_strategy:
+#   'position_modulo' — DMS/SSM: group by mutation position % n_folds (ProteinGym standard)
+#   'identity' — inter-family: group by unique sequence hash
+#   'complex' — DDG: group by PDB complex ID
+#   'experiment' — AbAgym combined: group by experiment name
 DATASET_REGISTRY = {
-    # DMS (intra-family)
-    'flab_expression_koenig': ('flab', 'identity'),
-    'flab_binding_koenig':    ('flab', 'identity'),
-    'abagym_Ang2':            ('abagym', 'identity'),
-    'abagym_EGFR':            ('abagym', 'identity'),
-    'abagym_lysozyme':        ('abagym', 'identity'),
-    'abagym_VEGF':            ('abagym', 'identity'),
-    'abagym_HER2':            ('abagym', 'identity'),
+    # DMS (intra-family) — position-based splits to prevent same-position leakage
+    'flab_expression_koenig': ('flab', 'position_modulo'),
+    'flab_binding_koenig':    ('flab', 'position_modulo'),
+    'abagym_Ang2':            ('abagym', 'position_modulo'),
+    'abagym_EGFR':            ('abagym', 'position_modulo'),
+    'abagym_lysozyme':        ('abagym', 'position_modulo'),
+    'abagym_VEGF':            ('abagym', 'position_modulo'),
+    'abagym_HER2':            ('abagym', 'position_modulo'),
     # Inter-family
     'ddg_combined':           ('ddg', 'complex'),
+    # Full SKEMPI (all protein-protein, not just Ab-Ag) — experiment option.
+    # Loaded via load_ddg_combined_dataset(ab_ag_only=False).
+    # Non-Ab protein sequences will not benefit from antibody-specific LM reps.
+    'ddg_combined_full':      ('ddg_full', 'complex'),
     'abagym_all':             ('abagym', 'experiment'),
     'abcov_kd':               ('abcov', 'identity'),
     'flab_thermo_jain':       ('flab', 'identity'),
     'flab_aggregation_jain':  ('flab', 'identity'),
-    # FLAb2 expansion
-    'flab_binding_phillips_h3':   ('flab', 'identity'),
-    'flab_binding_adams':         ('flab', 'identity'),
-    'flab_expression_adams':      ('flab', 'identity'),
+    # FLAb2 expansion — DMS datasets get position splits, inter-family keep identity
+    'flab_binding_phillips_h3':   ('flab', 'position_modulo'),
+    'flab_binding_adams':         ('flab', 'position_modulo'),
+    'flab_expression_adams':      ('flab', 'position_modulo'),
     'flab_thermo_tresanco':       ('flab', 'identity'),
     'flab_thermo_hutchinson':     ('flab', 'identity'),
     'flab_immunogenicity_marks':  ('flab', 'identity'),
@@ -91,7 +99,10 @@ DOMAIN_GROUPS = {
         'flab_polyreact_jain_bvp', 'flab_polyreact_jain_cic',
         'flab_pk_jain_fcrnrt', 'flab_pk_jain_heprt',
     ],
-    'all': list(DATASET_REGISTRY.keys()),
+    # 'all' excludes ddg_combined_full by default (it's an experiment option,
+    # not part of the standard survey). Use --include-all-skempi to add it.
+    'all': [d for d in DATASET_REGISTRY.keys() if d != 'ddg_combined_full'],
+    'all_ddg': ['ddg_combined', 'ddg_combined_full'],
 }
 
 
@@ -124,7 +135,14 @@ def load_dataset(name: str) -> dict:
         data = load_abagym_dataset(_abagym_full_name(name))
     elif source == 'ddg':
         from kirby.datasets.ddg_combined import load_ddg_combined_dataset
-        data = load_ddg_combined_dataset()
+        data = load_ddg_combined_dataset(ab_ag_only=True)
+    elif source == 'ddg_full':
+        # Full SKEMPI: all protein-protein complexes, not just Ab-Ag.
+        # NOTE: non-Ab sequences will not benefit from antibody LM reps.
+        from kirby.datasets.ddg_combined import load_ddg_combined_dataset
+        print("  [ddg_combined_full] Using ab_ag_only=False — includes all "
+              "protein-protein SKEMPI entries (barnase-barstar, T4-lysozyme, etc.)")
+        data = load_ddg_combined_dataset(ab_ag_only=False)
     elif source == 'abcov':
         from kirby.datasets.abcov import load_abcov_dataset
         data = load_abcov_dataset(name)
@@ -172,6 +190,20 @@ def _assign_groups(heavy_seqs, light_seqs, strategy, data):
             return groups, len(unique)
         # Fallback: identity groups
         return _identity_groups(heavy_seqs)
+    elif strategy == 'position_modulo':
+        # DMS/SSM data: group by mutation position (ProteinGym standard).
+        # Prevents same-position leakage where mutations at the same residue
+        # appear in both train and test.
+        mutations = data.get('mutations')
+        if mutations and any(len(m) > 0 for m in mutations):
+            groups, n_groups = _assign_position_groups_modulo(mutations)
+            if n_groups >= 3:
+                return groups, n_groups
+            # If too few position groups (very short protein), fall back
+            print("    WARNING: <3 position groups, falling back to identity")
+        else:
+            print("    WARNING: no mutation data, falling back to identity")
+        return _identity_groups(heavy_seqs)
     else:  # identity
         return _identity_groups(heavy_seqs)
 
@@ -214,43 +246,78 @@ def _identity_groups(seqs, min_groups=3):
     return groups, n_groups
 
 
+def _assign_position_groups_modulo(mutations, n_folds=5):
+    """ProteinGym-style modulo split for DMS data.
+
+    Assigns each sample to a fold based on (mutation_position % n_folds).
+    Ensures mutations at the same position are always in the same fold,
+    preventing position-specific effect leakage.
+
+    Reference: ProteinGym (NeurIPS 2023) fold_modulo_5 scheme.
+    """
+    groups = np.zeros(len(mutations), dtype=int)
+    for i, muts in enumerate(mutations):
+        if muts:
+            # Use first mutation position (SSM data has 1 mutation per variant)
+            groups[i] = muts[0]['pos'] % n_folds
+        else:
+            # Wildtype: assign to fold 0
+            groups[i] = 0
+    n_groups = len(np.unique(groups))
+    return groups, n_groups
+
+
+def _assign_position_groups_contiguous(mutations, n_folds=5):
+    """ProteinGym-style contiguous split for DMS data.
+
+    Splits the protein into n_folds contiguous segments by position.
+    Tests whether models can extrapolate to unseen sequence regions.
+
+    Reference: ProteinGym (NeurIPS 2023) fold_contiguous_5 scheme.
+    """
+    all_pos = [muts[0]['pos'] for muts in mutations if muts]
+    if not all_pos:
+        return np.zeros(len(mutations), dtype=int), 1
+
+    max_pos = max(all_pos) + 1
+    segment_size = max_pos / n_folds
+
+    groups = np.zeros(len(mutations), dtype=int)
+    for i, muts in enumerate(mutations):
+        if muts:
+            groups[i] = min(int(muts[0]['pos'] / segment_size), n_folds - 1)
+        else:
+            groups[i] = 0
+    n_groups = len(np.unique(groups))
+    return groups, n_groups
+
+
 # =============================================================================
 # MODELS
 # =============================================================================
 
-def get_models(model_names: List[str]) -> Dict[str, object]:
-    """Return model instances by name."""
-    catalog = {
-        'ridge': RidgeCV(alphas=np.logspace(-4, 4, 50)),
-    }
+def get_models(model_names: List[str], n_samples: int = None) -> Dict[str, object]:
+    """Return model instances by name, using centralized DEFAULT_MODELS.
 
-    if 'rf' in model_names:
-        from sklearn.ensemble import RandomForestRegressor
-        catalog['rf'] = RandomForestRegressor(
-            n_estimators=100, max_features='sqrt', random_state=42, n_jobs=1)
+    Forces n_jobs=1 for antibody datasets (small, no benefit from parallelism).
+    """
+    from kirby.find_best_hybrid import get_model
 
-    if 'xgboost' in model_names:
+    catalog = {}
+    for name in model_names:
         try:
-            from xgboost import XGBRegressor
-            catalog['xgboost'] = XGBRegressor(
-                n_estimators=100, colsample_bytree=0.5,
-                random_state=42, n_jobs=1, verbosity=0)
-        except ImportError:
-            print("  WARNING: xgboost not available")
+            m = get_model(name, task_type='regression', n_samples=n_samples)
+        except ValueError:
+            print(f"  WARNING: unknown model '{name}', skipping")
+            continue
+        if m is None:
+            continue  # skipped by size guard
+        # Force n_jobs=1 for antibody (small datasets, avoid overhead)
+        if hasattr(m, 'n_jobs'):
+            m.set_params(n_jobs=1)
+        catalog[name] = m
 
-    if 'lightgbm' in model_names:
-        try:
-            from lightgbm import LGBMRegressor
-            catalog['lightgbm'] = LGBMRegressor(
-                n_estimators=100, random_state=42, n_jobs=1, verbose=-1)
-        except ImportError:
-            print("  WARNING: lightgbm not available")
-
-    if 'knn' in model_names:
-        from sklearn.neighbors import KNeighborsRegressor
-        catalog['knn'] = KNeighborsRegressor(n_neighbors=5, n_jobs=1)
-
-    return {k: v for k, v in catalog.items() if k in model_names}
+    return catalog
 
 
 # =============================================================================
@@ -284,6 +351,9 @@ def evaluate_rep(
 
     if actual_folds < 2:
         return {'r2_mean': float('nan'), 'r2_std': float('nan'),
+                'spearman_mean': float('nan'), 'spearman_std': float('nan'),
+                'pearson_mean': float('nan'), 'pearson_std': float('nan'),
+                'rmse_mean': float('nan'), 'rmse_std': float('nan'),
                 'per_fold': []}
 
     if n_unique >= actual_folds:
@@ -294,6 +364,9 @@ def evaluate_rep(
         splits = list(cv.split(X, labels))
 
     r2_scores = []
+    spearman_scores = []
+    pearson_scores = []
+    rmse_scores = []
     fold_details = []
 
     # Only z-score continuous features; leave binary reps (onehot, blosum) raw
@@ -316,10 +389,19 @@ def evaluate_rep(
             y_pred = m.predict(X_val)
 
             r2 = r2_score(labels[val_idx], y_pred)
+            rho = float(spearmanr(labels[val_idx], y_pred)[0])
+            pr = float(pearsonr(labels[val_idx], y_pred)[0])
+            rmse_val = float(np.sqrt(mean_squared_error(labels[val_idx], y_pred)))
             r2_scores.append(r2)
+            spearman_scores.append(rho)
+            pearson_scores.append(pr)
+            rmse_scores.append(rmse_val)
             fold_details.append({
                 'fold': fold_i,
                 'r2': round(float(r2), 4),
+                'spearman': round(rho, 4),
+                'pearson': round(pr, 4),
+                'rmse': round(rmse_val, 4),
                 'n_train': len(train_idx),
                 'n_val': len(val_idx),
             })
@@ -328,11 +410,20 @@ def evaluate_rep(
 
     if not r2_scores:
         return {'r2_mean': float('nan'), 'r2_std': float('nan'),
+                'spearman_mean': float('nan'), 'spearman_std': float('nan'),
+                'pearson_mean': float('nan'), 'pearson_std': float('nan'),
+                'rmse_mean': float('nan'), 'rmse_std': float('nan'),
                 'per_fold': fold_details}
 
     return {
         'r2_mean': round(float(np.mean(r2_scores)), 4),
         'r2_std': round(float(np.std(r2_scores)), 4),
+        'spearman_mean': round(float(np.mean(spearman_scores)), 4),
+        'spearman_std': round(float(np.std(spearman_scores)), 4),
+        'pearson_mean': round(float(np.mean(pearson_scores)), 4),
+        'pearson_std': round(float(np.std(pearson_scores)), 4),
+        'rmse_mean': round(float(np.mean(rmse_scores)), 4),
+        'rmse_std': round(float(np.std(rmse_scores)), 4),
         'per_fold': fold_details,
     }
 
@@ -347,7 +438,11 @@ def evaluate_ft_rep(factory, labels, groups, model, n_folds=5):
     actual_folds = min(n_folds, n_unique)
 
     if actual_folds < 2:
-        return {'r2_mean': float('nan'), 'r2_std': float('nan'), 'per_fold': []}
+        return {'r2_mean': float('nan'), 'r2_std': float('nan'),
+                'spearman_mean': float('nan'), 'spearman_std': float('nan'),
+                'pearson_mean': float('nan'), 'pearson_std': float('nan'),
+                'rmse_mean': float('nan'), 'rmse_std': float('nan'),
+                'per_fold': []}
 
     if n_unique >= actual_folds:
         cv = GroupKFold(n_splits=actual_folds)
@@ -357,6 +452,9 @@ def evaluate_ft_rep(factory, labels, groups, model, n_folds=5):
         splits = list(cv.split(np.zeros(len(labels)), labels))
 
     r2_scores = []
+    spearman_scores = []
+    pearson_scores = []
+    rmse_scores = []
     fold_details = []
 
     for fold_i, (train_idx, val_idx) in enumerate(splits):
@@ -378,9 +476,17 @@ def evaluate_ft_rep(factory, labels, groups, model, n_folds=5):
             m.fit(X_train, labels[train_idx])
             y_pred = m.predict(X_val)
             r2 = r2_score(labels[val_idx], y_pred)
+            rho = float(spearmanr(labels[val_idx], y_pred)[0])
+            pr = float(pearsonr(labels[val_idx], y_pred)[0])
+            rmse_val = float(np.sqrt(mean_squared_error(labels[val_idx], y_pred)))
             r2_scores.append(r2)
+            spearman_scores.append(rho)
+            pearson_scores.append(pr)
+            rmse_scores.append(rmse_val)
             fold_details.append({
                 'fold': fold_i, 'r2': round(float(r2), 4),
+                'spearman': round(rho, 4), 'pearson': round(pr, 4),
+                'rmse': round(rmse_val, 4),
                 'n_train': len(train_idx), 'n_val': len(val_idx),
             })
         except Exception as e:
@@ -388,11 +494,20 @@ def evaluate_ft_rep(factory, labels, groups, model, n_folds=5):
 
     if not r2_scores:
         return {'r2_mean': float('nan'), 'r2_std': float('nan'),
+                'spearman_mean': float('nan'), 'spearman_std': float('nan'),
+                'pearson_mean': float('nan'), 'pearson_std': float('nan'),
+                'rmse_mean': float('nan'), 'rmse_std': float('nan'),
                 'per_fold': fold_details}
 
     return {
         'r2_mean': round(float(np.mean(r2_scores)), 4),
         'r2_std': round(float(np.std(r2_scores)), 4),
+        'spearman_mean': round(float(np.mean(spearman_scores)), 4),
+        'spearman_std': round(float(np.std(spearman_scores)), 4),
+        'pearson_mean': round(float(np.mean(pearson_scores)), 4),
+        'pearson_std': round(float(np.std(pearson_scores)), 4),
+        'rmse_mean': round(float(np.mean(rmse_scores)), 4),
+        'rmse_std': round(float(np.std(rmse_scores)), 4),
         'per_fold': fold_details,
     }
 
@@ -421,10 +536,15 @@ def run_survey(
     print(f"  {data['n_samples']} samples, {data['n_groups']} groups")
 
     # 2. Generate representations (with .npy caching)
+    # esm2_entropy_top20 needs per-fold fitting (entropy on train only)
+    FACTORY_REPS = {'esm2_entropy_top20'}
+
     from kirby.representations.antibody import ANTIBODY_REPS
     from kirby.representations.mutation import MUTATION_REPS
     reps = {}
     for rep_name in rep_names:
+        if rep_name in FACTORY_REPS:
+            continue  # handled separately below
         if rep_name not in ANTIBODY_REPS:
             if rep_name not in MUTATION_REPS:
                 print(f"  WARNING: unknown rep '{rep_name}', skipping")
@@ -489,7 +609,7 @@ def run_survey(
         raise RuntimeError("No representations generated successfully")
 
     # 3. Get models
-    models = get_models(model_names)
+    models = get_models(model_names, n_samples=data['n_samples'])
     print(f"  Models: {list(models.keys())}")
 
     # 4. Evaluate each (rep, model) cell
@@ -510,12 +630,41 @@ def run_survey(
                 result = evaluate_rep(X, labels, groups, model, n_folds)
                 entry['scores'][mname] = result
                 r2 = result['r2_mean']
-                print(f" {mname}={r2:.3f}", end='', flush=True)
+                rho = result['spearman_mean']
+                print(f" {mname}={r2:.3f}/\u03c1={rho:.3f}", end='', flush=True)
 
             baselines[rep_name] = entry
             print()
         except Exception as e:
             print(f" EVAL FAILED: {e}")
+
+    # 4b. Factory-based reps (per-fold fitting to prevent leakage)
+    factory_rep_names = [r for r in rep_names if r in FACTORY_REPS]
+    if factory_rep_names:
+        from kirby.representations.antibody import make_esm2_entropy_factory
+
+        factory_map = {
+            'esm2_entropy_top20': lambda: make_esm2_entropy_factory(
+                heavy_seqs, light_seqs),
+        }
+
+        for rep_name in factory_rep_names:
+            if rep_name not in factory_map:
+                continue
+            try:
+                print(f"  {rep_name} (per-fold):", end='', flush=True)
+                factory = factory_map[rep_name]()
+                entry = {'dimension': 2560, 'scores': {}}
+                for mname, model in models.items():
+                    result = evaluate_ft_rep(factory, labels, groups, model, n_folds)
+                    entry['scores'][mname] = result
+                    r2 = result['r2_mean']
+                    rho = result['spearman_mean']
+                    print(f" {mname}={r2:.3f}/\u03c1={rho:.3f}", end='', flush=True)
+                baselines[rep_name] = entry
+                print()
+            except Exception as e:
+                print(f" FAILED: {e}")
 
     # 5. Fine-tuned reps (ESM-2 LoRA)
     ft_baselines = {}
@@ -535,7 +684,8 @@ def run_survey(
                 result = evaluate_ft_rep(factory, labels, groups, model, n_folds)
                 entry['scores'][mname] = result
                 r2 = result['r2_mean']
-                print(f" {mname}={r2:.3f}", end='', flush=True)
+                rho = result['spearman_mean']
+                print(f" {mname}={r2:.3f}/\u03c1={rho:.3f}", end='', flush=True)
 
             ft_baselines[ft_name] = entry
             print()
@@ -638,7 +788,8 @@ def print_summary_table(result):
     # Header
     header = f"{'Rep':<25} {'Dim':>5}"
     for m in models:
-        header += f" {m:>8}"
+        col_label = f"R\u00b2/\u03c1 ({m})"
+        header += f" {col_label:>18}"
     print(header)
     print("-" * len(header))
 
@@ -648,7 +799,8 @@ def print_summary_table(result):
         for m in models:
             s = r['scores'].get(m, {})
             r2 = s.get('r2_mean', float('nan'))
-            row += f" {r2:>8.4f}"
+            rho = s.get('spearman_mean', float('nan'))
+            row += f" {r2:>8.4f}/{rho:.4f}"
         print(row)
 
     # Fine-tuned scores
@@ -664,7 +816,8 @@ def print_summary_table(result):
             for m in models:
                 s = r['scores'].get(m, {})
                 r2 = s.get('r2_mean', float('nan'))
-                row += f" {r2:>8.4f}"
+                rho = s.get('spearman_mean', float('nan'))
+                row += f" {r2:>8.4f}/{rho:.4f}"
             print(row)
 
     print(f"\n  Time: {meta['elapsed_seconds']:.0f}s")
@@ -684,27 +837,41 @@ Datasets:
   abagym_Ang2/EGFR/lysozyme/VEGF/HER2              (AbAgym DMS)
   ddg_combined, abagym_all, abcov_kd,               (inter-family)
     flab_thermo_jain, flab_aggregation_jain
+  ddg_combined_full                                 (experiment: full SKEMPI PP)
 
 Shortcuts:
-  all_dms       Run all 7 DMS datasets
-  all_inter     Run all 5 inter-family datasets
-  all           Run everything
+  all_dms       Run all 10 DMS datasets
+  all_inter     Run all 14 inter-family datasets
+  all           Run everything (excludes ddg_combined_full by default)
+  all_ddg       ddg_combined + ddg_combined_full (Ab-Ag vs full PP comparison)
+
+DDG experiment flags:
+  --include-all-skempi    Add ddg_combined_full to any multi-dataset run.
+                          Compares Ab-Ag-only vs all-PP SKEMPI on same reps.
 
 Examples:
   %(prog)s flab_expression_koenig --skip-lm
   %(prog)s all_dms --models ridge,rf
-  %(prog)s all --output tests/results/antibody_survey/
+  %(prog)s ddg_combined --models ridge,lightgbm
+  %(prog)s all_ddg --models ridge,lightgbm --output tests/results/ddg_comparison/
+  %(prog)s all --include-all-skempi --output tests/results/antibody_survey/
         """
     )
 
     parser.add_argument('dataset', type=str,
                         help='Dataset name, group shortcut, or "all"')
+    parser.add_argument('--include-all-skempi', action='store_true',
+                        help='Add ddg_combined_full to the dataset list. '
+                             'Uses all SKEMPI protein-protein entries (not just Ab-Ag). '
+                             'Equivalent to adding ddg_combined_full to the dataset list. '
+                             'Only affects multi-dataset runs (all, all_inter, etc.).')
     parser.add_argument('--skip-lm', action='store_true',
                         help='Skip LM reps (only one-hot, blosum, aac)')
     parser.add_argument('--reps', type=str, default=None,
                         help='Comma-separated rep names to use (overrides --skip-lm)')
-    parser.add_argument('--models', type=str, default='ridge,lightgbm',
-                        help='Comma-separated model names (default: ridge,lightgbm)')
+    parser.add_argument('--models', type=str,
+                        default='ridge,rf,xgboost,lightgbm,gp,mlp,dnn,cnn,catboost',
+                        help='Comma-separated model names (default: all 9 models)')
     parser.add_argument('--n-folds', type=int, default=5,
                         help='Number of CV folds (default: 5)')
     parser.add_argument('--augment', action='store_true',
@@ -720,7 +887,7 @@ Examples:
     # Resolve datasets
     ds_input = args.dataset
     if ds_input in DOMAIN_GROUPS:
-        datasets = DOMAIN_GROUPS[ds_input]
+        datasets = list(DOMAIN_GROUPS[ds_input])
     elif ds_input in DATASET_REGISTRY:
         datasets = [ds_input]
     else:
@@ -728,6 +895,17 @@ Examples:
         print(f"Available: {sorted(DATASET_REGISTRY.keys())}")
         print(f"Groups: {sorted(DOMAIN_GROUPS.keys())}")
         return 1
+
+    # --include-all-skempi: inject ddg_combined_full if not already present
+    if getattr(args, 'include_all_skempi', False):
+        if 'ddg_combined_full' not in datasets:
+            # Insert right after ddg_combined if present, else append
+            if 'ddg_combined' in datasets:
+                idx = datasets.index('ddg_combined')
+                datasets.insert(idx + 1, 'ddg_combined_full')
+            else:
+                datasets.append('ddg_combined_full')
+            print(f"  [--include-all-skempi] Added ddg_combined_full to dataset list")
 
     # Resolve reps
     from kirby.representations.antibody import (
@@ -807,7 +985,8 @@ Examples:
                     scores = baselines[rep_name]['scores']
                     parts = []
                     for mname, s in scores.items():
-                        parts.append(f"{mname}={s['r2_mean']:.4f}")
+                        rho = s.get('spearman_mean', float('nan'))
+                        parts.append(f"{mname}={s['r2_mean']:.4f}/\u03c1={rho:.4f}")
                     print(f"    {rep_name:<20} {', '.join(parts)}")
             else:
                 print(f"  {ds:<30} FAILED")

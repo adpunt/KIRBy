@@ -29,22 +29,31 @@ import warnings
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from copy import deepcopy
+
 import numpy as np
+from scipy.stats import spearmanr
+from sklearn.metrics import mean_squared_error
 
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+from kirby.find_best_hybrid import _concordance_index
 warnings.filterwarnings('ignore')
 
 
 # Which reps to evaluate (ordered: lightweight first, LM last)
 DRUG_REPS = [
     'drug_ecfp4', 'drug_maccs', 'drug_pdv', 'drug_map4', 'drug_mol2vec',
+    'drug_mordred', 'drug_avalon',
     'drug_chemberta', 'drug_molformer', 'drug_selformer', 'drug_clamp',
     'drug_rmat', 'drug_unimol_v2',
+    'drug_minimol', 'drug_gp_molformer', 'drug_mole',
 ]
 PROTEIN_REPS = [
     'protein_aac', 'protein_descriptors', 'protein_kmer',
     'protein_esm2', 'protein_esmc', 'protein_esm2_midlayers',
     'protein_amplify',
+    'protein_mint', 'protein_esmfold', 'protein_alphafold_db',
+    'protein_esm3', 'protein_saprot', 'protein_boltz2',  # Phase 4B
 ]
 
 # Default minimal partners for paired evaluation
@@ -132,8 +141,30 @@ def generate_rep(rep_name: str, unique_drugs, unique_proteins,
         dispatch['drug_rmat'] = (mol.create_rmat, 'drug')
     elif rep_name == 'drug_unimol_v2':
         dispatch['drug_unimol_v2'] = (mol.create_unimol_v2, 'drug')
+    elif rep_name == 'drug_mordred':
+        dispatch['drug_mordred'] = (mol.create_mordred, 'drug')
+    elif rep_name == 'drug_avalon':
+        dispatch['drug_avalon'] = (mol.create_avalon, 'drug')
+    elif rep_name == 'drug_minimol':
+        dispatch['drug_minimol'] = (mol.create_minimol, 'drug')
+    elif rep_name == 'drug_gp_molformer':
+        dispatch['drug_gp_molformer'] = (mol.create_gp_molformer, 'drug')
+    elif rep_name == 'drug_mole':
+        dispatch['drug_mole'] = (mol.create_mole, 'drug')
     elif rep_name == 'protein_amplify':
         dispatch['protein_amplify'] = (prot.create_amplify_protein_embeddings, 'protein')
+    elif rep_name == 'protein_mint':
+        dispatch['protein_mint'] = (prot.create_mint_protein_embeddings, 'protein')
+    elif rep_name == 'protein_esmfold':
+        dispatch['protein_esmfold'] = (prot.create_esmfold_protein_features, 'protein')
+    elif rep_name == 'protein_alphafold_db':
+        dispatch['protein_alphafold_db'] = (prot.create_alphafold_db_features, 'protein')
+    elif rep_name == 'protein_esm3':
+        dispatch['protein_esm3'] = (prot.create_esm3_protein_embeddings, 'protein')
+    elif rep_name == 'protein_saprot':
+        dispatch['protein_saprot'] = (prot.create_saprot_protein_embeddings, 'protein')
+    elif rep_name == 'protein_boltz2':
+        dispatch['protein_boltz2'] = (prot.create_boltz2_protein_embeddings, 'protein')
 
     if rep_name not in dispatch:
         print(f"  WARNING: Unknown rep '{rep_name}', skipping")
@@ -158,16 +189,8 @@ def evaluate_rep(X: np.ndarray, y: np.ndarray, groups: np.ndarray,
                  n_folds: int = 5) -> Dict[str, float]:
     """Evaluate a representation with GroupKFold CV. Returns {model: R²}."""
     from sklearn.model_selection import GroupKFold
-    from sklearn.linear_model import RidgeCV
-    from sklearn.ensemble import RandomForestRegressor
     from sklearn.preprocessing import StandardScaler
     from sklearn.metrics import r2_score
-
-    try:
-        import xgboost as xgb
-        has_xgb = True
-    except ImportError:
-        has_xgb = False
 
     # Handle NaN/Inf/extreme values (some descriptors fail for certain molecules)
     X = X.copy()
@@ -188,19 +211,23 @@ def evaluate_rep(X: np.ndarray, y: np.ndarray, groups: np.ndarray,
     gkf = GroupKFold(n_splits=n_folds)
     results = {}
 
-    models = {
-        'ridge': lambda: RidgeCV(alphas=np.logspace(-4, 4, 50)),
-        'rf': lambda: RandomForestRegressor(n_estimators=100, max_features='sqrt',
-                                            n_jobs=-1, random_state=42),
-    }
-    if has_xgb:
-        models['xgboost'] = lambda: xgb.XGBRegressor(
-            n_estimators=100, colsample_bytree=0.5,
-            n_jobs=-1, random_state=42, verbosity=0,
-        )
+    from kirby.find_best_hybrid import get_model as _get_model
+    _model_names = ['ridge', 'rf', 'xgboost', 'lightgbm',
+                         'gp', 'mlp', 'dnn', 'cnn', 'catboost']
+    models = {}
+    for _mn in _model_names:
+        try:
+            _m = _get_model(_mn, task_type='regression', n_samples=len(y))
+            if _m is not None:
+                models[_mn] = lambda _m=_m: deepcopy(_m)
+        except Exception:
+            pass
 
     for model_name, model_fn in models.items():
         fold_scores = []
+        fold_ci = []
+        fold_spearman = []
+        fold_rmse = []
         for train_idx, test_idx in gkf.split(X, y, groups):
             scaler = StandardScaler()
             X_train = scaler.fit_transform(X[train_idx])
@@ -209,16 +236,25 @@ def evaluate_rep(X: np.ndarray, y: np.ndarray, groups: np.ndarray,
             model.fit(X_train, y[train_idx])
             pred = model.predict(X_test)
             fold_scores.append(r2_score(y[test_idx], pred))
+            fold_ci.append(_concordance_index(y[test_idx], pred))
+            fold_spearman.append(float(spearmanr(y[test_idx], pred)[0]))
+            fold_rmse.append(float(np.sqrt(mean_squared_error(y[test_idx], pred))))
 
         mean_r2 = np.mean(fold_scores)
         std_r2 = np.std(fold_scores)
-        results[model_name] = {'mean': round(mean_r2, 4), 'std': round(std_r2, 4)}
+        results[model_name] = {
+            'mean': round(mean_r2, 4), 'std': round(std_r2, 4),
+            'ci_mean': round(float(np.mean(fold_ci)), 4), 'ci_std': round(float(np.std(fold_ci)), 4),
+            'spearman_mean': round(float(np.mean(fold_spearman)), 4), 'spearman_std': round(float(np.std(fold_spearman)), 4),
+            'rmse_mean': round(float(np.mean(fold_rmse)), 4), 'rmse_std': round(float(np.std(fold_rmse)), 4),
+        }
 
     return results
 
 
 def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
-               skip_lm: bool = False, skip_kmer: bool = False):
+               skip_lm: bool = False, skip_kmer: bool = False,
+               cold_setting: str = 'target', n_folds: int = 5):
     """Run full baseline survey on one dataset."""
     print(f"\n{'='*70}")
     print(f"DTA BASELINE SURVEY: {dataset_name.upper()}")
@@ -239,16 +275,22 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
         drug_smiles = [drug_smiles[i] for i in idx]
         protein_seqs = [protein_seqs[i] for i in idx]
         labels = labels[idx]
+        metadata['drug_ids'] = [metadata['drug_ids'][i] for i in idx]
         metadata['protein_ids'] = [metadata['protein_ids'][i] for i in idx]
         metadata['n_drugs'] = len(set(drug_smiles))
         metadata['n_proteins'] = len(set(protein_seqs))
         print(f"  Subsampled to {max_pairs} pairs")
 
-    # Cold-target groups
-    from kirby.datasets.dta import assign_cold_target_groups
-    groups, n_groups = assign_cold_target_groups(metadata['protein_ids'])
-    print(f"  {len(labels)} pairs, {metadata['n_drugs']} drugs × {metadata['n_proteins']} proteins")
-    print(f"  Cold-target groups: {n_groups}")
+    # Cold-target or cold-drug groups
+    from kirby.datasets.dta import assign_cold_target_groups, assign_cold_drug_groups
+    if cold_setting == 'drug':
+        groups, n_groups = assign_cold_drug_groups(metadata['drug_ids'])
+        print(f"  {len(labels)} pairs, {metadata['n_drugs']} drugs × {metadata['n_proteins']} proteins")
+        print(f"  Cold-drug groups: {n_groups} unique drugs")
+    else:
+        groups, n_groups = assign_cold_target_groups(metadata['protein_ids'])
+        print(f"  {len(labels)} pairs, {metadata['n_drugs']} drugs × {metadata['n_proteins']} proteins")
+        print(f"  Cold-target groups: {n_groups} unique proteins")
 
     # Deduplicate for efficient generation
     unique_drugs = sorted(set(drug_smiles))
@@ -258,9 +300,9 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
 
     # Decide which reps to run
     drug_reps_to_run = [r for r in DRUG_REPS
-                        if not (skip_lm and r in ('drug_chemberta', 'drug_molformer', 'drug_selformer', 'drug_clamp', 'drug_rmat', 'drug_unimol_v2'))]
+                        if not (skip_lm and r in ('drug_chemberta', 'drug_molformer', 'drug_selformer', 'drug_clamp', 'drug_rmat', 'drug_unimol_v2', 'drug_minimol', 'drug_gp_molformer', 'drug_mole'))]
     protein_reps_to_run = [r for r in PROTEIN_REPS
-                           if not (skip_lm and r in ('protein_esm2', 'protein_esmc', 'protein_esm2_midlayers', 'protein_amplify'))
+                           if not (skip_lm and r in ('protein_esm2', 'protein_esmc', 'protein_esm2_midlayers', 'protein_amplify', 'protein_mint', 'protein_esmfold', 'protein_alphafold_db', 'protein_esm3', 'protein_saprot', 'protein_boltz2'))
                            and not (skip_kmer and r == 'protein_kmer')]
 
     all_reps_to_run = drug_reps_to_run + protein_reps_to_run
@@ -291,12 +333,13 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
     standalone_results = {}
     for rep_name, rep in generated.items():
         t0 = time.time()
-        scores = evaluate_rep(rep, labels, groups)
+        scores = evaluate_rep(rep, labels, groups, n_folds=n_folds)
         elapsed = time.time() - t0
         standalone_results[rep_name] = scores
-        best_model = max(scores, key=lambda m: scores[m]['mean'])
+        best_model = max(scores, key=lambda m: scores[m]['ci_mean'])
+        best_ci = scores[best_model]['ci_mean']
         best_r2 = scores[best_model]['mean']
-        print(f"  {rep_name:<25} best={best_model} R²={best_r2:.4f} ({elapsed:.1f}s)")
+        print(f"  {rep_name:<25} best={best_model} CI={best_ci:.4f} R²={best_r2:.4f} ({elapsed:.1f}s)")
 
     # Evaluate: paired mode (drug + minimal protein, or protein + minimal drug)
     print(f"\n--- PAIRED EVALUATION (drug+protein_aac or protein+drug_ecfp4) ---")
@@ -315,12 +358,13 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
             continue
 
         t0 = time.time()
-        scores = evaluate_rep(X, labels, groups)
+        scores = evaluate_rep(X, labels, groups, n_folds=n_folds)
         elapsed = time.time() - t0
         paired_results[rep_name] = scores
-        best_model = max(scores, key=lambda m: scores[m]['mean'])
+        best_model = max(scores, key=lambda m: scores[m]['ci_mean'])
+        best_ci = scores[best_model]['ci_mean']
         best_r2 = scores[best_model]['mean']
-        print(f"  {rep_name:<25} +{partner:<20} best={best_model} R²={best_r2:.4f} ({elapsed:.1f}s)")
+        print(f"  {rep_name:<25} +{partner:<20} best={best_model} CI={best_ci:.4f} R²={best_r2:.4f} ({elapsed:.1f}s)")
 
     # Combined: all drug + all protein
     if drug_partner is not None and protein_partner is not None:
@@ -330,11 +374,12 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
             X_all = np.hstack(all_drug_reps + all_protein_reps)
             print(f"\n--- ALL COMBINED ({X_all.shape[1]}D) ---")
             t0 = time.time()
-            all_scores = evaluate_rep(X_all, labels, groups)
+            all_scores = evaluate_rep(X_all, labels, groups, n_folds=n_folds)
             elapsed = time.time() - t0
-            best_model = max(all_scores, key=lambda m: all_scores[m]['mean'])
+            best_model = max(all_scores, key=lambda m: all_scores[m]['ci_mean'])
+            best_ci = all_scores[best_model]['ci_mean']
             best_r2 = all_scores[best_model]['mean']
-            print(f"  all_concat ({X_all.shape[1]}D): best={best_model} R²={best_r2:.4f} ({elapsed:.1f}s)")
+            print(f"  all_concat ({X_all.shape[1]}D): best={best_model} CI={best_ci:.4f} R²={best_r2:.4f} ({elapsed:.1f}s)")
         else:
             all_scores = None
     else:
@@ -349,7 +394,7 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
         models_seen.update(scores.keys())
     models_list = sorted(models_seen)
 
-    header = f"{'Rep':<25} {'Dim':<6} " + " ".join(f"{m:<16}" for m in models_list)
+    header = f"{'Rep':<25} {'Dim':<6} " + " ".join(f"{m:<22}" for m in models_list)
     print(header)
     print("-" * len(header))
 
@@ -361,9 +406,9 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
         for m in models_list:
             if m in standalone_results[rep_name]:
                 s = standalone_results[rep_name][m]
-                row += f"{s['mean']:>6.4f}±{s['std']:.3f}   "
+                row += f"R²={s['mean']:.4f} CI={s['ci_mean']:.4f}  "
             else:
-                row += f"{'--':<16} "
+                row += f"{'--':<22} "
         print(row)
 
     print(f"\nPaired (+ minimal partner):")
@@ -375,13 +420,14 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
         for m in models_list:
             if m in paired_results[rep_name]:
                 s = paired_results[rep_name][m]
-                row += f"{s['mean']:>6.4f}±{s['std']:.3f}   "
+                row += f"R²={s['mean']:.4f} CI={s['ci_mean']:.4f}  "
             else:
-                row += f"{'--':<16} "
+                row += f"{'--':<22} "
         print(row)
 
     return {
         'dataset': dataset_name,
+        'cold_setting': cold_setting,
         'n_pairs': len(labels),
         'standalone': standalone_results,
         'paired': paired_results,
@@ -393,27 +439,35 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
 
 def main():
     parser = argparse.ArgumentParser(description='DTA Baseline Survey for BOM')
-    parser.add_argument('dataset', choices=['davis', 'kiba', 'pdbbind_refined', 'pdbbind_core', 'all'],
+    parser.add_argument('dataset', choices=[
+        'davis', 'kiba', 'bindingdb_kd', 'pdbbind_refined', 'pdbbind_core', 'all'],
                         help='Dataset to evaluate')
     parser.add_argument('--max-pairs', type=int, default=None,
-                        help='Subsample KIBA (default: 30000 for kiba)')
+                        help='Subsample large datasets (default: 30000 for kiba/bindingdb_kd)')
     parser.add_argument('--skip-lm', action='store_true',
                         help='Skip LM reps (ESM-2, ChemBERTa, MolFormer, SelFormer)')
     parser.add_argument('--skip-kmer', action='store_true',
                         help='Skip protein_kmer (8000D→200D via importance filter)')
+    parser.add_argument('--n-folds', type=int, default=5,
+                        help='Number of CV folds (default: 5)')
+    parser.add_argument('--cold-setting', choices=['target', 'drug'], default='target',
+                        help='Cold split: target (default) or drug')
     parser.add_argument('--output', type=str, default=None,
                         help='Save results JSON')
     args = parser.parse_args()
 
-    datasets = ['davis', 'kiba', 'pdbbind_refined', 'pdbbind_core'] if args.dataset == 'all' else [args.dataset]
+    datasets = (['davis', 'kiba', 'bindingdb_kd', 'pdbbind_refined', 'pdbbind_core']
+                if args.dataset == 'all' else [args.dataset])
     all_results = {}
 
     for ds in datasets:
         max_pairs = args.max_pairs
-        if max_pairs is None and ds == 'kiba':
-            max_pairs = 30000  # default subsample for KIBA
+        if max_pairs is None and ds in ('kiba', 'bindingdb_kd'):
+            max_pairs = 30000  # default subsample for large datasets
         result = run_survey(ds, max_pairs=max_pairs,
-                            skip_lm=args.skip_lm, skip_kmer=args.skip_kmer)
+                            skip_lm=args.skip_lm, skip_kmer=args.skip_kmer,
+                            cold_setting=args.cold_setting,
+                            n_folds=args.n_folds)
         all_results[ds] = result
 
     if args.output:

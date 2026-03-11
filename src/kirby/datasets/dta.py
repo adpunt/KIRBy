@@ -1,16 +1,27 @@
 """
 Drug-Target Affinity (DTA) Dataset Loader
 
-Loads DAVIS and KIBA benchmark datasets directly from DeepDTA GitHub.
-No external dependencies beyond numpy/pandas/requests.
+Loads DAVIS and KIBA benchmark datasets directly from DeepDTA GitHub,
+and BindingDB_Kd via TDC (Therapeutics Data Commons).
+No external dependencies beyond numpy/pandas/requests (+ PyTDC for BindingDB).
 
 DAVIS: 68 drugs × 442 kinases, Kd values (nM → pKd)
 KIBA: 2,111 drugs × 229 proteins, integrated KIBA scores (~118K valid pairs)
+BindingDB_Kd: ~52K drug-target pairs (10,665 drugs × 1,413 proteins), Kd from BindingDB
+
+Note on expected performance:
+    Published SOTA DTA CI (0.90+) uses warm-start splits with deep interaction
+    models (DeepDTA, GraphDTA) that learn drug-protein attention — a different
+    paradigm. KIRBy uses cold-target/cold-drug GroupKFold with linear/tree models.
+    Cold-target CI 0.82-0.87 is consistent with published cold-target ranges.
+    This is by design: the thesis evaluates representation quality, not architecture.
+    See issues_dta_reaction.md §1.2 for published performance ranges.
 
 Reference:
 - Davis et al. (2011) Nature Biotechnology (DAVIS kinase binding)
 - Tang et al. (2014) Bioinformatics (KIBA score)
 - Öztürk et al. (2018) Bioinformatics (DeepDTA, data source)
+- Liu et al. (2007) Bioinformatics (BindingDB)
 """
 
 import json
@@ -30,8 +41,15 @@ _DATASETS = {
     },
     'kiba': {
         'property': 'KIBA integrated score',
-        'description': '~118K drug-target pairs (from 2111×229 matrix), integrated binding score (DeepDTA-transformed)',
-        'transform': 'kiba',  # negate so higher = stronger binding
+        'description': '~118K drug-target pairs (from 2111×229 matrix), integrated binding score. '
+                       'DeepDTA Y matrix already has higher = stronger binding (range ~0-17).',
+        'transform': None,  # No transform needed — DeepDTA values are already affinity-scaled
+    },
+    'bindingdb_kd': {
+        'property': 'Kd binding affinity (pKd)',
+        'description': '~52K drug-target pairs (10,665 drugs × 1,413 proteins), Kd from BindingDB',
+        'transform': 'pkd',
+        'source': 'tdc',
     },
 }
 
@@ -84,11 +102,131 @@ def _download_deepdta(name: str, cache: Path) -> Tuple[dict, dict, np.ndarray]:
     return ligands, proteins, Y
 
 
+def _load_from_tdc(name_lower: str, info: dict, cache: Path) -> Tuple[List[str], List[str], np.ndarray, List[str], List[str]]:
+    """Load a DTA dataset from TDC (Therapeutics Data Commons).
+
+    Returns:
+        (drug_smiles, protein_seqs, labels, drug_ids, protein_ids)
+    """
+    cached = cache / f'{name_lower}_processed.npz'
+    cached_meta = cache / f'{name_lower}_meta.csv'
+
+    if cached.exists() and cached_meta.exists():
+        print(f"  Loading cached {name_lower} dataset...")
+        data = np.load(cached, allow_pickle=True)
+        meta_df = pd.read_csv(cached_meta)
+        # Ensure IDs are strings (pandas may read numeric IDs as float)
+        drug_ids = meta_df['Drug_ID'].fillna('unknown').astype(str).tolist()
+        target_ids = meta_df['Target_ID'].fillna('unknown').astype(str).tolist()
+        return (
+            meta_df['Drug'].tolist(),
+            meta_df['Target'].tolist(),
+            data['labels'],
+            drug_ids,
+            target_ids,
+        )
+
+    try:
+        from tdc.multi_pred import DTI
+    except ImportError:
+        raise ImportError("TDC required for BindingDB: pip install PyTDC")
+
+    # Map dataset names to TDC names
+    tdc_name_map = {
+        'bindingdb_kd': 'BindingDB_Kd',
+    }
+    tdc_name = tdc_name_map.get(name_lower, name_lower)
+
+    print(f"  Loading {tdc_name} from TDC...")
+    dti = DTI(name=tdc_name)
+    df = dti.get_data()
+
+    # TDC DTI columns: Drug, Target, Y, Drug_ID, Target_ID
+    df = df.dropna(subset=['Drug', 'Target', 'Y'])
+    df = df[df['Y'] > 0]  # Filter non-positive Kd values (can't log-transform)
+
+    drug_smiles = df['Drug'].tolist()
+    protein_seqs = df['Target'].tolist()
+    labels = df['Y'].values.astype(np.float64)
+
+    # Use TDC-provided IDs, or derive from unique values
+    if 'Drug_ID' in df.columns:
+        drug_ids = df['Drug_ID'].fillna('unknown').astype(str).tolist()
+    else:
+        unique_drugs = sorted(set(drug_smiles))
+        drug_map = {s: f'drug_{i}' for i, s in enumerate(unique_drugs)}
+        drug_ids = [drug_map[s] for s in drug_smiles]
+
+    if 'Target_ID' in df.columns:
+        # TDC BindingDB has NaN Target_IDs for some entries — derive from sequence
+        has_nan = df['Target_ID'].isna().any()
+        if has_nan:
+            # For entries with NaN Target_ID, use a hash of the protein sequence
+            seq_to_id = {}
+            for _, row in df.iterrows():
+                tid = row['Target_ID']
+                seq = row['Target']
+                if pd.notna(tid):
+                    seq_to_id[seq] = str(tid)
+                elif seq not in seq_to_id:
+                    seq_to_id[seq] = f'seq_{hash(seq) % 10**8}'
+            protein_ids = [seq_to_id[s] for s in protein_seqs]
+        else:
+            protein_ids = df['Target_ID'].astype(str).tolist()
+    else:
+        unique_prots = sorted(set(protein_seqs))
+        prot_map = {s: f'prot_{i}' for i, s in enumerate(unique_prots)}
+        protein_ids = [prot_map[s] for s in protein_seqs]
+
+    # Re-canonicalize SMILES
+    from rdkit import Chem
+    valid_mask = []
+    for i, smi in enumerate(drug_smiles):
+        mol = Chem.MolFromSmiles(smi)
+        if mol is not None:
+            drug_smiles[i] = Chem.MolToSmiles(mol, canonical=True)
+            valid_mask.append(True)
+        else:
+            valid_mask.append(False)
+
+    # Drop entries with invalid SMILES
+    if not all(valid_mask):
+        valid_mask = np.array(valid_mask)
+        n_invalid = (~valid_mask).sum()
+        drug_smiles = [s for s, v in zip(drug_smiles, valid_mask) if v]
+        protein_seqs = [s for s, v in zip(protein_seqs, valid_mask) if v]
+        drug_ids = [s for s, v in zip(drug_ids, valid_mask) if v]
+        protein_ids = [s for s, v in zip(protein_ids, valid_mask) if v]
+        labels = labels[valid_mask]
+        print(f"  Dropped {n_invalid} entries with invalid SMILES")
+
+    # Transform labels
+    if info['transform'] == 'pkd':
+        labels = -np.log10(labels / 1e9)
+
+    n_drugs = len(set(drug_ids))
+    n_proteins = len(set(protein_ids))
+    print(f"  Loaded from TDC: {len(labels)} pairs from "
+          f"{n_drugs} drugs × {n_proteins} proteins")
+
+    # Cache processed data
+    np.savez_compressed(cached, labels=labels)
+    pd.DataFrame({
+        'Drug': drug_smiles,
+        'Target': protein_seqs,
+        'Drug_ID': drug_ids,
+        'Target_ID': protein_ids,
+    }).to_csv(cached_meta, index=False)
+    print(f"  Cached to {cached}")
+
+    return drug_smiles, protein_seqs, labels, drug_ids, protein_ids
+
+
 def load_dataset(name: str) -> Dict:
     """Load a DTA benchmark dataset.
 
     Args:
-        name: 'davis' or 'kiba'
+        name: 'davis', 'kiba', or 'bindingdb_kd'
 
     Returns:
         dict with keys:
@@ -106,74 +244,81 @@ def load_dataset(name: str) -> Dict:
 
     info = _DATASETS[name_lower]
     cache = _cache_dir()
-    cached = cache / f'{name_lower}_processed.npz'
-    cached_meta = cache / f'{name_lower}_meta.csv'
 
-    if cached.exists() and cached_meta.exists():
-        print(f"  Loading cached {name_lower} dataset...")
-        data = np.load(cached, allow_pickle=True)
-        meta_df = pd.read_csv(cached_meta)
-        drug_smiles = meta_df['Drug'].tolist()
-        protein_seqs = meta_df['Target'].tolist()
-        labels = data['labels']
-        drug_ids = meta_df['Drug_ID'].tolist()
-        protein_ids = meta_df['Target_ID'].tolist()
+    # TDC-sourced datasets use a separate loader
+    if info.get('source') == 'tdc':
+        drug_smiles, protein_seqs, labels, drug_ids, protein_ids = \
+            _load_from_tdc(name_lower, info, cache)
     else:
-        ligands, proteins, Y = _download_deepdta(name_lower, cache)
+        # DeepDTA-sourced datasets (davis, kiba)
+        cached = cache / f'{name_lower}_processed.npz'
+        cached_meta = cache / f'{name_lower}_meta.csv'
 
-        drug_keys = list(ligands.keys())
-        protein_keys = list(proteins.keys())
+        if cached.exists() and cached_meta.exists():
+            print(f"  Loading cached {name_lower} dataset...")
+            data = np.load(cached, allow_pickle=True)
+            meta_df = pd.read_csv(cached_meta)
+            drug_smiles = meta_df['Drug'].tolist()
+            protein_seqs = meta_df['Target'].tolist()
+            labels = data['labels']
+            drug_ids = meta_df['Drug_ID'].tolist()
+            protein_ids = meta_df['Target_ID'].tolist()
+        else:
+            ligands, proteins, Y = _download_deepdta(name_lower, cache)
 
-        # Y matrix: rows = drugs, cols = proteins
-        assert Y.shape[0] == len(drug_keys), \
-            f"Y rows ({Y.shape[0]}) != drugs ({len(drug_keys)})"
-        assert Y.shape[1] == len(protein_keys), \
-            f"Y cols ({Y.shape[1]}) != proteins ({len(protein_keys)})"
+            drug_keys = list(ligands.keys())
+            protein_keys = list(proteins.keys())
 
-        # Flatten to pairs, skipping NaN (KIBA has 75% missing)
-        drug_smiles, protein_seqs, labels = [], [], []
-        drug_ids, protein_ids = [], []
+            # Y matrix: rows = drugs, cols = proteins
+            assert Y.shape[0] == len(drug_keys), \
+                f"Y rows ({Y.shape[0]}) != drugs ({len(drug_keys)})"
+            assert Y.shape[1] == len(protein_keys), \
+                f"Y cols ({Y.shape[1]}) != proteins ({len(protein_keys)})"
 
-        for i, dk in enumerate(drug_keys):
-            for j, pk in enumerate(protein_keys):
-                val = Y[i, j]
-                if np.isnan(val):
-                    continue
-                drug_smiles.append(ligands[dk])
-                protein_seqs.append(proteins[pk])
-                drug_ids.append(dk)
-                protein_ids.append(pk)
-                labels.append(val)
+            # Flatten to pairs, skipping NaN (KIBA has 75% missing)
+            drug_smiles, protein_seqs, labels = [], [], []
+            drug_ids, protein_ids = [], []
 
-        labels = np.array(labels, dtype=np.float64)
+            for i, dk in enumerate(drug_keys):
+                for j, pk in enumerate(protein_keys):
+                    val = Y[i, j]
+                    if np.isnan(val):
+                        continue
+                    drug_smiles.append(ligands[dk])
+                    protein_seqs.append(proteins[pk])
+                    drug_ids.append(dk)
+                    protein_ids.append(pk)
+                    labels.append(val)
 
-        # Re-canonicalize drug SMILES for consistency
-        from rdkit import Chem
-        for i, smi in enumerate(drug_smiles):
-            mol = Chem.MolFromSmiles(smi)
-            if mol is not None:
-                drug_smiles[i] = Chem.MolToSmiles(mol, canonical=True)
+            labels = np.array(labels, dtype=np.float64)
 
-        # Transform labels
-        if info['transform'] == 'pkd':
-            # DAVIS: Kd (nM) → pKd
-            labels = -np.log10(labels / 1e9)
-        elif info['transform'] == 'kiba':
-            # KIBA: negate so higher = stronger binding (like pKd)
-            labels = -labels
+            # Re-canonicalize drug SMILES for consistency
+            from rdkit import Chem
+            for i, smi in enumerate(drug_smiles):
+                mol = Chem.MolFromSmiles(smi)
+                if mol is not None:
+                    drug_smiles[i] = Chem.MolToSmiles(mol, canonical=True)
 
-        print(f"  Downloaded {name_lower}: {len(labels)} pairs from "
-              f"{len(drug_keys)} drugs × {len(protein_keys)} proteins")
+            # Transform labels
+            if info['transform'] == 'pkd':
+                # DAVIS: Kd (nM) → pKd
+                labels = -np.log10(labels / 1e9)
+            elif info['transform'] == 'kiba':
+                # KIBA: negate so higher = stronger binding (like pKd)
+                labels = -labels
 
-        # Cache processed data
-        np.savez_compressed(cached, labels=labels)
-        pd.DataFrame({
-            'Drug': drug_smiles,
-            'Target': protein_seqs,
-            'Drug_ID': drug_ids,
-            'Target_ID': protein_ids,
-        }).to_csv(cached_meta, index=False)
-        print(f"  Cached to {cached}")
+            print(f"  Downloaded {name_lower}: {len(labels)} pairs from "
+                  f"{len(drug_keys)} drugs × {len(protein_keys)} proteins")
+
+            # Cache processed data
+            np.savez_compressed(cached, labels=labels)
+            pd.DataFrame({
+                'Drug': drug_smiles,
+                'Target': protein_seqs,
+                'Drug_ID': drug_ids,
+                'Target_ID': protein_ids,
+            }).to_csv(cached_meta, index=False)
+            print(f"  Cached to {cached}")
 
     # Filter invalid entries
     valid = np.isfinite(labels)

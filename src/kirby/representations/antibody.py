@@ -242,11 +242,27 @@ def get_imgt_position_map(sequence: str) -> dict:
 
 # ── LM embeddings ────────────────────────────────────────────────────────────
 
-def _mean_pool(outputs, attention_mask):
-    """Mean-pool last hidden state over non-padding tokens."""
+def _mean_pool(outputs, attention_mask, exclude_bos=False, exclude_eos=False):
+    """Mean-pool last hidden state over non-padding tokens.
+
+    Args:
+        outputs: Model outputs with .last_hidden_state (B, L, D).
+        attention_mask: (B, L) attention mask.
+        exclude_bos: Zero out position 0 (BOS/CLS token) before pooling.
+        exclude_eos: Zero out last non-pad position (EOS/SEP) before pooling.
+    """
     import torch
     hidden = outputs.last_hidden_state  # (B, L, D)
-    mask = attention_mask.unsqueeze(-1).float()  # (B, L, 1)
+    mask = attention_mask.clone()
+    if exclude_eos:
+        # Find EOS position from ORIGINAL mask (before BOS zeroing)
+        for j in range(mask.shape[0]):
+            n_tokens = attention_mask[j].sum().item()  # use original, not clone
+            if n_tokens > 0:
+                mask[j, int(n_tokens) - 1] = 0
+    if exclude_bos:
+        mask[:, 0] = 0
+    mask = mask.unsqueeze(-1).float()  # (B, L, 1)
     pooled = (hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
     return pooled.cpu().numpy()
 
@@ -299,7 +315,8 @@ def _embed_single_chain_model(
                                truncation=True, max_length=512).to(device)
             with torch.no_grad():
                 outputs = model(**inputs)
-            all_embs.append(_mean_pool(outputs, inputs['attention_mask']))
+            all_embs.append(_mean_pool(outputs, inputs['attention_mask'],
+                                       exclude_bos=True, exclude_eos=True))
         return np.vstack(all_embs)
 
     h_embs = _embed_seqs(heavy_seqs)
@@ -354,7 +371,9 @@ def embed_prot_t5(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
                                truncation=True, max_length=512).to(device)
             with torch.no_grad():
                 outputs = model(**inputs)
-            all_embs.append(_mean_pool(outputs, inputs['attention_mask']))
+            # T5: no BOS token, only EOS (</s>)
+            all_embs.append(_mean_pool(outputs, inputs['attention_mask'],
+                                       exclude_bos=False, exclude_eos=True))
         return np.vstack(all_embs)
 
     h_embs = _embed_seqs(heavy_seqs)
@@ -416,7 +435,39 @@ def embed_igbert(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
                            truncation=True, max_length=512).to(device)
         with torch.no_grad():
             outputs = model(**inputs)
-        all_embs.append(_mean_pool(outputs, inputs['attention_mask']))
+        all_embs.append(_mean_pool(outputs, inputs['attention_mask'],
+                                   exclude_bos=True, exclude_eos=True))
+
+    return np.vstack(all_embs).astype(np.float32)
+
+
+def embed_igbert_cls(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """IgBert [CLS] pooling variant → (N, 768).
+
+    Extracts position-0 hidden state ([CLS] token) instead of mean-pooling.
+    Useful comparison: [CLS] captures global sequence representation
+    without dilution from padding/separator tokens.
+    """
+    import torch
+    from transformers import AutoTokenizer, AutoModel
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model_name = 'Exscientia/IgBert'
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModel.from_pretrained(model_name).eval().to(device)
+    batch_size = 8
+    all_embs = []
+
+    for start in range(0, len(heavy_seqs), batch_size):
+        h_batch = heavy_seqs[start:start + batch_size]
+        l_batch = light_seqs[start:start + batch_size]
+        inputs = tokenizer(h_batch, l_batch, return_tensors='pt', padding=True,
+                           truncation=True, max_length=512).to(device)
+        with torch.no_grad():
+            outputs = model(**inputs)
+        # Extract [CLS] token (position 0)
+        cls_emb = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+        all_embs.append(cls_emb)
 
     return np.vstack(all_embs).astype(np.float32)
 
@@ -452,8 +503,8 @@ def embed_esmc(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
                 protein_tensor = model.encode(protein)
                 with torch.no_grad():
                     output = model.logits(protein_tensor, config)
-                # output.embeddings: (1, L, 1152) — mean-pool over residues
-                emb = output.embeddings.mean(dim=1).squeeze(0).cpu().numpy()
+                # output.embeddings: (1, L, 1152) — mean-pool excluding BOS/EOS
+                emb = output.embeddings[:, 1:-1, :].mean(dim=1).squeeze(0).cpu().numpy()
                 batch_embs.append(emb)
             all_embs.append(np.vstack(batch_embs))
         return np.vstack(all_embs)
@@ -607,6 +658,217 @@ def embed_esmc_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
     return np.hstack([h_embs, l_embs]).astype(np.float32)
 
 
+# ── ESM3 (multimodal protein LM, 1536D per chain) ────────────────────────────
+
+
+def embed_esm3(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """ESM3 embeddings: H+L concatenated → (N, 3072).
+
+    ESM3 is a multimodal protein language model from EvolutionaryScale that
+    reasons over sequence, structure, and function simultaneously.
+    Uses the same `esm` package as ESM-C.
+
+    Requires: pip install esm (Python >= 3.10)
+    """
+    import torch
+    from esm.models.esm3 import ESM3
+    from esm.sdk.api import ESMProtein, LogitsConfig
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = ESM3.from_pretrained("esm3_sm_open_v1").to(device)
+    model.eval()
+
+    config = LogitsConfig(sequence=True, return_embeddings=True)
+
+    def _embed_seqs(seqs):
+        all_embs = []
+        for seq in seqs:
+            try:
+                protein = ESMProtein(sequence=seq)
+                protein_tensor = model.encode(protein)
+                with torch.no_grad():
+                    output = model.logits(protein_tensor, config)
+                # output.embeddings: (1, L, 1536) — mean-pool excluding BOS/EOS
+                emb = output.embeddings[:, 1:-1, :].mean(dim=1).squeeze(0).cpu().numpy()
+                all_embs.append(emb)
+            except Exception as e:
+                print(f"    WARNING: ESM3 failed on seq (len={len(seq)}): {e}")
+                all_embs.append(np.zeros(1536, dtype=np.float32))
+        return np.vstack(all_embs)
+
+    h_embs = _embed_seqs(heavy_seqs)
+    l_embs = _embed_seqs(light_seqs)
+    return np.hstack([h_embs, l_embs]).astype(np.float32)
+
+
+def embed_esm3_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """ESM3 CDR-only pooled: H+L concatenated → (N, 3072)."""
+    import torch
+    from esm.models.esm3 import ESM3
+    from esm.sdk.api import ESMProtein, LogitsConfig
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = ESM3.from_pretrained("esm3_sm_open_v1").to(device)
+    model.eval()
+
+    config = LogitsConfig(sequence=True, return_embeddings=True)
+
+    def _embed_seqs(seqs):
+        all_cdr_indices = [get_cdr_residue_indices(s) for s in seqs]
+        all_embs = []
+        for i, seq in enumerate(seqs):
+            try:
+                protein = ESMProtein(sequence=seq)
+                protein_tensor = model.encode(protein)
+                with torch.no_grad():
+                    output = model.logits(protein_tensor, config)
+                # CDR-pool over embeddings (1, L, 1536)
+                emb = _cdr_pool(output.embeddings, [all_cdr_indices[i]])[0]
+                all_embs.append(emb)
+            except Exception as e:
+                print(f"    WARNING: ESM3 CDR failed on seq (len={len(seq)}): {e}")
+                all_embs.append(np.zeros(1536, dtype=np.float32))
+        return np.vstack(all_embs)
+
+    h_embs = _embed_seqs(heavy_seqs)
+    l_embs = _embed_seqs(light_seqs)
+    return np.hstack([h_embs, l_embs]).astype(np.float32)
+
+
+# ── SaProt (structure-aware protein LM, 1280D per chain) ─────────────────────
+
+
+def embed_saprot(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """SaProt 650M embeddings: H+L concatenated → (N, 2560).
+
+    SaProt uses Foldseek 3Di structural tokens interleaved with amino acid
+    sequences. 3Di tokens are predicted using ProstT5 (pure Python).
+
+    Requires: pip install transformers
+    Models: westlake-repl/SaProt_650M_AF2 (~2.5GB), Rostlab/ProstT5 (~5.5GB)
+    """
+    import torch
+    import kirby.representations.protein as _prot_mod
+    from kirby.representations.protein import _predict_3di_with_prostt5, _interleave_aa_3di
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    # Predict 3Di for all chains at once
+    all_seqs = list(heavy_seqs) + list(light_seqs)
+    all_3di = _predict_3di_with_prostt5(all_seqs, device)
+    h_3di = all_3di[:len(heavy_seqs)]
+    l_3di = all_3di[len(heavy_seqs):]
+
+    # Interleave AA + 3Di
+    h_sa = [_interleave_aa_3di(s.upper().strip(), di) for s, di in zip(heavy_seqs, h_3di)]
+    l_sa = [_interleave_aa_3di(s.upper().strip(), di) for s, di in zip(light_seqs, l_3di)]
+
+    # Load SaProt model (reuse singleton from protein.py)
+    if _prot_mod._SAPROT_MODEL is None:
+        from transformers import EsmTokenizer, EsmModel
+        print("  Loading SaProt (westlake-repl/SaProt_650M_AF2)...")
+        _prot_mod._SAPROT_TOKENIZER = EsmTokenizer.from_pretrained(
+            'westlake-repl/SaProt_650M_AF2'
+        )
+        _prot_mod._SAPROT_MODEL = EsmModel.from_pretrained(
+            'westlake-repl/SaProt_650M_AF2'
+        ).to(device).eval()
+
+    model = _prot_mod._SAPROT_MODEL
+    tokenizer = _prot_mod._SAPROT_TOKENIZER
+
+    def _embed_seqs(sa_seqs):
+        all_embs = []
+        for sa_seq in sa_seqs:
+            try:
+                inputs = tokenizer(
+                    sa_seq, return_tensors='pt', padding=False,
+                    truncation=True, max_length=2048,
+                ).to(device)
+                with torch.no_grad():
+                    outputs = model(**inputs)
+                emb = outputs.last_hidden_state[:, 1:-1, :].mean(dim=1)
+                all_embs.append(emb.squeeze(0).cpu().numpy())
+            except Exception as e:
+                print(f"    WARNING: SaProt failed: {e}")
+                all_embs.append(np.zeros(1280, dtype=np.float32))
+        return np.vstack(all_embs)
+
+    h_embs = _embed_seqs(h_sa)
+    l_embs = _embed_seqs(l_sa)
+    return np.hstack([h_embs, l_embs]).astype(np.float32)
+
+
+def embed_saprot_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """SaProt 650M CDR-only pooled: H+L concatenated → (N, 2560).
+
+    SaProt tokenizer maps each AA+3Di pair to one token, so token positions
+    correspond 1:1 with residue positions (same CDR index mapping as ESM-2).
+    """
+    import torch
+    import kirby.representations.protein as _prot_mod
+    from kirby.representations.protein import _predict_3di_with_prostt5, _interleave_aa_3di
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    # Predict 3Di for all chains at once
+    all_seqs = list(heavy_seqs) + list(light_seqs)
+    all_3di = _predict_3di_with_prostt5(all_seqs, device)
+    h_3di = all_3di[:len(heavy_seqs)]
+    l_3di = all_3di[len(heavy_seqs):]
+
+    # Interleave AA + 3Di
+    h_sa = [_interleave_aa_3di(s.upper().strip(), di) for s, di in zip(heavy_seqs, h_3di)]
+    l_sa = [_interleave_aa_3di(s.upper().strip(), di) for s, di in zip(light_seqs, l_3di)]
+
+    # Load SaProt model (reuse singleton from protein.py)
+    if _prot_mod._SAPROT_MODEL is None:
+        from transformers import EsmTokenizer, EsmModel
+        print("  Loading SaProt (westlake-repl/SaProt_650M_AF2)...")
+        _prot_mod._SAPROT_TOKENIZER = EsmTokenizer.from_pretrained(
+            'westlake-repl/SaProt_650M_AF2'
+        )
+        _prot_mod._SAPROT_MODEL = EsmModel.from_pretrained(
+            'westlake-repl/SaProt_650M_AF2'
+        ).to(device).eval()
+
+    model = _prot_mod._SAPROT_MODEL
+    tokenizer = _prot_mod._SAPROT_TOKENIZER
+
+    def _embed_seqs(sa_seqs, orig_seqs):
+        all_cdr_indices = [get_cdr_residue_indices(s) for s in orig_seqs]
+        all_embs = []
+        for i, sa_seq in enumerate(sa_seqs):
+            try:
+                inputs = tokenizer(
+                    sa_seq, return_tensors='pt', padding=False,
+                    truncation=True, max_length=2048,
+                ).to(device)
+                with torch.no_grad():
+                    outputs = model(**inputs)
+                # CDR-pool: token positions = residue positions for SaProt
+                emb = _cdr_pool(outputs.last_hidden_state, [all_cdr_indices[i]])[0]
+                all_embs.append(emb)
+            except Exception as e:
+                print(f"    WARNING: SaProt CDR failed: {e}")
+                all_embs.append(np.zeros(1280, dtype=np.float32))
+        return np.vstack(all_embs)
+
+    h_embs = _embed_seqs(h_sa, heavy_seqs)
+    l_embs = _embed_seqs(l_sa, light_seqs)
+    return np.hstack([h_embs, l_embs]).astype(np.float32)
+
+
+# ── MINT (protein foundation model, 1280D per chain) ────────────────────────
+
+def embed_mint(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """MINT embeddings: H+L concatenated -> (N, 2560). 1280D per chain."""
+    from kirby.representations.protein import create_mint_protein_embeddings
+    h_embs = create_mint_protein_embeddings(heavy_seqs)
+    l_embs = create_mint_protein_embeddings(light_seqs)
+    return np.hstack([h_embs, l_embs]).astype(np.float32)
+
+
 # ── Intermediate layer extraction ────────────────────────────────────────────
 
 
@@ -669,6 +931,176 @@ def embed_esm2_midlayers(heavy_seqs: List[str], light_seqs: List[str]) -> np.nda
     )
 
 
+def embed_esm2_layer24(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """ESM-2 650M single layer 24: H+L → (N, 2560).
+
+    Literature suggests middle-late layers capture the best fitness-relevant
+    signal for unsupervised variant effect prediction. Layer 24 of 33
+    is in the sweet spot between task-specific final layers and generic early layers.
+    """
+    return _embed_single_chain_midlayers(
+        heavy_seqs, light_seqs,
+        'facebook/esm2_t33_650M_UR50D',
+        layer_start=24, layer_end=24,
+    )
+
+
+def embed_esm2_early(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """ESM-2 650M early layers averaged (layers 0-16): H+L → (N, 2560).
+
+    Early layers capture different information than late layers — more local,
+    syntax-level patterns vs. global evolutionary signal. Gives the hybrid
+    search a complementary ESM-2 representation.
+    """
+    return _embed_single_chain_midlayers(
+        heavy_seqs, light_seqs,
+        'facebook/esm2_t33_650M_UR50D',
+        layer_start=0, layer_end=16,
+    )
+
+
+# ── ESM-2 concat-chain (paired-aware) ────────────────────────────────────────
+
+
+def embed_esm2_concat(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """ESM-2 concat-chain: embed H+L as a single sequence → (N, 1280).
+
+    Instead of embedding H and L separately and concatenating (losing
+    cross-chain context), concatenates the sequences and passes them
+    through ESM-2 as one input. Typical VH+VL = ~230 residues, well
+    within ESM-2's 1022-token limit.
+
+    Returns 1280D (single embedding, not H+L concat).
+    """
+    import torch
+    from transformers import AutoTokenizer, AutoModel
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model_name = 'facebook/esm2_t33_650M_UR50D'
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModel.from_pretrained(model_name).eval().to(device)
+    batch_size = 8
+
+    # Concatenate H+L into single sequences
+    concat_seqs = [h + l for h, l in zip(heavy_seqs, light_seqs)]
+
+    all_embs = []
+    for start in range(0, len(concat_seqs), batch_size):
+        batch = concat_seqs[start:start + batch_size]
+        inputs = tokenizer(batch, return_tensors='pt', padding=True,
+                           truncation=True, max_length=1022).to(device)
+        with torch.no_grad():
+            outputs = model(**inputs)
+        all_embs.append(_mean_pool(outputs, inputs['attention_mask'],
+                                   exclude_bos=True, exclude_eos=True))
+
+    del model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return np.vstack(all_embs).astype(np.float32)
+
+
+# ── ESM-2 CDR3-only pooling ──────────────────────────────────────────────────
+
+
+def get_cdr3_residue_indices(sequence: str) -> List[int]:
+    """Get 0-based residue indices of CDR3 positions (IMGT 105-117) using ANARCI.
+
+    CDR3 is the most variable region and most important for binding specificity.
+    Falls back to full pooling if ANARCI fails.
+    """
+    try:
+        from anarci import anarci as run_anarci
+    except ImportError:
+        return list(range(len(sequence)))
+
+    results = run_anarci([('q', sequence)], scheme='imgt')
+    numbering = results[0]
+
+    if not numbering or not numbering[0]:
+        return list(range(len(sequence)))
+
+    positions = numbering[0][0][0]
+
+    cdr3_lo, cdr3_hi = 105, 117
+    cdr3_indices = []
+    raw_idx = 0
+    for (pos_num, _insertion), aa in positions:
+        if aa == '-':
+            continue
+        if cdr3_lo <= pos_num <= cdr3_hi:
+            cdr3_indices.append(raw_idx)
+        raw_idx += 1
+
+    if not cdr3_indices:
+        return list(range(len(sequence)))
+
+    return cdr3_indices
+
+
+def embed_esm2_cdr3(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """ESM-2 CDR3-only pooled: H+L concatenated → (N, 2560).
+
+    Pools ESM-2 per-residue embeddings only over CDR3 residues (IMGT 105-117).
+    CDR3 is the most variable region and dominant determinant of binding
+    specificity. Complementary to full CDR pooling (CDR1+2+3).
+    """
+    import torch
+    from transformers import AutoTokenizer, AutoModel
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model_name = 'facebook/esm2_t33_650M_UR50D'
+    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+    model = AutoModel.from_pretrained(model_name, trust_remote_code=True).eval().to(device)
+    batch_size = 8
+
+    def _embed_seqs(seqs):
+        all_cdr3_indices = [get_cdr3_residue_indices(s) for s in seqs]
+        all_embs = []
+        for start in range(0, len(seqs), batch_size):
+            batch = seqs[start:start + batch_size]
+            batch_cdr3 = all_cdr3_indices[start:start + batch_size]
+            inputs = tokenizer(batch, return_tensors='pt', padding=True,
+                               truncation=True, max_length=512).to(device)
+            with torch.no_grad():
+                outputs = model(**inputs)
+            all_embs.append(_cdr_pool(outputs.last_hidden_state, batch_cdr3))
+        return np.vstack(all_embs)
+
+    h_embs = _embed_seqs(heavy_seqs)
+    l_embs = _embed_seqs(light_seqs)
+
+    del model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return np.hstack([h_embs, l_embs]).astype(np.float32)
+
+
+# ── Ab-RoBERTa (mogam-ai/Ab-RoBERTa) ────────────────────────────────────────
+
+
+def embed_abroberta(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """Ab-RoBERTa embeddings: H+L concatenated → (N, 1536).
+
+    Ab-RoBERTa is a RoBERTa-based antibody language model (125M params)
+    trained on antibody sequences. Uses standard HuggingFace transformers API.
+
+    HF model: mogam-ai/Ab-RoBERTa
+    """
+    return _embed_single_chain_model(
+        heavy_seqs, light_seqs,
+        'mogam-ai/Ab-RoBERTa',
+    )
+
+
+def embed_abroberta_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """Ab-RoBERTa CDR-only pooled: H+L concatenated → (N, 1536)."""
+    return _embed_single_chain_cdr(
+        heavy_seqs, light_seqs,
+        'mogam-ai/Ab-RoBERTa',
+    )
+
+
 # ── AMPLIFY 350M ──────────────────────────────────────────────────────────────
 
 
@@ -692,6 +1124,71 @@ def embed_amplify_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarra
     return _embed_single_chain_cdr(
         heavy_seqs, light_seqs,
         'chandar-lab/AMPLIFY_350M',
+    )
+
+
+def embed_igt5(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """IgT5 paired embeddings → (N, 1024).
+
+    IgT5 is a T5-based paired antibody language model from Exscientia.
+    Uses T5EncoderModel (encoder-only) for embedding extraction.
+
+    Input format: space-separated residues, chains joined by ' </s> '.
+    Pooling: mean over non-special tokens (excludes separator and EOS).
+
+    Requires: pip install transformers sentencepiece
+    HF model: Exscientia/IgT5
+    """
+    import torch
+    from transformers import T5Tokenizer, T5EncoderModel
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model_name = 'Exscientia/IgT5'
+    tokenizer = T5Tokenizer.from_pretrained(model_name, do_lower_case=False)
+    model = T5EncoderModel.from_pretrained(model_name).eval().to(device)
+    batch_size = 4  # T5 is larger than BERT
+
+    all_embs = []
+
+    for start in range(0, len(heavy_seqs), batch_size):
+        h_batch = heavy_seqs[start:start + batch_size]
+        l_batch = light_seqs[start:start + batch_size]
+        # IgT5 expects: space-separated AAs, chains joined by ' </s> '
+        paired = [
+            ' '.join(list(h)) + ' </s> ' + ' '.join(list(l))
+            for h, l in zip(h_batch, l_batch)
+        ]
+        inputs = tokenizer(
+            paired, return_tensors='pt', padding=True,
+            truncation=True, max_length=512,
+            add_special_tokens=True,
+            return_special_tokens_mask=True,
+        ).to(device)
+        with torch.no_grad():
+            outputs = model(**inputs)
+        # Pool over non-special tokens (excludes </s> separator + final EOS)
+        hidden = outputs.last_hidden_state  # (B, L, 1024)
+        special_mask = inputs['special_tokens_mask']  # 1 = special, 0 = residue
+        residue_mask = (1 - special_mask).unsqueeze(-1).float()  # (B, L, 1)
+        pooled = (hidden * residue_mask).sum(dim=1) / residue_mask.sum(dim=1).clamp(min=1)
+        all_embs.append(pooled.cpu().numpy())
+
+    return np.vstack(all_embs).astype(np.float32)
+
+
+def embed_s2alm(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """S2ALM (Structure and Sequence Aligned Language Model) embeddings.
+
+    S2ALM is an ESM-2 architecture model jointly trained on protein
+    structure and sequence. Produces 2560D embeddings (H+L concat).
+
+    NOTE: This function is a stub — S2ALM weights may not be publicly
+    available. Will raise NotImplementedError until weights are confirmed.
+    """
+    raise NotImplementedError(
+        "S2ALM weights are not yet publicly available. "
+        "This rep is blocked until weights are confirmed on HuggingFace or "
+        "another public source. See ISSUES.md Phase 4A."
     )
 
 
@@ -918,11 +1415,66 @@ def embed_esm2_per_region(heavy_seqs: List[str], light_seqs: List[str]) -> np.nd
 
 # ── Registry ──────────────────────────────────────────────────────────────────
 
+# =============================================================================
+# PER-FOLD FACTORIES (no data leakage — fit on train, transform both)
+# =============================================================================
+
+
+def make_esm2_entropy_factory(heavy_seqs: List[str], light_seqs: List[str]):
+    """Factory for per-fold ESM-2 entropy-guided pooling (no data leakage).
+
+    Computes positional entropy on training sequences only per fold,
+    then pools ESM-2 per-residue embeddings at the top-20 variable positions.
+
+    Returns:
+        Callable: factory(train_idx, val_idx, train_labels) -> (train, val)
+    """
+    def factory(train_idx, val_idx, train_labels):
+        def _process_chain(sequences, all_indices, train_idx, val_idx):
+            if not sequences or all(s == '' for s in sequences):
+                n_total = len(train_idx) + len(val_idx)
+                return (np.zeros((len(train_idx), 1280), dtype=np.float32),
+                        np.zeros((len(val_idx), 1280), dtype=np.float32))
+
+            # Extract per-residue ESM-2 for ALL sequences (expensive, do once)
+            token_embs = _extract_per_residue_esm2_chain(sequences)
+
+            # Compute IMGT position maps for ALL sequences
+            pos_maps = [get_imgt_position_map(s) for s in sequences]
+
+            # Compute entropy on TRAINING sequences only (prevents leakage)
+            train_seqs = [sequences[i] for i in train_idx]
+            train_pos_maps = [pos_maps[i] for i in train_idx]
+            entropy_map = _compute_entropy_from_maps(train_seqs, train_pos_maps)
+
+            # Pool both train and val using train-derived entropy
+            def _pool_subset(indices):
+                pooled = []
+                for i in indices:
+                    top_indices = _get_top_k_variable_indices(
+                        pos_maps[i], entropy_map, k=20,
+                        seq_len=token_embs[i].shape[0])
+                    pooled.append(_pool_indices(token_embs[i], top_indices))
+                return np.vstack(pooled)
+
+            return _pool_subset(train_idx), _pool_subset(val_idx)
+
+        h_train, h_val = _process_chain(heavy_seqs, None, train_idx, val_idx)
+        l_train, l_val = _process_chain(light_seqs, None, train_idx, val_idx)
+
+        train_embs = np.hstack([h_train, l_train]).astype(np.float32)
+        val_embs = np.hstack([h_val, l_val]).astype(np.float32)
+        return train_embs, val_embs
+
+    return factory
+
+
 ANTIBODY_REPS = {
     'esm2': embed_esm2,                # 2560D
     'esmc': embed_esmc,                # 2304D
     'ablang2': embed_ablang2,           # 768D
     'igbert': embed_igbert,             # 768D
+    'igbert_cls': embed_igbert_cls,     # 768D ([CLS] pooling)
     'antiberty': embed_antiberty,       # 1024D
     'prot_t5': embed_prot_t5,           # 2048D
     'onehot': onehot_encode,            # 5600D
@@ -938,21 +1490,47 @@ ANTIBODY_REPS = {
     # AMPLIFY 350M (Mila/Chandar Lab)
     'amplify': embed_amplify,                # 1920D (960 × 2)
     'amplify_cdr': embed_amplify_cdr,        # 1920D (CDR-pooled)
+    # IgT5 (Exscientia, T5-based paired antibody LM)
+    'igt5': embed_igt5,                      # paired T5 encoder
     # Structural (from structural.py, requires ImmuneBuilder for full 28D)
     'structural': embed_structural,          # 28D (SASA + confidence + paratope)
     'paratope': embed_paratope,              # 8D (sequence-based, no deps)
+    # ESM3 (EvolutionaryScale, multimodal, 1536D per chain)
+    'esm3': embed_esm3,                      # 3072D (1536 × 2)
+    'esm3_cdr': embed_esm3_cdr,              # 3072D (CDR-pooled)
+    # SaProt (structure-aware, ProstT5 for 3Di, 1280D per chain)
+    'saprot': embed_saprot,                  # 2560D (1280 × 2)
+    'saprot_cdr': embed_saprot_cdr,          # 2560D (CDR-pooled)
+    # MINT (protein foundation model, 1280D per chain)
+    'mint': embed_mint,                      # 2560D (1280 × 2)
     # Entropy/region-aware pooling
     'esm2_entropy_top20': embed_esm2_entropy_top20,  # 2560D
     'esm2_per_cdr': embed_esm2_per_cdr,              # 7680D
     'esm2_per_region': embed_esm2_per_region,        # 17920D
+    # ESM-2 layer selection variants (Issue 26)
+    'esm2_layer24': embed_esm2_layer24,              # 2560D (single layer 24)
+    'esm2_early': embed_esm2_early,                  # 2560D (layers 0-16 avg)
+    # ESM-2 paired-aware and CDR3-only
+    'esm2_concat': embed_esm2_concat,                # 1280D (H+L as single seq)
+    'esm2_cdr3': embed_esm2_cdr3,                    # 2560D (CDR3-only pooled)
+    # Ab-RoBERTa (mogam-ai, RoBERTa-based, 768D per chain)
+    'abroberta': embed_abroberta,                    # 1536D (768 × 2)
+    'abroberta_cdr': embed_abroberta_cdr,            # 1536D (CDR-pooled)
 }
 
 # LM reps (require GPU / torch / transformers)
 ANTIBODY_LM_REPS = {
-    'esm2', 'esmc', 'ablang2', 'igbert', 'antiberty', 'prot_t5',
+    'esm2', 'esmc', 'ablang2', 'igbert', 'igbert_cls', 'antiberty', 'prot_t5',
     'esm2_cdr', 'esmc_cdr', 'antiberty_cdr', 'prot_t5_cdr',
     'esm2_midlayers', 'amplify', 'amplify_cdr',
+    'igt5',
+    'esm3', 'esm3_cdr',
+    'saprot', 'saprot_cdr',
+    'mint',
     'esm2_entropy_top20', 'esm2_per_cdr', 'esm2_per_region',
+    'esm2_layer24', 'esm2_early',
+    'esm2_concat', 'esm2_cdr3',
+    'abroberta', 'abroberta_cdr',
 }
 
 # Structural reps (require ImmuneBuilder + biopython, CPU-heavy)
