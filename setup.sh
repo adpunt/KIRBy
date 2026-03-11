@@ -70,8 +70,9 @@ if [ -n "$TORCH_LIB" ] && [ -d "$TORCH_LIB" ]; then
     export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$TORCH_LIB"
 fi
 
-# Install kirby package (editable)
-pip install --quiet $CONSTRAINTS -e . 2>/dev/null || true
+# Install kirby package (editable) with all domain extras into the venv.
+# The extras install torch, transformers, scanpy, gseapy, etc.
+pip install --quiet $CONSTRAINTS -e ".[qsar,antibody,tcga,finetune,dta,reaction]" 2>/dev/null || true
 
 # Only install packages if not already present — avoids breaking torch-cluster/PyG
 _install_if_missing() {
@@ -112,9 +113,8 @@ _install_if_missing polaris polaris-lib
 
 # --- Phase 4A: Forward compatibility models ---
 _install_if_missing minimol minimol
-# MINT: requires manual install (git+https://github.com/EMCarrami/MINT.git)
-# MolE: requires manual install (git+https://github.com/recursionpharma/mole.git)
-# GP-MoLFormer: auto-downloads from HF, no extra pip install needed
+_install_if_missing mint "git+https://github.com/EMCarrami/MINT.git"
+_install_if_missing mole "git+https://github.com/recursionpharma/mole.git"
 
 # Molecular reps: CLAMP, R-MAT
 CLAMP_DIR="${SCRIPT_DIR}/src/clamp"
