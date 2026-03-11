@@ -35,7 +35,8 @@ from find_best_hybrid_molecular import (
     load_dataset, assign_scaffold_groups, _rep_cache_path, REP_PRESETS
 )
 
-ALL_DATASETS = ['logd', 'caco2', 'herg', 'qm9']
+ALL_DATASETS = ['logd', 'caco2', 'herg', 'qm9',
+                'adme_hlm', 'adme_rlm', 'adme_mdr1', 'adme_solubility']
 ALL_REPS = REP_PRESETS['all'] + ['chemformer']
 
 

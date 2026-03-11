@@ -72,6 +72,17 @@ setup(
             "mol2vec>=0.1",
         ],
 
+        # Forward compatibility models (Phase 4)
+        "forward_compat": [
+            "minimol",
+            "boltz",
+            # GP-MoLFormer, IgT5: covered by transformers + sentencepiece
+            # MolE: pip install git+https://github.com/recursionpharma/mole.git
+            # MINT: pip install git+https://github.com/EMCarrami/MINT.git
+            # ESM3: covered by esm package (same as ESM-C)
+            # SaProt: uses transformers (HF) + ProstT5 for 3Di tokens
+        ],
+
         # =================================================================
         # USE CASE BUNDLES
         # =================================================================
@@ -80,9 +91,15 @@ setup(
         "qsar-minimal": [
             "xgboost>=1.5.0",
             "lightgbm>=3.0.0",
+            "catboost>=1.0.0",
         ],
 
-        # Full QSAR: transformers + GNNs + GP models
+        # Polaris Hub datasets (ADME-Fang benchmarks)
+        "polaris": [
+            "polaris-lib>=0.13.0",
+        ],
+
+        # Full QSAR: transformers + GNNs + GP models + descriptors
         "qsar": [
             "torch>=2.0.0",
             "torch-geometric>=2.3.0",
@@ -96,6 +113,8 @@ setup(
             "grakel>=0.1.8",
             "xgboost>=1.5.0",
             "lightgbm>=3.0.0",
+            "catboost>=1.0.0",
+            "mordred>=1.2.0",
         ],
 
         # Uncertainty quantification
@@ -140,6 +159,12 @@ setup(
             "PyTDC>=0.4.0",
         ],
 
+        # Reaction yield prediction (BH, Suzuki)
+        "reaction": [
+            "drfp",
+            "rxnfp>=0.0.7",
+        ],
+
         # TCGA genomics / histopathology
         "tcga": [
             "scanpy>=1.9.0",
@@ -148,6 +173,7 @@ setup(
             "decoupler>=1.4.0",
             "requests>=2.26.0",
             "combat",  # pyComBat for batch correction across TSS sites
+            "SigProfilerAssignment>=0.1.0",  # COSMIC mutational signatures
         ],
 
         # Medical imaging / genomics
@@ -167,7 +193,7 @@ setup(
         "finetune": [
             "torch>=2.0.0",
             "transformers>=4.41.0",
-            "peft>=0.7.0",
+            "peft>=0.7.0,<0.13",
             "accelerate>=0.25.0",
             "bitsandbytes>=0.41.0",
         ],

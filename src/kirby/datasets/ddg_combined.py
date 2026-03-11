@@ -3,17 +3,31 @@ Combined ΔΔG Dataset — SKEMPI 2.0 + AB-Bind, deduplicated.
 
 Merges two public antibody-antigen ΔΔG databases:
   - SKEMPI 2.0: ~5,000 entries across diverse protein-protein interfaces
-    (filtered to Ab-Ag only, with proper mutation parsing and DDG computation)
+    (filtered to Ab-Ag only by default; set ab_ag_only=False for full PP data)
   - AB-Bind: ~754 entries across 32 Ab-Ag complexes (direct DDG measurements)
 
 Deduplication uses (PDB_ID, sorted normalized mutations) as key, preferring
 AB-Bind's direct DDG measurements over SKEMPI's Kd-derived values on conflict.
+
+Full SKEMPI (ab_ag_only=False):
+  - Includes ALL protein-protein interfaces (~7085 entries before filtering)
+  - Barnase-barstar, T4 lysozyme, thrombin inhibitors, enzymes, etc.
+  - ~6x more data than Ab-Ag filtered subset
+  - Protein sequences returned as heavy_seqs (chain 1) and light_seqs (chain 2)
+  - Intended as an EXPERIMENT: does training on more diverse PP data help?
+  - Non-antibody sequences will not benefit from antibody-specific LM reps.
+
+AbDesign DDG (load_abdesign_ddg):
+  - Stub loader — AbDesign CDR-H3 benchmark data is not in a canonical public
+    repository. Raises AbDesignDataNotAvailableError with instructions.
 
 References:
 - Jankauskaitė et al. (2019) "SKEMPI 2.0: an updated benchmark of changes in
   protein–protein binding energy, kinetics and thermodynamics upon mutation"
 - Sirin et al. (2016) "AB-Bind: Antibody binding mutational database for
   computational affinity predictions"
+- Goldenzweig et al. (2016) "Automated Structure-Based Design of a New ABDesign
+  Library for CDR-H3 Engineering"
 """
 
 import math
@@ -96,7 +110,7 @@ def _is_abag_entry(row: pd.Series) -> bool:
     has_ab = any(kw in all_text for kw in _AB_KEYWORDS)
     has_ag = any(kw in all_text for kw in _AG_KEYWORDS)
 
-    return has_ab or has_ag
+    return has_ab and has_ag
 
 
 def _identify_ab_chains_skempi(
@@ -209,13 +223,16 @@ def _normalize_mutation_key(
 
     Maps raw chain IDs to 'heavy'/'light' roles so SKEMPI and AB-Bind entries
     with different chain naming but same PDB/mutations are recognized as duplicates.
+    h_chain/l_chain can be single chain IDs ('H') or comma-separated ('A,B').
     """
+    h_chains = set(h_chain.split(',')) if h_chain else set()
+    l_chains = set(l_chain.split(',')) if l_chain else set()
     normalized = []
     for m in mutations:
         raw_chain = m['chain']
-        if raw_chain == h_chain or raw_chain == 'H':
+        if raw_chain in h_chains or raw_chain == 'H':
             role = 'heavy'
-        elif raw_chain == l_chain or raw_chain == 'L':
+        elif raw_chain in l_chains or raw_chain == 'L':
             role = 'light'
         else:
             role = raw_chain  # non-antibody or unknown
@@ -275,7 +292,8 @@ def _process_skempi_entries(df: pd.DataFrame) -> List[Dict]:
             try:
                 kd_mut = float(row.get('Affinity_mut_parsed', np.nan))
                 kd_wt = float(row.get('Affinity_wt_parsed', np.nan))
-                temp = float(row.get('Temperature', 298.15))
+                temp_raw = row.get('Temperature', 298.15)
+                temp = float(temp_raw) if pd.notna(temp_raw) else 298.15
                 if np.isfinite(kd_mut) and np.isfinite(kd_wt):
                     ddg = _compute_ddg(kd_mut, kd_wt, temp)
             except (ValueError, TypeError):
@@ -414,12 +432,211 @@ def _process_skempi_entries(df: pd.DataFrame) -> List[Dict]:
             'ddg': ddg,
             'heavy_seq': mut_heavy,
             'light_seq': mut_light,
+            'wt_heavy': wt_heavy,
+            'wt_light': wt_light,
             'mutation_records': mutation_records,
             'source': 'skempi',
             'dedup_key': dedup_key,
         })
 
     print(f"  SKEMPI: {len(entries)} valid Ab-Ag entries, {n_skipped} skipped")
+    return entries
+
+
+def _process_skempi_all_entries(df: pd.DataFrame) -> List[Dict]:
+    """Process ALL SKEMPI 2.0 entries (protein-protein, not just Ab-Ag).
+
+    Unlike _process_skempi_entries(), this function does NOT require H/L chain
+    assignment. It processes ANY protein-protein complex:
+      - chain1_seq: sequence from the first chain group (returned as 'heavy_seq')
+      - chain2_seq: sequence from the second chain group (returned as 'light_seq')
+      - mutations are applied to whichever chain they fall on
+
+    This is intended for the full-SKEMPI experiment where non-antibody PP
+    interactions (barnase-barstar, T4-lysozyme, etc.) are included to increase
+    training data diversity.
+
+    Returns entries with the same key structure as _process_skempi_entries()
+    so they can be directly used in load_ddg_combined_dataset().
+    """
+    entries = []
+    pdb_cache = {}
+    n_skipped = 0
+
+    for _, row in df.iterrows():
+        pdb_field = str(row.get('#Pdb', '')).strip()
+        parts = pdb_field.split('_')
+        if len(parts) < 3:
+            n_skipped += 1
+            continue
+
+        pdb_id = parts[0].upper()
+        if len(parts) == 3:
+            group1_chains = set(parts[1])
+            group2_chains = set(parts[2])
+        else:
+            # Multi-char groups: split last _ as group2, rest as group1
+            group1_chains = set(''.join(parts[1:-1]))
+            group2_chains = set(parts[-1])
+
+        mutation_str = str(row.get('Mutation(s)_cleaned', row.get('Mutation(s)_PDB', '')))
+        parsed_muts = _parse_skempi_mutations(mutation_str)
+        if not parsed_muts:
+            n_skipped += 1
+            continue
+
+        # Compute DDG
+        ddg = None
+        for col in ['DDG', 'ddG']:
+            if col in row.index:
+                try:
+                    val = float(row[col])
+                    if np.isfinite(val):
+                        ddg = val
+                        break
+                except (ValueError, TypeError):
+                    pass
+
+        if ddg is None:
+            try:
+                kd_mut = float(row.get('Affinity_mut_parsed', np.nan))
+                kd_wt = float(row.get('Affinity_wt_parsed', np.nan))
+                temp_raw = row.get('Temperature', 298.15)
+                temp = float(temp_raw) if pd.notna(temp_raw) else 298.15
+                if np.isfinite(kd_mut) and np.isfinite(kd_wt):
+                    ddg = _compute_ddg(kd_mut, kd_wt, temp)
+            except (ValueError, TypeError):
+                pass
+
+        if ddg is None:
+            n_skipped += 1
+            continue
+
+        # Determine which chains are mutated
+        all_ab_chains = group1_chains | group2_chains
+        mutated_chains = set(m['chain'] for m in parsed_muts)
+        relevant_chains = mutated_chains & all_ab_chains
+        if not relevant_chains:
+            n_skipped += 1
+            continue
+
+        # Cache PDB data: extract sequences for both chain groups
+        if pdb_id not in pdb_cache:
+            try:
+                pdb_path = download_pdb(pdb_id)
+
+                seqs = {}
+                resnum_maps = {}
+                for chain_id in all_ab_chains:
+                    try:
+                        seqs[chain_id] = extract_chain_sequence(pdb_path, chain_id)
+                        resnum_maps[chain_id] = build_pdb_resnum_mapping(pdb_path, chain_id)
+                    except (ValueError, KeyError):
+                        seqs[chain_id] = ''
+
+                if not any(seqs.values()):
+                    pdb_cache[pdb_id] = None
+                else:
+                    # Assign "heavy" = first chain group (concatenated), "light" = second
+                    def _concat_seqs(chains):
+                        return ''.join(seqs.get(c, '') for c in sorted(chains))
+
+                    pdb_cache[pdb_id] = {
+                        'pdb_path': pdb_path,
+                        'seqs': seqs,
+                        'resnum_maps': resnum_maps,
+                        'group1_chains': group1_chains,
+                        'group2_chains': group2_chains,
+                        'wt_heavy': _concat_seqs(group1_chains),
+                        'wt_light': _concat_seqs(group2_chains),
+                    }
+            except Exception as e:
+                print(f"    WARNING: SKEMPI (full) PDB {pdb_id}: {e}")
+                pdb_cache[pdb_id] = None
+
+        cached = pdb_cache.get(pdb_id)
+        if cached is None:
+            n_skipped += 1
+            continue
+
+        seqs = cached['seqs']
+        resnum_maps = cached['resnum_maps']
+        wt_heavy = cached['wt_heavy']
+        wt_light = cached['wt_light']
+        g1_chains = cached['group1_chains']
+        g2_chains = cached['group2_chains']
+
+        # Apply mutations to respective chain sequences
+        # We track per-chain mutant sequences separately, then concatenate
+        mut_seq_per_chain = {c: seqs.get(c, '') for c in all_ab_chains}
+        mutation_records = []
+        valid = True
+
+        for m in parsed_muts:
+            chain = m['chain']
+            if chain not in mut_seq_per_chain or chain not in resnum_maps:
+                continue  # skip antigen-side mutations silently
+
+            resnum_map = resnum_maps[chain]
+            resnum = m['resnum']
+            if resnum not in resnum_map:
+                valid = False
+                break
+
+            seq_pos = resnum_map[resnum]
+            cur_seq = mut_seq_per_chain[chain]
+            if seq_pos >= len(cur_seq) or cur_seq[seq_pos] != m['wt_aa']:
+                valid = False
+                break
+
+            try:
+                mut_seq_per_chain[chain] = apply_mutation(cur_seq, seq_pos, m['mut_aa'])
+            except (ValueError, IndexError):
+                valid = False
+                break
+
+            role = 'heavy' if chain in g1_chains else 'light'
+            mutation_records.append({
+                'pos': seq_pos,
+                'wt_aa': m['wt_aa'],
+                'mut_aa': m['mut_aa'],
+                'chain': role,
+                'pdb': pdb_id,
+            })
+
+        if not valid or not mutation_records:
+            n_skipped += 1
+            continue
+
+        # Build mutant concatenated sequences for each group
+        def _concat_mut(chains):
+            return ''.join(mut_seq_per_chain.get(c, seqs.get(c, '')) for c in sorted(chains))
+
+        mut_heavy = _concat_mut(g1_chains)
+        mut_light = _concat_mut(g2_chains)
+
+        # For dedup with AB-Bind: map group1 chains → 'heavy', group2 → 'light'
+        # so mutation keys like 'H:Y27A' match AB-Bind's 'heavy:Y27A'
+        h_for_dedup = ','.join(sorted(g1_chains))
+        l_for_dedup = ','.join(sorted(g2_chains))
+        dedup_key = _normalize_mutation_key(pdb_id, parsed_muts,
+                                            h_for_dedup, l_for_dedup)
+
+        entries.append({
+            'pdb_id': pdb_id,
+            'h_chain': h_for_dedup,
+            'l_chain': l_for_dedup,
+            'ddg': ddg,
+            'heavy_seq': mut_heavy,
+            'light_seq': mut_light,
+            'wt_heavy': wt_heavy,
+            'wt_light': wt_light,
+            'mutation_records': mutation_records,
+            'source': 'skempi_full',
+            'dedup_key': dedup_key,
+        })
+
+    print(f"  SKEMPI (full PP): {len(entries)} valid entries, {n_skipped} skipped")
     return entries
 
 
@@ -570,6 +787,8 @@ def _process_abbind_entries() -> List[Dict]:
             'ddg': ddg,
             'heavy_seq': mut_heavy,
             'light_seq': mut_light,
+            'wt_heavy': wt_heavy,
+            'wt_light': wt_light,
             'mutation_records': mutation_records,
             'source': 'abbind',
             'dedup_key': dedup_key,
@@ -579,7 +798,11 @@ def _process_abbind_entries() -> List[Dict]:
     return entries
 
 
-def load_ddg_combined_dataset(max_samples: int = 5000) -> Dict:
+def load_ddg_combined_dataset(
+    max_samples: int = 5000,
+    augment_reverse: bool = False,
+    ab_ag_only: bool = True,
+) -> Dict:
     """Load merged SKEMPI 2.0 + AB-Bind ΔΔG dataset with deduplication.
 
     Deduplication key: (PDB_ID, sorted normalized mutations).
@@ -587,20 +810,39 @@ def load_ddg_combined_dataset(max_samples: int = 5000) -> Dict:
 
     Args:
         max_samples: Subsample to this size if exceeded.
+        augment_reverse: If True, add reverse mutations (WT→MUT becomes MUT→WT
+            with negated DDG). Roughly doubles training data. Forward+reverse
+            pairs share the same pdb_id so GroupKFold keeps them together.
+        ab_ag_only: If True (default), filter SKEMPI to antibody-antigen
+            complexes only. If False, include ALL protein-protein SKEMPI
+            entries (~6x more data: barnase-barstar, T4 lysozyme, etc.).
+            NOTE: AB-Bind entries are always Ab-Ag regardless of this flag.
+            EXPERIMENT OPTION: non-Ab sequences will not benefit from
+            antibody-specific LM representations.
 
     Returns:
         dict with keys: heavy_seqs, light_seqs, labels, task_type,
             wildtype_heavy, wildtype_light, mutations, is_intra_family,
             property_name.
     """
-    print("  Loading combined ΔΔG dataset (SKEMPI 2.0 + AB-Bind)...")
+    if ab_ag_only:
+        print("  Loading combined ΔΔG dataset (SKEMPI 2.0 Ab-Ag + AB-Bind)...")
+    else:
+        print("  Loading combined ΔΔG dataset (SKEMPI 2.0 ALL PP + AB-Bind) "
+              "[ab_ag_only=False]...")
 
     # Download and filter SKEMPI
     skempi_df = _download_skempi()
-    skempi_abag = skempi_df[skempi_df.apply(_is_abag_entry, axis=1)].copy()
-    print(f"  SKEMPI: {len(skempi_abag)}/{len(skempi_df)} entries are Ab-Ag")
 
-    skempi_entries = _process_skempi_entries(skempi_abag)
+    if ab_ag_only:
+        skempi_subset = skempi_df[skempi_df.apply(_is_abag_entry, axis=1)].copy()
+        print(f"  SKEMPI: {len(skempi_subset)}/{len(skempi_df)} entries are Ab-Ag")
+        skempi_entries = _process_skempi_entries(skempi_subset)
+    else:
+        print(f"  SKEMPI: using all {len(skempi_df)} protein-protein entries "
+              f"(ab_ag_only=False)")
+        skempi_entries = _process_skempi_all_entries(skempi_df)
+
     abbind_entries = _process_abbind_entries()
 
     # Deduplicate: AB-Bind preferred over SKEMPI on conflict
@@ -623,10 +865,10 @@ def load_ddg_combined_dataset(max_samples: int = 5000) -> Dict:
           f"({len(skempi_entries)} SKEMPI + {len(abbind_entries)} AB-Bind "
           f"- {n_overlap} overlap)")
 
-    # Assemble output arrays
     entries_list = list(combined.values())
 
-    # Remove extreme ddG outliers (> 3 std from mean, or |ddG| > 8 kcal/mol)
+    # Remove extreme ddG outliers BEFORE augmentation (filter on real data,
+    # then augment the filtered set to avoid asymmetric pair removal)
     ddg_values = np.array([e['ddg'] for e in entries_list])
     mu, sigma = ddg_values.mean(), ddg_values.std()
     keep = [(abs(v - mu) < 3 * sigma and abs(v) <= 8.0) for v in ddg_values]
@@ -635,6 +877,40 @@ def load_ddg_combined_dataset(max_samples: int = 5000) -> Dict:
         entries_list = [e for e, k in zip(entries_list, keep) if k]
         print(f"  Outlier filter: removed {n_outliers} entries "
               f"(|ddG|>8 or >3σ from mean)")
+
+    # Reverse mutation augmentation AFTER outlier filtering
+    if augment_reverse:
+        n_before = len(entries_list)
+        reverse_entries = []
+        for entry in entries_list:
+            wt_h = entry.get('wt_heavy', '')
+            wt_l = entry.get('wt_light', '')
+            if not wt_h and not wt_l:
+                continue
+            rev_records = []
+            for mr in entry['mutation_records']:
+                rev_records.append({
+                    'pos': mr['pos'],
+                    'wt_aa': mr['mut_aa'],
+                    'mut_aa': mr['wt_aa'],
+                    'chain': mr['chain'],
+                    'pdb': mr['pdb'],
+                })
+            reverse_entries.append({
+                'pdb_id': entry['pdb_id'],  # same PDB → GroupKFold keeps together
+                'h_chain': entry['h_chain'],
+                'l_chain': entry['l_chain'],
+                'ddg': -entry['ddg'],
+                'heavy_seq': wt_h,
+                'light_seq': wt_l,
+                'wt_heavy': entry['heavy_seq'],
+                'wt_light': entry['light_seq'],
+                'mutation_records': rev_records,
+                'source': entry['source'] + '_rev',
+                'dedup_key': entry['dedup_key'] + ('_rev',),
+            })
+        entries_list.extend(reverse_entries)
+        print(f"  Reverse augmentation: {n_before} → {len(entries_list)} entries")
 
     all_heavy_seqs = []
     all_light_seqs = []
@@ -668,6 +944,7 @@ def load_ddg_combined_dataset(max_samples: int = 5000) -> Dict:
             light_seqs = [light_seqs[i] for i in idx]
         labels = labels[idx]
         all_mutations = [all_mutations[i] for i in idx]
+        all_pdb_ids = [all_pdb_ids[i] for i in idx]
 
     print(f"  Final: {len(all_heavy_seqs)} entries")
     print(f"  ΔΔG range: [{labels.min():.3f}, {labels.max():.3f}] kcal/mol, "
@@ -693,3 +970,113 @@ def assign_complex_groups(pdb_ids: List[str]) -> Tuple[np.ndarray, int]:
     pdb_to_id = {p: i for i, p in enumerate(unique_pdbs)}
     groups = np.array([pdb_to_id[p] for p in pdb_ids])
     return groups, len(unique_pdbs)
+
+
+# ---------------------------------------------------------------------------
+# AbDesign stub
+# ---------------------------------------------------------------------------
+
+class AbDesignDataNotAvailableError(Exception):
+    """Raised when AbDesign DDG data is requested but cannot be located."""
+
+
+def load_abdesign_ddg(data_dir=None) -> Dict:
+    """Load AbDesign CDR-H3 mutant ΔΔG dataset — STUB.
+
+    The AbDesign dataset contains ~658 CDR-H3 mutants with experimentally
+    measured binding affinities from the Rosetta-guided antibody design
+    pipeline. It is used as an independent held-out test set for DDG
+    prediction because its PDB structures do NOT overlap with SKEMPI 2.0
+    or AB-Bind.
+
+    Data availability:
+        The data has been referenced in several papers but is NOT available
+        in a canonical public repository with a stable download URL.
+
+        Possible sources (as of 2026):
+          1. Supplementary data of Goldenzweig et al. (2016) PNAS:
+             https://www.pnas.org/doi/10.1073/pnas.1605871113
+          2. The AbBiBench benchmark repository (if released):
+             Search: https://github.com/search?q=AbBiBench
+          3. The original AbDesign paper by Lapidoth et al. (2015):
+             https://doi.org/10.1002/prot.24779
+
+    To use this dataset once you have the data:
+        1. Place a CSV at: <data_dir>/abdesign_ddg/abdesign.csv
+        2. Required columns:
+             - heavy_seq: mutant VH sequence
+             - light_seq: mutant VL sequence (or empty string)
+             - wt_heavy: wildtype VH sequence
+             - wt_light: wildtype VL sequence (or empty string)
+             - ddg: ΔΔG in kcal/mol (positive = destabilizing)
+             - pdb_id: PDB ID of the parent structure
+        3. Replace this stub with a loader following load_ddg_combined_dataset().
+
+    Args:
+        data_dir: Override cache directory (default: /Volumes/seagate or ~/.cache).
+
+    Raises:
+        AbDesignDataNotAvailableError: Always (this is a stub).
+    """
+    cache = Path(data_dir) if data_dir else _cache_dir()
+    csv_path = cache / 'abdesign_ddg' / 'abdesign.csv'
+
+    if csv_path.exists():
+        # If the user has placed their data, load it
+        return _load_abdesign_from_csv(csv_path)
+
+    raise AbDesignDataNotAvailableError(
+        "AbDesign CDR-H3 ΔΔG data not found.\n\n"
+        "The AbDesign dataset is NOT available in a canonical public repository. "
+        "Possible sources:\n"
+        "  1. Goldenzweig et al. (2016) PNAS supplementary:\n"
+        "     https://www.pnas.org/doi/10.1073/pnas.1605871113\n"
+        "  2. Lapidoth et al. (2015) Proteins:\n"
+        "     https://doi.org/10.1002/prot.24779\n"
+        "  3. AbBiBench benchmark repository (if publicly released):\n"
+        "     https://github.com/search?q=AbBiBench\n\n"
+        "Once you have the data, place a CSV at:\n"
+        f"  {csv_path}\n\n"
+        "Required CSV columns: heavy_seq, light_seq, wt_heavy, wt_light, "
+        "ddg, pdb_id"
+    )
+
+
+def _load_abdesign_from_csv(csv_path: Path) -> Dict:
+    """Load AbDesign ΔΔG data from a user-provided CSV.
+
+    Called automatically by load_abdesign_ddg() if the CSV exists.
+    """
+    df = pd.read_csv(csv_path)
+
+    required = {'heavy_seq', 'ddg', 'pdb_id'}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(
+            f"AbDesign CSV at {csv_path} is missing required columns: {missing}\n"
+            f"Available columns: {list(df.columns)}"
+        )
+
+    df = df.dropna(subset=['heavy_seq', 'ddg']).copy()
+
+    heavy_seqs = list(df['heavy_seq'].astype(str))
+    light_seqs = list(df.get('light_seq', '').fillna('').astype(str)) \
+        if 'light_seq' in df.columns else [''] * len(heavy_seqs)
+    labels = df['ddg'].values.astype(np.float64)
+    pdb_ids = list(df['pdb_id'].astype(str))
+
+    print(f"  AbDesign: {len(heavy_seqs)} entries loaded from {csv_path}")
+    print(f"  ΔΔG range: [{labels.min():.3f}, {labels.max():.3f}] kcal/mol")
+
+    return {
+        'heavy_seqs': heavy_seqs,
+        'light_seqs': light_seqs if any(s for s in light_seqs) else None,
+        'labels': labels,
+        'task_type': 'regression',
+        'wildtype_heavy': None,
+        'wildtype_light': None,
+        'mutations': None,
+        'is_intra_family': False,
+        'property_name': 'ΔΔG (kcal/mol)',
+        'pdb_ids': pdb_ids,
+    }

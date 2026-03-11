@@ -36,11 +36,12 @@ from datetime import datetime
 ROOT = Path(__file__).resolve().parent.parent
 
 # All molecular datasets
-ALL_DATASETS = ['logd', 'caco2', 'herg', 'qm9']
+ALL_DATASETS = ['logd', 'caco2', 'herg', 'qm9',
+                'adme_hlm', 'adme_rlm', 'adme_mdr1', 'adme_solubility']
 
 # Reps in the 'all' preset + chemformer (implemented but not in preset)
 ALL_REPS = [
-    'ecfp4', 'maccs', 'pdv', 'mol2vec', 'chemberta', 'molformer',
+    'ecfp4', 'maccs', 'pdv', 'mordred', 'mol2vec', 'chemberta', 'molformer',
     'selformer', 'chembert', 'molclr', 'graphmvp', 'smited',
     'mhg_gnn', 'grover', 'graph_kernel', 'schnet', 'chemformer'
 ]
@@ -48,7 +49,7 @@ ALL_REPS = [
 # Per-rep timeout tiers (seconds)
 REP_TIMEOUTS = {
     # Fast CPU fingerprints
-    'ecfp4': 600, 'maccs': 600, 'pdv': 600,
+    'ecfp4': 600, 'maccs': 600, 'pdv': 600, 'mordred': 3600,
     # HF transformers (auto-download, GPU helps)
     'chemberta': 1800, 'molformer': 1800, 'selformer': 1800, 'chembert': 1800,
     # Fast CPU
@@ -147,7 +148,7 @@ def main():
         description="Precache molecular reps in isolated subprocesses"
     )
     parser.add_argument("dataset", nargs='?', default=None,
-                        help="Dataset name (logd, caco2, herg, qm9)")
+                        help="Dataset name (logd, caco2, herg, qm9, adme_hlm, adme_rlm, adme_mdr1, adme_solubility)")
     parser.add_argument("--all-datasets", action="store_true",
                         help="Run all 4 molecular datasets")
     parser.add_argument("--reps", type=str, default=None,

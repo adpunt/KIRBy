@@ -20,6 +20,13 @@ Product ECFP4:
 
 Reactant ECFP4:
   OR-combined Morgan fingerprint of all reactants.
+
+RXNFP:
+  Learned reaction fingerprints from IBM's RXNBERT (256D).
+  Schwaller et al., Nature Machine Intelligence 2021.
+
+One-Hot Components:
+  One-hot encoding of factorial reaction components (categorical baseline).
 """
 
 import numpy as np
@@ -176,4 +183,64 @@ def create_reactant_ecfp4(rxn_smiles: List[str], n_bits: int = 2048) -> np.ndarr
                 DataStructs.ConvertToNumpyArray(fp, arr)
                 combined = np.maximum(combined, arr)  # OR combination
         X[i] = combined
+    return X
+
+
+def create_rxnfp(rxn_smiles: List[str]) -> np.ndarray:
+    """Generate learned reaction fingerprints via IBM's RXNBERT (256D).
+
+    Transformer-based fingerprints trained on ~1M reactions.
+    Schwaller et al., Nature Machine Intelligence 2021.
+
+    Args:
+        rxn_smiles: Reaction SMILES in 'reactants>>products' format.
+
+    Returns:
+        np.ndarray of shape (n_reactions, 256), float32.
+
+    Requires: pip install rxnfp
+    Note: Auto-downloads HuggingFace model on first use (~500MB).
+    """
+    from rxnfp.transformer_fingerprints import (
+        RXNBERTFingerprintGenerator, get_default_model_and_tokenizer,
+    )
+    model, tokenizer = get_default_model_and_tokenizer()
+    gen = RXNBERTFingerprintGenerator(model, tokenizer)
+    from tqdm import tqdm
+    fps = [gen.convert(rxn) for rxn in tqdm(rxn_smiles, desc='rxnfp')]
+    return np.array(fps, dtype=np.float32)
+
+
+def create_onehot_components(components: List[Dict[str, str]]) -> np.ndarray:
+    """One-hot encode reaction components (categorical baseline).
+
+    Encodes the factorial structure of HTE datasets (e.g. 15 aryl_halides ×
+    4 ligands × 3 bases × 23 additives for Buchwald-Hartwig). No external deps.
+
+    Args:
+        components: List of dicts with component SMILES/names as values.
+            Keys must be consistent across all entries.
+
+    Returns:
+        np.ndarray of shape (n_reactions, sum_of_vocab_sizes), float32.
+    """
+    if not components:
+        raise ValueError("Empty components list")
+
+    keys = sorted(components[0].keys())
+    vocabs = {}
+    for key in keys:
+        unique_vals = sorted(set(comp.get(key, '') for comp in components))
+        vocabs[key] = {val: i for i, val in enumerate(unique_vals)}
+
+    total_dim = sum(len(v) for v in vocabs.values())
+    X = np.zeros((len(components), total_dim), dtype=np.float32)
+    offset = 0
+    for key in keys:
+        vocab = vocabs[key]
+        for i, comp in enumerate(components):
+            val = comp.get(key, '')
+            if val in vocab:
+                X[i, offset + vocab[val]] = 1.0
+        offset += len(vocab)
     return X

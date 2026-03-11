@@ -41,8 +41,10 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
+from scipy.stats import pearsonr, spearmanr
 from sklearn.metrics import (
     accuracy_score,
+    f1_score,
     mean_absolute_error,
     mean_squared_error,
     r2_score,
@@ -115,12 +117,32 @@ class SearchResult:
 # METRIC ABSTRACTION
 # =============================================================================
 
+def _concordance_index(y_true, y_pred):
+    """Concordance index (CI) — standard DTA metric. O(n²), fine for CV folds."""
+    y_true = np.asarray(y_true).ravel()
+    y_pred = np.asarray(y_pred).ravel()
+    n = len(y_true)
+    concordant = discordant = 0
+    for i in range(n):
+        for j in range(i + 1, n):
+            if y_true[i] == y_true[j]:
+                continue
+            concordant += (y_true[i] - y_true[j]) * (y_pred[i] - y_pred[j]) > 0
+            discordant += (y_true[i] - y_true[j]) * (y_pred[i] - y_pred[j]) < 0
+    total = concordant + discordant
+    return concordant / total if total > 0 else 0.5
+
+
 BUILTIN_METRICS = {
-    'r2':       (r2_score, False),
-    'rmse':     (lambda y, p: np.sqrt(mean_squared_error(y, p)), True),
-    'mae':      (mean_absolute_error, True),
-    'accuracy': (accuracy_score, False),
-    'auc':      (roc_auc_score, False),
+    'r2':          (r2_score, False),
+    'rmse':        (lambda y, p: np.sqrt(mean_squared_error(y, p)), True),
+    'mae':         (mean_absolute_error, True),
+    'accuracy':    (accuracy_score, False),
+    'auc':         (roc_auc_score, False),
+    'spearman':    (lambda y, p: float(spearmanr(y, p)[0]), False),
+    'pearson':     (lambda y, p: float(pearsonr(y, p)[0]), False),
+    'ci':          (_concordance_index, False),
+    'f1_weighted': (lambda y, p: f1_score(y, p, average='weighted'), False),
 }
 
 
@@ -214,6 +236,59 @@ def _get_lgbm_classifier():
                                       random_state=42, n_jobs=-1)
 
 
+def _get_catboost_regressor():
+    try:
+        from catboost import CatBoostRegressor
+        return CatBoostRegressor(
+            iterations=500, learning_rate=0.1, depth=6, verbose=0,
+            random_seed=42)
+    except ImportError:
+        return _get_lgbm_regressor()
+
+
+def _get_catboost_classifier():
+    try:
+        from catboost import CatBoostClassifier
+        return CatBoostClassifier(
+            iterations=500, learning_rate=0.1, depth=6, verbose=0,
+            random_seed=42)
+    except ImportError:
+        return _get_lgbm_classifier()
+
+
+def _get_gp_regressor():
+    from sklearn.gaussian_process import GaussianProcessRegressor
+    from sklearn.gaussian_process.kernels import RBF, WhiteKernel
+    return GaussianProcessRegressor(
+        kernel=RBF() + WhiteKernel(), n_restarts_optimizer=3, random_state=42)
+
+
+def _get_gp_classifier():
+    from sklearn.gaussian_process import GaussianProcessClassifier
+    from sklearn.gaussian_process.kernels import RBF
+    return GaussianProcessClassifier(kernel=RBF(), random_state=42)
+
+
+def _get_dnn_regressor():
+    from kirby.models.dnn import DNNRegressor
+    return DNNRegressor()
+
+
+def _get_dnn_classifier():
+    from kirby.models.dnn import DNNClassifier
+    return DNNClassifier()
+
+
+def _get_cnn_regressor():
+    from kirby.models.cnn import CNNRegressor
+    return CNNRegressor()
+
+
+def _get_cnn_classifier():
+    from kirby.models.cnn import CNNClassifier
+    return CNNClassifier()
+
+
 DEFAULT_MODELS = {
     'rf': {
         'regressor': lambda: __import__('sklearn.ensemble', fromlist=['RandomForestRegressor']).RandomForestRegressor(
@@ -249,14 +324,38 @@ DEFAULT_MODELS = {
     },
     'mlp': {
         'regressor': lambda: __import__('sklearn.neural_network', fromlist=['MLPRegressor']).MLPRegressor(
-            hidden_layer_sizes=(100, 50), random_state=42, max_iter=500),
+            hidden_layer_sizes=(256,), random_state=42, max_iter=500,
+            early_stopping=True, validation_fraction=0.1),
         'classifier': lambda: __import__('sklearn.neural_network', fromlist=['MLPClassifier']).MLPClassifier(
-            hidden_layer_sizes=(100, 50), random_state=42, max_iter=500),
+            hidden_layer_sizes=(256,), random_state=42, max_iter=500,
+            early_stopping=True, validation_fraction=0.1),
         'tier': 'long',
     },
     'svm': {
         'regressor': lambda: __import__('sklearn.svm', fromlist=['SVR']).SVR(),
         'classifier': lambda: __import__('sklearn.svm', fromlist=['SVC']).SVC(),
+        'tier': 'long',
+        '_max_samples': 10000,
+    },
+    'gp': {
+        'regressor': _get_gp_regressor,
+        'classifier': _get_gp_classifier,
+        'tier': 'long',
+        '_max_samples': 5000,
+    },
+    'catboost': {
+        'regressor': _get_catboost_regressor,
+        'classifier': _get_catboost_classifier,
+        'tier': 'long',
+    },
+    'dnn': {
+        'regressor': _get_dnn_regressor,
+        'classifier': _get_dnn_classifier,
+        'tier': 'long',
+    },
+    'cnn': {
+        'regressor': _get_cnn_regressor,
+        'classifier': _get_cnn_classifier,
         'tier': 'long',
     },
 }
@@ -265,7 +364,8 @@ DEFAULT_MODELS = {
 _TIER_ORDER = {'fast': 0, 'medium': 1, 'long': 2}
 
 
-def _resolve_models(models, task_type: str, speed: str) -> Dict[str, Any]:
+def _resolve_models(models, task_type: str, speed: str,
+                     n_samples: Optional[int] = None) -> Dict[str, Any]:
     """Resolve model spec to dict of {name: sklearn_model_instance}.
 
     models can be:
@@ -273,15 +373,25 @@ def _resolve_models(models, task_type: str, speed: str) -> Dict[str, Any]:
     - List[str]: lookup by name
     - Dict[str, model]: custom models (passthrough)
     - Single model instance: wrap as {'custom': model}
+
+    Models with _max_samples are auto-skipped when n_samples exceeds the limit.
     """
     key = 'classifier' if task_type == 'classification' else 'regressor'
     max_tier = _TIER_ORDER.get(speed, 2)
+
+    def _check_max_samples(name, spec):
+        max_s = spec.get('_max_samples')
+        if max_s is not None and n_samples is not None and n_samples > max_s:
+            print(f"  Skipping {name}: n_samples={n_samples} > _max_samples={max_s}")
+            return False
+        return True
 
     if models is None:
         resolved = {}
         for name, spec in DEFAULT_MODELS.items():
             if _TIER_ORDER.get(spec['tier'], 0) <= max_tier:
-                resolved[name] = spec[key]()
+                if _check_max_samples(name, spec):
+                    resolved[name] = spec[key]()
         return resolved
 
     if isinstance(models, list):
@@ -292,7 +402,8 @@ def _resolve_models(models, task_type: str, speed: str) -> Dict[str, Any]:
                     f"Unknown model '{name}'. "
                     f"Available: {list(DEFAULT_MODELS.keys())}"
                 )
-            resolved[name] = DEFAULT_MODELS[name][key]()
+            if _check_max_samples(name, DEFAULT_MODELS[name]):
+                resolved[name] = DEFAULT_MODELS[name][key]()
         return resolved
 
     if isinstance(models, dict):
@@ -306,6 +417,35 @@ def _resolve_models(models, task_type: str, speed: str) -> Dict[str, Any]:
         f"models must be None, list of names, dict of models, or a single model. "
         f"Got {type(models)}"
     )
+
+
+def get_model(name: str, task_type: str = 'regression',
+              n_samples: Optional[int] = None) -> Any:
+    """Return a fresh model instance from DEFAULT_MODELS.
+
+    Returns None (with warning) if n_samples exceeds the model's _max_samples.
+    Useful for survey scripts to avoid duplicating model definitions.
+
+    Args:
+        name: Model name (e.g. 'ridge', 'gp', 'dnn').
+        task_type: 'regression' or 'classification'.
+        n_samples: Dataset size — models with _max_samples auto-skip if exceeded.
+
+    Returns:
+        Model instance, or None if skipped due to size guard.
+    """
+    if name not in DEFAULT_MODELS:
+        raise ValueError(
+            f"Unknown model '{name}'. Available: {list(DEFAULT_MODELS.keys())}")
+
+    spec = DEFAULT_MODELS[name]
+    max_s = spec.get('_max_samples')
+    if max_s is not None and n_samples is not None and n_samples > max_s:
+        print(f"  Skipping {name}: n_samples={n_samples} > _max_samples={max_s}")
+        return None
+
+    key = 'classifier' if task_type == 'classification' else 'regressor'
+    return spec[key]()
 
 
 def _detect_task_type(labels: np.ndarray) -> str:
@@ -346,7 +486,7 @@ _HP_SEARCH_SPACES = {
         'weights': ['uniform', 'distance'],
     },
     'mlp': {
-        'hidden_layer_sizes': [(64,), (100,), (100, 50), (200, 100)],
+        'hidden_layer_sizes': [(128,), (256,), (256, 128), (512,)],
         'alpha': [0.0001, 0.001, 0.01],
         'learning_rate_init': [0.001, 0.01],
     },
@@ -354,7 +494,25 @@ _HP_SEARCH_SPACES = {
         'C': [0.1, 1, 10, 100],
         'gamma': ['scale', 'auto'],
     },
+    'gp': {
+        'kernel': [
+            __import__('sklearn.gaussian_process.kernels', fromlist=['RBF']).RBF(),
+            __import__('sklearn.gaussian_process.kernels', fromlist=['RBF', 'WhiteKernel']).RBF()
+            + __import__('sklearn.gaussian_process.kernels', fromlist=['WhiteKernel']).WhiteKernel(),
+            __import__('sklearn.gaussian_process.kernels', fromlist=['Matern']).Matern(nu=1.5),
+            __import__('sklearn.gaussian_process.kernels', fromlist=['Matern']).Matern(nu=2.5),
+        ],
+        'alpha': [1e-10, 1e-5, 1e-2, 0.1],
+    },
+    'catboost': {
+        'iterations': [200, 500, 1000],
+        'depth': [4, 6, 8],
+        'learning_rate': [0.01, 0.05, 0.1],
+        'l2_leaf_reg': [1, 3, 5, 10],
+    },
     # ridge: skip — uses RidgeCV/LogisticRegressionCV internally
+    # dnn: skip — too slow for RandomizedSearchCV
+    # cnn: skip — too slow for RandomizedSearchCV
 }
 
 
@@ -403,9 +561,8 @@ def tune_models(
         task_type = _detect_task_type(labels)
 
     # Concatenate all base reps into a single feature matrix
+    # NOTE: scaling is done inside Pipeline per CV fold (no pre-scaling leakage)
     X = np.hstack([base_reps[name] for name in sorted(base_reps.keys())])
-    scaler = StandardScaler()
-    X = scaler.fit_transform(X)
     y = labels
 
     # Build CV splitter
@@ -427,8 +584,9 @@ def tune_models(
     else:
         scoring = 'r2'
 
-    # Resolve which models to tune
-    default_models = _resolve_models(None, task_type, speed)
+    # Resolve which models to tune (pass n_samples for size guards)
+    default_models = _resolve_models(None, task_type, speed,
+                                      n_samples=len(y))
 
     tuned = {}
     for model_name, model in default_models.items():
@@ -437,8 +595,22 @@ def tune_models(
             tuned[model_name] = model
             print(f"  {model_name}: skip (uses internal CV)")
             continue
+        if model_name in ('dnn', 'cnn'):
+            # DNN/CNN too slow for RandomizedSearchCV — uses internal early stopping
+            tuned[model_name] = model
+            print(f"  {model_name}: skip (uses internal early stopping)")
+            continue
 
         param_grid = _HP_SEARCH_SPACES.get(model_name)
+        if param_grid is not None:
+            # Filter out HP params that don't exist on the actual model
+            # (e.g., catboost fallback to LightGBM won't have 'iterations')
+            valid_params = model.get_params().keys() if hasattr(model, 'get_params') else set()
+            filtered_grid = {k: v for k, v in param_grid.items() if k in valid_params}
+            if not filtered_grid:
+                param_grid = None  # all params invalid → skip tuning
+            elif len(filtered_grid) < len(param_grid):
+                param_grid = filtered_grid
         if param_grid is None:
             tuned[model_name] = model
             print(f"  {model_name}: skip (no search space defined)")
@@ -449,8 +621,13 @@ def tune_models(
         actual_iter = min(n_iter, grid_size)
 
         try:
+            # Wrap model in Pipeline so StandardScaler fits per CV fold
+            from sklearn.pipeline import Pipeline as _Pipeline
+            pipe = _Pipeline([('scaler', StandardScaler()), ('model', deepcopy(model))])
+            pipe_grid = {f'model__{k}': v for k, v in param_grid.items()}
+
             search = RandomizedSearchCV(
-                model, param_grid,
+                pipe, pipe_grid,
                 n_iter=actual_iter,
                 cv=cv,
                 scoring=scoring,
@@ -459,7 +636,10 @@ def tune_models(
                 error_score=np.nan,
             )
             search.fit(X, y, **cv_args)
-            best_model = search.best_estimator_
+
+            # Extract the tuned model from the Pipeline (caller's _evaluate_single
+            # does its own per-fold scaling, so we return the raw model)
+            best_model = search.best_estimator_.named_steps['model']
 
             # Silence verbosity on tuned estimators
             # LightGBM: verbose=-1 (silent), RF/MLP: verbose=0 (silent)
@@ -471,8 +651,11 @@ def tune_models(
                 best_model.set_params(verbosity=0)
 
             tuned[model_name] = best_model
+            # Report best params without 'model__' prefix for readability
+            clean_params = {k.replace('model__', ''): v
+                           for k, v in search.best_params_.items()}
             print(f"  {model_name}: {search.best_score_:.4f} "
-                  f"({actual_iter} iters, best: {search.best_params_})")
+                  f"({actual_iter} iters, best: {clean_params})")
 
         except Exception as e:
             print(f"  {model_name}: tuning FAILED ({e}), using defaults")
@@ -541,7 +724,22 @@ def _make_cv_splitter(groups: Optional[np.ndarray], n_folds: int, seed: int):
         n_unique = len(np.unique(groups))
         if n_unique >= n_folds:
             return GroupKFold(n_splits=n_folds), True
-        # Not enough groups for GroupKFold — fall back to regular KFold
+        # Not enough groups for requested n_folds — reduce folds to match groups
+        if n_unique >= 2:
+            import warnings
+            warnings.warn(
+                f"Only {n_unique} unique groups for {n_folds}-fold CV. "
+                f"Reducing to {n_unique}-fold GroupKFold to preserve group structure.",
+                stacklevel=2,
+            )
+            return GroupKFold(n_splits=n_unique), True
+        # Only 1 group — groups are meaningless, warn and fall back
+        import warnings
+        warnings.warn(
+            f"Only 1 unique group — GroupKFold impossible. "
+            f"Falling back to KFold({n_folds}).",
+            stacklevel=2,
+        )
     return KFold(n_splits=n_folds, shuffle=True, random_state=seed), False
 
 
@@ -657,11 +855,17 @@ def _evaluate_single(
     n_folds: int,
     metric_fn: Callable,
     seed: int = 42,
-) -> Tuple[float, float]:
-    """Evaluate one (X, model) with CV. Returns (mean_score, std_score) in raw metric units."""
+    secondary_metric_fns: Optional[Dict[str, Callable]] = None,
+) -> Union[Tuple[float, float], Tuple[float, float, Dict[str, Tuple[float, float]]]]:
+    """Evaluate one (X, model) with CV.
+
+    Returns (mean_score, std_score) if no secondary metrics.
+    Returns (mean_score, std_score, {name: (mean, std)}) if secondary metrics provided.
+    """
     splitter, use_groups = _make_cv_splitter(groups, n_folds, seed)
     split_args = (X, y, groups) if use_groups else (X, y)
     scores = []
+    sec_scores = {name: [] for name in (secondary_metric_fns or {})}
 
     # Only scale continuous features; leave binary (ECFP, MACCS, etc.) raw
     is_binary = (X.dtype == np.uint8 or
@@ -691,7 +895,22 @@ def _evaluate_single(
         y_pred = m.predict(X_val_s)
         scores.append(metric_fn(y_val, y_pred))
 
-    return float(np.mean(scores)), float(np.std(scores))
+        if secondary_metric_fns:
+            for sec_name, sec_fn in secondary_metric_fns.items():
+                try:
+                    sec_scores[sec_name].append(sec_fn(y_val, y_pred))
+                except Exception:
+                    pass
+
+    mean, std = float(np.mean(scores)), float(np.std(scores))
+    if secondary_metric_fns is None:
+        return mean, std
+
+    sec_results = {}
+    for sec_name, vals in sec_scores.items():
+        if vals:
+            sec_results[sec_name] = (float(np.mean(vals)), float(np.std(vals)))
+    return mean, std, sec_results
 
 
 def _evaluate_hybrid_config(
@@ -835,11 +1054,15 @@ def _evaluate_baselines(
     verbose: bool = True,
     fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
+    secondary_metric_fns: Optional[Dict[str, Callable]] = None,
 ) -> Dict[str, Dict[str, float]]:
     """Evaluate full-dimension baselines for each rep x model.
 
     Factory reps (from fold_reps) are evaluated per-fold since they have
     different train/val embeddings per fold.
+
+    If secondary_metric_fns is provided, stores secondary metrics under
+    '_secondary' key per rep: {f'{model}_{metric}': {'mean': ..., 'std': ...}}.
     """
     if verbose:
         print("\nEvaluating full-dimension baselines...")
@@ -849,11 +1072,24 @@ def _evaluate_baselines(
     # Frozen reps: standard global-array evaluation
     for rep_name, X in base_reps.items():
         baselines[rep_name] = {'dimension': X.shape[1]}
+        sec_all = {}
         for model_name, model in models.items():
-            mean_score, _ = _evaluate_single(
-                X, labels, model, groups, n_folds, metric_fn, seed
+            result = _evaluate_single(
+                X, labels, model, groups, n_folds, metric_fn, seed,
+                secondary_metric_fns=secondary_metric_fns,
             )
+            if secondary_metric_fns is not None:
+                mean_score, _, sec_dict = result
+                for sec_name, (sec_mean, sec_std) in sec_dict.items():
+                    sec_all[f'{model_name}_{sec_name}'] = {
+                        'mean': round(sec_mean, 4), 'std': round(sec_std, 4),
+                    }
+            else:
+                mean_score, _ = result
             baselines[rep_name][model_name] = round(mean_score, 4)
+
+        if sec_all:
+            baselines[rep_name]['_secondary'] = sec_all
 
         if verbose:
             scores_str = ", ".join(
@@ -874,9 +1110,11 @@ def _evaluate_baselines(
                 continue
             dim = first_fold[rep_name][0].shape[1]
             baselines[rep_name] = {'dimension': dim}
+            sec_all = {}
 
             for model_name, model in models.items():
                 fold_scores = []
+                fold_sec_scores = {name: [] for name in (secondary_metric_fns or {})}
                 for fold_idx, (train_idx, val_idx) in enumerate(precomputed_folds):
                     if fold_idx not in fold_reps or rep_name not in fold_reps[fold_idx]:
                         continue
@@ -892,8 +1130,26 @@ def _evaluate_baselines(
                     y_pred = m.predict(X_val_s)
                     fold_scores.append(metric_fn(y_val, y_pred))
 
+                    if secondary_metric_fns:
+                        for sec_name, sec_fn in secondary_metric_fns.items():
+                            try:
+                                fold_sec_scores[sec_name].append(sec_fn(y_val, y_pred))
+                            except Exception:
+                                pass
+
                 if fold_scores:
                     baselines[rep_name][model_name] = round(float(np.mean(fold_scores)), 4)
+
+                if secondary_metric_fns:
+                    for sec_name, vals in fold_sec_scores.items():
+                        if vals:
+                            sec_all[f'{model_name}_{sec_name}'] = {
+                                'mean': round(float(np.mean(vals)), 4),
+                                'std': round(float(np.std(vals)), 4),
+                            }
+
+            if sec_all:
+                baselines[rep_name]['_secondary'] = sec_all
 
             if verbose:
                 scores_str = ", ".join(
@@ -904,11 +1160,24 @@ def _evaluate_baselines(
     # All concatenated (frozen reps only — fine-tuned reps have per-fold shape)
     X_concat = np.hstack([base_reps[k] for k in sorted(base_reps.keys())])
     baselines['all_concat'] = {'dimension': X_concat.shape[1]}
+    sec_all = {}
     for model_name, model in models.items():
-        mean_score, _ = _evaluate_single(
-            X_concat, labels, model, groups, n_folds, metric_fn, seed
+        result = _evaluate_single(
+            X_concat, labels, model, groups, n_folds, metric_fn, seed,
+            secondary_metric_fns=secondary_metric_fns,
         )
+        if secondary_metric_fns is not None:
+            mean_score, _, sec_dict = result
+            for sec_name, (sec_mean, sec_std) in sec_dict.items():
+                sec_all[f'{model_name}_{sec_name}'] = {
+                    'mean': round(sec_mean, 4), 'std': round(sec_std, 4),
+                }
+        else:
+            mean_score, _ = result
         baselines['all_concat'][model_name] = round(mean_score, 4)
+
+    if sec_all:
+        baselines['all_concat']['_secondary'] = sec_all
 
     if verbose:
         scores_str = ", ".join(
@@ -1460,6 +1729,7 @@ def find_best_hybrid(
     refinement_top_n: int = 5,
     refinement_step_sizes: Optional[List[int]] = None,
     rep_factories: Optional[Dict[str, Callable]] = None,
+    secondary_metrics: Optional[List[str]] = None,
     seed: int = 42,
     verbose: bool = True,
     cache: bool = False,
@@ -1476,7 +1746,8 @@ def find_best_hybrid(
         groups: Group labels for GroupKFold (n_samples,). If None, uses random KFold.
         models: Model specification. None=defaults for speed tier.
             List[str] for named models. Dict[str, model] for custom models.
-        metric: Evaluation metric. String ('r2','rmse','mae','accuracy','auc')
+        metric: Evaluation metric. String ('r2','rmse','mae','accuracy','auc',
+            'spearman','pearson','ci','f1_weighted')
             or callable(y_true, y_pred)->float, or (callable, lower_is_better).
         task_type: 'regression', 'classification', or 'auto' (infer from labels).
         speed: Search comprehensiveness: 'fast', 'medium', 'long'.
@@ -1503,6 +1774,9 @@ def find_best_hybrid(
             fold (NOT per search config). The resulting embeddings are merged with frozen
             base_reps during evaluation. Requires peft + torch for actual fine-tuning
             (but the interface itself is dependency-free).
+        secondary_metrics: List of metric names (e.g. ['spearman', 'rmse']) to compute
+            alongside the primary metric. Only computed for baselines (not during search
+            to avoid overhead). Results stored in baselines[rep]['_secondary'].
         seed: Random seed.
         verbose: Print progress.
         cache: If True, cache results to disk and load from cache on subsequent
@@ -1583,8 +1857,16 @@ def find_best_hybrid(
     # --- Resolve metric ---
     metric_fn, lower_is_better = _resolve_metric(metric)
 
+    # --- Resolve secondary metrics ---
+    resolved_secondary = None
+    if secondary_metrics:
+        resolved_secondary = {name: _resolve_metric(name)[0] for name in secondary_metrics}
+        if verbose:
+            print(f"Secondary metrics: {secondary_metrics}")
+
     # --- Resolve models ---
-    resolved_models = _resolve_models(models, task_type, speed)
+    resolved_models = _resolve_models(models, task_type, speed,
+                                       n_samples=n_samples)
     if verbose:
         print(f"Models: {list(resolved_models.keys())}")
         print(f"Representations: {list(base_reps.keys())} "
@@ -1611,6 +1893,7 @@ def find_best_hybrid(
         baseline_folds, metric_fn, seed, verbose,
         fold_reps=fold_reps,
         precomputed_folds=precomputed_folds,
+        secondary_metric_fns=resolved_secondary,
     )
 
     # --- Run search ---

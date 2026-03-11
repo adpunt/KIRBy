@@ -9,3 +9,4 @@ pytz==2023.3.post1
 torch==2.2.2
 torch-geometric<2.7
 bitsandbytes<0.43
+peft<0.13

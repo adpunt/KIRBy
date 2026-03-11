@@ -219,8 +219,8 @@ def create_esmc_protein_embeddings(
             protein = ESMProtein(sequence=seq)
             protein_tensor = model.encode(protein)
             output = model.logits(protein_tensor, config)
-            # output.embeddings: (1, L, 1152) — mean-pool over residues
-            emb = output.embeddings.mean(dim=1).squeeze(0).cpu().numpy()
+            # output.embeddings: (1, L, 1152) — mean-pool excluding BOS/EOS
+            emb = output.embeddings[:, 1:-1, :].mean(dim=1).squeeze(0).cpu().numpy()
             all_embeddings.append(emb)
 
             if (i + 1) % 50 == 0:
@@ -228,6 +228,384 @@ def create_esmc_protein_embeddings(
 
     result = np.vstack(all_embeddings)
     print(f"  Generated ESM-C protein embeddings: {result.shape}")
+    return result
+
+
+def create_esm3_protein_embeddings(
+    sequences: List[str],
+    device: str = 'cpu',
+) -> np.ndarray:
+    """Extract ESM3 mean-pooled embeddings for protein sequences.
+
+    ESM3 is a multimodal protein language model from EvolutionaryScale that
+    reasons over sequence, structure, and function simultaneously.
+    Uses the same `esm` package as ESM-C.
+
+    Args:
+        sequences: List of protein amino acid sequences.
+        device: 'cpu' or 'cuda'.
+
+    Returns:
+        np.ndarray: (n_sequences, 1536) embeddings.
+
+    Requires: pip install esm (Python >= 3.10)
+    """
+    import torch
+    try:
+        from esm.models.esm3 import ESM3
+        from esm.sdk.api import ESMProtein, LogitsConfig
+    except ImportError:
+        raise ImportError("ESM3 requires the esm package: pip install esm")
+
+    print("  Loading ESM3 (esm3_sm_open_v1) for protein embeddings...")
+    model = ESM3.from_pretrained("esm3_sm_open_v1").to(device)
+    model.eval()
+
+    config = LogitsConfig(sequence=True, return_embeddings=True)
+    all_embeddings = []
+    n = len(sequences)
+
+    with torch.no_grad():
+        for i, seq in enumerate(sequences):
+            seq = seq.upper().strip()[:2048]  # ESM3 max length
+            try:
+                protein = ESMProtein(sequence=seq)
+                protein_tensor = model.encode(protein)
+                output = model.logits(protein_tensor, config)
+                # output.embeddings: (1, L, 1536) — mean-pool excluding BOS/EOS
+                emb = output.embeddings[:, 1:-1, :].mean(dim=1).squeeze(0).cpu().numpy()
+                all_embeddings.append(emb)
+            except Exception as e:
+                print(f"    WARNING: ESM3 failed on seq {i} (len={len(seq)}): {e}")
+                all_embeddings.append(np.zeros(1536, dtype=np.float32))
+
+            if (i + 1) % 50 == 0:
+                print(f"    Progress: {i + 1}/{n}")
+
+    result = np.vstack(all_embeddings)
+    print(f"  Generated ESM3 protein embeddings: {result.shape}")
+    return result
+
+
+# ── SaProt (structure-aware protein LM) ──────────────────────────────────────
+
+# Global singletons for ProstT5 and SaProt models (avoid re-loading)
+_PROSTT5_MODEL = None
+_PROSTT5_TOKENIZER = None
+_SAPROT_MODEL = None
+_SAPROT_TOKENIZER = None
+
+
+def _predict_3di_with_prostt5(
+    sequences: List[str],
+    device: str = 'cpu',
+) -> List[str]:
+    """Predict Foldseek 3Di structural tokens from amino acid sequences using ProstT5.
+
+    ProstT5 (Rostlab/ProstT5) translates AA sequences to 3Di tokens directly
+    without requiring structure prediction. Pure Python, no binary dependencies.
+
+    Args:
+        sequences: List of protein amino acid sequences.
+        device: 'cpu' or 'cuda'.
+
+    Returns:
+        List of 3Di strings (one per input sequence).
+    """
+    import torch
+    global _PROSTT5_MODEL, _PROSTT5_TOKENIZER
+
+    try:
+        from transformers import T5Tokenizer, T5ForConditionalGeneration
+    except ImportError:
+        raise ImportError("ProstT5 requires transformers: pip install transformers")
+
+    if _PROSTT5_MODEL is None:
+        print("  Loading ProstT5 (Rostlab/ProstT5) for 3Di prediction...")
+        _PROSTT5_TOKENIZER = T5Tokenizer.from_pretrained(
+            'Rostlab/ProstT5', do_lower_case=False
+        )
+        _PROSTT5_MODEL = T5ForConditionalGeneration.from_pretrained(
+            'Rostlab/ProstT5'
+        ).to(device).eval()
+
+    model = _PROSTT5_MODEL
+    tokenizer = _PROSTT5_TOKENIZER
+    threedi_seqs = []
+
+    with torch.no_grad():
+        for i, seq in enumerate(sequences):
+            try:
+                seq_clean = seq.upper().strip()[:1000]  # ProstT5 practical limit
+                # ProstT5 expects: '<AA2fold> ' prefix + space-separated residues
+                input_str = '<AA2fold> ' + ' '.join(list(seq_clean))
+                inputs = tokenizer(
+                    input_str, return_tensors='pt',
+                    add_special_tokens=True, max_length=2048,
+                    truncation=True,
+                ).to(device)
+                output = model.generate(
+                    **inputs,
+                    max_new_tokens=len(seq_clean) + 10,
+                    do_sample=False,
+                )
+                # Decode 3Di tokens, strip special tokens
+                decoded = tokenizer.decode(output[0], skip_special_tokens=True)
+                # ProstT5 outputs space-separated 3Di tokens
+                threedi = decoded.replace(' ', '')
+                # Ensure length matches (truncate or pad with '#')
+                if len(threedi) < len(seq_clean):
+                    threedi = threedi + '#' * (len(seq_clean) - len(threedi))
+                elif len(threedi) > len(seq_clean):
+                    threedi = threedi[:len(seq_clean)]
+                threedi_seqs.append(threedi)
+            except Exception as e:
+                print(f"    WARNING: ProstT5 failed on seq {i} (len={len(seq)}): {e}")
+                threedi_seqs.append('#' * len(seq.strip()))
+
+            if (i + 1) % 20 == 0:
+                print(f"    ProstT5 progress: {i + 1}/{len(sequences)}")
+
+    return threedi_seqs
+
+
+def _interleave_aa_3di(aa_seq: str, threedi_seq: str) -> str:
+    """Interleave amino acid and 3Di sequences for SaProt input.
+
+    SaProt expects alternating AA and 3Di tokens: "MdTpKv..." where
+    uppercase = AA, lowercase = 3Di.
+
+    Args:
+        aa_seq: Amino acid sequence (e.g., "MTK...").
+        threedi_seq: 3Di token sequence (e.g., "dpv...").
+
+    Returns:
+        Interleaved string (e.g., "MdTpKv...").
+    """
+    min_len = min(len(aa_seq), len(threedi_seq))
+    interleaved = []
+    for i in range(min_len):
+        interleaved.append(aa_seq[i].upper())
+        interleaved.append(threedi_seq[i].lower())
+    return ''.join(interleaved)
+
+
+def create_saprot_protein_embeddings(
+    sequences: List[str],
+    device: str = 'cpu',
+    batch_size: int = 4,
+) -> np.ndarray:
+    """Extract SaProt 650M mean-pooled embeddings for protein sequences.
+
+    SaProt is a structure-aware protein language model that uses Foldseek 3Di
+    structural tokens interleaved with amino acid sequences. 3Di tokens are
+    predicted using ProstT5 (pure Python, no binary dependencies).
+
+    Args:
+        sequences: List of protein amino acid sequences.
+        device: 'cpu' or 'cuda'.
+        batch_size: Sequences per batch.
+
+    Returns:
+        np.ndarray: (n_sequences, 1280) embeddings.
+
+    Requires: pip install transformers (HuggingFace)
+    Models auto-downloaded: westlake-repl/SaProt_650M_AF2 (~2.5GB),
+                            Rostlab/ProstT5 (~5.5GB)
+    """
+    import torch
+    global _SAPROT_MODEL, _SAPROT_TOKENIZER
+
+    try:
+        from transformers import EsmTokenizer, EsmModel
+    except ImportError:
+        raise ImportError("SaProt requires transformers: pip install transformers")
+
+    # Step 1: Predict 3Di tokens for all sequences via ProstT5
+    print("  Step 1/2: Predicting 3Di structural tokens with ProstT5...")
+    threedi_seqs = _predict_3di_with_prostt5(sequences, device)
+
+    # Step 2: Interleave AA + 3Di
+    sa_seqs = [
+        _interleave_aa_3di(s.upper().strip(), di)
+        for s, di in zip(sequences, threedi_seqs)
+    ]
+
+    # Step 3: Load SaProt model
+    if _SAPROT_MODEL is None:
+        print("  Step 2/2: Loading SaProt (westlake-repl/SaProt_650M_AF2)...")
+        _SAPROT_TOKENIZER = EsmTokenizer.from_pretrained(
+            'westlake-repl/SaProt_650M_AF2'
+        )
+        _SAPROT_MODEL = EsmModel.from_pretrained(
+            'westlake-repl/SaProt_650M_AF2'
+        ).to(device).eval()
+
+    model = _SAPROT_MODEL
+    tokenizer = _SAPROT_TOKENIZER
+
+    all_embeddings = []
+    n = len(sequences)
+
+    with torch.no_grad():
+        for start in range(0, n, batch_size):
+            batch = sa_seqs[start:start + batch_size]
+            batch_embs = []
+            for j, sa_seq in enumerate(batch):
+                idx = start + j
+                try:
+                    inputs = tokenizer(
+                        sa_seq, return_tensors='pt', padding=False,
+                        truncation=True, max_length=2048,
+                    ).to(device)
+                    outputs = model(**inputs)
+                    # Mean pool excluding BOS/EOS
+                    emb = outputs.last_hidden_state[:, 1:-1, :].mean(dim=1)
+                    batch_embs.append(emb.squeeze(0).cpu().numpy())
+                except Exception as e:
+                    print(f"    WARNING: SaProt failed on seq {idx}: {e}")
+                    batch_embs.append(np.zeros(1280, dtype=np.float32))
+            all_embeddings.extend(batch_embs)
+
+            end = min(start + batch_size, n)
+            if end < n and end % 20 == 0:
+                print(f"    SaProt progress: {end}/{n}")
+
+    result = np.vstack(all_embeddings)
+    print(f"  Generated SaProt protein embeddings: {result.shape}")
+    return result
+
+
+# ── Boltz-2 (structure prediction embeddings) ────────────────────────────────
+
+
+def create_boltz2_protein_embeddings(
+    sequences: List[str],
+    device: str = 'cpu',
+    cache_dir: str = None,
+) -> np.ndarray:
+    """Extract Boltz-2 single-representation protein embeddings (384D).
+
+    Boltz-2 is a structure prediction model. We use its CLI `boltz predict`
+    with `--write_embeddings` to extract per-residue single representations,
+    then mean-pool to a fixed 384D vector per sequence.
+
+    Embeddings are cached to disk keyed on sequence hash to avoid re-running.
+
+    Note: Boltz-2 requires CUDA for practical use.
+
+    Args:
+        sequences: List of protein amino acid sequences.
+        device: 'cpu' or 'cuda' (CUDA strongly recommended).
+        cache_dir: Directory to cache embeddings. Defaults to ~/.cache/kirby/boltz2/.
+
+    Returns:
+        np.ndarray: (n_sequences, 384) embeddings.
+
+    Requires: pip install boltz (CUDA recommended)
+    """
+    import subprocess
+    import tempfile
+    import hashlib as _hashlib
+    from pathlib import Path
+
+    try:
+        import boltz  # noqa: F401
+    except ImportError:
+        raise ImportError("Boltz-2 requires the boltz package: pip install boltz")
+
+    if cache_dir is None:
+        cache_dir = str(Path(os.environ.get(
+            'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')
+        )) / 'boltz2')
+    cache_path = Path(cache_dir)
+    cache_path.mkdir(parents=True, exist_ok=True)
+
+    n = len(sequences)
+    all_embeddings = []
+    print(f"  Generating Boltz-2 embeddings for {n} proteins...")
+
+    for i, seq in enumerate(sequences):
+        seq_clean = seq.upper().strip()
+        seq_hash = _hashlib.sha256(seq_clean.encode()).hexdigest()[:16]
+        cached_file = cache_path / f'{seq_hash}.npy'
+
+        # Check cache
+        if cached_file.exists():
+            emb = np.load(cached_file)
+            all_embeddings.append(emb)
+            continue
+
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                # Write FASTA file
+                fasta_path = os.path.join(tmpdir, 'input.fasta')
+                with open(fasta_path, 'w') as f:
+                    f.write(f'>seq_{i}\n{seq_clean}\n')
+
+                out_dir = os.path.join(tmpdir, 'output')
+
+                # Run boltz predict with embeddings
+                cmd = [
+                    'boltz', 'predict', fasta_path,
+                    '--write_embeddings',
+                    '--out_dir', out_dir,
+                ]
+                if device != 'cpu':
+                    cmd.extend(['--accelerator', 'gpu'])
+
+                proc = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=300,
+                )
+                if proc.returncode != 0:
+                    raise RuntimeError(f"boltz predict failed: {proc.stderr[:200]}")
+
+                # Find and load embeddings npz
+                out_path = Path(out_dir)
+                npz_files = list(out_path.rglob('*embeddings*.npz'))
+                if not npz_files:
+                    # Try loading from the predictions directory
+                    npz_files = list(out_path.rglob('*.npz'))
+
+                if npz_files:
+                    data = np.load(npz_files[0])
+                    # Boltz-2 single representations: (N_tokens, 384)
+                    # Try common key names
+                    for key in ['single', 's_s', 'prot_embeddings', 'embeddings']:
+                        if key in data:
+                            token_embs = data[key]
+                            break
+                    else:
+                        # Use first array in npz
+                        token_embs = data[list(data.keys())[0]]
+
+                    # Mean pool over token dimension
+                    if token_embs.ndim == 3:
+                        token_embs = token_embs[0]  # remove batch dim
+                    emb = token_embs.mean(axis=0).astype(np.float32)
+
+                    # Handle variable embedding dims — pad/truncate to 384
+                    if emb.shape[0] != 384:
+                        if emb.shape[0] > 384:
+                            emb = emb[:384]
+                        else:
+                            emb = np.pad(emb, (0, 384 - emb.shape[0]))
+                else:
+                    raise FileNotFoundError("No embedding files found in boltz output")
+
+            # Cache the result
+            np.save(cached_file, emb)
+            all_embeddings.append(emb)
+
+        except Exception as e:
+            print(f"    WARNING: Boltz-2 failed on seq {i} (len={len(seq_clean)}): {e}")
+            all_embeddings.append(np.zeros(384, dtype=np.float32))
+
+        if (i + 1) % 10 == 0:
+            print(f"    Boltz-2 progress: {i + 1}/{n}")
+
+    result = np.vstack(all_embeddings)
+    print(f"  Generated Boltz-2 protein embeddings: {result.shape}")
     return result
 
 
@@ -271,8 +649,14 @@ def create_amplify_protein_embeddings(
             )
             inputs = {k: v.to(device) for k, v in inputs.items()}
             outputs = model(**inputs)
-            # Mean pool over non-padding tokens
-            mask = inputs['attention_mask'].unsqueeze(-1).float()
+            # Mean pool excluding BOS/EOS tokens
+            mask = inputs['attention_mask'].clone()
+            mask[:, 0] = 0  # exclude BOS
+            for j in range(mask.shape[0]):
+                last_tok = mask[j].sum().item()
+                if last_tok > 0:
+                    mask[j, int(last_tok)] = 0  # exclude EOS
+            mask = mask.unsqueeze(-1).float()
             pooled = (outputs.last_hidden_state * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
             all_embeddings.append(pooled.cpu().numpy())
 
@@ -422,14 +806,18 @@ def create_esmfold_protein_features(
         raise ImportError("ESMFold requires transformers>=4.30: pip install transformers")
 
     tokenizer = AutoTokenizer.from_pretrained("facebook/esmfold_v1")
-    model = EsmForProteinFolding.from_pretrained("facebook/esmfold_v1").to(device)
+    # Force fp32 to avoid "LayerNormKernelImpl not implemented for Half"
+    # which can happen when bitsandbytes or autocast interfere
+    model = EsmForProteinFolding.from_pretrained(
+        "facebook/esmfold_v1", torch_dtype=torch.float32,
+    ).to(device).float()
     model.eval()
 
     n = len(sequences)
     features = np.zeros((n, 12), dtype=np.float32)
 
     print(f"  Predicting structures for {n} proteins with ESMFold...")
-    with torch.no_grad():
+    with torch.no_grad(), torch.amp.autocast(device_type='cuda', enabled=False):
         for i, seq in enumerate(sequences):
             seq = seq.upper().strip()[:512]  # ESMFold max practical length
             try:
@@ -477,6 +865,101 @@ def create_esmfold_protein_features(
 
     print(f"  Generated ESMFold features: ({n}, 12)")
     return features
+
+
+def _resolve_uniprot_ids(
+    protein_ids: List[str],
+) -> List[Optional[str]]:
+    """Resolve protein identifiers to UniProt accession IDs.
+
+    Handles two cases:
+      - Already UniProt accessions (e.g. 'O00141', 'P04629'): returned as-is
+      - Gene names (e.g. 'AAK1', 'ABL1(E255K)'): looked up via UniProt REST API
+
+    Results are cached to disk so the API is only queried once per gene name.
+    """
+    import re
+    import json
+    from pathlib import Path
+
+    cache_dir = Path(os.environ.get('KIRBY_CACHE_DIR',
+                     str(Path.home() / '.cache' / 'kirby')))
+    cache_file = cache_dir / 'uniprot_gene_map.json'
+
+    # Load existing cache
+    gene_map = {}
+    if cache_file.exists():
+        try:
+            gene_map = json.loads(cache_file.read_text())
+        except Exception:
+            pass
+
+    # UniProt accession pattern: [OPQ][0-9][A-Z0-9]{3}[0-9] or [A-NR-Z][0-9]...
+    _uniprot_re = re.compile(r'^[A-Z][0-9][A-Z0-9]{3}[0-9]$')
+
+    result = []
+    genes_to_lookup = set()
+
+    for pid in protein_ids:
+        if pid is None:
+            result.append(None)
+            continue
+        pid_clean = pid.strip()
+        if _uniprot_re.match(pid_clean):
+            result.append(pid_clean)
+        else:
+            # Extract base gene name: 'ABL1(E255K)-phosphorylated' → 'ABL1'
+            base_gene = re.split(r'[(\-/]', pid_clean)[0].strip()
+            if base_gene in gene_map:
+                result.append(gene_map[base_gene])
+            else:
+                result.append(base_gene)  # placeholder, will be resolved
+                genes_to_lookup.add(base_gene)
+
+    # Batch lookup missing gene names via UniProt REST API
+    if genes_to_lookup:
+        import requests
+        print(f"    Resolving {len(genes_to_lookup)} gene names to UniProt IDs...")
+        for gene in sorted(genes_to_lookup):
+            if gene in gene_map:
+                continue
+            try:
+                url = (
+                    f"https://rest.uniprot.org/uniprotkb/search?"
+                    f"query=gene_exact:{gene}+AND+organism_id:9606&"
+                    f"format=json&size=1&fields=accession"
+                )
+                resp = requests.get(url, timeout=10)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get('results'):
+                        uid = data['results'][0]['primaryAccession']
+                        gene_map[gene] = uid
+                    else:
+                        gene_map[gene] = None
+                else:
+                    gene_map[gene] = None
+            except Exception:
+                gene_map[gene] = None
+
+        # Save updated cache
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_file.write_text(json.dumps(gene_map, indent=2))
+
+        # Replace placeholders with resolved IDs
+        _uniprot_re2 = re.compile(r'^[A-Z][0-9][A-Z0-9]{3}[0-9]$')
+        for i, pid in enumerate(protein_ids):
+            if pid is None:
+                continue
+            pid_clean = pid.strip()
+            if not _uniprot_re2.match(pid_clean):
+                base_gene = re.split(r'[(\-/]', pid_clean)[0].strip()
+                result[i] = gene_map.get(base_gene)
+
+        resolved = sum(1 for r in result if r is not None)
+        print(f"    Resolved {resolved}/{len(result)} protein IDs to UniProt accessions")
+
+    return result
 
 
 def create_alphafold_db_features(
@@ -620,6 +1103,95 @@ def create_alphafold_db_features(
     mapped = (features[:, 0] != 0).sum()
     print(f"  Generated AlphaFold DB features: ({n}, 15), {mapped}/{n} mapped")
     return features
+
+
+def create_mint_protein_embeddings(
+    sequences: List[str],
+    checkpoint_path: str = None,
+    device: str = 'cpu',
+) -> np.ndarray:
+    """Extract MINT mean-pooled embeddings for protein sequences.
+
+    MINT (Masked INTeraction modeling) is a protein language model built
+    on top of ESM-2, pretrained for protein-protein interaction prediction.
+    Produces 1280D embeddings per sequence.
+
+    Args:
+        sequences: List of protein amino acid sequences.
+        checkpoint_path: Path to mint.ckpt. If None, searches
+            $KIRBY_MODELS_DIR/mint/mint.ckpt, ~/kirby_models/mint/mint.ckpt.
+        device: 'cpu' or 'cuda'.
+
+    Returns:
+        np.ndarray: (n_sequences, 1280) embeddings.
+
+    Requires: pip install git+https://github.com/EMCarrami/MINT.git
+              Download checkpoint from MINT GitHub releases.
+    """
+    import torch
+
+    try:
+        from mint.helpers.extract import load_config, MINTWrapper
+    except ImportError:
+        raise ImportError(
+            "MINT requires the mint package: "
+            "pip install git+https://github.com/EMCarrami/MINT.git\n"
+            "Download checkpoint from https://github.com/EMCarrami/MINT "
+            "and place at $KIRBY_MODELS_DIR/mint/mint.ckpt"
+        )
+
+    if checkpoint_path is None:
+        search_paths = [
+            os.path.join(os.environ.get('KIRBY_MODELS_DIR', ''), 'mint', 'mint.ckpt'),
+            os.path.expanduser('~/kirby_models/mint/mint.ckpt'),
+            'mint.ckpt',
+            '../mint.ckpt',
+        ]
+        found = None
+        for p in search_paths:
+            if p and os.path.isfile(p):
+                found = p
+                break
+        if found is None:
+            raise FileNotFoundError(
+                f"Could not find MINT checkpoint in: {search_paths}\n"
+                "Download from https://github.com/EMCarrami/MINT "
+                "and set KIRBY_MODELS_DIR or place at ~/kirby_models/mint/mint.ckpt"
+            )
+        checkpoint_path = found
+
+    print(f"  Loading MINT from {checkpoint_path}...")
+    config = load_config()
+    model = MINTWrapper(config, checkpoint_path)
+    model = model.to(device)
+    model.eval()
+
+    all_embeddings = []
+    n = len(sequences)
+
+    with torch.no_grad():
+        for i, seq in enumerate(sequences):
+            seq = seq.upper().strip()[:1022]  # ESM-2 backbone limit
+            try:
+                emb = model.get_embedding(seq)
+                if isinstance(emb, torch.Tensor):
+                    emb = emb.cpu().numpy()
+                emb = np.atleast_1d(emb.flatten())
+                # Expect 1280D from ESM-2 backbone
+                if emb.shape[0] != 1280:
+                    emb = emb[:1280] if emb.shape[0] > 1280 else np.pad(
+                        emb, (0, 1280 - emb.shape[0]))
+                all_embeddings.append(emb)
+            except Exception as e:
+                print(f"    WARNING: MINT failed on seq {i} (len={len(seq)}): {e}")
+                all_embeddings.append(np.zeros(1280, dtype=np.float32))
+
+            if (i + 1) % 50 == 0:
+                print(f"    Progress: {i + 1}/{n}")
+
+    result = np.vstack(all_embeddings).astype(np.float32)
+    print(f"  Generated MINT protein embeddings: {result.shape}")
+    return result
 
 
 def create_protein_kmer(sequences: List[str], k: int = 3) -> np.ndarray:

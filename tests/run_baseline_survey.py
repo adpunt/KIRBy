@@ -31,7 +31,9 @@ sys.modules.setdefault('bottleneck', None)
 
 import numpy as np
 from sklearn.base import clone
-from sklearn.metrics import accuracy_score, r2_score
+from sklearn.metrics import (accuracy_score, r2_score, mean_squared_error,
+                             f1_score, roc_auc_score)
+from scipy.stats import spearmanr, pearsonr
 from sklearn.model_selection import GroupKFold, KFold
 from sklearn.preprocessing import StandardScaler
 
@@ -55,6 +57,10 @@ DATASET_REGISTRY = {
     'caco2': ('molecular', 'all'),
     'herg':  ('molecular', 'all'),
     'qm9':   ('molecular', 'all'),
+    'adme_hlm':        ('molecular', 'all'),
+    'adme_rlm':        ('molecular', 'all'),
+    'adme_mdr1':       ('molecular', 'all'),
+    'adme_solubility': ('molecular', 'all'),
     # Antibody — use antibody_baseline_survey.py instead for antibody datasets
     # TCGA
     'tcga_luad_vs_lusc':  ('tcga', 'all'),
@@ -63,11 +69,13 @@ DATASET_REGISTRY = {
     # DTA
     'davis': ('dta', 'full'),
     'kiba':  ('dta', 'full'),
+    'bindingdb_kd': ('dta', 'full'),
     'pdbbind_refined': ('dta', 'full'),
     'pdbbind_core':    ('dta', 'full'),
     # Reaction Yield
     'buchwald_hartwig': ('reaction', 'all'),
     'suzuki':           ('reaction', 'all'),
+    'bh_doyle_plates':  ('reaction', 'all'),
 }
 
 # Build domain -> datasets mapping
@@ -75,7 +83,8 @@ DOMAIN_DATASETS = {}
 for _ds, (_dom, _) in DATASET_REGISTRY.items():
     DOMAIN_DATASETS.setdefault(_dom, []).append(_ds)
 
-SURVEY_MODELS = ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm']
+SURVEY_MODELS = ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm',
+                  'gp', 'mlp', 'dnn', 'cnn', 'catboost']
 
 
 def _make_ridge_l2norm(task_type='regression'):
@@ -158,10 +167,14 @@ def _load_reaction(dataset_name: str) -> dict:
     from kirby.representations.reaction import (
         create_drfp, create_concat_ecfp4, create_concat_maccs,
         create_concat_pdv, create_product_ecfp4, create_reactant_ecfp4,
+        create_rxnfp, create_onehot_components,
     )
 
     if dataset_name == 'buchwald_hartwig':
         data = load_buchwald_hartwig()
+    elif dataset_name == 'bh_doyle_plates':
+        from kirby.datasets.reaction_yields import load_bh_doyle_plates
+        data = load_bh_doyle_plates()
     else:
         data = load_suzuki()
 
@@ -194,19 +207,37 @@ def _load_reaction(dataset_name: str) -> dict:
     except Exception as e:
         print(f"  WARNING: reactant_ecfp4 failed: {e}")
 
+    # Learned reaction fingerprints
+    try:
+        reps['rxnfp'] = create_rxnfp(data['rxn_smiles'])
+    except ImportError:
+        print("  WARNING: rxnfp not installed, skipping RXNFP rep")
+    except Exception as e:
+        print(f"  WARNING: rxnfp failed: {e}")
+
+    # One-hot component encoding (factorial baseline)
+    try:
+        reps['onehot_components'] = create_onehot_components(data['components'])
+    except Exception as e:
+        print(f"  WARNING: onehot_components failed: {e}")
+
     n = len(data['labels'])
-    print(f"  {dataset_name}: {n} reactions, {len(reps)} reps "
+    groups = data.get('groups')
+    n_groups = len(np.unique(groups)) if groups is not None else 0
+    group_key = data.get('metadata', {}).get('group_key', 'unknown')
+    print(f"  {dataset_name}: {n} reactions, {len(reps)} reps, "
+          f"{n_groups} groups ({group_key}) "
           f"({', '.join(f'{k}={v.shape[1]}' for k, v in reps.items())})")
 
     return {
         'labels': data['labels'],
         'reps': reps,
-        'groups': None,
-        'n_groups': 0,
+        'groups': groups,
+        'n_groups': n_groups,
         'task_type': 'regression',
         'domain': 'reaction',
         'augmentations': None,
-        'prebuilt_splits': data.get('splits'),  # 70/30 × 10 splits
+        'prebuilt_splits': None,  # use GroupKFold on groups, not random splits
     }
 
 
@@ -252,10 +283,67 @@ def _make_cv(groups, n_folds, labels):
 
 
 def _score(y_true, y_pred, task_type):
-    """Compute appropriate metric."""
+    """Compute all domain-appropriate metrics. Returns dict."""
     if task_type == 'classification':
-        return accuracy_score(y_true, y_pred)
-    return r2_score(y_true, y_pred)
+        metrics = {'accuracy': float(accuracy_score(y_true, y_pred))}
+        # F1-weighted (works for binary and multiclass)
+        metrics['f1_weighted'] = float(f1_score(y_true, y_pred,
+                                                average='weighted',
+                                                zero_division=0))
+        # AUROC — only for binary classification
+        unique_labels = np.unique(y_true)
+        if len(unique_labels) == 2:
+            try:
+                metrics['auroc'] = float(roc_auc_score(y_true, y_pred))
+            except ValueError:
+                pass
+        return metrics
+    # Regression
+    metrics = {
+        'r2': float(r2_score(y_true, y_pred)),
+        'rmse': float(np.sqrt(mean_squared_error(y_true, y_pred))),
+    }
+    try:
+        rho, _ = spearmanr(y_true, y_pred)
+        metrics['spearman'] = float(rho)
+    except Exception:
+        pass
+    try:
+        r, _ = pearsonr(y_true, y_pred)
+        metrics['pearson'] = float(r)
+    except Exception:
+        pass
+    try:
+        from kirby.find_best_hybrid import _concordance_index
+        metrics['ci'] = float(_concordance_index(y_true, y_pred))
+    except Exception:
+        pass
+    return metrics
+
+
+def _get_primary_metric(dataset_name: str, task_type: str) -> tuple:
+    """Return (metric_name, higher_is_better) per domain."""
+    domain = DATASET_REGISTRY.get(dataset_name, ('unknown', None))[0]
+    if task_type == 'classification':
+        if domain == 'tcga':
+            if dataset_name == 'tcga_luad_vs_lusc':
+                return 'auroc', True
+            return 'f1_weighted', True
+        return 'accuracy', True
+    if domain == 'molecular':
+        return 'rmse', False
+    if domain == 'dta':
+        return 'ci', True
+    return 'r2', True
+
+
+def _primary_metric(metrics, task_type, metric_name=None):
+    """Extract primary metric value."""
+    if metric_name:
+        return metrics.get(metric_name, float('nan'))
+    if task_type == 'classification':
+        return metrics.get('accuracy', float('nan'))
+    return metrics.get('r2', float('nan'))
 
 
 def _is_binary_rep(X):
@@ -285,13 +373,13 @@ def _maybe_scale(X_train, X_val):
 
 def evaluate_rep(X, labels, groups, model, n_folds, task_type,
                  prebuilt_splits=None):
-    """Evaluate one (rep, model) pair via CV. Returns (mean, std)."""
+    """Evaluate one (rep, model) pair via CV. Returns (mean_metrics, std_metrics)."""
     if prebuilt_splits is not None:
         splits = prebuilt_splits
     else:
         cv, cv_kwargs = _make_cv(groups, n_folds, labels)
         splits = list(cv.split(X, labels, **cv_kwargs))
-    scores = []
+    fold_metrics = []
 
     for train_idx, val_idx in splits:
         X_train, X_val = _maybe_scale(X[train_idx], X[val_idx])
@@ -299,19 +387,26 @@ def evaluate_rep(X, labels, groups, model, n_folds, task_type,
         try:
             m = clone(model)
             m.fit(X_train, labels[train_idx])
-            scores.append(_score(labels[val_idx], m.predict(X_val), task_type))
+            fold_metrics.append(
+                _score(labels[val_idx], m.predict(X_val), task_type))
         except Exception:
             continue
 
-    if not scores:
-        return float('nan'), float('nan')
-    return float(np.mean(scores)), float(np.std(scores))
+    if not fold_metrics:
+        return {}, {}
+    # Aggregate across folds: mean and std for each metric key
+    all_keys = fold_metrics[0].keys()
+    mean_m = {k: float(np.mean([f[k] for f in fold_metrics if k in f]))
+              for k in all_keys}
+    std_m = {k: float(np.std([f[k] for f in fold_metrics if k in f]))
+             for k in all_keys}
+    return mean_m, std_m
 
 
 def evaluate_ft_rep(factory, labels, groups, model, n_folds, task_type):
-    """Evaluate a fine-tuning factory via CV. Returns (mean, std)."""
+    """Evaluate a fine-tuning factory via CV. Returns (mean_metrics, std_metrics)."""
     cv, cv_kwargs = _make_cv(groups, n_folds, labels)
-    scores = []
+    fold_metrics = []
     dummy_X = np.zeros((len(labels), 1))
 
     for train_idx, val_idx in cv.split(dummy_X, labels, **cv_kwargs):
@@ -331,13 +426,19 @@ def evaluate_ft_rep(factory, labels, groups, model, n_folds, task_type):
         try:
             m = clone(model)
             m.fit(X_train, labels[train_idx])
-            scores.append(_score(labels[val_idx], m.predict(X_val), task_type))
+            fold_metrics.append(
+                _score(labels[val_idx], m.predict(X_val), task_type))
         except Exception:
             continue
 
-    if not scores:
-        return float('nan'), float('nan')
-    return float(np.mean(scores)), float(np.std(scores))
+    if not fold_metrics:
+        return {}, {}
+    all_keys = fold_metrics[0].keys()
+    mean_m = {k: float(np.mean([f[k] for f in fold_metrics if k in f]))
+              for k in all_keys}
+    std_m = {k: float(np.std([f[k] for f in fold_metrics if k in f]))
+             for k in all_keys}
+    return mean_m, std_m
 
 
 # =============================================================================
@@ -456,7 +557,7 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
     prebuilt_splits = data.get('prebuilt_splits')
     task_type = data.get('task_type', 'regression')
     n_groups = len(np.unique(groups)) if groups is not None else 0
-    metric_name = 'accuracy' if task_type == 'classification' else 'r2'
+    metric_name, higher_is_better = _get_primary_metric(dataset_name, task_type)
 
     # 2. Default models
     default_models = get_default_models(task_type)
@@ -482,14 +583,19 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
         print(f"  {rep_name} ({dim}d):", end='', flush=True)
 
         try:
-            entry = {'dimension': dim, 'scores': {}}
+            entry = {'dimension': dim, 'scores': {}, 'metrics': {}}
 
             for mname in model_names:
-                mean_s, _ = evaluate_rep(
+                mean_m, std_m = evaluate_rep(
                     X, labels, groups, default_models[mname], n_folds, task_type,
                     prebuilt_splits=prebuilt_splits)
-                entry['scores'][mname] = round(mean_s, 4)
-                print(f" {mname}={mean_s:.3f}", end='', flush=True)
+                primary = _primary_metric(mean_m, task_type, metric_name)
+                entry['scores'][mname] = round(primary, 4)
+                entry['metrics'][mname] = {
+                    k: {'mean': round(v, 4), 'std': round(std_m.get(k, 0), 4)}
+                    for k, v in mean_m.items()
+                }
+                print(f" {mname}={primary:.3f}", end='', flush=True)
 
             # Optional: Optuna-tuned XGBoost
             if tune_trials > 0:
@@ -500,7 +606,7 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
                     else:
                         cv, cv_kwargs = _make_cv(groups, n_folds, labels)
                         tune_splits = list(cv.split(X, labels, **cv_kwargs))
-                    tune_scores = []
+                    tune_fold_metrics = []
                     for train_idx, val_idx in tune_splits:
                         scaler = StandardScaler()
                         X_tr = scaler.fit_transform(X[train_idx])
@@ -509,11 +615,21 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
                             X_tr, labels[train_idx],
                             n_trials=tune_trials, task_type=task_type, seed=seed,
                         )
-                        tune_scores.append(_score(
+                        tune_fold_metrics.append(_score(
                             labels[val_idx], tuned.predict(X_va), task_type))
-                    mean_s = float(np.mean(tune_scores))
-                    entry['scores']['xgb_tuned'] = round(mean_s, 4)
-                    print(f" xgb_tuned={mean_s:.3f}", end='', flush=True)
+                    if tune_fold_metrics:
+                        t_keys = tune_fold_metrics[0].keys()
+                        t_mean = {k: float(np.mean([f[k] for f in tune_fold_metrics if k in f]))
+                                  for k in t_keys}
+                        t_std = {k: float(np.std([f[k] for f in tune_fold_metrics if k in f]))
+                                 for k in t_keys}
+                        primary = _primary_metric(t_mean, task_type, metric_name)
+                        entry['scores']['xgb_tuned'] = round(primary, 4)
+                        entry['metrics']['xgb_tuned'] = {
+                            k: {'mean': round(v, 4), 'std': round(t_std.get(k, 0), 4)}
+                            for k, v in t_mean.items()
+                        }
+                        print(f" xgb_tuned={primary:.3f}", end='', flush=True)
                 except ImportError:
                     print(" (optuna not installed)", end='', flush=True)
 
@@ -521,7 +637,7 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
             valid = [(m, s) for m, s in entry['scores'].items()
                      if not np.isnan(s)]
             if valid:
-                best = max(valid, key=lambda x: x[1])
+                best = min(valid, key=lambda x: x[1]) if not higher_is_better else max(valid, key=lambda x: x[1])
                 entry['best'] = {'model': best[0], 'score': best[1]}
             else:
                 entry['best'] = None
@@ -539,19 +655,24 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
             print(f"\n--- Fine-tuned reps: {list(ft_factories.keys())} ---")
             for ft_name, factory in ft_factories.items():
                 print(f"  {ft_name}:", end='', flush=True)
-                entry = {'dimension': '?', 'scores': {}}
+                entry = {'dimension': '?', 'scores': {}, 'metrics': {}}
 
                 for mname in model_names:
-                    mean_s, _ = evaluate_ft_rep(
+                    mean_m, std_m = evaluate_ft_rep(
                         factory, labels, groups, default_models[mname],
                         n_folds, task_type)
-                    entry['scores'][mname] = round(mean_s, 4)
-                    print(f" {mname}={mean_s:.3f}", end='', flush=True)
+                    primary = _primary_metric(mean_m, task_type, metric_name)
+                    entry['scores'][mname] = round(primary, 4)
+                    entry['metrics'][mname] = {
+                        k: {'mean': round(v, 4), 'std': round(std_m.get(k, 0), 4)}
+                        for k, v in mean_m.items()
+                    }
+                    print(f" {mname}={primary:.3f}", end='', flush=True)
 
                 valid = [(m, s) for m, s in entry['scores'].items()
                          if not np.isnan(s)]
                 if valid:
-                    best = max(valid, key=lambda x: x[1])
+                    best = min(valid, key=lambda x: x[1]) if not higher_is_better else max(valid, key=lambda x: x[1])
                     entry['best'] = {'model': best[0], 'score': best[1]}
                 else:
                     entry['best'] = None
@@ -566,7 +687,8 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
         scored = [(name, e['best']['score']) for name, e in baselines.items()
                   if e.get('best') is not None]
         if scored:
-            top_rep, top_score = max(scored, key=lambda x: x[1])
+            top_rep, top_score = (min(scored, key=lambda x: x[1]) if not higher_is_better
+                                  else max(scored, key=lambda x: x[1]))
             top_model = baselines[top_rep]['best']['model']
             X_top = reps[top_rep]
 
@@ -575,15 +697,16 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
                           if v.shape[1] <= 200 and k != top_rep}
 
             if small_reps:
-                print(f"\n--- Augmentation test: {top_rep} (R²={top_score:.4f}) "
+                print(f"\n--- Augmentation test: {top_rep} ({metric_name}={top_score:.4f}) "
                       f"+ {len(small_reps)} small reps ---")
 
                 model = default_models[top_model]
                 for aug_name in sorted(small_reps.keys()):
                     X_aug = np.hstack([X_top, small_reps[aug_name]])
-                    mean_s, _ = evaluate_rep(
+                    mean_m, _ = evaluate_rep(
                         X_aug, labels, groups, model, n_folds, task_type,
                         prebuilt_splits=prebuilt_splits)
+                    mean_s = _primary_metric(mean_m, task_type, metric_name)
                     delta = mean_s - top_score
                     sign = '+' if delta >= 0 else ''
                     print(f"  {top_rep}+{aug_name} ({X_aug.shape[1]}d): "
@@ -607,7 +730,7 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
     all_bests = [(name, e['best']) for name, e in all_entries.items()
                  if e['best'] is not None]
     if all_bests:
-        overall = max(all_bests, key=lambda x: x[1]['score'])
+        overall = min(all_bests, key=lambda x: x[1]['score']) if not higher_is_better else max(all_bests, key=lambda x: x[1]['score'])
         summary = {
             'best_rep': overall[0],
             'best_score': overall[1]['score'],
@@ -626,7 +749,12 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
             'n_reps': len(reps),
             'rep_names': sorted(reps.keys()),
             'models': model_names,
-            'metric': metric_name,
+            'primary_metric': metric_name,
+            'higher_is_better': higher_is_better,
+            'all_metrics': (['accuracy', 'f1_weighted'] +
+                            (['auroc'] if task_type == 'classification' else [])
+                            if task_type == 'classification'
+                            else ['r2', 'rmse', 'spearman', 'pearson', 'ci']),
             'task_type': task_type,
             'seed': seed,
             'elapsed_seconds': round(elapsed, 1),
@@ -651,7 +779,7 @@ def print_summary_table(result):
     baselines = result['baselines']
     summary = result['summary']
     models = meta['models']
-    metric = meta['metric']
+    metric = meta.get('primary_metric', meta.get('metric', 'r2'))
 
     print(f"\n{'='*70}")
     print(f"SUMMARY: {meta['dataset']} ({meta['n_samples']} samples, "
@@ -712,11 +840,13 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Datasets:
-  logd, caco2, herg, qm9                          (molecular)
+  logd, caco2, herg, qm9,                         (molecular)
+    adme_hlm, adme_rlm, adme_mdr1, adme_solubility
   tcga_luad_vs_lusc, tcga_brca_pam50,             (TCGA)
     tcga_brca_survival
-  davis, kiba                                      (DTA)
-  buchwald_hartwig, suzuki                         (reaction yield)
+  davis, kiba, bindingdb_kd,                       (DTA)
+    pdbbind_refined, pdbbind_core
+  buchwald_hartwig, suzuki, bh_doyle_plates        (reaction yield)
 
 Shortcuts:
   molecular, tcga, dta, reaction                   (run all in domain)
@@ -831,7 +961,7 @@ Examples:
             m = r['metadata']
             if s.get('best_rep'):
                 print(f"  {ds:<30} {s['best_rep']:<20} + {s['best_model']:<10} = "
-                      f"{s['best_score']:.4f} ({m['metric']})")
+                      f"{s['best_score']:.4f} ({m.get('primary_metric', m.get('metric', 'r2'))})")
             else:
                 print(f"  {ds:<30} FAILED")
 

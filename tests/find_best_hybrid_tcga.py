@@ -36,7 +36,7 @@ import argparse
 import warnings
 from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Tuple, Optional
 
 import numpy as np
 
@@ -112,12 +112,21 @@ REP_PRESETS = {
         # Foundation model embeddings (5, GPU)
         'gene_geneformer', 'gene_bulkrnabert', 'gene_scfoundation',
         'gene_scgpt', 'gene_uce',
-        # Multi-omic (6)
+        # Multi-omic (23)
         'cnv_gistic', 'cnv_pca50', 'rppa', 'mirna_top200',
         'methyl_pca50', 'methyl_hvg',
-        # WSI (5)
+        'mutation_matrix', 'mut_tmb', 'mut_driver', 'mut_pathway', 'mut_pca50',
+        'sig_sbs', 'sig_dbs', 'sig_id',
+        'immune_cibersort', 'immune_xcell', 'stemness_mrnasi',
+        'purity_consensus', 'heterogeneity_math',
+        'msi_status', 'hrd_score', 'cimp_status',
+        'clinical',
+        # Tier 2 multi-omic (4)
+        'lncrna_pca50', 'gsva_hallmark', 'promoter_meth', 'splicing_psi50',
+        # WSI (7)
         'wsi_ctranspath', 'wsi_phikon', 'wsi_hoptimus0', 'wsi_gigapath', 'wsi_moco',
-    ],  # 34 reps
+        'wsi_titan', 'wsi_uni2h',
+    ],  # 57 reps
 
     # Genomic-only presets (no WSI)
     'genomic_fast': [
@@ -128,7 +137,8 @@ REP_PRESETS = {
         'gene_pca100', 'gene_hallmark', 'gene_immune',
         'gene_nmf50', 'gene_stats',
         'cnv_gistic', 'rppa', 'mirna_top200', 'methyl_pca50',
-    ],  # 9 reps
+        'mut_tmb', 'purity_consensus',
+    ],  # 11 reps
 
     'genomic_all': [
         'gene_hvg2000', 'gene_pca100', 'gene_hallmark', 'gene_progeny',
@@ -141,7 +151,15 @@ REP_PRESETS = {
         'gene_scgpt', 'gene_uce',
         'cnv_gistic', 'cnv_pca50', 'rppa', 'mirna_top200',
         'methyl_pca50', 'methyl_hvg',
-    ],  # 29 reps
+        'mutation_matrix', 'mut_tmb', 'mut_driver', 'mut_pathway', 'mut_pca50',
+        'sig_sbs', 'sig_dbs', 'sig_id',
+        'immune_cibersort', 'immune_xcell', 'stemness_mrnasi',
+        'purity_consensus', 'heterogeneity_math',
+        'msi_status', 'hrd_score', 'cimp_status',
+        'clinical',
+        # Tier 2 multi-omic (4)
+        'lncrna_pca50', 'gsva_hallmark', 'promoter_meth', 'splicing_psi50',
+    ],  # 50 reps
 }
 
 _SEARCH_NAME_MAP = {
@@ -153,6 +171,19 @@ _SEARCH_NAME_MAP = {
     'exhaustive': 'long',
     'fast': 'fast',
     'long': 'long',
+}
+
+# Reps that require per-fold fitting (z-scoring, PCA, etc.).
+# These are created as rep_factories instead of base_reps to prevent leakage.
+FACTORY_REPS = {
+    'gene_hvg2000', 'gene_pca100',
+    'gene_hallmark', 'gene_progeny', 'gene_kegg', 'gene_dorothea',
+    'gene_combined_pathway', 'gene_reactome', 'gene_oncogenic',
+    'gene_immune',
+    'gene_nmf50', 'gene_ica50', 'gene_sparse_pca50',
+    'gene_quantile_rank', 'gene_corr_modules', 'gene_autoencoder50',
+    # Tier 2 factory reps
+    'lncrna_pca50', 'gsva_hallmark', 'promoter_meth', 'splicing_psi50',
 }
 
 # Dispatch: (function_name, rep_type)
@@ -196,14 +227,43 @@ _REP_DISPATCH = {
     # DNA methylation: fn(sample_ids, cohort) -> np.ndarray
     'methyl_pca50':          ('create_methylation_pca50', 'mutation'),
     'methyl_hvg':            ('create_methylation_hvg',   'mutation'),
+    # Mutation: fn(sample_ids, cohort) -> np.ndarray
+    'mutation_matrix':       ('create_mutation_matrix',   'mutation'),
+    'mut_tmb':               ('create_mut_tmb',           'mutation'),
+    'mut_driver':            ('create_mut_driver',        'mutation'),
+    'mut_pathway':           ('create_mut_pathway',       'mutation'),
+    'mut_pca50':             ('create_mut_pca50',         'mutation'),
+    # Mutational signatures: fn(sample_ids, cohort) -> np.ndarray
+    'sig_sbs':               ('create_sig_sbs',           'mutation'),
+    'sig_dbs':               ('create_sig_dbs',           'mutation'),
+    'sig_id':                ('create_sig_id',            'mutation'),
+    # PanCanAtlas pre-computed: fn(sample_ids, cohort) -> np.ndarray
+    'immune_cibersort':      ('create_immune_cibersort',  'mutation'),
+    'immune_xcell':          ('create_immune_xcell',      'mutation'),
+    'stemness_mrnasi':       ('create_stemness_mrnasi',   'mutation'),
+    'purity_consensus':      ('create_purity_consensus',  'mutation'),
+    'heterogeneity_math':    ('create_heterogeneity_math','mutation'),
+    'msi_status':            ('create_msi_status',        'mutation'),
+    'hrd_score':             ('create_hrd_score',         'mutation'),
+    'cimp_status':           ('create_cimp_status',       'mutation'),
+    # Clinical: fn(sample_ids, cohort) -> np.ndarray
+    'clinical':              ('create_clinical',          'mutation'),
+    # Tier 2 multi-omic
+    'lncrna_pca50':          ('create_lncrna_pca50',     'mutation'),
+    'gsva_hallmark':         ('create_gsva_hallmark',    'genomic'),
+    'promoter_meth':         ('create_promoter_methylation', 'mutation'),
+    'splicing_psi50':        ('create_splicing_psi50',   'mutation'),
     # RPPA: fn(sample_ids) -> np.ndarray (pan-cancer, no cohort needed)
     'rppa':                  ('create_rppa',              'rppa'),
-    # WSI — GigaSSL (Mendeley, public, slide-level)
+    # WSI — slide-level features (GigaSSL: ctranspath/phikon/hoptimus0/gigapath/moco;
+    #        TITAN: HF gated; UNI2-h: manual prep)
     'wsi_ctranspath':        ('load_wsi_features',        'wsi'),
     'wsi_phikon':            ('load_wsi_features',        'wsi'),
     'wsi_hoptimus0':         ('load_wsi_features',        'wsi'),
     'wsi_gigapath':          ('load_wsi_features',        'wsi'),
     'wsi_moco':              ('load_wsi_features',        'wsi'),
+    'wsi_titan':             ('load_wsi_features',        'wsi'),
+    'wsi_uni2h':             ('load_wsi_features',        'wsi'),
 }
 
 
@@ -272,10 +332,14 @@ def get_representations(
     if genomic_only:
         rep_names = [r for r in rep_names if not r.startswith('wsi_')]
 
-    print(f"\nGenerating {len(rep_names)} representations...")
+    # Filter out factory reps — these are handled by get_rep_factories()
+    base_rep_names = [r for r in rep_names if r not in FACTORY_REPS]
+
+    print(f"\nGenerating {len(base_rep_names)} base representations "
+          f"(+ {len(rep_names) - len(base_rep_names)} per-fold factory reps)...")
 
     representations = {}
-    for rep_name in rep_names:
+    for rep_name in base_rep_names:
         if rep_name not in _REP_DISPATCH:
             print(f"  WARNING: Unknown representation '{rep_name}', skipping")
             continue
@@ -350,6 +414,145 @@ def get_representations(
     return representations
 
 
+def get_rep_factories(
+    expression: np.ndarray,
+    gene_names: np.ndarray,
+    preset_or_list: str,
+    sample_ids: Optional[List[str]] = None,
+    cohort: str = '',
+) -> Dict[str, Any]:
+    """Create per-fold rep factories for data-dependent TCGA representations.
+
+    These reps require fitting on training data (z-scoring, PCA) and are
+    passed as rep_factories to find_best_hybrid() to prevent leakage.
+
+    Args:
+        expression: (n_samples, n_genes) expression matrix
+        gene_names: (n_genes,) gene symbols
+        preset_or_list: preset name or comma-separated rep names
+        sample_ids: TCGA barcodes (needed for methylation/lncRNA/splicing factories)
+        cohort: TCGA cohort string (needed for methylation/lncRNA/splicing factories)
+
+    Returns:
+        Dict of {rep_name: factory_callable} for reps that need per-fold fitting
+    """
+    from kirby.representations.genomic import (
+        make_hvg2000_factory, make_gene_pca_factory,
+        make_gene_set_score_factory, make_weighted_score_factory,
+        make_combined_pathway_factory,
+        make_gene_immune_factory,
+        make_nmf_factory, make_ica_factory, make_sparse_pca_factory,
+        make_quantile_rank_pca_factory, make_corr_modules_factory,
+        make_autoencoder_factory,
+        make_lncrna_pca_factory, make_gsva_hallmark_factory,
+        make_promoter_methylation_factory, make_splicing_psi_factory,
+    )
+    from kirby.representations.data import (
+        hallmark, progeny_weights, kegg, dorothea_regulons,
+        reactome, oncogenic,
+    )
+
+    if preset_or_list in REP_PRESETS:
+        rep_names = REP_PRESETS[preset_or_list]
+    else:
+        rep_names = [r.strip().lower() for r in preset_or_list.split(',')]
+
+    # Only create factories for requested reps that are in FACTORY_REPS
+    requested_factories = [r for r in rep_names if r in FACTORY_REPS]
+    if not requested_factories:
+        return {}
+
+    print(f"\nCreating {len(requested_factories)} per-fold rep factories...")
+
+    # Gene set loaders for unweighted scoring
+    _gene_set_loaders = {
+        'gene_hallmark': hallmark,
+        'gene_kegg': kegg,
+        'gene_reactome': reactome,
+        'gene_oncogenic': oncogenic,
+    }
+    # Weighted network loaders
+    _weighted_loaders = {
+        'gene_progeny': progeny_weights,
+        'gene_dorothea': dorothea_regulons,
+    }
+
+    # Tier 2 reps that need sample_ids + cohort
+    _tier2_needs_samples = {'lncrna_pca50', 'promoter_meth', 'splicing_psi50'}
+
+    factories = {}
+    for rep_name in requested_factories:
+        try:
+            start = time.time()
+            print(f"  Setting up {rep_name} factory...", end=' ', flush=True)
+
+            if rep_name == 'gene_hvg2000':
+                factories[rep_name] = make_hvg2000_factory(expression, gene_names)
+            elif rep_name == 'gene_pca100':
+                factories[rep_name] = make_gene_pca_factory(expression)
+            elif rep_name in _gene_set_loaders:
+                gs = _gene_set_loaders[rep_name]()
+                factories[rep_name] = make_gene_set_score_factory(
+                    expression, gene_names, gs
+                )
+            elif rep_name in _weighted_loaders:
+                weights = _weighted_loaders[rep_name]()
+                factories[rep_name] = make_weighted_score_factory(
+                    expression, gene_names, weights
+                )
+            elif rep_name == 'gene_combined_pathway':
+                factories[rep_name] = make_combined_pathway_factory(
+                    expression, gene_names
+                )
+            elif rep_name == 'gene_immune':
+                factories[rep_name] = make_gene_immune_factory(
+                    expression, gene_names
+                )
+            elif rep_name == 'gene_nmf50':
+                factories[rep_name] = make_nmf_factory(expression)
+            elif rep_name == 'gene_ica50':
+                factories[rep_name] = make_ica_factory(expression)
+            elif rep_name == 'gene_sparse_pca50':
+                factories[rep_name] = make_sparse_pca_factory(expression)
+            elif rep_name == 'gene_quantile_rank':
+                factories[rep_name] = make_quantile_rank_pca_factory(expression)
+            elif rep_name == 'gene_corr_modules':
+                factories[rep_name] = make_corr_modules_factory(expression)
+            elif rep_name == 'gene_autoencoder50':
+                factories[rep_name] = make_autoencoder_factory(expression)
+            # --- Tier 2 factories ---
+            elif rep_name == 'gsva_hallmark':
+                factories[rep_name] = make_gsva_hallmark_factory(
+                    expression, gene_names
+                )
+            elif rep_name in _tier2_needs_samples:
+                if sample_ids is None:
+                    print(f"WARNING: {rep_name} factory needs sample_ids — skipping")
+                    continue
+                if rep_name == 'lncrna_pca50':
+                    factories[rep_name] = make_lncrna_pca_factory(
+                        sample_ids, cohort
+                    )
+                elif rep_name == 'promoter_meth':
+                    factories[rep_name] = make_promoter_methylation_factory(
+                        sample_ids, cohort
+                    )
+                elif rep_name == 'splicing_psi50':
+                    factories[rep_name] = make_splicing_psi_factory(
+                        sample_ids, cohort
+                    )
+            else:
+                print(f"WARNING: no factory for '{rep_name}'")
+                continue
+
+            elapsed = time.time() - start
+            print(f"done ({elapsed:.1f}s)")
+        except Exception as e:
+            print(f"FAILED: {e}")
+
+    return factories
+
+
 # =============================================================================
 # OUTPUT FORMATTING
 # =============================================================================
@@ -364,6 +567,8 @@ def _get(result, key):
 _METRIC_DISPLAY = {
     'r2': 'R²', 'rmse': 'RMSE', 'mae': 'MAE',
     'accuracy': 'Accuracy', 'auc': 'AUC',
+    'spearman': 'Spearman ρ', 'pearson': 'Pearson r',
+    'ci': 'CI', 'f1_weighted': 'F1w',
 }
 
 
@@ -438,6 +643,32 @@ def print_summary(result: SearchResult, task_type: str):
             else:
                 row += f"{'--':<10}"
         print(row)
+
+    # Secondary metrics for baselines
+    sec_keys = set()
+    for baseline_scores in baselines.values():
+        if '_secondary' in baseline_scores:
+            sec_keys.update(baseline_scores['_secondary'].keys())
+    if sec_keys:
+        print(f"\n=== SECONDARY METRICS (baselines) ===")
+        # Group by metric name
+        sec_metric_names = sorted(set(k.split('_', 1)[1] for k in sec_keys if '_' in k))
+        for sec_metric in sec_metric_names:
+            display_name = _METRIC_DISPLAY.get(sec_metric, sec_metric)
+            print(f"\n  {display_name}:")
+            header = f"  {'Baseline':<15} {'Dim':<8}" + "".join(f"{m:<10}" for m in models_evaluated)
+            print(header)
+            for baseline_name, baseline_scores in baselines.items():
+                sec = baseline_scores.get('_secondary', {})
+                row = f"  {baseline_name:<15} {baseline_scores.get('dimension', '?'):<8}"
+                for m in models_evaluated:
+                    key = f'{m}_{sec_metric}'
+                    val = sec.get(key, {}).get('mean')
+                    if val is not None:
+                        row += f"{val:<10.4f}"
+                    else:
+                        row += f"{'--':<10}"
+                print(row)
 
     print(f"\n=== HYBRID IMPROVEMENT ===")
     for model_name, r in result.best_by_model.items():
@@ -634,7 +865,7 @@ Output:
                        help="tcga_luad_vs_lusc, tcga_brca_pam50, or tcga_brca_survival")
     parser.add_argument('--reps', type=str, default='fast',
                        help="Preset: 'fast'(5), 'fast+diverse'(8), 'multimodal'(12), "
-                            "'fast+learned'(15), 'all'(27), 'genomic_fast'(3), "
+                            "'fast+learned'(15), 'all'(57), 'genomic_fast'(3), "
                             "'genomic_diverse'(10), 'genomic_all'(18), or comma-separated list")
     parser.add_argument('--search', type=str, default='fast',
                        choices=list(_SEARCH_NAME_MAP.keys()),
@@ -703,6 +934,12 @@ Output:
         args.reps, cohort=cohort, genomic_only=args.genomic_only,
     )
 
+    # Create per-fold factories for data-dependent reps (prevents leakage)
+    leakage_free_factories = get_rep_factories(
+        expression, gene_names, args.reps,
+        sample_ids=sample_ids, cohort=cohort,
+    )
+
     # Resolve model override
     models_arg = None
     if args.model:
@@ -714,9 +951,16 @@ Output:
 
     # Select metric
     if task_type == 'classification':
-        metric = 'accuracy'
+        n_classes = len(np.unique(labels))
+        if n_classes == 2:
+            metric = 'auc'
+            secondary_metrics = ['accuracy', 'f1_weighted']
+        else:
+            metric = 'f1_weighted'
+            secondary_metrics = ['accuracy']
     else:
         metric = 'r2'
+        secondary_metrics = ['rmse', 'spearman']
 
     # Build fine-tuning factories
     rep_factories = None
@@ -759,6 +1003,12 @@ Output:
         else:
             rep_factories = None
 
+    # Merge leakage-free factories with fine-tuning factories
+    if leakage_free_factories:
+        if rep_factories is None:
+            rep_factories = {}
+        rep_factories.update(leakage_free_factories)
+
     # Hyperparameter tuning
     if args.tune:
         from kirby.find_best_hybrid import tune_models
@@ -777,6 +1027,7 @@ Output:
         groups=groups,
         models=models_arg,
         metric=metric,
+        secondary_metrics=secondary_metrics,
         task_type=task_type,
         speed=speed,
         n_folds=args.n_folds,

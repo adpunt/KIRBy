@@ -275,15 +275,15 @@ def load_abagym_dataset(
             except (ValueError, IndexError):
                 continue
 
-            all_heavy_seqs.append(mut_heavy)
-            all_light_seqs.append(mut_light)
-
             # Use MinMax normalized score as label
             label = row['MinMax_normalized_DMS_score']
             if pd.isna(label):
                 label = row['DMS_score']
             if pd.isna(label):
                 continue
+
+            all_heavy_seqs.append(mut_heavy)
+            all_light_seqs.append(mut_light)
             all_labels.append(float(label))
             all_exp_labels.append(exp_name)
 

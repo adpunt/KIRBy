@@ -81,7 +81,13 @@ pip install -e ".[uncertainty]"
 pip install -e ".[qsar,antibody,tcga,uncertainty,interpret]"
 
 # Reaction yield prediction (optional)
-pip install drfp
+pip install drfp rxnfp
+
+# Mordred 2D descriptors (~1613 features, superset of RDKit PDV)
+pip install mordred  # or: pip install mordredcommunity (maintained fork)
+
+# Polaris Hub ADME benchmarks (biogen/adme-fang-v1: HLM, RLM, MDR1, Solubility)
+pip install polaris-lib
 
 # openpyxl — required for Buchwald-Hartwig Excel loading (pandas needs >=3.1.0)
 pip install --upgrade openpyxl
@@ -207,6 +213,53 @@ pip install unimol-tools
 # If install fails: pip install unimol-tools --no-deps
 ```
 
+### 3g. Forward Compatibility Models (Phase 4A)
+
+```bash
+# MiniMol — lightweight GINE GNN molecular encoder
+pip install minimol
+
+# GP-MoLFormer — IBM's improved MoLFormer (auto-downloads from HF)
+# Model: ibm-research/GP-MoLFormer-Uniq (768D, trust_remote_code=True)
+# Already covered by transformers dependency
+
+# MolE — contrastive molecular encoder (CC-BY-NC 4.0 license)
+pip install git+https://github.com/recursionpharma/mole.git
+# Download pretrained weights from https://github.com/recursionpharma/mole
+# Place in: $KIRBY_MODELS_DIR/mole/ or ~/kirby_models/mole/
+
+# MINT — protein interaction LM (ESM-2 backbone, 1280D)
+pip install git+https://github.com/EMCarrami/MINT.git
+# Download checkpoint from MINT GitHub releases
+# Place at: $KIRBY_MODELS_DIR/mint/mint.ckpt or ~/kirby_models/mint/mint.ckpt
+
+# IgT5 — T5-based paired antibody LM (auto-downloads from HF)
+# Model: Exscientia/IgT5 (requires sentencepiece)
+# Already covered by transformers + sentencepiece dependencies
+
+# S2ALM — BLOCKED: weights not publicly available (stub only)
+```
+
+### 3h. Forward Compatibility Models (Phase 4B — structure-dependent)
+
+```bash
+# ESM3 — multimodal protein LM (sequence + structure + function)
+# Uses the same `esm` package as ESM-C. Requires Python >= 3.10.
+# Model: esm3_sm_open_v1 (1536D embeddings, auto-downloads)
+pip install esm
+
+# SaProt — structure-aware protein LM (3Di + AA interleaved)
+# Uses HuggingFace transformers. ProstT5 predicts 3Di tokens (no Foldseek needed).
+# Models auto-download: westlake-repl/SaProt_650M_AF2 (~2.5GB)
+#                       Rostlab/ProstT5 (~5.5GB)
+# Already covered by transformers dependency
+
+# Boltz-2 — structure prediction model for protein embeddings (384D)
+# CLI-based: runs `boltz predict --write_embeddings`
+# CUDA strongly recommended. Embeddings cached to ~/.cache/kirby/boltz2/
+pip install boltz
+```
+
 ### Molecular representation summary
 
 | Representation | Type | Dims | Extra Setup |
@@ -214,6 +267,7 @@ pip install unimol-tools
 | ECFP4 | Static | 2048D | None (RDKit) |
 | MACCS | Static | 167D | None (RDKit) |
 | PDV | Static | 200D | None (RDKit) |
+| Mordred | Static | ~1613D | `mordred` (pip) |
 | mol2vec | Pretrained | 300D | Download `model_300dim.pkl` |
 | Graph Kernel (WL) | Pretrained | Variable | None (grakel) |
 | MHG-GNN | Pretrained | 256D | Clone repo + weights |
@@ -233,6 +287,9 @@ pip install unimol-tools
 | Uni-Mol v2 | Pretrained (3D) | 768D | `unimol-tools` (**requires numpy>=2, Python>=3.10**) |
 | DimeNet++ | Pretrained (3D) | 256D | None (torch-geometric) |
 | PDV variants | Static | 200D | None (RDKit) — `pdv_binary_mean`, `pdv_rank` |
+| MiniMol | Pretrained (GNN) | ~512D | `minimol` (pip) |
+| GP-MoLFormer | Pretrained | 768D | None (auto-downloads from HF) |
+| MolE | Pretrained | TBD | GitHub + manual weights (CC-BY-NC 4.0) |
 
 ---
 
@@ -281,8 +338,8 @@ pip install peft
 
 ### Antibody representation summary
 
-**Current reps (18 total, March 2026 rebuild):** 7 LM + 4 sequence + 5 CDR-pooled +
-1 midlayer + 1 structural. See `BILL_OF_MATERIALS.md` §2B for full list.
+**Current reps (19+ total, March 2026 rebuild):** 8 LM + 4 sequence + 5 CDR-pooled +
+1 midlayer + 1 structural + forward compat. See `BILL_OF_MATERIALS.md` §2B for full list.
 
 | Representation | Dims | Category | Package | Notes |
 |----------------|------|----------|---------|-------|
@@ -304,6 +361,11 @@ pip install peft
 | `amplify_cdr` | 1920 | CDR-pooled LM | transformers + anarci | AMPLIFY 350M, CDR-only |
 | `esm2_midlayers` | 2560 | Intermediate LM | transformers | Avg layers 20-33 |
 | `structural` | 28 | Structure | ImmuneBuilder | SASA + confidence + paratope (ABodyBuilder2) |
+| `igt5` | varies | Pretrained Ab LM | transformers + sentencepiece | IgT5 paired (Exscientia) |
+| `esm3` | 3072 | Pretrained LM | esm (v3) | ESM3 multimodal, H+L concat. **Requires Python >=3.10.** |
+| `esm3_cdr` | 3072 | CDR-pooled LM | esm + anarci | ESM3, CDR residues only |
+| `saprot` | 2560 | Structure-aware LM | transformers | SaProt 650M + ProstT5 for 3Di. H+L concat |
+| `saprot_cdr` | 2560 | CDR-pooled LM | transformers + anarci | SaProt, CDR residues only |
 
 ---
 
@@ -350,6 +412,10 @@ python -c "from transformers import AutoTokenizer, AutoModelForCausalLM; AutoTok
 python -c "from transformers import AutoModel; AutoModel.from_pretrained('ibm/MoLFormer-XL-both-10pct')"
 python -c "from transformers import AutoModel; AutoModel.from_pretrained('seyonec/ChemBERTa-zinc-base-v1')"
 python -c "from transformers import AutoModel; AutoModel.from_pretrained('HUBioDataLab/SELFormer')"
+
+# Forward compat models (Phase 4A)
+python -c "from transformers import AutoModel, AutoTokenizer; AutoTokenizer.from_pretrained('ibm-research/GP-MoLFormer-Uniq', trust_remote_code=True); AutoModel.from_pretrained('ibm-research/GP-MoLFormer-Uniq', trust_remote_code=True)"
+python -c "from transformers import AutoTokenizer, T5EncoderModel; AutoTokenizer.from_pretrained('Exscientia/IgT5'); T5EncoderModel.from_pretrained('Exscientia/IgT5')"
 ```
 
 ### 5c. BALM (manual — not on HuggingFace)
@@ -715,7 +781,24 @@ No GDC/dbGaP credentials needed. Alternative: `python scripts/download_tcga_gdc.
 | Clinical/phenotype | UCSC Xena | Yes | <5 MB |
 | Survival endpoints | TCGA-CDR (Liu et al. 2018) | Yes | <1 MB |
 | Somatic mutations | MC3 MAF (Xena) | Yes | ~50 MB |
-| WSI features | Mendeley GigaSSL | Yes (on first use) | ~50 MB |
+| WSI features (GigaSSL) | Mendeley GigaSSL | Yes (on first use) | ~50 MB |
+| WSI features (TITAN) | HuggingFace (gated) | Yes (needs `huggingface-cli login`) | ~100 MB |
+| WSI features (UNI2-h) | Manual prep | No (see below) | ~200 MB |
+
+#### TITAN WSI features (gated HuggingFace)
+
+TITAN (768D slide-level embeddings) requires a gated HuggingFace model. Authenticate first:
+
+```bash
+huggingface-cli login  # paste your HF token
+# Features auto-download on first use via load_wsi_features()
+```
+
+#### UNI2-h WSI features (manual prep)
+
+UNI2-h (1536D mean-pooled patch embeddings) requires pre-extracted features. Place feature
+files in the WSI directory alongside GigaSSL features, named with the `uni2h` model key.
+The `load_wsi_features()` loader picks them up automatically.
 
 ### Available Datasets
 
@@ -731,7 +814,7 @@ No GDC/dbGaP credentials needed. Alternative: `python scripts/download_tcga_gdc.
 |--------|------|-------------|
 | `fast` | gene_pca100, gene_hallmark, gene_progeny, wsi_ctranspath, wsi_phikon | 5 reps, CPU-only |
 | `fast+learned` | + gene_hvg2000, gene_kegg, gene_dorothea, gene_combined_pathway, wsi_conch, wsi_hoptimus0 | 11 reps |
-| `all` | + gene_mutation, wsi_gigapath | 13 reps (all genomic + WSI) |
+| `all` | 53 total: 18 expression + 5 FM + 23 multi-omic + 7 WSI | 53 reps |
 | `genomic_fast` | gene_pca100, gene_hallmark, gene_progeny | 3 reps, no WSI |
 | `genomic_all` | all 8 genomic reps, no WSI | 8 reps |
 

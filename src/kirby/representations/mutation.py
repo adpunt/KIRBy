@@ -445,6 +445,209 @@ def create_esm2_llr(
     return np.vstack(features)
 
 
+# ── ESM-C log-likelihood ratio ──────────────────────────────────────────────
+
+def create_esmc_llr(
+    heavy_seqs: List[str],
+    light_seqs: Optional[List[str]],
+    mutations: List[List[Dict]],
+) -> np.ndarray:
+    """ESM-C 600M masked marginal log-likelihood ratio for each mutation.
+
+    Same approach as ESM-2 LLR but uses EvolutionaryScale's ESM-C model.
+    ESM-C matches ESM-2 3B quality at 5x fewer params — a different model
+    gives a different LLR signal that the hybrid search can leverage.
+
+    Returns:
+        (N, 3) float32 array: [sum_llr, mean_llr, min_llr]
+    """
+    import torch
+    from esm.models.esmc import ESMC
+    from esm.sdk.api import ESMProtein
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = ESMC.from_pretrained("esmc_600m").to(device)
+    model.eval()
+
+    # Build vocab mapping: single AA → token ID
+    # ESM-C encode() returns ESMProteinTensor with .sequence shape (1, 3) = [BOS, aa, EOS]
+    aa_to_token = {}
+    for aa in AA_LIST:
+        protein = ESMProtein(sequence=aa)
+        tensor = model.encode(protein)
+        aa_to_token[aa] = int(tensor.sequence[0, 1])
+
+    features = []
+
+    for i in range(len(heavy_seqs)):
+        mut_list = mutations[i] if i < len(mutations) else []
+        if not mut_list:
+            features.append(np.zeros(3, dtype=np.float32))
+            continue
+
+        llrs = []
+        for m in mut_list:
+            chain = m.get('chain', 'heavy')
+            pos = m.get('pos', 0)
+            wt_aa = m['wt_aa']
+            mut_aa = m['mut_aa']
+
+            if chain == 'heavy':
+                seq = heavy_seqs[i]
+            elif light_seqs and light_seqs[i]:
+                seq = light_seqs[i]
+            else:
+                seq = heavy_seqs[i]
+
+            # Reconstruct wildtype at this position
+            wt_seq = list(seq)
+            if pos < len(wt_seq):
+                wt_seq[pos] = wt_aa
+            wt_seq = ''.join(wt_seq)
+
+            # Encode and mask
+            protein = ESMProtein(sequence=wt_seq)
+            tensor = model.encode(protein)
+            # tensor.sequence: (1, L+2) with BOS at 0 and EOS at end
+            mask_pos = pos + 1  # +1 for BOS
+            if mask_pos >= tensor.sequence.shape[1] - 1:
+                llrs.append(0.0)
+                continue
+
+            # Mask the target position (ESM family uses token ID 32 for mask)
+            tensor.sequence[0, mask_pos] = 32
+
+            with torch.no_grad():
+                from esm.sdk.api import LogitsConfig
+                config = LogitsConfig(sequence=True, return_embeddings=False)
+                output = model.logits(tensor, config)
+                logits = output.logits[0, mask_pos]
+                log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+
+            wt_tok = aa_to_token.get(wt_aa)
+            mut_tok = aa_to_token.get(mut_aa)
+            if wt_tok is not None and mut_tok is not None:
+                llr = (log_probs[mut_tok] - log_probs[wt_tok]).item()
+            else:
+                llr = 0.0
+            llrs.append(llr)
+
+        if llrs:
+            features.append(np.array([
+                sum(llrs), np.mean(llrs), min(llrs),
+            ], dtype=np.float32))
+        else:
+            features.append(np.zeros(3, dtype=np.float32))
+
+    del model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    return np.vstack(features)
+
+
+# ── AntiBERTy log-likelihood ratio ─────────────────────────────────────────
+
+def create_antiberty_llr(
+    heavy_seqs: List[str],
+    light_seqs: Optional[List[str]],
+    mutations: List[List[Dict]],
+) -> np.ndarray:
+    """AntiBERTy masked marginal log-likelihood ratio for each mutation.
+
+    AntiBERTy is a BERT-style masked LM trained specifically on antibody
+    sequences. Its LLR captures antibody-specific evolutionary plausibility,
+    complementary to the general-purpose ESM-2 LLR.
+
+    Uses the `antiberty` pip package (jeffreyruffolo/AntiBERTy).
+    Accesses the underlying BertForMaskedLM model and tokenizer from the runner.
+
+    Returns:
+        (N, 3) float32 array: [sum_llr, mean_llr, min_llr]
+    """
+    import torch
+    from antiberty import AntiBERTyRunner
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    runner = AntiBERTyRunner()
+    # AntiBERTyRunner exposes .model (BertForMaskedLM) and .tokenizer
+    model = runner.model.to(device).eval()
+    tokenizer = runner.tokenizer
+
+    # Build AA → token ID mapping
+    aa_to_token = {}
+    for aa in AA_LIST:
+        toks = tokenizer.encode(aa, add_special_tokens=False)
+        if toks:
+            aa_to_token[aa] = toks[0]
+
+    mask_token_id = tokenizer.mask_token_id
+
+    features = []
+
+    for i in range(len(heavy_seqs)):
+        mut_list = mutations[i] if i < len(mutations) else []
+        if not mut_list:
+            features.append(np.zeros(3, dtype=np.float32))
+            continue
+
+        llrs = []
+        for m in mut_list:
+            chain = m.get('chain', 'heavy')
+            pos = m.get('pos', 0)
+            wt_aa = m['wt_aa']
+            mut_aa = m['mut_aa']
+
+            if chain == 'heavy':
+                seq = heavy_seqs[i]
+            elif light_seqs and light_seqs[i]:
+                seq = light_seqs[i]
+            else:
+                seq = heavy_seqs[i]
+
+            # Reconstruct wildtype at this position
+            wt_seq = list(seq)
+            if pos < len(wt_seq):
+                wt_seq[pos] = wt_aa
+            wt_seq = ''.join(wt_seq)
+
+            # Tokenize WT sequence, mask the mutation position
+            tokens = tokenizer.encode(wt_seq, add_special_tokens=True,
+                                      return_tensors='pt').to(device)
+            # +1 for CLS/BOS token
+            mask_pos = pos + 1
+            if mask_pos >= tokens.shape[1] - 1:
+                llrs.append(0.0)
+                continue
+
+            tokens[0, mask_pos] = mask_token_id
+
+            with torch.no_grad():
+                logits = model(tokens).logits[0, mask_pos]
+                log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
+
+            wt_tok = aa_to_token.get(wt_aa)
+            mut_tok = aa_to_token.get(mut_aa)
+            if wt_tok is not None and mut_tok is not None:
+                llr = (log_probs[mut_tok] - log_probs[wt_tok]).item()
+            else:
+                llr = 0.0
+            llrs.append(llr)
+
+        if llrs:
+            features.append(np.array([
+                sum(llrs), np.mean(llrs), min(llrs),
+            ], dtype=np.float32))
+        else:
+            features.append(np.zeros(3, dtype=np.float32))
+
+    del model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    return np.vstack(features)
+
+
 # ── Registry ─────────────────────────────────────────────────────────────────
 
 MUTATION_REPS = {
@@ -452,4 +655,6 @@ MUTATION_REPS = {
     'esm2_mutsite': create_esm2_mutsite,              # 1280D
     'esm2_wt_delta': create_esm2_wt_delta,            # 2560D
     'esm2_llr': create_esm2_llr,                      # 3D
+    'esmc_llr': create_esmc_llr,                      # 3D
+    'antiberty_llr': create_antiberty_llr,            # 3D
 }

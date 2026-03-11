@@ -3,11 +3,13 @@
 # Run on the login node: bash tests/slurm_scripts/run_dta_scenarios.sh [MODE]
 #
 # Usage:
-#   bash tests/slurm_scripts/run_dta_scenarios.sh              # all: davis + kiba frozen + kiba FT
+#   bash tests/slurm_scripts/run_dta_scenarios.sh              # all: davis + kiba + bindingdb + cold-drug
 #   bash tests/slurm_scripts/run_dta_scenarios.sh davis         # davis frozen only
 #   bash tests/slurm_scripts/run_dta_scenarios.sh kiba          # kiba frozen only
 #   bash tests/slurm_scripts/run_dta_scenarios.sh kiba_ft       # kiba with ESM-2 LoRA fine-tuning
-#   bash tests/slurm_scripts/run_dta_scenarios.sh all           # davis + kiba + kiba_ft
+#   bash tests/slurm_scripts/run_dta_scenarios.sh bindingdb_kd  # BindingDB_Kd (via TDC)
+#   bash tests/slurm_scripts/run_dta_scenarios.sh davis_cold_drug  # davis cold-drug split
+#   bash tests/slurm_scripts/run_dta_scenarios.sh all           # all modes
 
 MODE=${1:-all}
 OUTPUT="tests/results/dta_survey"
@@ -53,21 +55,42 @@ case "$MODE" in
         echo ""
         echo "  Total: 1 job (kiba with ESM-2 LoRA fine-tuning, GPU)"
         ;;
+    bindingdb_kd)
+        submit bindingdb_kd_frozen bindingdb_kd "--max-pairs 30000" 64G 47:59:00 gpu
+        echo ""
+        echo "  Total: 1 job (BindingDB_Kd frozen, 30K pairs)"
+        ;;
+    davis_cold_drug)
+        submit davis_cold_drug davis "--cold-setting drug" 64G 47:59:00 gpu
+        echo ""
+        echo "  Total: 1 job (davis cold-drug, 68 drug groups)"
+        ;;
+    kiba_cold_drug)
+        submit kiba_cold_drug kiba "--max-pairs 30000 --cold-setting drug" 64G 47:59:00 gpu
+        echo ""
+        echo "  Total: 1 job (kiba cold-drug, 30K pairs)"
+        ;;
     all)
         submit davis_frozen davis "" 64G 47:59:00 gpu
         submit kiba_frozen kiba "--max-pairs 30000" 64G 47:59:00 gpu
         submit kiba_ft kiba "--max-pairs 30000 --finetune protein_esm2_lora --finetune-epochs 5" 96G 47:59:00 gpu
+        submit bindingdb_kd_frozen bindingdb_kd "--max-pairs 30000" 64G 47:59:00 gpu
+        submit davis_cold_drug davis "--cold-setting drug" 64G 47:59:00 gpu
+        submit kiba_cold_drug kiba "--max-pairs 30000 --cold-setting drug" 64G 47:59:00 gpu
         echo ""
-        echo "  Total: 3 jobs (davis frozen + kiba frozen + kiba FT)"
+        echo "  Total: 6 jobs (davis + kiba + kiba_ft + bindingdb + cold-drug × 2)"
         ;;
     *)
         echo "Usage: bash run_dta_scenarios.sh [MODE]"
         echo ""
         echo "Modes:"
-        echo "  all       Davis frozen + KIBA frozen + KIBA FT (3 jobs)"
-        echo "  davis     Davis frozen (27 reps, 1 job)"
-        echo "  kiba      KIBA frozen (27 reps, 30K pairs, 1 job)"
-        echo "  kiba_ft   KIBA with ESM-2 protein LoRA fine-tuning (GPU)"
+        echo "  all              All modes (6 jobs)"
+        echo "  davis            Davis frozen (27 reps, 1 job)"
+        echo "  kiba             KIBA frozen (27 reps, 30K pairs, 1 job)"
+        echo "  kiba_ft          KIBA with ESM-2 protein LoRA fine-tuning (GPU)"
+        echo "  bindingdb_kd     BindingDB_Kd frozen (via TDC, 30K pairs)"
+        echo "  davis_cold_drug  Davis cold-drug split (68 drug groups)"
+        echo "  kiba_cold_drug   KIBA cold-drug split (30K pairs)"
         echo ""
         echo "KIBA: DeepDTA E2E beats frozen by +0.056 R²; fine-tuning recommended."
         exit 1

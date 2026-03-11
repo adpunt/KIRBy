@@ -61,6 +61,33 @@ _XENA_MC3_MAF_URLS = [
     "mc3.v0.2.8.PUBLIC.xena.gz",
 ]
 
+# PanCanAtlas pre-computed data
+_PANCAN_ABSOLUTE_URLS = [
+    "https://pancanatlas.xenahubs.net/download/"
+    "TCGA_mastercalls.abs_tables_JSedit.fixed.txt",
+]
+
+# Thorsson et al. (Immunity 2018) — immune landscape supplementary S1
+# GDC publication UUID: 160789b5-4345-42df-91f7-f4f7c6a10eb4
+_PANCAN_IMMUNE_URLS = [
+    "https://api.gdc.cancer.gov/data/"
+    "160789b5-4345-42df-91f7-f4f7c6a10eb4",
+]
+
+# Malta et al. (Cell 2018) — stemness scores
+# GDC publication: PanCanStemness-2018
+_PANCAN_STEMNESS_URLS = [
+    "https://api.gdc.cancer.gov/data/"
+    "4da68f3a-a504-4e98-aa98-f0ff6a0b8a00",
+]
+
+# Knijnenburg et al. (Cell Reports 2018) — DNA damage response
+# GDC publication: PanCan-DDR-2018
+_PANCAN_HRD_URLS = [
+    "https://api.gdc.cancer.gov/data/"
+    "0bbfca05-f14f-4e6e-a1c4-822e0ca84356",
+]
+
 # GISTIC2 gene-level copy number (per-cohort)
 _XENA_CNV_TEMPLATES = [
     "https://tcga-xena-hub.s3.us-east-1.amazonaws.com/"
@@ -520,6 +547,206 @@ def _download_mutations(sample_ids: List[str]) -> pd.DataFrame:
     result.to_csv(cached_csv, index=False)
     print(f"  {len(result)} mutations for {len(patient_ids)} patients")
     return result
+
+
+def _download_mutations_full(sample_ids: List[str]) -> pd.DataFrame:
+    """Download MC3 MAF with ALL columns needed for mutational signature analysis.
+
+    Unlike _download_mutations() which keeps only (sample, gene, effect),
+    this preserves chromosome, position, ref/alt alleles — required by
+    SigProfilerAssignment for trinucleotide context extraction.
+
+    Returns:
+        DataFrame with columns: sample, chr, start, end, ref, alt, gene, effect
+    """
+    import requests
+
+    cache = _cache_dir()
+
+    import hashlib
+    sid_key = hashlib.sha256(
+        '\n'.join(sorted(set(s[:12] for s in sample_ids))).encode()
+    ).hexdigest()[:16]
+    cached_csv = cache / f'mutations_full_{sid_key}.csv'
+
+    if cached_csv.exists():
+        return pd.read_csv(cached_csv)
+
+    print(f"  Downloading MC3 somatic mutations (full MAF)...")
+    resp = _download_with_fallback(_XENA_MC3_MAF_URLS, timeout=600)
+
+    content = gzip.decompress(resp.content)
+    df = pd.read_csv(io.BytesIO(content), sep='\t', low_memory=False)
+
+    # Filter to our samples by patient ID (first 12 chars of barcode)
+    sample_col = df.columns[0]
+    patient_ids = set(s[:12] for s in sample_ids)
+    mask = df[sample_col].astype(str).str[:12].isin(patient_ids)
+    df = df[mask].copy()
+
+    # Map Xena MC3 columns to standardized names
+    # Xena MC3 columns: sample, chr, start, end, reference, alt, gene, effect, ...
+    col_map = {}
+    for c in df.columns:
+        cl = c.lower()
+        if cl == 'sample' or c == df.columns[0]:
+            col_map['sample'] = c
+        elif cl == 'chr' or cl == 'chromosome' or cl == 'chrom':
+            col_map['chr'] = c
+        elif cl == 'start' or cl == 'start_position' or cl == 'pos_start':
+            col_map['start'] = c
+        elif cl == 'end' or cl == 'end_position' or cl == 'pos_end':
+            col_map['end'] = c
+        elif cl == 'reference' or cl == 'reference_allele' or cl == 'ref':
+            col_map['ref'] = c
+        elif cl == 'alt' or cl == 'tumor_seq_allele2' or cl == 'alternate':
+            col_map['alt'] = c
+        elif cl in ('gene', 'hugo_symbol'):
+            col_map['gene'] = c
+        elif 'class' in cl or cl == 'effect':
+            col_map['effect'] = c
+        elif cl == 'dna_vaf' or cl == 't_vaf':
+            col_map['dna_vaf'] = c
+
+    required = ['sample', 'chr', 'start', 'end', 'ref', 'alt']
+    missing = [k for k in required if k not in col_map]
+    if missing:
+        raise ValueError(
+            f"MC3 MAF missing required columns: {missing}. "
+            f"Available: {list(df.columns)}"
+        )
+
+    result = pd.DataFrame({
+        'sample': df[col_map['sample']].astype(str).str[:15],
+        'chr': df[col_map['chr']].astype(str),
+        'start': df[col_map['start']],
+        'end': df[col_map['end']],
+        'ref': df[col_map['ref']].astype(str),
+        'alt': df[col_map['alt']].astype(str),
+    })
+    if 'gene' in col_map:
+        result['gene'] = df[col_map['gene']]
+    if 'effect' in col_map:
+        result['effect'] = df[col_map['effect']]
+    if 'dna_vaf' in col_map:
+        result['dna_vaf'] = pd.to_numeric(df[col_map['dna_vaf']], errors='coerce')
+
+    result.to_csv(cached_csv, index=False)
+    print(f"  {len(result)} mutations (full MAF) for {len(patient_ids)} patients")
+    return result
+
+
+# =============================================================================
+# PANCANATLAS PRE-COMPUTED DATA
+# =============================================================================
+
+def _pancanatlas_cache_dir() -> Path:
+    """Cache directory for PanCanAtlas pre-computed data."""
+    base = _cache_dir()
+    d = base / 'pancanatlas'
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _download_pancanatlas(
+    urls: list,
+    cache_name: str,
+    description: str,
+    sep: str = '\t',
+) -> pd.DataFrame:
+    """Download and cache a PanCanAtlas table.
+
+    Checks local cache first, then attempts download, then checks for
+    manually-placed file at <cache_dir>/pancanatlas/<cache_name>.
+
+    Args:
+        urls: list of fallback URLs
+        cache_name: filename for cache (e.g., 'absolute_purity.tsv')
+        description: human-readable name for error messages
+        sep: CSV/TSV separator
+    """
+    cache_dir = _pancanatlas_cache_dir()
+    cached = cache_dir / cache_name
+
+    if cached.exists():
+        return pd.read_csv(cached, sep=sep, low_memory=False)
+
+    # Try download
+    print(f"  Downloading {description}...")
+    try:
+        resp = _download_with_fallback(urls, timeout=300)
+        content = resp.content
+        # Handle gzip if needed
+        if cache_name.endswith('.gz') or content[:2] == b'\x1f\x8b':
+            content = gzip.decompress(content)
+        df = pd.read_csv(io.BytesIO(content), sep=sep, low_memory=False)
+        df.to_csv(cached, sep=sep, index=False)
+        print(f"  {description}: {len(df)} rows cached to {cached}")
+        return df
+    except Exception as e:
+        # Check for manually-placed file with common extensions
+        for ext in ['', '.tsv', '.txt', '.csv']:
+            manual = cache_dir / (cache_name.rsplit('.', 1)[0] + ext)
+            if manual.exists() and manual != cached:
+                return pd.read_csv(manual, sep=sep, low_memory=False)
+
+        raise FileNotFoundError(
+            f"Could not download {description}.\n"
+            f"Error: {e}\n"
+            f"To fix: manually download the file and place it at:\n"
+            f"  {cached}\n"
+            f"URLs tried: {urls}"
+        )
+
+
+def _download_pancanatlas_purity() -> pd.DataFrame:
+    """ABSOLUTE purity/ploidy from Xena PanCanAtlas.
+
+    Returns DataFrame with columns including: sample, call status,
+    purity, ploidy, Genome doublings, etc.
+    """
+    return _download_pancanatlas(
+        _PANCAN_ABSOLUTE_URLS,
+        'absolute_purity.tsv',
+        'ABSOLUTE purity (PanCanAtlas)',
+    )
+
+
+def _download_pancanatlas_immune() -> pd.DataFrame:
+    """Thorsson et al. (Immunity 2018) immune landscape supplementary S1.
+
+    Contains CIBERSORT fractions (~22 cell types), xCell scores (~64 types),
+    leukocyte fraction, immune subtypes, and more for ~10K TCGA samples.
+    """
+    return _download_pancanatlas(
+        _PANCAN_IMMUNE_URLS,
+        'immune_landscape.tsv',
+        'Thorsson et al. immune landscape (Immunity 2018)',
+    )
+
+
+def _download_pancanatlas_stemness() -> pd.DataFrame:
+    """Malta et al. (Cell 2018) stemness scores.
+
+    Contains mRNAsi and EREG-mRNAsi for TCGA samples.
+    """
+    return _download_pancanatlas(
+        _PANCAN_STEMNESS_URLS,
+        'stemness_scores.tsv',
+        'Malta et al. stemness (Cell 2018)',
+    )
+
+
+def _download_pancanatlas_hrd() -> pd.DataFrame:
+    """Knijnenburg et al. (Cell Reports 2018) HRD scores.
+
+    Contains HRD-LOH, HRD-TAI (NtAI), HRD-LST, and total HRD score.
+    """
+    return _download_pancanatlas(
+        _PANCAN_HRD_URLS,
+        'hrd_scores.tsv',
+        'Knijnenburg et al. HRD (Cell Reports 2018)',
+    )
 
 
 # =============================================================================
