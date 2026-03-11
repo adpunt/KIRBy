@@ -34,8 +34,9 @@ from typing import Callable, Dict, List, Tuple
 import numpy as np
 from sklearn.base import clone
 from sklearn.linear_model import RidgeCV
+from scipy.stats import spearmanr
 from sklearn.metrics import r2_score
-from sklearn.model_selection import GroupKFold, KFold
+from sklearn.model_selection import GroupKFold
 from sklearn.preprocessing import StandardScaler
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
@@ -64,12 +65,14 @@ def evaluate_frozen(X, labels, groups, n_folds=5):
     """Evaluate a frozen rep with RidgeCV."""
     n_unique = len(np.unique(groups)) if groups is not None else 0
 
-    if groups is not None and n_unique >= n_folds:
-        cv = GroupKFold(n_splits=min(n_folds, n_unique))
-        splits = list(cv.split(X, labels, groups=groups))
-    else:
-        cv = KFold(n_splits=n_folds, shuffle=True, random_state=42)
-        splits = list(cv.split(X, labels))
+    if groups is None or n_unique < 2:
+        print("  WARNING: <2 unique groups, skipping dataset")
+        return {'r2': (float('nan'), float('nan')),
+                'spearman': (float('nan'), float('nan'))}
+
+    effective_folds = min(n_folds, n_unique)
+    cv = GroupKFold(n_splits=effective_folds)
+    splits = list(cv.split(X, labels, groups=groups))
 
     scores = []
     for train_idx, val_idx in splits:
@@ -79,9 +82,15 @@ def evaluate_frozen(X, labels, groups, n_folds=5):
 
         model = RidgeCV(alphas=np.logspace(-6, 6, 13))
         model.fit(X_tr, labels[train_idx])
-        scores.append(r2_score(labels[val_idx], model.predict(X_va)))
+        preds = model.predict(X_va)
+        r2 = r2_score(labels[val_idx], preds)
+        rho = float(spearmanr(labels[val_idx], preds).correlation)
+        scores.append({'r2': r2, 'spearman': rho})
 
-    return float(np.mean(scores)), float(np.std(scores))
+    r2_vals = [s['r2'] for s in scores]
+    rho_vals = [s['spearman'] for s in scores]
+    return {'r2': (float(np.mean(r2_vals)), float(np.std(r2_vals))),
+            'spearman': (float(np.mean(rho_vals)), float(np.std(rho_vals)))}
 
 
 def evaluate_factory(factory, labels, groups, n_folds=5):
@@ -89,12 +98,14 @@ def evaluate_factory(factory, labels, groups, n_folds=5):
     n_unique = len(np.unique(groups)) if groups is not None else 0
     dummy = np.zeros((len(labels), 1))
 
-    if groups is not None and n_unique >= n_folds:
-        cv = GroupKFold(n_splits=min(n_folds, n_unique))
-        splits = list(cv.split(dummy, labels, groups=groups))
-    else:
-        cv = KFold(n_splits=n_folds, shuffle=True, random_state=42)
-        splits = list(cv.split(dummy, labels))
+    if groups is None or n_unique < 2:
+        print("  WARNING: <2 unique groups, skipping dataset")
+        return {'r2': (float('nan'), float('nan')),
+                'spearman': (float('nan'), float('nan'))}
+
+    effective_folds = min(n_folds, n_unique)
+    cv = GroupKFold(n_splits=effective_folds)
+    splits = list(cv.split(dummy, labels, groups=groups))
 
     scores = []
     for train_idx, val_idx in splits:
@@ -110,11 +121,18 @@ def evaluate_factory(factory, labels, groups, n_folds=5):
 
         model = RidgeCV(alphas=np.logspace(-6, 6, 13))
         model.fit(X_tr, labels[train_idx])
-        scores.append(r2_score(labels[val_idx], model.predict(X_va)))
+        preds = model.predict(X_va)
+        r2 = r2_score(labels[val_idx], preds)
+        rho = float(spearmanr(labels[val_idx], preds).correlation)
+        scores.append({'r2': r2, 'spearman': rho})
 
     if not scores:
-        return float('nan'), float('nan')
-    return float(np.mean(scores)), float(np.std(scores))
+        return {'r2': (float('nan'), float('nan')),
+                'spearman': (float('nan'), float('nan'))}
+    r2_vals = [s['r2'] for s in scores]
+    rho_vals = [s['spearman'] for s in scores]
+    return {'r2': (float(np.mean(r2_vals)), float(np.std(r2_vals))),
+            'spearman': (float(np.mean(rho_vals)), float(np.std(rho_vals)))}
 
 
 # =========================================================================
@@ -564,14 +582,19 @@ def main():
         print("\n  --- Frozen baselines ---")
         frozen = get_frozen_baselines(heavy_seqs, light_seqs)
         for rep_name, X in frozen.items():
-            mean, std = evaluate_frozen(
+            result = evaluate_frozen(
                 X, labels, groups, args.n_folds)
+            r2_mean, r2_std = result['r2']
+            rho_mean, rho_std = result['spearman']
             ds_results['frozen'][rep_name] = {
-                'r2_mean': round(mean, 4),
-                'r2_std': round(std, 4),
+                'r2_mean': round(r2_mean, 4),
+                'r2_std': round(r2_std, 4),
+                'spearman_mean': round(rho_mean, 4),
+                'spearman_std': round(rho_std, 4),
                 'dim': X.shape[1],
             }
-            print(f"    {rep_name}: R²={mean:.4f} ± {std:.4f}")
+            print(f"    {rep_name}: R²={r2_mean:.4f} ± {r2_std:.4f}"
+                  f"  ρ={rho_mean:.4f} ± {rho_std:.4f}")
 
         # Fine-tuned methods
         print("\n  --- Fine-tuned ---")
@@ -603,19 +626,24 @@ def main():
 
         for ft_name, factory in factories.items():
             print(f"    {ft_name}:", end='', flush=True)
-            mean, std = evaluate_factory(
+            result = evaluate_factory(
                 factory, labels, groups, args.n_folds)
+            r2_mean, r2_std = result['r2']
+            rho_mean, rho_std = result['spearman']
             ds_results['finetuned'][ft_name] = {
-                'r2_mean': round(mean, 4),
-                'r2_std': round(std, 4),
+                'r2_mean': round(r2_mean, 4),
+                'r2_std': round(r2_std, 4),
+                'spearman_mean': round(rho_mean, 4),
+                'spearman_std': round(rho_std, 4),
             }
-            print(f" R²={mean:.4f} ± {std:.4f}")
+            print(f" R²={r2_mean:.4f} ± {r2_std:.4f}"
+                  f"  ρ={rho_mean:.4f} ± {rho_std:.4f}")
 
             # Compare to frozen baseline
             base_name = ft_name.split('_')[0]  # esm2, ablang2, antiberty
             if base_name in ds_results['frozen']:
                 base_r2 = ds_results['frozen'][base_name]['r2_mean']
-                delta = mean - base_r2
+                delta = r2_mean - base_r2
                 sign = '+' if delta >= 0 else ''
                 print(f"      vs frozen {base_name}: {sign}{delta:.4f}")
 
@@ -628,9 +656,11 @@ def main():
     for ds, res in all_results.items():
         print(f"\n  {ds} ({res['n_samples']} samples):")
         for name, r in res['frozen'].items():
-            print(f"    frozen {name}: R²={r['r2_mean']:.4f}")
+            print(f"    frozen {name}: R²={r['r2_mean']:.4f}  "
+                  f"ρ={r['spearman_mean']:.4f}")
         for name, r in res['finetuned'].items():
-            print(f"    {name}: R²={r['r2_mean']:.4f}")
+            print(f"    {name}: R²={r['r2_mean']:.4f}  "
+                  f"ρ={r['spearman_mean']:.4f}")
 
     # Save
     output_path = args.output or 'tests/results/comparisons'

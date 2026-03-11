@@ -28,8 +28,16 @@ from pathlib import Path
 
 import numpy as np
 from sklearn.metrics import r2_score, mean_squared_error
+from scipy.stats import spearmanr
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
+
+
+def concordance_index(y_true, y_pred):
+    """Concordance Index (CI) — efficient O(n log n) via sorting."""
+    from scipy.stats import kendalltau
+    tau, _ = kendalltau(y_true, y_pred)
+    return (tau + 1) / 2  # Convert Kendall's tau to CI
 
 # ── SMILES / protein integer encoding ────────────────────────────────────────
 
@@ -443,11 +451,13 @@ def main():
             kirby_pred = model.predict(X_test)
             kirby_r2 = r2_score(y_test, kirby_pred)
             kirby_mse = mean_squared_error(y_test, kirby_pred)
-            print(f"    R²={kirby_r2:.4f}, MSE={kirby_mse:.4f} ({time.time()-t0:.1f}s)")
-            results['kirby_frozen'].append({'r2': kirby_r2, 'mse': kirby_mse})
+            kirby_ci = concordance_index(y_test, kirby_pred)
+            kirby_spearman = float(spearmanr(y_test, kirby_pred).correlation)
+            print(f"    CI={kirby_ci:.4f}, R²={kirby_r2:.4f}, MSE={kirby_mse:.4f}, ρ={kirby_spearman:.4f} ({time.time()-t0:.1f}s)")
+            results['kirby_frozen'].append({'r2': kirby_r2, 'mse': kirby_mse, 'ci': kirby_ci, 'spearman': kirby_spearman})
         except Exception as e:
             print(f"    FAILED: {e}")
-            results['kirby_frozen'].append({'r2': float('nan'), 'mse': float('nan')})
+            results['kirby_frozen'].append({'r2': float('nan'), 'mse': float('nan'), 'ci': float('nan'), 'spearman': float('nan')})
 
         # ── Method 2: DeepDTA ──
         print("  [2] DeepDTA...")
@@ -461,12 +471,14 @@ def main():
             )
             dt_r2 = r2_score(y_test, deepdta_pred)
             dt_mse = mean_squared_error(y_test, deepdta_pred)
-            print(f"    R²={dt_r2:.4f}, MSE={dt_mse:.4f} ({time.time()-t0:.1f}s)")
-            results['deepdta'].append({'r2': dt_r2, 'mse': dt_mse})
+            dt_ci = concordance_index(y_test, deepdta_pred)
+            dt_spearman = float(spearmanr(y_test, deepdta_pred).correlation)
+            print(f"    CI={dt_ci:.4f}, R²={dt_r2:.4f}, MSE={dt_mse:.4f}, ρ={dt_spearman:.4f} ({time.time()-t0:.1f}s)")
+            results['deepdta'].append({'r2': dt_r2, 'mse': dt_mse, 'ci': dt_ci, 'spearman': dt_spearman})
             del deepdta
         except Exception as e:
             print(f"    FAILED: {e}")
-            results['deepdta'].append({'r2': float('nan'), 'mse': float('nan')})
+            results['deepdta'].append({'r2': float('nan'), 'mse': float('nan'), 'ci': float('nan'), 'spearman': float('nan')})
 
         # ── Method 3: GraphDTA-GIN ──
         print("  [3] GraphDTA-GIN...")
@@ -482,12 +494,14 @@ def main():
             )
             gin_r2 = r2_score(y_test, gin_pred)
             gin_mse = mean_squared_error(y_test, gin_pred)
-            print(f"    R²={gin_r2:.4f}, MSE={gin_mse:.4f} ({time.time()-t0:.1f}s)")
-            results['graphdta_gin'].append({'r2': gin_r2, 'mse': gin_mse})
+            gin_ci = concordance_index(y_test, gin_pred)
+            gin_spearman = float(spearmanr(y_test, gin_pred).correlation)
+            print(f"    CI={gin_ci:.4f}, R²={gin_r2:.4f}, MSE={gin_mse:.4f}, ρ={gin_spearman:.4f} ({time.time()-t0:.1f}s)")
+            results['graphdta_gin'].append({'r2': gin_r2, 'mse': gin_mse, 'ci': gin_ci, 'spearman': gin_spearman})
             del gin
         except Exception as e:
             print(f"    FAILED: {e}")
-            results['graphdta_gin'].append({'r2': float('nan'), 'mse': float('nan')})
+            results['graphdta_gin'].append({'r2': float('nan'), 'mse': float('nan'), 'ci': float('nan'), 'spearman': float('nan')})
 
         if device == 'cuda':
             torch.cuda.empty_cache()
@@ -496,16 +510,19 @@ def main():
     print("\n" + "=" * 70)
     print(f"DTA End-to-End Comparison: {args.dataset.upper()} ({n} pairs, cold-target)")
     print("=" * 70)
-    print(f"{'Method':<25} {'R² (mean±std)':>18} {'MSE (mean±std)':>18}")
-    print("-" * 70)
+    print(f"{'Method':<25} {'CI (mean±std)':>18} {'R² (mean±std)':>18} {'Spearman':>12}")
+    print("-" * 78)
     for method, scores in results.items():
         r2s = [s['r2'] for s in scores if not np.isnan(s['r2'])]
         mses = [s['mse'] for s in scores if not np.isnan(s['mse'])]
+        cis = [s['ci'] for s in scores if not np.isnan(s['ci'])]
+        rhos = [s['spearman'] for s in scores if not np.isnan(s['spearman'])]
         if r2s:
-            print(f"{method:<25} {np.mean(r2s):>7.4f}±{np.std(r2s):.4f}   "
-                  f"{np.mean(mses):>7.4f}±{np.std(mses):.4f}")
+            print(f"{method:<25} {np.mean(cis):>7.4f}±{np.std(cis):.4f}   "
+                  f"{np.mean(r2s):>7.4f}±{np.std(r2s):.4f}   "
+                  f"{np.mean(rhos):>7.4f}")
         else:
-            print(f"{method:<25} {'FAILED':>18} {'FAILED':>18}")
+            print(f"{method:<25} {'FAILED':>18} {'FAILED':>18} {'FAILED':>12}")
 
     # Save
     out_dir = Path(args.output) / 'dta_e2e_comparison'

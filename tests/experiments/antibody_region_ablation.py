@@ -41,8 +41,9 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from sklearn.linear_model import RidgeCV
+from scipy.stats import spearmanr
 from sklearn.metrics import r2_score
-from sklearn.model_selection import GroupKFold, KFold
+from sklearn.model_selection import GroupKFold
 from sklearn.preprocessing import StandardScaler
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
@@ -390,15 +391,18 @@ def build_method_features(
 # =========================================================================
 
 def evaluate_cv(X, labels, groups, n_folds=5):
-    """5-fold GroupKFold + StandardScaler + RidgeCV. Returns (mean_r2, std_r2, per_fold)."""
+    """5-fold GroupKFold + StandardScaler + RidgeCV. Returns dict with r2 and spearman."""
     n_unique = len(np.unique(groups)) if groups is not None else 0
 
-    if groups is not None and n_unique >= n_folds:
-        cv = GroupKFold(n_splits=min(n_folds, n_unique))
-        splits = list(cv.split(X, labels, groups=groups))
-    else:
-        cv = KFold(n_splits=n_folds, shuffle=True, random_state=42)
-        splits = list(cv.split(X, labels))
+    if groups is None or n_unique < 2:
+        print("  WARNING: <2 unique groups, skipping dataset")
+        return {'r2_mean': float('nan'), 'r2_std': float('nan'),
+                'spearman_mean': float('nan'), 'spearman_std': float('nan'),
+                'per_fold': []}
+
+    effective_folds = min(n_folds, n_unique)
+    cv = GroupKFold(n_splits=effective_folds)
+    splits = list(cv.split(X, labels, groups=groups))
 
     scores = []
     for train_idx, val_idx in splits:
@@ -408,9 +412,18 @@ def evaluate_cv(X, labels, groups, n_folds=5):
 
         model = RidgeCV(alphas=np.logspace(-6, 6, 13))
         model.fit(X_tr, labels[train_idx])
-        scores.append(float(r2_score(labels[val_idx], model.predict(X_va))))
+        preds = model.predict(X_va)
+        r2 = float(r2_score(labels[val_idx], preds))
+        rho = float(spearmanr(labels[val_idx], preds).correlation)
+        scores.append({'r2': r2, 'spearman': rho})
 
-    return float(np.mean(scores)), float(np.std(scores)), scores
+    r2_vals = [s['r2'] for s in scores]
+    rho_vals = [s['spearman'] for s in scores]
+    return {'r2_mean': float(np.mean(r2_vals)),
+            'r2_std': float(np.std(r2_vals)),
+            'spearman_mean': float(np.mean(rho_vals)),
+            'spearman_std': float(np.std(rho_vals)),
+            'per_fold': scores}
 
 
 # =========================================================================
@@ -579,17 +592,19 @@ def main():
             else:
                 X = h_X
 
-            mean_r2, std_r2, per_fold = evaluate_cv(
-                X, labels, groups, args.n_folds)
+            result = evaluate_cv(X, labels, groups, args.n_folds)
 
             ds_results['methods'][method] = {
-                'r2_mean': round(mean_r2, 4),
-                'r2_std': round(std_r2, 4),
+                'r2_mean': round(result['r2_mean'], 4),
+                'r2_std': round(result['r2_std'], 4),
+                'spearman_mean': round(result['spearman_mean'], 4),
+                'spearman_std': round(result['spearman_std'], 4),
                 'dim': X.shape[1],
-                'per_fold': [round(s, 4) for s in per_fold],
+                'per_fold': result['per_fold'],
             }
-            print(f"    {method:20s}  R²={mean_r2:.4f} ± {std_r2:.4f}  "
-                  f"(dim={X.shape[1]})")
+            print(f"    {method:20s}  R²={result['r2_mean']:.4f} ± {result['r2_std']:.4f}"
+                  f"  ρ={result['spearman_mean']:.4f} ± {result['spearman_std']:.4f}"
+                  f"  (dim={X.shape[1]})")
 
         all_results[ds_name] = ds_results
 
@@ -597,9 +612,9 @@ def main():
         del h_features, l_features
         gc.collect()
 
-    # Summary table
+    # Summary table — R²
     print(f"\n{'='*70}")
-    print("SUMMARY")
+    print("SUMMARY (R²)")
     print(f"{'='*70}")
     header = f"{'Method':20s}"
     for ds in datasets:
@@ -618,8 +633,29 @@ def main():
                 row += f"  {'---':>12s}"
         print(row)
 
+    # Summary table — Spearman ρ
+    print(f"\n{'='*70}")
+    print("SUMMARY (Spearman ρ)")
+    print(f"{'='*70}")
+    header = f"{'Method':20s}"
+    for ds in datasets:
+        short = ds.split('_', 1)[-1][:12]
+        header += f"  {short:>12s}"
+    print(header)
+    print("-" * len(header))
+
+    for method in methods:
+        row = f"{method:20s}"
+        for ds in datasets:
+            if ds in all_results and method in all_results[ds]['methods']:
+                rho = all_results[ds]['methods'][method]['spearman_mean']
+                row += f"  {rho:12.4f}"
+            else:
+                row += f"  {'---':>12s}"
+        print(row)
+
     # Delta vs full_seq baseline
-    print(f"\nDelta vs full_seq:")
+    print(f"\nDelta vs full_seq (R²):")
     for method in methods:
         if method == 'full_seq':
             continue
