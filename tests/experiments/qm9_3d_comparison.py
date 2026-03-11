@@ -8,10 +8,13 @@ Three methods:
   2. Frozen SchNet embeddings + Ridge (current frozen approach for 3D)
   3. End-to-end SchNet (trained on 3D coordinates, expected winner)
 
+Uses scaffold-split GroupKFold (no random splitting).
+
 Usage:
     python tests/experiments/qm9_3d_comparison.py --property gap
     python tests/experiments/qm9_3d_comparison.py --property mu --n-samples 5000
     python tests/experiments/qm9_3d_comparison.py --property gap --n-samples 0  # full dataset (~130K)
+    python tests/experiments/qm9_3d_comparison.py --property gap --n-folds 3
 """
 
 import sys
@@ -23,6 +26,8 @@ from pathlib import Path
 
 import numpy as np
 from sklearn.metrics import r2_score, mean_absolute_error
+from sklearn.model_selection import GroupKFold
+from scipy.stats import spearmanr
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -31,6 +36,23 @@ PROPERTY_MAP = {
     'mu': 0, 'alpha': 1, 'homo': 2, 'lumo': 3, 'gap': 4, 'r2': 5,
     'zpve': 6, 'U0': 7, 'U': 8, 'H': 9, 'G': 10, 'Cv': 11,
 }
+
+
+def _scaffold_groups(smiles_list):
+    """Assign Murcko scaffold group indices for GroupKFold splitting."""
+    from rdkit import Chem
+    from rdkit.Chem.Scaffolds.MurckoScaffold import MurckoScaffoldSmiles
+
+    scaffolds = []
+    for smi in smiles_list:
+        try:
+            scaf = MurckoScaffoldSmiles(smi, includeChirality=False)
+        except Exception:
+            scaf = smi
+        scaffolds.append(scaf)
+    unique = sorted(set(scaffolds))
+    scaffold_to_idx = {s: i for i, s in enumerate(unique)}
+    return np.array([scaffold_to_idx[s] for s in scaffolds])
 
 
 def main():
@@ -42,6 +64,8 @@ def main():
                         help='Number of samples (0 = full dataset, default: 10000)')
     parser.add_argument('--epochs', type=int, default=100,
                         help='Training epochs for end-to-end SchNet')
+    parser.add_argument('--n-folds', type=int, default=5,
+                        help='Number of scaffold-split folds (default: 5)')
     parser.add_argument('--output', default='tests/results',
                         help='Output directory')
     args = parser.parse_args()
@@ -70,67 +94,94 @@ def main():
     n = len(labels)
     print(f"\n{n} molecules, property: {args.property}")
 
-    # Random split (80/10/10)
-    rng = np.random.RandomState(42)
-    perm = rng.permutation(n)
-    n_train = int(0.8 * n)
-    n_val = int(0.1 * n)
-    train_idx = perm[:n_train]
-    val_idx = perm[n_train:n_train + n_val]
-    test_idx = perm[n_train + n_val:]
+    # Scaffold-split GroupKFold
+    groups = _scaffold_groups(smiles)
+    n_unique_scaffolds = len(set(groups))
+    print(f"Scaffold groups: {n_unique_scaffolds} unique scaffolds")
 
-    y_train = labels[train_idx]
-    y_test = labels[test_idx]
+    gkf = GroupKFold(n_splits=args.n_folds)
+    method_names = ['ecfp4_xgb', 'frozen_schnet', 'e2e_schnet']
+    all_fold_results = {m: [] for m in method_names}
 
-    results = {}
+    for fold, (train_val_idx, test_idx) in enumerate(gkf.split(labels, groups=groups)):
+        print(f"\n{'=' * 60}")
+        print(f"  Fold {fold + 1}/{args.n_folds}  "
+              f"(train+val={len(train_val_idx)}, test={len(test_idx)})")
+        print(f"{'=' * 60}")
 
-    # --- Method 1: Frozen ECFP4 + XGBoost ---
-    print("\n" + "=" * 60)
-    print("Method 1: Frozen ECFP4 + XGBoost")
-    print("=" * 60)
-    t0 = time.time()
-    results['ecfp4_xgb'] = run_ecfp4_xgb(
-        smiles, labels, train_idx, val_idx, test_idx
-    )
-    results['ecfp4_xgb']['time'] = time.time() - t0
+        # Within train_val, hold out 10% for E2E early stopping
+        rng = np.random.RandomState(42 + fold)
+        perm = rng.permutation(len(train_val_idx))
+        n_val = max(1, int(0.1 * len(train_val_idx)))
+        val_idx = train_val_idx[perm[:n_val]]
+        train_idx = train_val_idx[perm[n_val:]]
 
-    # --- Method 2: Frozen SchNet embeddings + Ridge ---
-    print("\n" + "=" * 60)
-    print("Method 2: Frozen SchNet Embeddings + Ridge")
-    print("=" * 60)
-    t0 = time.time()
-    results['frozen_schnet'] = run_frozen_schnet(
-        smiles, labels, train_idx, val_idx, test_idx
-    )
-    results['frozen_schnet']['time'] = time.time() - t0
+        # --- Method 1: Frozen ECFP4 + XGBoost ---
+        print("\n  Method 1: Frozen ECFP4 + XGBoost")
+        t0 = time.time()
+        res = run_ecfp4_xgb(smiles, labels, train_idx, val_idx, test_idx)
+        res['time'] = time.time() - t0
+        all_fold_results['ecfp4_xgb'].append(res)
 
-    # --- Method 3: End-to-end SchNet ---
-    print("\n" + "=" * 60)
-    print("Method 3: End-to-End SchNet (3D)")
-    print("=" * 60)
-    t0 = time.time()
-    results['e2e_schnet'] = run_e2e_schnet(
-        data_list, labels, train_idx, val_idx, test_idx,
-        prop_idx=prop_idx, epochs=args.epochs,
-    )
-    results['e2e_schnet']['time'] = time.time() - t0
+        # --- Method 2: Frozen SchNet embeddings + Ridge ---
+        print("\n  Method 2: Frozen SchNet Embeddings + Ridge")
+        t0 = time.time()
+        res = run_frozen_schnet(smiles, labels, train_idx, val_idx, test_idx)
+        res['time'] = time.time() - t0
+        all_fold_results['frozen_schnet'].append(res)
 
-    # --- Summary ---
-    print("\n" + "=" * 60)
-    print(f"QM9 {args.property} — Three-Way Comparison ({n} molecules)")
-    print("=" * 60)
-    print(f"{'Method':<30} {'R²':>8} {'MAE':>10} {'Time':>8}")
-    print("-" * 60)
-    for method, r in results.items():
-        print(f"{method:<30} {r['test_r2']:>8.4f} {r['test_mae']:>10.4f} "
-              f"{r['time']:>7.1f}s")
+        # --- Method 3: End-to-end SchNet ---
+        print("\n  Method 3: End-to-End SchNet (3D)")
+        t0 = time.time()
+        res = run_e2e_schnet(
+            data_list, labels, train_idx, val_idx, test_idx,
+            prop_idx=prop_idx, epochs=args.epochs,
+        )
+        res['time'] = time.time() - t0
+        all_fold_results['e2e_schnet'].append(res)
+
+    # --- Summary: mean +/- std across folds ---
+    print(f"\n{'=' * 70}")
+    print(f"QM9 {args.property} -- {args.n_folds}-Fold Scaffold-Split Summary "
+          f"({n} molecules)")
+    print(f"{'=' * 70}")
+    print(f"{'Method':<25} {'R2':>12} {'MAE':>14} {'Spearman':>14} {'Time':>8}")
+    print("-" * 70)
+
+    summary = {}
+    for method in method_names:
+        folds = all_fold_results[method]
+        r2s = [f['test_r2'] for f in folds if not np.isnan(f['test_r2'])]
+        maes = [f['test_mae'] for f in folds if not np.isnan(f['test_mae'])]
+        spears = [f['test_spearman'] for f in folds
+                  if not np.isnan(f.get('test_spearman', float('nan')))]
+        times = [f['time'] for f in folds]
+
+        r2_mean, r2_std = (np.mean(r2s), np.std(r2s)) if r2s else (float('nan'), 0)
+        mae_mean, mae_std = (np.mean(maes), np.std(maes)) if maes else (float('nan'), 0)
+        sp_mean, sp_std = (np.mean(spears), np.std(spears)) if spears else (float('nan'), 0)
+        t_total = sum(times)
+
+        print(f"{method:<25} "
+              f"{r2_mean:>5.4f}+/-{r2_std:.4f} "
+              f"{mae_mean:>6.4f}+/-{mae_std:.4f} "
+              f"{sp_mean:>6.4f}+/-{sp_std:.4f} "
+              f"{t_total:>7.1f}s")
+
+        summary[method] = {
+            'test_r2_mean': float(r2_mean), 'test_r2_std': float(r2_std),
+            'test_mae_mean': float(mae_mean), 'test_mae_std': float(mae_std),
+            'test_spearman_mean': float(sp_mean), 'test_spearman_std': float(sp_std),
+            'total_time': float(t_total),
+            'folds': folds,
+        }
 
     # Save
     out_dir = Path(args.output) / 'qm9_3d_comparison'
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / f'{args.property}_{n}.json'
     with open(out_file, 'w') as f:
-        json.dump(results, f, indent=2)
+        json.dump(summary, f, indent=2)
     print(f"\n[saved {out_file}]")
 
 
@@ -138,9 +189,9 @@ def run_ecfp4_xgb(smiles, labels, train_idx, val_idx, test_idx):
     """Frozen ECFP4 fingerprints + XGBoost."""
     from kirby.representations.molecular import create_ecfp4
 
-    print("  Generating ECFP4...")
+    print("    Generating ECFP4...")
     X = create_ecfp4(smiles)
-    print(f"  ECFP4 shape: {X.shape}")
+    print(f"    ECFP4 shape: {X.shape}")
 
     X_train, X_test = X[train_idx].astype(np.float32), X[test_idx].astype(np.float32)
     y_train, y_test = labels[train_idx], labels[test_idx]
@@ -160,9 +211,10 @@ def run_ecfp4_xgb(smiles, labels, train_idx, val_idx, test_idx):
 
     r2 = r2_score(y_test, y_pred)
     mae = mean_absolute_error(y_test, y_pred)
-    print(f"  Test R²: {r2:.4f}, MAE: {mae:.4f}")
+    sp = float(spearmanr(y_test, y_pred).correlation)
+    print(f"    Test R2: {r2:.4f}, MAE: {mae:.4f}, Spearman: {sp:.4f}")
 
-    return {'test_r2': float(r2), 'test_mae': float(mae)}
+    return {'test_r2': float(r2), 'test_mae': float(mae), 'test_spearman': sp}
 
 
 def run_frozen_schnet(smiles, labels, train_idx, val_idx, test_idx):
@@ -171,14 +223,14 @@ def run_frozen_schnet(smiles, labels, train_idx, val_idx, test_idx):
     from sklearn.linear_model import RidgeCV
     from sklearn.preprocessing import StandardScaler
 
-    print("  Generating frozen SchNet embeddings...")
+    print("    Generating frozen SchNet embeddings...")
     try:
         X = create_schnet(smiles)
-        print(f"  SchNet shape: {X.shape}")
+        print(f"    SchNet shape: {X.shape}")
     except Exception as e:
-        print(f"  SchNet failed: {e}")
+        print(f"    SchNet failed: {e}")
         return {'test_r2': float('nan'), 'test_mae': float('nan'),
-                'error': str(e)}
+                'test_spearman': float('nan'), 'error': str(e)}
 
     X_train, X_test = X[train_idx], X[test_idx]
     y_train, y_test = labels[train_idx], labels[test_idx]
@@ -193,9 +245,10 @@ def run_frozen_schnet(smiles, labels, train_idx, val_idx, test_idx):
 
     r2 = r2_score(y_test, y_pred)
     mae = mean_absolute_error(y_test, y_pred)
-    print(f"  Test R²: {r2:.4f}, MAE: {mae:.4f}")
+    sp = float(spearmanr(y_test, y_pred).correlation)
+    print(f"    Test R2: {r2:.4f}, MAE: {mae:.4f}, Spearman: {sp:.4f}")
 
-    return {'test_r2': float(r2), 'test_mae': float(mae)}
+    return {'test_r2': float(r2), 'test_mae': float(mae), 'test_spearman': sp}
 
 
 def run_e2e_schnet(data_list, labels, train_idx, val_idx, test_idx,
@@ -221,12 +274,12 @@ def run_e2e_schnet(data_list, labels, train_idx, val_idx, test_idx,
     try:
         from torch_geometric.nn import SchNet
     except ImportError:
-        print("  SchNet requires torch_geometric.nn.SchNet")
+        print("    SchNet requires torch_geometric.nn.SchNet")
         return {'test_r2': float('nan'), 'test_mae': float('nan'),
-                'error': 'SchNet not available'}
+                'test_spearman': float('nan'), 'error': 'SchNet not available'}
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"  Device: {device}")
+    print(f"    Device: {device}")
 
     # Prepare data: set data.y to the target property
     for i, d in enumerate(data_list):
@@ -262,7 +315,7 @@ def run_e2e_schnet(data_list, labels, train_idx, val_idx, test_idx,
     best_val_mae = float('inf')
     best_state = None
 
-    print(f"  Training for {epochs} epochs...")
+    print(f"    Training for {epochs} epochs...")
     for epoch in range(1, epochs + 1):
         model.train()
         train_loss = 0
@@ -300,8 +353,8 @@ def run_e2e_schnet(data_list, labels, train_idx, val_idx, test_idx,
         if epoch % 20 == 0 or epoch == 1:
             val_r2 = r2_score(val_true, val_preds)
             lr = optimizer.param_groups[0]['lr']
-            print(f"    Epoch {epoch:3d}: train_loss={train_loss:.4f} "
-                  f"val_MAE={val_mae:.4f} val_R²={val_r2:.4f} lr={lr:.1e}")
+            print(f"      Epoch {epoch:3d}: train_loss={train_loss:.4f} "
+                  f"val_MAE={val_mae:.4f} val_R2={val_r2:.4f} lr={lr:.1e}")
 
     # Load best model and evaluate on test
     model.load_state_dict(best_state)
@@ -320,12 +373,14 @@ def run_e2e_schnet(data_list, labels, train_idx, val_idx, test_idx,
 
     r2 = r2_score(test_true, test_preds)
     mae = mean_absolute_error(test_true, test_preds)
-    print(f"  Test R²: {r2:.4f}, MAE: {mae:.4f}")
-    print(f"  Best val MAE: {best_val_mae:.4f}")
+    sp = float(spearmanr(test_true, test_preds).correlation)
+    print(f"    Test R2: {r2:.4f}, MAE: {mae:.4f}, Spearman: {sp:.4f}")
+    print(f"    Best val MAE: {best_val_mae:.4f}")
 
     return {
         'test_r2': float(r2),
         'test_mae': float(mae),
+        'test_spearman': sp,
         'best_val_mae': float(best_val_mae),
         'epochs_trained': epochs,
     }
