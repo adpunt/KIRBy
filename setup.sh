@@ -70,9 +70,11 @@ if [ -n "$TORCH_LIB" ] && [ -d "$TORCH_LIB" ]; then
     export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$TORCH_LIB"
 fi
 
-# Install kirby package (editable) with all domain extras into the venv.
-# The extras install torch, transformers, scanpy, gseapy, etc.
-pip install --quiet $CONSTRAINTS -e ".[qsar,antibody,tcga,finetune,dta,reaction]" 2>/dev/null || true
+# Install kirby package (editable) — core deps only.
+# Domain extras (torch, transformers, scanpy, etc.) are assumed to already be
+# in the venv from initial setup. We do NOT re-resolve extras on every job
+# because that risks breaking a working environment.
+pip install --quiet --no-deps -e . 2>/dev/null || true
 
 # Only install packages if not already present — avoids breaking torch-cluster/PyG
 _install_if_missing() {
@@ -113,8 +115,9 @@ _install_if_missing polaris polaris-lib
 
 # --- Phase 4A: Forward compatibility models ---
 _install_if_missing minimol minimol
-_install_if_missing mint "git+https://github.com/EMCarrami/MINT.git"
-_install_if_missing mole "git+https://github.com/recursionpharma/mole.git"
+# MINT and MolE are git installs — only run once, not on every job:
+#   pip install git+https://github.com/EMCarrami/MINT.git
+#   pip install git+https://github.com/recursionpharma/mole.git
 
 # Molecular reps: CLAMP, R-MAT
 CLAMP_DIR="${SCRIPT_DIR}/src/clamp"
