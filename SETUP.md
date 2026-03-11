@@ -224,14 +224,15 @@ pip install minimol
 # Already covered by transformers dependency
 
 # MolE — contrastive molecular encoder (CC-BY-NC 4.0 license)
-pip install git+https://github.com/recursionpharma/mole.git
-# Download pretrained weights from https://github.com/recursionpharma/mole
+git clone https://github.com/recursionpharma/mole_public.git src/mole
+pip install -e src/mole
+# Download pretrained weights from https://github.com/recursionpharma/mole_public
 # Place in: $KIRBY_MODELS_DIR/mole/ or ~/kirby_models/mole/
 
 # MINT — protein interaction LM (ESM-2 backbone, 1280D)
-pip install git+https://github.com/EMCarrami/MINT.git
-# Download checkpoint from MINT GitHub releases
-# Place at: $KIRBY_MODELS_DIR/mint/mint.ckpt or ~/kirby_models/mint/mint.ckpt
+git clone https://github.com/VarunUllanat/mint.git src/MINT
+pip install -e src/MINT
+wget https://huggingface.co/varunullanat2012/mint/resolve/main/mint.ckpt -P $KIRBY_MODELS_DIR/mint/
 
 # IgT5 — T5-based paired antibody LM (auto-downloads from HF)
 # Model: Exscientia/IgT5 (requires sentencepiece)

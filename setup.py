@@ -77,8 +77,8 @@ setup(
             "minimol",
             "boltz",
             # GP-MoLFormer, IgT5: covered by transformers + sentencepiece
-            # MolE: pip install git+https://github.com/recursionpharma/mole.git
-            # MINT: pip install git+https://github.com/EMCarrami/MINT.git
+            # MolE: git clone https://github.com/recursionpharma/mole_public.git && pip install -e mole_public
+            # MINT: git clone https://github.com/VarunUllanat/mint.git && pip install -e mint
             # ESM3: covered by esm package (same as ESM-C)
             # SaProt: uses transformers (HF) + ProstT5 for 3Di tokens
         ],

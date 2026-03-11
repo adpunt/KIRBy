@@ -1125,7 +1125,7 @@ def create_mint_protein_embeddings(
     Returns:
         np.ndarray: (n_sequences, 1280) embeddings.
 
-    Requires: pip install git+https://github.com/EMCarrami/MINT.git
+    Requires: git clone https://github.com/VarunUllanat/mint.git && pip install -e mint
               Download checkpoint from MINT GitHub releases.
     """
     import torch
@@ -1135,8 +1135,8 @@ def create_mint_protein_embeddings(
     except ImportError:
         raise ImportError(
             "MINT requires the mint package: "
-            "pip install git+https://github.com/EMCarrami/MINT.git\n"
-            "Download checkpoint from https://github.com/EMCarrami/MINT "
+            "git clone https://github.com/VarunUllanat/mint.git && pip install -e mint\n"
+            "Download checkpoint from https://github.com/VarunUllanat/mint "
             "and place at $KIRBY_MODELS_DIR/mint/mint.ckpt"
         )
 
@@ -1155,7 +1155,7 @@ def create_mint_protein_embeddings(
         if found is None:
             raise FileNotFoundError(
                 f"Could not find MINT checkpoint in: {search_paths}\n"
-                "Download from https://github.com/EMCarrami/MINT "
+                "Download from https://github.com/VarunUllanat/mint "
                 "and set KIRBY_MODELS_DIR or place at ~/kirby_models/mint/mint.ckpt"
             )
         checkpoint_path = found
