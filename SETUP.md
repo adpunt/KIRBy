@@ -490,20 +490,23 @@ export HF_HOME=/Volumes/YOUR_DRIVE/huggingface
 
 ## 7. ARC Server Setup (Oxford)
 
-For running on the ARC HPC cluster at Oxford. **Python 3.9** (system Anaconda).
+For running on the ARC HPC cluster at Oxford.
 
-### Critical: Python 3.9 constraints
+### Python environment: venv (recommended)
 
-The ARC server runs Python 3.9. These packages are **incompatible** and must NOT
-be installed (they pull in numpy>=2 which breaks everything on Py3.9):
+The ARC system has Python 3.9 (Anaconda), but Phase 4B models (ESM-C, ESM3,
+SaProt, Boltz-2) require Python >=3.10. Use a **venv with Python 3.11**:
 
-| Package | Reason | Alternative |
-|---------|--------|-------------|
-| `unimol-tools` | Requires numpy>=2.0 | Skip (no Uni-Mol on server) |
-| `esm` (ESM-C) | Requires Python>=3.10 | Use ESM-2 instead |
-| `decoupler>=1.9` | Requires numpy>=2 | Pin `decoupler==1.8.0` |
+```bash
+# One-time: create the venv
+python3.11 -m venv /data/stat-cadd/scat9264/py311-kirby
+```
 
-`setup.sh` handles this automatically (guards behind Python version check).
+`setup.sh` automatically activates this venv if it exists. All SLURM scripts
+source `setup.sh`, so everything runs inside the venv.
+
+If the venv doesn't exist, `setup.sh` falls back to system Python (3.9) and
+Phase 4B models will be skipped.
 
 ### 7a. First-time setup
 
@@ -511,17 +514,21 @@ be installed (they pull in numpy>=2 which breaks everything on Py3.9):
 ssh scat9264@gateway.arc.ox.ac.uk
 cd /data/stat-cadd/scat9264
 
+# Create venv (only once)
+python3.11 -m venv /data/stat-cadd/scat9264/py311-kirby
+
 # Clone repo
 git clone https://github.com/adpunt/KIRBy.git
 cd KIRBy
 
-# Source setup.sh (sets cache dirs, pins core deps, loads CUDA)
+# Source setup.sh — activates venv, sets cache dirs, installs deps
 . setup.sh
 
-# Install KIRBy + extras
-pip install -e ".[qsar,antibody,uncertainty]"
+# Install KIRBy + extras into the venv
+pip install -e ".[qsar,antibody,tcga,uncertainty]"
+
+# Conda-only dependency (install in base conda env, not venv)
 conda install -c bioconda anarci
-pip install antiberty ablang2 sentencepiece
 ```
 
 ### 7a-fix. Repair broken environment
