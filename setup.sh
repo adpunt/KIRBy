@@ -108,7 +108,7 @@ _install_if_missing xformers 'xformers==0.0.25'
 _install_if_missing openpyxl 'openpyxl>=3.1.0'
 
 # --- Phase 3B: Molecular descriptors + reaction reps ---
-_install_if_missing mordred mordred
+_install_if_missing mordred mordredcommunity
 _install_if_missing drfp drfp
 _install_if_missing rxnfp rxnfp
 _install_if_missing polaris polaris-lib
