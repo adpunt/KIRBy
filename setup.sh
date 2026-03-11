@@ -115,9 +115,10 @@ _install_if_missing polaris polaris-lib
 
 # --- Phase 4A: Forward compatibility models ---
 _install_if_missing minimol minimol
-# MINT and MolE are git installs — only run once, not on every job:
-#   pip install git+https://github.com/EMCarrami/MINT.git
-#   pip install git+https://github.com/recursionpharma/mole.git
+# MINT and MolE are git clones — only run once, not on every job:
+#   git clone https://github.com/VarunUllanat/mint.git src/MINT && pip install -e src/MINT
+#   wget https://huggingface.co/varunullanat2012/mint/resolve/main/mint.ckpt -P $KIRBY_MODELS_DIR/mint/
+#   git clone https://github.com/recursionpharma/mole_public.git src/mole && pip install -e src/mole
 
 # Molecular reps: CLAMP, R-MAT
 CLAMP_DIR="${SCRIPT_DIR}/src/clamp"

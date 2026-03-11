@@ -3204,15 +3204,15 @@ def create_mole(smiles_list, pretrained_model=None, batch_size=32):
     Returns:
         np.ndarray: MolE embeddings (n_molecules, D)
 
-    Requires: pip install git+https://github.com/recursionpharma/mole.git
+    Requires: git clone https://github.com/recursionpharma/mole_public.git && pip install -e mole_public
     """
     try:
         from mole import mole_predict
     except ImportError:
         raise ImportError(
             "MolE requires the mole package: "
-            "pip install git+https://github.com/recursionpharma/mole.git\n"
-            "Weights: download from https://github.com/recursionpharma/mole "
+            "git clone https://github.com/recursionpharma/mole_public.git && pip install -e mole_public\n"
+            "Weights: download from https://github.com/recursionpharma/mole_public"
             "and place in $KIRBY_MODELS_DIR/mole/ or ~/kirby_models/mole/"
         )
 
@@ -3231,7 +3231,7 @@ def create_mole(smiles_list, pretrained_model=None, batch_size=32):
         if found is None:
             raise FileNotFoundError(
                 f"Could not find MolE model in: {search_paths}\n"
-                "Download from https://github.com/recursionpharma/mole "
+                "Download from https://github.com/recursionpharma/mole_public"
                 "and set KIRBY_MODELS_DIR or place in ~/kirby_models/mole/"
             )
         pretrained_model = found
