@@ -79,29 +79,52 @@ REGION_ORDER = ['FR1', 'CDR1', 'FR2', 'CDR2', 'FR3', 'CDR3', 'FR4']
 CDR_REGIONS = ['CDR1', 'CDR2', 'CDR3']
 FW_REGIONS = ['FR1', 'FR2', 'FR3', 'FR4']
 
-ESM2_DIM = 1280  # per-token hidden dim
+# LM configs: (HF model ID, embed_dim, has_bos_token)
+LM_CONFIGS = {
+    'esm2': ('facebook/esm2_t33_650M_UR50D', 1280, True),
+    'esmc': ('EvolutionaryScale/esmc-600m-2024-12', 1152, True),
+    'ablang2': (None, 480, False),  # special handling via ablang2 library
+}
+
+DEFAULT_LM = 'esm2'
 
 
 # =========================================================================
-# TOKEN-LEVEL ESM-2 EXTRACTION
+# TOKEN-LEVEL LM EXTRACTION
 # =========================================================================
 
-def extract_token_embeddings_esm2(
+def extract_token_embeddings(
     sequences: List[str],
+    lm_name: str = 'esm2',
     batch_size: int = 4,
-) -> List[np.ndarray]:
-    """Extract per-residue ESM-2 hidden states (no pooling).
+) -> Tuple[List[np.ndarray], int]:
+    """Extract per-residue hidden states from a protein LM (no pooling).
 
-    Returns list of (L_i, 1280) arrays, one per sequence.
-    Processes in batches, strips BOS/EOS tokens.
+    Returns (list of (L_i, D) arrays, embed_dim).
+    Supports: esm2, esmc, ablang2.
     """
+    if lm_name == 'ablang2':
+        return _extract_token_embeddings_ablang2(sequences, batch_size)
+
+    model_id, embed_dim, has_bos = LM_CONFIGS[lm_name]
+    return _extract_token_embeddings_hf(
+        sequences, model_id, embed_dim, has_bos, batch_size), embed_dim
+
+
+def _extract_token_embeddings_hf(
+    sequences: List[str],
+    model_id: str,
+    embed_dim: int,
+    has_bos: bool,
+    batch_size: int,
+) -> List[np.ndarray]:
+    """Extract tokens from any HuggingFace protein LM."""
     import torch
     from transformers import AutoTokenizer, AutoModel
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model_name = 'facebook/esm2_t33_650M_UR50D'
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name).eval().to(device)
+    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    model = AutoModel.from_pretrained(model_id, trust_remote_code=True).eval().to(device)
 
     all_embeddings = []
     for start in range(0, len(sequences), batch_size):
@@ -111,22 +134,77 @@ def extract_token_embeddings_esm2(
         with torch.no_grad():
             outputs = model(**inputs)
 
-        hidden = outputs.last_hidden_state  # (B, L, 1280)
+        hidden = outputs.last_hidden_state
 
         for i in range(len(batch)):
             seq_len = len(batch[i])
-            # ESM-2: token 0 = BOS, tokens 1..seq_len = residues, then EOS+PAD
-            # Extract residue tokens only (skip BOS)
-            residue_embs = hidden[i, 1:seq_len + 1, :].cpu().numpy()
+            if has_bos:
+                # BOS at index 0, residues at 1..seq_len
+                residue_embs = hidden[i, 1:seq_len + 1, :].cpu().numpy()
+            else:
+                residue_embs = hidden[i, :seq_len, :].cpu().numpy()
             all_embeddings.append(residue_embs.astype(np.float32))
 
-    # Free GPU memory
     del model, tokenizer
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     gc.collect()
 
     return all_embeddings
+
+
+def _extract_token_embeddings_ablang2(
+    sequences: List[str],
+    batch_size: int,
+) -> Tuple[List[np.ndarray], int]:
+    """Extract per-residue AbLang2 hidden states."""
+    import torch
+
+    try:
+        import ablang2
+        from ablang2.pretrained import format_seq_input
+    except ImportError:
+        raise ImportError("AbLang2 requires: pip install ablang2")
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = ablang2.pretrained(model_to_use='ablang2-paired',
+                               random_init=False, ncpu=1, device=str(device))
+    embed_dim = 480
+
+    all_embeddings = []
+    for start in range(0, len(sequences), batch_size):
+        batch = sequences[start:start + batch_size]
+        # AbLang2 expects (heavy, light) tuples — for single chain, use empty light
+        seqs = [(s, '') for s in batch]
+        formatted, _chain = format_seq_input(seqs)
+        tokens = model.tokenizer(
+            formatted, pad=True, w_extra_tkns=False, device=device)
+        with torch.no_grad():
+            hidden = model.AbRep(tokens).last_hidden_states  # (B, L, 480)
+
+        for i in range(len(batch)):
+            seq_len = len(batch[i])
+            residue_embs = hidden[i, :seq_len, :].cpu().numpy()
+            all_embeddings.append(residue_embs.astype(np.float32))
+
+    del model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    gc.collect()
+
+    return all_embeddings, embed_dim
+
+
+def extract_token_embeddings_esm2(
+    sequences: List[str],
+    batch_size: int = 4,
+) -> List[np.ndarray]:
+    """Legacy wrapper: extract ESM-2 tokens. Returns list of (L, 1280)."""
+    embs = _extract_token_embeddings_hf(
+        sequences,
+        'facebook/esm2_t33_650M_UR50D',
+        1280, True, batch_size)
+    return embs
 
 
 # =========================================================================
@@ -436,6 +514,7 @@ def process_chain(
     entropy_map: Optional[Dict[int, float]] = None,
     batch_size: int = 4,
     chain_name: str = 'H',
+    lm_name: str = 'esm2',
 ) -> Tuple[Dict[str, np.ndarray], Dict[int, float]]:
     """Extract tokens for one chain, compute entropy + regions, build all methods.
 
@@ -445,8 +524,12 @@ def process_chain(
     if not sequences or all(s == '' for s in sequences):
         return {}, entropy_map or {}
 
-    print(f"    Extracting ESM-2 tokens ({chain_name})...", flush=True)
-    token_embs_list = extract_token_embeddings_esm2(sequences, batch_size)
+    print(f"    Extracting {lm_name} tokens ({chain_name})...", flush=True)
+    result = extract_token_embeddings(sequences, lm_name=lm_name, batch_size=batch_size)
+    if isinstance(result, tuple):
+        token_embs_list, _dim = result
+    else:
+        token_embs_list = result
     print(f"      Done. {len(token_embs_list)} sequences, "
           f"shapes: {token_embs_list[0].shape} ... {token_embs_list[-1].shape}")
 
@@ -503,7 +586,10 @@ def main():
                              f'Options: {",".join(ALL_METHODS)}')
     parser.add_argument('--n-folds', type=int, default=5)
     parser.add_argument('--batch-size', type=int, default=4,
-                        help='ESM-2 batch size (default: 4)')
+                        help='LM batch size (default: 4)')
+    parser.add_argument('--lms', type=str, default=None,
+                        help=f'Comma-separated LMs to test (default: esm2). '
+                             f'Options: {",".join(LM_CONFIGS.keys())}')
     parser.add_argument('--output', type=str, default=None)
     args = parser.parse_args()
 
@@ -517,6 +603,11 @@ def main():
         if m not in ALL_METHODS:
             parser.error(f"Unknown method: {m}. Choose from: {ALL_METHODS}")
 
+    lms = (args.lms.split(',') if args.lms else ['esm2'])
+    for lm in lms:
+        if lm not in LM_CONFIGS:
+            parser.error(f"Unknown LM: {lm}. Choose from: {list(LM_CONFIGS.keys())}")
+
     output_dir = args.output or 'tests/results/comparisons'
     os.makedirs(output_dir, exist_ok=True)
 
@@ -524,6 +615,7 @@ def main():
     print("ANTIBODY REGION ABLATION")
     print(f"  Datasets: {datasets}")
     print(f"  Methods: {methods}")
+    print(f"  LMs: {lms}")
     print(f"  Folds: {args.n_folds}")
     print("=" * 70)
 
@@ -555,122 +647,119 @@ def main():
         ds_results = {
             'n_samples': n,
             'has_light': has_light,
-            'methods': {},
+            'lms': {},
             'entropy': {},
         }
 
-        # Process heavy chain
-        h_features, h_entropy = process_chain(
-            heavy_seqs, methods, batch_size=args.batch_size, chain_name='H')
+        for lm_name in lms:
+            print(f"\n  --- LM: {lm_name} ---")
 
-        # Save entropy map
-        ds_results['entropy']['heavy'] = {
-            str(k): round(v, 4) for k, v in sorted(h_entropy.items())
-        }
+            lm_results = {}
 
-        # Process light chain (if available)
-        if has_light:
-            l_features, l_entropy = process_chain(
-                light_seqs, methods, batch_size=args.batch_size, chain_name='L')
-            ds_results['entropy']['light'] = {
-                str(k): round(v, 4) for k, v in sorted(l_entropy.items())
-            }
-        else:
-            l_features = {}
+            # Process heavy chain
+            h_features, h_entropy = process_chain(
+                heavy_seqs, methods, batch_size=args.batch_size,
+                chain_name='H', lm_name=lm_name)
 
-        # Evaluate each method
-        print(f"\n  --- Evaluation ({args.n_folds}-fold CV) ---")
-        for method in methods:
-            h_X = h_features.get(method)
-            if h_X is None:
-                print(f"    {method}: SKIPPED (no heavy features)")
-                continue
+            # Save entropy map (only for first LM to avoid duplication)
+            if 'heavy' not in ds_results['entropy']:
+                ds_results['entropy']['heavy'] = {
+                    str(k): round(v, 4) for k, v in sorted(h_entropy.items())
+                }
 
-            if has_light and method in l_features:
-                l_X = l_features[method]
-                X = np.hstack([h_X, l_X])
+            # Process light chain (if available)
+            if has_light:
+                l_features, l_entropy = process_chain(
+                    light_seqs, methods, batch_size=args.batch_size,
+                    chain_name='L', lm_name=lm_name)
+                if 'light' not in ds_results['entropy']:
+                    ds_results['entropy']['light'] = {
+                        str(k): round(v, 4) for k, v in sorted(l_entropy.items())
+                    }
             else:
-                X = h_X
+                l_features = {}
 
-            result = evaluate_cv(X, labels, groups, args.n_folds)
+            # Evaluate each method
+            print(f"\n    --- Evaluation ({args.n_folds}-fold CV, {lm_name}) ---")
+            for method in methods:
+                h_X = h_features.get(method)
+                if h_X is None:
+                    print(f"      {method}: SKIPPED (no heavy features)")
+                    continue
 
-            ds_results['methods'][method] = {
-                'r2_mean': round(result['r2_mean'], 4),
-                'r2_std': round(result['r2_std'], 4),
-                'spearman_mean': round(result['spearman_mean'], 4),
-                'spearman_std': round(result['spearman_std'], 4),
-                'dim': X.shape[1],
-                'per_fold': result['per_fold'],
-            }
-            print(f"    {method:20s}  R²={result['r2_mean']:.4f} ± {result['r2_std']:.4f}"
-                  f"  ρ={result['spearman_mean']:.4f} ± {result['spearman_std']:.4f}"
-                  f"  (dim={X.shape[1]})")
+                if has_light and method in l_features:
+                    l_X = l_features[method]
+                    X = np.hstack([h_X, l_X])
+                else:
+                    X = h_X
+
+                result = evaluate_cv(X, labels, groups, args.n_folds)
+
+                lm_results[method] = {
+                    'r2_mean': round(result['r2_mean'], 4),
+                    'r2_std': round(result['r2_std'], 4),
+                    'spearman_mean': round(result['spearman_mean'], 4),
+                    'spearman_std': round(result['spearman_std'], 4),
+                    'dim': X.shape[1],
+                    'per_fold': result['per_fold'],
+                }
+                print(f"      {method:20s}  R²={result['r2_mean']:.4f} ± {result['r2_std']:.4f}"
+                      f"  ρ={result['spearman_mean']:.4f} ± {result['spearman_std']:.4f}"
+                      f"  (dim={X.shape[1]})")
+
+            ds_results['lms'][lm_name] = lm_results
+
+            # Free memory between LMs
+            del h_features
+            if has_light:
+                del l_features
+            gc.collect()
+
+        # Backward compatibility: copy first LM's results to 'methods'
+        if lms:
+            ds_results['methods'] = ds_results['lms'].get(lms[0], {})
 
         all_results[ds_name] = ds_results
-
-        # Free memory between datasets
-        del h_features, l_features
         gc.collect()
 
-    # Summary table — R²
-    print(f"\n{'='*70}")
-    print("SUMMARY (R²)")
-    print(f"{'='*70}")
-    header = f"{'Method':20s}"
-    for ds in datasets:
-        short = ds.split('_', 1)[-1][:12]
-        header += f"  {short:>12s}"
-    print(header)
-    print("-" * len(header))
-
-    for method in methods:
-        row = f"{method:20s}"
+    # Summary tables per LM
+    for lm_name in lms:
+        print(f"\n{'='*70}")
+        print(f"SUMMARY — {lm_name} (R²)")
+        print(f"{'='*70}")
+        header = f"{'Method':20s}"
         for ds in datasets:
-            if ds in all_results and method in all_results[ds]['methods']:
-                r2 = all_results[ds]['methods'][method]['r2_mean']
-                row += f"  {r2:12.4f}"
-            else:
-                row += f"  {'---':>12s}"
-        print(row)
+            short = ds.split('_', 1)[-1][:12]
+            header += f"  {short:>12s}"
+        print(header)
+        print("-" * len(header))
 
-    # Summary table — Spearman ρ
-    print(f"\n{'='*70}")
-    print("SUMMARY (Spearman ρ)")
-    print(f"{'='*70}")
-    header = f"{'Method':20s}"
-    for ds in datasets:
-        short = ds.split('_', 1)[-1][:12]
-        header += f"  {short:>12s}"
-    print(header)
-    print("-" * len(header))
+        for method in methods:
+            row = f"{method:20s}"
+            for ds in datasets:
+                lm_data = all_results.get(ds, {}).get('lms', {}).get(lm_name, {})
+                if method in lm_data:
+                    r2 = lm_data[method]['r2_mean']
+                    row += f"  {r2:12.4f}"
+                else:
+                    row += f"  {'---':>12s}"
+            print(row)
 
-    for method in methods:
-        row = f"{method:20s}"
-        for ds in datasets:
-            if ds in all_results and method in all_results[ds]['methods']:
-                rho = all_results[ds]['methods'][method]['spearman_mean']
-                row += f"  {rho:12.4f}"
-            else:
-                row += f"  {'---':>12s}"
-        print(row)
-
-    # Delta vs full_seq baseline
-    print(f"\nDelta vs full_seq (R²):")
-    for method in methods:
-        if method == 'full_seq':
-            continue
-        row = f"  {method:20s}"
-        for ds in datasets:
-            if (ds in all_results
-                    and method in all_results[ds]['methods']
-                    and 'full_seq' in all_results[ds]['methods']):
-                delta = (all_results[ds]['methods'][method]['r2_mean']
-                         - all_results[ds]['methods']['full_seq']['r2_mean'])
-                sign = '+' if delta >= 0 else ''
-                row += f"  {sign}{delta:11.4f}"
-            else:
-                row += f"  {'---':>12s}"
-        print(row)
+        # Delta vs full_seq
+        print(f"\n  Delta vs full_seq (R²):")
+        for method in methods:
+            if method == 'full_seq':
+                continue
+            row = f"    {method:20s}"
+            for ds in datasets:
+                lm_data = all_results.get(ds, {}).get('lms', {}).get(lm_name, {})
+                if method in lm_data and 'full_seq' in lm_data:
+                    delta = lm_data[method]['r2_mean'] - lm_data['full_seq']['r2_mean']
+                    sign = '+' if delta >= 0 else ''
+                    row += f"  {sign}{delta:11.4f}"
+                else:
+                    row += f"  {'---':>12s}"
+            print(row)
 
     # Save results
     output_path = os.path.join(output_dir, 'antibody_region_ablation.json')

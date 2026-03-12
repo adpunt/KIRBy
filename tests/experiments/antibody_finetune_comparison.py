@@ -495,21 +495,333 @@ def make_antiberty_ft(heavy_seqs, light_seqs, dataset_name, epochs=5,
     return factory
 
 
+def make_lora_factory(heavy_seqs, light_seqs, dataset_name, base_model,
+                      epochs=5, cache=True):
+    """Generic LoRA factory for any model in antibody_lora._MODEL_CONFIGS."""
+    from kirby.finetuning.antibody_lora import make_antibody_lora_factory
+    return make_antibody_lora_factory(
+        heavy_seqs=heavy_seqs, light_seqs=light_seqs,
+        dataset_name=dataset_name, base_model=base_model,
+        epochs=epochs, cache=cache,
+    )
+
+
+def _finetune_igbert(
+    train_heavy, train_light, val_heavy, val_light, train_labels,
+    epochs, lr, batch_size, device,
+):
+    """Fine-tune IgBERT (paired model) on antibody sequences."""
+    import torch
+    import torch.nn as nn
+
+    try:
+        from transformers import AutoTokenizer, AutoModel
+    except ImportError:
+        raise ImportError("IgBERT requires transformers")
+
+    model_id = 'Exscientia/IgBERT'
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    model = AutoModel.from_pretrained(model_id)
+
+    for param in model.parameters():
+        param.requires_grad = True
+
+    embed_dim = 1024
+    head = nn.Sequential(
+        nn.Linear(embed_dim, 256),
+        nn.ReLU(),
+        nn.Dropout(0.1),
+        nn.Linear(256, 1),
+    ).to(device)
+
+    model = model.to(device)
+
+    optimizer = torch.optim.AdamW(
+        list(model.parameters()) + list(head.parameters()),
+        lr=lr, weight_decay=0.01,
+    )
+    criterion = nn.MSELoss()
+
+    n_train = len(train_heavy)
+    n_holdout = max(1, int(0.1 * n_train))
+    perm = np.random.RandomState(42).permutation(n_train)
+    ho_idx = perm[:n_holdout]
+    fit_idx = perm[n_holdout:]
+
+    best_ho_loss = float('inf')
+    patience_counter = 0
+
+    def _embed_batch(heavy_list, light_list):
+        # IgBERT: concatenate H and L with [SEP]
+        paired = [f"{h} [SEP] {l}" for h, l in zip(heavy_list, light_list)]
+        enc = tokenizer(paired, padding=True, truncation=True,
+                        max_length=512, return_tensors='pt')
+        ids = enc['input_ids'].to(device)
+        mask = enc['attention_mask'].to(device)
+        out = model(input_ids=ids, attention_mask=mask)
+        return out.last_hidden_state.mean(dim=1)
+
+    for epoch in range(epochs):
+        model.train()
+        head.train()
+
+        fit_perm = np.random.RandomState(epoch).permutation(len(fit_idx))
+        for start in range(0, len(fit_idx), batch_size):
+            batch_ii = fit_perm[start:start + batch_size]
+            batch_idx = fit_idx[batch_ii]
+            h_batch = [train_heavy[i] for i in batch_idx]
+            l_batch = [train_light[i] for i in batch_idx]
+            y_batch = torch.FloatTensor(train_labels[batch_idx]).to(device)
+
+            optimizer.zero_grad()
+            embs = _embed_batch(h_batch, l_batch)
+            pred = head(embs).squeeze(-1)
+            loss = criterion(pred, y_batch)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+                list(model.parameters()) + list(head.parameters()), 1.0)
+            optimizer.step()
+
+        model.eval()
+        head.eval()
+        with torch.no_grad():
+            ho_h = [train_heavy[i] for i in ho_idx]
+            ho_l = [train_light[i] for i in ho_idx]
+            ho_embs = _embed_batch(ho_h, ho_l)
+            ho_pred = head(ho_embs).squeeze(-1)
+            ho_y = torch.FloatTensor(train_labels[ho_idx]).to(device)
+            ho_loss = criterion(ho_pred, ho_y).item()
+
+        if ho_loss < best_ho_loss:
+            best_ho_loss = ho_loss
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if patience_counter >= 3:
+                break
+
+    model.eval()
+
+    def _extract(heavy_list, light_list):
+        all_embs = []
+        with torch.no_grad():
+            for i in range(0, len(heavy_list), batch_size):
+                j = min(i + batch_size, len(heavy_list))
+                embs = _embed_batch(heavy_list[i:j], light_list[i:j])
+                all_embs.append(embs.cpu().numpy())
+        return np.vstack(all_embs).astype(np.float32)
+
+    train_embs = _extract(train_heavy, train_light)
+    val_embs = _extract(val_heavy, val_light)
+
+    del model, head, optimizer
+    if device == 'cuda':
+        torch.cuda.empty_cache()
+
+    return train_embs, val_embs
+
+
+def _finetune_igt5(
+    train_heavy, train_light, val_heavy, val_light, train_labels,
+    epochs, lr, batch_size, device,
+):
+    """Fine-tune IgT5 (paired model) on antibody sequences."""
+    import torch
+    import torch.nn as nn
+
+    try:
+        from transformers import T5EncoderModel, T5Tokenizer
+    except ImportError:
+        raise ImportError("IgT5 requires transformers")
+
+    model_id = 'Exscientia/IgT5'
+    tokenizer = T5Tokenizer.from_pretrained(model_id)
+    model = T5EncoderModel.from_pretrained(model_id)
+
+    for param in model.parameters():
+        param.requires_grad = True
+
+    embed_dim = 1024
+    head = nn.Sequential(
+        nn.Linear(embed_dim, 256),
+        nn.ReLU(),
+        nn.Dropout(0.1),
+        nn.Linear(256, 1),
+    ).to(device)
+
+    model = model.to(device)
+
+    optimizer = torch.optim.AdamW(
+        list(model.parameters()) + list(head.parameters()),
+        lr=lr, weight_decay=0.01,
+    )
+    criterion = nn.MSELoss()
+
+    n_train = len(train_heavy)
+    n_holdout = max(1, int(0.1 * n_train))
+    perm = np.random.RandomState(42).permutation(n_train)
+    ho_idx = perm[:n_holdout]
+    fit_idx = perm[n_holdout:]
+
+    best_ho_loss = float('inf')
+    patience_counter = 0
+
+    def _embed_batch(heavy_list, light_list):
+        # IgT5: space-separated residues, H and L concatenated
+        seqs = [' '.join(list(h)) + ' </s> ' + ' '.join(list(l))
+                for h, l in zip(heavy_list, light_list)]
+        enc = tokenizer(seqs, padding=True, truncation=True,
+                        max_length=512, return_tensors='pt')
+        ids = enc['input_ids'].to(device)
+        mask = enc['attention_mask'].to(device)
+        out = model(input_ids=ids, attention_mask=mask)
+        return out.last_hidden_state.mean(dim=1)
+
+    for epoch in range(epochs):
+        model.train()
+        head.train()
+
+        fit_perm = np.random.RandomState(epoch).permutation(len(fit_idx))
+        for start in range(0, len(fit_idx), batch_size):
+            batch_ii = fit_perm[start:start + batch_size]
+            batch_idx = fit_idx[batch_ii]
+            h_batch = [train_heavy[i] for i in batch_idx]
+            l_batch = [train_light[i] for i in batch_idx]
+            y_batch = torch.FloatTensor(train_labels[batch_idx]).to(device)
+
+            optimizer.zero_grad()
+            embs = _embed_batch(h_batch, l_batch)
+            pred = head(embs).squeeze(-1)
+            loss = criterion(pred, y_batch)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+                list(model.parameters()) + list(head.parameters()), 1.0)
+            optimizer.step()
+
+        model.eval()
+        head.eval()
+        with torch.no_grad():
+            ho_h = [train_heavy[i] for i in ho_idx]
+            ho_l = [train_light[i] for i in ho_idx]
+            ho_embs = _embed_batch(ho_h, ho_l)
+            ho_pred = head(ho_embs).squeeze(-1)
+            ho_y = torch.FloatTensor(train_labels[ho_idx]).to(device)
+            ho_loss = criterion(ho_pred, ho_y).item()
+
+        if ho_loss < best_ho_loss:
+            best_ho_loss = ho_loss
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if patience_counter >= 3:
+                break
+
+    model.eval()
+
+    def _extract(heavy_list, light_list):
+        all_embs = []
+        with torch.no_grad():
+            for i in range(0, len(heavy_list), batch_size):
+                j = min(i + batch_size, len(heavy_list))
+                embs = _embed_batch(heavy_list[i:j], light_list[i:j])
+                all_embs.append(embs.cpu().numpy())
+        return np.vstack(all_embs).astype(np.float32)
+
+    train_embs = _extract(train_heavy, train_light)
+    val_embs = _extract(val_heavy, val_light)
+
+    del model, head, optimizer
+    if device == 'cuda':
+        torch.cuda.empty_cache()
+
+    return train_embs, val_embs
+
+
+def make_igbert_ft(heavy_seqs, light_seqs, dataset_name, epochs=5,
+                   lr=2e-5, batch_size=8, cache=True):
+    """IgBERT full fine-tuning factory."""
+    from kirby.finetuning._base import fold_cache_key, load_or_compute
+
+    hyperparams = {'model': 'igbert', 'epochs': epochs, 'lr': lr}
+    rep_name = 'ft_igbert'
+
+    def factory(train_idx, val_idx, train_labels):
+        key = fold_cache_key(dataset_name, rep_name, train_idx, hyperparams)
+
+        def _compute():
+            from kirby.finetuning._base import get_device
+            device = get_device()
+            return _finetune_igbert(
+                [heavy_seqs[i] for i in train_idx],
+                [light_seqs[i] for i in train_idx],
+                [heavy_seqs[i] for i in val_idx],
+                [light_seqs[i] for i in val_idx],
+                train_labels, epochs, lr, batch_size, device,
+            )
+
+        return load_or_compute(key, _compute, cache=cache)
+
+    return factory
+
+
+def make_igt5_ft(heavy_seqs, light_seqs, dataset_name, epochs=5,
+                 lr=2e-5, batch_size=8, cache=True):
+    """IgT5 full fine-tuning factory."""
+    from kirby.finetuning._base import fold_cache_key, load_or_compute
+
+    hyperparams = {'model': 'igt5', 'epochs': epochs, 'lr': lr}
+    rep_name = 'ft_igt5'
+
+    def factory(train_idx, val_idx, train_labels):
+        key = fold_cache_key(dataset_name, rep_name, train_idx, hyperparams)
+
+        def _compute():
+            from kirby.finetuning._base import get_device
+            device = get_device()
+            return _finetune_igt5(
+                [heavy_seqs[i] for i in train_idx],
+                [light_seqs[i] for i in train_idx],
+                [heavy_seqs[i] for i in val_idx],
+                [light_seqs[i] for i in val_idx],
+                train_labels, epochs, lr, batch_size, device,
+            )
+
+        return load_or_compute(key, _compute, cache=cache)
+
+    return factory
+
+
 # =========================================================================
 # FROZEN BASELINES
 # =========================================================================
 
 def get_frozen_baselines(heavy_seqs, light_seqs):
-    """Generate frozen embeddings for ESM-2, AbLang2, AntiBERTy."""
+    """Generate frozen embeddings for all antibody LMs."""
     from kirby.representations.antibody import (
         embed_esm2, embed_ablang2, embed_antiberty,
+        embed_esmc, embed_esm3, embed_saprot,
+        embed_prot_t5, embed_amplify, embed_abroberta,
+        embed_mint, embed_igbert, embed_igt5,
     )
 
     baselines = {}
 
-    for name, fn in [('esm2', embed_esm2),
-                     ('ablang2', embed_ablang2),
-                     ('antiberty', embed_antiberty)]:
+    all_models = [
+        ('esm2', embed_esm2),
+        ('ablang2', embed_ablang2),
+        ('antiberty', embed_antiberty),
+        ('esmc', embed_esmc),
+        ('esm3', embed_esm3),
+        ('saprot', embed_saprot),
+        ('prott5', embed_prot_t5),
+        ('amplify', embed_amplify),
+        ('abroberta', embed_abroberta),
+        ('mint', embed_mint),
+        ('igbert', embed_igbert),
+        ('igt5', embed_igt5),
+    ]
+
+    for name, fn in all_models:
         try:
             print(f"    Generating frozen {name}...", end='', flush=True)
             X = fn(heavy_seqs, light_seqs)
@@ -531,8 +843,10 @@ def main():
     parser.add_argument('--datasets', type=str, default=None,
                        help='Comma-separated dataset names')
     parser.add_argument('--methods', type=str, default=None,
-                       help='Comma-separated methods: esm2_lora,ablang2_ft,'
-                            'antiberty_ft (default: all)')
+                       help='Comma-separated methods: esm2_lora,esmc_lora,'
+                            'esm3_lora,saprot_lora,prott5_lora,amplify_lora,'
+                            'abroberta_lora,mint_lora,ablang2_ft,antiberty_ft,'
+                            'igbert_ft,igt5_ft (default: all)')
     parser.add_argument('--epochs', type=int, default=5,
                        help='Fine-tuning epochs (default: 5)')
     parser.add_argument('--n-folds', type=int, default=5,
@@ -545,7 +859,10 @@ def main():
     datasets = (args.datasets.split(',') if args.datasets
                 else DEFAULT_DATASETS)
     methods = (args.methods.split(',') if args.methods
-               else ['esm2_lora', 'ablang2_ft', 'antiberty_ft'])
+               else ['esm2_lora', 'esmc_lora', 'esm3_lora', 'saprot_lora',
+                      'prott5_lora', 'amplify_lora', 'abroberta_lora',
+                      'mint_lora', 'ablang2_ft', 'antiberty_ft',
+                      'igbert_ft', 'igt5_ft'])
     cache = not args.no_cache
 
     print("=" * 70)
@@ -600,14 +917,29 @@ def main():
         print("\n  --- Fine-tuned ---")
         factories = {}
 
-        if 'esm2_lora' in methods:
-            try:
-                factories['esm2_lora'] = make_esm2_lora(
-                    heavy_seqs, light_seqs, ds_name,
-                    epochs=args.epochs, cache=cache)
-            except Exception as e:
-                print(f"    esm2_lora: FAILED to create factory: {e}")
+        # LoRA-based methods (all use antibody_lora.py with different base_model)
+        lora_methods = {
+            'esm2_lora': 'esm2',
+            'esmc_lora': 'esmc',
+            'esm3_lora': 'esm3',
+            'saprot_lora': 'saprot',
+            'prott5_lora': 'prott5',
+            'amplify_lora': 'amplify',
+            'abroberta_lora': 'abroberta',
+            'mint_lora': 'mint',
+        }
 
+        for method_name, base_model in lora_methods.items():
+            if method_name in methods:
+                try:
+                    factories[method_name] = make_lora_factory(
+                        heavy_seqs, light_seqs, ds_name,
+                        base_model=base_model,
+                        epochs=args.epochs, cache=cache)
+                except Exception as e:
+                    print(f"    {method_name}: FAILED to create factory: {e}")
+
+        # Full fine-tuning methods
         if 'ablang2_ft' in methods:
             try:
                 factories['ablang2_ft'] = make_ablang2_ft(
@@ -623,6 +955,22 @@ def main():
                     epochs=args.epochs, cache=cache)
             except Exception as e:
                 print(f"    antiberty_ft: FAILED to create factory: {e}")
+
+        if 'igbert_ft' in methods:
+            try:
+                factories['igbert_ft'] = make_igbert_ft(
+                    heavy_seqs, light_seqs, ds_name,
+                    epochs=args.epochs, cache=cache)
+            except Exception as e:
+                print(f"    igbert_ft: FAILED to create factory: {e}")
+
+        if 'igt5_ft' in methods:
+            try:
+                factories['igt5_ft'] = make_igt5_ft(
+                    heavy_seqs, light_seqs, ds_name,
+                    epochs=args.epochs, cache=cache)
+            except Exception as e:
+                print(f"    igt5_ft: FAILED to create factory: {e}")
 
         for ft_name, factory in factories.items():
             print(f"    {ft_name}:", end='', flush=True)
@@ -640,7 +988,16 @@ def main():
                   f"  ρ={rho_mean:.4f} ± {rho_std:.4f}")
 
             # Compare to frozen baseline
-            base_name = ft_name.split('_')[0]  # esm2, ablang2, antiberty
+            # Map method name to frozen baseline name
+            ft_to_frozen = {
+                'esm2_lora': 'esm2', 'esmc_lora': 'esmc', 'esm3_lora': 'esm3',
+                'saprot_lora': 'saprot', 'prott5_lora': 'prott5',
+                'amplify_lora': 'amplify', 'abroberta_lora': 'abroberta',
+                'mint_lora': 'mint', 'ablang2_ft': 'ablang2',
+                'antiberty_ft': 'antiberty', 'igbert_ft': 'igbert',
+                'igt5_ft': 'igt5',
+            }
+            base_name = ft_to_frozen.get(ft_name, ft_name.split('_')[0])
             if base_name in ds_results['frozen']:
                 base_r2 = ds_results['frozen'][base_name]['r2_mean']
                 delta = r2_mean - base_r2

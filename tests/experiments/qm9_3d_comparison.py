@@ -1,12 +1,14 @@
-"""QM9 Three-Way Comparison: Frozen ECFP vs Frozen SchNet vs End-to-End SchNet.
+"""QM9 3D Comparison: Frozen ECFP vs Frozen SchNet/DimeNet++ vs E2E SchNet/DimeNet++.
 
 Demonstrates WHEN and WHY frozen embeddings break down: tasks requiring 3D
 geometry + sufficient data for end-to-end training.
 
-Three methods:
+Five methods:
   1. Frozen ECFP4 + XGBoost (KIRBy's standard approach)
   2. Frozen SchNet embeddings + Ridge (current frozen approach for 3D)
-  3. End-to-end SchNet (trained on 3D coordinates, expected winner)
+  3. End-to-end SchNet (trained on 3D coordinates)
+  4. Frozen DimeNet++ embeddings + Ridge
+  5. End-to-end DimeNet++ (trained on 3D coordinates)
 
 Uses scaffold-split GroupKFold (no random splitting).
 
@@ -15,6 +17,7 @@ Usage:
     python tests/experiments/qm9_3d_comparison.py --property mu --n-samples 5000
     python tests/experiments/qm9_3d_comparison.py --property gap --n-samples 0  # full dataset (~130K)
     python tests/experiments/qm9_3d_comparison.py --property gap --n-folds 3
+    python tests/experiments/qm9_3d_comparison.py --property gap,homo,mu  # multiple properties
 """
 
 import sys
@@ -58,8 +61,9 @@ def _scaffold_groups(smiles_list):
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--property', default='gap', choices=list(PROPERTY_MAP.keys()),
-                        help='QM9 property to predict')
+    parser.add_argument('--property', default='gap',
+                        help='QM9 property to predict (comma-separated for multiple, '
+                             f'choices: {",".join(PROPERTY_MAP.keys())})')
     parser.add_argument('--n-samples', type=int, default=10000,
                         help='Number of samples (0 = full dataset, default: 10000)')
     parser.add_argument('--epochs', type=int, default=100,
@@ -70,9 +74,19 @@ def main():
                         help='Output directory')
     args = parser.parse_args()
 
-    prop_idx = PROPERTY_MAP[args.property]
+    properties = [p.strip() for p in args.property.split(',')]
+    for p in properties:
+        if p not in PROPERTY_MAP:
+            parser.error(f"Unknown property '{p}'. Choose from: {list(PROPERTY_MAP.keys())}")
+
     n_samples = args.n_samples if args.n_samples > 0 else None
 
+    for prop_name in properties:
+        _run_property(prop_name, PROPERTY_MAP[prop_name], n_samples, args)
+
+
+def _run_property(prop_name, prop_idx, n_samples, args):
+    """Run comparison for a single QM9 property."""
     # Load QM9 with 3D coordinates
     from kirby.datasets.qm9 import load_qm9_with_3d
     data = load_qm9_with_3d(n_samples=n_samples, property_idx=prop_idx)
@@ -92,7 +106,7 @@ def main():
         data_list = [data_list[i] for i in valid]
 
     n = len(labels)
-    print(f"\n{n} molecules, property: {args.property}")
+    print(f"\n{n} molecules, property: {prop_name}")
 
     # Scaffold-split GroupKFold
     groups = _scaffold_groups(smiles)
@@ -100,7 +114,8 @@ def main():
     print(f"Scaffold groups: {n_unique_scaffolds} unique scaffolds")
 
     gkf = GroupKFold(n_splits=args.n_folds)
-    method_names = ['ecfp4_xgb', 'frozen_schnet', 'e2e_schnet']
+    method_names = ['ecfp4_xgb', 'frozen_schnet', 'e2e_schnet',
+                    'frozen_dimenetpp', 'e2e_dimenetpp']
     all_fold_results = {m: [] for m in method_names}
 
     for fold, (train_val_idx, test_idx) in enumerate(gkf.split(labels, groups=groups)):
@@ -140,9 +155,26 @@ def main():
         res['time'] = time.time() - t0
         all_fold_results['e2e_schnet'].append(res)
 
+        # --- Method 4: Frozen DimeNet++ embeddings + Ridge ---
+        print("\n  Method 4: Frozen DimeNet++ Embeddings + Ridge")
+        t0 = time.time()
+        res = run_frozen_dimenetpp(smiles, labels, train_idx, val_idx, test_idx)
+        res['time'] = time.time() - t0
+        all_fold_results['frozen_dimenetpp'].append(res)
+
+        # --- Method 5: End-to-end DimeNet++ ---
+        print("\n  Method 5: End-to-End DimeNet++ (3D)")
+        t0 = time.time()
+        res = run_e2e_dimenetpp(
+            data_list, labels, train_idx, val_idx, test_idx,
+            prop_idx=prop_idx, epochs=args.epochs,
+        )
+        res['time'] = time.time() - t0
+        all_fold_results['e2e_dimenetpp'].append(res)
+
     # --- Summary: mean +/- std across folds ---
     print(f"\n{'=' * 70}")
-    print(f"QM9 {args.property} -- {args.n_folds}-Fold Scaffold-Split Summary "
+    print(f"QM9 {prop_name} -- {args.n_folds}-Fold Scaffold-Split Summary "
           f"({n} molecules)")
     print(f"{'=' * 70}")
     print(f"{'Method':<25} {'R2':>12} {'MAE':>14} {'Spearman':>14} {'Time':>8}")
@@ -179,7 +211,7 @@ def main():
     # Save
     out_dir = Path(args.output) / 'qm9_3d_comparison'
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_file = out_dir / f'{args.property}_{n}.json'
+    out_file = out_dir / f'{prop_name}_{n}.json'
     with open(out_file, 'w') as f:
         json.dump(summary, f, indent=2)
     print(f"\n[saved {out_file}]")
@@ -249,6 +281,106 @@ def run_frozen_schnet(smiles, labels, train_idx, val_idx, test_idx):
     print(f"    Test R2: {r2:.4f}, MAE: {mae:.4f}, Spearman: {sp:.4f}")
 
     return {'test_r2': float(r2), 'test_mae': float(mae), 'test_spearman': sp}
+
+
+def run_frozen_dimenetpp(smiles, labels, train_idx, val_idx, test_idx):
+    """Frozen DimeNet++ embeddings + Ridge regression."""
+    from kirby.representations.molecular import create_dimenetpp
+    from sklearn.linear_model import RidgeCV
+    from sklearn.preprocessing import StandardScaler
+
+    print("    Generating frozen DimeNet++ embeddings...")
+    try:
+        X = create_dimenetpp(smiles)
+        print(f"    DimeNet++ shape: {X.shape}")
+    except Exception as e:
+        print(f"    DimeNet++ failed: {e}")
+        return {'test_r2': float('nan'), 'test_mae': float('nan'),
+                'test_spearman': float('nan'), 'error': str(e)}
+
+    X_train, X_test = X[train_idx], X[test_idx]
+    y_train, y_test = labels[train_idx], labels[test_idx]
+
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(X_train)
+    X_test = scaler.transform(X_test)
+
+    model = RidgeCV(alphas=np.logspace(-4, 4, 50))
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+
+    r2 = r2_score(y_test, y_pred)
+    mae = mean_absolute_error(y_test, y_pred)
+    sp = float(spearmanr(y_test, y_pred).correlation)
+    print(f"    Test R2: {r2:.4f}, MAE: {mae:.4f}, Spearman: {sp:.4f}")
+
+    return {'test_r2': float(r2), 'test_mae': float(mae), 'test_spearman': sp}
+
+
+def run_e2e_dimenetpp(data_list, labels, train_idx, val_idx, test_idx,
+                      prop_idx=4, epochs=100):
+    """End-to-end DimeNet++ trained on 3D coordinates.
+
+    Uses the molecular_3d.py factory for fine-tuning.
+    """
+    import torch
+
+    try:
+        from kirby.finetuning.molecular_3d import make_molecular_3d_factory
+    except ImportError:
+        print("    DimeNet++ E2E requires molecular_3d factory")
+        return {'test_r2': float('nan'), 'test_mae': float('nan'),
+                'test_spearman': float('nan'), 'error': 'molecular_3d not available'}
+
+    # Get SMILES for the factory
+    smiles = []
+    for d in data_list:
+        if hasattr(d, 'smiles'):
+            smiles.append(d.smiles)
+        else:
+            smiles.append('C')  # placeholder
+
+    try:
+        factory = make_molecular_3d_factory(
+            smiles_list=smiles,
+            dataset_name=f'qm9_prop{prop_idx}',
+            base_model='dimenetpp',
+            epochs=epochs,
+            cache=True,
+        )
+
+        all_idx = np.concatenate([train_idx, val_idx])
+        all_labels = labels[all_idx]
+        train_embs, test_embs = factory(all_idx, test_idx, all_labels)
+    except Exception as e:
+        print(f"    DimeNet++ E2E failed: {e}")
+        return {'test_r2': float('nan'), 'test_mae': float('nan'),
+                'test_spearman': float('nan'), 'error': str(e)}
+
+    from sklearn.linear_model import RidgeCV
+    from sklearn.preprocessing import StandardScaler
+
+    scaler = StandardScaler()
+    X_train = scaler.fit_transform(train_embs)
+    X_test = scaler.transform(test_embs)
+    y_train = labels[np.concatenate([train_idx, val_idx])]
+    y_test = labels[test_idx]
+
+    model = RidgeCV(alphas=np.logspace(-4, 4, 50))
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+
+    r2 = r2_score(y_test, y_pred)
+    mae = mean_absolute_error(y_test, y_pred)
+    sp = float(spearmanr(y_test, y_pred).correlation)
+    print(f"    Test R2: {r2:.4f}, MAE: {mae:.4f}, Spearman: {sp:.4f}")
+
+    return {
+        'test_r2': float(r2),
+        'test_mae': float(mae),
+        'test_spearman': sp,
+        'epochs_trained': epochs,
+    }
 
 
 def run_e2e_schnet(data_list, labels, train_idx, val_idx, test_idx,

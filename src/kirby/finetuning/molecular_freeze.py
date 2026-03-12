@@ -27,6 +27,18 @@ _MODEL_CONFIGS = {
         'ibm/MoLFormer-XL-both-10pct',
         768,
     ),
+    'selformer': (
+        'HUBioDataLab/SELFormer',
+        768,
+    ),
+    'gp_molformer': (
+        'ibm-research/GP-MoLFormer-Uniq',
+        768,
+    ),
+    'chembert': (
+        'jonghyunlee/ChemBERT_ChEMBL_pretrained',
+        256,
+    ),
 }
 
 

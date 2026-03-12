@@ -1,16 +1,18 @@
 """
-Antibody ESM-2 LoRA fine-tuning factory.
+Antibody LoRA fine-tuning factory.
 
-Fine-tunes ESM-2 650M with LoRA on antibody VH sequences for fitness/property
-prediction. Light chain sequences are embedded frozen and concatenated during
-training to provide context, but only heavy chain embeddings are extracted.
+Fine-tunes protein language models (ESM-2, ESM-C, ESM3, SaProt, ProtT5,
+AMPLIFY, Ab-RoBERTa, MINT) with LoRA on antibody VH sequences for
+fitness/property prediction. Light chain sequences are embedded frozen and
+concatenated during training to provide context, but only heavy chain
+embeddings are extracted.
 
 Architecture during training:
-    heavy_seq → LoRA-ESM-2 → heavy_emb (1280D)
-    light_seq → frozen-ESM-2 → light_emb (1280D)
+    heavy_seq → LoRA-PLM → heavy_emb (D)
+    light_seq → frozen-PLM → light_emb (D)
     concat(heavy_emb, light_emb) → regression_head → fitness
 
-Extraction: heavy_emb (1280D) from LoRA-ESM-2 only.
+Extraction: heavy_emb (D) from LoRA-PLM only.
 Concatenation with light chain (or other reps) is handled downstream.
 
 Requires: torch, transformers, peft
@@ -26,13 +28,71 @@ from kirby.finetuning._base import (
     load_or_compute,
 )
 
+# Model configs: (HF model ID, embed_dim, LoRA target_modules)
 _MODEL_CONFIGS = {
     'esm2': (
         'facebook/esm2_t33_650M_UR50D',
         1280,
         ['query', 'value'],
     ),
+    'esmc': (
+        'EvolutionaryScale/esmc-600m-2024-12',
+        1152,
+        ['query', 'value'],
+    ),
+    'esm3': (
+        'EvolutionaryScale/esm3-sm-open-v1',
+        1536,
+        ['query', 'value'],
+    ),
+    'saprot': (
+        'westlake-repl/SaProt_650M_AF2',
+        1280,
+        ['query', 'value'],
+    ),
+    'prott5': (
+        'Rostlab/prot_t5_xl_uniref50',
+        1024,
+        ['q', 'v'],  # T5 uses q/v naming
+    ),
+    'amplify': (
+        'chandar-lab/AMPLIFY_350M',
+        960,
+        ['query', 'value'],
+    ),
+    'abroberta': (
+        'alchemab/antiberta2',
+        768,
+        ['query', 'value'],
+    ),
+    'mint': (
+        'AmelieSchreiber/MINT',
+        1280,
+        ['query', 'value'],
+    ),
 }
+
+
+def _is_t5_model(model_name: str) -> bool:
+    """Check if model uses T5 encoder-decoder architecture."""
+    return model_name in ('prott5',)
+
+
+def _load_model(model_id: str, model_name: str):
+    """Load the appropriate model class for the given model name."""
+    if _is_t5_model(model_name):
+        from transformers import T5EncoderModel
+        return T5EncoderModel.from_pretrained(model_id)
+    else:
+        from transformers import AutoModel
+        return AutoModel.from_pretrained(model_id, trust_remote_code=True)
+
+
+def _pool_output(out):
+    """Extract pooler_output if available, else mean-pool over token hidden states."""
+    if hasattr(out, 'pooler_output') and out.pooler_output is not None:
+        return out.pooler_output
+    return out.last_hidden_state.mean(dim=1)
 
 
 def _finetune_and_extract(
@@ -48,20 +108,20 @@ def _finetune_and_extract(
     lr: float,
     batch_size: int,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Fine-tune ESM-2 with LoRA on antibody VH, extract embeddings."""
+    """Fine-tune a protein LM with LoRA on antibody VH, extract embeddings."""
     import torch
     import torch.nn as nn
     from torch.utils.data import DataLoader, TensorDataset
-    from transformers import AutoTokenizer, AutoModel
+    from transformers import AutoTokenizer
     from peft import LoraConfig, get_peft_model, TaskType
 
     model_id, embed_dim, target_modules = _MODEL_CONFIGS[model_name]
     device = get_device()
 
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
 
     # LoRA model for heavy chain
-    base_model = AutoModel.from_pretrained(model_id)
+    base_model = _load_model(model_id, model_name)
     lora_config = LoraConfig(
         r=lora_rank,
         lora_alpha=lora_alpha,
@@ -73,7 +133,7 @@ def _finetune_and_extract(
     peft_model = get_peft_model(base_model, lora_config)
 
     # Frozen model for light chain context
-    frozen_model = AutoModel.from_pretrained(model_id)
+    frozen_model = _load_model(model_id, model_name)
     for p in frozen_model.parameters():
         p.requires_grad = False
 
@@ -109,9 +169,9 @@ def _finetune_and_extract(
             ids = train_l_enc['input_ids'][i:j].to(device)
             mask = train_l_enc['attention_mask'][i:j].to(device)
             out = frozen_model(input_ids=ids, attention_mask=mask)
-            pooled = out.last_hidden_state.mean(dim=1)
+            pooled = _pool_output(out)
             train_l_embs.append(pooled.cpu())
-    train_l_tensor = torch.cat(train_l_embs, dim=0)  # (N_train, 1280)
+    train_l_tensor = torch.cat(train_l_embs, dim=0)  # (N_train, embed_dim)
 
     # Early stopping holdout
     n_train = len(train_heavy)
@@ -154,7 +214,7 @@ def _finetune_and_extract(
 
             optimizer.zero_grad()
             out = peft_model(input_ids=batch_h_ids, attention_mask=batch_h_mask)
-            h_emb = out.last_hidden_state.mean(dim=1)
+            h_emb = _pool_output(out)
             combined = torch.cat([h_emb, batch_l_emb], dim=1)
             pred = head(combined).squeeze(-1)
             loss = criterion(pred, batch_y)
@@ -166,7 +226,7 @@ def _finetune_and_extract(
         head.eval()
         with torch.no_grad():
             ho_out = peft_model(input_ids=ho_h_ids, attention_mask=ho_h_mask)
-            ho_h_emb = ho_out.last_hidden_state.mean(dim=1)
+            ho_h_emb = _pool_output(ho_out)
             ho_combined = torch.cat([ho_h_emb, ho_l_embs], dim=1)
             ho_pred = head(ho_combined).squeeze(-1)
             ho_loss = criterion(ho_pred, ho_labels_t).item()
@@ -191,7 +251,7 @@ def _finetune_and_extract(
                 ids = enc['input_ids'][i:j].to(device)
                 mask = enc['attention_mask'][i:j].to(device)
                 out = peft_model(input_ids=ids, attention_mask=mask)
-                pooled = out.last_hidden_state.mean(dim=1)
+                pooled = _pool_output(out)
                 all_embs.append(pooled.cpu().numpy())
         return np.concatenate(all_embs, axis=0).astype(np.float32)
 
@@ -218,16 +278,20 @@ def make_antibody_lora_factory(
     batch_size: int = 8,
     cache: bool = True,
 ) -> Callable:
-    """Create a LoRA fine-tuning factory for antibody ESM-2.
+    """Create a LoRA fine-tuning factory for antibody protein LMs.
 
-    Trains LoRA-adapted ESM-2 on heavy chain with frozen light chain context,
-    then extracts LoRA-adapted heavy chain embeddings (1280D).
+    Trains LoRA-adapted PLM on heavy chain with frozen light chain context,
+    then extracts LoRA-adapted heavy chain embeddings.
+
+    Supported base_model values:
+        esm2 (1280D), esmc (1152D), esm3 (1536D), saprot (1280D),
+        prott5 (1024D), amplify (960D), abroberta (768D), mint (1280D)
 
     Args:
         heavy_seqs: Heavy chain sequences.
         light_seqs: Light chain sequences (used as frozen context during training).
         dataset_name: Used for cache key.
-        base_model: 'esm2' (ESM-2 650M).
+        base_model: Model key from _MODEL_CONFIGS.
         lora_rank: LoRA rank (default: 8).
         lora_alpha: LoRA alpha (default: 16).
         epochs: Fine-tuning epochs per fold (default: 5).
@@ -237,7 +301,6 @@ def make_antibody_lora_factory(
 
     Returns:
         Factory callable: (train_idx, val_idx, train_labels) -> (train_embs, val_embs)
-        Output: 1280D heavy chain embeddings from LoRA-ESM-2.
     """
     if base_model not in _MODEL_CONFIGS:
         raise ValueError(f"Unknown base_model '{base_model}'. "

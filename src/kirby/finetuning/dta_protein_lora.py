@@ -1,12 +1,13 @@
 """
 DTA protein-side LoRA fine-tuning factory.
 
-Fine-tunes ESM-2 650M or ESM-C 600M with LoRA on the protein side of drug-target
-affinity prediction. The training signal comes from affinity labels, with frozen
-drug ECFP4 features concatenated to provide drug context.
+Fine-tunes protein language models (ESM-2, ESM-C, ESM3, SaProt, AMPLIFY, MINT)
+with LoRA on the protein side of drug-target affinity prediction. The training
+signal comes from affinity labels, with frozen drug ECFP4 features concatenated
+to provide drug context.
 
 Architecture during training:
-    protein_seq → LoRA-ESM-2 → protein_emb (1280D)
+    protein_seq → LoRA-PLM → protein_emb (D)
     drug_smiles → frozen ECFP4 (2048D)
     concat(protein_emb, drug_ecfp4) → regression_head → affinity
 
@@ -38,6 +39,31 @@ _MODEL_CONFIGS = {
         1280,
         ['query', 'value'],
     ),
+    'esmc': (
+        'EvolutionaryScale/esmc-600m-2024-12',
+        1152,
+        ['query', 'value'],
+    ),
+    'esm3': (
+        'EvolutionaryScale/esm3-sm-open-v1',
+        1536,
+        ['query', 'value'],
+    ),
+    'saprot': (
+        'westlake-repl/SaProt_650M_AF2',
+        1280,
+        ['query', 'value'],
+    ),
+    'amplify': (
+        'chandar-lab/AMPLIFY_350M',
+        960,
+        ['query', 'value'],
+    ),
+    'mint': (
+        'AmelieSchreiber/MINT',
+        1280,
+        ['query', 'value'],
+    ),
 }
 
 
@@ -56,8 +82,8 @@ def _finetune_and_extract(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Core fine-tuning + extraction for DTA protein models.
 
-    Training: LoRA-ESM-2(protein) concat ECFP4(drug) → head → affinity
-    Extraction: LoRA-ESM-2(protein) → mean-pooled embedding only
+    Training: LoRA-PLM(protein) concat ECFP4(drug) → head → affinity
+    Extraction: LoRA-PLM(protein) → mean-pooled embedding only
     """
     import torch
     import torch.nn as nn
@@ -80,8 +106,8 @@ def _finetune_and_extract(
     train_drug_tensor = torch.FloatTensor(train_drug_feats)
 
     # --- Protein LM + LoRA ---
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    base_model = AutoModel.from_pretrained(model_id)
+    tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    base_model = AutoModel.from_pretrained(model_id, trust_remote_code=True)
 
     lora_config = LoraConfig(
         r=lora_rank,
@@ -106,7 +132,6 @@ def _finetune_and_extract(
 
     # --- Tokenize all training proteins ---
     def _tokenize(seqs, max_length=1024):
-        # ESM-2 uses single-character tokenization
         spaced = [' '.join(list(s)) for s in seqs]
         return tokenizer(
             spaced, padding=True, truncation=True,
@@ -230,25 +255,29 @@ def make_dta_protein_lora_factory(
 ) -> Callable:
     """Create a LoRA fine-tuning factory for protein LMs on DTA tasks.
 
-    Trains LoRA-adapted ESM-2 with drug ECFP4 context to predict affinity,
+    Trains LoRA-adapted PLM with drug ECFP4 context to predict affinity,
     then extracts protein-only embeddings. Drug context is frozen and used
     only during training — not in the extracted embeddings.
+
+    Supported base_model values:
+        esm2 (1280D), esmc (1152D), esm3 (1536D), saprot (1280D),
+        amplify (960D), mint (1280D)
 
     Args:
         protein_seqs: Protein sequences per pair (with repeats).
         drug_smiles: Drug SMILES per pair (with repeats).
         dataset_name: Used for cache key ('davis', 'kiba').
-        base_model: 'esm2' (ESM-2 650M).
+        base_model: Model key from _MODEL_CONFIGS.
         lora_rank: LoRA rank (default: 8, recommended 4-8 for >5K samples).
         lora_alpha: LoRA alpha (default: 16).
         epochs: Fine-tuning epochs per fold (default: 5).
         lr: Learning rate (default: 2e-5, lower than molecular due to larger model).
-        batch_size: Batch size (default: 8, smaller due to ESM-2 memory).
+        batch_size: Batch size (default: 8, smaller due to PLM memory).
         cache: Cache fold embeddings to disk.
 
     Returns:
         Factory callable: (train_idx, val_idx, train_labels) -> (train_embs, val_embs)
-        Output embeddings are protein-only (1280D for ESM-2).
+        Output embeddings are protein-only.
     """
     if base_model not in _MODEL_CONFIGS:
         raise ValueError(
