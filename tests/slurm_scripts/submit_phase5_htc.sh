@@ -3,10 +3,13 @@
 # Run from HTC login node.
 #
 # Usage:
-#   bash tests/slurm_scripts/submit_phase5_htc.sh           # all GPU jobs
+#   bash tests/slurm_scripts/submit_phase5_htc.sh           # all jobs
 #   bash tests/slurm_scripts/submit_phase5_htc.sh antibody
 #   bash tests/slurm_scripts/submit_phase5_htc.sh dta
 #   bash tests/slurm_scripts/submit_phase5_htc.sh comparisons
+#   bash tests/slurm_scripts/submit_phase5_htc.sh molecular
+#   bash tests/slurm_scripts/submit_phase5_htc.sh reaction
+#   bash tests/slurm_scripts/submit_phase5_htc.sh tcga
 
 set -euo pipefail
 
@@ -35,8 +38,47 @@ submit() {
 }
 
 echo "============================================"
-echo "Phase 5: HTC GPU Jobs"
+echo "Phase 5: HTC Jobs (all require --gres=gpu:1 for scheduling)"
 echo "============================================"
+
+run_molecular() {
+    local OUT="${BASE_OUTPUT}/molecular"
+    echo "--- Molecular (8 datasets, ~35 reps) ---"
+    submit mol_baselines \
+        "mkdir -p ${OUT} && python tests/run_baseline_survey.py molecular --n-folds 5 --augment --output ${OUT}/" \
+        64G 47:59:00
+    echo ""
+}
+
+run_reaction() {
+    local OUT="${BASE_OUTPUT}/reaction"
+    echo "--- Reaction (3 datasets, 8 reps) ---"
+    submit rxn_baselines \
+        "mkdir -p ${OUT} && python tests/run_baseline_survey.py reaction --n-folds 5 --augment --output ${OUT}/" \
+        32G 23:59:00
+    echo ""
+}
+
+run_antibody_fast() {
+    local OUT="${BASE_OUTPUT}/antibody"
+    echo "--- Antibody fast reps (onehot, blosum, aac, paratope) ---"
+    submit ab_fast_dms \
+        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_dms --output ${OUT}/ --n-folds 5 --augment --reps onehot,blosum,aac,paratope" \
+        32G 23:59:00
+    submit ab_fast_inter \
+        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_inter --output ${OUT}/ --n-folds 5 --augment --reps onehot,blosum,aac,paratope" \
+        32G 23:59:00
+    echo ""
+}
+
+run_tcga() {
+    local OUT="${BASE_OUTPUT}/tcga"
+    echo "--- TCGA (3 datasets, 57 reps) ---"
+    submit tcga_baselines \
+        "mkdir -p ${OUT} && python tests/run_baseline_survey.py tcga --n-folds 5 --augment --output ${OUT}/" \
+        256G 47:59:00
+    echo ""
+}
 
 run_antibody_gpu() {
     local OUT="${BASE_OUTPUT}/antibody"
@@ -125,16 +167,24 @@ run_comparisons() {
 }
 
 case "$MODE" in
+    molecular)   run_molecular ;;
+    reaction)    run_reaction ;;
+    antibody_fast) run_antibody_fast ;;
+    tcga)        run_tcga ;;
     antibody)    run_antibody_gpu ;;
     dta)         run_dta ;;
     comparisons) run_comparisons ;;
     all)
+        run_molecular
+        run_reaction
+        run_antibody_fast
+        run_tcga
         run_antibody_gpu
         run_dta
         run_comparisons
         echo "============================================"
-        echo "Total: 18 GPU jobs (10 ab + 4 dta + 4 cmp)"
+        echo "Total: 23 jobs (5 CPU + 10 ab_gpu + 4 dta + 4 cmp)"
         echo "============================================"
         ;;
-    *) echo "Usage: bash submit_phase5_htc.sh [all|antibody|dta|comparisons]"; exit 1 ;;
+    *) echo "Usage: bash submit_phase5_htc.sh [all|molecular|reaction|antibody_fast|tcga|antibody|dta|comparisons]"; exit 1 ;;
 esac
