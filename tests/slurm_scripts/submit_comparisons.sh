@@ -10,7 +10,7 @@
 #   mol_ft     - Molecular fine-tuning: frozen vs LoRA vs freeze+head (GPU)
 #   dta_ft     - DTA LoRA fine-tuning: protein/drug LMs (GPU)
 #   tcga_fm    - TCGA foundation models: frozen vs fine-tuned (GPU)
-#   reaction   - Reaction rep comparison: 8 reps × 3 models (CPU-only)
+#   reaction   - Reaction rep comparison: 8 reps × 3 models (GPU)
 #   wsi        - WSI aggregation: mean pool vs gated attention vs ABMIL (GPU)
 #
 # Usage:
@@ -45,22 +45,6 @@ submit_gpu() {
     echo "  $J  ${name}  (mem=${mem}, time=${wall}, GPU)"
 }
 
-submit_cpu() {
-    local name=$1
-    local cmd=$2
-    local mem=${3:-32G}
-    local wall=${4:-12:00:00}
-
-    J=$(sbatch \
-        --job-name="cmp_${name}" \
-        --nodes=1 --ntasks=1 --cpus-per-task=8 \
-        --time="${wall}" --partition=long \
-        --mem="${mem}" \
-        --mail-user="${EMAIL}" --mail-type=END,FAIL \
-        --wrap="${WRAP_PREFIX} && mkdir -p ${OUTPUT} && ${cmd} ${STDERR_FILTER}" \
-        | awk '{print $4}')
-    echo "  $J  ${name}  (mem=${mem}, time=${wall}, CPU)"
-}
 
 echo "Submitting comparison experiments..."
 echo "  Output: ${OUTPUT}/"
@@ -123,7 +107,7 @@ run_tcga_fm() {
 
 run_reaction() {
     echo "--- Reaction Rep Comparison (8 reps × 3 models, CPU) ---"
-    submit_cpu reaction_reps \
+    submit_gpu reaction_reps \
         "python tests/experiments/reaction_rep_comparison.py --n-folds 5 --output ${OUTPUT}/reaction_rep_comparison.json" \
         32G 06:00:00
 }
@@ -159,7 +143,7 @@ case "$MODE" in
         run_reaction
         run_wsi
         echo ""
-        echo "  Total: 13 jobs (12 GPU + 1 CPU)"
+        echo "  Total: 13 jobs"
         ;;
     *)
         echo "Usage: bash submit_comparisons.sh [MODE]"
@@ -173,7 +157,7 @@ case "$MODE" in
         echo "  mol_ft     Molecular fine-tuning: 5 LMs × 4 methods (1 GPU)"
         echo "  dta_ft     DTA LoRA: 8 protein/drug FT combos (2 GPU)"
         echo "  tcga_fm    TCGA foundation models: frozen vs FT (1 GPU)"
-        echo "  reaction   Reaction reps: 8 reps × 3 models (1 CPU)"
+        echo "  reaction   Reaction reps: 8 reps × 3 models (1 GPU)"
         echo "  wsi        WSI aggregation: 7 encoders × 3 methods (2 GPU)"
         exit 1
         ;;
