@@ -46,6 +46,7 @@ submit_gpu() {
 }
 
 submit_cpu() {
+    # HTC requires --gres=gpu:1 for scheduling even for CPU-only jobs
     local name=$1
     local cmd=$2
     local mem=${3:-32G}
@@ -55,11 +56,11 @@ submit_cpu() {
         --job-name="cmp_${name}" \
         --nodes=1 --ntasks=1 --cpus-per-task=8 \
         --time="${wall}" --partition=long \
-        --mem="${mem}" \
+        --mem="${mem}" --gres=gpu:1 \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
         --wrap="${WRAP_PREFIX} && mkdir -p ${OUTPUT} && ${cmd} ${STDERR_FILTER}" \
         | awk '{print $4}')
-    echo "  $J  ${name}  (mem=${mem}, time=${wall}, CPU)"
+    echo "  $J  ${name}  (mem=${mem}, time=${wall})"
 }
 
 echo "Submitting comparison experiments..."
@@ -159,7 +160,7 @@ case "$MODE" in
         run_reaction
         run_wsi
         echo ""
-        echo "  Total: 13 jobs (12 GPU + 1 CPU)"
+        echo "  Total: 13 jobs"
         ;;
     *)
         echo "Usage: bash submit_comparisons.sh [MODE]"
