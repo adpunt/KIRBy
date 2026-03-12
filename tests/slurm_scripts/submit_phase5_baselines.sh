@@ -173,10 +173,10 @@ run_antibody() {
     # Fast reps (CPU): onehot, blosum, aac, paratope
     submit ab_fast_dms \
         "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_dms --output ${OUT}/ --n-folds 5 --augment --reps onehot,blosum,aac,paratope" \
-        32G 02:00:00
+        32G 12:00:00
     submit ab_fast_inter \
         "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_inter --output ${OUT}/ --n-folds 5 --augment --reps onehot,blosum,aac,paratope" \
-        32G 02:00:00
+        32G 12:00:00
 
     # LM reps (GPU): 25 reps including Phase 4 additions
     submit ab_lm_dms \
