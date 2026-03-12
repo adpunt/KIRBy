@@ -32,6 +32,21 @@ _MODEL_CONFIGS = {
         768,
         ['query', 'value'],
     ),
+    'selformer': (
+        'HUBioDataLab/SELFormer',
+        768,
+        ['query', 'value'],
+    ),
+    'gp_molformer': (
+        'ibm-research/GP-MoLFormer-Uniq',
+        768,
+        ['query', 'value'],
+    ),
+    'chembert': (
+        'jonghyunlee/ChemBERT_ChEMBL_pretrained',
+        256,
+        ['query', 'value'],
+    ),
 }
 
 
