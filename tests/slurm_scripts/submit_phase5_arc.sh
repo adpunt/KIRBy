@@ -43,7 +43,7 @@ run_molecular() {
     echo "--- Molecular (8 datasets, ~35 reps) ---"
     submit mol_baselines \
         "mkdir -p ${OUT} && python tests/run_baseline_survey.py molecular --n-folds 5 --augment --output ${OUT}/" \
-        64G 47:59:00
+        64G 23:59:00
     echo ""
 }
 
@@ -73,7 +73,7 @@ run_tcga() {
     echo "--- TCGA (3 datasets, 57 reps) ---"
     submit tcga_baselines \
         "mkdir -p ${OUT} && python tests/run_baseline_survey.py tcga --n-folds 5 --augment --output ${OUT}/" \
-        256G 47:59:00
+        256G 23:59:00
     echo ""
 }
 
