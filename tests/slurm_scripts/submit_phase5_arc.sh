@@ -77,17 +77,28 @@ run_tcga() {
     echo ""
 }
 
+run_reaction_comparison() {
+    local OUT="tests/results/comparisons"
+    echo "--- Reaction Rep Comparison (8 reps × 3 models) ---"
+    submit cmp_reaction \
+        "mkdir -p ${OUT} && python tests/experiments/reaction_rep_comparison.py --n-folds 5 --output ${OUT}/reaction_rep_comparison.json" \
+        32G 06:00:00
+    echo ""
+}
+
 case "$MODE" in
     molecular) run_molecular ;;
     reaction)  run_reaction ;;
     antibody)  run_antibody_fast ;;
     tcga)      run_tcga ;;
+    cmp_reaction) run_reaction_comparison ;;
     all)
         run_molecular
         run_reaction
         run_antibody_fast
         run_tcga
-        echo "Total: 5 CPU jobs (mol, rxn, 2× ab_fast, tcga)"
+        run_reaction_comparison
+        echo "Total: 6 CPU jobs (mol, rxn, 2× ab_fast, tcga, cmp_reaction)"
         ;;
-    *) echo "Usage: bash submit_phase5_arc.sh [all|molecular|reaction|antibody|tcga]"; exit 1 ;;
+    *) echo "Usage: bash submit_phase5_arc.sh [all|molecular|reaction|antibody|tcga|cmp_reaction]"; exit 1 ;;
 esac
