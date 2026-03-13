@@ -31,8 +31,8 @@ STDERR_FILTER="2> >(grep -v -e 'DEPRECATION WARNING' -e 'threadpoolctl' -e 'ctyp
 submit_gpu() {
     local name=$1
     local cmd=$2
-    local mem=${3:-64G}
-    local wall=${4:-23:59:00}
+    local mem=${3:-128G}
+    local wall=${4:-47:59:00}
 
     J=$(sbatch \
         --job-name="cmp_${name}" \
