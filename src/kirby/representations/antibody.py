@@ -242,6 +242,20 @@ def get_imgt_position_map(sequence: str) -> dict:
 
 # ── LM embeddings ────────────────────────────────────────────────────────────
 
+
+def _has_light(light_seqs: List[str]) -> bool:
+    """Return True if light_seqs contains at least one non-empty sequence."""
+    return any(s != '' for s in light_seqs)
+
+
+def _concat_hl(h_embs: np.ndarray, l_embs: np.ndarray,
+               light_seqs: List[str]) -> np.ndarray:
+    """Concatenate H and L embeddings, returning H-only when L is all empty."""
+    if _has_light(light_seqs):
+        return np.hstack([h_embs, l_embs]).astype(np.float32)
+    return h_embs.astype(np.float32)
+
+
 def _mean_pool(outputs, attention_mask, exclude_bos=False, exclude_eos=False):
     """Mean-pool last hidden state over non-padding tokens.
 
@@ -320,8 +334,10 @@ def _embed_single_chain_model(
         return np.vstack(all_embs)
 
     h_embs = _embed_seqs(heavy_seqs)
+    if not _has_light(light_seqs):
+        return h_embs.astype(np.float32)
     l_embs = _embed_seqs(light_seqs)
-    return np.hstack([h_embs, l_embs]).astype(np.float32)
+    return _concat_hl(h_embs, l_embs, light_seqs)
 
 
 def embed_esm2(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
@@ -341,9 +357,11 @@ def embed_antiberty(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
     from antiberty import AntiBERTyRunner
 
     runner = AntiBERTyRunner()
-    h_embs = [e.cpu().numpy().mean(axis=0) for e in runner.embed(list(heavy_seqs))]
-    l_embs = [e.cpu().numpy().mean(axis=0) for e in runner.embed(list(light_seqs))]
-    return np.hstack([np.vstack(h_embs), np.vstack(l_embs)]).astype(np.float32)
+    h_embs = np.vstack([e.cpu().numpy().mean(axis=0) for e in runner.embed(list(heavy_seqs))])
+    if not _has_light(light_seqs):
+        return h_embs.astype(np.float32)
+    l_embs = np.vstack([e.cpu().numpy().mean(axis=0) for e in runner.embed(list(light_seqs))])
+    return np.hstack([h_embs, l_embs]).astype(np.float32)
 
 
 def embed_prot_t5(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
@@ -378,7 +396,7 @@ def embed_prot_t5(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
 
     h_embs = _embed_seqs(heavy_seqs)
     l_embs = _embed_seqs(light_seqs)
-    return np.hstack([h_embs, l_embs]).astype(np.float32)
+    return _concat_hl(h_embs, l_embs, light_seqs)
 
 
 def embed_ablang2(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
@@ -427,12 +445,18 @@ def embed_igbert(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
     batch_size = 8
     all_embs = []
 
+    # IgBert is a paired model — when light chains are absent, use heavy-only
+    has_light_chains = _has_light(light_seqs)
+
     for start in range(0, len(heavy_seqs), batch_size):
         h_batch = heavy_seqs[start:start + batch_size]
-        l_batch = light_seqs[start:start + batch_size]
-        # Use tokenizer's text-pair handling for proper SEP token insertion
-        inputs = tokenizer(h_batch, l_batch, return_tensors='pt', padding=True,
-                           truncation=True, max_length=512).to(device)
+        if has_light_chains:
+            l_batch = light_seqs[start:start + batch_size]
+            inputs = tokenizer(h_batch, l_batch, return_tensors='pt', padding=True,
+                               truncation=True, max_length=512).to(device)
+        else:
+            inputs = tokenizer(h_batch, return_tensors='pt', padding=True,
+                               truncation=True, max_length=512).to(device)
         with torch.no_grad():
             outputs = model(**inputs)
         all_embs.append(_mean_pool(outputs, inputs['attention_mask'],
@@ -458,11 +482,17 @@ def embed_igbert_cls(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray
     batch_size = 8
     all_embs = []
 
+    has_light_chains = _has_light(light_seqs)
+
     for start in range(0, len(heavy_seqs), batch_size):
         h_batch = heavy_seqs[start:start + batch_size]
-        l_batch = light_seqs[start:start + batch_size]
-        inputs = tokenizer(h_batch, l_batch, return_tensors='pt', padding=True,
-                           truncation=True, max_length=512).to(device)
+        if has_light_chains:
+            l_batch = light_seqs[start:start + batch_size]
+            inputs = tokenizer(h_batch, l_batch, return_tensors='pt', padding=True,
+                               truncation=True, max_length=512).to(device)
+        else:
+            inputs = tokenizer(h_batch, return_tensors='pt', padding=True,
+                               truncation=True, max_length=512).to(device)
         with torch.no_grad():
             outputs = model(**inputs)
         # Extract [CLS] token (position 0)
@@ -511,7 +541,7 @@ def embed_esmc(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
 
     h_embs = _embed_seqs(heavy_seqs)
     l_embs = _embed_seqs(light_seqs)
-    return np.hstack([h_embs, l_embs]).astype(np.float32)
+    return _concat_hl(h_embs, l_embs, light_seqs)
 
 
 # ── CDR-specific LM embeddings ───────────────────────────────────────────────
@@ -553,7 +583,7 @@ def _embed_single_chain_cdr(
 
     h_embs = _embed_seqs(heavy_seqs)
     l_embs = _embed_seqs(light_seqs)
-    return np.hstack([h_embs, l_embs]).astype(np.float32)
+    return _concat_hl(h_embs, l_embs, light_seqs)
 
 
 def embed_esm2_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
@@ -589,7 +619,7 @@ def embed_antiberty_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndar
 
     h_embs = _cdr_pool_antiberty(heavy_seqs)
     l_embs = _cdr_pool_antiberty(light_seqs)
-    return np.hstack([h_embs, l_embs]).astype(np.float32)
+    return _concat_hl(h_embs, l_embs, light_seqs)
 
 
 def embed_prot_t5_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
@@ -625,7 +655,7 @@ def embed_prot_t5_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarra
 
     h_embs = _embed_seqs(heavy_seqs)
     l_embs = _embed_seqs(light_seqs)
-    return np.hstack([h_embs, l_embs]).astype(np.float32)
+    return _concat_hl(h_embs, l_embs, light_seqs)
 
 
 def embed_esmc_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
@@ -655,7 +685,7 @@ def embed_esmc_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
 
     h_embs = _embed_seqs(heavy_seqs)
     l_embs = _embed_seqs(light_seqs)
-    return np.hstack([h_embs, l_embs]).astype(np.float32)
+    return _concat_hl(h_embs, l_embs, light_seqs)
 
 
 # ── ESM3 (multimodal protein LM, 1536D per chain) ────────────────────────────
@@ -700,7 +730,7 @@ def embed_esm3(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
 
     h_embs = _embed_seqs(heavy_seqs)
     l_embs = _embed_seqs(light_seqs)
-    return np.hstack([h_embs, l_embs]).astype(np.float32)
+    return _concat_hl(h_embs, l_embs, light_seqs)
 
 
 def embed_esm3_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
@@ -736,7 +766,7 @@ def embed_esm3_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
 
     h_embs = _embed_seqs(heavy_seqs)
     l_embs = _embed_seqs(light_seqs)
-    return np.hstack([h_embs, l_embs]).astype(np.float32)
+    return _concat_hl(h_embs, l_embs, light_seqs)
 
 
 # ── SaProt (structure-aware protein LM, 1280D per chain) ─────────────────────
@@ -800,7 +830,7 @@ def embed_saprot(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
 
     h_embs = _embed_seqs(h_sa)
     l_embs = _embed_seqs(l_sa)
-    return np.hstack([h_embs, l_embs]).astype(np.float32)
+    return _concat_hl(h_embs, l_embs, light_seqs)
 
 
 def embed_saprot_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
@@ -860,7 +890,7 @@ def embed_saprot_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray
 
     h_embs = _embed_seqs(h_sa, heavy_seqs)
     l_embs = _embed_seqs(l_sa, light_seqs)
-    return np.hstack([h_embs, l_embs]).astype(np.float32)
+    return _concat_hl(h_embs, l_embs, light_seqs)
 
 
 # ── MINT (protein foundation model, 1280D per chain) ────────────────────────
@@ -870,7 +900,30 @@ def embed_mint(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
     from kirby.representations.protein import create_mint_protein_embeddings
     h_embs = create_mint_protein_embeddings(heavy_seqs)
     l_embs = create_mint_protein_embeddings(light_seqs)
-    return np.hstack([h_embs, l_embs]).astype(np.float32)
+    return _concat_hl(h_embs, l_embs, light_seqs)
+
+
+# ── AIDO.Protein-16B (MoE protein foundation model, 2304D per chain) ─────────
+
+def embed_aido_protein(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """AIDO.Protein-16B embeddings: H+L concatenated -> (N, 4608). 2304D per chain.
+
+    WARNING: Requires ~32GB VRAM in float16. CUDA strongly recommended.
+    """
+    from kirby.representations.protein import create_aido_protein_embeddings
+    h_embs = create_aido_protein_embeddings(heavy_seqs)
+    l_embs = create_aido_protein_embeddings(light_seqs)
+    return _concat_hl(h_embs, l_embs, light_seqs)
+
+
+# ── xTrimoPGLM-1B (BioMap, 1B MLM, ~2048D per chain) ────────────────────────
+
+def embed_xtrimopglm(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """xTrimoPGLM-1B embeddings: H+L concatenated -> (N, ~4096). ~2048D per chain."""
+    from kirby.representations.protein import create_xtrimopglm_protein_embeddings
+    h_embs = create_xtrimopglm_protein_embeddings(heavy_seqs)
+    l_embs = create_xtrimopglm_protein_embeddings(light_seqs)
+    return _concat_hl(h_embs, l_embs, light_seqs)
 
 
 # ── Intermediate layer extraction ────────────────────────────────────────────
@@ -923,7 +976,7 @@ def _embed_single_chain_midlayers(
 
     h_embs = _embed_seqs(heavy_seqs)
     l_embs = _embed_seqs(light_seqs)
-    return np.hstack([h_embs, l_embs]).astype(np.float32)
+    return _concat_hl(h_embs, l_embs, light_seqs)
 
 
 def embed_esm2_midlayers(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
@@ -1077,7 +1130,7 @@ def embed_esm2_cdr3(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
     del model
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-    return np.hstack([h_embs, l_embs]).astype(np.float32)
+    return _concat_hl(h_embs, l_embs, light_seqs)
 
 
 # ── Ab-RoBERTa (mogam-ai/Ab-RoBERTa) ────────────────────────────────────────
@@ -1154,14 +1207,19 @@ def embed_igt5(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
 
     all_embs = []
 
+    has_light_chains = _has_light(light_seqs)
+
     for start in range(0, len(heavy_seqs), batch_size):
         h_batch = heavy_seqs[start:start + batch_size]
         l_batch = light_seqs[start:start + batch_size]
         # IgT5 expects: space-separated AAs, chains joined by ' </s> '
-        paired = [
-            ' '.join(list(h)) + ' </s> ' + ' '.join(list(l))
-            for h, l in zip(h_batch, l_batch)
-        ]
+        if has_light_chains:
+            paired = [
+                ' '.join(list(h)) + ' </s> ' + ' '.join(list(l))
+                for h, l in zip(h_batch, l_batch)
+            ]
+        else:
+            paired = [' '.join(list(h)) for h in h_batch]
         inputs = tokenizer(
             paired, return_tensors='pt', padding=True,
             truncation=True, max_length=512,
@@ -1350,7 +1408,7 @@ def embed_esm2_entropy_top20(heavy_seqs: List[str], light_seqs: List[str]) -> np
 
     h_embs = _process_chain(heavy_seqs)
     l_embs = _process_chain(light_seqs)
-    return np.hstack([h_embs, l_embs]).astype(np.float32)
+    return _concat_hl(h_embs, l_embs, light_seqs)
 
 
 def embed_esm2_per_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
@@ -1383,7 +1441,7 @@ def embed_esm2_per_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarr
 
     h_embs = _process_chain(heavy_seqs)
     l_embs = _process_chain(light_seqs)
-    return np.hstack([h_embs, l_embs]).astype(np.float32)
+    return _concat_hl(h_embs, l_embs, light_seqs)
 
 
 def embed_esm2_per_region(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
@@ -1416,7 +1474,7 @@ def embed_esm2_per_region(heavy_seqs: List[str], light_seqs: List[str]) -> np.nd
 
     h_embs = _process_chain(heavy_seqs)
     l_embs = _process_chain(light_seqs)
-    return np.hstack([h_embs, l_embs]).astype(np.float32)
+    return _concat_hl(h_embs, l_embs, light_seqs)
 
 
 # ── Registry ──────────────────────────────────────────────────────────────────
@@ -1466,10 +1524,13 @@ def make_esm2_entropy_factory(heavy_seqs: List[str], light_seqs: List[str]):
             return _pool_subset(train_idx), _pool_subset(val_idx)
 
         h_train, h_val = _process_chain(heavy_seqs, None, train_idx, val_idx)
-        l_train, l_val = _process_chain(light_seqs, None, train_idx, val_idx)
-
-        train_embs = np.hstack([h_train, l_train]).astype(np.float32)
-        val_embs = np.hstack([h_val, l_val]).astype(np.float32)
+        if _has_light(light_seqs):
+            l_train, l_val = _process_chain(light_seqs, None, train_idx, val_idx)
+            train_embs = np.hstack([h_train, l_train]).astype(np.float32)
+            val_embs = np.hstack([h_val, l_val]).astype(np.float32)
+        else:
+            train_embs = h_train.astype(np.float32)
+            val_embs = h_val.astype(np.float32)
         return train_embs, val_embs
 
     return factory
@@ -1522,6 +1583,10 @@ ANTIBODY_REPS = {
     # Ab-RoBERTa (mogam-ai, RoBERTa-based, 768D per chain)
     'abroberta': embed_abroberta,                    # 1536D (768 × 2)
     'abroberta_cdr': embed_abroberta_cdr,            # 1536D (CDR-pooled)
+    # AIDO.Protein-16B (GenBio AI, MoE, 2304D per chain)
+    'aido_protein': embed_aido_protein,              # 4608D (2304 × 2)
+    # xTrimoPGLM-1B (BioMap, 1B MLM, ~2048D per chain)
+    'xtrimopglm': embed_xtrimopglm,                  # ~4096D (2048 × 2)
 }
 
 # LM reps (require GPU / torch / transformers)
@@ -1537,6 +1602,8 @@ ANTIBODY_LM_REPS = {
     'esm2_layer24', 'esm2_early',
     'esm2_concat', 'esm2_cdr3',
     'abroberta', 'abroberta_cdr',
+    'aido_protein',
+    'xtrimopglm',
 }
 
 # Structural reps (require ImmuneBuilder + biopython, CPU-heavy)

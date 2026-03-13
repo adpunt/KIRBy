@@ -96,10 +96,10 @@ REP_PRESETS = {
         'gene_hvg2000', 'gene_pca100', 'gene_hallmark', 'gene_progeny',
         'gene_kegg', 'gene_dorothea', 'gene_combined_pathway',
         'gene_nmf50', 'gene_ica50', 'gene_stats',
-        'gene_geneformer', 'gene_bulkrnabert', 'gene_scfoundation',
-        'gene_scgpt', 'gene_uce',
+        'gene_geneformer', 'gene_geneformer_v2', 'gene_bulkrnabert',
+        'gene_scfoundation', 'gene_scgpt', 'gene_uce',
         'wsi_ctranspath', 'wsi_phikon', 'wsi_hoptimus0', 'wsi_moco',
-    ],  # 19 reps
+    ],  # 20 reps
 
     'all': [
         # Expression-derived (18)
@@ -109,9 +109,9 @@ REP_PRESETS = {
         'gene_reactome', 'gene_oncogenic', 'gene_immune',
         'gene_quantile_rank', 'gene_corr_modules', 'gene_chromosome_arm',
         'gene_autoencoder50', 'gene_sparse_pca50',
-        # Foundation model embeddings (5, GPU)
-        'gene_geneformer', 'gene_bulkrnabert', 'gene_scfoundation',
-        'gene_scgpt', 'gene_uce',
+        # Foundation model embeddings (6, GPU)
+        'gene_geneformer', 'gene_geneformer_v2', 'gene_bulkrnabert',
+        'gene_scfoundation', 'gene_scgpt', 'gene_uce',
         # Multi-omic (23)
         'cnv_gistic', 'cnv_pca50', 'rppa', 'mirna_top200',
         'methyl_pca50', 'methyl_hvg',
@@ -123,10 +123,10 @@ REP_PRESETS = {
         'clinical',
         # Tier 2 multi-omic (4)
         'lncrna_pca50', 'gsva_hallmark', 'promoter_meth', 'splicing_psi50',
-        # WSI (7)
+        # WSI (10)
         'wsi_ctranspath', 'wsi_phikon', 'wsi_hoptimus0', 'wsi_gigapath', 'wsi_moco',
-        'wsi_titan', 'wsi_uni2h',
-    ],  # 57 reps
+        'wsi_titan', 'wsi_uni2h', 'wsi_virchow2', 'wsi_conch', 'wsi_hoptimus1',
+    ],  # 61 reps
 
     # Genomic-only presets (no WSI)
     'genomic_fast': [
@@ -147,8 +147,8 @@ REP_PRESETS = {
         'gene_reactome', 'gene_oncogenic', 'gene_immune',
         'gene_quantile_rank', 'gene_corr_modules', 'gene_chromosome_arm',
         'gene_autoencoder50', 'gene_sparse_pca50',
-        'gene_geneformer', 'gene_bulkrnabert', 'gene_scfoundation',
-        'gene_scgpt', 'gene_uce',
+        'gene_geneformer', 'gene_geneformer_v2', 'gene_bulkrnabert',
+        'gene_scfoundation', 'gene_scgpt', 'gene_uce',
         'cnv_gistic', 'cnv_pca50', 'rppa', 'mirna_top200',
         'methyl_pca50', 'methyl_hvg',
         'mutation_matrix', 'mut_tmb', 'mut_driver', 'mut_pathway', 'mut_pca50',
@@ -159,7 +159,7 @@ REP_PRESETS = {
         'clinical',
         # Tier 2 multi-omic (4)
         'lncrna_pca50', 'gsva_hallmark', 'promoter_meth', 'splicing_psi50',
-    ],  # 50 reps
+    ],  # 51 reps
 }
 
 _SEARCH_NAME_MAP = {
@@ -216,6 +216,7 @@ _REP_DISPATCH = {
     'gene_chromosome_arm':   ('create_chromosome_arm',    'genomic'),
     # Foundation model embeddings: fn(expression, gene_names) -> np.ndarray (GPU)
     'gene_geneformer':       ('create_geneformer_embeddings', 'genomic'),
+    'gene_geneformer_v2':    ('create_geneformer_v2_embeddings', 'genomic'),
     'gene_bulkrnabert':      ('create_bulkrnabert_embeddings', 'genomic'),
     'gene_scfoundation':     ('create_scfoundation_embeddings', 'genomic'),
     'gene_scgpt':            ('create_scgpt_embeddings',        'genomic'),
@@ -256,7 +257,9 @@ _REP_DISPATCH = {
     # RPPA: fn(sample_ids) -> np.ndarray (pan-cancer, no cohort needed)
     'rppa':                  ('create_rppa',              'rppa'),
     # WSI — slide-level features (GigaSSL: ctranspath/phikon/hoptimus0/gigapath/moco;
-    #        TITAN: HF gated; UNI2-h: manual prep)
+    #        TITAN: HF gated; UNI2-h: manual prep;
+    #        Virchow2: Paige AI 1280D; CONCH v1.5: Mahmood Lab 768D;
+    #        H-optimus-1: Bioptimus 1536D)
     'wsi_ctranspath':        ('load_wsi_features',        'wsi'),
     'wsi_phikon':            ('load_wsi_features',        'wsi'),
     'wsi_hoptimus0':         ('load_wsi_features',        'wsi'),
@@ -264,6 +267,9 @@ _REP_DISPATCH = {
     'wsi_moco':              ('load_wsi_features',        'wsi'),
     'wsi_titan':             ('load_wsi_features',        'wsi'),
     'wsi_uni2h':             ('load_wsi_features',        'wsi'),
+    'wsi_virchow2':          ('load_wsi_features',        'wsi'),
+    'wsi_conch':             ('load_wsi_features',        'wsi'),
+    'wsi_hoptimus1':         ('load_wsi_features',        'wsi'),
 }
 
 

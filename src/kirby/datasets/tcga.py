@@ -160,6 +160,9 @@ _WSI_DIMS = {
     'moco': 512,           # GigaSSL + MoCo
     'titan': 768,          # TITAN slide encoder
     'uni2h': 1536,         # UNI2-h mean-pooled patches
+    'virchow2': 1280,      # Virchow2 (Paige AI) CLS token
+    'conch': 768,          # CONCH v1.5 (Mahmood Lab)
+    'hoptimus1': 1536,     # H-optimus-1 (Bioptimus)
     'cnn320': 320,         # Local small CNN features
 }
 

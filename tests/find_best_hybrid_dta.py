@@ -77,7 +77,9 @@ REP_PRESETS = {
         'protein_aac', 'protein_descriptors', 'protein_kmer',
         'protein_mint',
         'protein_esm3', 'protein_saprot', 'protein_boltz2',
-    ],  # 37 reps (24 drug + 13 protein)
+        'protein_aido',
+        'protein_xtrimopglm',
+    ],  # 39 reps (24 drug + 15 protein)
 }
 
 # Reps that require per-fold fitting (data-dependent transforms).
@@ -142,6 +144,8 @@ _REP_DISPATCH = {
     'protein_esm3':    ('create_esm3_protein_embeddings',       'protein', 'protein'),
     'protein_saprot':  ('create_saprot_protein_embeddings',     'protein', 'protein'),
     'protein_boltz2':  ('create_boltz2_protein_embeddings',     'protein', 'protein'),
+    'protein_aido':    ('create_aido_protein_embeddings',       'protein', 'protein'),
+    'protein_xtrimopglm': ('create_xtrimopglm_protein_embeddings', 'protein', 'protein'),
 }
 
 

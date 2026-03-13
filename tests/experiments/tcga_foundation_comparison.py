@@ -129,8 +129,7 @@ def evaluate_fold(
         auroc = float(roc_auc_score(y_val, proba))
     else:
         logreg = LogisticRegression(
-            C=1.0, max_iter=1000, solver='lbfgs',
-            multi_class='multinomial', random_state=42)
+            C=1.0, max_iter=1000, solver='lbfgs', random_state=42)
         logreg.fit(X_tr, y_train)
         proba = logreg.predict_proba(X_va)
         y_val_bin = label_binarize(y_val, classes=np.arange(n_classes))

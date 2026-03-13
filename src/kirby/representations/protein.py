@@ -7,6 +7,7 @@ proteins are kinases, GPCRs, etc.
 
 Functions:
 - create_esm2_protein_embeddings: ESM-2 mean-pooled embeddings (1280D)
+- create_aido_protein_embeddings: AIDO.Protein-16B MoE embeddings (2304D)
 - create_protein_aac: amino acid composition (20D)
 - create_protein_descriptors: biophysical descriptors (~30D)
 - create_protein_kmer: k-mer frequency (default k=3, 8000D)
@@ -286,6 +287,113 @@ def create_esm3_protein_embeddings(
 
     result = np.vstack(all_embeddings)
     print(f"  Generated ESM3 protein embeddings: {result.shape}")
+    return result
+
+
+# ── AIDO.Protein-16B (MoE protein foundation model) ──────────────────────────
+
+# Global singletons to avoid reloading the large model
+_AIDO_MODEL = None
+_AIDO_TOKENIZER = None
+
+
+def create_aido_protein_embeddings(
+    sequences: List[str],
+    model_name: str = 'genbio-ai/AIDO.Protein-16B',
+    device: str = 'cpu',
+    batch_size: int = 1,
+) -> np.ndarray:
+    """Extract AIDO.Protein-16B mean-pooled embeddings for protein sequences.
+
+    AIDO.Protein-16B is a Mixture-of-Experts (MoE) protein foundation model
+    from GenBio AI with 16B total parameters but only ~4B active per token
+    (top-2 routing across 8 experts). Uses RoPE positional embeddings and
+    SwiGLU activation.
+
+    WARNING: This model requires ~32GB VRAM in float16. Use batch_size=1
+    to avoid OOM. On CPU this will be extremely slow. CUDA strongly
+    recommended.
+
+    Args:
+        sequences: List of protein amino acid sequences.
+        model_name: HuggingFace model name.
+        device: 'cpu' or 'cuda'. CUDA strongly recommended.
+        batch_size: Sequences per batch (default 1 due to model size).
+
+    Returns:
+        np.ndarray: (n_sequences, 2304) embeddings.
+
+    Requires: pip install transformers torch
+    Model auto-downloaded: genbio-ai/AIDO.Protein-16B (~64GB)
+    """
+    import torch
+    global _AIDO_MODEL, _AIDO_TOKENIZER
+
+    try:
+        from transformers import AutoTokenizer, AutoModel
+    except ImportError:
+        raise ImportError(
+            "AIDO.Protein requires transformers: pip install transformers"
+        )
+
+    if _AIDO_MODEL is None:
+        print(f"  Loading AIDO.Protein-16B ({model_name.split('/')[-1]}, float16)...")
+        print(f"  WARNING: Model requires ~32GB VRAM in float16.")
+        _AIDO_TOKENIZER = AutoTokenizer.from_pretrained(
+            model_name, trust_remote_code=True
+        )
+        _AIDO_MODEL = AutoModel.from_pretrained(
+            model_name, trust_remote_code=True, torch_dtype=torch.float16
+        ).to(device).eval()
+
+    model = _AIDO_MODEL
+    tokenizer = _AIDO_TOKENIZER
+
+    all_embeddings = []
+    n = len(sequences)
+    embed_dim = 2304  # model.config.hidden_size
+
+    with torch.no_grad():
+        for start in range(0, n, batch_size):
+            batch = [
+                s.upper().strip()[:2046]  # max_position_embeddings=2048, leave room for special tokens
+                for s in sequences[start:start + batch_size]
+            ]
+            for j, seq in enumerate(batch):
+                idx = start + j
+                try:
+                    inputs = tokenizer(
+                        seq, return_tensors='pt', padding=False,
+                        truncation=True, max_length=2048,
+                    )
+                    inputs = {k: v.to(device) for k, v in inputs.items()}
+                    outputs = model(**inputs)
+                    # last_hidden_state: (1, L, 2304)
+                    # Mean pool excluding special tokens (SEP at end, PAD=0)
+                    hidden = outputs.last_hidden_state  # (1, L, 2304)
+                    if 'attention_mask' in inputs:
+                        mask = inputs['attention_mask'].clone()
+                    else:
+                        mask = torch.ones(hidden.shape[:2], device=device)
+                    # Exclude last token (SEP) if present
+                    n_tokens = mask[0].sum().item()
+                    if n_tokens > 1:
+                        mask[0, int(n_tokens) - 1] = 0
+                    mask = mask.unsqueeze(-1).float()
+                    pooled = (hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp(min=1)
+                    emb = pooled.squeeze(0).cpu().float().numpy()
+                    all_embeddings.append(emb)
+                except Exception as e:
+                    print(f"    WARNING: AIDO.Protein failed on seq {idx} "
+                          f"(len={len(seq)}): {e}")
+                    all_embeddings.append(np.zeros(embed_dim, dtype=np.float32))
+
+            end = min(start + batch_size, n)
+            if end < n and end % 20 == 0:
+                print(f"    Progress: {end}/{n}")
+
+    result = np.vstack(all_embeddings)
+    print(f"  Generated AIDO.Protein embeddings: {result.shape}")
     return result
 
 
@@ -1206,6 +1314,101 @@ def create_mint_protein_embeddings(
 
     result = np.vstack(all_embeddings).astype(np.float32)
     print(f"  Generated MINT protein embeddings: {result.shape}")
+    return result
+
+
+def create_xtrimopglm_protein_embeddings(
+    sequences: List[str],
+    device: str = 'cpu',
+    batch_size: int = 2,
+) -> np.ndarray:
+    """Extract xTrimoPGLM-1B mean-pooled embeddings for protein sequences.
+
+    xTrimoPGLM is a unified 100B-parameter protein language model from BioMap
+    that integrates protein understanding and generation. We use the 1B MLM
+    variant (proteinglm-1b-mlm) for efficient embedding extraction.
+
+    Args:
+        sequences: List of protein amino acid sequences.
+        device: 'cpu' or 'cuda'.
+        batch_size: Sequences per batch (default 2 — model is large).
+
+    Returns:
+        np.ndarray: (n_sequences, hidden_dim) embeddings.
+
+    Requires: pip install transformers torch
+    Note: Auto-downloads HuggingFace model on first use. Requires
+          trust_remote_code=True for custom model architecture.
+    """
+    import torch
+    try:
+        from transformers import AutoTokenizer, AutoModel
+    except ImportError:
+        raise ImportError(
+            "xTrimoPGLM requires transformers and torch: "
+            "pip install transformers torch"
+        )
+
+    model_name = 'biomap-research/proteinglm-1b-mlm'
+    print(f"  Loading xTrimoPGLM-1B ({model_name})...")
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name, trust_remote_code=True
+    )
+    # Try bfloat16 first, fall back to float16, then float32
+    dtype = torch.float32
+    if device == 'cuda':
+        if torch.cuda.is_bf16_supported():
+            dtype = torch.bfloat16
+        else:
+            dtype = torch.float16
+
+    model = AutoModel.from_pretrained(
+        model_name, trust_remote_code=True, torch_dtype=dtype,
+    ).to(device).eval()
+
+    # Determine hidden dim from model config
+    hidden_dim = getattr(model.config, 'hidden_size', 2048)
+
+    all_embeddings = []
+    n = len(sequences)
+
+    with torch.no_grad():
+        for start in range(0, n, batch_size):
+            batch_seqs = sequences[start:start + batch_size]
+            batch_embs = []
+            for j, seq in enumerate(batch_seqs):
+                idx = start + j
+                seq = seq.upper().strip()[:2048]
+                try:
+                    inputs = tokenizer(
+                        seq, return_tensors='pt', padding=False,
+                        truncation=True, max_length=2050,
+                    )
+                    inputs = {k: v.to(device) for k, v in inputs.items()}
+                    outputs = model(**inputs)
+                    # Mean pool excluding special tokens (BOS/EOS)
+                    hidden = outputs.last_hidden_state
+                    if hidden.shape[1] > 2:
+                        emb = hidden[:, 1:-1, :].mean(dim=1)
+                    else:
+                        emb = hidden.mean(dim=1)
+                    batch_embs.append(
+                        emb.squeeze(0).float().cpu().numpy()
+                    )
+                except Exception as e:
+                    print(f"    WARNING: xTrimoPGLM failed on seq {idx} "
+                          f"(len={len(seq)}): {e}")
+                    batch_embs.append(
+                        np.zeros(hidden_dim, dtype=np.float32)
+                    )
+            all_embeddings.extend(batch_embs)
+
+            end = min(start + batch_size, n)
+            if end < n and end % 20 == 0:
+                print(f"    xTrimoPGLM progress: {end}/{n}")
+
+    result = np.vstack(all_embeddings).astype(np.float32)
+    print(f"  Generated xTrimoPGLM protein embeddings: {result.shape}")
     return result
 
 

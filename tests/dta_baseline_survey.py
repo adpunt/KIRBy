@@ -54,6 +54,8 @@ PROTEIN_REPS = [
     'protein_amplify',
     'protein_mint', 'protein_esmfold', 'protein_alphafold_db',
     'protein_esm3', 'protein_saprot', 'protein_boltz2',  # Phase 4B
+    'protein_aido',
+    'protein_xtrimopglm',
 ]
 
 # Default minimal partners for paired evaluation
@@ -165,6 +167,10 @@ def generate_rep(rep_name: str, unique_drugs, unique_proteins,
         dispatch['protein_saprot'] = (prot.create_saprot_protein_embeddings, 'protein')
     elif rep_name == 'protein_boltz2':
         dispatch['protein_boltz2'] = (prot.create_boltz2_protein_embeddings, 'protein')
+    elif rep_name == 'protein_aido':
+        dispatch['protein_aido'] = (prot.create_aido_protein_embeddings, 'protein')
+    elif rep_name == 'protein_xtrimopglm':
+        dispatch['protein_xtrimopglm'] = (prot.create_xtrimopglm_protein_embeddings, 'protein')
 
     if rep_name not in dispatch:
         print(f"  WARNING: Unknown rep '{rep_name}', skipping")
@@ -302,7 +308,7 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
     drug_reps_to_run = [r for r in DRUG_REPS
                         if not (skip_lm and r in ('drug_chemberta', 'drug_molformer', 'drug_selformer', 'drug_clamp', 'drug_rmat', 'drug_unimol_v2', 'drug_minimol', 'drug_gp_molformer', 'drug_mole'))]
     protein_reps_to_run = [r for r in PROTEIN_REPS
-                           if not (skip_lm and r in ('protein_esm2', 'protein_esmc', 'protein_esm2_midlayers', 'protein_amplify', 'protein_mint', 'protein_esmfold', 'protein_alphafold_db', 'protein_esm3', 'protein_saprot', 'protein_boltz2'))
+                           if not (skip_lm and r in ('protein_esm2', 'protein_esmc', 'protein_esm2_midlayers', 'protein_amplify', 'protein_mint', 'protein_esmfold', 'protein_alphafold_db', 'protein_esm3', 'protein_saprot', 'protein_boltz2', 'protein_aido', 'protein_xtrimopglm'))
                            and not (skip_kmer and r == 'protein_kmer')]
 
     all_reps_to_run = drug_reps_to_run + protein_reps_to_run

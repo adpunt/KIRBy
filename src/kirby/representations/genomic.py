@@ -3947,6 +3947,111 @@ def create_geneformer_embeddings(expression: np.ndarray,
     return embeddings
 
 
+def create_geneformer_v2_embeddings(expression: np.ndarray,
+                                     gene_names: np.ndarray,
+                                     max_input_size: int = 4096) -> np.ndarray:
+    """Frozen Geneformer V2 (316M-param, 20-layer) embeddings.
+
+    Uses the larger gf-20L-316M-i4096 checkpoint from ctheodoris/Geneformer.
+    Same tokenization as V1 (rank-value encoding via corpus medians), but with
+    a deeper model and 4096-token context window.
+
+    Falls back to gf-12L-95M-i4096 if the 316M model is unavailable,
+    then to the legacy V1 root model.
+
+    Requires: torch, transformers, huggingface_hub
+
+    Args:
+        expression: (n_samples, n_genes) log2(TPM+1) matrix
+        gene_names: (n_genes,) HUGO gene symbols
+        max_input_size: max genes to include per sample (default 4096 for V2)
+
+    Returns:
+        (n_samples, hidden_size) frozen embeddings (V2-316M: 1024D, V2-95M: 512D,
+         fallback V1: 512D)
+    """
+    import torch
+
+    n_samples = expression.shape[0]
+
+    # Tokenize using shared Geneformer tokenization (same vocab for V1/V2)
+    from kirby.finetuning.tcga_geneformer import _tokenize_expression
+    tok_ids, tok_mask, proper_vocab = _tokenize_expression(
+        expression, gene_names, max_input_size,
+    )
+    input_ids = torch.LongTensor(tok_ids)
+    attention_mask = torch.LongTensor(tok_mask)
+
+    # Try V2 models in order of preference: 316M → 95M → root (V1)
+    from transformers import AutoModel, AutoConfig
+
+    model_id = 'ctheodoris/Geneformer'
+    v2_subdirs = [
+        'gf-20L-316M-i4096',   # 20-layer, 316M params, 4096 context
+        'gf-12L-95M-i4096',    # 12-layer, 95M params, 4096 context
+    ]
+
+    model = None
+    embed_dim = None
+
+    for subdir in v2_subdirs:
+        try:
+            config = AutoConfig.from_pretrained(
+                model_id, subfolder=subdir, trust_remote_code=True)
+            model = AutoModel.from_pretrained(
+                model_id, subfolder=subdir, trust_remote_code=True)
+            embed_dim = config.hidden_size
+            print(f"    Loaded Geneformer V2 ({subdir}, {embed_dim}D)")
+            break
+        except Exception:
+            continue
+
+    # Fall back to root model (V1) if no V2 subdirectory works
+    if model is None:
+        try:
+            config = AutoConfig.from_pretrained(model_id, trust_remote_code=True)
+            model = AutoModel.from_pretrained(model_id, trust_remote_code=True)
+            embed_dim = config.hidden_size
+            print(f"    Geneformer V2 subdirs unavailable, using root model ({embed_dim}D)")
+        except Exception as e:
+            from transformers import BertConfig, BertModel
+            config = BertConfig(
+                vocab_size=30000,
+                hidden_size=256,
+                num_hidden_layers=4,
+                num_attention_heads=4,
+                intermediate_size=512,
+                max_position_embeddings=max_input_size + 2,
+            )
+            model = BertModel(config)
+            embed_dim = 256
+            print(f"    Geneformer V2 unavailable ({e}), using BERT fallback ({embed_dim}D)")
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = model.to(device).eval()
+
+    # Extract embeddings in batches
+    embeddings = np.zeros((n_samples, embed_dim), dtype=np.float32)
+    batch_size = 8  # smaller batch for larger model
+
+    with torch.no_grad():
+        for start in range(0, n_samples, batch_size):
+            end = min(start + batch_size, n_samples)
+            batch_ids = input_ids[start:end].to(device)
+            batch_mask = attention_mask[start:end].to(device)
+            outputs = model(input_ids=batch_ids, attention_mask=batch_mask)
+            # Use [CLS] token (first position)
+            cls_emb = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+            embeddings[start:end] = cls_emb
+
+    # Cleanup
+    del model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    return embeddings
+
+
 def create_bulkrnabert_embeddings(expression: np.ndarray,
                                    gene_names: np.ndarray) -> np.ndarray:
     """Frozen BulkRNABert embeddings for bulk RNA-seq.
@@ -4366,7 +4471,9 @@ def load_wsi_features(sample_ids: List[str], wsi_dir: Optional[Path],
         sample_ids: TCGA sample barcodes
         wsi_dir: path to directory containing model .npy files
         model_name: ctranspath, phikon, hoptimus0, gigapath, moco (GigaSSL),
-                    titan (TITAN 768D), uni2h (UNI2-h 1536D), cnn320 (local 320D)
+                    titan (TITAN 768D), uni2h (UNI2-h 1536D),
+                    virchow2 (Paige AI 1280D), conch (CONCH v1.5 768D),
+                    hoptimus1 (Bioptimus 1536D), cnn320 (local 320D)
 
     Returns:
         (n_samples, d) feature matrix. Missing slides get zero vectors.
