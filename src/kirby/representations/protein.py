@@ -258,8 +258,10 @@ def create_esm3_protein_embeddings(
         raise ImportError("ESM3 requires the esm package: pip install esm")
 
     print("  Loading ESM3 (esm3_sm_open_v1) for protein embeddings...")
-    model = ESM3.from_pretrained("esm3_sm_open_v1").to(device)
-    model.eval()
+    model = ESM3.from_pretrained("esm3_sm_open_v1")
+    if device == 'cuda' and not torch.cuda.is_bf16_supported():
+        model = model.half()
+    model = model.to(device).eval()
 
     config = LogitsConfig(sequence=True, return_embeddings=True)
     all_embeddings = []
