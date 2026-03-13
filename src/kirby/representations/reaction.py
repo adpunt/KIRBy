@@ -211,6 +211,71 @@ def create_rxnfp(rxn_smiles: List[str]) -> np.ndarray:
     return np.array(fps, dtype=np.float32)
 
 
+def create_reactiont5(rxn_smiles: List[str], batch_size: int = 16) -> np.ndarray:
+    """Generate ReactionT5 encoder embeddings for reaction SMILES (~768D).
+
+    ReactionT5v2-forward is a T5-based model trained on reaction SMILES.
+    We extract mean-pooled encoder hidden states as reaction representations.
+
+    Sagawa et al., 2024.
+
+    Args:
+        rxn_smiles: Reaction SMILES in 'reactants>>products' format.
+        batch_size: Sequences per batch (default 16).
+
+    Returns:
+        np.ndarray of shape (n_reactions, 768), float32.
+
+    Requires: pip install transformers torch
+    Note: Auto-downloads HuggingFace model on first use (~900MB).
+    """
+    try:
+        import torch
+        from transformers import AutoTokenizer, T5EncoderModel
+    except ImportError:
+        raise ImportError(
+            "ReactionT5 requires transformers and torch: "
+            "pip install transformers torch"
+        )
+
+    model_name = 'sagawa/ReactionT5v2-forward'
+    print(f"  Loading ReactionT5 ({model_name})...")
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = T5EncoderModel.from_pretrained(model_name).eval()
+
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = model.to(device)
+
+    all_embeddings = []
+    n = len(rxn_smiles)
+
+    with torch.no_grad():
+        for start in range(0, n, batch_size):
+            batch = rxn_smiles[start:start + batch_size]
+            inputs = tokenizer(
+                batch, return_tensors='pt', padding=True,
+                truncation=True, max_length=512,
+            )
+            inputs = {k: v.to(device) for k, v in inputs.items()}
+            # T5EncoderModel doesn't accept special_tokens_mask
+            inputs.pop('special_tokens_mask', None)
+            outputs = model(**inputs)
+            # Mean pool over non-padding tokens
+            attention_mask = inputs['attention_mask'].unsqueeze(-1).float()
+            sum_emb = (outputs.last_hidden_state * attention_mask).sum(dim=1)
+            count = attention_mask.sum(dim=1).clamp(min=1)
+            mean_emb = (sum_emb / count).cpu().numpy()
+            all_embeddings.append(mean_emb)
+
+            end = min(start + batch_size, n)
+            if end < n and end % 100 == 0:
+                print(f"    ReactionT5 progress: {end}/{n}")
+
+    result = np.vstack(all_embeddings).astype(np.float32)
+    print(f"  Generated ReactionT5 embeddings: {result.shape}")
+    return result
+
+
 def create_onehot_components(components: List[Dict[str, str]]) -> np.ndarray:
     """One-hot encode reaction components (categorical baseline).
 

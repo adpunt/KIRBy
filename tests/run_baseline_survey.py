@@ -167,7 +167,7 @@ def _load_reaction(dataset_name: str) -> dict:
     from kirby.representations.reaction import (
         create_drfp, create_concat_ecfp4, create_concat_maccs,
         create_concat_pdv, create_product_ecfp4, create_reactant_ecfp4,
-        create_rxnfp, create_onehot_components,
+        create_rxnfp, create_onehot_components, create_reactiont5,
     )
 
     if dataset_name == 'buchwald_hartwig':
@@ -214,6 +214,14 @@ def _load_reaction(dataset_name: str) -> dict:
         print("  WARNING: rxnfp not installed, skipping RXNFP rep")
     except Exception as e:
         print(f"  WARNING: rxnfp failed: {e}")
+
+    # ReactionT5 encoder embeddings
+    try:
+        reps['reactiont5'] = create_reactiont5(data['rxn_smiles'])
+    except ImportError:
+        print("  WARNING: transformers/torch not installed, skipping ReactionT5 rep")
+    except Exception as e:
+        print(f"  WARNING: reactiont5 failed: {e}")
 
     # One-hot component encoding (factorial baseline)
     try:

@@ -192,6 +192,83 @@ run_esm3() {
 }
 
 # ---------------------------------------------------------------
+# Experiment 6: xTrimoPGLM-1B (Nature Methods 2025, 1B MLM, ~2048D)
+#   Domains: DTA (protein_xtrimopglm) + Antibody
+#   Thesis claim: xTrimoPGLM alone < xTrimoPGLM + KIRBy hybrid
+# ---------------------------------------------------------------
+run_exp6() {
+    local OUT="${BASE_OUTPUT}/exp6_xtrimopglm"
+    echo "--- Exp 6: xTrimoPGLM-1B → DTA + Antibody ---"
+
+    submit xtri_davis_baseline \
+        "mkdir -p ${OUT} && python tests/dta_baseline_survey.py davis --n-folds 5 --output ${OUT}/davis_baseline.json" \
+        128G 47:59:00
+
+    for ds in flab_expression_koenig flab_binding_koenig ddg_combined; do
+        submit "xtri_ab_${ds}" \
+            "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --reps xtrimopglm" \
+            128G 23:59:00
+    done
+    echo ""
+}
+
+# ---------------------------------------------------------------
+# Experiment 7: ReactionT5 (J Cheminformatics 2025, T5 encoder, 768D)
+#   Domain: Reaction
+#   Thesis claim: ReactionT5 alone < ReactionT5 + KIRBy hybrid
+# ---------------------------------------------------------------
+run_exp7() {
+    local OUT="${BASE_OUTPUT}/exp7_reactiont5"
+    echo "--- Exp 7: ReactionT5 → Reaction ---"
+
+    for ds in buchwald_hartwig suzuki doyle_plates; do
+        submit "rxnt5_${ds}" \
+            "mkdir -p ${OUT} && python tests/run_baseline_survey.py ${ds} --n-folds 5 --augment --output ${OUT}/" \
+            128G 23:59:00
+    done
+    echo ""
+}
+
+# ---------------------------------------------------------------
+# Experiment 8: Geneformer V2-316M (upgraded, 4096 context, ~1024D)
+#   Domain: TCGA
+#   Thesis claim: V2 upgrade is drop-in, proves forward compat
+# ---------------------------------------------------------------
+run_exp8() {
+    local OUT="${BASE_OUTPUT}/exp8_geneformer_v2"
+    echo "--- Exp 8: Geneformer V2 → TCGA ---"
+
+    for ds in tcga_luad_vs_lusc tcga_brca_pam50; do
+        submit "gfv2_${ds}" \
+            "mkdir -p ${OUT} && python tests/run_baseline_survey.py ${ds} --n-folds 5 --augment --output ${OUT}/" \
+            256G 47:59:00
+    done
+    echo ""
+}
+
+# ---------------------------------------------------------------
+# Experiment 9: AIDO.Protein-16B (GenBio AI, MoE 16B, 2304D)
+#   Domains: DTA + Antibody
+#   WARNING: Requires ~32GB VRAM (float16). May fail on smaller GPUs.
+# ---------------------------------------------------------------
+run_exp9() {
+    local OUT="${BASE_OUTPUT}/exp9_aido_protein"
+    echo "--- Exp 9: AIDO.Protein-16B → DTA + Antibody ---"
+    echo "    WARNING: Requires ~32GB VRAM. Will skip gracefully if OOM."
+
+    submit aido_davis_baseline \
+        "mkdir -p ${OUT} && python tests/dta_baseline_survey.py davis --n-folds 5 --output ${OUT}/davis_baseline.json" \
+        256G 47:59:00
+
+    for ds in flab_expression_koenig flab_binding_koenig ddg_combined; do
+        submit "aido_ab_${ds}" \
+            "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --reps aido_protein" \
+            256G 47:59:00
+    done
+    echo ""
+}
+
+# ---------------------------------------------------------------
 # DISPATCH
 # ---------------------------------------------------------------
 
@@ -214,6 +291,18 @@ case "$MODE" in
     esm3)
         run_esm3
         ;;
+    exp6|xtrimopglm)
+        run_exp6
+        ;;
+    exp7|reactiont5)
+        run_exp7
+        ;;
+    exp8|geneformer_v2|gfv2)
+        run_exp8
+        ;;
+    exp9|aido|aido_protein)
+        run_exp9
+        ;;
     all)
         run_exp1
         run_exp2
@@ -221,15 +310,23 @@ case "$MODE" in
         run_exp4
         run_exp5
         run_esm3
+        run_exp6
+        run_exp7
+        run_exp8
+        run_exp9
         echo "============================================"
-        echo "Total: ~35 forward compatibility jobs"
+        echo "Total: ~55 forward compatibility jobs"
         echo ""
-        echo "Experiment 1 (MINT):         6 jobs (DTA + antibody)"
-        echo "Experiment 2 (SaProt):       5 jobs (DTA + antibody)"
-        echo "Experiment 3 (MolE/MiniMol): 8 jobs (molecular)"
+        echo "Experiment 1 (MINT):           6 jobs (DTA + antibody)"
+        echo "Experiment 2 (SaProt):         5 jobs (DTA + antibody)"
+        echo "Experiment 3 (MolE/MiniMol):   8 jobs (molecular)"
         echo "Experiment 4 (IgT5/AbRoBERTa): 6 jobs (antibody)"
-        echo "Experiment 5 (Boltz-2):      2 jobs (DTA)"
-        echo "ESM3 (extra):                4 jobs (antibody + DTA)"
+        echo "Experiment 5 (Boltz-2):        2 jobs (DTA)"
+        echo "ESM3 (extra):                  4 jobs (antibody + DTA)"
+        echo "Experiment 6 (xTrimoPGLM):     4 jobs (DTA + antibody)"
+        echo "Experiment 7 (ReactionT5):     3 jobs (reaction)"
+        echo "Experiment 8 (Geneformer V2):  2 jobs (TCGA)"
+        echo "Experiment 9 (AIDO.Protein):   4 jobs (DTA + antibody)"
         echo "============================================"
         ;;
     *)
@@ -238,13 +335,17 @@ case "$MODE" in
         echo "Usage: bash submit_forward_compat.sh [MODE]"
         echo ""
         echo "Modes:"
-        echo "  all       All 5 experiments + ESM3 (~35 jobs)"
-        echo "  exp1      MINT → DTA + antibody"
-        echo "  exp2      SaProt → DTA + antibody"
-        echo "  exp3      MolE/MiniMol/GP-MoLFormer → molecular"
-        echo "  exp4      IgT5/Ab-RoBERTa → antibody"
-        echo "  exp5      Boltz-2 → DTA"
-        echo "  esm3      ESM3 → antibody + DTA"
+        echo "  all           All experiments (~55 jobs)"
+        echo "  exp1|mint     MINT → DTA + antibody"
+        echo "  exp2|saprot   SaProt → DTA + antibody"
+        echo "  exp3|molecular MolE/MiniMol/GP-MoLFormer → molecular"
+        echo "  exp4|igt5     IgT5/Ab-RoBERTa → antibody"
+        echo "  exp5|boltz2   Boltz-2 → DTA"
+        echo "  esm3          ESM3 → antibody + DTA"
+        echo "  exp6|xtrimopglm xTrimoPGLM-1B → DTA + antibody"
+        echo "  exp7|reactiont5 ReactionT5 → reaction"
+        echo "  exp8|gfv2     Geneformer V2 → TCGA"
+        echo "  exp9|aido     AIDO.Protein-16B → DTA + antibody"
         echo ""
         echo "Output: ${BASE_OUTPUT}/<experiment>/"
         echo ""
