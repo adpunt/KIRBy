@@ -675,8 +675,10 @@ def embed_esm3(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
     from esm.sdk.api import ESMProtein, LogitsConfig
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    model = ESM3.from_pretrained("esm3_sm_open_v1").to(device)
-    model.eval()
+    model = ESM3.from_pretrained("esm3_sm_open_v1")
+    if device == 'cuda' and not torch.cuda.is_bf16_supported():
+        model = model.half()
+    model = model.to(device).eval()
 
     config = LogitsConfig(sequence=True, return_embeddings=True)
 
@@ -708,8 +710,10 @@ def embed_esm3_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
     from esm.sdk.api import ESMProtein, LogitsConfig
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    model = ESM3.from_pretrained("esm3_sm_open_v1").to(device)
-    model.eval()
+    model = ESM3.from_pretrained("esm3_sm_open_v1")
+    if device == 'cuda' and not torch.cuda.is_bf16_supported():
+        model = model.half()
+    model = model.to(device).eval()
 
     config = LogitsConfig(sequence=True, return_embeddings=True)
 
