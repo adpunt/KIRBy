@@ -35,20 +35,19 @@ STDERR_FILTER="2> >(grep -v -e 'DEPRECATION WARNING' -e 'threadpoolctl' -e 'ctyp
 submit() {
     local name=$1
     local cmd=$2
-    local mem=${3:-64G}
+    local mem=${3:-128G}
     local wall=${4:-23:59:00}
-    local gpu=${5:-}
 
     J=$(sbatch \
         --job-name="fc_${name}" \
         --nodes=1 --ntasks=1 --cpus-per-task=8 \
         --time="${wall}" --partition=long \
         --mem="${mem}" \
+        --gres=gpu:1 \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
-        ${gpu:+--gres=gpu:1} \
         --wrap="${WRAP_PREFIX} && ${cmd} ${STDERR_FILTER}" \
         | awk '{print $4}')
-    echo "  $J  ${name}  (mem=${mem}, time=${wall}${gpu:+, GPU})"
+    echo "  $J  ${name}  (mem=${mem}, time=${wall}, GPU)"
 }
 
 echo "============================================"
@@ -70,16 +69,16 @@ run_exp1() {
     # NOTE: dta_baseline_survey.py runs ALL reps, no --reps filter
     submit mint_davis_baseline \
         "mkdir -p ${OUT} && python tests/dta_baseline_survey.py davis --n-folds 5 --output ${OUT}/davis_mint_baseline.json" \
-        64G 47:59:00 gpu
+        128G 47:59:00
     submit mint_davis_hybrid \
         "mkdir -p ${OUT} && python tests/find_best_hybrid_dta.py davis --reps full --search fast --n-folds 5 --output ${OUT}/davis_mint_hybrid.json" \
-        64G 47:59:00 gpu
+        128G 47:59:00
 
     # Antibody: MINT on key DMS + inter-family datasets
     for ds in flab_expression_koenig flab_binding_koenig ddg_combined flab_thermo_tresanco; do
         submit "mint_ab_${ds}" \
             "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --reps mint" \
-            96G 23:59:00 gpu
+            128G 23:59:00
     done
     echo ""
 }
@@ -96,13 +95,13 @@ run_exp2() {
     # DTA: Full baseline (includes protein_saprot) + pick out saprot from results
     submit saprot_davis_baseline \
         "mkdir -p ${OUT} && python tests/dta_baseline_survey.py davis --n-folds 5 --output ${OUT}/davis_saprot_baseline.json" \
-        64G 47:59:00 gpu
+        128G 47:59:00
 
     # Antibody: SaProt + CDR on key datasets
     for ds in flab_expression_koenig flab_binding_koenig ddg_combined flab_thermo_tresanco; do
         submit "saprot_ab_${ds}" \
             "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --reps saprot,saprot_cdr" \
-            96G 23:59:00 gpu
+            128G 23:59:00
     done
     echo ""
 }
@@ -120,14 +119,14 @@ run_exp3() {
     for ds in logd caco2 herg adme_hlm; do
         submit "molfm_${ds}" \
             "mkdir -p ${OUT} && python tests/run_baseline_survey.py ${ds} --n-folds 5 --augment --output ${OUT}/" \
-            64G 23:59:00
+            128G 23:59:00
     done
 
     # Hybrid search on same datasets (all reps includes Phase 4)
     for ds in logd caco2 herg adme_hlm; do
         submit "molfm_hybrid_${ds}" \
             "mkdir -p ${OUT} && python tests/find_best_hybrid_molecular.py ${ds} --reps all --search fast --n-folds 5 --output ${OUT}/${ds}_hybrid.json" \
-            64G 23:59:00
+            128G 23:59:00
     done
     echo ""
 }
@@ -145,7 +144,7 @@ run_exp4() {
               ddg_combined flab_thermo_tresanco abcov_kd; do
         submit "ablm_${ds}" \
             "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --reps igt5,abroberta,abroberta_cdr" \
-            96G 23:59:00 gpu
+            128G 23:59:00
     done
     echo ""
 }
@@ -162,10 +161,10 @@ run_exp5() {
     # DTA: Full baseline (includes protein_boltz2) + hybrid search
     submit boltz2_davis_baseline \
         "mkdir -p ${OUT} && python tests/dta_baseline_survey.py davis --n-folds 5 --output ${OUT}/davis_boltz2_baseline.json" \
-        64G 47:59:00 gpu
+        128G 47:59:00
     submit boltz2_davis_hybrid \
         "mkdir -p ${OUT} && python tests/find_best_hybrid_dta.py davis --reps full --search fast --n-folds 5 --output ${OUT}/davis_boltz2_hybrid.json" \
-        64G 47:59:00 gpu
+        128G 47:59:00
     echo ""
 }
 
@@ -181,14 +180,14 @@ run_esm3() {
     for ds in flab_expression_koenig flab_binding_koenig ddg_combined; do
         submit "esm3_ab_${ds}" \
             "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --reps esm3,esm3_cdr" \
-            96G 23:59:00 gpu
+            128G 23:59:00
     done
 
     # DTA
     # DTA: Full baseline (includes protein_esm3)
     submit esm3_davis_baseline \
         "mkdir -p ${OUT} && python tests/dta_baseline_survey.py davis --n-folds 5 --output ${OUT}/davis_esm3_baseline.json" \
-        64G 47:59:00 gpu
+        128G 47:59:00
     echo ""
 }
 
