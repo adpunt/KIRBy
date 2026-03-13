@@ -28,6 +28,12 @@ import argparse
 from pathlib import Path
 
 import numpy as np
+
+
+def _nan_result(elapsed=0.0):
+    """Return a NaN result dict for a failed method."""
+    return {'test_r2': float('nan'), 'test_mae': float('nan'),
+            'test_spearman': float('nan'), 'time': elapsed}
 from sklearn.metrics import r2_score, mean_absolute_error
 from sklearn.model_selection import GroupKFold
 from scipy.stats import spearmanr
@@ -140,37 +146,53 @@ def _run_property(prop_name, prop_idx, n_samples, args):
 
         # --- Method 2: Frozen SchNet embeddings + Ridge ---
         print("\n  Method 2: Frozen SchNet Embeddings + Ridge")
-        t0 = time.time()
-        res = run_frozen_schnet(smiles, labels, train_idx, val_idx, test_idx)
-        res['time'] = time.time() - t0
-        all_fold_results['frozen_schnet'].append(res)
+        try:
+            t0 = time.time()
+            res = run_frozen_schnet(smiles, labels, train_idx, val_idx, test_idx)
+            res['time'] = time.time() - t0
+            all_fold_results['frozen_schnet'].append(res)
+        except Exception as e:
+            print(f"    FAILED: {e}")
+            all_fold_results['frozen_schnet'].append(_nan_result(time.time() - t0))
 
         # --- Method 3: End-to-end SchNet ---
         print("\n  Method 3: End-to-End SchNet (3D)")
-        t0 = time.time()
-        res = run_e2e_schnet(
-            data_list, labels, train_idx, val_idx, test_idx,
-            prop_idx=prop_idx, epochs=args.epochs,
-        )
-        res['time'] = time.time() - t0
-        all_fold_results['e2e_schnet'].append(res)
+        try:
+            t0 = time.time()
+            res = run_e2e_schnet(
+                data_list, labels, train_idx, val_idx, test_idx,
+                prop_idx=prop_idx, epochs=args.epochs,
+            )
+            res['time'] = time.time() - t0
+            all_fold_results['e2e_schnet'].append(res)
+        except Exception as e:
+            print(f"    FAILED: {e}")
+            all_fold_results['e2e_schnet'].append(_nan_result(time.time() - t0))
 
         # --- Method 4: Frozen DimeNet++ embeddings + Ridge ---
         print("\n  Method 4: Frozen DimeNet++ Embeddings + Ridge")
-        t0 = time.time()
-        res = run_frozen_dimenetpp(smiles, labels, train_idx, val_idx, test_idx)
-        res['time'] = time.time() - t0
-        all_fold_results['frozen_dimenetpp'].append(res)
+        try:
+            t0 = time.time()
+            res = run_frozen_dimenetpp(smiles, labels, train_idx, val_idx, test_idx)
+            res['time'] = time.time() - t0
+            all_fold_results['frozen_dimenetpp'].append(res)
+        except Exception as e:
+            print(f"    FAILED: {e}")
+            all_fold_results['frozen_dimenetpp'].append(_nan_result(time.time() - t0))
 
         # --- Method 5: End-to-end DimeNet++ ---
         print("\n  Method 5: End-to-End DimeNet++ (3D)")
-        t0 = time.time()
-        res = run_e2e_dimenetpp(
-            data_list, labels, train_idx, val_idx, test_idx,
-            prop_idx=prop_idx, epochs=args.epochs,
-        )
-        res['time'] = time.time() - t0
-        all_fold_results['e2e_dimenetpp'].append(res)
+        try:
+            t0 = time.time()
+            res = run_e2e_dimenetpp(
+                data_list, labels, train_idx, val_idx, test_idx,
+                prop_idx=prop_idx, epochs=args.epochs,
+            )
+            res['time'] = time.time() - t0
+            all_fold_results['e2e_dimenetpp'].append(res)
+        except Exception as e:
+            print(f"    FAILED: {e}")
+            all_fold_results['e2e_dimenetpp'].append(_nan_result(time.time() - t0))
 
     # --- Summary: mean +/- std across folds ---
     print(f"\n{'=' * 70}")
