@@ -1164,11 +1164,13 @@ def embed_igt5(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
             add_special_tokens=True,
             return_special_tokens_mask=True,
         ).to(device)
+        # Extract special_tokens_mask before forwarding (model doesn't accept it)
+        special_mask = inputs.pop('special_tokens_mask')
         with torch.no_grad():
             outputs = model(**inputs)
         # Pool over non-special tokens (excludes </s> separator + final EOS)
         hidden = outputs.last_hidden_state  # (B, L, 1024)
-        special_mask = inputs['special_tokens_mask']  # 1 = special, 0 = residue
+        # special_mask: 1 = special, 0 = residue
         residue_mask = (1 - special_mask).unsqueeze(-1).float()  # (B, L, 1)
         pooled = (hidden * residue_mask).sum(dim=1) / residue_mask.sum(dim=1).clamp(min=1)
         all_embs.append(pooled.cpu().numpy())
