@@ -81,7 +81,7 @@ run_reaction_comparison() {
     local OUT="tests/results/comparisons"
     echo "--- Reaction Rep Comparison (8 reps × 3 models) ---"
     submit cmp_reaction \
-        "mkdir -p ${OUT} && python tests/experiments/reaction_rep_comparison.py --n-folds 5 --output ${OUT}/reaction_rep_comparison.json" \
+        "mkdir -p ${OUT} && python tests/experiments/reaction_rep_comparison.py --n-folds 5 --output ${OUT}" \
         128G 23:59:00
     echo ""
 }

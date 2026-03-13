@@ -182,10 +182,10 @@ run_comparisons() {
 
     # DTA LoRA fine-tuning: 8 methods
     submit cmp_dta_ft_davis \
-        "mkdir -p ${OUT} && python tests/experiments/dta_finetune_comparison.py davis --n-folds 5 --output ${OUT}/dta_finetune_davis.json" \
+        "mkdir -p ${OUT} && python tests/experiments/dta_finetune_comparison.py davis --n-folds 5 --output ${OUT}" \
         128G 47:59:00
     submit cmp_dta_ft_kiba \
-        "mkdir -p ${OUT} && python tests/experiments/dta_finetune_comparison.py kiba --n-folds 5 --max-pairs 30000 --output ${OUT}/dta_finetune_kiba.json" \
+        "mkdir -p ${OUT} && python tests/experiments/dta_finetune_comparison.py kiba --n-folds 5 --max-pairs 30000 --output ${OUT}" \
         128G 47:59:00
 
     # TCGA foundation models: frozen vs fine-tuned
@@ -195,7 +195,7 @@ run_comparisons() {
 
     # Reaction rep comparison: 8 reps × 3 models
     submit cmp_reaction \
-        "mkdir -p ${OUT} && python tests/experiments/reaction_rep_comparison.py --n-folds 5 --output ${OUT}/reaction_rep_comparison.json" \
+        "mkdir -p ${OUT} && python tests/experiments/reaction_rep_comparison.py --n-folds 5 --output ${OUT}" \
         128G 23:59:00
 
     # WSI aggregation: 7 encoders × 3 methods

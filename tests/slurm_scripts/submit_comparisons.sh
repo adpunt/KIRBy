@@ -91,10 +91,10 @@ run_mol_ft() {
 run_dta_ft() {
     echo "--- DTA LoRA Fine-Tuning (8 methods) ---"
     submit_gpu dta_ft_davis \
-        "python tests/experiments/dta_finetune_comparison.py davis --n-folds 5 --output ${OUTPUT}/dta_finetune_davis.json" \
+        "python tests/experiments/dta_finetune_comparison.py davis --n-folds 5 --output ${OUTPUT}" \
         96G 47:59:00
     submit_gpu dta_ft_kiba \
-        "python tests/experiments/dta_finetune_comparison.py kiba --n-folds 5 --max-pairs 30000 --output ${OUTPUT}/dta_finetune_kiba.json" \
+        "python tests/experiments/dta_finetune_comparison.py kiba --n-folds 5 --max-pairs 30000 --output ${OUTPUT}" \
         96G 47:59:00
 }
 
@@ -108,8 +108,8 @@ run_tcga_fm() {
 run_reaction() {
     echo "--- Reaction Rep Comparison (8 reps × 3 models, CPU) ---"
     submit_gpu reaction_reps \
-        "python tests/experiments/reaction_rep_comparison.py --n-folds 5 --output ${OUTPUT}/reaction_rep_comparison.json" \
-        32G 06:00:00
+        "python tests/experiments/reaction_rep_comparison.py --n-folds 5 --output ${OUTPUT}" \
+        128G 06:00:00
 }
 
 run_wsi() {
