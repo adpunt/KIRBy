@@ -1163,7 +1163,20 @@ def create_mint_protein_embeddings(
         checkpoint_path = found
 
     print(f"  Loading MINT from {checkpoint_path}...")
-    config = load_config()
+    # load_config requires path to MINT's config JSON
+    mint_pkg_dir = os.path.dirname(os.path.dirname(
+        __import__('mint').__file__))
+    config_path = os.path.join(mint_pkg_dir, 'data', 'esm2_t33_650M_UR50D.json')
+    if not os.path.isfile(config_path):
+        # Fallback: search relative to KIRBy repo
+        for candidate in [
+            os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src', 'MINT', 'data', 'esm2_t33_650M_UR50D.json'),
+            os.path.join(os.environ.get('KIRBY_MODELS_DIR', ''), 'mint', 'esm2_t33_650M_UR50D.json'),
+        ]:
+            if candidate and os.path.isfile(candidate):
+                config_path = candidate
+                break
+    config = load_config(config_path)
     model = MINTWrapper(config, checkpoint_path)
     model = model.to(device)
     model.eval()
