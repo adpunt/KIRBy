@@ -39,6 +39,8 @@ _XENA_TOIL_EXPRESSION = (
 
 # TCGA phenotype (cancer type, sample type, etc.)
 _XENA_PHENOTYPE_URLS = [
+    "https://pancanatlas.xenahubs.net/download/"
+    "TCGA_phenotype_denseDataOnlyDownload.tsv.gz",
     "https://tcga-xena-hub.s3.us-east-1.amazonaws.com/"
     "download/TCGA_phenotype_denseDataOnlyDownload.tsv.gz",
     "https://tcga.xenahubs.net/download/"
@@ -55,11 +57,11 @@ _XENA_SURVIVAL = (
 _XENA_MC3_MAF_URLS = [
     "https://api.gdc.cancer.gov/data/"
     "1c8cfe5f-e52d-41ba-94da-f15ea1337efc",
+    "https://pancanatlas.xenahubs.net/download/"
+    "mc3.v0.2.8.PUBLIC.xena.gz",
     "https://tcga-xena-hub.s3.us-east-1.amazonaws.com/"
     "download/mc3.v0.2.8.PUBLIC.xena.gz",
     "https://tcga.xenahubs.net/download/"
-    "mc3.v0.2.8.PUBLIC.xena.gz",
-    "https://gdc.xenahubs.net/download/"
     "mc3.v0.2.8.PUBLIC.xena.gz",
 ]
 
@@ -91,7 +93,10 @@ _PANCAN_STEMNESS_URLS = [
 
 # Knijnenburg et al. (Cell Reports 2018) — DNA damage response
 # GDC publication: PanCan-DDR-2018
+# New UUID returns ZIP containing DDRscores.tsv + Samples.tsv + Scores.tsv
 _PANCAN_HRD_URLS = [
+    "https://api.gdc.cancer.gov/data/"
+    "d9fdd899-bffe-4325-b0ce-58cbf9924c0a",
     "https://api.gdc.cancer.gov/data/"
     "0bbfca05-f14f-4e6e-a1c4-822e0ca84356",
 ]
@@ -784,11 +789,79 @@ def _download_pancanatlas_hrd() -> pd.DataFrame:
     """Knijnenburg et al. (Cell Reports 2018) HRD scores.
 
     Contains HRD-LOH, HRD-TAI (NtAI), HRD-LST, and total HRD score.
+    The new GDC UUID returns a ZIP with DDRscores.tsv + Samples.tsv + Scores.tsv.
     """
-    return _download_pancanatlas(
-        _PANCAN_HRD_URLS,
-        'hrd_scores.tsv',
-        'Knijnenburg et al. HRD (Cell Reports 2018)',
+    import zipfile
+
+    cache_dir = _pancanatlas_cache_dir()
+    cached = cache_dir / 'hrd_scores.tsv'
+
+    if cached.exists():
+        return pd.read_csv(cached, sep='\t', low_memory=False)
+
+    print(f"  Downloading Knijnenburg et al. HRD (Cell Reports 2018)...")
+    last_err = None
+    for url in _PANCAN_HRD_URLS:
+        try:
+            import requests
+            resp = requests.get(url, timeout=300)
+            resp.raise_for_status()
+            content = resp.content
+
+            # New UUID returns ZIP containing DDRscores.tsv + Samples.tsv + Scores.tsv
+            if content[:4] == b'PK\x03\x04':
+                zf = zipfile.ZipFile(io.BytesIO(content))
+                names = zf.namelist()
+                # Find the score and sample files
+                scores_file = next((n for n in names if 'DDRscores' in n), None)
+                samples_file = next((n for n in names if 'Samples' in n and 'Scores' not in n), None)
+                colnames_file = next((n for n in names if n.endswith('Scores.tsv') and 'DDR' not in n), None)
+
+                if scores_file and samples_file:
+                    samples_df = pd.read_csv(io.BytesIO(zf.read(samples_file)), sep='\t')
+                    # DDRscores has no header; Scores.tsv lists column names
+                    if colnames_file:
+                        col_df = pd.read_csv(io.BytesIO(zf.read(colnames_file)), sep='\t', header=None)
+                        col_names = col_df.iloc[:, 0].tolist()
+                    else:
+                        col_names = None
+                    scores_df = pd.read_csv(io.BytesIO(zf.read(scores_file)), sep='\t',
+                                            header=None, names=col_names)
+                    # Combine sample IDs with scores
+                    sample_col = next((c for c in samples_df.columns
+                                      if 'sample' in c.lower() or 'barcode' in c.lower()),
+                                     samples_df.columns[0])
+                    df = pd.concat([samples_df[[sample_col]].reset_index(drop=True),
+                                    scores_df.reset_index(drop=True)], axis=1)
+                    df = df.rename(columns={sample_col: 'sample'})
+                else:
+                    # Fallback: try reading largest file as TSV
+                    largest = max(names, key=lambda n: zf.getinfo(n).file_size)
+                    df = pd.read_csv(io.BytesIO(zf.read(largest)), sep='\t')
+            else:
+                # Old format: plain TSV
+                if content[:2] == b'\x1f\x8b':
+                    content = gzip.decompress(content)
+                df = pd.read_csv(io.BytesIO(content), sep='\t', low_memory=False)
+
+            df.to_csv(cached, sep='\t', index=False)
+            print(f"  HRD scores: {len(df)} rows cached to {cached}")
+            return df
+        except Exception as e:
+            last_err = e
+            continue
+
+    # Check for manually-placed file
+    for ext in ['', '.tsv', '.txt', '.csv']:
+        manual = cache_dir / ('hrd_scores' + ext)
+        if manual.exists() and manual != cached:
+            return pd.read_csv(manual, sep='\t', low_memory=False)
+
+    raise FileNotFoundError(
+        f"Could not download Knijnenburg et al. HRD (Cell Reports 2018).\n"
+        f"Error: {last_err}\n"
+        f"To fix: manually download and place at: {cached}\n"
+        f"URLs tried: {_PANCAN_HRD_URLS}"
     )
 
 
