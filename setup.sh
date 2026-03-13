@@ -112,6 +112,7 @@ _install_if_missing mordred mordredcommunity
 _install_if_missing drfp drfp
 _install_if_missing rxnfp rxnfp
 _install_if_missing polaris polaris-lib
+_install_if_missing map4 map4
 
 # --- Phase 4A: Forward compatibility models ---
 _install_if_missing minimol minimol

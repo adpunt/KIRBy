@@ -53,6 +53,8 @@ _XENA_SURVIVAL = (
 
 # MC3 somatic mutations (public MAF)
 _XENA_MC3_MAF_URLS = [
+    "https://api.gdc.cancer.gov/data/"
+    "1c8cfe5f-e52d-41ba-94da-f15ea1337efc",
     "https://tcga-xena-hub.s3.us-east-1.amazonaws.com/"
     "download/mc3.v0.2.8.PUBLIC.xena.gz",
     "https://tcga.xenahubs.net/download/"
@@ -63,20 +65,26 @@ _XENA_MC3_MAF_URLS = [
 
 # PanCanAtlas pre-computed data
 _PANCAN_ABSOLUTE_URLS = [
+    "https://api.gdc.cancer.gov/data/"
+    "4f277128-f793-4354-a13d-30cc7fe9f6b5",
     "https://pancanatlas.xenahubs.net/download/"
     "TCGA_mastercalls.abs_tables_JSedit.fixed.txt",
 ]
 
 # Thorsson et al. (Immunity 2018) — immune landscape supplementary S1
-# GDC publication UUID: 160789b5-4345-42df-91f7-f4f7c6a10eb4
+# Old GDC UUID is dead; use Elsevier supplementary XLSX (Table S1)
 _PANCAN_IMMUNE_URLS = [
+    "https://ars.els-cdn.com/content/image/"
+    "1-s2.0-S1074761318301213-mmc2.xlsx",
     "https://api.gdc.cancer.gov/data/"
     "160789b5-4345-42df-91f7-f4f7c6a10eb4",
 ]
 
 # Malta et al. (Cell 2018) — stemness scores
-# GDC publication: PanCanStemness-2018
+# Old GDC UUID is dead; use Elsevier supplementary XLSX (Table S1)
 _PANCAN_STEMNESS_URLS = [
+    "https://ars.els-cdn.com/content/image/"
+    "1-s2.0-S0092867418303581-mmc1.xlsx",
     "https://api.gdc.cancer.gov/data/"
     "4da68f3a-a504-4e98-aa98-f0ff6a0b8a00",
 ]
@@ -528,7 +536,12 @@ def _download_mutations(sample_ids: List[str]) -> pd.DataFrame:
     df = pd.read_csv(io.BytesIO(content), sep='\t', low_memory=False)
 
     # Filter to our samples by patient ID (first 12 chars of barcode)
-    sample_col = df.columns[0]  # Usually 'sample'
+    # Xena format: col[0] = 'sample'; GDC MAF: 'Tumor_Sample_Barcode'
+    sample_col = next(
+        (c for c in df.columns
+         if c.lower() in ('sample', 'tumor_sample_barcode')),
+        df.columns[0]
+    )
     patient_ids = set(s[:12] for s in sample_ids)
     mask = df[sample_col].astype(str).str[:12].isin(patient_ids)
     df = df[mask].copy()
@@ -579,17 +592,24 @@ def _download_mutations_full(sample_ids: List[str]) -> pd.DataFrame:
     df = pd.read_csv(io.BytesIO(content), sep='\t', low_memory=False)
 
     # Filter to our samples by patient ID (first 12 chars of barcode)
-    sample_col = df.columns[0]
+    # Xena format: col[0] = 'sample'; GDC MAF: 'Tumor_Sample_Barcode'
+    sample_col = next(
+        (c for c in df.columns
+         if c.lower() in ('sample', 'tumor_sample_barcode')),
+        df.columns[0]
+    )
     patient_ids = set(s[:12] for s in sample_ids)
     mask = df[sample_col].astype(str).str[:12].isin(patient_ids)
     df = df[mask].copy()
 
-    # Map Xena MC3 columns to standardized names
-    # Xena MC3 columns: sample, chr, start, end, reference, alt, gene, effect, ...
+    # Map columns to standardized names
+    # Xena MC3: sample, chr, start, end, reference, alt, gene, effect
+    # GDC MAF: Hugo_Symbol, ..., Chromosome, Start_Position, End_Position,
+    #          Reference_Allele, Tumor_Seq_Allele2, ..., Tumor_Sample_Barcode
     col_map = {}
     for c in df.columns:
         cl = c.lower()
-        if cl == 'sample' or c == df.columns[0]:
+        if cl in ('sample', 'tumor_sample_barcode'):
             col_map['sample'] = c
         elif cl == 'chr' or cl == 'chromosome' or cl == 'chrom':
             col_map['chr'] = c
@@ -653,6 +673,7 @@ def _download_pancanatlas(
     cache_name: str,
     description: str,
     sep: str = '\t',
+    xlsx_sheet: str = None,
 ) -> pd.DataFrame:
     """Download and cache a PanCanAtlas table.
 
@@ -664,6 +685,7 @@ def _download_pancanatlas(
         cache_name: filename for cache (e.g., 'absolute_purity.tsv')
         description: human-readable name for error messages
         sep: CSV/TSV separator
+        xlsx_sheet: if set, read this sheet from an XLSX download
     """
     cache_dir = _pancanatlas_cache_dir()
     cached = cache_dir / cache_name
@@ -673,30 +695,49 @@ def _download_pancanatlas(
 
     # Try download
     print(f"  Downloading {description}...")
-    try:
-        resp = _download_with_fallback(urls, timeout=300)
-        content = resp.content
-        # Handle gzip if needed
-        if cache_name.endswith('.gz') or content[:2] == b'\x1f\x8b':
-            content = gzip.decompress(content)
-        df = pd.read_csv(io.BytesIO(content), sep=sep, low_memory=False)
-        df.to_csv(cached, sep=sep, index=False)
-        print(f"  {description}: {len(df)} rows cached to {cached}")
-        return df
-    except Exception as e:
-        # Check for manually-placed file with common extensions
-        for ext in ['', '.tsv', '.txt', '.csv']:
-            manual = cache_dir / (cache_name.rsplit('.', 1)[0] + ext)
-            if manual.exists() and manual != cached:
-                return pd.read_csv(manual, sep=sep, low_memory=False)
+    import requests
+    last_err = None
+    for url in urls:
+        try:
+            resp = requests.get(url, timeout=300)
+            resp.raise_for_status()
+            content = resp.content
 
-        raise FileNotFoundError(
-            f"Could not download {description}.\n"
-            f"Error: {e}\n"
-            f"To fix: manually download the file and place it at:\n"
-            f"  {cached}\n"
-            f"URLs tried: {urls}"
-        )
+            # Handle gzip
+            if cache_name.endswith('.gz') or content[:2] == b'\x1f\x8b':
+                content = gzip.decompress(content)
+
+            # Handle XLSX (Elsevier supplementary files)
+            if url.endswith('.xlsx') or content[:4] == b'PK\x03\x04':
+                import openpyxl  # noqa: F401
+                df = pd.read_excel(
+                    io.BytesIO(content),
+                    sheet_name=xlsx_sheet or 0,
+                    engine='openpyxl',
+                )
+            else:
+                df = pd.read_csv(io.BytesIO(content), sep=sep, low_memory=False)
+
+            df.to_csv(cached, sep=sep, index=False)
+            print(f"  {description}: {len(df)} rows cached to {cached}")
+            return df
+        except Exception as e:
+            last_err = e
+            continue
+
+    # Check for manually-placed file with common extensions
+    for ext in ['', '.tsv', '.txt', '.csv']:
+        manual = cache_dir / (cache_name.rsplit('.', 1)[0] + ext)
+        if manual.exists() and manual != cached:
+            return pd.read_csv(manual, sep=sep, low_memory=False)
+
+    raise FileNotFoundError(
+        f"Could not download {description}.\n"
+        f"Error: {last_err}\n"
+        f"To fix: manually download the file and place it at:\n"
+        f"  {cached}\n"
+        f"URLs tried: {urls}"
+    )
 
 
 def _download_pancanatlas_purity() -> pd.DataFrame:
@@ -722,6 +763,7 @@ def _download_pancanatlas_immune() -> pd.DataFrame:
         _PANCAN_IMMUNE_URLS,
         'immune_landscape.tsv',
         'Thorsson et al. immune landscape (Immunity 2018)',
+        xlsx_sheet=0,
     )
 
 
@@ -734,6 +776,7 @@ def _download_pancanatlas_stemness() -> pd.DataFrame:
         _PANCAN_STEMNESS_URLS,
         'stemness_scores.tsv',
         'Malta et al. stemness (Cell 2018)',
+        xlsx_sheet='StemnessScores_RNAexp',
     )
 
 

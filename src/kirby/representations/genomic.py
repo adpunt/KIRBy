@@ -1338,7 +1338,7 @@ def create_stemness_mrnasi(sample_ids: List[str],
     sample_col = next(
         (c for c in df.columns
          if c.lower() in ('sample', 'sampleid', 'tcga_barcode',
-                          'tcga barcode', 'barcode')),
+                          'tcga barcode', 'barcode', 'tcgalong.id')),
         df.columns[0]
     )
 
