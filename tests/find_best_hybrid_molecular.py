@@ -89,7 +89,7 @@ REP_PRESETS = {
         'ecfp4', 'maccs', 'avalon', 'pdv', 'mordred',
         'mol2vec', 'chemberta', 'molformer',
         'selformer', 'chembert', 'molclr', 'graphmvp', 'smited',
-        'mhg_gnn', 'grover', 'graph_kernel', 'schnet', 'dimenetpp',
+        'mhg_gnn', 'grover', 'graph_kernel',
         'clamp', 'rmat', 'map4', 'unimol_v2',
         'minimol', 'gp_molformer', 'mole',
         # Per-fold factory reps (moved from base_reps to rep_factories):
