@@ -186,6 +186,14 @@ run_antibody() {
         "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_inter --output ${OUT}/ --n-folds 5 --augment --reps esm2,esmc,ablang2,igbert,igbert_cls,antiberty,prot_t5,amplify,igt5,esm3,esm3_cdr,saprot,saprot_cdr,esm2_cdr,esmc_cdr,antiberty_cdr,prot_t5_cdr,amplify_cdr,esm2_midlayers,esm2_layer24,esm2_early,esm2_concat,esm2_cdr3,abroberta,abroberta_cdr" \
         96G 23:59:00 gpu
 
+    # AIDO.Protein + xTrimoPGLM (separate jobs: AIDO needs ~32GB VRAM → 256G mem)
+    submit ab_newlm_dms \
+        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_dms --output ${OUT}/ --n-folds 5 --augment --reps aido_protein,xtrimopglm" \
+        256G 23:59:00 gpu
+    submit ab_newlm_inter \
+        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_inter --output ${OUT}/ --n-folds 5 --augment --reps aido_protein,xtrimopglm" \
+        256G 23:59:00 gpu
+
     # Structural reps (GPU)
     submit ab_struct_dms \
         "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_dms --output ${OUT}/ --n-folds 5 --augment --reps structural" \
@@ -219,7 +227,7 @@ run_antibody() {
         96G 23:59:00 gpu
 
     echo ""
-    echo "  Total: 14 antibody jobs (4 fast CPU + 10 GPU)"
+    echo "  Total: 16 antibody jobs (4 fast CPU + 12 GPU)"
     echo ""
 }
 
@@ -261,12 +269,12 @@ case "$MODE" in
         run_reaction
         run_antibody
         echo "============================================"
-        echo "Total: ~25 jobs across all domains"
+        echo "Total: ~27 jobs across all domains"
         echo "  Molecular:  1 frozen (+ optional 1 FT GPU)"
         echo "  TCGA:       1 frozen (+ optional 1 FT GPU)"
         echo "  DTA:        3 baseline + 1 universal"
         echo "  Reaction:   1"
-        echo "  Antibody:   14 (4 CPU + 10 GPU)"
+        echo "  Antibody:   16 (4 CPU + 12 GPU)"
         echo "============================================"
         ;;
     all_with_ft)

@@ -86,13 +86,13 @@ run_dta() {
 
     submit dta_davis \
         "mkdir -p ${OUT} && python tests/find_best_hybrid_dta.py davis --reps full --search fast --n-folds 5 --tune --output ${OUT}/davis.json" \
-        64G 47:59:00 gpu
+        128G 47:59:00 gpu
     submit dta_kiba \
         "mkdir -p ${OUT} && python tests/find_best_hybrid_dta.py kiba --reps full --search fast --n-folds 5 --max-pairs 30000 --tune --output ${OUT}/kiba.json" \
-        64G 47:59:00 gpu
+        128G 47:59:00 gpu
     submit dta_bindingdb \
         "mkdir -p ${OUT} && python tests/find_best_hybrid_dta.py bindingdb_kd --reps full --search fast --n-folds 5 --max-pairs 30000 --tune --output ${OUT}/bindingdb_kd.json" \
-        64G 47:59:00 gpu
+        128G 47:59:00 gpu
     echo ""
 }
 

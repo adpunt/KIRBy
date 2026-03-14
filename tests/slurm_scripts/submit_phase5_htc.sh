@@ -124,7 +124,15 @@ run_antibody_gpu() {
         "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_inter --output ${OUT}/ --n-folds 5 --augment --reps mint" \
         128G 47:59:00
 
-    echo "  Total: 10 antibody GPU jobs"
+    # AIDO.Protein + xTrimoPGLM (separate jobs: AIDO needs ~32GB VRAM → 256G mem)
+    submit ab_newlm_dms \
+        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_dms --output ${OUT}/ --n-folds 5 --augment --reps aido_protein,xtrimopglm" \
+        256G 47:59:00
+    submit ab_newlm_inter \
+        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_inter --output ${OUT}/ --n-folds 5 --augment --reps aido_protein,xtrimopglm" \
+        256G 47:59:00
+
+    echo "  Total: 12 antibody GPU jobs"
     echo ""
 }
 
@@ -227,7 +235,7 @@ case "$MODE" in
         run_dta
         run_comparisons
         echo "============================================"
-        echo "Total: 32 jobs"
+        echo "Total: 34 jobs"
         echo "============================================"
         ;;
     *) echo "Usage: bash submit_phase5_htc.sh [all|molecular|reaction|antibody_fast|tcga|antibody|dta|comparisons]"; exit 1 ;;
