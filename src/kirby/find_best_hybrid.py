@@ -269,6 +269,66 @@ def _get_gp_classifier():
     return GaussianProcessClassifier(kernel=RBF(), random_state=42)
 
 
+class TanimotoKernel(__import__('sklearn.gaussian_process.kernels',
+                                fromlist=['Kernel']).Kernel):
+    """Tanimoto (Jaccard) kernel for binary fingerprint vectors.
+
+    k(x, x') = <x, x'> / (||x||^2 + ||x'||^2 - <x, x'>)
+
+    Returns 1 for identical non-zero vectors, 0 for zero vectors.
+    No learnable hyperparameters.
+    """
+
+    def __init__(self):
+        super().__init__()
+
+    def __call__(self, X, Y=None, eval_gradient=False):
+        X = np.asarray(X, dtype=np.float64)
+        if Y is None:
+            Y = X
+        else:
+            Y = np.asarray(Y, dtype=np.float64)
+
+        XY = X @ Y.T
+        X_sq = np.sum(X ** 2, axis=1)
+        Y_sq = np.sum(Y ** 2, axis=1)
+
+        # denom[i,j] = ||x_i||^2 + ||y_j||^2 - <x_i, y_j>
+        denom = X_sq[:, None] + Y_sq[None, :] - XY
+        K = np.where(denom > 0, XY / denom, 0.0)
+
+        if eval_gradient:
+            return K, np.empty((X.shape[0], Y.shape[0], 0))
+        return K
+
+    def diag(self, X):
+        X = np.asarray(X, dtype=np.float64)
+        norms = np.sum(X ** 2, axis=1)
+        return np.where(norms > 0, 1.0, 0.0)
+
+    def is_stationary(self):
+        return False
+
+    @property
+    def hyperparameter_names(self):
+        return []
+
+    @property
+    def theta(self):
+        return np.empty(0)
+
+    @theta.setter
+    def theta(self, value):
+        pass
+
+    @property
+    def bounds(self):
+        return np.empty((0, 2))
+
+    def clone_with_theta(self, theta):
+        return TanimotoKernel()
+
+
 def _get_dnn_regressor():
     from kirby.models.dnn import DNNRegressor
     return DNNRegressor()
@@ -501,6 +561,7 @@ _HP_SEARCH_SPACES = {
             + __import__('sklearn.gaussian_process.kernels', fromlist=['WhiteKernel']).WhiteKernel(),
             __import__('sklearn.gaussian_process.kernels', fromlist=['Matern']).Matern(nu=1.5),
             __import__('sklearn.gaussian_process.kernels', fromlist=['Matern']).Matern(nu=2.5),
+            TanimotoKernel(),
         ],
         'alpha': [1e-10, 1e-5, 1e-2, 0.1],
     },

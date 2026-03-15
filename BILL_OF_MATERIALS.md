@@ -5,7 +5,7 @@ performance. This document is the single source of truth for what KIRBy supports
 and what actually works. Representations without confirmed performance data should
 not be used in experiments until validated.
 
-**Last updated:** 2026-03-14 (Phase 5 results: molecular logd, reaction BH+Suzuki, TCGA 2/3, antibody 11 inter-family datasets + DMS partial, all comparisons (DTA E2E, QM9 3D, TCGA FM, WSI ABMIL, Mol FT, Reaction rep, Ab FT/region). DTA baselines + remaining molecular + antibody DMS still running.)
+**Last updated:** 2026-03-15 (Added OPIG experiment datasets: 1H antibody clf (B1+B3), 1I Ginkgo developability (B5), 1J synthetic DDG (B2). Added OPIG comparison experiments: covariate shift (C2), Imrie TL (C4). TanimotoKernel note (C1). Phase 5 results unchanged — OPIG surveys need run.)
 
 ---
 
@@ -118,13 +118,59 @@ not be used in experiments until validated.
 
 | Dataset | Samples | Source | Target | Status |
 |---------|---------|--------|--------|--------|
-| `pdbbind_refined` | ~5,316 complexes | PDBBind v2020 refined | -log(Kd/Ki) | Listed, manual download needed |
-| `pdbbind_core` | ~290 complexes | PDBBind v2020 core | -log(Kd/Ki) | Listed, manual download needed |
+| `pdbbind_refined` | ~5,316 complexes | PDBBind v2020 refined | -log(Kd/Ki) | Ready (manual download needed, LP-PDBBind splits) |
+| `pdbbind_core` | ~290 complexes | PDBBind v2020 core | -log(Kd/Ki) | Ready (manual download needed, LP-PDBBind splits) |
 
 **Data source:** pdbbind.org.cn (free registration, manual download required).
 **Approach:** Sequence-based — extracts protein sequences from PDB + ligand SMILES from SDF.
 Returns same dict format as DTA loader → plugs into existing DTA pipeline.
-**Splits:** LP-PDBBind leak-proof via protein sequence clustering (Volkov et al. 2022).
+**Splits:** LP-PDBBind leak-proof via protein sequence clustering at 30% identity (Volkov et al. 2022). `assign_lp_groups()` in `src/kirby/datasets/pdbbind.py` computes connected components, cached to disk.
+**Note:** AEV-PLIG rep (Valsson et al. 2025) deferred — requires 3D complex structures, can't participate in cross-dataset hybrid comparisons.
+
+### 1H. Antibody Classification (OPIG B1 + B3, StratifiedGroupKFold)
+
+| Dataset | Source | Samples | Target | Task | Metrics | Best Rep (model) | Best Acc | Status |
+|---------|--------|---------|--------|------|---------|------------------|----------|--------|
+| `tz_her2_binary` | Chinery et al. 2024 | 5,000 (subsample) | Binding (binder/non-binder) | Binary clf | Acc, F1w, AUROC | blosum (rf) | **84.9%** | **Partial** (fast reps only) |
+| `tz_her2_multiclass` | Chinery et al. 2024 | 5,000 (subsample) | Affinity (low/mid/high) | 3-class clf | Acc, F1w | — | — | **Needs run** |
+| `humanness_species` | Marks et al. 2021 (OAS FASTA, Zenodo 10562968) | varies | Human vs non-human | Binary clf | Acc, F1w, AUROC | — | — | **Needs run** |
+| `humanness_therapeutic` | Marks et al. 2021 (Thera-SAbDab fallback) | varies | Human vs non-human | Binary clf | Acc, F1w, AUROC | — | — | **Needs run** |
+
+**Splits:** StratifiedGroupKFold — edit_distance groups for Trastuzumab, identity groups for humanness. VH-only (unpaired) for humanness.
+**Reps:** 40 antibody reps via `antibody_baseline_survey.py all_clf`.
+**Initial results (tz_her2_binary, 5K, 5-fold):** BLOSUM RF 84.9% acc, onehot RF 84.9% acc. Full LM survey pending.
+
+### 1I. Antibody Developability (OPIG B5, pre-computed hierarchical cluster splits)
+
+| Dataset | Source | Samples | Target | Metrics | Best Rep (model) | Best ρ | Status |
+|---------|--------|---------|--------|---------|------------------|--------|--------|
+| `ginkgo_hic` | van Niekerk et al. 2026 (GDPa1 v1.2) | 242 | HIC retention | R², ρ, RMSE | ridge | **0.39** | **Partial** (initial run) |
+| `ginkgo_tm2` | van Niekerk et al. 2026 (GDPa1 v1.2) | varies | Tm (2nd derivative) | R², ρ, RMSE | — | — | **Needs run** |
+| `ginkgo_titer` | van Niekerk et al. 2026 (GDPa1 v1.2) | varies | Expression titer | R², ρ, RMSE | — | — | **Needs run** |
+| `ginkgo_pr_cho` | van Niekerk et al. 2026 (GDPa1 v1.2) | varies | Protein recovery (CHO) | R², ρ, RMSE | — | — | **Needs run** |
+| `ginkgo_acsins` | van Niekerk et al. 2026 (GDPa1 v1.2) | varies | AC-SINS | R², ρ, RMSE | — | — | **Needs run** |
+| `ginkgo_purity` | van Niekerk et al. 2026 (GDPa1 v1.2) | varies | SEC purity | R², ρ, RMSE | — | — | **Needs run** |
+| `ginkgo_aggregation` | van Niekerk et al. 2026 (GDPa1 v1.2) | varies | Aggregation | R², ρ, RMSE | — | — | **Needs run** |
+| `ginkgo_colloidal` | van Niekerk et al. 2026 (GDPa1 v1.2) | varies | Colloidal stability | R², ρ, RMSE | — | — | **Needs run** |
+| `ginkgo_heparin` | van Niekerk et al. 2026 (GDPa1 v1.2) | varies | Heparin binding | R², ρ, RMSE | — | — | **Needs run** |
+
+**Data source:** `ginkgobioworks/abdev-benchmark` (GitHub CSV). 242 antibodies, 9 regression properties, sample sizes 94-242 per property.
+**Splits:** Pre-computed 5-fold hierarchical cluster splits (provided in dataset). `pre_split` group strategy.
+**Reps:** 40 antibody reps via `antibody_baseline_survey.py all_ginkgo`.
+**Initial result:** ginkgo_hic ridge R²=0.08/ρ=0.39. Small datasets — expect noisy estimates.
+
+### 1J. Synthetic DDG (OPIG B2, leave-one-complex-out GroupKFold)
+
+| Dataset | Source | Samples | Target | Metrics | Best Rep (model) | Best ρ | Status |
+|---------|--------|---------|--------|---------|------------------|--------|--------|
+| `graphinity_foldx` | Hummer et al. 2025 (Nature Comp Sci) | ~50,000 (subsample) | FoldX ΔΔG | R², ρ, RMSE | — | — | **Needs run** |
+| `graphinity_rosetta` | Hummer et al. 2025 (Nature Comp Sci) | ~21,000 | Rosetta ΔΔG | R², ρ, RMSE | — | — | **Needs run** |
+| `graphinity_augmented` | Hummer et al. 2025 (Nature Comp Sci) | exp+synth | ΔΔG (augmented) | R², ρ, RMSE | — | — | **Needs run** |
+
+**Data source:** Zenodo 15384945. Mutations parsed from `complex` column. PDB sequences via pdb_utils (cached).
+**Splits:** Leave-one-complex-out GroupKFold. Groups by complex.
+**Reps:** 40 antibody reps via `antibody_baseline_survey.py all_ddg`.
+**Scientific question:** Does synthetic DDG data (FoldX/Rosetta) help KIRBy's DDG predictions? Can large synthetic data compensate for the scarcity of experimental DDG data (~429 in ddg_combined)?
 
 ---
 
@@ -496,6 +542,30 @@ Script: `tests/experiments/antibody_finetune_comparison.py`
 region_var_kN (entropy-guided variability selection) consistently outperforms full-seq and CDR strategies across all datasets. Biggest gains on harder problems (koenig, tresanco, HER2).
 Script: `tests/experiments/antibody_region_ablation.py`
 
+**Covariate Shift Robustness (OPIG C2):**
+
+| Experiment | Splits | Reps | Models | Datasets | Status |
+|-----------|--------|------|--------|----------|--------|
+| Covariate shift comparison | scaffold, MW percentile, spectral clustering | 36 (all molecular preset) | rf, ridge, xgboost | logd, caco2, herg | **Needs run** |
+
+3 split strategies × 36 reps × 3 models × 3 datasets. Tests whether hybrid reps maintain their advantage across multiple distribution shifts (not just scaffold splits).
+Script: `tests/experiments/covariate_shift.py`
+
+**Imrie Transfer Learning (OPIG C4):**
+
+| Condition | Description | Status |
+|-----------|-------------|--------|
+| `dnn_scratch` | DNN trained from scratch | **Needs run** |
+| `dnn_tl_full` | DNN pre-trained on ChEMBL, all layers fine-tuned | **Needs run** |
+| `dnn_tl_frozen` | DNN pre-trained on ChEMBL, frozen encoder | **Needs run** |
+| `ridge` | Ridge baseline | **Needs run** |
+| `gp` | GP baseline | **Needs run** |
+
+5 conditions × 6 reps (ecfp4, maccs, pdv, mol2vec, mordred, avalon — fast reps only, required for ChEMBL pre-training) × 3 datasets (logd, caco2, herg).
+Pre-training: `src/kirby/models/pretrain_chembl_dnn.py` → `tests/slurm_scripts/imrie_pretrain.sh` (run first).
+Evaluation: `tests/experiments/imrie_transfer_learning.py` → `tests/slurm_scripts/imrie_eval.sh`.
+**Scientific question:** Does transfer learning change which reps rank best? If rankings are preserved across TL conditions → model improvement is orthogonal to rep choice (supports KIRBy thesis that rep selection matters more than model architecture).
+
 **Forward Compatibility Experiments:**
 
 | Experiment | Model | Domains | Thesis claim | Status |
@@ -614,11 +684,11 @@ for the same n_samples, so manual deletion is recommended:
 | Domain | Datasets | Reps (run / registered) | Models | Metrics | Status |
 |--------|----------|------------------------|--------|---------|--------|
 | Molecular | 1/8 | 17/36 | 10/10 | R²+ρ+RMSE | **Phase 5** (logd done; 7 datasets running) |
-| Antibody | 24/25 | 20-23/40 (inter) | 10/10 | ρ+R²+Pearson+RMSE | **Phase 5** (11 inter-family done; DMS partial) |
+| Antibody | 24/41 | 20-23/40 (inter) | 10/10 | ρ+R²+Pearson+RMSE | **Phase 5** (11 inter-family done; DMS partial; OPIG B1/B2/B3/B5 need run) |
 | TCGA | 2/3 | 36/57 | 10/10 | AUROC+F1+ρ+RMSE | **Phase 5** (2 clf done; survival dropped; factory reps running) |
 | DTA | 0/3 | 0/37 | — | — | **Running** (baselines on HTC) |
 | Reaction | 2/3 | 8/8 | 10/10 | R²+ρ+RMSE | **Phase 5** (BH+Suzuki done; Doyle plates via comparison) |
-| Comparisons | 10 experiments | — | — | — | **Phase 5** ✅ (DTA E2E, DTA FT, QM9, TCGA FM, WSI, Mol FT, Rxn rep, Ab FT, Ab region all done) |
+| Comparisons | 12 experiments | — | — | — | **Phase 5** ✅ (10 done); OPIG C2 covariate shift + C4 Imrie TL **need run** |
 | PDBBind | 0/2 | — | — | — | **Blocked** (manual download) |
 
 ### What's STILL PENDING
@@ -636,6 +706,11 @@ for the same n_samples, so manual deletion is recommended:
 | IgBert | NaN everywhere on antibody | **Drop** — confirmed dead across all 11 tested datasets |
 | aido_protein | Zero signal on all 10 antibody DMS datasets | **Drop from antibody** — keep in DTA only (untested there) |
 | WSI ABMIL bug | All 3 aggregation methods produce identical results | **Investigate** — attention heads may not be learning |
+| OPIG antibody clf (1H) | tz_her2_binary/multiclass, humanness_species/therapeutic — full 40-rep survey needed | Fast reps only for tz_her2_binary; rest not started |
+| OPIG Ginkgo developability (1I) | 9 datasets × 40 reps — full survey needed | Initial ginkgo_hic run only |
+| OPIG Graphinity DDG (1J) | 3 synthetic DDG datasets × 40 reps — full survey needed | Not started |
+| OPIG covariate shift (C2) | 3 splits × 36 reps × 3 models × 3 datasets | Not started |
+| OPIG Imrie TL (C4) | 5 conditions × 6 reps × 3 datasets | Needs pretrain first, then eval |
 
 ### Dropped
 
@@ -676,7 +751,7 @@ for the same n_samples, so manual deletion is recommended:
 | KNN | Instance | fast | Adaptive k = min(5, sqrt(N)) |
 | MLP | Neural | medium | VespaG-style (256,), early stopping |
 | SVM/SVR | Kernel | medium | Size guard _max_samples=10000. **Not in SURVEY_MODELS** (too slow for standard survey); available via `get_model()` for targeted use. |
-| GP | Kernel | medium | RBF+White, size guard _max_samples=5000 |
+| GP | Kernel | medium | RBF+White, size guard _max_samples=5000. + TanimotoKernel for binary fingerprints (OPIG C1, in HP grid) |
 | CatBoost | Boosting | medium | Falls back to LightGBM if not installed |
 | DNN | Neural | long | (256,128,64), PyTorch sklearn wrapper, internal early stopping |
 | CNN | Neural | long | Multi-scale 1D Conv (k=3,7,15), PyTorch sklearn wrapper, internal early stopping |
@@ -878,6 +953,9 @@ replaced with a simple baseline pipeline: LM embeddings → Ridge → Spearman �
 6. Does finer-grained pooling (per-CDR, per-region, entropy-top20) improve DMS prediction over full-sequence mean-pool?
 7. Do ESM-2 layer variants (layer24, early, concat-chain) or CDR3-only provide signal beyond standard mean-pool?
 8. Can hybrid reps improve binder classification on Trastuzumab-HER2 beyond individual rep baselines (~85% acc)?
+9. Can hybrid reps improve Ginkgo developability prediction on small datasets (n=94-242)?
+10. Does synthetic DDG augmentation (Graphinity FoldX/Rosetta) help KIRBy's DDG predictions beyond the ~429 experimental samples?
+11. Do antibody LMs distinguish human vs non-human sequences (humanness) better than simple sequence encodings?
 
 ---
 

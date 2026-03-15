@@ -144,7 +144,13 @@ def _load_dta(dataset_name: str, rep_preset: str) -> dict:
 
     reps = _get_dta_reps(drug_smiles, protein_seqs, rep_preset,
                          protein_ids=protein_ids)
-    groups, n_groups = assign_cold_target_groups(protein_ids)
+
+    # PDBBind: use LP-PDBBind leak-proof grouping (30% seq identity clusters)
+    if dataset_name.startswith('pdbbind'):
+        from kirby.datasets.pdbbind import assign_lp_groups
+        groups, n_groups = assign_lp_groups(protein_seqs)
+    else:
+        groups, n_groups = assign_cold_target_groups(protein_ids)
 
     print(f"  {dataset_name}: {len(labels)} pairs, {n_groups} cold-target groups, "
           f"{len(reps)} reps")
@@ -556,7 +562,8 @@ def make_ft_factories(data, dataset_name, task_type, ft_epochs=3, ft_cache=True)
 # =============================================================================
 
 def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
-               tune_trials=0, l2_norm=False, augment=False):
+               tune_trials=0, l2_norm=False, augment=False,
+               split_strategy='scaffold'):
     """Run the full baseline survey for one dataset. Returns result dict."""
     print(f"\n{'='*70}")
     print(f"SURVEY: {dataset_name}")
@@ -571,6 +578,22 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
     groups = data['groups']
     prebuilt_splits = data.get('prebuilt_splits')
     task_type = data.get('task_type', 'regression')
+
+    # Override groups for molecular datasets with alternative split strategies
+    if split_strategy != 'scaffold' and data.get('domain') != 'molecular':
+        print(f"  WARNING: --split-strategy {split_strategy} only applies to "
+              f"molecular datasets; using default groups for {dataset_name}")
+    if split_strategy != 'scaffold' and data.get('domain') == 'molecular':
+        smiles = data.get('smiles')
+        if smiles is not None:
+            from find_best_hybrid_molecular import assign_mw_groups, assign_spectral_groups
+            if split_strategy == 'mw':
+                groups, _ = assign_mw_groups(smiles, n_groups=n_folds)
+                print(f"  Using MW split ({len(np.unique(groups))} groups)")
+            elif split_strategy == 'spectral':
+                groups, _ = assign_spectral_groups(smiles, n_groups=n_folds)
+                print(f"  Using spectral split ({len(np.unique(groups))} groups)")
+
     n_groups = len(np.unique(groups)) if groups is not None else 0
     metric_name, higher_is_better = _get_primary_metric(dataset_name, task_type)
 
@@ -892,6 +915,11 @@ Examples:
                        help='Add ridge_l2norm model (L2-normalize before Ridge)')
     parser.add_argument('--augment', action='store_true',
                        help='Test augmentation: concat each small rep (<=200D) with top base rep')
+    parser.add_argument('--split-strategy', type=str, default='scaffold',
+                       choices=['scaffold', 'mw', 'spectral'],
+                       help='Group splitting strategy for molecular datasets '
+                            '(default: scaffold). mw = molecular weight bins, '
+                            'spectral = Tanimoto spectral clustering.')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--output', type=str, default=None,
                        help='Output path (JSON file or directory for multi-dataset)')
@@ -940,6 +968,7 @@ Examples:
                 args.finetune, args.seed,
                 tune_trials=args.tune, l2_norm=args.l2_norm,
                 augment=args.augment,
+                split_strategy=args.split_strategy,
             )
             result = convert_numpy(result)
             print_summary_table(result)

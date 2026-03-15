@@ -92,6 +92,9 @@ pip install polaris-lib
 # openpyxl — required for Buchwald-Hartwig Excel loading (pandas needs >=3.1.0)
 pip install --upgrade openpyxl
 
+# ChEMBL client — required for hERG/DRD2 loaders and Imrie TL pre-training
+pip install chembl_webresource_client
+
 # Optuna HP tuning (optional)
 pip install optuna
 

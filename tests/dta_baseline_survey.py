@@ -475,8 +475,14 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
         print(f"  Subsampled to {max_pairs} pairs")
 
     # Cold-target or cold-drug groups
+    # PDBBind: use LP-PDBBind leak-proof grouping (30% seq identity clusters)
     from kirby.datasets.dta import assign_cold_target_groups, assign_cold_drug_groups
-    if cold_setting == 'drug':
+    if dataset_name.startswith('pdbbind'):
+        from kirby.datasets.pdbbind import assign_lp_groups
+        groups, n_groups = assign_lp_groups(protein_seqs)
+        print(f"  {len(labels)} pairs, {metadata['n_drugs']} drugs × {metadata['n_proteins']} proteins")
+        print(f"  LP-PDBBind groups: {n_groups} clusters (30% seq identity)")
+    elif cold_setting == 'drug':
         groups, n_groups = assign_cold_drug_groups(metadata['drug_ids'])
         print(f"  {len(labels)} pairs, {metadata['n_drugs']} drugs × {metadata['n_proteins']} proteins")
         print(f"  Cold-drug groups: {n_groups} unique drugs")
