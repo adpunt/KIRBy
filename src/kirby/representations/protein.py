@@ -45,11 +45,26 @@ AA_PROPERTIES = {
 }
 
 
+def _esm2_per_residue_cache_dir() -> 'Path':
+    """Return cache directory for per-residue ESM-2 embeddings."""
+    from pathlib import Path
+    cache_dir = Path(os.environ.get('KIRBY_CACHE_DIR',
+                     str(Path.home() / '.cache' / 'kirby'))) / 'esm2_per_residue'
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+def _seq_hash(seq: str) -> str:
+    import hashlib
+    return hashlib.sha256(seq.upper().strip().encode()).hexdigest()[:16]
+
+
 def create_esm2_protein_embeddings(
     sequences: List[str],
     model_name: str = 'facebook/esm2_t33_650M_UR50D',
     device: str = 'cpu',
     batch_size: int = 4,
+    cache_per_residue: bool = True,
 ) -> np.ndarray:
     """Extract ESM-2 mean-pooled embeddings for protein sequences.
 
@@ -58,6 +73,8 @@ def create_esm2_protein_embeddings(
         model_name: HuggingFace ESM-2 model name.
         device: 'cpu' or 'cuda'.
         batch_size: Sequences per batch (proteins can be long, use small batch).
+        cache_per_residue: If True, cache per-residue embeddings to disk for
+            later use by pocket-local features, contact graphs, etc.
 
     Returns:
         np.ndarray: (n_sequences, 1280) embeddings.
@@ -68,22 +85,47 @@ def create_esm2_protein_embeddings(
     except ImportError:
         raise ImportError("ESM-2 requires transformers: pip install transformers")
 
+    per_res_dir = _esm2_per_residue_cache_dir() if cache_per_residue else None
+    n = len(sequences)
+
+    # Check which sequences already have cached per-residue embeddings
+    all_embeddings = [None] * n
+    need_compute = []
+    if per_res_dir is not None:
+        for i, seq in enumerate(sequences):
+            cache_file = per_res_dir / f'{_seq_hash(seq)}_mean.npy'
+            if cache_file.exists():
+                all_embeddings[i] = np.load(cache_file)
+            else:
+                need_compute.append(i)
+    else:
+        need_compute = list(range(n))
+
+    n_cached = n - len(need_compute)
+    if n_cached > 0:
+        print(f"  ESM-2: {n_cached}/{n} sequences cached, computing {len(need_compute)} remaining...")
+
+    if not need_compute:
+        result = np.stack(all_embeddings, axis=0)
+        print(f"  Generated ESM-2 protein embeddings: {result.shape} (all cached)")
+        return result
+
     print(f"  Loading ESM-2 ({model_name.split('/')[-1]}) for protein embeddings...")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model = EsmModel.from_pretrained(model_name).to(device).eval()
 
-    all_embeddings = []
-    n = len(sequences)
-
     with torch.no_grad():
-        for start in range(0, n, batch_size):
-            batch = [s.upper().strip()[:1022] for s in sequences[start:start + batch_size]]
+        for batch_start in range(0, len(need_compute), batch_size):
+            batch_indices = need_compute[batch_start:batch_start + batch_size]
+            batch = [sequences[i].upper().strip()[:1022] for i in batch_indices]
             inputs = tokenizer(
                 batch, return_tensors='pt', padding=True,
                 truncation=True, max_length=1024
             )
             inputs = {k: v.to(device) for k, v in inputs.items()}
             outputs = model(**inputs)
+            hidden = outputs.last_hidden_state  # (B, L, 1280)
+
             # Mean pool excluding BOS/EOS
             attention_mask = inputs['attention_mask'].clone()
             attention_mask[:, 0] = 0
@@ -92,18 +134,43 @@ def create_esm2_protein_embeddings(
                 if last_tok > 0:
                     attention_mask[j, int(last_tok)] = 0
             mask_expanded = attention_mask.unsqueeze(-1).float()
-            sum_emb = (outputs.last_hidden_state * mask_expanded).sum(dim=1)
+            sum_emb = (hidden * mask_expanded).sum(dim=1)
             count = mask_expanded.sum(dim=1).clamp(min=1)
             mean_emb = (sum_emb / count).cpu().numpy()
-            all_embeddings.append(mean_emb)
 
-            end = min(start + batch_size, n)
-            if end < n:
-                print(f"    Progress: {end}/{n}")
+            # Save per-residue and mean embeddings per sequence
+            for j, idx in enumerate(batch_indices):
+                all_embeddings[idx] = mean_emb[j]
+                if per_res_dir is not None:
+                    sh = _seq_hash(sequences[idx])
+                    np.save(per_res_dir / f'{sh}_mean.npy', mean_emb[j])
+                    # Save per-residue (excluding BOS/EOS padding)
+                    seq_len = int(attention_mask[j].sum().item())
+                    if seq_len > 0:
+                        # Residue embeddings: positions 1..seq_len (skip BOS at 0)
+                        per_res = hidden[j, 1:1 + seq_len].cpu().numpy()
+                        np.save(per_res_dir / f'{sh}_per_residue.npy', per_res)
 
-    result = np.concatenate(all_embeddings, axis=0)
+            done = min(batch_start + batch_size, len(need_compute))
+            if done < len(need_compute):
+                print(f"    Progress: {done}/{len(need_compute)}")
+
+    result = np.stack(all_embeddings, axis=0)
     print(f"  Generated ESM-2 protein embeddings: {result.shape}")
     return result
+
+
+def load_esm2_per_residue(sequence: str) -> Optional[np.ndarray]:
+    """Load cached per-residue ESM-2 embeddings for a single protein.
+
+    Returns:
+        np.ndarray of shape (seq_len, 1280) or None if not cached.
+        Call create_esm2_protein_embeddings() first to populate the cache.
+    """
+    cache_file = _esm2_per_residue_cache_dir() / f'{_seq_hash(sequence)}_per_residue.npy'
+    if cache_file.exists():
+        return np.load(cache_file)
+    return None
 
 
 def create_esm2_midlayers_protein_embeddings(

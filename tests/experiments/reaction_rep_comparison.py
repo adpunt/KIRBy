@@ -58,6 +58,10 @@ from kirby.representations.reaction import (
     create_concat_pdv,
     create_product_ecfp4,
     create_reactant_ecfp4,
+    create_product_maccs,
+    create_reactant_maccs,
+    create_product_pdv,
+    create_reactant_pdv,
     create_rxnfp,
     create_onehot_components,
 )
@@ -71,7 +75,10 @@ warnings.filterwarnings('ignore')
 
 ALL_REPS = [
     'drfp_2048', 'concat_ecfp4', 'concat_maccs', 'concat_pdv',
-    'product_ecfp4', 'reactant_ecfp4', 'rxnfp', 'onehot_components',
+    'product_ecfp4', 'reactant_ecfp4',
+    'product_maccs', 'reactant_maccs',
+    'product_pdv', 'reactant_pdv',
+    'rxnfp', 'onehot_components',
 ]
 
 ALL_DATASETS = ['buchwald_hartwig', 'suzuki', 'bh_doyle_plates']
@@ -108,6 +115,14 @@ def generate_rep(rep_name: str, rxn_smiles: List[str],
         return create_product_ecfp4(rxn_smiles)
     elif rep_name == 'reactant_ecfp4':
         return create_reactant_ecfp4(rxn_smiles)
+    elif rep_name == 'product_maccs':
+        return create_product_maccs(rxn_smiles)
+    elif rep_name == 'reactant_maccs':
+        return create_reactant_maccs(rxn_smiles)
+    elif rep_name == 'product_pdv':
+        return create_product_pdv(rxn_smiles)
+    elif rep_name == 'reactant_pdv':
+        return create_reactant_pdv(rxn_smiles)
     elif rep_name == 'rxnfp':
         return create_rxnfp(rxn_smiles)
     elif rep_name == 'onehot_components':

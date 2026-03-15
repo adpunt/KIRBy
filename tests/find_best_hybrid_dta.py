@@ -72,6 +72,7 @@ REP_PRESETS = {
         'drug_chemberta_pca50', 'drug_molformer_pca50', 'drug_selformer_pca50',
         'drug_clamp_pca50', 'drug_rmat_pca50',
         'drug_mordred_pca50',
+        'drug_sns',
         'protein_esm2', 'protein_esmc', 'protein_esm2_midlayers',
         'protein_amplify', 'protein_esmfold', 'protein_alphafold_db',
         'protein_aac', 'protein_descriptors', 'protein_kmer',
@@ -79,7 +80,7 @@ REP_PRESETS = {
         'protein_esm3', 'protein_saprot', 'protein_boltz2',
         'protein_aido',
         'protein_xtrimopglm',
-    ],  # 39 reps (24 drug + 15 protein)
+    ],  # 40 reps (25 drug + 15 protein)
 }
 
 # Reps that require per-fold fitting (data-dependent transforms).
@@ -88,6 +89,7 @@ FACTORY_REPS = {
     'drug_pdv_binary_mean', 'drug_pdv_rank',
     'drug_chemberta_pca50', 'drug_molformer_pca50', 'drug_selformer_pca50',
     'drug_clamp_pca50', 'drug_rmat_pca50', 'drug_mordred_pca50',
+    'drug_sns',
 }
 
 _SEARCH_NAME_MAP = {
@@ -422,6 +424,37 @@ def get_rep_factories(
             print(f"done ({pair_embs.shape[1]}D base, {elapsed:.1f}s)")
         except Exception as e:
             print(f"FAILED: {e}")
+
+    # Sort & Slice (SNS) — fitted per fold on unique training drugs
+    if 'drug_sns' in requested:
+        print("  Setting up drug_sns factory...", end=' ', flush=True)
+        start = time.time()
+
+        def _make_sns(pair_smiles, uniq_drugs, pair_idx):
+            def factory(train_idx, val_idx, train_labels):
+                # Get unique training drug SMILES for fitting
+                train_drug_set = set(pair_idx[train_idx])
+                unique_train_drugs = [uniq_drugs[i] for i in sorted(train_drug_set)]
+
+                # Fit SNS on unique training drugs only
+                _, featurizer = mol.create_sns(
+                    unique_train_drugs, return_featurizer=True)
+
+                # Transform ALL unique drugs with fitted featurizer
+                all_features = mol.create_sns(
+                    uniq_drugs, reference_featurizer=featurizer)
+
+                # Expand to pair level
+                train_features = all_features[pair_idx[train_idx]]
+                val_features = all_features[pair_idx[val_idx]]
+
+                return train_features, val_features
+            return factory
+
+        factories['drug_sns'] = _make_sns(
+            drug_smiles, unique_drugs, pair_drug_indices)
+        elapsed = time.time() - start
+        print(f"done ({elapsed:.1f}s)")
 
     return factories
 

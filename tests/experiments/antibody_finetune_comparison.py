@@ -846,7 +846,7 @@ def main():
                        help='Comma-separated methods: esm2_lora,esmc_lora,'
                             'esm3_lora,saprot_lora,prott5_lora,amplify_lora,'
                             'abroberta_lora,mint_lora,ablang2_ft,antiberty_ft,'
-                            'igbert_ft,igt5_ft (default: all)')
+                            'igbert_ft (default: all; igt5_ft removed — OOM on 44GB GPU)')
     parser.add_argument('--epochs', type=int, default=5,
                        help='Fine-tuning epochs (default: 5)')
     parser.add_argument('--n-folds', type=int, default=5,
@@ -862,7 +862,8 @@ def main():
                else ['esm2_lora', 'esmc_lora', 'esm3_lora', 'saprot_lora',
                       'prott5_lora', 'amplify_lora', 'abroberta_lora',
                       'mint_lora', 'ablang2_ft', 'antiberty_ft',
-                      'igbert_ft', 'igt5_ft'])
+                      'igbert_ft'])
+    # igt5_ft removed: OOM on 44GB GPU (IgT5 paired T5 too large for LoRA FT)
     cache = not args.no_cache
 
     print("=" * 70)
