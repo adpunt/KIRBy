@@ -186,6 +186,92 @@ def create_reactant_ecfp4(rxn_smiles: List[str], n_bits: int = 2048) -> np.ndarr
     return X
 
 
+def create_product_maccs(rxn_smiles: List[str]) -> np.ndarray:
+    """MACCS keys (167-bit) of the product molecule only."""
+    from rdkit import Chem
+    from rdkit.Chem import MACCSkeys, DataStructs
+
+    X = np.zeros((len(rxn_smiles), 167), dtype=np.float32)
+    for i, rxn in enumerate(rxn_smiles):
+        parts = rxn.split('>>')
+        product_smi = parts[-1] if len(parts) >= 2 else parts[0]
+        mol = Chem.MolFromSmiles(product_smi)
+        if mol is not None:
+            fp = MACCSkeys.GenMACCSKeys(mol)
+            arr = np.zeros(167, dtype=np.float32)
+            DataStructs.ConvertToNumpyArray(fp, arr)
+            X[i] = arr
+    return X
+
+
+def create_reactant_maccs(rxn_smiles: List[str]) -> np.ndarray:
+    """OR-combined MACCS keys (167-bit) of all reactants."""
+    from rdkit import Chem
+    from rdkit.Chem import MACCSkeys, DataStructs
+
+    X = np.zeros((len(rxn_smiles), 167), dtype=np.float32)
+    for i, rxn in enumerate(rxn_smiles):
+        parts = rxn.split('>>')
+        reactant_smi = parts[0] if len(parts) >= 2 else ''
+        combined = np.zeros(167, dtype=np.float32)
+        for smi in reactant_smi.split('.'):
+            mol = Chem.MolFromSmiles(smi.strip())
+            if mol is not None:
+                fp = MACCSkeys.GenMACCSKeys(mol)
+                arr = np.zeros(167, dtype=np.float32)
+                DataStructs.ConvertToNumpyArray(fp, arr)
+                combined = np.maximum(combined, arr)
+        X[i] = combined
+    return X
+
+
+def create_product_pdv(rxn_smiles: List[str]) -> np.ndarray:
+    """RDKit physicochemical descriptors of the product molecule only."""
+    from rdkit import Chem
+    from rdkit.Chem import Descriptors
+    from rdkit.ML.Descriptors.MoleculeDescriptors import MolecularDescriptorCalculator
+
+    desc_names = [d[0] for d in Descriptors._descList]
+    calc = MolecularDescriptorCalculator(desc_names)
+    n_desc = len(desc_names)
+    X = np.zeros((len(rxn_smiles), n_desc), dtype=np.float32)
+    for i, rxn in enumerate(rxn_smiles):
+        parts = rxn.split('>>')
+        product_smi = parts[-1] if len(parts) >= 2 else parts[0]
+        mol = Chem.MolFromSmiles(product_smi)
+        if mol is not None:
+            vals = calc.CalcDescriptors(mol)
+            arr = np.array(vals, dtype=np.float32)
+            X[i] = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+    return X
+
+
+def create_reactant_pdv(rxn_smiles: List[str]) -> np.ndarray:
+    """Mean-pooled RDKit physicochemical descriptors of all reactants."""
+    from rdkit import Chem
+    from rdkit.Chem import Descriptors
+    from rdkit.ML.Descriptors.MoleculeDescriptors import MolecularDescriptorCalculator
+
+    desc_names = [d[0] for d in Descriptors._descList]
+    calc = MolecularDescriptorCalculator(desc_names)
+    n_desc = len(desc_names)
+    X = np.zeros((len(rxn_smiles), n_desc), dtype=np.float32)
+    for i, rxn in enumerate(rxn_smiles):
+        parts = rxn.split('>>')
+        reactant_smi = parts[0] if len(parts) >= 2 else ''
+        reactant_descs = []
+        for smi in reactant_smi.split('.'):
+            mol = Chem.MolFromSmiles(smi.strip())
+            if mol is not None:
+                vals = calc.CalcDescriptors(mol)
+                arr = np.array(vals, dtype=np.float32)
+                arr = np.nan_to_num(arr, nan=0.0, posinf=0.0, neginf=0.0)
+                reactant_descs.append(arr)
+        if reactant_descs:
+            X[i] = np.mean(reactant_descs, axis=0)
+    return X
+
+
 def create_rxnfp(rxn_smiles: List[str]) -> np.ndarray:
     """Generate learned reaction fingerprints via IBM's RXNBERT (256D).
 

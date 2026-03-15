@@ -167,6 +167,8 @@ def _load_reaction(dataset_name: str) -> dict:
     from kirby.representations.reaction import (
         create_drfp, create_concat_ecfp4, create_concat_maccs,
         create_concat_pdv, create_product_ecfp4, create_reactant_ecfp4,
+        create_product_maccs, create_reactant_maccs,
+        create_product_pdv, create_reactant_pdv,
         create_rxnfp, create_onehot_components, create_reactiont5,
     )
 
@@ -206,6 +208,22 @@ def _load_reaction(dataset_name: str) -> dict:
         reps['reactant_ecfp4'] = create_reactant_ecfp4(data['rxn_smiles'])
     except Exception as e:
         print(f"  WARNING: reactant_ecfp4 failed: {e}")
+    try:
+        reps['product_maccs'] = create_product_maccs(data['rxn_smiles'])
+    except Exception as e:
+        print(f"  WARNING: product_maccs failed: {e}")
+    try:
+        reps['reactant_maccs'] = create_reactant_maccs(data['rxn_smiles'])
+    except Exception as e:
+        print(f"  WARNING: reactant_maccs failed: {e}")
+    try:
+        reps['product_pdv'] = create_product_pdv(data['rxn_smiles'])
+    except Exception as e:
+        print(f"  WARNING: product_pdv failed: {e}")
+    try:
+        reps['reactant_pdv'] = create_reactant_pdv(data['rxn_smiles'])
+    except Exception as e:
+        print(f"  WARNING: reactant_pdv failed: {e}")
 
     # Learned reaction fingerprints
     try:
