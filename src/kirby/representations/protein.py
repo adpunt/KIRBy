@@ -207,18 +207,20 @@ def _get_ca_positions_batch(
 
     cached = n - len(need_esmfold)
     if cached > 0:
-        print(f"    Structure cache: {cached}/{n} proteins cached")
+        print(f"    Structure cache: {cached}/{n} proteins cached", flush=True)
 
     # Second pass: ESMFold for remaining
     if need_esmfold and source in ('auto', 'esmfold'):
         try:
             import torch
             from transformers import EsmForProteinFolding, AutoTokenizer
-            print(f"    Loading ESMFold for {len(need_esmfold)} proteins...")
+            print(f"    Loading ESMFold model (~3GB)...", flush=True)
             tokenizer_fold = AutoTokenizer.from_pretrained("facebook/esmfold_v1")
+            print(f"    ESMFold tokenizer loaded, loading weights...", flush=True)
             model_fold = EsmForProteinFolding.from_pretrained(
                 "facebook/esmfold_v1", torch_dtype=torch.float32,
             ).to(device).float().eval()
+            print(f"    ESMFold ready. Predicting {len(need_esmfold)} structures...", flush=True)
 
             for j, idx in enumerate(need_esmfold):
                 ca, pl = _get_ca_positions(
@@ -226,8 +228,8 @@ def _get_ca_positions_batch(
                     _esmfold_model=model_fold, _esmfold_tokenizer=tokenizer_fold,
                 )
                 results[idx] = (ca, pl) if ca is not None else (None, None)
-                if (j + 1) % 20 == 0:
-                    print(f"    ESMFold progress: {j + 1}/{len(need_esmfold)}")
+                if (j + 1) % 20 == 0 or j == 0:
+                    print(f"    ESMFold progress: {j + 1}/{len(need_esmfold)}", flush=True)
 
             del model_fold
             if torch.cuda.is_available():
