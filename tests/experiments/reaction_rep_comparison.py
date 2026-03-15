@@ -1,16 +1,17 @@
 """Reaction Representation Comparison: Which rep works best for yield prediction?
 
-Evaluates 8 reaction representations across 3 HTE yield datasets using
+Evaluates 9 reaction representations across 3 HTE yield datasets using
 GroupKFold CV (groups provided by the dataset loader). All reps are static
 (no fine-tuning) — this is a frozen-rep comparison.
 
-Representations (8):
+Representations (9):
   drfp_2048         — Differential Reaction FP (Probst et al. 2022)
-  concat_ecfp4      — Concatenated component ECFP4
-  concat_maccs      — Concatenated component MACCS keys
-  concat_pdv        — Concatenated component physicochemical descriptors
   product_ecfp4     — Product-only Morgan FP
   reactant_ecfp4    — Reactant-only Morgan FP (OR-combined)
+  product_maccs     — Product-only MACCS keys (167-bit)
+  reactant_maccs    — Reactant-only MACCS keys (OR-combined)
+  product_pdv       — Product-only physicochemical descriptors
+  reactant_pdv      — Reactant-only descriptors (mean-pooled)
   rxnfp             — RXNBERT learned FP (256D, Schwaller et al. 2021)
   onehot_components — One-hot categorical components (factorial baseline)
 
@@ -53,9 +54,6 @@ from kirby.datasets.reaction_yields import (
 )
 from kirby.representations.reaction import (
     create_drfp,
-    create_concat_ecfp4,
-    create_concat_maccs,
-    create_concat_pdv,
     create_product_ecfp4,
     create_reactant_ecfp4,
     create_product_maccs,
@@ -74,7 +72,7 @@ warnings.filterwarnings('ignore')
 # =============================================================================
 
 ALL_REPS = [
-    'drfp_2048', 'concat_ecfp4', 'concat_maccs', 'concat_pdv',
+    'drfp_2048',
     'product_ecfp4', 'reactant_ecfp4',
     'product_maccs', 'reactant_maccs',
     'product_pdv', 'reactant_pdv',
@@ -105,12 +103,6 @@ def generate_rep(rep_name: str, rxn_smiles: List[str],
     """
     if rep_name == 'drfp_2048':
         return create_drfp(rxn_smiles, n_bits=2048)
-    elif rep_name == 'concat_ecfp4':
-        return create_concat_ecfp4(components)
-    elif rep_name == 'concat_maccs':
-        return create_concat_maccs(components)
-    elif rep_name == 'concat_pdv':
-        return create_concat_pdv(components)
     elif rep_name == 'product_ecfp4':
         return create_product_ecfp4(rxn_smiles)
     elif rep_name == 'reactant_ecfp4':

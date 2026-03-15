@@ -166,8 +166,7 @@ def _load_reaction(dataset_name: str) -> dict:
     """Load reaction yield dataset with multiple representation types."""
     from kirby.datasets.reaction_yields import load_buchwald_hartwig, load_suzuki
     from kirby.representations.reaction import (
-        create_drfp, create_concat_ecfp4, create_concat_maccs,
-        create_concat_pdv, create_product_ecfp4, create_reactant_ecfp4,
+        create_drfp, create_product_ecfp4, create_reactant_ecfp4,
         create_product_maccs, create_reactant_maccs,
         create_product_pdv, create_reactant_pdv,
         create_rxnfp, create_onehot_components, create_reactiont5,
@@ -182,17 +181,6 @@ def _load_reaction(dataset_name: str) -> dict:
         data = load_suzuki()
 
     reps = {}
-
-    # Concat fingerprints per component
-    reps['concat_ecfp4'] = create_concat_ecfp4(data['components'])
-    try:
-        reps['concat_maccs'] = create_concat_maccs(data['components'])
-    except Exception as e:
-        print(f"  WARNING: concat_maccs failed: {e}")
-    try:
-        reps['concat_pdv'] = create_concat_pdv(data['components'])
-    except Exception as e:
-        print(f"  WARNING: concat_pdv failed: {e}")
 
     # Reaction-level fingerprints
     try:

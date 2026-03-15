@@ -105,6 +105,8 @@ def extract_token_embeddings(
     """
     if lm_name == 'ablang2':
         return _extract_token_embeddings_ablang2(sequences, batch_size)
+    if lm_name == 'esmc':
+        return _extract_token_embeddings_esmc(sequences, batch_size)
 
     model_id, embed_dim, has_bos = LM_CONFIGS[lm_name]
     return _extract_token_embeddings_hf(
@@ -151,6 +153,48 @@ def _extract_token_embeddings_hf(
     gc.collect()
 
     return all_embeddings
+
+
+def _extract_token_embeddings_esmc(
+    sequences: List[str],
+    batch_size: int,
+) -> Tuple[List[np.ndarray], int]:
+    """Extract per-residue ESM-C hidden states via EvolutionaryScale esm package."""
+    import torch
+    try:
+        from esm.models.esmc import ESMC
+        from esm.sdk.api import ESMProtein, LogitsConfig
+    except ImportError:
+        raise ImportError("ESM-C requires the esm package: pip install esm")
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = ESMC.from_pretrained("esmc_600m").to(device)
+    model.eval()
+
+    config = LogitsConfig(sequence=True, return_embeddings=True)
+    embed_dim = 1152
+    all_embeddings = []
+
+    with torch.no_grad():
+        for i, seq in enumerate(sequences):
+            seq = seq.upper().strip()[:2048]
+            protein = ESMProtein(sequence=seq)
+            protein_tensor = model.encode(protein)
+            output = model.logits(protein_tensor, config)
+            # output.embeddings: (1, L+2, 1152) with BOS/EOS
+            # Extract residue tokens only (skip BOS at 0, EOS at -1)
+            per_res = output.embeddings[0, 1:-1, :].cpu().numpy().astype(np.float32)
+            all_embeddings.append(per_res)
+
+            if (i + 1) % 50 == 0:
+                print(f"    ESM-C progress: {i + 1}/{len(sequences)}")
+
+    del model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    gc.collect()
+
+    return all_embeddings, embed_dim
 
 
 def _extract_token_embeddings_ablang2(
