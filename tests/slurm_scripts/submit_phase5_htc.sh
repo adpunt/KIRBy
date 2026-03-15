@@ -152,7 +152,7 @@ run_dta() {
     local OUT2="${BASE_OUTPUT}/dta_universal"
     submit dta_universal \
         "mkdir -p ${OUT2} && python tests/run_baseline_survey.py dta --n-folds 5 --augment --output ${OUT2}/" \
-        128G 47:59:00
+        256G 47:59:00
     echo ""
 }
 

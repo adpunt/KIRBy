@@ -372,17 +372,21 @@ GroupKFold (BH: leave-additive-out, 23 groups; Suzuki: leave-ligand-out, 12 grou
 | Rep | Dim | BH Best Model | BH R² | BH ρ | Suzuki Best Model | Suzuki R² | Suzuki ρ |
 |-----|-----|--------------|-------|------|------------------|-----------|----------|
 | `reactant_ecfp4` | 2048 | rf | **0.718** | **0.855** | ridge | -0.033 | 0.031 |
-| `concat_ecfp4` | 5120 | rf | 0.704 | 0.847 | rf | -0.033 | 0.000 |
 | `drfp_2048` | 2048 | rf | 0.688 | 0.835 | ridge | -0.033 | 0.033 |
-| `concat_maccs` | 835 | xgboost | 0.634 | 0.812 | rf | -0.033 | 0.000 |
 | `onehot_components` | 45/37 | xgboost | 0.615 | 0.802 | rf | **0.453** | **0.680** |
-| `concat_pdv` | 1085 | rf | 0.582 | 0.796 | rf | -0.033 | 0.000 |
 | `rxnfp` | 256 | ridge | 0.566 | 0.771 | ridge | -0.034 | 0.003 |
 | `product_ecfp4` | 2048 | ridge | 0.136 | 0.370 | rf | -0.033 | 0.000 |
+| `reactant_maccs` | 167 | — | — | — | — | — | — |
+| `product_maccs` | 167 | — | — | — | — | — | — |
+| `reactant_pdv` | ~210 | — | — | — | — | — | — |
+| `product_pdv` | ~210 | — | — | — | — | — | — |
+
+*concat_ecfp4, concat_maccs, concat_pdv removed — redundant with separated product/reactant variants.*
+*New separated MACCS/PDV reps pending first run.*
 
 **Key findings (Phase 5):**
 - BH: R² dropped from 0.934 (random) to 0.718 (GroupKFold) as predicted. reactant_ecfp4 overtakes drfp_2048.
-- Suzuki: **catastrophic collapse** — ALL concat/drfp/rxnfp reps produce R²≈-0.03 under leave-ligand-out. Only onehot_components generalizes (R²=0.453). This is a genuine finding: molecular fingerprints cannot extrapolate to unseen ligands in this reaction space.
+- Suzuki: **catastrophic collapse** — ALL drfp/rxnfp reps produce R²≈-0.03 under leave-ligand-out. Only onehot_components generalizes (R²=0.453). This is a genuine finding: molecular fingerprints cannot extrapolate to unseen ligands in this reaction space.
 - product_ecfp4 is weak on BH (product alone lacks reactant/reagent info).
 
 ### 2F. Comparison Experiments
@@ -626,6 +630,7 @@ for the same n_samples, so manual deletion is recommended:
 | TCGA factory reps | 21/57 reps missing (gene_hvg2000, gene_pca100, gene_nmf50, pathway reps, etc.) — these require per-fold fitting. | Likely still running on HTC. |
 | Molecular 7 remaining datasets | caco2, herg, qm9, adme_hlm, adme_rlm, adme_mdr1, adme_solubility | Running on HTC+ARC |
 | DTA all baselines | Davis, KIBA, BindingDB_Kd × 31 reps, CI primary | Running on HTC (~33h in) |
+| DTA universal survey | Bus error (core dumped) during large model loading | OOM with 128G during checkpoint sharding. Resubmit with 256G. |
 | DTA fine-tuning | All 7 LoRA strategies produced NaN | **Needs debug** — investigate loss calculation |
 | PDBBind | 2 datasets | Manual download from pdbbind.org.cn |
 | IgBert | NaN everywhere on antibody | **Drop** — confirmed dead across all 11 tested datasets |
@@ -642,6 +647,8 @@ for the same n_samples, so manual deletion is recommended:
 | `gene_scfoundation` (frozen) | Degenerate embeddings (0.51 acc = majority class). FT version works. |
 | `igt5_ft` | OOM on 44GB GPU — IgT5 paired T5 too large for LoRA FT. Removed from default methods list. |
 | `aido_protein` (antibody) | Zero signal on all 10 DMS datasets (ρ < 0.08). Keep for DTA only. |
+| `xtrimopglm` | Requires `deepspeed` (not installed). Skipped gracefully; low priority to fix. |
+| `concat_ecfp4/maccs/pdv` (reaction) | Redundant with separated product/reactant variants. Concat mixes components; separated reps let KIRBy pick the informative decomposition. Removed from surveys. |
 
 **NOT dropped (re-wired in Phase 0):** `mutation_matrix` (was `gene_mutation`), `clinical` — both in 'all' preset with Xena 403 fallback handling.
 **At risk (in 'all' but may fail):** `wsi_titan` (gated HF, garbage results), `wsi_uni2h` (manual download needed). Both still in TCGA 'all' preset — monitor on rerun.
@@ -926,33 +933,30 @@ DTA baselines + remaining molecular + antibody DMS still running.
 
 **Published context:** Random-split R²=0.92-0.96. OOS reagent hold-out R²=0.54-0.84 (Schwaller 2021, JCIM 2024). KIRBy's GroupKFold is equivalent to OOS.
 
-7/8 reps viable. R²=0.718 best — squarely in the OOS literature range.
+4/5 reps viable (concat reps removed — redundant with separated variants). R²=0.718 best — squarely in the OOS literature range.
 
 | Rep | Dim | R² | RMSE | ρ | Best Model | Rep Type |
 |-----|-----|----|------|---|-----------|---------|
 | reactant_ecfp4 | 2048 | 0.718 | 14.16 | 0.855 | rf | Molecular FP |
-| concat_ecfp4 | 5120 | 0.704 | 14.57 | 0.847 | rf | Concat FP |
 | drfp_2048 | 2048 | 0.688 | 14.93 | 0.835 | rf | Reaction FP |
-| concat_maccs | 835 | 0.634 | 16.22 | 0.812 | xgboost | Concat FP |
 | onehot_components | 45 | 0.615 | 16.62 | 0.802 | xgboost | Design encoding |
-| concat_pdv | 1085 | 0.582 | 17.42 | 0.796 | rf | Concat descriptor |
 | rxnfp | 256 | 0.566 | 17.77 | 0.771 | ridge | Learned reaction |
+
+*Pending (new reps):* reactant_maccs, product_maccs, reactant_pdv, product_pdv.
 
 **Dead:** product_ecfp4 (R²=0.136 — product alone lacks reagent info).
 
-**Hybrid search notes:** 4 rep types (molecular FP, concat, reaction FP, design encoding) provide diversity. reactant_ecfp4 beating concat_ecfp4 is interesting — reactant features alone carry more signal than the full concatenation under OOS splitting. Hybrid of reactant_ecfp4 + onehot_components would combine molecular + factorial information.
+**Hybrid search notes:** reactant_ecfp4 beats concat — reactant features alone carry more signal than the full concatenation under OOS splitting. Hybrid of reactant_ecfp4 + onehot_components would combine molecular + factorial information.
 
 ### 10C. Reaction — Suzuki (5,760 reactions, leave-ligand-out 12 groups) — AUGMENTATION EXPERIMENT
 
 **Published context:** "When Yield Prediction Does Not Yield Prediction" (JCIM 2024) predicts exactly this collapse.
 
-1/8 reps viable. **All molecular fingerprint reps collapse to R²≈-0.03 under leave-ligand-out.**
+1/5 reps viable (concat reps removed). **All molecular fingerprint reps collapse to R²≈-0.03 under leave-ligand-out.**
 
 | Rep | Dim | R² | ρ | Best Model |
 |-----|-----|----|---|-----------|
 | onehot_components | 37 | 0.453 | 0.680 | rf |
-| concat_ecfp4 | 5120 | -0.033 | 0.000 | — |
-| concat_maccs | 835 | -0.033 | 0.000 | — |
 | drfp_2048 | 2048 | -0.033 | 0.033 | — |
 | rxnfp | 256 | -0.034 | 0.003 | — |
 | (all others) | — | ≈-0.03 | ≈0.00 | — |
