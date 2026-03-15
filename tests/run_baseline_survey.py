@@ -142,7 +142,8 @@ def _load_dta(dataset_name: str, rep_preset: str) -> dict:
         protein_ids = [protein_ids[i] for i in idx]
         print(f"  Subsampled to 30000 pairs")
 
-    reps = _get_dta_reps(drug_smiles, protein_seqs, rep_preset)
+    reps = _get_dta_reps(drug_smiles, protein_seqs, rep_preset,
+                         protein_ids=protein_ids)
     groups, n_groups = assign_cold_target_groups(protein_ids)
 
     print(f"  {dataset_name}: {len(labels)} pairs, {n_groups} cold-target groups, "

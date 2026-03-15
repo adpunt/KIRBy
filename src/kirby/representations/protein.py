@@ -11,6 +11,11 @@ Functions:
 - create_protein_aac: amino acid composition (20D)
 - create_protein_descriptors: biophysical descriptors (~30D)
 - create_protein_kmer: k-mer frequency (default k=3, 8000D)
+- create_contact_graph_features: residue contact graph topology (~80D)
+- create_usr_shape_features: 3D shape descriptors, rotation-invariant (~60D)
+- create_pocket_features: binding pocket geometry & composition (~55D)
+- create_esm2_pocket_embeddings: pocket-local ESM-2 embeddings (1280D)
+- create_pocket_composition_features: pocket AA composition (20D)
 """
 
 import os
@@ -57,6 +62,1238 @@ def _esm2_per_residue_cache_dir() -> 'Path':
 def _seq_hash(seq: str) -> str:
     import hashlib
     return hashlib.sha256(seq.upper().strip().encode()).hexdigest()[:16]
+
+
+# =============================================================================
+# SHARED STRUCTURAL COORDINATE CACHE
+# =============================================================================
+
+def _struct_cache_dir():
+    """Return cache directory for protein structure coordinates."""
+    from pathlib import Path
+    seagate = Path('/Volumes/seagate/kirby/protein_structures')
+    if seagate.parent.parent.exists():
+        seagate.mkdir(parents=True, exist_ok=True)
+        return seagate
+    cache_dir = Path(os.environ.get('KIRBY_CACHE_DIR',
+                     str(Path.home() / '.cache' / 'kirby'))) / 'protein_structures'
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+def _get_ca_positions(
+    sequence: str,
+    uniprot_id: Optional[str] = None,
+    device: str = 'cpu',
+    source: str = 'auto',
+    _esmfold_model=None,
+    _esmfold_tokenizer=None,
+) -> tuple:
+    """Get Cα positions and pLDDT for a protein from cache or prediction.
+
+    Args:
+        sequence: Amino acid sequence.
+        uniprot_id: Optional UniProt ID for AlphaFold DB lookup.
+        device: Device for ESMFold prediction.
+        source: 'auto' (try cache→AF→ESMFold), 'esmfold', 'alphafold'.
+        _esmfold_model: Pre-loaded ESMFold model (to avoid reloading).
+        _esmfold_tokenizer: Pre-loaded ESMFold tokenizer.
+
+    Returns:
+        (ca_positions: np.ndarray (N, 3), plddt: np.ndarray (N,)) or (None, None).
+    """
+    seq = sequence.upper().strip()
+    sh = _seq_hash(seq)
+    cache_dir = _struct_cache_dir()
+
+    # Check cache first
+    ca_file = cache_dir / f'{sh}_ca.npy'
+    plddt_file = cache_dir / f'{sh}_plddt.npy'
+    if ca_file.exists() and plddt_file.exists():
+        return np.load(ca_file), np.load(plddt_file)
+
+    ca_positions = None
+    plddt = None
+
+    # Try AlphaFold DB if UniProt ID available
+    if source in ('auto', 'alphafold') and uniprot_id is not None:
+        try:
+            import requests
+            from pathlib import Path
+            af_cache = Path(os.environ.get('KIRBY_CACHE_DIR',
+                           str(Path.home() / '.cache' / 'kirby'))) / 'alphafold_db'
+            af_cache.mkdir(parents=True, exist_ok=True)
+            pdb_path = af_cache / f'AF-{uniprot_id}-F1-model_v4.pdb'
+            if not pdb_path.exists():
+                url = f'https://alphafold.ebi.ac.uk/files/AF-{uniprot_id}-F1-model_v4.pdb'
+                resp = requests.get(url, timeout=30)
+                if resp.status_code == 200:
+                    pdb_path.write_bytes(resp.content)
+            if pdb_path.exists():
+                from Bio.PDB import PDBParser
+                parser = PDBParser(QUIET=True)
+                structure = parser.get_structure('af', str(pdb_path))
+                model = structure[0]
+                ca_atoms, plddt_vals = [], []
+                for chain in model.get_chains():
+                    for residue in chain.get_residues():
+                        if residue.get_id()[0] != ' ':
+                            continue
+                        if 'CA' in residue:
+                            ca_atoms.append(residue['CA'].get_vector().get_array())
+                            plddt_vals.append(residue['CA'].get_bfactor())
+                if ca_atoms:
+                    ca_positions = np.array(ca_atoms, dtype=np.float32)
+                    plddt = np.array(plddt_vals, dtype=np.float32)
+        except Exception:
+            pass
+
+    # Try ESMFold prediction
+    if ca_positions is None and source in ('auto', 'esmfold'):
+        try:
+            import torch
+            if _esmfold_model is not None and _esmfold_tokenizer is not None:
+                model_fold = _esmfold_model
+                tokenizer_fold = _esmfold_tokenizer
+            else:
+                from transformers import EsmForProteinFolding, AutoTokenizer
+                tokenizer_fold = AutoTokenizer.from_pretrained("facebook/esmfold_v1")
+                model_fold = EsmForProteinFolding.from_pretrained(
+                    "facebook/esmfold_v1", torch_dtype=torch.float32,
+                ).to(device).float().eval()
+
+            seq_trunc = seq[:512]
+            with torch.no_grad(), torch.amp.autocast(device_type='cuda', enabled=False):
+                inputs = tokenizer_fold([seq_trunc], return_tensors="pt",
+                                        add_special_tokens=False).to(device)
+                output = model_fold(**inputs)
+                plddt_raw = output.plddt[0, :len(seq_trunc)].cpu().numpy().flatten()
+                if plddt_raw.max() <= 1.0:
+                    plddt_raw *= 100.0
+                positions = output.positions[0, :len(seq_trunc), 1, :].cpu().numpy()
+                ca_positions = positions.astype(np.float32)
+                plddt = plddt_raw.astype(np.float32)
+        except Exception:
+            pass
+
+    # Cache results
+    if ca_positions is not None:
+        np.save(ca_file, ca_positions)
+        np.save(plddt_file, plddt)
+
+    return ca_positions, plddt
+
+
+def _get_ca_positions_batch(
+    sequences: List[str],
+    uniprot_ids: Optional[List[str]] = None,
+    device: str = 'cpu',
+    source: str = 'auto',
+) -> List[tuple]:
+    """Batch wrapper for _get_ca_positions. Loads ESMFold once for all sequences."""
+    n = len(sequences)
+    results = [None] * n
+    need_esmfold = []
+
+    # First pass: try cache and AlphaFold DB
+    for i, seq in enumerate(sequences):
+        uid = uniprot_ids[i] if uniprot_ids and i < len(uniprot_ids) else None
+        ca, pl = _get_ca_positions(seq, uniprot_id=uid, device=device,
+                                   source='alphafold' if source == 'auto' else source)
+        if ca is not None:
+            results[i] = (ca, pl)
+        else:
+            need_esmfold.append(i)
+
+    cached = n - len(need_esmfold)
+    if cached > 0:
+        print(f"    Structure cache: {cached}/{n} proteins cached")
+
+    # Second pass: ESMFold for remaining
+    if need_esmfold and source in ('auto', 'esmfold'):
+        try:
+            import torch
+            from transformers import EsmForProteinFolding, AutoTokenizer
+            print(f"    Loading ESMFold for {len(need_esmfold)} proteins...")
+            tokenizer_fold = AutoTokenizer.from_pretrained("facebook/esmfold_v1")
+            model_fold = EsmForProteinFolding.from_pretrained(
+                "facebook/esmfold_v1", torch_dtype=torch.float32,
+            ).to(device).float().eval()
+
+            for j, idx in enumerate(need_esmfold):
+                ca, pl = _get_ca_positions(
+                    sequences[idx], device=device, source='esmfold',
+                    _esmfold_model=model_fold, _esmfold_tokenizer=tokenizer_fold,
+                )
+                results[idx] = (ca, pl) if ca is not None else (None, None)
+                if (j + 1) % 20 == 0:
+                    print(f"    ESMFold progress: {j + 1}/{len(need_esmfold)}")
+
+            del model_fold
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception as e:
+            print(f"    WARNING: ESMFold failed: {e}")
+            for idx in need_esmfold:
+                if results[idx] is None:
+                    results[idx] = (None, None)
+
+    # Fill remaining None entries
+    for i in range(n):
+        if results[i] is None:
+            results[i] = (None, None)
+
+    return results
+
+
+def _build_contact_graph(ca_positions, cutoff=8.0, min_seq_sep=5):
+    """Build residue contact graph from Cα positions.
+
+    Args:
+        ca_positions: (N, 3) array of Cα coordinates.
+        cutoff: Distance cutoff in Angstroms.
+        min_seq_sep: Minimum sequence separation for contacts.
+
+    Returns:
+        networkx.Graph with residue nodes and contact edges.
+    """
+    import networkx as nx
+    from scipy.spatial.distance import pdist, squareform
+
+    n_res = len(ca_positions)
+    G = nx.Graph()
+    G.add_nodes_from(range(n_res))
+
+    if n_res < 2:
+        return G
+
+    dist_matrix = squareform(pdist(ca_positions))
+    seq_sep = np.abs(np.arange(n_res)[:, None] - np.arange(n_res)[None, :])
+    contacts = (dist_matrix < cutoff) & (seq_sep > min_seq_sep)
+
+    rows, cols = np.where(contacts)
+    for r, c in zip(rows, cols):
+        if r < c:
+            G.add_edge(r, c, weight=dist_matrix[r, c], seq_sep=abs(r - c))
+
+    return G
+
+
+# =============================================================================
+# PROTEIN CONTACT GRAPH FEATURES (~80D)
+# =============================================================================
+
+def _extract_graph_features(G, n_res, ca_positions):
+    """Extract graph-theoretic features from a residue contact graph.
+
+    Returns:
+        np.ndarray of shape (80,).
+    """
+    import networkx as nx
+    from scipy.stats import skew, kurtosis as scipy_kurtosis
+
+    features = np.zeros(80, dtype=np.float64)
+
+    if n_res < 10 or G.number_of_edges() == 0:
+        return features
+
+    degrees = np.array([d for _, d in G.degree()], dtype=np.float64)
+
+    # --- Degree distribution (10D) ---
+    features[0] = degrees.mean()
+    features[1] = degrees.std()
+    features[2] = degrees.max()
+    features[3] = degrees.min()
+    features[4] = np.median(degrees)
+    features[5] = float(skew(degrees)) if degrees.std() > 0 else 0.0
+    features[6] = float(scipy_kurtosis(degrees)) if degrees.std() > 0 else 0.0
+    threshold = degrees.mean() + 2 * degrees.std()
+    features[7] = (degrees > threshold).mean() if threshold > 0 else 0.0
+    # Degree distribution entropy
+    deg_counts = np.bincount(degrees.astype(int))
+    deg_probs = deg_counts[deg_counts > 0] / deg_counts.sum()
+    features[8] = -np.sum(deg_probs * np.log(deg_probs + 1e-12))
+    # Gini coefficient of degrees
+    sorted_deg = np.sort(degrees)
+    n_d = len(sorted_deg)
+    index = np.arange(1, n_d + 1)
+    features[9] = (2 * np.sum(index * sorted_deg) / (n_d * sorted_deg.sum() + 1e-12)) - (n_d + 1) / n_d
+
+    # --- Centrality (12D) ---
+    try:
+        betweenness = np.array(list(nx.betweenness_centrality(G).values()))
+        features[10] = betweenness.mean()
+        features[11] = betweenness.std()
+        features[12] = betweenness.max()
+    except Exception:
+        pass
+
+    try:
+        closeness = np.array(list(nx.closeness_centrality(G).values()))
+        features[13] = closeness.mean()
+        features[14] = closeness.std()
+        features[15] = closeness.max()
+    except Exception:
+        pass
+
+    try:
+        eigenvector = np.array(list(nx.eigenvector_centrality_numpy(G).values()))
+        features[16] = eigenvector.mean()
+        features[17] = eigenvector.std()
+        features[18] = eigenvector.max()
+    except Exception:
+        pass
+
+    try:
+        features[19] = nx.degree_assortativity_coefficient(G)
+    except Exception:
+        pass
+    try:
+        features[20] = nx.transitivity(G)
+    except Exception:
+        pass
+
+    # --- Clustering (6D) ---
+    try:
+        features[21] = nx.average_clustering(G)
+        local_clust = np.array(list(nx.clustering(G).values()))
+        features[22] = local_clust.mean()
+        features[23] = local_clust.std()
+    except Exception:
+        pass
+
+    try:
+        triangles = np.array(list(nx.triangles(G).values()))
+        features[24] = triangles.sum() / max(n_res ** 2, 1)  # normalized
+    except Exception:
+        pass
+    try:
+        features[25] = nx.graph_clique_number(G)
+    except Exception:
+        pass
+    try:
+        features[26] = sum(1 for _ in nx.find_cliques(G))
+    except Exception:
+        pass
+
+    # --- Community structure (6D) ---
+    try:
+        communities = list(nx.community.greedy_modularity_communities(G))
+        features[27] = len(communities)
+        features[28] = nx.community.modularity(G, communities)
+        sizes = [len(c) / n_res for c in communities]
+        features[29] = max(sizes) if sizes else 0.0
+        features[30] = min(sizes) if sizes else 0.0
+        features[31] = np.std(sizes) if sizes else 0.0
+        # Inter-community edge fraction
+        comm_map = {}
+        for ci, comm in enumerate(communities):
+            for node in comm:
+                comm_map[node] = ci
+        inter = sum(1 for u, v in G.edges() if comm_map.get(u) != comm_map.get(v))
+        features[32] = inter / max(G.number_of_edges(), 1)
+    except Exception:
+        pass
+
+    # --- Path/distance (10D) ---
+    # Use largest connected component for path-based features
+    if nx.is_connected(G):
+        Gc = G
+    else:
+        Gc = G.subgraph(max(nx.connected_components(G), key=len)).copy()
+
+    try:
+        features[33] = nx.average_shortest_path_length(Gc)
+    except Exception:
+        pass
+    try:
+        ecc = nx.eccentricity(Gc)
+        ecc_vals = np.array(list(ecc.values()))
+        features[34] = max(ecc_vals)  # diameter
+        features[35] = min(ecc_vals)  # radius
+        features[36] = (ecc_vals == max(ecc_vals)).sum()  # periphery size
+        features[37] = (ecc_vals == min(ecc_vals)).sum()  # center size
+        features[38] = ecc_vals.mean()
+        features[39] = ecc_vals.std()
+    except Exception:
+        pass
+    try:
+        features[40] = nx.global_efficiency(G)
+    except Exception:
+        pass
+    # Wiener index (normalized)
+    try:
+        if Gc.number_of_nodes() > 1:
+            features[41] = nx.wiener_index(Gc) / max(Gc.number_of_nodes() ** 2, 1)
+    except Exception:
+        pass
+    features[42] = nx.number_connected_components(G)
+
+    # --- Spectral (12D) ---
+    try:
+        L = nx.laplacian_matrix(G).toarray().astype(np.float64)
+        eigenvalues = np.sort(np.linalg.eigvalsh(L))
+        # Top-10 eigenvalues (largest)
+        top10 = eigenvalues[-10:] if len(eigenvalues) >= 10 else np.pad(
+            eigenvalues, (10 - len(eigenvalues), 0))
+        features[43:53] = top10
+        # Algebraic connectivity (2nd smallest eigenvalue)
+        features[53] = eigenvalues[1] if len(eigenvalues) > 1 else 0.0
+        # Spectral gap (difference between 2 largest)
+        if len(eigenvalues) >= 2:
+            features[54] = eigenvalues[-1] - eigenvalues[-2]
+    except Exception:
+        pass
+
+    # --- Contact-specific (10D) ---
+    edges = list(G.edges(data=True))
+    if edges:
+        seq_seps = np.array([abs(u - v) for u, v, _ in edges])
+        long_mask = seq_seps > 12
+        short_mask = seq_seps <= 6
+
+        features[55] = long_mask.mean()  # long-range fraction
+        features[56] = short_mask.mean()  # short-range fraction
+
+        dists = np.array([d.get('weight', 0.0) for _, _, d in edges])
+        features[57] = dists[long_mask].mean() if long_mask.any() else 0.0
+        features[58] = dists[short_mask].mean() if short_mask.any() else 0.0
+
+        # Contact order
+        features[59] = seq_seps.mean() / max(n_res, 1)
+
+    # Fraction high-degree residues
+    features[60] = (degrees > threshold).mean()
+    # Surface residues (degree <= 2)
+    features[61] = (degrees <= 2).mean()
+    # Core residues (degree > mean + sigma)
+    core_threshold = degrees.mean() + degrees.std()
+    features[62] = (degrees > core_threshold).mean()
+
+    # Contact density by protein thirds
+    third = n_res // 3
+    if third > 0:
+        n_term_contacts = sum(1 for u, v in G.edges() if u < third or v < third)
+        mid_contacts = sum(1 for u, v in G.edges()
+                          if (third <= u < 2 * third) or (third <= v < 2 * third))
+        c_term_contacts = sum(1 for u, v in G.edges() if u >= 2 * third or v >= 2 * third)
+        total = max(n_term_contacts + mid_contacts + c_term_contacts, 1)
+        features[63] = n_term_contacts / total
+        features[64] = mid_contacts / total
+        features[65] = c_term_contacts / total
+
+    # Pad remaining to 80
+    # features[66:80] reserved for future use
+
+    return features
+
+
+def create_contact_graph_features(
+    sequences: List[str],
+    uniprot_ids: Optional[List[str]] = None,
+    device: str = 'cpu',
+    source: str = 'auto',
+) -> np.ndarray:
+    """Extract residue contact graph features for protein sequences (~80D).
+
+    Builds a residue contact graph (8Å Cα cutoff, |i-j|>5 sequence separation)
+    and computes graph-theoretic features: degree distribution, centrality,
+    clustering, community structure, path/distance, spectral, contact-specific.
+
+    Args:
+        sequences: List of protein amino acid sequences.
+        uniprot_ids: Optional UniProt IDs for AlphaFold DB structure lookup.
+        device: Device for ESMFold fallback.
+        source: 'auto', 'esmfold', or 'alphafold'.
+
+    Returns:
+        np.ndarray: (n_sequences, 80) feature matrix.
+    """
+    n = len(sequences)
+    print(f"  Computing contact graph features for {n} proteins...")
+
+    # Get structures (batch — loads ESMFold once if needed)
+    struct_results = _get_ca_positions_batch(sequences, uniprot_ids, device, source)
+
+    features = np.zeros((n, 80), dtype=np.float64)
+    success = 0
+
+    for i, (ca, plddt) in enumerate(struct_results):
+        if ca is None or len(ca) < 10:
+            continue
+        try:
+            G = _build_contact_graph(ca)
+            features[i] = _extract_graph_features(G, len(ca), ca)
+            success += 1
+        except Exception as e:
+            print(f"    WARNING: Contact graph failed for seq {i}: {e}")
+
+        if (i + 1) % 50 == 0:
+            print(f"    Progress: {i + 1}/{n}")
+
+    print(f"  Generated contact graph features: ({n}, 80), {success}/{n} successful")
+    return features.astype(np.float32)
+
+
+# =============================================================================
+# PROTEIN USR SHAPE FEATURES (~60D)
+# =============================================================================
+
+def _compute_usr_features(ca_positions, sequence):
+    """Compute Ultrafast Shape Recognition + extended shape descriptors.
+
+    Args:
+        ca_positions: (N, 3) Cα coordinates.
+        sequence: Amino acid sequence (for property-based reference points).
+
+    Returns:
+        np.ndarray of shape (60,).
+    """
+    from scipy.stats import skew as scipy_skew
+    from scipy.stats import kurtosis as scipy_kurt
+
+    features = np.zeros(60, dtype=np.float64)
+    n = len(ca_positions)
+
+    if n < 4:
+        return features
+
+    # --- Basic USR (12D): 4 reference points ---
+    centroid = ca_positions.mean(axis=0)
+    dists_to_centroid = np.linalg.norm(ca_positions - centroid, axis=1)
+
+    closest_idx = np.argmin(dists_to_centroid)
+    farthest_idx = np.argmax(dists_to_centroid)
+    dists_to_farthest = np.linalg.norm(ca_positions - ca_positions[farthest_idx], axis=1)
+    farthest2_idx = np.argmax(dists_to_farthest)
+
+    ref_points = [
+        centroid,
+        ca_positions[closest_idx],
+        ca_positions[farthest_idx],
+        ca_positions[farthest2_idx],
+    ]
+
+    for j, ref in enumerate(ref_points):
+        dists = np.linalg.norm(ca_positions - ref, axis=1)
+        features[j * 3] = dists.mean()
+        features[j * 3 + 1] = dists.var()
+        features[j * 3 + 2] = float(scipy_skew(dists)) if dists.std() > 0 else 0.0
+
+    # --- Extended reference points (12D) ---
+    hydrophobic = set('IVLFCMAW')
+    charged = set('DEKRH')
+    seq_upper = sequence.upper().strip()
+
+    hydro_idx = [i for i, aa in enumerate(seq_upper[:n]) if aa in hydrophobic]
+    charged_idx = [i for i, aa in enumerate(seq_upper[:n]) if aa in charged]
+    quarter = max(n // 4, 1)
+    nterm_idx = list(range(quarter))
+    cterm_idx = list(range(n - quarter, n))
+
+    ext_groups = [hydro_idx, charged_idx, nterm_idx, cterm_idx]
+    for j, idx_group in enumerate(ext_groups):
+        if idx_group:
+            ref = ca_positions[idx_group].mean(axis=0)
+        else:
+            ref = centroid
+        dists = np.linalg.norm(ca_positions - ref, axis=1)
+        base = 12 + j * 3
+        features[base] = dists.mean()
+        features[base + 1] = dists.var()
+        features[base + 2] = float(scipy_skew(dists)) if dists.std() > 0 else 0.0
+
+    # --- Higher moments (16D): kurtosis + median for all 8 refs ---
+    all_refs = ref_points + [
+        ca_positions[hydro_idx].mean(axis=0) if hydro_idx else centroid,
+        ca_positions[charged_idx].mean(axis=0) if charged_idx else centroid,
+        ca_positions[nterm_idx].mean(axis=0),
+        ca_positions[cterm_idx].mean(axis=0),
+    ]
+    for j, ref in enumerate(all_refs):
+        dists = np.linalg.norm(ca_positions - ref, axis=1)
+        features[24 + j] = float(scipy_kurt(dists)) if dists.std() > 0 else 0.0
+        features[32 + j] = np.median(dists)
+
+    # --- Inertia/shape (8D) ---
+    centered = ca_positions - centroid
+    gyration_tensor = (centered.T @ centered) / n
+    eigvals = np.sort(np.linalg.eigvalsh(gyration_tensor))[::-1]
+    l1, l2, l3 = eigvals[0], eigvals[1], eigvals[2]
+
+    features[40] = l1 - 0.5 * (l2 + l3)  # asphericity
+    features[41] = l2 - l3  # acylindricity
+    rg2 = l1 + l2 + l3
+    features[42] = (features[40] ** 2 + 0.75 * features[41] ** 2) / max(rg2 ** 2, 1e-12)  # rel shape anisotropy
+    features[43] = (l1 - l2) / max(l1 + l2, 1e-12)  # prolateness approx
+    features[44] = l2 / max(l1, 1e-12)  # axis ratio 2/1
+    features[45] = l3 / max(l1, 1e-12)  # axis ratio 3/1
+    features[46] = l3 / max(l2, 1e-12)  # axis ratio 3/2
+    features[47] = 1.0 - 3.0 * ((l1 * l2 + l2 * l3 + l1 * l3) / max(rg2 ** 2, 1e-12))  # anisotropy
+
+    # --- Size (12D) ---
+    features[48] = np.sqrt(rg2)  # radius of gyration
+    all_dists = np.linalg.norm(ca_positions[:, None] - ca_positions[None, :], axis=2)
+    features[49] = all_dists.max()  # max Cα distance
+
+    try:
+        from scipy.spatial import ConvexHull
+        hull = ConvexHull(ca_positions)
+        features[50] = hull.area  # convex hull SA
+        features[51] = hull.volume  # convex hull volume
+        features[52] = hull.volume / max(hull.area, 1e-12)  # compactness
+        features[53] = (np.pi ** (1 / 3) * (6 * hull.volume) ** (2 / 3)) / max(hull.area, 1e-12)  # sphericity
+        features[54] = len(hull.vertices) / max(n, 1)  # hull vertex fraction
+    except Exception:
+        pass
+
+    features[55] = all_dists.max()  # max diameter (same as [49])
+
+    # PCA axis extents (Feret diameters)
+    from numpy.linalg import svd
+    _, _, Vt = svd(centered, full_matrices=False)
+    projected = centered @ Vt.T
+    for j in range(min(3, projected.shape[1])):
+        features[56 + j] = projected[:, j].max() - projected[:, j].min()
+
+    # End-to-end distance
+    features[59] = np.linalg.norm(ca_positions[0] - ca_positions[-1])
+
+    return features
+
+
+def create_usr_shape_features(
+    sequences: List[str],
+    uniprot_ids: Optional[List[str]] = None,
+    device: str = 'cpu',
+    source: str = 'auto',
+) -> np.ndarray:
+    """Extract Ultrafast Shape Recognition (USR) + shape features (~60D).
+
+    Rotation/translation invariant 3D shape descriptors from Cα coordinates.
+
+    Args:
+        sequences: List of protein amino acid sequences.
+        uniprot_ids: Optional UniProt IDs for AlphaFold DB structure lookup.
+        device: Device for ESMFold fallback.
+        source: 'auto', 'esmfold', or 'alphafold'.
+
+    Returns:
+        np.ndarray: (n_sequences, 60) feature matrix.
+    """
+    n = len(sequences)
+    print(f"  Computing USR shape features for {n} proteins...")
+
+    struct_results = _get_ca_positions_batch(sequences, uniprot_ids, device, source)
+
+    features = np.zeros((n, 60), dtype=np.float64)
+    success = 0
+
+    for i, (ca, plddt) in enumerate(struct_results):
+        if ca is None or len(ca) < 4:
+            continue
+        try:
+            features[i] = _compute_usr_features(ca, sequences[i])
+            success += 1
+        except Exception as e:
+            print(f"    WARNING: USR failed for seq {i}: {e}")
+
+        if (i + 1) % 50 == 0:
+            print(f"    Progress: {i + 1}/{n}")
+
+    print(f"  Generated USR shape features: ({n}, 60), {success}/{n} successful")
+    return features.astype(np.float32)
+
+
+# =============================================================================
+# PROTEIN POCKET FEATURES (~55D) + POCKET ESM-2 EMBEDDING (1280D)
+# =============================================================================
+
+def _get_klifs_pocket_residues(uniprot_ids: List[Optional[str]]) -> dict:
+    """Query KLIFS database for kinase binding pocket residue positions.
+
+    Returns:
+        Dict mapping UniProt ID -> List[int] of pocket residue indices.
+    """
+    import json
+    from pathlib import Path
+
+    # Cache
+    seagate = Path('/Volumes/seagate/kirby/klifs')
+    if seagate.parent.exists():
+        cache_dir = seagate
+    else:
+        cache_dir = Path(os.environ.get('KIRBY_CACHE_DIR',
+                         str(Path.home() / '.cache' / 'kirby'))) / 'klifs'
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = cache_dir / 'pocket_map.json'
+
+    pocket_map = {}
+    if cache_file.exists():
+        try:
+            pocket_map = json.loads(cache_file.read_text())
+        except Exception:
+            pass
+
+    # Find which UniProt IDs we need to look up
+    to_lookup = set()
+    for uid in uniprot_ids:
+        if uid is not None and uid not in pocket_map:
+            to_lookup.add(uid)
+
+    if to_lookup:
+        import requests
+        print(f"    Querying KLIFS for {len(to_lookup)} kinases...")
+        for uid in sorted(to_lookup):
+            try:
+                # KLIFS API: get structures for a UniProt ID
+                resp = requests.get(
+                    f'https://klifs.net/api/structures_list?uniprot={uid}',
+                    timeout=15,
+                )
+                if resp.status_code == 200:
+                    structures = resp.json()
+                    if structures and len(structures) > 0:
+                        # Use first structure's pocket residues
+                        struct_id = structures[0].get('structure_ID')
+                        if struct_id:
+                            resp2 = requests.get(
+                                f'https://klifs.net/api/structure_get_pocket?structure_ID={struct_id}',
+                                timeout=15,
+                            )
+                            if resp2.status_code == 200:
+                                pocket_data = resp2.json()
+                                if pocket_data:
+                                    # Extract residue numbers
+                                    residues = [
+                                        r.get('residue_number') for r in pocket_data
+                                        if r.get('residue_number') is not None
+                                    ]
+                                    if residues:
+                                        pocket_map[uid] = residues
+                                        continue
+                pocket_map[uid] = None  # Not a kinase or not in KLIFS
+            except Exception:
+                pocket_map[uid] = None
+
+        # Save cache
+        cache_file.write_text(json.dumps(pocket_map, indent=2))
+
+    return pocket_map
+
+
+def _run_fpocket(pdb_path: str) -> tuple:
+    """Run fpocket on a PDB file to detect binding pockets.
+
+    Returns:
+        (pocket_residue_indices: List[int], pocket_info: dict) or (None, {}).
+    """
+    import subprocess
+    import json
+    from pathlib import Path
+
+    pdb_path = Path(pdb_path)
+    if not pdb_path.exists():
+        return None, {}
+
+    # Check fpocket cache
+    seagate = Path('/Volumes/seagate/kirby/fpocket_cache')
+    if seagate.parent.exists():
+        fp_cache_dir = seagate
+    else:
+        fp_cache_dir = Path(os.environ.get('KIRBY_CACHE_DIR',
+                           str(Path.home() / '.cache' / 'kirby'))) / 'fpocket_cache'
+    fp_cache_dir.mkdir(parents=True, exist_ok=True)
+
+    cache_key = pdb_path.stem
+    cache_file = fp_cache_dir / f'{cache_key}.json'
+    if cache_file.exists():
+        try:
+            data = json.loads(cache_file.read_text())
+            return data.get('residues'), data.get('info', {})
+        except Exception:
+            pass
+
+    try:
+        result = subprocess.run(
+            ['fpocket', '-f', str(pdb_path)],
+            capture_output=True, text=True, timeout=60,
+        )
+        if result.returncode != 0:
+            return None, {}
+
+        # Parse fpocket output — look for pocket 1 (highest druggability)
+        out_dir = pdb_path.parent / f'{pdb_path.stem}_out'
+        pocket_pdb = out_dir / 'pockets' / 'pocket1_atm.pdb'
+        if not pocket_pdb.exists():
+            return None, {}
+
+        residues = set()
+        with open(pocket_pdb) as f:
+            for line in f:
+                if line.startswith(('ATOM', 'HETATM')):
+                    try:
+                        res_num = int(line[22:26].strip())
+                        residues.add(res_num)
+                    except ValueError:
+                        pass
+
+        pocket_residues = sorted(residues)
+        info = {'n_pockets': len(list((out_dir / 'pockets').glob('pocket*_atm.pdb')))}
+
+        # Cache
+        cache_file.write_text(json.dumps({'residues': pocket_residues, 'info': info}))
+
+        return pocket_residues, info
+
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None, {}
+
+
+def _get_pocket_residues(
+    sequence: str,
+    uniprot_id: Optional[str] = None,
+    ca_positions=None,
+    pdb_path: Optional[str] = None,
+    dataset_hint: Optional[str] = None,
+    klifs_cache: Optional[dict] = None,
+) -> tuple:
+    """Identify binding pocket residues using 3-tier fallback.
+
+    Returns:
+        (pocket_indices: List[int], detection_method: int)
+        detection_method: 0=KLIFS, 1=fpocket, 2=contact-count heuristic.
+    """
+    seq = sequence.upper().strip()
+    n_res = len(seq)
+
+    # Tier 1: KLIFS (kinase datasets)
+    if klifs_cache and uniprot_id and uniprot_id in klifs_cache:
+        residues = klifs_cache[uniprot_id]
+        if residues is not None:
+            # KLIFS residue numbers are 1-indexed; convert to 0-indexed
+            pocket = [r - 1 for r in residues if 0 < r <= n_res]
+            if pocket:
+                return pocket, 0
+
+    # Tier 2: fpocket
+    if pdb_path is not None:
+        residues, info = _run_fpocket(pdb_path)
+        if residues is not None and residues:
+            # fpocket residues are 1-indexed PDB numbering
+            pocket = [r - 1 for r in residues if 0 < r <= n_res]
+            if pocket:
+                return pocket, 1
+
+    # Tier 3: Contact-count heuristic (fallback)
+    if ca_positions is not None and len(ca_positions) >= 10:
+        G = _build_contact_graph(ca_positions)
+        degrees = np.array([d for _, d in G.degree()])
+        n_pocket = min(85, max(10, int(0.2 * n_res)))
+        top_indices = np.argsort(degrees)[-n_pocket:].tolist()
+        top_indices.sort()
+        return top_indices, 2
+
+    # Absolute fallback: use middle 20% of sequence
+    start = n_res // 4
+    end = start + max(10, n_res // 5)
+    return list(range(start, min(end, n_res))), 2
+
+
+def _extract_pocket_features(ca_positions, plddt, sequence, pocket_indices, detection_method):
+    """Extract hand-crafted pocket features.
+
+    Returns:
+        np.ndarray of shape (55,).
+    """
+    features = np.zeros(55, dtype=np.float64)
+    seq = sequence.upper().strip()
+    n_res = len(ca_positions)
+
+    if not pocket_indices or n_res < 10:
+        features[52] = detection_method
+        return features
+
+    # Ensure valid indices
+    pocket_indices = [i for i in pocket_indices if 0 <= i < n_res]
+    if not pocket_indices:
+        features[52] = detection_method
+        return features
+
+    pocket_ca = ca_positions[pocket_indices]
+    pocket_seq = ''.join(seq[i] for i in pocket_indices if i < len(seq))
+    n_pocket = len(pocket_indices)
+
+    # --- Composition (14D) ---
+    hydrophobic = set('IVLFCMAW')
+    charged_pos = set('KRH')
+    charged_neg = set('DE')
+    polar = set('STNQ')
+    aromatic = set('FYW')
+    small = set('GAST')
+    large = set('FYWKRH')
+
+    features[0] = sum(1 for aa in pocket_seq if aa in hydrophobic) / max(n_pocket, 1)
+    features[1] = sum(1 for aa in pocket_seq if aa in charged_pos) / max(n_pocket, 1)
+    features[2] = sum(1 for aa in pocket_seq if aa in charged_neg) / max(n_pocket, 1)
+    features[3] = sum(1 for aa in pocket_seq if aa in polar) / max(n_pocket, 1)
+    features[4] = sum(1 for aa in pocket_seq if aa in aromatic) / max(n_pocket, 1)
+    features[5] = sum(1 for aa in pocket_seq if aa in small) / max(n_pocket, 1)
+    features[6] = sum(1 for aa in pocket_seq if aa in large) / max(n_pocket, 1)
+    features[7] = sum(1 for aa in pocket_seq if aa == 'C') / max(n_pocket, 1)
+    features[8] = sum(1 for aa in pocket_seq if aa == 'P') / max(n_pocket, 1)
+    features[9] = sum(1 for aa in pocket_seq if aa == 'G') / max(n_pocket, 1)
+
+    # Mean/std hydrophobicity and volume of pocket residues
+    hydro_vals = [AA_PROPERTIES.get(aa, {}).get('hydrophobicity', 0.0) for aa in pocket_seq]
+    vol_vals = [AA_PROPERTIES.get(aa, {}).get('volume', 100.0) for aa in pocket_seq]
+    if hydro_vals:
+        features[10] = np.mean(hydro_vals)
+        features[11] = np.std(hydro_vals)
+    if vol_vals:
+        features[12] = np.mean(vol_vals)
+        features[13] = np.std(vol_vals)
+
+    # --- Geometry (16D) ---
+    features[14] = n_pocket / max(n_res, 1)  # pocket fraction
+
+    try:
+        from scipy.spatial import ConvexHull
+        if n_pocket >= 4:
+            hull = ConvexHull(pocket_ca)
+            features[15] = hull.volume  # pocket volume
+            features[16] = hull.area  # pocket SA
+            features[17] = hull.volume / max(hull.area, 1e-12)  # compactness
+    except Exception:
+        pass
+
+    pocket_centroid = pocket_ca.mean(axis=0)
+    protein_centroid = ca_positions.mean(axis=0)
+
+    # Depth: mean dist from pocket residues to protein surface estimate
+    # (simplified: mean dist from pocket centroid to all non-pocket residues)
+    non_pocket = np.array([i for i in range(n_res) if i not in set(pocket_indices)])
+    if len(non_pocket) > 0:
+        surface_dists = np.linalg.norm(ca_positions[non_pocket] - pocket_centroid, axis=1)
+        features[18] = surface_dists.mean()
+
+    # Openness: fraction of pocket residues with low contact count
+    G_full = _build_contact_graph(ca_positions)
+    pocket_degrees = np.array([G_full.degree(i) for i in pocket_indices])
+    features[19] = (pocket_degrees <= 2).mean()
+
+    # Elongation via PCA of pocket
+    if n_pocket >= 3:
+        centered = pocket_ca - pocket_centroid
+        cov = centered.T @ centered / n_pocket
+        eigvals = np.sort(np.linalg.eigvalsh(cov))[::-1]
+        features[20] = eigvals[1] / max(eigvals[0], 1e-12)
+        features[21] = eigvals[2] / max(eigvals[0], 1e-12)
+        features[22] = eigvals[2] / max(eigvals[1], 1e-12)
+
+    # Distance from pocket center to protein centroid
+    features[23] = np.linalg.norm(pocket_centroid - protein_centroid)
+
+    # Pocket Rg
+    features[24] = np.sqrt(((pocket_ca - pocket_centroid) ** 2).sum(axis=1).mean())
+
+    # Pocket span (max Ca distance within pocket)
+    if n_pocket >= 2:
+        pocket_dists = np.linalg.norm(pocket_ca[:, None] - pocket_ca[None, :], axis=2)
+        features[25] = pocket_dists.max()
+
+    # Pocket fraction of total protein
+    features[26] = n_pocket / max(n_res, 1)
+
+    # --- Pocket graph (12D) ---
+    pocket_set = set(pocket_indices)
+    pocket_subgraph = G_full.subgraph(pocket_indices)
+
+    if pocket_subgraph.number_of_edges() > 0:
+        sub_degrees = np.array([d for _, d in pocket_subgraph.degree()], dtype=float)
+        features[27] = sub_degrees.mean()
+        features[28] = sub_degrees.std()
+
+        import networkx as nx
+        features[29] = nx.average_clustering(pocket_subgraph)
+
+        # Boundary edges / pocket edges
+        boundary = sum(1 for u, v in G_full.edges()
+                       if (u in pocket_set) != (v in pocket_set))
+        features[30] = boundary / max(pocket_subgraph.number_of_edges(), 1)
+
+        # Hub fraction
+        hub_thresh = sub_degrees.mean() + sub_degrees.std()
+        features[31] = (sub_degrees > hub_thresh).mean() if hub_thresh > 0 else 0.0
+
+        features[32] = nx.density(pocket_subgraph)
+
+        try:
+            L = nx.laplacian_matrix(pocket_subgraph).toarray().astype(float)
+            eigvals_p = np.sort(np.linalg.eigvalsh(L))
+            features[33] = eigvals_p[1] if len(eigvals_p) > 1 else 0.0
+        except Exception:
+            pass
+
+        features[34] = nx.number_connected_components(pocket_subgraph)
+
+        if nx.is_connected(pocket_subgraph):
+            try:
+                features[35] = nx.diameter(pocket_subgraph)
+            except Exception:
+                pass
+
+        try:
+            betw = np.array(list(nx.betweenness_centrality(pocket_subgraph).values()))
+            features[36] = betw.mean()
+        except Exception:
+            pass
+
+        try:
+            close = np.array(list(nx.closeness_centrality(pocket_subgraph).values()))
+            features[37] = close.mean()
+        except Exception:
+            pass
+
+        # Interface edge count normalized
+        features[38] = boundary / max(n_res, 1)
+
+    # --- Location (8D) ---
+    third = n_res // 3
+    if third > 0:
+        features[39] = sum(1 for i in pocket_indices if i < third) / max(n_pocket, 1)
+        features[40] = sum(1 for i in pocket_indices if third <= i < 2 * third) / max(n_pocket, 1)
+        features[41] = sum(1 for i in pocket_indices if i >= 2 * third) / max(n_pocket, 1)
+
+    # Max gap between consecutive pocket residues
+    sorted_pocket = sorted(pocket_indices)
+    if len(sorted_pocket) > 1:
+        gaps = np.diff(sorted_pocket)
+        features[42] = gaps.max() / max(n_res, 1)
+
+    pos_normalized = np.array(sorted_pocket) / max(n_res, 1)
+    features[43] = pos_normalized.mean()
+    features[44] = pos_normalized.std()
+    features[45] = pos_normalized.min()
+    features[46] = pos_normalized.max()
+
+    # --- Metadata (3D) ---
+    features[47] = detection_method
+    if plddt is not None and len(plddt) > 0:
+        pocket_plddt = plddt[[i for i in pocket_indices if i < len(plddt)]]
+        if len(pocket_plddt) > 0:
+            features[48] = pocket_plddt.mean()
+    features[49] = 1  # number of pockets (simplified)
+
+    # features[50:55] reserved
+
+    return features
+
+
+def create_pocket_features(
+    sequences: List[str],
+    uniprot_ids: Optional[List[str]] = None,
+    protein_ids: Optional[List[str]] = None,
+    device: str = 'cpu',
+    source: str = 'auto',
+    dataset_hint: Optional[str] = None,
+) -> np.ndarray:
+    """Extract binding pocket features for protein sequences (~55D).
+
+    Uses 3-tier pocket detection: KLIFS (kinases) → fpocket → contact heuristic.
+
+    Args:
+        sequences: List of protein amino acid sequences.
+        uniprot_ids: Optional resolved UniProt IDs.
+        protein_ids: Optional raw protein identifiers (gene names).
+        device: Device for ESMFold fallback.
+        source: 'auto', 'esmfold', or 'alphafold'.
+        dataset_hint: Dataset name hint for pocket strategy (e.g. 'davis', 'kiba').
+
+    Returns:
+        np.ndarray: (n_sequences, 55) feature matrix.
+    """
+    n = len(sequences)
+    print(f"  Computing pocket features for {n} proteins...")
+
+    # Resolve UniProt IDs if not provided
+    if uniprot_ids is None and protein_ids is not None:
+        uniprot_ids = _resolve_uniprot_ids(protein_ids)
+
+    # Pre-fetch KLIFS pocket data for kinase datasets
+    klifs_cache = None
+    if dataset_hint in ('davis', 'kiba') or (uniprot_ids and any(u is not None for u in uniprot_ids)):
+        unique_uids = list(set(u for u in (uniprot_ids or []) if u is not None))
+        if unique_uids:
+            klifs_cache = _get_klifs_pocket_residues(unique_uids)
+
+    # Get structures
+    struct_results = _get_ca_positions_batch(sequences, uniprot_ids, device, source)
+
+    features = np.zeros((n, 55), dtype=np.float64)
+    success = 0
+
+    for i, (ca, plddt) in enumerate(struct_results):
+        if ca is None:
+            continue
+        try:
+            uid = uniprot_ids[i] if uniprot_ids and i < len(uniprot_ids) else None
+            pocket_indices, method = _get_pocket_residues(
+                sequences[i], uniprot_id=uid, ca_positions=ca,
+                dataset_hint=dataset_hint, klifs_cache=klifs_cache,
+            )
+            features[i] = _extract_pocket_features(ca, plddt, sequences[i], pocket_indices, method)
+            success += 1
+        except Exception as e:
+            print(f"    WARNING: Pocket features failed for seq {i}: {e}")
+
+        if (i + 1) % 50 == 0:
+            print(f"    Progress: {i + 1}/{n}")
+
+    print(f"  Generated pocket features: ({n}, 55), {success}/{n} successful")
+    return features.astype(np.float32)
+
+
+def create_esm2_pocket_embeddings(
+    sequences: List[str],
+    uniprot_ids: Optional[List[str]] = None,
+    protein_ids: Optional[List[str]] = None,
+    device: str = 'cpu',
+    dataset_hint: Optional[str] = None,
+) -> np.ndarray:
+    """Extract pocket-local ESM-2 embeddings (1280D).
+
+    Mean-pools ESM-2 per-residue embeddings only at pocket residue positions.
+    Requires create_esm2_protein_embeddings() to have been run first.
+
+    Falls back to full-sequence pooling if pocket detection fails or if
+    per-residue ESM-2 embeddings are not cached.
+
+    Args:
+        sequences: List of protein amino acid sequences.
+        uniprot_ids: Optional resolved UniProt IDs.
+        protein_ids: Optional raw protein identifiers.
+        device: Device for ESMFold fallback (structure for pocket detection).
+        dataset_hint: Dataset name hint for pocket strategy.
+
+    Returns:
+        np.ndarray: (n_sequences, 1280) embeddings.
+    """
+    n = len(sequences)
+    print(f"  Computing pocket-local ESM-2 embeddings for {n} proteins...")
+
+    # Resolve UniProt IDs if needed
+    if uniprot_ids is None and protein_ids is not None:
+        uniprot_ids = _resolve_uniprot_ids(protein_ids)
+
+    # Pre-fetch KLIFS
+    klifs_cache = None
+    if uniprot_ids:
+        unique_uids = list(set(u for u in uniprot_ids if u is not None))
+        if unique_uids:
+            klifs_cache = _get_klifs_pocket_residues(unique_uids)
+
+    # Get structures for pocket detection
+    struct_results = _get_ca_positions_batch(sequences, uniprot_ids, device, 'auto')
+
+    embeddings = np.zeros((n, 1280), dtype=np.float32)
+    pocket_pooled = 0
+    full_pooled = 0
+
+    for i, seq in enumerate(sequences):
+        # Load per-residue ESM-2
+        per_res = load_esm2_per_residue(seq)
+
+        if per_res is None:
+            # Fall back to mean embedding
+            cache_file = _esm2_per_residue_cache_dir() / f'{_seq_hash(seq)}_mean.npy'
+            if cache_file.exists():
+                embeddings[i] = np.load(cache_file)
+                full_pooled += 1
+            continue
+
+        # Get pocket residues
+        ca, plddt = struct_results[i]
+        uid = uniprot_ids[i] if uniprot_ids and i < len(uniprot_ids) else None
+
+        if ca is not None:
+            pocket_indices, _ = _get_pocket_residues(
+                seq, uniprot_id=uid, ca_positions=ca,
+                dataset_hint=dataset_hint, klifs_cache=klifs_cache,
+            )
+            # Filter to valid indices within per-residue array
+            valid_pocket = [j for j in pocket_indices if j < len(per_res)]
+            if valid_pocket:
+                embeddings[i] = per_res[valid_pocket].mean(axis=0)
+                pocket_pooled += 1
+                continue
+
+        # Fallback: full sequence pooling
+        embeddings[i] = per_res.mean(axis=0)
+        full_pooled += 1
+
+    print(f"  Generated pocket ESM-2 embeddings: ({n}, 1280), "
+          f"{pocket_pooled} pocket-pooled, {full_pooled} full-sequence")
+    return embeddings
+
+
+def create_pocket_composition_features(
+    sequences: List[str],
+    uniprot_ids: Optional[List[str]] = None,
+    protein_ids: Optional[List[str]] = None,
+    device: str = 'cpu',
+    dataset_hint: Optional[str] = None,
+) -> np.ndarray:
+    """Extract amino acid composition of binding pocket only (~20D).
+
+    Lightweight version of pocket features — no graph or geometry, just AA
+    composition at pocket residue positions.
+
+    Returns:
+        np.ndarray: (n_sequences, 20) feature matrix (one per standard AA).
+    """
+    n = len(sequences)
+    print(f"  Computing pocket composition features for {n} proteins...")
+
+    if uniprot_ids is None and protein_ids is not None:
+        uniprot_ids = _resolve_uniprot_ids(protein_ids)
+
+    klifs_cache = None
+    if uniprot_ids:
+        unique_uids = list(set(u for u in uniprot_ids if u is not None))
+        if unique_uids:
+            klifs_cache = _get_klifs_pocket_residues(unique_uids)
+
+    struct_results = _get_ca_positions_batch(sequences, uniprot_ids, device, 'auto')
+
+    features = np.zeros((n, 20), dtype=np.float32)
+    aa_to_idx = {aa: j for j, aa in enumerate(STANDARD_AAS)}
+
+    for i, seq in enumerate(sequences):
+        ca, _ = struct_results[i]
+        uid = uniprot_ids[i] if uniprot_ids and i < len(uniprot_ids) else None
+        seq_upper = seq.upper().strip()
+
+        if ca is not None:
+            pocket_indices, _ = _get_pocket_residues(
+                seq, uniprot_id=uid, ca_positions=ca,
+                dataset_hint=dataset_hint, klifs_cache=klifs_cache,
+            )
+        else:
+            # Fallback: middle 20%
+            n_res = len(seq_upper)
+            start = n_res // 4
+            pocket_indices = list(range(start, min(start + max(10, n_res // 5), n_res)))
+
+        pocket_seq = ''.join(seq_upper[j] for j in pocket_indices if j < len(seq_upper))
+        if pocket_seq:
+            for aa in pocket_seq:
+                if aa in aa_to_idx:
+                    features[i, aa_to_idx[aa]] += 1
+            features[i] /= len(pocket_seq)
+
+    print(f"  Generated pocket composition features: ({n}, 20)")
+    return features
 
 
 def create_esm2_protein_embeddings(

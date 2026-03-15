@@ -115,6 +115,9 @@ setup(
             "lightgbm>=3.0.0",
             "catboost>=1.0.0",
             "mordred>=1.2.0",
+            "networkx>=2.6",  # Explicit for contact graph features (also transitive via PyG)
+            # fpocket: optional conda install for pocket detection
+            # conda install -c conda-forge fpocket
         ],
 
         # Uncertainty quantification

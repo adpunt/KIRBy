@@ -316,7 +316,7 @@ Davis: 30K pairs (68 drugs × 442 proteins). KIBA: 30K subsample (2111 drugs × 
 17 reps ran (20 missing from full preset of 37: clamp, rmat, map4, unimol_v2, mordred, avalon, esmc, amplify, esmfold, alphafold_db, minimol, gp_molformer, mole, mint, PCA variants, mordred_pca50, esm3, saprot, boltz2).
 **Metrics (implemented, not yet reported):** CI (primary), Spearman ρ, RMSE. Old table shows R² only. DTA baseline survey now ranks by CI (not R²).
 **Models:** Old results use mixed models; 9 models now available (ridge, rf, xgb, lgbm, gp, mlp, dnn, cnn, catboost).
-**Baseline survey:** 29 reps tested (16 drug + 13 protein) via `tests/dta_baseline_survey.py`.
+**Baseline survey:** 34 reps tested (16 drug + 18 protein) via `tests/dta_baseline_survey.py`.
 
 | Rep | Dim | Davis R² | KIBA R² |
 |-----|-----|----------|---------|
@@ -355,9 +355,10 @@ Davis: 30K pairs (68 drugs × 442 proteins). KIBA: 30K subsample (2111 drugs × 
 **Presets:**
 - `fast` (5): drug_ecfp4, drug_maccs, drug_pdv, protein_esm2, protein_aac
 - `fast+lm` (10): + drug_chemberta, drug_molformer, drug_clamp, protein_esmc, protein_descriptors
-- `full` (37): 24 drug reps (ecfp4, maccs, pdv, pdv_binary_mean, pdv_rank, map4, mol2vec, mordred, avalon, chemberta, molformer, selformer, clamp, rmat, unimol_v2, minimol, gp_molformer, mole, chemberta_pca50, molformer_pca50, selformer_pca50, clamp_pca50, rmat_pca50, mordred_pca50) + 13 protein reps (esm2, esmc, esm2_midlayers, amplify, esmfold, alphafold_db, aac, descriptors, kmer, mint, esm3, saprot, boltz2)
+- `full` (45): 25 drug reps (ecfp4, maccs, pdv, pdv_binary_mean, pdv_rank, map4, mol2vec, mordred, avalon, chemberta, molformer, selformer, clamp, rmat, unimol_v2, minimol, gp_molformer, mole, chemberta_pca50, molformer_pca50, selformer_pca50, clamp_pca50, rmat_pca50, mordred_pca50, sns) + 20 protein reps (esm2, esmc, esm2_midlayers, amplify, esmfold, alphafold_db, aac, descriptors, kmer, mint, esm3, saprot, boltz2, aido, xtrimopglm, contact_graph, usr_shape, pocket, esm2_pocket, pocket_composition)
 
 **Phase 4A/4B forward-compat (in 'full' preset):** drug_minimol, drug_gp_molformer, drug_mole, protein_mint, protein_esm3, protein_saprot, protein_boltz2.
+**Structural protein reps (new):** protein_contact_graph (~80D graph topology), protein_usr_shape (~60D 3D shape), protein_pocket (~55D binding pocket geometry), protein_esm2_pocket (1280D pocket-local ESM-2), protein_pocket_composition (20D pocket AA composition). All reuse ESMFold/AlphaFold coordinates via shared cache.
 
 ### 2E. Reaction Yield Representations
 
@@ -855,6 +856,12 @@ replaced with a simple baseline pipeline: LM embeddings → Ridge → Spearman �
 
 **Current approach:** 39 representations (33 ANTIBODY_REPS + 6 MUTATION_REPS: 11 LM full-seq + 8 CDR-pooled + 1 midlayer + 3 layer variants + 1 CDR3-only + 3 seq-encoding + 2 structural + 3 variation-pool + 1 forward-compat + 6 mutation-aware) evaluated per dataset with 9 models (ridge, rf, xgb, lgbm, gp, mlp, dnn, cnn, catboost).
 
+**Antibody classification datasets (new):**
+- `tz_her2_binary`: Trastuzumab-HER2 binding, binary classification (binder/non-binder). 524K→5K stratified subsample. ~33% binders. Groups by edit distance. Metrics: accuracy, F1-weighted, AUROC.
+- `tz_her2_multiclass`: Same data, 3-class (low/mid/high affinity). Metrics: accuracy, F1-weighted.
+- Source: Chinery et al. 2024. All variants share trastuzumab framework, only 10-residue CDRH3 varies. Full VH reconstructed by splicing into framework.
+- Initial results (5K, 5-fold, edit-distance groups): BLOSUM ridge 80.7% acc, RF 84.9% acc; onehot ridge 81.1%, RF 84.9%.
+
 **Key questions to answer with the new baselines:**
 1. Which LM (ESM-2, ESM-C, AbLang2, IgBert, AntiBERTy, ProtT5, AMPLIFY, ESM3, SaProt, ABRoBERTa, IgT5) works best per task type?
 2. Does one-hot match or beat LMs at ≥1K samples (as claimed in literature)?
@@ -863,6 +870,7 @@ replaced with a simple baseline pipeline: LM embeddings → Ridge → Spearman �
 5. Do mutation-aware reps (esm2_mutsite, esm2_wt_delta, esm2_llr, esmc_llr, antiberty_llr) rescue ΔΔG prediction (currently R²=-0.137)?
 6. Does finer-grained pooling (per-CDR, per-region, entropy-top20) improve DMS prediction over full-sequence mean-pool?
 7. Do ESM-2 layer variants (layer24, early, concat-chain) or CDR3-only provide signal beyond standard mean-pool?
+8. Can hybrid reps improve binder classification on Trastuzumab-HER2 beyond individual rep baselines (~85% acc)?
 
 ---
 

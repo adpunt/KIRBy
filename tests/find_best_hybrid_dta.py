@@ -80,7 +80,9 @@ REP_PRESETS = {
         'protein_esm3', 'protein_saprot', 'protein_boltz2',
         'protein_aido',
         'protein_xtrimopglm',
-    ],  # 40 reps (25 drug + 15 protein)
+        'protein_contact_graph', 'protein_usr_shape',
+        'protein_pocket', 'protein_esm2_pocket', 'protein_pocket_composition',
+    ],  # 45 reps (25 drug + 20 protein)
 }
 
 # Reps that require per-fold fitting (data-dependent transforms).
@@ -148,6 +150,12 @@ _REP_DISPATCH = {
     'protein_boltz2':  ('create_boltz2_protein_embeddings',     'protein', 'protein'),
     'protein_aido':    ('create_aido_protein_embeddings',       'protein', 'protein'),
     'protein_xtrimopglm': ('create_xtrimopglm_protein_embeddings', 'protein', 'protein'),
+    # Structural protein reps
+    'protein_contact_graph':     ('create_contact_graph_features',       'protein', 'protein'),
+    'protein_usr_shape':         ('create_usr_shape_features',           'protein', 'protein'),
+    'protein_pocket':            ('create_pocket_features',              'protein', 'protein'),
+    'protein_esm2_pocket':       ('create_esm2_pocket_embeddings',       'protein', 'protein'),
+    'protein_pocket_composition': ('create_pocket_composition_features', 'protein', 'protein'),
 }
 
 
@@ -277,7 +285,13 @@ def get_representations(
                 rep = unique_rep[pair_indices]
             elif rep_type == 'protein':
                 # Compute on unique proteins, then expand to all pairs
-                if rep_name == 'protein_alphafold_db' and unique_protein_ids is not None:
+                # Reps that benefit from UniProt IDs (structure lookup)
+                _needs_uniprot = {
+                    'protein_alphafold_db', 'protein_contact_graph',
+                    'protein_usr_shape', 'protein_pocket',
+                    'protein_esm2_pocket', 'protein_pocket_composition',
+                }
+                if rep_name in _needs_uniprot and unique_protein_ids is not None:
                     from kirby.representations.protein import _resolve_uniprot_ids
                     resolved_ids = _resolve_uniprot_ids(unique_protein_ids)
                     unique_rep = func(unique_proteins, uniprot_ids=resolved_ids)
