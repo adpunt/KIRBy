@@ -78,6 +78,60 @@ def assign_scaffold_groups(smiles_list: List[str]) -> Tuple[np.ndarray, int]:
     return groups, len(unique_scaffolds)
 
 
+def assign_mw_groups(smiles_list: List[str], n_groups: int = 5) -> Tuple[np.ndarray, int]:
+    """Assign molecular-weight percentile groups for GroupKFold.
+
+    Bins molecules into n_groups equal-count bins by ExactMolWt.
+    Invalid SMILES get group 0.
+    """
+    from rdkit import Chem
+    from rdkit.Chem import Descriptors
+
+    mws = []
+    for smi in smiles_list:
+        mol = Chem.MolFromSmiles(smi)
+        mws.append(Descriptors.ExactMolWt(mol) if mol is not None else 0.0)
+    mws = np.array(mws)
+
+    percentiles = np.linspace(0, 100, n_groups + 1)[1:-1]
+    bins = np.percentile(mws, percentiles)
+    groups = np.digitize(mws, bins)
+    return groups, int(len(np.unique(groups)))
+
+
+def assign_spectral_groups(smiles_list: List[str], n_groups: int = 5) -> Tuple[np.ndarray, int]:
+    """Assign spectral clustering groups based on Tanimoto similarity for GroupKFold.
+
+    Computes Morgan fingerprints, builds a pairwise Tanimoto similarity matrix,
+    then runs spectral clustering.
+    """
+    from rdkit import Chem
+    from rdkit.Chem import AllChem, DataStructs
+    from sklearn.cluster import SpectralClustering
+
+    fps = []
+    for smi in smiles_list:
+        mol = Chem.MolFromSmiles(smi)
+        if mol is not None:
+            fps.append(AllChem.GetMorganFingerprintAsBitVect(mol, 2, nBits=1024))
+        else:
+            fps.append(AllChem.GetMorganFingerprintAsBitVect(
+                Chem.MolFromSmiles('C'), 2, nBits=1024))
+
+    n = len(fps)
+    sim_matrix = np.zeros((n, n), dtype=np.float32)
+    for i in range(n):
+        sims = DataStructs.BulkTanimotoSimilarity(fps[i], fps)
+        sim_matrix[i] = sims
+
+    clustering = SpectralClustering(
+        n_clusters=n_groups, affinity='precomputed', random_state=42,
+        assign_labels='kmeans',
+    )
+    groups = clustering.fit_predict(sim_matrix)
+    return groups, int(len(np.unique(groups)))
+
+
 # =============================================================================
 # CONFIGURATION
 # =============================================================================

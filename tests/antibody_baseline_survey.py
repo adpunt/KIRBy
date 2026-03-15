@@ -29,8 +29,9 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 from sklearn.base import clone
 from scipy.stats import spearmanr, pearsonr
-from sklearn.metrics import mean_squared_error, r2_score
-from sklearn.model_selection import GroupKFold, KFold
+from sklearn.metrics import (mean_squared_error, r2_score,
+                             accuracy_score, f1_score, roc_auc_score)
+from sklearn.model_selection import GroupKFold, KFold, StratifiedGroupKFold
 from sklearn.preprocessing import StandardScaler
 
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
@@ -81,6 +82,26 @@ DATASET_REGISTRY = {
     'flab_pk_jain_fcrnrt':        ('flab', 'identity'),
     'flab_pk_jain_heprt':         ('flab', 'identity'),
     'flab_aggregation_jain_sas':  ('flab', 'identity'),
+    # Classification — Trastuzumab-HER2 binding
+    'tz_her2_binary':             ('trastuzumab', 'edit_distance'),
+    'tz_her2_multiclass':         ('trastuzumab_3class', 'edit_distance'),
+    # Classification — Humanness (human vs non-human VH)
+    'humanness_species':          ('humanness_species', 'identity'),
+    'humanness_therapeutic':      ('humanness_therapeutic', 'identity'),
+    # Ginkgo developability — 9 regression properties, pre-computed 5-fold splits
+    'ginkgo_hic':                 ('ginkgo', 'pre_split'),
+    'ginkgo_tm2':                 ('ginkgo', 'pre_split'),
+    'ginkgo_titer':               ('ginkgo', 'pre_split'),
+    'ginkgo_pr_cho':              ('ginkgo', 'pre_split'),
+    'ginkgo_acsins':              ('ginkgo', 'pre_split'),
+    'ginkgo_purity':              ('ginkgo', 'pre_split'),
+    'ginkgo_aggregation':         ('ginkgo', 'pre_split'),
+    'ginkgo_colloidal':           ('ginkgo', 'pre_split'),
+    'ginkgo_heparin':             ('ginkgo', 'pre_split'),
+    # Graphinity synthetic DDG — FoldX/Rosetta computed ΔΔG
+    'graphinity_foldx':           ('graphinity_foldx', 'complex'),
+    'graphinity_rosetta':         ('graphinity_rosetta', 'complex'),
+    'graphinity_augmented':       ('graphinity_augmented', 'complex'),
 }
 
 DOMAIN_GROUPS = {
@@ -99,10 +120,22 @@ DOMAIN_GROUPS = {
         'flab_polyreact_jain_bvp', 'flab_polyreact_jain_cic',
         'flab_pk_jain_fcrnrt', 'flab_pk_jain_heprt',
     ],
+    'all_clf': [
+        'tz_her2_binary', 'tz_her2_multiclass',
+        'humanness_species', 'humanness_therapeutic',
+    ],
+    'all_ginkgo': [
+        'ginkgo_hic', 'ginkgo_tm2', 'ginkgo_titer', 'ginkgo_pr_cho',
+        'ginkgo_acsins', 'ginkgo_purity', 'ginkgo_aggregation',
+        'ginkgo_colloidal', 'ginkgo_heparin',
+    ],
+    'all_ddg': [
+        'ddg_combined', 'ddg_combined_full',
+        'graphinity_foldx', 'graphinity_rosetta', 'graphinity_augmented',
+    ],
     # 'all' excludes ddg_combined_full by default (it's an experiment option,
     # not part of the standard survey). Use --include-all-skempi to add it.
     'all': [d for d in DATASET_REGISTRY.keys() if d != 'ddg_combined_full'],
-    'all_ddg': ['ddg_combined', 'ddg_combined_full'],
 }
 
 
@@ -146,12 +179,37 @@ def load_dataset(name: str) -> dict:
     elif source == 'abcov':
         from kirby.datasets.abcov import load_abcov_dataset
         data = load_abcov_dataset(name)
+    elif source == 'trastuzumab':
+        from kirby.datasets.trastuzumab import load_trastuzumab_dataset
+        data = load_trastuzumab_dataset(preset='binary')
+    elif source == 'trastuzumab_3class':
+        from kirby.datasets.trastuzumab import load_trastuzumab_dataset
+        data = load_trastuzumab_dataset(preset='multiclass')
+    elif source == 'humanness_species':
+        from kirby.datasets.humanness import load_humanness_dataset
+        data = load_humanness_dataset(preset='species')
+    elif source == 'humanness_therapeutic':
+        from kirby.datasets.humanness import load_humanness_dataset
+        data = load_humanness_dataset(preset='therapeutic')
+    elif source == 'ginkgo':
+        from kirby.datasets.ginkgo_dev import load_ginkgo_dataset
+        data = load_ginkgo_dataset(name)
+    elif source == 'graphinity_foldx':
+        from kirby.datasets.graphinity import load_graphinity_dataset
+        data = load_graphinity_dataset(preset='foldx')
+    elif source == 'graphinity_rosetta':
+        from kirby.datasets.graphinity import load_graphinity_dataset
+        data = load_graphinity_dataset(preset='rosetta')
+    elif source == 'graphinity_augmented':
+        from kirby.datasets.graphinity import load_ddg_augmented_dataset
+        data = load_ddg_augmented_dataset()
     else:
         raise ValueError(f"Unknown source: {source}")
 
     heavy_seqs = data['heavy_seqs']
     light_seqs = data['light_seqs']
     labels = data['labels']
+    task_type = data.get('task_type', 'regression')
 
     # Guard: if light_seqs is None (unpaired), use empty strings
     if light_seqs is None:
@@ -169,12 +227,32 @@ def load_dataset(name: str) -> dict:
         'n_groups': n_groups,
         'n_samples': len(labels),
         'mutations': data.get('mutations'),
+        'task_type': task_type,
+        'edit_distances': data.get('edit_distances'),
     }
 
 
 def _assign_groups(heavy_seqs, light_seqs, strategy, data):
     """Assign CV groups based on strategy."""
-    if strategy == 'complex':
+    if strategy == 'pre_split':
+        # Pre-computed fold assignments (e.g. Ginkgo hierarchical clustering)
+        folds = data.get('fold_assignments')
+        if folds is not None:
+            groups = np.asarray(folds, dtype=int)
+            return groups, len(np.unique(groups))
+        # Fallback if no fold assignments
+        print("    WARNING: pre_split strategy but no fold_assignments, "
+              "falling back to identity")
+        return _identity_groups(heavy_seqs)
+    elif strategy == 'edit_distance':
+        # Group by edit distance from wildtype (preserves distribution across folds)
+        ed = data.get('edit_distances')
+        if ed is not None:
+            groups = np.asarray(ed, dtype=int)
+            return groups, len(np.unique(groups))
+        # Fallback
+        return _identity_groups(heavy_seqs)
+    elif strategy == 'complex':
         from kirby.datasets.ddg_combined import assign_complex_groups
         pdb_ids = data.get('pdb_ids', [])
         return assign_complex_groups(pdb_ids)
@@ -296,7 +374,8 @@ def _assign_position_groups_contiguous(mutations, n_folds=5):
 # MODELS
 # =============================================================================
 
-def get_models(model_names: List[str], n_samples: int = None) -> Dict[str, object]:
+def get_models(model_names: List[str], n_samples: int = None,
+               task_type: str = 'regression') -> Dict[str, object]:
     """Return model instances by name, using centralized DEFAULT_MODELS.
 
     Forces n_jobs=1 for antibody datasets (small, no benefit from parallelism).
@@ -306,7 +385,7 @@ def get_models(model_names: List[str], n_samples: int = None) -> Dict[str, objec
     catalog = {}
     for name in model_names:
         try:
-            m = get_model(name, task_type='regression', n_samples=n_samples)
+            m = get_model(name, task_type=task_type, n_samples=n_samples)
         except ValueError:
             print(f"  WARNING: unknown model '{name}', skipping")
             continue
@@ -332,41 +411,65 @@ def _is_binary_rep(X):
     return len(uniq) <= 2 and set(uniq).issubset({0, 0.0, 1, 1.0})
 
 
+def _nan_clf_result():
+    return {'accuracy_mean': float('nan'), 'accuracy_std': float('nan'),
+            'f1_weighted_mean': float('nan'), 'f1_weighted_std': float('nan'),
+            'auroc_mean': float('nan'), 'auroc_std': float('nan'),
+            'per_fold': []}
+
+
+def _nan_reg_result():
+    return {'r2_mean': float('nan'), 'r2_std': float('nan'),
+            'spearman_mean': float('nan'), 'spearman_std': float('nan'),
+            'pearson_mean': float('nan'), 'pearson_std': float('nan'),
+            'rmse_mean': float('nan'), 'rmse_std': float('nan'),
+            'per_fold': []}
+
+
 def evaluate_rep(
     X: np.ndarray,
     labels: np.ndarray,
     groups: np.ndarray,
     model,
     n_folds: int = 5,
+    task_type: str = 'regression',
 ) -> Dict[str, float]:
     """Evaluate one (rep, model) pair via GroupKFold.
 
-    Returns dict with r2_mean, r2_std, per_fold.
+    Returns dict with metric means/stds and per_fold details.
+    For regression: r2, spearman, pearson, rmse.
+    For classification: accuracy, f1_weighted, auroc (binary only).
     """
+    is_clf = (task_type == 'classification')
     X = np.asarray(X, dtype=np.float64)
-    labels = np.asarray(labels, dtype=np.float64)
+    if is_clf:
+        labels = np.asarray(labels, dtype=np.int64)
+    else:
+        labels = np.asarray(labels, dtype=np.float64)
 
     n_unique = len(np.unique(groups))
     actual_folds = min(n_folds, n_unique)
 
     if actual_folds < 2:
-        return {'r2_mean': float('nan'), 'r2_std': float('nan'),
-                'spearman_mean': float('nan'), 'spearman_std': float('nan'),
-                'pearson_mean': float('nan'), 'pearson_std': float('nan'),
-                'rmse_mean': float('nan'), 'rmse_std': float('nan'),
-                'per_fold': []}
+        return _nan_clf_result() if is_clf else _nan_reg_result()
 
-    if n_unique >= actual_folds:
+    # Use StratifiedGroupKFold for classification to preserve class balance
+    if is_clf and n_unique >= actual_folds:
+        cv = StratifiedGroupKFold(n_splits=actual_folds, shuffle=True,
+                                  random_state=42)
+        splits = list(cv.split(X, labels, groups=groups))
+    elif n_unique >= actual_folds:
         cv = GroupKFold(n_splits=actual_folds)
         splits = list(cv.split(X, labels, groups=groups))
     else:
         cv = KFold(n_splits=actual_folds, shuffle=True, random_state=42)
         splits = list(cv.split(X, labels))
 
-    r2_scores = []
-    spearman_scores = []
-    pearson_scores = []
-    rmse_scores = []
+    # Metric accumulators
+    if is_clf:
+        acc_scores, f1_scores, auroc_scores = [], [], []
+    else:
+        r2_scores, spearman_scores, pearson_scores, rmse_scores = [], [], [], []
     fold_details = []
 
     # Only z-score continuous features; leave binary reps (onehot, blosum) raw
@@ -388,73 +491,112 @@ def evaluate_rep(
             m.fit(X_train, labels[train_idx])
             y_pred = m.predict(X_val)
 
-            r2 = r2_score(labels[val_idx], y_pred)
-            rho = float(spearmanr(labels[val_idx], y_pred)[0])
-            pr = float(pearsonr(labels[val_idx], y_pred)[0])
-            rmse_val = float(np.sqrt(mean_squared_error(labels[val_idx], y_pred)))
-            r2_scores.append(r2)
-            spearman_scores.append(rho)
-            pearson_scores.append(pr)
-            rmse_scores.append(rmse_val)
-            fold_details.append({
-                'fold': fold_i,
-                'r2': round(float(r2), 4),
-                'spearman': round(rho, 4),
-                'pearson': round(pr, 4),
-                'rmse': round(rmse_val, 4),
-                'n_train': len(train_idx),
-                'n_val': len(val_idx),
-            })
+            if is_clf:
+                acc = float(accuracy_score(labels[val_idx], y_pred))
+                f1 = float(f1_score(labels[val_idx], y_pred,
+                                    average='weighted', zero_division=0))
+                acc_scores.append(acc)
+                f1_scores.append(f1)
+                fold_info = {
+                    'fold': fold_i, 'accuracy': round(acc, 4),
+                    'f1_weighted': round(f1, 4),
+                    'n_train': len(train_idx), 'n_val': len(val_idx),
+                }
+                # AUROC for binary only, requires predict_proba
+                n_classes = len(np.unique(labels))
+                if n_classes == 2 and hasattr(m, 'predict_proba'):
+                    try:
+                        y_prob = m.predict_proba(X_val)[:, 1]
+                        auc = float(roc_auc_score(labels[val_idx], y_prob))
+                        auroc_scores.append(auc)
+                        fold_info['auroc'] = round(auc, 4)
+                    except (ValueError, IndexError):
+                        pass
+                fold_details.append(fold_info)
+            else:
+                r2 = r2_score(labels[val_idx], y_pred)
+                rho = float(spearmanr(labels[val_idx], y_pred)[0])
+                pr = float(pearsonr(labels[val_idx], y_pred)[0])
+                rmse_val = float(np.sqrt(mean_squared_error(
+                    labels[val_idx], y_pred)))
+                r2_scores.append(r2)
+                spearman_scores.append(rho)
+                pearson_scores.append(pr)
+                rmse_scores.append(rmse_val)
+                fold_details.append({
+                    'fold': fold_i,
+                    'r2': round(float(r2), 4),
+                    'spearman': round(rho, 4),
+                    'pearson': round(pr, 4),
+                    'rmse': round(rmse_val, 4),
+                    'n_train': len(train_idx),
+                    'n_val': len(val_idx),
+                })
         except Exception as e:
             fold_details.append({'fold': fold_i, 'error': str(e)})
 
-    if not r2_scores:
-        return {'r2_mean': float('nan'), 'r2_std': float('nan'),
-                'spearman_mean': float('nan'), 'spearman_std': float('nan'),
-                'pearson_mean': float('nan'), 'pearson_std': float('nan'),
-                'rmse_mean': float('nan'), 'rmse_std': float('nan'),
-                'per_fold': fold_details}
-
-    return {
-        'r2_mean': round(float(np.mean(r2_scores)), 4),
-        'r2_std': round(float(np.std(r2_scores)), 4),
-        'spearman_mean': round(float(np.mean(spearman_scores)), 4),
-        'spearman_std': round(float(np.std(spearman_scores)), 4),
-        'pearson_mean': round(float(np.mean(pearson_scores)), 4),
-        'pearson_std': round(float(np.std(pearson_scores)), 4),
-        'rmse_mean': round(float(np.mean(rmse_scores)), 4),
-        'rmse_std': round(float(np.std(rmse_scores)), 4),
-        'per_fold': fold_details,
-    }
+    if is_clf:
+        if not acc_scores:
+            return _nan_clf_result()
+        result = {
+            'accuracy_mean': round(float(np.mean(acc_scores)), 4),
+            'accuracy_std': round(float(np.std(acc_scores)), 4),
+            'f1_weighted_mean': round(float(np.mean(f1_scores)), 4),
+            'f1_weighted_std': round(float(np.std(f1_scores)), 4),
+            'per_fold': fold_details,
+        }
+        if auroc_scores:
+            result['auroc_mean'] = round(float(np.mean(auroc_scores)), 4)
+            result['auroc_std'] = round(float(np.std(auroc_scores)), 4)
+        else:
+            result['auroc_mean'] = float('nan')
+            result['auroc_std'] = float('nan')
+        return result
+    else:
+        if not r2_scores:
+            return _nan_reg_result()
+        return {
+            'r2_mean': round(float(np.mean(r2_scores)), 4),
+            'r2_std': round(float(np.std(r2_scores)), 4),
+            'spearman_mean': round(float(np.mean(spearman_scores)), 4),
+            'spearman_std': round(float(np.std(spearman_scores)), 4),
+            'pearson_mean': round(float(np.mean(pearson_scores)), 4),
+            'pearson_std': round(float(np.std(pearson_scores)), 4),
+            'rmse_mean': round(float(np.mean(rmse_scores)), 4),
+            'rmse_std': round(float(np.std(rmse_scores)), 4),
+            'per_fold': fold_details,
+        }
 
 
 # =============================================================================
 # SURVEY
 # =============================================================================
 
-def evaluate_ft_rep(factory, labels, groups, model, n_folds=5):
-    """Evaluate a fine-tuning factory via CV. Returns dict with r2_mean, r2_std."""
+def evaluate_ft_rep(factory, labels, groups, model, n_folds=5,
+                    task_type='regression'):
+    """Evaluate a fine-tuning factory via CV. Returns dict with metric means/stds."""
+    is_clf = (task_type == 'classification')
     n_unique = len(np.unique(groups))
     actual_folds = min(n_folds, n_unique)
 
     if actual_folds < 2:
-        return {'r2_mean': float('nan'), 'r2_std': float('nan'),
-                'spearman_mean': float('nan'), 'spearman_std': float('nan'),
-                'pearson_mean': float('nan'), 'pearson_std': float('nan'),
-                'rmse_mean': float('nan'), 'rmse_std': float('nan'),
-                'per_fold': []}
+        return _nan_clf_result() if is_clf else _nan_reg_result()
 
-    if n_unique >= actual_folds:
+    if is_clf and n_unique >= actual_folds:
+        cv = StratifiedGroupKFold(n_splits=actual_folds, shuffle=True,
+                                  random_state=42)
+        splits = list(cv.split(np.zeros(len(labels)), labels, groups=groups))
+    elif n_unique >= actual_folds:
         cv = GroupKFold(n_splits=actual_folds)
         splits = list(cv.split(np.zeros(len(labels)), labels, groups=groups))
     else:
         cv = KFold(n_splits=actual_folds, shuffle=True, random_state=42)
         splits = list(cv.split(np.zeros(len(labels)), labels))
 
-    r2_scores = []
-    spearman_scores = []
-    pearson_scores = []
-    rmse_scores = []
+    if is_clf:
+        acc_scores, f1_scores, auroc_scores = [], [], []
+    else:
+        r2_scores, spearman_scores, pearson_scores, rmse_scores = [], [], [], []
     fold_details = []
 
     for fold_i, (train_idx, val_idx) in enumerate(splits):
@@ -475,41 +617,78 @@ def evaluate_ft_rep(factory, labels, groups, model, n_folds=5):
             m = clone(model)
             m.fit(X_train, labels[train_idx])
             y_pred = m.predict(X_val)
-            r2 = r2_score(labels[val_idx], y_pred)
-            rho = float(spearmanr(labels[val_idx], y_pred)[0])
-            pr = float(pearsonr(labels[val_idx], y_pred)[0])
-            rmse_val = float(np.sqrt(mean_squared_error(labels[val_idx], y_pred)))
-            r2_scores.append(r2)
-            spearman_scores.append(rho)
-            pearson_scores.append(pr)
-            rmse_scores.append(rmse_val)
-            fold_details.append({
-                'fold': fold_i, 'r2': round(float(r2), 4),
-                'spearman': round(rho, 4), 'pearson': round(pr, 4),
-                'rmse': round(rmse_val, 4),
-                'n_train': len(train_idx), 'n_val': len(val_idx),
-            })
+
+            if is_clf:
+                acc = float(accuracy_score(labels[val_idx], y_pred))
+                f1 = float(f1_score(labels[val_idx], y_pred,
+                                    average='weighted', zero_division=0))
+                acc_scores.append(acc)
+                f1_scores.append(f1)
+                fold_info = {
+                    'fold': fold_i, 'accuracy': round(acc, 4),
+                    'f1_weighted': round(f1, 4),
+                    'n_train': len(train_idx), 'n_val': len(val_idx),
+                }
+                n_classes = len(np.unique(labels))
+                if n_classes == 2 and hasattr(m, 'predict_proba'):
+                    try:
+                        y_prob = m.predict_proba(X_val)[:, 1]
+                        auc = float(roc_auc_score(labels[val_idx], y_prob))
+                        auroc_scores.append(auc)
+                        fold_info['auroc'] = round(auc, 4)
+                    except (ValueError, IndexError):
+                        pass
+                fold_details.append(fold_info)
+            else:
+                r2 = r2_score(labels[val_idx], y_pred)
+                rho = float(spearmanr(labels[val_idx], y_pred)[0])
+                pr = float(pearsonr(labels[val_idx], y_pred)[0])
+                rmse_val = float(np.sqrt(mean_squared_error(
+                    labels[val_idx], y_pred)))
+                r2_scores.append(r2)
+                spearman_scores.append(rho)
+                pearson_scores.append(pr)
+                rmse_scores.append(rmse_val)
+                fold_details.append({
+                    'fold': fold_i, 'r2': round(float(r2), 4),
+                    'spearman': round(rho, 4), 'pearson': round(pr, 4),
+                    'rmse': round(rmse_val, 4),
+                    'n_train': len(train_idx), 'n_val': len(val_idx),
+                })
         except Exception as e:
             fold_details.append({'fold': fold_i, 'error': str(e)})
 
-    if not r2_scores:
-        return {'r2_mean': float('nan'), 'r2_std': float('nan'),
-                'spearman_mean': float('nan'), 'spearman_std': float('nan'),
-                'pearson_mean': float('nan'), 'pearson_std': float('nan'),
-                'rmse_mean': float('nan'), 'rmse_std': float('nan'),
-                'per_fold': fold_details}
-
-    return {
-        'r2_mean': round(float(np.mean(r2_scores)), 4),
-        'r2_std': round(float(np.std(r2_scores)), 4),
-        'spearman_mean': round(float(np.mean(spearman_scores)), 4),
-        'spearman_std': round(float(np.std(spearman_scores)), 4),
-        'pearson_mean': round(float(np.mean(pearson_scores)), 4),
-        'pearson_std': round(float(np.std(pearson_scores)), 4),
-        'rmse_mean': round(float(np.mean(rmse_scores)), 4),
-        'rmse_std': round(float(np.std(rmse_scores)), 4),
-        'per_fold': fold_details,
-    }
+    if is_clf:
+        if not acc_scores:
+            return _nan_clf_result()
+        result = {
+            'accuracy_mean': round(float(np.mean(acc_scores)), 4),
+            'accuracy_std': round(float(np.std(acc_scores)), 4),
+            'f1_weighted_mean': round(float(np.mean(f1_scores)), 4),
+            'f1_weighted_std': round(float(np.std(f1_scores)), 4),
+            'per_fold': fold_details,
+        }
+        if auroc_scores:
+            result['auroc_mean'] = round(float(np.mean(auroc_scores)), 4)
+            result['auroc_std'] = round(float(np.std(auroc_scores)), 4)
+        else:
+            result['auroc_mean'] = float('nan')
+            result['auroc_std'] = float('nan')
+        return result
+    else:
+        if not r2_scores:
+            return _nan_reg_result()
+        return {
+            'r2_mean': round(float(np.mean(r2_scores)), 4),
+            'r2_std': round(float(np.std(r2_scores)), 4),
+            'spearman_mean': round(float(np.mean(spearman_scores)), 4),
+            'spearman_std': round(float(np.std(spearman_scores)), 4),
+            'pearson_mean': round(float(np.mean(pearson_scores)), 4),
+            'pearson_std': round(float(np.std(pearson_scores)), 4),
+            'rmse_mean': round(float(np.mean(rmse_scores)), 4),
+            'rmse_std': round(float(np.std(rmse_scores)), 4),
+            'per_fold': fold_details,
+        }
 
 
 def run_survey(
@@ -532,8 +711,11 @@ def run_survey(
     light_seqs = data['light_seqs']
     labels = data['labels']
     groups = data['groups']
+    task_type = data.get('task_type', 'regression')
+    is_clf = (task_type == 'classification')
 
-    print(f"  {data['n_samples']} samples, {data['n_groups']} groups")
+    print(f"  {data['n_samples']} samples, {data['n_groups']} groups, "
+          f"task={task_type}")
 
     # 2. Generate representations (with .npy caching)
     # esm2_entropy_top20 needs per-fold fitting (entropy on train only)
@@ -609,7 +791,8 @@ def run_survey(
         raise RuntimeError("No representations generated successfully")
 
     # 3. Get models
-    models = get_models(model_names, n_samples=data['n_samples'])
+    models = get_models(model_names, n_samples=data['n_samples'],
+                        task_type=task_type)
     print(f"  Models: {list(models.keys())}")
 
     # 4. Evaluate each (rep, model) cell
@@ -627,11 +810,19 @@ def run_survey(
         try:
             entry = {'dimension': dim, 'scores': {}}
             for mname, model in models.items():
-                result = evaluate_rep(X, labels, groups, model, n_folds)
+                result = evaluate_rep(X, labels, groups, model, n_folds,
+                                      task_type=task_type)
                 entry['scores'][mname] = result
-                r2 = result['r2_mean']
-                rho = result['spearman_mean']
-                print(f" {mname}={r2:.3f}/\u03c1={rho:.3f}", end='', flush=True)
+                if is_clf:
+                    acc = result['accuracy_mean']
+                    f1 = result['f1_weighted_mean']
+                    print(f" {mname}=acc:{acc:.3f}/F1:{f1:.3f}",
+                          end='', flush=True)
+                else:
+                    r2 = result['r2_mean']
+                    rho = result['spearman_mean']
+                    print(f" {mname}={r2:.3f}/\u03c1={rho:.3f}",
+                          end='', flush=True)
 
             baselines[rep_name] = entry
             print()
@@ -656,11 +847,19 @@ def run_survey(
                 factory = factory_map[rep_name]()
                 entry = {'dimension': 2560, 'scores': {}}
                 for mname, model in models.items():
-                    result = evaluate_ft_rep(factory, labels, groups, model, n_folds)
+                    result = evaluate_ft_rep(factory, labels, groups, model,
+                                             n_folds, task_type=task_type)
                     entry['scores'][mname] = result
-                    r2 = result['r2_mean']
-                    rho = result['spearman_mean']
-                    print(f" {mname}={r2:.3f}/\u03c1={rho:.3f}", end='', flush=True)
+                    if is_clf:
+                        acc = result['accuracy_mean']
+                        f1 = result['f1_weighted_mean']
+                        print(f" {mname}=acc:{acc:.3f}/F1:{f1:.3f}",
+                              end='', flush=True)
+                    else:
+                        r2 = result['r2_mean']
+                        rho = result['spearman_mean']
+                        print(f" {mname}={r2:.3f}/\u03c1={rho:.3f}",
+                              end='', flush=True)
                 baselines[rep_name] = entry
                 print()
             except Exception as e:
@@ -681,11 +880,19 @@ def run_survey(
 
             entry = {'dimension': 1280, 'scores': {}}
             for mname, model in models.items():
-                result = evaluate_ft_rep(factory, labels, groups, model, n_folds)
+                result = evaluate_ft_rep(factory, labels, groups, model, n_folds,
+                                         task_type=task_type)
                 entry['scores'][mname] = result
-                r2 = result['r2_mean']
-                rho = result['spearman_mean']
-                print(f" {mname}={r2:.3f}/\u03c1={rho:.3f}", end='', flush=True)
+                if is_clf:
+                    acc = result['accuracy_mean']
+                    f1 = result['f1_weighted_mean']
+                    print(f" {mname}=acc:{acc:.3f}/F1:{f1:.3f}",
+                          end='', flush=True)
+                else:
+                    r2 = result['r2_mean']
+                    rho = result['spearman_mean']
+                    print(f" {mname}={r2:.3f}/\u03c1={rho:.3f}",
+                          end='', flush=True)
 
             ft_baselines[ft_name] = entry
             print()
@@ -695,12 +902,14 @@ def run_survey(
     # 6. Augmentation test: concat small reps with top base
     augmentations = {}
     if augment and baselines:
-        # Find top-scoring rep by best R² across models
+        # Find top-scoring rep — use accuracy for clf, R² for regression
+        primary_key = 'accuracy_mean' if is_clf else 'r2_mean'
         scored = []
         for name, e in baselines.items():
             for mname, s in e['scores'].items():
-                if not np.isnan(s['r2_mean']):
-                    scored.append((name, mname, s['r2_mean']))
+                val = s.get(primary_key, float('nan'))
+                if not np.isnan(val):
+                    scored.append((name, mname, val))
         if scored:
             top_rep, top_model_name, top_score = max(scored, key=lambda x: x[2])
             X_top = reps[top_rep]
@@ -711,13 +920,16 @@ def run_survey(
                           if v.shape[1] <= 200 and k != top_rep}
 
             if small_reps:
-                print(f"\n--- Augmentation test: {top_rep} (R²={top_score:.4f}) "
+                metric_label = 'Acc' if is_clf else 'R²'
+                print(f"\n--- Augmentation test: {top_rep} "
+                      f"({metric_label}={top_score:.4f}) "
                       f"+ {len(small_reps)} small reps ---")
 
                 for aug_name in sorted(small_reps.keys()):
                     X_aug = np.hstack([X_top, small_reps[aug_name]])
-                    result = evaluate_rep(X_aug, labels, groups, top_model, n_folds)
-                    mean_s = result['r2_mean']
+                    result = evaluate_rep(X_aug, labels, groups, top_model,
+                                          n_folds, task_type=task_type)
+                    mean_s = result[primary_key]
                     delta = mean_s - top_score
                     sign = '+' if delta >= 0 else ''
                     print(f"  {top_rep}+{aug_name} ({X_aug.shape[1]}d): "
@@ -742,6 +954,7 @@ def run_survey(
             'n_samples': data['n_samples'],
             'n_groups': data['n_groups'],
             'n_folds': n_folds,
+            'task_type': task_type,
             'reps': sorted(reps.keys()),
             'models': list(models.keys()),
             'elapsed_seconds': round(elapsed, 1),
@@ -779,16 +992,21 @@ def print_summary_table(result):
     meta = result['metadata']
     baselines = result['baselines']
     models = meta['models']
+    is_clf = meta.get('task_type') == 'classification'
 
     print(f"\n{'='*70}")
     print(f"SUMMARY: {meta['dataset']} ({meta['n_samples']} samples, "
-          f"{meta['n_groups']} groups, {meta['n_folds']}-fold)")
+          f"{meta['n_groups']} groups, {meta['n_folds']}-fold, "
+          f"task={meta.get('task_type', 'regression')})")
     print(f"{'='*70}")
 
     # Header
     header = f"{'Rep':<25} {'Dim':>5}"
     for m in models:
-        col_label = f"R\u00b2/\u03c1 ({m})"
+        if is_clf:
+            col_label = f"Acc/F1 ({m})"
+        else:
+            col_label = f"R\u00b2/\u03c1 ({m})"
         header += f" {col_label:>18}"
     print(header)
     print("-" * len(header))
@@ -798,9 +1016,14 @@ def print_summary_table(result):
         row = f"{rep_name:<25} {r['dimension']:>5}"
         for m in models:
             s = r['scores'].get(m, {})
-            r2 = s.get('r2_mean', float('nan'))
-            rho = s.get('spearman_mean', float('nan'))
-            row += f" {r2:>8.4f}/{rho:.4f}"
+            if is_clf:
+                acc = s.get('accuracy_mean', float('nan'))
+                f1 = s.get('f1_weighted_mean', float('nan'))
+                row += f" {acc:>8.4f}/{f1:.4f}"
+            else:
+                r2 = s.get('r2_mean', float('nan'))
+                rho = s.get('spearman_mean', float('nan'))
+                row += f" {r2:>8.4f}/{rho:.4f}"
         print(row)
 
     # Fine-tuned scores
@@ -815,9 +1038,14 @@ def print_summary_table(result):
             row = f"{ft_name:<25} {dim:>5}"
             for m in models:
                 s = r['scores'].get(m, {})
-                r2 = s.get('r2_mean', float('nan'))
-                rho = s.get('spearman_mean', float('nan'))
-                row += f" {r2:>8.4f}/{rho:.4f}"
+                if is_clf:
+                    acc = s.get('accuracy_mean', float('nan'))
+                    f1 = s.get('f1_weighted_mean', float('nan'))
+                    row += f" {acc:>8.4f}/{f1:.4f}"
+                else:
+                    r2 = s.get('r2_mean', float('nan'))
+                    rho = s.get('spearman_mean', float('nan'))
+                    row += f" {r2:>8.4f}/{rho:.4f}"
             print(row)
 
     print(f"\n  Time: {meta['elapsed_seconds']:.0f}s")
@@ -838,12 +1066,21 @@ Datasets:
   ddg_combined, abagym_all, abcov_kd,               (inter-family)
     flab_thermo_jain, flab_aggregation_jain
   ddg_combined_full                                 (experiment: full SKEMPI PP)
+  tz_her2_binary                                    (classification: binder/non-binder)
+  tz_her2_multiclass                                (classification: low/mid/high)
+  humanness_species                                 (classification: human vs non-human VH)
+  humanness_therapeutic                             (classification: human vs non-human therapeutics)
+  ginkgo_hic/tm2/titer/pr_cho/acsins               (Ginkgo developability, 5 core)
+  ginkgo_purity/aggregation/colloidal/heparin       (Ginkgo developability, 4 additional)
+  graphinity_foldx/rosetta/augmented                (Graphinity synthetic DDG)
 
 Shortcuts:
   all_dms       Run all 10 DMS datasets
   all_inter     Run all 14 inter-family datasets
+  all_clf       Run all classification datasets
+  all_ginkgo    Run all 9 Ginkgo developability properties
+  all_ddg       ddg_combined + ddg_combined_full + graphinity
   all           Run everything (excludes ddg_combined_full by default)
-  all_ddg       ddg_combined + ddg_combined_full (Ab-Ag vs full PP comparison)
 
 DDG experiment flags:
   --include-all-skempi    Add ddg_combined_full to any multi-dataset run.
@@ -852,8 +1089,9 @@ DDG experiment flags:
 Examples:
   %(prog)s flab_expression_koenig --skip-lm
   %(prog)s all_dms --models ridge,rf
-  %(prog)s ddg_combined --models ridge,lightgbm
-  %(prog)s all_ddg --models ridge,lightgbm --output tests/results/ddg_comparison/
+  %(prog)s all_ginkgo --models ridge,rf --skip-lm
+  %(prog)s humanness_species --models ridge,rf
+  %(prog)s graphinity_foldx --models ridge --skip-lm
   %(prog)s all --include-all-skempi --output tests/results/antibody_survey/
         """
     )
@@ -979,14 +1217,21 @@ Examples:
         print(f"{'='*70}")
         for ds, r in all_results.items():
             baselines = r.get('baselines', {})
+            ds_clf = r.get('metadata', {}).get('task_type') == 'classification'
             if baselines:
                 print(f"\n  {ds}:")
                 for rep_name in sorted(baselines.keys()):
                     scores = baselines[rep_name]['scores']
                     parts = []
                     for mname, s in scores.items():
-                        rho = s.get('spearman_mean', float('nan'))
-                        parts.append(f"{mname}={s['r2_mean']:.4f}/\u03c1={rho:.4f}")
+                        if ds_clf:
+                            acc = s.get('accuracy_mean', float('nan'))
+                            f1 = s.get('f1_weighted_mean', float('nan'))
+                            parts.append(f"{mname}=acc:{acc:.4f}/F1:{f1:.4f}")
+                        else:
+                            rho = s.get('spearman_mean', float('nan'))
+                            parts.append(
+                                f"{mname}={s['r2_mean']:.4f}/\u03c1={rho:.4f}")
                     print(f"    {rep_name:<20} {', '.join(parts)}")
             else:
                 print(f"  {ds:<30} FAILED")

@@ -21,7 +21,7 @@ Reference:
 import os
 import numpy as np
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 
 def _find_data_dir() -> Optional[Path]:
@@ -260,6 +260,21 @@ def load_dataset(name: str, data_dir: Optional[str] = None) -> Dict:
     print(f"  Label range: [{labels.min():.2f}, {labels.max():.2f}], "
           f"mean={labels.mean():.2f}")
 
+    # Build drug_ids from canonical SMILES (each unique SMILES = unique drug)
+    drug_ids = list(drug_smiles)  # copy — don't alias the returned drug_smiles list
+
+    # Build protein_ids: first PDB ID seen for each unique protein sequence
+    seq_to_id = {}
+    for seq, pid in zip(protein_seqs, pdb_ids):
+        if seq not in seq_to_id:
+            seq_to_id[seq] = pid
+    protein_ids = [seq_to_id[seq] for seq in protein_seqs]
+
+    n_drugs = len(set(drug_smiles))
+    n_proteins = len(set(protein_ids))
+
+    print(f"  Unique drugs: {n_drugs}, unique proteins: {n_proteins}")
+
     return {
         'drug_smiles': drug_smiles,
         'protein_seqs': protein_seqs,
@@ -267,7 +282,122 @@ def load_dataset(name: str, data_dir: Optional[str] = None) -> Dict:
         'task_type': 'regression',
         'metadata': {
             'pdb_ids': pdb_ids,
+            'drug_ids': drug_ids,
+            'protein_ids': protein_ids,
+            'n_drugs': n_drugs,
+            'n_proteins': n_proteins,
             'n_complexes': len(labels),
             'subset': subset,
         },
     }
+
+
+def _seq_identity(seq1: str, seq2: str, threshold: float = 0.3) -> float:
+    """Compute sequence identity as fraction of matching residues.
+
+    Uses simple pairwise alignment: count matches / max(len(seq1), len(seq2)).
+    No gap penalties — fast approximation suitable for clustering.
+    """
+    if seq1 == seq2:
+        return 1.0
+    # For very different lengths, identity can't exceed min_len/max_len
+    max_len = max(len(seq1), len(seq2))
+    min_len = min(len(seq1), len(seq2))
+    if min_len / max_len < threshold:
+        return 0.0
+    # Count matches at aligned positions (ungapped)
+    matches = sum(a == b for a, b in zip(seq1, seq2))
+    return matches / max_len
+
+
+def assign_lp_groups(protein_seqs: List[str],
+                     threshold: float = 0.3) -> Tuple[np.ndarray, int]:
+    """Assign LP-PDBBind leak-proof groups via protein sequence clustering.
+
+    Clusters proteins at the given sequence identity threshold using connected
+    components. Proteins within the same cluster share >threshold identity,
+    so they must be in the same CV fold to prevent information leakage.
+
+    Based on Volkov et al. (2022) J. Chem. Inf. Model. — LP-PDBBind uses 30%
+    protein sequence identity clustering for leak-proof evaluation.
+
+    Args:
+        protein_seqs: List of protein sequences (one per sample/pair).
+        threshold: Sequence identity threshold for clustering (default: 0.3).
+
+    Returns:
+        (group_ids, n_groups) compatible with GroupKFold.
+    """
+    # Get unique sequences
+    unique_seqs = sorted(set(protein_seqs))
+    n_unique = len(unique_seqs)
+
+    # Check for cached clustering
+    import hashlib
+    cache_key = hashlib.sha256(
+        (''.join(unique_seqs) + str(threshold)).encode()
+    ).hexdigest()[:16]
+
+    cache_dir = Path.home() / '.cache' / 'kirby' / 'lp_pdbbind'
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = cache_dir / f'lp_groups_{cache_key}.npz'
+
+    if cache_file.exists():
+        data = np.load(cache_file, allow_pickle=True)
+        seq_to_group = dict(zip(data['seqs'], data['groups']))
+        group_ids = np.array([seq_to_group[s] for s in protein_seqs])
+        n_groups = int(data['n_groups'])
+        print(f"  LP-PDBBind groups (cached): {n_groups} clusters "
+              f"from {n_unique} unique proteins at {threshold:.0%} identity")
+        return group_ids, n_groups
+
+    print(f"  Computing LP-PDBBind clustering ({n_unique} unique proteins, "
+          f"{threshold:.0%} identity threshold)...")
+
+    # Build adjacency list via pairwise identity
+    adj = {i: set() for i in range(n_unique)}
+    n_edges = 0
+    for i in range(n_unique):
+        for j in range(i + 1, n_unique):
+            ident = _seq_identity(unique_seqs[i], unique_seqs[j], threshold)
+            if ident >= threshold:
+                adj[i].add(j)
+                adj[j].add(i)
+                n_edges += 1
+
+    # Connected components via BFS
+    visited = set()
+    components = []
+    for start in range(n_unique):
+        if start in visited:
+            continue
+        component = []
+        queue = [start]
+        while queue:
+            node = queue.pop(0)
+            if node in visited:
+                continue
+            visited.add(node)
+            component.append(node)
+            queue.extend(adj[node] - visited)
+        components.append(component)
+
+    # Map unique seqs to group IDs
+    seq_to_group = {}
+    for gid, component in enumerate(components):
+        for idx in component:
+            seq_to_group[unique_seqs[idx]] = gid
+
+    n_groups = len(components)
+    print(f"  LP-PDBBind: {n_groups} clusters, {n_edges} edges "
+          f"(avg cluster size: {n_unique / n_groups:.1f})")
+
+    # Cache result
+    np.savez(cache_file,
+             seqs=np.array(unique_seqs, dtype=object),
+             groups=np.array([seq_to_group[s] for s in unique_seqs]),
+             n_groups=n_groups)
+
+    # Expand to per-sample groups
+    group_ids = np.array([seq_to_group[s] for s in protein_seqs])
+    return group_ids, n_groups
