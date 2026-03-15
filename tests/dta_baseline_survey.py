@@ -60,6 +60,8 @@ PROTEIN_REPS = [
     'protein_esm3', 'protein_saprot', 'protein_boltz2',  # Phase 4B
     'protein_aido',
     'protein_xtrimopglm',
+    'protein_contact_graph', 'protein_usr_shape',  # Structural
+    'protein_pocket', 'protein_esm2_pocket', 'protein_pocket_composition',
 ]
 
 # Default minimal partners for paired evaluation
@@ -189,6 +191,71 @@ def generate_rep(rep_name: str, unique_drugs, unique_proteins,
         dispatch['protein_aido'] = (prot.create_aido_protein_embeddings, 'protein')
     elif rep_name == 'protein_xtrimopglm':
         dispatch['protein_xtrimopglm'] = (prot.create_xtrimopglm_protein_embeddings, 'protein')
+    elif rep_name == 'protein_contact_graph':
+        if protein_ids is not None:
+            seq_to_pid = {}
+            for seq, pid in zip(protein_seqs, protein_ids):
+                if seq not in seq_to_pid:
+                    seq_to_pid[seq] = pid
+            unique_pids = [seq_to_pid.get(seq) for seq in unique_proteins]
+            uniprot_ids = prot._resolve_uniprot_ids(unique_pids)
+            dispatch['protein_contact_graph'] = (
+                lambda seqs: prot.create_contact_graph_features(seqs, uniprot_ids=uniprot_ids),
+                'protein')
+        else:
+            dispatch['protein_contact_graph'] = (prot.create_contact_graph_features, 'protein')
+    elif rep_name == 'protein_usr_shape':
+        if protein_ids is not None:
+            seq_to_pid = {}
+            for seq, pid in zip(protein_seqs, protein_ids):
+                if seq not in seq_to_pid:
+                    seq_to_pid[seq] = pid
+            unique_pids = [seq_to_pid.get(seq) for seq in unique_proteins]
+            uniprot_ids = prot._resolve_uniprot_ids(unique_pids)
+            dispatch['protein_usr_shape'] = (
+                lambda seqs: prot.create_usr_shape_features(seqs, uniprot_ids=uniprot_ids),
+                'protein')
+        else:
+            dispatch['protein_usr_shape'] = (prot.create_usr_shape_features, 'protein')
+    elif rep_name == 'protein_pocket':
+        if protein_ids is not None:
+            seq_to_pid = {}
+            for seq, pid in zip(protein_seqs, protein_ids):
+                if seq not in seq_to_pid:
+                    seq_to_pid[seq] = pid
+            unique_pids = [seq_to_pid.get(seq) for seq in unique_proteins]
+            uniprot_ids = prot._resolve_uniprot_ids(unique_pids)
+            dispatch['protein_pocket'] = (
+                lambda seqs: prot.create_pocket_features(seqs, uniprot_ids=uniprot_ids),
+                'protein')
+        else:
+            dispatch['protein_pocket'] = (prot.create_pocket_features, 'protein')
+    elif rep_name == 'protein_esm2_pocket':
+        if protein_ids is not None:
+            seq_to_pid = {}
+            for seq, pid in zip(protein_seqs, protein_ids):
+                if seq not in seq_to_pid:
+                    seq_to_pid[seq] = pid
+            unique_pids = [seq_to_pid.get(seq) for seq in unique_proteins]
+            uniprot_ids = prot._resolve_uniprot_ids(unique_pids)
+            dispatch['protein_esm2_pocket'] = (
+                lambda seqs: prot.create_esm2_pocket_embeddings(seqs, uniprot_ids=uniprot_ids),
+                'protein')
+        else:
+            dispatch['protein_esm2_pocket'] = (prot.create_esm2_pocket_embeddings, 'protein')
+    elif rep_name == 'protein_pocket_composition':
+        if protein_ids is not None:
+            seq_to_pid = {}
+            for seq, pid in zip(protein_seqs, protein_ids):
+                if seq not in seq_to_pid:
+                    seq_to_pid[seq] = pid
+            unique_pids = [seq_to_pid.get(seq) for seq in unique_proteins]
+            uniprot_ids = prot._resolve_uniprot_ids(unique_pids)
+            dispatch['protein_pocket_composition'] = (
+                lambda seqs: prot.create_pocket_composition_features(seqs, uniprot_ids=uniprot_ids),
+                'protein')
+        else:
+            dispatch['protein_pocket_composition'] = (prot.create_pocket_composition_features, 'protein')
 
     if rep_name not in dispatch:
         print(f"  WARNING: Unknown rep '{rep_name}', skipping")
@@ -437,7 +504,7 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
     drug_reps_to_run = [r for r in DRUG_REPS
                         if not (skip_lm and r in ('drug_chemberta', 'drug_molformer', 'drug_selformer', 'drug_clamp', 'drug_rmat', 'drug_unimol_v2', 'drug_minimol', 'drug_gp_molformer', 'drug_mole'))]
     protein_reps_to_run = [r for r in PROTEIN_REPS
-                           if not (skip_lm and r in ('protein_esm2', 'protein_esmc', 'protein_esm2_midlayers', 'protein_amplify', 'protein_mint', 'protein_esmfold', 'protein_alphafold_db', 'protein_esm3', 'protein_saprot', 'protein_boltz2', 'protein_aido', 'protein_xtrimopglm'))
+                           if not (skip_lm and r in ('protein_esm2', 'protein_esmc', 'protein_esm2_midlayers', 'protein_amplify', 'protein_mint', 'protein_esmfold', 'protein_alphafold_db', 'protein_esm3', 'protein_saprot', 'protein_boltz2', 'protein_aido', 'protein_xtrimopglm', 'protein_esm2_pocket'))
                            and not (skip_kmer and r == 'protein_kmer')]
     factory_drug_reps_to_run = list(FACTORY_DRUG_REPS)
 

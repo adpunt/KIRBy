@@ -114,6 +114,13 @@ pip install uce-model
 # Uses facebook/esmfold_v1 (~700M params, ~3GB download)
 pip install transformers torch
 
+# Structural protein reps (contact graph, USR shape, pocket features)
+# networkx: required for contact graph features (usually already installed via PyG)
+pip install networkx
+# fpocket: optional, for binding pocket detection on non-kinase proteins
+# conda install -c conda-forge fpocket
+# Without fpocket, pocket features fall back to KLIFS (kinases) or contact-count heuristic
+
 # DimeNet++ 3D molecular embeddings (optional, uses torch-geometric)
 # Already covered by torch-geometric install for SchNet
 ```
