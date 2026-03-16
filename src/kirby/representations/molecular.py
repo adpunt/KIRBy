@@ -745,6 +745,11 @@ def create_mol2vec(smiles_list, model_path=None, radius=1, unseen='UNK'):
     Returns:
         np.ndarray: Mol2vec embeddings (n_molecules, 300)
     """
+    # mol2vec uses pandas.io.formats.format.get_adjustment which was
+    # removed in pandas >= 2.0 — patch it before importing mol2vec
+    import pandas.io.formats.format as _fmt
+    if not hasattr(_fmt, 'get_adjustment'):
+        _fmt.get_adjustment = lambda: lambda x: x
     from mol2vec.features import mol2alt_sentence, MolSentence
     from gensim.models import word2vec
     import os
