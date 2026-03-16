@@ -466,7 +466,10 @@ def create_esmc_llr(
     from esm.sdk.api import ESMProtein
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    model = ESMC.from_pretrained("esmc_600m").to(device)
+    model = ESMC.from_pretrained("esmc_600m")
+    if device == 'cpu' or (device == 'cuda' and not torch.cuda.is_bf16_supported()):
+        model = model.float()
+    model = model.to(device)
     model.eval()
 
     # Build vocab mapping: single AA → token ID

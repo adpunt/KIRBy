@@ -1513,7 +1513,11 @@ def create_esmc_protein_embeddings(
         raise ImportError("ESM-C requires the esm package: pip install esm")
 
     print("  Loading ESM-C 600M for protein embeddings...")
-    model = ESMC.from_pretrained("esmc_600m").to(device)
+    model = ESMC.from_pretrained("esmc_600m")
+    # Cast to float32 if device doesn't support bfloat16
+    if device == 'cpu' or (device == 'cuda' and not torch.cuda.is_bf16_supported()):
+        model = model.float()
+    model = model.to(device)
     model.eval()
 
     config = LogitsConfig(sequence=True, return_embeddings=True)
@@ -2050,6 +2054,11 @@ def create_amplify_protein_embeddings(
     from transformers import AutoTokenizer, AutoModel
 
     print(f"  Loading AMPLIFY ({model_name.split('/')[-1]}) for protein embeddings...")
+    # AMPLIFY's code checks torch.backends.cuda.is_flash_attention_available()
+    # which doesn't exist in older PyTorch — patch it if missing
+    import torch.backends.cuda as _cuda_backend
+    if not hasattr(_cuda_backend, 'is_flash_attention_available'):
+        _cuda_backend.is_flash_attention_available = lambda: False
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     model = AutoModel.from_pretrained(model_name, trust_remote_code=True).to(device).eval()
 
@@ -2657,6 +2666,16 @@ def create_xtrimopglm_protein_embeddings(
 
     model_name = 'biomap-research/proteinglm-1b-mlm'
     print(f"  Loading xTrimoPGLM-1B ({model_name})...")
+
+    # xTrimoPGLM's remote code imports deepspeed optionally — mock it if missing
+    try:
+        import deepspeed  # noqa: F401
+    except ImportError:
+        import types
+        _mock_ds = types.ModuleType('deepspeed')
+        import sys
+        sys.modules['deepspeed'] = _mock_ds
+
     tokenizer = AutoTokenizer.from_pretrained(
         model_name, trust_remote_code=True
     )
