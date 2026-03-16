@@ -1,15 +1,6 @@
 #!/bin/bash
 # Phase 5A: Re-run ALL baseline surveys with corrected pipeline.
 #
-# This is the master script for Phase 5 of ISSUES.md. It runs every
-# baseline survey across all domains with the full Phase 0-4 changes:
-#   - Corrected preprocessing (SMILES standardization, InChIKey dedup, BOS/EOS)
-#   - Per-fold PCA/scaling (no data leakage)
-#   - Domain-appropriate primary metrics (RMSE molecular, CI DTA, AUROC/F1w TCGA)
-#   - 11 downstream models (ridge, rf, xgboost, lightgbm, knn, gp, mlp, dnn, cnn, catboost)
-#   - Position-modulo DMS splits, GroupKFold reaction splits
-#   - All Phase 3+4 representations included
-#
 # Usage (on login node):
 #   bash tests/slurm_scripts/submit_phase5_baselines.sh              # everything
 #   bash tests/slurm_scripts/submit_phase5_baselines.sh molecular    # one domain
@@ -28,24 +19,30 @@ EMAIL="adelaide.punt@stcatz.ox.ac.uk"
 WRAP_PREFIX="cd /data/stat-cadd/scat9264/KIRBy && git pull 2>/dev/null; . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
 STDERR_FILTER="2> >(grep -v -e 'DEPRECATION WARNING' -e 'threadpoolctl' -e 'ctypes callback' -e 'NoneType.*split' >&2)"
 
+# All antibody reps — one list
+ALL_AB_REPS="onehot,blosum,aac,paratope,esm2,esmc,ablang2,igbert,igbert_cls,antiberty,prot_t5,amplify,igt5,esm3,esm3_cdr,saprot,saprot_cdr,esm2_cdr,esmc_cdr,antiberty_cdr,prot_t5_cdr,amplify_cdr,esm2_midlayers,esm2_layer24,esm2_early,esm2_concat,esm2_cdr3,abroberta,abroberta_cdr,structural,mutation_features,esm2_mutsite,esm2_wt_delta,esm2_llr,esmc_llr,antiberty_llr,esm2_entropy_top20,esm2_per_cdr,esm2_per_region,mint,aido_protein,xtrimopglm"
+
 submit() {
     local name=$1
     local cmd=$2
-    local mem=${3:-64G}
-    local wall=${4:-23:59:00}
-    local gpu=${5:-}
-    local partition=${6:-long}
+    local mem=${3:-256G}
+    local gpu=${4:-gpu}
+
+    local gpu_flag=""
+    if [ "$gpu" = "gpu" ]; then
+        gpu_flag="--gres=gpu:1"
+    fi
 
     J=$(sbatch \
         --job-name="p5_${name}" \
         --nodes=1 --ntasks=1 --cpus-per-task=8 \
-        --time="${wall}" --partition="${partition}" \
+        --time=47:59:00 --partition=long \
         --mem="${mem}" \
+        ${gpu_flag} \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
-        ${gpu:+--gres=gpu:1} \
         --wrap="${WRAP_PREFIX} && ${cmd} ${STDERR_FILTER}" \
         | awk '{print $4}')
-    echo "  $J  ${name}  (mem=${mem}, time=${wall}${gpu:+, GPU})"
+    echo "  $J  ${name}  (mem=${mem}, 48h${gpu_flag:+, GPU})"
 }
 
 echo "============================================"
@@ -54,213 +51,98 @@ echo "============================================"
 echo "  Output: ${BASE_OUTPUT}/"
 echo ""
 
-# ---------------------------------------------------------------
-# MOLECULAR (8 datasets, ~35 reps, 10 models)
-# ---------------------------------------------------------------
 run_molecular() {
     local OUT="${BASE_OUTPUT}/molecular"
-    echo "--- Molecular (8 datasets) ---"
+    echo "--- Molecular (8 datasets, ~35 reps) ---"
     submit mol_baselines \
-        "mkdir -p ${OUT} && python tests/run_baseline_survey.py molecular --n-folds 5 --augment --output ${OUT}/" \
-        64G 23:59:00
+        "mkdir -p ${OUT} && python tests/run_baseline_survey.py molecular --n-folds 5 --augment --output ${OUT}/"
     echo ""
 }
 
-# ---------------------------------------------------------------
-# MOLECULAR with fine-tuning (ChemBERTa/MolFormer LoRA + SchNet E2E)
-# ---------------------------------------------------------------
 run_molecular_ft() {
     local OUT="${BASE_OUTPUT}/molecular_ft"
     echo "--- Molecular Fine-tuned (8 datasets, GPU) ---"
     submit mol_ft_baselines \
-        "mkdir -p ${OUT} && python tests/run_baseline_survey.py molecular --n-folds 5 --augment --finetune --output ${OUT}/" \
-        64G 23:59:00 gpu
+        "mkdir -p ${OUT} && python tests/run_baseline_survey.py molecular --n-folds 5 --augment --finetune --output ${OUT}/"
     echo ""
 }
 
-# ---------------------------------------------------------------
-# TCGA (3 datasets, 57 reps, 10 models)
-# ---------------------------------------------------------------
 run_tcga() {
     local OUT="${BASE_OUTPUT}/tcga"
     echo "--- TCGA (3 datasets, 57 reps) ---"
     submit tcga_baselines \
-        "mkdir -p ${OUT} && python tests/run_baseline_survey.py tcga --n-folds 5 --augment --output ${OUT}/" \
-        256G 23:59:00
+        "mkdir -p ${OUT} && python tests/run_baseline_survey.py tcga --n-folds 5 --augment --output ${OUT}/"
     echo ""
 }
 
-# ---------------------------------------------------------------
-# TCGA with fine-tuning (Geneformer/scFoundation)
-# ---------------------------------------------------------------
 run_tcga_ft() {
     local OUT="${BASE_OUTPUT}/tcga_ft"
     echo "--- TCGA Fine-tuned (3 datasets, GPU) ---"
     submit tcga_ft_baselines \
-        "mkdir -p ${OUT} && python tests/run_baseline_survey.py tcga --n-folds 5 --augment --finetune --output ${OUT}/" \
-        256G 23:59:00 gpu
+        "mkdir -p ${OUT} && python tests/run_baseline_survey.py tcga --n-folds 5 --augment --finetune --output ${OUT}/"
     echo ""
 }
 
-# ---------------------------------------------------------------
-# DTA baseline survey (individual rep scores with CI metric)
-# Uses dta_baseline_survey.py for per-rep CI/R²/Spearman
-# ---------------------------------------------------------------
 run_dta() {
     local OUT="${BASE_OUTPUT}/dta"
     echo "--- DTA Baselines (davis, kiba, bindingdb_kd) ---"
-    # Davis — all reps
     submit dta_davis \
-        "mkdir -p ${OUT} && python tests/dta_baseline_survey.py davis --n-folds 5 --output ${OUT}/davis.json" \
-        64G 47:59:00 gpu
-    # KIBA — subsampled to 30K
+        "mkdir -p ${OUT} && python tests/dta_baseline_survey.py davis --n-folds 5 --output ${OUT}/davis.json"
     submit dta_kiba \
-        "mkdir -p ${OUT} && python tests/dta_baseline_survey.py kiba --n-folds 5 --max-pairs 30000 --output ${OUT}/kiba.json" \
-        64G 47:59:00 gpu
-    # BindingDB_Kd
+        "mkdir -p ${OUT} && python tests/dta_baseline_survey.py kiba --n-folds 5 --max-pairs 30000 --output ${OUT}/kiba.json"
     submit dta_bindingdb \
-        "mkdir -p ${OUT} && python tests/dta_baseline_survey.py bindingdb_kd --n-folds 5 --max-pairs 30000 --output ${OUT}/bindingdb_kd.json" \
-        64G 47:59:00 gpu
+        "mkdir -p ${OUT} && python tests/dta_baseline_survey.py bindingdb_kd --n-folds 5 --max-pairs 30000 --output ${OUT}/bindingdb_kd.json"
     echo ""
 }
 
-# ---------------------------------------------------------------
-# DTA also via run_baseline_survey.py (uses 10 downstream models)
-# ---------------------------------------------------------------
 run_dta_universal() {
     local OUT="${BASE_OUTPUT}/dta_universal"
-    echo "--- DTA Universal Survey (davis, kiba, bindingdb_kd via run_baseline_survey.py) ---"
+    echo "--- DTA Universal Survey ---"
     submit dta_universal \
-        "mkdir -p ${OUT} && python tests/run_baseline_survey.py dta --n-folds 5 --augment --output ${OUT}/" \
-        96G 47:59:00 gpu
+        "mkdir -p ${OUT} && python tests/run_baseline_survey.py dta --n-folds 5 --augment --output ${OUT}/"
     echo ""
 }
 
-# ---------------------------------------------------------------
-# DTA cold-drug evaluation
-# ---------------------------------------------------------------
 run_dta_cold() {
     local OUT="${BASE_OUTPUT}/dta_cold"
     echo "--- DTA Cold-Drug (davis, kiba) ---"
     submit dta_davis_cold \
-        "mkdir -p ${OUT} && python tests/dta_baseline_survey.py davis --n-folds 5 --cold-setting drug --output ${OUT}/davis_cold_drug.json" \
-        64G 47:59:00 gpu
+        "mkdir -p ${OUT} && python tests/dta_baseline_survey.py davis --n-folds 5 --cold-setting drug --output ${OUT}/davis_cold_drug.json"
     submit dta_kiba_cold \
-        "mkdir -p ${OUT} && python tests/dta_baseline_survey.py kiba --n-folds 5 --max-pairs 30000 --cold-setting drug --output ${OUT}/kiba_cold_drug.json" \
-        64G 47:59:00 gpu
+        "mkdir -p ${OUT} && python tests/dta_baseline_survey.py kiba --n-folds 5 --max-pairs 30000 --cold-setting drug --output ${OUT}/kiba_cold_drug.json"
     echo ""
 }
 
-# ---------------------------------------------------------------
-# REACTION (3 datasets, 8 reps, 10 models)
-# ---------------------------------------------------------------
 run_reaction() {
     local OUT="${BASE_OUTPUT}/reaction"
-    echo "--- Reaction Yield (3 datasets, GroupKFold) ---"
+    echo "--- Reaction Yield (3 datasets) ---"
     submit rxn_baselines \
-        "mkdir -p ${OUT} && python tests/run_baseline_survey.py reaction --n-folds 5 --augment --output ${OUT}/" \
-        32G 06:00:00
+        "mkdir -p ${OUT} && python tests/run_baseline_survey.py reaction --n-folds 5 --augment --output ${OUT}/"
     echo ""
 }
 
-# ---------------------------------------------------------------
-# ANTIBODY (35 reps × 25 datasets, split into manageable jobs)
-# ---------------------------------------------------------------
 run_antibody() {
     local OUT="${BASE_OUTPUT}/antibody"
-    echo "--- Antibody (35 reps × 25 datasets) ---"
+    echo "--- Antibody (42 reps × dms + inter) ---"
 
-    # Fast reps (CPU): onehot, blosum, aac, paratope
-    submit ab_fast_dms \
-        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_dms --output ${OUT}/ --n-folds 5 --augment --reps onehot,blosum,aac,paratope" \
-        32G 12:00:00
-    submit ab_fast_inter \
-        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_inter --output ${OUT}/ --n-folds 5 --augment --reps onehot,blosum,aac,paratope" \
-        32G 12:00:00
+    submit ab_dms \
+        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_dms --output ${OUT}/ --n-folds 5 --augment --reps ${ALL_AB_REPS}"
+    submit ab_inter \
+        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_inter --output ${OUT}/ --n-folds 5 --augment --reps ${ALL_AB_REPS}"
 
-    # LM reps (GPU): 25 reps including Phase 4 additions
-    submit ab_lm_dms \
-        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_dms --output ${OUT}/ --n-folds 5 --augment --reps esm2,esmc,ablang2,igbert,igbert_cls,antiberty,prot_t5,amplify,igt5,esm3,esm3_cdr,saprot,saprot_cdr,esm2_cdr,esmc_cdr,antiberty_cdr,prot_t5_cdr,amplify_cdr,esm2_midlayers,esm2_layer24,esm2_early,esm2_concat,esm2_cdr3,abroberta,abroberta_cdr" \
-        96G 23:59:00 gpu
-    submit ab_lm_inter \
-        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_inter --output ${OUT}/ --n-folds 5 --augment --reps esm2,esmc,ablang2,igbert,igbert_cls,antiberty,prot_t5,amplify,igt5,esm3,esm3_cdr,saprot,saprot_cdr,esm2_cdr,esmc_cdr,antiberty_cdr,prot_t5_cdr,amplify_cdr,esm2_midlayers,esm2_layer24,esm2_early,esm2_concat,esm2_cdr3,abroberta,abroberta_cdr" \
-        96G 23:59:00 gpu
-
-    # AIDO.Protein + xTrimoPGLM (separate jobs: AIDO needs ~32GB VRAM → 256G mem)
-    submit ab_newlm_dms \
-        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_dms --output ${OUT}/ --n-folds 5 --augment --reps aido_protein,xtrimopglm" \
-        256G 23:59:00 gpu
-    submit ab_newlm_inter \
-        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_inter --output ${OUT}/ --n-folds 5 --augment --reps aido_protein,xtrimopglm" \
-        256G 23:59:00 gpu
-
-    # Structural reps (GPU)
-    submit ab_struct_dms \
-        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_dms --output ${OUT}/ --n-folds 5 --augment --reps structural" \
-        64G 23:59:00 gpu
-    submit ab_struct_inter \
-        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_inter --output ${OUT}/ --n-folds 5 --augment --reps structural" \
-        64G 23:59:00 gpu
-
-    # Mutation reps (GPU)
-    submit ab_mut_dms \
-        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_dms --output ${OUT}/ --n-folds 5 --augment --reps mutation_features,esm2_mutsite,esm2_wt_delta,esm2_llr,esmc_llr,antiberty_llr" \
-        96G 23:59:00 gpu
-    submit ab_mut_inter \
-        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_inter --output ${OUT}/ --n-folds 5 --augment --reps mutation_features,esm2_mutsite,esm2_wt_delta,esm2_llr,esmc_llr,antiberty_llr" \
-        96G 23:59:00 gpu
-
-    # Variation reps (GPU)
-    submit ab_var_dms \
-        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_dms --output ${OUT}/ --n-folds 5 --augment --reps esm2_entropy_top20,esm2_per_cdr,esm2_per_region" \
-        96G 23:59:00 gpu
-    submit ab_var_inter \
-        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_inter --output ${OUT}/ --n-folds 5 --augment --reps esm2_entropy_top20,esm2_per_cdr,esm2_per_region" \
-        96G 23:59:00 gpu
-
-    # MINT (antibody-specific Phase 4 rep, needs own job due to GPU+special weights)
-    submit ab_mint_dms \
-        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_dms --output ${OUT}/ --n-folds 5 --augment --reps mint" \
-        96G 23:59:00 gpu
-    submit ab_mint_inter \
-        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_inter --output ${OUT}/ --n-folds 5 --augment --reps mint" \
-        96G 23:59:00 gpu
-
-    echo ""
-    echo "  Total: 16 antibody jobs (4 fast CPU + 12 GPU)"
+    echo "  Total: 2 antibody jobs"
     echo ""
 }
 
-# ---------------------------------------------------------------
-# DISPATCH
-# ---------------------------------------------------------------
-
 case "$MODE" in
-    molecular)
-        run_molecular
-        ;;
-    molecular_ft)
-        run_molecular_ft
-        ;;
-    tcga)
-        run_tcga
-        ;;
-    tcga_ft)
-        run_tcga_ft
-        ;;
-    dta)
-        run_dta
-        run_dta_universal
-        ;;
-    dta_cold)
-        run_dta_cold
-        ;;
-    reaction)
-        run_reaction
-        ;;
-    antibody)
-        run_antibody
-        ;;
+    molecular)    run_molecular ;;
+    molecular_ft) run_molecular_ft ;;
+    tcga)         run_tcga ;;
+    tcga_ft)      run_tcga_ft ;;
+    dta)          run_dta; run_dta_universal ;;
+    dta_cold)     run_dta_cold ;;
+    reaction)     run_reaction ;;
+    antibody)     run_antibody ;;
     all)
         run_molecular
         run_tcga
@@ -269,12 +151,7 @@ case "$MODE" in
         run_reaction
         run_antibody
         echo "============================================"
-        echo "Total: ~27 jobs across all domains"
-        echo "  Molecular:  1 frozen (+ optional 1 FT GPU)"
-        echo "  TCGA:       1 frozen (+ optional 1 FT GPU)"
-        echo "  DTA:        3 baseline + 1 universal"
-        echo "  Reaction:   1"
-        echo "  Antibody:   16 (4 CPU + 12 GPU)"
+        echo "Total: 10 jobs"
         echo "============================================"
         ;;
     all_with_ft)
@@ -288,30 +165,23 @@ case "$MODE" in
         run_reaction
         run_antibody
         echo "============================================"
-        echo "Total: ~30 jobs (all domains + fine-tuning + cold-drug)"
+        echo "Total: 14 jobs (all domains + fine-tuning + cold-drug)"
         echo "============================================"
         ;;
     *)
-        echo "Phase 5A: Re-run ALL baseline surveys"
-        echo ""
         echo "Usage: bash submit_phase5_baselines.sh [MODE]"
         echo ""
         echo "Modes:"
-        echo "  all           All domains, frozen reps (~25 jobs)"
-        echo "  all_with_ft   All domains + fine-tuning + cold-drug (~30 jobs)"
-        echo "  molecular     8 datasets, ~35 reps, 10 models"
-        echo "  molecular_ft  + ChemBERTa/MolFormer LoRA + SchNet E2E (GPU)"
-        echo "  tcga          3 datasets, 57 reps, 10 models"
-        echo "  tcga_ft       + Geneformer/scFoundation FT (GPU)"
+        echo "  all           All domains, frozen reps (10 jobs)"
+        echo "  all_with_ft   All domains + fine-tuning + cold-drug (14 jobs)"
+        echo "  molecular     8 datasets, ~35 reps"
+        echo "  molecular_ft  + ChemBERTa/MolFormer LoRA + SchNet E2E"
+        echo "  tcga          3 datasets, 57 reps"
+        echo "  tcga_ft       + Geneformer/scFoundation FT"
         echo "  dta           davis/kiba/bindingdb baselines + universal"
         echo "  dta_cold      Cold-drug splits (davis, kiba)"
-        echo "  reaction      BH/Suzuki/BH-Doyle, GroupKFold, 8 reps"
-        echo "  antibody      35 reps × 25 datasets (14 jobs)"
-        echo ""
-        echo "Output: ${BASE_OUTPUT}/<domain>/<dataset>.json"
-        echo ""
-        echo "After baselines complete, run:"
-        echo "  bash tests/slurm_scripts/submit_phase5_hybrids.sh"
+        echo "  reaction      BH/Suzuki/BH-Doyle, 8 reps"
+        echo "  antibody      42 reps × dms + inter (2 jobs)"
         exit 1
         ;;
 esac
