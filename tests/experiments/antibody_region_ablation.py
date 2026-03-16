@@ -168,7 +168,10 @@ def _extract_token_embeddings_esmc(
         raise ImportError("ESM-C requires the esm package: pip install esm")
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = ESMC.from_pretrained("esmc_600m").to(device)
+    model = ESMC.from_pretrained("esmc_600m")
+    if device.type == 'cpu' or (device.type == 'cuda' and not torch.cuda.is_bf16_supported()):
+        model = model.float()
+    model = model.to(device)
     model.eval()
 
     config = LogitsConfig(sequence=True, return_embeddings=True)

@@ -3138,10 +3138,19 @@ def create_gp_molformer(smiles_list, batch_size=32, device=None):
 
     if _GP_MOLFORMER_MODEL is None:
         print("Loading GP-MoLFormer...")
-        _GP_MOLFORMER_TOKENIZER = AutoTokenizer.from_pretrained(
-            "ibm-research/GP-MoLFormer-Uniq",
-            trust_remote_code=True
-        )
+        # AutoTokenizer fails on GP-MoLFormer's custom MolformerConfig —
+        # fall back to BertTokenizer which is what MoLFormer actually uses
+        try:
+            _GP_MOLFORMER_TOKENIZER = AutoTokenizer.from_pretrained(
+                "ibm-research/GP-MoLFormer-Uniq",
+                trust_remote_code=True
+            )
+        except ValueError:
+            from transformers import BertTokenizer
+            _GP_MOLFORMER_TOKENIZER = BertTokenizer.from_pretrained(
+                "ibm-research/GP-MoLFormer-Uniq",
+                trust_remote_code=True
+            )
         _GP_MOLFORMER_MODEL = AutoModel.from_pretrained(
             "ibm-research/GP-MoLFormer-Uniq",
             trust_remote_code=True

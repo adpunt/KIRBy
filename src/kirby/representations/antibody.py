@@ -317,6 +317,12 @@ def _embed_single_chain_model(
     import torch
     from transformers import AutoTokenizer, AutoModel
 
+    # AMPLIFY checks torch.backends.cuda.is_flash_attention_available()
+    # which doesn't exist in older PyTorch
+    import torch.backends.cuda as _cuda_backend
+    if not hasattr(_cuda_backend, 'is_flash_attention_available'):
+        _cuda_backend.is_flash_attention_available = lambda: False
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     model = AutoModel.from_pretrained(model_name, trust_remote_code=True).eval().to(device)
@@ -517,7 +523,10 @@ def embed_esmc(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
     from esm.sdk.api import ESMProtein, LogitsConfig
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    model = ESMC.from_pretrained("esmc_600m").to(device)
+    model = ESMC.from_pretrained("esmc_600m")
+    if device == 'cpu' or (device == 'cuda' and not torch.cuda.is_bf16_supported()):
+        model = model.float()
+    model = model.to(device)
     model.eval()
 
     config = LogitsConfig(sequence=True, return_embeddings=True)
@@ -560,6 +569,11 @@ def _embed_single_chain_cdr(
     """
     import torch
     from transformers import AutoTokenizer, AutoModel
+
+    # AMPLIFY checks torch.backends.cuda.is_flash_attention_available()
+    import torch.backends.cuda as _cuda_backend
+    if not hasattr(_cuda_backend, 'is_flash_attention_available'):
+        _cuda_backend.is_flash_attention_available = lambda: False
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
@@ -665,7 +679,10 @@ def embed_esmc_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
     from esm.sdk.api import ESMProtein, LogitsConfig
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    model = ESMC.from_pretrained("esmc_600m").to(device)
+    model = ESMC.from_pretrained("esmc_600m")
+    if device == 'cpu' or (device == 'cuda' and not torch.cuda.is_bf16_supported()):
+        model = model.float()
+    model = model.to(device)
     model.eval()
 
     config = LogitsConfig(sequence=True, return_embeddings=True)
