@@ -2054,11 +2054,14 @@ def create_amplify_protein_embeddings(
     from transformers import AutoTokenizer, AutoModel
 
     print(f"  Loading AMPLIFY ({model_name.split('/')[-1]}) for protein embeddings...")
-    # AMPLIFY's code checks torch.backends.cuda.is_flash_attention_available()
-    # which doesn't exist in older PyTorch — patch it if missing
+    # AMPLIFY's remote code requires newer PyTorch flash attention APIs.
+    # Patch missing attributes so it loads on older PyTorch versions.
     import torch.backends.cuda as _cuda_backend
     if not hasattr(_cuda_backend, 'is_flash_attention_available'):
         _cuda_backend.is_flash_attention_available = lambda: False
+    import torch.utils.flop_counter as _flop_counter
+    if not hasattr(_flop_counter, '_unpack_flash_attention_nested_shapes'):
+        _flop_counter._unpack_flash_attention_nested_shapes = lambda *a, **kw: ()
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
     model = AutoModel.from_pretrained(model_name, trust_remote_code=True).to(device).eval()
 

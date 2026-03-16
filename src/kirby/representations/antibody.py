@@ -317,11 +317,13 @@ def _embed_single_chain_model(
     import torch
     from transformers import AutoTokenizer, AutoModel
 
-    # AMPLIFY checks torch.backends.cuda.is_flash_attention_available()
-    # which doesn't exist in older PyTorch
+    # AMPLIFY's remote code requires newer PyTorch flash attention APIs.
     import torch.backends.cuda as _cuda_backend
     if not hasattr(_cuda_backend, 'is_flash_attention_available'):
         _cuda_backend.is_flash_attention_available = lambda: False
+    import torch.utils.flop_counter as _flop_counter
+    if not hasattr(_flop_counter, '_unpack_flash_attention_nested_shapes'):
+        _flop_counter._unpack_flash_attention_nested_shapes = lambda *a, **kw: ()
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)

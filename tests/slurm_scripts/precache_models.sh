@@ -9,7 +9,6 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mail-user=adelaide.punt@stcatz.ox.ac.uk
 #SBATCH --mail-type=END,FAIL
-#SBATCH --output=slurm-precache-%j.out
 #
 # Pre-download all HuggingFace model weights so compute-node jobs
 # don't stall on network downloads.
