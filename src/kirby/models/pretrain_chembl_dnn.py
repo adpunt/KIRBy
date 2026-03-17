@@ -96,6 +96,12 @@ def pretrain_one_rep(
     elapsed_rep = time.time() - t0
     print(f"  Rep shape: {X.shape} ({elapsed_rep:.1f}s)")
 
+    # Z-normalize features (prevents NaN from large values in linear layers)
+    from sklearn.preprocessing import StandardScaler
+    feat_scaler = StandardScaler()
+    X = feat_scaler.fit_transform(X)
+    X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
+
     # Z-normalize targets
     y_mean = float(y.mean())
     y_std = float(y.std()) if y.std() > 1e-8 else 1.0

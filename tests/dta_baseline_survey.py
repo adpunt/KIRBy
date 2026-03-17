@@ -323,14 +323,23 @@ def evaluate_rep(X: np.ndarray, y: np.ndarray, groups: np.ndarray,
             scaler = StandardScaler()
             X_train = scaler.fit_transform(X[train_idx])
             X_test = scaler.transform(X[test_idx])
+            # Skip if all features are constant (e.g. all-zero reps)
+            if np.all(X_train == X_train[0]):
+                continue
             model = model_fn()
-            model.fit(X_train, y[train_idx])
+            try:
+                model.fit(X_train, y[train_idx])
+            except Exception as e:
+                print(f"    WARNING: {model_name} fit failed: {e}")
+                continue
             pred = model.predict(X_test)
             fold_scores.append(r2_score(y[test_idx], pred))
             fold_ci.append(_concordance_index(y[test_idx], pred))
             fold_spearman.append(float(spearmanr(y[test_idx], pred)[0]))
             fold_rmse.append(float(np.sqrt(mean_squared_error(y[test_idx], pred))))
 
+        if not fold_scores:
+            continue
         mean_r2 = np.mean(fold_scores)
         std_r2 = np.std(fold_scores)
         results[model_name] = {
