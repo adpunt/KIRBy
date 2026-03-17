@@ -397,7 +397,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("=" * 70)
 
     metric_name, metric_fn, lower_is_better = _get_primary_metric(data)
-    model_factory = get_model_factories(['rf'])['rf']
+    task_type = data.get('task_type', 'regression')
+    model_factory = get_model_factories(['rf'], task_type=task_type,
+                                        n_samples=len(data['labels']))['rf']
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
     budget = 100
