@@ -270,6 +270,8 @@ def main():
     # Save results
     output_path = args.output or 'tests/results/comparisons/covariate_shift.json'
     p = Path(output_path)
+    if p.is_dir() or not p.suffix:
+        p = p / 'covariate_shift.json'
     p.parent.mkdir(parents=True, exist_ok=True)
 
     with open(p, 'w') as f:
