@@ -176,6 +176,42 @@ Returns same dict format as DTA loader → plugs into existing DTA pipeline.
 **Reps:** 40 antibody reps via `antibody_baseline_survey.py all_ddg`.
 **Scientific question:** Does synthetic DDG data (FoldX/Rosetta) help KIRBy's DDG predictions? Can large synthetic data compensate for the scarcity of experimental DDG data (~429 in ddg_combined)?
 
+### 1K. Nucleotide / Genomics (classification, chromosome-grouped GroupKFold)
+
+| Dataset | Source | Samples | Seq Length | Classes | Groups | Metric | Status |
+|---------|--------|---------|-----------|---------|--------|--------|--------|
+| `nt_promoter_all` | NT Revised (InstaDeepAI) | ~30K | 300bp | 2 | 23 chr | MCC | **Needs run** |
+| `nt_promoter_tata` | NT Revised | ~5K | 300bp | 2 | 23 chr | MCC | **Needs run** |
+| `nt_promoter_no_tata` | NT Revised | ~25K | 300bp | 2 | 23 chr | MCC | **Needs run** |
+| `nt_enhancers` | NT Revised | ~30K | 200bp | 2 | 23 chr | MCC | **Needs run** |
+| `nt_enhancers_types` | NT Revised | ~30K | 200bp | 3 | 23 chr | MCC | **Needs run** |
+| `nt_splice_sites_all` | NT Revised | ~30K | 400-600bp | 3 | 23 chr | MCC | **Needs run** |
+| `nt_splice_sites_acceptors` | NT Revised | ~30K | 400-600bp | 2 | 23 chr | MCC | **Needs run** |
+| `nt_splice_sites_donors` | NT Revised | ~30K | 400-600bp | 2 | 23 chr | MCC | **Needs run** |
+| `nt_H2AFZ` | NT Revised | ~30K | 500bp | 2 | 23 chr | MCC | **Needs run** |
+| `nt_H3K27ac` | NT Revised | ~30K | 1000bp | 2 | 23 chr | MCC | **Needs run** |
+| `nt_H3K27me3` | NT Revised | ~30K | 1000bp | 2 | 23 chr | MCC | **Needs run** |
+| `nt_H3K36me3` | NT Revised | ~30K | 1000bp | 2 | 23 chr | MCC | **Needs run** |
+| `nt_H3K4me1` | NT Revised | ~30K | 1000bp | 2 | 23 chr | MCC | **Needs run** |
+| `nt_H3K4me2` | NT Revised | ~18K | 1000bp | 2 | 23 chr | MCC | **Needs run** |
+| `nt_H3K4me3` | NT Revised | ~18K | 1000bp | 2 | 23 chr | MCC | **Needs run** |
+| `nt_H3K9ac` | NT Revised | ~30K | 1000bp | 2 | 23 chr | MCC | **Needs run** |
+| `nt_H3K9me3` | NT Revised | ~30K | 1000bp | 2 | 23 chr | MCC | **Needs run** |
+| `nt_H4K20me1` | NT Revised | ~30K | 1000bp | 2 | 23 chr | MCC | **Needs run** |
+| `gb_human_nontata_promoters` | Genomic Benchmarks | ~36K | 251bp | 2 | 5 hash | MCC | **Needs run** |
+| `gb_human_enhancers_cohn` | Genomic Benchmarks | ~28K | ~500bp | 2 | 5 hash | MCC | **Needs run** |
+| `gb_demo_coding_vs_intergenomic_seqs` | Genomic Benchmarks | ~100K | variable | 2 | 5 hash | MCC | **Needs run** |
+| `gb_demo_human_or_worm` | Genomic Benchmarks | ~100K | variable | 2 | 5 hash | MCC | **Needs run** |
+
+**Data source:** HuggingFace `InstaDeepAI/nucleotide_transformer_downstream_tasks_revised` (NT Revised, 18 tasks in one dataset filtered by `task` column). Genomic Benchmarks from HuggingFace.
+**Splits:** Chromosome-based GroupKFold for NT tasks (23 chromosomes extracted from `name` field). Hash-based 5 groups for Genomic Benchmarks.
+**Metric:** MCC (Matthews Correlation Coefficient) — standard for genomics benchmarks, handles class imbalance.
+**Representations (Phase G0 — classical only, 12 total):** kmer3 (64D), kmer4 (256D), kmer5 (1024D), kmer6 (4096D), gc_content (5D), dinuc_freq (16D), tetranuc_freq (256D), tnf_canonical (136D), dna_shape (8D), complexity (5D), codon_usage (61D), onehot_pca50 (50D factory). 11 LM reps stubbed for Phase G1/G2.
+**Presets:** `fast` (6 reps), `classical` (11 reps), `all` (23 reps incl. LM stubs + factory).
+**CLI:** `python tests/find_best_hybrid_nucleotide.py nt_H3K4me3 --reps fast --search fast`
+**Scientific question:** Can KIRBy's hybrid representation selection identify useful genomic features across promoter/enhancer/splice/histone tasks? Do classical k-mer features compete with DNA foundation models?
+**Deps:** `pip install datasets` (HuggingFace).
+
 ---
 
 ## 2. Representations with Baseline Performance

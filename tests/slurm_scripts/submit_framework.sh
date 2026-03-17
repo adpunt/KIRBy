@@ -11,6 +11,11 @@
 #   bash tests/slurm_scripts/submit_framework.sh wave2     # f02 from JSON (14 jobs)
 #   bash tests/slurm_scripts/submit_framework.sh f01       # just f01 (7 jobs)
 #   bash tests/slurm_scripts/submit_framework.sh f01 logd  # just f01 on logd (1 job)
+#
+# Resources:
+#   f00, f05, f06, f07:  128G, 12h, short partition
+#   f01, f03, f04, f08:  256G, 24h, long partition
+#   f02 (wave 2):         64G,  2h, short partition
 
 set -euo pipefail
 
@@ -44,16 +49,23 @@ submit() {
     local timelimit=$3
     local cmd=$4
 
+    # Pick partition based on time limit (short ≤12h, long >12h)
+    local hours=${timelimit%%:*}
+    local partition="long"
+    if [ "$hours" -le 12 ]; then
+        partition="short"
+    fi
+
     J=$(sbatch \
         --job-name="${jobname}" \
         --nodes=1 --ntasks=1 --cpus-per-task=8 \
-        --time="${timelimit}" --partition=long \
+        --time="${timelimit}" --partition="${partition}" \
         --mem="${mem}" \
         --gres=gpu:1 \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
         --wrap="${WRAP_PREFIX} && mkdir -p ${OUTPUT} && ${cmd} ${STDERR_FILTER}" \
         | awk '{print $4}')
-    echo "  $J  ${jobname}  (${mem}, ${timelimit})"
+    echo "  $J  ${jobname}  (${mem}, ${timelimit}, ${partition})"
     TOTAL=$((TOTAL + 1))
 }
 
@@ -72,7 +84,7 @@ get_tasks() {
 run_f00() {
     echo "--- f00: Rep Screening ---"
     for task in $(get_tasks); do
-        submit "f00_${SHORT_NAMES[$task]}" 128G 23:59:00 \
+        submit "f00_${SHORT_NAMES[$task]}" 128G 11:59:00 \
             "python tests/experiments/framework/f00_rep_screening.py --dataset ${task} --framework --mode full --output ${OUTPUT}"
     done
     echo ""
@@ -81,7 +93,7 @@ run_f00() {
 run_f01() {
     echo "--- f01: Allocation Strategies ---"
     for task in $(get_tasks); do
-        submit "f01_${SHORT_NAMES[$task]}" 256G 47:59:00 \
+        submit "f01_${SHORT_NAMES[$task]}" 256G 23:59:00 \
             "python tests/experiments/framework/f01_allocation_strategies.py --dataset ${task} --framework --mode full --output ${OUTPUT}"
     done
     echo ""
@@ -90,7 +102,7 @@ run_f01() {
 run_f03() {
     echo "--- f03: Greedy Step Size & Patience ---"
     for task in $(get_tasks); do
-        submit "f03_${SHORT_NAMES[$task]}" 256G 47:59:00 \
+        submit "f03_${SHORT_NAMES[$task]}" 256G 23:59:00 \
             "python tests/experiments/framework/f03_greedy_step_size.py --dataset ${task} --framework --mode full --output ${OUTPUT}"
     done
     echo ""
@@ -99,7 +111,7 @@ run_f03() {
 run_f04() {
     echo "--- f04: Two-Phase Search ---"
     for task in $(get_tasks); do
-        submit "f04_${SHORT_NAMES[$task]}" 256G 47:59:00 \
+        submit "f04_${SHORT_NAMES[$task]}" 256G 23:59:00 \
             "python tests/experiments/framework/f04_two_phase_search.py --dataset ${task} --framework --mode full --output ${OUTPUT}"
     done
     echo ""
@@ -108,7 +120,7 @@ run_f04() {
 run_f05() {
     echo "--- f05: Importance Correlation ---"
     for task in $(get_tasks); do
-        submit "f05_${SHORT_NAMES[$task]}" 128G 23:59:00 \
+        submit "f05_${SHORT_NAMES[$task]}" 128G 11:59:00 \
             "python tests/experiments/framework/f05_importance_correlation.py --dataset ${task} --framework --mode full --output ${OUTPUT}"
     done
     echo ""
@@ -117,7 +129,7 @@ run_f05() {
 run_f06() {
     echo "--- f06: Augmentation Test ---"
     for task in $(get_tasks); do
-        submit "f06_${SHORT_NAMES[$task]}" 128G 23:59:00 \
+        submit "f06_${SHORT_NAMES[$task]}" 128G 11:59:00 \
             "python tests/experiments/framework/f06_augmentation_test.py --dataset ${task} --framework --mode full --output ${OUTPUT}"
     done
     echo ""
@@ -126,7 +138,7 @@ run_f06() {
 run_f07() {
     echo "--- f07: Internal Evaluator ---"
     for task in $(get_tasks); do
-        submit "f07_${SHORT_NAMES[$task]}" 128G 23:59:00 \
+        submit "f07_${SHORT_NAMES[$task]}" 128G 11:59:00 \
             "python tests/experiments/framework/f07_internal_evaluator.py --dataset ${task} --framework --mode full --output ${OUTPUT}"
     done
     echo ""
@@ -135,7 +147,7 @@ run_f07() {
 run_f08() {
     echo "--- f08: Iterative Augmentation ---"
     for task in $(get_tasks); do
-        submit "f08_${SHORT_NAMES[$task]}" 256G 47:59:00 \
+        submit "f08_${SHORT_NAMES[$task]}" 256G 23:59:00 \
             "python tests/experiments/framework/f08_iterative_augmentation.py --dataset ${task} --framework --mode full --output ${OUTPUT}"
     done
     echo ""
@@ -152,9 +164,9 @@ run_f02() {
         local f03_json="${OUTPUT}/f03_greedy_step_size/${task}.json"
 
         # One job consuming f01, one consuming f03
-        submit "f02f1_${SHORT_NAMES[$task]}" 64G 03:59:00 \
+        submit "f02f1_${SHORT_NAMES[$task]}" 64G 01:59:00 \
             "python tests/experiments/framework/f02_adaptive_pruning.py --from-json ${f01_json} --output ${OUTPUT}"
-        submit "f02f3_${SHORT_NAMES[$task]}" 64G 03:59:00 \
+        submit "f02f3_${SHORT_NAMES[$task]}" 64G 01:59:00 \
             "python tests/experiments/framework/f02_adaptive_pruning.py --from-json ${f03_json} --output ${OUTPUT}"
     done
     echo ""
