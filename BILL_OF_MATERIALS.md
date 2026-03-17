@@ -5,7 +5,7 @@ performance. This document is the single source of truth for what KIRBy supports
 and what actually works. Representations without confirmed performance data should
 not be used in experiments until validated.
 
-**Last updated:** 2026-03-15 (Added OPIG experiment datasets: 1H antibody clf (B1+B3), 1I Ginkgo developability (B5), 1J synthetic DDG (B2). Added OPIG comparison experiments: covariate shift (C2), Imrie TL (C4). TanimotoKernel note (C1). Phase 5 results unchanged — OPIG surveys need run.)
+**Last updated:** 2026-03-16 (Added 7 structural geometry features as augmentation-only reps: vhvl_angles, cdr_shape, cdr_canonical, paratope_charge, paratope_hydrophobicity, cdr_contacts, vhvl_interface. Tested via separate survey: `tests/experiments/structural_geometry_survey.py`.)
 
 ---
 
@@ -16,15 +16,19 @@ not be used in experiments until validated.
 | Dataset | Source | Samples | Target | Metrics | Best Rep (model) | Best RMSE | Best R² | Status |
 |---------|--------|---------|--------|---------|------------------|-----------|---------|--------|
 | `logd` | OpenADMET-ExpansionRx | 5,028 | LogD | RMSE, R², Spearman ρ | mhg_gnn (gp) | **0.442** | **0.857** | **Phase 5** ✅ |
-| `caco2` | OpenADMET-ExpansionRx | 2,158 | Caco2 Efflux (log) | RMSE, R², Spearman ρ | — | — | — | **Running** |
-| `herg` | ChEMBL (CHEMBL240) | 1,415 | pKi | RMSE, R², Spearman ρ | — | — | — | **Running** |
+| `caco2` | OpenADMET-ExpansionRx | 2,158 | Caco2 Efflux (log) | RMSE, R², Spearman ρ | mol2vec (gp) | **0.290** | — | **Phase 5** ✅ |
+| `herg` | ChEMBL (CHEMBL240) | 1,412 | pKi | RMSE, R², Spearman ρ | mhg_gnn (lgbm) | **0.587** | — | **Phase 5** ✅ |
 | `qm9` | QM9 | ~10,000 | HOMO-LUMO gap | RMSE, R², Spearman ρ | — | — | — | **Running** |
 | `adme_hlm` | Polaris ADME-Fang | 3,087 | HLM clearance (log) | RMSE, R², Spearman ρ | — | — | — | **Running** |
 | `adme_rlm` | Polaris ADME-Fang | 3,054 | RLM clearance (log) | RMSE, R², Spearman ρ | — | — | — | **Running** |
 | `adme_mdr1` | Polaris ADME-Fang | 2,642 | MDR1 efflux (log) | RMSE, R², Spearman ρ | — | — | — | **Running** |
 | `adme_solubility` | Polaris ADME-Fang | 2,173 | Solubility (log) | RMSE, R², Spearman ρ | — | — | — | **Running** |
 
-**LogD Phase 5 results (17 reps × 10 models, 5-fold scaffold-split):** RMSE primary metric. Best: mhg_gnn (GP, RMSE=0.442, R²=0.857, ρ=0.922). grover essentially tied (ridge, RMSE=0.443, R²=0.857, ρ=0.925). GP and DNN models dominate as best model for most reps. unimol_v2 failed (R²≈0). 7 remaining datasets running on HTC+ARC.
+**LogD Phase 5 results (17 reps × 10 models, 5-fold scaffold-split):** RMSE primary metric. Best: mhg_gnn (GP, RMSE=0.442, R²=0.857, ρ=0.922). grover essentially tied (ridge, RMSE=0.443, R²=0.857, ρ=0.925). GP and DNN models dominate as best model for most reps. unimol_v2 failed (R²≈0). 5 remaining datasets running on HTC+ARC.
+
+**Caco2 Phase 5 results (17 reps × 10 models, 5-fold scaffold-split):** Very tight RMSE range — top 7 reps within 0.005 of each other. Best: mol2vec (GP, 0.290), grover (GP, 0.290), mhg_gnn (GP, 0.292), graph_kernel (catboost, 0.292), ecfp4 (GP, 0.292). GP dominates as best model. unimol_v2 dead last (0.437).
+
+**hERG Phase 5 results (16 reps × 10 models, 5-fold scaffold-split):** mol2vec missing. Best: mhg_gnn (lightgbm, 0.587), graph_kernel (catboost, 0.598), avalon (catboost, 0.599), grover (dnn, 0.600). More model diversity than logd/caco2 — catboost, lightgbm, dnn, ridge all win for different reps. unimol_v2 dead (0.914).
 
 **Preprocessing:** All molecular datasets apply `standardize_smiles()` (salt stripping, neutralization, tautomer canonicalization) and `deduplicate_by_inchikey()` (removes duplicate molecules with different SMILES but same InChIKey, preventing same molecule in train+test).
 
@@ -32,21 +36,23 @@ not be used in experiments until validated.
 
 | Dataset | Source | Samples | Target | Best Rep (model) | Best ρ | Reps Tested | Status |
 |---------|--------|---------|--------|------------------|--------|-------------|--------|
-| `flab_binding_koenig` | FLAb (G6) | 4,275 | Kd | blosum (cnn) | **0.309** | 4 | **Partial** (fast reps only) |
-| `flab_expression_koenig` | FLAb (G6 SSM) | 4,275 | Expression | aac (rf) | **0.447** | 4 | **Partial** (fast reps only) |
-| `flab_binding_phillips_h3` | FLAb2 (Phillips 2021) | 5,000 | Binding (SPR Kd) | — | — | 1 | **Partial** (aido_protein only, failed) |
-| `flab_binding_adams` | FLAb2 (Adams 2017) | 5,000 | Binding (Kd) | — | — | 1 | **Partial** (aido_protein only, failed) |
-| `flab_expression_adams` | FLAb2 (Adams 2017) | 5,000 | Expression (ER) | — | — | 1 | **Partial** (aido_protein only, failed) |
-| `abagym_HER2` | AbAgym DMS | 146 | Fitness | — | — | 1 | **Partial** (aido_protein only, failed) |
-| `abagym_VEGF` | AbAgym DMS | 418 | Fitness | — | — | 1 | **Partial** (aido_protein only, failed) |
-| `abagym_EGFR` | AbAgym DMS | 659 | Fitness | — | — | 1 | **Partial** (aido_protein only, failed) |
-| `abagym_lysozyme` | AbAgym DMS | 627 | Fitness | — | — | 1 | **Partial** (aido_protein only, failed) |
-| `abagym_Ang2` | AbAgym DMS | 397 | Fitness | — | — | 1 | **Partial** (aido_protein only, failed) |
-| `abagym_all` | AbAgym (pooled, 5 groups) | 2,247 | Fitness | — | — | 1 | **Partial** (aido_protein only, failed) |
+| `flab_binding_koenig` | FLAb (G6) | 4,275 | Kd | ablang2 (dnn) | **0.475** | 23 | **Phase 5** ✅ |
+| `flab_expression_koenig` | FLAb (G6 SSM) | 4,275 | Expression | — | — | 23 | **Phase 5** ✅ |
+| `flab_binding_phillips_h3` | FLAb2 (Phillips 2021) | 5,000 | Binding (SPR Kd) | — | — | 4 | **Partial** |
+| `flab_binding_adams` | FLAb2 (Adams 2017) | 5,000 | Binding (Kd) | — | — | 4 | **Partial** |
+| `flab_expression_adams` | FLAb2 (Adams 2017) | 5,000 | Expression (ER) | — | — | 4 | **Partial** |
+| `abagym_HER2` | AbAgym DMS | 146 | Fitness | — | — | 4 | **Partial** |
+| `abagym_VEGF` | AbAgym DMS | 418 | Fitness | — | — | 4 | **Partial** |
+| `abagym_EGFR` | AbAgym DMS | 659 | Fitness | — | — | 4 | **Partial** |
+| `abagym_lysozyme` | AbAgym DMS | 627 | Fitness | — | — | 4 | **Partial** |
+| `abagym_Ang2` | AbAgym DMS | 397 | Fitness | — | — | 4 | **Partial** |
+| `abagym_all` | AbAgym (pooled, 5 groups) | 2,247 | Fitness | ablang2 (ridge) | **0.145** | 35 | **Phase 5** ✅ |
 
-**⚠ DMS datasets mostly INCOMPLETE** — 10/11 datasets have only aido_protein results (which produced zero signal on every dataset, ρ < 0.08). 2 Koenig datasets have 4 fast reps (onehot, blosum, aac, paratope). LM, mutation, variation, structural, MINT reps still running/pending.
+**Koenig DMS now has 23 LM reps.** ablang2 leads binding (ρ=0.475 with DNN), saprot/esm3 close behind (~0.44). igbert dead (ρ≈0).
 
-**aido_protein (4608D) completely failed on all antibody DMS datasets** — R² negative and Spearman near zero across all 10 datasets tested. This is a strong negative result for AIDO.Protein on antibody tasks.
+**AbAgYm pooled now has 35 reps** but is a very hard task — best ρ=0.145 (ablang2, ridge). mutation_features (0.123) and esm2_layer24 (0.121) show some signal. Most LM reps under 0.10.
+
+**aido_protein (4608D) completely failed on all antibody DMS datasets** — R² negative and Spearman near zero across all datasets tested. This is a strong negative result for AIDO.Protein on antibody tasks.
 
 **Metrics:** R², Spearman ρ, Pearson r, RMSE per fold.
 
@@ -54,24 +60,22 @@ not be used in experiments until validated.
 
 | Dataset | Source | Samples | Target | Best Rep (model) | Best ρ | Reps Tested | Status |
 |---------|--------|---------|--------|------------------|--------|-------------|--------|
-| `flab_thermo_tresanco` | FLAb2 (Tresanco 2023) | 672 | Tm | esm3 (dnn) | **0.805** | 20 | **Phase 5** ✅ |
-| `flab_pk_jain_heprt` | FLAb2 (Jain 2023) | 130 | Heparin RT | esm2_per_cdr (gp) | **0.658** | 3 | **Partial** |
-| `flab_pk_jain_fcrnrt` | FLAb2 (Jain 2023) | 132 | FcRn RT | ablang2 (ridge) | **0.595** | 21 | **Phase 5** ✅ |
-| `flab_polyreact_jain_cic` | FLAb2 (Jain 2017) | 137 | CIC RT | prot_t5 (ridge) | **0.586** | 23 | **Phase 5** ✅ |
-| `flab_aggregation_jain_hicrt` | FLAb2 (Jain 2017) | 137 | HIC RT | prot_t5 (ridge) | **0.506** | 23 | **Phase 5** ✅ |
-| `flab_thermo_jain` | FLAb (Jain 2017) | 137 | Tm | ablang2 (ridge) | **0.457** | 23 | **Phase 5** ✅ |
+| `flab_thermo_tresanco` | FLAb2 (Tresanco 2023) | 672 | Tm | esm3 (dnn) | **0.805** | 34 | **Phase 5** ✅ |
+| `flab_pk_jain_heprt` | FLAb2 (Jain 2023) | 130 | Heparin RT | — | — | 37 | **Phase 5** ✅ |
+| `flab_pk_jain_fcrnrt` | FLAb2 (Jain 2023) | 132 | FcRn RT | ablang2 (ridge) | **0.595** | 37 | **Phase 5** ✅ |
+| `flab_polyreact_jain_cic` | FLAb2 (Jain 2017) | 137 | CIC RT | prot_t5 (ridge) | **0.586** | 37 | **Phase 5** ✅ |
+| `flab_aggregation_jain_hicrt` | FLAb2 (Jain 2017) | 137 | HIC RT | prot_t5 (ridge) | **0.506** | 37 | **Phase 5** ✅ |
+| `flab_thermo_jain` | FLAb (Jain 2017) | 137 | Tm | — | — | 36 | **Phase 5** ✅ |
 | `abcov_kd` | Ab-CoV (via FLAb) | 141 | -log Kd | prot_t5 (catboost) | **0.432** | 22 | **Phase 5** ✅ |
-| `flab_aggregation_jain` | FLAb (Jain 2017) | 137 | AC-SINS | esm2_concat (ridge) | **0.425** | 23 | **Phase 5** ✅ |
+| `flab_aggregation_jain` | FLAb (Jain 2017) | 137 | AC-SINS | — | — | 36 | **Phase 5** ✅ |
 | `flab_immunogenicity_marks` | FLAb2 (Marks 2021) | 217 | Immunogenicity | antiberty_cdr (mlp) | **0.399** | 23 | **Phase 5** ✅ |
-| `flab_polyreact_jain_bvp` | FLAb2 (Jain 2017) | 137 | BVP ELISA | ablang2 (ridge) | **0.374** | 23 | **Phase 5** ✅ |
-| `flab_thermo_hutchinson` | FLAb2 (Hutchinson 2023) | 192 | Tm | esm2 (xgboost) | **0.289** | 23 | **Phase 5** ✅ |
-| `flab_aggregation_jain_sas` | FLAb2 (Jain 2017) | 137 | SAS | antiberty_cdr (xgb) | **0.201** | 23 | **Phase 5** ✅ |
-| `ddg_combined` | SKEMPI 2.0 + AB-Bind (Ab-Ag only) | 429 | ΔΔG | — | — | 1 | **Partial** (aido_protein only, failed) |
+| `flab_polyreact_jain_bvp` | FLAb2 (Jain 2017) | 137 | BVP ELISA | — | — | 37 | **Phase 5** ✅ |
+| `flab_thermo_hutchinson` | FLAb2 (Hutchinson 2023) | 192 | Tm | — | — | 37 | **Phase 5** ✅ |
+| `flab_aggregation_jain_sas` | FLAb2 (Jain 2017) | 137 | SAS | — | — | 37 | **Phase 5** ✅ |
+| `ddg_combined` | SKEMPI 2.0 + AB-Bind (Ab-Ag only) | 429 | ΔΔG | esm2_wt_delta (ridge) | **0.293** | 34 | **Phase 5** ✅ |
 | `ddg_combined_full` | SKEMPI 2.0 full + AB-Bind (all PP) | ~3,000 | ΔΔG | — | — | — | **New** (run needed) |
 
-**Phase 5 inter-family results (20-23 LM reps, 10 models, identity-grouped GroupKFold):** Spearman ρ is now the primary metric. Every dataset with ≥20 reps tested shows viable signal — even "hard" datasets like aggregation_sas (ρ=0.201) and thermo_hutchinson (ρ=0.289) that had negative R² in stale results now show positive rank correlation. ESM3 dominates tresanco (ρ=0.805 with DNN). ablang2 and prot_t5 are the most consistent top performers across datasets. DNN/ridge split as best model — DNN wins on larger datasets, ridge on smaller ones.
-
-**Key changes from stale → Phase 5:** bvp and sas, which had negative R² in old results, are now confirmed viable by Spearman. This validates the switch to Spearman as primary antibody metric. Datasets ranked 4→12 (by ρ, not R²) with only LM reps — fast reps, mutation reps, structural reps, MINT still pending.
+**Phase 5 inter-family results (34-37 reps, 10 models, identity-grouped GroupKFold):** Spearman ρ is primary metric. Now includes LM reps, seq encoding (onehot, blosum, aac), structural, mutation, and variation reps. ESM3 dominates tresanco (ρ=0.805 with DNN). ablang2 and prot_t5 are the most consistent top performers across datasets. blosum surprisingly strong on tresanco (ρ=0.780). DNN wins on larger datasets, ridge on smaller ones. ddg_combined now has 34 reps — esm2_wt_delta leads (ρ=0.293), a hard task. 5 reps consistently fail/NaN: aido_protein, mint, xtrimopglm, igbert, igbert_cls.
 
 **Dropped:** `sabdab_affinity` (was SKEMPI 2.0 only, replaced by `ddg_combined`),
 `abbind` / `abbind_spm` (strict subsets of `ddg_combined`).
@@ -222,36 +226,42 @@ Caco2, hERG, QM9, 4× ADME still running on HTC+ARC.
 
 ### 2B. Antibody Representations
 
-**Phase 5 results (20-23 LM reps × 10 models, identity-grouped GroupKFold).**
-Spearman ρ is primary metric. 11 inter-family datasets with substantial coverage. DMS datasets mostly incomplete.
+**Phase 5 results (34-37 reps × 10 models, identity-grouped GroupKFold).**
+Spearman ρ is primary metric. 13 inter-family datasets with 34-37 reps each. DMS: binding_koenig has 23 reps, abagym_all has 35 reps.
 
 **Script:** `tests/antibody_baseline_survey.py`
 
 **Per-rep best Spearman ρ across key inter-family datasets (best model per dataset):**
 
-| Rep | Dim | tresanco | fcrnrt | cic | hicrt | thermo_jain | abcov_kd | immunogenicity |
-|-----|-----|----------|--------|-----|-------|-------------|----------|----------------|
-| `ablang2` | 480 | 0.722 | **0.595** | 0.455 | 0.397 | **0.457** | 0.384 | 0.293 |
-| `prot_t5` | 2048 | 0.729 | 0.416 | **0.586** | **0.506** | 0.289 | **0.432** | 0.357 |
-| `esm3` | 3072 | **0.805** | 0.374 | 0.369 | 0.358 | 0.429 | 0.352 | 0.312 |
-| `igt5` | 1024 | 0.746 | **0.563** | **0.502** | 0.394 | 0.431 | 0.348 | 0.368 |
-| `abroberta` | 1536 | 0.685 | 0.292 | 0.387 | 0.370 | **0.451** | 0.412 | 0.297 |
-| `esm2` | 2560 | 0.759 | 0.407 | 0.369 | 0.382 | 0.368 | 0.412 | 0.311 |
-| `antiberty` | 768 | 0.729 | 0.388 | 0.377 | 0.307 | 0.280 | 0.426 | **0.398** |
-| `saprot` | 2560 | 0.784 | 0.409 | 0.317 | 0.303 | 0.357 | 0.309 | 0.283 |
-| `esmc` | 1280 | 0.780 | 0.271 | 0.330 | 0.414 | 0.329 | 0.369 | 0.350 |
-| `igbert` | 1024 | NaN | NaN | NaN | NaN | NaN | NaN | NaN |
+| Rep | Dim | tresanco | fcrnrt | cic | hicrt | binding_koenig | ddg_combined |
+|-----|-----|----------|--------|-----|-------|----------------|--------------|
+| `esm3` | 3072 | **0.805** | -0.012 | 0.311 | 0.395 | 0.439 | 0.164 |
+| `saprot` | 2560 | 0.784 | 0.409 | 0.463 | 0.379 | 0.439 | 0.223 |
+| `blosum` | 5600 | 0.780 | 0.273 | 0.270 | 0.365 | — | 0.166 |
+| `esmc` | 2304 | 0.780 | 0.340 | 0.412 | 0.414 | 0.412 | 0.249 |
+| `prot_t5` | 2048 | 0.778 | 0.416 | **0.586** | **0.506** | 0.437 | 0.278 |
+| `igt5` | 1024 | 0.777 | **0.563** | 0.502 | 0.214 | 0.421 | — |
+| `onehot` | 5600 | 0.775 | 0.282 | 0.235 | 0.311 | — | 0.261 |
+| `esm2_early` | 2560 | 0.771 | 0.419 | 0.542 | 0.479 | 0.366 | 0.126 |
+| `esm2` | 2560 | 0.757 | 0.330 | 0.423 | 0.339 | 0.324 | 0.190 |
+| `mutation_features` | 48 | 0.752 | 0.403 | 0.437 | 0.424 | — | 0.228 |
+| `ablang2` | 480 | 0.722 | **0.595** | 0.472 | 0.391 | **0.475** | 0.033 |
+| `antiberty` | 1024 | 0.714 | 0.360 | 0.326 | 0.281 | 0.285 | 0.206 |
+| `aac` | 40 | 0.708 | 0.331 | 0.446 | 0.342 | — | 0.239 |
+| `esm2_wt_delta` | 2560 | 0.767 | 0.334 | 0.414 | 0.350 | — | **0.293** |
 
-**Top rep rankings:**
-1. **ablang2** — best on fcrnrt (#1) and thermo_jain (#1), strong everywhere. Antibody-specific LM.
-2. **prot_t5** — best on cic (#1), hicrt (#1), abcov_kd (#1). General protein LM, dominates on smaller datasets.
-3. **igt5** — forward-compat Phase 4A, consistently top 5. Best antibody-specific newcomer.
-4. **esm3** — best on tresanco (#1, ρ=0.805 with DNN). Excels on the largest dataset.
-5. **abroberta** — strong on thermo_jain (#1 by ρ despite R²≈0). CDR-pooled variant identical.
+**Top rep rankings (updated with 34-37 reps):**
+1. **prot_t5** — best on cic (#1), hicrt (#1). Strong everywhere. General protein LM.
+2. **ablang2** — best on fcrnrt (#1) and binding_koenig (#1). Antibody-specific, low-dim.
+3. **esm3** — best on tresanco (#1, ρ=0.805). But FAILS on fcrnrt (-0.012). Task-dependent.
+4. **igt5** — #2 fcrnrt (0.563), consistently top 5. Forward-compat antibody-specific.
+5. **esm2_early** — surprisingly strong mid-layer aggregate. #2 on cic (0.542), #2 on hicrt (0.479).
+6. **esm2_wt_delta** — best on ddg_combined (#1, 0.293). Mutation-aware.
+7. **blosum/onehot** — seq encoding reps newly tested, strong on tresanco (0.78). Cheap baselines.
 
-**Model landscape:** Ridge dominates small datasets (n≈130-140). DNN dominates on tresanco (n=672). Catboost/lightgbm competitive on abcov_kd. GP wins on heprt with variation reps.
+**Model landscape:** Ridge dominates small datasets (n≈130-140). DNN dominates on tresanco (n=672) and koenig (n=4275). Catboost/lightgbm competitive on ddg and smaller datasets.
 
-**Dead confirmed:** igbert/igbert_cls (NaN everywhere), aido_protein (failed on all 10 DMS datasets).
+**Dead confirmed:** igbert/igbert_cls (NaN or ρ<0.1 everywhere), aido_protein (failed on all datasets), mint (NaN everywhere), xtrimopglm (NaN everywhere).
 
 **ANTIBODY_REPS registered in code (34 total):**
 - **LM full-seq (12):** esm2, esmc, ablang2, igbert, igbert_cls, antiberty, prot_t5, amplify, esm3, saprot, abroberta, mint
@@ -261,6 +271,7 @@ Spearman ρ is primary metric. 11 inter-family datasets with substantial coverag
 - **LM CDR3-only (1):** esm2_cdr3 (IMGT 105-117 only, 2560D)
 - **Seq encoding (3):** onehot, blosum, aac
 - **Structural (2):** structural (28D: SASA+confidence+paratope via ImmuneBuilder), paratope (8D)
+- **Geometry (7+1, augmentation-only):** vhvl_angles (6D), cdr_shape (60D), cdr_canonical (12D), paratope_charge (12D), paratope_hydrophobicity (12D), cdr_contacts (30D), vhvl_interface (30D), all_geometry (162D combined). Tested as augmentations via `tests/experiments/structural_geometry_survey.py`. NOT in ANTIBODY_REPS — separate registry in `antibody_geometry.py`.
 - **Variation-pool (3):** esm2_entropy_top20 (2560D, per-fold factory), esm2_per_cdr (7680D, CDR1/2/3 separate), esm2_per_region (17920D, all 7 IMGT regions separate)
 - **Forward-compat (1):** igt5 (1024D, Exscientia paired T5)
 
@@ -427,8 +438,7 @@ GroupKFold (BH: leave-additive-out, 23 groups; Suzuki: leave-ligand-out, 12 grou
 | `reactant_pdv` | ~210 | — | — | — | — | — | — |
 | `product_pdv` | ~210 | — | — | — | — | — | — |
 
-*concat_ecfp4, concat_maccs, concat_pdv removed — redundant with separated product/reactant variants.*
-*New separated MACCS/PDV reps pending first run.*
+*New separated MACCS/PDV reps + diff reps + descriptor reps + ReactionT5 pending first run.*
 
 **Key findings (Phase 5):**
 - BH: R² dropped from 0.934 (random) to 0.718 (GroupKFold) as predicted. reactant_ecfp4 overtakes drfp_2048.

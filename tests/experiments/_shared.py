@@ -40,19 +40,24 @@ warnings.filterwarnings('ignore')
 
 INTERMEDIARY = {
     'n_splits': 1,
-    'models': ['rf', 'knn', 'ridge', 'mlp', 'xgboost', 'lightgbm'],
+    'models': ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp',
+               'svm', 'gp', 'catboost', 'dnn', 'cnn'],
     'budgets': [5, 10, 25, 50, 75, 100, 150, 200, 300, 500, 750, 1000],
-    'allocations': ['greedy', 'performance_weighted', 'softmax_T5', 'dominant_greedy'],
-    'importance_methods': ['lightgbm_gain'],
+    'allocations': ['greedy', 'performance_weighted', 'softmax_T5'],
+    'importance_methods': ['treeshap', 'lightgbm_gain'],
     'search_speed': 'fast',
 }
 
 FULL = {
     'n_splits': 5,
-    'models': ['rf', 'knn', 'ridge', 'mlp', 'xgboost', 'lightgbm'],
-    'budgets': [10, 25, 50, 100, 200, 500],
-    'allocations': ['greedy', 'performance_weighted', 'softmax_T2', 'softmax_T5', 'dominant_greedy'],
-    'importance_methods': ['treeshap', 'lightgbm_gain', 'permutation', 'shap'],
+    'models': ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp',
+               'svm', 'gp', 'catboost', 'dnn', 'cnn'],
+    'budgets': [50, 100, 200, 500],
+    'allocations': [
+        'greedy', 'performance_weighted', 'softmax_T1', 'softmax_T5',
+        'dominant_greedy', 'power_2',
+    ],
+    'importance_methods': ['treeshap', 'xgboost_gain', 'lightgbm_gain', 'permutation'],
     'search_speed': 'medium',
 }
 
@@ -115,6 +120,40 @@ def make_cv_splitter(n_folds, groups=None, seed=42):
 
 
 # =============================================================================
+# DOMAIN-AWARE METRIC DISPATCH
+# =============================================================================
+
+def get_domain_metric(data: dict) -> Tuple[str, Any, bool]:
+    """Return (metric_name, metric_fn, lower_is_better) based on domain/task_type.
+
+    Centralised metric selection for all framework experiments. Matches the
+    primary metrics used in run_baseline_survey.py.
+    """
+    from kirby.find_best_hybrid import BUILTIN_METRICS
+
+    domain = data.get('domain', 'molecular')
+    task_type = data.get('task_type', 'regression')
+
+    if task_type == 'classification':
+        # TCGA clf, trastuzumab, humanness
+        fn, lib = BUILTIN_METRICS['accuracy']
+        return 'accuracy', fn, lib
+    elif domain == 'dta':
+        fn, lib = BUILTIN_METRICS['ci']
+        return 'ci', fn, lib
+    elif domain == 'antibody':
+        fn, lib = BUILTIN_METRICS['spearman']
+        return 'spearman', fn, lib
+    elif domain == 'nucleotide':
+        fn, lib = BUILTIN_METRICS['mcc']
+        return 'mcc', fn, lib
+    else:
+        # molecular, reaction
+        fn, lib = BUILTIN_METRICS['rmse']
+        return 'rmse', fn, lib
+
+
+# =============================================================================
 # EVALUATION HELPERS
 # =============================================================================
 
@@ -129,11 +168,15 @@ def evaluate_cv(
     budget: int = 100,
     seed: int = 42,
     mode: str = 'full',
+    metric_fn=None,
 ) -> Tuple[float, float, int]:
     """Proper per-fold CV: create_hybrid on train, apply_feature_selection on val.
 
-    Returns (mean_r2, std_r2, n_features).
+    Returns (mean_score, std_score, n_features).
     """
+    if metric_fn is None:
+        metric_fn = r2_score
+
     sample_X = next(iter(base_reps.values()))
     scores = []
     n_feats = []
@@ -160,7 +203,7 @@ def evaluate_cv(
 
         model = model_factory()
         model.fit(X_train_s, y_train)
-        scores.append(r2_score(y_val, model.predict(X_val_s)))
+        scores.append(metric_fn(y_val, model.predict(X_val_s)))
         n_feats.append(X_train.shape[1])
 
     if not scores:
@@ -179,11 +222,15 @@ def evaluate_cv_with_train(
     budget: int = 100,
     seed: int = 42,
     mode: str = 'full',
+    metric_fn=None,
 ) -> Tuple[float, float, float, float, int]:
-    """Like evaluate_cv but also returns train R².
+    """Like evaluate_cv but also returns train score.
 
-    Returns (val_r2_mean, val_r2_std, train_r2_mean, train_r2_std, n_features).
+    Returns (val_mean, val_std, train_mean, train_std, n_features).
     """
+    if metric_fn is None:
+        metric_fn = r2_score
+
     sample_X = next(iter(base_reps.values()))
     val_scores = []
     train_scores = []
@@ -211,8 +258,8 @@ def evaluate_cv_with_train(
 
         model = model_factory()
         model.fit(X_train_s, y_train)
-        val_scores.append(r2_score(y_val, model.predict(X_val_s)))
-        train_scores.append(r2_score(y_train, model.predict(X_train_s)))
+        val_scores.append(metric_fn(y_val, model.predict(X_val_s)))
+        train_scores.append(metric_fn(y_train, model.predict(X_train_s)))
         n_feats.append(X_train.shape[1])
 
     if not val_scores:
@@ -231,8 +278,12 @@ def evaluate_single_rep_cv(
     model_factory,
     n_folds: int = 5,
     mode: str = 'full',
+    metric_fn=None,
 ) -> Tuple[float, float]:
-    """Simple CV for a single representation matrix. Returns (mean_r2, std_r2)."""
+    """Simple CV for a single representation matrix. Returns (mean_score, std_score)."""
+    if metric_fn is None:
+        metric_fn = r2_score
+
     scores = []
     for train_idx, val_idx in cv_split(groups, n_folds, X, labels, mode=mode):
         scaler = StandardScaler()
@@ -241,7 +292,7 @@ def evaluate_single_rep_cv(
 
         model = model_factory()
         model.fit(X_train, labels[train_idx])
-        scores.append(r2_score(labels[val_idx], model.predict(X_val)))
+        scores.append(metric_fn(labels[val_idx], model.predict(X_val)))
 
     return float(np.mean(scores)), float(np.std(scores))
 
@@ -370,51 +421,39 @@ def evaluate_similarity_retrieval(
 # MODEL FACTORIES
 # =============================================================================
 
-def get_model_factories(model_names: List[str]) -> Dict[str, callable]:
-    """Return {name: factory_fn} for requested models."""
-    from sklearn.ensemble import RandomForestRegressor
-    from sklearn.linear_model import RidgeCV
-    from sklearn.neighbors import KNeighborsRegressor
-    from sklearn.neural_network import MLPRegressor
+def get_model_factories(model_names: List[str],
+                        task_type: str = 'regression',
+                        n_samples: Optional[int] = None) -> Dict[str, callable]:
+    """Return {name: factory_fn} for requested models.
 
-    catalog = {
-        'rf': lambda: RandomForestRegressor(n_estimators=100, max_features='sqrt', random_state=42, n_jobs=-1),
-        'knn': lambda: KNeighborsRegressor(n_neighbors=5, n_jobs=-1),
-        'ridge': lambda: RidgeCV(alphas=np.logspace(-4, 4, 50)),
-        'mlp': lambda: MLPRegressor(hidden_layer_sizes=(100, 50), random_state=42, max_iter=500),
-    }
+    Delegates to find_best_hybrid.DEFAULT_MODELS for authoritative model
+    definitions (all 11 models, with size guards and clf/reg dispatch).
 
-    try:
-        from xgboost import XGBRegressor
-        catalog['xgboost'] = lambda: XGBRegressor(n_estimators=100, colsample_bytree=0.5,
-                                                   random_state=42, n_jobs=-1, verbosity=0)
-    except ImportError:
-        pass
+    Args:
+        model_names: List of model names (e.g. ['rf', 'ridge', 'gp']).
+        task_type: 'regression' or 'classification'.
+        n_samples: Dataset size — models with _max_samples auto-skip.
 
-    try:
-        from lightgbm import LGBMRegressor
-        catalog['lightgbm'] = lambda: LGBMRegressor(n_estimators=100, random_state=42, n_jobs=-1, verbose=-1)
-    except ImportError:
-        pass
-
-    try:
-        from sklearn.svm import SVR
-        catalog['svr'] = lambda: SVR(kernel='rbf', C=1.0)
-    except ImportError:
-        pass
-
-    try:
-        from sklearn.linear_model import ElasticNet
-        catalog['elasticnet'] = lambda: ElasticNet(alpha=0.1, l1_ratio=0.5, random_state=42)
-    except ImportError:
-        pass
+    Returns:
+        {name: callable} where each callable returns a fresh model instance.
+    """
+    from kirby.find_best_hybrid import get_model as _get_model, DEFAULT_MODELS
 
     factories = {}
     for name in model_names:
-        if name in catalog:
-            factories[name] = catalog[name]
-        else:
-            print(f"  WARNING: model '{name}' not available, skipping")
+        if name not in DEFAULT_MODELS:
+            print(f"  WARNING: model '{name}' not in DEFAULT_MODELS, skipping")
+            continue
+        spec = DEFAULT_MODELS[name]
+        max_s = spec.get('_max_samples')
+        if max_s is not None and n_samples is not None and n_samples > max_s:
+            print(f"  Skipping {name}: n_samples={n_samples} > _max_samples={max_s}")
+            continue
+
+        def _make_factory(_name, _task_type):
+            return lambda: _get_model(_name, _task_type)
+
+        factories[name] = _make_factory(name, task_type)
     return factories
 
 
@@ -702,6 +741,57 @@ def compute_dataset_complexity(reps: Dict[str, np.ndarray], labels: np.ndarray) 
 
 _ANTIBODY_PREFIXES = ('flab_', 'abcov_', 'sabdab_', 'abagym_', 'abbind', 'ddg_')
 _TCGA_PREFIXES = ('tcga_',)
+_NUCLEOTIDE_PREFIXES = ('nt_', 'gb_')
+_REACTION_DATASETS = ('buchwald_hartwig', 'suzuki', 'bh_doyle_plates')
+
+
+# =============================================================================
+# FRAMEWORK EXPERIMENT TASK & REP CONFIGURATION
+# =============================================================================
+
+FRAMEWORK_TASKS = {
+    # Molecular (RMSE, scaffold-split)
+    'logd': [
+        'mhg_gnn', 'grover', 'mordred', 'mol2vec', 'ecfp4', 'molformer',
+        'pdv', 'smited', 'avalon', 'chemberta', 'graph_kernel', 'maccs',
+    ],
+    'herg': [
+        'mhg_gnn', 'graph_kernel', 'avalon', 'grover', 'ecfp4', 'mordred',
+        'pdv', 'molformer', 'smited', 'chemberta', 'maccs',
+    ],
+    # Antibody (Spearman, identity-grouped)
+    'flab_thermo_tresanco': [
+        'esm3', 'saprot', 'blosum', 'esmc', 'prot_t5', 'igt5', 'onehot',
+        'esm2_early', 'esm2', 'mutation_features', 'ablang2', 'antiberty',
+        'aac', 'structural',
+    ],
+    'flab_pk_jain_fcrnrt': [
+        'ablang2', 'igt5', 'esm2_early', 'prot_t5', 'saprot',
+        'mutation_features', 'antiberty', 'esmc', 'esm2', 'aac',
+        'abroberta', 'onehot', 'structural',
+    ],
+    # TCGA (AUROC / F1w, TSS-grouped)
+    'tcga_luad_vs_lusc': [
+        'gene_geneformer_v2', 'gene_bulkrnabert', 'methyl_hvg',
+        'gene_geneformer', 'gene_chromosome_arm', 'wsi_titan',
+        'methyl_pca50', 'cnv_pca50', 'mirna_top200', 'wsi_gigapath',
+        'rppa', 'immune_xcell', 'mut_driver', 'stemness_mrnasi',
+    ],
+    'tcga_brca_pam50': [
+        'gene_geneformer_v2', 'gene_bulkrnabert', 'methyl_hvg',
+        'gene_geneformer', 'gene_chromosome_arm', 'wsi_titan',
+        'methyl_pca50', 'cnv_pca50', 'mirna_top200', 'wsi_gigapath',
+        'rppa', 'immune_xcell', 'mut_driver', 'stemness_mrnasi',
+    ],
+    # Reaction (R², leave-additive-out GroupKFold)
+    'buchwald_hartwig': [
+        'reactant_ecfp4', 'drfp_2048', 'onehot_components', 'rxnfp',
+        'product_ecfp4', 'reactant_maccs', 'product_maccs', 'reactant_pdv',
+        'product_pdv', 'diff_ecfp4', 'diff_maccs', 'component_descriptors',
+        'ligand_descriptors', 'reactiont5', 'concat_ecfp4', 'concat_maccs',
+        'concat_pdv',
+    ],
+}
 
 
 def _is_antibody_dataset(name: str) -> bool:
@@ -712,8 +802,17 @@ def _is_tcga_dataset(name: str) -> bool:
     return any(name.lower().startswith(p) for p in _TCGA_PREFIXES)
 
 
+def _is_nucleotide_dataset(name: str) -> bool:
+    return any(name.lower().startswith(p) for p in _NUCLEOTIDE_PREFIXES)
+
+
+def _is_reaction_dataset(name: str) -> bool:
+    return name.lower() in _REACTION_DATASETS
+
+
 def load_data(dataset_name: str, rep_preset: str = 'fast',
-              delta: bool = False, augment: bool = False) -> dict:
+              delta: bool = False, augment: bool = False,
+              rep_names: Optional[List[str]] = None) -> dict:
     """Load dataset, generate representations, assign groups.
 
     Domain-aware: detects TCGA, antibody, or molecular dataset names and
@@ -738,6 +837,9 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
             expression, gene_names, sample_ids, wsi_dir,
             rep_preset, cohort=cohort,
         )
+
+        if rep_names:
+            reps = {k: v for k, v in reps.items() if k in rep_names}
 
         tss_groups, n_groups = assign_tss_groups(sample_ids)
 
@@ -768,18 +870,22 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
         groups = data['groups']
         n_groups = data['n_groups']
 
-        # Generate reps based on preset
+        # Generate reps based on preset or custom list
         if rep_preset in ('fast', 'skip_lm'):
-            rep_names = sorted(ANTIBODY_FAST_REPS)
+            _rep_names_from_preset = sorted(ANTIBODY_FAST_REPS)
         else:
-            rep_names = sorted(ANTIBODY_REPS.keys())
+            _rep_names_from_preset = sorted(ANTIBODY_REPS.keys())
 
+        _wanted_reps = rep_names if rep_names else _rep_names_from_preset
         reps = {}
-        for rep_name in rep_names:
+        for rn in _wanted_reps:
+            if rn not in ANTIBODY_REPS:
+                print(f"  WARNING: antibody rep '{rn}' not in ANTIBODY_REPS, skipping")
+                continue
             try:
-                reps[rep_name] = ANTIBODY_REPS[rep_name](heavy_seqs, light_seqs)
+                reps[rn] = ANTIBODY_REPS[rn](heavy_seqs, light_seqs)
             except Exception as e:
-                print(f"  WARNING: {rep_name} failed: {e}")
+                print(f"  WARNING: {rn} failed: {e}")
 
         print(f"  {dataset_name}: {len(heavy_seqs)} antibodies, {n_groups} groups, "
               f"{len(reps)} reps ({', '.join(f'{k}={v.shape[1]}' for k, v in reps.items())})")
@@ -796,6 +902,121 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
             'domain': 'antibody',
             'augmentations': None,
         }
+    elif _is_nucleotide_dataset(dataset_name):
+        from find_best_hybrid_nucleotide import (
+            load_dataset as load_nuc_dataset,
+            get_representations as get_nuc_representations,
+        )
+
+        data = load_nuc_dataset(dataset_name)
+        sequences = data['sequences']
+        labels = data['labels']
+        groups = data['groups']
+        n_groups = data['n_groups']
+        task_type = data['task_type']
+
+        reps = get_nuc_representations(sequences, rep_preset)
+
+        if rep_names:
+            reps = {k: v for k, v in reps.items() if k in rep_names}
+
+        print(f"  {dataset_name}: {len(sequences)} sequences, {n_groups} groups, "
+              f"{len(reps)} reps ({', '.join(f'{k}={v.shape[1]}' for k, v in reps.items())})")
+
+        return {
+            'sequences': sequences,
+            'labels': labels,
+            'reps': reps,
+            'groups': groups,
+            'n_groups': n_groups,
+            'n_scaffolds': n_groups,
+            'task_type': task_type,
+            'domain': 'nucleotide',
+            'augmentations': None,
+        }
+
+    elif _is_reaction_dataset(dataset_name):
+        from kirby.datasets.reaction_yields import (
+            load_buchwald_hartwig, load_suzuki, load_bh_doyle_plates,
+        )
+        from kirby.representations.reaction import (
+            create_drfp, create_concat_ecfp4, create_concat_maccs,
+            create_concat_pdv, create_product_ecfp4, create_reactant_ecfp4,
+            create_product_maccs, create_reactant_maccs,
+            create_product_pdv, create_reactant_pdv,
+            create_rxnfp, create_onehot_components,
+            create_diff_ecfp4, create_diff_maccs,
+            create_component_descriptors, create_ligand_descriptors,
+            create_reactiont5,
+        )
+
+        loaders = {
+            'buchwald_hartwig': load_buchwald_hartwig,
+            'suzuki': load_suzuki,
+            'bh_doyle_plates': load_bh_doyle_plates,
+        }
+        data = loaders[dataset_name]()
+        rxn_smiles = data['rxn_smiles']
+        labels = np.array(data['labels'], dtype=np.float32)
+        groups = np.array(data['groups'])
+        components = data.get('components')
+
+        # Registry of all reaction rep generators
+        _rxn_generators = {
+            'drfp_2048': lambda: create_drfp(rxn_smiles),
+            'concat_ecfp4': lambda: create_concat_ecfp4(components),
+            'concat_maccs': lambda: create_concat_maccs(components),
+            'concat_pdv': lambda: create_concat_pdv(components),
+            'product_ecfp4': lambda: create_product_ecfp4(rxn_smiles),
+            'reactant_ecfp4': lambda: create_reactant_ecfp4(rxn_smiles),
+            'product_maccs': lambda: create_product_maccs(rxn_smiles),
+            'reactant_maccs': lambda: create_reactant_maccs(rxn_smiles),
+            'product_pdv': lambda: create_product_pdv(rxn_smiles),
+            'reactant_pdv': lambda: create_reactant_pdv(rxn_smiles),
+            'rxnfp': lambda: create_rxnfp(rxn_smiles),
+            'onehot_components': lambda: create_onehot_components(components),
+            'diff_ecfp4': lambda: create_diff_ecfp4(rxn_smiles),
+            'diff_maccs': lambda: create_diff_maccs(rxn_smiles),
+            'component_descriptors': lambda: create_component_descriptors(components),
+            'ligand_descriptors': lambda: create_ligand_descriptors(components),
+            'reactiont5': lambda: create_reactiont5(rxn_smiles),
+        }
+
+        # Determine which reps to generate
+        if rep_names:
+            wanted = rep_names
+        elif rep_preset == 'all':
+            wanted = list(_rxn_generators.keys())
+        else:
+            # fast preset: the original 8
+            wanted = ['drfp_2048', 'concat_ecfp4', 'concat_maccs', 'concat_pdv',
+                       'product_ecfp4', 'reactant_ecfp4', 'rxnfp', 'onehot_components']
+
+        reps = {}
+        for name in wanted:
+            if name not in _rxn_generators:
+                print(f"  WARNING: unknown reaction rep '{name}', skipping")
+                continue
+            try:
+                reps[name] = _rxn_generators[name]()
+            except Exception as e:
+                print(f"  WARNING: {name} failed: {e}")
+
+        n_groups = len(np.unique(groups))
+        print(f"  {dataset_name}: {len(labels)} reactions, {n_groups} groups, "
+              f"{len(reps)} reps ({', '.join(f'{k}={v.shape[1]}' for k, v in reps.items())})")
+
+        return {
+            'labels': labels,
+            'reps': reps,
+            'groups': groups,
+            'n_groups': n_groups,
+            'n_scaffolds': n_groups,
+            'task_type': 'regression',
+            'domain': 'reaction',
+            'augmentations': None,
+        }
+
     else:
         from find_best_hybrid_molecular import (
             load_dataset as load_molecular_dataset,
@@ -806,6 +1027,9 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
         smiles, labels, task_type = load_molecular_dataset(dataset_name)
         reps = get_molecular_representations(smiles, rep_preset)
         groups, n_scaffolds = assign_scaffold_groups(smiles)
+
+        if rep_names:
+            reps = {k: v for k, v in reps.items() if k in rep_names}
 
         print(f"  {dataset_name}: {len(smiles)} samples, {n_scaffolds} scaffolds, "
               f"{len(reps)} reps ({', '.join(f'{k}={v.shape[1]}' for k, v in reps.items())})")
@@ -956,13 +1180,27 @@ def convert_numpy(obj):
 
 def save_experiment_results(results: dict, output_dir: str, experiment_id: str,
                             dataset: str = None):
-    """Save results JSON to output_dir/experiment_id/{dataset}.json."""
+    """Save results JSON to output_dir/experiment_id/{dataset}.json.
+
+    If results contains a 'meta' key, the output uses the structured schema.
+    Otherwise, wraps results with a timestamp for traceability.
+    """
+    import datetime
+
     out = Path(output_dir) / experiment_id
     out.mkdir(parents=True, exist_ok=True)
     filename = f"{dataset}.json" if dataset else "results.json"
     filepath = out / filename
+
+    output = convert_numpy(results)
+    if 'meta' not in output:
+        output = {'timestamp': datetime.datetime.now().isoformat(), **output}
+    else:
+        output.setdefault('timestamp', datetime.datetime.now().isoformat())
+        output.setdefault('experiment', experiment_id)
+
     with open(filepath, 'w') as f:
-        json.dump(convert_numpy(results), f, indent=2)
+        json.dump(output, f, indent=2)
     print(f"  [saved {filepath}]")
     return filepath
 
@@ -979,6 +1217,69 @@ def load_experiment_results(output_dir: str, experiment_id: str,
     return None
 
 
+def make_structured_output(experiment_id: str, dataset: str, data: dict,
+                           config: dict, results: Any,
+                           primary_metric: str = None,
+                           lower_is_better: bool = None) -> dict:
+    """Build the common structured JSON schema for framework experiments.
+
+    Returns a dict ready for save_experiment_results().
+    """
+    import datetime
+    reps = data.get('reps', {})
+    return {
+        'experiment': experiment_id,
+        'dataset': dataset,
+        'domain': data.get('domain', 'molecular'),
+        'timestamp': datetime.datetime.now().isoformat(),
+        'primary_metric': primary_metric,
+        'lower_is_better': lower_is_better,
+        'config': convert_numpy(config),
+        'results': convert_numpy(results),
+        'meta': {
+            'n_samples': len(data.get('labels', [])),
+            'n_reps': len(reps),
+            'rep_dims': {k: v.shape[1] for k, v in reps.items()},
+            'task_type': data.get('task_type', 'regression'),
+        },
+    }
+
+
+def run_across_tasks(run_fn, tasks: List[dict], output_dir: str,
+                     experiment_id: str):
+    """Run an experiment function across multiple (dataset, rep_preset) tasks.
+
+    Args:
+        run_fn: callable(data, config, output_dir, dataset_name) -> results
+        tasks: list of dicts with keys: dataset, reps, mode (optional).
+        output_dir: base output directory.
+        experiment_id: experiment ID for structured output.
+
+    Returns:
+        list of (dataset_name, results) tuples.
+    """
+    all_results = []
+    for task in tasks:
+        dataset = task['dataset']
+        rep_preset = task.get('reps', 'all')
+        mode = task.get('mode', 'full')
+
+        print(f"\n{'='*70}")
+        print(f"  TASK: {dataset} (reps={rep_preset}, mode={mode})")
+        print(f"{'='*70}")
+
+        # Use curated rep list from FRAMEWORK_TASKS if available
+        custom_reps = task.get('rep_names') or FRAMEWORK_TASKS.get(dataset)
+        data = load_data(dataset, rep_preset, rep_names=custom_reps)
+        # Build config from mode
+        config = FULL if mode == 'full' else INTERMEDIARY
+        results = run_fn(data, config, output_dir, dataset)
+        save_experiment_results(results, output_dir, experiment_id, dataset)
+        all_results.append((dataset, results))
+
+    return all_results
+
+
 def create_experiment_parser(description: str, has_delta: bool = False,
                              has_augment: bool = False) -> argparse.ArgumentParser:
     """Create a standard argument parser for experiment scripts."""
@@ -988,9 +1289,11 @@ def create_experiment_parser(description: str, has_delta: bool = False,
     parser.add_argument('--dataset', type=str, default='logd',
                         help='Dataset name (logd, caco2, herg, qm9, flab_*, etc.)')
     parser.add_argument('--reps', type=str, default='fast',
-                        help='Representation preset (fast, fast+hf, all)')
+                        help='Representation preset (fast, fast+hf, all) or comma-separated list')
     parser.add_argument('--output', type=str, default='tests/results',
                         help='Output directory for results JSON')
+    parser.add_argument('--framework', action='store_true',
+                        help='Use curated FRAMEWORK_TASKS rep lists (overrides --reps)')
     if has_delta:
         parser.add_argument('--delta', action='store_true',
                             help='Generate delta representations for antibody datasets')
@@ -998,6 +1301,26 @@ def create_experiment_parser(description: str, has_delta: bool = False,
         parser.add_argument('--augment', action='store_true',
                             help='Include augmented features for antibody datasets')
     return parser
+
+
+def parse_rep_args(args) -> Tuple[str, Optional[List[str]]]:
+    """Parse --reps and --framework args into (rep_preset, rep_names).
+
+    Returns:
+        (rep_preset, rep_names) where rep_names is None if using a preset,
+        or a list of rep names if using --framework or comma-separated --reps.
+    """
+    if getattr(args, 'framework', False):
+        dataset = args.dataset
+        if dataset in FRAMEWORK_TASKS:
+            return 'all', FRAMEWORK_TASKS[dataset]
+        else:
+            print(f"  WARNING: {dataset} not in FRAMEWORK_TASKS, falling back to --reps")
+
+    reps_arg = args.reps
+    if ',' in reps_arg:
+        return 'all', [r.strip() for r in reps_arg.split(',')]
+    return reps_arg, None
 
 
 def get_config(args) -> dict:
