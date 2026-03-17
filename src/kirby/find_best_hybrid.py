@@ -45,6 +45,7 @@ from scipy.stats import pearsonr, spearmanr
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
+    matthews_corrcoef,
     mean_absolute_error,
     mean_squared_error,
     r2_score,
@@ -73,6 +74,7 @@ class Blueprint:
     seed: int = 42
     metric: str = 'r2'
     task_type: str = 'regression'
+    augmentation_strategy: str = 'greedy_ablation'
 
     def to_dict(self) -> dict:
         return {
@@ -86,6 +88,7 @@ class Blueprint:
             'seed': self.seed,
             'metric': self.metric,
             'task_type': self.task_type,
+            'augmentation_strategy': self.augmentation_strategy,
         }
 
 
@@ -143,6 +146,7 @@ BUILTIN_METRICS = {
     'pearson':     (lambda y, p: float(pearsonr(y, p)[0]), False),
     'ci':          (_concordance_index, False),
     'f1_weighted': (lambda y, p: f1_score(y, p, average='weighted'), False),
+    'mcc':         (matthews_corrcoef, False),
 }
 
 
@@ -991,6 +995,7 @@ def _evaluate_hybrid_config(
     augmentation_strategy: str = 'greedy_ablation',
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
+    lower_is_better: bool = False,
     fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
 ) -> dict:
@@ -1040,6 +1045,9 @@ def _evaluate_hybrid_config(
                 augmentation_strategy=augmentation_strategy,
                 augmentation_threshold=augmentation_threshold,
                 augmentation_budget=augmentation_budget,
+                model=model,
+                metric_fn=metric_fn,
+                lower_is_better=lower_is_better,
             )
             X_val = apply_feature_selection(val_reps, feature_info)
 
@@ -1087,6 +1095,7 @@ def _evaluate_hybrid_config(
         importance_method=importance_method,
         budget=budget,
         step_size=step_size,
+        augmentation_strategy=augmentation_strategy,
     )
 
     return {
@@ -1375,6 +1384,7 @@ def _run_search(
                                 augmentation_strategy=augmentation_strategy,
                                 augmentation_threshold=augmentation_threshold,
                                 augmentation_budget=augmentation_budget,
+                                lower_is_better=lower_is_better,
                                 fold_reps=fold_reps,
                                 precomputed_folds=precomputed_folds,
                             )

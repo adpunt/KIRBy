@@ -26,10 +26,13 @@ Default configuration (from testing):
 - budget=100
 """
 
+from copy import deepcopy
+
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from sklearn.inspection import permutation_importance
+from sklearn.metrics import make_scorer, r2_score
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import r2_score
 
 
 # ============================================================================
@@ -873,27 +876,44 @@ def _create_hybrid_with_allocation(rep_dict, labels, allocation):
     return np.hstack(selected_features).astype(np.float32), feature_info
 
 
-def _evaluate_allocation(X_train, X_val, y_train, y_val):
-    """Helper: Evaluate allocation with RF"""
+def _evaluate_allocation(X_train, X_val, y_train, y_val,
+                         model=None, metric_fn=None, lower_is_better=False):
+    """Helper: Evaluate allocation quality on a train/val split.
+
+    If *model* is None (default), uses an internal RF and R²/accuracy —
+    preserving backward compatibility for all existing callers.
+
+    If *model* is provided it is deep-copied, fitted on (X_train, y_train),
+    and scored with *metric_fn(y_val, y_pred)*.  The returned value is
+    negated when *lower_is_better* so that "higher return = better" always.
+    """
     if X_train.shape[1] == 0:
         return -np.inf
-    
+
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_val_scaled = scaler.transform(X_val)
-    
+
+    if model is not None:
+        m = deepcopy(model)
+        m.fit(X_train_scaled, y_train)
+        y_pred = m.predict(X_val_scaled)
+        score = metric_fn(y_val, y_pred)
+        return -score if lower_is_better else score
+
+    # Fallback: internal RF (backward compat)
     is_classification = _is_classification_task(y_train)
     if is_classification:
-        model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+        rf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
     else:
-        model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-    
-    model.fit(X_train_scaled, y_train)
-    
+        rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+
+    rf.fit(X_train_scaled, y_train)
+
     if is_classification:
-        return model.score(X_val_scaled, y_val)
+        return rf.score(X_val_scaled, y_val)
     else:
-        y_pred = model.predict(X_val_scaled)
+        y_pred = rf.predict(X_val_scaled)
         return r2_score(y_val, y_pred)
 
 
@@ -1078,6 +1098,297 @@ def greedy_augmentation_ablation(
         result['all_scores'] = all_scores
     
     return result
+
+
+def iterative_augmentation(
+    X_base_train, X_base_val,
+    base_feature_info,
+    augmentations_train, augmentations_val,
+    y_train, y_val,
+    model=None,
+    total_budget=100,
+    metric_fn=None,
+    lower_is_better=False,
+    max_candidates=200,
+    patience=10,
+):
+    """Iterative per-feature augmentation with fill-then-replace.
+
+    Phase A — fill remaining budget slots by individually A/B-testing
+    augmentation features (best first, ranked by a single RF importance pass).
+
+    Phase B — replace lowest-importance base features with better
+    augmentation features, verified by A/B testing with the downstream model.
+
+    Parameters
+    ----------
+    X_base_train, X_base_val : ndarray
+        Base hybrid features (already selected).
+    base_feature_info : dict
+        Feature info from base hybrid creation. Keys are rep names, values
+        have ``'selected_indices'``.  Modified **in-place** during Phase B
+        to reflect replacements.
+    augmentations_train, augmentations_val : dict
+        ``{aug_name: ndarray}`` of candidate augmentation features.
+    y_train, y_val : ndarray
+        Target labels.
+    model : estimator or None
+        Downstream sklearn-compatible model.  If None, internal RF is used.
+    total_budget : int
+        Maximum number of features in the final hybrid (base + aug).
+    metric_fn : callable or None
+        ``metric_fn(y_true, y_pred) -> float``.  Required when *model* is
+        provided.
+    lower_is_better : bool
+        If True, lower metric values are better.
+    max_candidates : int
+        Pre-ranking cutoff — only this many top aug features are considered.
+    patience : int
+        Stop after this many consecutive non-improving candidates.
+
+    Returns
+    -------
+    dict
+        ``augmentation_info`` (compatible with ``apply_augmentation_selection``),
+        plus ``replacements``, ``phase_a_added``, ``phase_b_replaced``,
+        ``baseline_score``, ``final_score``.
+    """
+    is_classification = _is_classification_task(y_train)
+    n_base = X_base_train.shape[1]
+    remaining_budget = max(0, total_budget - n_base)
+
+    # ------------------------------------------------------------------
+    # Pre-rank: pool all aug features, fit one RF, rank by importance
+    # ------------------------------------------------------------------
+    aug_names_flat = []   # (aug_name, col_idx) per pooled column
+    pool_parts_train = []
+    pool_parts_val = []
+
+    for aug_name, X_aug_tr in augmentations_train.items():
+        X_aug_vl = augmentations_val[aug_name]
+        X_aug_tr = np.clip(X_aug_tr, -1e10, 1e10)
+        X_aug_tr = np.nan_to_num(X_aug_tr, nan=0.0, posinf=1e10, neginf=-1e10)
+        X_aug_vl = np.clip(X_aug_vl, -1e10, 1e10)
+        X_aug_vl = np.nan_to_num(X_aug_vl, nan=0.0, posinf=1e10, neginf=-1e10)
+        for col in range(X_aug_tr.shape[1]):
+            aug_names_flat.append((aug_name, col))
+        pool_parts_train.append(X_aug_tr)
+        pool_parts_val.append(X_aug_vl)
+
+    if not pool_parts_train:
+        return {
+            'augmentation_info': {},
+            'replacements': [],
+            'phase_a_added': 0,
+            'phase_b_replaced': 0,
+            'baseline_score': float('nan'),
+            'final_score': float('nan'),
+        }
+
+    X_pool_train = np.hstack(pool_parts_train)
+    X_pool_val = np.hstack(pool_parts_val)
+
+    scaler_pool = StandardScaler()
+    X_pool_scaled = scaler_pool.fit_transform(X_pool_train)
+
+    if is_classification:
+        rf_ranker = RandomForestClassifier(n_estimators=50, max_depth=10,
+                                           random_state=42, n_jobs=-1)
+    else:
+        rf_ranker = RandomForestRegressor(n_estimators=50, max_depth=10,
+                                          random_state=42, n_jobs=-1)
+    rf_ranker.fit(X_pool_scaled, y_train)
+    importances = np.nan_to_num(rf_ranker.feature_importances_, nan=0.0)
+
+    # Rank and take top max_candidates
+    ranked_idx = np.argsort(importances)[::-1][:max_candidates]
+
+    # ------------------------------------------------------------------
+    # Baseline score
+    # ------------------------------------------------------------------
+    baseline_score = _evaluate_allocation(
+        X_base_train, X_base_val, y_train, y_val,
+        model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
+    )
+
+    # Current hybrid state (columns appended during Phase A)
+    X_cur_train = X_base_train.copy()
+    X_cur_val = X_base_val.copy()
+    current_score = baseline_score
+
+    # Track which aug features we've added: {aug_name: [col_indices]}
+    aug_selected = {}
+    phase_a_added = 0
+    consecutive_failures = 0
+
+    # ------------------------------------------------------------------
+    # Phase A — fill remaining budget
+    # ------------------------------------------------------------------
+    for rank_pos in ranked_idx:
+        if remaining_budget <= 0:
+            break
+        if consecutive_failures >= patience:
+            break
+
+        aug_name, col_idx = aug_names_flat[rank_pos]
+        feat_train = X_pool_train[:, rank_pos:rank_pos + 1]
+        feat_val = X_pool_val[:, rank_pos:rank_pos + 1]
+
+        # A/B test: current + this one feature
+        X_test_train = np.hstack([X_cur_train, feat_train])
+        X_test_val = np.hstack([X_cur_val, feat_val])
+
+        new_score = _evaluate_allocation(
+            X_test_train, X_test_val, y_train, y_val,
+            model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
+        )
+
+        if new_score > current_score:
+            X_cur_train = X_test_train
+            X_cur_val = X_test_val
+            current_score = new_score
+            remaining_budget -= 1
+            phase_a_added += 1
+            consecutive_failures = 0
+            aug_selected.setdefault(aug_name, []).append(col_idx)
+        else:
+            consecutive_failures += 1
+
+    # ------------------------------------------------------------------
+    # Phase B — replace lowest-importance base features
+    # ------------------------------------------------------------------
+    replacements = []
+    phase_b_replaced = 0
+    consecutive_failures = 0
+
+    # Collect remaining candidates not yet added
+    added_pool_indices = set()
+    for aug_name, cols in aug_selected.items():
+        for col in cols:
+            for i, (an, ci) in enumerate(aug_names_flat):
+                if an == aug_name and ci == col:
+                    added_pool_indices.add(i)
+                    break
+    remaining_candidates = [i for i in ranked_idx if i not in added_pool_indices]
+
+    if remaining_candidates and n_base > 0:
+        for rank_pos in remaining_candidates:
+            if consecutive_failures >= patience:
+                break
+
+            aug_name, col_idx = aug_names_flat[rank_pos]
+            feat_train = X_pool_train[:, rank_pos:rank_pos + 1]
+            feat_val = X_pool_val[:, rank_pos:rank_pos + 1]
+
+            # Compute permutation importance of current hybrid to find worst feature
+            scaler_cur = StandardScaler()
+            X_cur_train_s = scaler_cur.fit_transform(X_cur_train)
+            X_cur_val_s = scaler_cur.transform(X_cur_val)
+
+            if model is not None:
+                m_perm = deepcopy(model)
+            elif is_classification:
+                m_perm = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+            else:
+                m_perm = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+
+            m_perm.fit(X_cur_train_s, y_train)
+
+            if metric_fn is not None:
+                scoring = make_scorer(metric_fn,
+                                      greater_is_better=not lower_is_better)
+            else:
+                scoring = None
+            perm_result = permutation_importance(
+                m_perm, X_cur_val_s, y_val,
+                n_repeats=3, random_state=42,
+                scoring=scoring,
+            )
+            perm_imp = perm_result.importances_mean
+
+            # Only consider base feature columns for replacement (indices 0..n_base-1
+            # of the *current* hybrid — augmentation cols are after n_base)
+            base_perm_imp = perm_imp[:n_base]
+            if lower_is_better:
+                # For lower-is-better, permutation_importance with default scorer
+                # gives negative importances for helpful features; worst = highest
+                worst_base_idx = int(np.argmax(base_perm_imp))
+            else:
+                worst_base_idx = int(np.argmin(base_perm_imp))
+
+            # A/B test: replace worst base feature with this aug feature
+            X_test_train = X_cur_train.copy()
+            X_test_val = X_cur_val.copy()
+            X_test_train[:, worst_base_idx] = feat_train[:, 0]
+            X_test_val[:, worst_base_idx] = feat_val[:, 0]
+
+            new_score = _evaluate_allocation(
+                X_test_train, X_test_val, y_train, y_val,
+                model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
+            )
+
+            if new_score > current_score:
+                X_cur_train = X_test_train
+                X_cur_val = X_test_val
+                current_score = new_score
+                phase_b_replaced += 1
+                consecutive_failures = 0
+                aug_selected.setdefault(aug_name, []).append(col_idx)
+
+                # Track replacement for provenance
+                replacements.append({
+                    'replaced_base_col': worst_base_idx,
+                    'replaced_by_aug': aug_name,
+                    'replaced_by_col': col_idx,
+                    'score_delta': new_score - current_score,
+                })
+
+                # Update base_feature_info: remove the replaced base feature
+                # Find which rep owns worst_base_idx
+                col_cursor = 0
+                for rep_name, info in list(base_feature_info.items()):
+                    if 'selected_indices' not in info:
+                        continue
+                    sel = info['selected_indices']
+                    rep_n = len(sel)
+                    if col_cursor <= worst_base_idx < col_cursor + rep_n:
+                        # Remove this index from the rep's selected_indices
+                        local_pos = worst_base_idx - col_cursor
+                        info['selected_indices'] = np.delete(sel, local_pos)
+                        info['n_features'] = len(info['selected_indices'])
+                        if 'importance_scores' in info and len(info['importance_scores']) > local_pos:
+                            info['importance_scores'] = np.delete(
+                                info['importance_scores'], local_pos)
+                        break
+                    col_cursor += rep_n
+            else:
+                consecutive_failures += 1
+
+    # ------------------------------------------------------------------
+    # Build augmentation_info (compatible with apply_augmentation_selection)
+    # ------------------------------------------------------------------
+    augmentation_info = {}
+    for aug_name, col_indices in aug_selected.items():
+        col_arr = np.array(sorted(set(col_indices)), dtype=int)
+        augmentation_info[aug_name] = {
+            'selected_indices': col_arr,
+            'importance_scores': importances[
+                [i for i, (an, _) in enumerate(aug_names_flat)
+                 if an == aug_name and _ in set(col_indices)]
+            ] if len(col_arr) > 0 else np.array([]),
+            'n_features': len(col_arr),
+        }
+
+    return {
+        'augmentation_info': augmentation_info,
+        'kept_augmentations': list(aug_selected.keys()),
+        'replacements': replacements,
+        'phase_a_added': phase_a_added,
+        'phase_b_replaced': phase_b_replaced,
+        'baseline_score': baseline_score,
+        'final_score': current_score,
+        'total_improvement': current_score - baseline_score,
+    }
 
 
 # ============================================================================
@@ -1934,7 +2245,7 @@ def apply_augmentation_selection(augmentations, augmentation_info):
 # MAIN HYBRID CREATION
 # ============================================================================
 
-def create_hybrid(base_reps, labels, 
+def create_hybrid(base_reps, labels,
                  allocation_method='greedy',
                  n_per_rep=100,
                  budget=100,
@@ -1948,6 +2259,10 @@ def create_hybrid(base_reps, labels,
                  augmentation_strategy='greedy_ablation',
                  augmentation_threshold=None,
                  augmentation_budget=20,
+                 # Model-aware augmentation (iterative strategy)
+                 model=None,
+                 metric_fn=None,
+                 lower_is_better=False,
                  **kwargs):
     """
     Create hybrid representation by combining features from multiple base representations.
@@ -1981,11 +2296,17 @@ def create_hybrid(base_reps, labels,
             These are evaluated separately from base_reps via greedy ablation
         augmentation_strategy: How to handle augmentations
             - 'greedy_ablation': Test each, keep only those that improve (default)
+            - 'iterative': Per-feature fill-then-replace using downstream model
             - 'all': Include all augmentations
             - 'none': Ignore augmentations
         augmentation_threshold: Minimum improvement to keep augmentation (default: None = any improvement)
             Can be float (e.g., 0.01 for 1% R² improvement) or None
         augmentation_budget: Max features per augmentation to select (default: 20)
+
+        model: sklearn-compatible estimator for model-aware augmentation (default: None)
+            Only used by 'iterative' strategy. Deepcopied for each evaluation.
+        metric_fn: callable(y_true, y_pred) -> float for model-aware augmentation
+        lower_is_better: Whether lower metric_fn values are better (default: False)
         
         **kwargs: Additional arguments for importance computation
         
@@ -2340,6 +2661,41 @@ def create_hybrid(base_reps, labels,
                 if aug_features is not None:
                     hybrid_features = np.hstack([hybrid_features, aug_features])
         
+        elif augmentation_strategy == 'iterative':
+            # Per-feature fill-then-replace with model-aware A/B testing
+            aug_result = iterative_augmentation(
+                X_base_train, X_base_val,
+                feature_info,
+                aug_dict_train, aug_dict_val,
+                train_labels, val_labels,
+                model=model,
+                total_budget=budget,
+                metric_fn=metric_fn,
+                lower_is_better=lower_is_better,
+                max_candidates=kwargs.pop('aug_max_candidates', 200),
+                patience=kwargs.pop('aug_patience', 10),
+            )
+
+            feature_info['augmentation_info'] = aug_result['augmentation_info']
+            feature_info['augmentation_baseline'] = aug_result['baseline_score']
+            feature_info['augmentation_final'] = aug_result['final_score']
+            feature_info['kept_augmentations'] = aug_result['kept_augmentations']
+            feature_info['augmentation_replacements'] = aug_result['replacements']
+            feature_info['phase_a_added'] = aug_result['phase_a_added']
+            feature_info['phase_b_replaced'] = aug_result['phase_b_replaced']
+
+            # Rebuild hybrid_features from (possibly modified) base_feature_info
+            # + augmentation features.  Phase B may have removed base indices.
+            hybrid_features = apply_feature_selection(
+                original_base_reps, feature_info
+            )
+            if aug_result['kept_augmentations']:
+                aug_features = apply_augmentation_selection(
+                    augmentations, aug_result['augmentation_info']
+                )
+                if aug_features is not None:
+                    hybrid_features = np.hstack([hybrid_features, aug_features])
+
         elif augmentation_strategy == 'all':
             # Include all augmentations (select top features from each)
             is_classification = _is_classification_task(labels)
