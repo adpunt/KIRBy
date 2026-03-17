@@ -1590,8 +1590,8 @@ def create_esm3_protein_embeddings(
 
     print("  Loading ESM3 (esm3_sm_open_v1) for protein embeddings...")
     model = ESM3.from_pretrained("esm3_sm_open_v1")
-    if device == 'cuda' and not torch.cuda.is_bf16_supported():
-        model = model.half()
+    if device == 'cuda':
+        model = model.half()  # float16 — bf16 not supported on all GPUs
     model = model.to(device).eval()
 
     config = LogitsConfig(sequence=True, return_embeddings=True)
