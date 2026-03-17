@@ -76,6 +76,30 @@ DATASET_REGISTRY = {
     'buchwald_hartwig': ('reaction', 'all'),
     'suzuki':           ('reaction', 'all'),
     'bh_doyle_plates':  ('reaction', 'all'),
+    # Nucleotide (NT Revised)
+    'nt_promoter_all':            ('nucleotide', 'fast'),
+    'nt_promoter_tata':           ('nucleotide', 'fast'),
+    'nt_promoter_no_tata':        ('nucleotide', 'fast'),
+    'nt_enhancers':               ('nucleotide', 'fast'),
+    'nt_enhancers_types':         ('nucleotide', 'fast'),
+    'nt_splice_sites_all':        ('nucleotide', 'fast'),
+    'nt_splice_sites_acceptors':  ('nucleotide', 'fast'),
+    'nt_splice_sites_donors':     ('nucleotide', 'fast'),
+    'nt_H2AFZ':                   ('nucleotide', 'fast'),
+    'nt_H3K27ac':                 ('nucleotide', 'fast'),
+    'nt_H3K27me3':                ('nucleotide', 'fast'),
+    'nt_H3K36me3':                ('nucleotide', 'fast'),
+    'nt_H3K4me1':                 ('nucleotide', 'fast'),
+    'nt_H3K4me2':                 ('nucleotide', 'fast'),
+    'nt_H3K4me3':                 ('nucleotide', 'fast'),
+    'nt_H3K9ac':                  ('nucleotide', 'fast'),
+    'nt_H3K9me3':                 ('nucleotide', 'fast'),
+    'nt_H4K20me1':                ('nucleotide', 'fast'),
+    # Nucleotide (Genomic Benchmarks)
+    'gb_human_nontata_promoters':           ('nucleotide', 'fast'),
+    'gb_human_enhancers_cohn':              ('nucleotide', 'fast'),
+    'gb_demo_coding_vs_intergenomic_seqs':  ('nucleotide', 'fast'),
+    'gb_demo_human_or_worm':                ('nucleotide', 'fast'),
 }
 
 # Build domain -> datasets mapping
@@ -109,6 +133,8 @@ def load_dataset_and_reps(dataset_name: str, rep_preset: Optional[str] = None) -
         return _load_dta(dataset_name, preset)
     if domain == 'reaction':
         return _load_reaction(dataset_name)
+    if domain == 'nucleotide':
+        return _load_nucleotide(dataset_name, preset)
 
     # Molecular, antibody, TCGA — handled by _shared.load_data
     from experiments._shared import load_data
@@ -176,6 +202,8 @@ def _load_reaction(dataset_name: str) -> dict:
         create_product_maccs, create_reactant_maccs,
         create_product_pdv, create_reactant_pdv,
         create_rxnfp, create_onehot_components, create_reactiont5,
+        create_diff_ecfp4, create_diff_maccs,
+        create_component_descriptors, create_ligand_descriptors,
     )
 
     if dataset_name == 'buchwald_hartwig':
@@ -242,6 +270,28 @@ def _load_reaction(dataset_name: str) -> dict:
     except Exception as e:
         print(f"  WARNING: onehot_components failed: {e}")
 
+    # Difference fingerprints (product - reactant)
+    try:
+        reps['diff_ecfp4'] = create_diff_ecfp4(data['rxn_smiles'])
+    except Exception as e:
+        print(f"  WARNING: diff_ecfp4 failed: {e}")
+    try:
+        reps['diff_maccs'] = create_diff_maccs(data['rxn_smiles'])
+    except Exception as e:
+        print(f"  WARNING: diff_maccs failed: {e}")
+
+    # Per-component physicochemical descriptors
+    try:
+        reps['component_descriptors'] = create_component_descriptors(data['components'])
+    except Exception as e:
+        print(f"  WARNING: component_descriptors failed: {e}")
+
+    # Ligand steric/electronic descriptors
+    try:
+        reps['ligand_descriptors'] = create_ligand_descriptors(data['components'])
+    except Exception as e:
+        print(f"  WARNING: ligand_descriptors failed: {e}")
+
     n = len(data['labels'])
     groups = data.get('groups')
     n_groups = len(np.unique(groups)) if groups is not None else 0
@@ -259,6 +309,37 @@ def _load_reaction(dataset_name: str) -> dict:
         'domain': 'reaction',
         'augmentations': None,
         'prebuilt_splits': None,  # use GroupKFold on groups, not random splits
+    }
+
+
+def _load_nucleotide(dataset_name: str, rep_preset: str) -> dict:
+    """Load nucleotide dataset with representations."""
+    from find_best_hybrid_nucleotide import (
+        load_dataset as _load_nuc_ds,
+        get_representations as _get_nuc_reps,
+    )
+
+    data = _load_nuc_ds(dataset_name)
+    sequences = data['sequences']
+    labels = data['labels']
+    groups = data['groups']
+    n_groups = data['n_groups']
+    task_type = data['task_type']
+
+    reps = _get_nuc_reps(sequences, rep_preset)
+
+    print(f"  {dataset_name}: {len(sequences)} sequences, {n_groups} groups, "
+          f"{len(reps)} reps "
+          f"({', '.join(f'{k}={v.shape[1]}' for k, v in reps.items())})")
+
+    return {
+        'labels': labels,
+        'reps': reps,
+        'groups': groups,
+        'n_groups': n_groups,
+        'task_type': task_type,
+        'domain': 'nucleotide',
+        'augmentations': None,
     }
 
 
@@ -306,11 +387,17 @@ def _make_cv(groups, n_folds, labels):
 def _score(y_true, y_pred, task_type):
     """Compute all domain-appropriate metrics. Returns dict."""
     if task_type == 'classification':
+        from sklearn.metrics import matthews_corrcoef
         metrics = {'accuracy': float(accuracy_score(y_true, y_pred))}
         # F1-weighted (works for binary and multiclass)
         metrics['f1_weighted'] = float(f1_score(y_true, y_pred,
                                                 average='weighted',
                                                 zero_division=0))
+        # MCC (standard for genomics, handles class imbalance)
+        try:
+            metrics['mcc'] = float(matthews_corrcoef(y_true, y_pred))
+        except Exception:
+            pass
         # AUROC — only for binary classification
         unique_labels = np.unique(y_true)
         if len(unique_labels) == 2:
@@ -345,6 +432,8 @@ def _score(y_true, y_pred, task_type):
 def _get_primary_metric(dataset_name: str, task_type: str) -> tuple:
     """Return (metric_name, higher_is_better) per domain."""
     domain = DATASET_REGISTRY.get(dataset_name, ('unknown', None))[0]
+    if domain == 'nucleotide':
+        return 'mcc', True
     if task_type == 'classification':
         if domain == 'tcga':
             if dataset_name == 'tcga_luad_vs_lusc':
