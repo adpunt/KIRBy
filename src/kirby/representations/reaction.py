@@ -395,3 +395,261 @@ def create_onehot_components(components: List[Dict[str, str]]) -> np.ndarray:
                 X[i, offset + vocab[val]] = 1.0
         offset += len(vocab)
     return X
+
+
+# =========================================================================
+# DIFFERENCE FINGERPRINTS — what changed in the reaction
+# =========================================================================
+
+def create_diff_ecfp4(rxn_smiles: List[str], n_bits: int = 2048) -> np.ndarray:
+    """Product ECFP4 minus reactant ECFP4 — captures structural change.
+
+    Positive bits = substructures gained in product.
+    Negative bits = substructures lost from reactants.
+    Unlike DRFP (symmetric difference), this preserves directionality.
+
+    Returns:
+        np.ndarray of shape (n_reactions, n_bits), float32 in {-1, 0, 1}.
+    """
+    return create_product_ecfp4(rxn_smiles, n_bits) - create_reactant_ecfp4(rxn_smiles, n_bits)
+
+
+def create_diff_maccs(rxn_smiles: List[str]) -> np.ndarray:
+    """Product MACCS minus reactant MACCS — captures structural change.
+
+    Returns:
+        np.ndarray of shape (n_reactions, 167), float32 in {-1, 0, 1}.
+    """
+    return create_product_maccs(rxn_smiles) - create_reactant_maccs(rxn_smiles)
+
+
+# =========================================================================
+# COMPONENT PHYSICOCHEMICAL DESCRIPTORS
+# =========================================================================
+
+_COMPONENT_PROPS = [
+    'MolWt', 'MolLogP', 'TPSA', 'NumHDonors', 'NumHAcceptors',
+    'NumRotatableBonds', 'NumAromaticRings', 'NumHeteroatoms',
+    'FractionCSP3', 'LabuteASA', 'BalabanJ', 'HallKierAlpha',
+    'NumValenceElectrons', 'NumRadicalElectrons',
+]
+
+
+def _compute_mol_props(smi: str) -> np.ndarray:
+    """Compute focused physicochemical properties for one molecule."""
+    from rdkit import Chem
+    from rdkit.Chem import Descriptors, rdMolDescriptors
+
+    n = len(_COMPONENT_PROPS)
+    props = np.zeros(n, dtype=np.float32)
+
+    mol = Chem.MolFromSmiles(smi) if smi and smi.strip() else None
+    if mol is None:
+        return props
+
+    _fn_map = {
+        'MolWt': Descriptors.MolWt,
+        'MolLogP': Descriptors.MolLogP,
+        'TPSA': Descriptors.TPSA,
+        'NumHDonors': Descriptors.NumHDonors,
+        'NumHAcceptors': Descriptors.NumHAcceptors,
+        'NumRotatableBonds': Descriptors.NumRotatableBonds,
+        'NumAromaticRings': Descriptors.NumAromaticRings,
+        'NumHeteroatoms': Descriptors.NumHeteroatoms,
+        'FractionCSP3': Descriptors.FractionCSP3,
+        'LabuteASA': Descriptors.LabuteASA,
+        'BalabanJ': Descriptors.BalabanJ,
+        'HallKierAlpha': Descriptors.HallKierAlpha,
+        'NumValenceElectrons': Descriptors.NumValenceElectrons,
+        'NumRadicalElectrons': Descriptors.NumRadicalElectrons,
+    }
+
+    for i, name in enumerate(_COMPONENT_PROPS):
+        try:
+            props[i] = float(_fn_map[name](mol))
+        except Exception:
+            pass
+
+    return np.nan_to_num(props, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def create_component_descriptors(components: List[Dict[str, str]]) -> np.ndarray:
+    """Per-component physicochemical descriptors concatenated.
+
+    For each component role (aryl_halide, ligand, base, additive, etc.),
+    computes 14 RDKit properties (MW, LogP, TPSA, HBD, HBA, rotatable bonds,
+    aromatic rings, heteroatoms, Fsp3, ASA, Balaban J, Hall-Kier alpha,
+    valence electrons, radical electrons). Concatenated across roles.
+
+    Encodes *what kind of* component, not just *which* component.
+
+    Args:
+        components: List of dicts with component SMILES as values.
+
+    Returns:
+        np.ndarray of shape (n_reactions, n_components * 14), float32.
+    """
+    if not components:
+        raise ValueError("Empty components list")
+
+    # Use SMILES-valued keys only (skip categorical name keys)
+    # Heuristic: if a key has '_smiles' suffix, prefer it; otherwise use
+    # the key directly if its values look like SMILES
+    sample = components[0]
+    keys = sorted(sample.keys())
+
+    # For BH Doyle plates, prefer *_smiles keys over categorical name keys
+    smiles_keys = [k for k in keys if k.endswith('_smiles')]
+    if smiles_keys:
+        keys = smiles_keys
+    else:
+        # Filter to keys whose values contain SMILES-like characters
+        from rdkit import Chem
+        keys = [k for k in keys if Chem.MolFromSmiles(str(sample.get(k, ''))) is not None]
+
+    n_props = len(_COMPONENT_PROPS)
+    total_dim = len(keys) * n_props
+    X = np.zeros((len(components), total_dim), dtype=np.float32)
+
+    for i, comp in enumerate(components):
+        for j, key in enumerate(keys):
+            smi = str(comp.get(key, ''))
+            X[i, j * n_props:(j + 1) * n_props] = _compute_mol_props(smi)
+
+    print(f"  Component descriptors: {X.shape} "
+          f"({len(keys)} components × {n_props} props)")
+    return X
+
+
+# =========================================================================
+# LIGAND STERIC / ELECTRONIC DESCRIPTORS
+# =========================================================================
+
+def create_ligand_descriptors(components: List[Dict[str, str]]) -> np.ndarray:
+    """Steric and electronic descriptors for phosphine/amine ligands.
+
+    For Pd-catalyzed couplings (Buchwald-Hartwig, Suzuki), ligand choice
+    dominates yield. This encodes ligand properties that correlate with
+    catalytic activity:
+
+    Steric (8D):
+      - MW, num heavy atoms, num rotatable bonds
+      - num atoms alpha/beta to P (proxy for cone angle)
+      - Fraction sp3 carbons, num rings, num aromatic rings
+      - Approximate Tolman cone angle from substituent MW
+
+    Electronic (8D):
+      - Gasteiger partial charge on P (or N for amine ligands)
+      - Electronegativity-weighted sum near coordinating atom
+      - LogP (lipophilicity), TPSA (polarity)
+      - Num lone pairs on coordinating atom
+      - Num electron-donating groups (alkyl on P)
+      - Num electron-withdrawing groups (aryl on P)
+      - HOMO energy proxy (HallKierAlpha)
+      - Total valence electrons
+
+    Falls back to zeros if no ligand key found or ligand is not parseable.
+
+    Args:
+        components: List of dicts with component SMILES.
+            Must contain 'ligand' or 'ligand_smiles' key.
+
+    Returns:
+        np.ndarray of shape (n_reactions, 16), float32.
+    """
+    from rdkit import Chem
+    from rdkit.Chem import Descriptors, rdMolDescriptors, AllChem
+
+    if not components:
+        raise ValueError("Empty components list")
+
+    # Find the ligand key
+    sample = components[0]
+    if 'ligand_smiles' in sample:
+        lig_key = 'ligand_smiles'
+    elif 'ligand' in sample:
+        lig_key = 'ligand'
+    else:
+        raise ValueError("No 'ligand' or 'ligand_smiles' key in components")
+
+    X = np.zeros((len(components), 16), dtype=np.float32)
+
+    for i, comp in enumerate(components):
+        smi = str(comp.get(lig_key, ''))
+        mol = Chem.MolFromSmiles(smi) if smi and smi.strip() else None
+        if mol is None:
+            continue
+
+        try:
+            # --- Steric (8D) ---
+            X[i, 0] = Descriptors.MolWt(mol)
+            X[i, 1] = mol.GetNumHeavyAtoms()
+            X[i, 2] = Descriptors.NumRotatableBonds(mol)
+
+            # Atoms near coordinating atom (P or N)
+            coord_atom = None
+            for atom in mol.GetAtoms():
+                if atom.GetSymbol() == 'P':
+                    coord_atom = atom
+                    break
+            if coord_atom is None:
+                for atom in mol.GetAtoms():
+                    if atom.GetSymbol() == 'N' and atom.GetDegree() <= 3:
+                        coord_atom = atom
+                        break
+
+            if coord_atom is not None:
+                # Alpha atoms (directly bonded to P/N)
+                alpha = [n for n in coord_atom.GetNeighbors()]
+                X[i, 3] = len(alpha)
+                # Beta atoms (2 bonds from P/N)
+                beta = set()
+                for a in alpha:
+                    for b in a.GetNeighbors():
+                        if b.GetIdx() != coord_atom.GetIdx():
+                            beta.add(b.GetIdx())
+                X[i, 4] = len(beta)
+
+                # Substituent MW proxy for cone angle
+                # Sum MW of all fragments attached to P/N
+                sub_mw = sum(n.GetMass() for n in alpha)
+                X[i, 5] = sub_mw
+            else:
+                X[i, 3:6] = 0.0
+
+            X[i, 6] = Descriptors.FractionCSP3(mol)
+            X[i, 7] = Descriptors.NumAromaticRings(mol)
+
+            # --- Electronic (8D) ---
+            AllChem.ComputeGasteigerCharges(mol)
+
+            if coord_atom is not None:
+                charge = coord_atom.GetDoubleProp('_GasteigerCharge')
+                X[i, 8] = charge if np.isfinite(charge) else 0.0
+                # Electronegativity-weighted neighbor sum
+                neighbor_charge = 0.0
+                for n in coord_atom.GetNeighbors():
+                    nc = n.GetDoubleProp('_GasteigerCharge')
+                    if np.isfinite(nc):
+                        neighbor_charge += nc
+                X[i, 9] = neighbor_charge
+
+                # Count alkyl vs aryl substituents on coordinating atom
+                n_alkyl = sum(1 for n in coord_atom.GetNeighbors()
+                              if not n.GetIsAromatic() and n.GetSymbol() == 'C')
+                n_aryl = sum(1 for n in coord_atom.GetNeighbors()
+                             if n.GetIsAromatic())
+                X[i, 13] = n_alkyl  # electron-donating
+                X[i, 14] = n_aryl   # electron-withdrawing (relative)
+
+            X[i, 10] = Descriptors.MolLogP(mol)
+            X[i, 11] = Descriptors.TPSA(mol)
+            X[i, 12] = Descriptors.HallKierAlpha(mol)
+            X[i, 15] = Descriptors.NumValenceElectrons(mol)
+
+        except Exception:
+            pass
+
+    X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
+    print(f"  Ligand descriptors: {X.shape} (8 steric + 8 electronic)")
+    return X
