@@ -323,8 +323,11 @@ def evaluate_rep(X: np.ndarray, y: np.ndarray, groups: np.ndarray,
             scaler = StandardScaler()
             X_train = scaler.fit_transform(X[train_idx])
             X_test = scaler.transform(X[test_idx])
+            # Clean up after scaling: zero-variance cols become NaN
+            X_train = np.nan_to_num(X_train, nan=0.0, posinf=0.0, neginf=0.0)
+            X_test = np.nan_to_num(X_test, nan=0.0, posinf=0.0, neginf=0.0)
             # Skip if all features are constant (e.g. all-zero reps)
-            if np.all(X_train == X_train[0]):
+            if X_train.shape[1] == 0 or np.all(X_train.std(axis=0) == 0):
                 continue
             model = model_fn()
             try:
