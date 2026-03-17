@@ -121,7 +121,17 @@ _install_if_missing minimol minimol
 # MINT and MolE are git clones — only run once, not on every job:
 #   git clone https://github.com/VarunUllanat/mint.git src/MINT && pip install -e src/MINT
 #   wget https://huggingface.co/varunullanat2012/mint/resolve/main/mint.ckpt -P $KIRBY_MODELS_DIR/mint/
-#   git clone https://github.com/recursionpharma/mole_public.git src/mole && pip install -e src/mole
+MOLE_DIR="${SCRIPT_DIR}/src/mole"
+if ! python -c "import mole" 2>/dev/null; then
+    if [ -d "$MOLE_DIR" ]; then
+        pip install --quiet $CONSTRAINTS -e "$MOLE_DIR" 2>/dev/null || true
+    else
+        echo "MolE not installed. Clone manually:"
+        echo "  git clone https://github.com/recursionpharma/mole_public.git $MOLE_DIR"
+        echo "  pip install -e $MOLE_DIR"
+        echo "  Download weights to \$KIRBY_MODELS_DIR/mole/ or ~/kirby_models/mole/"
+    fi
+fi
 
 # Molecular reps: CLAMP, R-MAT
 CLAMP_DIR="${SCRIPT_DIR}/src/clamp"

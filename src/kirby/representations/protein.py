@@ -110,7 +110,15 @@ def _get_ca_positions(
     ca_file = cache_dir / f'{sh}_ca.npy'
     plddt_file = cache_dir / f'{sh}_plddt.npy'
     if ca_file.exists() and plddt_file.exists():
-        return np.load(ca_file), np.load(plddt_file)
+        ca_cached = np.load(ca_file)
+        # Validate cache: must be 2D (N, 3). Older versions stored wrong shapes
+        # due to ESMFold num_frames dimension bug.
+        if ca_cached.ndim == 2 and ca_cached.shape[1] == 3:
+            return ca_cached, np.load(plddt_file)
+        else:
+            # Corrupted cache entry — delete and recompute
+            ca_file.unlink(missing_ok=True)
+            plddt_file.unlink(missing_ok=True)
 
     ca_positions = None
     plddt = None
@@ -167,11 +175,23 @@ def _get_ca_positions(
                 inputs = tokenizer_fold([seq_trunc], return_tensors="pt",
                                         add_special_tokens=False).to(device)
                 output = model_fold(**inputs)
-                plddt_raw = output.plddt[0, :len(seq_trunc)].cpu().numpy().flatten()
+                # output.positions shape: (batch, num_frames, seq_len, 14, 3)
+                # Select last frame [-1] for final prediction, atom index 1 for Cα
+                pos = output.positions
+                if pos.ndim == 5:
+                    positions = pos[0, -1, :len(seq_trunc), 1, :].cpu().numpy()
+                else:
+                    # Fallback for older transformers with 4D output
+                    positions = pos[0, :len(seq_trunc), 1, :].cpu().numpy()
+                ca_positions = positions.astype(np.float32)
+                # pLDDT: may also have frames dim
+                plddt_tensor = output.plddt
+                if plddt_tensor.ndim == 3:
+                    plddt_raw = plddt_tensor[0, -1, :len(seq_trunc)].cpu().numpy()
+                else:
+                    plddt_raw = plddt_tensor[0, :len(seq_trunc)].cpu().numpy().flatten()
                 if plddt_raw.max() <= 1.0:
                     plddt_raw *= 100.0
-                positions = output.positions[0, :len(seq_trunc), 1, :].cpu().numpy()
-                ca_positions = positions.astype(np.float32)
                 plddt = plddt_raw.astype(np.float32)
         except Exception:
             pass
@@ -2254,7 +2274,12 @@ def create_esmfold_protein_features(
                 output = model(**inputs)
 
                 # pLDDT: per-residue confidence (0-100 scale in output.plddt)
-                plddt = output.plddt[0, :len(seq)].cpu().numpy().flatten()
+                # May have frames dim: (batch, frames, seq) or (batch, seq)
+                plddt_t = output.plddt
+                if plddt_t.ndim == 3:
+                    plddt = plddt_t[0, -1, :len(seq)].cpu().numpy()
+                else:
+                    plddt = plddt_t[0, :len(seq)].cpu().numpy().flatten()
                 if plddt.max() <= 1.0:
                     plddt *= 100.0  # normalize to 0-100 if needed
 
@@ -2266,9 +2291,13 @@ def create_esmfold_protein_features(
                 features[i, 5] = (plddt > 90).mean()
 
                 # Extract Cα positions from predicted structure
-                # output.positions: (1, n_res, 37, 3) — atom37 representation
-                # Cα is atom index 1 in atom37
-                positions = output.positions[0, :len(seq), 1, :].cpu().numpy()  # (L, 3)
+                # output.positions: (batch, num_frames, seq_len, 14, 3) in transformers>=4.30
+                # Select last frame [-1] for final prediction, atom index 1 for Cα
+                pos = output.positions
+                if pos.ndim == 5:
+                    positions = pos[0, -1, :len(seq), 1, :].cpu().numpy()
+                else:
+                    positions = pos[0, :len(seq), 1, :].cpu().numpy()  # (L, 3)
 
                 # Contact map (8Å cutoff on Cα-Cα distances)
                 from scipy.spatial.distance import pdist, squareform
