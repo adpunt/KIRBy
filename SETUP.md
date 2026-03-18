@@ -126,6 +126,12 @@ pip install networkx
 
 # DimeNet++ 3D molecular embeddings (optional, uses torch-geometric)
 # Already covered by torch-geometric install for SchNet
+
+# E3FP — Extended 3D fingerprints (optional, 3D analogue of ECFP)
+pip install e3fp
+
+# giotto-tda — Persistent homology / TDA descriptors (optional)
+pip install giotto-tda
 ```
 
 ### 2d. Install conda-only dependencies
