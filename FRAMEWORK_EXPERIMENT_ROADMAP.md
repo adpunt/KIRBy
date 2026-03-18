@@ -4,7 +4,7 @@
 identify what's useless, refine the speed tiers and algorithms, and produce validated
 final search settings.
 
-**Status:** Planning (2026-03-15)
+**Status:** Wave 1 partial results in (2026-03-18)
 
 ---
 
@@ -54,16 +54,201 @@ Not all components are independent:
 
 | Script | What it tests | Status |
 |--------|-------------|--------|
-| **f00** `f00_rep_screening.py` | Where should rep filtering go? Pre-search gate vs implicit vs relative threshold vs augmentation pathway | **Written** (needs testing) |
-| **f01** `f01_allocation_strategies.py` | 21 allocation strategies × budgets × models | **Done** |
-| **f02** `f02_adaptive_pruning.py` | Post-hoc pruning simulation at thresholds 0.3–0.7 | **Done** |
-| **f03** `f03_greedy_step_size.py` | step_size × patience × budget × model for greedy only | **Done** |
-| **f04** `f04_two_phase_search.py` | Two-phase (coarse + refinement) vs full grid | **Done** |
-| **f05** `f05_importance_correlation.py` | Are the 8 importance methods redundant? Rank correlation + wall time | **Written** |
-| **f06** `f06_augmentation_test.py` | greedy_ablation vs all vs none. augmentation_budget sweep. | **Written** |
-| **f07** `f07_internal_evaluator.py` | RF vs XGBoost vs Ridge as the internal evaluator inside greedy loops | **Written** |
-| **f08** `f08_iterative_augmentation.py` | Iterative augmentation strategy testing | **Written** |
+| **f00** `f00_rep_screening.py` | Where should rep filtering go? Pre-search gate vs implicit vs relative threshold vs augmentation pathway | **Results in** (3/7 tasks). C_relative has sign bug — needs fix + re-run |
+| **f01** `f01_allocation_strategies.py` | 21 allocation strategies × budgets × models | **Awaiting results** |
+| **f02** `f02_adaptive_pruning.py` | Post-hoc pruning simulation at thresholds 0.3–0.7 | **Awaiting results** (depends on f01+f03) |
+| **f03** `f03_greedy_step_size.py` | step_size × patience × budget × model for greedy only | **Awaiting results** |
+| **f04** `f04_two_phase_search.py` | Two-phase (coarse + refinement) vs full grid | **Awaiting results** |
+| **f05** `f05_importance_correlation.py` | Are the 8 importance methods redundant? Rank correlation + wall time | **Results in** (7/7 tasks) |
+| **f06** `f06_augmentation_test.py` | greedy_ablation vs iterative vs all. augmentation_budget sweep. | **Results in** (4/7 tasks). Not redundant with f08 |
+| **f07** `f07_internal_evaluator.py` | RF vs XGBoost vs Ridge as the internal evaluator inside greedy loops | **Results in** (4/7 tasks). **CANCELLED** remaining runs — decision made |
+| **f08** `f08_iterative_augmentation.py` | Iterative augmentation hyperparameter sweep (7 axes) | **Awaiting results** |
 | **f09** `f09_cross_domain_analysis.py` | Consumes outputs from f00–f08 across all tasks. Identifies cross-domain patterns. | **Not written** |
+
+---
+
+## Results (2026-03-18)
+
+### F00: Rep Screening (3/7 tasks complete)
+
+**Datasets:** herg (molecular, RMSE↓, n=1412), buchwald_hartwig (reaction, RMSE↓, n=3955), flab_pk_jain_fcrnrt (antibody, Spearman↑, n=132)
+
+#### Summary table
+
+| Strategy | herg RMSE↓ | buchwald RMSE↓ | fcrnrt ρ↑ | Notes |
+|----------|-----------|----------------|-----------|-------|
+| Best single rep | 0.618 (ecfp4) | 14.26 (reactant_ecfp4) | 0.483 (igt5) | |
+| A_hard_gate_p50 | **0.613** | 14.53 | — | Sensitive to percentile |
+| A_hard_gate_p75 | 0.611 | 14.75 | — | |
+| B_implicit | 0.618 | 14.67 | 0.259 | Slow (~2500s), no clear advantage |
+| C_relative_* | **ALL NaN** | **ALL NaN** | 0.240–0.289 | **BUG** on lower-is-better metrics |
+| D_augmentation_core3 | 0.622 | **14.06** | **0.436** | Consistent, fast |
+| D_augmentation_core4 | 0.610 | **14.01** | 0.384 | Best on reaction |
+| D_augmentation_core5 | **0.608** | 15.17 | 0.346 | Best on molecular |
+
+#### C_relative sign bug
+
+**Location:** `f00_rep_screening.py:278-281`
+
+```python
+comparable_scores = {k: _score_to_comparable(v, lower_is_better) ...}
+best_comparable = max(comparable_scores.values())  # = -0.618 for herg
+cutoff_comparable = fraction * best_comparable      # = 0.1 × (-0.618) = -0.0618
+# BUG: cutoff (-0.0618) is ABOVE all scores (-0.618 to -0.688)
+# → all reps screened out
+```
+
+When `lower_is_better=True`, comparable scores are negative. Multiplying by a positive fraction makes the cutoff *less negative* than all scores → everything filtered.
+
+**Fix:** Use gap-based threshold:
+```python
+best_comparable = max(comparable_scores.values())
+cutoff_comparable = best_comparable - fraction * abs(best_comparable)
+```
+
+**Status:** Fix needed, then re-run herg + buchwald_hartwig. fcrnrt results are valid (positive scores).
+
+#### Key findings
+
+1. **D_augmentation is the most consistent strategy** — beats best single rep on 2/3 tasks.
+2. **A_hard_gate is sensitive to percentile** — p50 sometimes wins but p25 is too aggressive.
+3. **B_implicit is slow** (~2500s) without clear advantage over D.
+4. **Small datasets (n=132) resist hybridization** — no strategy beats best single rep on fcrnrt.
+5. **Remaining tasks needed:** logd, flab_thermo_tresanco, tcga_luad_vs_lusc, tcga_brca_pam50 (plus re-runs after C_relative fix).
+
+---
+
+### F05: Importance Method Correlation (7/7 tasks complete)
+
+**All 8 methods ran on all 7 datasets.** Key patterns are consistent across domains.
+
+#### Redundancy clusters
+
+| Cluster | Methods | Typical ρ | Fastest in cluster |
+|---------|---------|-----------|-------------------|
+| Gradient-based | deeplift ≈ integrated_gradients ≈ gradientshap | 0.89–1.00 | **deeplift** (2s) |
+| Tree-permutation | treeshap ≈ permutation | 0.90–0.96 | **treeshap** (6–75s) |
+| Tree-gain | xgboost_gain ≈ lightgbm_gain | 0.47–0.87 | **lightgbm_gain** (1–8s) |
+| Outlier | kernelshap | avg ρ = 0.27–0.54 | N/A (2800–4500s, slowest by far) |
+
+#### Per-dataset highlights
+
+- **buchwald_hartwig** (reaction): Extreme redundancy — deeplift/IG/gradientshap ρ=0.998–1.000. treeshap/deeplift ρ=0.988. xgboost/lightgbm ρ=0.872.
+- **herg** (molecular): deeplift/IG ρ=0.951. treeshap/permutation ρ=0.916. KernelSHAP isolated (avg ρ=0.39).
+- **logd** (molecular): Same pattern. treeshap/permutation ρ=0.962. deeplift/IG ρ=0.943.
+- **flab_pk_jain_fcrnrt** (antibody, n=132): Lower correlations overall (max ρ=0.81). All methods more independent on small data.
+- **flab_thermo_tresanco** (antibody, n=672): deeplift/IG ρ=0.987. treeshap/permutation ρ=0.899.
+- **tcga_brca_pam50** (TCGA): Data pending detailed analysis.
+- **tcga_luad_vs_lusc** (TCGA): Data pending detailed analysis.
+
+#### Decision (pending confirmation from remaining experiments)
+
+**Use 3 methods: treeshap + deeplift + lightgbm_gain**
+
+Rationale:
+- Covers 3 independent families (tree-permutation, gradient, tree-gain)
+- Combined wall time ~10–80s vs ~3500s for all 8
+- KernelSHAP dropped: slowest by 10–100x, lowest correlation with others (unique signal or noise — not worth the cost)
+- permutation dropped: redundant with treeshap (ρ>0.90)
+- integrated_gradients + gradientshap dropped: redundant with deeplift (ρ>0.95), 15–300x slower
+
+**TODO:** Confirm with f01/f03/f04 results that downstream performance doesn't depend on the dropped methods.
+
+---
+
+### F06: Augmentation Strategy Test (4/7 tasks complete)
+
+**Datasets:** buchwald_hartwig, flab_pk_jain_fcrnrt, tcga_luad_vs_lusc, tcga_brca_pam50
+
+Splits reps into core (top 5 by single-rep baseline) and candidates (rest). Tests 3 augmentation strategies.
+
+#### Summary table
+
+| Dataset | Best single | core+greedy_ablation | core+iterative | core+all |
+|---------|------------|---------------------|----------------|----------|
+| buchwald_hartwig (RMSE↓) | 15.99 | **14.20** (rf, b=200) | 14.54 (rf, b=200) | 14.61 (rf, b=200) |
+| fcrnrt (ρ↑) | 0.427 | 0.326 (rf) | 0.309 (rf) | **0.377** (ridge) |
+| tcga_luad_vs_lusc (acc↑) | 0.942 | 0.963 (xgb) | **0.968** (xgb) | 0.963 (xgb) |
+| tcga_brca_pam50 (acc↑) | 0.817 | 0.884 (ridge) | **0.884** (ridge) | 0.876 (xgb) |
+
+#### Key findings
+
+1. **All strategies beat single reps** on 3/4 tasks (exception: fcrnrt n=132).
+2. **greedy_ablation and iterative are comparable** — neither consistently dominates.
+3. **augmentation_budget has minimal impact** (10 vs 50 give similar results).
+4. **Model choice matters** — ridge best for TCGA/antibody, rf/xgb best for reaction.
+
+#### Relationship to F08
+
+F06 answers *which strategy* (greedy_ablation vs iterative vs all). F08 answers *how to tune iterative's hyperparameters*. F06's iterative results use default hyperparams → lower bound. F06 is NOT redundant.
+
+---
+
+### F07: Internal Evaluator (4/7 tasks — CANCELLED remaining)
+
+**Datasets:** flab_pk_jain_fcrnrt, flab_thermo_tresanco, tcga_brca_pam50, tcga_luad_vs_lusc
+
+Tests RF vs XGBoost vs Ridge as the internal evaluator in greedy allocation loops. Also tests greedy vs dominant_greedy allocation and budget 100 vs 200.
+
+#### Summary table (best downstream score per dataset)
+
+| Dataset | Best internal evaluator | Allocation | Budget | Best downstream | Score |
+|---------|----------------------|------------|--------|----------------|-------|
+| flab_pk_jain_fcrnrt (ρ↑) | **ridge** | greedy | 100 | ridge | 0.435 |
+| flab_thermo_tresanco (ρ↑) | **ridge** | greedy | 100 | lightgbm | 0.796 |
+| tcga_brca_pam50 (acc↑) | rf | dominant_greedy | 200 | xgboost | 0.896 |
+| tcga_luad_vs_lusc (acc↑) | xgboost | greedy | 100 | xgboost | 0.963 |
+
+#### Decision
+
+**Internal evaluator becomes a configurable parameter with `ridge` as default.**
+
+Rationale:
+- Ridge wins on antibody (both tasks).
+- No single evaluator dominates across all domains.
+- Ridge is fastest of the three.
+- Expose as `internal_evaluator` kwarg in `find_best_hybrid()` / `create_hybrid()`.
+
+**Remaining F07 runs cancelled** — enough data to make the decision.
+
+---
+
+## Implementation Next Steps
+
+### Immediate (before more experiments finish)
+
+1. **Fix C_relative sign bug** in `f00_rep_screening.py:281`
+   - Change `cutoff_comparable = fraction * best_comparable` to gap-based threshold
+   - Re-run f00 on herg + buchwald_hartwig (the two lower-is-better tasks that failed)
+   - Also run the 4 missing tasks (logd, tresanco, luad_vs_lusc, brca_pam50)
+
+2. **Add `internal_evaluator` parameter** to `find_best_hybrid()` and `create_hybrid()`
+   - Default: `'ridge'`
+   - Accepted values: `'rf'`, `'xgboost'`, `'ridge'`
+   - Wire into `_evaluate_allocation()` and `_create_hybrid_with_allocation()`
+
+### After f01/f03/f04 results arrive
+
+3. **Confirm importance method reduction** — verify that f01/f03 downstream scores don't depend on dropped methods (permutation, kernelshap, IG, gradientshap)
+4. **Update SPEED_TIERS** — reduce importance_methods from 8 to 3 (treeshap, deeplift, lightgbm_gain)
+
+### After f08 results arrive
+
+5. **Compare F06 vs F08** — do F08's tuned iterative hyperparams change the strategy ranking from F06?
+6. **Set iterative augmentation defaults** based on F08's best hyperparameters
+
+### After all Wave 1 + Wave 2 results
+
+7. **Run f09 cross-domain synthesis** — consumes all JSON outputs, produces final recommendations
+8. **Rebuild SPEED_TIERS from data** — allocation methods, importance methods, budgets, step sizes
+
+### Code changes (after f09 synthesis)
+
+9. **Implement rep screening** — if D_augmentation holds across all tasks, add `screen_reps='augmentation'` as default pathway in `find_best_hybrid()`
+10. **Remove dead importance methods** from default configs (keep available for explicit use)
+11. **Update default budget/step_size** based on f03 plateau analysis
+
+---
 
 ### Why f01–f04 need rewriting (not updating)
 
