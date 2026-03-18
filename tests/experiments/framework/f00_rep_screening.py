@@ -264,7 +264,7 @@ def option_b_implicit(reps, labels, groups, model_factory, metric_fn,
 def option_c_relative(reps, labels, groups, model_factory, metric_fn,
                       baselines, fraction, lower_is_better,
                       n_folds, mode, budget=100):
-    """Screen reps below fraction * best_rep_score, then run hybrid."""
+    """Screen reps more than `fraction` away from the best rep's score, then run hybrid."""
     # Find best baseline score (in comparable space)
     valid_scores = {k: v for k, v in baselines.items() if not np.isnan(v)}
     if not valid_scores:
@@ -278,7 +278,10 @@ def option_c_relative(reps, labels, groups, model_factory, metric_fn,
     comparable_scores = {k: _score_to_comparable(v, lower_is_better)
                          for k, v in valid_scores.items()}
     best_comparable = max(comparable_scores.values())
-    cutoff_comparable = fraction * best_comparable
+    # Gap-based threshold: keep reps within `fraction` of the best score.
+    # e.g. fraction=0.1 means "drop reps more than 10% away from best".
+    # Using abs() handles negative comparable scores (lower-is-better metrics).
+    cutoff_comparable = best_comparable - fraction * abs(best_comparable)
 
     surviving = {}
     screened = {}
@@ -390,10 +393,12 @@ def option_d_augmentation(reps, labels, groups, model_factory, metric_fn,
 # MAIN EXPERIMENT
 # =============================================================================
 
-def run(data, config, output_dir, dataset_name, **kwargs):
-    """Run rep screening comparison across all 4 options."""
+def run(data, config, output_dir, dataset_name, only_option=None, **kwargs):
+    """Run rep screening comparison across all 4 options (or a single option)."""
     print("\n" + "=" * 70)
     print("EXPERIMENT F00: REP SCREENING — WHERE SHOULD FILTERING GO?")
+    if only_option:
+        print(f"  (Running ONLY option {only_option})")
     print("=" * 70)
 
     metric_name, metric_fn, lower_is_better = _get_primary_metric(data)
@@ -432,124 +437,141 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     }
 
     # --- Option B: Implicit (current behavior, run first as reference) ---
-    print(f"\n  Option B: Implicit (all {n_reps} reps, no screening)...")
-    result_b = option_b_implicit(reps, labels, groups, model_factory,
-                                 metric_fn, n_folds, mode, budget)
-    results['options']['B_implicit'] = result_b
-    print(f"    Score: {result_b['score_mean']:.4f} +/- {result_b['score_std']:.3f}, "
-          f"dim={result_b['n_features']}, "
-          f"active={result_b['n_surviving']}/{n_reps}, "
-          f"time={result_b['wall_time']:.1f}s")
+    if not only_option or only_option == 'B':
+        print(f"\n  Option B: Implicit (all {n_reps} reps, no screening)...")
+        result_b = option_b_implicit(reps, labels, groups, model_factory,
+                                     metric_fn, n_folds, mode, budget)
+        results['options']['B_implicit'] = result_b
+        print(f"    Score: {result_b['score_mean']:.4f} +/- {result_b['score_std']:.3f}, "
+              f"dim={result_b['n_features']}, "
+              f"active={result_b['n_surviving']}/{n_reps}, "
+              f"time={result_b['wall_time']:.1f}s")
 
     # --- Option A: Pre-search hard gate ---
-    # Determine thresholds based on domain
-    if lower_is_better:
-        # For RMSE: lower is better, so threshold = max acceptable RMSE
-        # Use percentiles of baseline scores
-        valid_scores = [v for v in baselines.values() if not np.isnan(v)]
-        if valid_scores:
-            thresholds_a = [
-                ('p25', float(np.percentile(valid_scores, 25))),
-                ('p50', float(np.percentile(valid_scores, 50))),
-                ('p75', float(np.percentile(valid_scores, 75))),
-            ]
+    if not only_option or only_option == 'A':
+        # Determine thresholds based on domain
+        if lower_is_better:
+            # For RMSE: lower is better, so threshold = max acceptable RMSE
+            # Use percentiles of baseline scores
+            valid_scores = [v for v in baselines.values() if not np.isnan(v)]
+            if valid_scores:
+                thresholds_a = [
+                    ('p25', float(np.percentile(valid_scores, 25))),
+                    ('p50', float(np.percentile(valid_scores, 50))),
+                    ('p75', float(np.percentile(valid_scores, 75))),
+                ]
+            else:
+                thresholds_a = []
         else:
-            thresholds_a = []
-    else:
-        # For R², accuracy, spearman: higher is better
-        thresholds_a = [
-            ('>=0', 0.0),
-            ('>=0.1', 0.1),
-            ('>=0.3', 0.3),
-            ('>=0.5', 0.5),
-        ]
+            # For R², accuracy, spearman: higher is better
+            thresholds_a = [
+                ('>=0', 0.0),
+                ('>=0.1', 0.1),
+                ('>=0.3', 0.3),
+                ('>=0.5', 0.5),
+            ]
 
-    for label, thresh in thresholds_a:
-        print(f"\n  Option A: Hard gate (threshold {label} = {thresh:.3f})...")
-        result_a = option_a_hard_gate(
-            reps, labels, groups, model_factory, metric_fn,
-            baselines, thresh, lower_is_better, n_folds, mode, budget
-        )
-        key = f'A_hard_gate_{label}'
-        results['options'][key] = result_a
-        print(f"    Score: {result_a['score_mean']:.4f} +/- {result_a['score_std']:.3f}, "
-              f"surviving={result_a['n_surviving']}/{n_reps}, "
-              f"time={result_a['wall_time']:.1f}s")
-        if result_a['screened_reps']:
-            print(f"    Screened: {list(result_a['screened_reps'].keys())}")
+        for label, thresh in thresholds_a:
+            print(f"\n  Option A: Hard gate (threshold {label} = {thresh:.3f})...")
+            result_a = option_a_hard_gate(
+                reps, labels, groups, model_factory, metric_fn,
+                baselines, thresh, lower_is_better, n_folds, mode, budget
+            )
+            key = f'A_hard_gate_{label}'
+            results['options'][key] = result_a
+            print(f"    Score: {result_a['score_mean']:.4f} +/- {result_a['score_std']:.3f}, "
+                  f"surviving={result_a['n_surviving']}/{n_reps}, "
+                  f"time={result_a['wall_time']:.1f}s")
+            if result_a['screened_reps']:
+                print(f"    Screened: {list(result_a['screened_reps'].keys())}")
 
     # --- Option C: Relative threshold ---
-    relative_fractions = [0.1, 0.2, 0.3, 0.5]
-    for frac in relative_fractions:
-        print(f"\n  Option C: Relative threshold ({frac:.0%} of best)...")
-        result_c = option_c_relative(
-            reps, labels, groups, model_factory, metric_fn,
-            baselines, frac, lower_is_better, n_folds, mode, budget
-        )
-        key = f'C_relative_{frac}'
-        results['options'][key] = result_c
-        print(f"    Score: {result_c['score_mean']:.4f} +/- {result_c['score_std']:.3f}, "
-              f"surviving={result_c['n_surviving']}/{n_reps}, "
-              f"time={result_c['wall_time']:.1f}s")
-        if result_c['screened_reps']:
-            print(f"    Screened: {list(result_c['screened_reps'].keys())}")
+    if not only_option or only_option == 'C':
+        relative_fractions = [0.1, 0.2, 0.3, 0.5, 0.75, 1.0]
+        for frac in relative_fractions:
+            print(f"\n  Option C: Relative threshold ({frac:.0%} of best)...")
+            result_c = option_c_relative(
+                reps, labels, groups, model_factory, metric_fn,
+                baselines, frac, lower_is_better, n_folds, mode, budget
+            )
+            key = f'C_relative_{frac}'
+            results['options'][key] = result_c
+            print(f"    Score: {result_c['score_mean']:.4f} +/- {result_c['score_std']:.3f}, "
+                  f"surviving={result_c['n_surviving']}/{n_reps}, "
+                  f"time={result_c['wall_time']:.1f}s")
+            if result_c['screened_reps']:
+                print(f"    Screened: {list(result_c['screened_reps'].keys())}")
 
     # --- Option D: Augmentation pathway ---
-    for n_core in [3, 4, 5]:
-        if n_core >= n_reps:
-            continue
-        print(f"\n  Option D: Augmentation pathway (top {n_core} core, rest as augmentations)...")
-        result_d = option_d_augmentation(
-            reps, labels, groups, model_factory, metric_fn,
-            baselines, lower_is_better, n_folds, mode, budget,
-            n_core=n_core,
-        )
-        key = f'D_augmentation_core{n_core}'
-        results['options'][key] = result_d
-        print(f"    Score: {result_d['score_mean']:.4f} +/- {result_d['score_std']:.3f}, "
-              f"core={result_d['core_reps']}, "
-              f"time={result_d['wall_time']:.1f}s")
+    if not only_option or only_option == 'D':
+        for n_core in [3, 4, 5]:
+            if n_core >= n_reps:
+                continue
+            print(f"\n  Option D: Augmentation pathway (top {n_core} core, rest as augmentations)...")
+            result_d = option_d_augmentation(
+                reps, labels, groups, model_factory, metric_fn,
+                baselines, lower_is_better, n_folds, mode, budget,
+                n_core=n_core,
+            )
+            key = f'D_augmentation_core{n_core}'
+            results['options'][key] = result_d
+            print(f"    Score: {result_d['score_mean']:.4f} +/- {result_d['score_std']:.3f}, "
+                  f"core={result_d['core_reps']}, "
+                  f"time={result_d['wall_time']:.1f}s")
 
     # --- Summary ---
     print("\n" + "=" * 70)
     print("  SUMMARY")
     print("=" * 70)
 
-    ref_score = result_b['score_mean']
-    ref_time = result_b['wall_time']
     direction = -1 if lower_is_better else 1
 
-    print(f"\n  Reference (Option B implicit): {metric_name}={ref_score:.4f}, "
-          f"time={ref_time:.1f}s")
-    print(f"\n  {'Option':<35} {'Score':>8} {'Delta':>8} {'Reps':>6} {'Time':>7} {'Speedup':>8}")
-    print("  " + "-" * 75)
+    # Use option B as reference if available, otherwise skip comparative summary
+    b_result = results['options'].get('B_implicit')
+    if b_result:
+        ref_score = b_result['score_mean']
+        ref_time = b_result['wall_time']
 
-    for opt_name in sorted(results['options'].keys()):
-        opt = results['options'][opt_name]
-        score = opt['score_mean']
-        delta = (score - ref_score) * direction  # positive = better
-        n_surv = opt['n_surviving']
-        wt = opt['wall_time']
-        speedup = ref_time / wt if wt > 0 else float('inf')
+        print(f"\n  Reference (Option B implicit): {metric_name}={ref_score:.4f}, "
+              f"time={ref_time:.1f}s")
+        print(f"\n  {'Option':<35} {'Score':>8} {'Delta':>8} {'Reps':>6} {'Time':>7} {'Speedup':>8}")
+        print("  " + "-" * 75)
 
-        print(f"  {opt_name:<35} {score:>8.4f} {delta:>+8.4f} "
-              f"{n_surv:>4}/{n_reps} {wt:>6.1f}s {speedup:>7.1f}x")
+        for opt_name in sorted(results['options'].keys()):
+            opt = results['options'][opt_name]
+            score = opt['score_mean']
+            delta = (score - ref_score) * direction  # positive = better
+            n_surv = opt['n_surviving']
+            wt = opt['wall_time']
+            speedup = ref_time / wt if wt > 0 else float('inf')
 
-    # --- Regret analysis ---
-    print(f"\n  REGRET ANALYSIS (did screening miss a useful rep?)")
-    for opt_name, opt in results['options'].items():
-        if opt_name == 'B_implicit':
-            continue
-        score = opt['score_mean']
-        # Regret = how much worse than implicit (in the "better" direction)
-        regret = (ref_score - score) * direction
-        if regret > 0.01:  # more than 1% regret
-            print(f"    {opt_name}: REGRET = {regret:.4f} "
-                  f"(screened: {list(opt.get('screened_reps', {}).keys())})")
-        elif regret > 0:
-            print(f"    {opt_name}: minor regret = {regret:.4f}")
-        else:
-            print(f"    {opt_name}: no regret (matched or beat implicit)")
+            print(f"  {opt_name:<35} {score:>8.4f} {delta:>+8.4f} "
+                  f"{n_surv:>4}/{n_reps} {wt:>6.1f}s {speedup:>7.1f}x")
+
+        # --- Regret analysis ---
+        print(f"\n  REGRET ANALYSIS (did screening miss a useful rep?)")
+        for opt_name, opt in results['options'].items():
+            if opt_name == 'B_implicit':
+                continue
+            score = opt['score_mean']
+            regret = (ref_score - score) * direction
+            if regret > 0.01:
+                print(f"    {opt_name}: REGRET = {regret:.4f} "
+                      f"(screened: {list(opt.get('screened_reps', {}).keys())})")
+            elif regret > 0:
+                print(f"    {opt_name}: minor regret = {regret:.4f}")
+            else:
+                print(f"    {opt_name}: no regret (matched or beat implicit)")
+    else:
+        # Single-option mode: just print scores
+        print(f"\n  {'Option':<35} {'Score':>8} {'Reps':>6} {'Time':>7}")
+        print("  " + "-" * 60)
+        for opt_name in sorted(results['options'].keys()):
+            opt = results['options'][opt_name]
+            score = opt['score_mean']
+            n_surv = opt['n_surviving']
+            wt = opt['wall_time']
+            print(f"  {opt_name:<35} {score:>8.4f} {n_surv:>4}/{n_reps} {wt:>6.1f}s")
 
     results['meta'] = {
         'dataset': dataset_name,
@@ -569,16 +591,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 if __name__ == '__main__':
     parser = create_experiment_parser('F00: Rep Screening Comparison',
                                      has_delta=True, has_augment=True)
+    parser.add_argument('--only-option', type=str, default=None,
+                        choices=['A', 'B', 'C', 'D'],
+                        help='Run only this screening option (default: all)')
     args = parser.parse_args()
     config = get_config(args)
 
     print(f"Mode: {args.mode}")
     print(f"Dataset: {args.dataset}")
     print(f"Reps: {args.reps}")
+    if args.only_option:
+        print(f"Only option: {args.only_option}")
 
     rep_preset, rep_names = parse_rep_args(args)
     data = load_data(args.dataset, rep_preset, rep_names=rep_names,
                      delta=getattr(args, 'delta', False),
                      augment=getattr(args, 'augment', False))
-    results = run(data, config, args.output, args.dataset)
-    save_experiment_results(results, args.output, 'f00_rep_screening', args.dataset)
+    results = run(data, config, args.output, args.dataset,
+                  only_option=getattr(args, 'only_option', None))
+    # Use separate output subdir when running a single option
+    exp_id = 'f00_rep_screening'
+    if args.only_option:
+        exp_id = f'f00_rep_screening_option{args.only_option}'
+    save_experiment_results(results, args.output, exp_id, args.dataset)
