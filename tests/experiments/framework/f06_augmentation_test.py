@@ -147,6 +147,9 @@ def _evaluate_condition(base_reps, labels, groups, model_factory, metric_fn,
                 if aug_val_features is not None:
                     X_val = np.hstack([X_val, aug_val_features])
         except Exception as e:
+            import traceback
+            print(f"\n      WARNING: create_hybrid failed: {e}")
+            traceback.print_exc()
             fold_aug_details.append({'error': str(e)})
             continue
 
