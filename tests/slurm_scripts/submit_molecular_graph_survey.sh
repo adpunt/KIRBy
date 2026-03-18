@@ -56,13 +56,13 @@ case "$MODE" in
         ;;
     qm9)
         # 10K mols — heavy conformer gen, ~16h total
-        submit qm9 qm9 128G 23:59:00 short
+        submit qm9 qm9 128G 23:59:00 long
         echo "  Total: 1 job (QM9)"
         ;;
     all)
         submit herg herg 64G 05:59:00 short
         submit logd logd 64G 11:59:00 short
-        submit qm9 qm9 128G 23:59:00 short
+        submit qm9 qm9 128G 23:59:00 long
         echo "  Total: 3 jobs (hERG + LogD + QM9)"
         ;;
     *)
