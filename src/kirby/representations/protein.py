@@ -59,6 +59,14 @@ def _esm2_per_residue_cache_dir() -> 'Path':
     return cache_dir
 
 
+def _default_device(device=None):
+    """Return device, auto-detecting CUDA if not specified."""
+    if device is not None:
+        return device
+    import torch
+    return 'cuda' if torch.cuda.is_available() else 'cpu'
+
+
 def _seq_hash(seq: str) -> str:
     import hashlib
     return hashlib.sha256(seq.upper().strip().encode()).hexdigest()[:16]
@@ -84,7 +92,7 @@ def _struct_cache_dir():
 def _get_ca_positions(
     sequence: str,
     uniprot_id: Optional[str] = None,
-    device: str = 'cpu',
+    device: str = None,
     source: str = 'auto',
     _esmfold_model=None,
     _esmfold_tokenizer=None,
@@ -102,6 +110,7 @@ def _get_ca_positions(
     Returns:
         (ca_positions: np.ndarray (N, 3), plddt: np.ndarray (N,)) or (None, None).
     """
+    device = _default_device(device)
     seq = sequence.upper().strip()
     sh = _seq_hash(seq)
     cache_dir = _struct_cache_dir()
@@ -207,7 +216,7 @@ def _get_ca_positions(
 def _get_ca_positions_batch(
     sequences: List[str],
     uniprot_ids: Optional[List[str]] = None,
-    device: str = 'cpu',
+    device: str = None,
     source: str = 'auto',
 ) -> List[tuple]:
     """Batch wrapper for _get_ca_positions. Loads ESMFold once for all sequences."""
@@ -513,7 +522,7 @@ def _extract_graph_features(G, n_res, ca_positions):
 def create_contact_graph_features(
     sequences: List[str],
     uniprot_ids: Optional[List[str]] = None,
-    device: str = 'cpu',
+    device: str = None,
     source: str = 'auto',
 ) -> np.ndarray:
     """Extract residue contact graph features for protein sequences (~80D).
@@ -531,6 +540,7 @@ def create_contact_graph_features(
     Returns:
         np.ndarray: (n_sequences, 80) feature matrix.
     """
+    device = _default_device(device)
     n = len(sequences)
     print(f"  Computing contact graph features for {n} proteins...")
 
@@ -687,7 +697,7 @@ def _compute_usr_features(ca_positions, sequence):
 def create_usr_shape_features(
     sequences: List[str],
     uniprot_ids: Optional[List[str]] = None,
-    device: str = 'cpu',
+    device: str = None,
     source: str = 'auto',
 ) -> np.ndarray:
     """Extract Ultrafast Shape Recognition (USR) + shape features (~60D).
@@ -703,6 +713,7 @@ def create_usr_shape_features(
     Returns:
         np.ndarray: (n_sequences, 60) feature matrix.
     """
+    device = _default_device(device)
     n = len(sequences)
     print(f"  Computing USR shape features for {n} proteins...")
 
@@ -1116,7 +1127,7 @@ def create_pocket_features(
     sequences: List[str],
     uniprot_ids: Optional[List[str]] = None,
     protein_ids: Optional[List[str]] = None,
-    device: str = 'cpu',
+    device: str = None,
     source: str = 'auto',
     dataset_hint: Optional[str] = None,
 ) -> np.ndarray:
@@ -1135,6 +1146,7 @@ def create_pocket_features(
     Returns:
         np.ndarray: (n_sequences, 55) feature matrix.
     """
+    device = _default_device(device)
     n = len(sequences)
     print(f"  Computing pocket features for {n} proteins...")
 
@@ -1180,7 +1192,7 @@ def create_esm2_pocket_embeddings(
     sequences: List[str],
     uniprot_ids: Optional[List[str]] = None,
     protein_ids: Optional[List[str]] = None,
-    device: str = 'cpu',
+    device: str = None,
     dataset_hint: Optional[str] = None,
 ) -> np.ndarray:
     """Extract pocket-local ESM-2 embeddings (1280D).
@@ -1201,6 +1213,7 @@ def create_esm2_pocket_embeddings(
     Returns:
         np.ndarray: (n_sequences, 1280) embeddings.
     """
+    device = _default_device(device)
     n = len(sequences)
     print(f"  Computing pocket-local ESM-2 embeddings for {n} proteins...")
 
@@ -1263,7 +1276,7 @@ def create_pocket_composition_features(
     sequences: List[str],
     uniprot_ids: Optional[List[str]] = None,
     protein_ids: Optional[List[str]] = None,
-    device: str = 'cpu',
+    device: str = None,
     dataset_hint: Optional[str] = None,
 ) -> np.ndarray:
     """Extract amino acid composition of binding pocket only (~20D).
@@ -1274,6 +1287,7 @@ def create_pocket_composition_features(
     Returns:
         np.ndarray: (n_sequences, 20) feature matrix (one per standard AA).
     """
+    device = _default_device(device)
     n = len(sequences)
     print(f"  Computing pocket composition features for {n} proteins...")
 
@@ -1321,7 +1335,7 @@ def create_pocket_composition_features(
 def create_esm2_protein_embeddings(
     sequences: List[str],
     model_name: str = 'facebook/esm2_t33_650M_UR50D',
-    device: str = 'cpu',
+    device: str = None,
     batch_size: int = 4,
     cache_per_residue: bool = True,
 ) -> np.ndarray:
@@ -1338,6 +1352,7 @@ def create_esm2_protein_embeddings(
     Returns:
         np.ndarray: (n_sequences, 1280) embeddings.
     """
+    device = _default_device(device)
     import torch
     try:
         from transformers import AutoTokenizer, EsmModel
@@ -1435,7 +1450,7 @@ def load_esm2_per_residue(sequence: str) -> Optional[np.ndarray]:
 def create_esm2_midlayers_protein_embeddings(
     sequences: List[str],
     model_name: str = 'facebook/esm2_t33_650M_UR50D',
-    device: str = 'cpu',
+    device: str = None,
     batch_size: int = 4,
     layer_start: int = 20,
     layer_end: int = 33,
@@ -1457,6 +1472,7 @@ def create_esm2_midlayers_protein_embeddings(
     Returns:
         np.ndarray: (n_sequences, 1280) embeddings.
     """
+    device = _default_device(device)
     import torch
     try:
         from transformers import AutoTokenizer, EsmModel
@@ -1507,7 +1523,7 @@ def create_esm2_midlayers_protein_embeddings(
 
 def create_esmc_protein_embeddings(
     sequences: List[str],
-    device: str = 'cpu',
+    device: str = None,
 ) -> np.ndarray:
     """Extract ESM-C 600M mean-pooled embeddings for protein sequences.
 
@@ -1525,6 +1541,7 @@ def create_esmc_protein_embeddings(
 
     Requires: pip install esm
     """
+    device = _default_device(device)
     import torch
     try:
         from esm.models.esmc import ESMC
@@ -1564,7 +1581,7 @@ def create_esmc_protein_embeddings(
 
 def create_esm3_protein_embeddings(
     sequences: List[str],
-    device: str = 'cpu',
+    device: str = None,
 ) -> np.ndarray:
     """Extract ESM3 mean-pooled embeddings for protein sequences.
 
@@ -1581,6 +1598,7 @@ def create_esm3_protein_embeddings(
 
     Requires: pip install esm (Python >= 3.10)
     """
+    device = _default_device(device)
     import torch
     try:
         from esm.models.esm3 import ESM3
@@ -1630,7 +1648,7 @@ _AIDO_TOKENIZER = None
 def create_aido_protein_embeddings(
     sequences: List[str],
     model_name: str = 'genbio-ai/AIDO.Protein-16B',
-    device: str = 'cpu',
+    device: str = None,
     batch_size: int = 1,
 ) -> np.ndarray:
     """Extract AIDO.Protein-16B mean-pooled embeddings for protein sequences.
@@ -1656,6 +1674,7 @@ def create_aido_protein_embeddings(
     Requires: pip install transformers torch
     Model auto-downloaded: genbio-ai/AIDO.Protein-16B (~64GB)
     """
+    device = _default_device(device)
     import torch
     global _AIDO_MODEL, _AIDO_TOKENIZER
 
@@ -1738,7 +1757,7 @@ _SAPROT_TOKENIZER = None
 
 def _predict_3di_with_prostt5(
     sequences: List[str],
-    device: str = 'cpu',
+    device: str = None,
 ) -> List[str]:
     """Predict Foldseek 3Di structural tokens from amino acid sequences using ProstT5.
 
@@ -1752,6 +1771,7 @@ def _predict_3di_with_prostt5(
     Returns:
         List of 3Di strings (one per input sequence).
     """
+    device = _default_device(device)
     import torch
     global _PROSTT5_MODEL, _PROSTT5_TOKENIZER
 
@@ -1832,7 +1852,7 @@ def _interleave_aa_3di(aa_seq: str, threedi_seq: str) -> str:
 
 def create_saprot_protein_embeddings(
     sequences: List[str],
-    device: str = 'cpu',
+    device: str = None,
     batch_size: int = 4,
 ) -> np.ndarray:
     """Extract SaProt 650M mean-pooled embeddings for protein sequences.
@@ -1853,6 +1873,7 @@ def create_saprot_protein_embeddings(
     Models auto-downloaded: westlake-repl/SaProt_650M_AF2 (~2.5GB),
                             Rostlab/ProstT5 (~5.5GB)
     """
+    device = _default_device(device)
     import torch
     global _SAPROT_MODEL, _SAPROT_TOKENIZER
 
@@ -1921,7 +1942,7 @@ def create_saprot_protein_embeddings(
 
 def create_boltz2_protein_embeddings(
     sequences: List[str],
-    device: str = 'cpu',
+    device: str = None,
     cache_dir: str = None,
 ) -> np.ndarray:
     """Extract Boltz-2 single-representation protein embeddings (384D).
@@ -1944,6 +1965,7 @@ def create_boltz2_protein_embeddings(
 
     Requires: pip install boltz (CUDA recommended)
     """
+    device = _default_device(device)
     import subprocess
     import tempfile
     import hashlib as _hashlib
@@ -2052,7 +2074,7 @@ def create_boltz2_protein_embeddings(
 def create_amplify_protein_embeddings(
     sequences: List[str],
     model_name: str = 'chandar-lab/AMPLIFY_350M',
-    device: str = 'cpu',
+    device: str = None,
     batch_size: int = 4,
 ) -> np.ndarray:
     """Extract AMPLIFY 350M mean-pooled embeddings for protein sequences.
@@ -2070,6 +2092,7 @@ def create_amplify_protein_embeddings(
 
     Requires: pip install transformers
     """
+    device = _default_device(device)
     import torch
     from transformers import AutoTokenizer, AutoModel
 
@@ -2218,7 +2241,7 @@ def create_protein_descriptors(sequences: List[str]) -> np.ndarray:
 
 def create_esmfold_protein_features(
     sequences: List[str],
-    device: str = 'cpu',
+    device: str = None,
 ) -> np.ndarray:
     """Extract structural features from ESMFold predicted structures.
 
@@ -2245,9 +2268,13 @@ def create_esmfold_protein_features(
 
     Requires: pip install transformers torch
     """
+    device = _default_device(device)
     import torch
 
-    print("  Loading ESMFold for structure prediction...")
+    if device is None:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    print(f"  Loading ESMFold for structure prediction (device={device})...")
     try:
         from transformers import EsmForProteinFolding, AutoTokenizer
     except ImportError:
@@ -2565,7 +2592,7 @@ def create_alphafold_db_features(
 def create_mint_protein_embeddings(
     sequences: List[str],
     checkpoint_path: str = None,
-    device: str = 'cpu',
+    device: str = None,
 ) -> np.ndarray:
     """Extract MINT mean-pooled embeddings for protein sequences.
 
@@ -2585,6 +2612,7 @@ def create_mint_protein_embeddings(
     Requires: git clone https://github.com/VarunUllanat/mint.git && pip install -e mint
               Download checkpoint from MINT GitHub releases.
     """
+    device = _default_device(device)
     import torch
 
     try:
@@ -2666,7 +2694,7 @@ def create_mint_protein_embeddings(
 
 def create_xtrimopglm_protein_embeddings(
     sequences: List[str],
-    device: str = 'cpu',
+    device: str = None,
     batch_size: int = 2,
 ) -> np.ndarray:
     """Extract xTrimoPGLM-1B mean-pooled embeddings for protein sequences.
@@ -2687,6 +2715,7 @@ def create_xtrimopglm_protein_embeddings(
     Note: Auto-downloads HuggingFace model on first use. Requires
           trust_remote_code=True for custom model architecture.
     """
+    device = _default_device(device)
     import torch
     try:
         from transformers import AutoTokenizer, AutoModel
