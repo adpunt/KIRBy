@@ -651,8 +651,9 @@ def create_tda(smiles_list, max_dim=1):
     Computes Vietoris-Rips persistence on 3D atomic distance matrices and
     extracts topological summary statistics per homology dimension.
 
-    Per dimension (H0, H1): birth/death mean/std, persistence mean/max/std/entropy,
-    n_features, lifetime mean/std, midlife mean/std, Betti number → 14 features × 2 = 28D.
+    Per dimension (H0, H1): birth mean/std, death mean/std, persistence
+    mean/max/min/std/entropy, n_features, midlife mean/std, persistence
+    median, persistence sum → 14 features × 2 = 28D.
 
     Requires: giotto-tda (pip install giotto-tda)
 

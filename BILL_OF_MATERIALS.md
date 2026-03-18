@@ -5,7 +5,7 @@ performance. This document is the single source of truth for what KIRBy supports
 and what actually works. Representations without confirmed performance data should
 not be used in experiments until validated.
 
-**Last updated:** 2026-03-16 (Added 7 structural geometry features as augmentation-only reps: vhvl_angles, cdr_shape, cdr_canonical, paratope_charge, paratope_hydrophobicity, cdr_contacts, vhvl_interface. Tested via separate survey: `tests/experiments/structural_geometry_survey.py`.)
+**Last updated:** 2026-03-18 (Added 9 molecular graph/structural reps: atom_pair, top_torsion, coulomb_matrix, usr, usrcat, pharmacophore3d, tda, e3fp, ft_chemprop. Survey: `tests/experiments/molecular_graph_survey.py`.)
 
 ---
 
@@ -249,14 +249,30 @@ Caco2, hERG, QM9, 4× ADME still running on HTC+ARC.
 
 **Key changes vs stale:** mhg_gnn overtakes grover (GP model). mordred (new Phase 3B) enters top 3. avalon (new) solid mid-tier. unimol_v2 completely failed. GP and DNN are dominant best models — ridge no longer best for any rep except grover.
 
-**Not yet tested (running):** minimol, gp_molformer, mole, sns, dimenetpp, schnet, clamp, rmat, map4, all *_pca50 factory reps.
-**Fine-tuned:** ft_schnet (E2E SchNet → 128D, QM9 R²=0.888).
+**Not yet tested (running):** minimol, gp_molformer, mole, sns, dimenetpp, schnet, clamp, rmat, map4, all *_pca50 factory reps, and all new graph/structural reps below.
+**Fine-tuned:** ft_schnet (E2E SchNet → 128D, QM9 R²=0.888), ft_chemprop (D-MPNN → 300D, new).
 **Dropped:** `chemformer` (broken HF weights), `unimol` v1 (broken install).
+
+**New graph/structural reps (Phase 3B+):**
+
+| Rep | Dim | 3D? | New Dep? | Description |
+|-----|-----|-----|----------|-------------|
+| `atom_pair` | 2048 | No | No | Atom-pair topological fingerprints |
+| `top_torsion` | 2048 | No | No | Topological torsion fingerprints |
+| `coulomb_matrix` | 50 | Yes | No | Coulomb matrix eigenvalue spectrum |
+| `usr` | 12 | Yes | No | Ultrafast Shape Recognition |
+| `usrcat` | 60 | Yes | No | USRCAT (USR + pharmacophore channels) |
+| `pharmacophore3d` | 49 | Yes | No | 3D pharmacophore pair distances |
+| `tda` | 28 | Yes | giotto-tda | Persistent homology / TDA |
+| `e3fp` | 1024 | Yes | e3fp | Extended 3D fingerprint |
+| `ft_chemprop` | 300 | No | No (chemprop) | D-MPNN fine-tuned per fold (E2E) |
+
+**Survey:** `tests/experiments/molecular_graph_survey.py` — standalone + augmentation evaluation on hERG/LogD/QM9.
 
 **Presets:**
 - `fast` (3): ecfp4, maccs, pdv
 - `fast+hf` (6): + chemberta, molformer, selformer
-- `all` (36): 25 base reps (ecfp4, maccs, avalon, pdv, mordred, mol2vec, chemberta, molformer, selformer, chembert, molclr, graphmvp, smited, mhg_gnn, grover, graph_kernel, schnet, dimenetpp, clamp, rmat, map4, unimol_v2, minimol, gp_molformer, mole) + 11 per-fold factory reps (pdv_binary_mean, pdv_rank, sns, chemberta_pca50, molformer_pca50, selformer_pca50, molclr_pca50, smited_pca50, mhg_gnn_pca50, grover_pca50, mordred_pca50)
+- `all` (42): 31 base reps (ecfp4, maccs, avalon, atom_pair, top_torsion, pdv, mordred, coulomb_matrix, usr, usrcat, pharmacophore3d, tda, e3fp, mol2vec, chemberta, molformer, selformer, chembert, molclr, graphmvp, smited, mhg_gnn, grover, graph_kernel, clamp, rmat, map4, unimol_v2, minimol, gp_molformer, mole) + 11 per-fold factory reps (pdv_binary_mean, pdv_rank, sns, chemberta_pca50, molformer_pca50, selformer_pca50, molclr_pca50, smited_pca50, mhg_gnn_pca50, grover_pca50, mordred_pca50)
 
 **Phase 4A forward-compat reps (in 'all' preset):** `minimol` (MiniMol, pip install), `gp_molformer` (IBM GP-MoLFormer, HuggingFace), `mole` (MolE, GitHub + manual weights).
 

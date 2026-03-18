@@ -778,8 +778,10 @@ SPEED_TIERS = {
 # INTERNAL EVALUATION FUNCTIONS
 # =============================================================================
 
-def _make_cv_splitter(groups: Optional[np.ndarray], n_folds: int, seed: int):
+def _make_cv_splitter(groups: Optional[np.ndarray], n_folds: int, seed: int, cv_splitter=None):
     """Return (splitter, use_groups) depending on whether groups are provided."""
+    if cv_splitter is not None:
+        return cv_splitter, False
     if n_folds == 1:
         # Single 80/20 split (intermediary mode)
         if groups is not None:
@@ -814,6 +816,7 @@ def _precompute_fold_reps(
     groups: Optional[np.ndarray],
     n_folds: int,
     seed: int,
+    cv_splitter=None,
     verbose: bool = True,
 ) -> Tuple[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]], List[Tuple[np.ndarray, np.ndarray]]]:
     """Pre-compute fine-tuned representations for each fold.
@@ -842,7 +845,7 @@ def _precompute_fold_reps(
               f"({len(rep_factories)} factories × {n_folds} folds)...")
 
     # Materialize fold splits (ensures identical splits downstream)
-    splitter, use_groups = _make_cv_splitter(groups, n_folds, seed)
+    splitter, use_groups = _make_cv_splitter(groups, n_folds, seed, cv_splitter=cv_splitter)
     # We need a dummy X for splitting
     dummy_X = np.zeros((len(labels), 1))
     split_args = (dummy_X, labels, groups) if use_groups else (dummy_X, labels)
@@ -920,6 +923,7 @@ def _evaluate_single(
     n_folds: int,
     metric_fn: Callable,
     seed: int = 42,
+    cv_splitter=None,
     secondary_metric_fns: Optional[Dict[str, Callable]] = None,
 ) -> Union[Tuple[float, float], Tuple[float, float, Dict[str, Tuple[float, float]]]]:
     """Evaluate one (X, model) with CV.
@@ -927,7 +931,7 @@ def _evaluate_single(
     Returns (mean_score, std_score) if no secondary metrics.
     Returns (mean_score, std_score, {name: (mean, std)}) if secondary metrics provided.
     """
-    splitter, use_groups = _make_cv_splitter(groups, n_folds, seed)
+    splitter, use_groups = _make_cv_splitter(groups, n_folds, seed, cv_splitter=cv_splitter)
     split_args = (X, y, groups) if use_groups else (X, y)
     scores = []
     sec_scores = {name: [] for name in (secondary_metric_fns or {})}
@@ -998,6 +1002,7 @@ def _evaluate_hybrid_config(
     lower_is_better: bool = False,
     fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
+    cv_splitter=None,
 ) -> dict:
     """Evaluate a single hybrid configuration. Returns result dict."""
     from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
@@ -1008,7 +1013,7 @@ def _evaluate_hybrid_config(
     if precomputed_folds is not None:
         fold_splits = precomputed_folds
     else:
-        splitter, use_groups = _make_cv_splitter(groups, n_folds, seed)
+        splitter, use_groups = _make_cv_splitter(groups, n_folds, seed, cv_splitter=cv_splitter)
         sample_X = next(iter(base_reps.values()))
         split_args = (sample_X, labels, groups) if use_groups else (sample_X, labels)
         fold_splits = list(splitter.split(*split_args))
@@ -1125,6 +1130,7 @@ def _evaluate_baselines(
     fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
     secondary_metric_fns: Optional[Dict[str, Callable]] = None,
+    cv_splitter=None,
 ) -> Dict[str, Dict[str, float]]:
     """Evaluate full-dimension baselines for each rep x model.
 
@@ -1146,6 +1152,7 @@ def _evaluate_baselines(
         for model_name, model in models.items():
             result = _evaluate_single(
                 X, labels, model, groups, n_folds, metric_fn, seed,
+                cv_splitter=cv_splitter,
                 secondary_metric_fns=secondary_metric_fns,
             )
             if secondary_metric_fns is not None:
@@ -1234,6 +1241,7 @@ def _evaluate_baselines(
     for model_name, model in models.items():
         result = _evaluate_single(
             X_concat, labels, model, groups, n_folds, metric_fn, seed,
+            cv_splitter=cv_splitter,
             secondary_metric_fns=secondary_metric_fns,
         )
         if secondary_metric_fns is not None:
@@ -1285,6 +1293,7 @@ def _run_search(
     lower_is_better: bool = False,
     fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
+    cv_splitter=None,
 ) -> List[dict]:
     """Main search loop over all configurations."""
     tier = SPEED_TIERS[speed]
@@ -1387,6 +1396,7 @@ def _run_search(
                                 lower_is_better=lower_is_better,
                                 fold_reps=fold_reps,
                                 precomputed_folds=precomputed_folds,
+                                cv_splitter=cv_splitter,
                             )
                             if rep_set_name != 'all':
                                 result['rep_subset'] = rep_set_name
@@ -1513,6 +1523,7 @@ def _run_refinement_phase(
     augmentation_budget: int = 20,
     fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
+    cv_splitter=None,
 ) -> List[dict]:
     """Phase 2: re-evaluate top configs from Phase 1 with alternative step_sizes.
 
@@ -1595,6 +1606,7 @@ def _run_refinement_phase(
                     augmentation_budget=augmentation_budget,
                     fold_reps=fold_reps,
                     precomputed_folds=precomputed_folds,
+                    cv_splitter=cv_splitter,
                 )
                 result['refinement_phase'] = True
                 refinement_results.append(result)
@@ -1801,6 +1813,7 @@ def find_best_hybrid(
     refinement_step_sizes: Optional[List[int]] = None,
     rep_factories: Optional[Dict[str, Callable]] = None,
     secondary_metrics: Optional[List[str]] = None,
+    cv_splitter=None,
     seed: int = 42,
     verbose: bool = True,
     cache: bool = False,
@@ -1919,6 +1932,10 @@ def find_best_hybrid(
             aug_dims = {k: v.shape[1] for k, v in augmentations.items()}
             print(f"Augmentations: {aug_dims} (strategy={augmentation_strategy})")
 
+    # --- Infer n_folds from cv_splitter ---
+    if cv_splitter is not None and n_folds is None:
+        n_folds = cv_splitter.get_n_splits()
+
     # --- Auto-detect task type ---
     if task_type == 'auto':
         task_type = _detect_task_type(labels)
@@ -1951,7 +1968,8 @@ def find_best_hybrid(
     if rep_factories:
         actual_folds_for_ft = n_folds if n_folds is not None else SPEED_TIERS[speed]['n_folds']
         fold_reps, precomputed_folds = _precompute_fold_reps(
-            rep_factories, labels, groups, actual_folds_for_ft, seed, verbose
+            rep_factories, labels, groups, actual_folds_for_ft, seed,
+            cv_splitter=cv_splitter, verbose=verbose,
         )
     else:
         fold_reps = None
@@ -1965,6 +1983,7 @@ def find_best_hybrid(
         fold_reps=fold_reps,
         precomputed_folds=precomputed_folds,
         secondary_metric_fns=resolved_secondary,
+        cv_splitter=cv_splitter,
     )
 
     # --- Run search ---
@@ -1987,6 +2006,7 @@ def find_best_hybrid(
         lower_is_better=lower_is_better,
         fold_reps=fold_reps,
         precomputed_folds=precomputed_folds,
+        cv_splitter=cv_splitter,
     )
 
     # --- Two-phase refinement ---
@@ -2010,6 +2030,7 @@ def find_best_hybrid(
             augmentation_budget=augmentation_budget,
             fold_reps=fold_reps,
             precomputed_folds=precomputed_folds,
+            cv_splitter=cv_splitter,
         )
         all_results.extend(refinement_results)
 
