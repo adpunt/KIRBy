@@ -741,7 +741,7 @@ def main():
                         help='Skip protein_kmer (8000D→200D via importance filter)')
     parser.add_argument('--n-folds', type=int, default=5,
                         help='Number of CV folds (default: 5)')
-    parser.add_argument('--cold-setting', choices=['target', 'drug'], default='target',
+    parser.add_argument('--cold-setting', choices=['target', 'protein', 'drug'], default='target',
                         help='Cold split: target (default) or drug')
     parser.add_argument('--reps', type=str, default=None,
                         help='Comma-separated rep names to evaluate (default: all)')

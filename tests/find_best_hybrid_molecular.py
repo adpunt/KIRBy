@@ -140,7 +140,9 @@ REP_PRESETS = {
     'fast': ['ecfp4', 'maccs', 'pdv'],
     'fast+hf': ['ecfp4', 'maccs', 'pdv', 'chemberta', 'molformer', 'selformer'],
     'all': [
-        'ecfp4', 'maccs', 'avalon', 'pdv', 'mordred',
+        'ecfp4', 'maccs', 'avalon', 'atom_pair', 'top_torsion', 'rdkfp',
+        'pdv', 'mordred',
+        'coulomb_matrix', 'usr', 'usrcat', 'pharmacophore3d', 'tda', 'e3fp',
         'mol2vec', 'chemberta', 'molformer',
         'selformer', 'chembert', 'molclr', 'graphmvp', 'smited',
         'mhg_gnn', 'grover', 'graph_kernel',
@@ -516,6 +518,9 @@ def get_representations(smiles: List[str], preset_or_list: str,
     """
     from kirby.representations.molecular import (
         create_ecfp4, create_maccs, create_avalon, create_pdv, create_mordred,
+        create_atom_pair, create_top_torsion, create_rdkfp,
+        create_coulomb_matrix, create_usr, create_usrcat,
+        create_pharmacophore3d, create_tda, create_e3fp,
         create_mol2vec,
         create_chemberta, create_molformer, create_selformer,
         create_chembert, create_molclr, create_graphmvp, create_smited,
@@ -540,8 +545,17 @@ def get_representations(smiles: List[str], preset_or_list: str,
         'ecfp4': create_ecfp4,
         'maccs': create_maccs,
         'avalon': create_avalon,
+        'atom_pair': create_atom_pair,
+        'top_torsion': create_top_torsion,
+        'rdkfp': create_rdkfp,
         'pdv': create_pdv,
         'mordred': create_mordred,
+        'coulomb_matrix': create_coulomb_matrix,
+        'usr': create_usr,
+        'usrcat': create_usrcat,
+        'pharmacophore3d': create_pharmacophore3d,
+        'tda': create_tda,
+        'e3fp': create_e3fp,
         'mol2vec': create_mol2vec,
         'chemberta': create_chemberta,
         'molformer': create_molformer,
@@ -1226,7 +1240,7 @@ Output:
                             'freeze_chemberta, freeze_molformer, '
                             'gnn_molclr, gnn_graphmvp, '
                             'contrastive_chemberta, contrastive_molformer, '
-                            'grover_ft, ft_schnet, ft_dimenetpp, mock_lora')
+                            'grover_ft, ft_schnet, ft_dimenetpp, ft_chemprop, mock_lora')
     parser.add_argument('--finetune-epochs', type=int, default=5,
                        help='Fine-tuning epochs per fold (default: 5)')
     parser.add_argument('--lora-rank', type=int, default=8,
@@ -1348,6 +1362,15 @@ Output:
                     dataset_name=dataset_name,
                     base_model=model_3d,
                     epochs=100,
+                    cache=ft_cache,
+                )
+            elif method == 'ft_chemprop':
+                from kirby.finetuning.molecular_chemprop import make_molecular_chemprop_factory
+                rep_factories[method] = make_molecular_chemprop_factory(
+                    smiles_list=smiles,
+                    dataset_name=dataset_name,
+                    epochs=args.finetune_epochs,
+                    task_type=task_type,
                     cache=ft_cache,
                 )
             else:

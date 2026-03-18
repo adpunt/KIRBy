@@ -64,6 +64,40 @@ def _safe_mol(smiles):
         return None
 
 
+def _generate_conformer(smiles, add_hs=True):
+    """Generate 3D conformer from SMILES. Returns (mol, conformer) or (None, None).
+
+    Pipeline: _safe_mol → AddHs → EmbedMolecule(seed=42) → fallback useRandomCoords
+    → MMFFOptimize(maxIters=200).
+    """
+    from rdkit.Chem import AllChem
+
+    mol = _safe_mol(smiles)
+    if mol is None or mol.GetNumAtoms() == 0:
+        return None, None
+
+    if add_hs:
+        mol = Chem.AddHs(mol)
+
+    result = AllChem.EmbedMolecule(mol, randomSeed=42)
+    if result == -1:
+        result = AllChem.EmbedMolecule(mol, useRandomCoords=True, randomSeed=42)
+    if result == -1:
+        return None, None
+
+    try:
+        AllChem.MMFFOptimizeMolecule(mol, maxIters=200)
+    except Exception:
+        pass
+
+    try:
+        conf = mol.GetConformer()
+    except Exception:
+        return None, None
+
+    return mol, conf
+
+
 # Metals whose presence invalidates organic descriptors
 _METALS = {3,4,11,12,13,19,20,21,22,23,24,25,26,27,28,29,30,31,37,38,
            39,40,41,42,44,45,46,47,48,49,50,55,56,72,73,74,75,76,77,78,79,80,81,82,83}
@@ -314,6 +348,462 @@ def create_avalon(smiles_list, n_bits=2048):
             fingerprints.append(np.zeros(n_bits, dtype=np.float32))
 
     return np.array(fingerprints, dtype=np.float32)
+
+
+def create_rdkfp(smiles_list, min_path=1, max_path=7, n_bits=2048):
+    """RDKit (Daylight-style) path-based fingerprints (2048-bit).
+
+    Enumerates all linear paths of length min_path..max_path in the molecular
+    graph and hashes them into a bit vector. Complementary to circular ECFPs:
+    ECFPs capture atom-centred environments, RDKFPs capture bond paths.
+
+    Per Moesser (2023): CSFPs (connected subgraph fingerprints) are a superset
+    of path fingerprints that enumerate ALL connected subgraphs, but require
+    the unmaintained csfpy package. RDKFPs capture most of the same topological
+    information via the standard RDKit path enumeration.
+
+    Args:
+        smiles_list: List of SMILES strings
+        min_path: Minimum path length (default: 1)
+        max_path: Maximum path length (default: 7)
+        n_bits: Number of bits (default: 2048)
+
+    Returns:
+        np.ndarray: Binary fingerprint matrix (n_molecules, n_bits)
+    """
+    fingerprints = []
+    generator = rdFingerprintGenerator.GetRDKitFPGenerator(
+        minPath=min_path, maxPath=max_path, fpSize=n_bits)
+
+    for smiles in smiles_list:
+        mol = _safe_mol(smiles)
+        if mol is None:
+            fingerprints.append(np.zeros(n_bits, dtype=np.float32))
+            continue
+        try:
+            fp = generator.GetFingerprint(mol)
+            fingerprints.append(np.array(fp, dtype=np.float32))
+        except Exception:
+            fingerprints.append(np.zeros(n_bits, dtype=np.float32))
+
+    return np.array(fingerprints, dtype=np.float32)
+
+
+def create_atom_pair(smiles_list, n_bits=2048):
+    """Atom-pair fingerprints (2048-bit).
+
+    Encodes all pairs of atoms and their topological distance.
+
+    Args:
+        smiles_list: List of SMILES strings
+        n_bits: Number of bits (default: 2048)
+
+    Returns:
+        np.ndarray: Binary fingerprint matrix (n_molecules, n_bits)
+    """
+    fingerprints = []
+    generator = rdFingerprintGenerator.GetAtomPairGenerator(fpSize=n_bits)
+
+    for smiles in smiles_list:
+        mol = _safe_mol(smiles)
+        if mol is None:
+            fingerprints.append(np.zeros(n_bits, dtype=np.float32))
+            continue
+        try:
+            fp = generator.GetFingerprint(mol)
+            fingerprints.append(np.array(fp, dtype=np.float32))
+        except Exception:
+            fingerprints.append(np.zeros(n_bits, dtype=np.float32))
+
+    return np.array(fingerprints, dtype=np.float32)
+
+
+def create_top_torsion(smiles_list, n_bits=2048):
+    """Topological torsion fingerprints (2048-bit).
+
+    Encodes linear sequences of 4 bonded atoms (torsion paths).
+
+    Args:
+        smiles_list: List of SMILES strings
+        n_bits: Number of bits (default: 2048)
+
+    Returns:
+        np.ndarray: Binary fingerprint matrix (n_molecules, n_bits)
+    """
+    fingerprints = []
+    generator = rdFingerprintGenerator.GetTopologicalTorsionGenerator(fpSize=n_bits)
+
+    for smiles in smiles_list:
+        mol = _safe_mol(smiles)
+        if mol is None:
+            fingerprints.append(np.zeros(n_bits, dtype=np.float32))
+            continue
+        try:
+            fp = generator.GetFingerprint(mol)
+            fingerprints.append(np.array(fp, dtype=np.float32))
+        except Exception:
+            fingerprints.append(np.zeros(n_bits, dtype=np.float32))
+
+    return np.array(fingerprints, dtype=np.float32)
+
+
+def create_coulomb_matrix(smiles_list, max_atoms=50):
+    """Coulomb matrix eigenvalue spectrum (3D, 50D).
+
+    Encodes nuclear charge + 3D geometry as a rotationally-invariant
+    descriptor via eigenvalue decomposition of the Coulomb matrix.
+
+    Args:
+        smiles_list: List of SMILES strings
+        max_atoms: Eigenvalues to keep (pad/truncate). Default: 50.
+
+    Returns:
+        np.ndarray: Eigenvalue matrix (n_molecules, max_atoms)
+    """
+    features = []
+
+    for smiles in smiles_list:
+        mol, conf = _generate_conformer(smiles)
+        if mol is None or conf is None:
+            features.append(np.zeros(max_atoms, dtype=np.float32))
+            continue
+
+        try:
+            positions = conf.GetPositions()
+            atomic_nums = np.array([a.GetAtomicNum() for a in mol.GetAtoms()],
+                                   dtype=np.float64)
+            n = len(atomic_nums)
+
+            # Build Coulomb matrix
+            cm = np.zeros((n, n), dtype=np.float64)
+            for i in range(n):
+                cm[i, i] = 0.5 * atomic_nums[i] ** 2.4
+                for j in range(i + 1, n):
+                    dist = np.linalg.norm(positions[i] - positions[j])
+                    if dist > 1e-8:
+                        cm[i, j] = atomic_nums[i] * atomic_nums[j] / dist
+                        cm[j, i] = cm[i, j]
+
+            eigvals = np.sort(np.linalg.eigvalsh(cm))[::-1]
+
+            # Pad or truncate
+            if len(eigvals) >= max_atoms:
+                result = eigvals[:max_atoms]
+            else:
+                result = np.zeros(max_atoms, dtype=np.float64)
+                result[:len(eigvals)] = eigvals
+
+            features.append(result.astype(np.float32))
+        except Exception:
+            features.append(np.zeros(max_atoms, dtype=np.float32))
+
+    return np.array(features, dtype=np.float32)
+
+
+def create_usr(smiles_list):
+    """Ultrafast Shape Recognition descriptors (3D, 12D).
+
+    Encodes molecular shape as distributions of distances from 4 reference
+    points (centroid, closest-to-centroid, farthest-from-centroid, farthest-
+    from-farthest). 3 moments per reference point = 12D.
+
+    Args:
+        smiles_list: List of SMILES strings
+
+    Returns:
+        np.ndarray: USR descriptor matrix (n_molecules, 12)
+    """
+    from rdkit.Chem import rdMolDescriptors
+
+    features = []
+    for smiles in smiles_list:
+        mol, conf = _generate_conformer(smiles)
+        if mol is None or conf is None:
+            features.append(np.zeros(12, dtype=np.float32))
+            continue
+        try:
+            usr = rdMolDescriptors.GetUSR(mol)
+            features.append(np.array(usr, dtype=np.float32))
+        except Exception:
+            features.append(np.zeros(12, dtype=np.float32))
+
+    return np.array(features, dtype=np.float32)
+
+
+def create_usrcat(smiles_list):
+    """USRCAT descriptors — USR + pharmacophoric atom-type channels (3D, 60D).
+
+    Extends USR with 4 additional reference-point sets filtered by atom type
+    (hydrophobic, aromatic, H-bond acceptor, H-bond donor). 12 base USR +
+    4 × 12 pharmacophoric channels = 60D.
+
+    Args:
+        smiles_list: List of SMILES strings
+
+    Returns:
+        np.ndarray: USRCAT descriptor matrix (n_molecules, 60)
+    """
+    from rdkit.Chem import rdMolDescriptors
+
+    features = []
+    for smiles in smiles_list:
+        mol, conf = _generate_conformer(smiles)
+        if mol is None or conf is None:
+            features.append(np.zeros(60, dtype=np.float32))
+            continue
+        try:
+            usrcat = rdMolDescriptors.GetUSRCAT(mol)
+            features.append(np.array(usrcat, dtype=np.float32))
+        except Exception:
+            features.append(np.zeros(60, dtype=np.float32))
+
+    return np.array(features, dtype=np.float32)
+
+
+# Cached pharmacophore feature factory (module-level singleton)
+_PHARM_FACTORY = None
+
+
+def _get_pharmacophore_factory():
+    """Get or create the pharmacophore feature factory (cached singleton)."""
+    global _PHARM_FACTORY
+    if _PHARM_FACTORY is None:
+        from rdkit.Chem import ChemicalFeatures
+        from rdkit import RDConfig
+        import os as _os
+        fdef_path = _os.path.join(RDConfig.RDDataDir, 'BaseFeatures.fdef')
+        _PHARM_FACTORY = ChemicalFeatures.BuildFeatureFactory(fdef_path)
+    return _PHARM_FACTORY
+
+
+def create_pharmacophore3d(smiles_list):
+    """3D pharmacophore descriptors (3D, 49D).
+
+    For each molecule, identifies pharmacophoric features (Donor, Acceptor,
+    Aromatic, Hydrophobe, PosIonizable, NegIonizable, LumpedHydrophobe) and
+    computes: 7 feature counts + 21 pair-distance means + 21 pair-distance stds.
+
+    Args:
+        smiles_list: List of SMILES strings
+
+    Returns:
+        np.ndarray: Pharmacophore descriptor matrix (n_molecules, 49)
+    """
+    families = ['Donor', 'Acceptor', 'Aromatic', 'Hydrophobe',
+                'PosIonizable', 'NegIonizable', 'LumpedHydrophobe']
+    n_families = len(families)
+    n_pairs = n_families * (n_families - 1) // 2  # 21
+    dim = n_families + 2 * n_pairs  # 7 + 42 = 49
+
+    features = []
+    factory = _get_pharmacophore_factory()
+
+    for smiles in smiles_list:
+        mol, conf = _generate_conformer(smiles)
+        if mol is None or conf is None:
+            features.append(np.zeros(dim, dtype=np.float32))
+            continue
+
+        try:
+            feats = factory.GetFeaturesForMol(mol)
+
+            # Group feature positions by family
+            family_positions = {f: [] for f in families}
+            for feat in feats:
+                fname = feat.GetFamily()
+                if fname in family_positions:
+                    family_positions[fname].append(
+                        np.array(feat.GetPos(), dtype=np.float64))
+
+            # Counts
+            counts = np.array([len(family_positions[f]) for f in families],
+                              dtype=np.float32)
+
+            # Pairwise distance stats
+            pair_means = []
+            pair_stds = []
+            for i in range(n_families):
+                for j in range(i + 1, n_families):
+                    pos_i = family_positions[families[i]]
+                    pos_j = family_positions[families[j]]
+                    if pos_i and pos_j:
+                        dists = [np.linalg.norm(a - b)
+                                 for a in pos_i for b in pos_j]
+                        pair_means.append(np.mean(dists))
+                        pair_stds.append(np.std(dists) if len(dists) > 1 else 0.0)
+                    else:
+                        pair_means.append(0.0)
+                        pair_stds.append(0.0)
+
+            vec = np.concatenate([counts,
+                                  np.array(pair_means, dtype=np.float32),
+                                  np.array(pair_stds, dtype=np.float32)])
+            features.append(vec.astype(np.float32))
+        except Exception:
+            features.append(np.zeros(dim, dtype=np.float32))
+
+    return np.array(features, dtype=np.float32)
+
+
+def create_tda(smiles_list, max_dim=1):
+    """Persistent homology / TDA descriptors (3D, 28D).
+
+    Computes Vietoris-Rips persistence on 3D atomic distance matrices and
+    extracts topological summary statistics per homology dimension.
+
+    Per dimension (H0, H1): birth/death mean/std, persistence mean/max/std/entropy,
+    n_features, lifetime mean/std, midlife mean/std, Betti number → 14 features × 2 = 28D.
+
+    Requires: giotto-tda (pip install giotto-tda)
+
+    Args:
+        smiles_list: List of SMILES strings
+        max_dim: Maximum homology dimension (default: 1, gives H0 and H1)
+
+    Returns:
+        np.ndarray: TDA descriptor matrix (n_molecules, 14 * (max_dim + 1))
+    """
+    try:
+        from gtda.homology import VietorisRipsPersistence
+    except ImportError:
+        raise ImportError(
+            "giotto-tda is required for TDA representations. "
+            "Install with: pip install giotto-tda"
+        )
+
+    n_features_per_dim = 14
+    dims = list(range(max_dim + 1))
+    total_dim = n_features_per_dim * len(dims)
+
+    def _summarize_diagram(dgm, dim):
+        """Extract summary stats from persistence diagram for one dimension.
+
+        14 features: birth mean/std, death mean/std, persistence mean/max/min/std/entropy,
+        n_features, midlife mean/std, persistence median, persistence sum.
+        """
+        mask = dgm[:, 2] == dim
+        pts = dgm[mask][:, :2]  # birth, death
+
+        if len(pts) == 0:
+            return np.zeros(n_features_per_dim, dtype=np.float32)
+
+        births = pts[:, 0]
+        deaths = pts[:, 1]
+        persistence = deaths - births
+        midlives = (births + deaths) / 2.0
+
+        # Persistence entropy
+        total_pers = persistence.sum()
+        if total_pers > 0:
+            probs = persistence / total_pers
+            entropy = -np.sum(probs * np.log(probs + 1e-10))
+        else:
+            entropy = 0.0
+
+        return np.array([
+            births.mean(), births.std(),
+            deaths.mean(), deaths.std(),
+            persistence.mean(), persistence.max(), persistence.min(),
+            persistence.std(), entropy,
+            float(len(pts)),
+            midlives.mean(), midlives.std(),
+            float(np.median(persistence)),
+            total_pers,
+        ], dtype=np.float32)
+
+    features = []
+    for smiles in smiles_list:
+        mol, conf = _generate_conformer(smiles)
+
+        if mol is None or conf is None:
+            # Fallback: use 2D topological distance matrix
+            mol_2d = _safe_mol(smiles)
+            if mol_2d is not None:
+                try:
+                    from rdkit.Chem import rdmolops
+                    dm = rdmolops.GetDistanceMatrix(mol_2d)
+                    dm = dm.astype(np.float64)
+                except Exception:
+                    features.append(np.zeros(total_dim, dtype=np.float32))
+                    continue
+            else:
+                features.append(np.zeros(total_dim, dtype=np.float32))
+                continue
+        else:
+            positions = conf.GetPositions()
+            from scipy.spatial.distance import pdist, squareform
+            dm = squareform(pdist(positions))
+
+        try:
+            # VietorisRipsPersistence expects (n_samples, n_points, n_points)
+            vr = VietorisRipsPersistence(
+                metric='precomputed',
+                homology_dimensions=dims,
+                n_jobs=1,
+            )
+            dgms = vr.fit_transform(dm[np.newaxis, :, :])[0]
+
+            vec = np.concatenate([_summarize_diagram(dgms, d) for d in dims])
+            features.append(vec)
+        except Exception:
+            features.append(np.zeros(total_dim, dtype=np.float32))
+
+    return np.array(features, dtype=np.float32)
+
+
+def create_e3fp(smiles_list, n_bits=1024):
+    """E3FP — Extended 3-Dimensional FingerPrint (3D, 1024D).
+
+    3D analogue of ECFP: captures local 3D chemical environments using
+    shell-based atom neighborhood hashing on conformers.
+
+    Requires: e3fp (pip install e3fp)
+
+    Args:
+        smiles_list: List of SMILES strings
+        n_bits: Number of bits (default: 1024)
+
+    Returns:
+        np.ndarray: Binary fingerprint matrix (n_molecules, n_bits)
+    """
+    try:
+        from e3fp.pipeline import fprints_from_mol
+        from e3fp.fingerprint import fprint as e3fp_fprint
+    except ImportError:
+        raise ImportError(
+            "e3fp is required for E3FP representations. "
+            "Install with: pip install e3fp"
+        )
+
+    features = []
+    for smiles in smiles_list:
+        mol, conf = _generate_conformer(smiles)
+        if mol is None or conf is None:
+            features.append(np.zeros(n_bits, dtype=np.float32))
+            continue
+
+        try:
+            fprints = fprints_from_mol(mol, fprint_params={'bits': n_bits})
+            if fprints:
+                fp = fprints[0]
+                arr = fp.to_vector(sparse=True)
+                if hasattr(arr, 'toarray'):
+                    arr = arr.toarray().flatten()
+                arr = np.asarray(arr, dtype=np.float32).flatten()
+                # Pad or truncate to n_bits
+                if len(arr) >= n_bits:
+                    arr = arr[:n_bits]
+                else:
+                    padded = np.zeros(n_bits, dtype=np.float32)
+                    padded[:len(arr)] = arr
+                    arr = padded
+                features.append(arr)
+            else:
+                features.append(np.zeros(n_bits, dtype=np.float32))
+        except Exception:
+            features.append(np.zeros(n_bits, dtype=np.float32))
+
+    return np.array(features, dtype=np.float32)
 
 
 def create_maccs(smiles_list):
@@ -936,28 +1426,11 @@ def create_schnet(smiles_list, hidden_channels=128, num_interactions=6,
 
     def smiles_to_data(smiles):
         """Convert SMILES to PyG Data with 3D coordinates."""
-        mol = _safe_mol(smiles)
-        if mol is None:
+        mol, conf = _generate_conformer(smiles)
+        if mol is None or conf is None:
             return None
-
-        # Add hydrogens and generate 3D conformer
-        mol = Chem.AddHs(mol)
-        result = AllChem.EmbedMolecule(mol, randomSeed=42)
-        if result == -1:
-            # Fallback: use distance geometry
-            AllChem.EmbedMolecule(mol, useRandomCoords=True, randomSeed=42)
-
-        # Optimize geometry
-        try:
-            AllChem.MMFFOptimizeMolecule(mol, maxIters=200)
-        except Exception:
-            pass  # Some molecules can't be optimized
-
-        # Extract atomic numbers and positions
-        conf = mol.GetConformer()
         z = torch.tensor([atom.GetAtomicNum() for atom in mol.GetAtoms()], dtype=torch.long)
         pos = torch.tensor(conf.GetPositions(), dtype=torch.float)
-
         return Data(z=z, pos=pos)
 
     # Convert all molecules
@@ -966,6 +1439,9 @@ def create_schnet(smiles_list, hidden_channels=128, num_interactions=6,
     for i, smiles in enumerate(smiles_list):
         try:
             data = smiles_to_data(smiles)
+            if data is None:
+                data = Data(z=torch.tensor([6], dtype=torch.long),
+                           pos=torch.tensor([[0.0, 0.0, 0.0]], dtype=torch.float))
             data_list.append(data)
         except Exception as e:
             print(f"  Warning: Failed on molecule {i} ({smiles[:30]}...): {e}")
@@ -2967,18 +3443,9 @@ def create_dimenetpp(smiles_list, hidden_channels=128, out_channels=1,
 
     def smiles_to_data(smiles):
         """Convert SMILES to PyG Data with 3D coordinates."""
-        mol = _safe_mol(smiles)
-        if mol is None:
+        mol, conf = _generate_conformer(smiles)
+        if mol is None or conf is None:
             return None
-        mol = Chem.AddHs(mol)
-        result = AllChem.EmbedMolecule(mol, randomSeed=42)
-        if result == -1:
-            AllChem.EmbedMolecule(mol, useRandomCoords=True, randomSeed=42)
-        try:
-            AllChem.MMFFOptimizeMolecule(mol, maxIters=200)
-        except Exception:
-            pass
-        conf = mol.GetConformer()
         z = torch.tensor([atom.GetAtomicNum() for atom in mol.GetAtoms()], dtype=torch.long)
         pos = torch.tensor(conf.GetPositions(), dtype=torch.float)
         return Data(z=z, pos=pos)
@@ -2989,6 +3456,9 @@ def create_dimenetpp(smiles_list, hidden_channels=128, out_channels=1,
     for i, smiles in enumerate(smiles_list):
         try:
             data = smiles_to_data(smiles)
+            if data is None:
+                data = Data(z=torch.tensor([6], dtype=torch.long),
+                           pos=torch.tensor([[0.0, 0.0, 0.0]], dtype=torch.float))
             data_list.append(data)
         except Exception as e:
             print(f"  Warning: Failed on molecule {i} ({smiles[:30]}...): {e}")
