@@ -828,8 +828,9 @@ Output:
                        help='RandomizedSearchCV iterations per model (default: 20)')
     parser.add_argument('--explain', action='store_true',
                        help='Generate feature explanations for best hybrid config')
-    parser.add_argument('--cold-setting', choices=['target', 'drug'], default='target',
-                       help='Cold split: target (default) or drug')
+    parser.add_argument('--cold-setting', choices=['target', 'protein', 'drug'], default='target',
+                       help='Cold split: target/protein (default, 30%% seq identity clusters) '
+                            'or drug (unique drug groups)')
 
     args = parser.parse_args()
 
