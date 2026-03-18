@@ -687,6 +687,9 @@ After baselines populate the BOM, select (dataset, rep, model) configurations fo
 | c08: Calibration | `c08_calibration.py` | Best model per domain | **Waiting for BOM** |
 | c09: Formal analysis | `c09_formal_analysis.py` | Top 5 reps per domain, all models | **Waiting for BOM** |
 | s01-s09: Similarity suite | `tests/experiments/similarity/` | 1-2 molecular datasets, top 3 reps | **Waiting for BOM** |
+| f10: Small dataset allocation | `f10_small_dataset_allocation.py` | 5 small Ab datasets (n≈130) + 1 control (n=672) | **New** |
+
+**F10 details:** Tests 5 conditions to fix hybrid underperformance on small datasets: (A) baseline, (B) budget cap `min(budget, n_train//2)`, (C) RidgeCV evaluator, (D) 3-fold CV evaluator, (E) combined. 12 reps × 4 budgets × 4 downstream models × 5-fold CV. Measures delta vs best single-rep baseline. SLURM: `submit_framework_f10.sh`.
 
 **Selection criteria (apply after Phase 5 baselines):**
 - **"Interesting"** = reps where top model varies (ridge vs tree vs neural), reps that rank differently across datasets, reps near the top but from different families (fingerprint vs LM vs descriptor)
