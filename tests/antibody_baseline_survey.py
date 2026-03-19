@@ -1123,6 +1123,8 @@ Examples:
     parser.add_argument('--output', type=str, default=None,
                         help='Output path (JSON file or directory for multi-dataset)')
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--skip-existing', action='store_true',
+                        help='Skip reps already in the output JSON (incremental mode)')
 
     args = parser.parse_args()
 
@@ -1186,8 +1188,26 @@ Examples:
     fail_count = 0
 
     for ds in datasets:
+        # --skip-existing: filter out reps already in the output JSON
+        _run_reps = list(rep_names)
+        if args.skip_existing and output_dir:
+            existing_path = output_dir / f"{ds}.json"
+            if existing_path.exists():
+                try:
+                    with open(existing_path) as f:
+                        _existing_data = json.load(f)
+                    _existing_reps = set(_existing_data.get('baselines', {}).keys())
+                    _run_reps = [r for r in rep_names if r not in _existing_reps]
+                    if len(_run_reps) < len(rep_names):
+                        print(f"  [{ds}] Skipping {len(rep_names) - len(_run_reps)} existing reps, {len(_run_reps)} remaining")
+                    if not _run_reps:
+                        print(f"  [{ds}] All reps already done, skipping entirely")
+                        continue
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
         try:
-            result = run_survey(ds, rep_names, model_names, args.n_folds,
+            result = run_survey(ds, _run_reps, model_names, args.n_folds,
                                 augment=args.augment,
                                 do_finetune=args.finetune)
             result = _convert_numpy(result)
@@ -1197,6 +1217,21 @@ Examples:
 
             if output_dir:
                 out_path = output_dir / f"{ds}.json"
+                if out_path.exists():
+                    try:
+                        with open(out_path) as f:
+                            existing = json.load(f)
+                        for section in ('baselines', 'finetuned_baselines', 'augmentations'):
+                            if section in result and result[section]:
+                                if section not in existing or not existing[section]:
+                                    existing[section] = {}
+                                existing[section].update(result[section])
+                        if 'metadata' in result:
+                            existing.setdefault('metadata', {}).update(result['metadata'])
+                        result = existing
+                        print(f"  Merged with existing: {out_path}")
+                    except (json.JSONDecodeError, KeyError):
+                        pass
                 with open(out_path, 'w') as f:
                     json.dump(result, f, indent=2)
                 print(f"  Saved: {out_path}")
