@@ -903,9 +903,13 @@ def run_survey(
     augmentations = {}
     if augment and baselines:
         # Find top-scoring rep — use accuracy for clf, R² for regression
+        # Only consider reps whose feature matrices are in `reps` (excludes
+        # factory reps like esm2_entropy_top20 and any that failed to generate)
         primary_key = 'accuracy_mean' if is_clf else 'r2_mean'
         scored = []
         for name, e in baselines.items():
+            if name not in reps:
+                continue  # factory/per-fold rep — no raw matrix available
             for mname, s in e['scores'].items():
                 val = s.get(primary_key, float('nan'))
                 if not np.isnan(val):

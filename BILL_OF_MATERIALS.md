@@ -15,20 +15,22 @@ not be used in experiments until validated.
 
 | Dataset | Source | Samples | Target | Metrics | Best Rep (model) | Best RMSE | Best R² | Status |
 |---------|--------|---------|--------|---------|------------------|-----------|---------|--------|
-| `logd` | OpenADMET-ExpansionRx | 5,028 | LogD | RMSE, R², Spearman ρ | mhg_gnn (gp) | **0.442** | **0.857** | **Phase 5** ✅ |
-| `caco2` | OpenADMET-ExpansionRx | 2,158 | Caco2 Efflux (log) | RMSE, R², Spearman ρ | mol2vec (gp) | **0.290** | — | **Phase 5** ✅ |
-| `herg` | ChEMBL (CHEMBL240) | 1,412 | pKi | RMSE, R², Spearman ρ | mhg_gnn (lgbm) | **0.587** | — | **Phase 5** ✅ |
-| `qm9` | QM9 | ~10,000 | HOMO-LUMO gap | RMSE, R², Spearman ρ | — | — | — | **Running** |
-| `adme_hlm` | Polaris ADME-Fang | 3,087 | HLM clearance (log) | RMSE, R², Spearman ρ | — | — | — | **Running** |
-| `adme_rlm` | Polaris ADME-Fang | 3,054 | RLM clearance (log) | RMSE, R², Spearman ρ | — | — | — | **Running** |
-| `adme_mdr1` | Polaris ADME-Fang | 2,642 | MDR1 efflux (log) | RMSE, R², Spearman ρ | — | — | — | **Running** |
-| `adme_solubility` | Polaris ADME-Fang | 2,173 | Solubility (log) | RMSE, R², Spearman ρ | — | — | — | **Running** |
+| `logd` | OpenADMET-ExpansionRx | 5,028 | LogD | RMSE, R², Spearman ρ | mhg_gnn (dnn) | **0.440** | **0.857** | **Phase 5** ✅ |
+| `caco2` | OpenADMET-ExpansionRx | 2,158 | Caco2 Efflux (log) | RMSE, R², Spearman ρ | graph_kernel (catboost) | **0.290** | — | **Phase 5** ✅ |
+| `herg` | ChEMBL (CHEMBL240) | 1,412 | pKi | RMSE, R², Spearman ρ | mhg_gnn (catboost) | **0.575** | — | **Phase 5** ✅ |
+| `qm9` | QM9 | ~10,000 | HOMO-LUMO gap | RMSE, R², Spearman ρ | — | — | — | **Running** (p5_mol_b, halfway through) |
+| `adme_hlm` | Polaris ADME-Fang | 3,087 | HLM clearance (log) | RMSE, R², Spearman ρ | — | — | — | **Missing** (mol job will timeout) |
+| `adme_rlm` | Polaris ADME-Fang | 3,054 | RLM clearance (log) | RMSE, R², Spearman ρ | — | — | — | **Missing** (mol job will timeout) |
+| `adme_mdr1` | Polaris ADME-Fang | 2,642 | MDR1 efflux (log) | RMSE, R², Spearman ρ | — | — | — | **Missing** (mol job will timeout) |
+| `adme_solubility` | Polaris ADME-Fang | 2,173 | Solubility (log) | RMSE, R², Spearman ρ | — | — | — | **Missing** (mol job will timeout) |
 
-**LogD Phase 5 results (17 reps × 10 models, 5-fold scaffold-split):** RMSE primary metric. Best: mhg_gnn (GP, RMSE=0.442, R²=0.857, ρ=0.922). grover essentially tied (ridge, RMSE=0.443, R²=0.857, ρ=0.925). GP and DNN models dominate as best model for most reps. unimol_v2 failed (R²≈0). 5 remaining datasets running on HTC+ARC.
+**LogD Phase 5 results (17 reps × 10 models, 5-fold scaffold-split):** RMSE primary metric. Best: mhg_gnn (DNN, RMSE=0.440). grover essentially tied (ridge, RMSE=0.451). mordred enters top 3 (DNN, 0.446). GP and DNN models dominate as best model for most reps. unimol_v2 failed (RMSE=1.177). Augmentations tested: mhg_gnn+maccs (delta -0.016), mhg_gnn+pdv (delta -0.027) — both improve.
 
-**Caco2 Phase 5 results (17 reps × 10 models, 5-fold scaffold-split):** Very tight RMSE range — top 7 reps within 0.005 of each other. Best: mol2vec (GP, 0.290), grover (GP, 0.290), mhg_gnn (GP, 0.292), graph_kernel (catboost, 0.292), ecfp4 (GP, 0.292). GP dominates as best model. unimol_v2 dead last (0.437).
+**Caco2 Phase 5 results (17 reps × 10 models, 5-fold scaffold-split):** Very tight RMSE range — top 7 reps within 0.005 of each other. Best: graph_kernel (catboost, 0.290), ecfp4 (GP, 0.293), mhg_gnn (GP, 0.291), mol2vec (GP, 0.291), pdv (catboost, 0.293). GP and catboost dominate as best model. unimol_v2 dead last (0.437). Augmentations: graph_kernel+maccs (delta -0.006), graph_kernel+pdv (delta -0.006) — marginal improvement.
 
-**hERG Phase 5 results (16 reps × 10 models, 5-fold scaffold-split):** mol2vec missing. Best: mhg_gnn (lightgbm, 0.587), graph_kernel (catboost, 0.598), avalon (catboost, 0.599), grover (dnn, 0.600). More model diversity than logd/caco2 — catboost, lightgbm, dnn, ridge all win for different reps. unimol_v2 dead (0.914).
+**hERG Phase 5 results (17 reps × 10 models, 5-fold scaffold-split):** Best: mhg_gnn (catboost, 0.575), mordred (catboost, 0.578), graph_kernel (catboost, 0.584), avalon (catboost, 0.586), grover (dnn, 0.589). More model diversity than logd/caco2 — catboost, dnn, rf all win for different reps. unimol_v2 dead (0.915). Augmentations: mhg_gnn+pdv (delta -0.006) — marginal.
+
+**Running job `p5_mol_b` (1d21h elapsed, 48h limit) is halfway through QM9.** Will timeout before reaching ADME datasets. Need consolidated resubmission for QM9 + 4× ADME.
 
 **Preprocessing:** All molecular datasets apply `standardize_smiles()` (salt stripping, neutralization, tautomer canonicalization) and `deduplicate_by_inchikey()` (removes duplicate molecules with different SMILES but same InChIKey, preventing same molecule in train+test).
 
@@ -37,15 +39,15 @@ not be used in experiments until validated.
 | Dataset | Source | Samples | Target | Best Rep (model) | Best ρ | Reps Tested | Status |
 |---------|--------|---------|--------|------------------|--------|-------------|--------|
 | `flab_binding_koenig` | FLAb (G6) | 4,275 | Kd | ablang2 (dnn) | **0.475** | 23 | **Phase 5** ✅ |
-| `flab_expression_koenig` | FLAb (G6 SSM) | 4,275 | Expression | — | — | 23 | **Phase 5** ✅ |
-| `flab_binding_phillips_h3` | FLAb2 (Phillips 2021) | 5,000 | Binding (SPR Kd) | — | — | 4 | **Partial** |
-| `flab_binding_adams` | FLAb2 (Adams 2017) | 5,000 | Binding (Kd) | — | — | 4 | **Partial** |
-| `flab_expression_adams` | FLAb2 (Adams 2017) | 5,000 | Expression (ER) | — | — | 4 | **Partial** |
-| `abagym_HER2` | AbAgym DMS | 146 | Fitness | — | — | 4 | **Partial** |
-| `abagym_VEGF` | AbAgym DMS | 418 | Fitness | — | — | 4 | **Partial** |
-| `abagym_EGFR` | AbAgym DMS | 659 | Fitness | — | — | 4 | **Partial** |
-| `abagym_lysozyme` | AbAgym DMS | 627 | Fitness | — | — | 4 | **Partial** |
-| `abagym_Ang2` | AbAgym DMS | 397 | Fitness | — | — | 4 | **Partial** |
+| `flab_expression_koenig` | FLAb (G6 SSM) | 4,275 | Expression | esm3 (dnn) | **0.715** | 23 | **Phase 5** ✅ |
+| `flab_binding_phillips_h3` | FLAb2 (Phillips 2021) | 5,000 | Binding (SPR Kd) | onehot (catboost) | **0.722** | 4 | **Partial** (needs 40-rep run) |
+| `flab_binding_adams` | FLAb2 (Adams 2017) | 5,000 | Binding (Kd) | blosum (dnn) | **0.669** | 4 | **Partial** (needs 40-rep run) |
+| `flab_expression_adams` | FLAb2 (Adams 2017) | 5,000 | Expression (ER) | blosum (catboost) | **0.511** | 4 | **Partial** (needs 40-rep run) |
+| `abagym_HER2` | AbAgym DMS | 146 | Fitness | aac (catboost) | **0.310** | 4 | **Partial** (needs 40-rep run) |
+| `abagym_VEGF` | AbAgym DMS | 418 | Fitness | aac (rf) | **0.587** | 4 | **Partial** (needs 40-rep run) |
+| `abagym_EGFR` | AbAgym DMS | 659 | Fitness | blosum (cnn) | **0.211** | 4 | **Partial** (needs 40-rep run) |
+| `abagym_lysozyme` | AbAgym DMS | 627 | Fitness | aac (xgboost) | **0.372** | 4 | **Partial** (needs 40-rep run) |
+| `abagym_Ang2` | AbAgym DMS | 397 | Fitness | onehot (mlp) | **0.259** | 4 | **Partial** (needs 40-rep run) |
 | `abagym_all` | AbAgym (pooled, 5 groups) | 2,247 | Fitness | ablang2 (ridge) | **0.145** | 35 | **Phase 5** ✅ |
 
 **Koenig DMS now has 23 LM reps.** ablang2 leads binding (ρ=0.475 with DNN), saprot/esm3 close behind (~0.44). igbert dead (ρ≈0).
@@ -61,19 +63,19 @@ not be used in experiments until validated.
 | Dataset | Source | Samples | Target | Best Rep (model) | Best ρ | Reps Tested | Status |
 |---------|--------|---------|--------|------------------|--------|-------------|--------|
 | `flab_thermo_tresanco` | FLAb2 (Tresanco 2023) | 672 | Tm | esm3 (dnn) | **0.805** | 34 | **Phase 5** ✅ |
-| `flab_pk_jain_heprt` | FLAb2 (Jain 2023) | 130 | Heparin RT | — | — | 37 | **Phase 5** ✅ |
+| `flab_pk_jain_heprt` | FLAb2 (Jain 2023) | 130 | Heparin RT | igt5 (ridge) | **0.783** | 37 | **Phase 5** ✅ |
 | `flab_pk_jain_fcrnrt` | FLAb2 (Jain 2023) | 132 | FcRn RT | ablang2 (ridge) | **0.595** | 37 | **Phase 5** ✅ |
 | `flab_polyreact_jain_cic` | FLAb2 (Jain 2017) | 137 | CIC RT | prot_t5 (ridge) | **0.586** | 37 | **Phase 5** ✅ |
 | `flab_aggregation_jain_hicrt` | FLAb2 (Jain 2017) | 137 | HIC RT | prot_t5 (ridge) | **0.506** | 37 | **Phase 5** ✅ |
-| `flab_thermo_jain` | FLAb (Jain 2017) | 137 | Tm | — | — | 36 | **Phase 5** ✅ |
+| `flab_thermo_jain` | FLAb (Jain 2017) | 137 | Tm | ablang2 (ridge) | **0.457** | 37 | **Phase 5** ✅ |
 | `abcov_kd` | Ab-CoV (via FLAb) | 141 | -log Kd | prot_t5 (catboost) | **0.432** | 22 | **Phase 5** ✅ |
-| `flab_aggregation_jain` | FLAb (Jain 2017) | 137 | AC-SINS | — | — | 36 | **Phase 5** ✅ |
+| `flab_aggregation_jain` | FLAb (Jain 2017) | 137 | AC-SINS | esm2_concat (ridge) | **0.425** | 37 | **Phase 5** ✅ |
 | `flab_immunogenicity_marks` | FLAb2 (Marks 2021) | 217 | Immunogenicity | antiberty_cdr (mlp) | **0.399** | 23 | **Phase 5** ✅ |
-| `flab_polyreact_jain_bvp` | FLAb2 (Jain 2017) | 137 | BVP ELISA | — | — | 37 | **Phase 5** ✅ |
-| `flab_thermo_hutchinson` | FLAb2 (Hutchinson 2023) | 192 | Tm | — | — | 37 | **Phase 5** ✅ |
-| `flab_aggregation_jain_sas` | FLAb2 (Jain 2017) | 137 | SAS | — | — | 37 | **Phase 5** ✅ |
+| `flab_polyreact_jain_bvp` | FLAb2 (Jain 2017) | 137 | BVP ELISA | ablang2 (ridge) | **0.374** | 37 | **Phase 5** ✅ |
+| `flab_thermo_hutchinson` | FLAb2 (Hutchinson 2023) | 192 | Tm | esm2 (xgboost) | **0.289** | 38 | **Phase 5** ✅ |
+| `flab_aggregation_jain_sas` | FLAb2 (Jain 2017) | 137 | SAS | onehot (rf) | **0.230** | 37 | **Phase 5** ✅ |
 | `ddg_combined` | SKEMPI 2.0 + AB-Bind (Ab-Ag only) | 429 | ΔΔG | esm2_wt_delta (ridge) | **0.293** | 34 | **Phase 5** ✅ |
-| `ddg_combined_full` | SKEMPI 2.0 full + AB-Bind (all PP) | ~3,000 | ΔΔG | — | — | — | **New** (run needed) |
+| `ddg_combined_full` | SKEMPI 2.0 full + AB-Bind (all PP) | 1,536 | ΔΔG | esm2_wt_delta (gp) | **0.231** | 32 | **Phase 5** ✅ (opig/ddg) |
 
 **Phase 5 inter-family results (34-37 reps, 10 models, identity-grouped GroupKFold):** Spearman ρ is primary metric. Now includes LM reps, seq encoding (onehot, blosum, aac), structural, mutation, and variation reps. ESM3 dominates tresanco (ρ=0.805 with DNN). ablang2 and prot_t5 are the most consistent top performers across datasets. blosum surprisingly strong on tresanco (ρ=0.780). DNN wins on larger datasets, ridge on smaller ones. ddg_combined now has 34 reps — esm2_wt_delta leads (ρ=0.293), a hard task. 5 reps consistently fail/NaN: aido_protein, mint, xtrimopglm, igbert, igbert_cls.
 
@@ -135,45 +137,47 @@ Returns same dict format as DTA loader → plugs into existing DTA pipeline.
 
 | Dataset | Source | Samples | Target | Task | Metrics | Best Rep (model) | Best Acc | Status |
 |---------|--------|---------|--------|------|---------|------------------|----------|--------|
-| `tz_her2_binary` | Chinery et al. 2024 | 5,000 (subsample) | Binding (binder/non-binder) | Binary clf | Acc, F1w, AUROC | blosum (rf) | **84.9%** | **Partial** (fast reps only) |
-| `tz_her2_multiclass` | Chinery et al. 2024 | 5,000 (subsample) | Affinity (low/mid/high) | 3-class clf | Acc, F1w | — | — | **Needs run** |
-| `humanness_species` | Marks et al. 2021 (OAS FASTA, Zenodo 10562968) | varies | Human vs non-human | Binary clf | Acc, F1w, AUROC | — | — | **Needs run** |
-| `humanness_therapeutic` | Marks et al. 2021 (Thera-SAbDab fallback) | varies | Human vs non-human | Binary clf | Acc, F1w, AUROC | — | — | **Needs run** |
+| `tz_her2_binary` | Chinery et al. 2024 | 5,000 (subsample) | Binding (binder/non-binder) | Binary clf | Acc, F1w, AUROC | blosum (catboost) | **92.9% AUROC** | **Phase 5** ✅ (36 reps) |
+| `tz_her2_multiclass` | Chinery et al. 2024 | 5,000 (subsample) | Affinity (low/mid/high) | 3-class clf | Acc, F1w | structural (rf) | **46.3% acc** | **Partial** (1 rep only) |
+| `humanness_species` | Marks et al. 2021 (OAS FASTA, Zenodo 10562968) | varies | Human vs non-human | Binary clf | Acc, F1w, AUROC | — | — | **Missing** (check SLURM log) |
+| `humanness_therapeutic` | Marks et al. 2021 (Thera-SAbDab fallback) | 564 | Human vs non-human | Binary clf | Acc, F1w, AUROC | structural (gp) | **68.1% AUROC** | **Partial** (1 rep only) |
 
 **Splits:** StratifiedGroupKFold — edit_distance groups for Trastuzumab, identity groups for humanness. VH-only (unpaired) for humanness.
 **Reps:** 40 antibody reps via `antibody_baseline_survey.py all_clf`.
-**Initial results (tz_her2_binary, 5K, 5-fold):** BLOSUM RF 84.9% acc, onehot RF 84.9% acc. Full LM survey pending.
+**tz_her2_binary (36 reps, 9 models):** blosum (catboost) AUROC=0.929, onehot (rf) AUROC=0.926. Classical seq encodings (blosum/onehot at 5600D) beat ALL foundation models. Augmentations tested: all deltas ≤ 0.
+**tz_her2_multiclass and humanness_therapeutic:** Only `structural` (1 rep) completed — needs full 40-rep rerun. humanness_species completely missing.
 
 ### 1I. Antibody Developability (OPIG B5, pre-computed hierarchical cluster splits)
 
 | Dataset | Source | Samples | Target | Metrics | Best Rep (model) | Best ρ | Status |
 |---------|--------|---------|--------|---------|------------------|--------|--------|
-| `ginkgo_hic` | van Niekerk et al. 2026 (GDPa1 v1.2) | 242 | HIC retention | R², ρ, RMSE | ridge | **0.39** | **Partial** (initial run) |
-| `ginkgo_tm2` | van Niekerk et al. 2026 (GDPa1 v1.2) | varies | Tm (2nd derivative) | R², ρ, RMSE | — | — | **Needs run** |
-| `ginkgo_titer` | van Niekerk et al. 2026 (GDPa1 v1.2) | varies | Expression titer | R², ρ, RMSE | — | — | **Needs run** |
-| `ginkgo_pr_cho` | van Niekerk et al. 2026 (GDPa1 v1.2) | varies | Protein recovery (CHO) | R², ρ, RMSE | — | — | **Needs run** |
-| `ginkgo_acsins` | van Niekerk et al. 2026 (GDPa1 v1.2) | varies | AC-SINS | R², ρ, RMSE | — | — | **Needs run** |
-| `ginkgo_purity` | van Niekerk et al. 2026 (GDPa1 v1.2) | varies | SEC purity | R², ρ, RMSE | — | — | **Needs run** |
-| `ginkgo_aggregation` | van Niekerk et al. 2026 (GDPa1 v1.2) | varies | Aggregation | R², ρ, RMSE | — | — | **Needs run** |
-| `ginkgo_colloidal` | van Niekerk et al. 2026 (GDPa1 v1.2) | varies | Colloidal stability | R², ρ, RMSE | — | — | **Needs run** |
-| `ginkgo_heparin` | van Niekerk et al. 2026 (GDPa1 v1.2) | varies | Heparin binding | R², ρ, RMSE | — | — | **Needs run** |
+| `ginkgo_hic` | van Niekerk et al. 2026 (GDPa1 v1.2) | 242 | HIC retention | R², ρ, RMSE | prot_t5 (ridge) | **0.604** | **Phase 5** ✅ (33 reps) |
+| `ginkgo_tm2` | van Niekerk et al. 2026 (GDPa1 v1.2) | 193 | Tm (2nd derivative) | R², ρ, RMSE | abroberta (lightgbm) | **0.164** | **Phase 5** ✅ (33 reps) |
+| `ginkgo_titer` | van Niekerk et al. 2026 (GDPa1 v1.2) | 239 | Expression titer | R², ρ, RMSE | ablang2 (rf) | **0.345** | **Phase 5** ✅ (33 reps) |
+| `ginkgo_pr_cho` | van Niekerk et al. 2026 (GDPa1 v1.2) | 197 | Protein recovery (CHO) | R², ρ, RMSE | esmc (rf) | **0.466** | **Phase 5** ✅ (33 reps) |
+| `ginkgo_acsins` | van Niekerk et al. 2026 (GDPa1 v1.2) | 242 | AC-SINS | R², ρ, RMSE | ablang2 (mlp) | **0.559** | **Phase 5** ✅ (33 reps) |
+| `ginkgo_purity` | van Niekerk et al. 2026 (GDPa1 v1.2) | 242 | SEC purity | R², ρ, RMSE | onehot (rf) | **0.210** | **Partial** (4 reps only) |
+| `ginkgo_aggregation` | van Niekerk et al. 2026 (GDPa1 v1.2) | 242 | Aggregation | R², ρ, RMSE | ablang2 (ridge) | **0.104** | **Phase 5** ✅ (33 reps, very weak signal) |
+| `ginkgo_colloidal` | van Niekerk et al. 2026 (GDPa1 v1.2) | 242 | Colloidal stability | R², ρ, RMSE | esm2_concat (ridge) | **0.346** | **Phase 5** ✅ (33 reps) |
+| `ginkgo_heparin` | van Niekerk et al. 2026 (GDPa1 v1.2) | 94 | Heparin binding | R², ρ, RMSE | esm2_concat (dnn) | **0.739** | **Phase 5** ✅ (33 reps) |
 
 **Data source:** `ginkgobioworks/abdev-benchmark` (GitHub CSV). 242 antibodies, 9 regression properties, sample sizes 94-242 per property.
 **Splits:** Pre-computed 5-fold hierarchical cluster splits (provided in dataset). `pre_split` group strategy.
-**Reps:** 40 antibody reps via `antibody_baseline_survey.py all_ginkgo`.
-**Initial result:** ginkgo_hic ridge R²=0.08/ρ=0.39. Small datasets — expect noisy estimates.
+**Reps:** 33 antibody reps tested (8 of 9 datasets). ginkgo_purity only has 4 reps (incomplete run).
+**Key findings:** prot_t5+ridge dominates RMSE on 5/9 properties. esm2_concat strong on Spearman for hic/heparin. ablang2 strong on acsins/titer. ginkgo_aggregation has near-zero signal (best ρ=0.104). ginkgo_heparin strongest (ρ=0.739) despite smallest n=94. Ridge dominates on these small datasets.
 
 ### 1J. Synthetic DDG (OPIG B2, leave-one-complex-out GroupKFold)
 
 | Dataset | Source | Samples | Target | Metrics | Best Rep (model) | Best ρ | Status |
 |---------|--------|---------|--------|---------|------------------|--------|--------|
-| `graphinity_foldx` | Hummer et al. 2025 (Nature Comp Sci) | ~50,000 (subsample) | FoldX ΔΔG | R², ρ, RMSE | — | — | **Needs run** |
-| `graphinity_rosetta` | Hummer et al. 2025 (Nature Comp Sci) | ~21,000 | Rosetta ΔΔG | R², ρ, RMSE | — | — | **Needs run** |
-| `graphinity_augmented` | Hummer et al. 2025 (Nature Comp Sci) | exp+synth | ΔΔG (augmented) | R², ρ, RMSE | — | — | **Needs run** |
+| `graphinity_foldx` | Hummer et al. 2025 (Nature Comp Sci) | ~50,000 (subsample) | FoldX ΔΔG | R², ρ, RMSE | — | — | **Missing** (SLURM failed) |
+| `graphinity_rosetta` | Hummer et al. 2025 (Nature Comp Sci) | ~21,000 | Rosetta ΔΔG | R², ρ, RMSE | — | — | **Missing** (SLURM failed) |
+| `graphinity_augmented` | Hummer et al. 2025 (Nature Comp Sci) | exp+synth | ΔΔG (augmented) | R², ρ, RMSE | — | — | **Missing** (SLURM failed) |
 
 **Data source:** Zenodo 15384945. Mutations parsed from `complex` column. PDB sequences via pdb_utils (cached).
 **Splits:** Leave-one-complex-out GroupKFold. Groups by complex.
 **Reps:** 40 antibody reps via `antibody_baseline_survey.py all_ddg`.
+**Results:** ddg_combined (429 samples, 33-34 reps) and ddg_combined_full (1,536 samples, 32 reps) both completed in opig/ddg/ and phase5_baselines/antibody/. esm2_wt_delta dominates both (ρ=0.293 on ddg_combined, 0.231 on ddg_combined_full). All 3 Graphinity synthetic datasets **failed** — need resubmission.
 **Scientific question:** Does synthetic DDG data (FoldX/Rosetta) help KIRBy's DDG predictions? Can large synthetic data compensate for the scarcity of experimental DDG data (~429 in ddg_combined)?
 
 ### 1K. Nucleotide / Genomics (classification, chromosome-grouped GroupKFold)
@@ -515,12 +519,13 @@ Script: `tests/experiments/dta_e2e_comparison.py`
 | Method | Davis CI | Davis R² | KIBA CI | KIBA R² | Status |
 |--------|----------|----------|---------|---------|--------|
 | **Frozen baseline** (ECFP4+ESM2) | 0.748 | 0.568 | 0.693 | 0.353 | **Phase 5** ✅ |
-| LoRA ESM-2 | NaN | NaN | NaN | NaN | **Failed** |
-| LoRA ESM-C / ESM3 / SaProt | NaN | NaN | NaN | NaN | **Failed** |
-| LoRA ChemBERTa / MolFormer | NaN | NaN | NaN | NaN | **Failed** |
-| Joint LoRA | NaN | NaN | NaN | NaN | **Failed** |
+| LoRA ChemBERTa + ESM2 | **0.749** | **0.573** | **0.701** | **0.377** | **Phase 5** ✅ |
+| LoRA MolFormer + ESM2 | 0.726 | 0.449 | 0.663 | 0.244 | **Phase 5** ✅ |
+| LoRA ESM-2 (protein-side) | NaN | NaN | NaN | NaN | **Failed** (0 valid folds) |
+| LoRA ESM-C / ESM3 / SaProt | NaN | NaN | NaN | NaN | **Failed** (0 valid folds) |
+| Joint LoRA (both sides) | NaN | NaN | NaN | NaN | **Failed** (0 valid folds) |
 
-**All 7 DTA LoRA fine-tuning strategies produced NaN.** Only frozen baseline ran successfully. This is a major negative result — DTA fine-tuning needs debugging.
+**LoRA ChemBERTa marginally beats frozen** on both Davis (+0.001 CI) and KIBA (+0.008 CI). LoRA MolFormer degrades. All protein-side LoRA and joint LoRA strategies failed (0 valid folds). Drug-side LoRA is the only viable DTA fine-tuning path.
 Script: `tests/experiments/dta_finetune_comparison.py`
 
 **QM9 3D Comparison (scaffold-split, 10K molecules):**
@@ -615,18 +620,16 @@ Script: `tests/experiments/covariate_shift.py`
 
 **Imrie Transfer Learning (OPIG C4):**
 
-| Condition | Description | Status |
-|-----------|-------------|--------|
-| `dnn_scratch` | DNN trained from scratch | **Needs run** |
-| `dnn_tl_full` | DNN pre-trained on ChEMBL, all layers fine-tuned | **Needs run** |
-| `dnn_tl_frozen` | DNN pre-trained on ChEMBL, frozen encoder | **Needs run** |
-| `ridge` | Ridge baseline | **Needs run** |
-| `gp` | GP baseline | **Needs run** |
+| Condition | LogD best (R²) | Caco2 best (R²) | hERG best (R²) | Status |
+|-----------|----------------|-----------------|-----------------|--------|
+| `dnn_scratch` | mordred (0.852) | mol2vec (0.531) | mol2vec (0.560) | **Phase 5** ✅ |
+| `dnn_tl_full` | ecfp4 (0.660) | — | — | **Phase 5** ✅ (degrades) |
+| `dnn_tl_frozen` | near 0 | near 0 | near 0 | **Phase 5** ✅ (useless) |
+| `ridge` | ecfp4 (0.802) | ecfp4 (0.498) | ecfp4 (0.555) | **Phase 5** ✅ |
+| `gp` | mol2vec (0.830) | mol2vec (0.530) | mol2vec (0.553) | **Phase 5** ✅ |
 
-5 conditions × 6 reps (ecfp4, maccs, pdv, mol2vec, mordred, avalon — fast reps only, required for ChEMBL pre-training) × 3 datasets (logd, caco2, herg).
-Pre-training: `src/kirby/models/pretrain_chembl_dnn.py` → `tests/slurm_scripts/imrie_pretrain.sh` (run first).
-Evaluation: `tests/experiments/imrie_transfer_learning.py` → `tests/slurm_scripts/imrie_eval.sh`.
-**Scientific question:** Does transfer learning change which reps rank best? If rankings are preserved across TL conditions → model improvement is orthogonal to rep choice (supports KIRBy thesis that rep selection matters more than model architecture).
+5 conditions × 6 reps × 3 datasets. **TL does NOT help:** dnn_scratch beats TL variants. TL_frozen is near-useless. Rep rankings are preserved across conditions — confirms thesis that rep selection is orthogonal to model architecture.
+Script: `tests/experiments/imrie_transfer_learning.py`
 
 **Forward Compatibility Experiments:**
 
@@ -746,36 +749,55 @@ for the same n_samples, so manual deletion is recommended:
 
 ### What we HAVE (confirmed baselines, March 2026 survey)
 
-| Domain | Datasets | Reps (run / registered) | Models | Metrics | Status |
-|--------|----------|------------------------|--------|---------|--------|
-| Molecular | 1/8 | 17/36 | 10/10 | R²+ρ+RMSE | **Phase 5** (logd done; 7 datasets running) |
-| Antibody | 24/41 | 20-23/40 (inter) | 10/10 | ρ+R²+Pearson+RMSE | **Phase 5** (11 inter-family done; DMS partial; OPIG B1/B2/B3/B5 need run) |
-| TCGA | 2/3 | 36/57 | 10/10 | AUROC+F1+ρ+RMSE | **Phase 5** (2 clf done; survival dropped; factory reps running) |
-| DTA | 0/3 | 0/37 | — | — | **Running** (baselines on HTC) |
-| Reaction | 2/3 | 8/8 | 10/10 | R²+ρ+RMSE | **Phase 5** (BH+Suzuki done; Doyle plates via comparison) |
-| Comparisons | 12 experiments | — | — | — | **Phase 5** ✅ (10 done); OPIG C2 covariate shift + C4 Imrie TL **need run** |
+| Domain | Datasets (done/total) | Reps (run / registered) | Models | Metrics | Status |
+|--------|----------------------|------------------------|--------|---------|--------|
+| Molecular | 3/8 | 17/36 | 10/10 | R²+ρ+RMSE | **Phase 5** (logd+caco2+herg done; QM9 running; 4× ADME missing) |
+| Antibody inter-fam | 15/15 | 22-38/40 | 9/10 | ρ+R²+Pearson+RMSE | **Phase 5** ✅ (all inter-family done; ddg_combined_full done in opig) |
+| Antibody DMS | 11/11 | 4-35/40 | 9/10 | ρ+R²+Pearson+RMSE | **Partial** (abagym_all=35 reps; 8 datasets only 4 reps; 2 koenig=23 reps) |
+| Antibody clf | 2/4 | 1-36/40 | 9/10 | Acc+F1+AUROC | **Partial** (tz_binary=36 reps; multiclass+humanness=1 rep; species missing) |
+| Ginkgo | 9/9 | 4-33/40 | 9/10 | R²+ρ+RMSE | **Phase 5** ✅ (8 datasets 33 reps; ginkgo_purity 4 reps only) |
+| DDG synth | 0/3 | — | — | — | **Missing** (all 3 Graphinity datasets failed) |
+| TCGA | 3/3 | 36/57 | 10/10 | AUROC+F1+ρ+RMSE | **Phase 5** ✅ (all 3 done; factory reps still missing) |
+| DTA | 0/3 | 0/37 | — | — | **Running** (3× kiba jobs on HTC) |
+| Reaction | 3/3 | 10/10 | 10/10 | R²+ρ+RMSE | **Phase 5** ✅ |
+| Comparisons | 13 experiments | — | — | — | **Phase 5** ✅ (all done incl Imrie TL); OPIG C2 covariate shift pending |
+| Nucleotide | 0/22 | — | — | — | **Missing** (never submitted) |
+| Geometry | 0/? | — | — | — | **Missing** (never completed) |
+| Forward compat | 0/9 | — | — | — | **Missing** (only smoketest ran) |
+| Molecular FT | 0/8 | — | — | — | **Missing** (never submitted) |
+| TCGA FT | 0/3 | — | — | — | **Missing** (never submitted) |
 | PDBBind | 0/2 | — | — | — | **Blocked** (manual download) |
 
 ### What's STILL PENDING
 
-| Item | Gap | Blocker |
-|------|-----|---------|
-| Antibody DMS full survey | 10/11 DMS datasets have only aido_protein (failed). Need full 40-rep LM runs. | LM jobs running on HTC. Fast reps (onehot, blosum, aac, paratope) running on ARC. |
-| Antibody inter-family: remaining reps | Fast reps, mutation reps, variation reps, MINT, xtrimopglm still pending on most datasets. | Jobs running/queued. aido_protein+xtrimopglm not yet submitted. |
-| TCGA factory reps | 21/57 reps missing (gene_hvg2000, gene_pca100, gene_nmf50, pathway reps, etc.) — these require per-fold fitting. | Likely still running on HTC. |
-| Molecular 7 remaining datasets | caco2, herg, qm9, adme_hlm, adme_rlm, adme_mdr1, adme_solubility | Running on HTC+ARC |
-| DTA all baselines | Davis, KIBA, BindingDB_Kd × 31 reps, CI primary | Running on HTC (~33h in) |
-| DTA universal survey | Bus error (core dumped) during large model loading | OOM with 128G during checkpoint sharding. Resubmit with 256G. |
-| DTA fine-tuning | All 7 LoRA strategies produced NaN | **Needs debug** — investigate loss calculation |
+**Currently running on HTC (as of 2026-03-19):**
+- `p5_mol_b` — molecular baselines, halfway through QM9 (will timeout before ADME)
+- `dta_kiba` × 3 — DTA dedicated baselines
+- `f01_*`, `f03_*`, `f04_*` — framework experiments
+- `f00c_*` — C_relative retest
+- `molgraph` — molecular graph survey
+- `opig_cov`, `opig_imr` — covariate shift + Imrie (pending priority)
+- `p5h_dta_*` × 3 — phase 5 hybrid DTA (pending priority)
+
+**Missing data requiring resubmission:**
+
+| Item | Gap | Action |
+|------|-----|--------|
+| Molecular: QM9 + 4× ADME | p5_mol_b will timeout. 5 datasets missing. | Consolidated resubmission: `qm9,adme_hlm,adme_rlm,adme_mdr1,adme_solubility` |
+| DTA dedicated baselines | davis.json + bindingdb_kd.json missing (kiba running) | Wait for kiba jobs; resubmit davis + bindingdb |
+| DTA universal/cold | Entire directories missing | Resubmit after dedicated finishes |
+| Antibody DMS full 40-rep | 8 datasets have only 4 reps (fast reps). Need full LM survey. | Consolidated run: all DMS datasets, full reps |
+| Antibody clf full 40-rep | tz_multiclass + humanness (1 rep only), humanness_species missing | Consolidated run: all_clf with full reps |
+| Ginkgo purity | Only 4 reps (rest have 33) | Include in ginkgo resubmission or single job |
+| Graphinity DDG × 3 | All failed. Likely Zenodo download or OOM. | Debug first, then resubmit all_ddg |
+| TCGA factory reps | 21/57 reps missing. Per-fold factories need GPU time. | May already be in molecular_ft / tcga_ft jobs |
+| Molecular FT | Entire directory missing. 8 datasets × FT reps. | `submit_phase5_baselines.sh molecular_ft` |
+| TCGA FT | Entire directory missing. 3 datasets × FT reps. | `submit_phase5_baselines.sh tcga_ft` |
+| Forward compat | Only smoketest exists. 9 experiments needed. | `submit_forward_compat.sh` (after baselines finish) |
+| Nucleotide | All 22 datasets missing. | `submit_nucleotide_survey.sh` |
+| Geometry survey | All missing. | `submit_geometry_survey.sh` |
+| Antibody ddg_combined_full | Missing from phase5_baselines (exists in opig/ddg) | Already have data — just not in p5 path |
 | PDBBind | 2 datasets | Manual download from pdbbind.org.cn |
-| IgBert | NaN everywhere on antibody | **Drop** — confirmed dead across all 11 tested datasets |
-| aido_protein | Zero signal on all 10 antibody DMS datasets | **Drop from antibody** — keep in DTA only (untested there) |
-| WSI ABMIL bug | All 3 aggregation methods produce identical results | **Investigate** — attention heads may not be learning |
-| OPIG antibody clf (1H) | tz_her2_binary/multiclass, humanness_species/therapeutic — full 40-rep survey needed | Fast reps only for tz_her2_binary; rest not started |
-| OPIG Ginkgo developability (1I) | 9 datasets × 40 reps — full survey needed | Initial ginkgo_hic run only |
-| OPIG Graphinity DDG (1J) | 3 synthetic DDG datasets × 40 reps — full survey needed | Not started |
-| OPIG covariate shift (C2) | 3 splits × 36 reps × 3 models × 3 datasets | Not started |
-| OPIG Imrie TL (C4) | 5 conditions × 6 reps × 3 datasets | Needs pretrain first, then eval |
 
 ### Dropped
 
@@ -1205,18 +1227,20 @@ All R² negative, Spearman near zero or NaN across all 32 reps. n=151 uncensored
 
 | Dataset | N | Reps Tested | Best Rep | Best ρ | Viable/Total | Best Model |
 |---------|---|-------------|----------|--------|-------------|-----------|
-| flab_thermo_tresanco | 672 | 20 | esm3 | **0.805** | 18/20 | dnn |
-| flab_pk_jain_heprt | 130 | 3 | esm2_per_cdr | **0.658** | 3/3 | gp |
-| flab_pk_jain_fcrnrt | 132 | 21 | ablang2 | **0.595** | 18/21 | ridge |
-| flab_polyreact_jain_cic | 137 | 23 | prot_t5 | **0.586** | 21/23 | ridge |
-| flab_aggregation_jain_hicrt | 137 | 23 | prot_t5 | **0.506** | 21/23 | ridge |
-| flab_thermo_jain | 137 | 23 | ablang2 | **0.457** | 21/23 | ridge |
+| flab_thermo_tresanco | 672 | 34 | esm3 | **0.805** | 30/34 | dnn |
+| flab_pk_jain_heprt | 130 | 37 | igt5 | **0.783** | 33/37 | ridge |
+| flab_pk_jain_fcrnrt | 132 | 37 | ablang2 | **0.595** | 33/37 | ridge |
+| flab_polyreact_jain_cic | 137 | 37 | prot_t5 | **0.586** | 33/37 | ridge |
+| flab_aggregation_jain_hicrt | 137 | 37 | prot_t5 | **0.506** | 33/37 | ridge |
+| flab_thermo_jain | 137 | 37 | ablang2 | **0.457** | 33/37 | ridge |
 | abcov_kd | 141 | 22 | prot_t5 | **0.432** | **22/22** | catboost |
-| flab_aggregation_jain | 137 | 23 | esm2_concat | **0.425** | 21/23 | ridge |
+| flab_aggregation_jain | 137 | 37 | esm2_concat | **0.425** | 33/37 | ridge |
 | flab_immunogenicity_marks | 217 | 23 | antiberty_cdr | **0.399** | 21/23 | mlp |
-| flab_polyreact_jain_bvp | 137 | 23 | ablang2 | **0.374** | 19/23 | ridge |
-| flab_thermo_hutchinson | 192 | 23 | esm2 | **0.289** | 21/23 | xgboost |
-| flab_aggregation_jain_sas | 137 | 23 | antiberty_cdr | **0.201** | 6/23 | xgboost |
+| flab_polyreact_jain_bvp | 137 | 37 | ablang2 | **0.374** | 33/37 | ridge |
+| flab_thermo_hutchinson | 192 | 38 | esm2 | **0.289** | 34/38 | xgboost |
+| flab_aggregation_jain_sas | 137 | 37 | onehot | **0.230** | 6/37 | rf |
+| ddg_combined | 429 | 34 | esm2_wt_delta | **0.293** | 28/34 | ridge |
+| ddg_combined_full | 1,536 | 32 | esm2_wt_delta | **0.231** | 20/32 | gp |
 
 **Top 5 most consistent reps across 11 datasets (by average rank):**
 
@@ -1267,3 +1291,144 @@ Forward-compat experiments are NOT separate — all FC reps are included in the 
 | protein_mint, protein_saprot, protein_boltz2, protein_esm3 | DTA | — | DTA jobs running | **Pending** |
 
 **Thesis narrative strong:** New models plug in with zero code changes. geneformer_v2 immediately #1 on TCGA. esm3 immediately #1 on largest antibody dataset (tresanco ρ=0.805). abroberta #1 by Spearman on thermo_jain. igt5 consistently top-5 across 6/11 antibody datasets. mordred enters top 3 on molecular logd. **One notable failure:** aido_protein (4608D) produced zero signal on all antibody DMS datasets — not all new models work. The hybrid search (Wave 2) will test the core claim: hybrid(new_model + old_rep) > new_model alone.
+
+**Dropped from FC:** Boltz-2 (removed from DTA — too slow, fails on every protein). MolE, MiniMol, GP-MoLFormer (repeated install failures on server — not viable).
+
+---
+
+## 11. Missing Pipelines / Unverified Data (2026-03-19)
+
+**Purpose:** Track datasets and experiments that are not yet in the BOM with confirmed results. These will be added as results come in. Use `submit_missing_surveys.sh` to generate all missing data.
+
+### 11A. Missing Baseline Surveys
+
+| Domain | Dataset(s) | Why missing | Resubmit via |
+|--------|-----------|-------------|-------------|
+| Molecular | `qm9` | p5_mol_b running, halfway through | `submit_missing_surveys.sh molecular` |
+| Molecular | `adme_hlm`, `adme_rlm`, `adme_mdr1`, `adme_solubility` | p5_mol_b will timeout before reaching them | `submit_missing_surveys.sh molecular` |
+| Molecular FT | All 8 datasets | Never submitted | `submit_missing_surveys.sh molecular_ft` |
+| DTA | `davis`, `bindingdb_kd` | Previous attempts: TIMEOUT (48h on Boltz-2, now removed) | `submit_missing_surveys.sh dta` |
+| DTA | `kiba` (dedicated) | CatBoost constant-features crash (now fixed) | `submit_missing_surveys.sh dta` |
+| DTA | Universal + cold-drug | Bus error on large model loading / TIMEOUT | `submit_missing_surveys.sh dta` |
+| Antibody DMS | 8 datasets (Phillips, Adams, 5× AbAgym individual) | Only 4 fast reps tested; need full 40-rep survey | `submit_missing_surveys.sh antibody` |
+| Antibody CLF | `humanness_species` | Python 3.11 tarfile compat bug (now fixed) | `submit_missing_surveys.sh opig` |
+| Antibody CLF | `tz_her2_multiclass`, `humanness_therapeutic` | Only 1 rep (structural); need full 40-rep survey | `submit_missing_surveys.sh opig` |
+| Ginkgo | `ginkgo_purity` | Only 4 reps (rest have 33) | `submit_missing_surveys.sh opig` |
+| Graphinity DDG | `graphinity_foldx`, `graphinity_rosetta`, `graphinity_augmented` | KeyError 'labels' column bug (now fixed) | `submit_missing_surveys.sh opig` |
+| TCGA FT | All 3 datasets | Never submitted | `submit_missing_surveys.sh tcga` |
+| Nucleotide | All 22 datasets | pyarrow/datasets version conflict (fix: pip upgrade) | `submit_missing_surveys.sh nucleotide` |
+| Geometry | All inter-family + ginkgo | Never completed | `submit_missing_surveys.sh geometry` |
+
+### 11B. Missing Forward Compatibility Experiments
+
+| Experiment | Model(s) | Domain | Status |
+|-----------|---------|--------|--------|
+| Exp 1: MINT | protein_mint (1280D) | Antibody, DTA | FC antibody baselines queued |
+| Exp 2: SaProt | saprot (1280D) | Antibody, DTA | FC antibody baselines queued |
+| Exp 4: IgT5/AbRoBERTa | igt5, abroberta (1024D/1536D) | Antibody | FC baselines queued |
+| Exp 6: xTrimoPGLM | xtrimopglm (2048D) | Antibody, DTA | Mock fixed; FC baselines queued |
+| Exp 7: ReactionT5 | reactiont5 (768D) | Reaction | FC baselines queued |
+| Exp 9: AIDO.Protein | aido_protein (4608D) | Antibody | FC baselines queued (DTA has PyTorch compat issue) |
+| ~~Exp 3: MolE/MiniMol/GP-MoLFormer~~ | — | Molecular | **Dropped** — repeated install failures |
+| ~~Exp 5: Boltz-2~~ | — | DTA | **Dropped** — too slow, removed from DTA |
+| ~~Exp 8: Geneformer V2~~ | — | TCGA | **Already validated** in Phase 5 baselines |
+
+### 11C. Missing Comparison / Framework Experiments
+
+| Experiment | Script | Status |
+|-----------|--------|--------|
+| OPIG C2: Covariate shift | `covariate_shift.py` | Pending (opig_cov in SLURM queue) |
+| Framework f01-f04, f08 | Various | Running/pending in SLURM queue |
+| Framework f10 | `f10_small_dataset_allocation.py` | 4/6 datasets complete |
+| Complexity c11-c12 | `c11_ensemble_vs_hybrid.py`, `c12_modality_ablation.py` | Waiting for BOM pipeline selection |
+| Similarity s01-s09 | `tests/experiments/similarity/` | Waiting for BOM pipeline selection |
+
+### 11D. Known Bus Error Risk (SIGBUS, exit code 7)
+
+Jobs that load many large LM models sequentially in one process can hit memory corruption (Bus error). Affected: DTA (universal survey loading all protein LMs), antibody LM DMS (loading 25+ LMs for 10 datasets), molecular baselines (loading all reps then crashing mid-eval). **Mitigation:** The per-dataset job splitting in `submit_missing_surveys.sh` reduces risk. If Bus errors persist, split further by rep group (e.g., run LM reps and classical reps in separate jobs).
+
+---
+
+## 12. Locked Experiment Pipelines (2026-03-19)
+
+**Purpose:** Curated (dataset, base reps, model, metric) configurations for noise, similarity, and complexity experiments. Each pipeline is a confirmed-working combination where the base rep produces meaningful signal. Experiments run per-dataset: load all pipeline reps, run all relevant experiments in one go.
+
+**Structure:** Tier 1 reps are primary hybrid base reps (top hybrid generation). Full set (Tier 1 + Tier 2) is used for broader experiments across the performance gradient. FT reps require `--finetune` flag — frozen counterpart is fallback when FT is disabled.
+
+### 12A. TCGA — LUAD vs LUSC
+
+- **Task:** Binary classification (LUAD vs LUSC)
+- **Metric:** AUROC
+- **Samples:** 1,017
+- **Split:** TSS-grouped StratifiedGroupKFold, 5-fold
+- **Cutoff:** AUROC ≥ 0.89
+
+**Tier 1 (AUROC > 0.93) — primary hybrid base reps:**
+
+| Rep | AUROC | Best Model | Modality | FT? |
+|-----|-------|-----------|----------|-----|
+| ft_scfoundation | **0.988** | — | Expression FM | **yes** (frozen=0.500, dead) |
+| ft_geneformer (V1) | 0.977 | — | Expression FM | **yes** (frozen V1=0.936) |
+| gene_geneformer_v2 | 0.946 | catboost | Expression FM | no (frozen) |
+| gene_bulkrnabert | 0.939 | ridge | Expression FM | no |
+| methyl_hvg | 0.939 | xgboost | Methylation | no |
+| gene_geneformer | 0.936 | catboost | Expression FM | no |
+
+**Tier 2 (0.89 ≤ AUROC ≤ 0.93) — full set:**
+
+| Rep | AUROC | Best Model | Modality | FT? |
+|-----|-------|-----------|----------|-----|
+| gene_chromosome_arm | 0.918 | ridge | CNV-derived | no |
+| wsi_titan | 0.917 | rf | WSI | no |
+| methyl_pca50 | 0.916 | catboost | Methylation | no |
+| cnv_pca50 | 0.915 | gp | CNV | no |
+| mirna_top200 | 0.896 | ridge | miRNA | no |
+
+**Modality coverage (5):** Expression FM, Methylation, WSI, CNV, miRNA.
+
+**TODOs:**
+- [ ] Check Geneformer V2 FT — may supersede V1 FT (V2 frozen already 0.946 vs V1 frozen 0.936)
+- [ ] Check factory rep results when available: gene_hvg2000, gene_pca100, gene_nmf50, gene_hallmark, gene_kegg, gene_reactome, gene_dorothea, gene_progeny, gene_combined_pathway, gene_immune — some dominated the old stale run and may enter Tier 1/2
+- [ ] Check signature reps: sig_sbs, sig_dbs, sig_id
+- [ ] Check Tier 5 reps: splicing_psi50, lncrna_pca50, gsva_hallmark, promoter_meth
+
+### 12B. TCGA — BRCA PAM50
+
+- **Task:** 4-class classification (LumA / LumB / Basal / Her2)
+- **Metric:** F1-weighted
+- **Samples:** 821
+- **Split:** TSS-grouped StratifiedGroupKFold, 5-fold
+- **Cutoff:** F1w ≥ 0.75
+
+**Tier 1 (F1w > 0.84) — primary hybrid base reps:**
+
+| Rep | F1w | Best Model | Modality | FT? |
+|-----|-----|-----------|----------|-----|
+| ft_scfoundation | **0.931** | — | Expression FM | **yes** (frozen=0.349, dead) |
+| ft_geneformer (V1) | 0.862 | — | Expression FM | **yes** (frozen V1=0.850) |
+| gene_geneformer_v2 | 0.861 | ridge | Expression FM | no (frozen) |
+| gene_geneformer | 0.850 | ridge | Expression FM | no |
+| gene_bulkrnabert | 0.841 | ridge | Expression FM | no |
+
+**Tier 2 (0.75 ≤ F1w ≤ 0.84) — full set:**
+
+| Rep | F1w | Best Model | Modality | FT? |
+|-----|-----|-----------|----------|-----|
+| rppa | 0.776 | lightgbm | Protein | no |
+| gene_chromosome_arm | 0.762 | ridge | CNV-derived | no |
+
+**Modality coverage (3):** Expression FM, Protein, CNV-derived. Thin diversity — factory reps may add modalities.
+
+**TODOs:**
+- [ ] Check Geneformer V2 FT — may supersede V1 FT
+- [ ] Check factory rep results: gene_hvg2000, gene_pca100, gene_nmf50 and pathway reps — critical for adding modality diversity beyond expression FMs
+- [ ] Check signature reps: sig_sbs, sig_dbs, sig_id
+- [ ] Check Tier 5 reps: splicing_psi50, lncrna_pca50, gsva_hallmark, promoter_meth
+
+### 12C. TCGA — BRCA Survival — CUT
+
+Dropped. All R² negative, n=151 too small. Not viable for hybrid search or experiments. Revisit only if factory reps produce Spearman ρ > 0.3.
+
+### 12D–12Z. Other Domains — TBD
+
+Molecular, antibody, reaction, nucleotide, ginkgo, DDG pipelines to be defined in subsequent sessions as BOM data fills in. DTA and QM9 excluded from current round.

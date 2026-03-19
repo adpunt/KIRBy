@@ -77,12 +77,12 @@ REP_PRESETS = {
         'protein_amplify', 'protein_esmfold', 'protein_alphafold_db',
         'protein_aac', 'protein_descriptors', 'protein_kmer',
         'protein_mint',
-        'protein_esm3', 'protein_saprot', 'protein_boltz2',
+        'protein_esm3', 'protein_saprot',
         'protein_aido',
         'protein_xtrimopglm',
         'protein_contact_graph', 'protein_usr_shape',
         'protein_pocket', 'protein_esm2_pocket', 'protein_pocket_composition',
-    ],  # 45 reps (25 drug + 20 protein)
+    ],  # 44 reps (25 drug + 19 protein)
 }
 
 # Reps that require per-fold fitting (data-dependent transforms).
@@ -147,7 +147,6 @@ _REP_DISPATCH = {
     'protein_mint':    ('create_mint_protein_embeddings',       'protein', 'protein'),
     'protein_esm3':    ('create_esm3_protein_embeddings',       'protein', 'protein'),
     'protein_saprot':  ('create_saprot_protein_embeddings',     'protein', 'protein'),
-    'protein_boltz2':  ('create_boltz2_protein_embeddings',     'protein', 'protein'),
     'protein_aido':    ('create_aido_protein_embeddings',       'protein', 'protein'),
     'protein_xtrimopglm': ('create_xtrimopglm_protein_embeddings', 'protein', 'protein'),
     # Structural protein reps

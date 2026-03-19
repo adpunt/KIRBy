@@ -159,7 +159,7 @@ def _download_and_extract_species() -> Path:
     print(f"  Extracting archive...")
     extracted.mkdir(parents=True, exist_ok=True)
     with tarfile.open(archive, 'r:gz') as tar:
-        tar.extractall(extracted, filter='data')
+        tar.extractall(extracted)
     print(f"  Extracted to {extracted}")
 
     return extracted

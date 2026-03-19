@@ -57,7 +57,7 @@ PROTEIN_REPS = [
     'protein_esm2', 'protein_esmc', 'protein_esm2_midlayers',
     'protein_amplify',
     'protein_mint', 'protein_esmfold', 'protein_alphafold_db',
-    'protein_esm3', 'protein_saprot', 'protein_boltz2',  # Phase 4B
+    'protein_esm3', 'protein_saprot',  # Phase 4B (boltz2 removed: not viable for DTA)
     'protein_aido',
     'protein_xtrimopglm',
     'protein_contact_graph', 'protein_usr_shape',  # Structural
@@ -185,8 +185,6 @@ def generate_rep(rep_name: str, unique_drugs, unique_proteins,
         dispatch['protein_esm3'] = (prot.create_esm3_protein_embeddings, 'protein')
     elif rep_name == 'protein_saprot':
         dispatch['protein_saprot'] = (prot.create_saprot_protein_embeddings, 'protein')
-    elif rep_name == 'protein_boltz2':
-        dispatch['protein_boltz2'] = (prot.create_boltz2_protein_embeddings, 'protein')
     elif rep_name == 'protein_aido':
         dispatch['protein_aido'] = (prot.create_aido_protein_embeddings, 'protein')
     elif rep_name == 'protein_xtrimopglm':
@@ -332,10 +330,10 @@ def evaluate_rep(X: np.ndarray, y: np.ndarray, groups: np.ndarray,
             model = model_fn()
             try:
                 model.fit(X_train, y[train_idx])
+                pred = model.predict(X_test)
             except Exception as e:
-                print(f"    WARNING: {model_name} fit failed: {e}")
+                print(f"    WARNING: {model_name} fit/predict failed: {e}")
                 continue
-            pred = model.predict(X_test)
             fold_scores.append(r2_score(y[test_idx], pred))
             fold_ci.append(_concordance_index(y[test_idx], pred))
             fold_spearman.append(float(spearmanr(y[test_idx], pred)[0]))
@@ -434,8 +432,12 @@ def evaluate_factory_rep(factory, y: np.ndarray, groups: np.ndarray,
             X_test = np.nan_to_num(X_test, nan=0.0, posinf=1e6, neginf=-1e6)
 
             model = model_fn()
-            model.fit(X_train, y[train_idx])
-            pred = model.predict(X_test)
+            try:
+                model.fit(X_train, y[train_idx])
+                pred = model.predict(X_test)
+            except Exception as e:
+                print(f"    WARNING: {model_name} fit/predict failed: {e}")
+                continue
             fold_scores.append(r2_score(y[test_idx], pred))
             fold_ci.append(_concordance_index(y[test_idx], pred))
             fold_spearman.append(float(spearmanr(y[test_idx], pred)[0]))
@@ -522,7 +524,7 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
     drug_reps_to_run = [r for r in DRUG_REPS
                         if not (skip_lm and r in ('drug_chemberta', 'drug_molformer', 'drug_selformer', 'drug_clamp', 'drug_rmat', 'drug_unimol_v2', 'drug_minimol', 'drug_gp_molformer', 'drug_mole'))]
     protein_reps_to_run = [r for r in PROTEIN_REPS
-                           if not (skip_lm and r in ('protein_esm2', 'protein_esmc', 'protein_esm2_midlayers', 'protein_amplify', 'protein_mint', 'protein_esmfold', 'protein_alphafold_db', 'protein_esm3', 'protein_saprot', 'protein_boltz2', 'protein_aido', 'protein_xtrimopglm', 'protein_esm2_pocket'))
+                           if not (skip_lm and r in ('protein_esm2', 'protein_esmc', 'protein_esm2_midlayers', 'protein_amplify', 'protein_mint', 'protein_esmfold', 'protein_alphafold_db', 'protein_esm3', 'protein_saprot', 'protein_aido', 'protein_xtrimopglm', 'protein_esm2_pocket'))
                            and not (skip_kmer and r == 'protein_kmer')]
     factory_drug_reps_to_run = list(FACTORY_DRUG_REPS)
 

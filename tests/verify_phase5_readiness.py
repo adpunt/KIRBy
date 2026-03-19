@@ -159,7 +159,7 @@ def check_dta():
         check(f"REP_PRESETS['full']: {n_full} reps", n_full >= 30)
         # Check Phase 4 reps
         full_reps = REP_PRESETS.get('full', [])
-        for rep in ['protein_mint', 'protein_esm3', 'protein_saprot', 'protein_boltz2',
+        for rep in ['protein_mint', 'protein_esm3', 'protein_saprot',
                      'drug_minimol', 'drug_gp_molformer', 'drug_mole']:
             check(f"  Phase 4: {rep}", rep in full_reps)
     except Exception as e:

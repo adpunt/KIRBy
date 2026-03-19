@@ -2728,14 +2728,20 @@ def create_xtrimopglm_protein_embeddings(
     model_name = 'biomap-research/proteinglm-1b-mlm'
     print(f"  Loading xTrimoPGLM-1B ({model_name})...")
 
-    # xTrimoPGLM's remote code imports deepspeed optionally — mock it if missing
+    # xTrimoPGLM's remote code does `import torch, deepspeed` at module level.
+    # deepspeed is only used for gradient checkpointing during training —
+    # not needed at inference. Mock it with a functional checkpointing stub.
     try:
         import deepspeed  # noqa: F401
     except ImportError:
         import types
-        _mock_ds = types.ModuleType('deepspeed')
         import sys
+        _mock_ds = types.ModuleType('deepspeed')
+        _mock_ckpt = types.ModuleType('deepspeed.checkpointing')
+        _mock_ckpt.is_configured = lambda: False
+        _mock_ds.checkpointing = _mock_ckpt
         sys.modules['deepspeed'] = _mock_ds
+        sys.modules['deepspeed.checkpointing'] = _mock_ckpt
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_name, trust_remote_code=True
