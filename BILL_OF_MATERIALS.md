@@ -1379,8 +1379,8 @@ No Phase 5 JSON files exist. Old dta_survey/ has stale 17-rep results. Davis/bin
 |--------|---------|--------|----------|
 | Nucleotide | 22 | pyarrow conflict (fix: `pip install --upgrade pyarrow datasets`) | `submit_missing_surveys.sh nucleotide` |
 | Geometry survey | 15 | Never completed | `submit_missing_surveys.sh geometry` |
-| Molecular FT | 8 | Never submitted | `submit_missing_surveys.sh molecular_ft` |
-| TCGA FT | 3 | Never submitted | `submit_missing_surveys.sh tcga_ft` |
+| ~~Molecular FT~~ | ~~8~~ | **Skipped** — comparison data shows FT does not help molecular (GROVER frozen wins) | N/A |
+| TCGA FT | 3 | Geneformer + scFoundation FT show real gains; need full 10-model survey | `submit_missing_surveys.sh tcga_ft` |
 | Forward compat | ~24 | Smoketests only | `submit_missing_surveys.sh forward_compat` |
 
 ### 11K. Reps That Will Fail (known broken — do not block on these)
