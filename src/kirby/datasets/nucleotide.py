@@ -177,41 +177,62 @@ def load_genomic_benchmark(name: str) -> Dict:
             continue
 
     if ds is None:
-        raise RuntimeError(
-            f"Could not load Genomic Benchmark '{name}' from HuggingFace.\n"
-            f"Tried: {tried_ids}\n"
-            f"Install the genomic-benchmarks package as fallback:\n"
-            f"  pip install genomic-benchmarks"
-        )
+        # Fallback: try the genomic-benchmarks pip package
+        try:
+            from genomic_benchmarks.loc2seq import download_dataset as gb_download
+        except ImportError:
+            raise RuntimeError(
+                f"Could not load Genomic Benchmark '{name}' from HuggingFace.\n"
+                f"Tried: {tried_ids}\n"
+                f"Install the genomic-benchmarks package as fallback:\n"
+                f"  pip install genomic-benchmarks"
+            )
 
-    all_sequences = []
-    all_labels = []
+        print(f"  HuggingFace failed, using genomic-benchmarks package...")
+        data_dir = Path(gb_download(name, version=0))
+        all_sequences = []
+        all_labels = []
 
-    for split_name in ['train', 'test']:
-        if split_name not in ds:
-            continue
-        split = ds[split_name]
-        col_names = split.column_names
+        for split_name in ['train', 'test']:
+            split_dir = data_dir / split_name
+            if not split_dir.exists():
+                continue
+            class_dirs = sorted(d for d in split_dir.iterdir() if d.is_dir())
+            for label_idx, class_dir in enumerate(class_dirs):
+                for txt_file in sorted(class_dir.glob('*.txt')):
+                    seq = txt_file.read_text().strip()
+                    if seq:
+                        all_sequences.append(seq)
+                        all_labels.append(label_idx)
+    else:
+        all_sequences = []
+        all_labels = []
 
-        # Detect columns
-        seq_col = None
-        for candidate in ['sequence', 'seq', 'text', 'dna']:
-            if candidate in col_names:
-                seq_col = candidate
-                break
-        if seq_col is None:
-            raise ValueError(f"No sequence column found in {col_names}")
+        for split_name in ['train', 'test']:
+            if split_name not in ds:
+                continue
+            split = ds[split_name]
+            col_names = split.column_names
 
-        label_col = None
-        for candidate in ['label', 'labels', 'y', 'target']:
-            if candidate in col_names:
-                label_col = candidate
-                break
-        if label_col is None:
-            raise ValueError(f"No label column found in {col_names}")
+            # Detect columns
+            seq_col = None
+            for candidate in ['sequence', 'seq', 'text', 'dna']:
+                if candidate in col_names:
+                    seq_col = candidate
+                    break
+            if seq_col is None:
+                raise ValueError(f"No sequence column found in {col_names}")
 
-        all_sequences.extend(split[seq_col])
-        all_labels.extend(split[label_col])
+            label_col = None
+            for candidate in ['label', 'labels', 'y', 'target']:
+                if candidate in col_names:
+                    label_col = candidate
+                    break
+            if label_col is None:
+                raise ValueError(f"No label column found in {col_names}")
+
+            all_sequences.extend(split[seq_col])
+            all_labels.extend(split[label_col])
 
     labels = np.array(all_labels, dtype=np.int64)
     n_classes = len(np.unique(labels))
