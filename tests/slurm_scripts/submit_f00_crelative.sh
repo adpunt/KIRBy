@@ -5,8 +5,8 @@
 # Usage (on login node):
 #   bash tests/slurm_scripts/submit_f00_crelative.sh
 #
-# C_relative is lightweight (no hybrid search for screened-out fractions),
-# so we can use short partition with modest resources.
+# Still needs baseline evaluation (expensive on large rep sets) plus up to
+# 6 hybrid searches. Use long partition with 24h to be safe.
 
 set -euo pipefail
 
@@ -39,13 +39,13 @@ for task in "${ALL_TASKS[@]}"; do
     J=$(sbatch \
         --job-name="f00c_${SHORT_NAMES[$task]}" \
         --nodes=1 --ntasks=1 --cpus-per-task=8 \
-        --time=05:59:00 --partition=short \
-        --mem=128G \
+        --time=23:59:00 --partition=long \
+        --mem=256G \
         --gres=gpu:1 \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
         --wrap="${WRAP_PREFIX} && mkdir -p ${OUTPUT} && python tests/experiments/framework/f00_rep_screening.py --dataset ${task} --framework --mode full --output ${OUTPUT} --only-option C ${STDERR_FILTER}" \
         | awk '{print $4}')
-    echo "  $J  f00c_${SHORT_NAMES[$task]}  (128G, 6h, short)"
+    echo "  $J  f00c_${SHORT_NAMES[$task]}  (256G, 24h, long)"
     TOTAL=$((TOTAL + 1))
 done
 
