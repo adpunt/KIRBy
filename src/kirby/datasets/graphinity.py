@@ -191,22 +191,21 @@ def load_graphinity_dataset(
         dict with: heavy_seqs, light_seqs, labels (float DDG), pdb_ids,
                    task_type='regression', mutations, property_name
     """
-    # DDG values are in the 'labels' column for both CSVs.
-    # ab_chain may also appear as 'chain_prot1'.
+    # DDG columns: 'foldx_ddg' in FoldX CSV, 'flexddg_ddg' in FlexddG CSV.
     if preset == 'foldx':
         df = _download_csv(_FOLDX_CSV)
-        ddg_col = 'labels'
+        ddg_col = 'foldx_ddg'
         label = 'FoldX'
     elif preset == 'rosetta':
         df = _download_csv(_FLEXDDG_CSV)
-        ddg_col = 'labels'
+        ddg_col = 'flexddg_ddg'
         label = 'Rosetta Flex ddG'
     elif preset == 'both':
         df_foldx = _download_csv(_FOLDX_CSV)
-        df_foldx['_ddg'] = df_foldx['labels']
+        df_foldx['_ddg'] = df_foldx['foldx_ddg']
         df_foldx['_source'] = 'foldx'
         df_rosetta = _download_csv(_FLEXDDG_CSV)
-        df_rosetta['_ddg'] = df_rosetta['labels']
+        df_rosetta['_ddg'] = df_rosetta['flexddg_ddg']
         df_rosetta['_source'] = 'rosetta'
         # Normalize ab_chain column name
         for d in [df_foldx, df_rosetta]:

@@ -124,8 +124,15 @@ def evaluate_split(X, labels, train_idx, test_idx, model_factory):
     X_test = scaler.transform(X_test)
 
     model = model_factory()
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
+    try:
+        model.fit(X_train, y_train)
+        y_pred = model.predict(X_test)
+    except Exception as e:
+        print(f"    WARNING: model fit/predict failed: {e}")
+        return {
+            'r2': float('nan'), 'rmse': float('nan'),
+            'mae': float('nan'), 'spearman': float('nan'),
+        }
 
     return {
         'r2': float(r2_score(y_test, y_pred)),

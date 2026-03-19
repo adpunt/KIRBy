@@ -61,11 +61,15 @@ def evaluate_rep(X, y, groups, n_folds=5, seed=42):
             X_test = scaler.transform(X_test)
 
             model = make_model()
-            model.fit(X_train, y_train)
-            y_pred = model.predict(X_test)
+            try:
+                model.fit(X_train, y_train)
+                y_pred = model.predict(X_test)
+            except Exception as e:
+                print(f"    WARNING: {name} fit/predict failed: {e}")
+                continue
             fold_scores.append(r2_score(y_test, y_pred))
 
-        results[name] = np.mean(fold_scores)
+        results[name] = float(np.mean(fold_scores)) if fold_scores else float('nan')
 
     return results
 

@@ -195,13 +195,25 @@ def evaluate_rep_model(
         X_test_s = np.nan_to_num(X_test_s, nan=0.0, posinf=0.0, neginf=0.0)
 
         model = model_factory()
-        model.fit(X_train_s, y_train)
-        y_pred = model.predict(X_test_s)
+        try:
+            model.fit(X_train_s, y_train)
+            y_pred = model.predict(X_test_s)
+        except Exception as e:
+            print(f"    WARNING: model fit/predict failed: {e}")
+            continue
 
         r2_scores.append(r2_score(y_test, y_pred))
         rmse_scores.append(float(np.sqrt(mean_squared_error(y_test, y_pred))))
         rho, _ = spearmanr(y_test, y_pred)
         spearman_scores.append(float(rho) if not np.isnan(rho) else 0.0)
+
+    if not r2_scores:
+        return {
+            'r2_mean': float('nan'), 'r2_std': float('nan'),
+            'rmse_mean': float('nan'), 'rmse_std': float('nan'),
+            'spearman_mean': float('nan'), 'spearman_std': float('nan'),
+            'n_folds': 0,
+        }
 
     return {
         'r2_mean': float(np.mean(r2_scores)),
