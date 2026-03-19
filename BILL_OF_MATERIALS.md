@@ -1296,56 +1296,108 @@ Forward-compat experiments are NOT separate — all FC reps are included in the 
 
 ---
 
-## 11. Missing Pipelines / Unverified Data (2026-03-19)
+## 11. Gap Audit and Missing Data (2026-03-19)
 
-**Purpose:** Track datasets and experiments that are not yet in the BOM with confirmed results. These will be added as results come in. Use `submit_missing_surveys.sh` to generate all missing data.
+**Source of truth: `python tests/audit_results.py`** — reads every JSON, compares against registered rep lists, outputs exact gaps. Run after pulling new results to update this section.
 
-### 11A. Missing Baseline Surveys
+**Total gaps: 1,299 rep×dataset cells with no data.** Resubmit: `bash tests/slurm_scripts/submit_missing_surveys.sh all` (~120 per-dataset jobs).
 
-| Domain | Dataset(s) | Why missing | Resubmit via |
-|--------|-----------|-------------|-------------|
-| Molecular | `qm9` | p5_mol_b running, halfway through | `submit_missing_surveys.sh molecular` |
-| Molecular | `adme_hlm`, `adme_rlm`, `adme_mdr1`, `adme_solubility` | p5_mol_b will timeout before reaching them | `submit_missing_surveys.sh molecular` |
-| Molecular FT | All 8 datasets | Never submitted | `submit_missing_surveys.sh molecular_ft` |
-| DTA | `davis`, `bindingdb_kd` | Previous attempts: TIMEOUT (48h on Boltz-2, now removed) | `submit_missing_surveys.sh dta` |
-| DTA | `kiba` (dedicated) | CatBoost constant-features crash (now fixed) | `submit_missing_surveys.sh dta` |
-| DTA | Universal + cold-drug | Bus error on large model loading / TIMEOUT | `submit_missing_surveys.sh dta` |
-| Antibody DMS | 8 datasets (Phillips, Adams, 5× AbAgym individual) | Only 4 fast reps tested; need full 40-rep survey | `submit_missing_surveys.sh antibody` |
-| Antibody CLF | `humanness_species` | Python 3.11 tarfile compat bug (now fixed) | `submit_missing_surveys.sh opig` |
-| Antibody CLF | `tz_her2_multiclass`, `humanness_therapeutic` | Only 1 rep (structural); need full 40-rep survey | `submit_missing_surveys.sh opig` |
-| Ginkgo | `ginkgo_purity` | Only 4 reps (rest have 33) | `submit_missing_surveys.sh opig` |
-| Graphinity DDG | `graphinity_foldx`, `graphinity_rosetta`, `graphinity_augmented` | KeyError 'labels' column bug (now fixed) | `submit_missing_surveys.sh opig` |
-| TCGA FT | All 3 datasets | Never submitted | `submit_missing_surveys.sh tcga` |
-| Nucleotide | All 22 datasets | pyarrow/datasets version conflict (fix: pip upgrade) | `submit_missing_surveys.sh nucleotide` |
-| Geometry | All inter-family + ginkgo | Never completed | `submit_missing_surveys.sh geometry` |
+### 11A. Molecular — 17/43 reps on 3/8 datasets
 
-### 11B. Missing Forward Compatibility Experiments
+**5 datasets have NO file:** qm9, adme_hlm, adme_rlm, adme_mdr1, adme_solubility.
+**26 reps missing from ALL datasets (including the 3 that have files):**
+- Installable but not on server (4): `clamp`, `rmat`, `map4`, `rdkfp`
+- Install broken / dropped (3): `minimol`, `gp_molformer`, `mole`
+- Graph/structural reps never run (9): `atom_pair`, `top_torsion`, `coulomb_matrix`, `usr`, `usrcat`, `pharmacophore3d`, `tda`, `e3fp`, `ft_chemprop` (molgraph survey job running)
+- Factory reps never run (11): `pdv_binary_mean`, `pdv_rank`, `sns`, `chemberta_pca50`, `molformer_pca50`, `selformer_pca50`, `molclr_pca50`, `smited_pca50`, `mhg_gnn_pca50`, `grover_pca50`, `mordred_pca50`
 
-| Experiment | Model(s) | Domain | Status |
-|-----------|---------|--------|--------|
-| Exp 1: MINT | protein_mint (1280D) | Antibody, DTA | FC antibody baselines queued |
-| Exp 2: SaProt | saprot (1280D) | Antibody, DTA | FC antibody baselines queued |
-| Exp 4: IgT5/AbRoBERTa | igt5, abroberta (1024D/1536D) | Antibody | FC baselines queued |
-| Exp 6: xTrimoPGLM | xtrimopglm (2048D) | Antibody, DTA | Mock fixed; FC baselines queued |
-| Exp 7: ReactionT5 | reactiont5 (768D) | Reaction | FC baselines queued |
-| Exp 9: AIDO.Protein | aido_protein (4608D) | Antibody | FC baselines queued (DTA has PyTorch compat issue) |
-| ~~Exp 3: MolE/MiniMol/GP-MoLFormer~~ | — | Molecular | **Dropped** — repeated install failures |
-| ~~Exp 5: Boltz-2~~ | — | DTA | **Dropped** — too slow, removed from DTA |
-| ~~Exp 8: Geneformer V2~~ | — | TCGA | **Already validated** in Phase 5 baselines |
+**Resubmit:** `submit_missing_surveys.sh molecular` (8 per-dataset jobs, full rep list)
 
-### 11C. Missing Comparison / Framework Experiments
+### 11B. Reaction — 10/14 reps on 3/3 datasets
 
-| Experiment | Script | Status |
-|-----------|--------|--------|
-| OPIG C2: Covariate shift | `covariate_shift.py` | Pending (opig_cov in SLURM queue) |
-| Framework f01-f04, f08 | Various | Running/pending in SLURM queue |
-| Framework f10 | `f10_small_dataset_allocation.py` | 4/6 datasets complete |
-| Complexity c11-c12 | `c11_ensemble_vs_hybrid.py`, `c12_modality_ablation.py` | Waiting for BOM pipeline selection |
-| Similarity s01-s09 | `tests/experiments/similarity/` | Waiting for BOM pipeline selection |
+**4 reps missing from ALL 3 datasets:** `diff_ecfp4`, `diff_maccs`, `component_descriptors`, `ligand_descriptors` — wired in survey code but failed silently during generation.
 
-### 11D. Known Bus Error Risk (SIGBUS, exit code 7)
+**Not wired in survey at all (3):** `concat_ecfp4`, `concat_maccs`, `concat_pdv` — code exists in reaction.py but not dispatched.
 
-Jobs that load many large LM models sequentially in one process can hit memory corruption (Bus error). Affected: DTA (universal survey loading all protein LMs), antibody LM DMS (loading 25+ LMs for 10 datasets), molecular baselines (loading all reps then crashing mid-eval). **Mitigation:** The per-dataset job splitting in `submit_missing_surveys.sh` reduces risk. If Bus errors persist, split further by rep group (e.g., run LM reps and classical reps in separate jobs).
+**Resubmit:** `submit_missing_surveys.sh reaction` (3 per-dataset jobs)
+
+### 11C. TCGA — 36/61 reps on 3/3 datasets
+
+**25 reps missing from ALL 3 datasets:**
+- Factory reps (15): `gene_hvg2000`, `gene_pca100`, `gene_nmf50`, `gene_ica50`, `gene_sparse_pca50`, `gene_autoencoder50`, `gene_quantile_rank`, `gene_corr_modules`, `gene_immune`, `gene_hallmark`, `gene_kegg`, `gene_reactome`, `gene_oncogenic`, `gene_progeny`, `gene_dorothea`, `gene_combined_pathway`
+- GPU foundation models (2): `gene_scgpt`, `gene_uce`
+- Mutational signatures (3): `sig_sbs`, `sig_dbs`, `sig_id` (needs SigProfiler setup)
+- Tier 2 multi-omic (4): `splicing_psi50`, `lncrna_pca50`, `gsva_hallmark`, `promoter_meth`
+
+**Resubmit:** `submit_missing_surveys.sh tcga` (3 per-dataset jobs)
+
+### 11D. Antibody DMS — 0/42 reps complete across all 11 datasets
+
+**8 datasets have only 4 reps** (onehot, blosum, aac, paratope): phillips_h3, adams (binding+expression), 5× AbAgym individual.
+**2 koenig datasets have 23/42 reps** — missing fast reps, mutation reps, factory reps, mint, xtrimopglm.
+**abagym_all has 35/42** — missing amplify, amplify_cdr, abroberta, abroberta_cdr, igt5, esm2_llr, esmc_llr.
+**Universally missing (4):** `amplify`, `amplify_cdr`, `esm2_llr`, `esmc_llr`.
+
+**Resubmit:** `submit_missing_surveys.sh antibody_dms` (11 per-dataset jobs × 42 reps)
+
+### 11E. Antibody Inter-Family — 17/42 reps complete across all 14 datasets
+
+Best coverage: hutchinson 38/42, most Jain datasets 37/42.
+Worst: abcov_kd 22/42, immunogenicity_marks 23/42.
+**Universally missing (4):** `amplify`, `amplify_cdr`, `esm2_llr`, `esmc_llr`.
+**Nearly universal (1):** `antiberty_llr` (missing from 13/14).
+
+**Resubmit:** `submit_missing_surveys.sh antibody_inter` (14 per-dataset jobs × 42 reps)
+
+### 11F. Antibody CLF — 0/42 reps complete across 4 datasets
+
+`tz_her2_binary`: 37/42 (best). `tz_her2_multiclass` + `humanness_therapeutic`: 1/42 each. `humanness_species`: NO FILE (tarfile bug, now fixed).
+
+**Resubmit:** `submit_missing_surveys.sh antibody_clf` (4 per-dataset jobs)
+
+### 11G. Ginkgo — 4/42 reps complete across all 9 datasets
+
+8 datasets at 34/42 (missing: amplify, amplify_cdr, antiberty_llr, esm2_llr, esm2_mutsite, esm2_wt_delta, esmc_llr, mutation_features). `ginkgo_purity`: 4/42.
+
+**Resubmit:** `submit_missing_surveys.sh ginkgo` (9 per-dataset jobs)
+
+### 11H. Graphinity DDG — 0/42 reps, 0/3 datasets
+
+All 3 datasets completely missing. Column name bug (now fixed).
+
+**Resubmit:** `submit_missing_surveys.sh ddg_synth` (3 per-dataset jobs)
+
+### 11I. DTA — 0/35 reps, 0/3 datasets (Phase 5)
+
+No Phase 5 JSON files exist. Old dta_survey/ has stale 17-rep results. Davis/bindingdb timed out on Boltz-2 (now removed). Kiba crashed on CatBoost constant features (now fixed).
+
+**Resubmit:** `submit_missing_surveys.sh dta` (5 jobs: 3 dedicated + 2 cold-drug)
+
+### 11J. Entirely Missing Domains
+
+| Domain | Datasets | Status | Resubmit |
+|--------|---------|--------|----------|
+| Nucleotide | 22 | pyarrow conflict (fix: `pip install --upgrade pyarrow datasets`) | `submit_missing_surveys.sh nucleotide` |
+| Geometry survey | 15 | Never completed | `submit_missing_surveys.sh geometry` |
+| Molecular FT | 8 | Never submitted | `submit_missing_surveys.sh molecular_ft` |
+| TCGA FT | 3 | Never submitted | `submit_missing_surveys.sh tcga_ft` |
+| Forward compat | ~24 | Smoketests only | `submit_missing_surveys.sh forward_compat` |
+
+### 11K. Reps That Will Fail (known broken — do not block on these)
+
+| Rep | Domain | Issue | Action |
+|-----|--------|-------|--------|
+| `minimol` | Molecular | pip install broken | Dropped |
+| `gp_molformer` | Molecular | Tokenizer incompatible with transformers | Dropped |
+| `mole` | Molecular | Manual weights + broken install | Dropped |
+| `amplify`, `amplify_cdr` | Antibody | Fails on all datasets (0/25) | Investigate or drop |
+| `esm2_llr`, `esmc_llr` | Antibody | Fails on all datasets (0/25) | Investigate or drop |
+| `gene_scgpt`, `gene_uce` | TCGA | GPU FM, may OOM | Try, accept failure |
+| `igbert`, `igbert_cls` | Antibody | Produces NaN everywhere | Confirmed dead, keep for completeness |
+
+### 11L. Bus Error Mitigation
+
+SIGBUS (exit code 7) from sequential large model loading. Per-dataset splitting in `submit_missing_surveys.sh` reduces risk. If it persists, split by rep group.
 
 ---
 
@@ -1429,6 +1481,87 @@ Jobs that load many large LM models sequentially in one process can hit memory c
 
 Dropped. All R² negative, n=151 too small. Not viable for hybrid search or experiments. Revisit only if factory reps produce Spearman ρ > 0.3.
 
-### 12D–12Z. Other Domains — TBD
+### 12D. Reaction — Buchwald-Hartwig
 
-Molecular, antibody, reaction, nucleotide, ginkgo, DDG pipelines to be defined in subsequent sessions as BOM data fills in. DTA and QM9 excluded from current round.
+- **Task:** Regression (yield 0-100%)
+- **Metric:** R², Spearman ρ
+- **Samples:** 3,955
+- **Split:** GroupKFold leave-additive-out, 22 groups
+- **Cutoff:** R² ≥ 0.55
+- **Published OOS range:** R²=0.54-0.84 (Schwaller 2021, JCIM 2024)
+
+**Tier 1 (R² > 0.68) — primary hybrid base reps:**
+
+| Rep | R² | ρ | Best Model | Type |
+|-----|-----|---|-----------|------|
+| reactant_ecfp4 | **0.718** | 0.855 | rf | Molecular FP |
+| drfp_2048 | 0.688 | 0.835 | rf | Reaction FP |
+
+**Tier 2 (0.55 ≤ R² ≤ 0.68) — full set:**
+
+| Rep | R² | ρ | Best Model | Type |
+|-----|-----|---|-----------|------|
+| onehot_components | 0.615 | 0.802 | xgboost | Design encoding |
+| rxnfp | 0.566 | 0.771 | ridge | Learned reaction |
+
+**Dead:** product_ecfp4 (R²=0.136 — product alone lacks reactant/reagent info).
+
+**Rep type coverage (3):** Molecular FP, Reaction FP, Design encoding. Different information types — good hybrid diversity. reactant_ecfp4 beats the whole-reaction DRFP under OOS, meaning reactant features alone carry more signal than the full reaction fingerprint.
+
+**TODOs:**
+- [ ] 11 reps registered in code have no results — run full baseline survey with all 16 reps:
+  - Reactant/product variants (4): reactant_maccs, reactant_pdv, product_maccs, product_pdv
+  - Difference FPs (2): diff_ecfp4, diff_maccs — directional structural change, distinct from DRFP's symmetric difference
+  - Component descriptors (2): component_descriptors (per-role physicochemical), ligand_descriptors (steric + electronic)
+  - Learned (1): reactiont5 (768D T5 encoder, Sagawa 2024)
+  - Concat baselines (2): concat_maccs, concat_pdv
+- [ ] Reassess tiers after full 16-rep results — diff reps and component_descriptors are new information types that could enter Tier 1/2
+- [ ] ligand_descriptors (16D steric/electronic) is especially interesting for hybrid augmentation — captures ligand chemistry that fingerprints encode implicitly
+
+### 12E. Reaction — Suzuki (Single-Rep Augmentation Experiment)
+
+- **Task:** Regression (yield 0-100%)
+- **Metric:** R², Spearman ρ
+- **Samples:** 5,760
+- **Split:** GroupKFold leave-ligand-out, 12 groups
+- **Cutoff:** N/A — only 1 viable rep
+
+**Base rep:**
+
+| Rep | R² | ρ | Best Model | Type |
+|-----|-----|---|-----------|------|
+| onehot_components | **0.453** | 0.680 | rf | Design encoding |
+
+**All other reps DEAD** (R²≈-0.03, ρ≈0.00): drfp_2048, rxnfp, reactant_ecfp4, product_ecfp4 — molecular fingerprints cannot extrapolate to unseen ligands in this reaction space.
+
+**Experiment framing:** This is a strong test of KIRBy's core thesis. onehot_components captures the factorial design (generalizes to unseen ligands) while fingerprints capture molecular detail (fail alone but may add signal when combined). **Consider making this a standalone experiment** — test multiple augmentation strategies on a single base rep:
+1. Standard hybrid search: onehot_components + each dead rep individually
+2. Multi-rep augmentation: onehot_components + multiple dead reps simultaneously
+3. Dimensionality-reduced augmentation: onehot_components + PCA-compressed fingerprint features
+4. Budget sweep: vary augmentation budget to find minimal useful signal from dead reps
+
+**Scientific question:** Can KIRBy hybrid augmentation rescue individually-failed reps by combining them with a rep that already generalizes? Published context: "When Yield Prediction Does Not Yield Prediction" (JCIM 2024) predicts exactly this collapse under OOS evaluation.
+
+**TODOs:**
+- [ ] Run full 16-rep baseline survey on Suzuki — confirm which reps are dead under leave-ligand-out
+- [ ] ligand_descriptors (16D) may be the exception: captures steric/electronic properties of ligands directly, could generalize to unseen ligands unlike fingerprints. If viable, it changes the experiment from single-rep to two-rep
+- [ ] component_descriptors and diff reps — likely dead (same FP collapse problem) but confirm
+- [ ] reactiont5 — T5 learned features, unknown whether they generalize under OOS
+- [ ] Design standalone augmentation experiment script (separate from standard pipeline)
+
+### 12F. Reaction — Doyle Plates — TODO
+
+- **Task:** Regression (yield 0-100%)
+- **Samples:** 4,312
+- **Split:** GroupKFold leave-additive-out, 24 groups
+- **Status:** Only 1 result exists: concat_ecfp4 (rf) R²=0.613. **Entire pipeline is TODO.**
+
+**TODOs:**
+- [ ] Run full 16-rep baseline survey on Doyle plates (all reps, not just the original 8)
+- [ ] Define tiers and cutoffs after results are in
+- [ ] Compare BH vs Doyle plates rep rankings — same reaction type (C-N coupling), different plate designs. Ranking consistency across these two datasets would validate the pipeline
+- [ ] Check whether ligand_descriptors and component_descriptors add value on this dataset
+
+### 12G–12Z. Other Domains — TBD
+
+Molecular, antibody, nucleotide, ginkgo, DDG pipelines to be defined in subsequent sessions as BOM data fills in. DTA and QM9 excluded from current round.
