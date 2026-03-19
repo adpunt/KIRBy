@@ -77,15 +77,13 @@ run_molecular() {
 }
 
 # ========================================================================
-# MOLECULAR FT: fine-tuned reps on all 8 datasets
+# MOLECULAR FT: SKIPPED — comparison experiments already show FT does not
+# help on molecular (GROVER frozen wins, LoRA/contrastive all degrade).
+# See comparisons/molecular_finetune_comparison.json.
 # ========================================================================
 run_molecular_ft() {
-    local OUT="tests/results/phase5_baselines/molecular_ft"
-    echo "--- Molecular FT: 8 datasets (per-dataset) ---"
-    for ds in logd caco2 herg qm9 adme_hlm adme_rlm adme_mdr1 adme_solubility; do
-        submit "molft_${ds}" \
-            "mkdir -p ${OUT} && python tests/run_baseline_survey.py ${ds} --n-folds 5 --augment --finetune --output ${OUT}/"
-    done
+    echo "--- Molecular FT: SKIPPED (comparison data shows FT does not help) ---"
+    echo "  See: tests/results/comparisons/molecular_finetune_comparison.json"
     echo ""
 }
 
@@ -364,7 +362,7 @@ case "$MODE" in
         echo "Modes:"
         echo "  all             Everything (~120 jobs)"
         echo "  molecular       8 datasets × full reps (8 jobs)"
-        echo "  molecular_ft    8 datasets × FT reps (8 jobs)"
+        echo "  molecular_ft    SKIPPED (FT doesn't help molecular)"
         echo "  reaction        3 datasets × full reps (3 jobs)"
         echo "  tcga            3 datasets × full reps (3 jobs)"
         echo "  tcga_ft         3 datasets × FT reps (3 jobs)"
