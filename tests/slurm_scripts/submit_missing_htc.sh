@@ -71,81 +71,53 @@ run_tcga_ft() {
     echo ""
 }
 
-# ── Antibody DMS: 11 datasets × 42 reps ──
+# ── Antibody DMS: all_dms group (1 job, iterates 11 datasets internally) ──
 run_antibody_dms() {
     local OUT="tests/results/phase5_baselines/antibody"
-    echo "--- Antibody DMS (11 datasets) ---"
-    # Large DMS (n>4000)
-    for ds in flab_binding_koenig flab_expression_koenig \
-              flab_binding_phillips_h3 flab_binding_adams flab_expression_adams; do
-        submit "abdms_${ds}" \
-            "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --skip-existing --reps ${ALL_AB_REPS}" \
-            256G
-    done
-    # Smaller DMS (n<700)
-    for ds in abagym_HER2 abagym_VEGF abagym_EGFR abagym_lysozyme abagym_Ang2 abagym_all; do
-        submit "abdms_${ds}" \
-            "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --skip-existing --reps ${ALL_AB_REPS}" \
-            128G
-    done
+    echo "--- Antibody DMS (all_dms = 11 datasets in 1 job, 256G) ---"
+    submit "abdms_all" \
+        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_dms --output ${OUT}/ --n-folds 5 --augment --skip-existing --reps ${ALL_AB_REPS}" \
+        256G
     echo ""
 }
 
-# ── Antibody Inter-Family: 14 datasets × 42 reps ──
+# ── Antibody Inter-Family: all_inter group (1 job, iterates 14 datasets internally) ──
 run_antibody_inter() {
     local OUT="tests/results/phase5_baselines/antibody"
-    echo "--- Antibody Inter-Family (14 datasets, 128G each) ---"
-    for ds in flab_thermo_tresanco flab_pk_jain_heprt flab_pk_jain_fcrnrt \
-              flab_polyreact_jain_cic flab_aggregation_jain_hicrt flab_thermo_jain \
-              abcov_kd flab_aggregation_jain flab_immunogenicity_marks \
-              flab_polyreact_jain_bvp flab_thermo_hutchinson flab_aggregation_jain_sas \
-              ddg_combined ddg_combined_full; do
-        submit "abint_${ds}" \
-            "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --skip-existing --reps ${ALL_AB_REPS}" \
-            128G
-    done
+    echo "--- Antibody Inter-Family (all_inter = 14 datasets in 1 job, 256G) ---"
+    submit "abint_all" \
+        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_inter --output ${OUT}/ --n-folds 5 --augment --skip-existing --reps ${ALL_AB_REPS}" \
+        256G
     echo ""
 }
 
-# ── Antibody CLF: 4 datasets × 42 reps ──
+# ── Antibody CLF: all_clf group (1 job) ──
 run_antibody_clf() {
     local OUT="tests/results/opig/clf"
-    echo "--- Antibody CLF (4 datasets) ---"
-    for ds in tz_her2_binary tz_her2_multiclass; do
-        submit "abclf_${ds}" \
-            "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --skip-existing --reps ${ALL_AB_REPS}" \
-            256G
-    done
-    for ds in humanness_species humanness_therapeutic; do
-        submit "abclf_${ds}" \
-            "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --skip-existing --reps ${ALL_AB_REPS}" \
-            128G
-    done
+    echo "--- Antibody CLF (all_clf = 4 datasets in 1 job, 256G) ---"
+    submit "abclf_all" \
+        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_clf --output ${OUT}/ --n-folds 5 --augment --skip-existing --reps ${ALL_AB_REPS}" \
+        256G
     echo ""
 }
 
-# ── Ginkgo: 9 datasets × 42 reps ──
+# ── Ginkgo: all_ginkgo group (1 job) ──
 run_ginkgo() {
     local OUT="tests/results/opig/ginkgo"
-    echo "--- Ginkgo (9 datasets, 128G each) ---"
-    for ds in ginkgo_hic ginkgo_tm2 ginkgo_titer ginkgo_pr_cho ginkgo_acsins \
-              ginkgo_purity ginkgo_aggregation ginkgo_colloidal ginkgo_heparin; do
-        submit "ginkgo_${ds}" \
-            "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --skip-existing --reps ${ALL_AB_REPS}" \
-            128G
-    done
+    echo "--- Ginkgo (all_ginkgo = 9 datasets in 1 job, 256G) ---"
+    submit "ginkgo_all" \
+        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_ginkgo --output ${OUT}/ --n-folds 5 --augment --skip-existing --reps ${ALL_AB_REPS}" \
+        256G
     echo ""
 }
 
-# ── Graphinity DDG: 3 datasets ──
+# ── Graphinity DDG: all_ddg group (1 job) ──
 run_ddg_synth() {
     local OUT="tests/results/opig/ddg"
-    echo "--- Graphinity DDG (3 datasets, 256G each) ---"
-    for ds in graphinity_foldx graphinity_rosetta graphinity_augmented; do
-        submit "ddg_${ds}" \
-            "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py ${ds} --output ${OUT}/ --n-folds 5 --augment --skip-existing --reps ${ALL_AB_REPS}" \
-            256G
-    done
+    echo "--- Graphinity DDG (all_ddg = 5 datasets in 1 job, 256G) ---"
+    submit "ddg_all" \
+        "mkdir -p ${OUT} && python tests/antibody_baseline_survey.py all_ddg --output ${OUT}/ --n-folds 5 --augment --skip-existing --reps ${ALL_AB_REPS}" \
+        256G
     echo ""
 }
 
@@ -230,19 +202,19 @@ case "$MODE" in
         echo "Usage: bash submit_missing_htc.sh [MODE]"
         echo "  Run on HTC login node. All jobs: long partition, GPU, 48h."
         echo ""
-        echo "  molecular       8 GPU jobs (256G)"
-        echo "  tcga            3 GPU jobs (256G)"
-        echo "  tcga_ft         3 GPU jobs (256G)"
-        echo "  antibody_dms    11 GPU jobs (128-256G)"
-        echo "  antibody_inter  14 GPU jobs (128G)"
-        echo "  antibody_clf    4 GPU jobs (128-256G)"
-        echo "  antibody        29 GPU jobs"
-        echo "  ginkgo          9 GPU jobs (128G)"
-        echo "  ddg_synth       3 GPU jobs (256G)"
-        echo "  opig            16 GPU jobs"
-        echo "  dta             5 GPU jobs (256G)"
+        echo "  molecular       8 GPU jobs (256G, per-dataset)"
+        echo "  tcga            3 GPU jobs (256G, per-dataset)"
+        echo "  tcga_ft         3 GPU jobs (256G, per-dataset)"
+        echo "  antibody_dms    1 GPU job (256G, all_dms group = 11 datasets)"
+        echo "  antibody_inter  1 GPU job (256G, all_inter group = 14 datasets)"
+        echo "  antibody_clf    1 GPU job (256G, all_clf group = 4 datasets)"
+        echo "  antibody        3 GPU jobs (dms + inter + clf)"
+        echo "  ginkgo          1 GPU job (256G, all_ginkgo group = 9 datasets)"
+        echo "  ddg_synth       1 GPU job (256G, all_ddg group = 5 datasets)"
+        echo "  opig            3 GPU jobs (clf + ginkgo + ddg)"
+        echo "  dta             5 GPU jobs (256G, per-dataset)"
         echo "  forward_compat  ~21 GPU jobs (128-256G)"
-        echo "  all             ~100 GPU jobs"
+        echo "  all             ~45 GPU jobs"
         exit 1
         ;;
 esac
