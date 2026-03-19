@@ -652,7 +652,7 @@ def make_ft_factories(data, dataset_name, task_type, ft_epochs=3, ft_cache=True)
 
 def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
                tune_trials=0, l2_norm=False, augment=False,
-               split_strategy='scaffold'):
+               split_strategy='scaffold', skip_reps=None):
     """Run the full baseline survey for one dataset. Returns result dict."""
     print(f"\n{'='*70}")
     print(f"SURVEY: {dataset_name}")
@@ -663,6 +663,15 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
     # 1. Load data + reps
     data = load_dataset_and_reps(dataset_name, rep_preset)
     reps = data['reps']
+
+    # Filter out already-computed reps (--skip-existing)
+    if skip_reps:
+        before = len(reps)
+        reps = {k: v for k, v in reps.items() if k not in skip_reps}
+        data['reps'] = reps
+        skipped = before - len(reps)
+        if skipped:
+            print(f"  Skipped {skipped} existing reps, {len(reps)} remaining")
     labels = data['labels']
     groups = data['groups']
     prebuilt_splits = data.get('prebuilt_splits')
@@ -1010,6 +1019,8 @@ Examples:
                             '(default: scaffold). mw = molecular weight bins, '
                             'spectral = Tanimoto spectral clustering.')
     parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--skip-existing', action='store_true',
+                       help='Skip reps already in the output JSON (incremental mode)')
     parser.add_argument('--output', type=str, default=None,
                        help='Output path (JSON file or directory for multi-dataset)')
 
@@ -1051,6 +1062,20 @@ Examples:
     fail_count = 0
 
     for ds in datasets:
+        # --skip-existing: load existing JSON and find which reps are done
+        _existing_reps = set()
+        if args.skip_existing and output_dir:
+            existing_path = output_dir / f"{ds}.json"
+            if existing_path.exists():
+                try:
+                    with open(existing_path) as f:
+                        _existing_data = json.load(f)
+                    _existing_reps = set(_existing_data.get('baselines', {}).keys())
+                    if _existing_reps:
+                        print(f"  [{ds}] {len(_existing_reps)} reps already done, will skip them")
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
         try:
             result = run_survey(
                 ds, args.reps, args.n_folds,
@@ -1058,15 +1083,33 @@ Examples:
                 tune_trials=args.tune, l2_norm=args.l2_norm,
                 augment=args.augment,
                 split_strategy=args.split_strategy,
+                skip_reps=_existing_reps,
             )
             result = convert_numpy(result)
             print_summary_table(result)
             all_results[ds] = result
             pass_count += 1
 
-            # Save per-dataset JSON
+            # Save per-dataset JSON (merge with existing if present)
             if output_dir:
                 out_path = output_dir / f"{ds}.json"
+                if out_path.exists():
+                    try:
+                        with open(out_path) as f:
+                            existing = json.load(f)
+                        # Merge baselines: keep existing, add/overwrite new
+                        for section in ('baselines', 'finetuned_baselines', 'augmentations'):
+                            if section in result and result[section]:
+                                if section not in existing or not existing[section]:
+                                    existing[section] = {}
+                                existing[section].update(result[section])
+                        # Update metadata
+                        if 'metadata' in result:
+                            existing.setdefault('metadata', {}).update(result['metadata'])
+                        result = existing
+                        print(f"  Merged with existing: {out_path}")
+                    except (json.JSONDecodeError, KeyError):
+                        pass  # Corrupted file — overwrite
                 with open(out_path, 'w') as f:
                     json.dump(result, f, indent=2)
                 print(f"  Saved: {out_path}")

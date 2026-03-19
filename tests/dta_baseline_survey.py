@@ -781,6 +781,21 @@ def main():
                 return obj.tolist()
             return obj
 
+        # Merge with existing results if file exists
+        out_path = Path(args.output)
+        if out_path.exists():
+            try:
+                with open(out_path) as f:
+                    existing = json.load(f)
+                for section in ('standalone', 'paired', 'all_combined'):
+                    if section in all_results and all_results[section]:
+                        if section not in existing or not existing[section]:
+                            existing[section] = {}
+                        existing[section].update(all_results[section])
+                all_results = existing
+                print(f"  Merged with existing: {out_path}")
+            except (json.JSONDecodeError, KeyError):
+                pass
         with open(args.output, 'w') as f:
             json.dump(all_results, f, indent=2, default=convert)
         print(f"\nResults saved to {args.output}")
