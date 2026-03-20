@@ -43,7 +43,7 @@ INTERMEDIARY = {
     'models': ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp',
                'svm', 'gp', 'catboost', 'dnn', 'cnn'],
     'budgets': [5, 10, 25, 50, 75, 100, 150, 200, 300, 500, 750, 1000],
-    'allocations': ['greedy', 'performance_weighted', 'softmax_T5'],
+    'allocations': ['performance_weighted', 'softmax_T5'],
     'importance_methods': ['treeshap', 'lightgbm_gain'],
     'search_speed': 'fast',
 }
@@ -54,12 +54,50 @@ FULL = {
                'svm', 'gp', 'catboost', 'dnn', 'cnn'],
     'budgets': [50, 100, 200, 500],
     'allocations': [
-        'greedy', 'performance_weighted', 'softmax_T1', 'softmax_T5',
-        'dominant_greedy', 'power_2',
+        'performance_weighted', 'softmax_T2', 'softmax_T5',
+        'power_2', 'min_floor_0.05',
     ],
-    'importance_methods': ['treeshap', 'xgboost_gain', 'lightgbm_gain', 'permutation'],
+    'importance_methods': ['treeshap', 'deeplift', 'lightgbm_gain'],
     'search_speed': 'medium',
 }
+
+
+# =============================================================================
+# REP TIER CLASSIFICATION
+# =============================================================================
+
+# Per-rep tier overrides (exceptions to pure dimensionality classification)
+REP_TIER_OVERRIDES = {
+    'aac': 2,  # 40D but bumped to tier 2 per user decision
+}
+
+
+def classify_rep_tier(dim: int, rep_name: str = None) -> int:
+    """Classify a representation into a tier based on dimensionality.
+
+    Tier 1 (<50D):   augmentation-only, NEVER standalone baselines
+    Tier 2 (50-200D): both standalone baselines and augmentation candidates
+    Tier 3 (>200D):  base reps, standalone baselines only
+
+    Per-rep exceptions are handled via REP_TIER_OVERRIDES.
+    Matches both exact names and domain-stripped suffixes (e.g. protein_aac → aac).
+    """
+    if rep_name:
+        if rep_name in REP_TIER_OVERRIDES:
+            return REP_TIER_OVERRIDES[rep_name]
+        # Strip domain prefix (drug_, protein_) for DTA reps
+        for prefix in ('drug_', 'protein_'):
+            if rep_name.startswith(prefix):
+                suffix = rep_name[len(prefix):]
+                if suffix in REP_TIER_OVERRIDES:
+                    return REP_TIER_OVERRIDES[suffix]
+                break
+    if dim < 50:
+        return 1
+    elif dim <= 200:
+        return 2
+    else:
+        return 3
 
 
 # =============================================================================
