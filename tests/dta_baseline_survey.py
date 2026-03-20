@@ -301,8 +301,7 @@ def evaluate_rep(X: np.ndarray, y: np.ndarray, groups: np.ndarray,
     results = {}
 
     from kirby.find_best_hybrid import get_model as _get_model
-    _model_names = ['ridge', 'rf', 'xgboost', 'lightgbm',
-                         'gp', 'mlp', 'dnn', 'cnn', 'catboost']
+    _model_names = ['ridge', 'rf', 'xgboost', 'lightgbm', 'mlp']
     models = {}
     for _mn in _model_names:
         try:
@@ -400,8 +399,7 @@ def evaluate_factory_rep(factory, y: np.ndarray, groups: np.ndarray,
     results = {}
 
     from kirby.find_best_hybrid import get_model as _get_model
-    _model_names = ['ridge', 'rf', 'xgboost', 'lightgbm',
-                         'gp', 'mlp', 'dnn', 'cnn', 'catboost']
+    _model_names = ['ridge', 'rf', 'xgboost', 'lightgbm', 'mlp']
     models = {}
     for _mn in _model_names:
         try:
@@ -576,10 +574,31 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
             print(f"\n  Creating {rep_name} factory...")
             factory_reps[rep_name] = make_dta_sns_factory(drug_smiles)
 
-    # Evaluate: standalone mode (each rep alone)
-    print(f"\n--- STANDALONE EVALUATION (each rep alone) ---")
+    # Factory rep dimensions (SNS = 1024 by default)
+    _factory_dims = {'drug_sns': 1024}
+
+    # Classify reps by tier
+    sys.path.insert(0, str(Path(__file__).parent / 'experiments'))
+    from _shared import classify_rep_tier
+    rep_tiers = {}
+    for rep_name, rep in generated.items():
+        rep_tiers[rep_name] = classify_rep_tier(rep.shape[1], rep_name)
+    for rep_name in factory_reps:
+        dim = _factory_dims.get(rep_name, 1024)
+        rep_tiers[rep_name] = classify_rep_tier(dim, rep_name)
+
+    tier_1_names = sorted(k for k, t in rep_tiers.items() if t == 1)
+    tier_23_names = sorted(k for k, t in rep_tiers.items() if t >= 2)
+    if tier_1_names:
+        print(f"\n  Tier 1 (skip standalone): {tier_1_names}")
+
+    # Evaluate: standalone mode (each rep alone) — skip tier 1
+    print(f"\n--- STANDALONE EVALUATION (tier 2+3 reps only, "
+          f"skipping {len(tier_1_names)} tier-1 reps) ---")
     standalone_results = {}
     for rep_name, rep in generated.items():
+        if rep_tiers.get(rep_name, 3) == 1:
+            continue  # tier 1: augmentation-only, skip standalone
         t0 = time.time()
         scores = evaluate_rep(rep, labels, groups, n_folds=n_folds)
         elapsed = time.time() - t0
@@ -591,6 +610,8 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
 
     # Evaluate factory reps (standalone)
     for rep_name, factory in factory_reps.items():
+        if rep_tiers.get(rep_name, 3) == 1:
+            continue
         t0 = time.time()
         scores = evaluate_factory_rep(factory, labels, groups, n_folds=n_folds)
         elapsed = time.time() - t0
@@ -684,9 +705,6 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
     header = f"{'Rep':<25} {'Dim':<6} " + " ".join(f"{m:<22}" for m in models_list)
     print(header)
     print("-" * len(header))
-
-    # Factory rep dimensions (SNS = 1024 by default)
-    _factory_dims = {'drug_sns': 1024}
 
     for rep_name in all_reps_to_run:
         if rep_name not in standalone_results:

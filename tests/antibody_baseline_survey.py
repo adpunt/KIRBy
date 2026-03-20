@@ -790,14 +790,35 @@ def run_survey(
     if not reps:
         raise RuntimeError("No representations generated successfully")
 
-    # 3. Get models
+    # 3. Classify reps by tier
+    from experiments._shared import classify_rep_tier
+    rep_tiers = {}
+    for rep_name, X in reps.items():
+        try:
+            dim = X.shape[1] if hasattr(X, 'shape') else np.asarray(X).shape[1]
+            rep_tiers[rep_name] = classify_rep_tier(dim, rep_name)
+        except Exception:
+            rep_tiers[rep_name] = 3
+
+    tier_1_reps = sorted(k for k, t in rep_tiers.items() if t == 1)
+    tier_2_reps = sorted(k for k, t in rep_tiers.items() if t == 2)
+    tier_3_reps = sorted(k for k, t in rep_tiers.items() if t == 3)
+    baseline_rep_names = sorted(set(tier_2_reps) | set(tier_3_reps))
+
+    if tier_1_reps:
+        print(f"  Tier 1 (augmentation-only): {tier_1_reps}")
+    if tier_2_reps:
+        print(f"  Tier 2 (standalone + augmentation): {tier_2_reps}")
+    print(f"  Tier 3 (standalone only): {len(tier_3_reps)} reps")
+
+    # 4. Get models
     models = get_models(model_names, n_samples=data['n_samples'],
                         task_type=task_type)
     print(f"  Models: {list(models.keys())}")
 
-    # 4. Evaluate each (rep, model) cell
+    # 5. Evaluate each (rep, model) cell — tier 2 + tier 3 only
     baselines = {}
-    for rep_name in sorted(reps.keys()):
+    for rep_name in baseline_rep_names:
         X = reps[rep_name]
         try:
             X = np.asarray(X, dtype=np.float64)
@@ -829,7 +850,7 @@ def run_survey(
         except Exception as e:
             print(f" EVAL FAILED: {e}")
 
-    # 4b. Factory-based reps (per-fold fitting to prevent leakage)
+    # 5b. Factory-based reps (per-fold fitting to prevent leakage)
     factory_rep_names = [r for r in rep_names if r in FACTORY_REPS]
     if factory_rep_names:
         from kirby.representations.antibody import make_esm2_entropy_factory
@@ -865,7 +886,7 @@ def run_survey(
             except Exception as e:
                 print(f" FAILED: {e}")
 
-    # 5. Fine-tuned reps (ESM-2 LoRA)
+    # 6. Fine-tuned reps (ESM-2 LoRA)
     ft_baselines = {}
     if do_finetune:
         try:
@@ -899,55 +920,72 @@ def run_survey(
         except Exception as e:
             print(f"\n  esm2_lora factory failed: {e}")
 
-    # 6. Augmentation test: concat small reps with top base
+    # 7. Augmentation test: concat tier-1 + tier-2 reps with top 2 tier-3 base reps
     augmentations = {}
     if augment and baselines:
-        # Find top-scoring rep — use accuracy for clf, R² for regression
-        # Only consider reps whose feature matrices are in `reps` (excludes
-        # factory reps like esm2_entropy_top20 and any that failed to generate)
         primary_key = 'accuracy_mean' if is_clf else 'r2_mean'
-        scored = []
+
+        # Candidates for augmentation: tier 1 + tier 2 reps (must have raw matrix)
+        aug_candidates = {k: reps[k] for k in sorted(reps.keys())
+                          if k in reps and rep_tiers.get(k, 3) in (1, 2)}
+
+        # Find top 2 tier-3 reps by best model score
+        tier3_scored = []
         for name, e in baselines.items():
             if name not in reps:
                 continue  # factory/per-fold rep — no raw matrix available
+            if rep_tiers.get(name, 3) != 3:
+                continue
             for mname, s in e['scores'].items():
                 val = s.get(primary_key, float('nan'))
                 if not np.isnan(val):
-                    scored.append((name, mname, val))
-        if scored:
-            top_rep, top_model_name, top_score = max(scored, key=lambda x: x[2])
-            X_top = reps[top_rep]
-            top_model = models[top_model_name]
+                    tier3_scored.append((name, mname, val))
 
-            # Small reps = ≤200D, excluding the top rep
-            small_reps = {k: v for k, v in reps.items()
-                          if v.shape[1] <= 200 and k != top_rep}
+        if tier3_scored and aug_candidates:
+            # Sort by score (higher is better for both accuracy and R²)
+            tier3_sorted = sorted(tier3_scored, key=lambda x: x[2], reverse=True)
+            # Deduplicate: keep only the best model per rep
+            seen = set()
+            top_bases = []
+            for name, mname, score in tier3_sorted:
+                if name not in seen:
+                    seen.add(name)
+                    top_bases.append((name, mname, score))
+                if len(top_bases) >= 2:
+                    break
 
-            if small_reps:
-                metric_label = 'Acc' if is_clf else 'R²'
-                print(f"\n--- Augmentation test: {top_rep} "
-                      f"({metric_label}={top_score:.4f}) "
-                      f"+ {len(small_reps)} small reps ---")
+            metric_label = 'Acc' if is_clf else 'R²'
+            print(f"\n--- Augmentation test: {len(top_bases)} tier-3 base reps × "
+                  f"{len(aug_candidates)} tier-1/2 reps ---")
 
-                for aug_name in sorted(small_reps.keys()):
-                    X_aug = np.hstack([X_top, small_reps[aug_name]])
-                    result = evaluate_rep(X_aug, labels, groups, top_model,
+            for base_name, base_model_name, base_score in top_bases:
+                X_base = reps[base_name]
+                base_model = models[base_model_name]
+
+                print(f"\n  Base: {base_name} ({metric_label}={base_score:.4f}, "
+                      f"model={base_model_name})")
+
+                for aug_name in sorted(aug_candidates.keys()):
+                    X_aug = np.hstack([X_base, aug_candidates[aug_name]])
+                    result = evaluate_rep(X_aug, labels, groups, base_model,
                                           n_folds, task_type=task_type)
                     mean_s = result[primary_key]
-                    delta = mean_s - top_score
+                    delta = mean_s - base_score
                     sign = '+' if delta >= 0 else ''
-                    print(f"  {top_rep}+{aug_name} ({X_aug.shape[1]}d): "
+                    print(f"    +{aug_name} ({X_aug.shape[1]}d): "
                           f"{mean_s:.4f} ({sign}{delta:.4f})")
-                    augmentations[f"{top_rep}+{aug_name}"] = {
-                        'base': top_rep,
+                    augmentations[f"{base_name}+{aug_name}"] = {
+                        'base': base_name,
                         'augment': aug_name,
-                        'base_dim': X_top.shape[1],
-                        'aug_dim': small_reps[aug_name].shape[1],
+                        'base_dim': int(X_base.shape[1]),
+                        'aug_dim': int(aug_candidates[aug_name].shape[1]),
                         'concat_dim': X_aug.shape[1],
-                        'model': top_model_name,
-                        'base_score': round(top_score, 4),
-                        'concat_score': round(mean_s, 4),
-                        'delta': round(delta, 4),
+                        'model': base_model_name,
+                        'base_score': round(base_score, 4),
+                        'concat_score': round(float(mean_s), 4),
+                        'delta': round(float(delta), 4),
+                        'base_tier': 3,
+                        'aug_tier': rep_tiers.get(aug_name, 1),
                     }
 
     elapsed = time.time() - t0
@@ -960,6 +998,7 @@ def run_survey(
             'n_folds': n_folds,
             'task_type': task_type,
             'reps': sorted(reps.keys()),
+            'rep_tiers': {k: v for k, v in rep_tiers.items()},
             'models': list(models.keys()),
             'elapsed_seconds': round(elapsed, 1),
             'timestamp': datetime.now().isoformat(),
@@ -1112,8 +1151,8 @@ Examples:
     parser.add_argument('--reps', type=str, default=None,
                         help='Comma-separated rep names to use (overrides --skip-lm)')
     parser.add_argument('--models', type=str,
-                        default='ridge,rf,xgboost,lightgbm,gp,mlp,dnn,cnn,catboost',
-                        help='Comma-separated model names (default: all 9 models)')
+                        default='ridge,rf,xgboost,lightgbm,mlp',
+                        help='Comma-separated model names (default: 5 survey models)')
     parser.add_argument('--n-folds', type=int, default=5,
                         help='Number of CV folds (default: 5)')
     parser.add_argument('--augment', action='store_true',

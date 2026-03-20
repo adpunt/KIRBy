@@ -107,8 +107,7 @@ DOMAIN_DATASETS = {}
 for _ds, (_dom, _) in DATASET_REGISTRY.items():
     DOMAIN_DATASETS.setdefault(_dom, []).append(_ds)
 
-SURVEY_MODELS = ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm',
-                  'gp', 'mlp', 'dnn', 'cnn', 'catboost']
+SURVEY_MODELS = ['ridge', 'rf', 'xgboost', 'lightgbm', 'mlp']
 
 
 def _make_ridge_l2norm(task_type='regression'):
@@ -704,11 +703,33 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
 
     model_names = list(default_models.keys())
 
-    # 3. Evaluate each frozen rep
-    baselines = {}
-    print(f"\n--- Evaluating {len(reps)} reps x {len(model_names)} models ---")
+    # 3. Classify reps by tier
+    from experiments._shared import classify_rep_tier
+    rep_tiers = {}
+    for rep_name in reps:
+        try:
+            dim = np.asarray(reps[rep_name]).shape[1]
+            rep_tiers[rep_name] = classify_rep_tier(dim, rep_name)
+        except Exception:
+            rep_tiers[rep_name] = 3  # default to full evaluation on error
 
-    for rep_name in sorted(reps.keys()):
+    tier_1_reps = sorted(k for k, t in rep_tiers.items() if t == 1)
+    tier_2_reps = sorted(k for k, t in rep_tiers.items() if t == 2)
+    tier_3_reps = sorted(k for k, t in rep_tiers.items() if t == 3)
+    baseline_rep_names = sorted(set(tier_2_reps) | set(tier_3_reps))
+
+    if tier_1_reps:
+        print(f"  Tier 1 (augmentation-only): {tier_1_reps}")
+    if tier_2_reps:
+        print(f"  Tier 2 (standalone + augmentation): {tier_2_reps}")
+    print(f"  Tier 3 (standalone only): {len(tier_3_reps)} reps")
+
+    # 4. Evaluate each frozen rep (tier 2 + tier 3 only; tier 1 = augmentation-only)
+    baselines = {}
+    print(f"\n--- Evaluating {len(baseline_rep_names)} reps x {len(model_names)} models "
+          f"(skipping {len(tier_1_reps)} tier-1 augmentation-only reps) ---")
+
+    for rep_name in baseline_rep_names:
         X = reps[rep_name]
         try:
             X = np.asarray(X, dtype=np.float64)
@@ -783,7 +804,7 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
         except Exception as e:
             print(f" EVAL FAILED: {e}")
 
-    # 4. Fine-tuned reps (TCGA only)
+    # 5. Fine-tuned reps (TCGA only)
     ft_baselines = {}
     if do_finetune:
         ft_factories = make_ft_factories(data, dataset_name, task_type)
@@ -816,52 +837,61 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
                 ft_baselines[ft_name] = entry
                 print()
 
-    # 5. Augmentation test: concat small reps with top base, check if it helps
+    # 6. Augmentation test: concat tier-1 + tier-2 reps with top 2 tier-3 base reps
     augmentations = {}
     if augment and baselines:
-        # Find the top-scoring base rep (by best model score)
-        scored = [(name, e['best']['score']) for name, e in baselines.items()
-                  if e.get('best') is not None]
-        if scored:
-            top_rep, top_score = (min(scored, key=lambda x: x[1]) if not higher_is_better
-                                  else max(scored, key=lambda x: x[1]))
-            top_model = baselines[top_rep]['best']['model']
-            X_top = reps[top_rep]
+        # Candidates for augmentation: tier 1 + tier 2 reps
+        aug_candidates = {k: reps[k] for k in sorted(reps.keys())
+                          if rep_tiers.get(k, 3) in (1, 2)}
 
-            # Small reps = ≤200D, excluding the top rep itself
-            small_reps = {k: v for k, v in reps.items()
-                          if v.shape[1] <= 200 and k != top_rep}
+        # Find top 2 tier-3 reps by best model score
+        tier3_scored = [(name, e['best']['score'], e['best']['model'])
+                        for name, e in baselines.items()
+                        if e.get('best') is not None
+                        and rep_tiers.get(name, 3) == 3]
 
-            if small_reps:
-                print(f"\n--- Augmentation test: {top_rep} ({metric_name}={top_score:.4f}) "
-                      f"+ {len(small_reps)} small reps ---")
+        if tier3_scored and aug_candidates:
+            tier3_sorted = sorted(tier3_scored, key=lambda x: x[1],
+                                  reverse=higher_is_better)
+            top_bases = tier3_sorted[:2]
 
-                model = default_models[top_model]
-                for aug_name in sorted(small_reps.keys()):
-                    X_aug = np.hstack([X_top, small_reps[aug_name]])
+            print(f"\n--- Augmentation test: {len(top_bases)} tier-3 base reps × "
+                  f"{len(aug_candidates)} tier-1/2 reps ---")
+
+            for base_name, base_score, base_model_name in top_bases:
+                X_base = reps[base_name]
+                model = default_models[base_model_name]
+
+                print(f"\n  Base: {base_name} ({metric_name}={base_score:.4f}, "
+                      f"model={base_model_name})")
+
+                for aug_name in sorted(aug_candidates.keys()):
+                    X_aug = np.hstack([X_base, aug_candidates[aug_name]])
                     mean_m, _ = evaluate_rep(
                         X_aug, labels, groups, model, n_folds, task_type,
                         prebuilt_splits=prebuilt_splits)
                     mean_s = _primary_metric(mean_m, task_type, metric_name)
-                    delta = mean_s - top_score
+                    delta = mean_s - base_score
                     sign = '+' if delta >= 0 else ''
-                    print(f"  {top_rep}+{aug_name} ({X_aug.shape[1]}d): "
+                    print(f"    +{aug_name} ({X_aug.shape[1]}d): "
                           f"{mean_s:.4f} ({sign}{delta:.4f})")
-                    augmentations[f"{top_rep}+{aug_name}"] = {
-                        'base': top_rep,
+                    augmentations[f"{base_name}+{aug_name}"] = {
+                        'base': base_name,
                         'augment': aug_name,
-                        'base_dim': X_top.shape[1],
-                        'aug_dim': small_reps[aug_name].shape[1],
+                        'base_dim': int(np.asarray(X_base).shape[1]),
+                        'aug_dim': int(np.asarray(aug_candidates[aug_name]).shape[1]),
                         'concat_dim': X_aug.shape[1],
-                        'model': top_model,
-                        'base_score': round(top_score, 4),
-                        'concat_score': round(mean_s, 4),
-                        'delta': round(delta, 4),
+                        'model': base_model_name,
+                        'base_score': round(base_score, 4),
+                        'concat_score': round(float(mean_s), 4),
+                        'delta': round(float(delta), 4),
+                        'base_tier': 3,
+                        'aug_tier': rep_tiers.get(aug_name, 1),
                     }
 
     elapsed = time.time() - t0
 
-    # 6. Summary
+    # 7. Summary
     all_entries = {**baselines, **ft_baselines}
     all_bests = [(name, e['best']) for name, e in all_entries.items()
                  if e['best'] is not None]
@@ -884,6 +914,7 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
             'n_folds': n_folds,
             'n_reps': len(reps),
             'rep_names': sorted(reps.keys()),
+            'rep_tiers': {k: v for k, v in rep_tiers.items()},
             'models': model_names,
             'primary_metric': metric_name,
             'higher_is_better': higher_is_better,
