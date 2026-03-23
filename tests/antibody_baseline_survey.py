@@ -788,7 +788,13 @@ def run_survey(
                     print(f" FAILED: {e}")
 
     if not reps:
-        raise RuntimeError("No representations generated successfully")
+        print("  WARNING: No new representations generated in this run")
+        # Return empty result — main() will merge with existing cached results
+        return {
+            'dataset': dataset_name,
+            'baselines': {},
+            'metadata': {'n_samples': data['n_samples'], 'task': task_type},
+        }
 
     # 3. Classify reps by tier
     from experiments._shared import classify_rep_tier

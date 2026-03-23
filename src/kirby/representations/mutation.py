@@ -360,12 +360,12 @@ def create_esm2_llr(
         (N, 3) float32 array: [sum_llr, mean_llr, min_llr]
     """
     import torch
-    from transformers import AutoTokenizer, AutoModel
+    from transformers import AutoTokenizer, AutoModelForMaskedLM
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model_name = 'facebook/esm2_t33_650M_UR50D'
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name).eval().to(device)
+    model = AutoModelForMaskedLM.from_pretrained(model_name).eval().to(device)
 
     # ESM-2 uses per-residue tokenization: each AA is one token
     # Token IDs: vocab maps single AAs to token IDs
@@ -473,12 +473,17 @@ def create_esmc_llr(
     model.eval()
 
     # Build vocab mapping: single AA → token ID
-    # ESM-C encode() returns ESMProteinTensor with .sequence shape (1, 3) = [BOS, aa, EOS]
+    # ESM-C encode() returns ESMProteinTensor with .sequence shape (L+2,) or (1, L+2)
     aa_to_token = {}
     for aa in AA_LIST:
         protein = ESMProtein(sequence=aa)
         tensor = model.encode(protein)
-        aa_to_token[aa] = int(tensor.sequence[0, 1])
+        seq_t = tensor.sequence
+        # Handle both 1D (L,) and 2D (1, L) sequence tensors
+        aa_to_token[aa] = int(seq_t[1] if seq_t.ndim == 1 else seq_t[0, 1])
+
+    from esm.sdk.api import LogitsConfig
+    config = LogitsConfig(sequence=True, return_embeddings=False)
 
     features = []
 
@@ -511,20 +516,27 @@ def create_esmc_llr(
             # Encode and mask
             protein = ESMProtein(sequence=wt_seq)
             tensor = model.encode(protein)
-            # tensor.sequence: (1, L+2) with BOS at 0 and EOS at end
+            seq_t = tensor.sequence
             mask_pos = pos + 1  # +1 for BOS
-            if mask_pos >= tensor.sequence.shape[1] - 1:
+            seq_len = seq_t.shape[-1]  # works for both 1D and 2D
+            if mask_pos >= seq_len - 1:
                 llrs.append(0.0)
                 continue
 
             # Mask the target position (ESM family uses token ID 32 for mask)
-            tensor.sequence[0, mask_pos] = 32
+            if seq_t.ndim == 1:
+                seq_t[mask_pos] = 32
+            else:
+                seq_t[0, mask_pos] = 32
 
             with torch.no_grad():
-                from esm.sdk.api import LogitsConfig
-                config = LogitsConfig(sequence=True, return_embeddings=False)
                 output = model.logits(tensor, config)
-                logits = output.logits[0, mask_pos]
+                logits_t = output.logits
+                # Handle both 2D (L, V) and 3D (1, L, V)
+                if logits_t.ndim == 3:
+                    logits = logits_t[0, mask_pos]
+                else:
+                    logits = logits_t[mask_pos]
                 log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
 
             wt_tok = aa_to_token.get(wt_aa)
@@ -626,7 +638,7 @@ def create_antiberty_llr(
             tokens[0, mask_pos] = mask_token_id
 
             with torch.no_grad():
-                logits = model(tokens).logits[0, mask_pos]
+                logits = model(tokens).prediction_logits[0, mask_pos]
                 log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
 
             wt_tok = aa_to_token.get(wt_aa)

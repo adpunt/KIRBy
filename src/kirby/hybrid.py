@@ -394,35 +394,23 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
     Returns:
         dict: Allocation of {rep_name: n_features}
     """
-    is_classification = _is_classification_task(train_labels)
-    
     baseline_scores = {}
-    
-    # Test each representation individually
+
+    # Test each representation individually using _evaluate_allocation
+    # so that monkey-patching the evaluator (e.g. F11 experiments) affects
+    # performance_weighted uniformly.
     for rep_name, X_train in rep_dict_train.items():
         X_val = rep_dict_val[rep_name]
-        
-        # Clean and scale
+
+        # Clean
         X_train_clean = np.clip(X_train, -1e10, 1e10)
         X_train_clean = np.nan_to_num(X_train_clean, nan=0.0, posinf=1e10, neginf=-1e10)
         X_val_clean = np.clip(X_val, -1e10, 1e10)
         X_val_clean = np.nan_to_num(X_val_clean, nan=0.0, posinf=1e10, neginf=-1e10)
-        
-        scaler = StandardScaler()
-        X_train_scaled = scaler.fit_transform(X_train_clean)
-        X_val_scaled = scaler.transform(X_val_clean)
-        
-        # Train and evaluate with appropriate model
-        if is_classification:
-            model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
-            model.fit(X_train_scaled, train_labels)
-            score = model.score(X_val_scaled, val_labels)  # accuracy
-        else:
-            model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-            model.fit(X_train_scaled, train_labels)
-            y_pred = model.predict(X_val_scaled)
-            score = r2_score(val_labels, y_pred)
-        
+
+        score = _evaluate_allocation(X_train_clean, X_val_clean,
+                                     train_labels, val_labels)
+
         baseline_scores[rep_name] = max(score, 0.0)  # Clip negative scores to 0
     
     # Apply weighting scheme to transform baseline scores into weights
@@ -2246,7 +2234,7 @@ def apply_augmentation_selection(augmentations, augmentation_info):
 # ============================================================================
 
 def create_hybrid(base_reps, labels,
-                 allocation_method='greedy',
+                 allocation_method='performance_weighted',
                  n_per_rep=100,
                  budget=100,
                  step_size=10,
@@ -2272,9 +2260,9 @@ def create_hybrid(base_reps, labels,
         labels: Target values for computing importance
         
         allocation_method: Method for allocating features across representations
-            - 'greedy': Adaptive allocation via greedy forward selection (default)
+            - 'performance_weighted': Allocate proportional to baseline scores (default)
+            - 'greedy': Adaptive allocation via greedy forward selection
             - 'greedy_feature': Feature-level greedy (slower but more precise)
-            - 'performance_weighted': Allocate proportional to baseline R² scores
             - 'two_stage': Fast screening then precise selection (uses stage2_method kwarg)
             - 'stability_selection': Bootstrap-resampled importance (uses n_bootstrap kwarg)
             - 'fixed': Equal allocation (n_per_rep for all)
