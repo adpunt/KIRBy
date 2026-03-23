@@ -194,6 +194,74 @@ def _should_prune(best_comparable: float, global_best_comparable: float,
     return gap > (1 - threshold) * abs(global_best_comparable)
 
 
+def _screen_reps(
+    base_reps: Dict[str, np.ndarray],
+    baselines: Dict[str, Dict[str, float]],
+    lower_is_better: bool,
+    threshold: float,
+    *,
+    fold_reps=None,
+    verbose: bool = True,
+) -> tuple:
+    """Screen out weak reps before hybrid search.
+
+    For each rep, takes the best score across all models from baselines.
+    Converts to comparable (higher=better) and applies a gap-based cutoff:
+    reps more than ``threshold`` fraction away from the best are dropped.
+
+    Returns (filtered_base_reps, filtered_fold_reps).
+    """
+    # Best single-rep score across models
+    best_per_rep = {}
+    for rep_name, scores in baselines.items():
+        model_scores = [v for k, v in scores.items()
+                        if k not in ('dimension', '_secondary')
+                        and isinstance(v, (int, float)) and np.isfinite(v)]
+        if model_scores:
+            if lower_is_better:
+                best_per_rep[rep_name] = min(model_scores)
+            else:
+                best_per_rep[rep_name] = max(model_scores)
+
+    if not best_per_rep:
+        return base_reps, fold_reps
+
+    comparable = {k: _score_to_comparable(v, lower_is_better)
+                  for k, v in best_per_rep.items()}
+    best_comparable = max(comparable.values())
+
+    # Gap-based cutoff: drop reps more than `threshold` away from best
+    cutoff = best_comparable - threshold * abs(best_comparable)
+
+    surviving = set()
+    for rep_name, comp in comparable.items():
+        if comp >= cutoff:
+            surviving.add(rep_name)
+
+    # Always keep at least 2 reps
+    if len(surviving) < 2:
+        top2 = sorted(comparable, key=comparable.get, reverse=True)[:2]
+        surviving = set(top2)
+
+    screened = set(base_reps.keys()) - surviving
+    if verbose and screened:
+        print(f"\nRep screening (threshold={threshold}): "
+              f"kept {len(surviving)}/{len(base_reps)} reps, "
+              f"screened out: {sorted(screened)}")
+
+    filtered_reps = {k: v for k, v in base_reps.items() if k in surviving}
+
+    filtered_fold_reps = fold_reps
+    if fold_reps is not None:
+        filtered_fold_reps = {}
+        for fold_idx, fold_data in fold_reps.items():
+            filtered_fold_reps[fold_idx] = {
+                k: v for k, v in fold_data.items() if k in surviving
+            }
+
+    return filtered_reps, filtered_fold_reps
+
+
 # =============================================================================
 # MODEL RESOLUTION
 # =============================================================================
@@ -734,39 +802,34 @@ def tune_models(
 # =============================================================================
 
 SPEED_TIERS = {
-    # Effective unique configs per model (importance-insensitive allocs run once):
-    #   fast:   1×1(greedy) + 2×2(perf_weighted, softmax_T5) = 5
-    #   medium: 1×3(greedy) + 1×3(dom_greedy) + 4×4×3(4 sensitive allocs) = 54
-    #   long:   1×4(greedy) + 1×4(dom_greedy) + 8×13×4(13 sensitive allocs) = 424
-    # All tiers use adaptive pruning, so actual runtime is much lower.
+    # F05 result: treeshap + deeplift + lightgbm_gain covers 3 independent
+    # families (tree-permutation, gradient, tree-gain). kernelshap, IG,
+    # gradientshap, permutation dropped as redundant or too slow.
+    # F01 result: greedy/greedy_feature consistently worst — removed.
+    # performance_weighted is the safest cross-domain default.
     'fast': {
         'importance_methods': ['treeshap', 'lightgbm_gain'],
-        'allocation_methods': ['greedy', 'performance_weighted', 'softmax_T5'],
+        'allocation_methods': ['performance_weighted', 'softmax_T5'],
         'budgets': [100],
         'n_folds': 3,
     },
     'medium': {
-        'importance_methods': [
-            'treeshap', 'xgboost_gain', 'lightgbm_gain', 'permutation',
-        ],
+        'importance_methods': ['treeshap', 'deeplift', 'lightgbm_gain'],
         'allocation_methods': [
-            'greedy', 'performance_weighted', 'softmax_T1', 'softmax_T5',
-            'dominant_greedy', 'power_2',
+            'performance_weighted', 'softmax_T2', 'softmax_T5',
+            'power_2', 'min_floor_0.05',
         ],
         'budgets': [50, 100, 200],
         'n_folds': 5,
     },
     'long': {
-        'importance_methods': [
-            'treeshap', 'xgboost_gain', 'lightgbm_gain', 'deeplift',
-            'permutation', 'kernelshap',
-            'integrated_gradients', 'gradientshap',
-        ],
+        'importance_methods': ['treeshap', 'deeplift', 'lightgbm_gain'],
         'allocation_methods': [
-            'greedy', 'performance_weighted', 'softmax_T0.5', 'softmax_T1',
-            'softmax_T5', 'softmax_T10', 'power_2', 'power_3', 'thresh_0.5',
+            'performance_weighted', 'softmax_T0.5', 'softmax_T1',
+            'softmax_T2', 'softmax_T5', 'softmax_T10',
+            'power_2', 'power_3', 'thresh_0.5',
             'top_3', 'min_floor_0.05', 'dominant_greedy', 'two_stage',
-            'stability_selection', 'greedy_feature',
+            'stability_selection',
         ],
         'budgets': [50, 100, 200, 500],
         'n_folds': 5,
@@ -1814,6 +1877,7 @@ def find_best_hybrid(
     rep_factories: Optional[Dict[str, Callable]] = None,
     secondary_metrics: Optional[List[str]] = None,
     cv_splitter=None,
+    screen_threshold: Optional[float] = None,
     seed: int = 42,
     verbose: bool = True,
     cache: bool = False,
@@ -1861,6 +1925,10 @@ def find_best_hybrid(
         secondary_metrics: List of metric names (e.g. ['spearman', 'rmse']) to compute
             alongside the primary metric. Only computed for baselines (not during search
             to avoid overhead). Results stored in baselines[rep]['_secondary'].
+        screen_threshold: Optional pre-search rep screening threshold (0.0–1.0).
+            After baselines, drops reps whose best single-rep score is more than
+            this fraction away from the best rep. E.g. 0.2 means "drop reps more
+            than 20% worse than the best". None (default) disables screening.
         seed: Random seed.
         verbose: Print progress.
         cache: If True, cache results to disk and load from cache on subsequent
@@ -1985,6 +2053,13 @@ def find_best_hybrid(
         secondary_metric_fns=resolved_secondary,
         cv_splitter=cv_splitter,
     )
+
+    # --- Pre-search rep screening ---
+    if screen_threshold is not None:
+        base_reps, fold_reps = _screen_reps(
+            base_reps, baselines, lower_is_better, screen_threshold,
+            fold_reps=fold_reps, verbose=verbose,
+        )
 
     # --- Run search ---
     all_results = _run_search(
