@@ -312,6 +312,7 @@ def _embed_single_chain_model(
     light_seqs: List[str],
     model_name: str,
     batch_size: int = 8,
+    max_length: int = 512,
 ) -> np.ndarray:
     """Embed H and L separately with a single-chain model, concatenate."""
     import torch
@@ -334,7 +335,7 @@ def _embed_single_chain_model(
         for start in range(0, len(seqs), batch_size):
             batch = seqs[start:start + batch_size]
             inputs = tokenizer(batch, return_tensors='pt', padding=True,
-                               truncation=True, max_length=512).to(device)
+                               truncation=True, max_length=max_length).to(device)
             with torch.no_grad():
                 outputs = model(**inputs)
             all_embs.append(_mean_pool(outputs, inputs['attention_mask'],
@@ -563,6 +564,7 @@ def _embed_single_chain_cdr(
     light_seqs: List[str],
     model_name: str,
     batch_size: int = 8,
+    max_length: int = 512,
 ) -> np.ndarray:
     """Embed H and L with CDR-only pooling, concatenate.
 
@@ -590,7 +592,7 @@ def _embed_single_chain_cdr(
             batch = seqs[start:start + batch_size]
             batch_cdr = all_cdr_indices[start:start + batch_size]
             inputs = tokenizer(batch, return_tensors='pt', padding=True,
-                               truncation=True, max_length=512).to(device)
+                               truncation=True, max_length=max_length).to(device)
             with torch.no_grad():
                 outputs = model(**inputs)
             # CDR-pool instead of mean-pool
@@ -1160,12 +1162,14 @@ def embed_abroberta(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
 
     Ab-RoBERTa is a RoBERTa-based antibody language model (125M params)
     trained on antibody sequences. Uses standard HuggingFace transformers API.
+    max_position_embeddings=152, so truncate to 150 (+ 2 special tokens).
 
     HF model: mogam-ai/Ab-RoBERTa
     """
     return _embed_single_chain_model(
         heavy_seqs, light_seqs,
         'mogam-ai/Ab-RoBERTa',
+        max_length=150,
     )
 
 
@@ -1174,6 +1178,7 @@ def embed_abroberta_cdr(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndar
     return _embed_single_chain_cdr(
         heavy_seqs, light_seqs,
         'mogam-ai/Ab-RoBERTa',
+        max_length=150,
     )
 
 
@@ -1243,10 +1248,12 @@ def embed_igt5(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
             paired, return_tensors='pt', padding=True,
             truncation=True, max_length=512,
             add_special_tokens=True,
-            return_special_tokens_mask=True,
         ).to(device)
-        # Extract special_tokens_mask before forwarding (model doesn't accept it)
-        special_mask = inputs.pop('special_tokens_mask')
+        # Build special_tokens_mask: 1 for pad/EOS/separator tokens, 0 for residues
+        # IgT5 special token IDs: pad=0, eos=1, unk=2
+        special_ids = {tokenizer.pad_token_id, tokenizer.eos_token_id}
+        special_mask = torch.isin(inputs['input_ids'],
+                                   torch.tensor(list(special_ids), device=device)).long()
         with torch.no_grad():
             outputs = model(**inputs)
         # Pool over non-special tokens (excludes </s> separator + final EOS)

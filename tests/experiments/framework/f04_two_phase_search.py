@@ -321,10 +321,11 @@ def run(data, config, output_dir, dataset_name, importance_method='treeshap',
             'delta': delta,
         }
 
-        print(f"    {model_name:>10}: full={mf_best['score_mean']:.4f} "
-              f"tp={mt_best['score_mean']:.4f if mt_best else 'N/A':>7} "
-              f"delta={delta:+.4f}" if mt_best else
-              f"    {model_name:>10}: full={mf_best['score_mean']:.4f} tp=N/A")
+        if mt_best:
+            print(f"    {model_name:>10}: full={mf_best['score_mean']:.4f} "
+                  f"tp={mt_best['score_mean']:.4f} delta={delta:+.4f}")
+        else:
+            print(f"    {model_name:>10}: full={mf_best['score_mean']:.4f} tp=N/A")
 
     # --- Verdict ---
     if regret < 0.01:
