@@ -117,24 +117,6 @@ run_f04() {
     echo ""
 }
 
-run_f03() {
-    echo "--- f03: Greedy Step Size & Patience ---"
-    for task in $(get_tasks); do
-        submit "f03_${SHORT_NAMES[$task]}" 256G 23:59:00 \
-            "python tests/experiments/framework/f03_greedy_step_size.py --dataset ${task} --framework --mode full --output ${OUTPUT}"
-    done
-    echo ""
-}
-
-run_f04() {
-    echo "--- f04: Two-Phase Search ---"
-    for task in $(get_tasks); do
-        submit "f04_${SHORT_NAMES[$task]}" 256G 23:59:00 \
-            "python tests/experiments/framework/f04_two_phase_search.py --dataset ${task} --framework --mode full --output ${OUTPUT}"
-    done
-    echo ""
-}
-
 run_f05() {
     echo "--- f05: Importance Correlation ---"
     for task in $(get_tasks); do
