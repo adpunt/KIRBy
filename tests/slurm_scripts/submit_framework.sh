@@ -99,6 +99,15 @@ run_f01() {
     echo ""
 }
 
+run_f01_lite() {
+    echo "--- f01 lite: Allocation Strategies (5-fold, 4 models) ---"
+    for task in $(get_tasks); do
+        submit "f01l_${SHORT_NAMES[$task]}" 128G 11:59:00 \
+            "python tests/experiments/framework/f01_allocation_strategies.py --dataset ${task} --framework --mode full --models ridge,rf,xgboost,lightgbm --output ${OUTPUT}"
+    done
+    echo ""
+}
+
 run_f03() {
     echo "--- f03: Greedy Step Size & Patience ---"
     for task in $(get_tasks); do
@@ -199,6 +208,7 @@ case "$MODE" in
         ;;
     f00) run_f00 ;;
     f01) run_f01 ;;
+    f01_lite) run_f01_lite ;;
     f02) run_f02 ;;
     f03) run_f03 ;;
     f04) run_f04 ;;

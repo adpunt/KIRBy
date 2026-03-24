@@ -1332,6 +1332,8 @@ def create_experiment_parser(description: str, has_delta: bool = False,
                         help='Output directory for results JSON')
     parser.add_argument('--framework', action='store_true',
                         help='Use curated FRAMEWORK_TASKS rep lists (overrides --reps)')
+    parser.add_argument('--models', type=str, default=None,
+                        help='Comma-separated model list (overrides mode default)')
     if has_delta:
         parser.add_argument('--delta', action='store_true',
                             help='Generate delta representations for antibody datasets')
@@ -1363,4 +1365,7 @@ def parse_rep_args(args) -> Tuple[str, Optional[List[str]]]:
 
 def get_config(args) -> dict:
     """Return the appropriate config dict based on args.mode."""
-    return INTERMEDIARY if args.mode == 'intermediary' else FULL
+    config = dict(INTERMEDIARY if args.mode == 'intermediary' else FULL)
+    if getattr(args, 'models', None):
+        config['models'] = [m.strip() for m in args.models.split(',')]
+    return config
