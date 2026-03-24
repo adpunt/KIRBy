@@ -203,6 +203,7 @@ def _load_reaction(dataset_name: str) -> dict:
         create_rxnfp, create_onehot_components, create_reactiont5,
         create_diff_ecfp4, create_diff_maccs,
         create_component_descriptors, create_ligand_descriptors,
+        create_reaction_rep_variant, _MOL_REP_VARIANTS,
     )
 
     if dataset_name == 'buchwald_hartwig':
@@ -291,6 +292,20 @@ def _load_reaction(dataset_name: str) -> dict:
     except Exception as e:
         print(f"  WARNING: ligand_descriptors failed: {e}")
 
+    # Molecular rep variants: reactant_/product_/diff_ for each molecular rep
+    for mol_name in _MOL_REP_VARIANTS:
+        for role in ('product', 'reactant', 'diff'):
+            rep_name = f'{role}_{mol_name}'
+            try:
+                reps[rep_name] = create_reaction_rep_variant(
+                    data['rxn_smiles'], mol_name, role,
+                )
+                print(f"  {rep_name}: {reps[rep_name].shape}")
+            except ImportError as e:
+                print(f"  WARNING: {rep_name} skipped (import): {e}")
+            except Exception as e:
+                print(f"  WARNING: {rep_name} failed: {e}")
+
     n = len(data['labels'])
     groups = data.get('groups')
     n_groups = len(np.unique(groups)) if groups is not None else 0
@@ -346,11 +361,16 @@ def _load_nucleotide(dataset_name: str, rep_preset: str) -> dict:
 # MODEL FACTORIES
 # =============================================================================
 
-def get_default_models(task_type: str) -> Dict[str, Any]:
-    """Return default model instances for the 5 survey models."""
+def get_default_models(task_type: str, model_names=None) -> Dict[str, Any]:
+    """Return model instances for the survey.
+
+    Args:
+        task_type: 'regression' or 'classification'.
+        model_names: Optional list of model names to use instead of SURVEY_MODELS.
+    """
     from kirby.find_best_hybrid import _resolve_models
-    # speed='long' includes all tiers (rf/xgb=fast, ridge/knn=medium, lgbm=long)
-    models = _resolve_models(SURVEY_MODELS, task_type, 'long')
+    names = model_names if model_names is not None else SURVEY_MODELS
+    models = _resolve_models(names, task_type, 'long')
     # Set n_jobs=1 for fork safety (avoids SIGSEGV on macOS with LightGBM).
     # Parallelism happens at the SLURM job level, not within models.
     for m in models.values():
@@ -651,7 +671,8 @@ def make_ft_factories(data, dataset_name, task_type, ft_epochs=3, ft_cache=True)
 
 def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
                tune_trials=0, l2_norm=False, augment=False,
-               split_strategy='scaffold', skip_reps=None):
+               split_strategy='scaffold', skip_reps=None,
+               model_names=None):
     """Run the full baseline survey for one dataset. Returns result dict."""
     print(f"\n{'='*70}")
     print(f"SURVEY: {dataset_name}")
@@ -695,7 +716,7 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
     metric_name, higher_is_better = _get_primary_metric(dataset_name, task_type)
 
     # 2. Default models
-    default_models = get_default_models(task_type)
+    default_models = get_default_models(task_type, model_names=model_names)
 
     # Optional: add L2-normalized Ridge
     if l2_norm:
@@ -1044,6 +1065,9 @@ Examples:
                        help='Add ridge_l2norm model (L2-normalize before Ridge)')
     parser.add_argument('--augment', action='store_true',
                        help='Test augmentation: concat each small rep (<=200D) with top base rep')
+    parser.add_argument('--models', type=str, default=None,
+                       help='Comma-separated model list (default: all 5 survey models). '
+                            'E.g., --models ridge,rf,xgboost for faster screening.')
     parser.add_argument('--split-strategy', type=str, default='scaffold',
                        choices=['scaffold', 'mw', 'spectral'],
                        help='Group splitting strategy for molecular datasets '
@@ -1056,6 +1080,9 @@ Examples:
                        help='Output path (JSON file or directory for multi-dataset)')
 
     args = parser.parse_args()
+
+    # Parse model list
+    model_names = args.models.split(',') if args.models else None
 
     # Resolve dataset list
     ds_input = args.dataset
@@ -1073,6 +1100,7 @@ Examples:
 
     print(f"Universal Baseline Survey")
     print(f"  Datasets: {len(datasets)} ({', '.join(datasets)})")
+    print(f"  Models: {model_names or SURVEY_MODELS}")
     print(f"  Folds: {args.n_folds}, Finetune: {args.finetune}")
 
     # Output handling
@@ -1115,6 +1143,7 @@ Examples:
                 augment=args.augment,
                 split_strategy=args.split_strategy,
                 skip_reps=_existing_reps,
+                model_names=model_names,
             )
             result = convert_numpy(result)
             print_summary_table(result)

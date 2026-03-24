@@ -653,3 +653,132 @@ def create_ligand_descriptors(components: List[Dict[str, str]]) -> np.ndarray:
     X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
     print(f"  Ligand descriptors: {X.shape} (8 steric + 8 electronic)")
     return X
+
+
+# =========================================================================
+# GENERIC REACTION VARIANTS OF MOLECULAR REPS
+# =========================================================================
+# Apply any molecular rep function as reactant_/product_/diff_ variants.
+# Product: rep of the product molecule.
+# Reactant: aggregated rep of all reactant molecules (OR for binary FPs,
+#           mean-pool for continuous embeddings).
+# Diff: product minus reactant — captures what changed.
+# =========================================================================
+
+# Registry: mol_rep_name → (module, function_name, binary)
+_MOL_REP_VARIANTS = {
+    'mordred':         ('kirby.representations.molecular', 'create_mordred', False),
+    'mhg_gnn':         ('kirby.representations.molecular', 'create_mhg_gnn', False),
+    'grover':          ('kirby.representations.molecular', 'create_grover', False),
+    'mol2vec':         ('kirby.representations.molecular', 'create_mol2vec', False),
+    'chemberta':       ('kirby.representations.molecular', 'create_chemberta', False),
+    'molformer':       ('kirby.representations.molecular', 'create_molformer', False),
+    'avalon':          ('kirby.representations.molecular', 'create_avalon', True),
+    'pharmacophore3d': ('kirby.representations.molecular', 'create_pharmacophore3d', False),
+}
+
+
+def _get_mol_rep_fn(mol_rep_name: str):
+    """Lazily import and return a molecular rep function."""
+    import importlib
+    module_path, fn_name, _ = _MOL_REP_VARIANTS[mol_rep_name]
+    mod = importlib.import_module(module_path)
+    return getattr(mod, fn_name)
+
+
+def _make_product_rep(rxn_smiles: List[str], mol_rep_fn) -> np.ndarray:
+    """Apply a molecular rep function to reaction products.
+
+    Extracts the product SMILES (after '>>') from each reaction and
+    computes the molecular representation in a single batch.
+    """
+    product_smiles = []
+    for rxn in rxn_smiles:
+        parts = rxn.split('>>')
+        product_smiles.append(parts[-1] if len(parts) >= 2 else parts[0])
+    return mol_rep_fn(product_smiles)
+
+
+def _make_reactant_rep(rxn_smiles: List[str], mol_rep_fn,
+                       binary: bool = False) -> np.ndarray:
+    """Apply a molecular rep function to reaction reactants.
+
+    For multi-reactant reactions (dot-separated), aggregates per-reaction:
+      - binary=True: OR-combine (element-wise max)
+      - binary=False: mean-pool
+
+    Flattens all individual reactant molecules into one batch for efficiency
+    (important for transformer-based reps), then aggregates back.
+    """
+    flat_smiles = []
+    rxn_indices = []
+    for i, rxn in enumerate(rxn_smiles):
+        parts = rxn.split('>>')
+        reactant_smi = parts[0] if len(parts) >= 2 else ''
+        for smi in reactant_smi.split('.'):
+            smi = smi.strip()
+            if smi:
+                flat_smiles.append(smi)
+                rxn_indices.append(i)
+
+    if not flat_smiles:
+        # Fallback: compute on products just to discover dimension, return zeros
+        product_smiles = []
+        for rxn in rxn_smiles:
+            parts = rxn.split('>>')
+            product_smiles.append(parts[-1] if len(parts) >= 2 else parts[0])
+        dim = mol_rep_fn(product_smiles[:1]).shape[1]
+        return np.zeros((len(rxn_smiles), dim), dtype=np.float32)
+
+    flat_reps = mol_rep_fn(flat_smiles)
+    dim = flat_reps.shape[1]
+
+    n = len(rxn_smiles)
+    result = np.zeros((n, dim), dtype=np.float32)
+    counts = np.zeros(n, dtype=np.float32)
+
+    for j, rxn_i in enumerate(rxn_indices):
+        if binary:
+            result[rxn_i] = np.maximum(result[rxn_i], flat_reps[j])
+        else:
+            result[rxn_i] += flat_reps[j]
+        counts[rxn_i] += 1
+
+    if not binary:
+        mask = counts > 0
+        result[mask] /= counts[mask, np.newaxis]
+
+    return result
+
+
+def create_reaction_rep_variant(rxn_smiles: List[str], mol_rep_name: str,
+                                role: str) -> np.ndarray:
+    """Create a reaction variant of a molecular representation.
+
+    Args:
+        rxn_smiles: Reaction SMILES in 'reactants>>products' format.
+        mol_rep_name: Name of molecular rep (e.g. 'mordred', 'avalon').
+        role: One of 'product', 'reactant', 'diff'.
+
+    Returns:
+        np.ndarray of shape (n_reactions, rep_dim).
+    """
+    if mol_rep_name not in _MOL_REP_VARIANTS:
+        raise ValueError(
+            f"Unknown mol rep '{mol_rep_name}'. "
+            f"Available: {sorted(_MOL_REP_VARIANTS)}"
+        )
+
+    fn = _get_mol_rep_fn(mol_rep_name)
+    _, _, binary = _MOL_REP_VARIANTS[mol_rep_name]
+
+    if role == 'product':
+        return _make_product_rep(rxn_smiles, fn)
+    elif role == 'reactant':
+        return _make_reactant_rep(rxn_smiles, fn, binary=binary)
+    elif role == 'diff':
+        product = _make_product_rep(rxn_smiles, fn)
+        reactant = _make_reactant_rep(rxn_smiles, fn, binary=binary)
+        return product - reactant
+    else:
+        raise ValueError(f"Unknown role '{role}'. Use 'product', 'reactant', or 'diff'.")
