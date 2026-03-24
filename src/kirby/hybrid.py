@@ -1603,7 +1603,9 @@ def augment_capped(
     phase_b_replaced = 0
     consec_fail = 0
     for i in range(ranked_tr.shape[1]):
-        if i in used or consec_fail >= patience:
+        if consec_fail >= patience:
+            break
+        if i in used:
             continue
 
         worst_idx = _find_worst_base_feature(
@@ -1629,6 +1631,24 @@ def augment_capped(
             used.add(i)
             aug_name, col_idx = prov[i]
             aug_selected.setdefault(aug_name, []).append(col_idx)
+
+            # Update base_feature_info: remove the replaced feature
+            col_cursor = 0
+            for rep_name, info in list(base_feature_info.items()):
+                if 'selected_indices' not in info:
+                    continue
+                sel = info['selected_indices']
+                rep_n = len(sel)
+                if col_cursor <= worst_idx < col_cursor + rep_n:
+                    local_pos = worst_idx - col_cursor
+                    info['selected_indices'] = np.delete(sel, local_pos)
+                    info['n_features'] = len(info['selected_indices'])
+                    if 'importance_scores' in info and len(info['importance_scores']) > local_pos:
+                        info['importance_scores'] = np.delete(
+                            info['importance_scores'], local_pos)
+                    n_base -= 1
+                    break
+                col_cursor += rep_n
         else:
             consec_fail += 1
 
