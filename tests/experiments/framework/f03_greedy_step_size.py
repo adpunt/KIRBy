@@ -69,7 +69,9 @@ def run(data, config, output_dir, dataset_name, importance_method='treeshap',
     models = get_model_factories(config['models'], task_type=task_type,
                                  n_samples=n_samples)
     n_folds = config['n_splits']
+    max_folds = config.get('max_folds', n_folds)
     mode = 'intermediary' if n_folds == 1 else 'full'
+    budgets = config.get('budgets', BUDGETS)
 
     reps = data['reps']
     labels = data['labels']
@@ -81,14 +83,14 @@ def run(data, config, output_dir, dataset_name, importance_method='treeshap',
     n_step_sensitive = len([a for a in GREEDY_ALLOCATIONS if a != 'greedy_feature'])
     n_greedy_feature = 1  # runs once per (patience, budget, model)
     total = (n_step_sensitive * len(STEP_SIZES) + n_greedy_feature) \
-        * len(PATIENCE_VALUES) * len(BUDGETS) * len(models)
+        * len(PATIENCE_VALUES) * len(budgets) * len(models)
 
     print(f"  Dataset: {dataset_name} ({domain}, {n_samples} samples)")
     print(f"  Metric: {metric_name} ({'lower' if lower_is_better else 'higher'} is better)")
     print(f"  Allocations: {GREEDY_ALLOCATIONS}")
     print(f"  {len(STEP_SIZES)} step_sizes × {len(PATIENCE_VALUES)} patience × "
-          f"{len(BUDGETS)} budgets × {len(models)} models = {total} evaluations")
-    print(f"  Importance: {importance_method}, folds: {n_folds}\n", flush=True)
+          f"{len(budgets)} budgets × {len(models)} models = {total} evaluations")
+    print(f"  Importance: {importance_method}, folds: {max_folds}/{n_folds}\n", flush=True)
 
     sample_X = next(iter(reps.values()))
     all_configs = []
@@ -100,7 +102,7 @@ def run(data, config, output_dir, dataset_name, importance_method='treeshap',
 
         for step_size in effective_steps:
             for patience in PATIENCE_VALUES:
-                for budget in BUDGETS:
+                for budget in budgets:
                     for model_name, model_factory in models.items():
                         idx += 1
                         fold_scores = []
@@ -108,9 +110,11 @@ def run(data, config, output_dir, dataset_name, importance_method='treeshap',
                         last_feature_info = {}
                         t0 = time.time()
 
-                        for train_idx, val_idx in cv_split(
+                        for fold_i, (train_idx, val_idx) in enumerate(cv_split(
                             groups, n_folds, sample_X, labels, mode=mode
-                        ):
+                        )):
+                            if fold_i >= max_folds:
+                                break
                             train_reps = {k: v[train_idx] for k, v in reps.items()}
                             val_reps = {k: v[val_idx] for k, v in reps.items()}
                             y_train, y_val = labels[train_idx], labels[val_idx]

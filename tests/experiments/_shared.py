@@ -35,6 +35,82 @@ warnings.filterwarnings('ignore')
 
 
 # =============================================================================
+# REPRESENTATION CACHING
+# =============================================================================
+
+def _rep_cache_dir() -> Path:
+    """Return cache directory for pre-computed representations."""
+    cache_root = Path(os.environ.get('KIRBY_CACHE_DIR',
+                      str(Path.home() / '.cache' / 'kirby')))
+    d = cache_root / 'rep_cache'
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _cache_rep(dataset_name: str, rep_name: str, compute_fn) -> np.ndarray:
+    """Load rep from cache if available, otherwise compute and save."""
+    cache_dir = _rep_cache_dir() / dataset_name
+    cache_file = cache_dir / f'{rep_name}.npy'
+
+    if cache_file.exists():
+        arr = np.load(cache_file)
+        print(f"    {rep_name}: cached ({arr.shape[1]}D)")
+        return arr
+
+    arr = compute_fn()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    np.save(cache_file, arr)
+    print(f"    {rep_name}: computed + cached ({arr.shape[1]}D)")
+    return arr
+
+
+def _cache_rep_dict(dataset_name: str, compute_all_fn,
+                    filter_names: Optional[List[str]] = None) -> Dict[str, np.ndarray]:
+    """Cache a function that returns {rep_name: array} dict.
+
+    Loads individual reps from cache. If any are missing, calls compute_all_fn
+    once and caches everything it returns.
+    """
+    cache_dir = _rep_cache_dir() / dataset_name
+    reps = {}
+    missing = []
+
+    # First pass: load what's cached
+    if filter_names:
+        wanted = filter_names
+    else:
+        # If no filter, check what's cached and what compute_all_fn would produce
+        # We don't know the keys without calling it, so just call it
+        wanted = None
+
+    if wanted is not None:
+        for rn in wanted:
+            cache_file = cache_dir / f'{rn}.npy'
+            if cache_file.exists():
+                reps[rn] = np.load(cache_file)
+                print(f"    {rn}: cached ({reps[rn].shape[1]}D)")
+            else:
+                missing.append(rn)
+
+        if not missing:
+            return reps
+
+    # Compute all, cache each, return wanted
+    print(f"    Computing representations...")
+    all_reps = compute_all_fn()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    for k, v in all_reps.items():
+        cache_file = cache_dir / f'{k}.npy'
+        if not cache_file.exists():
+            np.save(cache_file, v)
+        print(f"    {k}: computed + cached ({v.shape[1]}D)")
+
+    if filter_names:
+        return {k: v for k, v in all_reps.items() if k in filter_names}
+    return all_reps
+
+
+# =============================================================================
 # MODE CONFIGURATIONS
 # =============================================================================
 
@@ -871,13 +947,14 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
         wsi_dir = metadata.get('wsi_dir')
         cohort = metadata.get('cohort', '')
 
-        reps = get_tcga_representations(
-            expression, gene_names, sample_ids, wsi_dir,
-            rep_preset, cohort=cohort,
+        reps = _cache_rep_dict(
+            dataset_name,
+            lambda: get_tcga_representations(
+                expression, gene_names, sample_ids, wsi_dir,
+                rep_preset, cohort=cohort,
+            ),
+            filter_names=rep_names,
         )
-
-        if rep_names:
-            reps = {k: v for k, v in reps.items() if k in rep_names}
 
         tss_groups, n_groups = assign_tss_groups(sample_ids)
 
@@ -921,7 +998,9 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
                 print(f"  WARNING: antibody rep '{rn}' not in ANTIBODY_REPS, skipping")
                 continue
             try:
-                reps[rn] = ANTIBODY_REPS[rn](heavy_seqs, light_seqs)
+                fn = ANTIBODY_REPS[rn]
+                reps[rn] = _cache_rep(dataset_name, rn,
+                                      lambda _fn=fn: _fn(heavy_seqs, light_seqs))
             except Exception as e:
                 print(f"  WARNING: {rn} failed: {e}")
 
@@ -953,10 +1032,11 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
         n_groups = data['n_groups']
         task_type = data['task_type']
 
-        reps = get_nuc_representations(sequences, rep_preset)
-
-        if rep_names:
-            reps = {k: v for k, v in reps.items() if k in rep_names}
+        reps = _cache_rep_dict(
+            dataset_name,
+            lambda: get_nuc_representations(sequences, rep_preset),
+            filter_names=rep_names,
+        )
 
         print(f"  {dataset_name}: {len(sequences)} sequences, {n_groups} groups, "
               f"{len(reps)} reps ({', '.join(f'{k}={v.shape[1]}' for k, v in reps.items())})")
@@ -1036,7 +1116,9 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
                 print(f"  WARNING: unknown reaction rep '{name}', skipping")
                 continue
             try:
-                reps[name] = _rxn_generators[name]()
+                gen = _rxn_generators[name]
+                reps[name] = _cache_rep(dataset_name, name,
+                                        lambda _g=gen: _g())
             except Exception as e:
                 print(f"  WARNING: {name} failed: {e}")
 
@@ -1063,11 +1145,11 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
         )
 
         smiles, labels, task_type = load_molecular_dataset(dataset_name)
-        reps = get_molecular_representations(smiles, rep_preset)
         groups, n_scaffolds = assign_scaffold_groups(smiles)
 
-        if rep_names:
-            reps = {k: v for k, v in reps.items() if k in rep_names}
+        reps = _cache_rep_dict(dataset_name,
+                               lambda: get_molecular_representations(smiles, rep_preset),
+                               filter_names=rep_names)
 
         print(f"  {dataset_name}: {len(smiles)} samples, {n_scaffolds} scaffolds, "
               f"{len(reps)} reps ({', '.join(f'{k}={v.shape[1]}' for k, v in reps.items())})")
@@ -1334,6 +1416,10 @@ def create_experiment_parser(description: str, has_delta: bool = False,
                         help='Use curated FRAMEWORK_TASKS rep lists (overrides --reps)')
     parser.add_argument('--models', type=str, default=None,
                         help='Comma-separated model list (overrides mode default)')
+    parser.add_argument('--budgets', type=str, default=None,
+                        help='Comma-separated budget list (overrides script default)')
+    parser.add_argument('--max-folds', type=int, default=None,
+                        help='Max folds to evaluate (uses same splitter, stops early)')
     if has_delta:
         parser.add_argument('--delta', action='store_true',
                             help='Generate delta representations for antibody datasets')
@@ -1368,4 +1454,8 @@ def get_config(args) -> dict:
     config = dict(INTERMEDIARY if args.mode == 'intermediary' else FULL)
     if getattr(args, 'models', None):
         config['models'] = [m.strip() for m in args.models.split(',')]
+    if getattr(args, 'budgets', None):
+        config['budgets'] = [int(b.strip()) for b in args.budgets.split(',')]
+    if getattr(args, 'max_folds', None):
+        config['max_folds'] = args.max_folds
     return config

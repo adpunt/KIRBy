@@ -93,17 +93,26 @@ run_f00() {
 run_f01() {
     echo "--- f01: Allocation Strategies ---"
     for task in $(get_tasks); do
-        submit "f01_${SHORT_NAMES[$task]}" 256G 23:59:00 \
-            "python tests/experiments/framework/f01_allocation_strategies.py --dataset ${task} --framework --mode full --output ${OUTPUT}"
+        submit "f01_${SHORT_NAMES[$task]}" 128G 11:59:00 \
+            "python tests/experiments/framework/f01_allocation_strategies.py --dataset ${task} --framework --mode full --models ridge,rf,xgboost,lightgbm --budgets 50,150,300 --max-folds 1 --output ${OUTPUT}"
     done
     echo ""
 }
 
-run_f01_lite() {
-    echo "--- f01 lite: Allocation Strategies (5-fold, 4 models) ---"
+run_f03() {
+    echo "--- f03: Greedy Step Size & Patience ---"
     for task in $(get_tasks); do
-        submit "f01l_${SHORT_NAMES[$task]}" 128G 11:59:00 \
-            "python tests/experiments/framework/f01_allocation_strategies.py --dataset ${task} --framework --mode full --models ridge,rf,xgboost,lightgbm --output ${OUTPUT}"
+        submit "f03_${SHORT_NAMES[$task]}" 128G 11:59:00 \
+            "python tests/experiments/framework/f03_greedy_step_size.py --dataset ${task} --framework --mode full --models ridge,rf,xgboost,lightgbm --budgets 50,150,300 --max-folds 1 --output ${OUTPUT}"
+    done
+    echo ""
+}
+
+run_f04() {
+    echo "--- f04: Two-Phase Search ---"
+    for task in $(get_tasks); do
+        submit "f04_${SHORT_NAMES[$task]}" 128G 11:59:00 \
+            "python tests/experiments/framework/f04_two_phase_search.py --dataset ${task} --framework --mode full --models ridge,rf,xgboost,lightgbm --budgets 50,150,300 --max-folds 1 --output ${OUTPUT}"
     done
     echo ""
 }
@@ -208,7 +217,6 @@ case "$MODE" in
         ;;
     f00) run_f00 ;;
     f01) run_f01 ;;
-    f01_lite) run_f01_lite ;;
     f02) run_f02 ;;
     f03) run_f03 ;;
     f04) run_f04 ;;
