@@ -889,19 +889,18 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
         score = metric_fn(y_val, y_pred)
         return -score if lower_is_better else score
 
-    # Fallback: internal RF (backward compat)
+    # Fallback: internal Ridge evaluator (F07 experiment result: ridge default)
     is_classification = _is_classification_task(y_train)
     if is_classification:
-        rf = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+        from sklearn.linear_model import RidgeClassifierCV
+        m = RidgeClassifierCV(alphas=[0.01, 0.1, 1.0, 10.0, 100.0])
+        m.fit(X_train_scaled, y_train)
+        return m.score(X_val_scaled, y_val)
     else:
-        rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-
-    rf.fit(X_train_scaled, y_train)
-
-    if is_classification:
-        return rf.score(X_val_scaled, y_val)
-    else:
-        y_pred = rf.predict(X_val_scaled)
+        from sklearn.linear_model import RidgeCV
+        m = RidgeCV(alphas=[0.01, 0.1, 1.0, 10.0, 100.0])
+        m.fit(X_train_scaled, y_train)
+        y_pred = m.predict(X_val_scaled)
         return r2_score(y_val, y_pred)
 
 
@@ -2660,7 +2659,8 @@ def create_hybrid(base_reps, labels,
                  augmentation_strategy='greedy_ablation',
                  augmentation_threshold=None,
                  augmentation_budget=20,
-                 # Model-aware augmentation (iterative strategy)
+                 candidate_ranking='rf_importance',
+                 # Model-aware augmentation (capped/uncapped strategies)
                  model=None,
                  metric_fn=None,
                  lower_is_better=False,
@@ -2696,16 +2696,20 @@ def create_hybrid(base_reps, labels,
         augmentations: Dict of {aug_name: feature_array} for supplementary features (default: None)
             These are evaluated separately from base_reps via greedy ablation
         augmentation_strategy: How to handle augmentations
-            - 'greedy_ablation': Test each, keep only those that improve (default)
-            - 'iterative': Per-feature fill-then-replace using downstream model
+            - 'greedy_ablation': Test each rep, keep only those that improve (default)
+            - 'capped': Feature-level fill-then-replace within budget (F08 tested)
+            - 'uncapped': Feature-level add-if-it-helps, no budget limit
             - 'all': Include all augmentations
             - 'none': Ignore augmentations
         augmentation_threshold: Minimum improvement to keep augmentation (default: None = any improvement)
             Can be float (e.g., 0.01 for 1% R² improvement) or None
         augmentation_budget: Max features per augmentation to select (default: 20)
+        candidate_ranking: How to rank augmentation features for capped/uncapped strategies
+            - 'rf_importance': Rank by RF feature importance (default)
+            - 'residual_correlation': Rank by correlation with base model residuals
 
         model: sklearn-compatible estimator for model-aware augmentation (default: None)
-            Only used by 'iterative' strategy. Deepcopied for each evaluation.
+            Used by 'capped' and 'uncapped' strategies. Deepcopied for each evaluation.
         metric_fn: callable(y_true, y_pred) -> float for model-aware augmentation
         lower_is_better: Whether lower metric_fn values are better (default: False)
         
@@ -3062,19 +3066,20 @@ def create_hybrid(base_reps, labels,
                 if aug_features is not None:
                     hybrid_features = np.hstack([hybrid_features, aug_features])
         
-        elif augmentation_strategy == 'iterative':
-            # Per-feature fill-then-replace with model-aware A/B testing
-            aug_result = iterative_augmentation(
+        elif augmentation_strategy == 'capped':
+            # Feature-level fill-then-replace within budget (F08 tested)
+            aug_result = augment_capped(
                 X_base_train, X_base_val,
                 feature_info,
                 aug_dict_train, aug_dict_val,
                 train_labels, val_labels,
                 model=model,
-                total_budget=budget,
                 metric_fn=metric_fn,
                 lower_is_better=lower_is_better,
+                total_budget=budget,
+                candidate_ranking=candidate_ranking,
+                patience=20,
                 max_candidates=kwargs.pop('aug_max_candidates', 200),
-                patience=kwargs.pop('aug_patience', 10),
             )
 
             feature_info['augmentation_info'] = aug_result['augmentation_info']
@@ -3090,6 +3095,34 @@ def create_hybrid(base_reps, labels,
             hybrid_features = apply_feature_selection(
                 original_base_reps, feature_info
             )
+            if aug_result['kept_augmentations']:
+                aug_features = apply_augmentation_selection(
+                    augmentations, aug_result['augmentation_info']
+                )
+                if aug_features is not None:
+                    hybrid_features = np.hstack([hybrid_features, aug_features])
+
+        elif augmentation_strategy == 'uncapped':
+            # Feature-level add-if-it-helps, no budget limit
+            aug_result = augment_uncapped(
+                X_base_train, X_base_val,
+                aug_dict_train, aug_dict_val,
+                train_labels, val_labels,
+                model=model,
+                metric_fn=metric_fn,
+                lower_is_better=lower_is_better,
+                candidate_ranking=candidate_ranking,
+                patience=20,
+                max_candidates=kwargs.pop('aug_max_candidates', 200),
+            )
+
+            feature_info['augmentation_info'] = aug_result['augmentation_info']
+            feature_info['augmentation_baseline'] = aug_result['baseline_score']
+            feature_info['augmentation_final'] = aug_result['final_score']
+            feature_info['kept_augmentations'] = aug_result['kept_augmentations']
+            feature_info['n_added'] = aug_result['n_added']
+
+            # Append augmentation features to hybrid
             if aug_result['kept_augmentations']:
                 aug_features = apply_augmentation_selection(
                     augmentations, aug_result['augmentation_info']

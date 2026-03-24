@@ -1062,6 +1062,7 @@ def _evaluate_hybrid_config(
     augmentation_strategy: str = 'greedy_ablation',
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
+    candidate_ranking: str = 'rf_importance',
     lower_is_better: bool = False,
     fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
@@ -1113,6 +1114,7 @@ def _evaluate_hybrid_config(
                 augmentation_strategy=augmentation_strategy,
                 augmentation_threshold=augmentation_threshold,
                 augmentation_budget=augmentation_budget,
+                candidate_ranking=candidate_ranking,
                 model=model,
                 metric_fn=metric_fn,
                 lower_is_better=lower_is_better,
@@ -1351,6 +1353,7 @@ def _run_search(
     augmentation_strategy: str = 'greedy_ablation',
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
+    candidate_ranking: str = 'rf_importance',
     adaptive_pruning: bool = True,
     pruning_threshold: float = 0.5,
     lower_is_better: bool = False,
@@ -1456,6 +1459,7 @@ def _run_search(
                                 augmentation_strategy=augmentation_strategy,
                                 augmentation_threshold=augmentation_threshold,
                                 augmentation_budget=augmentation_budget,
+                                candidate_ranking=candidate_ranking,
                                 lower_is_better=lower_is_better,
                                 fold_reps=fold_reps,
                                 precomputed_folds=precomputed_folds,
@@ -1584,6 +1588,7 @@ def _run_refinement_phase(
     augmentation_strategy: str = 'greedy_ablation',
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
+    candidate_ranking: str = 'rf_importance',
     fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
     cv_splitter=None,
@@ -1667,6 +1672,7 @@ def _run_refinement_phase(
                     augmentation_strategy=augmentation_strategy,
                     augmentation_threshold=augmentation_threshold,
                     augmentation_budget=augmentation_budget,
+                    candidate_ranking=candidate_ranking,
                     fold_reps=fold_reps,
                     precomputed_folds=precomputed_folds,
                     cv_splitter=cv_splitter,
@@ -1764,6 +1770,7 @@ def _compute_fitted_result(
     augmentation_strategy: str = 'greedy_ablation',
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
+    candidate_ranking: str = 'rf_importance',
     finetuned_embeddings: Optional[Dict[str, np.ndarray]] = None,
 ) -> FittedResult:
     """Fit on full data and return concrete feature indices + optional weights."""
@@ -1786,6 +1793,7 @@ def _compute_fitted_result(
         augmentation_strategy=augmentation_strategy,
         augmentation_threshold=augmentation_threshold,
         augmentation_budget=augmentation_budget,
+        candidate_ranking=candidate_ranking,
     )
 
     selected_indices = {}
@@ -1869,6 +1877,7 @@ def find_best_hybrid(
     augmentation_strategy: str = 'greedy_ablation',
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
+    candidate_ranking: str = 'rf_importance',
     adaptive_pruning: bool = True,
     pruning_threshold: float = 0.5,
     two_phase: bool = False,
@@ -2076,6 +2085,7 @@ def find_best_hybrid(
         augmentation_strategy=augmentation_strategy,
         augmentation_threshold=augmentation_threshold,
         augmentation_budget=augmentation_budget,
+        candidate_ranking=candidate_ranking,
         adaptive_pruning=adaptive_pruning,
         pruning_threshold=pruning_threshold,
         lower_is_better=lower_is_better,
@@ -2103,6 +2113,7 @@ def find_best_hybrid(
             augmentation_strategy=augmentation_strategy,
             augmentation_threshold=augmentation_threshold,
             augmentation_budget=augmentation_budget,
+            candidate_ranking=candidate_ranking,
             fold_reps=fold_reps,
             precomputed_folds=precomputed_folds,
             cv_splitter=cv_splitter,
@@ -2130,6 +2141,7 @@ def find_best_hybrid(
             augmentation_strategy=augmentation_strategy,
             augmentation_threshold=augmentation_threshold,
             augmentation_budget=augmentation_budget,
+            candidate_ranking=candidate_ranking,
             finetuned_embeddings=finetuned_embeddings,
         )
 
