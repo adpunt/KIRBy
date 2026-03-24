@@ -93,8 +93,8 @@ run_f00() {
 run_f01() {
     echo "--- f01: Allocation Strategies ---"
     for task in $(get_tasks); do
-        submit "f01_${SHORT_NAMES[$task]}" 128G 11:59:00 \
-            "python tests/experiments/framework/f01_allocation_strategies.py --dataset ${task} --framework --mode full --models ridge,rf,xgboost,lightgbm --budgets 50,150,300 --max-folds 1 --output ${OUTPUT}"
+        submit "f01_${SHORT_NAMES[$task]}" 256G 23:59:00 \
+            "python tests/experiments/framework/f01_allocation_strategies.py --dataset ${task} --framework --mode full --output ${OUTPUT}"
     done
     echo ""
 }
