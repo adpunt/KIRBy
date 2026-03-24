@@ -1600,6 +1600,7 @@ def augment_capped(
             consec_fail += 1
 
     # Phase B — replace worst base features
+    replacements = []
     phase_b_replaced = 0
     consec_fail = 0
     for i in range(ranked_tr.shape[1]):
@@ -1624,6 +1625,7 @@ def augment_capped(
         )
 
         if new_score > current_score:
+            prev_score = current_score
             X_cur_tr, X_cur_vl = X_test_tr, X_test_vl
             current_score = new_score
             phase_b_replaced += 1
@@ -1632,7 +1634,8 @@ def augment_capped(
             aug_name, col_idx = prov[i]
             aug_selected.setdefault(aug_name, []).append(col_idx)
 
-            # Update base_feature_info: remove the replaced feature
+            # Track which base feature was replaced by which aug feature
+            replaced_rep = None
             col_cursor = 0
             for rep_name, info in list(base_feature_info.items()):
                 if 'selected_indices' not in info:
@@ -1641,6 +1644,8 @@ def augment_capped(
                 rep_n = len(sel)
                 if col_cursor <= worst_idx < col_cursor + rep_n:
                     local_pos = worst_idx - col_cursor
+                    replaced_rep = rep_name
+                    replaced_feature_idx = int(sel[local_pos])
                     info['selected_indices'] = np.delete(sel, local_pos)
                     info['n_features'] = len(info['selected_indices'])
                     if 'importance_scores' in info and len(info['importance_scores']) > local_pos:
@@ -1649,6 +1654,15 @@ def augment_capped(
                     n_base -= 1
                     break
                 col_cursor += rep_n
+
+            replacements.append({
+                'replaced_rep': replaced_rep,
+                'replaced_feature_idx': replaced_feature_idx if replaced_rep else None,
+                'replaced_base_col': worst_idx,
+                'replaced_by_aug': aug_name,
+                'replaced_by_col': col_idx,
+                'score_delta': current_score - prev_score,
+            })
         else:
             consec_fail += 1
 
@@ -1664,6 +1678,7 @@ def augment_capped(
     return {
         'augmentation_info': augmentation_info,
         'kept_augmentations': list(aug_selected.keys()),
+        'replacements': replacements,
         'phase_a_added': phase_a_added,
         'phase_b_replaced': phase_b_replaced,
         'baseline_score': baseline_score,
