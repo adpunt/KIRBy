@@ -44,6 +44,9 @@ from kirby.find_best_hybrid import _score_to_comparable
 # greedy_feature uses patience only (step_size=1 implicitly).
 GREEDY_ALLOCATIONS = ['greedy', 'dominant_greedy', 'greedy_feature']
 
+# Non-greedy baseline for comparison — ignores step_size and patience.
+BASELINE_ALLOCATIONS = ['performance_weighted']
+
 STEP_SIZES = [1, 2, 5, 10, 25, 50]
 PATIENCE_VALUES = [2, 3, 5, None]  # None = no early stopping
 BUDGETS = [50, 100, 200, 500]
@@ -265,6 +268,77 @@ def run(data, config, output_dir, dataset_name, importance_method='treeshap',
                             )
 
     # =========================================================================
+    # BASELINE: non-greedy allocations for comparison
+    # =========================================================================
+    print(f"\n  --- Baseline allocations (no step_size/patience) ---", flush=True)
+    for alloc_method in BASELINE_ALLOCATIONS:
+        for budget in budgets:
+            for model_name, model_factory in models.items():
+                idx += 1
+                fold_scores = []
+                last_n_features = 0
+                t0 = time.time()
+
+                for fold_i, (train_idx, val_idx) in enumerate(cv_split(
+                    groups, n_folds, sample_X, labels, mode=mode
+                )):
+                    if fold_i >= max_folds:
+                        break
+                    train_reps = {k: v[train_idx] for k, v in reps.items()}
+                    val_reps = {k: v[val_idx] for k, v in reps.items()}
+                    y_train, y_val = labels[train_idx], labels[val_idx]
+
+                    try:
+                        X_train_h, feature_info = create_hybrid(
+                            train_reps, y_train,
+                            allocation_method=alloc_method,
+                            budget=budget,
+                            importance_method=importance_method,
+                        )
+                        X_val_h = apply_feature_selection(val_reps, feature_info)
+                    except Exception:
+                        continue
+
+                    scaler = StandardScaler()
+                    X_train_s = scaler.fit_transform(X_train_h)
+                    X_val_s = scaler.transform(X_val_h)
+                    last_n_features = X_train_h.shape[1]
+
+                    try:
+                        model = model_factory()
+                        model.fit(X_train_s, y_train)
+                        fold_scores.append(
+                            metric_fn(y_val, model.predict(X_val_s)))
+                    except Exception:
+                        continue
+
+                elapsed = time.time() - t0
+                score_mean = float(np.mean(fold_scores)) if fold_scores else float('nan')
+                score_std = float(np.std(fold_scores)) if fold_scores else float('nan')
+
+                entry = {
+                    'allocation': alloc_method,
+                    'step_size': None,
+                    'patience': None,
+                    'budget': budget,
+                    'model': model_name,
+                    'importance': importance_method,
+                    'score_mean': score_mean,
+                    'score_std': score_std,
+                    'fold_scores': fold_scores,
+                    'n_features': last_n_features if fold_scores else 0,
+                    'elapsed_s': round(elapsed, 2),
+                    'n_iterations': 0,
+                    'stop_reason': 'baseline',
+                    'utilization': (last_n_features / budget if budget > 0 and fold_scores else 0.0),
+                    'allocation_dict': {},
+                }
+                all_configs.append(entry)
+
+                print(f"  [{idx}] {alloc_method}/b={budget}/{model_name}: "
+                      f"{metric_name}={score_mean:.4f} ({elapsed:.1f}s)", flush=True)
+
+    # =========================================================================
     # ANALYSIS
     # =========================================================================
     valid = [c for c in all_configs if not np.isnan(c['score_mean'])]
@@ -278,7 +352,7 @@ def run(data, config, output_dir, dataset_name, importance_method='treeshap',
 
     # --- Best by allocation method (averaged across models) ---
     alloc_ranking = {}
-    for alloc_method in GREEDY_ALLOCATIONS:
+    for alloc_method in GREEDY_ALLOCATIONS + BASELINE_ALLOCATIONS:
         alloc_cfgs = [c for c in valid if c['allocation'] == alloc_method]
         if alloc_cfgs:
             # For each model, find the best config under this allocation
@@ -498,7 +572,7 @@ def run(data, config, output_dir, dataset_name, importance_method='treeshap',
             'budgets': BUDGETS,
             'step_sizes': STEP_SIZES,
             'patience_values': PATIENCE_VALUES,
-            'allocations': GREEDY_ALLOCATIONS,
+            'allocations': GREEDY_ALLOCATIONS + BASELINE_ALLOCATIONS,
             'importance_method': importance_method,
         },
         results={'configs': all_configs, 'summary': summary},
