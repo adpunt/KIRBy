@@ -1380,6 +1380,384 @@ def iterative_augmentation(
 
 
 # ============================================================================
+# AUGMENTATION v2 — capped and uncapped (from f08 experiments)
+# ============================================================================
+
+def _pool_and_rank_aug_features(augmentations_train, augmentations_val,
+                                y_train, X_base_train, model,
+                                candidate_ranking, is_classification,
+                                max_candidates=200):
+    """Pool all augmentation features, rank them, return ranked arrays + provenance.
+
+    Parameters
+    ----------
+    candidate_ranking : str
+        'rf_importance' or 'residual_correlation'
+
+    Returns
+    -------
+    ranked_train, ranked_val : ndarray
+        Columns reordered by rank (best first), trimmed to max_candidates.
+    provenance : list of (aug_name, col_idx)
+        Original identity of each ranked column.
+    """
+    prov = []
+    parts_tr, parts_vl = [], []
+
+    for aug_name, X_tr in augmentations_train.items():
+        X_vl = augmentations_val[aug_name]
+        X_tr = np.nan_to_num(np.clip(X_tr, -1e10, 1e10), nan=0.0)
+        X_vl = np.nan_to_num(np.clip(X_vl, -1e10, 1e10), nan=0.0)
+        for col in range(X_tr.shape[1]):
+            prov.append((aug_name, col))
+        parts_tr.append(X_tr)
+        parts_vl.append(X_vl)
+
+    if not parts_tr:
+        return None, None, []
+
+    X_pool_tr = np.hstack(parts_tr)
+    X_pool_vl = np.hstack(parts_vl)
+
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_pool_tr)
+
+    if candidate_ranking == 'rf_importance':
+        if is_classification:
+            rf = RandomForestClassifier(n_estimators=50, max_depth=10,
+                                        random_state=42, n_jobs=-1)
+        else:
+            rf = RandomForestRegressor(n_estimators=50, max_depth=10,
+                                       random_state=42, n_jobs=-1)
+        rf.fit(X_scaled, y_train)
+        scores = np.nan_to_num(rf.feature_importances_, nan=0.0)
+    elif candidate_ranking == 'residual_correlation':
+        scaler_b = StandardScaler()
+        X_base_s = scaler_b.fit_transform(X_base_train)
+        m = deepcopy(model)
+        m.fit(X_base_s, y_train)
+        residuals = y_train - m.predict(X_base_s)
+        scores = np.zeros(X_pool_tr.shape[1])
+        for j in range(X_pool_tr.shape[1]):
+            col = X_pool_tr[:, j]
+            if np.std(col) > 1e-12:
+                scores[j] = abs(np.corrcoef(col, residuals)[0, 1])
+        scores = np.nan_to_num(scores, nan=0.0)
+    else:
+        raise ValueError(f"Unknown candidate_ranking: {candidate_ranking}")
+
+    order = np.argsort(scores)[::-1][:max_candidates]
+    ranked_tr = X_pool_tr[:, order]
+    ranked_vl = X_pool_vl[:, order]
+    ranked_prov = [prov[i] for i in order]
+
+    return ranked_tr, ranked_vl, ranked_prov
+
+
+def _ab_test(X_cur_train, X_cur_val, X_candidate_train, X_candidate_val,
+             y_train, y_val, model, metric_fn, lower_is_better):
+    """A/B test: score current hybrid with and without candidate feature(s).
+
+    Returns (new_score, improves) where new_score is comparable (higher=better).
+    """
+    X_test_tr = np.hstack([X_cur_train, X_candidate_train])
+    X_test_vl = np.hstack([X_cur_val, X_candidate_val])
+    new_score = _evaluate_allocation(
+        X_test_tr, X_test_vl, y_train, y_val,
+        model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
+    )
+    return X_test_tr, X_test_vl, new_score
+
+
+def _find_worst_base_feature(X_cur_train, X_cur_val, y_train, y_val,
+                              model, metric_fn, lower_is_better,
+                              n_base, is_classification):
+    """Find the worst base feature by permutation importance.
+
+    Only considers columns 0..n_base-1 (base features, not aug features).
+    """
+    scaler = StandardScaler()
+    X_tr_s = scaler.fit_transform(X_cur_train)
+    X_vl_s = scaler.transform(X_cur_val)
+
+    m = deepcopy(model) if model is not None else (
+        RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
+        if is_classification else
+        RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+    )
+    m.fit(X_tr_s, y_train)
+
+    scoring = (make_scorer(metric_fn, greater_is_better=not lower_is_better)
+               if metric_fn is not None else None)
+    result = permutation_importance(m, X_vl_s, y_val, n_repeats=3,
+                                    random_state=42, scoring=scoring)
+    base_imp = result.importances_mean[:n_base]
+
+    if lower_is_better:
+        return int(np.argmax(base_imp))
+    return int(np.argmin(base_imp))
+
+
+def augment_capped(
+    X_base_train, X_base_val,
+    base_feature_info,
+    augmentations_train, augmentations_val,
+    y_train, y_val,
+    model,
+    metric_fn,
+    lower_is_better,
+    total_budget,
+    candidate_ranking='rf_importance',
+    patience=20,
+    max_candidates=200,
+):
+    """Capped augmentation: fill remaining budget slots, then replace worst base features.
+
+    Phase A — fill: add aug features one at a time into remaining budget slots.
+    Phase B — replace: swap worst base feature with next-best aug feature.
+    Both phases use A/B testing with the downstream model.
+
+    Parameters
+    ----------
+    X_base_train, X_base_val : ndarray
+        Base hybrid features (already selected).
+    base_feature_info : dict
+        Feature info from base hybrid creation (modified in-place during replace).
+    augmentations_train, augmentations_val : dict
+        {aug_name: ndarray} of candidate augmentation features.
+    y_train, y_val : ndarray
+    model : estimator
+        Downstream model for A/B testing.
+    metric_fn : callable
+        metric_fn(y_true, y_pred) -> float.
+    lower_is_better : bool
+    total_budget : int
+        Max features in final hybrid.
+    candidate_ranking : str
+        'rf_importance' or 'residual_correlation' (searchable).
+    patience : int
+        Stop after this many consecutive non-improving candidates.
+    max_candidates : int
+        Pre-ranking cutoff.
+
+    Returns
+    -------
+    dict with augmentation_info, kept_augmentations, phase_a_added,
+    phase_b_replaced, baseline_score, final_score.
+    """
+    is_clf = _is_classification_task(y_train)
+    n_base = X_base_train.shape[1]
+    remaining_budget = max(0, total_budget - n_base)
+
+    ranked_tr, ranked_vl, prov = _pool_and_rank_aug_features(
+        augmentations_train, augmentations_val,
+        y_train, X_base_train, model,
+        candidate_ranking, is_clf, max_candidates,
+    )
+
+    if ranked_tr is None:
+        return {
+            'augmentation_info': {}, 'kept_augmentations': [],
+            'phase_a_added': 0, 'phase_b_replaced': 0,
+            'baseline_score': float('nan'), 'final_score': float('nan'),
+        }
+
+    baseline_score = _evaluate_allocation(
+        X_base_train, X_base_val, y_train, y_val,
+        model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
+    )
+
+    X_cur_tr = X_base_train.copy()
+    X_cur_vl = X_base_val.copy()
+    current_score = baseline_score
+    aug_selected = {}
+    used = set()
+
+    # Phase A — fill
+    phase_a_added = 0
+    consec_fail = 0
+    for i in range(ranked_tr.shape[1]):
+        if remaining_budget <= 0 or consec_fail >= patience:
+            break
+
+        feat_tr = ranked_tr[:, i:i + 1]
+        feat_vl = ranked_vl[:, i:i + 1]
+        X_test_tr, X_test_vl, new_score = _ab_test(
+            X_cur_tr, X_cur_vl, feat_tr, feat_vl,
+            y_train, y_val, model, metric_fn, lower_is_better,
+        )
+
+        if new_score > current_score:
+            X_cur_tr, X_cur_vl = X_test_tr, X_test_vl
+            current_score = new_score
+            remaining_budget -= 1
+            phase_a_added += 1
+            consec_fail = 0
+            used.add(i)
+            aug_name, col_idx = prov[i]
+            aug_selected.setdefault(aug_name, []).append(col_idx)
+        else:
+            consec_fail += 1
+
+    # Phase B — replace worst base features
+    phase_b_replaced = 0
+    consec_fail = 0
+    for i in range(ranked_tr.shape[1]):
+        if i in used or consec_fail >= patience:
+            continue
+
+        worst_idx = _find_worst_base_feature(
+            X_cur_tr, X_cur_vl, y_train, y_val,
+            model, metric_fn, lower_is_better, n_base, is_clf,
+        )
+
+        X_test_tr = X_cur_tr.copy()
+        X_test_vl = X_cur_vl.copy()
+        X_test_tr[:, worst_idx] = ranked_tr[:, i]
+        X_test_vl[:, worst_idx] = ranked_vl[:, i]
+
+        new_score = _evaluate_allocation(
+            X_test_tr, X_test_vl, y_train, y_val,
+            model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
+        )
+
+        if new_score > current_score:
+            X_cur_tr, X_cur_vl = X_test_tr, X_test_vl
+            current_score = new_score
+            phase_b_replaced += 1
+            consec_fail = 0
+            used.add(i)
+            aug_name, col_idx = prov[i]
+            aug_selected.setdefault(aug_name, []).append(col_idx)
+        else:
+            consec_fail += 1
+
+    # Build augmentation_info
+    augmentation_info = {}
+    for aug_name, cols in aug_selected.items():
+        col_arr = np.array(sorted(set(cols)), dtype=int)
+        augmentation_info[aug_name] = {
+            'selected_indices': col_arr,
+            'n_features': len(col_arr),
+        }
+
+    return {
+        'augmentation_info': augmentation_info,
+        'kept_augmentations': list(aug_selected.keys()),
+        'phase_a_added': phase_a_added,
+        'phase_b_replaced': phase_b_replaced,
+        'baseline_score': baseline_score,
+        'final_score': current_score,
+        'total_improvement': current_score - baseline_score,
+    }
+
+
+def augment_uncapped(
+    X_base_train, X_base_val,
+    augmentations_train, augmentations_val,
+    y_train, y_val,
+    model,
+    metric_fn,
+    lower_is_better,
+    candidate_ranking='rf_importance',
+    patience=20,
+    max_candidates=200,
+):
+    """Uncapped augmentation: add features beyond the budget if they help.
+
+    Ranks all aug features, A/B tests each one at a time. Keeps it if the
+    score improves. No budget limit, no replace phase.
+
+    Parameters
+    ----------
+    X_base_train, X_base_val : ndarray
+        Base hybrid features.
+    augmentations_train, augmentations_val : dict
+        {aug_name: ndarray} of candidate augmentation features.
+    y_train, y_val : ndarray
+    model : estimator
+        Downstream model for A/B testing.
+    metric_fn : callable
+    lower_is_better : bool
+    candidate_ranking : str
+        'rf_importance' or 'residual_correlation' (searchable).
+    patience : int
+        Stop after this many consecutive non-improving candidates.
+    max_candidates : int
+        Pre-ranking cutoff.
+
+    Returns
+    -------
+    dict with augmentation_info, kept_augmentations, n_added,
+    baseline_score, final_score.
+    """
+    is_clf = _is_classification_task(y_train)
+
+    ranked_tr, ranked_vl, prov = _pool_and_rank_aug_features(
+        augmentations_train, augmentations_val,
+        y_train, X_base_train, model,
+        candidate_ranking, is_clf, max_candidates,
+    )
+
+    if ranked_tr is None:
+        return {
+            'augmentation_info': {}, 'kept_augmentations': [],
+            'n_added': 0,
+            'baseline_score': float('nan'), 'final_score': float('nan'),
+        }
+
+    baseline_score = _evaluate_allocation(
+        X_base_train, X_base_val, y_train, y_val,
+        model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
+    )
+
+    X_cur_tr = X_base_train.copy()
+    X_cur_vl = X_base_val.copy()
+    current_score = baseline_score
+    aug_selected = {}
+    n_added = 0
+    consec_fail = 0
+
+    for i in range(ranked_tr.shape[1]):
+        if consec_fail >= patience:
+            break
+
+        feat_tr = ranked_tr[:, i:i + 1]
+        feat_vl = ranked_vl[:, i:i + 1]
+        X_test_tr, X_test_vl, new_score = _ab_test(
+            X_cur_tr, X_cur_vl, feat_tr, feat_vl,
+            y_train, y_val, model, metric_fn, lower_is_better,
+        )
+
+        if new_score > current_score:
+            X_cur_tr, X_cur_vl = X_test_tr, X_test_vl
+            current_score = new_score
+            n_added += 1
+            consec_fail = 0
+            aug_name, col_idx = prov[i]
+            aug_selected.setdefault(aug_name, []).append(col_idx)
+        else:
+            consec_fail += 1
+
+    augmentation_info = {}
+    for aug_name, cols in aug_selected.items():
+        col_arr = np.array(sorted(set(cols)), dtype=int)
+        augmentation_info[aug_name] = {
+            'selected_indices': col_arr,
+            'n_features': len(col_arr),
+        }
+
+    return {
+        'augmentation_info': augmentation_info,
+        'kept_augmentations': list(aug_selected.keys()),
+        'n_added': n_added,
+        'baseline_score': baseline_score,
+        'final_score': current_score,
+        'total_improvement': current_score - baseline_score,
+    }
+
+
+# ============================================================================
 # FEATURE IMPORTANCE COMPUTATION
 # ============================================================================
 
