@@ -58,23 +58,26 @@ def _run_full_grid(data, config, importance_method, metric_name, metric_fn,
     models = get_model_factories(config['models'], task_type=task_type,
                                  n_samples=n_samples)
     n_folds = config['n_splits']
+    max_folds = config.get('max_folds', n_folds)
     mode = 'intermediary' if n_folds == 1 else 'full'
+    budgets = config.get('budgets', BUDGETS)
 
     reps = data['reps']
     labels = data['labels']
     groups = data['groups']
     sample_X = next(iter(reps.values()))
 
-    total = len(ALLOCATIONS) * len(BUDGETS) * len(STEP_SIZES) * len(models)
-    print(f"\n  Full grid: {len(ALLOCATIONS)} allocs x {len(BUDGETS)} budgets x "
-          f"{len(STEP_SIZES)} step_sizes x {len(models)} models = {total} evaluations")
+    total = len(ALLOCATIONS) * len(budgets) * len(STEP_SIZES) * len(models)
+    print(f"\n  Full grid: {len(ALLOCATIONS)} allocs x {len(budgets)} budgets x "
+          f"{len(STEP_SIZES)} step_sizes x {len(models)} models = {total} evaluations"
+          f" (folds: {max_folds}/{n_folds})")
 
     results = []
     idx = 0
     t0_total = time.time()
 
     for alloc in ALLOCATIONS:
-        for budget in BUDGETS:
+        for budget in budgets:
             for step_size in STEP_SIZES:
                 for model_name, model_factory in models.items():
                     idx += 1
@@ -83,9 +86,11 @@ def _run_full_grid(data, config, importance_method, metric_name, metric_fn,
                     last_allocation = {}
                     t0 = time.time()
 
-                    for train_idx, val_idx in cv_split(groups, n_folds,
-                                                       sample_X, labels,
-                                                       mode=mode):
+                    for fold_i, (train_idx, val_idx) in enumerate(cv_split(
+                        groups, n_folds, sample_X, labels, mode=mode
+                    )):
+                        if fold_i >= max_folds:
+                            break
                         train_reps = {k: v[train_idx] for k, v in reps.items()}
                         val_reps = {k: v[val_idx] for k, v in reps.items()}
                         y_train, y_val = labels[train_idx], labels[val_idx]
@@ -168,6 +173,8 @@ def _run_two_phase(data, config, importance_method, metric_name):
     # Build model instances dict for find_best_hybrid
     model_instances = {name: factory() for name, factory in models.items()}
 
+    budgets = config.get('budgets', BUDGETS)
+
     t0 = time.time()
     search = find_best_hybrid(
         base_reps=reps,
@@ -177,7 +184,7 @@ def _run_two_phase(data, config, importance_method, metric_name):
         metric=metric_name,
         speed='fast',
         allocation_methods=ALLOCATIONS,
-        budgets=BUDGETS,
+        budgets=budgets,
         importance_methods=[importance_method],
         two_phase=True,
         refinement_top_n=5,
