@@ -56,7 +56,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Delegating to find_best_hybrid()...\n")
 
     augs = data.get('augmentations')
-    search = find_best_hybrid(
+
+    # No-augmentation baseline search
+    search_no_aug = find_best_hybrid(
         base_reps=reps,
         labels=labels,
         groups=groups,
@@ -65,10 +67,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         allocation_methods=allocation_methods,
         importance_methods=importance_methods,
         n_folds=n_folds,
-        augmentations=augs,
+        augmentations=None,
         verbose=True,
         cache=True,
     )
+
+    # Augmented search (uncapped default — adds features beyond budget if they help)
+    search = search_no_aug  # fallback if no augmentations
+    if augs:
+        print(f"\n  Re-running with uncapped augmentation ({len(augs)} aug reps)...")
+        search = find_best_hybrid(
+            base_reps=reps,
+            labels=labels,
+            groups=groups,
+            models=model_instances,
+            budgets=full_budgets,
+            allocation_methods=allocation_methods,
+            importance_methods=importance_methods,
+            n_folds=n_folds,
+            augmentations=augs,
+            verbose=True,
+            cache=True,
+        )
 
     # --- Reshape SearchResult to downstream format ---
 
@@ -106,8 +126,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         best_single_rep = None
         best_single_r2 = -np.inf
         for rep_name, rep_scores in lib_baselines.items():
-            if rep_name == 'all_concat':
-                continue
             rep_r2 = rep_scores.get(model_name, -np.inf)
             if rep_r2 > best_single_r2:
                 best_single_r2 = rep_r2
@@ -184,6 +202,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             row += f"{val:>8.4f}" if val is not None else f"{'--':>8}"
         print(row)
 
+    # No-aug comparison summary
+    no_aug_best_by_model = {}
+    for model_name, r in search_no_aug.best_by_model.items():
+        no_aug_best_by_model[model_name] = {
+            'model': model_name,
+            'allocation': r['allocation_method'],
+            'importance': r['importance_method'],
+            'budget': r['budget'],
+            'r2_mean': r['score_mean'],
+            'r2_std': r['score_std'],
+            'n_features': r['n_features'],
+        }
+
     return {
         'configs': configs,
         'best_by_model': best_by_model,
@@ -191,6 +222,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'pca_baselines': pca_baselines,
         'heatmap': heatmap,
         'importance_wins': importance_wins,
+        'no_aug_best_by_model': no_aug_best_by_model,
+        'has_augmentation': augs is not None,
     }
 
 

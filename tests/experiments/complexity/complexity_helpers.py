@@ -412,6 +412,8 @@ SINGLE_DATASET_EXPERIMENTS = [
     'c17',                  # information-theoretic decomposition
     'c18',                  # diversity vs depth
     'c19',                  # importance-weighted training
+    'c20',                  # augmentation value decomposition
+    'c21',                  # single-rep augmentation
 ]
 
 
@@ -435,6 +437,8 @@ def _import_experiment(exp_id: str):
         'c17': 'c17_information_theoretic_decomposition',
         'c18': 'c18_diversity_vs_depth',
         'c19': 'c19_importance_weighted_training',
+        'c20': 'c20_augmentation_value_decomposition',
+        'c21': 'c21_single_rep_augmentation',
     }
     mod_name = module_map[exp_id]
     import importlib
@@ -495,6 +499,26 @@ def run_all(dataset_name: str, output_dir: str,
             pct = 100 * nan_count / X.size
             print(f"  WARNING: {rname} has {nan_count} NaN values ({pct:.1f}%) — imputing 0")
             reps[rname] = np.nan_to_num(X, nan=0.0)
+
+    # ── Load augmentation reps ──
+    aug_rep_names = DATASET_REPS.get(dataset_name, {}).get('augmentation', [])
+    if aug_rep_names:
+        missing = [r for r in aug_rep_names if r not in reps]
+        if missing:
+            print(f"  Loading {len(missing)} augmentation reps: {missing}")
+            aug_data = load_data(dataset_name, rep_preset='all', rep_names=missing)
+            aug_reps = {}
+            for rn, arr in aug_data['reps'].items():
+                if int(np.isnan(arr).sum()) > 0:
+                    arr = np.nan_to_num(arr, nan=0.0)
+                aug_reps[rn] = arr
+            data['augmentations'] = aug_reps
+        else:
+            data['augmentations'] = {r: reps[r] for r in aug_rep_names}
+        print(f"  Augmentations ({len(data['augmentations'])}): "
+              f"{', '.join(f'{k}={v.shape[1]}' for k, v in data['augmentations'].items())}")
+    else:
+        data['augmentations'] = None
 
     # ── Run experiments in order ──
     results = {}
@@ -558,5 +582,7 @@ def _experiment_full_name(exp_id: str) -> str:
         'c17': 'c17_information_theoretic_decomposition',
         'c18': 'c18_diversity_vs_depth',
         'c19': 'c19_importance_weighted_training',
+        'c20': 'c20_augmentation_value_decomposition',
+        'c21': 'c21_single_rep_augmentation',
     }
     return name_map.get(exp_id, exp_id)

@@ -293,6 +293,7 @@ def _run_information_retention(data, budgets, search_speed='fast'):
                 reps, labels, groups=groups,
                 speed=search_speed, budgets=[budget],
                 augmentations=augs,
+                augmentation_strategy='capped',
                 verbose=False,
                 cache=True,
             )
@@ -402,6 +403,7 @@ def _run_effective_rank_analysis(data, budgets, search_speed='fast'):
                 reps, labels, groups=groups,
                 speed=search_speed, budgets=[budget],
                 augmentations=augs,
+                augmentation_strategy='capped',
                 verbose=False,
                 cache=True,
             )
@@ -506,6 +508,7 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                 speed=search_speed,
                 budgets=[budget],
                 augmentations=augs,
+                augmentation_strategy='capped',
                 verbose=False,
                 cache=True,
             )

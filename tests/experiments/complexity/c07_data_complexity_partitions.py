@@ -141,6 +141,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                     speed=search_speed,
                     budgets=budgets,
                     augmentations=sub_augs,
+                    augmentation_strategy='capped',
                     verbose=False,
                     cache=True,
                 )

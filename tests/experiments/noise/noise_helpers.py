@@ -134,6 +134,26 @@ def run_all(dataset_name: str, output_dir: str,
             print(f"  WARNING: {rname} has {nan_count} NaN values ({pct:.1f}%) — imputing 0")
             reps_data[rname] = np.nan_to_num(X, nan=0.0)
 
+    # ── Load augmentation reps ──
+    aug_rep_names = DATASET_REPS.get(dataset_name, {}).get('augmentation', [])
+    if aug_rep_names:
+        missing = [r for r in aug_rep_names if r not in reps_data]
+        if missing:
+            print(f"  Loading {len(missing)} augmentation reps: {missing}")
+            aug_data = load_data(dataset_name, rep_preset='all', rep_names=missing)
+            aug_reps = {}
+            for rn, arr in aug_data['reps'].items():
+                if int(np.isnan(arr).sum()) > 0:
+                    arr = np.nan_to_num(arr, nan=0.0)
+                aug_reps[rn] = arr
+            data['augmentations'] = aug_reps
+        else:
+            data['augmentations'] = {r: reps_data[r] for r in aug_rep_names}
+        print(f"  Augmentations ({len(data['augmentations'])}): "
+              f"{', '.join(f'{k}={v.shape[1]}' for k, v in data['augmentations'].items())}")
+    else:
+        data['augmentations'] = None
+
     # ── Run experiments ──
     results = {}
     for exp_id in experiments:

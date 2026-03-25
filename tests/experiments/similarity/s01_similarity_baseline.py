@@ -192,43 +192,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         results[rep_name] = rep_result
 
-    # Concatenated baseline (unweighted + weighted)
-    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
-    print(f"\n  all_concat (dim={X_concat.shape[1]}):")
-    D_concat = compute_distance_matrix(X_concat, standardize=True)
-    sac_rho, sac_p = similarity_activity_correlation(D_concat, labels, n_sample)
-    viol = violation_rate(D_concat, labels, k=5)
-    sali = compute_sali(D_concat, labels)
-
-    concat_result = {
-        'dim': X_concat.shape[1],
-        'sac_rho': sac_rho,
-        'sac_p': sac_p,
-        'violation_rate': viol,
-        'sali_mean': sali['mean'],
-        'sali_max': sali['max'],
-        'sali_std': sali['std'],
-    }
-
-    if importance is not None:
-        w_concat = np.concatenate([importance[k] for k in sorted(reps.keys())])
-        D_concat_w = compute_distance_matrix(X_concat, feature_weights=w_concat,
-                                             standardize=True)
-        sac_w, sac_w_p = similarity_activity_correlation(D_concat_w, labels, n_sample)
-        viol_w = violation_rate(D_concat_w, labels, k=5)
-        sali_w = compute_sali(D_concat_w, labels)
-        concat_result['sac_rho_weighted'] = sac_w
-        concat_result['sac_p_weighted'] = sac_w_p
-        concat_result['violation_rate_weighted'] = viol_w
-        concat_result['sali_mean_weighted'] = sali_w['mean']
-        print(f"    SAC rho={sac_rho:.4f}, weighted={sac_w:.4f}, "
-              f"viol={viol:.3f}/{viol_w:.3f}")
-    else:
-        print(f"    SAC rho={sac_rho:.4f} (p={sac_p:.2e}), "
-              f"violation_rate={viol:.3f}, SALI_mean={sali['mean']:.3f}")
-
-    results['all_concat'] = concat_result
-
     # Summary table
     print("\n  Summary:")
     has_weighted = any('sac_rho_weighted' in r for r in results.values())

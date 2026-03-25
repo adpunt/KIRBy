@@ -118,7 +118,7 @@ INTERMEDIARY = {
     'n_splits': 1,
     'models': ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp',
                'svm', 'gp', 'catboost', 'dnn', 'cnn'],
-    'budgets': [5, 10, 25, 50, 75, 100, 150, 200, 300, 500, 750, 1000],
+    'budgets': [10, 25, 50, 100, 200, 500, 1000, 2000],
     'allocations': ['performance_weighted', 'softmax_T5'],
     'importance_methods': ['treeshap', 'lightgbm_gain'],
     'search_speed': 'fast',
@@ -128,7 +128,7 @@ FULL = {
     'n_splits': 5,
     'models': ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp',
                'svm', 'gp', 'catboost', 'dnn', 'cnn'],
-    'budgets': [50, 100, 200, 500],
+    'budgets': [10, 25, 50, 100, 200, 300, 500, 750, 1000, 1500, 2000],
     'allocations': [
         'performance_weighted', 'softmax_T2', 'softmax_T5',
         'power_2', 'min_floor_0.05',
@@ -719,10 +719,18 @@ def estimate_intrinsic_dim_mle(X: np.ndarray, k: int = 10) -> float:
 
 def estimate_mutual_information_knn(X: np.ndarray, y: np.ndarray, k: int = 5) -> float:
     """Estimate I(X; Y) using KSG estimator (Kraskov et al. 2004)."""
-    n_samples = X.shape[0]
+    n_samples, d = X.shape
     k = min(k, n_samples - 1)
 
     X_scaled = StandardScaler().fit_transform(X)
+
+    # KSG needs n >> d; reduce dimensions for small datasets
+    max_components = min(15, n_samples // 10)
+    if d > max_components >= 1:
+        from sklearn.decomposition import PCA as _PCA
+        X_scaled = _PCA(n_components=max_components, random_state=42).fit_transform(X_scaled)
+    elif max_components < 1:
+        return 0.0  # too few samples for any MI estimate
     y_scaled = (y - y.mean()) / (y.std() + 1e-10)
 
     XY = np.column_stack([X_scaled, y_scaled.reshape(-1, 1)])
@@ -1226,6 +1234,7 @@ def get_hybrid_features_and_weights(
     search_speed: str = 'fast',
     weight_method: str = 'lightgbm_gain',
     budget: Optional[int] = None,
+    augmentations: Optional[Dict[str, np.ndarray]] = None,
 ) -> Tuple[np.ndarray, np.ndarray, SearchResult]:
     """Run find_best_hybrid and return hybrid features + flat importance weights."""
     kwargs = dict(
@@ -1240,6 +1249,8 @@ def get_hybrid_features_and_weights(
     )
     if budget is not None:
         kwargs['budgets'] = [budget]
+    if augmentations is not None:
+        kwargs['augmentations'] = augmentations
 
     search = find_best_hybrid(**kwargs)
     fitted = search.fitted_result

@@ -68,13 +68,13 @@ class Blueprint:
     allocation_method: str
     importance_method: str
     budget: int
-    step_size: int = 10
+    step_size: int = 5
     speed: str = ''
     n_folds: int = 0
     seed: int = 42
     metric: str = 'r2'
     task_type: str = 'regression'
-    augmentation_strategy: str = 'greedy_ablation'
+    augmentation_strategy: str = 'uncapped'
 
     def to_dict(self) -> dict:
         return {
@@ -1057,9 +1057,9 @@ def _evaluate_hybrid_config(
     n_folds: int,
     metric_fn: Callable,
     seed: int = 42,
-    step_size: int = 10,
+    step_size: int = 5,
     augmentations: Optional[Dict[str, np.ndarray]] = None,
-    augmentation_strategy: str = 'greedy_ablation',
+    augmentation_strategy: str = 'uncapped',
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
     candidate_ranking: str = 'rf_importance',
@@ -1299,35 +1299,6 @@ def _evaluate_baselines(
                 )
                 print(f"  {rep_name} (dim={dim}, fine-tuned): {scores_str}")
 
-    # All concatenated (frozen reps only — fine-tuned reps have per-fold shape)
-    X_concat = np.hstack([base_reps[k] for k in sorted(base_reps.keys())])
-    baselines['all_concat'] = {'dimension': X_concat.shape[1]}
-    sec_all = {}
-    for model_name, model in models.items():
-        result = _evaluate_single(
-            X_concat, labels, model, groups, n_folds, metric_fn, seed,
-            cv_splitter=cv_splitter,
-            secondary_metric_fns=secondary_metric_fns,
-        )
-        if secondary_metric_fns is not None:
-            mean_score, _, sec_dict = result
-            for sec_name, (sec_mean, sec_std) in sec_dict.items():
-                sec_all[f'{model_name}_{sec_name}'] = {
-                    'mean': round(sec_mean, 4), 'std': round(sec_std, 4),
-                }
-        else:
-            mean_score, _ = result
-        baselines['all_concat'][model_name] = round(mean_score, 4)
-
-    if sec_all:
-        baselines['all_concat']['_secondary'] = sec_all
-
-    if verbose:
-        scores_str = ", ".join(
-            f"{m}={baselines['all_concat'][m]:.3f}" for m in models
-        )
-        print(f"  all_concat (dim={X_concat.shape[1]}): {scores_str}")
-
     return baselines
 
 
@@ -1350,7 +1321,7 @@ def _run_search(
     seed: int = 42,
     verbose: bool = True,
     augmentations: Optional[Dict[str, np.ndarray]] = None,
-    augmentation_strategy: str = 'greedy_ablation',
+    augmentation_strategy: str = 'uncapped',
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
     candidate_ranking: str = 'rf_importance',
@@ -1585,7 +1556,7 @@ def _run_refinement_phase(
     step_sizes: Optional[List[int]] = None,
     verbose: bool = True,
     augmentations: Optional[Dict[str, np.ndarray]] = None,
-    augmentation_strategy: str = 'greedy_ablation',
+    augmentation_strategy: str = 'uncapped',
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
     candidate_ranking: str = 'rf_importance',
@@ -1767,7 +1738,7 @@ def _compute_fitted_result(
     blueprint: Blueprint,
     weight_method: Optional[str] = 'lightgbm_gain',
     augmentations: Optional[Dict[str, np.ndarray]] = None,
-    augmentation_strategy: str = 'greedy_ablation',
+    augmentation_strategy: str = 'uncapped',
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
     candidate_ranking: str = 'rf_importance',
@@ -1874,7 +1845,7 @@ def find_best_hybrid(
     weight_method: Optional[str] = None,
     dimension_tiers: Optional[List[int]] = None,
     augmentations: Optional[Dict[str, np.ndarray]] = None,
-    augmentation_strategy: str = 'greedy_ablation',
+    augmentation_strategy: str = 'uncapped',
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
     candidate_ranking: str = 'rf_importance',
@@ -1921,8 +1892,9 @@ def find_best_hybrid(
             These are small feature sets (e.g. developability, humanness) that augment
             the hybrid after main feature selection. Each is independently evaluated
             and only kept if it improves validation performance.
-        augmentation_strategy: How to handle augmentations. 'greedy_ablation' (default)
-            tests each and keeps only those that help. 'all' includes all. 'none' ignores.
+        augmentation_strategy: How to handle augmentations. 'uncapped' (default)
+            adds features beyond budget if they help. 'capped' fills then replaces within
+            budget. 'greedy_ablation' tests each rep-level. 'all' includes all. 'none' ignores.
         augmentation_threshold: Minimum improvement to keep an augmentation (default: any).
         augmentation_budget: Max features per augmentation to select (default: 20).
         rep_factories: Dict of {rep_name: factory_callable} for per-fold fine-tuned

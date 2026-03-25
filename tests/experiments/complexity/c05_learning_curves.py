@@ -92,6 +92,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     speed=search_speed,
                     n_folds=sub_folds,
                     augmentations=sub_augs,
+                    augmentation_strategy='capped',
                     verbose=False,
                     cache=True,
                 )

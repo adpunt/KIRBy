@@ -2749,14 +2749,14 @@ def create_hybrid(base_reps, labels,
                  allocation_method='performance_weighted',
                  n_per_rep=100,
                  budget=100,
-                 step_size=10,
-                 patience=3,
+                 step_size=5,
+                 patience=20,
                  validation_split=0.2,
                  apply_filters=False,
                  importance_method='treeshap',
                  # Augmentation parameters
                  augmentations=None,
-                 augmentation_strategy='greedy_ablation',
+                 augmentation_strategy='uncapped',
                  augmentation_threshold=None,
                  augmentation_budget=20,
                  candidate_ranking='rf_importance',
@@ -2782,8 +2782,8 @@ def create_hybrid(base_reps, labels,
             
         n_per_rep: Number of features per rep (for 'fixed' method, default: 100)
         budget: Total feature budget (for 'greedy' method, default: 100)
-        step_size: Features to add per greedy iteration (default: 10)
-        patience: Early stopping patience for greedy, None to disable (default: 3)
+        step_size: Features to add per greedy iteration (default: 5)
+        patience: Early stopping patience for greedy, None to disable (default: 20)
         validation_split: Fraction for validation in greedy (default: 0.2)
         
         apply_filters: Apply quality filters (sparsity + variance) before allocation (default: False)
@@ -2794,9 +2794,10 @@ def create_hybrid(base_reps, labels,
             and named variants like softmax_T*) use the specified importance_method.
         
         augmentations: Dict of {aug_name: feature_array} for supplementary features (default: None)
-            These are evaluated separately from base_reps via greedy ablation
+            These are evaluated separately from base_reps after initial hybrid creation
         augmentation_strategy: How to handle augmentations
-            - 'greedy_ablation': Test each rep, keep only those that improve (default)
+            - 'uncapped': Feature-level add-if-it-helps, no budget limit (default)
+            - 'greedy_ablation': Test each rep, keep only those that improve
             - 'capped': Feature-level fill-then-replace within budget (F08 tested)
             - 'uncapped': Feature-level add-if-it-helps, no budget limit
             - 'all': Include all augmentations

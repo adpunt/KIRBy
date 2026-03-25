@@ -20,9 +20,7 @@ from experiments._shared import (
     get_model_factories, _cv_split,
     apply_feature_selection,
 )
-from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
-# TODO: create_hybrid API not finalised — allocation_method / importance_method
-#       semantics may change after framework experiments. Revisit call sites below.
+from kirby.hybrid import create_hybrid, apply_augmentation_selection
 
 # Optional NoiseInject import
 try:
@@ -149,14 +147,24 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                     train_reps = {k: v[train_idx] for k, v in reps.items()}
                     val_reps = {k: v[val_idx] for k, v in reps.items()}
 
+                    augs_full = data.get('augmentations') or {}
+                    train_augs = {k: v[train_idx] for k, v in augs_full.items()} or None
+                    val_augs = {k: v[val_idx] for k, v in augs_full.items()} or None
                     try:
                         X_train, fi = create_hybrid(
                             train_reps, y_train,
                             allocation_method='greedy',
                             budget=budget,
                             importance_method='treeshap',
+                            augmentations=train_augs,
+                            augmentation_strategy='capped',
                         )
                         X_val = apply_feature_selection(val_reps, fi)
+                        aug_info = fi.get('augmentation_info', {})
+                        if aug_info and val_augs:
+                            aug_val = apply_augmentation_selection(val_augs, aug_info)
+                            if aug_val is not None:
+                                X_val = np.hstack([X_val, aug_val])
                     except Exception:
                         continue
 
@@ -234,12 +242,15 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                     y_train = noise_injector.inject(y_train, sigma=sigma)
 
                 train_reps = {k: v[train_idx] for k, v in reps.items()}
+                train_augs_stab = {k: v[train_idx] for k, v in (data.get('augmentations') or {}).items()} or None
                 try:
                     _, fi = create_hybrid(
                         train_reps, y_train,
                         allocation_method='greedy',
                         budget=budget_for_stability,
                         importance_method='treeshap',
+                        augmentations=train_augs_stab,
+                        augmentation_strategy='capped',
                     )
                     # Collect selected feature identifiers: (rep_name, feature_idx) tuples
                     selected = set()

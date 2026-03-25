@@ -73,6 +73,7 @@ def run(data, config, output_dir, dataset_name, families=None):
                     speed=search_speed,
                     budgets=budgets,
                     augmentations=augs,
+                    augmentation_strategy='capped',
                     verbose=False,
                     cache=True,
                 )
