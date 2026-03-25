@@ -45,9 +45,23 @@ from experiments._shared import (
 from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
 # TODO: create_hybrid API not finalised — revisit after framework experiments.
 
+from kirby.utils.noise_estimation import ActivityCliffAwareEstimator
+
 
 # Models that support sample_weight in .fit()
 WEIGHTED_MODELS = ['rf', 'xgboost', 'lightgbm', 'ridge']
+
+
+def compute_cliff_aware_weights(X, y, k=10, strength=1.0):
+    """Use ActivityCliffAwareEstimator to compute sample weights.
+
+    Unlike compute_reliability_scores, this distinguishes cliffs from noise:
+    cliff compounds get higher weights (they're not noise), while genuinely
+    noisy samples get lower weights.
+    """
+    estimator = ActivityCliffAwareEstimator(k=k, metric='cosine')
+    estimator.fit(X, y)
+    return estimator.get_weights(strength=strength)
 
 
 def compute_reliability_scores(X, y, importance_scores, k=10):
@@ -317,6 +331,46 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"dim={n_features})")
 
     results['hybrid'] = hybrid_results
+
+    # =========================================================================
+    # CONDITION 5: Hybrid + cliff-aware weighting (ActivityCliffAwareEstimator)
+    # =========================================================================
+    print(f"\n  --- Condition 5: Hybrid + cliff-aware weights ---")
+    cliff_aware_results = {}
+    for model_name, model_factory in model_factories.items():
+        ca_scores = []
+        for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
+                                            labels, mode=mode):
+            train_reps_fold = {k: v[train_idx] for k, v in reps.items()}
+            val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
+            y_train, y_val = labels[train_idx], labels[val_idx]
+            try:
+                X_train_h, fi = create_hybrid(
+                    train_reps_fold, y_train,
+                    allocation_method='greedy', budget=100,
+                    importance_method='lightgbm_gain',
+                )
+                X_val_h = apply_feature_selection(val_reps_fold, fi)
+                scaler = StandardScaler()
+                X_tr_s = scaler.fit_transform(X_train_h)
+                X_va_s = scaler.transform(X_val_h)
+                ca_weights = compute_cliff_aware_weights(X_tr_s, y_train, k=k_neighbors)
+                model = model_factory()
+                model.fit(X_tr_s, y_train, sample_weight=ca_weights)
+                ca_scores.append(metric_fn(y_val, model.predict(X_va_s)))
+            except Exception:
+                continue
+        if ca_scores:
+            ca_mean = float(np.mean(ca_scores))
+            uw_ref = hybrid_results.get(model_name, {}).get('unweighted_mean', float('nan'))
+            delta_ca = ca_mean - uw_ref if not np.isnan(uw_ref) else float('nan')
+            cliff_aware_results[model_name] = {
+                'score_mean': ca_mean,
+                'delta_vs_unweighted': delta_ca,
+            }
+            print(f"    {model_name}: cliff_aware={ca_mean:.4f} (delta={delta_ca:+.4f})")
+
+    results['hybrid_cliff_aware'] = cliff_aware_results
 
     # =========================================================================
     # SUMMARY: Compare weighting benefit for base reps vs hybrid
