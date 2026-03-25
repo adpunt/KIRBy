@@ -925,6 +925,27 @@ FRAMEWORK_TASKS = {
         'methyl_pca50', 'cnv_pca50', 'mirna_top200', 'wsi_gigapath',
         'rppa', 'immune_xcell', 'mut_driver', 'stemness_mrnasi',
     ],
+    # Small antibody (Spearman, identity-grouped) — same family as flab_pk_jain_fcrnrt
+    'flab_pk_jain_heprt': [
+        'ablang2', 'igt5', 'esm2_early', 'prot_t5', 'saprot',
+        'mutation_features', 'antiberty', 'esmc', 'esm2', 'aac',
+        'abroberta', 'onehot', 'structural',
+    ],
+    # AbAgym DMS (Spearman, position_modulo split)
+    'abagym_EGFR': [
+        'esm3', 'saprot', 'blosum', 'esmc', 'prot_t5', 'igt5', 'onehot',
+        'esm2_early', 'esm2', 'ablang2', 'antiberty', 'aac', 'structural',
+    ],
+    # Trastuzumab binding classification (AUROC/F1w, edit_distance grouped)
+    'tz_her2_binary': [
+        'esm3', 'saprot', 'blosum', 'esmc', 'prot_t5', 'igt5', 'onehot',
+        'esm2_early', 'esm2', 'ablang2', 'antiberty', 'aac', 'structural',
+    ],
+    # Ginkgo developability (Spearman, pre-computed 5-fold splits, n=242)
+    'ginkgo_hic': [
+        'esm3', 'saprot', 'blosum', 'esmc', 'prot_t5', 'igt5', 'onehot',
+        'esm2_early', 'esm2', 'ablang2', 'antiberty', 'aac', 'structural',
+    ],
     # Reaction (R², leave-additive-out GroupKFold)
     'buchwald_hartwig': [
         'reactant_ecfp4', 'drfp_2048', 'onehot_components', 'rxnfp',

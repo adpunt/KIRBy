@@ -1,8 +1,8 @@
 #!/bin/bash
 # Framework f01/f03/f04 on ARC (CPU-only, no GPU).
 # Run from ARC login node:
-#   bash tests/slurm_scripts/submit_framework_arc.sh              # all 7 tasks
-#   bash tests/slurm_scripts/submit_framework_arc.sh rep          # representative 4
+#   bash tests/slurm_scripts/submit_framework_arc.sh              # all framework tasks
+#   bash tests/slurm_scripts/submit_framework_arc.sh rep          # 7 representative datasets
 #   bash tests/slurm_scripts/submit_framework_arc.sh logd         # single task
 
 set -euo pipefail
@@ -12,14 +12,20 @@ OUTPUT="tests/results/framework"
 WRAP_PREFIX="cd /data/stat-cadd/scat9264/KIRBy && git pull 2>/dev/null; . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
 STDERR_FILTER="2> >(grep -v -e 'DEPRECATION WARNING' -e 'threadpoolctl' -e 'ctypes callback' -e 'NoneType.*split' >&2)"
 
-ALL_TASKS=(logd herg flab_thermo_tresanco flab_pk_jain_fcrnrt tcga_luad_vs_lusc tcga_brca_pam50 buchwald_hartwig)
-REP_TASKS=(logd flab_thermo_tresanco tcga_luad_vs_lusc buchwald_hartwig)
+ALL_TASKS=(logd herg flab_thermo_tresanco flab_pk_jain_fcrnrt flab_pk_jain_heprt abagym_EGFR tz_her2_binary ginkgo_hic tcga_luad_vs_lusc tcga_brca_pam50 buchwald_hartwig)
+
+# Representative 7: one per domain type (from EXPERIMENT_DESIGN_DISCUSSION.md §7)
+REP_TASKS=(herg flab_thermo_tresanco abagym_EGFR tz_her2_binary ginkgo_hic tcga_luad_vs_lusc flab_pk_jain_heprt)
 
 declare -A SHORT_NAMES=(
     [logd]="logd"
     [herg]="herg"
     [flab_thermo_tresanco]="tres"
     [flab_pk_jain_fcrnrt]="fcrn"
+    [flab_pk_jain_heprt]="hprt"
+    [abagym_EGFR]="egfr"
+    [tz_her2_binary]="tzh2"
+    [ginkgo_hic]="ghic"
     [tcga_luad_vs_lusc]="luad"
     [tcga_brca_pam50]="brca"
     [buchwald_hartwig]="buch"
