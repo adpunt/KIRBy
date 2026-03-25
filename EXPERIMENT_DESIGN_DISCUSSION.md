@@ -319,15 +319,15 @@ ssh scat9264@gateway.arc.ox.ac.uk "ls /data/stat-cadd/scat9264/KIRBy/tests/resul
 scp -r "scat9264@gateway.arc.ox.ac.uk:/data/stat-cadd/scat9264/KIRBy/tests/results/similarity/" tests/results/similarity/
 ```
 
-#### HTC — Antibody Baseline Surveys (ab_all_i, ab_all_d)
-**Jobs:** 7343797 (ab_all_d = DMS), 7343798 (ab_all_i = inter-family)
-**Script:** `submit_antibody_survey.sh`
-**Output:** `tests/results/antibody_survey/`
-**Status:** Pending (Priority). These are the full 42-rep surveys.
-**Blocks:** Pipeline readiness table for antibody datasets that still need full rep coverage.
+#### HTC — Antibody Rep Fill (ab_all_dms, ab_all_inter)
+**Jobs:** 7343797 (ab_all_dms), 7343798 (ab_all_inter)
+**Script:** `submit_missing_htc.sh` (antibody sections, `--skip-existing`)
+**Output:** `tests/results/phase5_baselines/antibody/` (merges into existing JSONs)
+**Status:** Pending (Priority). Filling missing reps for antibody datasets that already have partial results.
+**Blocks:** Pipeline readiness — full rep coverage needed for antibody tier decisions.
 
 ```bash
-scp -r "scat9264@gateway.arc.ox.ac.uk:/data/stat-cadd/scat9264/KIRBy/tests/results/antibody_survey/" tests/results/antibody_survey/
+scp -r "scat9264@gateway.arc.ox.ac.uk:/data/stat-cadd/scat9264/KIRBy/tests/results/phase5_baselines/antibody/" tests/results/phase5_baselines/antibody/
 ```
 
 #### HTC — Antibody CLF (abclf_hu)
