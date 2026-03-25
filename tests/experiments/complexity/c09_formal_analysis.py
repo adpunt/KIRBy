@@ -21,9 +21,12 @@ from experiments._shared import (
     save_experiment_results, load_experiment_results, convert_numpy,
     get_model_factories, evaluate_cv_with_train,
     estimate_mutual_information_knn, compute_effective_rank,
-    create_hybrid, apply_feature_selection,
+    apply_feature_selection,
     find_best_hybrid,
 )
+from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+# TODO: create_hybrid API not finalised — allocation_method / importance_method
+#       semantics may change after framework experiments. Revisit call sites below.
 
 
 # =========================================================================

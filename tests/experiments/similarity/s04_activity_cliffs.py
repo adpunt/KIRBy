@@ -28,7 +28,9 @@ from experiments._shared import (
     get_hybrid_features_and_weights, make_cv_splitter,
 )
 
-from kirby.hybrid import create_hybrid, apply_feature_selection, compute_feature_importance
+from kirby.hybrid import apply_feature_selection, compute_feature_importance
+from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+# TODO: create_hybrid API not finalised — revisit after framework experiments.
 
 
 # =============================================================================

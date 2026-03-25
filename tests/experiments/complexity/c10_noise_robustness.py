@@ -18,8 +18,11 @@ from experiments._shared import (
     load_data, INTERMEDIARY, FULL, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_model_factories, _cv_split,
-    create_hybrid, apply_feature_selection,
+    apply_feature_selection,
 )
+from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+# TODO: create_hybrid API not finalised — allocation_method / importance_method
+#       semantics may change after framework experiments. Revisit call sites below.
 
 # Optional NoiseInject import
 try:
@@ -191,6 +194,28 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                   f"retention={retention:.1f}%")
 
         results['hybrids'][budget] = budget_results
+
+    # --- Phase 2b: Noise × budget interaction ---
+    # For each strategy, extract NDS per budget to show that lower budget = more noise-robust
+    print("\n  Phase 2b: Noise × budget interaction")
+    noise_budget = {}
+    for strategy in strategies:
+        budget_nds_pairs = []
+        for budget in budgets:
+            bdata = results['hybrids'].get(budget, {}).get(strategy)
+            if bdata and not np.isnan(bdata.get('nds', float('nan'))):
+                budget_nds_pairs.append((budget, bdata['nds']))
+        if len(budget_nds_pairs) >= 2:
+            b_arr = np.array([p[0] for p in budget_nds_pairs])
+            nds_arr = np.array([p[1] for p in budget_nds_pairs])
+            corr = float(np.corrcoef(b_arr, nds_arr)[0, 1]) if np.std(nds_arr) > 0 else 0.0
+            noise_budget[strategy] = {
+                'budget_nds': {int(b): float(n) for b, n in budget_nds_pairs},
+                'correlation': corr,  # negative = higher budget → more negative NDS → less robust
+            }
+            print(f"    {strategy}: budget-NDS correlation={corr:.3f} "
+                  f"({'higher budget = less robust' if corr < -0.3 else 'weak/no trend'})")
+    results['noise_budget_interaction'] = noise_budget
 
     # --- Phase 3: Feature stability across noise levels ---
     print("\n  Phase 3: Feature stability across noise")

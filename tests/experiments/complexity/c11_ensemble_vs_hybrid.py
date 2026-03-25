@@ -24,14 +24,18 @@ import time
 
 import numpy as np
 from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
 from sklearn.metrics import r2_score
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_model_factories, cv_split,
-    create_hybrid, apply_feature_selection,
+    apply_feature_selection,
 )
+from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+# TODO: create_hybrid API not finalised — allocation_method / importance_method
+#       semantics may change after framework experiments. Revisit call sites below.
 
 
 def _time_fit_predict(model_factory, X_train, y_train, X_val):
@@ -195,6 +199,63 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'total_fit_time_s': float(np.mean(fold_ensemble_fit_times)),
                 'total_predict_time_s': float(np.mean(fold_ensemble_pred_times)),
             })
+
+        # =====================================================================
+        # 2b. PCA-matched: concat all reps, PCA-compress to budget dims, one model
+        # Isolates: is the hybrid advantage from intelligent selection or just
+        # dimensionality reduction?
+        # =====================================================================
+        for budget in budgets:
+            fold_pca_scores = []
+            fold_pca_fit_times = []
+            fold_pca_pred_times = []
+
+            for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
+                                               labels, mode=mode):
+                y_train, y_val = labels[train_idx], labels[val_idx]
+
+                # Concat all reps
+                X_train_cat = np.hstack([v[train_idx] for v in reps.values()])
+                X_val_cat = np.hstack([v[val_idx] for v in reps.values()])
+
+                n_comp = min(budget, X_train_cat.shape[1], len(y_train) - 1)
+                if n_comp < 2:
+                    continue
+
+                scaler = StandardScaler()
+                X_tr_s = scaler.fit_transform(X_train_cat)
+                X_va_s = scaler.transform(X_val_cat)
+
+                pca = PCA(n_components=n_comp, random_state=42)
+                X_tr_pca = pca.fit_transform(X_tr_s)
+                X_va_pca = pca.transform(X_va_s)
+
+                try:
+                    t0 = time.time()
+                    model = model_factory()
+                    model.fit(X_tr_pca, y_train)
+                    fit_time = time.time() - t0
+                    t0 = time.time()
+                    preds = model.predict(X_va_pca)
+                    pred_time = time.time() - t0
+                    fold_pca_scores.append(r2_score(y_val, preds))
+                    fold_pca_fit_times.append(fit_time)
+                    fold_pca_pred_times.append(pred_time)
+                except Exception:
+                    continue
+
+            if fold_pca_scores:
+                results.append({
+                    'model': model_name,
+                    'method': 'pca_matched',
+                    'budget': budget,
+                    'r2_mean': float(np.mean(fold_pca_scores)),
+                    'r2_std': float(np.std(fold_pca_scores)),
+                    'total_dim': n_comp,
+                    'n_models_trained': 1,
+                    'total_fit_time_s': float(np.mean(fold_pca_fit_times)),
+                    'total_predict_time_s': float(np.mean(fold_pca_pred_times)),
+                })
 
         # =====================================================================
         # 3. Hybrid: single model on fused representation

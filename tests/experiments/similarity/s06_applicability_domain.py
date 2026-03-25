@@ -27,8 +27,10 @@ from experiments._shared import (
     load_data, INTERMEDIARY, FULL, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results, convert_numpy,
     get_hybrid_features_and_weights, make_cv_splitter,
-    create_hybrid, apply_feature_selection, compute_feature_importance,
+    apply_feature_selection, compute_feature_importance,
 )
+from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+# TODO: create_hybrid API not finalised — revisit after framework experiments.
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -76,6 +78,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         all_d_per_rep = {rname: [] for rname in reps}
         all_d_per_rep_w = {rname: [] for rname in reps}
         all_errors = []
+        all_errors_neutral = []  # from RF on concat (removes tautology)
 
         for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
             y_train, y_val = labels[train_idx], labels[val_idx]
@@ -110,7 +113,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             except Exception:
                 continue
 
-            # Train RF on hybrid features
+            # Train RF on hybrid features (existing — may have tautological AD advantage)
             scaler_h = StandardScaler()
             X_tr_s = scaler_h.fit_transform(X_tr_h)
             X_va_s = scaler_h.transform(X_va_h)
@@ -118,6 +121,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             rf.fit(X_tr_s, y_train)
             y_pred = rf.predict(X_va_s)
             errors = np.abs(y_val - y_pred)
+
+            # Neutral model: RF on concat (removes tautology — errors are
+            # independent of hybrid space, so hybrid distance advantage is genuine)
+            scaler_c = StandardScaler()
+            X_tr_c = scaler_c.fit_transform(X_concat[train_idx])
+            X_va_c = scaler_c.transform(X_concat[val_idx])
+            rf_neutral = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+            rf_neutral.fit(X_tr_c, y_train)
+            errors_neutral = np.abs(y_val - rf_neutral.predict(X_va_c))
 
             # Concat weights for this fold
             w_concat = np.concatenate([imp[name] for name in sorted(reps.keys())
@@ -174,6 +186,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             all_d_hybrid.extend(d_hybrid.tolist())
             all_d_weighted.extend(d_weighted.tolist())
             all_errors.extend(errors.tolist())
+            all_errors_neutral.extend(errors_neutral.tolist())
 
         if not all_errors:
             continue
@@ -184,7 +197,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         all_d_weighted = np.array(all_d_weighted)
         all_errors = np.array(all_errors)
 
-        # Spearman correlations: distance vs |error|
+        # Spearman correlations: distance vs |error| (hybrid-model errors)
         rho_c, _ = spearmanr(all_d_concat, all_errors)
         rho_cw, _ = spearmanr(all_d_concat_w, all_errors)
         rho_h, _ = spearmanr(all_d_hybrid, all_errors)
@@ -196,6 +209,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'hybrid': float(rho_h),
             'hybrid_weighted': float(rho_w),
         }
+
+        # Neutral-model correlations (errors from RF on concat — removes tautology)
+        all_errors_neutral = np.array(all_errors_neutral)
+        if len(all_errors_neutral) == len(all_d_concat):
+            rho_c_n, _ = spearmanr(all_d_concat, all_errors_neutral)
+            rho_h_n, _ = spearmanr(all_d_hybrid, all_errors_neutral)
+            rho_w_n, _ = spearmanr(all_d_weighted, all_errors_neutral)
+            corr_result['neutral_model'] = {
+                'concat': float(rho_c_n),
+                'hybrid': float(rho_h_n),
+                'hybrid_weighted': float(rho_w_n),
+            }
+            print(f"    Neutral-model AD: concat={rho_c_n:.4f}, hybrid={rho_h_n:.4f}, "
+                  f"hybrid_w={rho_w_n:.4f}")
 
         # Per-rep correlations
         for rname in reps:

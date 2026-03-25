@@ -40,7 +40,9 @@ from experiments._shared import (
     get_model_factories, get_domain_metric, cv_split, make_cv_splitter,
 )
 
-from kirby.hybrid import create_hybrid, apply_feature_selection, compute_feature_importance
+from kirby.hybrid import apply_feature_selection, compute_feature_importance
+from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+# TODO: create_hybrid API not finalised — revisit after framework experiments.
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
 
 

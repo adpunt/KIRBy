@@ -459,7 +459,8 @@ def evaluate_factory_rep(factory, y: np.ndarray, groups: np.ndarray,
 def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
                skip_lm: bool = False, skip_kmer: bool = False,
                cold_setting: str = 'target', n_folds: int = 5,
-               reps_filter: Optional[List[str]] = None):
+               reps_filter: Optional[List[str]] = None,
+               skip_reps: Optional[set] = None):
     """Run full baseline survey on one dataset."""
     print(f"\n{'='*70}")
     print(f"DTA BASELINE SURVEY: {dataset_name.upper()}")
@@ -531,6 +532,10 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
         drug_reps_to_run = [r for r in drug_reps_to_run if r in reps_filter]
         protein_reps_to_run = [r for r in protein_reps_to_run if r in reps_filter]
         factory_drug_reps_to_run = [r for r in factory_drug_reps_to_run if r in reps_filter]
+    if skip_reps:
+        drug_reps_to_run = [r for r in drug_reps_to_run if r not in skip_reps]
+        protein_reps_to_run = [r for r in protein_reps_to_run if r not in skip_reps]
+        factory_drug_reps_to_run = [r for r in factory_drug_reps_to_run if r not in skip_reps]
 
     all_reps_to_run = drug_reps_to_run + factory_drug_reps_to_run + protein_reps_to_run
 
@@ -767,6 +772,8 @@ def main():
                         help='Comma-separated rep names to evaluate (default: all)')
     parser.add_argument('--output', type=str, default=None,
                         help='Save results JSON')
+    parser.add_argument('--skip-existing', action='store_true',
+                        help='Skip reps already present in output JSON')
     args = parser.parse_args()
 
     reps_filter = None
@@ -778,6 +785,21 @@ def main():
     all_results = {}
 
     for ds in datasets:
+        # --skip-existing: find reps already in the output JSON
+        skip_reps = set()
+        if args.skip_existing and args.output:
+            out_path = Path(args.output)
+            if out_path.exists():
+                try:
+                    with open(out_path) as f:
+                        _existing = json.load(f)
+                    ds_data = _existing.get(ds, _existing)
+                    skip_reps = set(ds_data.get('standalone', {}).keys())
+                    if skip_reps:
+                        print(f"  [{ds}] Skipping {len(skip_reps)} existing reps")
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
         max_pairs = args.max_pairs
         if max_pairs is None and ds in ('kiba', 'bindingdb_kd'):
             max_pairs = 30000  # default subsample for large datasets
@@ -785,7 +807,8 @@ def main():
                             skip_lm=args.skip_lm, skip_kmer=args.skip_kmer,
                             cold_setting=args.cold_setting,
                             n_folds=args.n_folds,
-                            reps_filter=reps_filter)
+                            reps_filter=reps_filter,
+                            skip_reps=skip_reps or None)
         all_results[ds] = result
 
     if args.output:

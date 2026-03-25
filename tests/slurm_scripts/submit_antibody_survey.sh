@@ -48,9 +48,8 @@ case "$MODE" in
         echo "  Total: 1 job (42 reps, inter-family datasets)"
         ;;
     all)
-        submit all_dms all_dms "--reps ${ALL_REPS}"
-        submit all_inter all_inter "--reps ${ALL_REPS}"
-        echo "  Total: 2 jobs (42 reps, all datasets)"
+        submit all all "--reps ${ALL_REPS} --skip-existing"
+        echo "  Total: 1 job (42 reps, all datasets)"
         ;;
     all_ft)
         submit ft_dms all_dms "--reps ${ALL_REPS} --finetune"
