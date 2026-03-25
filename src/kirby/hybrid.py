@@ -52,6 +52,10 @@ NAMED_ALLOCATIONS = {
     'thresh_0.5': ('performance_weighted', {'weighting_scheme': 'thresholded', 'weighting_params': {'alpha': 0.5}}),
     'top_3': ('performance_weighted', {'weighting_scheme': 'top_k', 'weighting_params': {'k': 3}}),
     'min_floor_0.05': ('performance_weighted', {'weighting_scheme': 'min_floor', 'weighting_params': {'floor': 0.05}}),
+    'rank_linear': ('performance_weighted', {'weighting_scheme': 'rank_linear'}),
+    'rank_exp': ('performance_weighted', {'weighting_scheme': 'rank_exp', 'weighting_params': {'decay': 0.3}}),
+    'score_gap': ('performance_weighted', {'weighting_scheme': 'score_gap', 'weighting_params': {'gap': 0.3}}),
+    'entropy': ('performance_weighted', {'weighting_scheme': 'entropy', 'weighting_params': {'diversity_penalty': 1.0}}),
     'dominant_greedy': ('dominant_greedy', {}),
     'fixed': ('fixed', {}),
     'two_stage': ('two_stage', {}),
@@ -89,13 +93,18 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
     """
     allocation = {rep: 0 for rep in rep_dict_train.keys()}
     remaining_budget = total_budget
-    
+
     best_val_r2 = -np.inf
     best_allocation = None
     best_feature_info = {}
     steps_without_improvement = 0
     history = []
-    
+
+    # Cache RF importance scores per rep — computed once, reused every iteration.
+    # Importance depends only on (rep features, labels) which are constant across
+    # the greedy loop. The cache is local to this call and discarded on return.
+    _importance_cache = {}
+
     iteration = 0
     while remaining_budget > 0:
         iteration += 1
@@ -103,24 +112,25 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
         iter_best_rep = None
         iter_best_feat_info = None
         iter_best_trial_allocation = None
-        
+
         # Try adding step_size features from each rep
         for rep_name in rep_dict_train.keys():
             # Check if rep is already maxed out
             max_features = rep_dict_train[rep_name].shape[1]
             if allocation[rep_name] >= max_features:
                 continue  # Already using all features from this rep
-            
+
             trial_allocation = allocation.copy()
             # Add step_size, but cap at max_features AND remaining_budget
             features_to_add = min(step_size, max_features - allocation[rep_name], remaining_budget)
             if features_to_add <= 0:
                 continue
             trial_allocation[rep_name] = allocation[rep_name] + features_to_add
-            
+
             # Create hybrid on train and apply SAME features to val
             X_train_trial, feat_info = _create_hybrid_with_allocation(
-                rep_dict_train, train_labels, trial_allocation
+                rep_dict_train, train_labels, trial_allocation,
+                importance_cache=_importance_cache,
             )
             X_val_trial = apply_feature_selection(rep_dict_val, feat_info)
             
@@ -322,13 +332,16 @@ def _build_from_selection(rep_dict_train, rep_dict_val, selected):
     return np.hstack(train_parts), np.hstack(val_parts)
 
 
-def _compute_allocation_weights(baseline_scores, scheme='linear', params=None):
+def _compute_allocation_weights(baseline_scores, scheme='linear', params=None,
+                                rep_dict_train=None):
     """Compute allocation weights from baseline scores using various schemes.
 
     Args:
         baseline_scores: Dict of {rep_name: score} (already clipped to >= 0).
         scheme: Weighting scheme name.
         params: Dict of scheme-specific parameters.
+        rep_dict_train: Optional dict of {rep_name: train_features}. Required
+            only for schemes that need the raw features (e.g. 'entropy').
 
     Returns:
         Dict of {rep_name: weight} (non-negative, not necessarily normalised).
@@ -366,6 +379,71 @@ def _compute_allocation_weights(baseline_scores, scheme='linear', params=None):
         # Special: handled in allocate_performance_weighted directly
         return dict(baseline_scores)
 
+    elif scheme == 'rank_linear':
+        # Weights by rank position: best rep gets n, worst gets 1.
+        # Score magnitudes are ignored — prevents clusters of similar scores
+        # from diluting budget across mediocre reps.
+        sorted_reps = sorted(baseline_scores.items(), key=lambda x: x[1])
+        return {name: float(rank) for rank, (name, _)
+                in enumerate(sorted_reps, start=1)}
+
+    elif scheme == 'rank_exp':
+        # Exponential rank decay: exp(-rank * decay).  Concentrates budget on
+        # top few reps with smooth falloff — no hard cutoff like top_k but
+        # more aggressive than rank_linear.  decay controls steepness.
+        decay = params.get('decay', 0.3)
+        sorted_reps = sorted(baseline_scores.items(), key=lambda x: x[1],
+                             reverse=True)
+        return {name: float(np.exp(-rank * decay))
+                for rank, (name, _) in enumerate(sorted_reps)}
+
+    elif scheme == 'score_gap':
+        # Zero out any rep whose score is more than `gap` below the best.
+        # gap is a fraction of best_score (e.g. 0.3 = within 30%).
+        gap_frac = params.get('gap', 0.3)
+        best_score = max(baseline_scores.values()) if baseline_scores else 0
+        gap = gap_frac * best_score if best_score > 0 else 0
+        return {k: (v if best_score - v <= gap else 0.0)
+                for k, v in baseline_scores.items()}
+
+    elif scheme == 'entropy':
+        # Penalize reps that are redundant with higher-scoring reps.
+        # Walk reps in descending score order. Each rep's weight is its
+        # baseline score multiplied by (1 - max_correlation_with_any_
+        # already-accepted_rep).  This down-weights reps that duplicate
+        # information already captured by a better rep.
+        #
+        # Redundancy is measured via correlation of sample-wise L2 norms
+        # (always n_samples-length, regardless of feature dimensionality).
+        if rep_dict_train is None:
+            return dict(baseline_scores)
+        diversity_penalty = params.get('diversity_penalty', 1.0)
+        sorted_reps = sorted(baseline_scores.items(), key=lambda x: x[1],
+                             reverse=True)
+        accepted_norms = []  # list of (name, sample_norms_array)
+        weights = {}
+        for name, score in sorted_reps:
+            X = rep_dict_train[name]
+            X_clean = np.nan_to_num(np.clip(X, -1e10, 1e10), nan=0.0)
+            sample_norms = np.linalg.norm(X_clean, axis=1)
+            std = np.std(sample_norms)
+            if std > 0:
+                sample_norms = (sample_norms - sample_norms.mean()) / std
+
+            if not accepted_norms:
+                max_corr = 0.0
+            else:
+                correlations = []
+                for _, prev_norms in accepted_norms:
+                    r = np.corrcoef(sample_norms, prev_norms)[0, 1]
+                    correlations.append(abs(r) if not np.isnan(r) else 0.0)
+                max_corr = max(correlations)
+
+            penalty = max(0.0, 1.0 - diversity_penalty * max_corr)
+            weights[name] = score * penalty
+            accepted_norms.append((name, sample_norms))
+        return weights
+
     else:
         raise ValueError(f"Unknown weighting scheme: {scheme}")
 
@@ -388,7 +466,8 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
         total_budget: Maximum total features to select (default: 100)
         weighting_scheme: How to transform baseline scores into weights.
             'linear' (default, identical to original), 'softmax', 'power_law',
-            'thresholded', 'top_k', 'min_floor'.
+            'thresholded', 'top_k', 'min_floor', 'rank_linear', 'exponential',
+            'score_gap', 'entropy'.
         weighting_params: Dict of scheme-specific parameters.
 
     Returns:
@@ -415,7 +494,8 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
     
     # Apply weighting scheme to transform baseline scores into weights
     weights = _compute_allocation_weights(baseline_scores, weighting_scheme,
-                                          weighting_params)
+                                          weighting_params,
+                                          rep_dict_train=rep_dict_train)
 
     # Handle min_floor scheme: guarantee minimum allocation per rep
     if weighting_scheme == 'min_floor':
@@ -548,9 +628,13 @@ def allocate_dominant_greedy(rep_dict_train, rep_dict_val, train_labels, val_lab
     allocation[best_rep] = dominant_budget
     remaining_budget = total_budget - dominant_budget
 
+    # Cache RF importance scores — local to this call, discarded on return.
+    _importance_cache = {}
+
     # Build initial hybrid and score
     X_train_init, init_feat_info = _create_hybrid_with_allocation(
-        rep_dict_train, train_labels, allocation
+        rep_dict_train, train_labels, allocation,
+        importance_cache=_importance_cache,
     )
     X_val_init = apply_feature_selection(rep_dict_val, init_feat_info)
     best_val_score = _evaluate_allocation(X_train_init, X_val_init, train_labels, val_labels)
@@ -585,7 +669,8 @@ def allocate_dominant_greedy(rep_dict_train, rep_dict_val, train_labels, val_lab
             trial_allocation[rep_name] = allocation[rep_name] + features_to_add
 
             X_train_trial, feat_info = _create_hybrid_with_allocation(
-                rep_dict_train, train_labels, trial_allocation
+                rep_dict_train, train_labels, trial_allocation,
+                importance_cache=_importance_cache,
             )
             X_val_trial = apply_feature_selection(rep_dict_val, feat_info)
             score = _evaluate_allocation(X_train_trial, X_val_trial, train_labels, val_labels)
@@ -797,7 +882,8 @@ def _is_classification_task(labels):
     return False
 
 
-def _create_hybrid_with_allocation(rep_dict, labels, allocation):
+def _create_hybrid_with_allocation(rep_dict, labels, allocation,
+                                    importance_cache=None):
     """Helper: Create hybrid with a pre-computed allocation dict {rep_name: n_features}.
 
     Always uses RandomForest feature_importances_ for within-rep feature selection.
@@ -806,61 +892,75 @@ def _create_hybrid_with_allocation(rep_dict, labels, allocation):
     we have an allocation, feature selection within each rep uses RF for speed.
     Greedy/dominant_greedy bypass importance_method entirely — they evaluate
     allocations by training RF models and using feature_importances_ directly.
+
+    Args:
+        importance_cache: Optional dict {rep_name: importance_scores}. When
+            provided, cached importance scores are reused instead of re-fitting
+            an RF.  New scores are written back into the dict so callers in
+            iterative loops (greedy, dominant_greedy) pay the RF cost only once
+            per rep.
     """
     selected_features = []
     feature_info = {}
-    
+
     is_classification = _is_classification_task(labels)
-    
+
     for name, X in rep_dict.items():
         n_select = allocation[name]
-        
+
         if n_select == 0:
             continue
-        
+
         # Clean data
         X_clipped = np.clip(X, -1e10, 1e10)
         X_clipped = np.nan_to_num(X_clipped, nan=0.0, posinf=1e10, neginf=-1e10)
-        
+
         if n_select >= X_clipped.shape[1]:
             selected_features.append(X_clipped)
             feature_info[name] = {
                 'selected_indices': np.arange(X_clipped.shape[1]),
-                'importance_scores': np.ones(X_clipped.shape[1]),  # All features selected, importance not computed
+                'importance_scores': np.ones(X_clipped.shape[1]),
                 'n_features': X_clipped.shape[1]
             }
             continue
-        
-        # Compute importance and select top features
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X_clipped)
-        
-        # Use RF for importance (fast and reliable)
-        if is_classification:
-            model = RandomForestClassifier(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
+
+        # Check cache before fitting RF
+        if importance_cache is not None and name in importance_cache:
+            importances = importance_cache[name]
         else:
-            model = RandomForestRegressor(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
-        
-        model.fit(X_scaled, labels)
-        importances = model.feature_importances_
-        importances = np.nan_to_num(importances, nan=0.0)
-        
+            # Compute importance via RF
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X_clipped)
+
+            if is_classification:
+                model = RandomForestClassifier(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
+            else:
+                model = RandomForestRegressor(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
+
+            model.fit(X_scaled, labels)
+            importances = model.feature_importances_
+            importances = np.nan_to_num(importances, nan=0.0)
+
+            # Store in cache for reuse
+            if importance_cache is not None:
+                importance_cache[name] = importances
+
         n_select = min(n_select, X_clipped.shape[1])
         top_idx = np.argsort(importances)[-n_select:][::-1]
-        
+
         X_selected = X_clipped[:, top_idx]
         selected_features.append(X_selected)
-        
+
         feature_info[name] = {
             'selected_indices': top_idx,
             'importance_scores': importances[top_idx],
             'n_features': n_select
         }
-    
+
     if len(selected_features) == 0:
         n_samples = len(labels)
         return np.zeros((n_samples, 0), dtype=np.float32), feature_info
-    
+
     return np.hstack(selected_features).astype(np.float32), feature_info
 
 

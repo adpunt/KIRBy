@@ -67,18 +67,38 @@ def _run_full_grid(data, config, importance_method, metric_name, metric_fn,
     groups = data['groups']
     sample_X = next(iter(reps.values()))
 
-    total = len(ALLOCATIONS) * len(budgets) * len(STEP_SIZES) * len(models)
+    # Count: greedy-family allocs get full step_size sweep, others run once
+    from kirby.hybrid import NAMED_ALLOCATIONS as _NA_count
+    _GREEDY_BASES_count = {'greedy', 'dominant_greedy', 'greedy_feature'}
+    n_step_sensitive = sum(1 for a in ALLOCATIONS
+                           if _NA_count.get(a, (a, {}))[0] in _GREEDY_BASES_count)
+    n_step_insensitive = len(ALLOCATIONS) - n_step_sensitive
+    total = (n_step_sensitive * len(STEP_SIZES) + n_step_insensitive) \
+        * len(budgets) * len(models)
     print(f"\n  Full grid: {len(ALLOCATIONS)} allocs x {len(budgets)} budgets x "
-          f"{len(STEP_SIZES)} step_sizes x {len(models)} models = {total} evaluations"
+          f"step_sizes x {len(models)} models = {total} evaluations"
           f" (folds: {max_folds}/{n_folds})")
 
     results = []
     idx = 0
     t0_total = time.time()
 
+    # Detect which allocations actually use step_size (greedy-family).
+    # Non-greedy allocations (e.g. softmax_T5 -> performance_weighted)
+    # ignore step_size, so we only run them once (step_size=10 placeholder).
+    from kirby.hybrid import NAMED_ALLOCATIONS as _NA
+    _GREEDY_BASES = {'greedy', 'dominant_greedy', 'greedy_feature'}
+
+    def _uses_step_size(alloc_name):
+        base = _NA.get(alloc_name, (alloc_name, {}))[0]
+        return base in _GREEDY_BASES
+
     for alloc in ALLOCATIONS:
+        uses_step = _uses_step_size(alloc)
+        effective_steps = STEP_SIZES if uses_step else [10]
+
         for budget in budgets:
-            for step_size in STEP_SIZES:
+            for step_size in effective_steps:
                 for model_name, model_factory in models.items():
                     idx += 1
                     fold_scores = []
@@ -95,13 +115,17 @@ def _run_full_grid(data, config, importance_method, metric_name, metric_fn,
                         val_reps = {k: v[val_idx] for k, v in reps.items()}
                         y_train, y_val = labels[train_idx], labels[val_idx]
 
+                        hybrid_kwargs = dict(
+                            allocation_method=alloc,
+                            budget=budget,
+                            importance_method=importance_method,
+                        )
+                        if uses_step:
+                            hybrid_kwargs['step_size'] = step_size
+
                         try:
                             X_train_h, feature_info = create_hybrid(
-                                train_reps, y_train,
-                                allocation_method=alloc,
-                                budget=budget,
-                                step_size=step_size,
-                                importance_method=importance_method,
+                                train_reps, y_train, **hybrid_kwargs,
                             )
                             X_val_h = apply_feature_selection(val_reps,
                                                               feature_info)
@@ -136,7 +160,7 @@ def _run_full_grid(data, config, importance_method, metric_name, metric_fn,
                     entry = {
                         'allocation_method': alloc,
                         'budget': budget,
-                        'step_size': step_size,
+                        'step_size': step_size if uses_step else None,
                         'model': model_name,
                         'importance_method': importance_method,
                         'score_mean': score_mean,
@@ -150,8 +174,9 @@ def _run_full_grid(data, config, importance_method, metric_name, metric_fn,
                     results.append(entry)
 
                     if idx % 20 == 0 or idx == total or idx <= 3:
+                        step_str = f"step={step_size}/" if uses_step else ""
                         print(f"  [{idx}/{total}] {alloc}/b={budget}/"
-                              f"step={step_size}/{model_name}: "
+                              f"{step_str}{model_name}: "
                               f"{metric_name}={score_mean:.4f} ({elapsed:.1f}s)",
                               flush=True)
 
@@ -378,9 +403,10 @@ def run(data, config, output_dir, dataset_name, importance_method='treeshap',
         data=data,
         config={
             'n_folds': config['n_splits'],
+            'max_folds': config.get('max_folds', config['n_splits']),
             'models': model_names,
             'allocations': ALLOCATIONS,
-            'budgets': BUDGETS,
+            'budgets': config.get('budgets', BUDGETS),
             'step_sizes': STEP_SIZES,
             'refinement_step_sizes': REFINEMENT_STEP_SIZES,
             'importance_method': importance_method,
