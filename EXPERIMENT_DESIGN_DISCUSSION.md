@@ -476,6 +476,22 @@ ssh scat9264@gateway.arc.ox.ac.uk "ls /data/stat-cadd/scat9264/KIRBy/tests/resul
 ssh scat9264@gateway.arc.ox.ac.uk "ls /data/stat-cadd/scat9264/KIRBy/tests/results/framework/f01_allocation_strategies/ /data/stat-cadd/scat9264/KIRBy/tests/results/framework/f03_greedy_step_size/ /data/stat-cadd/scat9264/KIRBy/tests/results/framework/f04_two_phase_search/"
 ```
 
+### OPIG experiments — BLOCKED on framework
+
+5 OPIG experiments (humanness, trastuzumab, ginkgo, graphinity, qsar) are ready but blocked until framework (F01/F03/F04) finalises SPEED_TIERS and caches are cleared.
+
+**Output:** `tests/results/comparisons/opig_*.json`
+
+```bash
+# When ready to submit (after framework + cache clear):
+bash tests/slurm_scripts/submit_opig_experiments.sh          # all 5
+bash tests/slurm_scripts/submit_opig_experiments.sh antibody  # humanness + tz + ginkgo
+bash tests/slurm_scripts/submit_opig_experiments.sh molecular # graphinity + qsar
+
+# When done:
+scp -r "scat9264@gateway.arc.ox.ac.uk:/data/stat-cadd/scat9264/KIRBy/tests/results/comparisons/opig_*" tests/results/comparisons/
+```
+
 ### ⚠️ Cache warning
 
 The complexity and similarity experiments currently running on ARC are using **stale hybrid caches** (pre-augmentation-overhaul defaults: step_size=10, patience=3, augmentation_strategy='greedy_ablation'). Their results are still useful as screening but will need re-running after:
