@@ -146,6 +146,16 @@ def run_all(dataset_name: str, output_dir: str,
     data = load_data(dataset_name, rep_preset='all', rep_names=rep_names)
     print(f"  Loaded in {time.time() - t0:.1f}s")
 
+    # NaN guard: some reps produce NaN for certain sequences. Replace with 0 and warn.
+    import numpy as np
+    reps_data = data.get('reps', {})
+    for rname, X in list(reps_data.items()):
+        nan_count = int(np.isnan(X).sum())
+        if nan_count > 0:
+            pct = 100 * nan_count / X.size
+            print(f"  WARNING: {rname} has {nan_count} NaN values ({pct:.1f}%) — imputing 0")
+            reps_data[rname] = np.nan_to_num(X, nan=0.0)
+
     # ── Shared search (produced by S02, consumed by S03-S07) ──
     # Run the search once up front if any of S02-S07 are in the experiment list.
     shared_search = None

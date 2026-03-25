@@ -133,8 +133,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     total_dim = sum(v.shape[1] for v in reps.values())
-    budgets = [25, 50, 100, 200, 500, total_dim]
-    budgets = [b for b in budgets if b <= total_dim]
+    # Cap full_dim at 2048 to prevent MLP/SVM blowup on large concat spaces
+    capped_full = min(total_dim, 2048)
+    budgets = [b for b in [25, 50, 100, 200, 500, 1024, capped_full] if b <= total_dim]
+    budgets = sorted(set(budgets))  # deduplicate
 
     families = _get_regularization_families()
     n_samples = len(labels)

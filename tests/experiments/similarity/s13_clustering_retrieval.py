@@ -178,8 +178,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  Hybrid creation failed: {e}")
 
     # Importance weights for weighted retrieval
-    imp_concat = compute_feature_importance(
-        StandardScaler().fit_transform(X_concat), labels, method='lightgbm_gain')
+    # compute_feature_importance expects {rep_name: array} dict, not raw ndarray
+    X_concat_s = StandardScaler().fit_transform(X_concat)
+    imp_dict = compute_feature_importance(
+        {'concat': X_concat_s}, labels, method='lightgbm_gain')
+    imp_concat = imp_dict.get('concat', np.ones(X_concat.shape[1]))
 
     print(f"  Spaces: {list(spaces.keys())}")
 
@@ -208,8 +211,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                        importance_weights=imp_concat)
         elif space_name == 'hybrid' and 'hybrid' in spaces:
             # Importance on hybrid features
-            imp_h = compute_feature_importance(
-                StandardScaler().fit_transform(X), labels, method='lightgbm_gain')
+            imp_h_dict = compute_feature_importance(
+                {'hybrid': StandardScaler().fit_transform(X)}, labels, method='lightgbm_gain')
+            imp_h = imp_h_dict.get('hybrid', np.ones(X.shape[1]))
             ret_w = _retrieval_quality(X, labels, k=k_retrieval,
                                        importance_weights=imp_h)
 
