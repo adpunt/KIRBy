@@ -456,15 +456,18 @@ def run(data, config, output_dir, dataset_name, importance_method='treeshap',
                 'utilization': best['utilization'],
             }
             pat_str = str(best['patience']) if best['patience'] is not None else 'off'
-            print(f"    {model_name:>10}: {best['allocation']}/step={best['step_size']:>2} "
+            step_str = str(best['step_size']) if best['step_size'] is not None else '-'
+            print(f"    {model_name:>10}: {best['allocation']}/step={step_str:>2} "
                   f"pat={pat_str:>3} b={best['budget']:>3} dim={best['n_features']:>3} "
                   f"{metric_name}={best['score_mean']:.4f} stop={best['stop_reason']}")
 
     # Model dependency: does optimal step_size vary by model?
+    # Only consider greedy-family configs (baselines have step_size=None).
     optimal_steps = set()
     for model_name in models:
         mc = [c for c in valid if c['model'] == model_name
-              and c['allocation'] != 'greedy_feature']
+              and c['allocation'] != 'greedy_feature'
+              and c['step_size'] is not None]
         if mc:
             best = _best_config(mc, lower_is_better)
             optimal_steps.add(best['step_size'])
