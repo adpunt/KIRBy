@@ -487,6 +487,15 @@ def run_all(dataset_name: str, output_dir: str,
     data = load_data(dataset_name, rep_preset='all', rep_names=rep_names)
     print(f"  Loaded in {time.time() - t0:.1f}s")
 
+    # NaN guard: some reps produce NaN for certain sequences. Replace with 0 and warn.
+    reps = data.get('reps', {})
+    for rname, X in list(reps.items()):
+        nan_count = int(np.isnan(X).sum())
+        if nan_count > 0:
+            pct = 100 * nan_count / X.size
+            print(f"  WARNING: {rname} has {nan_count} NaN values ({pct:.1f}%) — imputing 0")
+            reps[rname] = np.nan_to_num(X, nan=0.0)
+
     # ── Run experiments in order ──
     results = {}
     for exp_id in experiments:

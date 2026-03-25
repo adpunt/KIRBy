@@ -74,7 +74,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Reps: {', '.join(f'{k}({v.shape[1]})' for k, v in sorted(reps.items()))}\n")
 
     sample_X = next(iter(reps.values()))
-    budgets = [50, 100, 200, 500, total_dim]
+    budgets = [b for b in [50, 100, 200, 500, 1024] if b <= total_dim]
     results = []
 
     for model_name, model_factory in models.items():
