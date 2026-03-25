@@ -485,6 +485,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     groups = data.get('groups')
     n_samples = len(labels)
 
+    if n_samples < 200:
+        print(f"  Skipping S11: n={n_samples} < 200 (BO seed set too small for greedy allocation)")
+        return {'error': 'dataset_too_small', 'n_samples': n_samples}
+
     # Domain-aware metric for determining "lower_is_better"
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 

@@ -76,7 +76,8 @@ from find_best_hybrid_molecular import (
 )
 
 # Antibody dataset prefixes
-_ANTIBODY_PREFIXES = ('flab_', 'abcov_', 'sabdab_', 'abagym_', 'abbind', 'ddg_')
+_ANTIBODY_PREFIXES = ('flab_', 'abcov_', 'sabdab_', 'abagym_', 'abbind', 'ddg_',
+                      'ginkgo_', 'tz_her2', 'humanness_', 'graphinity_')
 
 
 def _is_antibody_dataset(name: str) -> bool:
@@ -127,7 +128,7 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
             'groups': groups,
             'n_scaffolds': n_groups,
             'n_groups': n_groups,
-            'task_type': 'regression',
+            'task_type': data.get('task_type', 'regression'),
             'domain': 'antibody',
             'augmentations': None,
         }
