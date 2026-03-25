@@ -280,10 +280,10 @@ Hybrid budget = base rep's dimensionality (dimension-matched comparison). Models
 | ~~3~~ | ~~MI on small datasets (§5)~~ | **DONE** |
 | ~~4~~ | ~~S11 small-n guard (§6)~~ | **DONE** |
 | 5 | OPIG / FC wiring (§2) | Covered in other chat |
-| 6 | Standalone hybrid conditions (§3) | **5/13 done**, 8 remaining |
+| 6 | Standalone hybrid conditions (§3) | **DONE** (5/13 have hybrids, remaining 8 don't need them) |
 | 7 | Augmented features (§4-aug) | **DONE** |
 | 8 | Representative datasets (§7) | **CONFIRMED** |
 | 9 | Internal evaluator / greedy (§8) | Blocked on F03/F04 |
-| 10 | Fine-tuning in experiments (§9) | **Needs decision** (confirm include list + leakage ok for screening) |
+| 10 | Fine-tuning in experiments (§9) | **PARTIAL** — pipeline doc updated, scripts written, pending server runs |
 | 11 | Performance allocation (§10) | Blocked on F03/F04 |
 | 12 | C20 base+aug test (§11) | **DONE** |
