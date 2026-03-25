@@ -142,4 +142,8 @@ src/clamp/
 
 # Allow these specific files even if they match patterns above
 !.gitignore
-!.gitattributes
+!.gitattributes*.md
+!README.md
+!SETUP.md
+!SETUP_PRETRAINED_MODELS.md
+experiment_extension.txt
