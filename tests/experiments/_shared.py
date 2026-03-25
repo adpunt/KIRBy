@@ -880,7 +880,8 @@ def compute_dataset_complexity(reps: Dict[str, np.ndarray], labels: np.ndarray) 
 # DATA LOADING (domain-aware)
 # =============================================================================
 
-_ANTIBODY_PREFIXES = ('flab_', 'abcov_', 'sabdab_', 'abagym_', 'abbind', 'ddg_')
+_ANTIBODY_PREFIXES = ('flab_', 'abcov_', 'sabdab_', 'abagym_', 'abbind', 'ddg_',
+                      'ginkgo_', 'tz_her2', 'humanness_', 'graphinity_')
 _TCGA_PREFIXES = ('tcga_',)
 _NUCLEOTIDE_PREFIXES = ('nt_', 'gb_')
 _REACTION_DATASETS = ('buchwald_hartwig', 'suzuki', 'bh_doyle_plates')
@@ -1042,7 +1043,7 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
             'groups': groups,
             'n_scaffolds': n_groups,
             'n_groups': n_groups,
-            'task_type': 'regression',
+            'task_type': data.get('task_type', 'regression'),
             'domain': 'antibody',
             'augmentations': None,
         }

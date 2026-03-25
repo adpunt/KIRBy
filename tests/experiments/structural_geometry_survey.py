@@ -211,6 +211,21 @@ def run_geometry_survey(
         print("  ERROR: No base reps available — run antibody_baseline_survey first")
         return {'error': 'no base reps'}
 
+    # 3b. Build hybrid from all available reps (base + geometry)
+    all_reps_for_hybrid = {**base_reps, **geo_reps}
+    all_reps_for_hybrid.pop('all_geometry', None)
+    if len(all_reps_for_hybrid) >= 2:
+        try:
+            from kirby.find_best_hybrid import find_best_hybrid
+            search = find_best_hybrid(
+                base_reps=all_reps_for_hybrid, labels=labels, groups=groups,
+                speed='fast', return_fitted=True, verbose=False, cache=True)
+            if search.fitted_result is not None:
+                geo_reps['kirby_hybrid'] = search.fitted_result.X_hybrid
+                print(f"  Hybrid built: {geo_reps['kirby_hybrid'].shape[1]}D")
+        except Exception as e:
+            print(f"  Hybrid build failed: {e}")
+
     # 4. Get models
     models = get_models(model_names, n_samples=data['n_samples'],
                         task_type=task_type)

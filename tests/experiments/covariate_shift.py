@@ -230,6 +230,19 @@ def main():
         reps = get_representations(smiles, args.reps)
         metric_name, higher_is_better = _get_primary_metric(ds_name, task_type)
 
+        # Build hybrid from the viable reps and add as another "rep"
+        try:
+            from kirby.find_best_hybrid import find_best_hybrid
+            scaffold_groups, _ = assign_scaffold_groups(smiles)
+            search = find_best_hybrid(
+                base_reps=reps, labels=labels, groups=scaffold_groups,
+                speed='fast', return_fitted=True, verbose=False, cache=True)
+            if search.fitted_result is not None:
+                reps['kirby_hybrid'] = search.fitted_result.X_hybrid
+                print(f"  Hybrid built: {reps['kirby_hybrid'].shape[1]}D")
+        except Exception as e:
+            print(f"  Hybrid build failed: {e}")
+
         print(f"  {len(labels)} samples, {len(reps)} reps, task={task_type}")
 
         ds_results = {}
