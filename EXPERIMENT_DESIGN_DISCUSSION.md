@@ -48,11 +48,46 @@ task_type = data.get('task_type', 'regression')
 - The OPIG baseline survey results (`tests/results/opig/`) are standalone JSONs that no experiment reads. They're informational only.
 - C13 (forward compatibility) has stale `_LEGACY_ANTIBODY` rep names (`ablang`, `protbert` instead of `ablang2`, `prot_t5`) — even if ginkgo loaded, the new/legacy split would be wrong.
 
-**Once §1 is fixed:** The existing per-dataset scripts will just work. C02 will automatically produce "hybrid vs baseline" comparisons for all OPIG datasets. C13 needs its legacy set updated separately.
+**Once §1 is fixed:** The existing per-dataset scripts (complexity/similarity/noise) will work for OPIG datasets. That handles point (1) below.
 
 ---
 
-## 3. Budgets — redesign needed
+## 3. Standalone comparison experiments — hybrid conditions needed
+
+There are **13 standalone experiment scripts** in `tests/experiments/` that each test a specific question (fine-tuning, covariate shift, 3D models, etc.) using individual reps. NONE of them has a hybrid condition. These are separate from the complexity/similarity/noise per-dataset experiments.
+
+OPIG-affiliated datasets are involved in two things:
+1. **The complexity/similarity/noise experiments** (handled by per-dataset scripts, needs §1 routing fix)
+2. **These standalone experiments** (need a hybrid condition added to each one)
+
+**The modification for each:** Build a KIRBy hybrid (via `find_best_hybrid` or `create_hybrid`), then evaluate it alongside the individual reps using the same analysis the experiment already does. This shows whether the hybrid changes the experiment's conclusion.
+
+| # | Script | What hybrid condition tests |
+|---|--------|---------------------------|
+| 1 | `antibody_finetune_comparison.py` | Does hybrid of frozen reps match or beat fine-tuned single reps? If yes → fine-tuning is redundant when you have hybrid. |
+| 2 | `antibody_region_ablation.py` | Does hybrid across pooling strategies beat the best single pooling? Does the hybrid discover that CDR+FW regions should be combined? |
+| 3 | `covariate_shift.py` | Is the hybrid more robust across split types (scaffold/MW/spectral) than any single rep? Smaller performance delta across splits = more robust. |
+| 4 | `dta_e2e_comparison.py` | Does KIRBy hybrid of frozen reps close the gap with end-to-end DeepDTA/GraphDTA? |
+| 5 | `dta_finetune_comparison.py` | Does hybrid of frozen reps beat LoRA fine-tuned single reps for DTA? |
+| 6 | `imrie_transfer_learning.py` | Does hybrid + TL > hybrid alone? Does hybrid + TL > TL + best single rep? Is TL orthogonal to hybridization? |
+| 7 | `molecular_finetune_comparison.py` | Does hybrid of frozen reps beat LoRA/contrastive fine-tuned single reps? |
+| 8 | `molecular_graph_survey.py` | Does the hybrid's greedy search select graph/structural reps as augmentations? Does automated selection beat manual concatenation? |
+| 9 | `qm9_3d_comparison.py` | Can hybrid of frozen reps approach E2E SchNet/DimeNet++? (Probably not for QM9 — but shows the boundary.) |
+| 10 | `reaction_rep_comparison.py` | Does hybrid of reaction reps beat the best single reaction rep? Which reps does greedy allocation select? |
+| 11 | `structural_geometry_survey.py` | Does KIRBy automated search discover the same geometry augmentations that manual concatenation found useful? |
+| 12 | `tcga_foundation_comparison.py` | Does hybrid of frozen genomic FMs beat fine-tuned single FMs? |
+| 13 | `wsi_abmil_comparison.py` | Does hybrid across WSI encoders beat the best single encoder? Does it beat ABMIL aggregation? |
+
+**Implementation for each:** ~20-40 lines per script. In the evaluation loop, add a condition that:
+1. Calls `create_hybrid` (or `find_best_hybrid`) on the available reps
+2. Evaluates the hybrid using the same model/metric/CV as the other conditions
+3. Reports it in the same results table
+
+**This is NOT architectural change — it's adding one more row to each experiment's results table.**
+
+---
+
+## 4. Budgets — redesign needed (was §3)
 
 **Current:** PRELIMINARY config uses `[25, 50, 100, 200, 500]`. Now capped at 1024 after MLP blowup at 18881.
 
@@ -225,13 +260,14 @@ If R²_concat ≈ R²_base but R²_hybrid > R²_base, then the hybrid's feature 
 
 | Priority | Issue | Blocks | Fix complexity |
 |----------|-------|--------|----------------|
-| 1 | `load_data` routing (§1) | 8/33 datasets | 2 lines |
-| 2 | Augmented features (§4) | All experiments missing augmentation | Medium (loader change) |
-| 3 | Representative datasets (§7) | Fast iteration | Config only |
-| 4 | Budgets (§3) | All experiments use suboptimal grid | Config change |
-| 5 | Internal evaluator (§8) | Greedy allocation suboptimal | Blocked on F03/F04 |
-| 6 | Base + aug test (§11) | New experiment | New file |
-| 7 | MI on small datasets (§5) | Cosmetic (MI=0) | Small code change |
-| 8 | S11 small-n guard (§6) | Cosmetic (BO skips) | 5 lines |
-| 9 | Fine-tuning (§9) | Scope expansion | Significant |
-| 10 | Performance allocation (§10) | Blocked on F03/F04 | Config change after unblock |
+| 1 | `load_data` routing (§1) | 8/33 datasets for complexity/sim/noise | 2 lines |
+| 2 | Standalone experiment hybrid conditions (§3) | 13 experiments have no hybrid | ~20-40 lines each |
+| 3 | Augmented features (§5) | All experiments missing augmentation | Medium (loader change) |
+| 4 | Representative datasets (§8) | Fast iteration | Config only |
+| 5 | Budgets (§4) | All experiments use suboptimal grid | Config change |
+| 6 | Internal evaluator / greedy allocation (§9) | Greedy is worst strategy | Blocked on F03/F04 |
+| 7 | Base + aug test (§12) | New experiment | New file |
+| 8 | MI on small datasets (§6) | Cosmetic (MI=0) | Small code change |
+| 9 | S11 small-n guard (§7) | Cosmetic (BO skips) | 5 lines |
+| 10 | Fine-tuning (§10) | Scope expansion | Significant |
+| 11 | Performance allocation (§11) | Blocked on F03/F04 | Config change after unblock |
