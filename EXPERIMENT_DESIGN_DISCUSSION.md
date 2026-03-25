@@ -197,49 +197,32 @@ FT reps are compute-once, save-as-.npy, load-like-frozen. NOT per-fold factories
 | lora_chemberta_esm2 | 0.749 vs 0.748 frozen (+.001) | **Negligible** |
 | lora_molformer_esm2 | 0.726 vs 0.748 (-.022) | **WORSE** |
 
-### FT reps worth promoting to static pre-computed
+### Decisions made (2026-03-25)
 
-**Include (clear benefit):**
-1. `scfoundation_ft` (TCGA) — FT-only, frozen is dead. **MUST** include.
-2. `molformer_lora` (molecular) — beats frozen 2/3. Swap-type (replaces `molformer` when flag on).
-3. `molformer_contrastive` (molecular) — beats frozen 2/3. Swap-type.
-4. `graphmvp_ft` (molecular) — beats frozen **3/3**. Swap-type (replaces `graphmvp`).
+**Per-dataset swap rules (FT replaces frozen ONLY where FT wins):**
+- lora_molformer replaces molformer on: logd, caco2. Frozen kept on herg.
+- contrastive_molformer replaces molformer on: logd, caco2. Frozen kept on herg.
+- graphmvp_ft replaces graphmvp on: logd, caco2, herg (all 3).
+- scfoundation_ft: FT-only on both TCGA datasets (frozen is dead).
+- geneformer_ft: general tier on both TCGA datasets (frozen v2 fallback).
+- Pipeline doc updated with per-dataset tier tables.
 
-**Maybe (marginal):**
-5. `geneformer_ft` (TCGA) — marginal gain, frozen v2 is fine. Swap-type.
-6. `chembert_lora` / `chembert_contrastive` (molecular) — only wins on logd.
+**Exclude everywhere:**
+- All chemberta FT, selformer FT, freeze_head (worse on all datasets)
+- gp_molformer, grover_ft (broken/NaN)
+- antiberty_ft (catastrophically broken, -166M R²)
+- All DTA protein LoRA (broken), DTA drug LoRA (negligible)
 
-**Exclude:**
-- All chemberta FT (worse on all datasets)
-- All selformer FT (worse on all datasets)
-- All freeze_head (dead everywhere)
-- gp_molformer (broken)
-- grover_ft (broken)
-- antiberty_ft (catastrophically broken)
-- All DTA protein LoRA (broken)
-- DTA drug LoRA (negligible/worse)
-- Antibody FT (too mixed to be reliable)
+### BLOCKED — waiting on server runs
 
-### What needs to change
+**Molecular FT fill (4 datasets):** qm9, adme_hlm, adme_rlm, adme_mdr1 need lora_molformer + contrastive_molformer + graphmvp_ft results. Script: `submit_molecular_ft_fill.sh`.
 
-**Step 1: Compute and save FT embeddings.** For each (FT_rep, dataset) pair above, run the existing factory ONCE on the full dataset, save the resulting embedding array to `.npy`. This means labels ARE used (acknowledged leakage for screening purposes — proper per-fold FT is the standalone experiment's job).
+**Antibody ESM-2 LoRA fill (29 datasets):** esm2_lora on all active antibody datasets (inter-family + DMS + CLF + Ginkgo). Script: `submit_antibody_ft_fill.sh`. Per-dataset include/exclude decisions pending results.
 
-**Step 2: Register in rep dispatch.** Add FT rep names to the static rep dicts (MOLECULAR_REPS, TCGA_REPS). They load from .npy like any frozen rep.
-
-**Step 3: Flag mechanism.** In `DATASET_REPS` and the rep dispatch:
-- Default: frozen reps only
-- `--finetune` flag: swap frozen→FT for reps that have FT versions, add FT-only reps (scfoundation_ft)
-- Implementation: a `FT_SWAP_MAP` dict, e.g. `{'molformer': 'molformer_lora', 'graphmvp': 'graphmvp_ft', ...}`
-
-**Step 4: Complexity experiment (C21).** Compare:
-1. Hybrid (frozen reps only) — default
-2. Hybrid (frozen + FT swapped in) — with flag
-Same datasets, same budgets, same models. Shows whether FT reps change hybrid composition/performance.
-
-### Decision needed
-- Confirm the "include" list above (items 1-4)
-- Confirm the "maybe" items (5-6) — in or out?
-- Confirm that compute-once with acknowledged leakage is acceptable for screening
+**After results land:**
+1. Update per-dataset tier tables in pipeline doc (swap frozen→FT only where FT wins)
+2. Implement compute-once .npy saving + flag toggle in rep dispatch
+3. Write complexity experiment comparing hybrid with/without FT reps
 
 ---
 
