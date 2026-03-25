@@ -270,3 +270,215 @@ Hybrid budget = base rep's dimensionality (dimension-matched comparison). Models
 | 10 | Fine-tuning in experiments (§9) | **PARTIAL** — pipeline doc updated, scripts written, pending server runs |
 | 11 | Performance allocation (§10) | Blocked on F03/F04 |
 | 12 | C20 base+aug test (§11) | **DONE** |
+
+---
+
+## 12. Server Job Tracker (2026-03-25)
+
+### What's running and what it blocks
+
+#### ARC — Complexity Experiments (cx_*)
+**Jobs:** cx_herg, cx_caco2, cx_logd, cx_qm9, cx_adme_hlm, cx_adme_rlm, cx_adme_mdr1 (7 jobs)
+**Output:** `tests/results/complexity/{dataset}/` — per-experiment JSONs (c01, c02, c05, etc.)
+**Status:** Running (~13h in). No local results yet.
+**Blocks:** Nothing directly — these are the research experiments. But they use stale caches (pre-augmentation defaults). **Must clear caches and re-run after framework finalisation.**
+
+```bash
+# When done:
+scp -r "scat9264@gateway.arc.ox.ac.uk:/data/stat-cadd/scat9264/KIRBy/tests/results/complexity/" tests/results/complexity/
+```
+
+#### ARC — Framework F01/F03/F04 (CRITICAL — blocks §8 and §10)
+**Jobs:** f01_* (8 datasets), f03_* (7 datasets), f04_* (8 datasets) = 23 jobs
+**Datasets:** logd, herg, buchwald_hartwig, flab_thermo_tresanco, flab_pk_jain_heprt, abagym_EGFR, tz_her2_binary, ginkgo_hic, (some also tcga_luad, tcga_brca)
+**Output:** `tests/results/framework/f01_allocation_strategies/`, `f03_greedy_step_size/`, `f04_two_phase_search/`
+**Status:** Running (~1-2h in). F01 has 3/7 locally (tcga_luad, tcga_brca, flab_fcrnrt). F03 and F04 have 0 locally (all prior runs timed out).
+**Blocks:**
+- §8 Internal evaluator — can't finalize Ridge default until F01 confirms allocation ranking
+- §10 Performance allocation — can't update hardcoded `allocation_method='greedy'` until F01/F03/F04 show what replaces it
+- F02 (adaptive pruning) — reads F01+F03 JSON outputs
+- F09 (cross-domain synthesis) — reads all framework outputs
+- **ALL thesis experiments at scale** — SPEED_TIERS need finalizing first
+
+```bash
+# When done (pull all framework results):
+scp -r "scat9264@gateway.arc.ox.ac.uk:/data/stat-cadd/scat9264/KIRBy/tests/results/framework/" tests/results/framework/
+```
+
+#### ARC — Similarity Experiments (already submitted, some completed)
+**Jobs:** Submitted via `submit_all_similarity.sh` — 33 datasets
+**Output:** `tests/results/similarity/{exp_id}/{dataset}.json`
+**Status:** At least flab_pk_jain_fcrnrt COMPLETED (12 experiments in 732s). flab_immunogenicity_marks and flab_polyreact_jain_bvp were running (slurm 11595868/69). **Unknown how many others finished — check server.**
+**Blocks:** Nothing directly — similarity experiments are research output. But like complexity, they use pre-augmentation caches.
+
+```bash
+# Check what's done:
+ssh scat9264@gateway.arc.ox.ac.uk "ls /data/stat-cadd/scat9264/KIRBy/tests/results/similarity/"
+
+# Pull everything:
+scp -r "scat9264@gateway.arc.ox.ac.uk:/data/stat-cadd/scat9264/KIRBy/tests/results/similarity/" tests/results/similarity/
+```
+
+#### HTC — Antibody Baseline Surveys (ab_all_i, ab_all_d)
+**Jobs:** 7343797 (ab_all_d = DMS), 7343798 (ab_all_i = inter-family)
+**Script:** `submit_antibody_survey.sh`
+**Output:** `tests/results/antibody_survey/`
+**Status:** Pending (Priority). These are the full 42-rep surveys.
+**Blocks:** Pipeline readiness table for antibody datasets that still need full rep coverage.
+
+```bash
+scp -r "scat9264@gateway.arc.ox.ac.uk:/data/stat-cadd/scat9264/KIRBy/tests/results/antibody_survey/" tests/results/antibody_survey/
+```
+
+#### HTC — Antibody CLF (abclf_hu)
+**Job:** 7349453 (humanness_therapeutic)
+**Script:** `submit_missing_htc.sh` run_antibody_clf()
+**Output:** `tests/results/opig/clf/`
+**Status:** Pending. Already have tz_her2_binary, tz_her2_multiclass, humanness_therapeutic locally. Likely filling missing reps.
+
+```bash
+scp -r "scat9264@gateway.arc.ox.ac.uk:/data/stat-cadd/scat9264/KIRBy/tests/results/opig/clf/" tests/results/opig/clf/
+```
+
+#### HTC — Molecular Augmentation Fill (aug_*)
+**Jobs:** aug_qm9 (7355877), aug_adme (7355878 = adme_mdr1)
+**Script:** `submit_molecular_aug_fill.sh`
+**Output:** `tests/results/molecular_aug_fill/`
+**Status:** Pending. Fills missing 3D shape reps (usrcat, coulomb_matrix, usr) for qm9 and adme_mdr1.
+**Blocks:** Pipeline readiness augmentation decisions for those molecular datasets.
+
+```bash
+scp -r "scat9264@gateway.arc.ox.ac.uk:/data/stat-cadd/scat9264/KIRBy/tests/results/molecular_aug_fill/" tests/results/molecular_aug_fill/
+```
+
+#### HTC — SchNet E2E Generalization (schnet_*)
+**Jobs:** schnet_l (logd), schnet_h (herg), schnet_c (caco2) — appears duplicated (6 jobs total: 7355839-43 + 7355870-74)
+**Script:** `submit_schnet_e2e.sh`
+**Output:** `tests/results/schnet_e2e/`
+**Status:** Pending. Tests whether E2E SchNet (top on QM9 R²=0.95) generalises to non-quantum tasks.
+**Blocks:** Molecular fine-tuning decisions (is SchNet worth including as FT rep?).
+
+```bash
+scp -r "scat9264@gateway.arc.ox.ac.uk:/data/stat-cadd/scat9264/KIRBy/tests/results/schnet_e2e/" tests/results/schnet_e2e/
+```
+
+#### HTC — Reaction Survey (rxn_doyl)
+**Job:** 7355734 (bh_doyle_plates)
+**Script:** `submit_reaction_survey.sh`
+**Output:** `tests/results/reaction_survey/`
+**Status:** Pending. Doyle HTE plates — new reaction dataset. buchwald_hartwig and suzuki may have already completed (they were in the same batch).
+**Blocks:** Pipeline readiness for reaction domain.
+
+```bash
+# Check what's done:
+ssh scat9264@gateway.arc.ox.ac.uk "ls /data/stat-cadd/scat9264/KIRBy/tests/results/reaction_survey/"
+
+# Pull:
+scp -r "scat9264@gateway.arc.ox.ac.uk:/data/stat-cadd/scat9264/KIRBy/tests/results/reaction_survey/" tests/results/reaction_survey/
+```
+
+#### HTC — Nucleotide Survey (nuc_*)
+**Jobs:** 22 jobs (7359437-58) — one per dataset
+**Script:** `submit_nucleotide_survey.sh`
+**Output:** `tests/results/nucleotide_survey/`
+**Status:** Pending. First-ever nucleotide domain run. 22 datasets × 26 reps × 3 models × 3 folds.
+**Blocks:** Entire nucleotide domain — can't make any decisions until these land.
+
+```bash
+scp -r "scat9264@gateway.arc.ox.ac.uk:/data/stat-cadd/scat9264/KIRBy/tests/results/nucleotide_survey/" tests/results/nucleotide_survey/
+```
+
+#### HTC — DTA Baseline Surveys (dta_*)
+**Jobs:** dta_davi (7331386, RUNNING 16h + 7359597 PENDING), dta_kiba (7359598), dta_bind (7359599)
+**Script:** `submit_missing_htc.sh` run_dta()
+**Output:** `tests/results/phase5_baselines/dta/`
+**Status:** davis running 16h, kiba+bindingdb pending. No local Phase 5 DTA results.
+**Blocks:** Pipeline readiness for all 3 DTA datasets. DTA has been "super buggy" — unknown if these will succeed.
+
+```bash
+scp -r "scat9264@gateway.arc.ox.ac.uk:/data/stat-cadd/scat9264/KIRBy/tests/results/phase5_baselines/dta/" tests/results/phase5_baselines/dta/
+```
+
+#### HTC — Graphinity DDG (ddg_grap)
+**Jobs:** 7331380-81 (RUNNING ~19h)
+**Script:** `submit_missing_htc.sh` run_ddg_synth()
+**Output:** `tests/results/opig/ddg/`
+**Status:** Running. graphinity_foldx (50K samples) and graphinity_rosetta (21K). First run ever.
+**Blocks:** DDG pipeline readiness.
+
+```bash
+scp -r "scat9264@gateway.arc.ox.ac.uk:/data/stat-cadd/scat9264/KIRBy/tests/results/opig/ddg/" tests/results/opig/ddg/
+```
+
+#### HTC — Molecular FT Fill (molft_*, JUST SUBMITTED)
+**Jobs:** 7365622-26 (4 jobs)
+**Script:** `submit_molecular_ft_fill.sh`
+**Output:** `tests/results/molecular_ft_fill/`
+**Status:** Just submitted. lora_molformer + contrastive_molformer + graphmvp_ft on qm9, adme_hlm, adme_rlm, adme_mdr1.
+**Blocks:** §9 FT decisions for 4 molecular datasets.
+
+```bash
+scp -r "scat9264@gateway.arc.ox.ac.uk:/data/stat-cadd/scat9264/KIRBy/tests/results/molecular_ft_fill/" tests/results/molecular_ft_fill/
+```
+
+#### HTC — Antibody FT Fill (abft_*, JUST SUBMITTED)
+**Jobs:** 7365627-55 (29 jobs)
+**Script:** `submit_antibody_ft_fill.sh`
+**Output:** `tests/results/antibody_ft_fill/`
+**Status:** Just submitted. ESM-2 LoRA on all 29 active antibody datasets.
+**Blocks:** §9 FT decisions for antibody — per-dataset include/exclude.
+
+```bash
+scp -r "scat9264@gateway.arc.ox.ac.uk:/data/stat-cadd/scat9264/KIRBy/tests/results/antibody_ft_fill/" tests/results/antibody_ft_fill/
+```
+
+### Dependency chain
+
+```
+LAYER 1 — Baseline surveys (running/pending)
+  DTA surveys → DTA pipeline readiness
+  Nucleotide surveys → nucleotide pipeline readiness
+  Reaction survey (doyle) → reaction pipeline readiness
+  Antibody fill surveys → antibody pipeline readiness
+  Graphinity DDG → DDG pipeline readiness
+  Mol aug fill → molecular augmentation decisions
+  SchNet E2E → molecular FT decisions
+
+LAYER 2 — Fine-tuning fill (just submitted)
+  Molecular FT fill → §9 FT swap decisions (4 datasets)
+  Antibody FT fill → §9 FT swap decisions (29 datasets)
+
+LAYER 3 — Framework experiments (running on ARC)
+  F01 + F03 + F04 → finalize SPEED_TIERS, allocation defaults, internal evaluator
+  → unblocks §8 (internal evaluator) and §10 (performance allocation)
+  → unblocks F02 (pruning) and F09 (synthesis)
+
+LAYER 4 — Research experiments (running on ARC, but use stale caches)
+  Complexity (cx_*) → research results BUT need cache clear + re-run after Layer 3
+  Similarity → same issue
+```
+
+### What's ALREADY DONE and can be pulled now
+
+**Check server for completed jobs from batches where some are still running:**
+
+```bash
+# Reaction survey — buchwald_hartwig and suzuki may be done
+ssh scat9264@gateway.arc.ox.ac.uk "ls /data/stat-cadd/scat9264/KIRBy/tests/results/reaction_survey/"
+
+# Similarity — multiple may have finished (fcrnrt confirmed)
+ssh scat9264@gateway.arc.ox.ac.uk "ls /data/stat-cadd/scat9264/KIRBy/tests/results/similarity/"
+
+# Complexity — check if any finished
+ssh scat9264@gateway.arc.ox.ac.uk "ls /data/stat-cadd/scat9264/KIRBy/tests/results/complexity/"
+
+# F01/F03/F04 — check if any new ones landed
+ssh scat9264@gateway.arc.ox.ac.uk "ls /data/stat-cadd/scat9264/KIRBy/tests/results/framework/f01_allocation_strategies/ /data/stat-cadd/scat9264/KIRBy/tests/results/framework/f03_greedy_step_size/ /data/stat-cadd/scat9264/KIRBy/tests/results/framework/f04_two_phase_search/"
+```
+
+### ⚠️ Cache warning
+
+The complexity and similarity experiments currently running on ARC are using **stale hybrid caches** (pre-augmentation-overhaul defaults: step_size=10, patience=3, augmentation_strategy='greedy_ablation'). Their results are still useful as screening but will need re-running after:
+1. Framework experiments (F01/F03/F04) finalize SPEED_TIERS
+2. Cache cleared: `rm -rf ~/.cache/kirby/hybrid_search/ ~/.cache/kirby/create_hybrid_cache/`
+3. Code pulled: `git pull`
