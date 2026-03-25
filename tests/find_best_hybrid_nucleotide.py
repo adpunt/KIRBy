@@ -71,13 +71,15 @@ REP_PRESETS = {
                   'dinuc_freq', 'tetranuc_freq', 'tnf_canonical',
                   'dna_shape', 'complexity', 'codon_usage'],
     'lm_only': ['dnabert2', 'nt_v2_250m', 'nt_v2_500m', 'hyenadna',
-                'caduceus', 'gena_lm', 'gpn', 'splicebert',
-                'rnafm', 'rinalmo', 'dnabert_s'],
+                'caduceus', 'grover_dna', 'ntv3_100m',
+                'gena_lm', 'splicebert', 'mistral_dna', 'dnabert_s',
+                'gpn', 'rnafm', 'rinalmo'],
     'all': [
-        # Foundation models
+        # Foundation models (14)
         'dnabert2', 'nt_v2_250m', 'nt_v2_500m', 'hyenadna',
-        'caduceus', 'gena_lm', 'gpn', 'splicebert',
-        'rnafm', 'rinalmo', 'dnabert_s',
+        'caduceus', 'grover_dna', 'ntv3_100m',
+        'gena_lm', 'splicebert', 'mistral_dna', 'dnabert_s',
+        'gpn', 'rnafm', 'rinalmo',
         # Classical features
         'kmer3', 'kmer4', 'kmer5', 'kmer6', 'gc_content',
         'dinuc_freq', 'tetranuc_freq', 'tnf_canonical',
