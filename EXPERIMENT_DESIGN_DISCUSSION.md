@@ -1,174 +1,237 @@
 # Experiment Design Discussion — Open Issues
 
 **Created:** 2026-03-25
-**Context:** First batch of experiment runs revealed bugs (fixed) and design questions (below).
+**Updated:** 2026-03-25 (v2 — full answers, not just restated questions)
+**Context:** First batch of experiment runs revealed bugs (fixed in b06932e) and design questions (below). These need user decisions before re-running.
 
 ---
 
-## 1. `load_data` routing — CRITICAL
+## 1. `load_data` routing — CRITICAL, blocks ginkgo/clf/graphinity
 
-**Problem:** `_shared.py` `load_data()` doesn't route ginkgo datasets correctly. When passed `ginkgo_colloidal`, it falls through to the molecular loader (`load_molecular_dataset`) which fails with "Unknown dataset". The routing logic checks prefixes for antibody (`flab_`, `abcov_`, etc.) and TCGA (`tcga_`) but ginkgo datasets don't match any prefix — they're antibody-domain datasets loaded via `antibody_baseline_survey.py` but their names start with `ginkgo_`.
+**Problem:** `_shared.py` `_ANTIBODY_PREFIXES` = `('flab_', 'abcov_', 'sabdab_', 'abagym_', 'abbind', 'ddg_')`. Missing: `'ginkgo_'`, `'tz_her2'`, `'humanness_'`, `'graphinity_'`. These all load correctly through `antibody_baseline_survey.py` but `_shared.py:load_data()` doesn't know they're antibody datasets — falls through to the molecular loader and crashes.
 
-**Affected:** All 6 ginkgo datasets for ALL experiment sets (complexity, similarity, noise).
+**Affected:** All 6 ginkgo datasets, tz_her2_binary, humanness_therapeutic — for ALL experiment sets (complexity, similarity, noise). 8 of 33 datasets are broken.
 
-**Fix options:**
-- A) Add `'ginkgo_'` to `_ANTIBODY_PREFIXES` in `_shared.py` (1-line fix, may have side effects if ginkgo loading differs from standard antibody)
-- B) Add explicit ginkgo routing in `load_data`
-
-**Also affected:** The broader MUTATION_REPS gap — `mutation_features`, `esm2_wt_delta`, `antiberty_llr` are still not loadable through `load_data`. Already documented in `complexity_helpers.py` TODO.
-
-**Decision needed:** Is option A safe? Does `load_ab_dataset('ginkgo_colloidal')` in `antibody_baseline_survey.py` work correctly?
-
----
-
-## 2. Budgets — redesign needed
-
-**Current:** PRELIMINARY config uses `[25, 50, 100, 200, 500]`. C11 was using `total_dim` (up to 18881). Now capped at 1024.
-
-**User's proposal:** Powers-of-2-ish: `[8, 16, 32, 64, 128, 256, 384, 512, 640, 768, 1024, 2048]` with model-specific caps. Also wants to compare base rep at its native dimension vs hybrid at the same dimension (e.g., ecfp4 at 2048D vs hybrid at 2048D).
-
-**Benefits of more granular budgets:**
-- Finer resolution on the complexity matching curve
-- Direct dimension-matched comparisons (hybrid at ecfp4's dimension)
-- Small budgets (8, 16, 32) test extreme compression
-- Computational: operations on `budget × budget` matrices are fast when budget is a power of 2
-
-**Concerns:**
-- More budgets = more compute. With 12 budgets instead of 5, experiments take ~2.4× longer.
-- Some experiments (C02 grid) already sweep budgets × models × allocations × importance — multiplying budget count compounds.
-- For screening runs (PRELIMINARY), fewer budgets is fine. Full runs should have the granular set.
-
-**Proposal:** Two budget tiers:
+**Fix:** Add the missing prefixes to `_ANTIBODY_PREFIXES` (line 883 of `_shared.py`):
 ```python
-PRELIMINARY['budgets'] = [32, 64, 128, 256, 512]       # 5 budgets, screening
-FULL['budgets'] = [16, 32, 64, 128, 256, 512, 768, 1024]  # 8 budgets, publication
+_ANTIBODY_PREFIXES = ('flab_', 'abcov_', 'sabdab_', 'abagym_', 'abbind', 'ddg_',
+                      'ginkgo_', 'tz_her2', 'humanness_', 'graphinity_')
 ```
 
-**Decision needed:** Confirm budget tiers. Also: should experiments that explicitly test "dimension-matched" comparisons (e.g., C17, C18) use a separate budget list that includes native rep dimensions?
+**Additional fix needed:** The antibody branch hardcodes `'task_type': 'regression'` (line 1045). For tz_her2_binary and humanness (classification), this must read the actual task_type from `load_ab_dataset()`. The `antibody_baseline_survey.py:load_dataset()` already returns `task_type` in the data dict — just read it:
+```python
+task_type = data.get('task_type', 'regression')
+```
+
+**Verification:** `load_data('ginkgo_hic', rep_preset='all', rep_names=['ablang2'])` should return an antibody data dict with `domain='antibody'`.
+
+**This is a 2-line fix.** Safe because `antibody_baseline_survey.py` already handles all these datasets correctly.
 
 ---
 
-## 3. Augmented features — not being used
+## 2. Ginkgo / OPIG / Forward Compatibility — what's connected and what isn't
 
-**Problem:** The hybrid search in these experiments uses `find_best_hybrid` or `create_hybrid` with default settings, which typically means greedy allocation with NO augmented features. The user has `augment_capped`, `augment_uncapped`, and `candidate_ranking` functions in `hybrid.py` that add augmented features after the base hybrid is built.
+**What exists and works:**
+- `src/kirby/datasets/ginkgo_dev.py` — clean loader, returns heavy_seqs/light_seqs/labels/fold_assignments
+- `antibody_baseline_survey.py` — routes `ginkgo_*` correctly via DATASET_REGISTRY, uses `pre_split` group strategy
+- `tests/results/opig/ginkgo/` — all 9 baseline survey JSONs exist (run via `submit_opig_surveys.sh`)
+- `tests/results/opig/clf/` — 3 CLF JSONs (humanness_therapeutic, tz_her2_binary, tz_her2_multiclass)
+- `tests/results/opig/ddg/` — 2 DDG JSONs
 
-**User's preference:** Default should be hybrid with uncapped augmented features. Only use no-aug or capped-aug when explicitly testing dimension sensitivity.
+**What's broken:**
+- `_shared.py load_data()` can't route ginkgo/clf/graphinity datasets (§1 above)
+- The experiment infrastructure (complexity/similarity/noise) therefore can't run on these datasets
+- The per-dataset wrapper scripts (e.g., `complexity/ginkgo_hic.py`) exist but crash on load
 
-**Current state:** Neither `run_all()` in the helpers nor the individual experiments pass `augmentations=` to `find_best_hybrid`. The `find_best_hybrid` function accepts `augmentations` and `rep_factories` parameters.
+**What's missing entirely:**
+- No "hybrids improve OPIG datasets" result. C02 (complexity grid) WOULD produce this — it compares best hybrid vs best single rep — but it can't load ginkgo data.
+- The OPIG baseline survey results (`tests/results/opig/`) are standalone JSONs that no experiment reads. They're informational only.
+- C13 (forward compatibility) has stale `_LEGACY_ANTIBODY` rep names (`ablang`, `protbert` instead of `ablang2`, `prot_t5`) — even if ginkgo loaded, the new/legacy split would be wrong.
 
-**Fix:** In the helpers, pass the augmentation reps from `DATASET_REPS[ds]['augmentation']` to `find_best_hybrid` via the `augmentations` parameter. Need to check how `find_best_hybrid` handles this.
-
-**Decision needed:**
-- Default: augmented uncapped for all experiments?
-- Which augmentation strategy? (greedy_ablation vs core+all — f06 results say greedy_ablation wins molecular, core+all wins antibody)
-- Should the augmentation reps be loaded alongside general reps? Currently `load_data` only loads `rep_names` from `DATASET_REPS[ds]['general']`, not augmentation reps.
-
----
-
-## 4. MI estimation fails on small datasets (S03)
-
-**Problem:** KSG mutual information estimator returns 0.0 for all reps on n=137-217 antibody datasets. This is a known limitation: KSG needs n >> d, and with PCA reduction to 50 components on 137 samples, the estimator is unreliable.
-
-**Options:**
-- A) Skip S03 on datasets with n < 300 (or warn that MI results are unreliable)
-- B) Use a different MI estimator (e.g., binning-based, which is less accurate but doesn't fail)
-- C) Reduce PCA to min(20, n//10) components for small datasets
-- D) Accept MI=0 and don't use MI density for small datasets
-
-**Decision needed:** Which option? This also affects C17 (information-theoretic decomposition).
+**Once §1 is fixed:** The existing per-dataset scripts will just work. C02 will automatically produce "hybrid vs baseline" comparisons for all OPIG datasets. C13 needs its legacy set updated separately.
 
 ---
 
-## 5. S11 BO fails on small datasets
+## 3. Budgets — redesign needed
 
-**Problem:** Bayesian optimization with seed=5% gives only 6 samples on n=137 datasets. Greedy allocation fails with 6 samples because the internal evaluator can't fit.
+**Current:** PRELIMINARY config uses `[25, 50, 100, 200, 500]`. Now capped at 1024 after MLP blowup at 18881.
 
-**Options:**
-- A) Skip S11 on datasets with n < 200
-- B) Increase seed fraction to 20% for small datasets
-- C) Use a simpler hybrid construction for the seed set (e.g., fixed allocation instead of greedy)
+**User's proposal:** Powers-of-2-ish budgets: `[8, 16, 32, 64, 128, 256, 384, 512, 640, 768, 1024, 2048]`, with model-specific caps. Benefits: finer resolution on the complexity matching curve, direct dimension-matched comparisons (hybrid at ecfp4's 2048D dimension), small budgets (8, 16) test extreme compression. Numpy operations don't benefit from powers-of-2 per se, but the finer grid is valuable.
 
-**Decision needed:** Which option?
+**Proposed budget tiers:**
+```python
+PRELIMINARY['budgets'] = [16, 32, 64, 128, 256, 512]           # 6 values, screening
+FULL['budgets'] = [8, 16, 32, 64, 128, 256, 384, 512, 768, 1024, 2048]  # 11 values
+```
+
+Model-specific caps for FULL:
+- RF/LightGBM/Ridge: no cap (can handle any dimension)
+- MLP: max 1024 (weights explode above this)
+- SVM: max 1024 (O(n²d) scaling)
+- GP: max 512 (O(n³) already limits dataset size)
+- kNN: no cap
+
+**Dimension-matched comparison idea:** For each base rep, add a condition where `budget = rep.shape[1]`. This shows whether hybrid feature SELECTION at the same dimensionality beats the raw rep. This could be a column in C02's output or a dedicated mini-experiment.
+
+**Decision needed:** Confirm the two tiers. Confirm whether dimension-matched comparison is a new experiment or a C02 extension.
 
 ---
 
-## 6. Representative datasets for testing
+## 4. Augmented features — NOT being used, should be
 
-**User asked for:** One per dataset type (not all 33) for faster iteration.
+**Current state:** `find_best_hybrid` accepts `augmentations` parameter. `DATASET_REPS[ds]['augmentation']` lists augmentation reps per dataset. But `run_all()` in all three helpers ONLY loads `DATASET_REPS[ds]['general']` reps — augmentation reps are defined but never loaded or passed.
 
-**Proposed representative set (7 datasets):**
+**User's preference:** Default should be **hybrid with uncapped augmented features**. Only use no-aug or capped-aug when explicitly testing dimension sensitivity.
 
-| Domain | Dataset | n | Why |
-|--------|---------|---|-----|
+**What needs to change:**
+1. `run_all()` needs to load augmentation reps alongside general reps
+2. Pass augmentation reps to `find_best_hybrid` via the `augmentations` parameter
+3. The `augment_uncapped` function in `hybrid.py` adds them after the base hybrid is built
+
+**Augmentation strategy choice:** F06 results say `greedy_ablation` wins molecular, `core+all` wins antibody. For screening, `core+all` (test each aug rep individually, keep those that help) is simpler and safer.
+
+**Implementation plan:**
+```python
+# In run_all(), after loading data:
+aug_rep_names = DATASET_REPS.get(dataset_name, {}).get('augmentation', [])
+if aug_rep_names:
+    aug_data = load_data(dataset_name, rep_preset='all', rep_names=aug_rep_names)
+    augmentation_reps = aug_data['reps']
+else:
+    augmentation_reps = None
+# Then pass augmentation_reps to experiments that call find_best_hybrid
+```
+
+**Complication:** The augmentation reps need to be loaded alongside the base reps — ideally in the same `load_data` call to avoid re-loading the dataset. This means combining `general + augmentation` in the rep_names list, then splitting them apart before passing to `find_best_hybrid`.
+
+**Decision needed:** Confirm uncapped augmented as default. Confirm `core+all` strategy for screening.
+
+---
+
+## 5. MI estimation fails on small datasets (S03, C17)
+
+**Problem:** KSG mutual information estimator returns 0.0 for all reps on n=137-217 antibody datasets. KSG needs n >> d; with PCA reduction to 50 components on 137 samples, there aren't enough data points for the k-nearest-neighbor density estimation to work.
+
+**Recommendation:** Option C — reduce PCA to `min(15, n//10)` components for small datasets. This preserves the MI computation's validity at the cost of some information loss. Also add a warning when n < 300 that MI results may be unreliable.
+
+**This is not a bug — it's a fundamental limitation of nonparametric MI estimation.** The experiments still run; they just produce MI=0 and nan density ratios for small datasets. S09 (cross-dataset summary) should exclude datasets where MI=0 from the MI-related aggregations.
+
+---
+
+## 6. S11 BO fails on small datasets
+
+**Problem:** BO seed = 5% of n. For n=137, seed=6 samples. Greedy allocation fails with 6 samples.
+
+**Recommendation:** Skip S11 on datasets with n < 200. Add a guard at the top of `s11.run()`:
+```python
+if len(labels) < 200:
+    print(f"  Skipping S11: n={len(labels)} < 200 (BO needs larger datasets)")
+    return {'error': 'dataset_too_small', 'n_samples': len(labels)}
+```
+
+This affects: all flab_*_jain datasets (n≈130-137), abagym_HER2 (n=146), ginkgo_heparin (n=94).
+
+---
+
+## 7. Representative datasets for testing
+
+**Proposed 7 datasets (one per domain type, strongest performers):**
+
+| Domain | Dataset | n | Why this one |
+|--------|---------|---|--------------|
 | Molecular | herg | 1,412 | Best molecular results, medium size |
-| Ab Inter-Family | flab_thermo_tresanco | 672 | Largest antibody dataset, best ρ |
-| AbAgym DMS | abagym_VEGF | 418 | Strongest DMS signal (ρ=0.613) |
+| Ab Inter-Family | flab_thermo_tresanco | 672 | Largest antibody, best ρ=0.805 |
+| AbAgym DMS | abagym_VEGF | 418 | Strongest DMS signal ρ=0.613 |
 | Ab CLF | tz_her2_binary | 5,000 | Largest clf dataset |
-| Ginkgo | ginkgo_hic | 242 | Best ginkgo signal (ρ=0.604) |
+| Ginkgo | ginkgo_hic | 242 | Best ginkgo signal ρ=0.604 |
 | TCGA | tcga_luad_vs_lusc | 1,017 | Best TCGA AUROC |
 | Small Ab | flab_pk_jain_heprt | 130 | Tests small-n edge cases |
 
-This covers: molecular, antibody regression, DMS, classification, developability, TCGA, and small-n.
-
-**Decision needed:** Confirm these 7, or adjust.
+**Decision needed:** Confirm these 7. Once confirmed, I'll create a `submit_representative.sh` SLURM script that submits just these 7 for all 3 experiment sets (21 jobs total instead of 99).
 
 ---
 
-## 7. Internal evaluator
+## 8. Internal evaluator — wrong, blocked on framework experiments
 
-**Question:** Is the internal evaluator being used correctly?
+**Current state:** `create_hybrid(allocation_method='greedy')` uses RF as the internal evaluator (hardcoded in `_evaluate_allocation` and `_create_hybrid_with_allocation` in `hybrid.py`). F07 showed Ridge wins for antibody datasets and is fastest overall. But the fix was never wired in — still RF everywhere.
 
-**Current state:** `find_best_hybrid` uses RF as the internal evaluator (hardcoded in `_evaluate_allocation` and `_create_hybrid_with_allocation`). Framework experiment F07 showed Ridge wins for antibody and is fastest overall. But the internal evaluator hasn't been changed yet — still RF everywhere.
+**Impact:** Every experiment calling `create_hybrid` or `find_best_hybrid` with greedy allocation uses RF internally to score trial allocations. If RF is suboptimal for the dataset domain, the discovered allocation is suboptimal.
 
-**Impact on experiments:** The greedy allocation loop uses RF internally to score trial allocations. If RF is suboptimal for the dataset, the allocation found may be suboptimal. This affects every experiment that calls `find_best_hybrid` or `create_hybrid` with `allocation_method='greedy'`.
+**Additionally:** F01 showed that `greedy` allocation was the WORST-performing strategy overall. `performance_weighted` is the fast-tier default in `find_best_hybrid`, but many experiments hardcode `allocation_method='greedy'` in their direct `create_hybrid` calls (C10, C11, C15, C16, C17, C18, S04, S05, S06, S08, S10, S11, S12, N01, N02, N04, N05, N07).
 
-**Decision needed:** Wait for framework experiments to finalize, then update. This is part of the broader "find_best_hybrid not finalized" situation.
+**This is the single biggest systematic issue with the experiments.** But it's blocked on `find_best_hybrid` finalization. When the methodology is finalized:
+1. Update the default allocation in `create_hybrid` calls
+2. Update the internal evaluator
+3. Clear all caches (`~/.cache/kirby/hybrid_search/` and `~/.cache/kirby/create_hybrid_cache/`)
+4. Re-run everything
 
----
-
-## 8. Fine-tuning
-
-**Question:** What happened to fine-tuning?
-
-**Current state:** Fine-tuned reps (lora_molformer, contrastive_molformer, geneformer_ft, scfoundation_ft) are documented in PIPELINE_READINESS_TODO.md as domain-level decisions. But they are NOT in `DATASET_REPS` because they require per-fold factory fitting, not pre-computed arrays.
-
-**Impact:** The experiments only test frozen reps. Fine-tuned reps are a different modality of representation that the hybrid could incorporate. But factory reps need special handling in `find_best_hybrid` (via `rep_factories` parameter).
-
-**Decision needed:** Include factory reps in experiments? This is a significant change to how data is loaded and would require modifying `run_all()` to pass `rep_factories` alongside `base_reps`.
+**Decision needed:** Wait for F03/F04 results, then finalize. All current results are screening-level anyway.
 
 ---
 
-## 9. Performance allocation improvements
+## 9. Fine-tuning — not in experiments, significant scope expansion
 
-**Question:** Do I need more framework experiments to determine performance allocation?
+**Current state:** Fine-tuned reps (lora_molformer, contrastive_molformer for molecular; geneformer_ft, scfoundation_ft for TCGA) are documented as domain-level decisions in PIPELINE_READINESS_TODO.md. They require per-fold factory fitting (data-dependent transforms), not pre-computed arrays.
 
-**Current state:** F01 (allocation strategies) has results for 3/7 tasks. `performance_weighted` is the fast-tier default. `stability_selection` best on large data. `greedy`/`greedy_feature` are worst (removed from speed tiers). F03 (step size) and F04 (two-phase) timed out and were resubmitted.
+**Why they're not in experiments:** `run_all()` loads reps via `load_data(rep_names=...)` which returns pre-computed arrays cached to .npy files. Factory reps need `rep_factories` parameter in `find_best_hybrid`, which creates fresh reps per fold using training data only (to prevent leakage).
 
-**Decision needed:** Wait for F03/F04 results before changing allocation defaults. The current experiments use `allocation_method='greedy'` with `importance_method='lightgbm_gain'` as hardcoded defaults in many experiments — if the framework experiments show a better default, all hardcoded values need updating.
+**What it would take to add them:**
+1. Modify `run_all()` to accept and pass `rep_factories`
+2. Define factory functions per dataset (already exist in `find_best_hybrid_molecular.py` FACTORY_REPS and `find_best_hybrid_tcga.py`)
+3. Pass them to `find_best_hybrid` alongside base reps
+
+**Impact:** The experiments currently test frozen reps only. Fine-tuned reps showed significant improvements on some datasets (scfoundation_ft: LUAD AUROC 0.988 vs frozen 0.500). Missing these means the hybrid experiments don't test the full pipeline.
+
+**Decision needed:** This is a significant scope expansion. Recommend deferring to after the initial screening run confirms the basic pipeline works.
 
 ---
 
-## 10. Base + augmentation test (without hybrid)
+## 10. Performance allocation — blocked on F03/F04
 
-**User request:** Test base rep + augmentation reps concatenated, WITHOUT the hybrid feature selection. This would show whether augmentation helps on its own or only through the hybrid.
+**Current state:** F01 results (3/7 tasks):
+- `performance_weighted` — safest default, consistent
+- `stability_selection` — best on large data
+- `greedy` / `greedy_feature` — WORST performers, removed from SPEED_TIERS
 
-**Design:** For each base rep, concatenate with each augmentation rep and evaluate directly (no selection). Compare: base alone, base+aug concat, hybrid(base+aug).
+F03 (step_size × patience) and F04 (two-phase vs full grid) both timed out and were resubmitted. Results pending.
 
-**Where it fits:** Could be a new experiment (C20 or S14) or an extension to C11 (which already compares single vs ensemble vs hybrid).
+**Key insight:** Most experiments hardcode `allocation_method='greedy'` which F01 showed is the worst. But `find_best_hybrid` uses `performance_weighted` by default in its fast speed tier. So experiments that call `find_best_hybrid` (C02, C05, C06, C07, C08, C13) use the right allocation, while experiments that call `create_hybrid` directly (C10, C11, C15-C19, S04-S06, S08, S10-S13, N01-N08) use the wrong one.
 
-**Decision needed:** New experiment or extension? Which experiment set (complexity or similarity)?
+**Decision needed:** Wait for F03/F04, then update all hardcoded `allocation_method='greedy'` to whatever the finalized default is.
+
+---
+
+## 11. Base + augmentation test (without hybrid) — NEW EXPERIMENT NEEDED
+
+**User request:** Test base rep + augmentation reps concatenated WITHOUT hybrid feature selection. Separates "does augmentation help at all?" from "does the hybrid's feature selection on augmented features help?"
+
+**Proposed design (C20 or S14):**
+For each (base_rep, aug_rep) pair:
+1. **Base alone:** RF on base_rep → R²_base
+2. **Base + aug concat:** RF on hstack(base_rep, aug_rep) → R²_concat
+3. **Hybrid(base + aug):** create_hybrid({base, aug}) → RF → R²_hybrid
+
+Key comparison: R²_concat - R²_base (does aug help raw?) vs R²_hybrid - R²_base (does aug help via hybrid?)
+
+If R²_concat ≈ R²_base but R²_hybrid > R²_base, then the hybrid's feature selection is what makes augmentation valuable — not the augmentation itself.
+
+**Where it fits:** Complexity chapter (it's about what the hybrid adds to augmentation). New experiment C20.
+
+**Decision needed:** Confirm this design. Confirm placement in complexity.
 
 ---
 
 ## Priority ordering
 
-1. **load_data routing** (CRITICAL — blocks ginkgo + potentially other datasets)
-2. **Augmented features** (changes what the hybrid actually does)
-3. **Representative dataset list** (enables faster iteration)
-4. **Budgets** (affects all experiments but current ones still produce useful data)
-5. **Internal evaluator** (blocked on framework experiments)
-6. **MI on small datasets** (cosmetic — experiments still run, just MI=0)
-7. **S11 small-n guard** (cosmetic — BO skips gracefully)
-8. **Fine-tuning** (significant scope expansion, defer)
-9. **Base + aug test** (new experiment, low urgency)
-10. **Performance allocation** (blocked on F03/F04)
+| Priority | Issue | Blocks | Fix complexity |
+|----------|-------|--------|----------------|
+| 1 | `load_data` routing (§1) | 8/33 datasets | 2 lines |
+| 2 | Augmented features (§4) | All experiments missing augmentation | Medium (loader change) |
+| 3 | Representative datasets (§7) | Fast iteration | Config only |
+| 4 | Budgets (§3) | All experiments use suboptimal grid | Config change |
+| 5 | Internal evaluator (§8) | Greedy allocation suboptimal | Blocked on F03/F04 |
+| 6 | Base + aug test (§11) | New experiment | New file |
+| 7 | MI on small datasets (§5) | Cosmetic (MI=0) | Small code change |
+| 8 | S11 small-n guard (§6) | Cosmetic (BO skips) | 5 lines |
+| 9 | Fine-tuning (§9) | Scope expansion | Significant |
+| 10 | Performance allocation (§10) | Blocked on F03/F04 | Config change after unblock |
