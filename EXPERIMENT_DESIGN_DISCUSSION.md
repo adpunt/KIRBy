@@ -492,6 +492,15 @@ bash tests/slurm_scripts/submit_opig_experiments.sh molecular # graphinity + qsa
 scp -r "scat9264@gateway.arc.ox.ac.uk:/data/stat-cadd/scat9264/KIRBy/tests/results/comparisons/opig_*" tests/results/comparisons/
 ```
 
+### Datasets not yet in the 33 — need scripts once unblocked
+
+Datasets currently blocked in PIPELINE_READINESS_TODO (missing baseline/FT/aug survey data) are NOT in the 33 complexity/similarity/noise datasets yet. Once their survey data lands and pipeline readiness decisions are made, they need:
+1. Per-dataset wrapper script in each of `tests/experiments/{complexity,similarity,noise}/`
+2. Entry in `DATASET_REPS` (complexity_helpers.py) with general + augmentation rep lists
+3. Added to the dataset lists in `submit_all_{complexity,similarity,noise}.sh`
+
+**Candidates:** adme_solubility, graphinity_foldx/rosetta/augmented, DTA datasets (davis/kiba/bindingdb_kd), nucleotide datasets (22), any new OPIG datasets. These depend on Layer 1 baseline survey results landing first.
+
 ### ⚠️ Cache warning
 
 The complexity and similarity experiments currently running on ARC are using **stale hybrid caches** (pre-augmentation-overhaul defaults: step_size=10, patience=3, augmentation_strategy='greedy_ablation'). Their results are still useful as screening but will need re-running after:
