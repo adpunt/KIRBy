@@ -27,8 +27,10 @@ from experiments._shared import (
     load_data, INTERMEDIARY, FULL, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_hybrid_features_and_weights, estimate_intrinsic_dim_mle, make_cv_splitter,
-    create_hybrid, apply_feature_selection,
+    apply_feature_selection,
 )
+from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+# TODO: create_hybrid API not finalised — revisit after framework experiments.
 
 from kirby.utils.noise_mitigation_methods import (
     compute_distance_matrix, get_k_neighbors_from_distances,
@@ -103,7 +105,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     n_folds = config['n_splits']
     search_speed = config['search_speed']
-    budgets = kwargs.get('budgets', [25, 50, 100])
+    budgets = kwargs.get('budgets', config.get('budgets', [15, 25, 50, 75, 100, 150, 200]))
     n_sample = kwargs.get('n_sample', 5000)
 
     reps = data['reps']
@@ -356,8 +358,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 if __name__ == '__main__':
     parser = create_experiment_parser('S08: Optimal Dimension for Similarity vs Prediction',
                                      has_delta=True, has_augment=True)
-    parser.add_argument('--budgets', type=int, nargs='+', default=[25, 50, 100],
-                        help='Budget values to test (default: [25, 50, 100])')
+    parser.add_argument('--budgets', type=int, nargs='+', default=[15, 25, 50, 75, 100, 150, 200],
+                        help='Budget values to test')
     parser.add_argument('--n-sample', type=int, default=5000,
                         help='Number of pairs to sample for SAC (default: 5000)')
     args = parser.parse_args()

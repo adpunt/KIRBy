@@ -40,8 +40,10 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, make_structured_output, convert_numpy,
     get_model_factories, get_domain_metric, cv_split,
-    create_hybrid, apply_feature_selection, compute_feature_importance,
+    apply_feature_selection, compute_feature_importance,
 )
+from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+# TODO: create_hybrid API not finalised — revisit after framework experiments.
 
 
 # Models that support sample_weight in .fit()

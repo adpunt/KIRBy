@@ -55,7 +55,8 @@ from experiments._shared import (
     get_domain_metric, get_hybrid_features_and_weights,
 )
 
-from kirby.hybrid import create_hybrid
+from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+# TODO: create_hybrid API not finalised — revisit after framework experiments.
 
 # Maximum compounds for pairwise analysis (O(N^2) memory)
 MAX_COMPOUNDS_SAS = 5000

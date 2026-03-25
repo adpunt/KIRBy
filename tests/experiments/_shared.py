@@ -619,6 +619,33 @@ def get_model_family_variants() -> Dict[str, List[Tuple[str, callable, float]]]:
     except ImportError:
         pass
 
+    # SVM: C controls capacity (low C = high regularisation = low capacity)
+    from sklearn.svm import SVR
+    families['SVM'] = [
+        ('C=0.01', lambda: SVR(kernel='rbf', C=0.01), 1),
+        ('C=0.1', lambda: SVR(kernel='rbf', C=0.1), 2),
+        ('C=1.0', lambda: SVR(kernel='rbf', C=1.0), 3),
+        ('C=10.0', lambda: SVR(kernel='rbf', C=10.0), 4),
+    ]
+
+    # GP: length_scale controls capacity (large = smooth/low capacity, small = wiggly/high)
+    # Size guard: GP is O(n³), only viable for n ≤ 2000
+    try:
+        from sklearn.gaussian_process import GaussianProcessRegressor
+        from sklearn.gaussian_process.kernels import RBF as _RBF, WhiteKernel as _WK
+        families['GP'] = [
+            ('ls=10', lambda: GaussianProcessRegressor(
+                kernel=_RBF(length_scale=10.0) + _WK(), n_restarts_optimizer=2, random_state=42), 1),
+            ('ls=1', lambda: GaussianProcessRegressor(
+                kernel=_RBF(length_scale=1.0) + _WK(), n_restarts_optimizer=2, random_state=42), 2),
+            ('ls=0.1', lambda: GaussianProcessRegressor(
+                kernel=_RBF(length_scale=0.1) + _WK(), n_restarts_optimizer=2, random_state=42), 3),
+            ('ls=0.01', lambda: GaussianProcessRegressor(
+                kernel=_RBF(length_scale=0.01) + _WK(), n_restarts_optimizer=2, random_state=42), 4),
+        ]
+    except ImportError:
+        pass
+
     return families
 
 

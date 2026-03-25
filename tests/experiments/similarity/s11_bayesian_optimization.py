@@ -64,7 +64,9 @@ from experiments._shared import (
     make_structured_output,
 )
 
-from kirby.hybrid import create_hybrid, apply_feature_selection
+from kirby.hybrid import apply_feature_selection
+from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+# TODO: create_hybrid API not finalised — revisit after framework experiments.
 
 
 # =============================================================================
@@ -542,6 +544,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'best_single',
         'pca_50d',
         'hybrid_50d',
+        'hybrid_50d_refit',
         'random_50d',
         'random_acq',
     ]
@@ -651,6 +654,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         X_seed, X_pool, dim, _, _ = build_hybrid_features(
                             reps, y_bo, seed_idx, pool_idx,
                             budget=hybrid_budget)
+
+                elif condition == 'hybrid_50d_refit':
+                    # Always rebuild hybrid every 25 iterations
+                    curve, gp_fail = _run_bo_with_rebuild(
+                        reps, y_bo, seed_idx, pool_idx,
+                        max_iterations, hybrid_budget, 25)
+                    all_curves.append(curve)
+                    total_gp_failures += gp_fail
+                    best_final = curve[-1] if curve else float('nan')
+                    print(f"      final best: {best_final:.4f}, "
+                          f"GP failures: {gp_fail}")
+                    continue
 
                 elif condition == 'random_50d':
                     X_seed, X_pool, dim = build_random_features(

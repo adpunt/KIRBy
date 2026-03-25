@@ -497,6 +497,35 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             total_budget = sum(alloc.values()) if alloc else 1
             alloc_share = alloc.get(rep_name, 0) / total_budget if total_budget > 0 else 0
 
+            # Diversity vs depth: cosine distance between new rep and nearest
+            # existing rep in the hybrid's selected feature space
+            modality_novelty = float('nan')
+            try:
+                from scipy.spatial.distance import cosine as _cosine_dist
+                feature_info = d_info.get('feature_info', {})
+                if feature_info and rep_name in feature_info:
+                    new_selected = feature_info[rep_name].get('selected_indices', [])
+                    if new_selected:
+                        new_vec = X_new[:, new_selected].mean(axis=0)
+                        min_dist = float('inf')
+                        for ename, edata in feature_info.items():
+                            if ename == rep_name:
+                                continue
+                            e_sel = edata.get('selected_indices', [])
+                            if e_sel and ename in existing_reps:
+                                e_vec = existing_reps[ename][:, e_sel].mean(axis=0)
+                                # Pad to same length for cosine
+                                maxlen = max(len(new_vec), len(e_vec))
+                                nv = np.zeros(maxlen); nv[:len(new_vec)] = new_vec
+                                ev = np.zeros(maxlen); ev[:len(e_vec)] = e_vec
+                                d = _cosine_dist(nv, ev)
+                                if d < min_dist:
+                                    min_dist = d
+                        if min_dist < float('inf'):
+                            modality_novelty = float(min_dist)
+            except Exception:
+                pass
+
             rep_result['conditions']['D'] = {
                 'description': f'hybrid WITH {rep_name}',
                 'score_mean': d_mean,
@@ -505,6 +534,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                 'hybrid_info': d_info,
                 'allocation_share': float(alloc_share),
                 'features_from_new_rep': float(alloc.get(rep_name, 0)),
+                'modality_novelty': modality_novelty,
             }
             print(f"    {metric_name} = {d_mean:.4f} +/- {d_std:.4f}")
             if alloc:

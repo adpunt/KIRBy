@@ -126,6 +126,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     reps = data['reps']
     labels = data['labels']
 
+    task_type = data.get('task_type', 'regression')
+    is_classification = task_type == 'classification'
+    if is_classification:
+        print("  NOTE: classification labels — SAC uses |delta_y| on 0/1, "
+              "violation rate still well-defined")
+
     results = {}
 
     # Compute importance weights for weighted baselines
@@ -144,10 +150,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         viol = violation_rate(D, labels, k=5)
         sali = compute_sali(D, labels)
 
+        # Permutation test: is SAC significantly above random?
+        n_perm = 200
+        rng_perm = np.random.RandomState(42)
+        perm_sacs = []
+        for _ in range(n_perm):
+            y_perm = rng_perm.permutation(labels)
+            perm_rho, _ = similarity_activity_correlation(D, y_perm, n_sample)
+            perm_sacs.append(perm_rho)
+        perm_sacs = np.array(perm_sacs)
+        sac_perm_p = float(np.mean(perm_sacs >= sac_rho))
+
         rep_result = {
             'dim': X.shape[1],
             'sac_rho': sac_rho,
             'sac_p': sac_p,
+            'sac_permutation_p': sac_perm_p,
+            'sac_significant': sac_perm_p < 0.05,
             'violation_rate': viol,
             'sali_mean': sali['mean'],
             'sali_max': sali['max'],

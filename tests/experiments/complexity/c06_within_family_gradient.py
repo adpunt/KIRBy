@@ -45,6 +45,15 @@ def run(data, config, output_dir, dataset_name, families=None):
     if families:
         all_families = {k: v for k, v in all_families.items() if k in families}
 
+    n_samples = len(labels)
+
+    # Size guards for expensive model families
+    _FAMILY_MAX_SAMPLES = {'GP': 2000, 'SVM': 10000}
+    for fam_name, max_n in _FAMILY_MAX_SAMPLES.items():
+        if fam_name in all_families and n_samples > max_n:
+            print(f"  Skipping {fam_name}: n_samples={n_samples} > {max_n}")
+            del all_families[fam_name]
+
     results = {'families': {}, 'search_speed': search_speed}
 
     for fam_name, variants in all_families.items():

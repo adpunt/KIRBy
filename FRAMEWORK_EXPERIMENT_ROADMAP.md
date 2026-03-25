@@ -52,18 +52,20 @@ Not all components are independent:
 
 ### All framework experiments (tests/experiments/framework/)
 
-| Script | What it tests | Status |
-|--------|-------------|--------|
-| **f00** `f00_rep_screening.py` | Where should rep filtering go? Pre-search gate vs implicit vs relative threshold vs augmentation pathway | **Results in** (3/7 tasks). C_relative has sign bug — needs fix + re-run |
-| **f01** `f01_allocation_strategies.py` | 21 allocation strategies × budgets × models | **Awaiting results** |
-| **f02** `f02_adaptive_pruning.py` | Post-hoc pruning simulation at thresholds 0.3–0.7 | **Awaiting results** (depends on f01+f03) |
-| **f03** `f03_greedy_step_size.py` | step_size × patience × budget × model for greedy only | **Awaiting results** |
-| **f04** `f04_two_phase_search.py` | Two-phase (coarse + refinement) vs full grid | **Awaiting results** |
-| **f05** `f05_importance_correlation.py` | Are the 8 importance methods redundant? Rank correlation + wall time | **Results in** (7/7 tasks) |
-| **f06** `f06_augmentation_test.py` | greedy_ablation vs iterative vs all. augmentation_budget sweep. | **Results in** (4/7 tasks). Not redundant with f08 |
-| **f07** `f07_internal_evaluator.py` | RF vs XGBoost vs Ridge as the internal evaluator inside greedy loops | **Results in** (4/7 tasks). **CANCELLED** remaining runs — decision made |
-| **f08** `f08_iterative_augmentation.py` | Iterative augmentation hyperparameter sweep (7 axes) | **Awaiting results** |
-| **f09** `f09_cross_domain_analysis.py` | Consumes outputs from f00–f08 across all tasks. Identifies cross-domain patterns. | **Not written** |
+| Script | What it tests | Tasks | Finding | Implemented? |
+|--------|-------------|-------|---------|-------------|
+| **f00** | Rep screening strategies | **Done** 3+7 retest | D_augmentation most consistent. C_relative fixed, threshold 0.1–0.3 optimal depending on domain | `_screen_reps()` exists in find_best_hybrid.py. Not yet wired as default |
+| **f01** | 17 allocation strategies | **3/7** (luad, brca, fcrnrt). 4 submitted | stability_selection best on large data. greedy/greedy_feature worst. Performance_weighted safest default | **Yes** — greedy/greedy_feature removed from SPEED_TIERS. performance_weighted is fast-tier default |
+| **f02** | Adaptive pruning simulation | **Blocked** on f01+f03 | — | — |
+| **f03** | Greedy step_size × patience | **Resubmitted** (all 7 timed out). Now: 4 models, budgets 50/150/300, 1 fold | — | — |
+| **f04** | Two-phase vs full grid | **Resubmitted** (all 7 timed out, 1 FAILED). Now: 4 models, budgets 50/150/300, 1 fold | — | — |
+| **f05** | Importance method redundancy | **Done** 7/7 | 3 families: treeshap, deeplift, lightgbm_gain. Drop 5 others | **Yes** — SPEED_TIERS uses only these 3 |
+| **f06** | Augmentation strategies | **6/7** (missing logd) | greedy_ablation wins molecular, core+all wins antibody. All beat single reps | **No** — augmentation_strategy still defaults to greedy_ablation everywhere |
+| **f07** | Internal evaluator (RF vs XGB vs Ridge) | **Done** 5/7, cancelled rest | Ridge wins antibody, fastest overall | **No** — `internal_evaluator` param not added. Still hardcoded RF |
+| **f08** | Iterative augmentation hyperparams | **6/7** (missing logd) | auto_threshold=50, base_step_size=2–10 matter most. candidate_ranking/ab_eval_model don't matter | **No** — iterative augmentation not in hybrid.py yet |
+| **f09** | Cross-domain synthesis | **Not written** | — | — |
+| **f10** | Small dataset fixes (n<200) | **Done** 4/4 | No fix recovers hybrid on n~130. Budget cap, ridge eval, CV3 all fail | **No** — no small-dataset guard |
+| **f11** | Allocation × evaluator interaction | **Done** 5/5 | Marginal gains with power_2+ridge_cv3 on some tasks. Root issue unfixable by tuning | **No** — same as f10 |
 
 ---
 

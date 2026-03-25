@@ -109,7 +109,7 @@ def _extract_sequences_cached(
     seq_cache = cache / 'pdb_sequences.csv'
 
     if seq_cache.exists():
-        cached_df = pd.read_csv(seq_cache)
+        cached_df = pd.read_csv(seq_cache).fillna('')
         cached_keys = set(zip(cached_df['pdb'], cached_df['ab_chain']))
     else:
         cached_df = pd.DataFrame(columns=['pdb', 'ab_chain', 'heavy_seq', 'light_seq'])

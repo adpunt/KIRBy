@@ -99,17 +99,22 @@ def run(all_dataset_results):
                 knn_deltas.append(delta_knn)
                 print(f"    kNN delta R2 (vs best rep): {delta_knn:+.4f}")
 
-        # Exp 6: AD correlation (hybrid_weighted vs unweighted hybrid)
+        # Exp 6: AD correlation (hybrid_weighted vs concat baseline)
         exp6 = ds_results.get('s06_applicability_domain')
         if exp6 and 'distance_error_correlation' in exp6:
             for k_key, corrs in exp6['distance_error_correlation'].items():
-                if 'hybrid' in corrs and 'hybrid_weighted' in corrs:
-                    delta_ad = corrs['hybrid_weighted'] - corrs['hybrid']
+                hw = corrs.get('hybrid_weighted')
+                # Compare against concat baseline (the main narrative claim)
+                baseline = corrs.get('concat', corrs.get('hybrid'))
+                baseline_label = 'concat' if 'concat' in corrs else 'hybrid_uw'
+                if hw is not None and baseline is not None:
+                    delta_ad = hw - baseline
                     ds_summary['ad_corr_delta'] = delta_ad
-                    ds_summary['ad_corr_weighted'] = corrs['hybrid_weighted']
+                    ds_summary['ad_corr_weighted'] = hw
+                    ds_summary['ad_corr_baseline'] = baseline
                     ad_deltas.append(delta_ad)
-                    print(f"    AD corr: weighted={corrs['hybrid_weighted']:.4f}, "
-                          f"unweighted={corrs['hybrid']:.4f} "
+                    print(f"    AD corr: hybrid_weighted={hw:.4f}, "
+                          f"{baseline_label}={baseline:.4f} "
                           f"(delta={delta_ad:+.4f})")
                     break
 

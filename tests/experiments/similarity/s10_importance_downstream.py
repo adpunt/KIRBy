@@ -35,7 +35,9 @@ from experiments._shared import (
     compute_feature_importance,
 )
 
-from kirby.hybrid import create_hybrid, apply_feature_selection
+from kirby.hybrid import apply_feature_selection
+from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+# TODO: create_hybrid API not finalised — revisit after framework experiments.
 
 
 # =============================================================================

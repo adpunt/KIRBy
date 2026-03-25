@@ -338,9 +338,17 @@ def _aggregate(task_results):
             except Exception:
                 pass
 
+        # Complexity matching strength: how much does representation choice
+        # matter in this domain? High std of deltas = some tasks benefit a lot,
+        # some don't = representation matters differently by task.
+        # High mean |delta| = representation consistently matters.
+        per_domain[domain]['complexity_matching_strength'] = float(np.mean(np.abs(d_arr)))
+        per_domain[domain]['delta_std'] = float(np.std(d_arr))
+
         print(f"    {domain}: {dr['wins']}/{n_d} wins, "
               f"mean_delta={np.mean(d_arr):+.4f}, "
-              f"mean_%imp={np.mean(p_arr):+.1f}%")
+              f"mean_%imp={np.mean(p_arr):+.1f}%, "
+              f"matching_strength={np.mean(np.abs(d_arr)):.4f}")
 
     return {
         'summary': summary,

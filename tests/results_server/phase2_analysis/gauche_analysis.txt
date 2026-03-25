@@ -1,0 +1,70 @@
+GAUCHE UNCERTAINTY INFLATION ANALYSIS
+==================================================
+
+FINDING: Gauche shows nearly flat uncertainty inflation
+compared to other methods that increase with noise.
+
+Mean uncertainty by noise level:
+
+  graph:
+    σ=0.0: uncertainty=0.6574
+    σ=0.1: uncertainty=0.6597
+    σ=0.2: uncertainty=0.6776
+    σ=0.3: uncertainty=0.7171
+    σ=0.4: uncertainty=0.7521
+    σ=0.5: uncertainty=0.8047
+    σ=0.6: uncertainty=0.8788
+    σ=0.7: uncertainty=0.9384
+    σ=0.8: uncertainty=1.0032
+    σ=0.9: uncertainty=1.0582
+    σ=1.0: uncertainty=1.1718
+    Inflation rate: 0.5143 (ideal: 1.0)
+
+  pdv:
+    σ=0.0: uncertainty=0.6559
+    σ=0.1: uncertainty=0.6628
+    σ=0.2: uncertainty=0.6788
+    σ=0.3: uncertainty=0.7183
+    σ=0.4: uncertainty=0.7541
+    σ=0.5: uncertainty=0.8068
+    σ=0.6: uncertainty=0.8689
+    σ=0.7: uncertainty=0.9334
+    σ=0.8: uncertainty=1.0015
+    σ=0.9: uncertainty=1.0603
+    σ=1.0: uncertainty=1.1686
+    Inflation rate: 0.5127 (ideal: 1.0)
+
+  smiles_ohe:
+    σ=0.0: uncertainty=0.6579
+    σ=0.1: uncertainty=0.6602
+    σ=0.2: uncertainty=0.6768
+    σ=0.3: uncertainty=0.7175
+    σ=0.4: uncertainty=0.7513
+    σ=0.5: uncertainty=0.8097
+    σ=0.6: uncertainty=0.8726
+    σ=0.7: uncertainty=0.9398
+    σ=0.8: uncertainty=1.0014
+    σ=0.9: uncertainty=1.0603
+    σ=1.0: uncertainty=1.1702
+    Inflation rate: 0.5123 (ideal: 1.0)
+
+  sns:
+    σ=0.0: uncertainty=0.6558
+    σ=0.1: uncertainty=0.6627
+    σ=0.2: uncertainty=0.6781
+    σ=0.3: uncertainty=0.7174
+    σ=0.4: uncertainty=0.7540
+    σ=0.5: uncertainty=0.8078
+    σ=0.6: uncertainty=0.8717
+    σ=0.7: uncertainty=0.9350
+    σ=0.8: uncertainty=1.0007
+    σ=0.9: uncertainty=1.0604
+    σ=1.0: uncertainty=1.1716
+    Inflation rate: 0.5158 (ideal: 1.0)
+
+POSSIBLE EXPLANATIONS:
+1. Gauche uses GP-based uncertainty that may be dominated by
+   kernel hyperparameters rather than noise estimation
+2. The model may be underfitting and capturing only epistemic
+   uncertainty from limited training data
+3. Hyperparameters may not be re-optimized for noisy conditions
