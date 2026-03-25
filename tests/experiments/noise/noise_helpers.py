@@ -42,7 +42,14 @@ SINGLE_DATASET_EXPERIMENTS = [
     'n01',   # activity cliff framework (Dablander)
     'n02',   # importance-weighted sample weighting
     'n03',   # SAS landscape analysis
+    'n04',   # GP-LOO cliff-aware noise detection
+    'n05',   # noise injection benchmark (all 15 detectors)
+    'n07',   # noise remediation strategies
+    'n08',   # noise estimation survey (all 15 estimators)
 ]
+
+# N06 (BindingDB ground-truth) is dataset-specific — not in the per-dataset list.
+# Run separately: python tests/experiments/noise/n06_bindingdb_ground_truth.py
 
 
 def _import_experiment(exp_id: str):
@@ -51,6 +58,11 @@ def _import_experiment(exp_id: str):
         'n01': 'n01_activity_cliff_framework',
         'n02': 'n02_sample_weighting',
         'n03': 'n03_sas_landscape',
+        'n04': 'n04_gp_loo_detection',
+        'n05': 'n05_noise_injection_benchmark',
+        'n06': 'n06_bindingdb_ground_truth',
+        'n07': 'n07_remediation',
+        'n08': 'n08_estimation_survey',
     }
     mod_name = module_map[exp_id]
     import importlib
@@ -63,6 +75,10 @@ def _experiment_full_name(exp_id: str) -> str:
         'n01': 'n01_activity_cliff_framework',
         'n02': 'n02_sample_weighting',
         'n03': 'n03_sas_landscape',
+        'n04': 'n04_gp_loo_detection',
+        'n05': 'n05_noise_injection_benchmark',
+        'n07': 'n07_remediation',
+        'n08': 'n08_estimation_survey',
     }
     return name_map.get(exp_id, exp_id)
 

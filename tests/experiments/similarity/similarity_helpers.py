@@ -60,6 +60,8 @@ SINGLE_DATASET_EXPERIMENTS = [
     's08',   # optimal dimension (standalone)
     's10',   # importance downstream (standalone)
     's11',   # bayesian optimization (standalone)
+    's12',   # cross-domain cliffs (standalone, generic)
+    's13',   # clustering + retrieval (standalone)
 ]
 
 
@@ -76,6 +78,8 @@ def _import_experiment(exp_id: str):
         's08': 's08_optimal_dimension',
         's10': 's10_importance_downstream',
         's11': 's11_bayesian_optimization',
+        's12': 's12_cross_domain_cliffs',
+        's13': 's13_clustering_retrieval',
     }
     mod_name = module_map[exp_id]
     import importlib
@@ -95,6 +99,8 @@ def _experiment_full_name(exp_id: str) -> str:
         's08': 's08_optimal_dimension',
         's10': 's10_importance_downstream',
         's11': 's11_bayesian_optimization',
+        's12': 's12_cross_domain_cliffs',
+        's13': 's13_clustering_retrieval',
     }
     return name_map.get(exp_id, exp_id)
 
