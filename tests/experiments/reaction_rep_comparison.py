@@ -413,6 +413,21 @@ def main():
             except Exception as e:
                 print(f"  {rep_name:<22} -> FAILED: {e}")
 
+        # Build hybrid from all successfully generated reps
+        if len(rep_matrices) >= 2:
+            try:
+                from kirby.find_best_hybrid import find_best_hybrid
+                search = find_best_hybrid(
+                    base_reps=rep_matrices, labels=labels, groups=groups,
+                    speed='fast', return_fitted=True, verbose=False, cache=True)
+                if search.fitted_result is not None:
+                    rep_matrices['kirby_hybrid'] = search.fitted_result.X_hybrid
+                    if 'kirby_hybrid' not in rep_names:
+                        rep_names = list(rep_names) + ['kirby_hybrid']
+                    print(f"  {'kirby_hybrid':<22} -> {rep_matrices['kirby_hybrid'].shape[1]:>6}D")
+            except Exception as e:
+                print(f"  kirby_hybrid           -> FAILED: {e}")
+
         # Evaluate all (rep, model) combinations
         for rep_name in rep_names:
             if rep_name not in rep_matrices:

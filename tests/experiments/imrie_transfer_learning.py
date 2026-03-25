@@ -181,6 +181,19 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pretrain_dir):
     rep_str = ','.join(rep_names)
     reps = get_representations(smiles, rep_str)
 
+    # Build hybrid and add as another "rep" (evaluated with non-TL models only)
+    try:
+        from kirby.find_best_hybrid import find_best_hybrid
+        search = find_best_hybrid(
+            base_reps=reps, labels=labels, groups=groups,
+            speed='fast', return_fitted=True, verbose=False, cache=True)
+        if search.fitted_result is not None:
+            reps['kirby_hybrid'] = search.fitted_result.X_hybrid
+            rep_names = list(rep_names) + ['kirby_hybrid']
+            print(f"  Hybrid built: {reps['kirby_hybrid'].shape[1]}D")
+    except Exception as e:
+        print(f"  Hybrid build failed: {e}")
+
     ds_results = {
         'n_samples': len(labels),
         'n_scaffolds': n_scaffolds,
