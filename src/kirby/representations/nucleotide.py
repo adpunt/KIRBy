@@ -9,10 +9,13 @@ Classical Features (Phase G0):
   tnf_canonical (136D), dna_shape (8D), complexity (5D),
   rna_structure (6D), codon_usage (61D)
 
-Foundation Models (Phase G1/G2 — stubs):
-  dnabert2 (768D), nt_v2_250m (768D), nt_v2_500m (1024D),
-  hyenadna (256D), caduceus (256D), gena_lm (768D), gpn (512D),
-  dnabert_s (768D), splicebert (512D), rnafm (640D), rinalmo (1280D)
+Foundation Models (Phase G1/G2 — 14 models):
+  Tier 1: dnabert2 (768D), nt_v2_250m (768D), nt_v2_500m (1024D),
+          hyenadna (256D), caduceus (256D, CUDA), grover_dna (768D),
+          ntv3_100m (768D)
+  Tier 2: gena_lm (1024D), splicebert (512D), mistral_dna (768D),
+          dnabert_s (768D)
+  Tier 3: gpn (512D), rnafm (640D), rinalmo (1280D, CUDA)
 """
 
 import numpy as np
@@ -462,20 +465,279 @@ def make_onehot_pca50_factory(sequences: List[str]) -> Callable:
 
 
 # =============================================================================
-# FOUNDATION MODEL STUBS (Phase G1/G2)
+# FOUNDATION MODELS (Phase G1/G2)
 # =============================================================================
 
-def _lm_stub(name: str, dim: int, install: str = '') -> Callable:
-    """Create a stub that raises ImportError for unimplemented LM reps."""
-    def stub(sequences: List[str]) -> np.ndarray:
-        raise ImportError(
-            f"'{name}' embeddings not yet implemented (Phase G1/G2).\n"
-            f"Expected output: (n, {dim}) float32.\n"
-            + (f"Will require: {install}\n" if install else "")
-            + "Use classical reps (--reps fast) for now."
-        )
-    stub.__name__ = f'embed_{name}'
-    return stub
+# Shared HuggingFace embedding pipeline — avoids duplicating ~50 lines per model.
+# Each model wrapper is a thin function calling this with model-specific params.
+
+_MODEL_CACHE: Dict[str, dict] = {}
+
+
+def _hf_embed(
+    sequences: List[str],
+    model_id: str,
+    batch_size: int = 8,
+    max_length: int = 512,
+    trust_remote_code: bool = True,
+    auto_class: str = 'AutoModel',
+    use_hidden_states: bool = False,
+    convert_t_to_u: bool = False,
+) -> np.ndarray:
+    """Shared HuggingFace transformer embedding pipeline.
+
+    Args:
+        sequences: DNA/RNA sequences.
+        model_id: HuggingFace model identifier.
+        batch_size: Sequences per batch.
+        max_length: Max tokens (truncation).
+        trust_remote_code: For models with custom code.
+        auto_class: 'AutoModel' or 'AutoModelForMaskedLM'.
+        use_hidden_states: If True, use output_hidden_states=True and take
+            hidden_states[-1]. If False, use last_hidden_state directly.
+        convert_t_to_u: Replace T→U for RNA models.
+
+    Returns:
+        np.ndarray of shape (n_sequences, hidden_dim), float32.
+    """
+    import torch
+    from transformers import AutoTokenizer
+
+    if auto_class == 'AutoModelForMaskedLM':
+        from transformers import AutoModelForMaskedLM as ModelClass
+    else:
+        from transformers import AutoModel as ModelClass
+
+    # Global model cache keyed by model_id
+    if model_id not in _MODEL_CACHE:
+        print(f"  Loading {model_id}...")
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_id, trust_remote_code=trust_remote_code)
+        model = ModelClass.from_pretrained(
+            model_id, trust_remote_code=trust_remote_code)
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        model = model.to(device).eval()
+        _MODEL_CACHE[model_id] = {
+            'model': model, 'tokenizer': tokenizer, 'device': device,
+        }
+        print(f"  Loaded on {device}")
+
+    cache = _MODEL_CACHE[model_id]
+    model, tokenizer, device = cache['model'], cache['tokenizer'], cache['device']
+
+    # Clean sequences
+    cleaned = []
+    for seq in sequences:
+        s = ''.join(seq.upper().split())  # strip all whitespace
+        if convert_t_to_u:
+            s = s.replace('T', 'U')
+        cleaned.append(s)
+
+    all_embeddings = []
+    n = len(cleaned)
+
+    with torch.no_grad():
+        for i in range(0, n, batch_size):
+            batch = cleaned[i:i + batch_size]
+            encoded = tokenizer(
+                batch, padding=True, truncation=True,
+                max_length=max_length, return_tensors='pt',
+            )
+            input_ids = encoded['input_ids'].to(device)
+            attention_mask = encoded['attention_mask'].to(device)
+
+            kwargs = dict(input_ids=input_ids, attention_mask=attention_mask)
+            if use_hidden_states:
+                kwargs['output_hidden_states'] = True
+            outputs = model(**kwargs)
+
+            if use_hidden_states and hasattr(outputs, 'hidden_states'):
+                hidden = outputs.hidden_states[-1]
+            elif hasattr(outputs, 'last_hidden_state'):
+                hidden = outputs.last_hidden_state
+            else:
+                # Fallback for non-standard output structures
+                hidden = outputs[0]
+
+            # Mean-pool over non-padding tokens
+            mask = attention_mask.unsqueeze(-1).float()
+            summed = (hidden * mask).sum(dim=1)
+            counts = mask.sum(dim=1).clamp(min=1)
+            embeddings = summed / counts
+
+            all_embeddings.append(embeddings.cpu().numpy())
+
+            if (i + batch_size) % 200 == 0 and i + batch_size < n:
+                print(f"    Progress: {i + batch_size}/{n}")
+
+    result = np.vstack(all_embeddings).astype(np.float32)
+    print(f"  {model_id}: {result.shape}")
+    return result
+
+
+# --- Wrappers for models already implemented in sequence.py ---
+
+def _embed_dnabert2(sequences: List[str]) -> np.ndarray:
+    """DNABERT-2 embeddings (768D). zhihan1996/DNABERT-2-117M."""
+    from .sequence import create_dnabert2
+    return create_dnabert2(sequences)
+
+
+def _embed_nt_v2_500m(sequences: List[str]) -> np.ndarray:
+    """Nucleotide Transformer v2 500M embeddings (1024D)."""
+    from .sequence import create_nucleotide_transformer
+    return create_nucleotide_transformer(sequences)
+
+
+def _embed_hyenadna(sequences: List[str]) -> np.ndarray:
+    """HyenaDNA embeddings (256D). LongSafari/hyenadna-small-32k-seqlen-hf."""
+    from .sequence import create_hyenadna
+    return create_hyenadna(sequences)
+
+
+def _embed_caduceus(sequences: List[str]) -> np.ndarray:
+    """Caduceus BiMamba embeddings (256D, CUDA only)."""
+    from .sequence import create_caduceus
+    return create_caduceus(sequences)
+
+
+# --- New implementations via _hf_embed ---
+
+def _embed_nt_v2_250m(sequences: List[str]) -> np.ndarray:
+    """Nucleotide Transformer v2 250M embeddings (768D).
+
+    Same architecture as NT-v2 500M but smaller. Strong on epigenetics.
+    Dalla-Torre et al., Nature Methods 2024.
+    """
+    return _hf_embed(
+        sequences,
+        model_id='InstaDeepAI/nucleotide-transformer-v2-250m-multi-species',
+        batch_size=8, max_length=1000,
+        auto_class='AutoModelForMaskedLM', use_hidden_states=True,
+    )
+
+
+def _embed_gena_lm(sequences: List[str]) -> np.ndarray:
+    """GENA-LM BERT-large embeddings (1024D).
+
+    Trained on T2T human genome assembly. BPE tokenization.
+    Fishman et al., NAR 2024.
+    """
+    return _hf_embed(
+        sequences,
+        model_id='AIRI-Institute/gena-lm-bert-large-t2t',
+        batch_size=8, max_length=512,
+    )
+
+
+def _embed_dnabert_s(sequences: List[str]) -> np.ndarray:
+    """DNABERT-S species-aware embeddings (768D).
+
+    Contrastive learning on multi-species genomes.
+    Same BPE tokenizer family as DNABERT-2.
+    """
+    return _hf_embed(
+        sequences,
+        model_id='zhihan1996/DNABERT-S',
+        batch_size=16, max_length=512,
+    )
+
+
+def _embed_gpn(sequences: List[str]) -> np.ndarray:
+    """GPN (Genomic Pre-trained Network) embeddings (512D).
+
+    Dilated ConvNet trained on Brassicales (plant) genomes.
+    May have limited transfer to human DNA tasks.
+    Benegas et al., 2023.
+    """
+    return _hf_embed(
+        sequences,
+        model_id='songlab/gpn-brassicales',
+        batch_size=16, max_length=512,
+        auto_class='AutoModelForMaskedLM', use_hidden_states=True,
+    )
+
+
+def _embed_splicebert(sequences: List[str]) -> np.ndarray:
+    """SpliceBERT splice-site specialist embeddings (512D).
+
+    Lightweight (6 layers) BERT trained on 2M pre-mRNA from 72 vertebrates.
+    Chen et al., 2024.
+    """
+    return _hf_embed(
+        sequences,
+        model_id='multimolecule/splicebert',
+        batch_size=16, max_length=512,
+    )
+
+
+def _embed_rnafm(sequences: List[str]) -> np.ndarray:
+    """RNA-FM foundation model embeddings (640D).
+
+    Trained on 23.7M ncRNA sequences from RNAcentral. Converts T→U.
+    Chen et al., Nature Methods 2024.
+    """
+    return _hf_embed(
+        sequences,
+        model_id='multimolecule/rnafm',
+        batch_size=8, max_length=512,
+        convert_t_to_u=True,
+    )
+
+
+def _embed_rinalmo(sequences: List[str]) -> np.ndarray:
+    """RiNALMo large RNA language model embeddings (1280D).
+
+    Trained on 36M ncRNA sequences. Converts T→U.
+    May require flash-attn (CUDA). Penić et al., Nature Comms 2025.
+    """
+    return _hf_embed(
+        sequences,
+        model_id='multimolecule/rinalmo',
+        batch_size=4, max_length=512,
+        convert_t_to_u=True,
+    )
+
+
+def _embed_grover_dna(sequences: List[str]) -> np.ndarray:
+    """GROVER genomic BERT embeddings (768D).
+
+    BERT with BPE + next-k-mer prediction pretraining on human genome.
+    One of 5 models in the 2025 Nature Comms DNA FM benchmark.
+    Sanabria et al., Nature Machine Intelligence 2024.
+    """
+    return _hf_embed(
+        sequences,
+        model_id='PoetschLab/GROVER',
+        batch_size=16, max_length=512,
+    )
+
+
+def _embed_ntv3_100m(sequences: List[str]) -> np.ndarray:
+    """Nucleotide Transformer v3 100M embeddings (768D).
+
+    U-Net Transformer with single-base tokenization. Trained on 9T tokens
+    from OpenGenome2. SOTA on functional track prediction (Dec 2025).
+    """
+    return _hf_embed(
+        sequences,
+        model_id='InstaDeepAI/NTv3_100M_pre',
+        batch_size=8, max_length=1000,
+    )
+
+
+def _embed_mistral_dna(sequences: List[str]) -> np.ndarray:
+    """Mistral-DNA Mixture-of-Experts embeddings (768D).
+
+    Mixtral-based MoE architecture for DNA. Grouped-query attention
+    + sliding window. Trained on hg38 human genome.
+    Mourad, 2024.
+    """
+    return _hf_embed(
+        sequences,
+        model_id='RaphaelMourad/Mistral-DNA-v1-422M-hg38',
+        batch_size=8, max_length=512,
+    )
 
 
 # =============================================================================
@@ -483,18 +745,23 @@ def _lm_stub(name: str, dim: int, install: str = '') -> Callable:
 # =============================================================================
 
 NUCLEOTIDE_REPS: Dict[str, Callable] = {
-    # Foundation models (stubs)
-    'dnabert2':    _lm_stub('dnabert2', 768, 'transformers'),
-    'nt_v2_250m':  _lm_stub('nt_v2_250m', 768, 'transformers'),
-    'nt_v2_500m':  _lm_stub('nt_v2_500m', 1024, 'transformers'),
-    'hyenadna':    _lm_stub('hyenadna', 256, 'transformers'),
-    'caduceus':    _lm_stub('caduceus', 256, 'mamba_ssm (CUDA only)'),
-    'gena_lm':     _lm_stub('gena_lm', 768, 'transformers'),
-    'gpn':         _lm_stub('gpn', 512, 'gpn'),
-    'splicebert':  _lm_stub('splicebert', 512, 'multimolecule'),
-    'rnafm':       _lm_stub('rnafm', 640, 'rna-fm'),
-    'rinalmo':     _lm_stub('rinalmo', 1280, 'multimolecule, flash-attn (CUDA)'),
-    'dnabert_s':   _lm_stub('dnabert_s', 768, 'transformers'),
+    # Foundation models — Tier 1 (well-benchmarked, diverse architectures)
+    'dnabert2':      _embed_dnabert2,        # 768D  — Transformer+BPE
+    'nt_v2_250m':    _embed_nt_v2_250m,      # 768D  — ESM+Rotary
+    'nt_v2_500m':    _embed_nt_v2_500m,      # 1024D — ESM+Rotary
+    'hyenadna':      _embed_hyenadna,        # 256D  — Hyena conv SSM
+    'caduceus':      _embed_caduceus,        # 256D  — BiMamba SSM (CUDA)
+    'grover_dna':    _embed_grover_dna,      # 768D  — BERT+next-k-mer
+    'ntv3_100m':     _embed_ntv3_100m,       # 768D  — U-Net Transformer
+    # Foundation models — Tier 2 (breadth)
+    'gena_lm':       _embed_gena_lm,         # 1024D — BERT-large T2T
+    'splicebert':    _embed_splicebert,       # 512D  — splice specialist
+    'mistral_dna':   _embed_mistral_dna,     # 768D  — MoE
+    'dnabert_s':     _embed_dnabert_s,       # 768D  — species-aware
+    # Foundation models — Tier 3 (may not transfer)
+    'gpn':           _embed_gpn,             # 512D  — plant ConvNet
+    'rnafm':         _embed_rnafm,           # 640D  — RNA model
+    'rinalmo':       _embed_rinalmo,         # 1280D — RNA (CUDA)
     # Classical features
     'kmer3':          lambda seqs: kmer_frequencies(seqs, 3),     # 64D
     'kmer4':          lambda seqs: kmer_frequencies(seqs, 4),     # 256D
@@ -512,7 +779,9 @@ NUCLEOTIDE_REPS: Dict[str, Callable] = {
 
 NUCLEOTIDE_LM_REPS = {
     'dnabert2', 'nt_v2_250m', 'nt_v2_500m', 'hyenadna', 'caduceus',
-    'gena_lm', 'gpn', 'splicebert', 'rnafm', 'rinalmo', 'dnabert_s',
+    'grover_dna', 'ntv3_100m',
+    'gena_lm', 'splicebert', 'mistral_dna', 'dnabert_s',
+    'gpn', 'rnafm', 'rinalmo',
 }
 
 NUCLEOTIDE_FAST_REPS = {
