@@ -596,6 +596,10 @@ At ~1-5s per config, expect 1-5 hours per dataset. Single SLURM job per dataset.
 4. **Does internal evaluator matter across all strategies?** Ridge might rescue greedy on antibody.
 5. **Which weighting scheme params are optimal?** Softmax temperature, power exponent, threshold alpha, etc.
 
+### After this experiment
+
+**SPEED_TIERS must be rebuilt** based on F12 results. Current SPEED_TIERS (in `find_best_hybrid.py`) use stale defaults from before F01/F03/F04/F07 findings. The winning (scheme × evaluator × importance) triple from F12 becomes the new fast-tier default. Medium and long tiers get expanded search grids.
+
 ### What this does NOT test
 
 - Augmentation (finalized in F06/F08)

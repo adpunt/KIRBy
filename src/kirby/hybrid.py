@@ -69,7 +69,8 @@ NAMED_ALLOCATIONS = {
 # ============================================================================
 
 def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labels,
-                           total_budget=100, step_size=10, patience=3):
+                           total_budget=100, step_size=10, patience=3,
+                           internal_evaluator='ridge'):
     """
     Greedy forward feature allocation with plateau detection.
     
@@ -135,8 +136,9 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
             X_val_trial = apply_feature_selection(rep_dict_val, feat_info)
             
             # Evaluate on validation
-            r2 = _evaluate_allocation(X_train_trial, X_val_trial, train_labels, val_labels)
-            
+            r2 = _evaluate_allocation(X_train_trial, X_val_trial, train_labels, val_labels,
+                                     internal_evaluator=internal_evaluator)
+
             if r2 > iter_best_gain:
                 iter_best_gain = r2
                 iter_best_rep = rep_name
@@ -183,7 +185,8 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
 
 
 def allocate_greedy_feature(rep_dict_train, rep_dict_val, train_labels, val_labels,
-                            total_budget=100, patience=5, importance_method='treeshap'):
+                            total_budget=100, patience=5, importance_method='treeshap',
+                            internal_evaluator='ridge'):
     """
     Feature-level greedy allocation.
 
@@ -257,7 +260,8 @@ def allocate_greedy_feature(rep_dict_train, rep_dict_val, train_labels, val_labe
                 continue
 
             # Evaluate
-            score = _evaluate_allocation(X_train_trial, X_val_trial, train_labels, val_labels)
+            score = _evaluate_allocation(X_train_trial, X_val_trial, train_labels, val_labels,
+                                         internal_evaluator=internal_evaluator)
 
             if score > iter_best_score:
                 iter_best_score = score
@@ -450,7 +454,7 @@ def _compute_allocation_weights(baseline_scores, scheme='linear', params=None,
 
 def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, val_labels,
                                   total_budget=100, weighting_scheme='linear',
-                                  weighting_params=None):
+                                  weighting_params=None, internal_evaluator='ridge'):
     """
     Allocate features proportional to each representation's baseline performance.
     
@@ -488,7 +492,8 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
         X_val_clean = np.nan_to_num(X_val_clean, nan=0.0, posinf=1e10, neginf=-1e10)
 
         score = _evaluate_allocation(X_train_clean, X_val_clean,
-                                     train_labels, val_labels)
+                                     train_labels, val_labels,
+                                     internal_evaluator=internal_evaluator)
 
         baseline_scores[rep_name] = max(score, 0.0)  # Clip negative scores to 0
     
@@ -587,7 +592,7 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
 
 def allocate_dominant_greedy(rep_dict_train, rep_dict_val, train_labels, val_labels,
                              total_budget=100, step_size=10, patience=3,
-                             dominant_fraction=0.7):
+                             dominant_fraction=0.7, internal_evaluator='ridge'):
     """
     Dominant-greedy allocation: give the best rep a large share, greedy-fill the rest.
 
@@ -615,7 +620,8 @@ def allocate_dominant_greedy(rep_dict_train, rep_dict_val, train_labels, val_lab
     for rep_name in rep_dict_train:
         X_tr = rep_dict_train[rep_name]
         X_va = rep_dict_val[rep_name]
-        score = _evaluate_allocation(X_tr, X_va, train_labels, val_labels)
+        score = _evaluate_allocation(X_tr, X_va, train_labels, val_labels,
+                                     internal_evaluator=internal_evaluator)
         rep_scores[rep_name] = score
 
     best_rep = max(rep_scores, key=rep_scores.get)
@@ -637,7 +643,8 @@ def allocate_dominant_greedy(rep_dict_train, rep_dict_val, train_labels, val_lab
         importance_cache=_importance_cache,
     )
     X_val_init = apply_feature_selection(rep_dict_val, init_feat_info)
-    best_val_score = _evaluate_allocation(X_train_init, X_val_init, train_labels, val_labels)
+    best_val_score = _evaluate_allocation(X_train_init, X_val_init, train_labels, val_labels,
+                                         internal_evaluator=internal_evaluator)
 
     best_allocation = allocation.copy()
     best_feature_info = init_feat_info
@@ -673,7 +680,8 @@ def allocate_dominant_greedy(rep_dict_train, rep_dict_val, train_labels, val_lab
                 importance_cache=_importance_cache,
             )
             X_val_trial = apply_feature_selection(rep_dict_val, feat_info)
-            score = _evaluate_allocation(X_train_trial, X_val_trial, train_labels, val_labels)
+            score = _evaluate_allocation(X_train_trial, X_val_trial, train_labels, val_labels,
+                                         internal_evaluator=internal_evaluator)
 
             if score > iter_best_gain:
                 iter_best_gain = score
@@ -965,15 +973,16 @@ def _create_hybrid_with_allocation(rep_dict, labels, allocation,
 
 
 def _evaluate_allocation(X_train, X_val, y_train, y_val,
-                         model=None, metric_fn=None, lower_is_better=False):
+                         model=None, metric_fn=None, lower_is_better=False,
+                         internal_evaluator='ridge'):
     """Helper: Evaluate allocation quality on a train/val split.
-
-    If *model* is None (default), uses an internal RF and R²/accuracy —
-    preserving backward compatibility for all existing callers.
 
     If *model* is provided it is deep-copied, fitted on (X_train, y_train),
     and scored with *metric_fn(y_val, y_pred)*.  The returned value is
     negated when *lower_is_better* so that "higher return = better" always.
+
+    If *model* is None (default), uses the *internal_evaluator* ('ridge',
+    'rf', or 'xgboost') with R²/accuracy as the score.
     """
     if X_train.shape[1] == 0:
         return -np.inf
@@ -989,19 +998,56 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
         score = metric_fn(y_val, y_pred)
         return -score if lower_is_better else score
 
-    # Fallback: internal Ridge evaluator (F07 experiment result: ridge default)
+    # Internal evaluator — used during greedy allocation loops
     is_classification = _is_classification_task(y_train)
-    if is_classification:
-        from sklearn.linear_model import RidgeClassifierCV
-        m = RidgeClassifierCV(alphas=[0.01, 0.1, 1.0, 10.0, 100.0])
+
+    if internal_evaluator == 'ridge':
+        if is_classification:
+            from sklearn.linear_model import RidgeClassifierCV
+            m = RidgeClassifierCV(alphas=[0.01, 0.1, 1.0, 10.0, 100.0])
+        else:
+            from sklearn.linear_model import RidgeCV
+            m = RidgeCV(alphas=[0.01, 0.1, 1.0, 10.0, 100.0])
         m.fit(X_train_scaled, y_train)
-        return m.score(X_val_scaled, y_val)
+        if is_classification:
+            return m.score(X_val_scaled, y_val)
+        return r2_score(y_val, m.predict(X_val_scaled))
+
+    elif internal_evaluator == 'rf':
+        if is_classification:
+            from sklearn.ensemble import RandomForestClassifier
+            m = RandomForestClassifier(n_estimators=50, max_depth=10,
+                                       random_state=42, n_jobs=-1)
+        else:
+            from sklearn.ensemble import RandomForestRegressor
+            m = RandomForestRegressor(n_estimators=50, max_depth=10,
+                                      random_state=42, n_jobs=-1)
+        m.fit(X_train_scaled, y_train)
+        if is_classification:
+            return m.score(X_val_scaled, y_val)
+        return r2_score(y_val, m.predict(X_val_scaled))
+
+    elif internal_evaluator == 'xgboost':
+        try:
+            from xgboost import XGBRegressor, XGBClassifier
+            if is_classification:
+                m = XGBClassifier(n_estimators=50, max_depth=4,
+                                  random_state=42, verbosity=0, n_jobs=-1)
+            else:
+                m = XGBRegressor(n_estimators=50, max_depth=4,
+                                 random_state=42, verbosity=0, n_jobs=-1)
+            m.fit(X_train_scaled, y_train)
+            if is_classification:
+                return m.score(X_val_scaled, y_val)
+            return r2_score(y_val, m.predict(X_val_scaled))
+        except ImportError:
+            # Fallback to ridge if xgboost not available
+            return _evaluate_allocation(X_train, X_val, y_train, y_val,
+                                        internal_evaluator='ridge')
+
     else:
-        from sklearn.linear_model import RidgeCV
-        m = RidgeCV(alphas=[0.01, 0.1, 1.0, 10.0, 100.0])
-        m.fit(X_train_scaled, y_train)
-        y_pred = m.predict(X_val_scaled)
-        return r2_score(y_val, y_pred)
+        raise ValueError(f"Unknown internal_evaluator: {internal_evaluator}. "
+                         f"Use 'ridge', 'rf', or 'xgboost'.")
 
 
 # ============================================================================
@@ -2764,6 +2810,8 @@ def create_hybrid(base_reps, labels,
                  model=None,
                  metric_fn=None,
                  lower_is_better=False,
+                 # Internal evaluator for greedy/performance_weighted allocation
+                 internal_evaluator='ridge',
                  **kwargs):
     """
     Create hybrid representation by combining features from multiple base representations.
@@ -2946,7 +2994,8 @@ def create_hybrid(base_reps, labels,
         # Run greedy allocation - now returns feature_info directly
         allocation, history, greedy_feature_info = allocate_greedy_forward(
             rep_dict_train, rep_dict_val, train_labels, val_labels,
-            total_budget=budget, step_size=step_size, patience=patience
+            total_budget=budget, step_size=step_size, patience=patience,
+            internal_evaluator=internal_evaluator,
         )
         
         # If filters were applied, remap indices from filtered space to original space
@@ -2974,6 +3023,7 @@ def create_hybrid(base_reps, labels,
         allocation = allocate_performance_weighted(
             rep_dict_train, rep_dict_val, train_labels, val_labels,
             total_budget=budget, weighting_scheme=ws, weighting_params=wp,
+            internal_evaluator=internal_evaluator,
         )
         
         # Compute importance on TRAIN split (consistent with allocation decision)
@@ -3081,7 +3131,8 @@ def create_hybrid(base_reps, labels,
         allocation, history, greedy_feature_info = allocate_greedy_feature(
             rep_dict_train, rep_dict_val, train_labels, val_labels,
             total_budget=budget, patience=patience,
-            importance_method=importance_method
+            importance_method=importance_method,
+            internal_evaluator=internal_evaluator,
         )
 
         # If filters were applied, remap indices
@@ -3107,6 +3158,7 @@ def create_hybrid(base_reps, labels,
             rep_dict_train, rep_dict_val, train_labels, val_labels,
             total_budget=budget, step_size=step_size, patience=patience,
             dominant_fraction=dominant_fraction,
+            internal_evaluator=internal_evaluator,
         )
 
         if filter_index_maps:
