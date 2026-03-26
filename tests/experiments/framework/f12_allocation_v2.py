@@ -255,7 +255,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         )
                         all_configs.append(entry)
 
-                        if idx % 100 == 0 or idx == total:
+                        if idx <= 10 or idx % 50 == 0 or idx == total:
                             elapsed = time.time() - t_start
                             rate = idx / elapsed if elapsed > 0 else 0
                             eta = (total - idx) / rate if rate > 0 else 0
