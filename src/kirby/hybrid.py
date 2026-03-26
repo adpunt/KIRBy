@@ -2388,10 +2388,10 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
             else:
                 if is_classification:
                     lgb_model = lgb.LGBMClassifier(n_estimators=n_estimators, max_depth=max_depth,
-                                                  random_state=random_state, n_jobs=-1, verbosity=-1)
+                                                  random_state=random_state, n_jobs=1, verbosity=-1)
                 else:
                     lgb_model = lgb.LGBMRegressor(n_estimators=n_estimators, max_depth=max_depth,
-                                                 random_state=random_state, n_jobs=-1, verbosity=-1)
+                                                 random_state=random_state, n_jobs=1, verbosity=-1)
                 lgb_model.fit(X_scaled, labels)
 
             feature_importance = lgb_model.booster_.feature_importance(importance_type='gain')

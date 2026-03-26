@@ -16,6 +16,8 @@ Usage:
         X = func(heavy_seqs, light_seqs)
 """
 
+import functools
+
 import numpy as np
 from typing import List, Optional
 
@@ -1562,6 +1564,41 @@ def make_esm2_entropy_factory(heavy_seqs: List[str], light_seqs: List[str]):
     return factory
 
 
+# ── Pair-level deduplication wrapper ──────────────────────────────────────────
+
+def _dedup_embed(fn):
+    """Wrap an (heavy_seqs, light_seqs)->ndarray function with pair dedup.
+
+    Datasets like graphinity have ~250x duplication (50K mutations from ~200
+    PDB structures sharing the same VH/VL). This embeds only unique pairs
+    and maps results back, saving ~99% of inference time.
+    """
+    @functools.wraps(fn)
+    def wrapper(heavy_seqs, light_seqs):
+        n = len(heavy_seqs)
+        seen = {}
+        orig_to_unique = np.empty(n, dtype=np.intp)
+        unique_h, unique_l = [], []
+        for i in range(n):
+            key = (heavy_seqs[i], light_seqs[i])
+            if key not in seen:
+                seen[key] = len(unique_h)
+                unique_h.append(heavy_seqs[i])
+                unique_l.append(light_seqs[i])
+            orig_to_unique[i] = seen[key]
+
+        n_unique = len(unique_h)
+        if n_unique == n:
+            return fn(heavy_seqs, light_seqs)
+
+        print(f"  [dedup] {fn.__name__}: {n} -> {n_unique} unique pairs "
+              f"({n / n_unique:.0f}x)")
+        X_unique = fn(unique_h, unique_l)
+        return X_unique[orig_to_unique]
+
+    return wrapper
+
+
 ANTIBODY_REPS = {
     'esm2': embed_esm2,                # 2560D
     'esmc': embed_esmc,                # 2304D
@@ -1637,3 +1674,9 @@ ANTIBODY_STRUCTURAL_REPS = {'structural'}
 
 # Fast reps (no dependencies beyond numpy/biopython)
 ANTIBODY_FAST_REPS = {'onehot', 'blosum', 'aac', 'paratope'}
+
+# Apply pair-level dedup to expensive reps (LM + structural).
+# Fast reps (onehot, blosum, aac, paratope) skip — too cheap to benefit.
+for _name in list(ANTIBODY_REPS):
+    if _name not in ANTIBODY_FAST_REPS:
+        ANTIBODY_REPS[_name] = _dedup_embed(ANTIBODY_REPS[_name])

@@ -1755,6 +1755,19 @@ _SAPROT_MODEL = None
 _SAPROT_TOKENIZER = None
 
 
+def _prostt5_cache_dir() -> 'Path':
+    """Return cache directory for ProstT5 3Di predictions."""
+    from pathlib import Path
+    seagate = Path('/Volumes/seagate/kirby/prostt5_3di')
+    if seagate.parent.parent.exists():
+        seagate.mkdir(parents=True, exist_ok=True)
+        return seagate
+    cache_dir = Path(os.environ.get('KIRBY_CACHE_DIR',
+                     str(Path.home() / '.cache' / 'kirby'))) / 'prostt5_3di'
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
 def _predict_3di_with_prostt5(
     sequences: List[str],
     device: str = None,
@@ -1763,6 +1776,9 @@ def _predict_3di_with_prostt5(
 
     ProstT5 (Rostlab/ProstT5) translates AA sequences to 3Di tokens directly
     without requiring structure prediction. Pure Python, no binary dependencies.
+
+    Deduplicates sequences and caches results to disk (keyed by sequence hash)
+    so repeated calls (e.g. saprot then saprot_cdr) are instant.
 
     Args:
         sequences: List of protein amino acid sequences.
@@ -1775,58 +1791,88 @@ def _predict_3di_with_prostt5(
     import torch
     global _PROSTT5_MODEL, _PROSTT5_TOKENIZER
 
-    try:
-        from transformers import T5Tokenizer, T5ForConditionalGeneration
-    except ImportError:
-        raise ImportError("ProstT5 requires transformers: pip install transformers")
+    cache_dir = _prostt5_cache_dir()
 
-    if _PROSTT5_MODEL is None:
-        print("  Loading ProstT5 (Rostlab/ProstT5) for 3Di prediction...")
-        _PROSTT5_TOKENIZER = T5Tokenizer.from_pretrained(
-            'Rostlab/ProstT5', do_lower_case=False
-        )
-        _PROSTT5_MODEL = T5ForConditionalGeneration.from_pretrained(
-            'Rostlab/ProstT5'
-        ).to(device).eval()
+    # Deduplicate: map each input to its canonical form + hash
+    canon = [s.upper().strip() for s in sequences]
+    unique_seqs = {}  # hash -> canonical seq
+    seq_to_hash = []  # index -> hash
+    for s in canon:
+        h = _seq_hash(s)
+        unique_seqs[h] = s
+        seq_to_hash.append(h)
 
-    model = _PROSTT5_MODEL
-    tokenizer = _PROSTT5_TOKENIZER
-    threedi_seqs = []
+    # Check disk cache for already-computed 3Di
+    computed = {}  # hash -> 3Di string
+    to_compute = {}  # hash -> canonical seq (needs ProstT5)
+    for h, s in unique_seqs.items():
+        cache_path = cache_dir / f"{h}.3di"
+        if cache_path.exists():
+            computed[h] = cache_path.read_text()
+        else:
+            to_compute[h] = s
 
-    with torch.no_grad():
-        for i, seq in enumerate(sequences):
-            try:
-                seq_clean = seq.upper().strip()[:1000]  # ProstT5 practical limit
-                # ProstT5 expects: '<AA2fold> ' prefix + space-separated residues
-                input_str = '<AA2fold> ' + ' '.join(list(seq_clean))
-                inputs = tokenizer(
-                    input_str, return_tensors='pt',
-                    add_special_tokens=True, max_length=2048,
-                    truncation=True,
-                ).to(device)
-                output = model.generate(
-                    **inputs,
-                    max_new_tokens=len(seq_clean) + 10,
-                    do_sample=False,
-                )
-                # Decode 3Di tokens, strip special tokens
-                decoded = tokenizer.decode(output[0], skip_special_tokens=True)
-                # ProstT5 outputs space-separated 3Di tokens
-                threedi = decoded.replace(' ', '')
-                # Ensure length matches (truncate or pad with '#')
-                if len(threedi) < len(seq_clean):
-                    threedi = threedi + '#' * (len(seq_clean) - len(threedi))
-                elif len(threedi) > len(seq_clean):
-                    threedi = threedi[:len(seq_clean)]
-                threedi_seqs.append(threedi)
-            except Exception as e:
-                print(f"    WARNING: ProstT5 failed on seq {i} (len={len(seq)}): {e}")
-                threedi_seqs.append('#' * len(seq.strip()))
+    n_cached = len(computed)
+    n_total_unique = len(unique_seqs)
+    n_dup = len(sequences) - n_total_unique
+    if n_cached > 0 or n_dup > 0:
+        print(f"    ProstT5: {len(sequences)} seqs, {n_total_unique} unique, "
+              f"{n_cached} cached, {len(to_compute)} to compute")
 
-            if (i + 1) % 20 == 0:
-                print(f"    ProstT5 progress: {i + 1}/{len(sequences)}")
+    # Compute missing 3Di predictions
+    if to_compute:
+        try:
+            from transformers import T5Tokenizer, T5ForConditionalGeneration
+        except ImportError:
+            raise ImportError("ProstT5 requires transformers: pip install transformers")
 
-    return threedi_seqs
+        if _PROSTT5_MODEL is None:
+            print("  Loading ProstT5 (Rostlab/ProstT5) for 3Di prediction...")
+            _PROSTT5_TOKENIZER = T5Tokenizer.from_pretrained(
+                'Rostlab/ProstT5', do_lower_case=False
+            )
+            _PROSTT5_MODEL = T5ForConditionalGeneration.from_pretrained(
+                'Rostlab/ProstT5'
+            ).to(device).eval()
+
+        model = _PROSTT5_MODEL
+        tokenizer = _PROSTT5_TOKENIZER
+        compute_list = list(to_compute.items())
+
+        with torch.no_grad():
+            for idx, (h, seq) in enumerate(compute_list):
+                try:
+                    seq_clean = seq[:1000]  # ProstT5 practical limit
+                    input_str = '<AA2fold> ' + ' '.join(list(seq_clean))
+                    inputs = tokenizer(
+                        input_str, return_tensors='pt',
+                        add_special_tokens=True, max_length=2048,
+                        truncation=True,
+                    ).to(device)
+                    output = model.generate(
+                        **inputs,
+                        max_new_tokens=len(seq_clean) + 10,
+                        do_sample=False,
+                    )
+                    decoded = tokenizer.decode(output[0], skip_special_tokens=True)
+                    threedi = decoded.replace(' ', '')
+                    if len(threedi) < len(seq_clean):
+                        threedi = threedi + '#' * (len(seq_clean) - len(threedi))
+                    elif len(threedi) > len(seq_clean):
+                        threedi = threedi[:len(seq_clean)]
+                except Exception as e:
+                    print(f"    WARNING: ProstT5 failed on seq (len={len(seq)}): {e}")
+                    threedi = '#' * len(seq)
+
+                # Cache to disk
+                (cache_dir / f"{h}.3di").write_text(threedi)
+                computed[h] = threedi
+
+                if (idx + 1) % 20 == 0:
+                    print(f"    ProstT5 progress: {idx + 1}/{len(compute_list)}")
+
+    # Reassemble in original order
+    return [computed[h] for h in seq_to_hash]
 
 
 def _interleave_aa_3di(aa_seq: str, threedi_seq: str) -> str:
