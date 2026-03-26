@@ -26,7 +26,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import time
-from itertools import product
 
 import numpy as np
 from sklearn.preprocessing import StandardScaler
@@ -124,8 +123,7 @@ def _eval_one(strat_display, alloc_method, extra_kwargs,
         'importance': importance_method,
         'internal_evaluator': internal_evaluator,
         'matched': internal_evaluator == model_name or (
-            internal_evaluator == 'xgboost' and model_name == 'lightgbm') or (
-            internal_evaluator == 'ridge' and model_name == 'ridge'),
+            internal_evaluator == 'xgboost' and model_name == 'lightgbm'),
         'score_mean': score_mean,
         'score_std': score_std,
         'fold_scores': fold_scores,
