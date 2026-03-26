@@ -3181,6 +3181,9 @@ def create_hybrid(base_reps, labels,
 
     # ========================================================================
     # BUDGET FLOOR: fill remaining budget with next-best features by importance
+    # Ensures all strategies produce exactly `budget` features.
+    # With capped augmentation, this means Phase A (fill) is a no-op and only
+    # Phase B (replace worst base with better aug) applies. This is intentional.
     # ========================================================================
     current_n = sum(
         info.get('n_features', len(info.get('selected_indices', [])))
