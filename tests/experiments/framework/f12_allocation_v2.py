@@ -241,29 +241,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     idx = 0
     t_start = time.time()
 
-    # Precompute importance scores per method (the expensive part).
-    # create_hybrid computes these internally every call — by precomputing
-    # and passing via kwargs, we avoid redundant RF+SHAP fits.
-    from kirby.hybrid import compute_feature_importance
-    mode = 'intermediary' if n_folds == 1 else 'full'
-    sample_X = next(iter(reps.values()))
-
-    # Get the train split (same for all configs since max_folds=1 and same seed)
-    train_idx, val_idx = next(iter(cv_split(groups, n_folds, sample_X, labels, mode=mode)))
-    train_reps_cached = {k: v[train_idx] for k, v in reps.items()}
-    train_labels_cached = labels[train_idx]
-
-    precomputed_importance = {}
-    for imp_method in IMPORTANCE_METHODS:
-        print(f"  Precomputing {imp_method} importance...", end='', flush=True)
-        t_imp = time.time()
-        precomputed_importance[imp_method] = compute_feature_importance(
-            train_reps_cached, train_labels_cached, method=imp_method,
-        )
-        print(f" done ({time.time() - t_imp:.0f}s)", flush=True)
-
-    for imp_method in IMPORTANCE_METHODS:
-        for (strat_display, alloc_method, extra_kw) in ALL_STRATEGY_CONFIGS:
+    for (strat_display, alloc_method, extra_kw) in ALL_STRATEGY_CONFIGS:
+        for imp_method in IMPORTANCE_METHODS:
             for int_eval in INTERNAL_EVALUATORS:
                 for budget in budgets:
                     for model_name, model_factory in models.items():
@@ -273,7 +252,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             budget, model_name, model_factory,
                             reps, labels, groups, n_folds, max_folds,
                             metric_fn, imp_method, int_eval,
-                            precomputed_importance=precomputed_importance.get(imp_method),
                         )
                         all_configs.append(entry)
 
