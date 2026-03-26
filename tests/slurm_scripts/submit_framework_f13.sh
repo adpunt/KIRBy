@@ -26,7 +26,7 @@ submit() {
         --time=11:59:00 --partition=short \
         --mem=64G \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
-        --wrap="${WRAP_PREFIX} && mkdir -p ${OUTPUT} && python tests/experiments/framework/f13_evaluator_model_matching.py --dataset ${dataset} --reps all --mode full --max-folds 1 --models ridge,rf,xgboost,lightgbm --output ${OUTPUT}" \
+        --wrap="${WRAP_PREFIX} && mkdir -p ${OUTPUT} && python tests/experiments/framework/f13_evaluator_model_matching.py --dataset ${dataset} --reps all --mode full --max-folds 1 --models=ridge,rf,xgboost,lightgbm --output ${OUTPUT}" \
         | awk '{print $4}')
     echo "  $J  f13_${name}  (short, 64G, 12h, CPU)"
 }
