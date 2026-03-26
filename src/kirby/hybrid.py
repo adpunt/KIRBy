@@ -3178,7 +3178,69 @@ def create_hybrid(base_reps, labels,
         raise ValueError(f"Unknown allocation_method: {allocation_method}. "
                         f"Choose 'greedy', 'greedy_feature', 'performance_weighted', "
                         f"'dominant_greedy', 'fixed', 'two_stage', or 'stability_selection'")
-    
+
+    # ========================================================================
+    # BUDGET FLOOR: fill remaining budget with next-best features by importance
+    # ========================================================================
+    current_n = sum(
+        info.get('n_features', len(info.get('selected_indices', [])))
+        for info in feature_info.values()
+        if isinstance(info, dict) and 'selected_indices' in info
+    )
+    if current_n < budget and allocation_method != 'fixed':
+        deficit = budget - current_n
+        # Collect all unselected features across reps, ranked by importance
+        candidates = []  # (importance, rep_name, feature_idx)
+        for rep_name, X_rep in rep_dict_train.items():
+            info = feature_info.get(rep_name, {})
+            selected = set(info.get('selected_indices', []).tolist()
+                          if hasattr(info.get('selected_indices', []), 'tolist')
+                          else list(info.get('selected_indices', [])))
+            n_total = X_rep.shape[1]
+            if len(selected) >= n_total:
+                continue
+            # Get importance scores for this rep
+            imp = info.get('importance_scores_full')
+            if imp is None:
+                # Compute importance for unselected features
+                X_clean = np.nan_to_num(np.clip(X_rep, -1e10, 1e10), nan=0.0)
+                scaler = StandardScaler()
+                X_scaled = scaler.fit_transform(X_clean)
+                is_clf = _is_classification_task(train_labels)
+                if is_clf:
+                    rf = RandomForestClassifier(n_estimators=50, max_depth=10,
+                                                random_state=42, n_jobs=-1)
+                else:
+                    rf = RandomForestRegressor(n_estimators=50, max_depth=10,
+                                               random_state=42, n_jobs=-1)
+                rf.fit(X_scaled, train_labels)
+                imp = rf.feature_importances_
+                imp = np.nan_to_num(imp, nan=0.0)
+            for idx in range(n_total):
+                if idx not in selected:
+                    candidates.append((imp[idx] if idx < len(imp) else 0.0,
+                                      rep_name, idx))
+        # Sort by importance descending, take top `deficit`
+        candidates.sort(key=lambda x: -x[0])
+        for _, rep_name, feat_idx in candidates[:deficit]:
+            info = feature_info.get(rep_name, {})
+            if 'selected_indices' not in info:
+                feature_info[rep_name] = {
+                    'selected_indices': np.array([feat_idx]),
+                    'n_features': 1,
+                }
+            else:
+                cur = info['selected_indices']
+                if hasattr(cur, 'tolist'):
+                    cur = cur.tolist()
+                cur.append(feat_idx)
+                feature_info[rep_name]['selected_indices'] = np.array(
+                    sorted(set(cur)), dtype=int)
+                feature_info[rep_name]['n_features'] = len(
+                    feature_info[rep_name]['selected_indices'])
+        # Rebuild hybrid_features with updated feature_info
+        hybrid_features = apply_feature_selection(original_base_reps, feature_info)
+
     # ========================================================================
     # AUGMENTATION HANDLING
     # ========================================================================
