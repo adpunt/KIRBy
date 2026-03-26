@@ -503,113 +503,118 @@ Datasets currently blocked in PIPELINE_READINESS_TODO (missing baseline/FT/aug s
 
 ---
 
-## 13. Next Allocation Experiment — F01v2
+## 13. Two-stage search — ABANDONED
+
+**F04 tested:** Does `find_best_hybrid`'s two-phase search (coarse screen → refine top candidates) match the full grid?
+
+**Result:** No. Two-phase is worse on 9/10 datasets, sometimes dramatically (fcrnrt: ρ=0.613 full grid → ρ=0.426 two-phase). Rank correlation between full grid and two-phase rankings is poor (0.24–0.52). The coarse screening phase discards good candidates too early.
+
+**Decision:** Two-stage search abandoned. Full grid search is the only reliable approach. The compute savings (~58% fewer evals) are not worth the quality loss.
+
+---
+
+## 14. Next Allocation Experiment — F01v2
 
 ### Problem
 
-F01 revealed that many allocation strategies (greedy, greedy_feature, stability_selection) converge to tiny feature sets (1–36 features) regardless of the requested budget. This makes them incomparable to strategies that use the full budget. The experiment needs to be re-run with a budget floor so all strategies are evaluated on equal terms.
+F01 revealed that many allocation strategies converge to tiny feature sets (1–36 features) regardless of budget. `fixed` (which ignores the budget entirely and uses all ~1000 features) appeared competitive only because it wasn't playing by the same rules. F03 showed that greedy CAN work when the budget is filled — it won on 2/6 datasets (logd, buchwald) when step_size was large enough to force budget utilisation. F04 showed two-stage search is unreliable (worse on 9/10 datasets).
 
-### Design changes from F01
+### Core change: budget as hard constraint
 
-**1. Budget as hard constraint (floor AND ceiling)**
+Every strategy must produce exactly `budget` features. The strategy decides *which* features, not *how many*. If a greedy strategy converges early, fill remaining slots with next-best features by importance.
 
-Every strategy must produce exactly `budget` features. The strategy decides *which* features, not *how many*. If a greedy strategy converges early at 28 features but budget=150, fill the remaining 122 slots with the next-best features by importance. This is the single biggest change.
+Must work with capped augmentation: budget constrains the base hybrid, capped augmentation fills/replaces within that budget, uncapped adds beyond it.
 
-Must be designed to work with capped augmentation: the budget constrains the base hybrid, then capped augmentation fills/replaces within that same budget. Uncapped augmentation adds beyond it. The floor applies to the base allocation only.
+### Three strategy families
 
-**2. Internal evaluator as a swept axis**
+**Family 1: performance_weighted** — allocate proportional to single-rep baseline scores, transformed by a weighting scheme.
 
-F01 used RF as the internal evaluator for all greedy-family strategies. F07 showed Ridge wins on antibody, is fastest overall. This was never combined with the allocation comparison.
+| Scheme | Params to sweep | Values | Total |
+|--------|----------------|--------|-------|
+| linear | (none) | — | 1 |
+| softmax | temperature | 0.5, 2, 10 | 3 |
+| power_law | power | 2, 3 | 2 |
+| thresholded | alpha | 0.3, 0.5, 0.7 | 3 |
+| top_k | k | 2, 3, 5 | 3 |
+| rank_linear | (none) | — | 1 |
+| rank_exp | decay | 0.1, 0.3, 0.5 | 3 |
+| score_gap | gap | 0.2, 0.3, 0.5, 0.7 | 4 |
+| entropy | diversity_penalty | 0.5, 1.0, 2.0 | 3 |
+| min_floor | (floor = budget-determined) | — | 1 |
+| **Total** | | | **24** |
 
-Sweep: `internal_evaluator ∈ {rf, ridge, xgboost}`
+**Family 2: greedy** — iterative forward selection with budget floor enforced.
 
-This interacts with allocation strategy — Ridge as evaluator might rescue greedy by giving cleaner signal on small internal val splits.
+| Strategy | Params to sweep | Values | Total |
+|----------|----------------|--------|-------|
+| greedy | step_size | 5, 10, 25 | 3 |
+| dominant_greedy | dominant_fraction | 0.5, 0.7, 0.9 | 3 |
+| greedy_feature | (step_size=1 implicit) | — | 1 |
+| **Total** | | | **7** |
 
-**3. Importance method as a swept axis**
+Step sizes from F03: step=1 consistently worst, step=2 marginal, {5, 10, 25} covers the useful range. Patience not swept — budget floor makes it irrelevant (strategies must fill the budget regardless).
 
-F01 used treeshap only. F05 showed 3 independent families: treeshap, deeplift, lightgbm_gain. Nobody tested whether importance method changes which allocation strategy wins.
+**Family 3: two_stage** — DROPPED (F04 showed worse on 9/10 datasets, unreliable coarse screening)
 
-Sweep: `importance_method ∈ {treeshap, deeplift, lightgbm_gain}`
+### Crossed axes
 
-**4. Trimmed strategy set**
+| Axis | Values | Count | Source |
+|------|--------|-------|--------|
+| Importance method | treeshap, deeplift, lightgbm_gain | 3 | F05 identified 3 independent families, never tested interaction with allocation |
+| Internal evaluator | rf, ridge, xgboost | 3 | F07 showed Ridge wins antibody, never combined with allocation strategies |
+| Budget | 50, 100, 200, 500 | 4 | Covers small→large; 500 tests if more features help |
+| Downstream model | ridge, rf, xgboost, lightgbm | 4 | Same as F01 |
 
-From F01 analysis, cut redundant variants:
-- **Keep:** softmax_T0.5, softmax_T2, softmax_T10 (covers concentrated→uniform range)
-- **Keep:** power_2, power_3 (moderate concentration)
-- **Keep:** performance_weighted, dominant_greedy, greedy, greedy_feature (need to see if budget floor fixes them)
-- **Keep:** min_floor_0.05, thresh_0.5, two_stage
-- **Drop:** softmax_T1, softmax_T5 (redundant with T0.5/T2)
-- **Drop:** power_5 (redundant with power_3)
-- **Drop:** stability_selection (catastrophic on multiple datasets, F11 confirmed unfixable)
-- **Drop:** fixed (not a real strategy — ignores budget, useful only as a reference)
-- **Drop:** all entropy_p*, rank_exp_d*, score_gap_*, top_N variants (tier 2 expansions, not in SPEED_TIERS)
+### Datasets
 
-That leaves ~12 strategies.
-
-**5. Budgets**
-
-Match the SPEED_TIERS: `budgets ∈ {50, 100, 200}`. Budget 500 can be dropped for screening — if a strategy doesn't work at 200 it won't magically work at 500.
-
-**6. Models (downstream evaluation)**
-
-Keep: `{ridge, rf, xgboost, lightgbm}` — same 4 as F01.
-
-**7. Modified representative datasets**
-
-F01's dataset set had problems:
-- LUAD: near ceiling (0.92–0.99 accuracy), strategy differences are noise → **DROP**
-- EGFR: tops out at ρ=0.36, many configs near zero → **KEEP but flag as hard/potentially meaningless**
-- ginkgo_hic: n=242, noisy → **REPLACE** with a better antibody dataset? Or keep as the small-n stress test
-
-Proposed set:
 | Dataset | Domain | n | Metric | Why |
 |---------|--------|---|--------|-----|
-| herg | molecular | 1,412 | RMSE↓ | Solid molecular task, good spread |
+| herg | molecular | 1,412 | RMSE↓ | Good spread in F01/F03 |
+| buchwald_hartwig | reaction | 3,955 | RMSE↓ | Greedy won here in F03 |
 | flab_thermo_tresanco | antibody | 672 | ρ↑ | Largest antibody, strong signal |
 | flab_pk_jain_heprt | antibody | 130 | ρ↑ | Small-n stress test |
 | abagym_VEGF | antibody DMS | 418 | ρ↑ | Better signal than EGFR (ρ=0.61 vs 0.36) |
-| tcga_brca_pam50 | TCGA clf | 821 | acc↑ | Harder than LUAD, not at ceiling |
-| buchwald_hartwig | reaction | 3,955 | RMSE↓ | Only reaction dataset (still running from F01) |
+| tcga_brca_pam50 | TCGA clf | 821 | acc↑ | Harder than LUAD (not at ceiling) |
 
-6 datasets. Dropped: LUAD (ceiling), fcrnrt (covered by heprt as small-n), ginkgo_hic (replaced by VEGF).
-
-**Decision needed:** Confirm this set. EGFR in or out?
+Dropped: LUAD (ceiling, everything 0.92–0.99), EGFR (max ρ=0.36, too hard), ginkgo_hic (noisy n=242, replaced by VEGF), fcrnrt (covered by heprt for small-n).
 
 ### Config grid
 
 ```
-12 strategies × 3 importance methods × 3 internal evaluators × 3 budgets × 4 models × 1 fold
-= 12 × 3 × 3 × 3 × 4 = 1,296 configs per dataset
-× 6 datasets = 7,776 total configs
+(24 perf_weighted + 7 greedy) × 3 importance × 3 evaluator × 4 budget × 4 model × 1 fold
+= 31 × 3 × 3 × 4 × 4 = 4,464 configs per dataset
+× 6 datasets = 26,784 total configs
 ```
 
-Each config is fast (single create_hybrid + evaluate). At ~1-5s per config, expect 2-10 hours per dataset. Single SLURM job per dataset.
+At ~1-5s per config, expect 1-5 hours per dataset. Single SLURM job per dataset.
 
 ### What this answers
 
-1. **Does the budget floor fix greedy/greedy_feature?** If yes, greedy stays in SPEED_TIERS. If no, it's dead.
-2. **Which (strategy × evaluator × importance) triple is the best default?** This is the SPEED_TIERS decision.
-3. **Do importance methods interact with allocation?** If treeshap+softmax_T2 wins but lightgbm_gain+power_2 is better, we need domain-specific defaults.
-4. **Does internal evaluator matter?** If Ridge rescues greedy on antibody, the evaluator becomes a tunable parameter.
+1. **Does the budget floor fix greedy/greedy_feature?** F03 showed greedy works when budget is filled. Budget floor makes this the default.
+2. **Which (scheme × evaluator × importance) triple is the best default?** → SPEED_TIERS decision.
+3. **Do importance methods interact with allocation?** Never tested before.
+4. **Does internal evaluator matter across all strategies?** Ridge might rescue greedy on antibody.
+5. **Which weighting scheme params are optimal?** Softmax temperature, power exponent, threshold alpha, etc.
 
-### Relationship to capped augmentation
+### What this does NOT test
 
-The budget floor applies to the base hybrid. When capped augmentation runs after:
-- The base hybrid has exactly `budget` features (guaranteed by the floor)
-- Capped augmentation can fill (if budget allows) or replace (swap worst base features for aug features)
-- The total stays at `budget`
-
-When uncapped augmentation runs:
-- The base hybrid has exactly `budget` features
-- Uncapped adds beyond — total = budget + however many aug features help
-
-The floor doesn't conflict with either mode.
-
-### NOT in this experiment
-
-- Augmentation (tested separately in F06/F08, defaults finalized)
+- Augmentation (finalized in F06/F08)
 - Fine-tuning (separate track)
-- More than 1 fold (screening — variance estimates come later at scale)
+- More than 1 fold (breadth over depth — variance comes later at scale)
+- Two-stage search (abandoned per F04)
+- Stability selection (abandoned per F01/F11)
+
+### Prior results informing this design
+
+| Experiment | Key finding used here |
+|------------|----------------------|
+| F01 | performance_weighted family competitive, greedy collapses without budget floor, stability_selection dead |
+| F03 | step_size {5,10,25} is the useful range, step=1 always worst, greedy works when budget filled |
+| F04 | Two-stage search unreliable, abandoned |
+| F05 | 3 importance method families (treeshap, deeplift, lightgbm_gain), others redundant |
+| F07 | Ridge wins as internal evaluator on antibody, fastest |
+| F08 | base_step_size matters most for augmentation (now fixed at 5) |
+| F11 | Small dataset (n~130) hybrid underperformance unfixable by tuning — structural limitation |
 
 ---
 
