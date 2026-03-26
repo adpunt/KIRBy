@@ -3046,7 +3046,12 @@ def create_hybrid(base_reps, labels,
         
         # Apply same feature selection to full data (use original if filters applied)
         hybrid_features = apply_feature_selection(original_base_reps, feature_info)
-        
+
+        # Store full importance scores for budget floor reuse
+        for rep_name, imp_arr in importance_scores.items():
+            if rep_name in feature_info and isinstance(feature_info[rep_name], dict):
+                feature_info[rep_name]['importance_scores_full'] = imp_arr
+
         # Add allocation to feature_info for reference
         feature_info['allocation'] = allocation
         
@@ -3192,20 +3197,32 @@ def create_hybrid(base_reps, labels,
     )
     if current_n < budget and allocation_method != 'fixed':
         deficit = budget - current_n
-        # Collect all unselected features across reps, ranked by importance
+        # Collect all unselected features across reps, ranked by importance.
+        # Use importance scores already computed during allocation (stored in
+        # feature_info[rep_name]['importance_scores']) or fall back to the
+        # importance_method used for this hybrid (already computed above for
+        # performance_weighted and greedy_feature allocations).
         candidates = []  # (importance, rep_name, feature_idx)
         for rep_name, X_rep in rep_dict_train.items():
             info = feature_info.get(rep_name, {})
-            selected = set(info.get('selected_indices', []).tolist()
-                          if hasattr(info.get('selected_indices', []), 'tolist')
-                          else list(info.get('selected_indices', [])))
+            sel_idx = info.get('selected_indices', np.array([], dtype=int))
+            if hasattr(sel_idx, 'tolist'):
+                selected = set(sel_idx.tolist())
+            else:
+                selected = set(sel_idx)
             n_total = X_rep.shape[1]
             if len(selected) >= n_total:
                 continue
-            # Get importance scores for this rep
-            imp = info.get('importance_scores_full')
+            # Try to get full importance scores from feature_info (already computed)
+            imp = info.get('importance_scores_full', info.get('importance_scores'))
+            if imp is not None and len(imp) == n_total:
+                # Full importance array available — use it directly
+                pass
+            elif imp is not None and len(imp) == len(selected):
+                # Only have importance for selected features — need full array
+                imp = None
             if imp is None:
-                # Compute importance for unselected features
+                # Compute importance via RF (only happens once per rep per call)
                 X_clean = np.nan_to_num(np.clip(X_rep, -1e10, 1e10), nan=0.0)
                 scaler = StandardScaler()
                 X_scaled = scaler.fit_transform(X_clean)
