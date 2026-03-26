@@ -15,7 +15,6 @@ MODE=${1:-all}
 OUTPUT="tests/results/framework"
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
 WRAP_PREFIX="cd /data/stat-cadd/scat9264/KIRBy && git pull 2>/dev/null; . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
-STDERR_FILTER="2> >(grep -v -e 'DEPRECATION WARNING' -e 'threadpoolctl' -e 'ctypes callback' -e 'NoneType.*split' >&2)"
 
 submit() {
     local name=$1
@@ -27,7 +26,7 @@ submit() {
         --time=11:59:00 --partition=short \
         --mem=64G \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
-        --wrap="${WRAP_PREFIX} && mkdir -p ${OUTPUT} && python tests/experiments/framework/f13_evaluator_model_matching.py --dataset ${dataset} --reps all --mode full --max-folds 1 --models 'ridge,rf,xgboost,lightgbm' --output ${OUTPUT} ${STDERR_FILTER}" \
+        --wrap="${WRAP_PREFIX} && mkdir -p ${OUTPUT} && python tests/experiments/framework/f13_evaluator_model_matching.py --dataset ${dataset} --reps all --mode full --max-folds 1 --models ridge,rf,xgboost,lightgbm --output ${OUTPUT}" \
         | awk '{print $4}')
     echo "  $J  f13_${name}  (short, 64G, 12h, CPU)"
 }
