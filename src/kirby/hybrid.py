@@ -2921,7 +2921,24 @@ def create_hybrid(base_reps, labels,
         raise ValueError(f"patience must be at least 1 or None, got {patience}")
     if augmentation_budget <= 0:
         raise ValueError(f"augmentation_budget must be positive, got {augmentation_budget}")
-    
+
+    # Resolve 'match' internal evaluator — maps downstream model type to evaluator
+    if internal_evaluator == 'match':
+        if model is not None:
+            model_class = type(model).__name__.lower()
+            if 'ridge' in model_class:
+                internal_evaluator = 'ridge'
+            elif 'randomforest' in model_class or model_class == 'rf':
+                internal_evaluator = 'rf'
+            elif 'xgb' in model_class or 'xgboost' in model_class:
+                internal_evaluator = 'xgboost'
+            elif 'lgbm' in model_class or 'lightgbm' in model_class:
+                internal_evaluator = 'xgboost'  # closest tree-based proxy
+            else:
+                internal_evaluator = 'ridge'  # safe fallback
+        else:
+            internal_evaluator = 'ridge'  # no model provided, default
+
     # Apply quality filters if requested
     # We track the mapping from filtered indices back to original indices
     filter_index_maps = {}  # {rep_name: array mapping filtered_idx -> original_idx}

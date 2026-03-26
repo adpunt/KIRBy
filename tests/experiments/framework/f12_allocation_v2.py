@@ -110,7 +110,7 @@ GREEDY_CONFIGS = [
 
 ALL_STRATEGY_CONFIGS = PERF_WEIGHTED_CONFIGS + GREEDY_CONFIGS
 
-IMPORTANCE_METHODS = ['treeshap', 'deeplift', 'lightgbm_gain']
+IMPORTANCE_METHODS = ['treeshap', 'lightgbm_gain']
 INTERNAL_EVALUATORS = ['rf', 'ridge', 'xgboost']
 BUDGETS = [50, 100, 200, 500]
 DOWNSTREAM_MODELS = ['ridge', 'rf', 'xgboost', 'lightgbm']
