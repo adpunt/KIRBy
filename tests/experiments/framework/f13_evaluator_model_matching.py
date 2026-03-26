@@ -51,7 +51,7 @@ STRATEGY_CONFIGS = [
 IMPORTANCE_METHODS = ['treeshap', 'lightgbm_gain']
 EVALUATORS = ['rf', 'ridge', 'xgboost']
 MODELS = ['ridge', 'rf', 'xgboost', 'lightgbm']
-BUDGETS = [100, 200]
+BUDGETS = [25, 50, 100, 200, 500]
 
 
 def _eval_one(strat_display, alloc_method, extra_kwargs,
@@ -148,7 +148,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     )
     n_folds = config['n_splits']
     max_folds = config.get('max_folds', n_folds)
-    budgets = config.get('budgets', BUDGETS)
+    budgets = BUDGETS  # Always use F13's own budgets, ignore config
 
     reps = data['reps']
     labels = data['labels']
