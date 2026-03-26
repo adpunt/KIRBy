@@ -1,0 +1,334 @@
+#!/usr/bin/env python3
+"""F12: Allocation strategy comparison v2 — budget floor, swept evaluator & importance.
+
+Paper: Framework
+Question: With budget enforced as a hard floor+ceiling, which (allocation scheme ×
+    importance method × internal evaluator) triple is the best default?
+
+Changes from F01:
+    - Budget is a hard constraint: strategies must produce exactly `budget` features
+    - No tiering: all strategy × param combos tested on all datasets
+    - Internal evaluator swept (rf, ridge, xgboost) — F07 showed Ridge wins antibody
+    - Importance method swept (treeshap, deeplift, lightgbm_gain) — F05 families
+    - Stability_selection dropped (F01/F11: catastrophic)
+    - Two_stage dropped (F04: worse on 9/10 datasets)
+    - Fixed dropped (ignores budget, not a real strategy)
+    - Step_size {5, 10, 25} for greedy family (F03: useful range)
+
+Usage:
+    python f12_allocation_v2.py --dataset herg --reps all --mode full
+    python f12_allocation_v2.py --dataset flab_thermo_tresanco --reps all --mode full
+    python f12_allocation_v2.py --dataset herg --reps all --mode full --budgets 50,100,200,500
+"""
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+import time
+from itertools import product
+
+import numpy as np
+from sklearn.preprocessing import StandardScaler
+
+from experiments._shared import (
+    load_data, get_config, create_experiment_parser,
+    save_experiment_results, make_structured_output,
+    get_model_factories, get_domain_metric, cv_split,
+    parse_rep_args, FRAMEWORK_TASKS,
+)
+from kirby.hybrid import create_hybrid, apply_feature_selection
+
+
+# =========================================================================
+# STRATEGY CONFIGS: (display_name, allocation_method, extra_kwargs)
+# =========================================================================
+
+# Family 1: performance_weighted schemes
+PERF_WEIGHTED_CONFIGS = [
+    # linear (no transform)
+    ('pw_linear', 'performance_weighted', {}),
+    # softmax temperatures
+    ('pw_softmax_T0.5', 'softmax_T0.5', {}),
+    ('pw_softmax_T2', 'softmax_T2', {}),
+    ('pw_softmax_T10', 'softmax_T10', {}),
+    # power law
+    ('pw_power_2', 'power_2', {}),
+    ('pw_power_3', 'power_3', {}),
+    # thresholded
+    ('pw_thresh_0.3', 'performance_weighted',
+     {'weighting_scheme': 'thresholded', 'weighting_params': {'alpha': 0.3}}),
+    ('pw_thresh_0.5', 'thresh_0.5', {}),
+    ('pw_thresh_0.7', 'performance_weighted',
+     {'weighting_scheme': 'thresholded', 'weighting_params': {'alpha': 0.7}}),
+    # top_k
+    ('pw_top_2', 'performance_weighted',
+     {'weighting_scheme': 'top_k', 'weighting_params': {'k': 2}}),
+    ('pw_top_3', 'top_3', {}),
+    ('pw_top_5', 'performance_weighted',
+     {'weighting_scheme': 'top_k', 'weighting_params': {'k': 5}}),
+    # rank_linear
+    ('pw_rank_linear', 'rank_linear', {}),
+    # rank_exp
+    ('pw_rank_exp_d0.1', 'performance_weighted',
+     {'weighting_scheme': 'rank_exp', 'weighting_params': {'decay': 0.1}}),
+    ('pw_rank_exp_d0.3', 'rank_exp', {}),
+    ('pw_rank_exp_d0.5', 'performance_weighted',
+     {'weighting_scheme': 'rank_exp', 'weighting_params': {'decay': 0.5}}),
+    # score_gap
+    ('pw_score_gap_0.2', 'performance_weighted',
+     {'weighting_scheme': 'score_gap', 'weighting_params': {'gap': 0.2}}),
+    ('pw_score_gap_0.3', 'performance_weighted',
+     {'weighting_scheme': 'score_gap', 'weighting_params': {'gap': 0.3}}),
+    ('pw_score_gap_0.5', 'performance_weighted',
+     {'weighting_scheme': 'score_gap', 'weighting_params': {'gap': 0.5}}),
+    ('pw_score_gap_0.7', 'performance_weighted',
+     {'weighting_scheme': 'score_gap', 'weighting_params': {'gap': 0.7}}),
+    # entropy
+    ('pw_entropy_0.5', 'performance_weighted',
+     {'weighting_scheme': 'entropy', 'weighting_params': {'diversity_penalty': 0.5}}),
+    ('pw_entropy_1.0', 'entropy', {}),
+    ('pw_entropy_2.0', 'performance_weighted',
+     {'weighting_scheme': 'entropy', 'weighting_params': {'diversity_penalty': 2.0}}),
+    # min_floor
+    ('pw_min_floor', 'min_floor_0.05', {}),
+]
+
+# Family 2: greedy
+GREEDY_CONFIGS = [
+    # greedy with step_size sweep
+    ('greedy_s5', 'greedy', {'step_size': 5}),
+    ('greedy_s10', 'greedy', {'step_size': 10}),
+    ('greedy_s25', 'greedy', {'step_size': 25}),
+    # dominant_greedy with dominant_fraction sweep
+    ('dom_greedy_f0.5', 'dominant_greedy', {'dominant_fraction': 0.5}),
+    ('dom_greedy_f0.7', 'dominant_greedy', {'dominant_fraction': 0.7}),
+    ('dom_greedy_f0.9', 'dominant_greedy', {'dominant_fraction': 0.9}),
+    # greedy_feature
+    ('greedy_feature', 'greedy_feature', {}),
+]
+
+ALL_STRATEGY_CONFIGS = PERF_WEIGHTED_CONFIGS + GREEDY_CONFIGS
+
+IMPORTANCE_METHODS = ['treeshap', 'deeplift', 'lightgbm_gain']
+INTERNAL_EVALUATORS = ['rf', 'ridge', 'xgboost']
+BUDGETS = [50, 100, 200, 500]
+DOWNSTREAM_MODELS = ['ridge', 'rf', 'xgboost', 'lightgbm']
+
+
+def _eval_one(strat_display, alloc_method, extra_kwargs,
+              budget, model_name, model_factory,
+              reps, labels, groups, n_folds, max_folds,
+              metric_fn, importance_method, internal_evaluator):
+    """Run a single config. Returns result dict."""
+    mode = 'intermediary' if n_folds == 1 else 'full'
+    sample_X = next(iter(reps.values()))
+    fold_scores = []
+    last_n_features = 0
+    last_allocation = {}
+    last_utilization = 0.0
+    t0 = time.time()
+
+    for fold_i, (train_idx, val_idx) in enumerate(cv_split(
+        groups, n_folds, sample_X, labels, mode=mode
+    )):
+        if fold_i >= max_folds:
+            break
+        train_reps = {k: v[train_idx] for k, v in reps.items()}
+        val_reps = {k: v[val_idx] for k, v in reps.items()}
+        y_train, y_val = labels[train_idx], labels[val_idx]
+
+        hybrid_kwargs = dict(
+            allocation_method=alloc_method,
+            budget=budget,
+            importance_method=importance_method,
+            internal_evaluator=internal_evaluator,
+        )
+        if extra_kwargs:
+            hybrid_kwargs.update(extra_kwargs)
+
+        try:
+            X_train_h, feature_info = create_hybrid(
+                train_reps, y_train, **hybrid_kwargs,
+            )
+            X_val_h = apply_feature_selection(val_reps, feature_info)
+        except Exception as e:
+            continue
+
+        scaler = StandardScaler()
+        X_train_s = scaler.fit_transform(X_train_h)
+        X_val_s = scaler.transform(X_val_h)
+        last_n_features = X_train_h.shape[1]
+        last_allocation = feature_info.get('allocation', {})
+        last_utilization = last_n_features / budget if budget > 0 else 0
+
+        try:
+            model = model_factory()
+            model.fit(X_train_s, y_train)
+            fold_scores.append(float(metric_fn(y_val, model.predict(X_val_s))))
+        except Exception:
+            continue
+
+    wall_time = time.time() - t0
+
+    if not fold_scores:
+        score_mean, score_std = float('nan'), float('nan')
+        n_features = 0
+    else:
+        score_mean = float(np.mean(fold_scores))
+        score_std = float(np.std(fold_scores))
+        n_features = last_n_features
+
+    return {
+        'strategy': strat_display,
+        'allocation_method': alloc_method,
+        'model': model_name,
+        'budget': budget,
+        'importance': importance_method,
+        'internal_evaluator': internal_evaluator,
+        'score_mean': score_mean,
+        'score_std': score_std,
+        'fold_scores': fold_scores,
+        'n_features': n_features,
+        'utilization': round(last_utilization, 2),
+        'allocation_dict': {k: int(v) for k, v in last_allocation.items()},
+        'wall_time': round(wall_time, 2),
+    }
+
+
+def run(data, config, output_dir, dataset_name, **kwargs):
+    """Run flat allocation strategy comparison with budget floor."""
+    print("\n" + "=" * 70)
+    print("EXPERIMENT F12: ALLOCATION STRATEGY v2 (budget floor)")
+    print("=" * 70)
+
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    n_samples = len(data['labels'])
+    task_type = data.get('task_type', 'regression')
+    models = get_model_factories(
+        config.get('models', DOWNSTREAM_MODELS),
+        task_type=task_type, n_samples=n_samples,
+    )
+    n_folds = config['n_splits']
+    max_folds = config.get('max_folds', n_folds)
+    budgets = config.get('budgets', BUDGETS)
+
+    reps = data['reps']
+    labels = data['labels']
+    groups = data['groups']
+    domain = data.get('domain', 'molecular')
+
+    n_strats = len(ALL_STRATEGY_CONFIGS)
+    n_imp = len(IMPORTANCE_METHODS)
+    n_eval = len(INTERNAL_EVALUATORS)
+    n_bud = len(budgets)
+    n_mod = len(models)
+    total = n_strats * n_imp * n_eval * n_bud * n_mod
+
+    print(f"  Dataset: {dataset_name} ({domain}, {n_samples} samples, {len(reps)} reps)")
+    print(f"  Metric: {metric_name} ({'lower' if lower_is_better else 'higher'} is better)")
+    print(f"  Strategies: {n_strats} ({len(PERF_WEIGHTED_CONFIGS)} perf_weighted + "
+          f"{len(GREEDY_CONFIGS)} greedy)")
+    print(f"  Importance methods: {IMPORTANCE_METHODS}")
+    print(f"  Internal evaluators: {INTERNAL_EVALUATORS}")
+    print(f"  Budgets: {budgets}")
+    print(f"  Models: {list(models.keys())}")
+    print(f"  Folds: {max_folds}/{n_folds}")
+    print(f"  Total configs: {total}")
+    print(flush=True)
+
+    all_configs = []
+    idx = 0
+    t_start = time.time()
+
+    for (strat_display, alloc_method, extra_kw) in ALL_STRATEGY_CONFIGS:
+        for imp_method in IMPORTANCE_METHODS:
+            for int_eval in INTERNAL_EVALUATORS:
+                for budget in budgets:
+                    for model_name, model_factory in models.items():
+                        idx += 1
+                        entry = _eval_one(
+                            strat_display, alloc_method, extra_kw,
+                            budget, model_name, model_factory,
+                            reps, labels, groups, n_folds, max_folds,
+                            metric_fn, imp_method, int_eval,
+                        )
+                        all_configs.append(entry)
+
+                        if idx % 100 == 0 or idx == total:
+                            elapsed = time.time() - t_start
+                            rate = idx / elapsed if elapsed > 0 else 0
+                            eta = (total - idx) / rate if rate > 0 else 0
+                            print(f"  [{idx}/{total}] {strat_display} / "
+                                  f"{imp_method} / {int_eval} / "
+                                  f"b={budget} / {model_name}: "
+                                  f"{metric_name}={entry['score_mean']:.4f} "
+                                  f"dim={entry['n_features']} "
+                                  f"({elapsed:.0f}s, ETA {eta:.0f}s)",
+                                  flush=True)
+
+    total_time = time.time() - t_start
+
+    # ── Summary ──
+    valid = [c for c in all_configs if c['score_mean'] == c['score_mean']]
+    if valid:
+        if lower_is_better:
+            best = min(valid, key=lambda c: c['score_mean'])
+        else:
+            best = max(valid, key=lambda c: c['score_mean'])
+
+        print(f"\n{'=' * 70}")
+        print(f"BEST: {best['strategy']} / {best['importance']} / "
+              f"{best['internal_evaluator']} / b={best['budget']} / "
+              f"{best['model']}: {metric_name}={best['score_mean']:.4f} "
+              f"dim={best['n_features']}")
+        print(f"Total: {len(all_configs)} configs in {total_time:.0f}s")
+        print(f"NaN configs: {len(all_configs) - len(valid)}")
+
+    return {
+        'experiment': 'f12',
+        'dataset': dataset_name,
+        'domain': domain,
+        'primary_metric': metric_name,
+        'lower_is_better': lower_is_better,
+        'n_samples': n_samples,
+        'n_reps': len(reps),
+        'config': {
+            'strategies': [s[0] for s in ALL_STRATEGY_CONFIGS],
+            'importance_methods': IMPORTANCE_METHODS,
+            'internal_evaluators': INTERNAL_EVALUATORS,
+            'budgets': budgets,
+            'models': list(models.keys()),
+            'n_folds': n_folds,
+            'max_folds': max_folds,
+        },
+        'results': {
+            'configs': all_configs,
+        },
+        'total_time_s': round(total_time, 1),
+    }
+
+
+if __name__ == '__main__':
+    parser = create_experiment_parser('F12: Allocation Strategy v2',
+                                     has_delta=True, has_augment=False)
+    parser.add_argument('--budgets', type=str, default=None,
+                        help='Comma-separated budget list (default: 50,100,200,500)')
+    parser.add_argument('--importance-method', type=str, default=None,
+                        help='Single importance method override (default: sweep all 3)')
+    args = parser.parse_args()
+    config = get_config(args)
+
+    if args.budgets:
+        config['budgets'] = [int(b) for b in args.budgets.split(',')]
+
+    print(f"Mode: {args.mode}")
+    print(f"Dataset: {args.dataset}")
+    print(f"Reps: {args.reps}")
+    print(f"Budgets: {config.get('budgets', BUDGETS)}")
+
+    data = load_data(args.dataset, args.reps,
+                     delta=getattr(args, 'delta', False))
+    results = run(data, config, args.output, args.dataset)
+    save_experiment_results(results, args.output, 'f12_allocation_v2',
+                            args.dataset)
