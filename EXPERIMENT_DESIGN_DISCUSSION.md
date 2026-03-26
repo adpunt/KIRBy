@@ -448,14 +448,20 @@ LAYER 2 — Fine-tuning fill (just submitted)
   Molecular FT fill → §9 FT swap decisions (4 datasets)
   Antibody FT fill → §9 FT swap decisions (29 datasets)
 
-LAYER 3 — Framework experiments (running on ARC)
-  F01 + F03 + F04 → finalize SPEED_TIERS, allocation defaults, internal evaluator
-  → unblocks §8 (internal evaluator) and §10 (performance allocation)
-  → unblocks F02 (pruning) and F09 (synthesis)
+LAYER 3 — Framework experiments
+  F01/F03/F04 → DONE (results pulled, analysed)
+  F12 (allocation v2 with budget floor) → RUNNING on ARC
+    31 strategies × 2 importance × 3 evaluators × 4 budgets × 4 models = 2976 configs/dataset
+    6 datasets. Results → finalize SPEED_TIERS
+  F13 (evaluator × model matching) → READY to submit
+    Tests whether internal evaluator should match downstream model
+    240 configs/dataset. Submit after F12 or in parallel.
+  → F12+F13 unblock §8 (internal evaluator) and §10 (performance allocation)
+  → Then rebuild SPEED_TIERS
 
-LAYER 4 — Research experiments (running on ARC, but use stale caches)
-  Complexity (cx_*) → research results BUT need cache clear + re-run after Layer 3
-  Similarity → same issue
+LAYER 4 — Research experiments (BLOCKED on Layer 3)
+  Complexity/Similarity/Noise (99 jobs) → need SPEED_TIERS finalized + cache clear
+  OPIG experiments (5 jobs) → same dependency
 ```
 
 ### What's ALREADY DONE and can be pulled now
@@ -560,7 +566,7 @@ Step sizes from F03: step=1 consistently worst, step=2 marginal, {5, 10, 25} cov
 
 | Axis | Values | Count | Source |
 |------|--------|-------|--------|
-| Importance method | treeshap, deeplift, lightgbm_gain | 3 | F05 identified 3 independent families, never tested interaction with allocation |
+| Importance method | treeshap, lightgbm_gain | 2 | F05 families. Deeplift dropped (too slow on CPU-only ARC nodes) |
 | Internal evaluator | rf, ridge, xgboost | 3 | F07 showed Ridge wins antibody, never combined with allocation strategies |
 | Budget | 50, 100, 200, 500 | 4 | Covers small→large; 500 tests if more features help |
 | Downstream model | ridge, rf, xgboost, lightgbm | 4 | Same as F01 |
@@ -581,9 +587,9 @@ Dropped: LUAD (ceiling, everything 0.92–0.99), EGFR (max ρ=0.36, too hard), g
 ### Config grid
 
 ```
-(24 perf_weighted + 7 greedy) × 3 importance × 3 evaluator × 4 budget × 4 model × 1 fold
-= 31 × 3 × 3 × 4 × 4 = 4,464 configs per dataset
-× 6 datasets = 26,784 total configs
+(24 perf_weighted + 7 greedy) × 2 importance × 3 evaluator × 4 budget × 4 model × 1 fold
+= 31 × 2 × 3 × 4 × 4 = 2,976 configs per dataset
+× 6 datasets = 17,856 total configs
 ```
 
 At ~1-5s per config, expect 1-5 hours per dataset. Single SLURM job per dataset.
@@ -619,6 +625,31 @@ At ~1-5s per config, expect 1-5 hours per dataset. Single SLURM job per dataset.
 | F07 | Ridge wins as internal evaluator on antibody, fastest |
 | F08 | base_step_size matters most for augmentation (now fixed at 5) |
 | F11 | Small dataset (n~130) hybrid underperformance unfixable by tuning — structural limitation |
+
+---
+
+---
+
+## 15. Evaluator × Model Matching — F13
+
+**Question:** Should the internal evaluator match the downstream model? Or does cross-evaluation (e.g., RF evaluator + Ridge downstream) produce better features?
+
+**Design:** Tests all evaluator × model combinations across 5 representative strategies. The `matched` field is computed post-hoc to compare matched vs cross conditions.
+
+- 5 strategies (pw_linear, softmax_T2, power_2, greedy_s10, dom_greedy_f0.7)
+- 2 importance methods (treeshap, lightgbm_gain)
+- 3 evaluators × 4 models = 12 evaluator-model pairs (4 matched, 8 cross)
+- 2 budgets (100, 200)
+- **240 configs per dataset** — much faster than F12
+
+**Implementation:** `internal_evaluator='match'` added to `create_hybrid` — auto-resolves from model class name. Available for production use if matching wins.
+
+```bash
+bash tests/slurm_scripts/submit_framework_f13.sh
+
+# When done:
+scp -r "scat9264@gateway.arc.ox.ac.uk:/data/stat-cadd/scat9264/KIRBy/tests/results/framework/f13_evaluator_model_matching/" tests/results/framework/f13_evaluator_model_matching/
+```
 
 ---
 
