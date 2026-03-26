@@ -312,14 +312,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 if __name__ == '__main__':
     parser = create_experiment_parser('F12: Allocation Strategy v2',
                                      has_delta=True, has_augment=False)
-    parser.add_argument('--budgets', type=str, default=None,
-                        help='Comma-separated budget list (default: 50,100,200,500)')
-    parser.add_argument('--importance-method', type=str, default=None,
-                        help='Single importance method override (default: sweep all 3)')
     args = parser.parse_args()
     config = get_config(args)
 
-    if args.budgets:
+    if hasattr(args, 'budgets') and args.budgets:
         config['budgets'] = [int(b) for b in args.budgets.split(',')]
 
     print(f"Mode: {args.mode}")
