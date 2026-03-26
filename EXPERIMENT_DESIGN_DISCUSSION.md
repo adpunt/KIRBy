@@ -501,6 +501,118 @@ Datasets currently blocked in PIPELINE_READINESS_TODO (missing baseline/FT/aug s
 
 **Candidates:** adme_solubility, graphinity_foldx/rosetta/augmented, DTA datasets (davis/kiba/bindingdb_kd), nucleotide datasets (22), any new OPIG datasets. These depend on Layer 1 baseline survey results landing first.
 
+---
+
+## 13. Next Allocation Experiment — F01v2
+
+### Problem
+
+F01 revealed that many allocation strategies (greedy, greedy_feature, stability_selection) converge to tiny feature sets (1–36 features) regardless of the requested budget. This makes them incomparable to strategies that use the full budget. The experiment needs to be re-run with a budget floor so all strategies are evaluated on equal terms.
+
+### Design changes from F01
+
+**1. Budget as hard constraint (floor AND ceiling)**
+
+Every strategy must produce exactly `budget` features. The strategy decides *which* features, not *how many*. If a greedy strategy converges early at 28 features but budget=150, fill the remaining 122 slots with the next-best features by importance. This is the single biggest change.
+
+Must be designed to work with capped augmentation: the budget constrains the base hybrid, then capped augmentation fills/replaces within that same budget. Uncapped augmentation adds beyond it. The floor applies to the base allocation only.
+
+**2. Internal evaluator as a swept axis**
+
+F01 used RF as the internal evaluator for all greedy-family strategies. F07 showed Ridge wins on antibody, is fastest overall. This was never combined with the allocation comparison.
+
+Sweep: `internal_evaluator ∈ {rf, ridge, xgboost}`
+
+This interacts with allocation strategy — Ridge as evaluator might rescue greedy by giving cleaner signal on small internal val splits.
+
+**3. Importance method as a swept axis**
+
+F01 used treeshap only. F05 showed 3 independent families: treeshap, deeplift, lightgbm_gain. Nobody tested whether importance method changes which allocation strategy wins.
+
+Sweep: `importance_method ∈ {treeshap, deeplift, lightgbm_gain}`
+
+**4. Trimmed strategy set**
+
+From F01 analysis, cut redundant variants:
+- **Keep:** softmax_T0.5, softmax_T2, softmax_T10 (covers concentrated→uniform range)
+- **Keep:** power_2, power_3 (moderate concentration)
+- **Keep:** performance_weighted, dominant_greedy, greedy, greedy_feature (need to see if budget floor fixes them)
+- **Keep:** min_floor_0.05, thresh_0.5, two_stage
+- **Drop:** softmax_T1, softmax_T5 (redundant with T0.5/T2)
+- **Drop:** power_5 (redundant with power_3)
+- **Drop:** stability_selection (catastrophic on multiple datasets, F11 confirmed unfixable)
+- **Drop:** fixed (not a real strategy — ignores budget, useful only as a reference)
+- **Drop:** all entropy_p*, rank_exp_d*, score_gap_*, top_N variants (tier 2 expansions, not in SPEED_TIERS)
+
+That leaves ~12 strategies.
+
+**5. Budgets**
+
+Match the SPEED_TIERS: `budgets ∈ {50, 100, 200}`. Budget 500 can be dropped for screening — if a strategy doesn't work at 200 it won't magically work at 500.
+
+**6. Models (downstream evaluation)**
+
+Keep: `{ridge, rf, xgboost, lightgbm}` — same 4 as F01.
+
+**7. Modified representative datasets**
+
+F01's dataset set had problems:
+- LUAD: near ceiling (0.92–0.99 accuracy), strategy differences are noise → **DROP**
+- EGFR: tops out at ρ=0.36, many configs near zero → **KEEP but flag as hard/potentially meaningless**
+- ginkgo_hic: n=242, noisy → **REPLACE** with a better antibody dataset? Or keep as the small-n stress test
+
+Proposed set:
+| Dataset | Domain | n | Metric | Why |
+|---------|--------|---|--------|-----|
+| herg | molecular | 1,412 | RMSE↓ | Solid molecular task, good spread |
+| flab_thermo_tresanco | antibody | 672 | ρ↑ | Largest antibody, strong signal |
+| flab_pk_jain_heprt | antibody | 130 | ρ↑ | Small-n stress test |
+| abagym_VEGF | antibody DMS | 418 | ρ↑ | Better signal than EGFR (ρ=0.61 vs 0.36) |
+| tcga_brca_pam50 | TCGA clf | 821 | acc↑ | Harder than LUAD, not at ceiling |
+| buchwald_hartwig | reaction | 3,955 | RMSE↓ | Only reaction dataset (still running from F01) |
+
+6 datasets. Dropped: LUAD (ceiling), fcrnrt (covered by heprt as small-n), ginkgo_hic (replaced by VEGF).
+
+**Decision needed:** Confirm this set. EGFR in or out?
+
+### Config grid
+
+```
+12 strategies × 3 importance methods × 3 internal evaluators × 3 budgets × 4 models × 1 fold
+= 12 × 3 × 3 × 3 × 4 = 1,296 configs per dataset
+× 6 datasets = 7,776 total configs
+```
+
+Each config is fast (single create_hybrid + evaluate). At ~1-5s per config, expect 2-10 hours per dataset. Single SLURM job per dataset.
+
+### What this answers
+
+1. **Does the budget floor fix greedy/greedy_feature?** If yes, greedy stays in SPEED_TIERS. If no, it's dead.
+2. **Which (strategy × evaluator × importance) triple is the best default?** This is the SPEED_TIERS decision.
+3. **Do importance methods interact with allocation?** If treeshap+softmax_T2 wins but lightgbm_gain+power_2 is better, we need domain-specific defaults.
+4. **Does internal evaluator matter?** If Ridge rescues greedy on antibody, the evaluator becomes a tunable parameter.
+
+### Relationship to capped augmentation
+
+The budget floor applies to the base hybrid. When capped augmentation runs after:
+- The base hybrid has exactly `budget` features (guaranteed by the floor)
+- Capped augmentation can fill (if budget allows) or replace (swap worst base features for aug features)
+- The total stays at `budget`
+
+When uncapped augmentation runs:
+- The base hybrid has exactly `budget` features
+- Uncapped adds beyond — total = budget + however many aug features help
+
+The floor doesn't conflict with either mode.
+
+### NOT in this experiment
+
+- Augmentation (tested separately in F06/F08, defaults finalized)
+- Fine-tuning (separate track)
+- More than 1 fold (screening — variance estimates come later at scale)
+
+---
+
 ### ⚠️ Cache warning
 
 The complexity and similarity experiments currently running on ARC are using **stale hybrid caches** (pre-augmentation-overhaul defaults: step_size=10, patience=3, augmentation_strategy='greedy_ablation'). Their results are still useful as screening but will need re-running after:
