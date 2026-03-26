@@ -27,7 +27,7 @@ submit() {
         --time=23:59:00 --partition=long \
         --mem=128G \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
-        --wrap="${WRAP_PREFIX} && mkdir -p ${OUTPUT} && python tests/experiments/framework/f12_allocation_v2.py --dataset ${dataset} --reps all --mode full --max-folds 1 --budgets 50,100,200,500 --models ridge,rf,xgboost,lightgbm --output ${OUTPUT} ${STDERR_FILTER}" \
+        --wrap="${WRAP_PREFIX} && mkdir -p ${OUTPUT} && python tests/experiments/framework/f12_allocation_v2.py --dataset ${dataset} --reps all --mode full --max-folds 1 --budgets 50,100,200,500 --models 'ridge,rf,xgboost,lightgbm' --output ${OUTPUT} ${STDERR_FILTER}" \
         | awk '{print $4}')
     echo "  $J  f12_${name}  (long, 128G, 24h, CPU)"
 }
