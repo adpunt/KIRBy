@@ -96,10 +96,14 @@ PERF_WEIGHTED_CONFIGS = [
 
 # Family 2: greedy
 GREEDY_CONFIGS = [
-    # greedy with step_size sweep
-    ('greedy_s5', 'greedy', {'step_size': 5}),
-    ('greedy_s10', 'greedy', {'step_size': 10}),
-    ('greedy_s25', 'greedy', {'step_size': 25}),
+    # greedy forced (no patience, must fill budget)
+    ('greedy_forced_s5', 'greedy', {'step_size': 5, 'patience': None}),
+    ('greedy_forced_s10', 'greedy', {'step_size': 10, 'patience': None}),
+    ('greedy_forced_s25', 'greedy', {'step_size': 25, 'patience': None}),
+    # greedy + fill (greedy stops naturally, fill from best single rep)
+    ('greedy_fill_s5', 'greedy', {'step_size': 5}),
+    ('greedy_fill_s10', 'greedy', {'step_size': 10}),
+    ('greedy_fill_s25', 'greedy', {'step_size': 25}),
     # dominant_greedy with dominant_fraction sweep
     ('dom_greedy_f0.5', 'dominant_greedy', {'dominant_fraction': 0.5}),
     ('dom_greedy_f0.7', 'dominant_greedy', {'dominant_fraction': 0.7}),
@@ -110,10 +114,10 @@ GREEDY_CONFIGS = [
 
 ALL_STRATEGY_CONFIGS = PERF_WEIGHTED_CONFIGS + GREEDY_CONFIGS
 
-IMPORTANCE_METHODS = ['treeshap', 'lightgbm_gain']
-INTERNAL_EVALUATORS = ['rf', 'ridge', 'xgboost']
-BUDGETS = [25, 50, 100, 200, 500]
-DOWNSTREAM_MODELS = ['ridge', 'rf', 'xgboost', 'lightgbm']
+IMPORTANCE_METHODS = ['deeplift', 'lightgbm_gain']
+# Matched internal_evaluator = downstream_model pairs only (F13 finding)
+MATCHED_PAIRS = [('rf', 'rf'), ('lightgbm', 'lightgbm'), ('mlp', 'mlp'), ('svm', 'svm')]
+BUDGETS = [50, 150, 300]
 
 
 def _incremental_save(all_configs, dataset_name, domain, metric_name,
@@ -240,13 +244,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     n_samples = len(data['labels'])
     task_type = data.get('task_type', 'regression')
-    models = get_model_factories(
-        config.get('models', DOWNSTREAM_MODELS),
-        task_type=task_type, n_samples=n_samples,
-    )
+    # Build model factories for all downstream models in matched pairs
+    all_model_names = sorted(set(m for _, m in MATCHED_PAIRS))
+    models = get_model_factories(all_model_names, task_type=task_type,
+                                 n_samples=n_samples)
     n_folds = config['n_splits']
     max_folds = config.get('max_folds', n_folds)
-    budgets = config.get('budgets', BUDGETS)
+    budgets = BUDGETS  # Always use F12's own budgets
 
     reps = data['reps']
     labels = data['labels']
@@ -255,19 +259,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     n_strats = len(ALL_STRATEGY_CONFIGS)
     n_imp = len(IMPORTANCE_METHODS)
-    n_eval = len(INTERNAL_EVALUATORS)
+    n_pairs = len(MATCHED_PAIRS)
     n_bud = len(budgets)
-    n_mod = len(models)
-    total = n_strats * n_imp * n_eval * n_bud * n_mod
+    total = n_strats * n_imp * n_pairs * n_bud
 
     print(f"  Dataset: {dataset_name} ({domain}, {n_samples} samples, {len(reps)} reps)")
     print(f"  Metric: {metric_name} ({'lower' if lower_is_better else 'higher'} is better)")
     print(f"  Strategies: {n_strats} ({len(PERF_WEIGHTED_CONFIGS)} perf_weighted + "
           f"{len(GREEDY_CONFIGS)} greedy)")
     print(f"  Importance methods: {IMPORTANCE_METHODS}")
-    print(f"  Internal evaluators: {INTERNAL_EVALUATORS}")
+    print(f"  Matched pairs: {MATCHED_PAIRS}")
     print(f"  Budgets: {budgets}")
-    print(f"  Models: {list(models.keys())}")
     print(f"  Folds: {max_folds}/{n_folds}")
     print(f"  Total configs: {total}")
     print(flush=True)
@@ -278,31 +280,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     for (strat_display, alloc_method, extra_kw) in ALL_STRATEGY_CONFIGS:
         for imp_method in IMPORTANCE_METHODS:
-            for int_eval in INTERNAL_EVALUATORS:
+            for int_eval, model_name in MATCHED_PAIRS:
+                if model_name not in models:
+                    continue
+                model_factory = models[model_name]
                 for budget in budgets:
-                    for model_name, model_factory in models.items():
-                        idx += 1
-                        entry = _eval_one(
-                            strat_display, alloc_method, extra_kw,
-                            budget, model_name, model_factory,
-                            reps, labels, groups, n_folds, max_folds,
-                            metric_fn, imp_method, int_eval,
-                        )
-                        all_configs.append(entry)
+                    idx += 1
+                    entry = _eval_one(
+                        strat_display, alloc_method, extra_kw,
+                        budget, model_name, model_factory,
+                        reps, labels, groups, n_folds, max_folds,
+                        metric_fn, imp_method, int_eval,
+                    )
+                    all_configs.append(entry)
 
-                        if idx <= 10 or idx % 50 == 0 or idx == total:
-                            elapsed = time.time() - t_start
-                            rate = idx / elapsed if elapsed > 0 else 0
-                            eta = (total - idx) / rate if rate > 0 else 0
-                            print(f"  [{idx}/{total}] {strat_display} / "
-                                  f"{imp_method} / {int_eval} / "
-                                  f"b={budget} / {model_name}: "
-                                  f"{metric_name}={entry['score_mean']:.4f} "
-                                  f"dim={entry['n_features']} "
-                                  f"({elapsed:.0f}s, ETA {eta:.0f}s)",
-                                  flush=True)
+                    if idx <= 10 or idx % 50 == 0 or idx == total:
+                        elapsed = time.time() - t_start
+                        rate = idx / elapsed if elapsed > 0 else 0
+                        eta = (total - idx) / rate if rate > 0 else 0
+                        print(f"  [{idx}/{total}] {strat_display} / "
+                              f"{imp_method} / {int_eval}={model_name} / "
+                              f"b={budget}: "
+                              f"{metric_name}={entry['score_mean']:.4f} "
+                              f"dim={entry['n_features']} "
+                              f"({elapsed:.0f}s, ETA {eta:.0f}s)",
+                              flush=True)
 
-                        # Incremental save every 500 configs
+                    # Incremental save every 500 configs
                         if idx % 500 == 0:
                             _incremental_save(all_configs, dataset_name, domain,
                                               metric_name, lower_is_better,
