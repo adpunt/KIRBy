@@ -101,9 +101,9 @@ GREEDY_CONFIGS = [
     ('greedy_forced_s10', 'greedy', {'step_size': 10, 'patience': None}),
     ('greedy_forced_s25', 'greedy', {'step_size': 25, 'patience': None}),
     # greedy + fill (greedy stops naturally, fill from best single rep)
-    ('greedy_fill_s5', 'greedy', {'step_size': 5}),
-    ('greedy_fill_s10', 'greedy', {'step_size': 10}),
-    ('greedy_fill_s25', 'greedy', {'step_size': 25}),
+    ('greedy_fill_s5', 'greedy', {'step_size': 5, 'budget_fill': True}),
+    ('greedy_fill_s10', 'greedy', {'step_size': 10, 'budget_fill': True}),
+    ('greedy_fill_s25', 'greedy', {'step_size': 25, 'budget_fill': True}),
     # dominant_greedy with dominant_fraction sweep
     ('dom_greedy_f0.5', 'dominant_greedy', {'dominant_fraction': 0.5}),
     ('dom_greedy_f0.7', 'dominant_greedy', {'dominant_fraction': 0.7}),

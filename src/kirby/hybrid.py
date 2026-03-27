@@ -3259,7 +3259,8 @@ def create_hybrid(base_reps, labels,
         for info in feature_info.values()
         if isinstance(info, dict) and 'selected_indices' in info
     )
-    if current_n < budget and allocation_method != 'fixed':
+    _do_fill = kwargs.pop('budget_fill', False)
+    if _do_fill and current_n < budget and allocation_method != 'fixed':
         deficit = budget - current_n
 
         # Get baseline scores per rep for ranking
