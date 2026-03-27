@@ -158,7 +158,8 @@ def _incremental_save(all_configs, dataset_name, domain, metric_name,
 def _eval_one(strat_display, alloc_method, extra_kwargs,
               budget, model_name, model_factory,
               reps, labels, groups, n_folds, max_folds,
-              metric_fn, importance_method, internal_evaluator):
+              metric_fn, importance_method, internal_evaluator,
+              precomputed_baselines=None, precomputed_importance=None):
     """Run a single config. Returns result dict."""
     mode = 'intermediary' if n_folds == 1 else 'full'
     sample_X = next(iter(reps.values()))
@@ -185,6 +186,10 @@ def _eval_one(strat_display, alloc_method, extra_kwargs,
         )
         if extra_kwargs:
             hybrid_kwargs.update(extra_kwargs)
+        if precomputed_baselines is not None:
+            hybrid_kwargs['precomputed_baselines'] = precomputed_baselines
+        if precomputed_importance is not None:
+            hybrid_kwargs['precomputed_importance'] = precomputed_importance
 
         try:
             X_train_h, feature_info = create_hybrid(
