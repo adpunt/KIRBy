@@ -49,9 +49,9 @@ STRATEGY_CONFIGS = [
 ]
 
 IMPORTANCE_METHODS = ['treeshap', 'lightgbm_gain']
-EVALUATORS = ['rf', 'ridge', 'xgboost']
-MODELS = ['ridge', 'rf', 'xgboost', 'lightgbm']
-BUDGETS = [25, 50, 100, 200, 500]
+EVALUATORS = ['rf', 'xgboost', 'lightgbm', 'mlp', 'svm']
+MODELS = ['rf', 'xgboost', 'lightgbm', 'mlp', 'svm']
+BUDGETS = [150, 300]
 
 
 def _eval_one(strat_display, alloc_method, extra_kwargs,
@@ -122,8 +122,7 @@ def _eval_one(strat_display, alloc_method, extra_kwargs,
         'budget': budget,
         'importance': importance_method,
         'internal_evaluator': internal_evaluator,
-        'matched': internal_evaluator == model_name or (
-            internal_evaluator == 'xgboost' and model_name == 'lightgbm'),
+        'matched': internal_evaluator == model_name,
         'score_mean': score_mean,
         'score_std': score_std,
         'fold_scores': fold_scores,

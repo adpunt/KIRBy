@@ -1045,9 +1045,50 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             return _evaluate_allocation(X_train, X_val, y_train, y_val,
                                         internal_evaluator='ridge')
 
+    elif internal_evaluator == 'lightgbm':
+        try:
+            from lightgbm import LGBMRegressor, LGBMClassifier
+            if is_classification:
+                m = LGBMClassifier(n_estimators=50, max_depth=4,
+                                   random_state=42, verbosity=-1, n_jobs=-1)
+            else:
+                m = LGBMRegressor(n_estimators=50, max_depth=4,
+                                  random_state=42, verbosity=-1, n_jobs=-1)
+            m.fit(X_train_scaled, y_train)
+            if is_classification:
+                return m.score(X_val_scaled, y_val)
+            return r2_score(y_val, m.predict(X_val_scaled))
+        except ImportError:
+            return _evaluate_allocation(X_train, X_val, y_train, y_val,
+                                        internal_evaluator='xgboost')
+
+    elif internal_evaluator == 'mlp':
+        from sklearn.neural_network import MLPRegressor, MLPClassifier
+        if is_classification:
+            m = MLPClassifier(hidden_layer_sizes=(64, 32), max_iter=200,
+                              random_state=42, early_stopping=True)
+        else:
+            m = MLPRegressor(hidden_layer_sizes=(64, 32), max_iter=200,
+                             random_state=42, early_stopping=True)
+        m.fit(X_train_scaled, y_train)
+        if is_classification:
+            return m.score(X_val_scaled, y_val)
+        return r2_score(y_val, m.predict(X_val_scaled))
+
+    elif internal_evaluator == 'svm':
+        from sklearn.svm import SVR, SVC
+        if is_classification:
+            m = SVC(kernel='rbf', C=1.0, random_state=42)
+        else:
+            m = SVR(kernel='rbf', C=1.0)
+        m.fit(X_train_scaled, y_train)
+        if is_classification:
+            return m.score(X_val_scaled, y_val)
+        return r2_score(y_val, m.predict(X_val_scaled))
+
     else:
         raise ValueError(f"Unknown internal_evaluator: {internal_evaluator}. "
-                         f"Use 'ridge', 'rf', or 'xgboost'.")
+                         f"Use 'ridge', 'rf', 'xgboost', 'lightgbm', 'mlp', or 'svm'.")
 
 
 # ============================================================================
@@ -2933,7 +2974,11 @@ def create_hybrid(base_reps, labels,
             elif 'xgb' in model_class or 'xgboost' in model_class:
                 internal_evaluator = 'xgboost'
             elif 'lgbm' in model_class or 'lightgbm' in model_class:
-                internal_evaluator = 'xgboost'  # closest tree-based proxy
+                internal_evaluator = 'lightgbm'
+            elif 'mlp' in model_class:
+                internal_evaluator = 'mlp'
+            elif 'sv' in model_class:
+                internal_evaluator = 'svm'
             else:
                 internal_evaluator = 'ridge'  # safe fallback
         else:
@@ -3202,8 +3247,10 @@ def create_hybrid(base_reps, labels,
                         f"'dominant_greedy', 'fixed', 'two_stage', or 'stability_selection'")
 
     # ========================================================================
-    # BUDGET FLOOR: fill remaining budget with next-best features by importance
-    # Ensures all strategies produce exactly `budget` features.
+    # BUDGET FLOOR: fill from best-performing reps (ranked by baseline score)
+    # When an allocator (e.g. greedy) converges early, fill remaining budget
+    # with top features from the best single reps. Walks reps in order of
+    # baseline score, adds their top unselected features by importance.
     # With capped augmentation, this means Phase A (fill) is a no-op and only
     # Phase B (replace worst base with better aug) applies. This is intentional.
     # ========================================================================
@@ -3214,32 +3261,40 @@ def create_hybrid(base_reps, labels,
     )
     if current_n < budget and allocation_method != 'fixed':
         deficit = budget - current_n
-        # Collect all unselected features across reps, ranked by importance.
-        # Use importance scores already computed during allocation (stored in
-        # feature_info[rep_name]['importance_scores']) or fall back to the
-        # importance_method used for this hybrid (already computed above for
-        # performance_weighted and greedy_feature allocations).
-        candidates = []  # (importance, rep_name, feature_idx)
-        for rep_name, X_rep in rep_dict_train.items():
+
+        # Get baseline scores per rep for ranking
+        _fill_baselines = kwargs.pop('precomputed_baselines', None)
+        if _fill_baselines is None:
+            _fill_baselines = {}
+            for rep_name, X_tr in rep_dict_train.items():
+                X_vl = rep_dict_val[rep_name]
+                X_tr_c = np.nan_to_num(np.clip(X_tr, -1e10, 1e10), nan=0.0)
+                X_vl_c = np.nan_to_num(np.clip(X_vl, -1e10, 1e10), nan=0.0)
+                _fill_baselines[rep_name] = _evaluate_allocation(
+                    X_tr_c, X_vl_c, train_labels, val_labels,
+                    internal_evaluator=internal_evaluator,
+                )
+
+        # Walk reps best-first, fill with their top unselected features
+        ranked_reps = sorted(_fill_baselines.keys(),
+                             key=lambda r: _fill_baselines[r], reverse=True)
+
+        filled = 0
+        for rep_name in ranked_reps:
+            if filled >= deficit:
+                break
+            X_rep = rep_dict_train[rep_name]
             info = feature_info.get(rep_name, {})
             sel_idx = info.get('selected_indices', np.array([], dtype=int))
-            if hasattr(sel_idx, 'tolist'):
-                selected = set(sel_idx.tolist())
-            else:
-                selected = set(sel_idx)
+            selected = set(sel_idx.tolist() if hasattr(sel_idx, 'tolist')
+                          else list(sel_idx))
             n_total = X_rep.shape[1]
             if len(selected) >= n_total:
                 continue
-            # Try to get full importance scores from feature_info (already computed)
+
+            # Get importance for this rep (cached or compute)
             imp = info.get('importance_scores_full', info.get('importance_scores'))
-            if imp is not None and len(imp) == n_total:
-                # Full importance array available — use it directly
-                pass
-            elif imp is not None and len(imp) == len(selected):
-                # Only have importance for selected features — need full array
-                imp = None
-            if imp is None:
-                # Compute importance via RF (only happens once per rep per call)
+            if imp is None or len(imp) != n_total:
                 X_clean = np.nan_to_num(np.clip(X_rep, -1e10, 1e10), nan=0.0)
                 scaler = StandardScaler()
                 X_scaled = scaler.fit_transform(X_clean)
@@ -3253,29 +3308,31 @@ def create_hybrid(base_reps, labels,
                 rf.fit(X_scaled, train_labels)
                 imp = rf.feature_importances_
                 imp = np.nan_to_num(imp, nan=0.0)
-            for idx in range(n_total):
-                if idx not in selected:
-                    candidates.append((imp[idx] if idx < len(imp) else 0.0,
-                                      rep_name, idx))
-        # Sort by importance descending, take top `deficit`
-        candidates.sort(key=lambda x: -x[0])
-        for _, rep_name, feat_idx in candidates[:deficit]:
-            info = feature_info.get(rep_name, {})
-            if 'selected_indices' not in info:
-                feature_info[rep_name] = {
-                    'selected_indices': np.array([feat_idx]),
-                    'n_features': 1,
-                }
-            else:
-                cur = info['selected_indices']
-                if hasattr(cur, 'tolist'):
-                    cur = cur.tolist()
-                cur.append(feat_idx)
-                feature_info[rep_name]['selected_indices'] = np.array(
-                    sorted(set(cur)), dtype=int)
-                feature_info[rep_name]['n_features'] = len(
-                    feature_info[rep_name]['selected_indices'])
-        # Rebuild hybrid_features with updated feature_info
+                del rf
+
+            # Add top unselected features from this rep
+            unselected = [(imp[i], i) for i in range(n_total) if i not in selected]
+            unselected.sort(key=lambda x: -x[0])
+
+            for _, feat_idx in unselected:
+                if filled >= deficit:
+                    break
+                if 'selected_indices' not in feature_info.get(rep_name, {}):
+                    feature_info[rep_name] = {
+                        'selected_indices': np.array([feat_idx]),
+                        'n_features': 1,
+                    }
+                else:
+                    cur = feature_info[rep_name]['selected_indices']
+                    cur = cur.tolist() if hasattr(cur, 'tolist') else list(cur)
+                    cur.append(feat_idx)
+                    feature_info[rep_name]['selected_indices'] = np.array(
+                        sorted(set(cur)), dtype=int)
+                    feature_info[rep_name]['n_features'] = len(
+                        feature_info[rep_name]['selected_indices'])
+                filled += 1
+
+        # Rebuild hybrid_features
         hybrid_features = apply_feature_selection(original_base_reps, feature_info)
 
     # ========================================================================
