@@ -1,8 +1,15 @@
 # Experiment Design Discussion — Open Issues
 
 **Created:** 2026-03-25
-**Updated:** 2026-03-25 (v3 — §1/4/5/6 done, §2/3/4-aug covered in other chats)
+**Updated:** 2026-03-26 (v4 — F12/F13 budgets bug fixed, §2 routing confirmed working)
 **Context:** First batch of experiment runs revealed bugs (fixed in b06932e) and design questions (below). These need user decisions before re-running.
+
+---
+
+> **⚠️ BRANCH WARNING:** The `f12-speedup` branch has precomputed importance/baselines
+> code that is ONLY valid for `--max-folds 1`. You are currently on `main`. Do NOT
+> merge `f12-speedup` without understanding the fold-0-only precomputation limitation.
+> Switch back to `main` before submitting any non-F12/F13 experiments.
 
 ---
 
@@ -262,13 +269,16 @@ Hybrid budget = base rep's dimensionality (dimension-matched comparison). Models
 | ~~2~~ | ~~Budgets (§4)~~ | **DONE** |
 | ~~3~~ | ~~MI on small datasets (§5)~~ | **DONE** |
 | ~~4~~ | ~~S11 small-n guard (§6)~~ | **DONE** |
-| 5 | OPIG / FC wiring (§2) | Covered in other chat |
-| 6 | Standalone hybrid conditions (§3) | **DONE** (5/13 have hybrids, remaining 8 don't need them) |
-| 7 | Augmented features (§4-aug) | **DONE** |
-| 8 | Representative datasets (§7) | **CONFIRMED** |
-| 9 | Internal evaluator / greedy (§8) | Blocked on F03/F04 |
+| ~~5~~ | ~~OPIG / FC wiring (§2)~~ | **DONE** (routing fixed, prefixes include ginkgo/clf/graphinity) |
+| ~~6~~ | ~~Standalone hybrid conditions (§3)~~ | **DONE** (5/13 have hybrids, remaining 8 don't need them) |
+| ~~7~~ | ~~Augmented features (§4-aug)~~ | **DONE** |
+| ~~8~~ | ~~Representative datasets (§7)~~ | **CONFIRMED** |
+| 9 | Internal evaluator / greedy (§8+§10) | **Blocked on F12/F13.** 26 experiments hardcode `allocation_method='greedy'` (worst per F01). Once F12/F13 finalize winner, update all. See `EXPERIMENT_BUGS.md` for full list. |
 | 10 | Fine-tuning in experiments (§9) | **PARTIAL** — pipeline doc updated, scripts written, pending server runs |
-| 11 | Performance allocation (§10) | Blocked on F03/F04 |
+| ~~11~~ | ~~Mutation reps missing from experiments~~ | **DONE** (2026-03-26) — `load_data()` two-pass MUTATION_REPS, `mutation_features` added to DMS DATASET_REPS |
+| ~~12~~ | ~~Classification metric bugs~~ | **DONE** (2026-03-26) — C02, C08, C09, C10, C11, N01, N07 fixed to use `get_domain_metric()` / `get_model_factories()` |
+| 13 | Augmentation not passed in C11, C16-C19, similarity, noise | Open — see `EXPERIMENT_BUGS.md` |
+| 14 | Hybrid usage gaps in C01-C07 | Open — no capped-vs-uncapped, no frozen-vs-FT, no budget sweep, no fast-vs-full search comparison. Design question, not a bug. |
 | 12 | C20 base+aug test (§11) | **DONE** |
 
 ---
@@ -639,8 +649,8 @@ At ~1-5s per config, expect 1-5 hours per dataset. Single SLURM job per dataset.
 - 5 strategies (pw_linear, softmax_T2, power_2, greedy_s10, dom_greedy_f0.7)
 - 2 importance methods (treeshap, lightgbm_gain)
 - 3 evaluators × 4 models = 12 evaluator-model pairs (4 matched, 8 cross)
-- 2 budgets (100, 200)
-- **240 configs per dataset** — much faster than F12
+- 5 budgets (25, 50, 100, 200, 500)
+- **600 configs per dataset** — much faster than F12
 
 **Implementation:** `internal_evaluator='match'` added to `create_hybrid` — auto-resolves from model class name. Available for production use if matching wins.
 

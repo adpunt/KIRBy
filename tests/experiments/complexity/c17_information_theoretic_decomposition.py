@@ -20,8 +20,6 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import r2_score
-
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
@@ -200,11 +198,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             try:
                 if strategy == 'hybrid':
+                    augmentations = data.get('augmentations')
                     X_h, fi = create_hybrid(
                         reps, labels,
                         allocation_method='greedy',
                         importance_method='lightgbm_gain',
                         budget=budget,
+                        augmentations=augmentations,
+                        augmentation_strategy='capped',
                     )
                     X_selected = X_h
 

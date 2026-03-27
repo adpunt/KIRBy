@@ -60,7 +60,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"  Using shared search (dim={X_hybrid.shape[1]})")
         else:
             X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-                reps, labels, groups, search_speed, 'lightgbm_gain')
+                reps, labels, groups, search_speed, 'lightgbm_gain',
+                augmentations=data.get('augmentations'))
     except Exception as e:
         print(f"  Hybrid search failed: {e}")
         return {'error': str(e)}

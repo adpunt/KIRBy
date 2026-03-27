@@ -12,13 +12,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import r2_score
 
 from experiments._shared import (
     load_data, INTERMEDIARY, FULL, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_model_factories, _cv_split,
-    apply_feature_selection,
+    apply_feature_selection, get_domain_metric,
 )
 from kirby.hybrid import create_hybrid, apply_augmentation_selection
 
@@ -46,6 +45,8 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
     if not HAS_NOISEINJECT:
         print("  NoiseInject not installed, skipping. Install: pip install noiseInject")
         return {'error': 'noiseInject not installed'}
+
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     reps = data['reps']
     labels = data['labels']
@@ -96,11 +97,11 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
 
                     rf = _RF(n_estimators=100, random_state=42, n_jobs=-1)
                     rf.fit(X_tr, y_train)
-                    fold_scores.append(r2_score(y_val, rf.predict(X_va)))
+                    fold_scores.append(metric_fn(y_val, rf.predict(X_va)))
 
                 sigma_scores[sigma] = float(np.mean(fold_scores))
 
-            # Compute NDS: slope of R² vs sigma
+            # Compute NDS: slope of score vs sigma
             s_arr = np.array(list(sigma_scores.keys()))
             r2_arr = np.array(list(sigma_scores.values()))
             if len(s_arr) >= 2 and np.std(s_arr) > 0:
@@ -174,7 +175,7 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
 
                     rf = _RF(n_estimators=100, random_state=42, n_jobs=-1)
                     rf.fit(X_tr, y_train)
-                    fold_scores.append(r2_score(y_val, rf.predict(X_va)))
+                    fold_scores.append(metric_fn(y_val, rf.predict(X_va)))
 
                 if fold_scores:
                     sigma_scores[sigma] = float(np.mean(fold_scores))

@@ -141,7 +141,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         try:
             X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
                 reps, labels, groups, search_speed, 'lightgbm_gain',
-                budget=budget)
+                budget=budget,
+                augmentations=data.get('augmentations'))
         except Exception as e:
             print(f"    Failed: {e}")
             results['budgets'][budget] = {'error': str(e)}

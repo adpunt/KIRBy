@@ -31,8 +31,7 @@ import numpy as np
 from itertools import combinations
 from scipy.spatial.distance import cdist as scipy_cdist
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import r2_score, mean_squared_error
-from sklearn.ensemble import RandomForestRegressor
+
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
@@ -348,12 +347,16 @@ def _run_cliff_mitigation(reps, labels, X_hybrid, sim_threshold, activity_k):
 
 def _run_cliff_stratified(reps, labels, groups, config, data,
                           sim_threshold, activity_k,
-                          hybrid_blueprint, smiles=None):
+                          hybrid_blueprint, smiles=None,
+                          augmentations=None, augmentation_strategy='uncapped'):
     """Compare prediction error on cliff vs non-cliff compounds."""
     print("\n  --- Sub-analysis 4: Cliff-Stratified Prediction Error ---")
 
     domain = data.get('domain', 'molecular')
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    model_factory = get_model_factories(
+        ['rf'], task_type=data.get('task_type', 'regression'),
+        n_samples=len(labels))['rf']
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
 
@@ -401,7 +404,6 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
     def _evaluate_condition(get_Xy_fn, label):
         """Run CV, return {metric_all, metric_cliff, metric_noncliff, rmse_*}."""
         fold_all, fold_cliff, fold_noncliff = [], [], []
-        fold_rmse_all, fold_rmse_cliff, fold_rmse_noncliff = [], [], []
         fold_domain_all = []
 
         split_args = (sample_X, labels, groups) if use_groups else (sample_X, labels)
@@ -418,13 +420,11 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
             X_tr_s = scaler.fit_transform(X_tr)
             X_va_s = scaler.transform(X_va)
 
-            model = RandomForestRegressor(n_estimators=100, random_state=42,
-                                          n_jobs=-1)
+            model = model_factory()
             model.fit(X_tr_s, y_train)
             y_pred = model.predict(X_va_s)
 
-            fold_all.append(r2_score(y_val, y_pred))
-            fold_rmse_all.append(float(np.sqrt(mean_squared_error(y_val, y_pred))))
+            fold_all.append(metric_fn(y_val, y_pred))
             fold_domain_all.append(metric_fn(y_val, y_pred))
 
             val_cliff = np.array([i for i, vi in enumerate(val_idx)
@@ -433,36 +433,33 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                                      if vi not in cliff_indices])
 
             if len(val_cliff) > 1:
-                fold_cliff.append(r2_score(y_val[val_cliff], y_pred[val_cliff]))
-                fold_rmse_cliff.append(float(np.sqrt(
-                    mean_squared_error(y_val[val_cliff], y_pred[val_cliff]))))
+                fold_cliff.append(metric_fn(y_val[val_cliff], y_pred[val_cliff]))
             if len(val_noncliff) > 1:
-                fold_noncliff.append(r2_score(y_val[val_noncliff],
-                                              y_pred[val_noncliff]))
-                fold_rmse_noncliff.append(float(np.sqrt(
-                    mean_squared_error(y_val[val_noncliff],
-                                       y_pred[val_noncliff]))))
+                fold_noncliff.append(metric_fn(y_val[val_noncliff],
+                                               y_pred[val_noncliff]))
 
         if not fold_all:
             return None
 
-        r2_c = float(np.mean(fold_cliff)) if fold_cliff else float('nan')
-        r2_nc = float(np.mean(fold_noncliff)) if fold_noncliff else float('nan')
-        rmse_c = float(np.mean(fold_rmse_cliff)) if fold_rmse_cliff else float('nan')
-        rmse_nc = float(np.mean(fold_rmse_noncliff)) if fold_rmse_noncliff else float('nan')
+        score_c = float(np.mean(fold_cliff)) if fold_cliff else float('nan')
+        score_nc = float(np.mean(fold_noncliff)) if fold_noncliff else float('nan')
+
+        gap = float('nan')
+        if not (np.isnan(score_c) or np.isnan(score_nc)):
+            # For higher-is-better: gap = noncliff - cliff (positive = noncliff easier)
+            # For lower-is-better: gap = cliff - noncliff (positive = cliff harder)
+            if lower_is_better:
+                gap = float(score_c - score_nc)
+            else:
+                gap = float(score_nc - score_c)
 
         return {
-            'r2_all': float(np.mean(fold_all)),
-            'r2_cliff': r2_c,
-            'r2_noncliff': r2_nc,
-            'rmse_all': float(np.mean(fold_rmse_all)),
-            'rmse_cliff': rmse_c,
-            'rmse_noncliff': rmse_nc,
-            f'{metric_name}_all': float(np.mean(fold_domain_all)) if fold_domain_all else float('nan'),
-            'cliff_noncliff_gap_r2': float(r2_nc - r2_c)
-            if not (np.isnan(r2_c) or np.isnan(r2_nc)) else float('nan'),
-            'cliff_noncliff_gap_rmse': float(rmse_c - rmse_nc)
-            if not (np.isnan(rmse_c) or np.isnan(rmse_nc)) else float('nan'),
+            f'{metric_name}_all': float(np.mean(fold_all)),
+            f'{metric_name}_cliff': score_c,
+            f'{metric_name}_noncliff': score_nc,
+            'cliff_noncliff_gap': gap,
+            'metric': metric_name,
+            'lower_is_better': lower_is_better,
         }
 
     strat_results = {}
@@ -475,9 +472,10 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
         res = _evaluate_condition(_get_rep, rep_name)
         if res:
             strat_results[rep_name] = res
-            print(f"      {rep_name:<20} R2_all={res['r2_all']:.4f}  "
-                  f"R2_cliff={res['r2_cliff']:.4f}  R2_noncliff={res['r2_noncliff']:.4f}  "
-                  f"gap={res['cliff_noncliff_gap_r2']:.4f}")
+            mn = res['metric']
+            print(f"      {rep_name:<20} {mn}_all={res[f'{mn}_all']:.4f}  "
+                  f"{mn}_cliff={res[f'{mn}_cliff']:.4f}  {mn}_noncliff={res[f'{mn}_noncliff']:.4f}  "
+                  f"gap={res['cliff_noncliff_gap']:.4f}")
 
     # Hybrid RF
     if hybrid_blueprint is not None:
@@ -491,6 +489,8 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                 allocation_method=hybrid_blueprint.allocation_method,
                 budget=hybrid_blueprint.budget,
                 importance_method=hybrid_blueprint.importance_method,
+                augmentations=augmentations,
+                augmentation_strategy=augmentation_strategy,
             )
             X_va_h = apply_feature_selection(val_reps, feat_info)
             return X_tr_h, X_va_h
@@ -498,19 +498,20 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
         res = _evaluate_condition(_get_hybrid, 'hybrid')
         if res:
             strat_results['_hybrid'] = res
-            print(f"      {'_hybrid':<20} R2_all={res['r2_all']:.4f}  "
-                  f"R2_cliff={res['r2_cliff']:.4f}  R2_noncliff={res['r2_noncliff']:.4f}  "
-                  f"gap={res['cliff_noncliff_gap_r2']:.4f}")
+            mn = res['metric']
+            print(f"      {'_hybrid':<20} {mn}_all={res[f'{mn}_all']:.4f}  "
+                  f"{mn}_cliff={res[f'{mn}_cliff']:.4f}  {mn}_noncliff={res[f'{mn}_noncliff']:.4f}  "
+                  f"gap={res['cliff_noncliff_gap']:.4f}")
 
         # Comparison
-        rep_gaps = [v['cliff_noncliff_gap_r2'] for k, v in strat_results.items()
-                    if k != '_hybrid' and not np.isnan(v.get('cliff_noncliff_gap_r2', float('nan')))]
+        rep_gaps = [v['cliff_noncliff_gap'] for k, v in strat_results.items()
+                    if k != '_hybrid' and not np.isnan(v.get('cliff_noncliff_gap', float('nan')))]
         if rep_gaps and '_hybrid' in strat_results:
             avg_rep_gap = float(np.mean(rep_gaps))
-            hybrid_gap = strat_results['_hybrid']['cliff_noncliff_gap_r2']
+            hybrid_gap = strat_results['_hybrid']['cliff_noncliff_gap']
             strat_results['_comparison'] = {
-                'avg_rep_gap_r2': avg_rep_gap,
-                'hybrid_gap_r2': hybrid_gap,
+                'avg_rep_gap': avg_rep_gap,
+                'hybrid_gap': hybrid_gap,
                 'gap_reduction': float(avg_rep_gap - hybrid_gap),
             }
             print(f"      Gap reduction: {avg_rep_gap:.4f} -> {hybrid_gap:.4f} "
@@ -623,10 +624,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         reps, labels, X_hybrid, sim_threshold, activity_threshold)
 
     # --- Sub-analysis 4: Cliff-stratified prediction error ---
+    augmentations = data.get('augmentations')
+    augmentation_strategy = 'uncapped'
     results['stratified'] = _run_cliff_stratified(
         reps, labels, groups, config, data,
         sim_threshold, activity_threshold,
-        hybrid_blueprint, smiles)
+        hybrid_blueprint, smiles,
+        augmentations=augmentations,
+        augmentation_strategy=augmentation_strategy)
 
     # --- Grand summary ---
     print("\n" + "=" * 70)
@@ -658,8 +663,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         st = results['stratified']
         if isinstance(st, dict) and 'stratified' in st and '_comparison' in st['stratified']:
             comp = st['stratified']['_comparison']
-            print(f"  4. Cliff-stratified gap: avg-rep={comp['avg_rep_gap_r2']:.4f}, "
-                  f"hybrid={comp['hybrid_gap_r2']:.4f} "
+            print(f"  4. Cliff-stratified gap: avg-rep={comp['avg_rep_gap']:.4f}, "
+                  f"hybrid={comp['hybrid_gap']:.4f} "
                   f"(reduction={comp['gap_reduction']:+.4f})")
 
     return make_structured_output(
@@ -668,7 +673,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         data=data,
         config=results.pop('config'),
         results=results,
-        primary_metric='cliff_noncliff_gap_r2',
+        primary_metric='cliff_noncliff_gap',
         lower_is_better=True,
     )
 

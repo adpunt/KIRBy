@@ -694,7 +694,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         from experiments._shared import get_hybrid_features_and_weights
         _, _, search = get_hybrid_features_and_weights(
             reps, labels, groups, search_speed, 'lightgbm_gain',
-            budget=budget)
+            budget=budget,
+            augmentations=data.get('augmentations'))
         if search.best_overall:
             hybrid_blueprint = search.best_overall['blueprint']
             print(f"  Hybrid blueprint: alloc={hybrid_blueprint.allocation_method}, "

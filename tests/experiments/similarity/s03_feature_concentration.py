@@ -61,7 +61,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         try:
             X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-                reps, labels, groups, search_speed, weight_methods[0])
+                reps, labels, groups, search_speed, weight_methods[0],
+                augmentations=data.get('augmentations'))
             fitted = search.fitted_result
         except Exception as e:
             print(f"  find_best_hybrid failed: {e}")

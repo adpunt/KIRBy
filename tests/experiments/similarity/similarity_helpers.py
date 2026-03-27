@@ -187,6 +187,7 @@ def run_all(dataset_name: str, output_dir: str,
                 data['reps'], data['labels'], data.get('groups'),
                 search_speed=config['search_speed'],
                 weight_method=config['weight_methods'][0],
+                augmentations=data.get('augmentations'),
             )
             print(f"  Shared search done (dim={shared_search[0].shape[1]})")
         except Exception as e:

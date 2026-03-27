@@ -165,7 +165,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     else:
         try:
             X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-                reps, labels, groups, search_speed, 'lightgbm_gain')
+                reps, labels, groups, search_speed, 'lightgbm_gain',
+                augmentations=data.get('augmentations'))
             if search.best_overall:
                 hybrid_blueprint = search.best_overall['blueprint']
         except Exception as e:

@@ -148,7 +148,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     )
     n_folds = config['n_splits']
     max_folds = config.get('max_folds', n_folds)
-    budgets = BUDGETS  # Always use F13's own budgets, ignore config
+    budgets = config.get('budgets', BUDGETS)
 
     reps = data['reps']
     labels = data['labels']

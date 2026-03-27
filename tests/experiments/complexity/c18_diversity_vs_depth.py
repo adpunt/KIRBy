@@ -24,8 +24,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import r2_score
-
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
@@ -196,12 +194,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"R²={metrics['r2']:.4f}, MI_d={metrics['mi_density']:.4f}")
 
         # Natural hybrid allocation (greedy)
+        augmentations = data.get('augmentations')
         try:
             X_h, fi = create_hybrid(
                 reps, labels,
                 allocation_method='greedy',
                 importance_method='lightgbm_gain',
                 budget=budget,
+                augmentations=augmentations,
+                augmentation_strategy='capped',
             )
             metrics = _evaluate(X_h, labels, groups, n_folds, mode, metric_fn)
             # Count how many reps contributed

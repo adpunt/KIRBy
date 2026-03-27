@@ -27,14 +27,13 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import Ridge
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.svm import SVR
-from sklearn.metrics import r2_score
-
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric,
 )
 from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+from kirby.hybrid import apply_augmentation_selection
 
 
 # =========================================================================
@@ -73,7 +72,7 @@ def _get_regularization_families():
 # =========================================================================
 
 def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
-                   metric_fn):
+                   metric_fn, augmentations=None):
     """Evaluate one (model, budget) cell. Returns (score, train_score)."""
     sample_X = next(iter(reps.values()))
     val_scores = []
@@ -84,6 +83,10 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
         val_reps = {k: v[val_idx] for k, v in reps.items()}
         y_train, y_val = labels[train_idx], labels[val_idx]
 
+        augs_full = augmentations or {}
+        train_augs = {k: v[train_idx] for k, v in augs_full.items()} or None
+        val_augs = {k: v[val_idx] for k, v in augs_full.items()} or None
+
         if budget is not None and budget < sum(v.shape[1] for v in reps.values()):
             try:
                 X_train, fi = create_hybrid(
@@ -91,9 +94,16 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
                     allocation_method='greedy',
                     budget=budget,
                     importance_method='lightgbm_gain',
+                    augmentations=train_augs,
+                    augmentation_strategy='capped',
                 )
                 from kirby.hybrid import apply_feature_selection
                 X_val = apply_feature_selection(val_reps, fi)
+                aug_info = fi.get('augmentation_info', {})
+                if aug_info and val_augs:
+                    aug_val = apply_augmentation_selection(val_augs, aug_info)
+                    if aug_val is not None:
+                        X_val = np.hstack([X_val, aug_val])
             except Exception:
                 continue
         else:
@@ -146,6 +156,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  Skipping SVM: n_samples={n_samples} > 5000")
         del families['SVM']
 
+    augmentations = data.get('augmentations')
+
     results = {
         'metric': metric_name,
         'lower_is_better': lower_is_better,
@@ -163,7 +175,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             heatmap[budget] = {}
             for pname, pval, factory in variants:
                 val_score, train_score = _evaluate_cell(
-                    reps, labels, groups, factory, budget, n_folds, mode, metric_fn)
+                    reps, labels, groups, factory, budget, n_folds, mode, metric_fn,
+                    augmentations=augmentations)
                 heatmap[budget][str(pval)] = {
                     'val': val_score,
                     'train': train_score,

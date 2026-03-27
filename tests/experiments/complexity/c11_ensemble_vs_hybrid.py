@@ -25,15 +25,15 @@ import time
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
-from sklearn.metrics import r2_score
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_model_factories, cv_split,
-    apply_feature_selection,
+    apply_feature_selection, get_domain_metric,
 )
 from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+from kirby.hybrid import apply_augmentation_selection
 # TODO: create_hybrid API not finalised — allocation_method / importance_method
 #       semantics may change after framework experiments. Revisit call sites below.
 
@@ -55,6 +55,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("\n" + "=" * 70)
     print("EXPERIMENT C11: ENSEMBLE VS HYBRID")
     print("=" * 70)
+
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     models = get_model_factories(config['models'])
     n_folds = config['n_splits']
@@ -101,7 +103,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 y_train, y_val = labels[train_idx], labels[val_idx]
 
                 preds, ft, pt = _time_fit_predict(model_factory, X_train, y_train, X_val)
-                fold_scores.append(r2_score(y_val, preds))
+                fold_scores.append(metric_fn(y_val, preds))
                 fold_fit_times.append(ft)
                 fold_pred_times.append(pt)
 
@@ -175,7 +177,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             if not all_preds:
                 continue
             ensemble_preds = np.mean(all_preds, axis=0)
-            fold_ensemble_scores.append(r2_score(y_val, ensemble_preds))
+            fold_ensemble_scores.append(metric_fn(y_val, ensemble_preds))
             fold_ensemble_fit_times.append(total_fit)
             fold_ensemble_pred_times.append(total_pred)
 
@@ -238,7 +240,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     t0 = time.time()
                     preds = model.predict(X_va_pca)
                     pred_time = time.time() - t0
-                    fold_pca_scores.append(r2_score(y_val, preds))
+                    fold_pca_scores.append(metric_fn(y_val, preds))
                     fold_pca_fit_times.append(fit_time)
                     fold_pca_pred_times.append(pred_time)
                 except Exception:
@@ -272,6 +274,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 val_reps = {k: v[val_idx] for k, v in reps.items()}
                 y_train, y_val = labels[train_idx], labels[val_idx]
 
+                augs_full = data.get('augmentations') or {}
+                train_augs = {k: v[train_idx] for k, v in augs_full.items()} or None
+                val_augs = {k: v[val_idx] for k, v in augs_full.items()} or None
+
                 try:
                     t0 = time.time()
                     X_train_h, feature_info = create_hybrid(
@@ -279,8 +285,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         allocation_method='greedy',
                         budget=budget,
                         importance_method=importance_method,
+                        augmentations=train_augs,
+                        augmentation_strategy='capped',
                     )
                     X_val_h = apply_feature_selection(val_reps, feature_info)
+                    aug_info = feature_info.get('augmentation_info', {})
+                    if aug_info and val_augs:
+                        aug_val = apply_augmentation_selection(val_augs, aug_info)
+                        if aug_val is not None:
+                            X_val_h = np.hstack([X_val_h, aug_val])
                     hybrid_build_time = time.time() - t0
                 except Exception:
                     continue
@@ -292,7 +305,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                 preds, ft, pt = _time_fit_predict(
                     model_factory, X_train_s, y_train, X_val_s)
-                fold_hybrid_scores.append(r2_score(y_val, preds))
+                fold_hybrid_scores.append(metric_fn(y_val, preds))
                 fold_hybrid_fit_times.append(ft + hybrid_build_time)
                 fold_hybrid_pred_times.append(pt)
 

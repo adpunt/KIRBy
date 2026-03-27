@@ -71,6 +71,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     reps = data['reps']
     labels = data['labels']
     groups = data['groups']
+    augmentations = data.get('augmentations')
+    augmentation_strategy = 'uncapped'
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
@@ -88,6 +90,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             allocation_method='greedy',
             importance_method='lightgbm_gain',
             budget=budget,
+            augmentations=augmentations,
+            augmentation_strategy=augmentation_strategy,
         )
         spaces['hybrid'] = StandardScaler().fit_transform(X_hybrid)
     except Exception as e:

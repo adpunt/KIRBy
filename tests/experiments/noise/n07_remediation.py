@@ -15,15 +15,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import HuberRegressor
 from sklearn.neighbors import NearestNeighbors
-from sklearn.metrics import r2_score
-
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    cv_split, get_domain_metric,
+    cv_split, get_domain_metric, get_model_factories,
 )
 from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
 # TODO: create_hybrid API not finalised — revisit after framework experiments.
@@ -53,9 +50,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("EXPERIMENT N07: NOISE REMEDIATION STRATEGIES")
     print("=" * 70)
 
+    model_factory = get_model_factories(
+        ['rf'], task_type=data.get('task_type', 'regression'),
+        n_samples=len(data['labels']))['rf']
+
     reps = data['reps']
     labels = data['labels']
     groups = data['groups']
+    augmentations = data.get('augmentations')
+    augmentation_strategy = 'uncapped'
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
@@ -104,6 +107,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     train_reps, y_train,
                     allocation_method='greedy', budget=budget,
                     importance_method='lightgbm_gain',
+                    augmentations=augmentations,
+                    augmentation_strategy=augmentation_strategy,
                 )
                 X_val_h = apply_feature_selection(val_reps, fi)
             except Exception:
@@ -126,7 +131,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # Apply strategy
             try:
                 if strategy in ('no_noise', 'noisy_baseline'):
-                    rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+                    rf = model_factory()
                     rf.fit(X_tr_s, y_train)
                     fold_scores.append(metric_fn(y_val, rf.predict(X_va_s)))
 
@@ -134,13 +139,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     threshold = np.percentile(noise_scores, 80)
                     keep = noise_scores < threshold
                     if keep.sum() >= 10:
-                        rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+                        rf = model_factory()
                         rf.fit(X_tr_s[keep], y_train[keep])
                         fold_scores.append(metric_fn(y_val, rf.predict(X_va_s)))
 
                 elif strategy == 'downweight':
                     weights = weights_from_scores(noise_scores, strength=1.0)
-                    rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+                    rf = model_factory()
                     rf.fit(X_tr_s, y_train, sample_weight=weights)
                     fold_scores.append(metric_fn(y_val, rf.predict(X_va_s)))
 
@@ -152,7 +157,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     nbr_means = np.mean(y_train[nbr_idx[:, 1:]], axis=1)
                     y_smoothed = smooth_by_scores(y_train, noise_scores, nbr_means,
                                                   alpha=0.5, method='proportional')
-                    rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+                    rf = model_factory()
                     rf.fit(X_tr_s, y_smoothed)
                     fold_scores.append(metric_fn(y_val, rf.predict(X_va_s)))
 
@@ -171,7 +176,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     nbr_means = np.mean(y_train[nbr_idx[:, 1:]], axis=1)
                     y_corrected = y_train.copy()
                     y_corrected[flagged] = nbr_means[flagged]
-                    rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+                    rf = model_factory()
                     rf.fit(X_tr_s, y_corrected)
                     fold_scores.append(metric_fn(y_val, rf.predict(X_va_s)))
 

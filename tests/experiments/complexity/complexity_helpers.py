@@ -35,7 +35,9 @@ from experiments._shared import (
 #       and budget semantics may change after framework experiments complete.
 #       When they do, delete the cache dir (~/.cache/kirby/create_hybrid_cache/).
 
-def _create_hybrid_cache_key(reps, labels, allocation_method, importance_method, budget):
+def _create_hybrid_cache_key(reps, labels, allocation_method, importance_method,
+                             budget, augmentations=None,
+                             augmentation_strategy='uncapped'):
     """Hash inputs to create_hybrid for disk caching."""
     h = hashlib.sha256()
     for name in sorted(reps.keys()):
@@ -45,12 +47,21 @@ def _create_hybrid_cache_key(reps, labels, allocation_method, importance_method,
     h.update(labels.tobytes()[:4096])
     h.update(str(len(labels)).encode())
     h.update(f'{allocation_method}_{importance_method}_{budget}'.encode())
+    # Include augmentation info in cache key
+    if augmentations:
+        h.update(b'__aug__')
+        for name in sorted(augmentations.keys()):
+            h.update(name.encode())
+            h.update(augmentations[name].tobytes()[:4096])
+            h.update(str(augmentations[name].shape).encode())
+        h.update(augmentation_strategy.encode())
     return h.hexdigest()[:24]
 
 
 def cached_create_hybrid(reps, labels, allocation_method='greedy',
                          importance_method='treeshap', budget=100,
-                         cache_dir=None):
+                         cache_dir=None, augmentations=None,
+                         augmentation_strategy='uncapped'):
     """Disk-cached wrapper around create_hybrid.
 
     Returns (X_hybrid, feature_info) — same as create_hybrid.
@@ -65,7 +76,9 @@ def cached_create_hybrid(reps, labels, allocation_method='greedy',
         cache_dir = Path(cache_dir)
 
     key = _create_hybrid_cache_key(reps, labels, allocation_method,
-                                   importance_method, budget)
+                                   importance_method, budget,
+                                   augmentations=augmentations,
+                                   augmentation_strategy=augmentation_strategy)
     cache_path = cache_dir / f'{key}.pkl'
 
     if cache_path.exists():
@@ -82,6 +95,8 @@ def cached_create_hybrid(reps, labels, allocation_method='greedy',
         allocation_method=allocation_method,
         importance_method=importance_method,
         budget=budget,
+        augmentations=augmentations,
+        augmentation_strategy=augmentation_strategy,
     )
 
     try:
@@ -114,14 +129,8 @@ PRELIMINARY = {
 # Dead antibody reps (excluded everywhere): aido_protein, igbert, igbert_cls,
 # mint, xtrimopglm — NaN or near-zero on all datasets.
 #
-# TODO: mutation_features, esm2_wt_delta, antiberty_llr are in MUTATION_REPS
-#       (src/kirby/representations/mutation.py) but _shared.py load_data() only
-#       checks ANTIBODY_REPS — these reps get silently skipped. The baseline
-#       surveys (antibody_baseline_survey.py) have a two-pass loader that handles
-#       MUTATION_REPS separately. Until load_data is fixed to also check
-#       MUTATION_REPS, these reps are EXCLUDED from configs below.
-#       Affected datasets: all antibody/DMS/ginkgo datasets that had
-#       mutation_features in their pipeline readiness tiers.
+# FIXED: _shared.py load_data() now handles MUTATION_REPS (two-pass loader).
+# mutation_features added back to DMS datasets that have mutation metadata.
 
 # Common antibody general set (viable on most datasets, dead reps excluded).
 # Per-dataset overrides narrow this when a dataset has few viable reps.
@@ -285,19 +294,19 @@ DATASET_REPS = {
         'general': [ 'prot_t5', 'esm2_midlayers', 'esm2', 'esmc',
             'ablang2', 'igt5', 'esm2_early', 'esm2_concat', 'esm2_layer24',
             'antiberty', 'prot_t5_cdr', 'saprot', 'esm3', 'abroberta',
-            'esm2_entropy_top20', 'blosum', 'aac'],
+            'esm2_entropy_top20', 'blosum', 'aac', 'mutation_features'],
         'augmentation': ['aac'],
         'top_tier': [ 'prot_t5', 'esm2_midlayers'],
     },
 
     # ── AbAgym DMS (5 datasets) ─────────────────────────────────────────
     'abagym_Ang2': {
-        'general': _AB_GENERAL + ['paratope', 'structural'],
+        'general': _AB_GENERAL + ['paratope', 'structural', 'mutation_features'],
         'augmentation': [],
         'top_tier': ['saprot', 'esm3', 'esm2_midlayers', 'esm2_layer24'],
     },
     'abagym_EGFR': {
-        'general': _AB_GENERAL + ['paratope', 'structural'],
+        'general': _AB_GENERAL + ['paratope', 'structural', 'mutation_features'],
         'augmentation': [],
         'top_tier': [
             'antiberty', 'antiberty_cdr', 'esm2_layer24', 'esm2_early',
@@ -306,17 +315,17 @@ DATASET_REPS = {
     'abagym_HER2': {
         'general': [ 'prot_t5_cdr', 'prot_t5', 'esm2_early',
             'esm2', 'esmc', 'ablang2', 'igt5', 'antiberty', 'esm2_midlayers',
-            'esm2_layer24', 'saprot', 'aac'],
+            'esm2_layer24', 'saprot', 'aac', 'mutation_features'],
         'augmentation': [],
         'top_tier': [ 'prot_t5_cdr', 'prot_t5'],
     },
     'abagym_lysozyme': {
-        'general': [ 'aac', 'blosum'],
+        'general': [ 'aac', 'blosum', 'mutation_features'],
         'augmentation': ['structural'],
         'top_tier': [],
     },
     'abagym_VEGF': {
-        'general': _AB_GENERAL + ['paratope', 'structural'],
+        'general': _AB_GENERAL + ['paratope', 'structural', 'mutation_features'],
         'augmentation': [],
         'top_tier': [ 'aac', 'prot_t5_cdr', 'prot_t5'],
     },

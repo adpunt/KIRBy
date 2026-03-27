@@ -127,6 +127,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         replicate_stds = None
 
     budget = kwargs.get('budget', 100)
+    augmentations = data.get('augmentations')
+    augmentation_strategy = 'uncapped'
 
     # Build feature spaces
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
@@ -139,6 +141,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             allocation_method='greedy',
             importance_method='lightgbm_gain',
             budget=budget,
+            augmentations=augmentations,
+            augmentation_strategy=augmentation_strategy,
         )
         spaces['hybrid'] = StandardScaler().fit_transform(X_hybrid)
     except Exception as e:
