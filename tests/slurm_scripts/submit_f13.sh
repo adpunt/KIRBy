@@ -11,12 +11,17 @@
 DATASET=${1:?Usage: sbatch submit_f13.sh DATASET}
 
 cd /data/stat-cadd/scat9264/KIRBy
+git fetch origin 2>/dev/null
+git checkout f12-speedup 2>/dev/null
+git reset --hard origin/f12-speedup 2>/dev/null
 . ./setup.sh
 export PYTHONWARNINGS=ignore
 
 echo "=== F13: ${DATASET} ==="
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "Node:   $(hostname)"
+echo "Branch: $(git branch --show-current)"
+echo "Commit: $(git log --oneline -1)"
 echo "Start:  $(date)"
 
 python tests/experiments/framework/f13_evaluator_model_matching.py \
