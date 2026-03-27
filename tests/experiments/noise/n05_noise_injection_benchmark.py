@@ -65,6 +65,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     reps = data['reps']
     labels = data['labels']
+    augmentations = data.get('augmentations')
+    augmentation_strategy = 'uncapped'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     sigmas = kwargs.get('sigmas', [0.05, 0.1, 0.2, 0.3])
@@ -83,6 +85,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             allocation_method='greedy',
             importance_method='lightgbm_gain',
             budget=budget,
+            augmentations=augmentations,
+            augmentation_strategy=augmentation_strategy,
         )
         D_hybrid = compute_distance_matrix(X_hybrid, standardize=True)
         print(f"  Hybrid distance matrix: {X_hybrid.shape[1]}D")

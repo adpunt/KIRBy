@@ -32,9 +32,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     models = get_model_factories(config['models'])
     n_folds = config['n_splits']
-    # TODO: sweep budget (e.g. 100, 300, 500) — current fixed budget=100 is
-    #  suboptimal for most models (C02 shows Ridge peaks at 500, MLP at 300).
     search_speed = config.get('search_speed', 'fast')
+    sweep_budgets = config.get('budgets', [25, 50, 100, 200, 500])
     n_repeats = kwargs.get('n_repeats', 3)
 
     reps = data['reps']
@@ -50,10 +49,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     print(f"  Models: {model_names}")
     print(f"  Sample sizes: {sample_sizes}")
+    print(f"  Budgets: {sweep_budgets}")
     print(f"  Repeats: {n_repeats}")
     print(f"  Search speed: {search_speed}")
 
-    results = {'sample_sizes': sample_sizes, 'models': {}, 'search_speed': search_speed}
+    results = {'sample_sizes': sample_sizes, 'budgets': sweep_budgets,
+                'models': {}, 'search_speed': search_speed}
 
     # Initialize per-model result structure
     for model_name in model_names:
@@ -85,10 +86,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             sub_folds = min(n_folds, n_unique_groups)
 
             # find_best_hybrid discovers optimal config per model at this sample size
+            # Cap budgets to subsample size (budget > n makes no sense)
+            sub_budgets = [b for b in sweep_budgets if b <= n_sub]
+            if not sub_budgets:
+                sub_budgets = [min(sweep_budgets)]
             try:
                 search = find_best_hybrid(
                     sub_reps, sub_labels, groups=sub_groups,
                     models=model_names,
+                    budgets=sub_budgets,
                     speed=search_speed,
                     n_folds=sub_folds,
                     augmentations=sub_augs,

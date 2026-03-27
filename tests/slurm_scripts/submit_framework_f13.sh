@@ -2,7 +2,7 @@
 # Submit F13 evaluator × model matching test as SLURM jobs.
 # Run from ARC login node: bash tests/slurm_scripts/submit_framework_f13.sh
 #
-# 5 strategies × 2 importance × 3 evaluators × 2 budgets × 4 models = 240 configs/dataset
+# 5 strategies × 2 importance × 3 evaluators × 5 budgets × 4 models = 600 configs/dataset
 # Much smaller than F12. CPU-only.
 #
 # Usage:

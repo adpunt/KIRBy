@@ -1034,6 +1034,7 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
     elif _is_antibody_dataset(dataset_name):
         from antibody_baseline_survey import load_dataset as load_ab_dataset
         from kirby.representations.antibody import ANTIBODY_REPS, ANTIBODY_FAST_REPS
+        from kirby.representations.mutation import MUTATION_REPS
 
         data = load_ab_dataset(dataset_name)
         heavy_seqs = data['heavy_seqs']
@@ -1041,25 +1042,43 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
         labels = data['labels']
         groups = data['groups']
         n_groups = data['n_groups']
+        mutations = data.get('mutations')
 
         # Generate reps based on preset or custom list
         if rep_preset in ('fast', 'skip_lm'):
             _rep_names_from_preset = sorted(ANTIBODY_FAST_REPS)
         else:
-            _rep_names_from_preset = sorted(ANTIBODY_REPS.keys())
+            _rep_names_from_preset = sorted(
+                set(ANTIBODY_REPS.keys()) | set(MUTATION_REPS.keys())
+            )
 
         _wanted_reps = rep_names if rep_names else _rep_names_from_preset
         reps = {}
+
+        # Pass 1: standard antibody reps (heavy_seqs, light_seqs)
         for rn in _wanted_reps:
-            if rn not in ANTIBODY_REPS:
-                print(f"  WARNING: antibody rep '{rn}' not in ANTIBODY_REPS, skipping")
-                continue
-            try:
-                fn = ANTIBODY_REPS[rn]
-                reps[rn] = _cache_rep(dataset_name, rn,
-                                      lambda _fn=fn: _fn(heavy_seqs, light_seqs))
-            except Exception as e:
-                print(f"  WARNING: {rn} failed: {e}")
+            if rn in ANTIBODY_REPS:
+                try:
+                    fn = ANTIBODY_REPS[rn]
+                    reps[rn] = _cache_rep(dataset_name, rn,
+                                          lambda _fn=fn: _fn(heavy_seqs, light_seqs))
+                except Exception as e:
+                    print(f"  WARNING: {rn} failed: {e}")
+            elif rn not in MUTATION_REPS:
+                print(f"  WARNING: antibody rep '{rn}' not found, skipping")
+
+        # Pass 2: mutation-aware reps (require mutations metadata)
+        _has_mutations = mutations and any(len(m) > 0 for m in mutations)
+        if _has_mutations:
+            for rn in _wanted_reps:
+                if rn in MUTATION_REPS and rn not in reps:
+                    try:
+                        fn = MUTATION_REPS[rn]
+                        reps[rn] = _cache_rep(
+                            dataset_name, rn,
+                            lambda _fn=fn: _fn(heavy_seqs, light_seqs, mutations))
+                    except Exception as e:
+                        print(f"  WARNING: {rn} failed: {e}")
 
         print(f"  {dataset_name}: {len(heavy_seqs)} antibodies, {n_groups} groups, "
               f"{len(reps)} reps ({', '.join(f'{k}={v.shape[1]}' for k, v in reps.items())})")

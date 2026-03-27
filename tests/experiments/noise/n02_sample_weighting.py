@@ -138,6 +138,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     reps = data['reps']
     labels = data['labels']
     groups = data['groups']
+    augmentations = data.get('augmentations')
+    augmentation_strategy = 'uncapped'
     sample_X = next(iter(reps.values()))
 
     print(f"  Dataset: {dataset_name} ({domain}, {n_samples} samples)")
@@ -259,6 +261,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     allocation_method='greedy',
                     budget=100,
                     importance_method='lightgbm_gain',
+                    augmentations=augmentations,
+                    augmentation_strategy=augmentation_strategy,
                 )
                 X_val_h = apply_feature_selection(val_reps, feature_info)
             except Exception as e:
@@ -349,6 +353,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     train_reps_fold, y_train,
                     allocation_method='greedy', budget=100,
                     importance_method='lightgbm_gain',
+                    augmentations=augmentations,
+                    augmentation_strategy=augmentation_strategy,
                 )
                 X_val_h = apply_feature_selection(val_reps_fold, fi)
                 scaler = StandardScaler()

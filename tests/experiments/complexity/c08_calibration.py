@@ -13,14 +13,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import numpy as np
 from scipy.stats import spearmanr
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import r2_score
-
 from experiments._shared import (
     load_data, INTERMEDIARY, FULL, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results, convert_numpy,
     get_model_factories, _cv_split,
     create_hybrid, apply_feature_selection,
-    find_best_hybrid,
+    find_best_hybrid, get_domain_metric,
 )
 
 
@@ -34,6 +32,14 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
     print("\n" + "=" * 70)
     print("EXPERIMENT 8: UNCERTAINTY CALIBRATION AT OPTIMAL VS SUBOPTIMAL COMPLEXITY")
     print("=" * 70)
+
+    # Domain-aware metric
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+
+    # Conformal calibration is regression-only; skip for classification
+    if data.get('task_type') == 'classification':
+        print("  SKIPPED: conformal calibration does not apply to classification tasks")
+        return {'skipped': True, 'reason': 'classification_task'}
 
     from sklearn.ensemble import RandomForestRegressor
     from sklearn.linear_model import Ridge
@@ -153,7 +159,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
             model = model_factory()
             model.fit(X_train_s, y_train)
             y_pred_val = model.predict(X_val_s)
-            val_r2 = r2_score(y_val, y_pred_val)
+            val_r2 = metric_fn(y_val, y_pred_val)
 
             # Conformal calibration: split train into proper-train + cal
             n_train = len(y_train)
@@ -205,7 +211,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 'ue_corr': ue_corr,
             }
             fold_metrics.append(fold_result)
-            print(f"    fold {fold_i}: R²={val_r2:.4f}, PICP={picp:.3f}, "
+            print(f"    fold {fold_i}: {metric_name}={val_r2:.4f}, PICP={picp:.3f}, "
                   f"MPIW={mpiw:.3f}, cal_error={cal_error:.3f}")
 
         if fold_metrics:
@@ -219,12 +225,12 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 'avg': avg,
                 'folds': fold_metrics,
             }
-            print(f"  >> {cond_name} avg: R²={avg['val_r2']:.4f}, PICP={avg['picp']:.3f}, "
+            print(f"  >> {cond_name} avg: {metric_name}={avg['val_r2']:.4f}, PICP={avg['picp']:.3f}, "
                   f"MPIW={avg['mpiw']:.3f}, cal_error={avg['cal_error']:.3f}")
 
     # Summary table
     print("\n  CALIBRATION SUMMARY:")
-    print(f"  {'Condition':<14} {'R²':<8} {'PICP':<8} {'MPIW':<8} {'Cal Error':<10} {'Budget':<8}")
+    print(f"  {'Condition':<14} {metric_name:<8} {'PICP':<8} {'MPIW':<8} {'Cal Error':<10} {'Budget':<8}")
     print("  " + "-" * 56)
     for cond_name, cond_data in results['conditions'].items():
         a = cond_data['avg']

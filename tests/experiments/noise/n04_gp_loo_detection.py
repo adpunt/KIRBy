@@ -145,6 +145,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     reps = data['reps']
     labels = data['labels']
     groups = data['groups']
+    augmentations = data.get('augmentations')
+    augmentation_strategy = 'uncapped'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     noise_fractions = kwargs.get('noise_fractions', [0.05, 0.1, 0.2])
@@ -163,6 +165,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             allocation_method='greedy',
             importance_method='lightgbm_gain',
             budget=budget,
+            augmentations=augmentations,
+            augmentation_strategy=augmentation_strategy,
         )
         spaces['hybrid'] = X_hybrid
     except Exception as e:

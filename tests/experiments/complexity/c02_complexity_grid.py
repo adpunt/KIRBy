@@ -18,13 +18,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import r2_score
 
 from experiments._shared import (
     load_data, INTERMEDIARY, FULL, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_model_factories, cv_split, _cv_split,
-    find_best_hybrid,
+    find_best_hybrid, get_domain_metric,
 )
 
 
@@ -46,18 +45,43 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     groups = data['groups']
 
     total_dim = sum(v.shape[1] for v in reps.values())
-    full_budgets = budgets + [total_dim]
+    # Include larger budgets up to total dim for dimension-matched comparison
+    full_budgets = sorted(set(budgets + [1000, 1500, 2000, total_dim]))
 
     # Convert model factories to instances for the library
     model_instances = {name: factory() for name, factory in models.items()}
 
-    print(f"  {len(models)} models x {len(full_budgets)} budgets x "
-          f"{len(allocation_methods)} allocations x {len(importance_methods)} importance")
-    print(f"  Delegating to find_best_hybrid()...\n")
-
     augs = data.get('augmentations')
 
-    # No-augmentation baseline search
+    # --- Top-tier reps only (from DATASET_REPS, if available) ---
+    from experiments.complexity.complexity_helpers import DATASET_REPS
+    ds_reps_config = DATASET_REPS.get(dataset_name, {})
+    top_tier_names = ds_reps_config.get('top_tier', [])
+    top_tier_reps = {k: v for k, v in reps.items() if k in top_tier_names}
+
+    search_top_tier = None
+    if len(top_tier_reps) >= 2:
+        print(f"\n  --- Top-tier reps only ({len(top_tier_reps)}/{len(reps)}: "
+              f"{list(top_tier_reps.keys())}) ---")
+        search_top_tier = find_best_hybrid(
+            base_reps=top_tier_reps,
+            labels=labels,
+            groups=groups,
+            models=model_instances,
+            budgets=full_budgets,
+            allocation_methods=allocation_methods,
+            importance_methods=importance_methods,
+            n_folds=n_folds,
+            augmentations=None,
+            verbose=True,
+            cache=True,
+        )
+
+    # --- All reps, no augmentation ---
+    print(f"\n  --- All reps, no augmentation ({len(reps)} reps) ---")
+    print(f"  {len(models)} models x {len(full_budgets)} budgets x "
+          f"{len(allocation_methods)} allocations x {len(importance_methods)} importance")
+
     search_no_aug = find_best_hybrid(
         base_reps=reps,
         labels=labels,
@@ -72,11 +96,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         cache=True,
     )
 
-    # Augmented search (uncapped default — adds features beyond budget if they help)
-    search = search_no_aug  # fallback if no augmentations
+    # --- All reps, uncapped augmentation ---
+    search_uncapped = search_no_aug  # fallback if no augmentations
     if augs:
-        print(f"\n  Re-running with uncapped augmentation ({len(augs)} aug reps)...")
-        search = find_best_hybrid(
+        print(f"\n  --- Uncapped augmentation ({len(augs)} aug reps) ---")
+        search_uncapped = find_best_hybrid(
             base_reps=reps,
             labels=labels,
             groups=groups,
@@ -86,9 +110,40 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             importance_methods=importance_methods,
             n_folds=n_folds,
             augmentations=augs,
+            augmentation_strategy='uncapped',
             verbose=True,
             cache=True,
         )
+
+    # --- All reps, capped augmentation ---
+    search_capped = None
+    if augs:
+        print(f"\n  --- Capped augmentation ({len(augs)} aug reps) ---")
+        search_capped = find_best_hybrid(
+            base_reps=reps,
+            labels=labels,
+            groups=groups,
+            models=model_instances,
+            budgets=full_budgets,
+            allocation_methods=allocation_methods,
+            importance_methods=importance_methods,
+            n_folds=n_folds,
+            augmentations=augs,
+            augmentation_strategy='capped',
+            verbose=True,
+            cache=True,
+        )
+
+    # TODO: Frozen vs fine-tuned comparison. When FT reps are available as
+    # cached .npy files, load them here and run a fifth search pass:
+    #   ft_reps = _load_ft_reps(dataset_name, reps)  # frozen + FT merged
+    #   search_ft = find_best_hybrid(base_reps=ft_reps, ...)
+    # Compare search_ft.best_by_model vs search_no_aug.best_by_model to
+    # answer: does hybrid(frozen+FT) beat hybrid(frozen_only)?
+    search_ft = None
+
+    # Use uncapped as the primary search (best overall)
+    search = search_uncapped
 
     # --- Reshape SearchResult to downstream format ---
 
@@ -137,6 +192,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  {model_name}: best_rep={best_single_rep} R2={best_single_r2:.4f}")
 
     # PCA baselines (library doesn't compute these -- keep manual)
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
     print("\n  Computing PCA baselines...")
     pca_baselines = {}
@@ -154,7 +210,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 X_val_p = pca.transform(X_val_s)
                 m = model_factory()
                 m.fit(X_train_p, labels[train_idx])
-                pca_scores.append(r2_score(labels[val_idx], m.predict(X_val_p)))
+                pca_scores.append(metric_fn(labels[val_idx], m.predict(X_val_p)))
             pca_baselines[budget][model_name] = float(np.mean(pca_scores))
 
     # Heatmap: model x budget -> best R2
@@ -202,18 +258,44 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             row += f"{val:>8.4f}" if val is not None else f"{'--':>8}"
         print(row)
 
-    # No-aug comparison summary
-    no_aug_best_by_model = {}
-    for model_name, r in search_no_aug.best_by_model.items():
-        no_aug_best_by_model[model_name] = {
-            'model': model_name,
-            'allocation': r['allocation_method'],
-            'importance': r['importance_method'],
-            'budget': r['budget'],
-            'r2_mean': r['score_mean'],
-            'r2_std': r['score_std'],
-            'n_features': r['n_features'],
-        }
+    # --- Condition comparison summary ---
+    def _extract_best(search_obj):
+        if search_obj is None:
+            return {}
+        out = {}
+        for model_name, r in search_obj.best_by_model.items():
+            out[model_name] = {
+                'model': model_name,
+                'allocation': r['allocation_method'],
+                'importance': r['importance_method'],
+                'budget': r['budget'],
+                'r2_mean': r['score_mean'],
+                'r2_std': r['score_std'],
+                'n_features': r['n_features'],
+            }
+        return out
+
+    conditions = {
+        'no_aug': _extract_best(search_no_aug),
+        'uncapped': _extract_best(search_uncapped),
+    }
+    if search_capped is not None:
+        conditions['capped'] = _extract_best(search_capped)
+    if search_top_tier is not None:
+        conditions['top_tier_only'] = _extract_best(search_top_tier)
+    if search_ft is not None:
+        conditions['frozen_plus_ft'] = _extract_best(search_ft)
+
+    # Print condition comparison
+    print("\n  CONDITION COMPARISON (best score per model):")
+    for model_name in models:
+        parts = []
+        for cond_name, cond_best in conditions.items():
+            if model_name in cond_best:
+                score = cond_best[model_name]['r2_mean']
+                parts.append(f"{cond_name}={score:.4f}")
+        if parts:
+            print(f"    {model_name}: {', '.join(parts)}")
 
     return {
         'configs': configs,
@@ -222,7 +304,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'pca_baselines': pca_baselines,
         'heatmap': heatmap,
         'importance_wins': importance_wins,
-        'no_aug_best_by_model': no_aug_best_by_model,
+        'conditions': conditions,
         'has_augmentation': augs is not None,
     }
 

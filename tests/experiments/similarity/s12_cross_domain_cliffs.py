@@ -145,7 +145,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             _, _, search = shared_search
         else:
             _, _, search = get_hybrid_features_and_weights(
-                reps, labels, groups, search_speed, 'lightgbm_gain')
+                reps, labels, groups, search_speed, 'lightgbm_gain',
+                augmentations=data.get('augmentations'))
         bp = search.best_overall['blueprint']
     except Exception as e:
         print(f"  Hybrid search failed: {e}")

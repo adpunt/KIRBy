@@ -27,8 +27,6 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import NearestNeighbors
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import Ridge
-from sklearn.metrics import r2_score
-
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
@@ -119,12 +117,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     input_spaces['concat'] = X_concat
 
     # 2. Hybrid
+    augmentations = data.get('augmentations')
     try:
         X_hybrid, fi = create_hybrid(
             reps, labels,
             allocation_method='greedy',
             importance_method='lightgbm_gain',
             budget=budget,
+            augmentations=augmentations,
+            augmentation_strategy='capped',
         )
         input_spaces['hybrid'] = X_hybrid
     except Exception as e:

@@ -353,7 +353,8 @@ def _run_landscape_comparison(reps, labels, per_rep_results):
 # SUB-ANALYSIS 4: SAS-BO BRIDGE
 # =============================================================================
 
-def _run_sas_bo_bridge(reps, labels, struct_t, act_t):
+def _run_sas_bo_bridge(reps, labels, struct_t, act_t,
+                       augmentations=None, augmentation_strategy='uncapped'):
     """Zone I fraction predicts GP quality -- explains why compact spaces help BO.
 
     Builds 4 representation conditions matching S11, computes SAS zones and
@@ -408,6 +409,8 @@ def _run_sas_bo_bridge(reps, labels, struct_t, act_t):
             allocation_method='greedy',
             importance_method='lightgbm_gain',
             budget=50,
+            augmentations=augmentations,
+            augmentation_strategy=augmentation_strategy,
         )
         conditions['hybrid_50d'] = StandardScaler().fit_transform(X_h)
     except Exception as e:
@@ -563,7 +566,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         sub_reps, sub_labels, per_rep_results)
 
     # --- Sub-analysis 4: SAS-BO bridge ---
-    results['bo_bridge'] = _run_sas_bo_bridge(reps, labels, struct_t, act_t)
+    augmentations = data.get('augmentations')
+    augmentation_strategy = 'uncapped'
+    results['bo_bridge'] = _run_sas_bo_bridge(
+        reps, labels, struct_t, act_t,
+        augmentations=augmentations,
+        augmentation_strategy=augmentation_strategy)
 
     # --- Grand summary ---
     print("\n" + "=" * 70)

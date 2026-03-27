@@ -22,7 +22,7 @@ from experiments._shared import (
     get_model_factories, evaluate_cv_with_train,
     estimate_mutual_information_knn, compute_effective_rank,
     apply_feature_selection,
-    find_best_hybrid,
+    find_best_hybrid, get_domain_metric,
 )
 from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
 # TODO: create_hybrid API not finalised — allocation_method / importance_method
@@ -461,6 +461,8 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
     """9d: Bias-variance proxy from train-val gap across budgets."""
     print("\n  9d: Bias-Variance Proxy")
 
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+
     reps = data['reps']
     labels = data['labels']
     groups = data['groups']
@@ -532,6 +534,7 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                     importance_method=imp,
                     budget=budget,
                     mode=mode,
+                    metric_fn=metric_fn,
                 )
                 if model_name not in results['models']:
                     results['models'][model_name] = {}
