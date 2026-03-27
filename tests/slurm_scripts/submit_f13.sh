@@ -1,0 +1,26 @@
+#!/bin/bash
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --time=47:00:00
+#SBATCH --partition=long
+#SBATCH --mem=128G
+#SBATCH --mail-user=adelaide.punt@stcatz.ox.ac.uk
+#SBATCH --mail-type=END,FAIL
+
+DATASET=${1:?Usage: sbatch submit_f13.sh DATASET}
+
+cd /data/stat-cadd/scat9264/KIRBy
+. ./setup.sh
+export PYTHONWARNINGS=ignore
+
+echo "=== F13: ${DATASET} ==="
+echo "Job ID: ${SLURM_JOB_ID}"
+echo "Node:   $(hostname)"
+echo "Start:  $(date)"
+
+python tests/experiments/framework/f13_evaluator_model_matching.py \
+    --dataset "${DATASET}" --reps all --mode full --max-folds 1 \
+    --output tests/results/framework
+
+echo "Done: $(date)"
