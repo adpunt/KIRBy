@@ -203,6 +203,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                   f"({elapsed:.0f}s, ETA {eta:.0f}s)",
                                   flush=True)
 
+                        # Incremental save every 200 configs
+                        if idx % 200 == 0:
+                            import json as _json
+                            from pathlib import Path as _Path
+                            _out = _Path(output_dir) / 'f13_evaluator_model_matching'
+                            _out.mkdir(parents=True, exist_ok=True)
+                            _p = _out / f'{dataset_name}.json'
+                            _p.write_text(_json.dumps({
+                                'experiment': 'f13', 'dataset': dataset_name,
+                                'partial': True, 'n_configs_so_far': len(all_configs),
+                                'results': {'configs': all_configs},
+                            }, default=str))
+                            print(f"  [SAVED {len(all_configs)} configs]", flush=True)
+
     total_time = time.time() - t_start
 
     # ── Analysis: matched vs cross ──

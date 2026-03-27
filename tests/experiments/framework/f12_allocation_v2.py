@@ -116,6 +116,41 @@ BUDGETS = [25, 50, 100, 200, 500]
 DOWNSTREAM_MODELS = ['ridge', 'rf', 'xgboost', 'lightgbm']
 
 
+def _incremental_save(all_configs, dataset_name, domain, metric_name,
+                      lower_is_better, n_samples, reps, models, budgets,
+                      n_folds, max_folds, output_dir, t_start):
+    """Save partial results so crashes don't lose everything."""
+    import json
+    from pathlib import Path
+    out_dir = Path(output_dir) / 'f12_allocation_v2'
+    out_dir.mkdir(parents=True, exist_ok=True)
+    partial = {
+        'experiment': 'f12',
+        'dataset': dataset_name,
+        'domain': domain,
+        'primary_metric': metric_name,
+        'lower_is_better': lower_is_better,
+        'n_samples': n_samples,
+        'n_reps': len(reps),
+        'partial': True,
+        'n_configs_so_far': len(all_configs),
+        'config': {
+            'strategies': [s[0] for s in ALL_STRATEGY_CONFIGS],
+            'importance_methods': IMPORTANCE_METHODS,
+            'internal_evaluators': INTERNAL_EVALUATORS,
+            'budgets': budgets,
+            'models': list(models.keys()),
+            'n_folds': n_folds,
+            'max_folds': max_folds,
+        },
+        'results': {'configs': all_configs},
+        'elapsed_s': round(time.time() - t_start, 1),
+    }
+    path = out_dir / f'{dataset_name}.json'
+    path.write_text(json.dumps(partial, default=str))
+    print(f"  [SAVED {len(all_configs)} configs to {path}]", flush=True)
+
+
 def _eval_one(strat_display, alloc_method, extra_kwargs,
               budget, model_name, model_factory,
               reps, labels, groups, n_folds, max_folds,
@@ -266,6 +301,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                   f"dim={entry['n_features']} "
                                   f"({elapsed:.0f}s, ETA {eta:.0f}s)",
                                   flush=True)
+
+                        # Incremental save every 500 configs
+                        if idx % 500 == 0:
+                            _incremental_save(all_configs, dataset_name, domain,
+                                              metric_name, lower_is_better,
+                                              n_samples, reps, models, budgets,
+                                              n_folds, max_folds, output_dir,
+                                              t_start)
 
     total_time = time.time() - t_start
 
