@@ -94,16 +94,12 @@ PERF_WEIGHTED_CONFIGS = [
     ('pw_min_floor', 'min_floor_0.05', {}),
 ]
 
-# Family 2: greedy
+# Family 2: greedy (non-fill strategies)
 GREEDY_CONFIGS = [
     # greedy forced (no patience, must fill budget)
     ('greedy_forced_s5', 'greedy', {'step_size': 5, 'patience': None}),
     ('greedy_forced_s10', 'greedy', {'step_size': 10, 'patience': None}),
     ('greedy_forced_s25', 'greedy', {'step_size': 25, 'patience': None}),
-    # greedy + fill (greedy stops naturally, fill from best single rep)
-    ('greedy_fill_s5', 'greedy', {'step_size': 5, 'budget_fill': True}),
-    ('greedy_fill_s10', 'greedy', {'step_size': 10, 'budget_fill': True}),
-    ('greedy_fill_s25', 'greedy', {'step_size': 25, 'budget_fill': True}),
     # dominant_greedy with dominant_fraction sweep
     ('dom_greedy_f0.5', 'dominant_greedy', {'dominant_fraction': 0.5}),
     ('dom_greedy_f0.7', 'dominant_greedy', {'dominant_fraction': 0.7}),
@@ -112,7 +108,14 @@ GREEDY_CONFIGS = [
     ('greedy_feature', 'greedy_feature', {}),
 ]
 
-ALL_STRATEGY_CONFIGS = PERF_WEIGHTED_CONFIGS + GREEDY_CONFIGS
+# greedy + fill runs LAST (slow — so all other configs save first)
+GREEDY_FILL_CONFIGS = [
+    ('greedy_fill_s5', 'greedy', {'step_size': 5, 'budget_fill': True}),
+    ('greedy_fill_s10', 'greedy', {'step_size': 10, 'budget_fill': True}),
+    ('greedy_fill_s25', 'greedy', {'step_size': 25, 'budget_fill': True}),
+]
+
+ALL_STRATEGY_CONFIGS = PERF_WEIGHTED_CONFIGS + GREEDY_CONFIGS + GREEDY_FILL_CONFIGS
 
 IMPORTANCE_METHODS = ['deeplift', 'lightgbm_gain']
 # Matched internal_evaluator = downstream_model pairs only (F13 finding)
