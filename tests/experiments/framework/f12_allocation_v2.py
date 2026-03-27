@@ -278,7 +278,53 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     idx = 0
     t_start = time.time()
 
+    # TEMPORARY: Precompute importance + baselines to avoid redundant
+    # RF+SHAP fits across configs. Remove when experiment is done.
+    from kirby.hybrid import compute_feature_importance, _evaluate_allocation
+    _mode = 'intermediary' if n_folds == 1 else 'full'
+    _sample_X = next(iter(reps.values()))
+    _train_idx, _val_idx = next(iter(cv_split(groups, n_folds, _sample_X, labels, mode=_mode)))
+    _train_reps_pre = {k: v[_train_idx] for k, v in reps.items()}
+    _val_reps_pre = {k: v[_val_idx] for k, v in reps.items()}
+    _train_labels_pre = labels[_train_idx]
+    _val_labels_pre = labels[_val_idx]
+
+    cached_importance = {}
+    for imp_method in IMPORTANCE_METHODS:
+        print(f"  Precomputing {imp_method} importance...", end='', flush=True)
+        t_imp = time.time()
+        cached_importance[imp_method] = compute_feature_importance(
+            _train_reps_pre, _train_labels_pre, method=imp_method,
+        )
+        print(f" {time.time() - t_imp:.0f}s", flush=True)
+
+    cached_baselines = {}
+    for int_eval, _ in MATCHED_PAIRS:
+        if int_eval in cached_baselines:
+            continue
+        print(f"  Precomputing {int_eval} baselines...", end='', flush=True)
+        t_bl = time.time()
+        bl = {}
+        for rep_name, X_tr in _train_reps_pre.items():
+            X_vl = _val_reps_pre[rep_name]
+            X_tr_c = np.nan_to_num(np.clip(X_tr, -1e10, 1e10), nan=0.0)
+            X_vl_c = np.nan_to_num(np.clip(X_vl, -1e10, 1e10), nan=0.0)
+            bl[rep_name] = _evaluate_allocation(
+                X_tr_c, X_vl_c, _train_labels_pre, _val_labels_pre,
+                internal_evaluator=int_eval,
+            )
+        cached_baselines[int_eval] = bl
+        print(f" {time.time() - t_bl:.0f}s", flush=True)
+
+    print(f"  Precomputation done in {time.time() - t_start:.0f}s\n", flush=True)
+
+    # Determine which strategies benefit from precomputed data
+    _PW_ALLOCS = {'performance_weighted', 'softmax_T0.5', 'softmax_T2', 'softmax_T10',
+                  'power_2', 'power_3', 'thresh_0.5', 'top_3', 'min_floor_0.05',
+                  'rank_linear', 'rank_exp', 'score_gap', 'entropy'}
+
     for (strat_display, alloc_method, extra_kw) in ALL_STRATEGY_CONFIGS:
+        is_pw = alloc_method in _PW_ALLOCS
         for imp_method in IMPORTANCE_METHODS:
             for int_eval, model_name in MATCHED_PAIRS:
                 if model_name not in models:
@@ -291,6 +337,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         budget, model_name, model_factory,
                         reps, labels, groups, n_folds, max_folds,
                         metric_fn, imp_method, int_eval,
+                        precomputed_baselines=cached_baselines.get(int_eval) if is_pw else None,
+                        precomputed_importance=cached_importance.get(imp_method) if is_pw else None,
                     )
                     all_configs.append(entry)
 
@@ -306,13 +354,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                               f"({elapsed:.0f}s, ETA {eta:.0f}s)",
                               flush=True)
 
-                    # Incremental save every 500 configs
-                        if idx % 500 == 0:
-                            _incremental_save(all_configs, dataset_name, domain,
-                                              metric_name, lower_is_better,
-                                              n_samples, reps, models, budgets,
-                                              n_folds, max_folds, output_dir,
-                                              t_start)
+                    # Incremental save every 200 configs
+                    if idx % 200 == 0:
+                        _incremental_save(all_configs, dataset_name, domain,
+                                          metric_name, lower_is_better,
+                                          n_samples, reps, models, budgets,
+                                          n_folds, max_folds, output_dir,
+                                          t_start)
 
     total_time = time.time() - t_start
 
