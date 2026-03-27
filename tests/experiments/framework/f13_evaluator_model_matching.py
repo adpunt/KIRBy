@@ -141,13 +141,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     n_samples = len(data['labels'])
     task_type = data.get('task_type', 'regression')
-    models = get_model_factories(
-        config.get('models', MODELS),
-        task_type=task_type, n_samples=n_samples,
-    )
+    models = get_model_factories(MODELS, task_type=task_type, n_samples=n_samples)
     n_folds = config['n_splits']
     max_folds = config.get('max_folds', n_folds)
-    budgets = config.get('budgets', BUDGETS)
+    budgets = BUDGETS
 
     reps = data['reps']
     labels = data['labels']
