@@ -405,24 +405,69 @@ def run_e2e_dimenetpp(data_list, labels, train_idx, val_idx, test_idx,
     }
 
 
+def _fallback_radius_graph(pos, batch, cutoff=10.0, max_neighbors=32):
+    """Pure-PyTorch radius graph (no torch-cluster dependency)."""
+    import torch
+
+    device = pos.device
+    edge_index_list = []
+    edge_weight_list = []
+
+    unique_batches = batch.unique()
+    for b in unique_batches:
+        mol_mask = (batch == b)
+        mol_indices = torch.where(mol_mask)[0]
+        mol_pos = pos[mol_mask]
+
+        dists = torch.cdist(mol_pos, mol_pos)
+        for i in range(len(mol_pos)):
+            within_cutoff = (dists[i] < cutoff) & (dists[i] > 0)
+            neighbors = torch.where(within_cutoff)[0]
+
+            if len(neighbors) > max_neighbors:
+                _, top_idx = dists[i][neighbors].topk(
+                    max_neighbors, largest=False)
+                neighbors = neighbors[top_idx]
+
+            for j in neighbors:
+                edge_index_list.append(
+                    [mol_indices[i].item(), mol_indices[j].item()])
+                edge_weight_list.append(dists[i][j].item())
+
+    if not edge_index_list:
+        edge_index = torch.tensor([[0], [0]], dtype=torch.long, device=device)
+        edge_weight = torch.tensor([0.1], dtype=torch.float, device=device)
+    else:
+        edge_index = torch.tensor(
+            edge_index_list, dtype=torch.long, device=device).t()
+        edge_weight = torch.tensor(
+            edge_weight_list, dtype=torch.float, device=device)
+
+    return edge_index, edge_weight
+
+
+def _patch_schnet_interaction_graph(model, cutoff=10.0):
+    """Monkey-patch SchNet.interaction_graph to use pure-PyTorch fallback.
+
+    This avoids the torch-cluster CUDA compilation requirement.
+    """
+    import types
+
+    def patched_interaction_graph(self, pos, batch):
+        return _fallback_radius_graph(pos, batch, cutoff=cutoff)
+
+    model.interaction_graph = types.MethodType(patched_interaction_graph, model)
+    return model
+
+
 def run_e2e_schnet(data_list, labels, train_idx, val_idx, test_idx,
                    prop_idx=4, epochs=100):
     """End-to-end SchNet trained on 3D coordinates.
 
-    Requires: torch-cluster (for radius_graph in SchNet interaction layer).
-    Install: pip install torch-cluster -f https://data.pyg-team.org/whl/torch-{TORCH_VERSION}+{CUDA}.html
+    Uses a pure-PyTorch radius graph fallback if torch-cluster is not
+    available or not compiled with CUDA support.
     """
     import torch
-    try:
-        import torch_cluster  # noqa: F401
-    except ImportError:
-        raise ImportError(
-            "torch-cluster is required for SchNet end-to-end training. "
-            "Install: pip install torch-cluster -f "
-            "https://data.pyg-team.org/whl/torch-$(python -c 'import torch; print(torch.__version__)')+"
-            "$(python -c 'import torch; print(\"cu\" + torch.version.cuda.replace(\".\",\"\") if torch.cuda.is_available() else \"cpu\")')"
-            ".html"
-        )
     from torch_geometric.loader import DataLoader
 
     try:
@@ -459,7 +504,26 @@ def run_e2e_schnet(data_list, labels, train_idx, val_idx, test_idx,
         num_interactions=6,
         num_gaussians=50,
         cutoff=10.0,
-    ).to(device)
+    )
+
+    # Patch interaction_graph if torch-cluster is missing or CPU-only
+    _needs_patch = False
+    try:
+        import torch_cluster  # noqa: F401
+        # Test if it actually works on the target device
+        _test_pos = torch.randn(3, 3, device=device)
+        _test_batch = torch.zeros(3, dtype=torch.long, device=device)
+        model.to(device)
+        model.interaction_graph(_test_pos, _test_batch)
+    except (ImportError, RuntimeError, Exception) as e:
+        print(f"    torch-cluster unavailable/incompatible ({e}), using fallback")
+        _needs_patch = True
+        model = model.cpu()  # reset before patching
+
+    if _needs_patch:
+        _patch_schnet_interaction_graph(model, cutoff=10.0)
+
+    model = model.to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
