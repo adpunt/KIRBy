@@ -585,13 +585,46 @@ Old Section 10G has a bulk summary with 11 datasets. Each needs individual cutof
 
 | # | Dataset | Samples | Reps | Augs | Status |
 |---|---------|---------|------|------|--------|
-| 23 | flab_binding_koenig | 4,275 | 23 | 0 | BLOCKED — 23/42 reps, jobs 7331342-46 pending |
-| 24 | flab_expression_koenig | 4,275 | 23 | 0 | BLOCKED — 23/42 reps, jobs 7331342-46 pending |
-| 25 | flab_binding_adams | 5,000 | 4 | 2 | BLOCKED — only 4 reps, 38 pending |
-| 26 | flab_expression_adams | 5,000 | 4 | 2 | BLOCKED — only 4 reps, 38 pending |
-| 27 | flab_binding_phillips_h3 | 5,000 | 4 | 2 | BLOCKED — only 4 reps, 38 pending |
+| 23 | flab_binding_koenig | 4,275 | 34 | 12 | DONE |
+| 24 | flab_expression_koenig | 4,275 | 34 | 12 | DONE |
+| 25 | flab_binding_adams | 5,000 | 35 | 10 | DONE |
+| 26 | flab_expression_adams | 5,000 | 35 | 10 | DONE |
+| 27 | flab_binding_phillips_h3 | 5,000 | 35 | 10 | DONE |
 
-**Note:** koenig datasets have 23 reps (enough to start). Adams/Phillips have only 4 — defer until server jobs complete.
+**flab_binding_koenig (n=4,275, best ρ=0.475, cutoff=0.28):**
+| Tier | Reps |
+|------|------|
+| Top Tier (8) | ablang2, saprot, saprot_cdr, esm3, esm3_cdr, prot_t5, prot_t5_cdr, igt5 |
+| General (26) | all reps with ρ > 0.28 (through antiberty_cdr) |
+| Augmentation (4) | esm2_llr, mutation_features, antiberty_llr, aac |
+
+**flab_expression_koenig (n=4,275, best ρ=0.715, cutoff=0.43):**
+| Tier | Reps |
+|------|------|
+| Top Tier (7) | esm3, esm3_cdr, prot_t5_cdr, prot_t5, saprot, saprot_cdr, igt5 |
+| General (27) | all reps with ρ > 0.43 (through aac) |
+| Augmentation (3) | mutation_features, esm2_llr, aac |
+
+**flab_binding_adams (n=5,000, best ρ=0.669, cutoff=0.50):**
+| Tier | Reps |
+|------|------|
+| Top Tier (8) | blosum, onehot, esm3, esm3_cdr, saprot, saprot_cdr, esm2_cdr, esm2_cdr3 |
+| General (26) | all reps with ρ > 0.50 (through esm2_mutsite) |
+| Augmentation (2) | aac, paratope |
+
+**flab_expression_adams (n=5,000, best ρ=0.511, cutoff=0.42):**
+| Tier | Reps |
+|------|------|
+| Top Tier (7) | blosum, saprot, saprot_cdr, esm3, esm3_cdr, prot_t5, prot_t5_cdr |
+| General (28) | all reps with ρ > 0.42 (through antiberty_cdr) |
+| Augmentation (1) | esm2_llr |
+
+**flab_binding_phillips_h3 (n=5,000, best ρ=0.722, cutoff=0.67):**
+| Tier | Reps |
+|------|------|
+| Top Tier (4) | onehot, blosum, igt5, esm2_early |
+| General (29) | all reps with ρ > 0.67 (through abroberta) |
+| Augmentation (3) | paratope, aac, mutation_features |
 
 ---
 
@@ -663,9 +696,23 @@ Old Sections 10B/10C/12D/12E have writeups. Need new-format review.
 
 | # | Dataset | Samples | Reps | Augs | Status |
 |---|---------|---------|------|------|--------|
-| 50 | buchwald_hartwig | 3,955 | 38 | 6 | TODO — expanded reps wired (14 original + 24 molecular variants) |
-| 51 | suzuki | 5,760 | 38 | 4 | TODO — expanded reps wired (14 original + 24 molecular variants) |
-| 52 | bh_doyle_plates | 4,312 | 38 | 6 | TODO — expanded reps wired (14 original + 24 molecular variants) |
+| 50 | buchwald_hartwig | 3,955 | 14 | 6 | DONE |
+| 51 | suzuki | 5,760 | 14 | 4 | DROPPED — R²=0.453 ceiling, only 1 viable rep |
+| 52 | bh_doyle_plates | 4,312 | 35 | 24 | DONE |
+
+**buchwald_hartwig (n=3,955, best R²=0.718, cutoff=0.50):**
+| Tier | Reps |
+|------|------|
+| Top Tier (3) | reactant_ecfp4, diff_ecfp4, drfp_2048 |
+| General (8) | all reps with R² > 0.50 (through rxnfp) |
+| Augmentation | none |
+
+**bh_doyle_plates (n=4,312, best R²=0.638, cutoff=0.50):**
+| Tier | Reps |
+|------|------|
+| Top Tier (6) | reactant_avalon, diff_avalon, diff_mhg_gnn, diff_ecfp4, reactant_grover, reactant_ecfp4 |
+| General (17) | all reps with R² > 0.50 (through diff_mordred) |
+| Augmentation (6) | product_maccs, reactant_maccs, onehot_components, diff_maccs, product_pharmacophore3d, reactant_pharmacophore3d |
 
 **Reaction supplementary data:**
 - `comparisons/reaction_rep_comparison.json`: rep comparison across all 3 datasets
@@ -694,36 +741,34 @@ Old Sections 10B/10C/12D/12E have writeups. Need new-format review.
 
 | # | Dataset | Samples | Reps | Metric | Status |
 |---|---------|---------|------|--------|--------|
-| 56 | gb_human_nontata_promoters | 36,131 | 3 | MCC | Survey on server (nucleotide_survey/), needs pull + review |
-| 57 | nt_enhancers | — | 3-6 | MCC | Survey on server, needs pull + review |
-| 58 | nt_enhancers_types | — | 3-6 | MCC | Survey on server, needs pull + review |
-| 59 | nt_H2AFZ | — | 3-6 | MCC | Survey on server, needs pull + review |
-| 60 | nt_H3K27ac | — | 3-6 | MCC | Survey on server, needs pull + review |
-| 61 | nt_H3K27me3 | — | 3-6 | MCC | Survey on server, needs pull + review |
-| 62 | nt_H3K36me3 | — | 3-6 | MCC | Survey on server, needs pull + review |
-| 63 | nt_H3K4me1 | — | 3-6 | MCC | Survey on server, needs pull + review |
-| 64 | nt_H3K4me2 | — | 3-6 | MCC | Survey on server, needs pull + review |
-| 65 | nt_H3K4me3 | — | 3-6 | MCC | Survey on server, needs pull + review |
-| 66 | nt_H3K9ac | — | 3-6 | MCC | Survey on server, needs pull + review |
-| 67 | nt_H3K9me3 | — | 3-6 | MCC | Survey on server, needs pull + review |
-| 68 | nt_H4K20me1 | — | 3-6 | MCC | Survey on server, needs pull + review |
-| 69 | nt_promoter_all | — | 6 | MCC | Survey on server, needs pull + review |
-| 70 | nt_promoter_no_tata | — | 6 | MCC | Survey on server, needs pull + review |
-| 71 | nt_promoter_tata | — | 6 | MCC | Survey on server, needs pull + review |
-| 72 | nt_splice_sites_acceptors | — | 3 | MCC | Survey on server, needs pull + review |
-| 73 | nt_splice_sites_all | — | 3 | MCC | Survey on server, needs pull + review |
-| 74 | nt_splice_sites_donors | — | 3 | MCC | Survey on server, needs pull + review |
+| 56 | gb_human_nontata_promoters | 36,131 | 6 | MCC | Classical only — needs resubmit with FM reps |
+| 57 | nt_enhancers | — | 6 | MCC | Classical only — needs resubmit with FM reps |
+| 58 | nt_enhancers_types | — | 6 | MCC | Classical only — needs resubmit with FM reps |
+| 59 | nt_H2AFZ | — | 6 | MCC | Classical only — needs resubmit with FM reps |
+| 60 | nt_H3K27ac | — | 6 | MCC | Classical only — needs resubmit with FM reps |
+| 61 | nt_H3K27me3 | — | 6 | MCC | Classical only — needs resubmit with FM reps |
+| 62 | nt_H3K36me3 | — | 6 | MCC | Classical only — needs resubmit with FM reps |
+| 63 | nt_H3K4me1 | — | 6 | MCC | Classical only — needs resubmit with FM reps |
+| 64 | nt_H3K4me2 | — | 6 | MCC | Classical only — needs resubmit with FM reps |
+| 65 | nt_H3K4me3 | — | 6 | MCC | Classical only — needs resubmit with FM reps |
+| 66 | nt_H3K9ac | — | 6 | MCC | Classical only — needs resubmit with FM reps |
+| 67 | nt_H3K9me3 | — | 6 | MCC | Classical only — needs resubmit with FM reps |
+| 68 | nt_H4K20me1 | — | 6 | MCC | Classical only — needs resubmit with FM reps |
+| 69 | nt_promoter_all | 31,584 | 6 | MCC | Classical only — needs resubmit with FM reps |
+| 70 | nt_promoter_no_tata | — | 6 | MCC | Classical only — needs resubmit with FM reps |
+| 71 | nt_promoter_tata | — | 6 | MCC | Classical only — needs resubmit with FM reps |
+| 72 | nt_splice_sites_acceptors | — | 6 | MCC | Classical only — needs resubmit with FM reps |
+| 73 | nt_splice_sites_all | — | 6 | MCC | Classical only — needs resubmit with FM reps |
+| 74 | nt_splice_sites_donors | — | 6 | MCC | Classical only — needs resubmit with FM reps |
 
-**Reps implemented (26 total):** 14 foundation models + 11 classical + 1 factory. Code: `src/kirby/representations/nucleotide.py`. SLURM: `submit_nucleotide_survey.sh`.
+**Root cause:** `DATASET_REGISTRY` in `run_baseline_survey.py` had default preset `'fast'` (6 classical reps only) for all nucleotide datasets. Survey was submitted without `--reps all` override, so FM reps never ran. **Fixed 2026-03-28** (commit a2a0d2d): default changed to `'all'` (26 reps: 14 FM + 11 classical + 1 factory).
 
-**Rep counts above (3-6) reflect what was surveyed BEFORE FM reps were added.** 19 survey results now on server (`tests/results/nucleotide_survey/`, Mar 26-28). Need to pull, check how many reps each file contains, then review individually.
+**Reps implemented (26 total):** 14 foundation models + 11 classical + 1 factory. Code: `src/kirby/representations/nucleotide.py`. SLURM: `submit_nucleotide_survey.sh` (short partition, 11:59:00, GPU).
 
-**Server file sizes suggest two groups:**
-- ~20KB files (nt_H3K9me3, nt_H3K9ac, nt_H3K4me3, nt_H3K4me2, nt_H4K20me1, nt_H3K27ac, nt_enhancers, nt_promoter_no_tata, nt_promoter_tata, nt_promoter_all): likely full FM rep set
-- ~7KB files (gb_human_nontata_promoters, nt_H3K4me1, nt_H3K36me3, nt_H3K27me3, nt_H2AFZ, nt_splice_sites_donors, nt_splice_sites_acceptors, nt_splice_sites_all, nt_enhancers_types): likely partial — some FM reps may have failed or timed out
+**Resubmission:** Pull on server, run `bash tests/slurm_scripts/submit_nucleotide_survey.sh`. Existing classical results will merge in automatically. Output: `tests/results/nucleotide_survey/`.
 
-**Preliminary decisions (from earlier classical-only results):**
-- DROP nt_splice_sites_all (MCC=0.245) and nt_H3K9me3 (MCC=0.239) — near random
+**Preliminary decisions (from classical-only results):**
+- DROP nt_splice_sites_all (MCC=0.245) and nt_H3K9me3 (MCC=0.239) — near random (pending confirmation after FM reps land)
 - kmer4, kmer6, tetranuc_freq will be general-tier classical baselines
 - dinuc_freq, gc_content are lower-tier classical; complexity is augmentation-only
 
@@ -747,16 +792,16 @@ Old Sections 10B/10C/12D/12E have writeups. Need new-format review.
 |--------|---------------|------|-------------|------|---------|---------|
 | Molecular | 8 | 7 | 0 | 0 | 0 | 1 (adme_solubility) |
 | Ab Inter-Family | 14 | 11 | 0 | 0 | 0 | 3 (hutchinson, sas, ddg_combined_full) |
-| Ab DMS/Large | 5 | 0 | 0 | 0 | 5 (all waiting for jobs 7331342-46) | 0 |
+| Ab DMS/Large | 5 | 5 | 0 | 0 | 0 | 0 |
 | AbAgym | 6 | 5 | 0 | 0 | 0 | 1 (abagym_all) |
 | Ab CLF | 4 | 2 | 0 | 0 | 2 (multiclass, species) | 0 |
 | Ginkgo | 9 | 6 | 0 | 0 | 0 | 3 (aggregation, purity, tm2) |
 | TCGA | 3 | 2 | 0 | 0 | 0 | 1 (survival) |
-| Reaction | 3 | 0 | 0 | 3 (reps wired, need survey run) | 0 | 0 |
+| Reaction | 3 | 2 | 0 | 0 | 0 | 1 (suzuki) |
 | DTA | 3 | 0 | 0 | 3 (partial data) | 0 | 0 |
 | Nucleotide | 19 | 0 | 0 | 0 | 17 (survey on server, needs pull + review) | 2 (splice_all, H3K9me3) |
 | Graphinity DDG | 3 | 0 | 0 | 0 | 3 | 0 |
-| **TOTAL** | **77** | **33** | **0** | **0** | **32** | **12** |
+| **TOTAL** | **77** | **40** | **0** | **0** | **24** | **13** |
 
 ---
 

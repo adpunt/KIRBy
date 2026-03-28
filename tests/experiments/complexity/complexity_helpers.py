@@ -299,6 +299,53 @@ DATASET_REPS = {
         'top_tier': [ 'prot_t5', 'esm2_midlayers'],
     },
 
+    # ── Antibody DMS / Large DMS (5 datasets) ──────────────────────────
+    'flab_binding_koenig': {
+        'general': _AB_GENERAL + [
+            'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
+            'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr'],
+        'augmentation': ['esm2_llr', 'mutation_features', 'antiberty_llr', 'aac'],
+        'top_tier': [
+            'ablang2', 'saprot', 'saprot_cdr', 'esm3', 'esm3_cdr',
+            'prot_t5', 'prot_t5_cdr', 'igt5'],
+    },
+    'flab_expression_koenig': {
+        'general': _AB_GENERAL + [
+            'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
+            'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr'],
+        'augmentation': ['mutation_features', 'esm2_llr', 'aac'],
+        'top_tier': [
+            'esm3', 'esm3_cdr', 'prot_t5_cdr', 'prot_t5', 'saprot',
+            'saprot_cdr', 'igt5'],
+    },
+    'flab_binding_adams': {
+        'general': _AB_GENERAL + [
+            'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
+            'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr',
+            'paratope'],
+        'augmentation': ['aac', 'paratope'],
+        'top_tier': [
+            'blosum', 'onehot', 'esm3', 'esm3_cdr', 'saprot',
+            'saprot_cdr', 'esm2_cdr', 'esm2_cdr3'],
+    },
+    'flab_expression_adams': {
+        'general': _AB_GENERAL + [
+            'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
+            'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr'],
+        'augmentation': ['esm2_llr'],
+        'top_tier': [
+            'blosum', 'saprot', 'saprot_cdr', 'esm3', 'esm3_cdr',
+            'prot_t5', 'prot_t5_cdr'],
+    },
+    'flab_binding_phillips_h3': {
+        'general': _AB_GENERAL + [
+            'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
+            'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr',
+            'paratope'],
+        'augmentation': ['paratope', 'aac', 'mutation_features'],
+        'top_tier': ['onehot', 'blosum', 'igt5', 'esm2_early'],
+    },
+
     # ── AbAgym DMS (5 datasets) ─────────────────────────────────────────
     'abagym_Ang2': {
         'general': _AB_GENERAL + ['paratope', 'structural', 'mutation_features'],
@@ -400,6 +447,29 @@ DATASET_REPS = {
             'gene_chromosome_arm', 'immune_xcell'],
         'top_tier': [
             'gene_geneformer_v2', 'gene_geneformer', 'gene_bulkrnabert'],
+    },
+
+    # ── Reaction (2 datasets) ─────────────────────────────────────────
+    'buchwald_hartwig': {
+        'general': [
+            'reactant_ecfp4', 'diff_ecfp4', 'drfp_2048', 'reactiont5',
+            'onehot_components', 'reactant_pdv', 'diff_maccs', 'rxnfp'],
+        'augmentation': [],
+        'top_tier': ['reactant_ecfp4', 'diff_ecfp4', 'drfp_2048'],
+    },
+    'bh_doyle_plates': {
+        'general': [
+            'reactant_avalon', 'diff_avalon', 'diff_mhg_gnn', 'diff_ecfp4',
+            'reactant_grover', 'reactant_ecfp4', 'reactant_mhg_gnn',
+            'diff_grover', 'drfp_2048', 'reactiont5', 'diff_mol2vec',
+            'onehot_components', 'reactant_mol2vec', 'rxnfp', 'diff_maccs',
+            'reactant_mordred', 'diff_mordred'],
+        'augmentation': [
+            'product_maccs', 'reactant_maccs', 'onehot_components',
+            'diff_maccs', 'product_pharmacophore3d', 'reactant_pharmacophore3d'],
+        'top_tier': [
+            'reactant_avalon', 'diff_avalon', 'diff_mhg_gnn', 'diff_ecfp4',
+            'reactant_grover', 'reactant_ecfp4'],
     },
 }
 
