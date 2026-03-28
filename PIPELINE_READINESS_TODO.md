@@ -93,15 +93,15 @@ Complexity and similarity experiments that ran previously used stale hybrid cach
 
 | Category | Experiments | Datasets | Helpers | Roadmap |
 |----------|------------|----------|---------|---------|
-| Complexity | C01-C21 | All 33 ready | `complexity_helpers.py` | `EXPERIMENT_REFACTOR_ROADMAP.md` |
-| Similarity | S01-S13 | All 33 ready | `similarity_helpers.py` | `EXPERIMENT_REFACTOR_ROADMAP.md` |
-| Noise | N01-N13 all active | All 33 ready | `noise_helpers.py` | `NOISE_EXPERIMENT_ROADMAP.md` |
+| Complexity | C01-C21 | All 40 ready | `complexity_helpers.py` | `EXPERIMENT_REFACTOR_ROADMAP.md` |
+| Similarity | S01-S13 | All 40 ready | `similarity_helpers.py` | `EXPERIMENT_REFACTOR_ROADMAP.md` |
+| Noise | N01-N13 all active | All 40 ready | `noise_helpers.py` | `NOISE_EXPERIMENT_ROADMAP.md` |
 | OPIG | 6 standalone scripts | Specific OPIG datasets | — | `OPIG_COLLAB_ROADMAP.md` |
-| Federated | fed01-fed03 active, fed04/fed06 planned | herg, caco2, logd | `federated_helpers.py` | `FEDERATED_EXPERIMENT_ROADMAP.md` |
+| Federated | fed01-fed04, fed06 all implemented | herg, caco2, logd | `federated_helpers.py` | `FEDERATED_EXPERIMENT_ROADMAP.md` |
 
 **Noise (N09-N13):** All implemented. N09 (LNL survey, 12 methods), N10 (hybrid neighborhood LNL), N11 (estimation × remediation grid), N12 (importance-weighted distance), N13 (alt noise distributions). New utility: `src/kirby/utils/lnl_methods.py` (12 training-loop LNL methods). See `NOISE_EXPERIMENT_ROADMAP.md`.
 
-**Federated (fed01-fed06):** Fed01 (noise heterogeneity), fed02 (rep diversity silos), fed03 (synthetic private datasets) are implemented. Fed04 (cluster-aware importance) and fed06 (antibody extension) still planned. Datasets: herg, caco2, logd. Also has `lhasa_herg_loader.py`. See `FEDERATED_EXPERIMENT_ROADMAP.md`.
+**Federated (fed01-fed06):** All 5 implemented: fed01 (noise heterogeneity), fed02 (rep diversity silos), fed03 (synthetic private datasets), fed04 (cluster-aware importance), fed06 (antibody extension). Uses group-aware single 80/20 split (by design for FLuID comparison). RF hardcoded (matches FLuID). Datasets: herg, caco2, logd. `lhasa_herg_loader.py` loads Lhasa curated data. See `FEDERATED_EXPERIMENT_ROADMAP.md`.
 
 **Impact on per-dataset files:** None — the unified runner handles dispatch. Adding a new experiment to any category just requires registering it in the helpers file. Adding a new category requires 1 helpers file + 1 entry in `run_dataset.py`'s `CATEGORIES` dict.
 
@@ -857,7 +857,7 @@ These sections have older-format writeups that were done before this dataset-by-
 ### IMPLEMENTATION — New experiment categories
 
 13. ~~**Noise N13 (alt noise distributions)**~~ **DONE** (2026-03-28) — N09-N13 all implemented. 5 new experiments + `lnl_methods.py` (12 LNL methods). See `NOISE_EXPERIMENT_ROADMAP.md`.
-14. **Federated fed04 + fed06** — fed01-fed03 are implemented. Fed04 (cluster-aware importance) and fed06 (antibody extension, deprioritized) still planned. See `FEDERATED_EXPERIMENT_ROADMAP.md`.
+14. ~~**Federated fed04 + fed06**~~ **DONE** — all 5 federated experiments implemented (fed01-fed04, fed06). See `FEDERATED_EXPERIMENT_ROADMAP.md`.
 
 ### IMPLEMENTATION — Experiment infrastructure
 
@@ -913,13 +913,17 @@ Noise extensions (N09-N13 ALL DONE)
   → N09-N13 deploy alongside N01-N08 on same 40 datasets
   → New utility: lnl_methods.py (12 training-loop LNL methods)
 
-Federated experiments (fed01-fed04, fed06 written, NEED REWORK)
-  → All 5 experiments bypass KIRBy's config system (hardcoded models, budgets, allocations)
-  → All use single 80/20 ShuffleSplit (should use cv_split with scaffold groups)
-  → Config dict passed to run() but never referenced
-  → No augmentation support
-  → See FEDERATED_EXPERIMENT_ROADMAP.md "Known Issues" section for full list
-  → Must refactor to use cv_split, config dict, get_model_factories before running
+Federated experiments (fed01-fed04, fed06 IMPLEMENTED)
+  → All 5 experiments have run() functions, wired into federated_helpers.py
+  → Splits: group-aware via cv_split/GroupShuffleSplit (single 80/20, by design for FLuID comparison)
+  → Models: RF hardcoded (deliberate — matches FLuID's published approach)
+  → Known issues from FEDERATED_EXPERIMENT_ROADMAP.md:
+    - S1: single split (no CI) — acceptable for federated simulation
+    - D1: fed01 lacks centralized KIRBy baseline
+    - D2: fed03 feature-space confound (FLuID 1 rep vs KIRBy 15+)
+    - D3: fed06 no FLuID vs KIRBy head-to-head for antibodies
+  → Datasets: herg, caco2, logd
+  → See FEDERATED_EXPERIMENT_ROADMAP.md for full design
 
 OPIG standalone experiments (6 scripts, NEED RECONSTRUCTION)
   → ALL 6 experiments deviate from original papers' methodology
