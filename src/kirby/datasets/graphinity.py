@@ -286,8 +286,8 @@ def load_graphinity_dataset(
         heavy_seq, light_seq = seqs
         info = mutations_info[i]
 
-        heavy_seqs.append(heavy_seq)
-        light_seqs.append(light_seq if light_seq else '')
+        heavy_seqs.append(heavy_seq if isinstance(heavy_seq, str) else '')
+        light_seqs.append(light_seq if isinstance(light_seq, str) else '')
         labels_list.append(row[ddg_col])
         pdb_ids.append(row['pdb'])
         mutations.append([{

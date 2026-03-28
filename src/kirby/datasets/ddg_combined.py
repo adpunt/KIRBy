@@ -919,8 +919,8 @@ def load_ddg_combined_dataset(
     all_pdb_ids = []
 
     for entry in entries_list:
-        all_heavy_seqs.append(entry['heavy_seq'])
-        all_light_seqs.append(entry['light_seq'])
+        all_heavy_seqs.append(entry['heavy_seq'] if isinstance(entry['heavy_seq'], str) else '')
+        all_light_seqs.append(entry['light_seq'] if isinstance(entry['light_seq'], str) else '')
         all_labels.append(entry['ddg'])
         all_mutations.append(entry['mutation_records'])
         all_pdb_ids.append(entry['pdb_id'])
