@@ -1,8 +1,154 @@
-# Pipeline Readiness TODO — BOM Section 10 Dataset-by-Dataset Review
+# Pipeline Readiness TODO
 
-**Purpose:** Track which datasets have been assessed for the pipeline readiness table. Each dataset needs a user-confirmed row with base reps and augmentation signal. This document is the single source of truth for what's been done and what remains.
+**Purpose:** Single operational document for the KIRBy experiment pipeline. Tracks dataset readiness, methodology status, blockers, and the path from preliminary runs to publication-quality results.
 
-**Last updated:** 2026-03-24
+**Last updated:** 2026-03-28
+
+---
+
+## Workflow Vision
+
+The pipeline follows a staged approach:
+
+1. **Preliminary runs:** Once F12/F13 results land and methodology is finalized, immediately run complexity/similarity/noise experiments on the 33 ready datasets. These are screening-level — they use the finalized allocation/evaluator defaults but are not the final paper results.
+
+2. **Incremental onboarding:** As new datasets get prepared (surveys completed, tier decisions made, DATASET_REPS populated), run them through the relevant experiments when they're ready. Complexity, similarity, and noise apply to all datasets. OPIG and federated experiments are specific to certain datasets only.
+
+3. **Refinement:** Modify experiments based on preliminary results. This is expected — experiments start in a preliminary running state, not a final one. Iterate on what's interesting.
+
+4. **Final runs:** When the picture is clear — which datasets tell the story, which experiments produce interesting results — trigger the selected experiments in full search mode on the selected datasets for publication-quality results.
+
+**The goal is seamless flow:** F12/F13 finalize → run experiments on ready datasets → onboard new datasets as their surveys land → refine → select → publish.
+
+---
+
+## Current Blockers
+
+### F12/F13 (framework experiments) — BLOCKS EVERYTHING
+
+F12 tests 31 allocation strategies × 2 importance × 3 evaluators × 4 budgets × 4 models = 2,976 configs/dataset across 6 datasets. F13 tests evaluator × model matching (600 configs/dataset). Results finalize SPEED_TIERS and allocation defaults. Currently running on ARC (`f12-speedup` branch). See `FRAMEWORK_EXPERIMENT_ROADMAP.md`.
+
+Until F12/F13 complete:
+- 26 experiments hardcode `allocation_method='greedy'` (the worst per F01). Full list in `EXPERIMENT_BUGS.md`.
+- SPEED_TIERS in `find_best_hybrid.py` use stale defaults.
+- All current experiment results are screening-level, not final.
+
+After F12/F13:
+1. Update allocation defaults in all 26 experiments
+2. Update internal evaluator
+3. Clear all caches on server (`~/.cache/kirby/hybrid_search/`, `~/.cache/kirby/create_hybrid_cache/`)
+4. Pull code on server (`git pull`)
+5. Begin preliminary runs on 33 ready datasets
+
+### FT experiments — stuck in HTC GPU queue (likely 1+ week)
+
+- Molecular FT fill (4 datasets: qm9, adme_hlm, adme_rlm, adme_mdr1): `submit_molecular_ft_fill.sh`
+- Antibody ESM-2 LoRA fill (29 datasets): `submit_antibody_ft_fill.sh`
+- Per-dataset FT swap decisions blocked until these land.
+- Don't wait on these for preliminary experiment runs — FT is an enhancement, not a requirement.
+
+### New dataset surveys — some likely timed out
+
+Need to check server status and re-submit failures. These block pipeline readiness for their respective datasets:
+- Reaction: buchwald_hartwig, suzuki, bh_doyle_plates
+- DTA: davis, kiba, bindingdb_kd (DTA has been "super buggy")
+- Nucleotide: 19 datasets — survey results on server (nucleotide_survey/, Mar 26-28), need pull + review. Some files ~7KB (possibly partial FM reps)
+- Graphinity DDG: foldx, rosetta, augmented
+- Ab DMS fill: adams (binding+expression), phillips_h3, koenig (binding+expression)
+- Ab CLF fill: tz_her2_multiclass, humanness_species
+
+### Cache warning
+
+Complexity and similarity experiments that ran previously used stale hybrid caches (pre-augmentation defaults: step_size=10, patience=3, augmentation_strategy='greedy_ablation'). Must clear caches after F12/F13 finalization before any new runs.
+
+---
+
+## Methodology Status
+
+| Component | Status | Blocked on |
+|-----------|--------|-----------|
+| Allocation strategy | Screening defaults; 26 experiments use greedy (worst) | F12 |
+| Internal evaluator | RF hardcoded; F07 showed Ridge wins on antibody | F12/F13 |
+| SPEED_TIERS | Stale | F12/F13 |
+| Augmentation defaults | **FINALIZED:** uncapped, step_size=5, patience=20 | — |
+| FT swap rules | **PARTIAL:** molecular 3/7 done, TCGA done, antibody pending | HTC queue |
+| Budget grid | **FINALIZED:** [10,25,50,100,200,500,1000,2000] screening | — |
+| Metrics | **FINALIZED:** domain-aware (RMSE/CI/AUROC/F1w/ρ/MCC) | — |
+| Classification support | **FINALIZED:** C02/C08/C09/C10/C11/N01/N07 fixed | — |
+| Augmentation passing | **FINALIZED:** C11/C16-C19, all similarity, all noise fixed | — |
+
+**FT decisions already locked (from `EXPERIMENT_DESIGN_DISCUSSION.md` §9):**
+- Molecular: lora_molformer, contrastive_molformer, graphmvp_ft → general base reps. Per-dataset swap only where FT beats frozen. herg keeps frozen molformer. All chemberta/selformer/freeze_head FT excluded.
+- TCGA: scfoundation_ft is FT-only (frozen dead). geneformer_ft general tier (frozen v2 fallback).
+- Antibody/DTA FT: pending HTC results.
+- Excluded everywhere: antiberty_ft (broken), all DTA protein LoRA (broken), chemberta/selformer FT (worse on all datasets).
+
+---
+
+## Experiment Categories
+
+5 categories. Complexity, similarity, and noise apply to **all** ready datasets. OPIG and federated are dataset-specific.
+
+| Category | Experiments | Datasets | Helpers | Roadmap |
+|----------|------------|----------|---------|---------|
+| Complexity | C01-C21 | All 33 ready | `complexity_helpers.py` | `EXPERIMENT_REFACTOR_ROADMAP.md` |
+| Similarity | S01-S13 | All 33 ready | `similarity_helpers.py` | `EXPERIMENT_REFACTOR_ROADMAP.md` |
+| Noise | N01-N13 all active | All 33 ready | `noise_helpers.py` | `NOISE_EXPERIMENT_ROADMAP.md` |
+| OPIG | 6 standalone scripts | Specific OPIG datasets | — | `OPIG_COLLAB_ROADMAP.md` |
+| Federated | fed01-fed03 active, fed04/fed06 planned | herg, caco2, logd | `federated_helpers.py` | `FEDERATED_EXPERIMENT_ROADMAP.md` |
+
+**Noise (N09-N13):** All implemented. N09 (LNL survey, 12 methods), N10 (hybrid neighborhood LNL), N11 (estimation × remediation grid), N12 (importance-weighted distance), N13 (alt noise distributions). New utility: `src/kirby/utils/lnl_methods.py` (12 training-loop LNL methods). See `NOISE_EXPERIMENT_ROADMAP.md`.
+
+**Federated (fed01-fed06):** Fed01 (noise heterogeneity), fed02 (rep diversity silos), fed03 (synthetic private datasets) are implemented. Fed04 (cluster-aware importance) and fed06 (antibody extension) still planned. Datasets: herg, caco2, logd. Also has `lhasa_herg_loader.py`. See `FEDERATED_EXPERIMENT_ROADMAP.md`.
+
+**Impact on per-dataset files:** None — the unified runner handles dispatch. Adding a new experiment to any category just requires registering it in the helpers file. Adding a new category requires 1 helpers file + 1 entry in `run_dataset.py`'s `CATEGORIES` dict.
+
+---
+
+## Per-Dataset Experiment Runner — DONE (2026-03-27)
+
+Replaced ~100 per-dataset boilerplate .py files with a single unified runner:
+
+```bash
+python tests/experiments/run_dataset.py complexity herg
+python tests/experiments/run_dataset.py noise herg --experiments n01 n02
+python tests/experiments/run_dataset.py similarity logd --output /custom/path
+python tests/experiments/run_dataset.py federated herg
+```
+
+**SLURM:** Unified into 2 scripts (was 6):
+```bash
+sbatch tests/slurm_scripts/submit_dataset.sh complexity herg
+sbatch tests/slurm_scripts/submit_dataset.sh noise herg "n01 n02"
+bash tests/slurm_scripts/submit_all_datasets.sh complexity              # all 33
+bash tests/slurm_scripts/submit_all_datasets.sh noise --domain molecular # 7
+bash tests/slurm_scripts/submit_all_datasets.sh federated               # herg only
+```
+
+Override SLURM resources at sbatch time: `sbatch --time=96:00:00 --mem=128G submit_dataset.sh federated herg`
+
+**To add a new dataset:** Add to `DATASET_REPS` in `complexity_helpers.py` + add to domain list in `submit_all_datasets.sh`. 0 new files.
+
+**To add a new experiment:** Create the .py file + register in the category's helpers `module_map`/`name_map` + uncomment in `SINGLE_DATASET_EXPERIMENTS`. 0 other changes.
+
+**To add a new category:** Create `{category}_helpers.py` with `run_all()` + `SINGLE_DATASET_EXPERIMENTS` + add 1 entry to `CATEGORIES` in `run_dataset.py` + add prefix in `submit_all_datasets.sh`.
+
+---
+
+## New Dataset Pipeline
+
+When a dataset becomes ready (survey results land from server), follow this checklist:
+
+1. **Pull results:** rsync survey JSON from server to `tests/results/`
+2. **Review data:** Show ALL standalone results sorted by primary metric, all augmentation tests, all supplementary data (FT, forward compat, graph survey, comparisons)
+3. **Decide tiers:** User decides top tier, general, augmentation rep cutoffs and viability
+4. **Update DATASET_REPS:** Add entry in `complexity_helpers.py` with `general` + `augmentation` + `top_tier` rep lists
+5. **Add to submit lists:** Add dataset name to the appropriate domain list in `submit_all_datasets.sh`
+6. **Submit preliminary runs:** `sbatch submit_dataset.sh complexity {dataset_name}` (repeat for similarity, noise)
+7. **Record here:** Update this document with tier tables and mark DONE
+
+For OPIG-specific datasets: also check `OPIG_COLLAB_ROADMAP.md` for relevant standalone experiments.
+For federated-eligible datasets: also add to federated experiment list per `FEDERATED_EXPERIMENT_ROADMAP.md`.
 
 ---
 
@@ -89,6 +235,7 @@
 | Top Tier (8) | graph_kernel, mol2vec, mhg_gnn, ecfp4, pdv, grover, avalon, mordred |
 | General (15) | graph_kernel, mol2vec, mhg_gnn, ecfp4, pdv, grover, avalon, mordred, top_torsion, smited, atom_pair, molformer, lora_molformer**, contrastive_molformer**, graphmvp_ft** |
 | Augmentation (2) | maccs, pharmacophore3d |
+| Augmentation (pending survey) | usrcat, coulomb_matrix, usr |
 
 **herg (1,412 samples):**
 | Tier | Reps |
@@ -135,6 +282,7 @@
 | Top Tier (5) | mordred, pdv, mhg_gnn, avalon, grover |
 | General (16) | mordred, pdv, mhg_gnn, avalon, grover, smited, molformer, atom_pair, graph_kernel, maccs, chemberta, ecfp4, chembert, selformer, top_torsion, rdkfp |
 | Augmentation (2) | pharmacophore3d, maccs |
+| Augmentation (pending survey) | usrcat, coulomb_matrix, usr |
 
 ### Molecular Domain-Level Decisions
 
@@ -151,11 +299,10 @@
 
 **Augmentation (apply to all molecular datasets):**
 - pharmacophore3d and maccs are domain-wide augmentation reps for all molecular datasets. pharmacophore3d is the most consistent augment rep tested (13/15 improve in graph survey, positive on 5/6 phase5 datasets). maccs shows small but reliable signal everywhere (6/7 datasets).
-- usrcat, coulomb_matrix, usr: inconsistent across datasets. Need further testing before domain-wide inclusion.
+- usrcat, coulomb_matrix, usr: now added to all molecular datasets (caco2 and adme_mdr1 were missing, fixed 2026-03-28).
 
 **ACTION items:**
-- Run E2E SchNet on logd, herg, caco2 to determine if it generalizes beyond qm9 (currently confirmed top tier on qm9 only, R²=0.95).
-- Run usrcat, coulomb_matrix, usr augmentation tests on remaining molecular datasets (adme_hlm, adme_rlm, adme_mdr1, adme_solubility) to resolve inconsistency. Small test — just these 3 reps as augments on the top base rep per dataset.
+- Run E2E SchNet on logd, herg, caco2 to determine if it generalizes beyond qm9. torch-cluster CUDA bug fixed (2026-03-28) — was producing NaN on all 3D methods due to CPU-only torch-cluster on GPU. Fallback radius graph now used automatically.
 
 ### TCGA Domain-Level Decisions
 
@@ -547,38 +694,37 @@ Old Sections 10B/10C/12D/12E have writeups. Need new-format review.
 
 | # | Dataset | Samples | Reps | Metric | Status |
 |---|---------|---------|------|--------|--------|
-| 56 | gb_human_nontata_promoters | 36,131 | 3 | MCC | TODO |
-| 57 | nt_enhancers | — | 3-6 | MCC | TODO |
-| 58 | nt_enhancers_types | — | 3-6 | MCC | TODO |
-| 59 | nt_H2AFZ | — | 3-6 | MCC | TODO |
-| 60 | nt_H3K27ac | — | 3-6 | MCC | TODO |
-| 61 | nt_H3K27me3 | — | 3-6 | MCC | TODO |
-| 62 | nt_H3K36me3 | — | 3-6 | MCC | TODO |
-| 63 | nt_H3K4me1 | — | 3-6 | MCC | TODO |
-| 64 | nt_H3K4me2 | — | 3-6 | MCC | TODO |
-| 65 | nt_H3K4me3 | — | 3-6 | MCC | TODO |
-| 66 | nt_H3K9ac | — | 3-6 | MCC | TODO |
-| 67 | nt_H3K9me3 | — | 3-6 | MCC | TODO |
-| 68 | nt_H4K20me1 | — | 3-6 | MCC | TODO |
-| 69 | nt_promoter_all | — | 6 | MCC | TODO |
-| 70 | nt_promoter_no_tata | — | 6 | MCC | TODO |
-| 71 | nt_promoter_tata | — | 6 | MCC | TODO |
-| 72 | nt_splice_sites_acceptors | — | 3 | MCC | TODO |
-| 73 | nt_splice_sites_all | — | 3 | MCC | TODO |
-| 74 | nt_splice_sites_donors | — | 3 | MCC | TODO |
+| 56 | gb_human_nontata_promoters | 36,131 | 3 | MCC | Survey on server (nucleotide_survey/), needs pull + review |
+| 57 | nt_enhancers | — | 3-6 | MCC | Survey on server, needs pull + review |
+| 58 | nt_enhancers_types | — | 3-6 | MCC | Survey on server, needs pull + review |
+| 59 | nt_H2AFZ | — | 3-6 | MCC | Survey on server, needs pull + review |
+| 60 | nt_H3K27ac | — | 3-6 | MCC | Survey on server, needs pull + review |
+| 61 | nt_H3K27me3 | — | 3-6 | MCC | Survey on server, needs pull + review |
+| 62 | nt_H3K36me3 | — | 3-6 | MCC | Survey on server, needs pull + review |
+| 63 | nt_H3K4me1 | — | 3-6 | MCC | Survey on server, needs pull + review |
+| 64 | nt_H3K4me2 | — | 3-6 | MCC | Survey on server, needs pull + review |
+| 65 | nt_H3K4me3 | — | 3-6 | MCC | Survey on server, needs pull + review |
+| 66 | nt_H3K9ac | — | 3-6 | MCC | Survey on server, needs pull + review |
+| 67 | nt_H3K9me3 | — | 3-6 | MCC | Survey on server, needs pull + review |
+| 68 | nt_H4K20me1 | — | 3-6 | MCC | Survey on server, needs pull + review |
+| 69 | nt_promoter_all | — | 6 | MCC | Survey on server, needs pull + review |
+| 70 | nt_promoter_no_tata | — | 6 | MCC | Survey on server, needs pull + review |
+| 71 | nt_promoter_tata | — | 6 | MCC | Survey on server, needs pull + review |
+| 72 | nt_splice_sites_acceptors | — | 3 | MCC | Survey on server, needs pull + review |
+| 73 | nt_splice_sites_all | — | 3 | MCC | Survey on server, needs pull + review |
+| 74 | nt_splice_sites_donors | — | 3 | MCC | Survey on server, needs pull + review |
 
-**Note:** Only classical reps (kmer4, kmer6, tetranuc_freq, etc.). No LM reps. Very few reps per dataset.
+**Reps implemented (26 total):** 14 foundation models + 11 classical + 1 factory. Code: `src/kirby/representations/nucleotide.py`. SLURM: `submit_nucleotide_survey.sh`.
 
-**BLOCKED: DNA foundation model reps needed before pipeline readiness can be assessed.** Current reps are all nucleotide composition variants (kmer4 ≈ kmer6 ≈ tetranuc_freq) — no information diversity to hybridize. Need:
-- DNABERT-2 (was requested but never implemented)
-- Nucleotide Transformer (InstaDeep)
-- Hyena-DNA, Caduceus, or other genomic FMs from the genomics domain plan
+**Rep counts above (3-6) reflect what was surveyed BEFORE FM reps were added.** 19 survey results now on server (`tests/results/nucleotide_survey/`, Mar 26-28). Need to pull, check how many reps each file contains, then review individually.
 
-Without LM reps, this domain has no meaningful tier structure — the top 3 reps encode the same information at different resolutions. Pipeline readiness decisions deferred until FM reps are added.
+**Server file sizes suggest two groups:**
+- ~20KB files (nt_H3K9me3, nt_H3K9ac, nt_H3K4me3, nt_H3K4me2, nt_H4K20me1, nt_H3K27ac, nt_enhancers, nt_promoter_no_tata, nt_promoter_tata, nt_promoter_all): likely full FM rep set
+- ~7KB files (gb_human_nontata_promoters, nt_H3K4me1, nt_H3K36me3, nt_H3K27me3, nt_H2AFZ, nt_splice_sites_donors, nt_splice_sites_acceptors, nt_splice_sites_all, nt_enhancers_types): likely partial — some FM reps may have failed or timed out
 
-**Preliminary decisions (apply when FM reps arrive):**
+**Preliminary decisions (from earlier classical-only results):**
 - DROP nt_splice_sites_all (MCC=0.245) and nt_H3K9me3 (MCC=0.239) — near random
-- kmer4, kmer6, tetranuc_freq will be general-tier classical baselines alongside whatever FM reps are added
+- kmer4, kmer6, tetranuc_freq will be general-tier classical baselines
 - dinuc_freq, gc_content are lower-tier classical; complexity is augmentation-only
 
 ---
@@ -608,7 +754,7 @@ Without LM reps, this domain has no meaningful tier structure — the top 3 reps
 | TCGA | 3 | 2 | 0 | 0 | 0 | 1 (survival) |
 | Reaction | 3 | 0 | 0 | 3 (reps wired, need survey run) | 0 | 0 |
 | DTA | 3 | 0 | 0 | 3 (partial data) | 0 | 0 |
-| Nucleotide | 19 | 0 | 0 | 0 | 17 (need DNA FM reps) | 2 (splice_all, H3K9me3) |
+| Nucleotide | 19 | 0 | 0 | 0 | 17 (survey on server, needs pull + review) | 2 (splice_all, H3K9me3) |
 | Graphinity DDG | 3 | 0 | 0 | 0 | 3 | 0 |
 | **TOTAL** | **77** | **33** | **0** | **0** | **32** | **12** |
 
@@ -628,34 +774,126 @@ These sections have older-format writeups that were done before this dataset-by-
 
 ---
 
-## Action Items (accumulated during pipeline readiness review)
+## Action Items
 
-### New experiments needed
+### IMMEDIATE — When F12/F13 results land
 
-1. **E2E SchNet on more molecular datasets** — currently qm9 only (R²=0.95). Run on logd, herg, caco2 to determine if it generalizes beyond quantum properties. If yes, domain-wide top tier.
-2. **Augmentation per-dataset assignment (usrcat, coulomb_matrix, usr)** — these are dataset-specific, not domain-wide. Need to test which ones help on which datasets. Small test: run these 3 as augments on the top base rep for each molecular dataset that doesn't already have augmentation data for them.
-3. **DNA foundation model reps** — DNABERT-2 was requested but never implemented. Blocks all 17 nucleotide datasets. Also consider: Nucleotide Transformer (InstaDeep), Hyena-DNA, Caduceus. Without these, nucleotide domain has no information diversity.
+1. **Analyze F12/F13 results** — determine winning (allocation × evaluator × importance) triple
+2. **Update 26 experiments** that hardcode `allocation_method='greedy'` (list in `EXPERIMENT_BUGS.md`: C08, C09, C10, C11, C16-C19, S11, S13, N01-N08)
+3. **Rebuild SPEED_TIERS** in `find_best_hybrid.py` based on F12 results
+4. **Clear hybrid caches on server** — `rm -rf ~/.cache/kirby/hybrid_search/ ~/.cache/kirby/create_hybrid_cache/`
+5. **Pull code on server** — `git pull` to get all fixes (classification metrics, augmentation passing, mutation reps, etc.)
+6. **Run preliminary experiments** on all 33 ready datasets — complexity, similarity, noise
 
-### FT fill runs needed
+### NEXT — New datasets (check server, re-submit failures)
 
-10. **Molecular FT fill** — lora_molformer, contrastive_molformer, graphmvp_ft on qm9, adme_hlm, adme_rlm, adme_mdr1. Script: `submit_molecular_ft_fill.sh`. Per-dataset swap decisions pending these results.
-11. **Antibody ESM-2 LoRA fill** — esm2_lora on ALL active antibody datasets (29 datasets: 11 inter-family + 10 DMS + 2 CLF + 6 Ginkgo). Script: `submit_antibody_ft_fill.sh`. Per-dataset include/exclude decisions pending results.
+7. **Check server for timed-out/completed jobs** — some of these have been sitting for days and may have timed out. Check status, pull what's done, re-submit what failed:
+   - Reaction: buchwald_hartwig, suzuki, bh_doyle_plates
+   - DTA: davis, kiba, bindingdb_kd (DTA has been buggy)
+   - Nucleotide: 22 datasets (first-ever run)
+   - Graphinity DDG: foldx, rosetta, augmented
+   - Ab DMS fill: adams (binding+expression), phillips_h3, koenig (binding+expression)
+   - Ab CLF fill: tz_her2_multiclass, humanness_species
+8. **As results land** — follow the New Dataset Pipeline checklist (above) for each: review → decide tiers → update DATASET_REPS → add to submit lists → run experiments
+9. **Track what's scattered** — new rep caches, survey results, and augmentation data are spread across multiple server result directories. Consolidate when pulling.
 
-### Implementation gaps
+### BLOCKED — FT experiments (HTC queue, ~1 week)
 
-4. **DNABERT-2 rep implementation** — add to `src/kirby/representations/` and wire into nucleotide survey dispatch. This fell through the cracks during vibe coding.
-5. ~~**Expand reaction rep set**~~ **DONE** — mordred, mhg_gnn, grover, mol2vec, chemberta, molformer, avalon, pharmacophore3d × {reactant_, product_, diff_} = 24 new reps wired into `_load_reaction()` via generic `create_reaction_rep_variant()` factory. Binary reps (avalon) use OR-combine for multi-reactant aggregation; continuous reps use mean-pool. Total reaction reps: 14 original + 24 = 38.
+10. **Molecular FT fill** — lora_molformer, contrastive_molformer, graphmvp_ft on qm9, adme_hlm, adme_rlm, adme_mdr1. Script: `submit_molecular_ft_fill.sh`.
+11. **Antibody ESM-2 LoRA fill** — esm2_lora on 29 active antibody datasets. Script: `submit_antibody_ft_fill.sh`.
+12. **When FT results land:** update per-dataset tier tables (swap frozen→FT only where FT wins), then implement compute-once .npy saving + flag toggle.
 
-### Waiting for server results (rsync when complete)
+### IMPLEMENTATION — New experiment categories
 
-6. **DTA** (jobs 7331383-87) — davis, kiba, bindingdb_kd. 5 jobs pending. Full DTA rep set already wired.
-7. **Graphinity DDG** (jobs 7331380-82) — foldx, rosetta, augmented. 3 jobs pending. Zero results currently.
-8. **Ab DMS fill** (jobs 7331342-46) — adams (binding+expression), phillips_h3, koenig (binding+expression). Filling from 4-23 reps to 42.
-9. **Ab CLF fill** (jobs 7343797-98) — tz_her2_multiclass (1→42 reps), humanness_species (just submitted).
+13. ~~**Noise N13 (alt noise distributions)**~~ **DONE** (2026-03-28) — N09-N13 all implemented. 5 new experiments + `lnl_methods.py` (12 LNL methods). See `NOISE_EXPERIMENT_ROADMAP.md`.
+14. **Federated fed04 + fed06** — fed01-fed03 are implemented. Fed04 (cluster-aware importance) and fed06 (antibody extension, deprioritized) still planned. See `FEDERATED_EXPERIMENT_ROADMAP.md`.
+
+### IMPLEMENTATION — Experiment infrastructure
+
+16. ~~**Implement per-dataset file redesign**~~ **DONE** (2026-03-27) — replaced ~100 boilerplate .py files + 6 SLURM scripts with `run_dataset.py` + `submit_dataset.sh` + `submit_all_datasets.sh`. N10-N13 and fed02-fed06 pre-registered in helpers.
+17. **S01-S09 classification metrics** — lower priority, but S04/S05/S06 compute R² on predictions which is wrong for classification datasets. See `EXPERIMENT_BUGS.md` Tier 2 similarity.
+
+### EXPERIMENTS — Supplementary runs needed
+
+18. **E2E SchNet on more molecular datasets** — currently qm9 only (R²=0.95). Run on logd, herg, caco2 to determine if it generalizes beyond quantum properties. torch-cluster CUDA bug FIXED (2026-03-28).
+19. **Augmentation per-dataset assignment (usrcat, coulomb_matrix, usr)** — added to caco2 and adme_mdr1 DATASET_REPS for survey testing. Tier assignment pending survey results.
+20. ~~**DNA foundation model rep implementation**~~ **DONE** — 14 FM reps implemented in `src/kirby/representations/nucleotide.py`. Survey results on server at `tests/results/nucleotide_survey/`.
+21. **Nucleotide tier review** — pull survey results, review all 22 datasets with FM reps, decide tiers. Implementation done, pipeline readiness pending review.
 
 ### Decisions already locked
 
 - **Molecular FT:** lora_molformer, contrastive_molformer, graphmvp_ft → general base reps. Per-dataset: swap frozen→FT only where FT beats frozen. herg keeps frozen molformer. All other FT variants (chemberta, selformer, freeze_head) excluded.
-- **Molecular augmentation:** pharmacophore3d and maccs → domain-wide augmentation for all molecular datasets.
+- **Molecular augmentation (confirmed):** pharmacophore3d, maccs → domain-wide. usrcat, coulomb_matrix, usr added to DATASET_REPS for survey testing on caco2/adme_mdr1 — not yet confirmed.
 - **Molecular drops:** adme_solubility (R²=0.32 ceiling), unimol_v2 (dead everywhere).
 - **Nucleotide drops:** nt_splice_sites_all (MCC=0.245), nt_H3K9me3 (MCC=0.239).
+- **Augmentation defaults:** uncapped, step_size=5, patience=20. Per-experiment overrides in `EXPERIMENT_BUGS.md`.
+- **Budgets:** [10,25,50,100,200,500,1000,2000] screening; [10,25,50,100,200,300,500,750,1000,1500,2000] full.
+- **Two-stage search:** ABANDONED (F04 showed worse on 9/10 datasets).
+- **Stability selection:** ABANDONED (F01/F11).
+- ~~**Expand reaction rep set**~~ **DONE** — 14 original + 24 molecular variants = 38 total reaction reps.
+
+---
+
+## Dependency Chain
+
+```
+F12/F13 (ARC, running)
+  → Finalize SPEED_TIERS + allocation defaults
+  → Update 26 experiments
+  → Clear caches
+  → PRELIMINARY RUNS on 33 ready datasets (complexity/similarity/noise)
+
+FT fill (HTC, queued ~1 week)
+  → Molecular FT swap decisions (4 datasets)
+  → Antibody FT swap decisions (29 datasets)
+  → (Does NOT block preliminary runs — FT is enhancement)
+
+New dataset surveys (HTC, check status)
+  → Pipeline readiness decisions per dataset
+  → Add to DATASET_REPS + submit lists
+  → Run experiments when ready
+
+Noise extensions (N09-N13 ALL DONE)
+  → N09-N13 deploy alongside N01-N08 on same 33 datasets
+  → New utility: lnl_methods.py (12 training-loop LNL methods)
+
+Federated experiments (fed01-fed04, fed06 written, NEED REWORK)
+  → All 5 experiments bypass KIRBy's config system (hardcoded models, budgets, allocations)
+  → All use single 80/20 ShuffleSplit (should use cv_split with scaffold groups)
+  → Config dict passed to run() but never referenced
+  → No augmentation support
+  → See FEDERATED_EXPERIMENT_ROADMAP.md "Known Issues" section for full list
+  → Must refactor to use cv_split, config dict, get_model_factories before running
+
+OPIG standalone experiments (6 scripts, NEED RECONSTRUCTION)
+  → ALL 6 experiments deviate from original papers' methodology
+  → Audit completed 2026-03-28: see OPIG_EXPERIMENT_AUDIT.md
+  → Key issues per experiment:
+    - Trastuzumab: paper did zero-shot library design, KIRBy does supervised classification (different task)
+    - Graphinity: paper uses CDR identity cutoff analysis, KIRBy only groups by PDB (weaker)
+    - CDR flexibility: paper trains on 73K general loops, KIRBy only uses tiny CDR test sets
+    - Ginkgo: missing Top-10% recall metric (benchmark's secondary metric)
+    - Activity cliff: missing half-AC exclusion, MMP partition analysis, MLP/KNN/GIN models
+    - Humanness: audit against original repo NOT YET DONE
+  → Cross-cutting: all 6 hardcode Ridge+RF instead of using config; all reimplement eval loops
+  → Data loaders are CLEAN (verified against original repos)
+  → MUST reconstruct before running
+```
+
+---
+
+## Reference: Other Documentation
+
+These documents are separate and maintained independently. Referenced here for navigation:
+
+| Document | What it covers | When to consult |
+|----------|---------------|-----------------|
+| `EXPERIMENT_DESIGN_DISCUSSION.md` | Closed design issues, F12/F13 design, FT results tables, server job history | Historical decisions and methodology rationale |
+| `EXPERIMENT_REFACTOR_ROADMAP.md` | Experiment → thesis chapter mapping, 4-step workflow, full inventory | Understanding what each C/S/N experiment tests |
+| `EXPERIMENT_BUGS.md` | Tier-based bug tracker, greedy allocation list, hybrid usage audit | Before updating experiments after F12/F13 |
+| `FRAMEWORK_EXPERIMENT_ROADMAP.md` | F00-F13 design and results | F12/F13 analysis |
+| `NOISE_EXPERIMENT_ROADMAP.md` | N09-N13 design, LNL survey, noise estimation work | Implementing noise extensions |
+| `FEDERATED_EXPERIMENT_ROADMAP.md` | fed01-fed06 design, FLuID integration | Implementing federated experiments |
+| `OPIG_COLLAB_ROADMAP.md` | 11 OPIG lab publication items | OPIG-specific dataset decisions |
+| `BILL_OF_MATERIALS.md` | Comprehensive rep/dataset inventory, baseline results | Looking up what reps exist and their dimensions |
+| `EXPERIMENT_OVERVIEW.md` | Reference for datasets, prediction tasks, representations | Quick lookup |
