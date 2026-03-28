@@ -234,8 +234,7 @@ For federated-eligible datasets: also add to federated experiment list per `FEDE
 |------|------|
 | Top Tier (8) | graph_kernel, mol2vec, mhg_gnn, ecfp4, pdv, grover, avalon, mordred |
 | General (15) | graph_kernel, mol2vec, mhg_gnn, ecfp4, pdv, grover, avalon, mordred, top_torsion, smited, atom_pair, molformer, lora_molformer**, contrastive_molformer**, graphmvp_ft** |
-| Augmentation (2) | maccs, pharmacophore3d |
-| Augmentation (pending survey) | usrcat, coulomb_matrix, usr |
+| Augmentation (5) | maccs, pharmacophore3d, usrcat, coulomb_matrix, usr |
 
 **herg (1,412 samples):**
 | Tier | Reps |
@@ -281,8 +280,7 @@ For federated-eligible datasets: also add to federated experiment list per `FEDE
 |------|------|
 | Top Tier (5) | mordred, pdv, mhg_gnn, avalon, grover |
 | General (16) | mordred, pdv, mhg_gnn, avalon, grover, smited, molformer, atom_pair, graph_kernel, maccs, chemberta, ecfp4, chembert, selformer, top_torsion, rdkfp |
-| Augmentation (2) | pharmacophore3d, maccs |
-| Augmentation (pending survey) | usrcat, coulomb_matrix, usr |
+| Augmentation (3) | pharmacophore3d, maccs, coulomb_matrix |
 
 ### Molecular Domain-Level Decisions
 
@@ -780,9 +778,9 @@ Old Sections 10B/10C/12D/12E have writeups. Need new-format review.
 |---|---------|---------|------|------|--------|
 | — | ddg_combined | 429 | 34 | 4 | Listed above (#21) in antibody inter-family |
 | — | ddg_combined_full | 1,536 | 30 | 8 | Listed above (#22) |
-| 75 | graphinity_foldx | — | 0 | 0 | BLOCKED — no results, jobs pending |
-| 76 | graphinity_rosetta | — | 0 | 0 | BLOCKED — no results, jobs pending |
-| 77 | graphinity_augmented | — | 0 | 0 | BLOCKED — no results, jobs pending |
+| 75 | graphinity_foldx | ~50K | 0 | 0 | BLOCKED — bus error (OOM), resubmitting with 370G |
+| 76 | graphinity_rosetta | ~21K | 29 | 0 | DROPPED — all R² negative, best ρ=0.079 |
+| 77 | graphinity_augmented | ~50K | 0 | 0 | BLOCKED — bus error (OOM) + NaN light_seq fix, resubmitting with 370G |
 
 ---
 
@@ -800,8 +798,8 @@ Old Sections 10B/10C/12D/12E have writeups. Need new-format review.
 | Reaction | 3 | 2 | 0 | 0 | 0 | 1 (suzuki) |
 | DTA | 3 | 0 | 0 | 3 (partial data) | 0 | 0 |
 | Nucleotide | 19 | 0 | 0 | 0 | 17 (survey on server, needs pull + review) | 2 (splice_all, H3K9me3) |
-| Graphinity DDG | 3 | 0 | 0 | 0 | 3 | 0 |
-| **TOTAL** | **77** | **40** | **0** | **0** | **24** | **13** |
+| Graphinity DDG | 3 | 0 | 0 | 0 | 2 (foldx, augmented — OOM, resubmitting) | 1 (rosetta) |
+| **TOTAL** | **77** | **40** | **0** | **0** | **23** | **14** |
 
 ---
 
@@ -860,15 +858,15 @@ These sections have older-format writeups that were done before this dataset-by-
 
 ### EXPERIMENTS — Supplementary runs needed
 
-18. **E2E SchNet on more molecular datasets** — currently qm9 only (R²=0.95). Run on logd, herg, caco2 to determine if it generalizes beyond quantum properties. torch-cluster CUDA bug FIXED (2026-03-28).
-19. **Augmentation per-dataset assignment (usrcat, coulomb_matrix, usr)** — added to caco2 and adme_mdr1 DATASET_REPS for survey testing. Tier assignment pending survey results.
+18. **E2E SchNet on more molecular datasets** — ft_schnet already wired in `make_ft_factories` (line 632-641 of run_baseline_survey.py). Previous HTC runs failed due to torch-cluster bug (now fixed). Resubmitting herg, caco2, logd on HTC with `--finetune`. Output: `tests/results/schnet_e2e/`.
+19. ~~**Augmentation per-dataset assignment (usrcat, coulomb_matrix, usr)**~~ **DONE** (2026-03-28) — Results from `molecular_aug_fill/`: caco2 all 3 positive (usrcat +0.021, usr +0.020, coulomb +0.015), adme_mdr1 coulomb_matrix +0.092, logd/qm9 flat or negative. DATASET_REPS already had correct assignments.
 20. ~~**DNA foundation model rep implementation**~~ **DONE** — 14 FM reps implemented in `src/kirby/representations/nucleotide.py`. Survey results on server at `tests/results/nucleotide_survey/`.
 21. **Nucleotide tier review** — pull survey results, review all 22 datasets with FM reps, decide tiers. Implementation done, pipeline readiness pending review.
 
 ### Decisions already locked
 
 - **Molecular FT:** lora_molformer, contrastive_molformer, graphmvp_ft → general base reps. Per-dataset: swap frozen→FT only where FT beats frozen. herg keeps frozen molformer. All other FT variants (chemberta, selformer, freeze_head) excluded.
-- **Molecular augmentation (confirmed):** pharmacophore3d, maccs → domain-wide. usrcat, coulomb_matrix, usr added to DATASET_REPS for survey testing on caco2/adme_mdr1 — not yet confirmed.
+- **Molecular augmentation (confirmed):** pharmacophore3d, maccs → domain-wide. usrcat, coulomb_matrix, usr → dataset-specific: caco2 (all 3), adme_mdr1 (coulomb_matrix only +0.092), herg (all 3 from original survey). logd/qm9 don't benefit.
 - **Molecular drops:** adme_solubility (R²=0.32 ceiling), unimol_v2 (dead everywhere).
 - **Nucleotide drops:** nt_splice_sites_all (MCC=0.245), nt_H3K9me3 (MCC=0.239).
 - **Augmentation defaults:** uncapped, step_size=5, patience=20. Per-experiment overrides in `EXPERIMENT_BUGS.md`.
@@ -940,5 +938,6 @@ These documents are separate and maintained independently. Referenced here for n
 | `NOISE_EXPERIMENT_ROADMAP.md` | N09-N13 design, LNL survey, noise estimation work | Implementing noise extensions |
 | `FEDERATED_EXPERIMENT_ROADMAP.md` | fed01-fed06 design, FLuID integration | Implementing federated experiments |
 | `OPIG_COLLAB_ROADMAP.md` | 11 OPIG lab publication items | OPIG-specific dataset decisions |
+| `OPIG_EXPERIMENT_AUDIT.md` | 6/6 OPIG experiments audited against original GitHub repos | **Before running or modifying any OPIG experiment** |
 | `BILL_OF_MATERIALS.md` | Comprehensive rep/dataset inventory, baseline results | Looking up what reps exist and their dimensions |
 | `EXPERIMENT_OVERVIEW.md` | Reference for datasets, prediction tasks, representations | Quick lookup |

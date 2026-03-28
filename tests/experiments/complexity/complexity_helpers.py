@@ -205,7 +205,7 @@ DATASET_REPS = {
             'mordred', 'pdv', 'mhg_gnn', 'avalon', 'grover', 'smited',
             'molformer', 'atom_pair', 'graph_kernel', 'maccs', 'chemberta',
             'ecfp4', 'chembert', 'selformer', 'top_torsion', 'rdkfp'],
-        'augmentation': ['pharmacophore3d', 'maccs', 'usrcat', 'coulomb_matrix', 'usr'],
+        'augmentation': ['pharmacophore3d', 'maccs', 'coulomb_matrix'],
         'top_tier': ['mordred', 'pdv', 'mhg_gnn', 'avalon', 'grover'],
     },
 
