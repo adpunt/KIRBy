@@ -38,24 +38,26 @@ After F12/F13:
 2. Update internal evaluator
 3. Clear all caches on server (`~/.cache/kirby/hybrid_search/`, `~/.cache/kirby/create_hybrid_cache/`)
 4. Pull code on server (`git pull`)
-5. Begin preliminary runs on 33 ready datasets
+5. Begin preliminary runs on 40 ready datasets
 
-### FT experiments — stuck in HTC GPU queue (likely 1+ week)
+### FT experiments — HTC, resubmitting (2026-03-28)
 
-- Molecular FT fill (4 datasets: qm9, adme_hlm, adme_rlm, adme_mdr1): `submit_molecular_ft_fill.sh`
-- Antibody ESM-2 LoRA fill (29 datasets): `submit_antibody_ft_fill.sh`
+All HTC FT jobs failed due to inline `pip install` corrupting torch. Fixed by removing pip install from SLURM scripts (deps already in venv). Resubmitting:
+- Molecular FT fill (4 datasets: qm9, adme_hlm, adme_rlm, adme_mdr1): `submit_molecular_ft_fill.sh` on HTC
+- Antibody ESM-2 LoRA fill (20 failed / 11 completed): `submit_antibody_ft_fill.sh` on HTC. Completed: tresanco, thermo_jain, aggregation_jain, polyreact_bvp, pk_fcrnrt, ddg_combined, binding_adams, expression_adams, abagym_EGFR/lysozyme/VEGF. Results in `tests/results/antibody_ft_fill/`.
+- E2E SchNet (3 datasets: herg, caco2, logd): `run_baseline_survey.py --finetune` on HTC. ft_schnet already wired in make_ft_factories. Previous runs failed due to torch-cluster bug (fixed 2026-03-28). logd needs 256G (bus error at 128G).
 - Per-dataset FT swap decisions blocked until these land.
 - Don't wait on these for preliminary experiment runs — FT is an enhancement, not a requirement.
 
-### New dataset surveys — some likely timed out
+### New dataset surveys — status as of 2026-03-28
 
-Need to check server status and re-submit failures. These block pipeline readiness for their respective datasets:
-- Reaction: buchwald_hartwig, suzuki, bh_doyle_plates
-- DTA: davis, kiba, bindingdb_kd (DTA has been "super buggy")
-- Nucleotide: 19 datasets — survey results on server (nucleotide_survey/, Mar 26-28), need pull + review. Some files ~7KB (possibly partial FM reps)
-- Graphinity DDG: foldx, rosetta, augmented
-- Ab DMS fill: adams (binding+expression), phillips_h3, koenig (binding+expression)
-- Ab CLF fill: tz_her2_multiclass, humanness_species
+- ~~Reaction: buchwald_hartwig, suzuki, bh_doyle_plates~~ **DONE** — buchwald_hartwig + bh_doyle_plates reviewed and added to experiments. suzuki DROPPED (R²=0.453, 1 viable rep).
+- ~~Ab DMS fill: adams (binding+expression), phillips_h3, koenig (binding+expression)~~ **DONE** — all 5 reviewed and added to experiments.
+- DTA: davis (OOM, resubmitting 370G on ARC), kiba (bug fixed, resubmitting on ARC), bindingdb_kd (timeout, resubmitting on ARC)
+- Nucleotide: 19 datasets — previous surveys had classical reps only (6 reps, default preset was 'fast'). Fixed default to 'all' (26 reps). Resubmitted on ARC (short partition, no GPU). Output: `tests/results/nucleotide_survey/`.
+- Graphinity DDG: foldx + augmented resubmitting on ARC (370G, NaN light_seq fix). rosetta DROPPED (all R² negative, best ρ=0.079).
+- Ab CLF: tz_her2_multiclass (timeout, resubmitting medium 48h 256G on HTC), humanness_species (OOM on SaProt, resubmitting medium 48h 256G on HTC), tz_her2_binary (FAILED exit 1, needs diagnosis)
+- ~~Molecular aug fill~~ **DONE** — caco2, logd, qm9, adme_mdr1 all completed. Confirmed existing augmentation assignments.
 
 ### Cache warning
 
@@ -228,6 +230,15 @@ For federated-eligible datasets: also add to federated experiment list per `FEDE
 | 31 | abagym_HER2 | AbAgym | 146 | DONE | Section 10 (new format) |
 | 32 | abagym_lysozyme | AbAgym | 627 | DONE | Section 10 (new format) |
 | 33 | abagym_VEGF | AbAgym | 418 | DONE | Section 10 (new format) |
+| 23 | flab_binding_koenig | Ab DMS | 4,275 | DONE | Section 10 (new format) |
+| 24 | flab_expression_koenig | Ab DMS | 4,275 | DONE | Section 10 (new format) |
+| 25 | flab_binding_adams | Ab DMS | 5,000 | DONE | Section 10 (new format) |
+| 26 | flab_expression_adams | Ab DMS | 5,000 | DONE | Section 10 (new format) |
+| 27 | flab_binding_phillips_h3 | Ab DMS | 5,000 | DONE | Section 10 (new format) |
+| 50 | buchwald_hartwig | Reaction | 3,955 | DONE | Section 10 (new format) |
+| 52 | bh_doyle_plates | Reaction | 4,312 | DONE | Section 10 (new format) |
+| 51 | suzuki | Reaction | 5,760 | DROPPED | R²=0.453 ceiling, 1 viable rep |
+| 76 | graphinity_rosetta | Graphinity | ~21K | DROPPED | all R² negative, best ρ=0.079 |
 
 **caco2 (2,158 samples):**
 | Tier | Reps |
@@ -826,25 +837,22 @@ These sections have older-format writeups that were done before this dataset-by-
 3. **Rebuild SPEED_TIERS** in `find_best_hybrid.py` based on F12 results
 4. **Clear hybrid caches on server** — `rm -rf ~/.cache/kirby/hybrid_search/ ~/.cache/kirby/create_hybrid_cache/`
 5. **Pull code on server** — `git pull` to get all fixes (classification metrics, augmentation passing, mutation reps, etc.)
-6. **Run preliminary experiments** on all 33 ready datasets — complexity, similarity, noise
+6. **Run preliminary experiments** on all 40 ready datasets — complexity, similarity, noise
 
-### NEXT — New datasets (check server, re-submit failures)
+### NEXT — Resubmitted jobs (2026-03-28), waiting for results
 
-7. **Check server for timed-out/completed jobs** — some of these have been sitting for days and may have timed out. Check status, pull what's done, re-submit what failed:
-   - Reaction: buchwald_hartwig, suzuki, bh_doyle_plates
-   - DTA: davis, kiba, bindingdb_kd (DTA has been buggy)
-   - Nucleotide: 22 datasets (first-ever run)
-   - Graphinity DDG: foldx, rosetta, augmented
-   - Ab DMS fill: adams (binding+expression), phillips_h3, koenig (binding+expression)
-   - Ab CLF fill: tz_her2_multiclass, humanness_species
-8. **As results land** — follow the New Dataset Pipeline checklist (above) for each: review → decide tiers → update DATASET_REPS → add to submit lists → run experiments
-9. **Track what's scattered** — new rep caches, survey results, and augmentation data are spread across multiple server result directories. Consolidate when pulling.
+7. **DTA (ARC):** davis (370G), kiba (bug fixed), bindingdb_kd — resubmitted. Output: `tests/results/phase5_baselines/dta/`
+8. **Nucleotide (ARC):** 22 datasets resubmitted with FM reps (default preset fixed 'fast'→'all'). Output: `tests/results/nucleotide_survey/`
+9. **Graphinity DDG (ARC):** foldx + augmented resubmitted (370G, NaN light_seq fix). Output: `tests/results/opig/ddg/`
+10. **Ab CLF (HTC):** tz_her2_multiclass + humanness_species resubmitted (medium, 48h, 256G). tz_her2_binary needs diagnosis (FAILED exit 1 in 6min). Output: `tests/results/opig/clf/`
+11. **As results land** — follow the New Dataset Pipeline checklist: review → decide tiers → update DATASET_REPS → add to submit lists
 
-### BLOCKED — FT experiments (HTC queue, ~1 week)
+### BLOCKED — FT experiments (HTC, resubmitting 2026-03-28)
 
-10. **Molecular FT fill** — lora_molformer, contrastive_molformer, graphmvp_ft on qm9, adme_hlm, adme_rlm, adme_mdr1. Script: `submit_molecular_ft_fill.sh`.
-11. **Antibody ESM-2 LoRA fill** — esm2_lora on 29 active antibody datasets. Script: `submit_antibody_ft_fill.sh`.
-12. **When FT results land:** update per-dataset tier tables (swap frozen→FT only where FT wins), then implement compute-once .npy saving + flag toggle.
+12. **Molecular FT fill** — qm9, adme_hlm, adme_rlm, adme_mdr1. Script: `submit_molecular_ft_fill.sh`. Fixed: removed inline pip install that broke torch.
+13. **Antibody ESM-2 LoRA fill** — 20 failed datasets (11 completed, results in `antibody_ft_fill/`). Script: `submit_antibody_ft_fill.sh`. Same pip install fix.
+14. **E2E SchNet** — herg, caco2, logd via `run_baseline_survey.py --finetune`. ft_schnet wired in make_ft_factories. torch-cluster bug fixed. logd needs 256G.
+15. **When FT results land:** update per-dataset tier tables (swap frozen→FT only where FT wins).
 
 ### IMPLEMENTATION — New experiment categories
 
@@ -884,20 +892,25 @@ F12/F13 (ARC, running)
   → Finalize SPEED_TIERS + allocation defaults
   → Update 26 experiments
   → Clear caches
-  → PRELIMINARY RUNS on 33 ready datasets (complexity/similarity/noise)
+  → PRELIMINARY RUNS on 40 ready datasets (complexity/similarity/noise)
 
-FT fill (HTC, queued ~1 week)
-  → Molecular FT swap decisions (4 datasets)
-  → Antibody FT swap decisions (29 datasets)
+FT fill (HTC, resubmitting 2026-03-28)
+  → Molecular FT: qm9, adme_hlm, adme_rlm, adme_mdr1 (pip install fix)
+  → Antibody FT: 20 failed datasets (pip install fix), 11 already completed
+  → E2E SchNet: herg, caco2, logd (torch-cluster fix)
+  → FT swap decisions blocked until these land
+  → TODO: Need more FT hybrids for complexity experiments
   → (Does NOT block preliminary runs — FT is enhancement)
 
-New dataset surveys (HTC, check status)
-  → Pipeline readiness decisions per dataset
-  → Add to DATASET_REPS + submit lists
-  → Run experiments when ready
+Resubmitted surveys (ARC + HTC, 2026-03-28)
+  → DTA: davis (370G), kiba (bug fix), bindingdb_kd (ARC)
+  → Nucleotide: 22 datasets with FM reps (ARC, default preset fixed)
+  → Graphinity DDG: foldx + augmented (ARC, 370G, NaN fix)
+  → Ab CLF: tz_her2_multiclass + humanness_species (HTC, 48h 256G)
+  → As results land → review → decide tiers → add to DATASET_REPS
 
 Noise extensions (N09-N13 ALL DONE)
-  → N09-N13 deploy alongside N01-N08 on same 33 datasets
+  → N09-N13 deploy alongside N01-N08 on same 40 datasets
   → New utility: lnl_methods.py (12 training-loop LNL methods)
 
 Federated experiments (fed01-fed04, fed06 written, NEED REWORK)
