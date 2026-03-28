@@ -144,7 +144,7 @@ def _incremental_save(all_configs, dataset_name, domain, metric_name,
         'config': {
             'strategies': [s[0] for s in ALL_STRATEGY_CONFIGS],
             'importance_methods': IMPORTANCE_METHODS,
-            'internal_evaluators': INTERNAL_EVALUATORS,
+            'matched_pairs': MATCHED_PAIRS,
             'budgets': budgets,
             'models': list(models.keys()),
             'n_folds': n_folds,
@@ -399,7 +399,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'config': {
             'strategies': [s[0] for s in ALL_STRATEGY_CONFIGS],
             'importance_methods': IMPORTANCE_METHODS,
-            'internal_evaluators': INTERNAL_EVALUATORS,
+            'matched_pairs': MATCHED_PAIRS,
             'budgets': budgets,
             'models': list(models.keys()),
             'n_folds': n_folds,
