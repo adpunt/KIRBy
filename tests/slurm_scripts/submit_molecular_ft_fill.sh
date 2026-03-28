@@ -32,7 +32,7 @@ submit() {
         --mem=128G \
         --gres=gpu:1 \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
-        --wrap="${WRAP_PREFIX} && pip install --quiet 'urllib3<2' 'peft>=0.7' 'accelerate>=0.25' bitsandbytes 2>/dev/null && mkdir -p ${OUTPUT} && python tests/find_best_hybrid_molecular.py ${dataset} --reps fast --search fast --finetune ${FT_METHODS} --output ${OUTPUT}/${dataset}_ft.json ${STDERR_FILTER}" \
+        --wrap="${WRAP_PREFIX} && mkdir -p ${OUTPUT} && python tests/find_best_hybrid_molecular.py ${dataset} --reps fast --search fast --finetune ${FT_METHODS} --output ${OUTPUT}/${dataset}_ft.json ${STDERR_FILTER}" \
         | awk '{print $4}')
     echo "  $J  molft_${name}  (long, 128G, ${wall}, GPU)"
 }
