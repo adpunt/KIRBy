@@ -38,7 +38,7 @@ submit() {
         --mem="${mem}" \
         --gres=gpu:1 \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
-        --wrap="${WRAP_PREFIX} && pip install --quiet 'urllib3<2' 'peft>=0.7' 'accelerate>=0.25' bitsandbytes 2>/dev/null && mkdir -p ${OUTPUT} && python tests/antibody_baseline_survey.py ${dataset} --finetune --models ${MODELS} --n-folds ${FOLDS} --output ${OUTPUT}/ ${STDERR_FILTER}" \
+        --wrap="${WRAP_PREFIX} && mkdir -p ${OUTPUT} && python tests/antibody_baseline_survey.py ${dataset} --finetune --models ${MODELS} --n-folds ${FOLDS} --output ${OUTPUT}/ ${STDERR_FILTER}" \
         | awk '{print $4}')
     echo "  $J  abft_${name}  (long, ${mem}, ${wall}, GPU, ${FOLDS} folds)"
 }
