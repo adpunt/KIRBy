@@ -159,7 +159,7 @@ DATASET_REPS = {
         'general': [
             'graph_kernel', 'mol2vec', 'mhg_gnn', 'ecfp4', 'pdv', 'grover',
             'avalon', 'mordred', 'top_torsion', 'smited', 'atom_pair', 'molformer'],
-        'augmentation': ['maccs', 'pharmacophore3d'],
+        'augmentation': ['maccs', 'pharmacophore3d', 'usrcat', 'coulomb_matrix', 'usr'],
         'top_tier': [
             'graph_kernel', 'mol2vec', 'mhg_gnn', 'ecfp4', 'pdv', 'grover',
             'avalon', 'mordred'],
@@ -205,7 +205,7 @@ DATASET_REPS = {
             'mordred', 'pdv', 'mhg_gnn', 'avalon', 'grover', 'smited',
             'molformer', 'atom_pair', 'graph_kernel', 'maccs', 'chemberta',
             'ecfp4', 'chembert', 'selformer', 'top_torsion', 'rdkfp'],
-        'augmentation': ['pharmacophore3d', 'maccs'],
+        'augmentation': ['pharmacophore3d', 'maccs', 'usrcat', 'coulomb_matrix', 'usr'],
         'top_tier': ['mordred', 'pdv', 'mhg_gnn', 'avalon', 'grover'],
     },
 

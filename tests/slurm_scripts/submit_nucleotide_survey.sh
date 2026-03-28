@@ -29,7 +29,7 @@ for ds in \
     J=$(sbatch \
         --job-name="nuc_${ds}" \
         --nodes=1 --ntasks=1 --cpus-per-task=8 \
-        --time=23:59:00 --partition=long \
+        --time=11:59:00 --partition=short \
         --mem=256G \
         --gres=gpu:1 \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
