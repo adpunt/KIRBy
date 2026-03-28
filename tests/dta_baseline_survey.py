@@ -607,6 +607,9 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
         t0 = time.time()
         scores = evaluate_rep(rep, labels, groups, n_folds=n_folds)
         elapsed = time.time() - t0
+        if not scores:
+            print(f"  {rep_name:<25} ALL MODELS FAILED ({elapsed:.1f}s)")
+            continue
         standalone_results[rep_name] = scores
         best_model = max(scores, key=lambda m: scores[m]['ci_mean'])
         best_ci = scores[best_model]['ci_mean']
