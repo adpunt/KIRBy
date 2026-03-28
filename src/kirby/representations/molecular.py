@@ -1511,8 +1511,8 @@ def create_schnet(smiles_list, hidden_channels=128, num_interactions=6,
             # Get interaction graph (use our implementation to avoid torch-cluster)
             try:
                 edge_index, edge_weight = _SCHNET_MODEL.interaction_graph(batch.pos, batch.batch)
-            except ImportError:
-                # Fallback if torch-cluster not available
+            except (ImportError, RuntimeError):
+                # Fallback if torch-cluster not available or not CUDA-compiled
                 edge_index, edge_weight = compute_radius_graph(
                     batch.pos, batch.batch, cutoff=cutoff
                 )
