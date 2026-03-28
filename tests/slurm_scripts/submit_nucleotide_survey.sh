@@ -31,7 +31,6 @@ for ds in \
         --nodes=1 --ntasks=1 --cpus-per-task=8 \
         --time=11:59:00 --partition=short \
         --mem=256G \
-        --gres=gpu:1 \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
         --wrap="${WRAP_PREFIX} && mkdir -p ${OUTPUT} && python tests/run_baseline_survey.py ${ds} --reps all --models ${MODELS} --n-folds ${FOLDS} --output ${OUTPUT}/ ${STDERR_FILTER}" \
         | awk '{print $4}')
