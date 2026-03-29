@@ -176,6 +176,17 @@ def load_genomic_benchmark(name: str) -> Dict:
             tried_ids.append(hf_id)
             continue
 
+    # Check if HF dataset has actual sequences (some return coordinates only)
+    _hf_has_sequences = False
+    if ds is not None:
+        _first_split = 'train' if 'train' in ds else list(ds.keys())[0]
+        _cols = ds[_first_split].column_names
+        _hf_has_sequences = any(c in _cols for c in ['sequence', 'seq', 'text', 'dna'])
+        if not _hf_has_sequences:
+            print(f"  HuggingFace has coordinate-only columns {_cols}, "
+                  f"falling back to genomic-benchmarks package...")
+            ds = None
+
     if ds is None:
         # Fallback: try the genomic-benchmarks pip package
         try:
@@ -188,7 +199,7 @@ def load_genomic_benchmark(name: str) -> Dict:
                 f"  pip install genomic-benchmarks"
             )
 
-        print(f"  HuggingFace failed, using genomic-benchmarks package...")
+        print(f"  Using genomic-benchmarks package...")
         data_dir = Path(gb_download(name, version=0))
         all_sequences = []
         all_labels = []
