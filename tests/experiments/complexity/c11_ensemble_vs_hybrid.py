@@ -32,7 +32,7 @@ from experiments._shared import (
     get_model_factories, cv_split,
     apply_feature_selection, get_domain_metric,
 )
-from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+from kirby.hybrid import create_hybrid
 from kirby.hybrid import apply_augmentation_selection
 # TODO: create_hybrid API not finalised — allocation_method / importance_method
 #       semantics may change after framework experiments. Revisit call sites below.
@@ -282,7 +282,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     t0 = time.time()
                     X_train_h, feature_info = create_hybrid(
                         train_reps, y_train,
-                        allocation_method='greedy',
+                        allocation_method='entropy_1.0',
                         budget=budget,
                         importance_method=importance_method,
                         augmentations=train_augs,

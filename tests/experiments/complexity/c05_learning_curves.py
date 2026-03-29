@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import numpy as np
 
 from experiments._shared import (
-    load_data, INTERMEDIARY, FULL, get_config, create_experiment_parser,
+    load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_model_factories, evaluate_single_rep_cv, fit_learning_curve,
     find_best_hybrid,

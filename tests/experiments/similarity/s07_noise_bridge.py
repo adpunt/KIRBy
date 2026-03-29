@@ -21,7 +21,7 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 
 from experiments._shared import (
-    load_data, INTERMEDIARY, FULL, get_config, create_experiment_parser,
+    load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results, convert_numpy,
     get_hybrid_features_and_weights,
 )

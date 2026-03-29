@@ -14,7 +14,7 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 
 from experiments._shared import (
-    load_data, INTERMEDIARY, FULL, get_config, create_experiment_parser,
+    load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_model_factories, _cv_split,
     apply_feature_selection, get_domain_metric,
@@ -154,7 +154,7 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                     try:
                         X_train, fi = create_hybrid(
                             train_reps, y_train,
-                            allocation_method='greedy',
+                            allocation_method='entropy_1.0',
                             budget=budget,
                             importance_method='treeshap',
                             augmentations=train_augs,
@@ -247,7 +247,7 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                 try:
                     _, fi = create_hybrid(
                         train_reps, y_train,
-                        allocation_method='greedy',
+                        allocation_method='entropy_1.0',
                         budget=budget_for_stability,
                         importance_method='treeshap',
                         augmentations=train_augs_stab,

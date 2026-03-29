@@ -35,6 +35,103 @@ warnings.filterwarnings('ignore')
 
 
 # =============================================================================
+# FOLD-AWARE HYBRID CACHING
+# =============================================================================
+
+import hashlib
+import pickle
+
+def _hybrid_fold_cache_dir() -> Path:
+    """Return cache directory for per-fold hybrid feature_info."""
+    cache_root = Path(os.environ.get('KIRBY_CACHE_DIR',
+                      str(Path.home() / '.cache' / 'kirby')))
+    d = cache_root / 'hybrid_fold_cache'
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _hybrid_fold_cache_key(train_idx, rep_shapes, allocation_method,
+                           importance_method, budget, internal_evaluator,
+                           augmentation_names, augmentation_strategy):
+    """Hash fold + hybrid config into a cache key."""
+    h = hashlib.sha256()
+    h.update(train_idx.tobytes())
+    for name, shape in sorted(rep_shapes.items()):
+        h.update(f"{name}:{shape}".encode())
+    h.update(f"{allocation_method}|{importance_method}|{budget}|{internal_evaluator}".encode())
+    if augmentation_names:
+        h.update(f"aug:{'|'.join(sorted(augmentation_names))}|{augmentation_strategy}".encode())
+    return h.hexdigest()[:24]
+
+
+def create_hybrid_cached(train_reps, y_train, train_idx,
+                         allocation_method='top_3',
+                         importance_method='lightgbm_gain',
+                         budget=100,
+                         internal_evaluator='svm',
+                         augmentations=None,
+                         augmentation_strategy='uncapped',
+                         **kwargs):
+    """Fold-aware cached create_hybrid.
+
+    Caches feature_info (selected indices) keyed by fold train indices +
+    hybrid config. The actual X_hybrid is reconstructed from feature_info
+    since it's just index selection on the rep arrays.
+
+    Args:
+        train_reps: {rep_name: train_features} for this fold.
+        y_train: Training labels for this fold.
+        train_idx: np.ndarray of training sample indices (used for cache key).
+        Other args: same as create_hybrid.
+
+    Returns:
+        (X_hybrid, feature_info) — same as create_hybrid.
+    """
+    rep_shapes = {name: X.shape for name, X in train_reps.items()}
+    aug_names = sorted(augmentations.keys()) if augmentations else None
+
+    key = _hybrid_fold_cache_key(
+        train_idx, rep_shapes, allocation_method, importance_method,
+        budget, internal_evaluator, aug_names, augmentation_strategy,
+    )
+    cache_dir = _hybrid_fold_cache_dir()
+    cache_path = cache_dir / f'{key}.pkl'
+
+    if cache_path.exists():
+        try:
+            feature_info = pickle.loads(cache_path.read_bytes())
+            X_hybrid = apply_feature_selection(train_reps, feature_info)
+            # Reconstruct augmentation features if present
+            aug_info = feature_info.get('augmentation_info')
+            if aug_info and augmentations:
+                from kirby.hybrid import apply_augmentation_selection
+                X_aug = apply_augmentation_selection(augmentations, aug_info)
+                if X_aug is not None:
+                    X_hybrid = np.hstack([X_hybrid, X_aug])
+            return X_hybrid, feature_info
+        except Exception:
+            pass  # corrupted, recompute
+
+    X_hybrid, feature_info = create_hybrid(
+        train_reps, y_train,
+        allocation_method=allocation_method,
+        importance_method=importance_method,
+        budget=budget,
+        internal_evaluator=internal_evaluator,
+        augmentations=augmentations,
+        augmentation_strategy=augmentation_strategy,
+        **kwargs,
+    )
+
+    try:
+        cache_path.write_bytes(pickle.dumps(feature_info))
+    except Exception:
+        pass  # non-fatal
+
+    return X_hybrid, feature_info
+
+
+# =============================================================================
 # REPRESENTATION CACHING
 # =============================================================================
 
@@ -111,31 +208,11 @@ def _cache_rep_dict(dataset_name: str, compute_all_fn,
 
 
 # =============================================================================
-# MODE CONFIGURATIONS
+# MODE CONFIGURATIONS — derived from SPEED_TIERS in find_best_hybrid.py
 # =============================================================================
-
-INTERMEDIARY = {
-    'n_splits': 1,
-    'models': ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp',
-               'svm', 'gp', 'catboost', 'dnn', 'cnn'],
-    'budgets': [10, 25, 50, 100, 200, 500, 1000, 2000],
-    'allocations': ['performance_weighted', 'softmax_T5'],
-    'importance_methods': ['treeshap', 'lightgbm_gain'],
-    'search_speed': 'fast',
-}
-
-FULL = {
-    'n_splits': 5,
-    'models': ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp',
-               'svm', 'gp', 'catboost', 'dnn', 'cnn'],
-    'budgets': [10, 25, 50, 100, 200, 300, 500, 750, 1000, 1500, 2000],
-    'allocations': [
-        'performance_weighted', 'softmax_T2', 'softmax_T5',
-        'power_2', 'min_floor_0.05',
-    ],
-    'importance_methods': ['treeshap', 'deeplift', 'lightgbm_gain'],
-    'search_speed': 'medium',
-}
+# No standalone config dicts here. Experiments use SPEED_TIERS directly.
+# The only experiment-level configs are: n_splits, models, budgets.
+# These are set per-experiment or via get_config(args).
 
 
 # =============================================================================
@@ -277,8 +354,8 @@ def evaluate_cv(
     groups: np.ndarray,
     model_factory,
     n_folds: int = 5,
-    allocation_method: str = 'greedy',
-    importance_method: str = 'treeshap',
+    allocation_method: str = 'top_3',
+    importance_method: str = 'lightgbm_gain',
     budget: int = 100,
     seed: int = 42,
     mode: str = 'full',
@@ -331,8 +408,8 @@ def evaluate_cv_with_train(
     groups: np.ndarray,
     model_factory,
     n_folds: int = 5,
-    allocation_method: str = 'greedy',
-    importance_method: str = 'treeshap',
+    allocation_method: str = 'top_3',
+    importance_method: str = 'lightgbm_gain',
     budget: int = 100,
     seed: int = 42,
     mode: str = 'full',
@@ -717,15 +794,22 @@ def estimate_intrinsic_dim_mle(X: np.ndarray, k: int = 10) -> float:
     return np.mean(estimates) if estimates else np.nan
 
 
-def estimate_mutual_information_knn(X: np.ndarray, y: np.ndarray, k: int = 5) -> float:
-    """Estimate I(X; Y) using KSG estimator (Kraskov et al. 2004)."""
+def estimate_mutual_information_knn(X: np.ndarray, y: np.ndarray, k: int = 5,
+                                    max_dim: int = 50) -> float:
+    """Estimate I(X; Y) using KSG estimator (Kraskov et al. 2004).
+
+    Args:
+        max_dim: Maximum dimensionality before PCA reduction. Higher values
+            preserve more nonlinear structure but need more samples for stable
+            estimates. Capped at n_samples // 5 for the n >> d requirement.
+    """
     n_samples, d = X.shape
     k = min(k, n_samples - 1)
 
     X_scaled = StandardScaler().fit_transform(X)
 
-    # KSG needs n >> d; reduce dimensions for small datasets
-    max_components = min(15, n_samples // 10)
+    # KSG needs n >> d; reduce dimensions when d is large relative to n.
+    max_components = min(max_dim, n_samples // 5)
     if d > max_components >= 1:
         from sklearn.decomposition import PCA as _PCA
         X_scaled = _PCA(n_components=max_components, random_state=42).fit_transform(X_scaled)
@@ -1471,7 +1555,19 @@ def run_across_tasks(run_fn, tasks: List[dict], output_dir: str,
         custom_reps = task.get('rep_names') or FRAMEWORK_TASKS.get(dataset)
         data = load_data(dataset, rep_preset, rep_names=custom_reps)
         # Build config from mode
-        config = FULL if mode == 'full' else INTERMEDIARY
+        # Build config from SPEED_TIERS
+        from kirby.find_best_hybrid import SPEED_TIERS
+        speed = 'full' if mode == 'full' else 'fast'
+        tier = SPEED_TIERS[speed]
+        config = {
+            'n_splits': tier['n_folds'],
+            'search_speed': speed,
+            'allocations': tier['allocation_methods'],
+            'importance_methods': tier['importance_methods'],
+            'internal_evaluators': tier['internal_evaluators'],
+            'models': ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp',
+                        'svm', 'gp', 'catboost', 'dnn', 'cnn'],
+        }
         results = run_fn(data, config, output_dir, dataset)
         save_experiment_results(results, output_dir, experiment_id, dataset)
         all_results.append((dataset, results))
@@ -1529,8 +1625,35 @@ def parse_rep_args(args) -> Tuple[str, Optional[List[str]]]:
 
 
 def get_config(args) -> dict:
-    """Return the appropriate config dict based on args.mode."""
-    config = dict(INTERMEDIARY if args.mode == 'intermediary' else FULL)
+    """Return config dict based on args.mode (fast or full).
+
+    Pulls allocations/importance/evaluators from SPEED_TIERS.
+    Models and budgets are experiment-controlled (set via CLI or experiment code).
+    """
+    from kirby.find_best_hybrid import SPEED_TIERS
+
+    speed = 'full' if args.mode == 'full' else 'fast'
+    tier = SPEED_TIERS[speed]
+
+    # Budget grids (from pipeline readiness decisions)
+    if speed == 'fast':
+        default_budgets = [10, 25, 50, 100, 200, 500, 1000, 2000]
+    else:
+        default_budgets = [10, 25, 50, 100, 200, 300, 500, 750, 1000, 1500, 2000]
+
+    config = {
+        'n_splits': tier['n_folds'],
+        'search_speed': speed,
+        'allocations': tier['allocation_methods'],
+        'importance_methods': tier['importance_methods'],
+        'internal_evaluators': tier['internal_evaluators'],
+        'budgets': default_budgets,
+        # Models default to all 11; fast experiments can override via CLI
+        'models': ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp',
+                    'svm', 'gp', 'catboost', 'dnn', 'cnn'],
+    }
+
+    # CLI overrides
     if getattr(args, 'models', None):
         config['models'] = [m.strip() for m in args.models.split(',')]
     if getattr(args, 'budgets', None):

@@ -26,7 +26,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric,
 )
-from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+from kirby.hybrid import create_hybrid
 # TODO: create_hybrid API not finalised — revisit after framework experiments.
 from kirby.utils.noise_estimation import get_noise_estimator
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
@@ -87,7 +87,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     try:
         X_hybrid, fi = create_hybrid(
             reps, labels,
-            allocation_method='greedy',
+            allocation_method='entropy_1.0',
             importance_method='lightgbm_gain',
             budget=budget,
             augmentations=augmentations,

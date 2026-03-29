@@ -32,7 +32,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric,
 )
-from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+from kirby.hybrid import create_hybrid
 from kirby.hybrid import apply_augmentation_selection
 
 
@@ -91,7 +91,7 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
             try:
                 X_train, fi = create_hybrid(
                     train_reps, y_train,
-                    allocation_method='greedy',
+                    allocation_method='entropy_1.0',
                     budget=budget,
                     importance_method='lightgbm_gain',
                     augmentations=train_augs,

@@ -16,7 +16,7 @@ Scientific questions:
 Conditions:
   - within_foldx:   Train/eval on FoldX synthetic DDG (GroupKFold by complex)
   - within_rosetta:  Train/eval on Rosetta Flex ddG (GroupKFold by complex)
-  - augmented:       Train on FoldX synthetic, eval on experimental SKEMPI
+  - transfer_foldx:  Train on ALL FoldX synthetic, eval on ALL experimental SKEMPI
   - experimental:    Train/eval on experimental SKEMPI only (baseline)
 
 Paper baselines (Hummer et al. 2025, Nature Computational Science):
@@ -62,7 +62,7 @@ from experiments._shared import convert_numpy, get_model_factories
 # CONFIGURATION
 # =============================================================================
 
-ALL_CONDITIONS = ['within_foldx', 'within_rosetta', 'experimental', 'augmented']
+ALL_CONDITIONS = ['within_foldx', 'within_rosetta', 'experimental', 'transfer_foldx']
 
 DEFAULT_REPS = [
     'blosum', 'onehot', 'aac',           # classical
@@ -77,7 +77,7 @@ CONDITION_DATASETS = {
     'within_foldx':   'graphinity_foldx',
     'within_rosetta': 'graphinity_rosetta',
     'experimental':   'ddg_combined',
-    'augmented':      'graphinity_augmented',
+    'transfer_foldx': None,  # handled specially: train on synthetic, eval on experimental
 }
 
 # Paper baselines (Hummer et al. 2025, Nature Computational Science)
@@ -151,11 +151,113 @@ def evaluate_rep_ddg(X, labels, groups, model, n_folds):
     return result
 
 
+def evaluate_transfer(rep_names, n_folds):
+    """Transfer learning: train on FoldX synthetic, evaluate on experimental.
+
+    No cross-validation — train on ALL synthetic data, test on ALL experimental.
+    Groups experimental by PDB complex for reporting variance.
+    """
+    from scipy.stats import pearsonr, spearmanr
+    from sklearn.base import clone
+    from run_baseline_survey import _maybe_scale
+
+    print(f"\n{'=' * 60}")
+    print(f"Condition: transfer_foldx (train=synthetic, test=experimental)")
+    print(f"{'=' * 60}")
+
+    train_data = load_dataset('graphinity_foldx')
+    test_data = load_dataset('ddg_combined')
+
+    n_train = len(train_data['labels'])
+    n_test = len(test_data['labels'])
+    print(f"  Train: {n_train} synthetic FoldX samples")
+    print(f"  Test: {n_test} experimental SKEMPI samples")
+
+    # Generate representations for both sets
+    from kirby.representations.antibody import ANTIBODY_REPS
+    from kirby.representations.mutation import MUTATION_REPS
+
+    reps_train, reps_test = {}, {}
+    for rep_name in rep_names:
+        rep_fn = ANTIBODY_REPS.get(rep_name) or MUTATION_REPS.get(rep_name)
+        if rep_fn is None:
+            continue
+        try:
+            if rep_name in MUTATION_REPS:
+                X_tr = rep_fn(train_data.get('mutations', []),
+                              train_data.get('wildtype_heavy', ''),
+                              train_data.get('wildtype_light', ''))
+                X_te = rep_fn(test_data.get('mutations', []),
+                              test_data.get('wildtype_heavy', ''),
+                              test_data.get('wildtype_light', ''))
+            else:
+                X_tr = ANTIBODY_REPS[rep_name](train_data['heavy_seqs'],
+                                               train_data['light_seqs'])
+                X_te = ANTIBODY_REPS[rep_name](test_data['heavy_seqs'],
+                                               test_data['light_seqs'])
+            X_tr = np.asarray(X_tr, dtype=np.float64)
+            X_te = np.asarray(X_te, dtype=np.float64)
+            if X_tr.ndim == 2 and X_tr.shape[0] == n_train and X_te.shape[0] == n_test:
+                reps_train[rep_name] = X_tr
+                reps_test[rep_name] = X_te
+                print(f"  {rep_name}: {X_tr.shape[1]}D")
+        except Exception as e:
+            print(f"  {rep_name}: FAILED ({e})")
+
+    if not reps_train:
+        print("  No reps available, skipping condition")
+        return None
+
+    y_train = train_data['labels']
+    y_test = test_data['labels']
+    models = get_model_factories(MODELS_LIST, 'regression', n_samples=n_train)
+
+    print(f"\n  Evaluating {len(reps_train)} reps × {len(models)} models "
+          f"(train-on-synthetic, test-on-experimental)...")
+    results = {}
+    for rep_name in sorted(reps_train.keys()):
+        X_tr = reps_train[rep_name]
+        X_te = reps_test[rep_name]
+        rep_results = {}
+        for model_name, factory in models.items():
+            try:
+                X_tr_s, X_te_s = _maybe_scale(X_tr, X_te)
+                m = factory()
+                m.fit(X_tr_s, y_train)
+                preds = m.predict(X_te_s)
+                r_p, _ = pearsonr(y_test, preds)
+                r_s, _ = spearmanr(y_test, preds)
+                rmse = float(np.sqrt(np.mean((y_test - preds) ** 2)))
+                rep_results[model_name] = {
+                    'pearson': {'mean': float(r_p), 'std': 0.0},
+                    'spearman': {'mean': float(r_s), 'std': 0.0},
+                    'rmse': {'mean': rmse, 'std': 0.0},
+                    'pearson_global': float(r_p),
+                }
+                print(f"    {rep_name:25s} {model_name:8s}  "
+                      f"r={r_p:.4f}  rho={r_s:.4f}  rmse={rmse:.4f}")
+            except Exception as e:
+                print(f"    {rep_name:25s} {model_name:8s}  FAILED ({e})")
+        if rep_results:
+            results[rep_name] = {'dim': X_tr.shape[1], 'models': rep_results}
+
+    return {
+        'n_samples': n_test,
+        'n_train': n_train,
+        'condition': 'transfer_foldx',
+        'dataset': 'graphinity_foldx -> ddg_combined',
+        'results': results,
+    }
+
+
 def evaluate_condition(condition, rep_names, n_folds):
     """Evaluate one condition: load data, generate reps, evaluate all.
 
     Returns dict with per-rep results.
     """
+    if condition == 'transfer_foldx':
+        return evaluate_transfer(rep_names, n_folds)
+
     ds_name = CONDITION_DATASETS[condition]
 
     print(f"\n{'=' * 60}")

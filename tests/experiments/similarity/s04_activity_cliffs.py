@@ -18,18 +18,18 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import numpy as np
 from scipy.spatial.distance import cdist as scipy_cdist
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import r2_score, mean_squared_error
-from sklearn.neighbors import KNeighborsRegressor
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error
+from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results,
     get_hybrid_features_and_weights, make_cv_splitter,
+    get_domain_metric, get_model_factories,
 )
 
 from kirby.hybrid import apply_feature_selection, compute_feature_importance
-from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+from kirby.hybrid import create_hybrid
 # TODO: create_hybrid API not finalised — revisit after framework experiments.
 
 
@@ -176,6 +176,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     splitter, use_groups = make_cv_splitter(n_folds, groups)
     sample_X = next(iter(reps.values()))
 
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    task_type = data.get('task_type', 'regression')
+    is_clf = task_type == 'classification'
+
+    def _make_knn(n_train):
+        k = min(5, n_train - 1)
+        if is_clf:
+            return KNeighborsClassifier(n_neighbors=k)
+        return KNeighborsRegressor(n_neighbors=k)
+
     def _evaluate_condition(get_Xy_fn, pre_scaled=False):
         """Run CV for a condition, return cliff/noncliff metrics."""
         fold_all, fold_cliff, fold_noncliff = [], [], []
@@ -197,40 +207,46 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 X_tr_s = scaler.fit_transform(X_tr)
                 X_va_s = scaler.transform(X_va)
 
-            model = KNeighborsRegressor(n_neighbors=min(5, len(y_train) - 1))
+            model = _make_knn(len(y_train))
             model.fit(X_tr_s, y_train)
             y_pred = model.predict(X_va_s)
 
             # Overall
-            fold_all.append(r2_score(y_val, y_pred))
-            fold_rmse_all.append(float(np.sqrt(mean_squared_error(y_val, y_pred))))
+            fold_all.append(metric_fn(y_val, y_pred))
+            if not is_clf:
+                fold_rmse_all.append(float(np.sqrt(mean_squared_error(y_val, y_pred))))
 
             # Stratify by cliff membership
             val_cliff = np.array([i for i, vi in enumerate(val_idx) if vi in cliff_indices])
             val_noncliff = np.array([i for i, vi in enumerate(val_idx) if vi not in cliff_indices])
 
             if len(val_cliff) > 1:
-                fold_cliff.append(r2_score(y_val[val_cliff], y_pred[val_cliff]))
-                fold_rmse_cliff.append(float(np.sqrt(mean_squared_error(
-                    y_val[val_cliff], y_pred[val_cliff]))))
+                fold_cliff.append(metric_fn(y_val[val_cliff], y_pred[val_cliff]))
+                if not is_clf:
+                    fold_rmse_cliff.append(float(np.sqrt(mean_squared_error(
+                        y_val[val_cliff], y_pred[val_cliff]))))
             if len(val_noncliff) > 1:
-                fold_noncliff.append(r2_score(y_val[val_noncliff], y_pred[val_noncliff]))
-                fold_rmse_noncliff.append(float(np.sqrt(mean_squared_error(
-                    y_val[val_noncliff], y_pred[val_noncliff]))))
+                fold_noncliff.append(metric_fn(y_val[val_noncliff], y_pred[val_noncliff]))
+                if not is_clf:
+                    fold_rmse_noncliff.append(float(np.sqrt(mean_squared_error(
+                        y_val[val_noncliff], y_pred[val_noncliff]))))
 
         if not fold_all:
             return None
-        return {
-            'r2_all': float(np.mean(fold_all)),
-            'r2_cliff': float(np.mean(fold_cliff)) if fold_cliff else float('nan'),
-            'r2_noncliff': float(np.mean(fold_noncliff)) if fold_noncliff else float('nan'),
-            'rmse_all': float(np.mean(fold_rmse_all)),
-            'rmse_cliff': float(np.mean(fold_rmse_cliff)) if fold_rmse_cliff else float('nan'),
-            'rmse_noncliff': float(np.mean(fold_rmse_noncliff)) if fold_rmse_noncliff else float('nan'),
+        out = {
+            'score_all': float(np.mean(fold_all)),
+            'score_cliff': float(np.mean(fold_cliff)) if fold_cliff else float('nan'),
+            'score_noncliff': float(np.mean(fold_noncliff)) if fold_noncliff else float('nan'),
+            'metric': metric_name,
         }
+        if not is_clf:
+            out['rmse_all'] = float(np.mean(fold_rmse_all))
+            out['rmse_cliff'] = float(np.mean(fold_rmse_cliff)) if fold_rmse_cliff else float('nan')
+            out['rmse_noncliff'] = float(np.mean(fold_rmse_noncliff)) if fold_rmse_noncliff else float('nan')
+        return out
 
     # --- Per-rep kNN baselines (unweighted + weighted) ---
-    print("\n  Per-rep kNN baselines (k=5):")
+    print(f"\n  Per-rep kNN baselines (k=5, metric={metric_name}):")
     for rep_name, X_rep in reps.items():
         # Unweighted
         def _get_rep(tr, va, yt, _X=X_rep):
@@ -247,14 +263,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 return scaler.fit_transform(_X[tr]) * w, scaler.transform(_X[va]) * w
             res_w = _evaluate_condition(_get_rep_w, pre_scaled=True)
             if res_w:
-                results['per_rep'][rep_name]['r2_cliff_weighted'] = res_w['r2_cliff']
-                results['per_rep'][rep_name]['rmse_cliff_weighted'] = res_w['rmse_cliff']
-                results['per_rep'][rep_name]['r2_all_weighted'] = res_w['r2_all']
+                results['per_rep'][rep_name]['score_cliff_weighted'] = res_w['score_cliff']
+                results['per_rep'][rep_name]['score_all_weighted'] = res_w['score_all']
+                if not is_clf:
+                    results['per_rep'][rep_name]['rmse_cliff_weighted'] = res_w.get('rmse_cliff', float('nan'))
 
-            print(f"    {rep_name:<15} R2_all={res['r2_all']:.4f}  "
-                  f"R2_cliff={res['r2_cliff']:.4f}  RMSE_cliff={res['rmse_cliff']:.4f}  "
-                  f"R2_noncliff={res['r2_noncliff']:.4f}"
-                  + (f"  | weighted: RMSE_cliff={res_w['rmse_cliff']:.4f}" if res_w else ""))
+            rmse_part = f"  RMSE_cliff={res.get('rmse_cliff', float('nan')):.4f}" if not is_clf else ""
+            w_part = ""
+            if res_w and not is_clf:
+                w_part = f"  | weighted: RMSE_cliff={res_w.get('rmse_cliff', float('nan')):.4f}"
+            print(f"    {rep_name:<15} {metric_name}_all={res['score_all']:.4f}  "
+                  f"{metric_name}_cliff={res['score_cliff']:.4f}{rmse_part}  "
+                  f"{metric_name}_noncliff={res['score_noncliff']:.4f}"
+                  + w_part)
 
     # --- Hybrid kNN (unweighted) ---
     if hybrid_blueprint is not None:
@@ -275,9 +296,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         res = _evaluate_condition(_get_hybrid_uw)
         if res:
             results['hybrid']['unweighted'] = res
-            print(f"    hybrid_uw      R2_all={res['r2_all']:.4f}  "
-                  f"R2_cliff={res['r2_cliff']:.4f}  RMSE_cliff={res['rmse_cliff']:.4f}  "
-                  f"R2_noncliff={res['r2_noncliff']:.4f}")
+            rmse_part = f"  RMSE_cliff={res.get('rmse_cliff', float('nan')):.4f}" if not is_clf else ""
+            print(f"    hybrid_uw      {metric_name}_all={res['score_all']:.4f}  "
+                  f"{metric_name}_cliff={res['score_cliff']:.4f}{rmse_part}  "
+                  f"{metric_name}_noncliff={res['score_noncliff']:.4f}")
 
         # --- Hybrid kNN (importance-weighted) ---
         print("  Hybrid kNN (weighted, k=5):")
@@ -312,16 +334,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         res = _evaluate_condition(_get_hybrid_w, pre_scaled=True)
         if res:
             results['hybrid']['weighted'] = res
-            print(f"    hybrid_w       R2_all={res['r2_all']:.4f}  "
-                  f"R2_cliff={res['r2_cliff']:.4f}  RMSE_cliff={res['rmse_cliff']:.4f}  "
-                  f"R2_noncliff={res['r2_noncliff']:.4f}")
+            rmse_part = f"  RMSE_cliff={res.get('rmse_cliff', float('nan')):.4f}" if not is_clf else ""
+            print(f"    hybrid_w       {metric_name}_all={res['score_all']:.4f}  "
+                  f"{metric_name}_cliff={res['score_cliff']:.4f}{rmse_part}  "
+                  f"{metric_name}_noncliff={res['score_noncliff']:.4f}")
 
     # --- RF baseline (on best individual rep) ---
     print("\n  RF baseline (per-rep, best rep):")
-    best_rep_name = max(results['per_rep'],
-                        key=lambda r: results['per_rep'][r]['r2_all']) if results['per_rep'] else None
+    best_cmp = (lambda r: -results['per_rep'][r]['score_all']) if lower_is_better \
+               else (lambda r: results['per_rep'][r]['score_all'])
+    best_rep_name = max(results['per_rep'], key=lambda r: -best_cmp(r)) if results['per_rep'] else None
     if best_rep_name:
         X_best = reps[best_rep_name]
+        rf_factory = get_model_factories(['rf'], task_type=task_type,
+                                          n_samples=len(labels))['rf']
 
         fold_all, fold_cliff, fold_noncliff = [], [], []
         fold_rmse_cliff = []
@@ -330,58 +356,58 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             scaler = StandardScaler()
             X_tr = scaler.fit_transform(X_best[train_idx])
             X_va = scaler.transform(X_best[val_idx])
-            rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+            rf = rf_factory()
             rf.fit(X_tr, y_train)
             y_pred = rf.predict(X_va)
 
-            fold_all.append(r2_score(y_val, y_pred))
+            fold_all.append(metric_fn(y_val, y_pred))
             val_cliff = np.array([i for i, vi in enumerate(val_idx) if vi in cliff_indices])
             val_noncliff = np.array([i for i, vi in enumerate(val_idx) if vi not in cliff_indices])
             if len(val_cliff) > 1:
-                fold_cliff.append(r2_score(y_val[val_cliff], y_pred[val_cliff]))
-                fold_rmse_cliff.append(float(np.sqrt(mean_squared_error(
-                    y_val[val_cliff], y_pred[val_cliff]))))
+                fold_cliff.append(metric_fn(y_val[val_cliff], y_pred[val_cliff]))
+                if not is_clf:
+                    fold_rmse_cliff.append(float(np.sqrt(mean_squared_error(
+                        y_val[val_cliff], y_pred[val_cliff]))))
             if len(val_noncliff) > 1:
-                fold_noncliff.append(r2_score(y_val[val_noncliff], y_pred[val_noncliff]))
+                fold_noncliff.append(metric_fn(y_val[val_noncliff], y_pred[val_noncliff]))
 
         results['rf_baseline'] = {
             'rep': best_rep_name,
-            'r2_all': float(np.mean(fold_all)),
-            'r2_cliff': float(np.mean(fold_cliff)) if fold_cliff else float('nan'),
-            'r2_noncliff': float(np.mean(fold_noncliff)) if fold_noncliff else float('nan'),
-            'rmse_cliff': float(np.mean(fold_rmse_cliff)) if fold_rmse_cliff else float('nan'),
+            'score_all': float(np.mean(fold_all)),
+            'score_cliff': float(np.mean(fold_cliff)) if fold_cliff else float('nan'),
+            'score_noncliff': float(np.mean(fold_noncliff)) if fold_noncliff else float('nan'),
+            'metric': metric_name,
         }
-        print(f"    RF({best_rep_name}) R2_all={results['rf_baseline']['r2_all']:.4f}  "
-              f"R2_cliff={results['rf_baseline']['r2_cliff']:.4f}  "
-              f"RMSE_cliff={results['rf_baseline']['rmse_cliff']:.4f}")
+        if not is_clf:
+            results['rf_baseline']['rmse_cliff'] = float(np.mean(fold_rmse_cliff)) if fold_rmse_cliff else float('nan')
+        rmse_part = f"  RMSE_cliff={results['rf_baseline'].get('rmse_cliff', float('nan')):.4f}" if not is_clf else ""
+        print(f"    RF({best_rep_name}) {metric_name}_all={results['rf_baseline']['score_all']:.4f}  "
+              f"{metric_name}_cliff={results['rf_baseline']['score_cliff']:.4f}"
+              f"{rmse_part}")
 
     # --- Summary ---
-    print(f"\n  --- Summary (RMSE_cliff comparison) ---")
+    print(f"\n  --- Summary ({metric_name}_cliff comparison) ---")
     all_methods = []
     for rname, rv in results['per_rep'].items():
-        all_methods.append((f"kNN({rname})", rv.get('rmse_cliff', float('nan')),
-                           rv.get('r2_cliff', float('nan'))))
-        if 'rmse_cliff_weighted' in rv:
-            all_methods.append((f"kNN({rname})_w", rv.get('rmse_cliff_weighted', float('nan')),
-                               rv.get('r2_cliff_weighted', float('nan'))))
+        all_methods.append((f"kNN({rname})", rv.get('score_cliff', float('nan'))))
+        if 'score_cliff_weighted' in rv:
+            all_methods.append((f"kNN({rname})_w", rv.get('score_cliff_weighted', float('nan'))))
     if 'unweighted' in results.get('hybrid', {}):
         rv = results['hybrid']['unweighted']
-        all_methods.append(("hybrid_kNN_uw", rv.get('rmse_cliff', float('nan')),
-                           rv.get('r2_cliff', float('nan'))))
+        all_methods.append(("hybrid_kNN_uw", rv.get('score_cliff', float('nan'))))
     if 'weighted' in results.get('hybrid', {}):
         rv = results['hybrid']['weighted']
-        all_methods.append(("hybrid_kNN_w", rv.get('rmse_cliff', float('nan')),
-                           rv.get('r2_cliff', float('nan'))))
+        all_methods.append(("hybrid_kNN_w", rv.get('score_cliff', float('nan'))))
     if 'rf_baseline' in results:
         rv = results['rf_baseline']
-        all_methods.append((f"RF({rv['rep']})", rv.get('rmse_cliff', float('nan')),
-                           rv.get('r2_cliff', float('nan'))))
+        all_methods.append((f"RF({rv['rep']})", rv.get('score_cliff', float('nan'))))
 
-    all_methods.sort(key=lambda x: x[1] if not np.isnan(x[1]) else 999)
-    print(f"  {'Method':<25} {'RMSE_cliff':<12} {'R2_cliff':<12}")
-    print("  " + "-" * 49)
-    for name, rmse, r2 in all_methods:
-        print(f"  {name:<25} {rmse:<12.4f} {r2:<12.4f}")
+    all_methods.sort(key=lambda x: x[1] if not np.isnan(x[1]) else 999,
+                     reverse=not lower_is_better)
+    print(f"  {'Method':<25} {metric_name + '_cliff':<12}")
+    print("  " + "-" * 37)
+    for name, score in all_methods:
+        print(f"  {name:<25} {score:<12.4f}")
 
     return results
 

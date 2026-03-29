@@ -37,8 +37,7 @@ from experiments._shared import (
     load_data, get_domain_metric, get_model_factories,
     evaluate_single_rep_cv, cv_split,
     save_experiment_results, convert_numpy,
-    find_best_hybrid,
-    INTERMEDIARY, FULL,
+    find_best_hybrid, get_config,
 )
 
 EXPERIMENT_ID = 'c14_cross_domain_summary'
@@ -367,7 +366,7 @@ def run(tasks, rep_preset, config, output_dir):
     Args:
         tasks: list of dataset name strings.
         rep_preset: representation preset (e.g. 'all', 'fast').
-        config: INTERMEDIARY or FULL dict.
+        config: fast or full dict.
         output_dir: base output directory.
 
     Returns:
@@ -441,7 +440,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     tasks = [t.strip() for t in args.tasks.split(',') if t.strip()]
-    config = FULL if args.mode == 'full' else INTERMEDIARY
+    config = get_config(args)
 
     if not tasks:
         print("ERROR: --tasks must specify at least one dataset name")

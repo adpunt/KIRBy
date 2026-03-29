@@ -23,7 +23,7 @@ from scipy.stats import spearmanr
 from sklearn.preprocessing import StandardScaler
 
 from experiments._shared import (
-    load_data, INTERMEDIARY, FULL, get_config, create_experiment_parser,
+    load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy, cv_split, _cv_split,
     compute_dataset_complexity,
     find_best_hybrid, create_hybrid, apply_feature_selection,
@@ -39,7 +39,7 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
     datasets : dict
         {dataset_name: data_dict} for each dataset.
     config : dict
-        Config dict (INTERMEDIARY or FULL).
+        Config dict (fast or full).
     output_dir : str
         Output directory path.
     dataset_name : str, optional
@@ -83,7 +83,7 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                 base_reps=data['reps'],
                 labels=data['labels'],
                 groups=data['groups'],
-                speed='medium',
+                speed='full',
                 augmentations=data.get('augmentations'),
                 verbose=False,
                 cache=True,

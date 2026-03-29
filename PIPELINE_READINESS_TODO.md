@@ -2,7 +2,7 @@
 
 **Purpose:** Single operational document for the KIRBy experiment pipeline. Tracks dataset readiness, methodology status, blockers, and the path from preliminary runs to publication-quality results.
 
-**Last updated:** 2026-03-28
+**Last updated:** 2026-03-30
 
 ---
 
@@ -24,21 +24,37 @@ The pipeline follows a staged approach:
 
 ## Current Blockers
 
-### F12/F13 (framework experiments) — BLOCKS EVERYTHING
+### ~~F12/F13 (framework experiments)~~ — DONE (2026-03-29)
 
-F12 tests 31 allocation strategies × 2 importance × 3 evaluators × 4 budgets × 4 models = 2,976 configs/dataset across 6 datasets. F13 tests evaluator × model matching (600 configs/dataset). Results finalize SPEED_TIERS and allocation defaults. Currently running on ARC (`f12-speedup` branch). See `FRAMEWORK_EXPERIMENT_ROADMAP.md`.
+**F12/F13 analysis complete. SPEED_TIERS rebuilt. Hybrid code updated.**
 
-Until F12/F13 complete:
-- 26 experiments hardcode `allocation_method='greedy'` (the worst per F01). Full list in `EXPERIMENT_BUGS.md`.
-- SPEED_TIERS in `find_best_hybrid.py` use stale defaults.
-- All current experiment results are screening-level, not final.
+Key findings:
+- **Model/evaluator choice dominates** (eta² 0.23–0.89). Strategy matters much less (eta² 0.01–0.07). Importance method barely registers (<0.01).
+- **Top strategies:** greedy_fill_s25 (#1 avg rank), pw_top_2/3, pw_rank_exp_d0.5, pw_entropy_1.0/2.0
+- **Cut:** greedy_feature, pw_min_floor, dom_greedy_f0.5 (+ two_stage, stability_selection from prior)
+- **Matching evaluator→model:** weak signal (eta² < 0.003), top configs are overwhelmingly cross
+- **Budget:** 300 > 150 >> 50
+- **Importance:** dead heat (deeplift vs lightgbm_gain); treeshap retained from F05
 
-After F12/F13:
-1. Update allocation defaults in all 26 experiments
-2. Update internal evaluator
-3. Clear all caches on server (`~/.cache/kirby/hybrid_search/`, `~/.cache/kirby/create_hybrid_cache/`)
-4. Pull code on server (`git pull`)
-5. Begin preliminary runs on 40 ready datasets
+Code changes applied (2026-03-29 → 2026-03-30):
+1. `NAMED_ALLOCATIONS` expanded from 22→39 entries (all F12 variants)
+2. Dead strategies removed: greedy_feature, min_floor_0.05, two_stage, stability_selection (dispatch removed, defs kept)
+3. `SPEED_TIERS` → **two tiers only: `fast` and `full`**. No medium/long. Budgets not in tiers (in experiment configs).
+   - Fast: 3 allocs (entropy_1.0, top_3, greedy_fill_s25), 2 imp (treeshap, lightgbm_gain), 3 evals (lightgbm, mlp, xgboost), 3-fold
+   - Full: 31 allocs (all F12 survivors), 3 imp (+deeplift), 7 evals (+ridge, rf, svm, gp), 5-fold
+4. `internal_evaluator` wired through entire pipeline (find_best_hybrid → _run_search → _evaluate_hybrid_config → create_hybrid). Tracked in Blueprint + result dicts. Callable evaluators supported.
+5. GP added as internal evaluator (O(n³)-safe with 500-sample cap)
+6. `create_hybrid` defaults set from F12 top-2 analysis: `top_3` / `lightgbm_gain` / `svm`
+7. All 30 hardcoded `allocation_method='greedy'` across 21 experiment files → `entropy_1.0`
+8. `cached_create_hybrid` (full-data, data-leaking) **deleted**. Replaced with fold-aware `create_hybrid_cached` in _shared.py
+9. `PRELIMINARY`, `INTERMEDIARY`, `FULL` config dicts **deleted**. All helpers build config from SPEED_TIERS directly.
+10. `DEFAULT_MODELS` tier labels updated: `fast` (rf, xgboost) and `full` (all 11)
+11. Budget grids restored in `get_config()`: screening [10,25,50,100,200,500,1000,2000], full [10,25,50,100,200,300,500,750,1000,1500,2000]
+
+Remaining:
+1. ~~Clear hybrid caches on server~~ **DONE** (2026-03-29)
+2. Push code + pull on server (`git push` → `git pull` on ARC)
+3. Begin preliminary runs on ready datasets
 
 ### FT experiments — HTC, resubmitting (2026-03-28)
 
@@ -61,7 +77,7 @@ All HTC FT jobs failed due to inline `pip install` corrupting torch. Fixed by re
 
 ### Cache warning
 
-Complexity and similarity experiments that ran previously used stale hybrid caches (pre-augmentation defaults: step_size=10, patience=3, augmentation_strategy='greedy_ablation'). Must clear caches after F12/F13 finalization before any new runs.
+~~Complexity and similarity experiments that ran previously used stale hybrid caches (pre-augmentation defaults: step_size=10, patience=3, augmentation_strategy='greedy_ablation'). Must clear caches after F12/F13 finalization before any new runs.~~ **CLEARED** (2026-03-29). Both `~/.cache/kirby/hybrid_search/` and `~/.cache/kirby/create_hybrid_cache/` deleted on server.
 
 ---
 
@@ -69,12 +85,14 @@ Complexity and similarity experiments that ran previously used stale hybrid cach
 
 | Component | Status | Blocked on |
 |-----------|--------|-----------|
-| Allocation strategy | Screening defaults; 26 experiments use greedy (worst) | F12 |
-| Internal evaluator | RF hardcoded; F07 showed Ridge wins on antibody | F12/F13 |
-| SPEED_TIERS | Stale | F12/F13 |
+| SPEED_TIERS | **FINALIZED:** 2 tiers (fast/full). No medium/long. | — |
+| Allocation strategy | **FINALIZED:** 31 survivors from F12. Default: `top_3`. All 30 greedy hardcodes fixed. | — |
+| Importance methods | **FINALIZED:** treeshap, lightgbm_gain, deeplift. Default: `lightgbm_gain`. | — |
+| Internal evaluator | **FINALIZED:** 7 options + callable. Default: `svm`. Wired through full pipeline. | — |
+| Budgets | **FINALIZED:** In experiment config. Screening [10,25,...,2000], full [10,25,...,2000]. | — |
 | Augmentation defaults | **FINALIZED:** uncapped, step_size=5, patience=20 | — |
+| Hybrid caching | **FINALIZED:** Fold-aware `create_hybrid_cached` in _shared.py. Old full-data cache deleted. | — |
 | FT swap rules | **PARTIAL:** molecular 3/7 done, TCGA done, antibody pending | HTC queue |
-| Budget grid | **FINALIZED:** [10,25,50,100,200,500,1000,2000] screening | — |
 | Metrics | **FINALIZED:** domain-aware (RMSE/CI/AUROC/F1w/ρ/MCC) | — |
 | Classification support | **FINALIZED:** C02/C08/C09/C10/C11/N01/N07 fixed | — |
 | Augmentation passing | **FINALIZED:** C11/C16-C19, all similarity, all noise fixed | — |
@@ -97,11 +115,11 @@ Complexity and similarity experiments that ran previously used stale hybrid cach
 | Similarity | S01-S13 | All 40 ready | `similarity_helpers.py` | `EXPERIMENT_REFACTOR_ROADMAP.md` |
 | Noise | N01-N13 all active | All 40 ready | `noise_helpers.py` | `NOISE_EXPERIMENT_ROADMAP.md` |
 | OPIG | 6 standalone scripts | Specific OPIG datasets | — | `OPIG_COLLAB_ROADMAP.md` |
-| Federated | fed01-fed04, fed06 all implemented | herg, caco2, logd | `federated_helpers.py` | `FEDERATED_EXPERIMENT_ROADMAP.md` |
+| Federated | fed01-fed05 all implemented | herg, caco2, logd | `federated_helpers.py` | `FEDERATED_EXPERIMENT_ROADMAP.md` |
 
 **Noise (N09-N13):** All implemented. N09 (LNL survey, 12 methods), N10 (hybrid neighborhood LNL), N11 (estimation × remediation grid), N12 (importance-weighted distance), N13 (alt noise distributions). New utility: `src/kirby/utils/lnl_methods.py` (12 training-loop LNL methods). See `NOISE_EXPERIMENT_ROADMAP.md`.
 
-**Federated (fed01-fed06):** All 5 implemented: fed01 (noise heterogeneity), fed02 (rep diversity silos), fed03 (synthetic private datasets), fed04 (cluster-aware importance), fed06 (antibody extension). Uses group-aware single 80/20 split (by design for FLuID comparison). RF hardcoded (matches FLuID). Datasets: herg, caco2, logd. `lhasa_herg_loader.py` loads Lhasa curated data. See `FEDERATED_EXPERIMENT_ROADMAP.md`.
+**Federated (fed01-fed05):** All 5 implemented: fed01 (noise heterogeneity), fed02 (rep diversity silos), fed03 (synthetic private datasets), fed04 (cluster-aware importance), fed05 (antibody extension). Uses group-aware single 80/20 split (by design for FLuID comparison). RF hardcoded (matches FLuID). Datasets: herg, caco2, logd. `lhasa_herg_loader.py` loads Lhasa curated data. See `FEDERATED_EXPERIMENT_ROADMAP.md`.
 
 **Impact on per-dataset files:** None — the unified runner handles dispatch. Adding a new experiment to any category just requires registering it in the helpers file. Adding a new category requires 1 helpers file + 1 entry in `run_dataset.py`'s `CATEGORIES` dict.
 
@@ -857,11 +875,11 @@ These sections have older-format writeups that were done before this dataset-by-
 ### IMPLEMENTATION — New experiment categories
 
 13. ~~**Noise N13 (alt noise distributions)**~~ **DONE** (2026-03-28) — N09-N13 all implemented. 5 new experiments + `lnl_methods.py` (12 LNL methods). See `NOISE_EXPERIMENT_ROADMAP.md`.
-14. ~~**Federated fed04 + fed06**~~ **DONE** — all 5 federated experiments implemented (fed01-fed04, fed06). See `FEDERATED_EXPERIMENT_ROADMAP.md`.
+14. ~~**Federated fed04 + fed05**~~ **DONE** — all 5 federated experiments implemented (fed01-fed05). See `FEDERATED_EXPERIMENT_ROADMAP.md`.
 
 ### IMPLEMENTATION — Experiment infrastructure
 
-16. ~~**Implement per-dataset file redesign**~~ **DONE** (2026-03-27) — replaced ~100 boilerplate .py files + 6 SLURM scripts with `run_dataset.py` + `submit_dataset.sh` + `submit_all_datasets.sh`. N10-N13 and fed02-fed06 pre-registered in helpers.
+16. ~~**Implement per-dataset file redesign**~~ **DONE** (2026-03-27) — replaced ~100 boilerplate .py files + 6 SLURM scripts with `run_dataset.py` + `submit_dataset.sh` + `submit_all_datasets.sh`. N10-N13 and fed02-fed05 pre-registered in helpers.
 17. **S01-S09 classification metrics** — lower priority, but S04/S05/S06 compute R² on predictions which is wrong for classification datasets. See `EXPERIMENT_BUGS.md` Tier 2 similarity.
 
 ### EXPERIMENTS — Supplementary runs needed
@@ -888,11 +906,13 @@ These sections have older-format writeups that were done before this dataset-by-
 ## Dependency Chain
 
 ```
-F12/F13 (ARC, running)
-  → Finalize SPEED_TIERS + allocation defaults
-  → Update 26 experiments
-  → Clear caches
-  → PRELIMINARY RUNS on 40 ready datasets (complexity/similarity/noise)
+F12/F13 — DONE (2026-03-30)
+  ✓ SPEED_TIERS → fast/full (31 allocs, 7 evals, 3 imp)
+  ✓ Defaults: top_3 / lightgbm_gain / svm
+  ✓ 30 greedy hardcodes fixed, all stale configs removed
+  ✓ Caches cleared
+  → git push + pull on server
+  → PRELIMINARY RUNS on ready datasets (complexity/similarity/noise)
 
 FT fill (HTC, resubmitting 2026-03-28)
   → Molecular FT: qm9, adme_hlm, adme_rlm, adme_mdr1 (pip install fix)
@@ -913,7 +933,7 @@ Noise extensions (N09-N13 ALL DONE)
   → N09-N13 deploy alongside N01-N08 on same 40 datasets
   → New utility: lnl_methods.py (12 training-loop LNL methods)
 
-Federated experiments (fed01-fed04, fed06 IMPLEMENTED)
+Federated experiments (fed01-fed05 IMPLEMENTED)
   → All 5 experiments have run() functions, wired into federated_helpers.py
   → Splits: group-aware via cv_split/GroupShuffleSplit (single 80/20, by design for FLuID comparison)
   → Models: RF hardcoded (deliberate — matches FLuID's published approach)
@@ -921,7 +941,7 @@ Federated experiments (fed01-fed04, fed06 IMPLEMENTED)
     - S1: single split (no CI) — acceptable for federated simulation
     - D1: fed01 lacks centralized KIRBy baseline
     - D2: fed03 feature-space confound (FLuID 1 rep vs KIRBy 15+)
-    - D3: fed06 no FLuID vs KIRBy head-to-head for antibodies
+    - D3: fed05 no FLuID vs KIRBy head-to-head for antibodies
   → Datasets: herg, caco2, logd
   → See FEDERATED_EXPERIMENT_ROADMAP.md for full design
 
@@ -953,7 +973,7 @@ These documents are separate and maintained independently. Referenced here for n
 | `EXPERIMENT_BUGS.md` | Tier-based bug tracker, greedy allocation list, hybrid usage audit | Before updating experiments after F12/F13 |
 | `FRAMEWORK_EXPERIMENT_ROADMAP.md` | F00-F13 design and results | F12/F13 analysis |
 | `NOISE_EXPERIMENT_ROADMAP.md` | N09-N13 design, LNL survey, noise estimation work | Implementing noise extensions |
-| `FEDERATED_EXPERIMENT_ROADMAP.md` | fed01-fed06 design, FLuID integration | Implementing federated experiments |
+| `FEDERATED_EXPERIMENT_ROADMAP.md` | fed01-fed05 design, FLuID integration | Implementing federated experiments |
 | `OPIG_COLLAB_ROADMAP.md` | 11 OPIG lab publication items | OPIG-specific dataset decisions |
 | `OPIG_EXPERIMENT_AUDIT.md` | 6/6 OPIG experiments audited against original GitHub repos | **Before running or modifying any OPIG experiment** |
 | `BILL_OF_MATERIALS.md` | Comprehensive rep/dataset inventory, baseline results | Looking up what reps exist and their dimensions |

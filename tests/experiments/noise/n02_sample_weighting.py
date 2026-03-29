@@ -42,7 +42,7 @@ from experiments._shared import (
     get_model_factories, get_domain_metric, cv_split,
     apply_feature_selection, compute_feature_importance,
 )
-from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+from kirby.hybrid import create_hybrid
 # TODO: create_hybrid API not finalised — revisit after framework experiments.
 
 from kirby.utils.noise_estimation import ActivityCliffAwareEstimator
@@ -258,7 +258,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             try:
                 X_train_h, feature_info = create_hybrid(
                     train_reps, y_train,
-                    allocation_method='greedy',
+                    allocation_method='entropy_1.0',
                     budget=100,
                     importance_method='lightgbm_gain',
                     augmentations=augmentations,
@@ -351,7 +351,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             try:
                 X_train_h, fi = create_hybrid(
                     train_reps_fold, y_train,
-                    allocation_method='greedy', budget=100,
+                    allocation_method='entropy_1.0', budget=100,
                     importance_method='lightgbm_gain',
                     augmentations=augmentations,
                     augmentation_strategy=augmentation_strategy,

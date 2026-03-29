@@ -21,15 +21,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import RandomForestRegressor
 from sklearn.neighbors import NearestNeighbors
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    cv_split, get_domain_metric, get_hybrid_features_and_weights,
+    cv_split, get_domain_metric, get_model_factories, get_hybrid_features_and_weights,
 )
-from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+from kirby.hybrid import create_hybrid
 # TODO: create_hybrid API not finalised — revisit after framework experiments.
 from kirby.hybrid import apply_feature_selection
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
@@ -110,6 +109,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     mode = 'intermediary' if n_folds == 1 else 'full'
     search_speed = config['search_speed']
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    task_type = data.get('task_type', 'regression')
+    _rf_factory = get_model_factories(['rf'], task_type=task_type,
+                                       n_samples=len(labels))['rf']
 
     sim_threshold = kwargs.get('sim_threshold', 0.55)
     activity_k = kwargs.get('activity_k', 2.0)
@@ -168,7 +170,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             X_tr = scaler.fit_transform(X_rep[train_idx])
             X_va = scaler.transform(X_rep[val_idx])
 
-            rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+            rf = _rf_factory()
             rf.fit(X_tr, labels[train_idx])
             y_pred = rf.predict(X_va)
 
@@ -207,7 +209,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         X_tr_s = scaler.fit_transform(X_tr_h)
         X_va_s = scaler.transform(X_va_h)
 
-        rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+        rf = _rf_factory()
         rf.fit(X_tr_s, labels[train_idx])
         y_pred = rf.predict(X_va_s)
 

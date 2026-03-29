@@ -35,91 +35,14 @@ from experiments._shared import (
 #       and budget semantics may change after framework experiments complete.
 #       When they do, delete the cache dir (~/.cache/kirby/create_hybrid_cache/).
 
-def _create_hybrid_cache_key(reps, labels, allocation_method, importance_method,
-                             budget, augmentations=None,
-                             augmentation_strategy='uncapped'):
-    """Hash inputs to create_hybrid for disk caching."""
-    h = hashlib.sha256()
-    for name in sorted(reps.keys()):
-        h.update(name.encode())
-        h.update(reps[name].tobytes()[:4096])  # first 4KB per rep for speed
-        h.update(str(reps[name].shape).encode())
-    h.update(labels.tobytes()[:4096])
-    h.update(str(len(labels)).encode())
-    h.update(f'{allocation_method}_{importance_method}_{budget}'.encode())
-    # Include augmentation info in cache key
-    if augmentations:
-        h.update(b'__aug__')
-        for name in sorted(augmentations.keys()):
-            h.update(name.encode())
-            h.update(augmentations[name].tobytes()[:4096])
-            h.update(str(augmentations[name].shape).encode())
-        h.update(augmentation_strategy.encode())
-    return h.hexdigest()[:24]
+# cached_create_hybrid DELETED (2026-03-29) — operated on full data with
+# random internal split, causing data leakage. Replaced by precompute_hybrids
+# system that operates on proper per-fold train splits.
 
 
-def cached_create_hybrid(reps, labels, allocation_method='greedy',
-                         importance_method='treeshap', budget=100,
-                         cache_dir=None, augmentations=None,
-                         augmentation_strategy='uncapped'):
-    """Disk-cached wrapper around create_hybrid.
-
-    Returns (X_hybrid, feature_info) — same as create_hybrid.
-    """
-    from kirby.hybrid import create_hybrid
-
-    if cache_dir is None:
-        cache_dir = Path(os.environ.get(
-            'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby'))
-        ) / 'create_hybrid_cache'
-    else:
-        cache_dir = Path(cache_dir)
-
-    key = _create_hybrid_cache_key(reps, labels, allocation_method,
-                                   importance_method, budget,
-                                   augmentations=augmentations,
-                                   augmentation_strategy=augmentation_strategy)
-    cache_path = cache_dir / f'{key}.pkl'
-
-    if cache_path.exists():
-        try:
-            result = pickle.loads(cache_path.read_bytes())
-            print(f"    [cached create_hybrid: alloc={allocation_method}, "
-                  f"imp={importance_method}, b={budget}]")
-            return result
-        except Exception:
-            pass  # corrupted, recompute
-
-    X_hybrid, feature_info = create_hybrid(
-        reps, labels,
-        allocation_method=allocation_method,
-        importance_method=importance_method,
-        budget=budget,
-        augmentations=augmentations,
-        augmentation_strategy=augmentation_strategy,
-    )
-
-    try:
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        cache_path.write_bytes(pickle.dumps((X_hybrid, feature_info)))
-    except Exception:
-        pass  # non-fatal
-
-    return X_hybrid, feature_info
-
-
-# ── Preliminary experiment config ──────────────────────────────────────────
-# Screening-level: 3 models, 1 fold, fast search. Results inform which
-# experiments are worth expanding to full mode.
-
-PRELIMINARY = {
-    'n_splits': 1,
-    'models': ['rf', 'lightgbm', 'mlp'],
-    'budgets': [25, 50, 100, 200, 500],
-    'allocations': ['performance_weighted', 'softmax_T5'],
-    'importance_methods': ['treeshap', 'lightgbm_gain'],
-    'search_speed': 'fast',
-}
+# ── Experiment config is derived from SPEED_TIERS (fast/full) ─────────────
+# No standalone config dict here. run_all() builds config from SPEED_TIERS
+# via get_config() or directly from the tier dict.
 
 
 # ── Per-dataset rep lists (from PIPELINE_READINESS_TODO.md tiers) ──────────
@@ -533,11 +456,21 @@ def run_all(dataset_name: str, output_dir: str,
         dataset_name: Dataset name (e.g. 'herg', 'logd', 'flab_thermo_tresanco').
         output_dir: Base output directory for results JSON files.
         experiments: List of experiment IDs to run (default: SINGLE_DATASET_EXPERIMENTS).
-        config: Config dict override (default: PRELIMINARY).
+        config: Config dict override (default: fast tier from SPEED_TIERS).
         rep_names: Explicit rep list override. If None, uses DATASET_REPS[dataset_name]['general'].
     """
     if config is None:
-        config = dict(PRELIMINARY)
+        from kirby.find_best_hybrid import SPEED_TIERS
+        tier = SPEED_TIERS['fast']
+        config = {
+            'n_splits': tier['n_folds'],
+            'search_speed': 'fast',
+            'allocations': tier['allocation_methods'],
+            'importance_methods': tier['importance_methods'],
+            'internal_evaluators': tier['internal_evaluators'],
+            'budgets': [10, 25, 50, 100, 200, 500, 1000, 2000],
+            'models': ['rf', 'lightgbm', 'mlp'],
+        }
     if experiments is None:
         experiments = list(SINGLE_DATASET_EXPERIMENTS)
         # C12 (modality ablation) is TCGA-only — auto-include for TCGA datasets

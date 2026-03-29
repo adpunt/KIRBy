@@ -21,15 +21,14 @@ import numpy as np
 from scipy.stats import spearmanr
 from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import NearestNeighbors
-from sklearn.ensemble import RandomForestRegressor
-
 from experiments._shared import (
-    load_data, INTERMEDIARY, FULL, get_config, create_experiment_parser,
+    load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results, convert_numpy,
     get_hybrid_features_and_weights, make_cv_splitter,
     apply_feature_selection, compute_feature_importance,
+    get_domain_metric, get_model_factories,
 )
-from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+from kirby.hybrid import create_hybrid
 # TODO: create_hybrid API not finalised — revisit after framework experiments.
 
 
@@ -46,6 +45,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     reps = data['reps']
     labels = data['labels']
     groups = data['groups']
+
+    task_type = data.get('task_type', 'regression')
+    _rf_factory = get_model_factories(['rf'], task_type=task_type,
+                                       n_samples=len(labels))['rf']
 
     results = {'distance_error_correlation': {}, 'reliability': {}, 'conformal': {}}
 
@@ -118,7 +121,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             scaler_h = StandardScaler()
             X_tr_s = scaler_h.fit_transform(X_tr_h)
             X_va_s = scaler_h.transform(X_va_h)
-            rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+            rf = _rf_factory()
             rf.fit(X_tr_s, y_train)
             y_pred = rf.predict(X_va_s)
             errors = np.abs(y_val - y_pred)
@@ -128,7 +131,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             scaler_c = StandardScaler()
             X_tr_c = scaler_c.fit_transform(X_concat[train_idx])
             X_va_c = scaler_c.transform(X_concat[val_idx])
-            rf_neutral = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+            rf_neutral = _rf_factory()
             rf_neutral.fit(X_tr_c, y_train)
             errors_neutral = np.abs(y_val - rf_neutral.predict(X_va_c))
 
@@ -306,8 +309,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 y_cal = y_train[cal_local]
 
                 # Train RF, compute conformal quantile on calibration set
-                rf = RandomForestRegressor(n_estimators=100, random_state=42,
-                                           n_jobs=-1)
+                rf = _rf_factory()
                 rf.fit(X_tr, y_tr)
 
                 # Calibration: residuals normalized by tree variance

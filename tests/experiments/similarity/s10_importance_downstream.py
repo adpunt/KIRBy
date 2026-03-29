@@ -26,17 +26,15 @@ from sklearn.neighbors import KNeighborsRegressor, NearestNeighbors
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, WhiteKernel, ConstantKernel
 from sklearn.svm import SVR
-from sklearn.ensemble import RandomForestRegressor
-
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, make_structured_output,
-    cv_split, get_domain_metric, convert_numpy,
+    cv_split, get_domain_metric, get_model_factories, convert_numpy,
     compute_feature_importance,
 )
 
 from kirby.hybrid import apply_feature_selection
-from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+from kirby.hybrid import create_hybrid
 # TODO: create_hybrid API not finalised — revisit after framework experiments.
 
 
@@ -507,9 +505,10 @@ def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
     k_neighbors = 10
     results = {'per_rep': {}, 'hybrid': {}}
 
+    _rf_fac = get_model_factories(['rf'], task_type=data.get('task_type', 'regression'),
+                                    n_samples=len(labels))['rf']
     def _make_rf():
-        return RandomForestRegressor(n_estimators=100, random_state=42,
-                                     n_jobs=-1)
+        return _rf_fac()
 
     # Per-rep evaluation
     for rep_name in sorted(reps.keys()):

@@ -2,13 +2,16 @@
 """S08: Optimal Dimension for Similarity vs Prediction.
 
 Paper: Similarity
-Conclusion: Optimal dimensionality differs for similarity vs prediction.
+Hypothesis: Optimal dimensionality may differ for similarity vs prediction.
 Dependencies: None (standalone).
 
 At each budget, runs get_hybrid_features_and_weights with specific budget and
 computes: MLE intrinsic dim, SAC, violation rate, distance correlation with
 full concat, RF R2 and kNN R2. Also computes per-rep baselines and concat
 reference. Finds optimal budget for prediction (RF) vs similarity (SAC).
+
+Includes Pareto frontier analysis to quantify the SAC-vs-prediction trade-off
+and determine whether the optima genuinely differ or coincide.
 """
 import sys
 import os
@@ -19,17 +22,15 @@ import time
 import numpy as np
 from scipy.stats import spearmanr
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import r2_score
-from sklearn.neighbors import KNeighborsRegressor
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
 
 from experiments._shared import (
-    load_data, INTERMEDIARY, FULL, get_config, create_experiment_parser,
+    load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_hybrid_features_and_weights, estimate_intrinsic_dim_mle, make_cv_splitter,
-    apply_feature_selection,
+    apply_feature_selection, get_domain_metric, get_model_factories,
 )
-from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+from kirby.hybrid import create_hybrid
 # TODO: create_hybrid API not finalised — revisit after framework experiments.
 
 from kirby.utils.noise_mitigation_methods import (
@@ -111,6 +112,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     reps = data['reps']
     labels = data['labels']
     groups = data['groups']
+
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    task_type = data.get('task_type', 'regression')
+    is_clf = task_type == 'classification'
+    rf_factory = get_model_factories(['rf'], task_type=task_type,
+                                      n_samples=len(labels))['rf']
+
+    def _make_knn(n_train):
+        k = min(5, n_train - 1)
+        if is_clf:
+            return KNeighborsClassifier(n_neighbors=k)
+        return KNeighborsRegressor(n_neighbors=k)
 
     results = {'budgets': {}}
 
@@ -196,31 +209,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             X_va_s = scaler.transform(X_va_h)
 
             # RF
-            rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+            rf = rf_factory()
             rf.fit(X_tr_s, y_train)
-            rf_scores.append(r2_score(y_val, rf.predict(X_va_s)))
+            rf_scores.append(metric_fn(y_val, rf.predict(X_va_s)))
 
             # kNN
-            knn = KNeighborsRegressor(n_neighbors=min(5, len(y_train) - 1))
+            knn = _make_knn(len(y_train))
             knn.fit(X_tr_s, y_train)
-            knn_scores.append(r2_score(y_val, knn.predict(X_va_s)))
+            knn_scores.append(metric_fn(y_val, knn.predict(X_va_s)))
 
-        rf_r2 = float(np.mean(rf_scores)) if rf_scores else float('nan')
-        knn_r2 = float(np.mean(knn_scores)) if knn_scores else float('nan')
+        rf_score = float(np.mean(rf_scores)) if rf_scores else float('nan')
+        knn_score = float(np.mean(knn_scores)) if knn_scores else float('nan')
 
         elapsed = time.time() - t0
 
         results['budgets'][budget] = {
             'actual_dim': actual_dim,
             'mle_id': mle_id,
-            'rf_r2': rf_r2,
-            'knn_r2': knn_r2,
+            'rf_score': rf_score,
+            'knn_score': knn_score,
+            'metric': metric_name,
             'sac_rho': sac_rho,
             'violation_rate': viol,
             'dist_corr_with_full': dist_corr,
             'time_seconds': elapsed,
         }
-        print(f"    dim={actual_dim} (MLE_ID={mle_id:.1f}): RF_R2={rf_r2:.4f}, kNN_R2={knn_r2:.4f}, "
+        print(f"    dim={actual_dim} (MLE_ID={mle_id:.1f}): RF_{metric_name}={rf_score:.4f}, "
+              f"kNN_{metric_name}={knn_score:.4f}, "
               f"SAC={sac_rho:.4f}, viol={viol:.3f}, dist_corr={dist_corr:.3f}")
 
     # Per-rep baselines (unweighted + weighted)
@@ -256,13 +271,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             X_tr = scaler.fit_transform(X[train_idx])
             X_va = scaler.transform(X[val_idx])
 
-            rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+            rf = rf_factory()
             rf.fit(X_tr, y_train)
-            rf_rep.append(r2_score(y_val, rf.predict(X_va)))
+            rf_rep.append(metric_fn(y_val, rf.predict(X_va)))
 
-            knn = KNeighborsRegressor(n_neighbors=min(5, len(y_train) - 1))
+            knn = _make_knn(len(y_train))
             knn.fit(X_tr, y_train)
-            knn_rep.append(r2_score(y_val, knn.predict(X_va)))
+            knn_rep.append(metric_fn(y_val, knn.predict(X_va)))
 
         # MLE ID for individual rep
         try:
@@ -274,8 +289,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['per_rep'][rep_name] = {
             'dim': X.shape[1],
             'mle_id': rep_mle,
-            'rf_r2': float(np.mean(rf_rep)),
-            'knn_r2': float(np.mean(knn_rep)),
+            'rf_score': float(np.mean(rf_rep)),
+            'knn_score': float(np.mean(knn_rep)),
+            'metric': metric_name,
             'sac_rho': sac_rep,
             'sac_rho_weighted': sac_rep_w,
             'violation_rate': viol_rep,
@@ -283,8 +299,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if best_rep_name is None or sac_rep > best_rep_sac:
             best_rep_sac = sac_rep
             best_rep_name = rep_name
-        print(f"    {rep_name} (dim={X.shape[1]}): RF_R2={np.mean(rf_rep):.4f}, "
-              f"kNN_R2={np.mean(knn_rep):.4f}, SAC={sac_rep:.4f}, SAC_w={sac_rep_w:.4f}")
+        print(f"    {rep_name} (dim={X.shape[1]}): RF_{metric_name}={np.mean(rf_rep):.4f}, "
+              f"kNN_{metric_name}={np.mean(knn_rep):.4f}, SAC={sac_rep:.4f}, SAC_w={sac_rep_w:.4f}")
 
     results['best_individual_rep'] = best_rep_name
     print(f"  Best individual rep: {best_rep_name} (SAC={best_rep_sac:.4f})")
@@ -302,18 +318,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         X_tr = scaler.fit_transform(X_concat[train_idx])
         X_va = scaler.transform(X_concat[val_idx])
 
-        rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+        rf = rf_factory()
         rf.fit(X_tr, y_train)
-        rf_scores_full.append(r2_score(y_val, rf.predict(X_va)))
+        rf_scores_full.append(metric_fn(y_val, rf.predict(X_va)))
 
-        knn = KNeighborsRegressor(n_neighbors=min(5, len(y_train) - 1))
+        knn = _make_knn(len(y_train))
         knn.fit(X_tr, y_train)
-        knn_scores_full.append(r2_score(y_val, knn.predict(X_va)))
+        knn_scores_full.append(metric_fn(y_val, knn.predict(X_va)))
 
     concat_ref = {
         'dim': full_dim,
-        'rf_r2': float(np.mean(rf_scores_full)),
-        'knn_r2': float(np.mean(knn_scores_full)),
+        'rf_score': float(np.mean(rf_scores_full)),
+        'knn_score': float(np.mean(knn_scores_full)),
+        'metric': metric_name,
         'sac_rho': sac_full,
         'violation_rate': viol_full,
     }
@@ -325,22 +342,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                            standardize=True)
         sac_full_w, _ = similarity_activity_correlation(D_full_w, labels, n_sample)
         concat_ref['sac_rho_weighted'] = sac_full_w
-        print(f"    RF_R2={concat_ref['rf_r2']:.4f}, "
-              f"kNN_R2={concat_ref['knn_r2']:.4f}, "
+        print(f"    RF_{metric_name}={concat_ref['rf_score']:.4f}, "
+              f"kNN_{metric_name}={concat_ref['knn_score']:.4f}, "
               f"SAC={sac_full:.4f}, SAC_w={sac_full_w:.4f}")
     else:
-        print(f"    RF_R2={concat_ref['rf_r2']:.4f}, "
-              f"kNN_R2={concat_ref['knn_r2']:.4f}, "
+        print(f"    RF_{metric_name}={concat_ref['rf_score']:.4f}, "
+              f"kNN_{metric_name}={concat_ref['knn_score']:.4f}, "
               f"SAC={sac_full:.4f}, viol={viol_full:.3f}")
     results['concat_reference'] = concat_ref
 
     # Find optimal budget for prediction vs similarity
     budget_list = sorted(results['budgets'].keys())
     if budget_list:
-        best_rf_budget = max(budget_list,
-                             key=lambda b: results['budgets'][b].get('rf_r2', -999))
-        best_knn_budget = max(budget_list,
-                              key=lambda b: results['budgets'][b].get('knn_r2', -999))
+        _best_fn = min if lower_is_better else max
+        _default = 999 if lower_is_better else -999
+        best_rf_budget = _best_fn(budget_list,
+                                   key=lambda b: results['budgets'][b].get('rf_score', _default))
+        best_knn_budget = _best_fn(budget_list,
+                                    key=lambda b: results['budgets'][b].get('knn_score', _default))
         # Highest SAC = best distance-activity correlation
         best_sac_budget = max(budget_list,
                               key=lambda b: results['budgets'][b].get('sac_rho', -999))
@@ -352,6 +371,67 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         }
         print(f"\n  Optimal budgets: RF={best_rf_budget}, "
               f"kNN={best_knn_budget}, SAC={best_sac_budget}")
+
+        # ── Pareto frontier: SAC (higher=better) vs RF (direction depends on metric) ──
+        # Both objectives should be "higher is better" for Pareto.
+        # RF score is already in the right direction (metric_fn handles it).
+        # For lower-is-better metrics (RMSE), negate so higher = better.
+        pareto_points = []
+        for b in budget_list:
+            bd = results['budgets'][b]
+            sac = bd.get('sac_rho', float('nan'))
+            rf = bd.get('rf_score', float('nan'))
+            if np.isnan(sac) or np.isnan(rf):
+                continue
+            rf_max = -rf if lower_is_better else rf  # convert to higher=better
+            pareto_points.append((b, sac, rf_max, rf))
+
+        pareto_front = []
+        if pareto_points:
+            # Sort by SAC descending; sweep for Pareto-optimal
+            pareto_points.sort(key=lambda x: x[1], reverse=True)
+            best_rf_seen = float('-inf')
+            for budget_val, sac, rf_max, rf_orig in pareto_points:
+                if rf_max >= best_rf_seen:
+                    pareto_front.append({
+                        'budget': budget_val,
+                        'sac_rho': sac,
+                        f'rf_{metric_name}': rf_orig,
+                    })
+                    best_rf_seen = rf_max
+
+            # Quantify trade-off: how much SAC do you lose going from
+            # SAC-optimal to RF-optimal budget, and vice versa?
+            sac_at_rf_opt = results['budgets'][best_rf_budget].get('sac_rho', float('nan'))
+            rf_at_sac_opt = results['budgets'][best_sac_budget].get('rf_score', float('nan'))
+            sac_at_sac_opt = results['budgets'][best_sac_budget].get('sac_rho', float('nan'))
+            rf_at_rf_opt = results['budgets'][best_rf_budget].get('rf_score', float('nan'))
+
+            tradeoff = {
+                'sac_loss_at_rf_optimum': float(sac_at_sac_opt - sac_at_rf_opt),
+                'rf_loss_at_sac_optimum': float(rf_at_rf_opt - rf_at_sac_opt) if not lower_is_better
+                    else float(rf_at_sac_opt - rf_at_rf_opt),
+                'optima_differ': best_rf_budget != best_sac_budget,
+                'budget_gap': abs(best_rf_budget - best_sac_budget),
+            }
+
+            results['pareto'] = {
+                'frontier': pareto_front,
+                'n_pareto_points': len(pareto_front),
+                'tradeoff': tradeoff,
+            }
+
+            print(f"\n  Pareto frontier ({len(pareto_front)} points):")
+            for pt in pareto_front:
+                print(f"    budget={pt['budget']:4d}  "
+                      f"SAC={pt['sac_rho']:.4f}  "
+                      f"RF_{metric_name}={pt[f'rf_{metric_name}']:.4f}")
+            if tradeoff['optima_differ']:
+                print(f"  Trade-off: SAC-opt@{best_sac_budget} vs RF-opt@{best_rf_budget}")
+                print(f"    SAC loss at RF-optimum: {tradeoff['sac_loss_at_rf_optimum']:.4f}")
+                print(f"    RF loss at SAC-optimum: {tradeoff['rf_loss_at_sac_optimum']:.4f}")
+            else:
+                print(f"  No trade-off: both objectives peak at budget={best_rf_budget}")
 
     return results
 

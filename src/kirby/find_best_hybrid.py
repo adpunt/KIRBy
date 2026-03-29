@@ -68,6 +68,7 @@ class Blueprint:
     allocation_method: str
     importance_method: str
     budget: int
+    internal_evaluator: str = 'ridge'
     step_size: int = 5
     speed: str = ''
     n_folds: int = 0
@@ -81,6 +82,7 @@ class Blueprint:
             'reps': self.reps,
             'allocation_method': self.allocation_method,
             'importance_method': self.importance_method,
+            'internal_evaluator': self.internal_evaluator,
             'budget': self.budget,
             'step_size': self.step_size,
             'speed': self.speed,
@@ -439,20 +441,20 @@ DEFAULT_MODELS = {
             alphas=np.logspace(-4, 4, 50)),
         'classifier': lambda: __import__('sklearn.linear_model', fromlist=['LogisticRegressionCV']).LogisticRegressionCV(
             Cs=10, random_state=42, max_iter=1000, n_jobs=-1),
-        'tier': 'medium',
+        'tier': 'full',
     },
     'knn': {
         'regressor': lambda: __import__('sklearn.neighbors', fromlist=['KNeighborsRegressor']).KNeighborsRegressor(
             n_neighbors=5, n_jobs=-1),
         'classifier': lambda: __import__('sklearn.neighbors', fromlist=['KNeighborsClassifier']).KNeighborsClassifier(
             n_neighbors=5, n_jobs=-1),
-        'tier': 'medium',
+        'tier': 'full',
         '_adaptive_k': True,
     },
     'lightgbm': {
         'regressor': _get_lgbm_regressor,
         'classifier': _get_lgbm_classifier,
-        'tier': 'long',
+        'tier': 'full',
     },
     'mlp': {
         'regressor': lambda: __import__('sklearn.neural_network', fromlist=['MLPRegressor']).MLPRegressor(
@@ -461,39 +463,39 @@ DEFAULT_MODELS = {
         'classifier': lambda: __import__('sklearn.neural_network', fromlist=['MLPClassifier']).MLPClassifier(
             hidden_layer_sizes=(256,), random_state=42, max_iter=500,
             early_stopping=True, validation_fraction=0.1),
-        'tier': 'long',
+        'tier': 'full',
     },
     'svm': {
         'regressor': lambda: __import__('sklearn.svm', fromlist=['SVR']).SVR(),
         'classifier': lambda: __import__('sklearn.svm', fromlist=['SVC']).SVC(),
-        'tier': 'long',
+        'tier': 'full',
         '_max_samples': 10000,
     },
     'gp': {
         'regressor': _get_gp_regressor,
         'classifier': _get_gp_classifier,
-        'tier': 'long',
+        'tier': 'full',
         '_max_samples': 5000,
     },
     'catboost': {
         'regressor': _get_catboost_regressor,
         'classifier': _get_catboost_classifier,
-        'tier': 'long',
+        'tier': 'full',
     },
     'dnn': {
         'regressor': _get_dnn_regressor,
         'classifier': _get_dnn_classifier,
-        'tier': 'long',
+        'tier': 'full',
     },
     'cnn': {
         'regressor': _get_cnn_regressor,
         'classifier': _get_cnn_classifier,
-        'tier': 'long',
+        'tier': 'full',
     },
 }
 
 # Tier ordering for filtering
-_TIER_ORDER = {'fast': 0, 'medium': 1, 'long': 2}
+_TIER_ORDER = {'fast': 0, 'full': 1}
 
 
 def _resolve_models(models, task_type: str, speed: str,
@@ -509,7 +511,7 @@ def _resolve_models(models, task_type: str, speed: str,
     Models with _max_samples are auto-skipped when n_samples exceeds the limit.
     """
     key = 'classifier' if task_type == 'classification' else 'regressor'
-    max_tier = _TIER_ORDER.get(speed, 2)
+    max_tier = _TIER_ORDER.get(speed, 1)
 
     def _check_max_samples(name, spec):
         max_s = spec.get('_max_samples')
@@ -802,36 +804,36 @@ def tune_models(
 # =============================================================================
 
 SPEED_TIERS = {
-    # F05 result: treeshap + deeplift + lightgbm_gain covers 3 independent
-    # families (tree-permutation, gradient, tree-gain). kernelshap, IG,
-    # gradientshap, permutation dropped as redundant or too slow.
-    # F01 result: greedy/greedy_feature consistently worst — removed.
-    # performance_weighted is the safest cross-domain default.
+    # F12/F13 results (2026-03-29). Two tiers: fast (screening) and full (publication).
+    # Budgets NOT in tiers — user must specify.
+    # Downstream models NOT in tiers — experiment-controlled.
     'fast': {
         'importance_methods': ['treeshap', 'lightgbm_gain'],
-        'allocation_methods': ['performance_weighted', 'softmax_T5'],
-        'budgets': [100],
+        'allocation_methods': [
+            'entropy_1.0', 'top_3', 'greedy_fill_s25',
+        ],
+        'internal_evaluators': ['lightgbm', 'mlp', 'xgboost'],
         'n_folds': 3,
     },
-    'medium': {
+    'full': {
         'importance_methods': ['treeshap', 'deeplift', 'lightgbm_gain'],
         'allocation_methods': [
-            'performance_weighted', 'softmax_T2', 'softmax_T5',
-            'power_2', 'min_floor_0.05',
+            # All 31 F12 survivors — PW family
+            'performance_weighted',
+            'softmax_T0.5', 'softmax_T2', 'softmax_T10',
+            'power_2', 'power_3',
+            'thresh_0.3', 'thresh_0.5', 'thresh_0.7',
+            'top_2', 'top_3', 'top_5',
+            'rank_linear',
+            'rank_exp_d0.1', 'rank_exp_d0.3', 'rank_exp_d0.5',
+            'score_gap_0.2', 'score_gap_0.3', 'score_gap_0.5', 'score_gap_0.7',
+            'entropy_0.5', 'entropy_1.0', 'entropy_2.0',
+            # Greedy family
+            'greedy_forced_s5', 'greedy_forced_s10', 'greedy_forced_s25',
+            'greedy_fill_s5', 'greedy_fill_s10', 'greedy_fill_s25',
+            'dom_greedy_f0.7', 'dom_greedy_f0.9',
         ],
-        'budgets': [50, 100, 200],
-        'n_folds': 5,
-    },
-    'long': {
-        'importance_methods': ['treeshap', 'deeplift', 'lightgbm_gain'],
-        'allocation_methods': [
-            'performance_weighted', 'softmax_T0.5', 'softmax_T1',
-            'softmax_T2', 'softmax_T5', 'softmax_T10',
-            'power_2', 'power_3', 'thresh_0.5',
-            'top_3', 'min_floor_0.05', 'dominant_greedy', 'two_stage',
-            'stability_selection',
-        ],
-        'budgets': [50, 100, 200, 500],
+        'internal_evaluators': ['ridge', 'rf', 'xgboost', 'lightgbm', 'mlp', 'svm', 'gp'],
         'n_folds': 5,
     },
 }
@@ -1053,9 +1055,10 @@ def _evaluate_hybrid_config(
     importance_method: str,
     model,
     model_name: str,
-    groups: Optional[np.ndarray],
-    n_folds: int,
-    metric_fn: Callable,
+    internal_evaluator: str = 'ridge',
+    groups: Optional[np.ndarray] = None,
+    n_folds: int = 5,
+    metric_fn: Callable = None,
     seed: int = 42,
     step_size: int = 5,
     augmentations: Optional[Dict[str, np.ndarray]] = None,
@@ -1110,6 +1113,7 @@ def _evaluate_hybrid_config(
                 budget=budget,
                 step_size=step_size,
                 importance_method=importance_method,
+                internal_evaluator=internal_evaluator,
                 augmentations=train_augs,
                 augmentation_strategy=augmentation_strategy,
                 augmentation_threshold=augmentation_threshold,
@@ -1163,6 +1167,7 @@ def _evaluate_hybrid_config(
         reps=rep_names,
         allocation_method=allocation_method,
         importance_method=importance_method,
+        internal_evaluator=internal_evaluator,
         budget=budget,
         step_size=step_size,
         augmentation_strategy=augmentation_strategy,
@@ -1178,6 +1183,7 @@ def _evaluate_hybrid_config(
         'time_seconds': elapsed,
         'allocation_method': allocation_method,
         'importance_method': importance_method,
+        'internal_evaluator': internal_evaluator,
         'budget': budget,
         'step_size': step_size,
     }
@@ -1313,9 +1319,10 @@ def _run_search(
     speed: str,
     models: Dict[str, Any],
     metric_fn: Callable,
-    budgets: Optional[List[int]] = None,
+    budgets: List[int],
     allocation_methods: Optional[List[str]] = None,
     importance_methods: Optional[List[str]] = None,
+    internal_evaluators: Optional[List[str]] = None,
     n_folds: Optional[int] = None,
     test_rep_subsets: bool = False,
     seed: int = 42,
@@ -1336,8 +1343,13 @@ def _run_search(
     tier = SPEED_TIERS[speed]
     search_importance = importance_methods if importance_methods is not None else tier['importance_methods']
     search_allocation = allocation_methods if allocation_methods is not None else tier['allocation_methods']
-    search_budgets = budgets if budgets is not None else tier['budgets']
+    search_evaluators = internal_evaluators if internal_evaluators is not None else tier['internal_evaluators']
+    search_budgets = budgets
     search_folds = n_folds if n_folds is not None else tier['n_folds']
+
+    # Resolve 'match' evaluators: for each model, the evaluator IS that model
+    use_matched = 'match' in search_evaluators
+    explicit_evaluators = [e for e in search_evaluators if e != 'match']
 
     # Build list of rep sets to test
     rep_sets = [base_reps]
@@ -1349,11 +1361,28 @@ def _run_search(
             rep_sets.append(subset)
             rep_set_names.append(f'no_{leave_out}')
 
-    # Compute effective config count accounting for importance-insensitive allocs
+    # Build effective evaluator list per model
+    def _evaluators_for_model(model_name):
+        """Return list of evaluator names to test for a given downstream model."""
+        evs = list(explicit_evaluators)
+        if use_matched:
+            # Map model name to evaluator name
+            match_map = {
+                'rf': 'rf', 'lightgbm': 'lightgbm', 'xgboost': 'xgboost',
+                'mlp': 'mlp', 'svm': 'svm', 'gp': 'gp', 'ridge': 'ridge',
+            }
+            matched_ev = match_map.get(model_name)
+            if matched_ev and matched_ev not in evs:
+                evs.append(matched_ev)
+        return evs if evs else ['ridge']
+
+    # Compute effective config count
     total = 0
     for alloc in search_allocation:
         n_imp = 1 if not _is_importance_sensitive(alloc) else len(search_importance)
-        total += len(rep_sets) * len(search_budgets) * n_imp * len(models)
+        for model_name in models:
+            n_ev = len(_evaluators_for_model(model_name))
+            total += len(rep_sets) * len(search_budgets) * n_imp * n_ev
 
     if verbose:
         print(f"\nSearching {total} unique configurations ({speed} mode)...")
@@ -1382,90 +1411,95 @@ def _run_search(
 
             # Skip pruned allocation methods
             if adaptive_pruning and alloc in pruned_alloc:
-                skipped = len(search_budgets) * len(effective_importance) * len(models)
+                skipped_alloc = 0
+                for mn in models:
+                    skipped_alloc += len(search_budgets) * len(effective_importance) * len(_evaluators_for_model(mn))
                 if verbose:
-                    print(f"  [skipping {skipped} configs] alloc={alloc}: PRUNED")
-                idx += skipped
+                    print(f"  [skipping {skipped_alloc} configs] alloc={alloc}: PRUNED")
+                idx += skipped_alloc
                 continue
 
             for bgt in search_budgets:
                 for imp in effective_importance:
                     # Skip pruned importance methods (only relevant for sensitive allocs)
                     if imp_sensitive and adaptive_pruning and imp in pruned_importance:
-                        skipped = len(models)
+                        skipped_imp = sum(len(_evaluators_for_model(mn)) for mn in models)
                         if verbose:
                             print(
-                                f"  [skipping {skipped} configs] {alloc}/{imp}/b={bgt}: "
+                                f"  [skipping {skipped_imp} configs] {alloc}/{imp}/b={bgt}: "
                                 f"PRUNED (importance)"
                             )
-                        idx += skipped
+                        idx += skipped_imp
                         continue
 
                     for model_name, model in models.items():
-                        idx += 1
+                        model_evaluators = _evaluators_for_model(model_name)
 
-                        # Skip pruned models
-                        if adaptive_pruning and model_name in pruned_models:
-                            if verbose:
-                                print(
-                                    f"  [{idx}/{total}] {model_name}/{alloc}/{imp}/b={bgt}: "
-                                    f"PRUNED"
+                        for eval_name in model_evaluators:
+                            idx += 1
+
+                            # Skip pruned models
+                            if adaptive_pruning and model_name in pruned_models:
+                                if verbose:
+                                    print(
+                                        f"  [{idx}/{total}] {model_name}/{alloc}/{imp}/b={bgt}/ev={eval_name}: "
+                                        f"PRUNED"
+                                    )
+                                continue
+
+                            try:
+                                result = _evaluate_hybrid_config(
+                                    base_reps=rep_set,
+                                    labels=labels,
+                                    allocation_method=alloc,
+                                    budget=bgt,
+                                    importance_method=imp,
+                                    model=model,
+                                    model_name=model_name,
+                                    internal_evaluator=eval_name,
+                                    groups=groups,
+                                    n_folds=search_folds,
+                                    metric_fn=metric_fn,
+                                    seed=seed,
+                                    augmentations=augmentations,
+                                    augmentation_strategy=augmentation_strategy,
+                                    augmentation_threshold=augmentation_threshold,
+                                    augmentation_budget=augmentation_budget,
+                                    candidate_ranking=candidate_ranking,
+                                    lower_is_better=lower_is_better,
+                                    fold_reps=fold_reps,
+                                    precomputed_folds=precomputed_folds,
+                                    cv_splitter=cv_splitter,
                                 )
-                            continue
+                                if rep_set_name != 'all':
+                                    result['rep_subset'] = rep_set_name
+                                results.append(result)
 
-                        try:
-                            result = _evaluate_hybrid_config(
-                                base_reps=rep_set,
-                                labels=labels,
-                                allocation_method=alloc,
-                                budget=bgt,
-                                importance_method=imp,
-                                model=model,
-                                model_name=model_name,
-                                groups=groups,
-                                n_folds=search_folds,
-                                metric_fn=metric_fn,
-                                seed=seed,
-                                augmentations=augmentations,
-                                augmentation_strategy=augmentation_strategy,
-                                augmentation_threshold=augmentation_threshold,
-                                augmentation_budget=augmentation_budget,
-                                candidate_ranking=candidate_ranking,
-                                lower_is_better=lower_is_better,
-                                fold_reps=fold_reps,
-                                precomputed_folds=precomputed_folds,
-                                cv_splitter=cv_splitter,
-                            )
-                            if rep_set_name != 'all':
-                                result['rep_subset'] = rep_set_name
-                            results.append(result)
+                                if verbose:
+                                    print(
+                                        f"  [{idx}/{total}] {model_name}/{alloc}/{imp}/b={bgt}/ev={eval_name}: "
+                                        f"score={result['score_mean']:.4f}+/-{result['score_std']:.3f}, "
+                                        f"dim={result['n_features']}"
+                                    )
 
-                            if verbose:
-                                print(
-                                    f"  [{idx}/{total}] {model_name}/{alloc}/{imp}/b={bgt}: "
-                                    f"score={result['score_mean']:.4f}+/-{result['score_std']:.3f}, "
-                                    f"dim={result['n_features']}"
-                                )
+                                # Track comparable scores for pruning
+                                if adaptive_pruning:
+                                    comp = _score_to_comparable(result['score_mean'], lower_is_better)
+                                    if model_name not in model_best_scores or comp > model_best_scores[model_name]:
+                                        model_best_scores[model_name] = comp
+                                    if imp not in importance_best_scores or comp > importance_best_scores[imp]:
+                                        importance_best_scores[imp] = comp
+                                    if alloc not in alloc_best_scores or comp > alloc_best_scores[alloc]:
+                                        alloc_best_scores[alloc] = comp
+                                    if comp > global_best_comparable:
+                                        global_best_comparable = comp
 
-                            # Track comparable scores for pruning
-                            if adaptive_pruning:
-                                comp = _score_to_comparable(result['score_mean'], lower_is_better)
-                                # Update per-dimension bests
-                                if model_name not in model_best_scores or comp > model_best_scores[model_name]:
-                                    model_best_scores[model_name] = comp
-                                if imp not in importance_best_scores or comp > importance_best_scores[imp]:
-                                    importance_best_scores[imp] = comp
-                                if alloc not in alloc_best_scores or comp > alloc_best_scores[alloc]:
-                                    alloc_best_scores[alloc] = comp
-                                if comp > global_best_comparable:
-                                    global_best_comparable = comp
-
-                        except Exception as e:
-                            if verbose:
-                                print(
-                                    f"  [{idx}/{total}] {model_name}/{alloc}/{imp}/b={bgt}: "
-                                    f"FAILED - {e}"
-                                )
+                            except Exception as e:
+                                if verbose:
+                                    print(
+                                        f"  [{idx}/{total}] {model_name}/{alloc}/{imp}/b={bgt}/ev={eval_name}: "
+                                        f"FAILED - {e}"
+                                    )
 
                     # After each (alloc, bgt, imp) model sweep: prune models
                     if adaptive_pruning and first_model_sweep_done and global_best_comparable > -np.inf:
@@ -1523,7 +1557,7 @@ def _run_search(
 # =============================================================================
 
 # Allocation methods where step_size has an effect (greedy-based methods)
-_STEP_SIZE_SENSITIVE = {'greedy', 'dominant_greedy', 'greedy_feature'}
+_STEP_SIZE_SENSITIVE = {'greedy', 'dominant_greedy'}
 
 # Allocation methods that ignore importance_method (use internal RF feature_importances_)
 _IMPORTANCE_INSENSITIVE = {'greedy', 'dominant_greedy'}
@@ -1634,6 +1668,7 @@ def _run_refinement_phase(
                     importance_method=r['importance_method'],
                     model=model,
                     model_name=model_name,
+                    internal_evaluator=r.get('internal_evaluator', 'ridge'),
                     groups=groups,
                     n_folds=n_folds,
                     metric_fn=metric_fn,
@@ -1801,7 +1836,8 @@ def _compute_fitted_result(
 # =============================================================================
 
 def _hybrid_cache_key(base_reps, labels, groups, speed, budgets, allocation_methods,
-                      importance_methods, n_folds, models, seed, metric, task_type,
+                      importance_methods, internal_evaluators, n_folds, models,
+                      seed, metric, task_type,
                       return_fitted=False, weight_method=None,
                       two_phase=False, refinement_top_n=5,
                       refinement_step_sizes=None,
@@ -1814,7 +1850,7 @@ def _hybrid_cache_key(base_reps, labels, groups, speed, budgets, allocation_meth
     h.update(labels.tobytes())
     if groups is not None:
         h.update(groups.tobytes())
-    h.update(f"{speed}|{budgets}|{allocation_methods}|{importance_methods}|{n_folds}|{seed}|{metric}|{task_type}|{return_fitted}|{weight_method}|{two_phase}|{refinement_top_n}|{refinement_step_sizes}".encode())
+    h.update(f"{speed}|{budgets}|{allocation_methods}|{importance_methods}|{internal_evaluators}|{n_folds}|{seed}|{metric}|{task_type}|{return_fitted}|{weight_method}|{two_phase}|{refinement_top_n}|{refinement_step_sizes}".encode())
     if models:
         model_names = sorted(models.keys()) if isinstance(models, dict) else sorted(models)
         h.update("|".join(model_names).encode())
@@ -1832,13 +1868,14 @@ def find_best_hybrid(
     labels: np.ndarray,
     groups: Optional[np.ndarray] = None,
     *,
+    budgets: Optional[List[int]] = None,
     models: Optional[Any] = None,
     metric: Union[str, Callable, Tuple[Callable, bool]] = 'r2',
     task_type: str = 'auto',
     speed: str = 'fast',
-    budgets: Optional[List[int]] = None,
     allocation_methods: Optional[List[str]] = None,
     importance_methods: Optional[List[str]] = None,
+    internal_evaluators: Optional[List[str]] = None,
     n_folds: Optional[int] = None,
     test_rep_subsets: bool = False,
     return_fitted: bool = False,
@@ -1878,10 +1915,13 @@ def find_best_hybrid(
             'spearman','pearson','ci','f1_weighted')
             or callable(y_true, y_pred)->float, or (callable, lower_is_better).
         task_type: 'regression', 'classification', or 'auto' (infer from labels).
-        speed: Search comprehensiveness: 'fast', 'medium', 'long'.
-        budgets: Override default budgets for the speed tier.
+        speed: Search comprehensiveness: 'fast' or 'full'.
+        budgets: List of feature budgets to search over (required).
         allocation_methods: Override allocation methods for the speed tier.
         importance_methods: Override importance methods for the speed tier.
+        internal_evaluators: Override internal evaluator list for the speed tier.
+            Fast tier default is ['match'] (matched to downstream model).
+            Medium/long tiers default to multiple evaluators.
         n_folds: Override number of CV folds for the speed tier.
         test_rep_subsets: Also test leave-one-rep-out subsets (when >=3 reps).
         return_fitted: If True, fit best config on full data and return FittedResult.
@@ -1925,7 +1965,8 @@ def find_best_hybrid(
         factory_names = sorted(rep_factories.keys()) if rep_factories else None
         key = _hybrid_cache_key(
             base_reps, labels, groups, speed, budgets, allocation_methods,
-            importance_methods, n_folds, models, seed, metric, task_type,
+            importance_methods, internal_evaluators, n_folds, models, seed,
+            metric, task_type,
             return_fitted=return_fitted, weight_method=weight_method,
             two_phase=two_phase, refinement_top_n=refinement_top_n,
             refinement_step_sizes=refinement_step_sizes,
@@ -1942,6 +1983,15 @@ def find_best_hybrid(
                 pass  # Corrupted cache, recompute
 
     # --- Validate inputs ---
+    if budgets is None:
+        import warnings
+        warnings.warn(
+            "budgets not specified — using default [50, 150, 300]. "
+            "Pass budgets= explicitly for reproducible results.",
+            stacklevel=2,
+        )
+        budgets = [50, 150, 300]
+
     labels = np.asarray(labels).ravel()
 
     if not base_reps:
@@ -2049,6 +2099,7 @@ def find_best_hybrid(
         budgets=budgets,
         allocation_methods=allocation_methods,
         importance_methods=importance_methods,
+        internal_evaluators=internal_evaluators,
         n_folds=n_folds,
         test_rep_subsets=test_rep_subsets,
         seed=seed,
