@@ -17,14 +17,14 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import r2_score
 
 from experiments._shared import (
-    load_data, INTERMEDIARY, FULL, get_config, create_experiment_parser,
+    load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results, convert_numpy,
     get_model_factories, evaluate_cv_with_train,
     estimate_mutual_information_knn, compute_effective_rank,
     apply_feature_selection,
     find_best_hybrid, get_domain_metric,
 )
-from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+from kirby.hybrid import create_hybrid
 # TODO: create_hybrid API not finalised — allocation_method / importance_method
 #       semantics may change after framework experiments. Revisit call sites below.
 

@@ -14,7 +14,7 @@ import numpy as np
 from scipy.stats import spearmanr
 
 from experiments._shared import (
-    load_data, INTERMEDIARY, FULL, get_config, create_experiment_parser,
+    load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_model_family_variants, evaluate_cv_with_train,
     find_best_hybrid,

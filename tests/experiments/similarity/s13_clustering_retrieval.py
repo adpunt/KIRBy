@@ -33,7 +33,7 @@ from experiments._shared import (
     get_hybrid_features_and_weights,
     compute_feature_importance,
 )
-from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+from kirby.hybrid import create_hybrid
 # TODO: create_hybrid API not finalised — revisit after framework experiments.
 
 
@@ -41,17 +41,27 @@ from experiments.complexity.complexity_helpers import cached_create_hybrid as cr
 # 13a: CLUSTERING QUALITY
 # =========================================================================
 
+def _is_classification(y):
+    """Heuristic: classification if <=20 unique values and integer-like."""
+    unique = np.unique(y)
+    return len(unique) <= 20 and np.allclose(y, np.round(y))
+
+
 def _cluster_label_coherence(X, y, n_clusters_list=(3, 5, 10)):
     """Cluster in X-space, measure label coherence.
 
-    Label coherence = 1 - mean(within-cluster std(y)) / std(y_global).
+    For regression: 1 - mean(within-cluster std(y)) / std(y_global).
+    For classification: mean class purity (majority class fraction per cluster).
     Higher = clusters group similar-label samples together.
     """
     scaler = StandardScaler()
     X_s = scaler.fit_transform(X)
-    y_std_global = np.std(y)
-    if y_std_global < 1e-10:
-        return {}
+    is_clf = _is_classification(y)
+
+    if not is_clf:
+        y_std_global = np.std(y)
+        if y_std_global < 1e-10:
+            return {}
 
     results = {}
     for n_clusters in n_clusters_list:
@@ -60,14 +70,25 @@ def _cluster_label_coherence(X, y, n_clusters_list=(3, 5, 10)):
         km = KMeans(n_clusters=n_clusters, random_state=42, n_init=5)
         cluster_labels = km.fit_predict(X_s)
 
-        # Within-cluster label std
-        cluster_stds = []
-        for c in range(n_clusters):
-            mask = cluster_labels == c
-            if mask.sum() >= 2:
-                cluster_stds.append(np.std(y[mask]))
-        mean_cluster_std = np.mean(cluster_stds) if cluster_stds else y_std_global
-        label_coherence = 1.0 - mean_cluster_std / y_std_global
+        if is_clf:
+            # Classification: mean purity (majority class fraction per cluster)
+            purities = []
+            for c in range(n_clusters):
+                mask = cluster_labels == c
+                if mask.sum() >= 1:
+                    counts = np.bincount(y[mask].astype(int))
+                    purities.append(counts.max() / mask.sum())
+            mean_purity = float(np.mean(purities)) if purities else 0.0
+            label_coherence = mean_purity
+        else:
+            # Regression: within-cluster std ratio
+            cluster_stds = []
+            for c in range(n_clusters):
+                mask = cluster_labels == c
+                if mask.sum() >= 2:
+                    cluster_stds.append(np.std(y[mask]))
+            mean_cluster_std = np.mean(cluster_stds) if cluster_stds else y_std_global
+            label_coherence = 1.0 - mean_cluster_std / y_std_global
 
         # Silhouette (geometric quality)
         try:
@@ -76,11 +97,15 @@ def _cluster_label_coherence(X, y, n_clusters_list=(3, 5, 10)):
         except Exception:
             sil = float('nan')
 
-        results[n_clusters] = {
+        result_entry = {
             'label_coherence': float(label_coherence),
             'silhouette': float(sil),
-            'mean_cluster_std': float(mean_cluster_std),
         }
+        if is_clf:
+            result_entry['mean_purity'] = mean_purity
+        else:
+            result_entry['mean_cluster_std'] = float(mean_cluster_std)
+        results[n_clusters] = result_entry
 
     return results
 
@@ -169,7 +194,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     try:
         X_hybrid, fi = create_hybrid(
             reps, labels,
-            allocation_method='greedy',
+            allocation_method='entropy_1.0',
             importance_method='lightgbm_gain',
             budget=budget,
         )

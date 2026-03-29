@@ -25,24 +25,15 @@ from experiments._shared import (
 )
 
 # Reuse dataset rep configs — single source of truth
-from experiments.complexity.complexity_helpers import (
-    DATASET_REPS, PRELIMINARY,
-)
+from experiments.complexity.complexity_helpers import DATASET_REPS
 
-
-# ── Similarity-specific config overrides ───────────────────────────────────
-# Similarity experiments use the same preliminary config as complexity,
-# plus some similarity-specific parameters.
-
-SIMILARITY_CONFIG = dict(PRELIMINARY)
-# Similarity experiments don't sweep allocations/importance — they use the
-# best from find_best_hybrid. These are similarity-specific defaults:
-SIMILARITY_CONFIG.update({
+# Similarity-specific extra params (layered on top of SPEED_TIERS config)
+SIMILARITY_EXTRA = {
     'weight_methods': ['lightgbm_gain'],
     'k_values': [5, 10],
     'n_sample': 5000,
     'knn_conditions': ['hybrid_unweighted', 'hybrid_weighted'],
-})
+}
 
 
 # ── Single-dataset experiment list ─────────────────────────────────────────
@@ -114,11 +105,22 @@ def run_all(dataset_name: str, output_dir: str,
         dataset_name: Dataset name (e.g. 'herg', 'logd', 'flab_thermo_tresanco').
         output_dir: Base output directory for results JSON files.
         experiments: List of experiment IDs to run (default: SINGLE_DATASET_EXPERIMENTS).
-        config: Config dict override (default: SIMILARITY_CONFIG).
+        config: Config dict override (default: fast tier + similarity extras).
         rep_names: Explicit rep list override. If None, uses DATASET_REPS[dataset_name]['general'].
     """
     if config is None:
-        config = dict(SIMILARITY_CONFIG)
+        from kirby.find_best_hybrid import SPEED_TIERS
+        tier = SPEED_TIERS['fast']
+        config = {
+            'n_splits': tier['n_folds'],
+            'search_speed': 'fast',
+            'allocations': tier['allocation_methods'],
+            'importance_methods': tier['importance_methods'],
+            'internal_evaluators': tier['internal_evaluators'],
+            'budgets': [10, 25, 50, 100, 200, 500, 1000, 2000],
+            'models': ['rf', 'lightgbm', 'mlp'],
+        }
+        config.update(SIMILARITY_EXTRA)
     if experiments is None:
         experiments = list(SINGLE_DATASET_EXPERIMENTS)
 

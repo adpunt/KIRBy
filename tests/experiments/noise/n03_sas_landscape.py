@@ -55,7 +55,7 @@ from experiments._shared import (
     get_domain_metric, get_hybrid_features_and_weights,
 )
 
-from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+from kirby.hybrid import create_hybrid
 # TODO: create_hybrid API not finalised — revisit after framework experiments.
 
 # Maximum compounds for pairwise analysis (O(N^2) memory)
@@ -406,7 +406,7 @@ def _run_sas_bo_bridge(reps, labels, struct_t, act_t,
     try:
         X_h, _ = create_hybrid(
             reps, labels,
-            allocation_method='greedy',
+            allocation_method='entropy_1.0',
             importance_method='lightgbm_gain',
             budget=50,
             augmentations=augmentations,

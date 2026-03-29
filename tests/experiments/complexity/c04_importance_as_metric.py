@@ -19,7 +19,7 @@ import time
 import numpy as np
 
 from experiments._shared import (
-    load_data, INTERMEDIARY, FULL, get_config, create_experiment_parser,
+    load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     compute_feature_importance,
     evaluate_weighted_knn, evaluate_similarity_retrieval,

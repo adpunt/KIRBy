@@ -33,7 +33,7 @@ from experiments._shared import (
     cv_split, get_domain_metric, get_model_factories,
     compute_feature_importance,
 )
-from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+from kirby.hybrid import create_hybrid
 from kirby.hybrid import apply_feature_selection
 
 
@@ -121,7 +121,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     try:
         X_hybrid, fi = create_hybrid(
             reps, labels,
-            allocation_method='greedy',
+            allocation_method='entropy_1.0',
             importance_method='lightgbm_gain',
             budget=budget,
             augmentations=augmentations,

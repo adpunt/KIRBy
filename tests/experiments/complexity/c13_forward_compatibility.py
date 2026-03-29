@@ -323,7 +323,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
 
     Args:
         data: Loaded dataset dict from load_data().
-        config: INTERMEDIARY or FULL config dict.
+        config: Config dict (fast or full).
         output_dir: Output directory for results JSON.
         dataset_name: Name of the dataset.
         new_rep_names: List of rep names to treat as "new". If None, auto-detect.

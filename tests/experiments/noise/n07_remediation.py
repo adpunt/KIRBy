@@ -22,7 +22,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories,
 )
-from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+from kirby.hybrid import create_hybrid
 # TODO: create_hybrid API not finalised — revisit after framework experiments.
 from kirby.utils.noise_estimation import (
     ActivityCliffAwareEstimator, smooth_by_scores, weights_from_scores,
@@ -105,7 +105,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             try:
                 X_train_h, fi = create_hybrid(
                     train_reps, y_train,
-                    allocation_method='greedy', budget=budget,
+                    allocation_method='entropy_1.0', budget=budget,
                     importance_method='lightgbm_gain',
                     augmentations=augmentations,
                     augmentation_strategy=augmentation_strategy,

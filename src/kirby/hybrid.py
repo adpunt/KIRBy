@@ -2,9 +2,8 @@
 Core hybrid representation creation functions - ENHANCED with Greedy Allocation
 
 Supports multiple feature importance methods and allocation strategies:
-- Allocation methods: 'greedy', 'greedy_feature', 'performance_weighted', 'two_stage',
-  'stability_selection', 'fixed', 'dominant_greedy', plus named variants (softmax_T*,
-  power_*, thresh_*, top_*, min_floor_*) — see NAMED_ALLOCATIONS.
+- Allocation methods: 'greedy', 'performance_weighted', 'dominant_greedy', 'fixed',
+  plus named variants — see NAMED_ALLOCATIONS for full list.
 - Importance methods (8 approved after benchmark correlation analysis):
   Fast: treeshap, xgboost_gain, lightgbm_gain, deeplift
   Slower: permutation, kernelshap
@@ -15,14 +14,15 @@ Importance-sensitive vs insensitive allocations:
   'greedy' and 'dominant_greedy' use internal RF feature_importances_ for
   feature selection, so they produce identical results regardless of the
   importance_method parameter. All other allocation methods (performance_weighted,
-  two_stage, stability_selection, greedy_feature, and named variants) use the
-  specified importance_method and will produce different results per method.
+  and all named performance_weighted variants) use the specified importance_method
+  and will produce different results per method.
   find_best_hybrid accounts for this — insensitive allocations are only evaluated
   once per (budget, model) rather than N times for N importance methods.
 
-Default configuration (from testing):
-- allocation_method='greedy'
-- importance_method='treeshap'
+Default configuration (from F12 top-2 analysis, 2026-03-29):
+- allocation_method='top_3'
+- importance_method='lightgbm_gain'
+- internal_evaluator='svm'
 - budget=100
 """
 
@@ -40,27 +40,68 @@ from sklearn.preprocessing import StandardScaler
 # ============================================================================
 
 NAMED_ALLOCATIONS = {
+    # --- Base methods ---
     'greedy': ('greedy', {}),
     'performance_weighted': ('performance_weighted', {}),
+    'fixed': ('fixed', {}),
+
+    # --- Softmax temperature variants ---
     'softmax_T0.5': ('performance_weighted', {'weighting_scheme': 'softmax', 'weighting_params': {'temperature': 0.5}}),
     'softmax_T1': ('performance_weighted', {'weighting_scheme': 'softmax', 'weighting_params': {'temperature': 1.0}}),
     'softmax_T2': ('performance_weighted', {'weighting_scheme': 'softmax', 'weighting_params': {'temperature': 2.0}}),
     'softmax_T5': ('performance_weighted', {'weighting_scheme': 'softmax', 'weighting_params': {'temperature': 5.0}}),
     'softmax_T10': ('performance_weighted', {'weighting_scheme': 'softmax', 'weighting_params': {'temperature': 10.0}}),
+
+    # --- Power law variants ---
     'power_2': ('performance_weighted', {'weighting_scheme': 'power_law', 'weighting_params': {'power': 2.0}}),
     'power_3': ('performance_weighted', {'weighting_scheme': 'power_law', 'weighting_params': {'power': 3.0}}),
+
+    # --- Thresholded variants ---
+    'thresh_0.3': ('performance_weighted', {'weighting_scheme': 'thresholded', 'weighting_params': {'alpha': 0.3}}),
     'thresh_0.5': ('performance_weighted', {'weighting_scheme': 'thresholded', 'weighting_params': {'alpha': 0.5}}),
+    'thresh_0.7': ('performance_weighted', {'weighting_scheme': 'thresholded', 'weighting_params': {'alpha': 0.7}}),
+
+    # --- Top-k variants ---
+    'top_2': ('performance_weighted', {'weighting_scheme': 'top_k', 'weighting_params': {'k': 2}}),
     'top_3': ('performance_weighted', {'weighting_scheme': 'top_k', 'weighting_params': {'k': 3}}),
-    'min_floor_0.05': ('performance_weighted', {'weighting_scheme': 'min_floor', 'weighting_params': {'floor': 0.05}}),
+    'top_5': ('performance_weighted', {'weighting_scheme': 'top_k', 'weighting_params': {'k': 5}}),
+
+    # --- Rank-based variants ---
     'rank_linear': ('performance_weighted', {'weighting_scheme': 'rank_linear'}),
+    'rank_exp_d0.1': ('performance_weighted', {'weighting_scheme': 'rank_exp', 'weighting_params': {'decay': 0.1}}),
+    'rank_exp_d0.3': ('performance_weighted', {'weighting_scheme': 'rank_exp', 'weighting_params': {'decay': 0.3}}),
+    'rank_exp_d0.5': ('performance_weighted', {'weighting_scheme': 'rank_exp', 'weighting_params': {'decay': 0.5}}),
+
+    # --- Score gap variants ---
+    'score_gap_0.2': ('performance_weighted', {'weighting_scheme': 'score_gap', 'weighting_params': {'gap': 0.2}}),
+    'score_gap_0.3': ('performance_weighted', {'weighting_scheme': 'score_gap', 'weighting_params': {'gap': 0.3}}),
+    'score_gap_0.5': ('performance_weighted', {'weighting_scheme': 'score_gap', 'weighting_params': {'gap': 0.5}}),
+    'score_gap_0.7': ('performance_weighted', {'weighting_scheme': 'score_gap', 'weighting_params': {'gap': 0.7}}),
+
+    # --- Entropy variants ---
+    'entropy_0.5': ('performance_weighted', {'weighting_scheme': 'entropy', 'weighting_params': {'diversity_penalty': 0.5}}),
+    'entropy_1.0': ('performance_weighted', {'weighting_scheme': 'entropy', 'weighting_params': {'diversity_penalty': 1.0}}),
+    'entropy_2.0': ('performance_weighted', {'weighting_scheme': 'entropy', 'weighting_params': {'diversity_penalty': 2.0}}),
+
+    # --- Greedy with early stopping (forced = no patience, fills budget) ---
+    'greedy_forced_s5': ('greedy', {'step_size': 5, 'patience': None}),
+    'greedy_forced_s10': ('greedy', {'step_size': 10, 'patience': None}),
+    'greedy_forced_s25': ('greedy', {'step_size': 25, 'patience': None}),
+
+    # --- Greedy with budget fill (patience + fills remaining budget from best reps) ---
+    'greedy_fill_s5': ('greedy', {'step_size': 5, 'budget_fill': True}),
+    'greedy_fill_s10': ('greedy', {'step_size': 10, 'budget_fill': True}),
+    'greedy_fill_s25': ('greedy', {'step_size': 25, 'budget_fill': True}),
+
+    # --- Dominant greedy (F12: dom_greedy_f0.7 and f0.9 retained, f0.5 cut) ---
+    'dominant_greedy': ('dominant_greedy', {}),
+    'dom_greedy_f0.7': ('dominant_greedy', {'dominant_fraction': 0.7}),
+    'dom_greedy_f0.9': ('dominant_greedy', {'dominant_fraction': 0.9}),
+
+    # Legacy aliases for backward compatibility with old experiment configs
     'rank_exp': ('performance_weighted', {'weighting_scheme': 'rank_exp', 'weighting_params': {'decay': 0.3}}),
     'score_gap': ('performance_weighted', {'weighting_scheme': 'score_gap', 'weighting_params': {'gap': 0.3}}),
     'entropy': ('performance_weighted', {'weighting_scheme': 'entropy', 'weighting_params': {'diversity_penalty': 1.0}}),
-    'dominant_greedy': ('dominant_greedy', {}),
-    'fixed': ('fixed', {}),
-    'two_stage': ('two_stage', {}),
-    'stability_selection': ('stability_selection', {}),
-    'greedy_feature': ('greedy_feature', {}),
 }
 
 
@@ -1086,9 +1127,40 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             return m.score(X_val_scaled, y_val)
         return r2_score(y_val, m.predict(X_val_scaled))
 
+    elif internal_evaluator == 'gp':
+        from sklearn.gaussian_process import GaussianProcessRegressor, GaussianProcessClassifier
+        from sklearn.gaussian_process.kernels import RBF, ConstantKernel
+        kernel = ConstantKernel(1.0) * RBF(length_scale=1.0)
+        if is_classification:
+            m = GaussianProcessClassifier(kernel=kernel, random_state=42,
+                                          max_iter_predict=50, n_restarts_optimizer=0)
+        else:
+            m = GaussianProcessRegressor(kernel=kernel, random_state=42,
+                                         n_restarts_optimizer=0, alpha=1e-2)
+        # GP scales O(n³) — limit training samples for large datasets
+        max_gp_samples = 500
+        if X_train_scaled.shape[0] > max_gp_samples:
+            rng = np.random.RandomState(42)
+            idx = rng.choice(X_train_scaled.shape[0], max_gp_samples, replace=False)
+            m.fit(X_train_scaled[idx], y_train[idx])
+        else:
+            m.fit(X_train_scaled, y_train)
+        if is_classification:
+            return m.score(X_val_scaled, y_val)
+        return r2_score(y_val, m.predict(X_val_scaled))
+
+    elif callable(internal_evaluator):
+        # Custom evaluator: must be a callable that returns a fresh sklearn-compatible model
+        m = internal_evaluator()
+        m.fit(X_train_scaled, y_train)
+        if is_classification:
+            return m.score(X_val_scaled, y_val)
+        return r2_score(y_val, m.predict(X_val_scaled))
+
     else:
         raise ValueError(f"Unknown internal_evaluator: {internal_evaluator}. "
-                         f"Use 'ridge', 'rf', 'xgboost', 'lightgbm', 'mlp', or 'svm'.")
+                         f"Use 'ridge', 'rf', 'xgboost', 'lightgbm', 'mlp', 'svm', 'gp', "
+                         f"or a callable that returns an sklearn-compatible model.")
 
 
 # ============================================================================
@@ -2833,14 +2905,14 @@ def apply_augmentation_selection(augmentations, augmentation_info):
 # ============================================================================
 
 def create_hybrid(base_reps, labels,
-                 allocation_method='performance_weighted',
+                 allocation_method='top_3',
                  n_per_rep=100,
                  budget=100,
                  step_size=5,
                  patience=20,
                  validation_split=0.2,
                  apply_filters=False,
-                 importance_method='treeshap',
+                 importance_method='lightgbm_gain',
                  # Augmentation parameters
                  augmentations=None,
                  augmentation_strategy='uncapped',
@@ -2852,7 +2924,7 @@ def create_hybrid(base_reps, labels,
                  metric_fn=None,
                  lower_is_better=False,
                  # Internal evaluator for greedy/performance_weighted allocation
-                 internal_evaluator='ridge',
+                 internal_evaluator='svm',
                  **kwargs):
     """
     Create hybrid representation by combining features from multiple base representations.
@@ -2861,13 +2933,18 @@ def create_hybrid(base_reps, labels,
         base_reps: Dict with representation names as keys and feature arrays as values
         labels: Target values for computing importance
         
-        allocation_method: Method for allocating features across representations
+        allocation_method: Method for allocating features across representations.
+            Base methods:
             - 'performance_weighted': Allocate proportional to baseline scores (default)
             - 'greedy': Adaptive allocation via greedy forward selection
-            - 'greedy_feature': Feature-level greedy (slower but more precise)
-            - 'two_stage': Fast screening then precise selection (uses stage2_method kwarg)
-            - 'stability_selection': Bootstrap-resampled importance (uses n_bootstrap kwarg)
+            - 'dominant_greedy': Greedy with dominant rep fraction
             - 'fixed': Equal allocation (n_per_rep for all)
+            Named variants (see NAMED_ALLOCATIONS for full list):
+            - 'top_2', 'top_3', 'top_5': Top-k reps only
+            - 'entropy_0.5', 'entropy_1.0', 'entropy_2.0': Entropy-weighted
+            - 'rank_exp_d0.1'...'rank_exp_d0.5': Rank exponential decay
+            - 'greedy_fill_s5'...'greedy_fill_s25': Greedy + budget fill
+            - 'greedy_forced_s5'...'greedy_forced_s25': Greedy, no early stopping
             
         n_per_rep: Number of features per rep (for 'fixed' method, default: 100)
         budget: Total feature budget (for 'greedy' method, default: 100)
@@ -2878,9 +2955,9 @@ def create_hybrid(base_reps, labels,
         apply_filters: Apply quality filters (sparsity + variance) before allocation (default: False)
         importance_method: Method for feature importance (default: 'treeshap').
             NOTE: 'greedy' and 'dominant_greedy' allocations ignore this parameter —
-            they use internal RF feature_importances_. All other allocation methods
-            (performance_weighted, two_stage, stability_selection, greedy_feature,
-            and named variants like softmax_T*) use the specified importance_method.
+            they use internal RF feature_importances_. All performance_weighted
+            variants (softmax_T*, top_*, entropy_*, etc.) use the specified
+            importance_method.
         
         augmentations: Dict of {aug_name: feature_array} for supplementary features (default: None)
             These are evaluated separately from base_reps after initial hybrid creation
@@ -2964,7 +3041,10 @@ def create_hybrid(base_reps, labels,
         raise ValueError(f"augmentation_budget must be positive, got {augmentation_budget}")
 
     # Resolve 'match' internal evaluator — maps downstream model type to evaluator
-    if internal_evaluator == 'match':
+    # Callables pass through as-is (custom evaluator)
+    if callable(internal_evaluator):
+        pass  # Use as-is
+    elif internal_evaluator == 'match':
         if model is not None:
             model_class = type(model).__name__.lower()
             if 'ridge' in model_class:
@@ -2979,6 +3059,8 @@ def create_hybrid(base_reps, labels,
                 internal_evaluator = 'mlp'
             elif 'sv' in model_class:
                 internal_evaluator = 'svm'
+            elif 'gaussianprocess' in model_class or model_class == 'gp':
+                internal_evaluator = 'gp'
             else:
                 internal_evaluator = 'ridge'  # safe fallback
         else:
@@ -3145,79 +3227,6 @@ def create_hybrid(base_reps, labels,
         
         feature_info['allocation'] = allocation
 
-    # TWO-STAGE ALLOCATION
-    elif allocation_method == 'two_stage':
-        stage2 = kwargs.get('stage2_method', 'permutation')
-        stage1_multiplier = kwargs.get('stage1_multiplier', 3)
-
-        allocation, two_stage_feature_info = allocate_two_stage(
-            rep_dict_train, rep_dict_val, train_labels, val_labels,
-            total_budget=budget, stage1_method=importance_method,
-            stage2_method=stage2, stage1_multiplier=stage1_multiplier
-        )
-
-        if filter_index_maps:
-            for rep_name in list(two_stage_feature_info.keys()):
-                if rep_name in filter_index_maps and 'selected_indices' in two_stage_feature_info[rep_name]:
-                    filtered_indices = two_stage_feature_info[rep_name]['selected_indices']
-                    original_indices = filter_index_maps[rep_name][filtered_indices]
-                    two_stage_feature_info[rep_name]['selected_indices'] = original_indices
-
-        hybrid_features = apply_feature_selection(original_base_reps, two_stage_feature_info)
-
-        feature_info = two_stage_feature_info.copy()
-        feature_info['allocation'] = allocation
-
-    # STABILITY SELECTION
-    elif allocation_method == 'stability_selection':
-        n_bootstrap = kwargs.get('n_bootstrap', 20)
-        selection_threshold = kwargs.get('selection_threshold', 0.6)
-
-        allocation, stability_feature_info = allocate_stability_selection(
-            rep_dict_train, rep_dict_val, train_labels, val_labels,
-            total_budget=budget, n_bootstrap=n_bootstrap,
-            importance_method=importance_method,
-            selection_threshold=selection_threshold
-        )
-
-        if filter_index_maps:
-            for rep_name in list(stability_feature_info.keys()):
-                if rep_name in filter_index_maps and 'selected_indices' in stability_feature_info[rep_name]:
-                    filtered_indices = stability_feature_info[rep_name]['selected_indices']
-                    original_indices = filter_index_maps[rep_name][filtered_indices]
-                    stability_feature_info[rep_name]['selected_indices'] = original_indices
-
-        hybrid_features = apply_feature_selection(original_base_reps, stability_feature_info)
-
-        feature_info = stability_feature_info.copy()
-        feature_info['allocation'] = allocation
-
-    # GREEDY FEATURE ALLOCATION (feature-level, high computation)
-    elif allocation_method == 'greedy_feature':
-        # Run feature-level greedy allocation
-        allocation, history, greedy_feature_info = allocate_greedy_feature(
-            rep_dict_train, rep_dict_val, train_labels, val_labels,
-            total_budget=budget, patience=patience,
-            importance_method=importance_method,
-            internal_evaluator=internal_evaluator,
-        )
-
-        # If filters were applied, remap indices
-        if filter_index_maps:
-            for rep_name in list(greedy_feature_info.keys()):
-                if rep_name in filter_index_maps and 'selected_indices' in greedy_feature_info[rep_name]:
-                    filtered_indices = greedy_feature_info[rep_name]['selected_indices']
-                    original_indices = filter_index_maps[rep_name][filtered_indices]
-                    greedy_feature_info[rep_name]['selected_indices'] = original_indices
-
-        # Apply the SAME feature selection from greedy to full data
-        hybrid_features = apply_feature_selection(original_base_reps, greedy_feature_info)
-
-        # Build feature_info with allocation metadata
-        feature_info = greedy_feature_info.copy()
-        feature_info['allocation'] = allocation
-        feature_info['greedy_feature_history'] = history
-
     # DOMINANT-GREEDY ALLOCATION
     elif allocation_method == 'dominant_greedy':
         dominant_fraction = kwargs.pop('dominant_fraction', 0.7)
@@ -3243,8 +3252,9 @@ def create_hybrid(base_reps, labels,
 
     else:
         raise ValueError(f"Unknown allocation_method: {allocation_method}. "
-                        f"Choose 'greedy', 'greedy_feature', 'performance_weighted', "
-                        f"'dominant_greedy', 'fixed', 'two_stage', or 'stability_selection'")
+                        f"Choose from: 'greedy', 'performance_weighted', 'dominant_greedy', "
+                        f"'fixed', or any named variant in NAMED_ALLOCATIONS "
+                        f"(e.g. 'top_3', 'entropy_1.0', 'greedy_fill_s25').")
 
     # ========================================================================
     # BUDGET FLOOR: fill from best-performing reps (ranked by baseline score)

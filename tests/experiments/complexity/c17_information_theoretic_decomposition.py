@@ -26,23 +26,43 @@ from experiments._shared import (
     estimate_mutual_information_knn, compute_effective_rank,
     cv_split, get_domain_metric,
 )
-from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+from kirby.hybrid import create_hybrid
 
 
 # =========================================================================
 # mRMR (greedy max-relevance minus redundancy)
 # =========================================================================
 
-def _greedy_mrmr(X, y, budget, k_mi=5):
+def _greedy_mrmr(X, y, budget, k_mi=5, max_features=None):
     """Greedy mRMR feature selection using KSG MI estimator.
 
     At each step, select the feature that maximizes:
         MI(x_j, y) - (1/|S|) * sum_{x_i in S} MI(x_j, x_i)
 
+    Args:
+        max_features: If set, pre-filter to top max_features by univariate MI
+            before running greedy selection. Enables mRMR on large feature sets.
+
     Returns selected feature indices.
     """
     n_features = X.shape[1]
     budget = min(budget, n_features)
+
+    # Pre-filter for large feature sets: rank all features by MI(x_j, y)
+    # and keep top max_features for greedy selection
+    feature_indices = np.arange(n_features)
+    if max_features is not None and n_features > max_features:
+        pre_mi = np.zeros(n_features)
+        for j in range(n_features):
+            try:
+                pre_mi[j] = estimate_mutual_information_knn(
+                    X[:, j:j+1], y, k=k_mi)
+            except Exception:
+                pre_mi[j] = 0.0
+        top_idx = np.argsort(pre_mi)[-max_features:]
+        feature_indices = top_idx
+        X = X[:, top_idx]
+        n_features = max_features
 
     # Pre-compute MI(x_j, y) for all features
     relevance = np.zeros(n_features)
@@ -87,7 +107,8 @@ def _greedy_mrmr(X, y, budget, k_mi=5):
         selected.append(best_j)
         remaining.remove(best_j)
 
-    return selected
+    # Map back to original feature indices if pre-filtered
+    return [int(feature_indices[s]) for s in selected]
 
 
 # =========================================================================
@@ -112,14 +133,10 @@ def _evaluate_strategy(X_selected, y, groups, n_folds, mode, metric_fn):
     """Evaluate a feature-selected matrix: MI, MI density, erank, downstream R²."""
     n_feat = X_selected.shape[1]
 
-    # MI with labels (PCA-reduce for stability if high-dim)
-    n_pca = min(50, n_feat, len(y) - 1)
-    if n_pca >= 2:
-        X_pca = PCA(n_components=n_pca).fit_transform(
-            StandardScaler().fit_transform(X_selected))
-    else:
-        X_pca = StandardScaler().fit_transform(X_selected)
-    mi = estimate_mutual_information_knn(X_pca, y, k=5)
+    # MI with labels — let estimate_mutual_information_knn handle PCA
+    # internally (max_dim=50) for consistent treatment across strategies.
+    X_scaled = StandardScaler().fit_transform(X_selected)
+    mi = estimate_mutual_information_knn(X_scaled, y, k=5)
 
     # MI density
     mi_density = mi / n_feat if n_feat > 0 else 0.0
@@ -170,16 +187,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     X_concat_scaled = StandardScaler().fit_transform(X_concat)
 
     budgets = [b for b in [25, 50, 100, 200] if b < total_dim]
-    # mRMR is O(budget * n_features * n_samples) — limit for large concat
-    mrmr_max_features = 2000
-    run_mrmr = total_dim <= mrmr_max_features
+    # mRMR is O(budget * n_features * n_samples). For large feature sets,
+    # pre-filter to top 2000 features by univariate MI before greedy selection.
+    mrmr_prefilter = 2000
 
     print(f"  Total dim: {total_dim}, budgets: {budgets}")
-    print(f"  mRMR: {'enabled' if run_mrmr else f'disabled (total_dim={total_dim} > {mrmr_max_features})'}")
+    if total_dim > mrmr_prefilter:
+        print(f"  mRMR: enabled with pre-filter to top {mrmr_prefilter} features")
+    else:
+        print(f"  mRMR: enabled (full feature set)")
 
-    strategies = ['hybrid', 'pca', 'rfe', 'random']
-    if run_mrmr:
-        strategies.insert(2, 'mrmr')
+    strategies = ['hybrid', 'pca', 'mrmr', 'rfe', 'random']
 
     results = {
         'metric': metric_name,
@@ -201,7 +219,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     augmentations = data.get('augmentations')
                     X_h, fi = create_hybrid(
                         reps, labels,
-                        allocation_method='greedy',
+                        allocation_method='entropy_1.0',
                         importance_method='lightgbm_gain',
                         budget=budget,
                         augmentations=augmentations,
@@ -215,7 +233,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     X_selected = pca.fit_transform(X_concat_scaled)
 
                 elif strategy == 'mrmr':
-                    indices = _greedy_mrmr(X_concat_scaled, labels, budget, k_mi=3)
+                    mf = mrmr_prefilter if total_dim > mrmr_prefilter else None
+                    indices = _greedy_mrmr(X_concat_scaled, labels, budget,
+                                           k_mi=5, max_features=mf)
                     X_selected = X_concat_scaled[:, indices]
 
                 elif strategy == 'rfe':

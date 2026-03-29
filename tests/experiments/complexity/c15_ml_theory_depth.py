@@ -48,7 +48,7 @@ from experiments._shared import (
     apply_feature_selection,
     compute_effective_rank,
 )
-from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+from kirby.hybrid import create_hybrid
 # TODO: create_hybrid API not finalised — allocation_method / importance_method
 #       semantics may change after framework experiments. Revisit call sites below.
 
@@ -107,7 +107,7 @@ def _run_distance_concentration(data, budgets):
         try:
             X_hybrid, _ = create_hybrid(
                 reps, labels,
-                allocation_method='greedy',
+                allocation_method='entropy_1.0',
                 importance_method='lightgbm_gain',
                 budget=budget,
             )
@@ -303,7 +303,7 @@ def _run_kernel_analysis(data, budgets):
             full_reps = data['reps']
             X_hybrid, feat_info = create_hybrid(
                 full_reps, data['labels'],
-                allocation_method='greedy',
+                allocation_method='entropy_1.0',
                 importance_method='lightgbm_gain',
                 budget=budget,
             )
@@ -337,7 +337,7 @@ def _run_kernel_analysis(data, budgets):
         try:
             X_h50, _ = create_hybrid(
                 data['reps'], data['labels'],
-                allocation_method='greedy',
+                allocation_method='entropy_1.0',
                 importance_method='lightgbm_gain',
                 budget=50,
             )
@@ -623,7 +623,7 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
         try:
             X_train, feat_info = create_hybrid(
                 train_reps, y_train,
-                allocation_method='greedy',
+                allocation_method='entropy_1.0',
                 importance_method='lightgbm_gain',
                 budget=budget,
             )
@@ -865,7 +865,7 @@ def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
                 # but evaluate memorization on RANDOM labels
                 X_train_hyb, _ = create_hybrid(
                     train_reps, y[train_idx],
-                    allocation_method='greedy',
+                    allocation_method='entropy_1.0',
                     importance_method='lightgbm_gain',
                     budget=budget,
                 )

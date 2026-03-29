@@ -77,16 +77,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         n_features = X.shape[1]
         n_samples = X.shape[0]
 
-        # Full rep MI (use PCA-reduced for stability if high-dim)
-        n_comp = min(50, n_features, n_samples - 1)
+        # Full rep MI — let estimate_mutual_information_knn handle PCA
+        # internally (max_dim=50, capped at n_samples//5). This ensures
+        # consistent dimensionality treatment across full/selected/random.
         X_scaled_full = StandardScaler().fit_transform(X)
-        if n_features > 2000:
-            from sklearn.decomposition import TruncatedSVD
-            X_pca_full = TruncatedSVD(n_components=n_comp, random_state=42).fit_transform(X_scaled_full)
-        else:
-            X_pca_full = PCA(n_components=n_comp).fit_transform(X_scaled_full)
         try:
-            mi_full = estimate_mutual_information_knn(X_pca_full, labels, k=5)
+            mi_full = estimate_mutual_information_knn(X_scaled_full, labels, k=5)
         except Exception:
             mi_full = float('nan')
         rep_result['mi_full'] = mi_full

@@ -2,8 +2,17 @@
 
 Each dataset gets its own script (e.g. herg.py, logd.py) that calls
 run_all() with its rep list from the pipeline readiness tiers.
-All three experiments (N01-N03) are single-dataset and standalone
-with no inter-dependencies.
+12 experiments (N01-N05, N07-N13) are single-dataset and standalone
+with no inter-dependencies. N06 (BindingDB) is run separately.
+
+Experiments:
+  N01-N08: Original noise suite (cliffs, weighting, SAS, GP-LOO, detection,
+           BindingDB, remediation, estimation survey)
+  N09: LNL method survey with hybrids (12 training-loop methods)
+  N10: Hybrid neighborhood for similarity-dependent LNL
+  N11: Noise estimation × remediation grid (full confirmation report grid)
+  N12: Feature importance-weighted distance for noise estimation
+  N13: Alternative noise distributions (uniform, multiplicative, heavy-tailed, partial)
 
 Config: RF / LightGBM / MLP, 1-fold scaffold CV, fast search.
 Rep lists reused from complexity_helpers.DATASET_REPS.
@@ -24,15 +33,7 @@ from experiments._shared import (
 )
 
 # Reuse dataset rep configs — single source of truth
-from experiments.complexity.complexity_helpers import (
-    DATASET_REPS, PRELIMINARY,
-)
-
-
-# ── Noise-specific config ──────────────────────────────────────────────────
-# Same preliminary config as complexity/similarity.
-
-NOISE_CONFIG = dict(PRELIMINARY)
+from experiments.complexity.complexity_helpers import DATASET_REPS
 
 
 # ── Experiment list ────────────────────────────────────────────────────────
@@ -46,6 +47,11 @@ SINGLE_DATASET_EXPERIMENTS = [
     'n05',   # noise injection benchmark (all 15 detectors)
     'n07',   # noise remediation strategies
     'n08',   # noise estimation survey (all 15 estimators)
+    'n09',   # LNL method survey with hybrids (12 methods)
+    'n10',   # hybrid neighborhood for similarity-dependent LNL
+    'n11',   # noise estimation x remediation grid
+    'n12',   # feature importance-weighted distance
+    'n13',   # alternative noise distributions
 ]
 
 # N06 (BindingDB ground-truth) is dataset-specific — not in the per-dataset list.
@@ -63,6 +69,11 @@ def _import_experiment(exp_id: str):
         'n06': 'n06_bindingdb_ground_truth',
         'n07': 'n07_remediation',
         'n08': 'n08_estimation_survey',
+        'n09': 'n09_lnl_survey',
+        'n10': 'n10_hybrid_neighborhood_lnl',
+        'n11': 'n11_estimation_remediation_grid',
+        'n12': 'n12_importance_weighted_distance',
+        'n13': 'n13_noise_distributions',
     }
     mod_name = module_map[exp_id]
     import importlib
@@ -79,6 +90,11 @@ def _experiment_full_name(exp_id: str) -> str:
         'n05': 'n05_noise_injection_benchmark',
         'n07': 'n07_remediation',
         'n08': 'n08_estimation_survey',
+        'n09': 'n09_lnl_survey',
+        'n10': 'n10_hybrid_neighborhood_lnl',
+        'n11': 'n11_estimation_remediation_grid',
+        'n12': 'n12_importance_weighted_distance',
+        'n13': 'n13_noise_distributions',
     }
     return name_map.get(exp_id, exp_id)
 
@@ -92,11 +108,21 @@ def run_all(dataset_name: str, output_dir: str,
         dataset_name: Dataset name (e.g. 'herg', 'logd', 'flab_thermo_tresanco').
         output_dir: Base output directory for results JSON files.
         experiments: List of experiment IDs to run (default: SINGLE_DATASET_EXPERIMENTS).
-        config: Config dict override (default: NOISE_CONFIG).
+        config: Config dict override (default: fast tier from SPEED_TIERS).
         rep_names: Explicit rep list override. If None, uses DATASET_REPS[dataset_name]['general'].
     """
     if config is None:
-        config = dict(NOISE_CONFIG)
+        from kirby.find_best_hybrid import SPEED_TIERS
+        tier = SPEED_TIERS['fast']
+        config = {
+            'n_splits': tier['n_folds'],
+            'search_speed': 'fast',
+            'allocations': tier['allocation_methods'],
+            'importance_methods': tier['importance_methods'],
+            'internal_evaluators': tier['internal_evaluators'],
+            'budgets': [10, 25, 50, 100, 200, 500, 1000, 2000],
+            'models': ['rf', 'lightgbm', 'mlp'],
+        }
     if experiments is None:
         experiments = list(SINGLE_DATASET_EXPERIMENTS)
 

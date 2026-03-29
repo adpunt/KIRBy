@@ -19,13 +19,14 @@ Design: Simulate a library-screening BO loop.
     5. Track best-found-so-far at each iteration
 
 Conditions:
-    1. ecfp4_raw     — ECFP4 (2048D) + RBF GP: shows RBF failure in high-D
-    2. best_single   — Best individual rep by seed-set GP + RBF GP
-    3. pca_50d       — PCA to 50D from concat + RBF GP: unsupervised compression
-    4. hybrid_50d    — KIRBy hybrid (budget=50) + RBF GP: MAIN CONDITION
-    5. random_50d    — Random Gaussian projection to 50D + RBF GP: null compression
-    6. random_acq    — Random acquisition baseline (no GP)
-    7. multi_obj_hybrid — (optional, --multi-objective) scalarized multi-objective
+    1. ecfp4_raw       — ECFP4 (2048D) + RBF GP: shows RBF failure in high-D
+    2. tanimoto_ecfp4  — ECFP4 (2048D) + Tanimoto GP: proper kernel for binary FPs
+    3. best_single     — Best individual rep by seed-set GP + RBF GP
+    4. pca_50d         — PCA to 50D from concat + RBF GP: unsupervised compression
+    5. hybrid_50d      — KIRBy hybrid (budget=50) + RBF GP: MAIN CONDITION
+    6. random_50d      — Random Gaussian projection to 50D + RBF GP: null compression
+    7. random_acq      — Random acquisition baseline (no GP)
+    8. multi_obj_hybrid — (optional, --multi-objective) scalarized multi-objective
        BO in hybrid space: geometric mean of normalized label + QED drug-likeness.
        Per Moesser (2023) Ch. 2. Molecular datasets with SMILES only.
     8. multi_obj_random — random baseline on combined objective (for comparison)
@@ -64,8 +65,44 @@ from experiments._shared import (
     make_structured_output,
 )
 
+from sklearn.gaussian_process.kernels import Kernel, Hyperparameter
 from kirby.hybrid import apply_feature_selection
-from experiments.complexity.complexity_helpers import cached_create_hybrid as create_hybrid
+from kirby.hybrid import create_hybrid
+
+
+class TanimotoKernel(Kernel):
+    """Tanimoto (Jaccard) kernel for binary/count fingerprints.
+
+    k(x, y) = <x, y> / (||x||² + ||y||² - <x, y>)
+
+    Appropriate for molecular fingerprints where RBF assumes smooth
+    continuous features. Bounded in [0, 1].
+    """
+
+    def __init__(self):
+        pass
+
+    @property
+    def hyperparameter_constant(self):
+        return Hyperparameter("constant", "fixed", 1.0)
+
+    def __call__(self, X, Y=None, eval_gradient=False):
+        if Y is None:
+            Y = X
+        XY = X @ Y.T
+        X_sq = np.sum(X ** 2, axis=1)
+        Y_sq = np.sum(Y ** 2, axis=1)
+        denom = X_sq[:, None] + Y_sq[None, :] - XY
+        K = np.where(denom > 0, XY / denom, 1.0)
+        if eval_gradient:
+            return K, np.empty((X.shape[0], Y.shape[0], 0))
+        return K
+
+    def diag(self, X):
+        return np.ones(X.shape[0])
+
+    def is_stationary(self):
+        return False
 # TODO: create_hybrid API not finalised — revisit after framework experiments.
 
 
@@ -100,13 +137,19 @@ def expected_improvement(mu, sigma, y_best, xi=0.01):
 # GP FITTING WITH ERROR HANDLING
 # =============================================================================
 
-def fit_gp(X_train, y_train, optimize=True):
-    """Fit a GP with RBF + WhiteKernel. Returns (gp, success).
+def fit_gp(X_train, y_train, optimize=True, kernel_type='rbf'):
+    """Fit a GP with specified kernel. Returns (gp, success).
 
     In high-D, the kernel matrix may become singular. We catch LinAlgError
     and return (None, False) — this IS the expected result showing GP failure.
+
+    Args:
+        kernel_type: 'rbf' (standard) or 'tanimoto' (for binary fingerprints).
     """
-    kernel = ConstantKernel(1.0) * RBF(length_scale=1.0) + WhiteKernel(noise_level=0.1)
+    if kernel_type == 'tanimoto':
+        kernel = ConstantKernel(1.0) * TanimotoKernel() + WhiteKernel(noise_level=0.1)
+    else:
+        kernel = ConstantKernel(1.0) * RBF(length_scale=1.0) + WhiteKernel(noise_level=0.1)
     gp = GaussianProcessRegressor(
         kernel=kernel,
         n_restarts_optimizer=2 if optimize else 0,
@@ -173,7 +216,8 @@ def compute_combined_objective(y, qed_scores, lower_is_better=False):
 # =============================================================================
 
 def run_bo_loop(X_labeled, y_labeled, X_pool, y_pool,
-                max_iterations, refit_interval=10, rng=None):
+                max_iterations, refit_interval=10, rng=None,
+                kernel_type='rbf'):
     """Run a single BO loop in a given representation space.
 
     Args:
@@ -183,6 +227,7 @@ def run_bo_loop(X_labeled, y_labeled, X_pool, y_pool,
         y_pool: pool targets (hidden, revealed one at a time)
         max_iterations: BO budget
         refit_interval: refit GP hyperparameters every N iterations
+        kernel_type: 'rbf' or 'tanimoto' (for binary fingerprints)
 
     Returns:
         best_so_far: list of best-found-so-far at each iteration
@@ -209,7 +254,8 @@ def run_bo_loop(X_labeled, y_labeled, X_pool, y_pool,
             last_optimize = it
 
         # Fit GP on labeled set
-        gp, success = fit_gp(X_lab, y_lab, optimize=optimize)
+        gp, success = fit_gp(X_lab, y_lab, optimize=optimize,
+                             kernel_type=kernel_type)
 
         if not success:
             gp_failures += 1
@@ -312,8 +358,10 @@ def build_best_single_features(reps, labels, seed_idx, pool_idx):
         gp, ok = fit_gp(X_s, y_seed, optimize=True)
         if ok:
             mu = gp.predict(X_s)
-            from sklearn.metrics import r2_score
-            score = r2_score(y_seed, mu)
+            # R² here is GP goodness-of-fit on training data, not a task metric
+            ss_res = np.sum((y_seed - mu) ** 2)
+            ss_tot = np.sum((y_seed - np.mean(y_seed)) ** 2)
+            score = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
             if score > best_score:
                 best_score = score
                 best_name = name
@@ -359,7 +407,7 @@ def build_hybrid_features(reps, labels, seed_idx, pool_idx, budget=50):
 
     X_seed, feature_info = create_hybrid(
         seed_reps, y_seed,
-        allocation_method='greedy',
+        allocation_method='entropy_1.0',
         importance_method='lightgbm_gain',
         budget=budget,
     )
@@ -545,6 +593,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     conditions = [
         'ecfp4_raw',
+        'tanimoto_ecfp4',
         'best_single',
         'pca_50d',
         'hybrid_50d',
@@ -634,6 +683,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     X_seed, X_pool, dim = build_ecfp4_features(
                         reps, seed_idx, pool_idx)
 
+                elif condition == 'tanimoto_ecfp4':
+                    # Same features as ecfp4_raw but with Tanimoto kernel
+                    # (proper kernel for binary fingerprints). No scaling —
+                    # Tanimoto operates on raw binary/count features.
+                    if 'ecfp4' in reps:
+                        X_all = reps['ecfp4']
+                    else:
+                        name = max(reps.keys(), key=lambda k: reps[k].shape[1])
+                        X_all = reps[name]
+                    X_seed = X_all[seed_idx].astype(np.float64)
+                    X_pool = X_all[pool_idx].astype(np.float64)
+                    dim = X_all.shape[1]
+
                 elif condition == 'best_single':
                     X_seed, X_pool, dim = build_best_single_features(
                         reps, y_bo, seed_idx, pool_idx)
@@ -720,10 +782,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"      dim: {dim}")
 
             # --- Run BO loop ---
+            kt = 'tanimoto' if condition == 'tanimoto_ecfp4' else 'rbf'
             curve, gp_fail = run_bo_loop(
                 X_seed, y_seed, X_pool, y_pool,
                 max_iterations=max_iterations,
                 refit_interval=10, rng=rng,
+                kernel_type=kt,
             )
             all_curves.append(curve)
             total_gp_failures += gp_fail
@@ -832,7 +896,7 @@ def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
 
     X_seed, feature_info = create_hybrid(
         seed_reps, y_seed,
-        allocation_method='greedy',
+        allocation_method='entropy_1.0',
         importance_method='lightgbm_gain',
         budget=hybrid_budget,
     )
@@ -864,7 +928,7 @@ def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
 
                 X_lab_new, feature_info = create_hybrid(
                     lab_reps, y_lab,
-                    allocation_method='greedy',
+                    allocation_method='entropy_1.0',
                     importance_method='lightgbm_gain',
                     budget=hybrid_budget,
                 )
