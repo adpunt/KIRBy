@@ -39,6 +39,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     find_best_hybrid, get_config,
 )
+from experiments.complexity.complexity_helpers import DATASET_REPS
 
 EXPERIMENT_ID = 'c14_cross_domain_summary'
 
@@ -75,6 +76,26 @@ def _evaluate_task(task_name, rep_preset, config):
     print(f"    Domain: {domain}, Metric: {metric_name} "
           f"({'lower better' if lower_is_better else 'higher better'})")
     print(f"    {n_samples} samples, {len(reps)} reps, {n_folds}-fold CV")
+
+    # -----------------------------------------------------------------
+    # Load augmentation reps from DATASET_REPS (if configured)
+    # -----------------------------------------------------------------
+    aug_rep_names = DATASET_REPS.get(task_name, {}).get('augmentation', [])
+    aug_dict = None
+    if aug_rep_names:
+        missing = [r for r in aug_rep_names if r not in reps]
+        if missing:
+            print(f"    Loading {len(missing)} augmentation reps: {missing}")
+            aug_data = load_data(task_name, rep_preset='all', rep_names=missing)
+            aug_dict = {}
+            for rn, arr in aug_data['reps'].items():
+                if int(np.isnan(arr).sum()) > 0:
+                    arr = np.nan_to_num(arr, nan=0.0)
+                aug_dict[rn] = arr
+        else:
+            aug_dict = {r: reps[r] for r in aug_rep_names}
+        print(f"    Augmentations ({len(aug_dict)}): "
+              f"{', '.join(f'{k}={v.shape[1]}' for k, v in aug_dict.items())}")
 
     # -----------------------------------------------------------------
     # 1. Evaluate each individual rep with each model, track fold scores
@@ -155,7 +176,7 @@ def _evaluate_task(task_name, rep_preset, config):
     print(f"    Running find_best_hybrid...")
 
     speed = config.get('search_speed', 'fast')
-    search = find_best_hybrid(
+    fbh_kwargs = dict(
         base_reps=reps,
         labels=labels,
         groups=groups,
@@ -167,6 +188,9 @@ def _evaluate_task(task_name, rep_preset, config):
         seed=42,
         cache=True,
     )
+    if aug_dict:
+        fbh_kwargs['augmentations'] = aug_dict
+    search = find_best_hybrid(**fbh_kwargs)
 
     if search.best_overall is None:
         print(f"    WARNING: find_best_hybrid returned no result for {task_name}")

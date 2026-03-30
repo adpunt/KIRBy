@@ -125,27 +125,24 @@ def _build_conditions(train_reps, y_train, augmentations, bp,
         sc3 = StandardScaler()
         conditions['hybrid_unweighted'] = sc3.fit_transform(X_hybrid)
 
-        # Condition 4: hybrid weighted by base rep's importance
-        # This tests cross-rep importance transfer — use base imp to weight hybrid features
-        # Not directly applicable (different feature spaces), so we compute hybrid's own
-        # importance using the base method and use base importance for the base-sized features
-        # Actually: hybrid has different dimensionality than base, so we compute
-        # importance on hybrid features using the same method
+        # Condition 4: hybrid weighted by blueprint's importance method
+        # The blueprint discovered its own importance method during search;
+        # use that to weight hybrid features (may differ from imp_method).
         if imp_base is not None:
-            # Compute importance on hybrid features (not base rep importance)
             try:
-                imp_hybrid_via_base_method = compute_feature_importance(
-                    {'hybrid': X_hybrid}, y_train, method=imp_method
+                imp_hybrid_via_blueprint = compute_feature_importance(
+                    {'hybrid': X_hybrid}, y_train, method=bp.importance_method
                 )['hybrid']
-                X_h_weighted = _weight_features(X_hybrid, imp_hybrid_via_base_method)
+                X_h_weighted = _weight_features(X_hybrid, imp_hybrid_via_blueprint)
                 sc4 = StandardScaler()
                 conditions['hybrid_imp_base'] = sc4.fit_transform(X_h_weighted)
             except Exception as e:
                 print(f"      hybrid_imp_base failed: {e}")
 
-        # Condition 5: hybrid weighted by hybrid's own importance (different method possible)
-        # For the ablation, use the SAME importance method but this condition tests
-        # whether importance weighting on an already-curated hybrid adds anything
+        # Condition 5: hybrid weighted by base rep's importance method
+        # Uses the same imp_method as conditions 1-2 (e.g. lightgbm_gain)
+        # applied to hybrid features — tests whether re-weighting an
+        # already-curated hybrid with an external method adds anything.
         try:
             imp_hybrid_own = compute_feature_importance(
                 {'hybrid': X_hybrid}, y_train, method=imp_method

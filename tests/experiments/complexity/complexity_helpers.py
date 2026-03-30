@@ -217,8 +217,8 @@ DATASET_REPS = {
         'general': [ 'prot_t5', 'esm2_midlayers', 'esm2', 'esmc',
             'ablang2', 'igt5', 'esm2_early', 'esm2_concat', 'esm2_layer24',
             'antiberty', 'prot_t5_cdr', 'saprot', 'esm3', 'abroberta',
-            'esm2_entropy_top20', 'blosum', 'aac', 'mutation_features'],
-        'augmentation': [],
+            'esm2_entropy_top20', 'blosum', 'mutation_features'],
+        'augmentation': ['aac'],
         'top_tier': [ 'prot_t5', 'esm2_midlayers'],
     },
 
@@ -316,33 +316,33 @@ DATASET_REPS = {
 
     # ── Ginkgo Developability (6 datasets) ──────────────────────────────
     'ginkgo_acsins': {
-        'general': _AB_GENERAL + ['paratope', 'structural'],
-        'augmentation': [],
+        'general': list(_AB_GENERAL),
+        'augmentation': ['paratope', 'structural'],
         'top_tier': ['igt5', 'ablang2'],
     },
     'ginkgo_colloidal': {
-        'general': _AB_GENERAL + ['paratope', 'structural'],
-        'augmentation': [],
+        'general': list(_AB_GENERAL),
+        'augmentation': ['paratope', 'structural'],
         'top_tier': ['prot_t5', 'prot_t5_cdr'],
     },
     'ginkgo_heparin': {
-        'general': _AB_GENERAL + ['paratope', 'structural'],
-        'augmentation': [],
+        'general': list(_AB_GENERAL),
+        'augmentation': ['paratope', 'structural'],
         'top_tier': ['esm2_concat', 'prot_t5', 'prot_t5_cdr', 'ablang2'],
     },
     'ginkgo_hic': {
-        'general': _AB_GENERAL + ['paratope', 'structural'],
-        'augmentation': [],
+        'general': list(_AB_GENERAL),
+        'augmentation': ['paratope', 'structural'],
         'top_tier': ['esm2_concat', 'prot_t5', 'prot_t5_cdr'],
     },
     'ginkgo_pr_cho': {
-        'general': _AB_GENERAL + ['paratope', 'structural'],
-        'augmentation': [],
+        'general': list(_AB_GENERAL),
+        'augmentation': ['paratope', 'structural'],
         'top_tier': ['prot_t5', 'prot_t5_cdr'],
     },
     'ginkgo_titer': {
-        'general': _AB_GENERAL + ['paratope', 'structural', 'saprot_cdr'],
-        'augmentation': [],
+        'general': list(_AB_GENERAL) + ['saprot_cdr'],
+        'augmentation': ['paratope', 'structural'],
         'top_tier': ['saprot', 'saprot_cdr'],
     },
 

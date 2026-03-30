@@ -20,7 +20,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_model_factories, evaluate_single_rep_cv, fit_learning_curve,
-    find_best_hybrid,
+    find_best_hybrid, get_domain_metric,
 )
 
 
@@ -29,6 +29,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("\n" + "=" * 70)
     print("EXPERIMENT C05: LEARNING CURVES")
     print("=" * 70)
+
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     models = get_model_factories(config['models'])
     n_folds = config['n_splits']
@@ -124,6 +126,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             X, sub_labels, sub_groups, model_factory,
                             n_folds=sub_folds,
                             mode='intermediary' if sub_folds == 1 else 'full',
+                            metric_fn=metric_fn,
                         )
                         best_single = max(best_single, r2)
                     except Exception:
@@ -174,14 +177,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(row)
 
     # Learning curve fit summary
-    print("\n  LEARNING CURVE FITS (R2_max = asymptotic R2):")
+    print(f"\n  LEARNING CURVE FITS (score_max = asymptotic {metric_name}):")
     for model_name in model_names:
         fit = results['models'][model_name].get('hybrid_fit', {})
         if 'r2_max' in fit and 'error' not in fit:
-            print(f"    {model_name}: R2_max={fit['r2_max']:.4f}, "
+            print(f"    {model_name}: {metric_name}_max={fit['r2_max']:.4f}, "
                   f"a={fit['a']:.3f}, b={fit['b']:.3f}, fit_R2={fit['fit_r2']:.3f}")
         elif 'r2_max' in fit:
-            print(f"    {model_name}: R2_max~{fit['r2_max']:.4f} (fit failed: {fit.get('error', '?')})")
+            print(f"    {model_name}: {metric_name}_max~{fit['r2_max']:.4f} (fit failed: {fit.get('error', '?')})")
 
     return results
 
