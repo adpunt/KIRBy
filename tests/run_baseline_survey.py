@@ -542,7 +542,9 @@ def evaluate_ft_rep(factory, labels, groups, model, n_folds, task_type):
         try:
             X_train, X_val = factory(train_idx, val_idx, labels[train_idx])
         except Exception as e:
-            print(f" [ft error: {e}]", end='')
+            import sys
+            print(f" [ft error: {e}]", end='', flush=True)
+            print(f"\n  FT FACTORY ERROR: {e}", file=sys.stderr)
             continue
 
         # FT reps are always continuous (LM embeddings) — always scale

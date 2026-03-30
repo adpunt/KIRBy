@@ -539,7 +539,9 @@ def evaluate_rep(
 
     if is_clf:
         if not acc_scores:
-            return _nan_clf_result()
+            result = _nan_clf_result()
+            result['per_fold'] = fold_details
+            return result
         result = {
             'accuracy_mean': round(float(np.mean(acc_scores)), 4),
             'accuracy_std': round(float(np.std(acc_scores)), 4),
@@ -556,7 +558,9 @@ def evaluate_rep(
         return result
     else:
         if not r2_scores:
-            return _nan_reg_result()
+            result = _nan_reg_result()
+            result['per_fold'] = fold_details
+            return result
         return {
             'r2_mean': round(float(np.mean(r2_scores)), 4),
             'r2_std': round(float(np.std(r2_scores)), 4),
@@ -662,7 +666,9 @@ def evaluate_ft_rep(factory, labels, groups, model, n_folds=5,
 
     if is_clf:
         if not acc_scores:
-            return _nan_clf_result()
+            result = _nan_clf_result()
+            result['per_fold'] = fold_details
+            return result
         result = {
             'accuracy_mean': round(float(np.mean(acc_scores)), 4),
             'accuracy_std': round(float(np.std(acc_scores)), 4),
@@ -679,7 +685,9 @@ def evaluate_ft_rep(factory, labels, groups, model, n_folds=5,
         return result
     else:
         if not r2_scores:
-            return _nan_reg_result()
+            result = _nan_reg_result()
+            result['per_fold'] = fold_details
+            return result
         return {
             'r2_mean': round(float(np.mean(r2_scores)), 4),
             'r2_std': round(float(np.std(r2_scores)), 4),

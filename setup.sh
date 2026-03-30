@@ -48,6 +48,12 @@ if [ -z "$VIRTUAL_ENV" ]; then
 
     # Fix threadpoolctl crash from system Anaconda's old version (2022.05).
     pip install --user "threadpoolctl>=3.1" -q 2>/dev/null
+else
+    # Inside venv: clear any stale PYTHONPATH that points to user site-packages
+    # (e.g. from a previous setup.sh run without the venv). This prevents
+    # Python 3.9 packages from ~/.local leaking into the 3.11 venv.
+    unset PYTHONPATH
+    export PYTHONNOUSERSITE=1
 fi
 
 # constraints.txt locks numpy/pandas/scipy/sklearn/torch so NO pip install can upgrade them
