@@ -17,7 +17,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_model_family_variants, evaluate_cv_with_train,
-    find_best_hybrid,
+    find_best_hybrid, get_domain_metric,
 )
 
 
@@ -32,6 +32,8 @@ def run(data, config, output_dir, dataset_name, families=None):
     print("\n" + "=" * 70)
     print("EXPERIMENT 6: WITHIN-FAMILY MODEL COMPLEXITY GRADIENT")
     print("=" * 70)
+
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     reps = data['reps']
     labels = data['labels']
@@ -100,6 +102,7 @@ def run(data, config, output_dir, dataset_name, families=None):
                             importance_method=bp.importance_method,
                             budget=budget,
                             mode=mode,
+                            metric_fn=metric_fn,
                         )
                     except Exception:
                         val_r2 = best_at_budget['score_mean']
@@ -117,8 +120,8 @@ def run(data, config, output_dir, dataset_name, families=None):
                     gap = train_r2 - val_r2 if not np.isnan(train_r2) else float('nan')
                     fam_result['train_val_gap'][f"{var_name}_b{budget}"] = gap
 
-                    print(f"      b={budget}: R²={val_r2:.4f}±{val_std:.3f}, "
-                          f"train_R²={train_r2:.4f}, gap={gap:.3f} "
+                    print(f"      b={budget}: {metric_name}={val_r2:.4f}±{val_std:.3f}, "
+                          f"train_{metric_name}={train_r2:.4f}, gap={gap:.3f} "
                           f"[{bp.importance_method}/{bp.allocation_method}]")
 
             # Optimal budget comes from find_best_hybrid's own search
@@ -131,7 +134,7 @@ def run(data, config, output_dir, dataset_name, families=None):
                     'importance': best['blueprint'].importance_method,
                     'allocation': best['blueprint'].allocation_method,
                 }
-                print(f"      >> optimal: b={best['blueprint'].budget}, R²={best['score_mean']:.4f} "
+                print(f"      >> optimal: b={best['blueprint'].budget}, {metric_name}={best['score_mean']:.4f} "
                       f"[{best['blueprint'].importance_method}/{best['blueprint'].allocation_method}]")
             else:
                 fam_result['optimal_budget'][var_name] = {
@@ -162,7 +165,7 @@ def run(data, config, output_dir, dataset_name, families=None):
             b = info.get('budget', '?')
             r2 = info.get('r2', float('nan'))
             imp = info.get('importance', '?')
-            print(f"    {fam_name}/{var_name}: optimal_budget={b}, R²={r2:.4f} [{imp}]")
+            print(f"    {fam_name}/{var_name}: optimal_budget={b}, {metric_name}={r2:.4f} [{imp}]")
 
     return results
 

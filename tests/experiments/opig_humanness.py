@@ -54,7 +54,7 @@ import warnings
 from pathlib import Path
 
 import numpy as np
-from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
+from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.base import clone
 from sklearn.metrics import (
@@ -130,14 +130,12 @@ def evaluate_rep_clf(X, labels, groups, model, n_folds, rep_name=''):
     X = np.asarray(X, dtype=np.float64)
     labels = np.asarray(labels, dtype=np.int64)
 
-    n_unique_groups = len(np.unique(groups)) if groups is not None else 0
-
-    if groups is not None and n_unique_groups >= n_folds:
-        cv = StratifiedGroupKFold(n_splits=n_folds, shuffle=True, random_state=42)
-        splits = list(cv.split(X, labels, groups=groups))
-    else:
-        cv = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=42)
-        splits = list(cv.split(X, labels))
+    if groups is None or len(np.unique(groups)) < n_folds:
+        raise ValueError(
+            f"Cannot create {n_folds}-fold group split: "
+            f"groups={'None' if groups is None else len(np.unique(groups))} unique")
+    cv = StratifiedGroupKFold(n_splits=n_folds, shuffle=True, random_state=42)
+    splits = list(cv.split(X, labels, groups=groups))
 
     is_binary = _is_binary_rep(X)
     acc_scores, f1_scores, auroc_scores, bacc_scores = [], [], [], []
@@ -266,7 +264,11 @@ def evaluate_dataset(dataset_name, rep_names, n_folds):
         rep_results = {}
         for model_name, factory in models.items():
             t0 = time.time()
-            res = evaluate_rep_clf(X, labels, groups, factory(), n_folds, rep_name)
+            try:
+                res = evaluate_rep_clf(X, labels, groups, factory(), n_folds, rep_name)
+            except ValueError as e:
+                print(f"    {rep_name:25s} {model_name:8s}  SKIPPED: {e}")
+                continue
             elapsed = time.time() - t0
             if res is not None:
                 rep_results[model_name] = res

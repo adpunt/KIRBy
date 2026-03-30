@@ -184,12 +184,12 @@ def evaluate_transfer(rep_names, n_folds):
             continue
         try:
             if rep_name in MUTATION_REPS:
-                X_tr = rep_fn(train_data.get('mutations', []),
-                              train_data.get('wildtype_heavy', ''),
-                              train_data.get('wildtype_light', ''))
-                X_te = rep_fn(test_data.get('mutations', []),
-                              test_data.get('wildtype_heavy', ''),
-                              test_data.get('wildtype_light', ''))
+                X_tr = rep_fn(train_data['heavy_seqs'],
+                              train_data['light_seqs'],
+                              train_data.get('mutations', []))
+                X_te = rep_fn(test_data['heavy_seqs'],
+                              test_data['light_seqs'],
+                              test_data.get('mutations', []))
             else:
                 X_tr = ANTIBODY_REPS[rep_name](train_data['heavy_seqs'],
                                                train_data['light_seqs'])
@@ -286,9 +286,7 @@ def evaluate_condition(condition, rep_names, n_folds):
         try:
             if rep_name in MUTATION_REPS:
                 mutations = data.get('mutations', [])
-                wt_heavy = data.get('wildtype_heavy', '')
-                wt_light = data.get('wildtype_light', '')
-                X = rep_fn(mutations, wt_heavy, wt_light)
+                X = rep_fn(heavy_seqs, light_seqs, mutations)
             else:
                 X = ANTIBODY_REPS[rep_name](heavy_seqs, light_seqs)
             X = np.asarray(X, dtype=np.float64)
