@@ -20,6 +20,7 @@ from experiments._shared import (
     create_hybrid, apply_feature_selection,
     find_best_hybrid, get_domain_metric,
 )
+from kirby.hybrid import apply_augmentation_selection
 
 
 def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir=None):
@@ -68,7 +69,10 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
     optimal_budget = 100
     optimal_alloc = 'greedy'
     optimal_imp = 'treeshap'
+    optimal_internal_eval = 'ridge'
+    optimal_aug_strategy = 'uncapped'
     optimal_desc = 'RF at budget=100 (default)'
+    augs = data.get('augmentations')
 
     if exp2_results and exp2_results.get('best_by_model'):
         # Use best config from Exp 2
@@ -85,7 +89,6 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
     else:
         # Run find_best_hybrid to discover optimal
         print(f"  Running find_best_hybrid(speed={search_speed}) to find optimal...")
-        augs = data.get('augmentations')
         try:
             search = find_best_hybrid(
                 reps, labels, groups=groups,
@@ -99,6 +102,8 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 optimal_budget = best['blueprint'].budget
                 optimal_alloc = best['blueprint'].allocation_method
                 optimal_imp = best['blueprint'].importance_method
+                optimal_internal_eval = best['blueprint'].internal_evaluator
+                optimal_aug_strategy = best['blueprint'].augmentation_strategy
                 best_model = best['model']
                 optimal_model_factory = get_model_factories([best_model]).get(best_model)
                 optimal_desc = (f"{best_model} at budget={optimal_budget} "
@@ -138,6 +143,8 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
             train_reps = {k: v[train_idx] for k, v in reps.items()}
             val_reps = {k: v[val_idx] for k, v in reps.items()}
             y_train, y_val = labels[train_idx], labels[val_idx]
+            train_augs = {k: v[train_idx] for k, v in augs.items()} if augs else None
+            val_augs = {k: v[val_idx] for k, v in augs.items()} if augs else None
 
             try:
                 X_train, feature_info = create_hybrid(
@@ -145,8 +152,16 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                     allocation_method=alloc,
                     budget=budget,
                     importance_method=imp,
+                    internal_evaluator=optimal_internal_eval,
+                    augmentations=train_augs,
+                    augmentation_strategy=optimal_aug_strategy,
                 )
                 X_val = apply_feature_selection(val_reps, feature_info)
+                aug_info = feature_info.get('augmentation_info')
+                if aug_info and val_augs:
+                    X_val_aug = apply_augmentation_selection(val_augs, aug_info)
+                    if X_val_aug is not None:
+                        X_val = np.hstack([X_val, X_val_aug])
             except Exception as e:
                 print(f"    fold {fold_i}: hybrid creation failed - {e}")
                 continue

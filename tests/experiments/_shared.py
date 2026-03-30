@@ -9,6 +9,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 import sys
 import json
+import time
 import argparse
 import warnings
 from pathlib import Path
@@ -414,11 +415,16 @@ def evaluate_cv_with_train(
     seed: int = 42,
     mode: str = 'full',
     metric_fn=None,
+    internal_evaluator: str = 'ridge',
+    augmentations: Optional[Dict[str, np.ndarray]] = None,
+    augmentation_strategy: str = 'uncapped',
 ) -> Tuple[float, float, float, float, int]:
     """Like evaluate_cv but also returns train score.
 
     Returns (val_mean, val_std, train_mean, train_std, n_features).
     """
+    from kirby.hybrid import apply_augmentation_selection
+
     if metric_fn is None:
         metric_fn = r2_score
 
@@ -431,6 +437,7 @@ def evaluate_cv_with_train(
         train_reps = {k: v[train_idx] for k, v in base_reps.items()}
         val_reps = {k: v[val_idx] for k, v in base_reps.items()}
         y_train, y_val = labels[train_idx], labels[val_idx]
+        train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
 
         try:
             X_train, feature_info = create_hybrid(
@@ -438,8 +445,17 @@ def evaluate_cv_with_train(
                 allocation_method=allocation_method,
                 budget=budget,
                 importance_method=importance_method,
+                internal_evaluator=internal_evaluator,
+                augmentations=train_augs,
+                augmentation_strategy=augmentation_strategy,
             )
             X_val = apply_feature_selection(val_reps, feature_info)
+            aug_info = feature_info.get('augmentation_info')
+            if aug_info and augmentations is not None:
+                val_augs = {k: v[val_idx] for k, v in augmentations.items()}
+                X_val_aug = apply_augmentation_selection(val_augs, aug_info)
+                if X_val_aug is not None:
+                    X_val = np.hstack([X_val, X_val_aug])
         except Exception:
             continue
 
@@ -1362,7 +1378,13 @@ def get_hybrid_features_and_weights(
         raise RuntimeError("find_best_hybrid returned no fitted result")
 
     X_hybrid = apply_feature_selection(reps, _fitted_to_feature_info(fitted))
-    weights_flat = _flatten_weights(fitted)
+    # Append augmentation features if present (must match flatten_weights layout)
+    if fitted.augmentation_info and augmentations is not None:
+        from kirby.hybrid import apply_augmentation_selection
+        X_aug = apply_augmentation_selection(augmentations, fitted.augmentation_info)
+        if X_aug is not None:
+            X_hybrid = np.hstack([X_hybrid, X_aug])
+    weights_flat = flatten_weights(fitted)
 
     return X_hybrid, weights_flat, search
 
@@ -1375,15 +1397,277 @@ def _fitted_to_feature_info(fitted) -> dict:
     return feature_info
 
 
-def _flatten_weights(fitted) -> np.ndarray:
-    """Flatten per-rep feature_weights into a single array matching X_hybrid columns."""
+def flatten_weights(fitted) -> np.ndarray:
+    """Flatten per-rep feature_weights into a single array matching X_hybrid columns.
+
+    Includes augmentation feature weights when augmentation_info is present.
+    The returned array has one weight per column of the full hybrid matrix
+    (base features + augmentation features).
+    """
     parts = []
+    # Base rep weights
     for rep_name in fitted.selected_indices:
         if fitted.feature_weights and rep_name in fitted.feature_weights:
             parts.append(fitted.feature_weights[rep_name])
         else:
             parts.append(np.ones(len(fitted.selected_indices[rep_name])))
-    return np.concatenate(parts)
+    # Augmentation weights (appended after base features, matching X_hybrid layout)
+    # NOTE: iteration order must match apply_augmentation_selection (insertion order)
+    if fitted.augmentation_info:
+        for aug_name in fitted.augmentation_info:
+            aug = fitted.augmentation_info[aug_name]
+            if 'importance_scores' in aug:
+                parts.append(np.asarray(aug['importance_scores']))
+            else:
+                n_feat = aug.get('n_features', len(aug.get('selected_indices', [])))
+                parts.append(np.ones(n_feat))
+    return np.concatenate(parts) if parts else np.array([])
+
+
+def flatten_fold_weights(feat_info) -> np.ndarray:
+    """Flatten per-rep importance scores from per-fold feature_info.
+
+    Unlike flatten_weights (which uses FittedResult from global search),
+    this uses the feature_info dict returned by create_hybrid / build_fold_hybrid.
+    Weights match the columns of the per-fold hybrid matrix exactly.
+    """
+    parts = []
+    for rep_name, info in feat_info.items():
+        if not isinstance(info, dict) or 'selected_indices' not in info:
+            continue
+        if 'importance_scores' in info:
+            parts.append(np.asarray(info['importance_scores']))
+        else:
+            parts.append(np.ones(info.get('n_features', len(info['selected_indices']))))
+    # Augmentation weights
+    aug_info = feat_info.get('augmentation_info')
+    if aug_info:
+        for aug_name, aug in aug_info.items():
+            if 'importance_scores' in aug:
+                parts.append(np.asarray(aug['importance_scores']))
+            else:
+                n_feat = aug.get('n_features', len(aug.get('selected_indices', [])))
+                parts.append(np.ones(n_feat))
+    return np.concatenate(parts) if parts else np.array([])
+
+
+def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
+                      augmentations_train=None, augmentations_val=None):
+    """Per-fold hybrid construction using a search blueprint.
+
+    Properly passes internal_evaluator and augmentations from the blueprint,
+    unlike bare create_hybrid calls that only pass allocation/budget/importance.
+
+    Args:
+        train_reps: {rep_name: X_train} for this fold.
+        val_reps: {rep_name: X_val} for this fold.
+        y_train: Training labels for this fold.
+        blueprint: Blueprint from search.best_overall['blueprint'].
+        augmentations_train: {aug_name: X_train} sliced augmentation reps, or None.
+        augmentations_val: {aug_name: X_val} sliced augmentation reps, or None.
+
+    Returns:
+        (X_tr_h, X_va_h, feat_info)
+    """
+    from kirby.hybrid import apply_augmentation_selection
+
+    X_tr_h, feat_info = create_hybrid(
+        train_reps, y_train,
+        allocation_method=blueprint.allocation_method,
+        budget=blueprint.budget,
+        importance_method=blueprint.importance_method,
+        internal_evaluator=blueprint.internal_evaluator,
+        augmentations=augmentations_train,
+        augmentation_strategy=blueprint.augmentation_strategy,
+    )
+    X_va_h = apply_feature_selection(val_reps, feat_info)
+
+    # Apply augmentation selection to val if the hybrid included augmentations
+    aug_info = feat_info.get('augmentation_info')
+    if aug_info and augmentations_val:
+        X_va_aug = apply_augmentation_selection(augmentations_val, aug_info)
+        if X_va_aug is not None:
+            X_va_h = np.hstack([X_va_h, X_va_aug])
+
+    return X_tr_h, X_va_h, feat_info
+
+
+# =============================================================================
+# HYBRID SEARCH PRECOMPUTE
+# =============================================================================
+
+def precompute_hybrid_searches(reps, labels, groups, config,
+                               augmentations=None, verbose=True):
+    """Warm find_best_hybrid disk cache for all (budget, aug_condition) combos.
+
+    Calls find_best_hybrid with budgets=[budget] for each budget value and
+    each augmentation condition. All calls use cache=True — first run computes,
+    subsequent runs hit disk cache instantly.
+
+    Args:
+        reps: Base representations {name: array}.
+        labels: Target values.
+        groups: Group labels for CV (or None).
+        config: Dict with keys: search_speed, budgets.
+        augmentations: {aug_name: array} or None.
+        verbose: Print progress.
+
+    Returns:
+        Dict mapping (budget, aug_cond) -> SearchResult.
+    """
+    from kirby.find_best_hybrid import find_best_hybrid
+
+    budgets = config.get('budgets', [100])
+    speed = config.get('search_speed', 'fast')
+
+    # Determine which aug conditions to precompute
+    aug_conditions = ['none']
+    if augmentations is not None and len(augmentations) > 0:
+        aug_conditions.extend(['uncapped', 'capped'])
+
+    total = len(budgets) * len(aug_conditions)
+    results = {}
+    t_start = time.time()
+    idx = 0
+
+    for budget in budgets:
+        for aug_cond in aug_conditions:
+            idx += 1
+            augs = augmentations if aug_cond != 'none' else None
+            aug_strat = aug_cond if aug_cond != 'none' else 'uncapped'
+
+            if verbose:
+                print(f"  [{idx}/{total}] budget={budget} aug={aug_cond} ...",
+                      end='', flush=True)
+
+            t0 = time.time()
+            try:
+                search = find_best_hybrid(
+                    base_reps=reps,
+                    labels=labels,
+                    groups=groups,
+                    budgets=[budget],
+                    augmentations=augs,
+                    augmentation_strategy=aug_strat,
+                    speed=speed,
+                    cache=True,
+                    verbose=False,
+                )
+                results[(budget, aug_cond)] = search
+                elapsed = time.time() - t0
+
+                if verbose:
+                    if search.best_overall:
+                        bp = search.best_overall['blueprint']
+                        score = search.best_overall.get('score_mean', 0)
+                        print(f" done {elapsed:.1f}s "
+                              f"(alloc={bp.allocation_method}, score={score:.4f})")
+                    else:
+                        print(f" done {elapsed:.1f}s (no results)")
+
+            except Exception as e:
+                if verbose:
+                    print(f" FAILED: {e}")
+                results[(budget, aug_cond)] = None
+
+    if verbose:
+        total_time = time.time() - t_start
+        n_ok = sum(1 for v in results.values() if v is not None)
+        print(f"  Precompute complete: {n_ok}/{total} searches in {total_time:.0f}s")
+
+    return results
+
+
+def get_precomputed_search(reps, labels, groups, budget,
+                           aug_condition='uncapped', augmentations=None,
+                           speed='fast', return_fitted=False,
+                           weight_method=None, **kwargs):
+    """Retrieve a hybrid search result for a specific (budget, aug_condition).
+
+    Calls find_best_hybrid with budgets=[budget] and cache=True.
+    If precompute_hybrid_searches() already ran with matching params,
+    this returns instantly from disk cache.
+
+    Args:
+        reps: Base representations {name: array}.
+        labels: Target values.
+        groups: Group labels for CV (or None).
+        budget: Feature budget (int).
+        aug_condition: 'none', 'uncapped', or 'capped'.
+        augmentations: {aug_name: array} or None.
+        speed: Search speed tier ('fast' or 'full').
+        return_fitted: If True, also fit best config on full data.
+        weight_method: Importance method for weights (needed if return_fitted).
+        **kwargs: Additional args passed to find_best_hybrid.
+
+    Returns:
+        SearchResult from find_best_hybrid.
+    """
+    from kirby.find_best_hybrid import find_best_hybrid
+
+    augs = augmentations if aug_condition != 'none' else None
+    aug_strat = aug_condition if aug_condition != 'none' else 'uncapped'
+
+    return find_best_hybrid(
+        base_reps=reps,
+        labels=labels,
+        groups=groups,
+        budgets=[budget],
+        augmentations=augs,
+        augmentation_strategy=aug_strat,
+        speed=speed,
+        return_fitted=return_fitted,
+        weight_method=weight_method,
+        cache=True,
+        verbose=False,
+        **kwargs,
+    )
+
+
+def get_fitted_hybrid(reps, labels, groups, budget, aug_condition='uncapped',
+                      augmentations=None, speed='fast'):
+    """Get X_hybrid and feature_info from a cached search (return_fitted=True).
+
+    For full-dataset experiments that need the hybrid matrix without per-fold splitting.
+
+    Args:
+        reps: Base representations {name: array}.
+        labels: Target values.
+        groups: Group labels for CV (or None).
+        budget: Feature budget (int).
+        aug_condition: 'none', 'uncapped', or 'capped'.
+        augmentations: {aug_name: array} or None.
+        speed: Search speed tier ('fast' or 'full').
+
+    Returns:
+        (X_hybrid, feature_info, SearchResult)
+    """
+    search = get_precomputed_search(
+        reps, labels, groups, budget=budget,
+        aug_condition=aug_condition, augmentations=augmentations,
+        speed=speed, return_fitted=True)
+    if search.fitted_result is None:
+        raise RuntimeError(f"No fitted result for budget={budget} aug={aug_condition}")
+    fitted = search.fitted_result
+    fi = {}
+    for rep_name, indices in fitted.selected_indices.items():
+        fi[rep_name] = {
+            'selected_indices': indices,
+            'n_selected': len(indices),
+        }
+        if fitted.feature_weights and rep_name in fitted.feature_weights:
+            fi[rep_name]['feature_weights'] = fitted.feature_weights[rep_name]
+    X_hybrid = apply_feature_selection(reps, fi)
+
+    # Include augmentation features if present
+    if fitted.augmentation_info and augmentations is not None:
+        from kirby.hybrid import apply_augmentation_selection
+        fi['augmentation_info'] = fitted.augmentation_info
+        X_aug = apply_augmentation_selection(augmentations, fitted.augmentation_info)
+        if X_aug is not None:
+            X_hybrid = np.hstack([X_hybrid, X_aug])
+
+    return X_hybrid, fi, search
 
 
 # =============================================================================

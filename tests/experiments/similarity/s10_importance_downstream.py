@@ -30,7 +30,8 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, make_structured_output,
     cv_split, get_domain_metric, get_model_factories, convert_numpy,
-    compute_feature_importance,
+    compute_feature_importance, build_fold_hybrid,
+    get_precomputed_search,
 )
 
 from kirby.hybrid import apply_feature_selection
@@ -122,7 +123,8 @@ def _compute_sim_descriptors(X_train, y_train, X_query, k=10):
 # =============================================================================
 
 def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
-                      metric_fn, metric_name, lower_is_better=False):
+                      metric_fn, metric_name, lower_is_better=False,
+                      augmentations=None):
     """Weighted kNN: per-rep and hybrid, weighted vs unweighted."""
     print("\n  --- Task 1: Weighted kNN Regression ---")
 
@@ -190,15 +192,13 @@ def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
                 train_reps = {n: r[train_idx] for n, r in reps.items()}
                 val_reps = {n: r[val_idx] for n, r in reps.items()}
                 y_train, y_val = labels[train_idx], labels[val_idx]
+                aug_tr = {a: v[train_idx] for a, v in augmentations.items()} if augmentations else None
+                aug_va = {a: v[val_idx] for a, v in augmentations.items()} if augmentations else None
 
                 try:
-                    X_tr_h, feat_info = create_hybrid(
-                        train_reps, y_train,
-                        allocation_method=hybrid_blueprint.allocation_method,
-                        budget=hybrid_blueprint.budget,
-                        importance_method=hybrid_blueprint.importance_method,
-                    )
-                    X_va_h = apply_feature_selection(val_reps, feat_info)
+                    X_tr_h, X_va_h, feat_info = build_fold_hybrid(
+                        train_reps, val_reps, y_train, hybrid_blueprint,
+                        augmentations_train=aug_tr, augmentations_val=aug_va)
                 except Exception:
                     continue
 
@@ -241,7 +241,8 @@ def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
 # =============================================================================
 
 def _run_weighted_gp(reps, labels, groups, config, hybrid_blueprint,
-                     metric_fn, metric_name, n_samples):
+                     metric_fn, metric_name, n_samples,
+                     augmentations=None):
     """GP with importance-weighted RBF kernel."""
     print("\n  --- Task 2: GP with Importance-Weighted RBF ---")
 
@@ -312,15 +313,13 @@ def _run_weighted_gp(reps, labels, groups, config, hybrid_blueprint,
             train_reps = {n: r[train_idx] for n, r in reps.items()}
             val_reps = {n: r[val_idx] for n, r in reps.items()}
             y_train, y_val = labels[train_idx], labels[val_idx]
+            aug_tr = {a: v[train_idx] for a, v in augmentations.items()} if augmentations else None
+            aug_va = {a: v[val_idx] for a, v in augmentations.items()} if augmentations else None
 
             try:
-                X_tr_h, feat_info = create_hybrid(
-                    train_reps, y_train,
-                    allocation_method=hybrid_blueprint.allocation_method,
-                    budget=hybrid_blueprint.budget,
-                    importance_method=hybrid_blueprint.importance_method,
-                )
-                X_va_h = apply_feature_selection(val_reps, feat_info)
+                X_tr_h, X_va_h, feat_info = build_fold_hybrid(
+                    train_reps, val_reps, y_train, hybrid_blueprint,
+                    augmentations_train=aug_tr, augmentations_val=aug_va)
             except Exception:
                 continue
 
@@ -365,7 +364,8 @@ def _run_weighted_gp(reps, labels, groups, config, hybrid_blueprint,
 # =============================================================================
 
 def _run_weighted_svr(reps, labels, groups, config, hybrid_blueprint,
-                      metric_fn, metric_name, n_samples):
+                      metric_fn, metric_name, n_samples,
+                      augmentations=None):
     """SVR with importance-weighted RBF kernel."""
     print("\n  --- Task 3: SVR with Importance-Weighted RBF ---")
 
@@ -432,15 +432,13 @@ def _run_weighted_svr(reps, labels, groups, config, hybrid_blueprint,
             train_reps = {n: r[train_idx] for n, r in reps.items()}
             val_reps = {n: r[val_idx] for n, r in reps.items()}
             y_train, y_val = labels[train_idx], labels[val_idx]
+            aug_tr = {a: v[train_idx] for a, v in augmentations.items()} if augmentations else None
+            aug_va = {a: v[val_idx] for a, v in augmentations.items()} if augmentations else None
 
             try:
-                X_tr_h, feat_info = create_hybrid(
-                    train_reps, y_train,
-                    allocation_method=hybrid_blueprint.allocation_method,
-                    budget=hybrid_blueprint.budget,
-                    importance_method=hybrid_blueprint.importance_method,
-                )
-                X_va_h = apply_feature_selection(val_reps, feat_info)
+                X_tr_h, X_va_h, feat_info = build_fold_hybrid(
+                    train_reps, val_reps, y_train, hybrid_blueprint,
+                    augmentations_train=aug_tr, augmentations_val=aug_va)
             except Exception:
                 continue
 
@@ -485,7 +483,8 @@ def _run_weighted_svr(reps, labels, groups, config, hybrid_blueprint,
 # =============================================================================
 
 def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
-                metric_fn, metric_name):
+                metric_fn, metric_name, task_type='regression',
+                augmentations=None):
     """q-RASAR-style similarity-augmented features.
 
     For each sample, find k nearest neighbors and compute similarity
@@ -505,7 +504,7 @@ def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
     k_neighbors = 10
     results = {'per_rep': {}, 'hybrid': {}}
 
-    _rf_fac = get_model_factories(['rf'], task_type=data.get('task_type', 'regression'),
+    _rf_fac = get_model_factories(['rf'], task_type=task_type,
                                     n_samples=len(labels))['rf']
     def _make_rf():
         return _rf_fac()
@@ -589,15 +588,13 @@ def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
             train_reps = {n: r[train_idx] for n, r in reps.items()}
             val_reps = {n: r[val_idx] for n, r in reps.items()}
             y_train, y_val = labels[train_idx], labels[val_idx]
+            aug_tr = {a: v[train_idx] for a, v in augmentations.items()} if augmentations else None
+            aug_va = {a: v[val_idx] for a, v in augmentations.items()} if augmentations else None
 
             try:
-                X_tr_h, feat_info = create_hybrid(
-                    train_reps, y_train,
-                    allocation_method=hybrid_blueprint.allocation_method,
-                    budget=hybrid_blueprint.budget,
-                    importance_method=hybrid_blueprint.importance_method,
-                )
-                X_va_h = apply_feature_selection(val_reps, feat_info)
+                X_tr_h, X_va_h, feat_info = build_fold_hybrid(
+                    train_reps, val_reps, y_train, hybrid_blueprint,
+                    augmentations_train=aug_tr, augmentations_val=aug_va)
             except Exception:
                 continue
 
@@ -690,11 +687,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     search_speed = config.get('search_speed', 'fast')
 
     try:
-        from experiments._shared import get_hybrid_features_and_weights
-        _, _, search = get_hybrid_features_and_weights(
-            reps, labels, groups, search_speed, 'lightgbm_gain',
-            budget=budget,
-            augmentations=data.get('augmentations'))
+        search = get_precomputed_search(
+            reps, labels, groups, budget=budget,
+            aug_condition='uncapped', augmentations=data.get('augmentations'),
+            speed=search_speed)
         if search.best_overall:
             hybrid_blueprint = search.best_overall['blueprint']
             print(f"  Hybrid blueprint: alloc={hybrid_blueprint.allocation_method}, "
@@ -706,32 +702,39 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     start_total = time.time()
     results = {}
 
+    augmentations = data.get('augmentations')
+
     # Task 1: Weighted kNN
     t0 = time.time()
     results['weighted_knn'] = _run_weighted_knn(
         reps, labels, groups, config, hybrid_blueprint,
-        metric_fn, metric_name, lower_is_better)
+        metric_fn, metric_name, lower_is_better,
+        augmentations=augmentations)
     print(f"  [Task 1 elapsed: {time.time() - t0:.1f}s]")
 
     # Task 2: GP with importance-weighted RBF
     t0 = time.time()
     results['weighted_gp'] = _run_weighted_gp(
         reps, labels, groups, config, hybrid_blueprint,
-        metric_fn, metric_name, n_samples)
+        metric_fn, metric_name, n_samples,
+        augmentations=augmentations)
     print(f"  [Task 2 elapsed: {time.time() - t0:.1f}s]")
 
     # Task 3: SVR with importance-weighted RBF
     t0 = time.time()
     results['weighted_svr'] = _run_weighted_svr(
         reps, labels, groups, config, hybrid_blueprint,
-        metric_fn, metric_name, n_samples)
+        metric_fn, metric_name, n_samples,
+        augmentations=augmentations)
     print(f"  [Task 3 elapsed: {time.time() - t0:.1f}s]")
 
     # Task 4: q-RASAR similarity-augmented features
     t0 = time.time()
+    task_type = data.get('task_type', 'regression')
     results['qrasar'] = _run_qrasar(
         reps, labels, groups, config, hybrid_blueprint,
-        metric_fn, metric_name)
+        metric_fn, metric_name, task_type=task_type,
+        augmentations=augmentations)
     print(f"  [Task 4 elapsed: {time.time() - t0:.1f}s]")
 
     # Summary

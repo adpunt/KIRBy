@@ -106,12 +106,19 @@ class PretrainedDNNRegressor(BaseEstimator, RegressorMixin):
     def fit(self, X, y):
         import torch
         import torch.nn as nn
+        from sklearn.preprocessing import StandardScaler
 
         rng = np.random.RandomState(self.random_state)
         torch.manual_seed(self.random_state)
 
         X = np.asarray(X, dtype=np.float32)
         y = np.asarray(y, dtype=np.float32).ravel()
+
+        # Z-normalize features to match pre-training (pretrain_chembl_dnn.py
+        # applies StandardScaler before training — weights expect scaled input)
+        self.feat_scaler_ = StandardScaler()
+        X = self.feat_scaler_.fit_transform(X).astype(np.float32)
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
 
         # Z-normalize targets
         self.y_mean_ = float(y.mean())
@@ -193,6 +200,10 @@ class PretrainedDNNRegressor(BaseEstimator, RegressorMixin):
     def predict(self, X):
         import torch
         X = np.asarray(X, dtype=np.float32)
+        # Apply same scaling as fit() (matches pre-training normalization)
+        if hasattr(self, 'feat_scaler_'):
+            X = self.feat_scaler_.transform(X).astype(np.float32)
+            X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
         self.model_.eval()
         with torch.no_grad():
             pred = self.model_(torch.from_numpy(X)).squeeze(-1).numpy()

@@ -101,6 +101,7 @@ class FittedResult:
     selected_indices: Dict[str, np.ndarray]
     feature_weights: Optional[Dict[str, np.ndarray]] = None
     n_features: int = 0
+    augmentation_info: Optional[dict] = None
 
 
 @dataclass
@@ -1823,11 +1824,15 @@ def _compute_fitted_result(
         except Exception:
             pass
 
+    # Preserve augmentation info if present
+    aug_info = feature_info.get('augmentation_info')
+
     return FittedResult(
         blueprint=blueprint,
         selected_indices=selected_indices,
         feature_weights=feature_weights,
         n_features=total_features,
+        augmentation_info=aug_info,
     )
 
 
@@ -1841,7 +1846,9 @@ def _hybrid_cache_key(base_reps, labels, groups, speed, budgets, allocation_meth
                       return_fitted=False, weight_method=None,
                       two_phase=False, refinement_top_n=5,
                       refinement_step_sizes=None,
-                      rep_factory_names=None) -> str:
+                      rep_factory_names=None,
+                      augmentations=None,
+                      augmentation_strategy='uncapped') -> str:
     """SHA256 hash of all search-affecting inputs."""
     h = hashlib.sha256()
     for name in sorted(base_reps.keys()):
@@ -1850,6 +1857,10 @@ def _hybrid_cache_key(base_reps, labels, groups, speed, budgets, allocation_meth
     h.update(labels.tobytes())
     if groups is not None:
         h.update(groups.tobytes())
+    if augmentations is not None:
+        for aname in sorted(augmentations.keys()):
+            h.update(f"aug:{aname}:{augmentations[aname].shape}".encode())
+        h.update(f"aug_strategy:{augmentation_strategy}".encode())
     h.update(f"{speed}|{budgets}|{allocation_methods}|{importance_methods}|{internal_evaluators}|{n_folds}|{seed}|{metric}|{task_type}|{return_fitted}|{weight_method}|{two_phase}|{refinement_top_n}|{refinement_step_sizes}".encode())
     if models:
         model_names = sorted(models.keys()) if isinstance(models, dict) else sorted(models)
@@ -1971,6 +1982,8 @@ def find_best_hybrid(
             two_phase=two_phase, refinement_top_n=refinement_top_n,
             refinement_step_sizes=refinement_step_sizes,
             rep_factory_names=factory_names,
+            augmentations=augmentations,
+            augmentation_strategy=augmentation_strategy,
         )
         cache_path = Path(cache_dir or Path.home() / '.cache' / 'kirby' / 'hybrid_search') / f'{key}.pkl'
         if cache_path.exists():

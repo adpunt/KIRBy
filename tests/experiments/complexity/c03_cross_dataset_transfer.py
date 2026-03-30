@@ -25,10 +25,10 @@ from sklearn.preprocessing import StandardScaler
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy, cv_split, _cv_split,
-    compute_dataset_complexity,
+    compute_dataset_complexity, get_domain_metric,
     find_best_hybrid, create_hybrid, apply_feature_selection,
 )
-from sklearn.metrics import r2_score
+from kirby.hybrid import apply_augmentation_selection
 
 
 def run(datasets, config, output_dir, dataset_name=None, **kwargs):
@@ -90,6 +90,8 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
             )
 
             best = search_result.best_overall
+            metric_name, metric_fn, _ = get_domain_metric(data)
+            augs = data.get('augmentations')
             if best:
                 bp = best['blueprint']
                 novel_results = {}
@@ -105,13 +107,23 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                             y_train = data['labels'][train_idx]
                             y_val = data['labels'][val_idx]
 
+                            train_augs = {k: v[train_idx] for k, v in augs.items()} if augs else None
                             X_train, fi = create_hybrid(
                                 train_reps, y_train,
                                 allocation_method=bp.allocation_method,
                                 budget=bp.budget,
                                 importance_method=bp.importance_method,
+                                internal_evaluator=bp.internal_evaluator,
+                                augmentations=train_augs,
+                                augmentation_strategy=bp.augmentation_strategy,
                             )
                             X_val = apply_feature_selection(val_reps, fi)
+                            aug_info = fi.get('augmentation_info')
+                            if aug_info and augs:
+                                val_augs = {k: v[val_idx] for k, v in augs.items()}
+                                X_aug_val = apply_augmentation_selection(val_augs, aug_info)
+                                if X_aug_val is not None:
+                                    X_val = np.hstack([X_val, X_aug_val])
 
                             scaler = StandardScaler()
                             X_train_s = scaler.fit_transform(X_train)
@@ -119,10 +131,10 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
 
                             m = deepcopy(novel_model)
                             m.fit(X_train_s, y_train)
-                            novel_scores.append(r2_score(y_val, m.predict(X_val_s)))
+                            novel_scores.append(metric_fn(y_val, m.predict(X_val_s)))
 
                         novel_results[novel_name] = float(np.mean(novel_scores))
-                        print(f"    {novel_name} on {ds_name}: R2={np.mean(novel_scores):.4f}")
+                        print(f"    {novel_name} on {ds_name}: {metric_name}={np.mean(novel_scores):.4f}")
                     except Exception as e:
                         print(f"    {novel_name} on {ds_name}: FAILED - {e}")
 

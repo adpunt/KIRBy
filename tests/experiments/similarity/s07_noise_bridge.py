@@ -23,7 +23,7 @@ from sklearn.preprocessing import StandardScaler
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results, convert_numpy,
-    get_hybrid_features_and_weights,
+    get_fitted_hybrid, flatten_weights,
 )
 
 from kirby.utils.noise_mitigation_methods import (
@@ -53,15 +53,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
 
     # Get hybrid
-    shared_search = kwargs.get('shared_search')
+    budget = kwargs.get('budget', 100)
+    augmentations = data.get('augmentations')
     try:
-        if shared_search is not None:
-            X_hybrid, weights_flat, search = shared_search
-            print(f"  Using shared search (dim={X_hybrid.shape[1]})")
-        else:
-            X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-                reps, labels, groups, search_speed, 'lightgbm_gain',
-                augmentations=data.get('augmentations'))
+        X_hybrid, fi, search = get_fitted_hybrid(
+            reps, labels, groups, budget=budget,
+            aug_condition='uncapped', augmentations=augmentations,
+            speed=config.get('search_speed', 'fast'))
+        fitted = search.fitted_result
+        weights_flat = flatten_weights(fitted) if fitted else np.ones(X_hybrid.shape[1])
     except Exception as e:
         print(f"  Hybrid search failed: {e}")
         return {'error': str(e)}

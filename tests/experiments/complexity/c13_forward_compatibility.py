@@ -53,7 +53,7 @@ from experiments._shared import (
     save_experiment_results, make_structured_output, convert_numpy,
     get_model_factories, get_domain_metric, cv_split,
     create_hybrid, apply_feature_selection,
-    evaluate_single_rep_cv,
+    evaluate_single_rep_cv, build_fold_hybrid,
 )
 from kirby.find_best_hybrid import find_best_hybrid
 
@@ -158,7 +158,7 @@ def _eval_single_rep_per_fold(X, labels, groups, model_factory, n_folds, mode,
 
 
 def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
-                           metric_fn, search_speed='fast'):
+                           metric_fn, search_speed='fast', augmentations=None):
     """Run find_best_hybrid and evaluate the best config per fold.
 
     Returns (per_fold_scores, search_result_dict).
@@ -183,6 +183,7 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
             labels=labels,
             groups=groups,
             speed=search_speed,
+            augmentations=augmentations,
             return_fitted=True,
             verbose=False,
             cache=True,
@@ -200,10 +201,6 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
     if blueprint is None:
         return [], {'error': 'no blueprint in best_overall'}
 
-    alloc_method = blueprint.allocation_method
-    imp_method = blueprint.importance_method
-    budget = blueprint.budget
-
     scores = []
     allocation_dicts = []
     sample_X = next(iter(reps.values()))
@@ -212,15 +209,13 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
         train_reps = {k: v[train_idx] for k, v in reps.items()}
         val_reps = {k: v[val_idx] for k, v in reps.items()}
         y_train, y_val = labels[train_idx], labels[val_idx]
+        train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
+        val_augs = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
 
         try:
-            X_train, feature_info = create_hybrid(
-                train_reps, y_train,
-                allocation_method=alloc_method,
-                budget=budget,
-                importance_method=imp_method,
-            )
-            X_val = apply_feature_selection(val_reps, feature_info)
+            X_train, X_val, feature_info = build_fold_hybrid(
+                train_reps, val_reps, y_train, blueprint,
+                augmentations_train=train_augs, augmentations_val=val_augs)
         except Exception:
             continue
 
@@ -251,9 +246,10 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
         'allocation': avg_alloc,
         'n_features': best.get('n_features', sum(avg_alloc.values()) if avg_alloc else 0),
         'blueprint': {
-            'allocation_method': alloc_method,
-            'importance_method': imp_method,
-            'budget': budget,
+            'allocation_method': blueprint.allocation_method,
+            'importance_method': blueprint.importance_method,
+            'budget': blueprint.budget,
+            'internal_evaluator': blueprint.internal_evaluator,
         },
     }
 
@@ -336,6 +332,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
     labels = data['labels']
     groups = data['groups']
     domain = data.get('domain', 'molecular')
+    augs = data.get('augmentations')
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
     search_speed = config['search_speed']
@@ -455,7 +452,8 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             c_model_factory = models.get(best_b_model, ridge_factory)
             c_scores, c_info = _eval_hybrid_per_fold(
                 existing_reps, labels, groups, c_model_factory,
-                n_folds, mode, metric_fn, search_speed=search_speed)
+                n_folds, mode, metric_fn, search_speed=search_speed,
+                augmentations=augs)
             c_mean = float(np.mean(c_scores)) if c_scores else float('nan')
             c_std = float(np.std(c_scores)) if c_scores else float('nan')
             rep_result['conditions']['C'] = {
@@ -488,7 +486,8 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             d_model_factory = models.get(best_b_model, ridge_factory)
             d_scores, d_info = _eval_hybrid_per_fold(
                 all_reps_for_d, labels, groups, d_model_factory,
-                n_folds, mode, metric_fn, search_speed=search_speed)
+                n_folds, mode, metric_fn, search_speed=search_speed,
+                augmentations=augs)
             d_mean = float(np.mean(d_scores)) if d_scores else float('nan')
             d_std = float(np.std(d_scores)) if d_scores else float('nan')
 

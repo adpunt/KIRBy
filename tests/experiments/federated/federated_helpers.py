@@ -67,19 +67,24 @@ if _original_display is not None:
 
 # ── Federated-specific config ────────────────────────────────────────────────
 
-def _get_federated_config():
-    from kirby.find_best_hybrid import SPEED_TIERS
-    tier = SPEED_TIERS['fast']
-    return {
-        'n_splits': tier['n_folds'],
-        'search_speed': 'fast',
-        'allocations': tier['allocation_methods'],
-        'importance_methods': tier['importance_methods'],
-        'internal_evaluators': tier['internal_evaluators'],
-        'models': ['rf', 'lightgbm', 'mlp'],
-    }
+_FEDERATED_CONFIG_CACHE = None
 
-FEDERATED_CONFIG = _get_federated_config()
+
+def _get_federated_config():
+    global _FEDERATED_CONFIG_CACHE
+    if _FEDERATED_CONFIG_CACHE is None:
+        from kirby.find_best_hybrid import SPEED_TIERS
+        tier = SPEED_TIERS['fast']
+        _FEDERATED_CONFIG_CACHE = {
+            'n_splits': tier['n_folds'],
+            'search_speed': 'fast',
+            'allocations': tier['allocation_methods'],
+            'importance_methods': tier['importance_methods'],
+            'internal_evaluators': tier['internal_evaluators'],
+            'budgets': [100],
+            'models': ['rf', 'lightgbm', 'mlp'],
+        }
+    return _FEDERATED_CONFIG_CACHE
 
 
 # ── Experiment list ──────────────────────────────────────────────────────────
@@ -646,7 +651,8 @@ def federate_labels_and_train_student(teacher_models, cluster_data, fluid_df,
 
 def federated_feature_selection(rep_dict, labels, silo_indices, k,
                                 budget=100, allocation_method='performance_weighted',
-                                importance_method='treeshap', seed=42):
+                                importance_method='treeshap',
+                                internal_evaluator='ridge', seed=42):
     """Privacy-preserving federated feature selection.
 
     Protocol:
@@ -702,6 +708,7 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
                 allocation_method=allocation_method,
                 importance_method=importance_method,
                 budget=per_silo_budget,
+                internal_evaluator=internal_evaluator,
             )
             silo_feature_infos[s] = fi
 
@@ -1093,7 +1100,10 @@ def predict_fluid_quality_ensemble_regression(teacher_models,
 
 
 def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,
-                              k_intra=3, budget=100, seed=42):
+                              k_intra=3, budget=100, seed=42,
+                              allocation_method='performance_weighted',
+                              importance_method='treeshap',
+                              internal_evaluator='ridge'):
     """Condition 6: FLuID clustering within each silo, KIRBy across silos.
 
     For each representation (silo):
@@ -1175,9 +1185,10 @@ def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,
         try:
             X_s, fi = create_hybrid(
                 silo_rep_tr, silo_labels,
-                allocation_method='performance_weighted',
-                importance_method='treeshap',
-                budget=per_silo_budget)
+                allocation_method=allocation_method,
+                importance_method=importance_method,
+                budget=per_silo_budget,
+                internal_evaluator=internal_evaluator)
             silo_fis[s] = fi
 
             # Validation score
@@ -1490,7 +1501,7 @@ def run_all(dataset_name: str, output_dir: str,
         sys.exit(1)
 
     if config is None:
-        config = dict(FEDERATED_CONFIG)
+        config = dict(_get_federated_config())
     if experiments is None:
         experiments = list(SINGLE_DATASET_EXPERIMENTS)
 
@@ -1564,6 +1575,40 @@ def run_all(dataset_name: str, output_dir: str,
                   f"{', '.join(f'{k}={v.shape[1]}' for k, v in data['augmentations'].items())}")
         else:
             data['augmentations'] = None
+
+        # ── Precompute hybrid searches (general reps) ──
+        if len(reps_data) >= 2:
+            from experiments._shared import precompute_hybrid_searches
+            print(f"\n  Precomputing hybrid searches (general, {len(reps_data)} reps)...")
+            precompute_results = precompute_hybrid_searches(
+                reps=reps_data,
+                labels=data['labels'],
+                groups=data.get('groups'),
+                config=config,
+                augmentations=data.get('augmentations'),
+            )
+            data['precomputed_searches'] = precompute_results
+        else:
+            data['precomputed_searches'] = {}
+
+        # ── Precompute hybrid searches (top-tier reps) ──
+        top_tier_names = DATASET_REPS.get(dataset_name, {}).get('top_tier', [])
+        top_tier_reps = {k: v for k, v in reps_data.items()
+                         if k in top_tier_names}
+        data['top_tier_reps'] = top_tier_reps
+        if len(top_tier_reps) >= 2:
+            print(f"\n  Precomputing hybrid searches "
+                  f"(top-tier, {len(top_tier_reps)} reps)...")
+            precompute_top = precompute_hybrid_searches(
+                reps=top_tier_reps,
+                labels=data['labels'],
+                groups=data.get('groups'),
+                config=config,
+                augmentations=data.get('augmentations'),
+            )
+            data['precomputed_searches_top'] = precompute_top
+        else:
+            data['precomputed_searches_top'] = {}
 
     # ── Run experiments ──
     results = {}

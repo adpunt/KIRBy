@@ -16,7 +16,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
-from scipy.spatial.distance import cdist as scipy_cdist
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error
 from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
@@ -24,72 +23,13 @@ from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results,
-    get_hybrid_features_and_weights, make_cv_splitter,
-    get_domain_metric, get_model_factories,
+    get_fitted_hybrid, flatten_weights, make_cv_splitter,
+    get_domain_metric, get_model_factories, build_fold_hybrid,
 )
+from experiments.similarity.similarity_helpers import identify_cliff_compounds
 
 from kirby.hybrid import apply_feature_selection, compute_feature_importance
 from kirby.hybrid import create_hybrid
-# TODO: create_hybrid API not finalised — revisit after framework experiments.
-
-
-# =============================================================================
-# LOCAL HELPERS
-# =============================================================================
-
-def identify_cliff_compounds(ecfp4, y, tanimoto_threshold=0.55, activity_k=2.0):
-    """Identify activity cliff compounds using ECFP4 Tanimoto.
-
-    Definition based on Bajorath standard for ECFP4 (Stumpfe & Bajorath 2019):
-      - Structural similarity: Tanimoto(ECFP4) >= tanimoto_threshold (default 0.55)
-      - Activity difference: |delta_y| > activity_k * MAD(y)
-
-    Note: MoleculeACE uses Tc>=0.9 for curated binding-affinity datasets.
-    For diverse property datasets (logD, logP), Tc>=0.55 is standard for ECFP4.
-    The activity threshold adapts to each dataset via MAD(y).
-
-    Returns:
-        cliff_mask: boolean array, True for cliff compounds
-        info: dict with thresholds, counts, per-compound cliff pair counts
-    """
-    n = len(y)
-
-    # Adaptive activity threshold: k * MAD(y)
-    mad_y = float(np.median(np.abs(y - np.median(y))))
-    activity_threshold = activity_k * mad_y
-
-    # Tanimoto similarity from binary ECFP4 (Tanimoto = 1 - Jaccard distance)
-    jaccard_dist = scipy_cdist(ecfp4, ecfp4, metric='jaccard')
-    tanimoto_sim = 1.0 - jaccard_dist
-    np.fill_diagonal(tanimoto_sim, 0)
-
-    # Activity difference matrix
-    delta_y = np.abs(y[:, None] - y[None, :])
-
-    # Cliff pair mask: high similarity AND large activity difference
-    cliff_pair_mask = (tanimoto_sim >= tanimoto_threshold) & (delta_y > activity_threshold)
-
-    # Cliff compounds: involved in at least one cliff pair
-    cliff_mask = cliff_pair_mask.any(axis=1)
-
-    # Per-compound cliff pair count (how many cliff partners each molecule has)
-    cliff_pair_counts = cliff_pair_mask.sum(axis=1)
-
-    n_cliff_pairs = int(cliff_pair_mask.sum()) // 2  # symmetric
-    n_cliff_compounds = int(cliff_mask.sum())
-
-    info = {
-        'tanimoto_threshold': tanimoto_threshold,
-        'activity_k': activity_k,
-        'activity_threshold': activity_threshold,
-        'mad_y': mad_y,
-        'n_cliff_pairs': n_cliff_pairs,
-        'n_cliff_compounds': n_cliff_compounds,
-        'pct_cliff_compounds': float(100.0 * n_cliff_compounds / n),
-        'cliff_pair_counts': cliff_pair_counts,  # per-compound array
-    }
-
-    return cliff_mask, info
 
 
 # =============================================================================
@@ -114,8 +54,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     tanimoto_threshold = kwargs.get('tanimoto_threshold', 0.55)
     activity_k = kwargs.get('activity_k', 2.0)
-    shared_search = kwargs.get('shared_search', None)
-    search_speed = config['search_speed']
     n_folds = config['n_splits']
     mode = 'intermediary' if config['n_splits'] == 1 else 'full'
 
@@ -157,20 +95,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # --- Get hybrid blueprint for per-fold hybrid construction ---
     hybrid_blueprint = None
-    if shared_search is not None:
-        X_hybrid, weights_flat, search = shared_search
+    try:
+        budget = kwargs.get('budget', 100)
+        augmentations = data.get('augmentations')
+        X_hybrid, fi, search = get_fitted_hybrid(
+            reps, labels, groups, budget=budget,
+            aug_condition='uncapped', augmentations=augmentations,
+            speed=config.get('search_speed', 'fast'))
+        fitted = search.fitted_result
+        weights_flat = flatten_weights(fitted) if fitted else np.ones(X_hybrid.shape[1])
         if search.best_overall:
             hybrid_blueprint = search.best_overall['blueprint']
-        print(f"  Using shared search (dim={X_hybrid.shape[1]})")
-    else:
-        try:
-            X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-                reps, labels, groups, search_speed, 'lightgbm_gain',
-                augmentations=data.get('augmentations'))
-            if search.best_overall:
-                hybrid_blueprint = search.best_overall['blueprint']
-        except Exception as e:
-            print(f"  Hybrid search failed: {e}")
+    except Exception as e:
+        print(f"  Hybrid search failed: {e}")
+        X_hybrid = None
+        weights_flat = None
 
     # --- CV evaluation of prediction on cliff vs non-cliff ---
     splitter, use_groups = make_cv_splitter(n_folds, groups)
@@ -281,16 +220,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if hybrid_blueprint is not None:
         print("\n  Hybrid kNN (unweighted, k=5):")
 
+        augmentations = data.get('augmentations')
+
         def _get_hybrid_uw(tr, va, yt):
-            train_reps = {name: rep[tr] for name, rep in reps.items()}
-            val_reps = {name: rep[va] for name, rep in reps.items()}
-            X_tr_h, feat_info = create_hybrid(
-                train_reps, yt,
-                allocation_method=hybrid_blueprint.allocation_method,
-                budget=hybrid_blueprint.budget,
-                importance_method=hybrid_blueprint.importance_method,
-            )
-            X_va_h = apply_feature_selection(val_reps, feat_info)
+            train_reps_h = {name: rep[tr] for name, rep in reps.items()}
+            val_reps_h = {name: rep[va] for name, rep in reps.items()}
+            aug_tr = {k: v[tr] for k, v in augmentations.items()} if augmentations else None
+            aug_va = {k: v[va] for k, v in augmentations.items()} if augmentations else None
+            X_tr_h, X_va_h, feat_info = build_fold_hybrid(
+                train_reps_h, val_reps_h, yt, hybrid_blueprint,
+                augmentations_train=aug_tr, augmentations_val=aug_va)
             return X_tr_h, X_va_h
 
         res = _evaluate_condition(_get_hybrid_uw)
@@ -305,16 +244,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print("  Hybrid kNN (weighted, k=5):")
 
         def _get_hybrid_w(tr, va, yt):
-            train_reps = {name: rep[tr] for name, rep in reps.items()}
-            val_reps = {name: rep[va] for name, rep in reps.items()}
-            X_tr_h, feat_info = create_hybrid(
-                train_reps, yt,
-                allocation_method=hybrid_blueprint.allocation_method,
-                budget=hybrid_blueprint.budget,
-                importance_method=hybrid_blueprint.importance_method,
-            )
-            X_va_h = apply_feature_selection(val_reps, feat_info)
-            imp = compute_feature_importance(train_reps, yt, method='lightgbm_gain')
+            train_reps_h = {name: rep[tr] for name, rep in reps.items()}
+            val_reps_h = {name: rep[va] for name, rep in reps.items()}
+            aug_tr = {k: v[tr] for k, v in augmentations.items()} if augmentations else None
+            aug_va = {k: v[va] for k, v in augmentations.items()} if augmentations else None
+            X_tr_h, X_va_h, feat_info = build_fold_hybrid(
+                train_reps_h, val_reps_h, yt, hybrid_blueprint,
+                augmentations_train=aug_tr, augmentations_val=aug_va)
+            imp = compute_feature_importance(train_reps_h, yt, method='lightgbm_gain')
             w_parts = []
             for rname in feat_info:
                 if not isinstance(feat_info[rname], dict):

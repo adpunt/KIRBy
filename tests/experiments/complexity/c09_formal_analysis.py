@@ -286,8 +286,11 @@ def _run_information_retention(data, budgets, search_speed='fast'):
     results = {'budgets': [], 'mi_xy': [], 'mi_xx_full': [], 'best_configs': []}
 
     augs = data.get('augmentations')
+    sample_X = next(iter(reps.values()))
+    from sklearn.linear_model import Ridge as _Ridge
+
     for budget in sorted(budgets):
-        # Find best hybrid at this budget
+        # Find best hybrid at this budget (proper CV search)
         try:
             search = find_best_hybrid(
                 reps, labels, groups=groups,
@@ -305,57 +308,68 @@ def _run_information_retention(data, budgets, search_speed='fast'):
         except Exception:
             bp = None
 
-        # Create the best hybrid at this budget
         alloc = bp.allocation_method if bp else 'greedy'
         imp = bp.importance_method if bp else 'treeshap'
-        try:
-            X_hybrid, _ = create_hybrid(
-                reps, labels,
-                allocation_method=alloc,
-                importance_method=imp,
-                budget=budget,
-            )
-        except Exception as e:
-            print(f"    budget={budget}: hybrid creation failed - {e}")
-            continue
-
+        int_eval = bp.internal_evaluator if bp else 'ridge'
         results['best_configs'].append({'budget': budget, 'importance': imp, 'allocation': alloc})
 
-        # MI(X_selected, Y)
-        n_comp = min(50, X_hybrid.shape[1], X_hybrid.shape[0] - 1)
-        X_red = PCA(n_components=n_comp).fit_transform(
-            StandardScaler().fit_transform(X_hybrid))
-        try:
-            mi_xy = estimate_mutual_information_knn(X_red, labels, k=5)
-        except Exception:
-            mi_xy = float('nan')
+        # Per-fold hybrid creation to avoid label leakage in MI measurement
+        fold_mi_xy = []
+        fold_mi_xx = []
+        from experiments._shared import cv_split as _cv_split_9b
+        for train_idx, val_idx in _cv_split_9b(groups, 3, sample_X, labels, mode='full'):
+            train_reps = {k: v[train_idx] for k, v in reps.items()}
+            y_train = labels[train_idx]
+            train_augs = {k: v[train_idx] for k, v in augs.items()} if augs else None
+            try:
+                X_hybrid, _ = create_hybrid(
+                    train_reps, y_train,
+                    allocation_method=alloc,
+                    importance_method=imp,
+                    budget=budget,
+                    internal_evaluator=int_eval,
+                    augmentations=train_augs,
+                    augmentation_strategy='capped',
+                )
+            except Exception:
+                continue
 
-        # MI(X_selected, X_full) -- approximate via explained variance
-        # Project X_full onto space spanned by X_hybrid columns
-        scaler = StandardScaler()
-        X_full_s = scaler.fit_transform(X_concat)
-        X_hyb_s = StandardScaler().fit_transform(X_hybrid)
-        # Use canonical correlation proxy: R² of predicting X_full PCs from X_hybrid
-        n_pcs = min(20, X_hybrid.shape[1], X_full_s.shape[0] - 1)
-        pca_full = PCA(n_components=n_pcs)
-        X_full_pcs = pca_full.fit_transform(X_full_s)
-        explained_var_retained = 0
-        try:
-            from sklearn.linear_model import Ridge as _Ridge
-            for pc_i in range(n_pcs):
-                reg = _Ridge(alpha=1.0)
-                reg.fit(X_hyb_s, X_full_pcs[:, pc_i])
-                r2_pc = max(0, r2_score(X_full_pcs[:, pc_i], reg.predict(X_hyb_s)))
-                explained_var_retained += r2_pc * pca_full.explained_variance_ratio_[pc_i]
-            mi_xx = float(explained_var_retained)
-        except Exception:
-            mi_xx = float('nan')
+            # MI(X_selected, Y) on train fold
+            n_comp = min(50, X_hybrid.shape[1], X_hybrid.shape[0] - 1)
+            X_red = PCA(n_components=n_comp).fit_transform(
+                StandardScaler().fit_transform(X_hybrid))
+            try:
+                mi_xy = estimate_mutual_information_knn(X_red, y_train, k=5)
+                fold_mi_xy.append(float(mi_xy))
+            except Exception:
+                pass
+
+            # MI(X_selected, X_full) -- approximate via explained variance on train
+            X_train_concat = np.hstack([v[train_idx] for v in reps.values()])
+            X_full_s = StandardScaler().fit_transform(X_train_concat)
+            X_hyb_s = StandardScaler().fit_transform(X_hybrid)
+            n_pcs = min(20, X_hybrid.shape[1], X_full_s.shape[0] - 1)
+            try:
+                pca_full = PCA(n_components=n_pcs)
+                X_full_pcs = pca_full.fit_transform(X_full_s)
+                explained_var_retained = 0
+                for pc_i in range(n_pcs):
+                    reg = _Ridge(alpha=1.0)
+                    reg.fit(X_hyb_s, X_full_pcs[:, pc_i])
+                    r2_pc = max(0, r2_score(X_full_pcs[:, pc_i], reg.predict(X_hyb_s)))
+                    explained_var_retained += r2_pc * pca_full.explained_variance_ratio_[pc_i]
+                fold_mi_xx.append(float(explained_var_retained))
+            except Exception:
+                pass
+
+        mi_xy_avg = float(np.mean(fold_mi_xy)) if fold_mi_xy else float('nan')
+        mi_xx_avg = float(np.mean(fold_mi_xx)) if fold_mi_xx else float('nan')
 
         results['budgets'].append(budget)
-        results['mi_xy'].append(float(mi_xy))
-        results['mi_xx_full'].append(mi_xx)
+        results['mi_xy'].append(mi_xy_avg)
+        results['mi_xx_full'].append(mi_xx_avg)
 
-        print(f"    budget={budget}: MI(X,Y)={mi_xy:.4f}, info_retained={mi_xx:.4f}")
+        print(f"    budget={budget}: MI(X,Y)={mi_xy_avg:.4f}, info_retained={mi_xx_avg:.4f}")
 
     # Find inflection: where MI(X,Y) gain drops below 10% of max gain
     if len(results['mi_xy']) >= 3:
@@ -394,10 +408,13 @@ def _run_effective_rank_analysis(data, budgets, search_speed='fast'):
     results = {'budgets': [], 'hybrid_rank': [], 'pca_rank': [], 'random_rank': []}
 
     augs = data.get('augmentations')
+    sample_X = next(iter(reps.values()))
+    from experiments._shared import cv_split as _cv_split_9c
+
     for budget in sorted(budgets):
         n_feat = min(budget, X_concat.shape[1], X_concat.shape[0] - 1)
 
-        # Find best hybrid at this budget, then compute its effective rank
+        # Find best hybrid config at this budget (proper CV)
         try:
             search = find_best_hybrid(
                 reps, labels, groups=groups,
@@ -414,16 +431,27 @@ def _run_effective_rank_analysis(data, budgets, search_speed='fast'):
 
         alloc = bp.allocation_method if bp else 'greedy'
         imp = bp.importance_method if bp else 'treeshap'
-        try:
-            X_hybrid, _ = create_hybrid(
-                reps, labels,
-                allocation_method=alloc,
-                importance_method=imp,
-                budget=budget,
-            )
-            hybrid_rank = compute_effective_rank(X_hybrid)
-        except Exception:
-            hybrid_rank = float('nan')
+        int_eval = bp.internal_evaluator if bp else 'ridge'
+
+        # Per-fold hybrid creation to avoid label leakage in rank measurement
+        fold_ranks = []
+        for train_idx, _ in _cv_split_9c(groups, 3, sample_X, labels, mode='full'):
+            try:
+                train_reps = {k: v[train_idx] for k, v in reps.items()}
+                train_augs = {k: v[train_idx] for k, v in augs.items()} if augs else None
+                X_hybrid, _ = create_hybrid(
+                    train_reps, labels[train_idx],
+                    allocation_method=alloc,
+                    importance_method=imp,
+                    budget=budget,
+                    internal_evaluator=int_eval,
+                    augmentations=train_augs,
+                    augmentation_strategy='capped',
+                )
+                fold_ranks.append(compute_effective_rank(X_hybrid))
+            except Exception:
+                pass
+        hybrid_rank = float(np.mean(fold_ranks)) if fold_ranks else float('nan')
 
         # PCA
         try:
@@ -524,8 +552,9 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                 bp = search.best_by_model[model_name]['blueprint']
                 alloc = bp.allocation_method
                 imp = bp.importance_method
+                int_eval = bp.internal_evaluator
             else:
-                alloc, imp = 'greedy', 'treeshap'
+                alloc, imp, int_eval = 'greedy', 'treeshap', 'ridge'
 
             try:
                 val_r2, val_std, train_r2, train_std, n_feat = evaluate_cv_with_train(
@@ -535,6 +564,9 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                     budget=budget,
                     mode=mode,
                     metric_fn=metric_fn,
+                    internal_evaluator=int_eval,
+                    augmentations=augs,
+                    augmentation_strategy='capped',
                 )
                 if model_name not in results['models']:
                     results['models'][model_name] = {}

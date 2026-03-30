@@ -24,12 +24,11 @@ from sklearn.neighbors import NearestNeighbors
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results, convert_numpy,
-    get_hybrid_features_and_weights, make_cv_splitter,
+    get_fitted_hybrid, flatten_weights, make_cv_splitter,
     apply_feature_selection, compute_feature_importance,
-    get_domain_metric, get_model_factories,
+    get_domain_metric, get_model_factories, build_fold_hybrid,
 )
 from kirby.hybrid import create_hybrid
-# TODO: create_hybrid API not finalised — revisit after framework experiments.
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -52,19 +51,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     results = {'distance_error_correlation': {}, 'reliability': {}, 'conformal': {}}
 
+    augmentations = data.get('augmentations')
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
 
     # Get hybrid + blueprint for per-fold CV
-    # Try to load from s02 results first
-    shared_search = kwargs.get('shared_search')
     try:
-        if shared_search is not None:
-            X_hybrid, weights_flat, search = shared_search
-            print(f"  Using shared search (dim={X_hybrid.shape[1]})")
-        else:
-            X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-                reps, labels, groups, search_speed, 'lightgbm_gain',
-                augmentations=data.get('augmentations'))
+        budget = kwargs.get('budget', 100)
+        augmentations_search = data.get('augmentations')
+        X_hybrid, fi, search = get_fitted_hybrid(
+            reps, labels, groups, budget=budget,
+            aug_condition='uncapped', augmentations=augmentations_search,
+            speed=config.get('search_speed', 'fast'))
+        fitted = search.fitted_result
+        weights_flat = flatten_weights(fitted) if fitted else np.ones(X_hybrid.shape[1])
         bp = search.best_overall['blueprint']
     except Exception as e:
         print(f"  Hybrid search failed: {e}")
@@ -88,20 +87,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             y_train, y_val = labels[train_idx], labels[val_idx]
 
             # Per-fold hybrid using search blueprint
-            train_reps = {name: rep[train_idx] for name, rep in reps.items()}
-            val_reps = {name: rep[val_idx] for name, rep in reps.items()}
+            train_reps_h = {name: rep[train_idx] for name, rep in reps.items()}
+            val_reps_h = {name: rep[val_idx] for name, rep in reps.items()}
+            aug_tr = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
+            aug_va = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
             try:
-                X_tr_h, feat_info = create_hybrid(
-                    train_reps, y_train,
-                    allocation_method=bp.allocation_method,
-                    budget=bp.budget,
-                    importance_method=bp.importance_method,
-                )
-                X_va_h = apply_feature_selection(val_reps, feat_info)
+                X_tr_h, X_va_h, feat_info = build_fold_hybrid(
+                    train_reps_h, val_reps_h, y_train, bp,
+                    augmentations_train=aug_tr, augmentations_val=aug_va)
 
                 # Importance weights for this fold
                 imp = compute_feature_importance(
-                    train_reps, y_train, method='lightgbm_gain')
+                    train_reps_h, y_train, method='lightgbm_gain')
                 w_parts = []
                 for rname in feat_info:
                     if not isinstance(feat_info[rname], dict):
@@ -278,14 +275,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # Per-fold hybrid using search blueprint (avoids data leakage)
             train_reps_fold = {k: v[train_idx] for k, v in reps.items()}
             val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
+            aug_tr_c = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
+            aug_va_c = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
             try:
-                X_hybrid_tr, fi = create_hybrid(
-                    train_reps_fold, y_train,
-                    allocation_method=bp.allocation_method,
-                    budget=bp.budget,
-                    importance_method=bp.importance_method,
-                )
-                X_hybrid_va = apply_feature_selection(val_reps_fold, fi)
+                X_hybrid_tr, X_hybrid_va, fi = build_fold_hybrid(
+                    train_reps_fold, val_reps_fold, y_train, bp,
+                    augmentations_train=aug_tr_c, augmentations_val=aug_va_c)
             except Exception:
                 continue
 

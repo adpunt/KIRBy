@@ -417,11 +417,14 @@ def main():
         if len(rep_matrices) >= 2:
             try:
                 from kirby.find_best_hybrid import find_best_hybrid
+                from kirby.hybrid import apply_feature_selection
                 search = find_best_hybrid(
                     base_reps=rep_matrices, labels=labels, groups=groups,
                     speed='fast', return_fitted=True, verbose=False, cache=True)
                 if search.fitted_result is not None:
-                    rep_matrices['kirby_hybrid'] = search.fitted_result.X_hybrid
+                    fi = {r: {'selected_indices': idx}
+                          for r, idx in search.fitted_result.selected_indices.items()}
+                    rep_matrices['kirby_hybrid'] = apply_feature_selection(rep_matrices, fi)
                     if 'kirby_hybrid' not in rep_names:
                         rep_names = list(rep_names) + ['kirby_hybrid']
                     print(f"  {'kirby_hybrid':<22} -> {rep_matrices['kirby_hybrid'].shape[1]:>6}D")

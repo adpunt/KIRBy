@@ -19,13 +19,151 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'sr
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))  # tests/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))         # tests/experiments/
 
+import numpy as np
+from scipy.stats import spearmanr
+from scipy.spatial.distance import cdist as scipy_cdist
+
 from experiments._shared import (
     load_data, save_experiment_results, convert_numpy,
-    get_hybrid_features_and_weights, load_experiment_results,
+    load_experiment_results,
 )
 
 # Reuse dataset rep configs — single source of truth
 from experiments.complexity.complexity_helpers import DATASET_REPS
+
+
+# =============================================================================
+# SHARED SIMILARITY METRIC FUNCTIONS
+# =============================================================================
+
+def similarity_activity_correlation(D, y, n_sample=5000):
+    """Spearman correlation between pairwise distance and |delta_y|.
+
+    Positive = good (large distance -> large activity difference means the
+    representation preserves the structure-activity relationship).
+    Returns (rho, p_value).
+    """
+    n = len(y)
+    triu_i, triu_j = np.triu_indices(n, k=1)
+    n_pairs = len(triu_i)
+
+    if n_pairs > n_sample:
+        rng = np.random.RandomState(42)
+        idx = rng.choice(n_pairs, n_sample, replace=False)
+        triu_i, triu_j = triu_i[idx], triu_j[idx]
+
+    dists = D[triu_i, triu_j]
+    delta_y = np.abs(y[triu_i] - y[triu_j])
+
+    rho, p = spearmanr(dists, delta_y)
+    return float(rho), float(p)
+
+
+def compute_sali(D, y, eps=1e-6):
+    """SALI: |y_i - y_j| / (1 - sim(i,j)), sim = 1/(1+d).
+
+    Returns per-sample max SALI and summary stats.
+    """
+    n = len(y)
+    sim = 1.0 / (1.0 + D)
+    np.fill_diagonal(sim, 0)
+
+    delta_y = np.abs(y[:, None] - y[None, :])
+    denom = 1.0 - sim + eps
+    sali_matrix = delta_y / denom
+    np.fill_diagonal(sali_matrix, 0)
+
+    per_sample_max = sali_matrix.max(axis=1)
+    per_sample_mean = sali_matrix.mean(axis=1)
+
+    return {
+        'mean': float(np.mean(per_sample_max)),
+        'max': float(np.max(per_sample_max)),
+        'std': float(np.std(per_sample_max)),
+        'median': float(np.median(per_sample_max)),
+        'per_sample_mean_avg': float(np.mean(per_sample_mean)),
+    }
+
+
+def violation_rate(D, y, k=5):
+    """Fraction of k-NN pairs where |delta_y| > median(|delta_y|)."""
+    from kirby.utils.noise_mitigation_methods import get_k_neighbors_from_distances
+
+    n = len(y)
+    k = min(k, n - 1)
+
+    indices, _ = get_k_neighbors_from_distances(D, k)
+
+    triu_i, triu_j = np.triu_indices(n, k=1)
+    if len(triu_i) > 50000:
+        rng = np.random.RandomState(42)
+        sample_idx = rng.choice(len(triu_i), 50000, replace=False)
+        all_delta = np.abs(y[triu_i[sample_idx]] - y[triu_j[sample_idx]])
+    else:
+        all_delta = np.abs(y[triu_i] - y[triu_j])
+    median_delta = np.median(all_delta)
+
+    n_violations = 0
+    n_total = 0
+    for i in range(n):
+        for j_idx in range(k):
+            j = indices[i, j_idx]
+            if np.abs(y[i] - y[j]) > median_delta:
+                n_violations += 1
+            n_total += 1
+
+    return float(n_violations / n_total) if n_total > 0 else 0.0
+
+
+def identify_cliff_compounds(ecfp4, y, tanimoto_threshold=0.55, activity_k=2.0):
+    """Identify activity cliff compounds using ECFP4 Tanimoto.
+
+    Definition based on Bajorath standard for ECFP4 (Stumpfe & Bajorath 2019):
+      - Structural similarity: Tanimoto(ECFP4) >= tanimoto_threshold (default 0.55)
+      - Activity difference: |delta_y| > activity_k * MAD(y)
+
+    Returns:
+        cliff_mask: boolean array, True for cliff compounds
+        info: dict with thresholds, counts, per-compound cliff pair counts
+    """
+    n = len(y)
+
+    # Adaptive activity threshold: k * MAD(y)
+    mad_y = float(np.median(np.abs(y - np.median(y))))
+    activity_threshold = activity_k * mad_y
+
+    # Tanimoto similarity from binary ECFP4 (Tanimoto = 1 - Jaccard distance)
+    jaccard_dist = scipy_cdist(ecfp4, ecfp4, metric='jaccard')
+    tanimoto_sim = 1.0 - jaccard_dist
+    np.fill_diagonal(tanimoto_sim, 0)
+
+    # Activity difference matrix
+    delta_y = np.abs(y[:, None] - y[None, :])
+
+    # Cliff pair mask: high similarity AND large activity difference
+    cliff_pair_mask = (tanimoto_sim >= tanimoto_threshold) & (delta_y > activity_threshold)
+
+    # Cliff compounds: involved in at least one cliff pair
+    cliff_mask = cliff_pair_mask.any(axis=1)
+
+    # Per-compound cliff pair count
+    cliff_pair_counts = cliff_pair_mask.sum(axis=1)
+
+    n_cliff_pairs = int(cliff_pair_mask.sum()) // 2  # symmetric
+    n_cliff_compounds = int(cliff_mask.sum())
+
+    info = {
+        'tanimoto_threshold': tanimoto_threshold,
+        'activity_k': activity_k,
+        'activity_threshold': activity_threshold,
+        'mad_y': mad_y,
+        'n_cliff_pairs': n_cliff_pairs,
+        'n_cliff_compounds': n_cliff_compounds,
+        'pct_cliff_compounds': float(100.0 * n_cliff_compounds / n),
+        'cliff_pair_counts': cliff_pair_counts,
+    }
+
+    return cliff_mask, info
 
 # Similarity-specific extra params (layered on top of SPEED_TIERS config)
 SIMILARITY_EXTRA = {
@@ -37,17 +175,16 @@ SIMILARITY_EXTRA = {
 
 
 # ── Single-dataset experiment list ─────────────────────────────────────────
-# In order. S02 first (produces shared_search for S03-S07).
 # S09 is cross-dataset — run separately.
 
 SINGLE_DATASET_EXPERIMENTS = [
     's01',   # similarity baseline (standalone)
-    's02',   # hybrid similarity (produces shared_search)
-    's03',   # feature concentration (uses shared_search)
-    's04',   # activity cliffs (uses shared_search)
-    's05',   # kNN prediction (uses shared_search)
-    's06',   # applicability domain (uses shared_search)
-    's07',   # noise bridge (uses shared_search)
+    's02',   # hybrid similarity
+    's03',   # feature concentration
+    's04',   # activity cliffs
+    's05',   # kNN prediction
+    's06',   # applicability domain
+    's07',   # noise bridge
     's08',   # optimal dimension (standalone)
     's10',   # importance downstream (standalone)
     's11',   # bayesian optimization (standalone)
@@ -178,22 +315,37 @@ def run_all(dataset_name: str, output_dir: str,
     else:
         data['augmentations'] = None
 
-    # ── Shared search (produced by S02, consumed by S03-S07) ──
-    # Run the search once up front if any of S02-S07 are in the experiment list.
-    shared_search = None
-    needs_search = any(e in experiments for e in ['s02', 's03', 's04', 's05', 's06', 's07'])
-    if needs_search:
-        print(f"\n  Running shared hybrid search (speed={config['search_speed']})...")
-        try:
-            shared_search = get_hybrid_features_and_weights(
-                data['reps'], data['labels'], data.get('groups'),
-                search_speed=config['search_speed'],
-                weight_method=config['weight_methods'][0],
-                augmentations=data.get('augmentations'),
-            )
-            print(f"  Shared search done (dim={shared_search[0].shape[1]})")
-        except Exception as e:
-            print(f"  Shared search FAILED: {e}")
+    # ── Precompute hybrid searches (general reps) ──
+    if len(reps_data) >= 2:
+        from experiments._shared import precompute_hybrid_searches
+        print(f"\n  Precomputing hybrid searches (general, {len(reps_data)} reps)...")
+        precompute_results = precompute_hybrid_searches(
+            reps=reps_data,
+            labels=data['labels'],
+            groups=data.get('groups'),
+            config=config,
+            augmentations=data.get('augmentations'),
+        )
+        data['precomputed_searches'] = precompute_results
+    else:
+        data['precomputed_searches'] = {}
+
+    # ── Precompute hybrid searches (top-tier reps) ──
+    top_tier_names = DATASET_REPS.get(dataset_name, {}).get('top_tier', [])
+    top_tier_reps = {k: v for k, v in reps_data.items() if k in top_tier_names}
+    data['top_tier_reps'] = top_tier_reps
+    if len(top_tier_reps) >= 2:
+        print(f"\n  Precomputing hybrid searches (top-tier, {len(top_tier_reps)} reps)...")
+        precompute_top = precompute_hybrid_searches(
+            reps=top_tier_reps,
+            labels=data['labels'],
+            groups=data.get('groups'),
+            config=config,
+            augmentations=data.get('augmentations'),
+        )
+        data['precomputed_searches_top'] = precompute_top
+    else:
+        data['precomputed_searches_top'] = {}
 
     # ── Run experiments in order ──
     results = {}
@@ -207,10 +359,8 @@ def run_all(dataset_name: str, output_dir: str,
             print(f"  SKIP {exp_id}: import failed ({e})")
             continue
 
-        # Build kwargs — pass shared_search and similarity-specific params
+        # Build kwargs — pass similarity-specific params
         kwargs = {}
-        if exp_id in ('s02', 's03', 's04', 's05', 's06', 's07'):
-            kwargs['shared_search'] = shared_search
         if exp_id in ('s01', 's02', 's08'):
             kwargs['n_sample'] = config.get('n_sample', 5000)
         if exp_id == 's02':

@@ -165,6 +165,7 @@ def _evaluate_task(task_name, rep_preset, config):
         n_folds=n_folds,
         verbose=False,
         seed=42,
+        cache=True,
     )
 
     if search.best_overall is None:

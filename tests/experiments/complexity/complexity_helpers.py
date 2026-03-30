@@ -128,7 +128,7 @@ DATASET_REPS = {
             'mordred', 'pdv', 'mhg_gnn', 'avalon', 'grover', 'smited',
             'molformer', 'atom_pair', 'graph_kernel', 'maccs', 'chemberta',
             'ecfp4', 'chembert', 'selformer', 'top_torsion', 'rdkfp'],
-        'augmentation': ['pharmacophore3d', 'maccs', 'coulomb_matrix'],
+        'augmentation': ['pharmacophore3d', 'coulomb_matrix'],
         'top_tier': ['mordred', 'pdv', 'mhg_gnn', 'avalon', 'grover'],
     },
 
@@ -158,7 +158,7 @@ DATASET_REPS = {
         'general': [
             'ablang2', 'igt5', 'esm2_early', 'prot_t5', 'saprot', 'antiberty', 'esmc', 'esm2', 'aac',
             'abroberta'],
-        'augmentation': ['aac'],
+        'augmentation': [],
         'top_tier': ['ablang2', 'igt5'],
     },
     'flab_polyreact_jain_cic': {
@@ -184,9 +184,9 @@ DATASET_REPS = {
             'ablang2', 'abroberta', 'igt5', 'esm3', 'prot_t5', 'prot_t5_cdr',
             'esm2_early', 'esmc', 'esm2', 'antiberty', 'saprot',
             'esm2_concat', 'esm2_midlayers', 'esm2_layer24',
-            'esm2_entropy_top20'
+            'esm2_entropy_top20', 'aac'
         ],
-        'augmentation': ['aac'],
+        'augmentation': [],
         'top_tier': ['ablang2', 'abroberta', 'igt5', 'esm3'],
     },
     'abcov_kd': {
@@ -198,7 +198,7 @@ DATASET_REPS = {
     },
     'flab_aggregation_jain': {
         'general': _AB_GENERAL + ['paratope', 'structural'],
-        'augmentation': ['paratope', 'structural'],
+        'augmentation': [],
         'top_tier': ['esm2_concat', 'ablang2', 'igt5'],
     },
     'flab_immunogenicity_marks': {
@@ -218,7 +218,7 @@ DATASET_REPS = {
             'ablang2', 'igt5', 'esm2_early', 'esm2_concat', 'esm2_layer24',
             'antiberty', 'prot_t5_cdr', 'saprot', 'esm3', 'abroberta',
             'esm2_entropy_top20', 'blosum', 'aac', 'mutation_features'],
-        'augmentation': ['aac'],
+        'augmentation': [],
         'top_tier': [ 'prot_t5', 'esm2_midlayers'],
     },
 
@@ -227,7 +227,7 @@ DATASET_REPS = {
         'general': _AB_GENERAL + [
             'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
             'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr'],
-        'augmentation': ['esm2_llr', 'mutation_features', 'antiberty_llr', 'aac'],
+        'augmentation': ['esm2_llr', 'mutation_features', 'antiberty_llr'],
         'top_tier': [
             'ablang2', 'saprot', 'saprot_cdr', 'esm3', 'esm3_cdr',
             'prot_t5', 'prot_t5_cdr', 'igt5'],
@@ -236,7 +236,7 @@ DATASET_REPS = {
         'general': _AB_GENERAL + [
             'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
             'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr'],
-        'augmentation': ['mutation_features', 'esm2_llr', 'aac'],
+        'augmentation': ['mutation_features', 'esm2_llr'],
         'top_tier': [
             'esm3', 'esm3_cdr', 'prot_t5_cdr', 'prot_t5', 'saprot',
             'saprot_cdr', 'igt5'],
@@ -246,7 +246,7 @@ DATASET_REPS = {
             'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
             'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr',
             'paratope'],
-        'augmentation': ['aac', 'paratope'],
+        'augmentation': [],
         'top_tier': [
             'blosum', 'onehot', 'esm3', 'esm3_cdr', 'saprot',
             'saprot_cdr', 'esm2_cdr', 'esm2_cdr3'],
@@ -265,7 +265,7 @@ DATASET_REPS = {
             'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
             'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr',
             'paratope'],
-        'augmentation': ['paratope', 'aac', 'mutation_features'],
+        'augmentation': ['mutation_features'],
         'top_tier': ['onehot', 'blosum', 'igt5', 'esm2_early'],
     },
 
@@ -317,32 +317,32 @@ DATASET_REPS = {
     # ── Ginkgo Developability (6 datasets) ──────────────────────────────
     'ginkgo_acsins': {
         'general': _AB_GENERAL + ['paratope', 'structural'],
-        'augmentation': ['paratope', 'structural'],
+        'augmentation': [],
         'top_tier': ['igt5', 'ablang2'],
     },
     'ginkgo_colloidal': {
         'general': _AB_GENERAL + ['paratope', 'structural'],
-        'augmentation': ['paratope', 'structural'],
+        'augmentation': [],
         'top_tier': ['prot_t5', 'prot_t5_cdr'],
     },
     'ginkgo_heparin': {
         'general': _AB_GENERAL + ['paratope', 'structural'],
-        'augmentation': ['paratope', 'structural'],
+        'augmentation': [],
         'top_tier': ['esm2_concat', 'prot_t5', 'prot_t5_cdr', 'ablang2'],
     },
     'ginkgo_hic': {
         'general': _AB_GENERAL + ['paratope', 'structural'],
-        'augmentation': ['paratope', 'structural'],
+        'augmentation': [],
         'top_tier': ['esm2_concat', 'prot_t5', 'prot_t5_cdr'],
     },
     'ginkgo_pr_cho': {
         'general': _AB_GENERAL + ['paratope', 'structural'],
-        'augmentation': ['paratope', 'structural'],
+        'augmentation': [],
         'top_tier': ['prot_t5', 'prot_t5_cdr'],
     },
     'ginkgo_titer': {
         'general': _AB_GENERAL + ['paratope', 'structural', 'saprot_cdr'],
-        'augmentation': ['paratope', 'structural'],
+        'augmentation': [],
         'top_tier': ['saprot', 'saprot_cdr'],
     },
 
@@ -414,8 +414,7 @@ SINGLE_DATASET_EXPERIMENTS = [
     'c17',                  # information-theoretic decomposition
     'c18',                  # diversity vs depth
     'c19',                  # importance-weighted training
-    'c20',                  # augmentation value decomposition
-    'c21',                  # single-rep augmentation
+    'c21',                  # single-rep augmentation (merged C20)
 ]
 
 
@@ -439,7 +438,6 @@ def _import_experiment(exp_id: str):
         'c17': 'c17_information_theoretic_decomposition',
         'c18': 'c18_diversity_vs_depth',
         'c19': 'c19_importance_weighted_training',
-        'c20': 'c20_augmentation_value_decomposition',
         'c21': 'c21_single_rep_augmentation',
     }
     mod_name = module_map[exp_id]
@@ -532,6 +530,38 @@ def run_all(dataset_name: str, output_dir: str,
     else:
         data['augmentations'] = None
 
+    # ── Precompute hybrid searches (general reps) ──
+    if len(data['reps']) >= 2:
+        from experiments._shared import precompute_hybrid_searches
+        print(f"\n  Precomputing hybrid searches (general, {len(data['reps'])} reps)...")
+        precompute_results = precompute_hybrid_searches(
+            reps=data['reps'],
+            labels=data['labels'],
+            groups=data.get('groups'),
+            config=config,
+            augmentations=data.get('augmentations'),
+        )
+        data['precomputed_searches'] = precompute_results
+    else:
+        data['precomputed_searches'] = {}
+
+    # ── Precompute hybrid searches (top-tier reps) ──
+    top_tier_names = DATASET_REPS.get(dataset_name, {}).get('top_tier', [])
+    top_tier_reps = {k: v for k, v in data['reps'].items() if k in top_tier_names}
+    data['top_tier_reps'] = top_tier_reps
+    if len(top_tier_reps) >= 2:
+        print(f"\n  Precomputing hybrid searches (top-tier, {len(top_tier_reps)} reps)...")
+        precompute_top = precompute_hybrid_searches(
+            reps=top_tier_reps,
+            labels=data['labels'],
+            groups=data.get('groups'),
+            config=config,
+            augmentations=data.get('augmentations'),
+        )
+        data['precomputed_searches_top'] = precompute_top
+    else:
+        data['precomputed_searches_top'] = {}
+
     # ── Run experiments in order ──
     results = {}
     for exp_id in experiments:
@@ -594,7 +624,6 @@ def _experiment_full_name(exp_id: str) -> str:
         'c17': 'c17_information_theoretic_decomposition',
         'c18': 'c18_diversity_vs_depth',
         'c19': 'c19_importance_weighted_training',
-        'c20': 'c20_augmentation_value_decomposition',
         'c21': 'c21_single_rep_augmentation',
     }
     return name_map.get(exp_id, exp_id)

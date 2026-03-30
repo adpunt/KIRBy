@@ -40,10 +40,9 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, make_structured_output, convert_numpy,
     get_model_factories, get_domain_metric, cv_split,
-    apply_feature_selection, compute_feature_importance,
+    compute_feature_importance,
+    get_precomputed_search, build_fold_hybrid,
 )
-from kirby.hybrid import create_hybrid
-# TODO: create_hybrid API not finalised — revisit after framework experiments.
 
 from kirby.utils.noise_estimation import ActivityCliffAwareEstimator
 
@@ -237,6 +236,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['per_rep'][rep_name] = rep_results
 
     # =========================================================================
+    # CONDITIONS 3-5: Get hybrid blueprint ONCE (shared across all fold loops)
+    # =========================================================================
+    search = get_precomputed_search(
+        reps, labels, groups, budget=100, aug_condition='uncapped',
+        augmentations=augmentations, speed=config.get('search_speed', 'fast'))
+    bp = search.best_overall['blueprint'] if search.best_overall else None
+    if bp is None:
+        print("  WARNING: No blueprint found, skipping hybrid conditions")
+        return {'error': 'no_blueprint', 'metric': metric_name}
+
+    # =========================================================================
     # CONDITIONS 3-4: Hybrid (hybrid_unweighted, hybrid_weighted)
     # =========================================================================
     print(f"\n  --- Conditions 3-4: Hybrid ---")
@@ -254,17 +264,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             val_reps = {k: v[val_idx] for k, v in reps.items()}
             y_train, y_val = labels[train_idx], labels[val_idx]
 
-            # Create hybrid per fold
+            # Create hybrid per fold from blueprint
             try:
-                X_train_h, feature_info = create_hybrid(
-                    train_reps, y_train,
-                    allocation_method='entropy_1.0',
-                    budget=100,
-                    importance_method='lightgbm_gain',
-                    augmentations=augmentations,
-                    augmentation_strategy=augmentation_strategy,
-                )
-                X_val_h = apply_feature_selection(val_reps, feature_info)
+                train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
+                val_augs = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
+                X_train_h, X_val_h, feature_info = build_fold_hybrid(
+                    train_reps, val_reps, y_train, bp,
+                    augmentations_train=train_augs, augmentations_val=val_augs)
             except Exception as e:
                 print(f"    {model_name}: hybrid creation failed - {e}")
                 continue
@@ -349,14 +355,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
             y_train, y_val = labels[train_idx], labels[val_idx]
             try:
-                X_train_h, fi = create_hybrid(
-                    train_reps_fold, y_train,
-                    allocation_method='entropy_1.0', budget=100,
-                    importance_method='lightgbm_gain',
-                    augmentations=augmentations,
-                    augmentation_strategy=augmentation_strategy,
-                )
-                X_val_h = apply_feature_selection(val_reps_fold, fi)
+                train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
+                val_augs = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
+                X_train_h, X_val_h, fi = build_fold_hybrid(
+                    train_reps_fold, val_reps_fold, y_train, bp,
+                    augmentations_train=train_augs, augmentations_val=val_augs)
                 scaler = StandardScaler()
                 X_tr_s = scaler.fit_transform(X_train_h)
                 X_va_s = scaler.transform(X_val_h)

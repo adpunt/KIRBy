@@ -25,7 +25,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     get_model_factories, evaluate_single_rep_cv,
     compute_intrinsic_dimensionality, estimate_mutual_information_knn,
-    compute_effective_rank,
+    compute_effective_rank, get_domain_metric,
 )
 
 
@@ -41,6 +41,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = data['labels']
     groups = data['groups']
     mode = 'intermediary' if config['n_splits'] == 1 else 'full'
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     results = {}
 
@@ -71,21 +72,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         rep_result['effective_rank'] = compute_effective_rank(X)
         print(f"    Effective rank={rep_result['effective_rank']:.1f}")
 
-        # Per-model baseline R2
+        # Per-model baselines (domain-aware metric)
         rep_result['baselines'] = {}
         scores_str = []
         for model_name, model_factory in models.items():
-            mean_r2, std_r2 = evaluate_single_rep_cv(
-                X, labels, groups, model_factory, n_folds, mode=mode)
-            rep_result['baselines'][model_name] = {'r2_mean': mean_r2, 'r2_std': std_r2}
-            scores_str.append(f"{model_name}={mean_r2:.3f}")
-        print(f"    Baselines: {', '.join(scores_str)}")
+            mean_score, std_score = evaluate_single_rep_cv(
+                X, labels, groups, model_factory, n_folds, mode=mode,
+                metric_fn=metric_fn)
+            rep_result['baselines'][model_name] = {'score_mean': mean_score, 'score_std': std_score}
+            scores_str.append(f"{model_name}={mean_score:.3f}")
+        print(f"    Baselines ({metric_name}): {', '.join(scores_str)}")
 
         results[rep_name] = rep_result
 
     # Summary table
     print("\n" + "-" * 70)
-    print("SUMMARY")
+    print(f"SUMMARY (metric: {metric_name})")
     print("-" * 70)
     header = f"  {'Rep':<20} {'Dim':>5} {'PCA95':>6} {'MLE':>6} {'MI':>8} {'ERank':>7}"
     for m in models:
@@ -101,7 +103,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                f"{r['effective_rank']:>7.1f}")
         for m in models:
             bl = r['baselines'].get(m, {})
-            row += f" {bl.get('r2_mean', float('nan')):>8.3f}"
+            row += f" {bl.get('score_mean', float('nan')):>8.3f}"
         print(row)
 
     return results

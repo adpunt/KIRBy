@@ -146,8 +146,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     search = search_uncapped
 
     # --- Reshape SearchResult to downstream format ---
+    metric_label = search.metric_name
 
-    # Configs: rename fields for Exp 9a ANOVA compatibility
+    # Configs: fields for Exp 9a ANOVA compatibility
     configs = []
     for r in search.all_results:
         configs.append({
@@ -161,7 +162,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'n_features': r['n_features'],
         })
 
-    # Best by model: rename fields for Exp 8 compatibility
+    # Best by model
     best_by_model = {}
     for model_name, r in search.best_by_model.items():
         best_by_model[model_name] = {
@@ -179,17 +180,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     lib_baselines = search.baselines
     for model_name in models:
         best_single_rep = None
-        best_single_r2 = -np.inf
+        best_single_score = -np.inf
         for rep_name, rep_scores in lib_baselines.items():
-            rep_r2 = rep_scores.get(model_name, -np.inf)
-            if rep_r2 > best_single_r2:
-                best_single_r2 = rep_r2
+            rep_score = rep_scores.get(model_name, -np.inf)
+            if rep_score > best_single_score:
+                best_single_score = rep_score
                 best_single_rep = rep_name
         baselines[model_name] = {
             'best_single_rep': best_single_rep,
-            'best_single_r2': best_single_r2,
+            'best_single_r2': best_single_score,
         }
-        print(f"  {model_name}: best_rep={best_single_rep} R2={best_single_r2:.4f}")
+        print(f"  {model_name}: best_rep={best_single_rep} {metric_label}={best_single_score:.4f}")
 
     # PCA baselines (library doesn't compute these -- keep manual)
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
@@ -213,7 +214,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 pca_scores.append(metric_fn(labels[val_idx], m.predict(X_val_p)))
             pca_baselines[budget][model_name] = float(np.mean(pca_scores))
 
-    # Heatmap: model x budget -> best R2
+    # Heatmap: model x budget -> best score
     heatmap = {}
     for model_name in models:
         heatmap[model_name] = {}
@@ -232,21 +233,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             importance_wins[imp] += 1
 
     # Print summary
-    print("\n  BEST BY MODEL:")
+    print(f"\n  BEST BY MODEL (metric: {metric_label}):")
     for model_name, best in best_by_model.items():
-        baseline_r2 = baselines[model_name]['best_single_r2']
+        baseline_score = baselines[model_name]['best_single_r2']
         baseline_rep = baselines[model_name]['best_single_rep']
-        delta = best['r2_mean'] - baseline_r2
+        delta = best['r2_mean'] - baseline_score
         print(f"  >> {model_name}: {best['allocation']}/{best['importance']}"
-              f"/b={best['budget']} -> R2={best['r2_mean']:.4f} "
-              f"(vs {baseline_rep} {baseline_r2:.4f}, delta={delta:+.4f})")
+              f"/b={best['budget']} -> {metric_label}={best['r2_mean']:.4f} "
+              f"(vs {baseline_rep} {baseline_score:.4f}, delta={delta:+.4f})")
 
     print("\n  IMPORTANCE METHOD WINS:")
     for imp, count in sorted(importance_wins.items(), key=lambda x: -x[1]):
         print(f"    {imp}: {count}/{len(models)}")
 
     # Heatmap table
-    print("\n  HEATMAP (model x budget -> best R2):")
+    print(f"\n  HEATMAP (model x budget -> best {metric_label}):")
     budget_strs = [str(b) for b in full_budgets]
     header = f"  {'Model':<12}" + "".join(f"{b:>8}" for b in budget_strs)
     print(header)
@@ -325,4 +326,4 @@ if __name__ == '__main__':
                      delta=getattr(args, 'delta', False),
                      augment=getattr(args, 'augment', False))
     results = run(data, config, args.output, args.dataset)
-    save_experiment_results(results, args.output, 'c02_complexity_grid', args.dataset)
+    save_experiment_results(results, args.output, 'c02_complexity_matching_grid', args.dataset)

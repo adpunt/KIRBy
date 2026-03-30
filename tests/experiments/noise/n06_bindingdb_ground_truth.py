@@ -20,9 +20,8 @@ from sklearn.preprocessing import StandardScaler
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
+    get_fitted_hybrid,
 )
-from kirby.hybrid import create_hybrid
-# TODO: create_hybrid API not finalised — revisit after framework experiments.
 from kirby.utils.noise_estimation import get_noise_estimator
 
 
@@ -42,54 +41,6 @@ ESTIMATORS_SCREENING = [
 
 # GP max samples
 GP_MAX = 1000
-
-
-def _find_replicates(dataset_name='bindingdb_kd'):
-    """Load BindingDB and identify replicate measurements.
-
-    Returns (X_features, y_labels, replicate_stds, replicate_group_ids)
-    where replicate_stds[i] = std of y within sample i's replicate group.
-    """
-    # Load via the standard data path
-    data = load_data(dataset_name, rep_preset='fast')
-
-    labels = data['labels']
-    reps = data['reps']
-
-    # BindingDB_Kd from TDC stores compound-target pairs.
-    # Replicates = same compound measured multiple times (same InChIKey).
-    # We approximate this via group assignments — samples in the same group
-    # are from the same compound/scaffold.
-    groups = data.get('groups')
-
-    if groups is None:
-        return data, None, None
-
-    # Compute per-group label statistics
-    unique_groups = np.unique(groups)
-    group_stds = {}
-    for g in unique_groups:
-        mask = groups == g
-        if mask.sum() >= 2:
-            group_stds[g] = float(np.std(labels[mask]))
-
-    if not group_stds:
-        return data, None, None
-
-    # Map back to per-sample replicate std
-    replicate_stds = np.zeros(len(labels))
-    for i, g in enumerate(groups):
-        replicate_stds[i] = group_stds.get(g, 0.0)
-
-    # Only keep samples that have replicates (std > 0)
-    has_replicate = replicate_stds > 0
-    n_with_replicates = int(has_replicate.sum())
-
-    print(f"  Replicates: {n_with_replicates}/{len(labels)} samples have replicate groups")
-    print(f"  Replicate std: mean={np.mean(replicate_stds[has_replicate]):.4f}, "
-          f"max={np.max(replicate_stds):.4f}")
-
-    return data, replicate_stds, has_replicate
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -128,7 +79,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     budget = kwargs.get('budget', 100)
     augmentations = data.get('augmentations')
-    augmentation_strategy = 'uncapped'
 
     # Build feature spaces
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
@@ -136,13 +86,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     spaces = {'concat': X_concat_s}
     try:
-        X_hybrid, fi = create_hybrid(
-            reps, labels,
-            allocation_method='entropy_1.0',
-            importance_method='lightgbm_gain',
-            budget=budget,
-            augmentations=augmentations,
-            augmentation_strategy=augmentation_strategy,
+        X_hybrid, fi, _search = get_fitted_hybrid(
+            reps, labels, groups, budget=budget,
+            aug_condition='uncapped', augmentations=augmentations,
+            speed=config.get('search_speed', 'fast'),
         )
         spaces['hybrid'] = StandardScaler().fit_transform(X_hybrid)
     except Exception as e:

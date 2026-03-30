@@ -31,9 +31,8 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric,
+    get_precomputed_search, build_fold_hybrid,
 )
-from kirby.hybrid import create_hybrid
-from kirby.hybrid import apply_augmentation_selection
 
 
 # =========================================================================
@@ -72,7 +71,7 @@ def _get_regularization_families():
 # =========================================================================
 
 def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
-                   metric_fn, augmentations=None):
+                   metric_fn, augmentations=None, blueprint=None):
     """Evaluate one (model, budget) cell. Returns (score, train_score)."""
     sample_X = next(iter(reps.values()))
     val_scores = []
@@ -88,22 +87,12 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
         val_augs = {k: v[val_idx] for k, v in augs_full.items()} or None
 
         if budget is not None and budget < sum(v.shape[1] for v in reps.values()):
+            if blueprint is None:
+                continue
             try:
-                X_train, fi = create_hybrid(
-                    train_reps, y_train,
-                    allocation_method='entropy_1.0',
-                    budget=budget,
-                    importance_method='lightgbm_gain',
-                    augmentations=train_augs,
-                    augmentation_strategy='capped',
-                )
-                from kirby.hybrid import apply_feature_selection
-                X_val = apply_feature_selection(val_reps, fi)
-                aug_info = fi.get('augmentation_info', {})
-                if aug_info and val_augs:
-                    aug_val = apply_augmentation_selection(val_augs, aug_info)
-                    if aug_val is not None:
-                        X_val = np.hstack([X_val, aug_val])
+                X_train, X_val, fi = build_fold_hybrid(
+                    train_reps, val_reps, y_train, blueprint,
+                    augmentations_train=train_augs, augmentations_val=val_augs)
             except Exception:
                 continue
         else:
@@ -158,6 +147,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     augmentations = data.get('augmentations')
 
+    # Pre-compute search blueprints per budget (cached)
+    blueprints = {}
+    for budget in budgets:
+        try:
+            search = get_precomputed_search(
+                reps, labels, groups, budget=budget,
+                aug_condition='capped', augmentations=augmentations,
+                speed=config.get('search_speed', 'fast'))
+            blueprints[budget] = search.best_overall['blueprint']
+        except Exception:
+            pass  # will skip this budget later
+
     results = {
         'metric': metric_name,
         'lower_is_better': lower_is_better,
@@ -176,7 +177,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             for pname, pval, factory in variants:
                 val_score, train_score = _evaluate_cell(
                     reps, labels, groups, factory, budget, n_folds, mode, metric_fn,
-                    augmentations=augmentations)
+                    augmentations=augmentations,
+                    blueprint=blueprints.get(budget))
                 heatmap[budget][str(pval)] = {
                     'val': val_score,
                     'train': train_score,

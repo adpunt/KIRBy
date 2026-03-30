@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+"""Run all single-dataset federated experiments for LogD.
+
+Usage:
+    python tests/experiments/federated/logd.py
+    python tests/experiments/federated/logd.py --experiments fed02
+    python tests/experiments/federated/logd.py --output tests/results/federated
+"""
+import sys
+import os
+import argparse
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+from experiments.federated.federated_helpers import (
+    run_all, SINGLE_DATASET_EXPERIMENTS,
+)
+
+DATASET = 'logd'
+DEFAULT_OUTPUT = 'tests/results/federated'
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Federated experiments for logd')
+    parser.add_argument(
+        '--experiments', nargs='+', default=None,
+        help=f'Experiment IDs to run (default: all). '
+             f'Options: {", ".join(SINGLE_DATASET_EXPERIMENTS)}')
+    parser.add_argument(
+        '--output', type=str, default=DEFAULT_OUTPUT,
+        help=f'Output directory (default: {DEFAULT_OUTPUT})')
+    args = parser.parse_args()
+    run_all(dataset_name=DATASET, output_dir=args.output,
+            experiments=args.experiments)
+
+
+if __name__ == '__main__':
+    main()

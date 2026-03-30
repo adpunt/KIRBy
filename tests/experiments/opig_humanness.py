@@ -241,6 +241,7 @@ def evaluate_dataset(dataset_name, rep_names, n_folds):
     # augmentation = [] (no augmentation reps for antibody classification)
     try:
         from kirby.find_best_hybrid import find_best_hybrid
+        from kirby.hybrid import apply_feature_selection
         search = find_best_hybrid(
             base_reps=reps,
             labels=labels, groups=groups,
@@ -249,7 +250,9 @@ def evaluate_dataset(dataset_name, rep_names, n_folds):
             augmentation_strategy='uncapped',
             speed='fast', return_fitted=True, verbose=False, cache=True)
         if search.fitted_result is not None:
-            reps['kirby_hybrid'] = search.fitted_result.X_hybrid
+            fi = {r: {'selected_indices': idx}
+                  for r, idx in search.fitted_result.selected_indices.items()}
+            reps['kirby_hybrid'] = apply_feature_selection(reps, fi)
             print(f"  kirby_hybrid: {reps['kirby_hybrid'].shape[1]}D (hybrid)")
     except Exception as e:
         print(f"  Hybrid build failed: {e}")
@@ -375,7 +378,7 @@ def print_analysis(dataset_name, ds_results):
 def main():
     parser = argparse.ArgumentParser(
         description='Humanness classification experiment (OPIG B3). '
-                    'Replicates Marks et al. 2021 with KIRBy antibody reps.')
+                    'Extends Prihoda et al. 2022 (BioPhi) with KIRBy antibody reps.')
     parser.add_argument(
         '--datasets', type=str, default=None,
         help='Comma-separated dataset names '
@@ -406,7 +409,7 @@ def main():
 
     print("=" * 70)
     print("HUMANNESS CLASSIFICATION EXPERIMENT (OPIG B3)")
-    print(f"  Paper: Marks et al. 2021, J Mol Biol 433:166928")
+    print(f"  Paper: Prihoda et al. 2022, mAbs 14(1):2020203 (BioPhi)")
     print(f"  Datasets: {datasets}")
     print(f"  Reps: {rep_names}")
     print(f"  Models: {MODELS_LIST}")

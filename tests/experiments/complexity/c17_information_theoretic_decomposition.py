@@ -26,7 +26,7 @@ from experiments._shared import (
     estimate_mutual_information_knn, compute_effective_rank,
     cv_split, get_domain_metric,
 )
-from kirby.hybrid import create_hybrid
+from experiments._shared import get_fitted_hybrid
 
 
 # =========================================================================
@@ -199,6 +199,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     strategies = ['hybrid', 'pca', 'mrmr', 'rfe', 'random']
 
+    # NOTE: All supervised methods (hybrid, mRMR, RFE) perform feature selection
+    # on the full dataset. This is standard for feature selection benchmarks —
+    # relative comparisons between strategies are fair since all supervised methods
+    # are treated identically. Downstream R² uses proper CV on pre-selected features.
+    # Absolute downstream R² values for supervised methods are optimistically biased.
+
     results = {
         'metric': metric_name,
         'budgets': budgets,
@@ -217,13 +223,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             try:
                 if strategy == 'hybrid':
                     augmentations = data.get('augmentations')
-                    X_h, fi = create_hybrid(
-                        reps, labels,
-                        allocation_method='entropy_1.0',
-                        importance_method='lightgbm_gain',
-                        budget=budget,
-                        augmentations=augmentations,
-                        augmentation_strategy='capped',
+                    X_h, fi, _search = get_fitted_hybrid(
+                        reps, labels, groups, budget=budget,
+                        aug_condition='capped', augmentations=augmentations,
+                        speed=config.get('search_speed', 'fast'),
                     )
                     X_selected = X_h
 

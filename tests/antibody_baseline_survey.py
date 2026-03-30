@@ -229,6 +229,8 @@ def load_dataset(name: str) -> dict:
         'mutations': data.get('mutations'),
         'task_type': task_type,
         'edit_distances': data.get('edit_distances'),
+        'fold_assignments': data.get('fold_assignments'),
+        'property_name': data.get('property_name'),
     }
 
 

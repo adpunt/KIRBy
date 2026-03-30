@@ -13,10 +13,11 @@ Steps:
   4. Validate via synthetic noise injection: are injected-noise samples detected
      more often than genuine cliff compounds?
 
-5 comparison conditions:
+Comparison conditions:
   - GP-LOO in hybrid space (MAIN — should have lowest cliff FP rate)
   - GP-LOO in full concat space (baseline)
   - GP-LOO in PCA-50 space (dimension-matched)
+  - GP-LOO in each individual base rep space (per-rep baselines)
   - ActivityCliffAwareEstimator (library, non-GP)
   - Prediction error filter (naive baseline)
 
@@ -39,10 +40,8 @@ from sklearn.ensemble import RandomForestRegressor
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    get_domain_metric,
+    get_domain_metric, get_fitted_hybrid,
 )
-from kirby.hybrid import create_hybrid
-# TODO: create_hybrid API not finalised — revisit after framework experiments.
 from kirby.utils.noise_estimation import ActivityCliffAwareEstimator
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
 
@@ -73,11 +72,15 @@ def _identify_cliffs_euclidean(X, y, sim_threshold=0.55, activity_k=2.0):
 
 
 def _gp_loo_scores(X, y):
-    """Compute GP LOO noise scores.
+    """Compute GP LOO noise scores via closed-form LOO (Rasmussen & Williams §5.4.2).
 
-    For each sample, fit GP on all-but-one, predict held-out.
-    Score = |y_i - mu_i| / sigma_i (standardised residual).
-    Higher = more likely noise.
+    Closed-form LOO avoids refitting n times. Given the trained GP kernel matrix
+    K and its inverse K_inv:
+        LOO_residual_i = (K_inv @ y)[i] / K_inv[i,i]
+        LOO_variance_i = 1 / K_inv[i,i]
+        score_i = |LOO_residual_i| / sqrt(LOO_variance_i)
+
+    Score = standardised LOO residual. Higher = more likely noise.
     """
     n = len(y)
     scaler = StandardScaler()
@@ -87,35 +90,45 @@ def _gp_loo_scores(X, y):
     scores = np.zeros(n)
     gp_failures = 0
 
-    # Full GP fit first to get hyperparameters (LOO refit is too expensive)
+    # Fit GP to learn hyperparameters
     try:
-        gp_full = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=2,
-                                           random_state=42, alpha=1e-6)
-        gp_full.fit(X_s, y)
-        learned_kernel = gp_full.kernel_
+        gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=2,
+                                      random_state=42, alpha=1e-6)
+        gp.fit(X_s, y)
+        learned_kernel = gp.kernel_
     except Exception:
-        # Fallback to default kernel
         learned_kernel = kernel
         gp_failures += 1
 
-    # LOO predictions using the learned kernel (fast approximate LOO)
+    # Closed-form LOO via kernel matrix inverse
     try:
-        gp = GaussianProcessRegressor(kernel=learned_kernel, optimizer=None,
-                                      random_state=42, alpha=1e-6)
-        gp.fit(X_s, y)
-        # Approximate LOO via prediction on training data with noise
-        # True LOO would refit n times — use the full model's uncertainty instead
-        y_pred, y_std = gp.predict(X_s, return_std=True)
-        y_std = np.maximum(y_std, 1e-10)
-        scores = np.abs(y - y_pred) / y_std
-    except Exception as e:
-        print(f"    GP LOO failed: {e}")
+        K = learned_kernel(X_s) + 1e-6 * np.eye(n)
+        K_inv = np.linalg.inv(K)
+        alpha_vec = K_inv @ y  # K_inv @ y, not the regularization alpha
+
+        K_inv_diag = np.diag(K_inv)
+        K_inv_diag = np.maximum(K_inv_diag, 1e-10)  # numerical safety
+
+        # LOO residual and variance (Rasmussen & Williams eq. 5.12)
+        loo_residual = alpha_vec / K_inv_diag
+        loo_variance = 1.0 / K_inv_diag
+        loo_std = np.sqrt(np.maximum(loo_variance, 1e-10))
+
+        scores = np.abs(loo_residual) / loo_std
+    except (np.linalg.LinAlgError, Exception) as e:
+        print(f"    GP closed-form LOO failed: {e}")
         gp_failures += 1
-        # Fallback to RF prediction error
-        rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
+        # Fallback: RF out-of-bag predictions (proper held-out estimate)
+        rf = RandomForestRegressor(n_estimators=200, oob_score=True,
+                                   random_state=42, n_jobs=-1)
         rf.fit(X_s, y)
-        y_pred = rf.predict(X_s)
-        scores = np.abs(y - y_pred) / (np.std(y) + 1e-10)
+        if hasattr(rf, 'oob_prediction_'):
+            oob_pred = rf.oob_prediction_
+        else:
+            # sklearn < 1.4 attribute name
+            oob_pred = rf.oob_prediction_
+        oob_residual = np.abs(y - oob_pred)
+        scores = oob_residual / (np.std(oob_residual) + 1e-10)
 
     return scores, gp_failures
 
@@ -146,7 +159,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = data['labels']
     groups = data['groups']
     augmentations = data.get('augmentations')
-    augmentation_strategy = 'uncapped'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     noise_fractions = kwargs.get('noise_fractions', [0.05, 0.1, 0.2])
@@ -160,13 +172,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # 1. Hybrid
     try:
-        X_hybrid, fi = create_hybrid(
-            reps, labels,
-            allocation_method='entropy_1.0',
-            importance_method='lightgbm_gain',
-            budget=budget,
-            augmentations=augmentations,
-            augmentation_strategy=augmentation_strategy,
+        X_hybrid, fi, _search = get_fitted_hybrid(
+            reps, labels, groups, budget=budget,
+            aug_condition='uncapped', augmentations=augmentations,
+            speed=config.get('search_speed', 'fast'),
         )
         spaces['hybrid'] = X_hybrid
     except Exception as e:
@@ -180,6 +189,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if pca_dim >= 2:
         spaces['pca_matched'] = PCA(n_components=pca_dim, random_state=42).fit_transform(
             StandardScaler().fit_transform(X_concat))
+
+    # 4. Per-rep spaces (individual base reps)
+    for rep_name, X_rep in reps.items():
+        spaces[rep_name] = StandardScaler().fit_transform(X_rep)
 
     print(f"  Spaces: {list(spaces.keys())}")
     print(f"  Noise fractions: {noise_fractions}")
