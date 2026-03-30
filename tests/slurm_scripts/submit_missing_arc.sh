@@ -45,23 +45,40 @@ run_reaction() {
     echo ""
 }
 
-# ── Nucleotide: 22 datasets (classical reps, no GPU) ──
-run_nucleotide() {
+# ── Nucleotide NT Revised: 18 datasets (classical reps, no GPU) ──
+run_nucleotide_nt() {
     local OUT="tests/results/nucleotide_survey"
-    echo "--- Nucleotide (22 datasets, 128G, 48h) ---"
+    echo "--- Nucleotide NT Revised (18 datasets, 128G, 48h) ---"
     for ds in nt_promoter_all nt_promoter_tata nt_promoter_no_tata \
               nt_enhancers nt_enhancers_types \
               nt_splice_sites_all nt_splice_sites_acceptors nt_splice_sites_donors \
               nt_H2AFZ nt_H3K27ac nt_H3K27me3 nt_H3K36me3 \
               nt_H3K4me1 nt_H3K4me2 nt_H3K4me3 \
-              nt_H3K9ac nt_H3K9me3 nt_H4K20me1 \
-              gb_human_nontata_promoters gb_human_enhancers_cohn \
+              nt_H3K9ac nt_H3K9me3 nt_H4K20me1; do
+        submit "nuc_${ds}" \
+            "mkdir -p ${OUT} && python tests/run_baseline_survey.py ${ds} --n-folds 5 --skip-existing --output ${OUT}/" \
+            128G
+    done
+    echo ""
+}
+
+# ── Nucleotide Genomic Benchmarks: 4 datasets (classical reps, no GPU) ──
+run_nucleotide_gb() {
+    local OUT="tests/results/nucleotide_survey"
+    echo "--- Nucleotide Genomic Benchmarks (4 datasets, 128G, 48h) ---"
+    for ds in gb_human_nontata_promoters gb_human_enhancers_cohn \
               gb_demo_coding_vs_intergenomic_seqs gb_demo_human_or_worm; do
         submit "nuc_${ds}" \
             "mkdir -p ${OUT} && python tests/run_baseline_survey.py ${ds} --n-folds 5 --skip-existing --output ${OUT}/" \
             128G
     done
     echo ""
+}
+
+# ── Nucleotide: all 22 datasets ──
+run_nucleotide() {
+    run_nucleotide_nt
+    run_nucleotide_gb
 }
 
 # ── Geometry: 15 datasets (uses cached reps, no GPU) ──
@@ -95,6 +112,8 @@ run_forward_compat() {
 case "$MODE" in
     reaction)       run_reaction ;;
     nucleotide)     run_nucleotide ;;
+    nucleotide_nt)  run_nucleotide_nt ;;
+    nucleotide_gb)  run_nucleotide_gb ;;
     geometry)       run_geometry ;;
     forward_compat) run_forward_compat ;;
     all)
@@ -109,6 +128,8 @@ case "$MODE" in
         echo ""
         echo "  reaction        3 CPU jobs (64G)"
         echo "  nucleotide      22 CPU jobs (128G)"
+        echo "  nucleotide_nt   18 NT Revised only (128G)"
+        echo "  nucleotide_gb   4 Genomic Benchmarks only (128G)"
         echo "  geometry        15 CPU jobs (64G)"
         echo "  forward_compat  3 CPU jobs (64G, ReactionT5 only)"
         echo "  all             43 CPU jobs"

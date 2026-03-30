@@ -10,8 +10,13 @@ Dependencies: None (standalone).
 
 Design: For each base rep in DATASET_REPS[dataset]['general']:
     Condition A: base rep alone → model CV score
-    Condition B: create_hybrid(base_reps={rep}, augmentations=aug_dict,
-                               augmentation_strategy='uncapped') → model CV score
+    Condition B: find_best_hybrid(base_reps={rep}, augmentations=aug_dict,
+                                  augmentation_strategy='uncapped',
+                                  budgets=[base_dim]) → best config per-fold CV score
+
+The search over importance_method × internal_evaluator discovers the best
+way to select/weight features for that specific rep + augmentation combination.
+Allocation is trivial (1 base rep → 100%).
 
 Reports per-rep improvement, which aug features were kept, and how many
 features were added beyond the base dimensionality.
@@ -32,8 +37,9 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_model_factories, cv_split, get_domain_metric,
+    build_fold_hybrid,
 )
-from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
+from kirby.find_best_hybrid import find_best_hybrid
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -90,6 +96,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Aug reps ({len(aug_reps_available)}): "
           f"{', '.join(f'{k}={v}D' for k, v in aug_dims.items())}")
 
+    search_speed = config.get('search_speed', 'fast')
+
     # ── Evaluate each base rep ──
     rep_results = []
 
@@ -97,6 +105,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         X_base = reps[base_name]
         base_dim = X_base.shape[1]
         print(f"\n  {base_name} ({base_dim}D)")
+
+        # Run find_best_hybrid for this base rep + augmentations
+        # Search over importance_method × internal_evaluator at budget=base_dim
+        # Allocation is trivial (1 base rep)
+        base_rep_dict = {base_name: X_base}
+        print(f"    Searching (budget={base_dim}, uncapped aug)...", end=' ')
+        try:
+            search = find_best_hybrid(
+                base_reps=base_rep_dict,
+                labels=labels,
+                groups=groups,
+                budgets=[base_dim],
+                augmentations=aug_dict,
+                augmentation_strategy='uncapped',
+                speed=search_speed,
+                cache=True,
+                verbose=False,
+            )
+            bp = search.best_overall['blueprint'] if search.best_overall else None
+        except Exception as e:
+            print(f"FAILED: {e}")
+            bp = None
+
+        if bp:
+            print(f"imp={bp.importance_method}, eval={bp.internal_evaluator}")
+        else:
+            print("no result (using defaults)")
 
         for model_name, model_factory in models.items():
             scores_base = []
@@ -116,35 +151,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 m1.fit(Xtr_b, y_train)
                 scores_base.append(float(metric_fn(y_val, m1.predict(Xva_b))))
 
-                # ── Condition B: base + uncapped augmentation ──
+                # ── Condition B: base + uncapped augmentation via search winner ──
+                if bp is None:
+                    scores_aug.append(float('nan'))
+                    fold_aug_info.append({'kept': [], 'n_added': 0,
+                                         'final_dim': base_dim})
+                    continue
+
                 train_base = {base_name: X_base[train_idx]}
                 val_base = {base_name: X_base[val_idx]}
-                train_augs = {rn: aug_dict[rn][train_idx] for rn in aug_reps_available}
-                val_augs = {rn: aug_dict[rn][val_idx] for rn in aug_reps_available}
+                train_augs = {rn: aug_dict[rn][train_idx]
+                              for rn in aug_reps_available}
+                val_augs = {rn: aug_dict[rn][val_idx]
+                            for rn in aug_reps_available}
 
                 try:
-                    Xtr_h, feature_info = create_hybrid(
-                        base_reps=train_base,
-                        labels=y_train,
-                        allocation_method='performance_weighted',
-                        budget=base_dim,
-                        importance_method='treeshap',
-                        augmentations=train_augs,
-                        augmentation_strategy='uncapped',
-                    )
-
-                    # Apply same selection to validation
-                    Xva_h = apply_feature_selection(val_base, feature_info)
-
-                    # Append augmentation features if any were kept
-                    aug_info = feature_info.get('augmentation_info', {})
-                    kept = feature_info.get('kept_augmentations', [])
-                    if kept and aug_info:
-                        aug_features_val = apply_augmentation_selection(
-                            val_augs, aug_info
-                        )
-                        if aug_features_val is not None:
-                            Xva_h = np.hstack([Xva_h, aug_features_val])
+                    Xtr_h, Xva_h, feature_info = build_fold_hybrid(
+                        train_base, val_base, y_train, bp,
+                        augmentations_train=train_augs,
+                        augmentations_val=val_augs)
 
                     scaler_h = StandardScaler()
                     Xtr_h = scaler_h.fit_transform(Xtr_h)
@@ -153,6 +178,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     m2.fit(Xtr_h, y_train)
                     scores_aug.append(float(metric_fn(y_val, m2.predict(Xva_h))))
 
+                    aug_info = feature_info.get('augmentation_info', {})
+                    kept = list(aug_info.keys()) if aug_info else []
                     n_added = Xtr_h.shape[1] - base_dim
                     fold_aug_info.append({
                         'kept': kept,
@@ -162,7 +189,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 except Exception as e:
                     print(f"    {model_name} fold {fold_idx}: augmentation failed - {e}")
                     scores_aug.append(float('nan'))
-                    fold_aug_info.append({'kept': [], 'n_added': 0, 'final_dim': base_dim})
+                    fold_aug_info.append({'kept': [], 'n_added': 0,
+                                         'final_dim': base_dim})
 
             base_mean = float(np.nanmean(scores_base))
             aug_mean = float(np.nanmean(scores_aug))
@@ -190,6 +218,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'kept_augmentations': sorted(all_kept),
                 'mean_features_added': float(np.mean(total_added)),
                 'fold_aug_info': fold_aug_info,
+                'blueprint': bp.to_dict() if bp else None,
             }
             rep_results.append(result)
 

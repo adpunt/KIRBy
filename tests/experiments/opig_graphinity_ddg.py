@@ -302,11 +302,10 @@ def evaluate_condition(condition, rep_names, n_folds):
         print("  No reps available, skipping condition")
         return None
 
-    # Build hybrid
-    # Augmentation config matches ddg_combined in DATASET_REPS:
-    # augmentation = ['aac']
+    # Build hybrid with aac as augmentation rep (matches DDG domain config)
     try:
         from kirby.find_best_hybrid import find_best_hybrid
+        from kirby.hybrid import apply_feature_selection
         grp = groups if groups is not None else np.arange(n)
         AUG_REPS = {'aac'}
         base = {k: v for k, v in reps.items() if k not in AUG_REPS}
@@ -320,7 +319,10 @@ def evaluate_condition(condition, rep_names, n_folds):
             augmentation_strategy='uncapped',
             speed='fast', return_fitted=True, verbose=False, cache=True)
         if search.fitted_result is not None:
-            reps['kirby_hybrid'] = search.fitted_result.X_hybrid
+            all_reps = {**reps, **(aug_dict or {})}
+            fi = {r: {'selected_indices': idx}
+                  for r, idx in search.fitted_result.selected_indices.items()}
+            reps['kirby_hybrid'] = apply_feature_selection(all_reps, fi)
             print(f"  kirby_hybrid: {reps['kirby_hybrid'].shape[1]}D (hybrid)")
     except Exception as e:
         print(f"  Hybrid build failed: {e}")
@@ -475,7 +477,8 @@ def main():
             print(f"WARNING: Unknown condition '{cond}', skipping")
             continue
         ds_name = CONDITION_DATASETS[cond]
-        if ds_name not in DATASET_REGISTRY:
+        # transfer_foldx has ds_name=None (handled specially in evaluate_condition)
+        if ds_name is not None and ds_name not in DATASET_REGISTRY:
             print(f"WARNING: Dataset '{ds_name}' not in registry, skipping")
             continue
         try:

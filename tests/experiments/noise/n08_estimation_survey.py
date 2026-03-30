@@ -24,10 +24,8 @@ from sklearn.metrics import r2_score
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    cv_split, get_domain_metric,
+    cv_split, get_domain_metric, get_fitted_hybrid,
 )
-from kirby.hybrid import create_hybrid
-# TODO: create_hybrid API not finalised — revisit after framework experiments.
 from kirby.utils.noise_estimation import get_noise_estimator
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
 
@@ -72,7 +70,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = data['labels']
     groups = data['groups']
     augmentations = data.get('augmentations')
-    augmentation_strategy = 'uncapped'
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
@@ -85,17 +82,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     spaces = {'concat': X_concat_s}
     try:
-        X_hybrid, fi = create_hybrid(
-            reps, labels,
-            allocation_method='entropy_1.0',
-            importance_method='lightgbm_gain',
-            budget=budget,
-            augmentations=augmentations,
-            augmentation_strategy=augmentation_strategy,
+        X_hybrid, fi, _search = get_fitted_hybrid(
+            reps, labels, groups, budget=budget,
+            aug_condition='uncapped', augmentations=augmentations,
+            speed=config.get('search_speed', 'fast'),
         )
         spaces['hybrid'] = StandardScaler().fit_transform(X_hybrid)
     except Exception as e:
         print(f"  Hybrid failed: {e}")
+
+    # Per-rep spaces
+    for rep_name, X_rep in reps.items():
+        spaces[rep_name] = StandardScaler().fit_transform(X_rep)
 
     # Subsample for GP-based estimators
     if n_samples > GP_MAX:

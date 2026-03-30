@@ -234,6 +234,7 @@ def evaluate_property(prop_name, rep_names, n_folds):
     # augmentation = ['paratope', 'structural']
     try:
         from kirby.find_best_hybrid import find_best_hybrid
+        from kirby.hybrid import apply_feature_selection
         grp = groups if groups is not None else np.arange(n)
         AUG_REPS = {'paratope', 'structural'}
         base = {k: v for k, v in reps.items() if k not in AUG_REPS}
@@ -247,7 +248,10 @@ def evaluate_property(prop_name, rep_names, n_folds):
             augmentation_strategy='uncapped',
             speed='fast', return_fitted=True, verbose=False, cache=True)
         if search.fitted_result is not None:
-            reps['kirby_hybrid'] = search.fitted_result.X_hybrid
+            all_reps = {**reps, **(aug_dict or {})}
+            fi = {r: {'selected_indices': idx}
+                  for r, idx in search.fitted_result.selected_indices.items()}
+            reps['kirby_hybrid'] = apply_feature_selection(all_reps, fi)
     except Exception:
         pass
 

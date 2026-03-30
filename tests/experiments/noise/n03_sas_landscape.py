@@ -53,10 +53,10 @@ from experiments._shared import (
     save_experiment_results, make_structured_output, convert_numpy,
     compute_effective_rank, estimate_mutual_information_knn,
     get_domain_metric, get_hybrid_features_and_weights,
+    get_fitted_hybrid,
 )
 
 from kirby.hybrid import create_hybrid
-# TODO: create_hybrid API not finalised — revisit after framework experiments.
 
 # Maximum compounds for pairwise analysis (O(N^2) memory)
 MAX_COMPOUNDS_SAS = 5000
@@ -353,13 +353,16 @@ def _run_landscape_comparison(reps, labels, per_rep_results):
 # SUB-ANALYSIS 4: SAS-BO BRIDGE
 # =============================================================================
 
-def _run_sas_bo_bridge(reps, labels, struct_t, act_t,
-                       augmentations=None, augmentation_strategy='uncapped'):
+def _run_sas_bo_bridge(reps, labels, groups, struct_t, act_t,
+                       augmentations=None, augmentation_strategy='uncapped',
+                       search_speed='fast'):
     """Zone I fraction predicts GP quality -- explains why compact spaces help BO.
 
     Builds 4 representation conditions matching S11, computes SAS zones and
     GP quality in each. Shows correlation: fewer cliffs -> better GP fit.
     """
+    from sklearn.model_selection import GroupShuffleSplit
+
     print("\n  --- Sub-analysis 4: SAS-BO Bridge ---")
 
     n = len(labels)
@@ -373,11 +376,20 @@ def _run_sas_bo_bridge(reps, labels, struct_t, act_t,
     else:
         gp_idx = np.arange(n)
 
-    # Train/val split on subsample
+    # Group-aware train/val split on subsample
     n_gp = len(gp_idx)
-    perm = np.random.RandomState(123).permutation(n_gp)
-    n_train = int(0.8 * n_gp)
-    train_local, val_local = perm[:n_train], perm[n_train:]
+    sub_labels = labels[gp_idx]
+    sub_groups = groups[gp_idx] if groups is not None else None
+    dummy_X = np.zeros((n_gp, 1))
+
+    if sub_groups is not None and len(np.unique(sub_groups)) >= 2:
+        gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=123)
+        train_local, val_local = next(gss.split(dummy_X, sub_labels, sub_groups))
+    else:
+        from sklearn.model_selection import ShuffleSplit
+        ss = ShuffleSplit(n_splits=1, test_size=0.2, random_state=123)
+        train_local, val_local = next(ss.split(dummy_X, sub_labels))
+
     train_idx = gp_idx[train_local]
     val_idx = gp_idx[val_local]
     y_train, y_val = labels[train_idx], labels[val_idx]
@@ -404,14 +416,11 @@ def _run_sas_bo_bridge(reps, labels, struct_t, act_t,
 
     # 3. KIRBy hybrid 50D
     try:
-        X_h, _ = create_hybrid(
-            reps, labels,
-            allocation_method='entropy_1.0',
-            importance_method='lightgbm_gain',
-            budget=50,
-            augmentations=augmentations,
-            augmentation_strategy=augmentation_strategy,
-        )
+        aug_cond = 'uncapped' if augmentations else 'none'
+        X_h, _, _search = get_fitted_hybrid(
+            reps, labels, groups, budget=50,
+            aug_condition=aug_cond, augmentations=augmentations,
+            speed=search_speed)
         conditions['hybrid_50d'] = StandardScaler().fit_transform(X_h)
     except Exception as e:
         print(f"    WARNING: hybrid build failed ({e})")
@@ -547,10 +556,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['per_rep'] = per_rep_results
 
     # --- Build hybrid for sub-analyses 2-3 ---
+    augmentations = data.get('augmentations')
     X_hybrid = None
     try:
         X_hybrid_full, _, search = get_hybrid_features_and_weights(
-            reps, labels, groups, search_speed, 'lightgbm_gain')
+            reps, labels, groups, search_speed, 'lightgbm_gain',
+            augmentations=augmentations)
         X_hybrid = X_hybrid_full[sub_idx] if len(sub_idx) < n else X_hybrid_full
         print(f"  Hybrid: dim={X_hybrid.shape[1]}")
     except Exception as e:
@@ -566,12 +577,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         sub_reps, sub_labels, per_rep_results)
 
     # --- Sub-analysis 4: SAS-BO bridge ---
-    augmentations = data.get('augmentations')
     augmentation_strategy = 'uncapped'
     results['bo_bridge'] = _run_sas_bo_bridge(
-        reps, labels, struct_t, act_t,
+        reps, labels, groups, struct_t, act_t,
         augmentations=augmentations,
-        augmentation_strategy=augmentation_strategy)
+        augmentation_strategy=augmentation_strategy,
+        search_speed=search_speed)
 
     # --- Grand summary ---
     print("\n" + "=" * 70)

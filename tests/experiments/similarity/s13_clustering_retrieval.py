@@ -32,9 +32,9 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     get_hybrid_features_and_weights,
     compute_feature_importance,
+    get_precomputed_search,
 )
-from kirby.hybrid import create_hybrid
-# TODO: create_hybrid API not finalised — revisit after framework experiments.
+from kirby.hybrid import create_hybrid, apply_feature_selection
 
 
 # =========================================================================
@@ -190,14 +190,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             StandardScaler().fit_transform(X_concat))
         spaces['pca_matched'] = X_pca
 
-    # Hybrid
+    # Hybrid — use held-out split to avoid label leakage:
+    # fit feature selection on 80% of data, transform ALL data for analysis.
     try:
-        X_hybrid, fi = create_hybrid(
-            reps, labels,
-            allocation_method='entropy_1.0',
-            importance_method='lightgbm_gain',
-            budget=budget,
+        search = get_precomputed_search(
+            reps, labels, groups, budget=budget,
+            aug_condition='none', speed=config.get('search_speed', 'fast'))
+        bp = search.best_overall['blueprint']
+
+        from sklearn.model_selection import GroupShuffleSplit, ShuffleSplit
+        if groups is not None and len(np.unique(groups)) >= 2:
+            _splitter = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+            fit_idx, _ = next(_splitter.split(labels, labels, groups=groups))
+        else:
+            _splitter = ShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+            fit_idx, _ = next(_splitter.split(labels, labels))
+        fit_reps = {k: v[fit_idx] for k, v in reps.items()}
+        _, fi = create_hybrid(
+            fit_reps, labels[fit_idx],
+            allocation_method=bp.allocation_method,
+            importance_method=bp.importance_method,
+            internal_evaluator=bp.internal_evaluator,
+            budget=bp.budget,
         )
+        X_hybrid = apply_feature_selection(reps, fi)
         spaces['hybrid'] = X_hybrid
     except Exception as e:
         print(f"  Hybrid creation failed: {e}")

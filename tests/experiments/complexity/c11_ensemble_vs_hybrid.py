@@ -30,12 +30,9 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_model_factories, cv_split,
-    apply_feature_selection, get_domain_metric,
+    get_domain_metric,
+    get_precomputed_search, build_fold_hybrid,
 )
-from kirby.hybrid import create_hybrid
-from kirby.hybrid import apply_augmentation_selection
-# TODO: create_hybrid API not finalised — allocation_method / importance_method
-#       semantics may change after framework experiments. Revisit call sites below.
 
 
 def _time_fit_predict(model_factory, X_train, y_train, X_val):
@@ -61,7 +58,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     models = get_model_factories(config['models'])
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
-    importance_method = 'lightgbm_gain'
 
     reps = data['reps']
     labels = data['labels']
@@ -77,6 +73,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     sample_X = next(iter(reps.values()))
     budgets = [b for b in [50, 100, 200, 500, 1024] if b <= total_dim]
+
+    # Precompute hybrid blueprints ONCE (cached) for all budgets
+    augmentations = data.get('augmentations')
+    blueprints = {}
+    for budget in budgets:
+        try:
+            search = get_precomputed_search(
+                reps, labels, groups, budget=budget,
+                aug_condition='capped', augmentations=augmentations,
+                speed=config.get('search_speed', 'fast'))
+            blueprints[budget] = search.best_overall['blueprint']
+        except Exception as e:
+            print(f"  Blueprint for budget={budget} failed: {e}")
+    print(f"  Blueprints: {sorted(blueprints.keys())}")
+
     results = []
 
     for model_name, model_factory in models.items():
@@ -257,12 +268,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'n_models_trained': 1,
                     'total_fit_time_s': float(np.mean(fold_pca_fit_times)),
                     'total_predict_time_s': float(np.mean(fold_pca_pred_times)),
+                    'augmented': False,
                 })
 
         # =====================================================================
         # 3. Hybrid: single model on fused representation
         # =====================================================================
         for budget in budgets:
+            if budget not in blueprints:
+                continue
+
             fold_hybrid_scores = []
             fold_hybrid_fit_times = []
             fold_hybrid_pred_times = []
@@ -270,30 +285,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
                                                labels, mode=mode):
-                train_reps = {k: v[train_idx] for k, v in reps.items()}
-                val_reps = {k: v[val_idx] for k, v in reps.items()}
+                train_reps_fold = {k: v[train_idx] for k, v in reps.items()}
+                val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
                 y_train, y_val = labels[train_idx], labels[val_idx]
 
-                augs_full = data.get('augmentations') or {}
+                augs_full = augmentations or {}
                 train_augs = {k: v[train_idx] for k, v in augs_full.items()} or None
                 val_augs = {k: v[val_idx] for k, v in augs_full.items()} or None
 
                 try:
                     t0 = time.time()
-                    X_train_h, feature_info = create_hybrid(
-                        train_reps, y_train,
-                        allocation_method='entropy_1.0',
-                        budget=budget,
-                        importance_method=importance_method,
-                        augmentations=train_augs,
-                        augmentation_strategy='capped',
+                    X_train_h, X_val_h, feature_info = build_fold_hybrid(
+                        train_reps_fold, val_reps_fold, y_train,
+                        blueprints[budget],
+                        augmentations_train=train_augs,
+                        augmentations_val=val_augs,
                     )
-                    X_val_h = apply_feature_selection(val_reps, feature_info)
-                    aug_info = feature_info.get('augmentation_info', {})
-                    if aug_info and val_augs:
-                        aug_val = apply_augmentation_selection(val_augs, aug_info)
-                        if aug_val is not None:
-                            X_val_h = np.hstack([X_val_h, aug_val])
                     hybrid_build_time = time.time() - t0
                 except Exception:
                     continue

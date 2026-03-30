@@ -295,6 +295,7 @@ def evaluate_target(target, rep_preset, n_folds):
     # augmentation = ['maccs', 'pharmacophore3d']
     try:
         from kirby.find_best_hybrid import find_best_hybrid
+        from kirby.hybrid import apply_feature_selection
         AUG_REPS = {'maccs', 'pharmacophore3d'}
         base = {k: v for k, v in reps.items() if k not in AUG_REPS}
         aug_dict = {k: v for k, v in reps.items() if k in AUG_REPS}
@@ -307,7 +308,10 @@ def evaluate_target(target, rep_preset, n_folds):
             augmentation_strategy='uncapped',
             speed='fast', return_fitted=True, verbose=False, cache=True)
         if search.fitted_result is not None:
-            reps['kirby_hybrid'] = search.fitted_result.X_hybrid
+            all_reps = {**reps, **(aug_dict or {})}
+            fi = {r: {'selected_indices': idx}
+                  for r, idx in search.fitted_result.selected_indices.items()}
+            reps['kirby_hybrid'] = apply_feature_selection(all_reps, fi)
             print(f"  kirby_hybrid: {reps['kirby_hybrid'].shape[1]}D (hybrid)")
     except Exception as e:
         print(f"  Hybrid build failed: {e}")

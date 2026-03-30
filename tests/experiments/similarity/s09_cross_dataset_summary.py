@@ -88,12 +88,12 @@ def run(all_dataset_results):
         exp5 = ds_results.get('s05_knn_prediction')
         if exp5 and 'conditions' in exp5:
             conds = exp5['conditions']
-            hw_scores = [v['r2_mean'] for k, v in conds.items()
+            hw_scores = [v['score_mean'] for k, v in conds.items()
                         if v.get('condition') == 'hybrid_weighted']
             # Compare against best individual rep kNN baseline
             per_rep = exp5.get('per_rep_baselines', {})
             if hw_scores and per_rep:
-                best_rep_knn = max(v['r2_mean'] for v in per_rep.values())
+                best_rep_knn = max(v['score_mean'] for v in per_rep.values())
                 delta_knn = max(hw_scores) - best_rep_knn
                 ds_summary['knn_delta_r2'] = delta_knn
                 knn_deltas.append(delta_knn)

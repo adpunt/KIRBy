@@ -28,73 +28,13 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_hybrid_features_and_weights, estimate_intrinsic_dim_mle, make_cv_splitter,
-    apply_feature_selection, get_domain_metric, get_model_factories,
+    get_domain_metric, get_model_factories,
+    build_fold_hybrid,
 )
-from kirby.hybrid import create_hybrid
-# TODO: create_hybrid API not finalised — revisit after framework experiments.
-
-from kirby.utils.noise_mitigation_methods import (
-    compute_distance_matrix, get_k_neighbors_from_distances,
+from experiments.similarity.similarity_helpers import (
+    similarity_activity_correlation, violation_rate,
 )
-
-
-# ---------------------------------------------------------------------------
-# Local helpers (same as s01 -- defined locally since only used here)
-# ---------------------------------------------------------------------------
-
-def similarity_activity_correlation(D, y, n_sample=5000):
-    """Spearman correlation between pairwise distance and |delta_y|.
-
-    Positive = good (large distance -> large activity difference).
-    Returns (rho, p_value).
-    """
-    n = len(y)
-    triu_i, triu_j = np.triu_indices(n, k=1)
-    n_pairs = len(triu_i)
-
-    if n_pairs > n_sample:
-        rng = np.random.RandomState(42)
-        idx = rng.choice(n_pairs, n_sample, replace=False)
-        triu_i, triu_j = triu_i[idx], triu_j[idx]
-
-    dists = D[triu_i, triu_j]
-    delta_y = np.abs(y[triu_i] - y[triu_j])
-
-    rho, p = spearmanr(dists, delta_y)
-    return float(rho), float(p)
-
-
-def violation_rate(D, y, k=5):
-    """Fraction of k-NN pairs where |delta_y| > median(|delta_y|) dataset-wide.
-
-    High = neighbors are NOT activity-similar.
-    """
-    n = len(y)
-    k = min(k, n - 1)
-
-    indices, _ = get_k_neighbors_from_distances(D, k)
-
-    # Compute all pairwise |delta_y| to get dataset median
-    triu_i, triu_j = np.triu_indices(n, k=1)
-    if len(triu_i) > 50000:
-        rng = np.random.RandomState(42)
-        sample_idx = rng.choice(len(triu_i), 50000, replace=False)
-        all_delta = np.abs(y[triu_i[sample_idx]] - y[triu_j[sample_idx]])
-    else:
-        all_delta = np.abs(y[triu_i] - y[triu_j])
-    median_delta = np.median(all_delta)
-
-    # Check k-NN pairs
-    n_violations = 0
-    n_total = 0
-    for i in range(n):
-        for j_idx in range(k):
-            j = indices[i, j_idx]
-            if np.abs(y[i] - y[j]) > median_delta:
-                n_violations += 1
-            n_total += 1
-
-    return float(n_violations / n_total) if n_total > 0 else 0.0
+from kirby.utils.noise_mitigation_methods import compute_distance_matrix
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -112,6 +52,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     reps = data['reps']
     labels = data['labels']
     groups = data['groups']
+    augmentations = data.get('augmentations')
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     task_type = data.get('task_type', 'regression')
@@ -182,8 +123,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         # Prediction quality: RF R2 (CV) -- use search blueprint's method
         bp = search.best_overall['blueprint'] if search.best_overall else None
-        alloc = bp.allocation_method if bp else 'greedy'
-        imp_method = bp.importance_method if bp else 'lightgbm_gain'
+        if bp is None:
+            print(f"    No blueprint at budget={budget}, skipping prediction")
+            continue
 
         rf_scores = []
         knn_scores = []
@@ -192,15 +134,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             train_reps_fold = {name: rep[train_idx] for name, rep in reps.items()}
             val_reps_fold = {name: rep[val_idx] for name, rep in reps.items()}
+            aug_tr = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
+            aug_va = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
 
             try:
-                X_tr_h, feat_info = create_hybrid(
-                    train_reps_fold, y_train,
-                    allocation_method=alloc,
-                    budget=budget,
-                    importance_method=imp_method,
-                )
-                X_va_h = apply_feature_selection(val_reps_fold, feat_info)
+                X_tr_h, X_va_h, feat_info = build_fold_hybrid(
+                    train_reps_fold, val_reps_fold, y_train, bp,
+                    augmentations_train=aug_tr, augmentations_val=aug_va)
             except Exception:
                 continue
 

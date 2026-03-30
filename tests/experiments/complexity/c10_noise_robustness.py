@@ -18,6 +18,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     get_model_factories, _cv_split,
     apply_feature_selection, get_domain_metric,
+    get_precomputed_search,
 )
 from kirby.hybrid import create_hybrid, apply_augmentation_selection
 
@@ -51,8 +52,24 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
     reps = data['reps']
     labels = data['labels']
     groups = data['groups']
+    augmentations = data.get('augmentations') or {}
     budgets = config['budgets']
     n_folds = config['n_splits']
+
+    # Precompute blueprints from cached search (clean labels)
+    blueprints = {}
+    for budget in budgets:
+        try:
+            search = get_precomputed_search(
+                reps, labels, groups, budget=budget,
+                aug_condition='capped', augmentations=augmentations or None,
+                speed=config.get('search_speed', 'fast'))
+            blueprints[budget] = search.best_overall['blueprint']
+            print(f"  Blueprint for budget={budget}: "
+                  f"{blueprints[budget].allocation_method}, "
+                  f"{blueprints[budget].importance_method}")
+        except Exception as e:
+            print(f"  Blueprint for budget={budget} failed: {e}")
 
     if sigmas is None:
         sigmas = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
@@ -148,17 +165,18 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                     train_reps = {k: v[train_idx] for k, v in reps.items()}
                     val_reps = {k: v[val_idx] for k, v in reps.items()}
 
-                    augs_full = data.get('augmentations') or {}
-                    train_augs = {k: v[train_idx] for k, v in augs_full.items()} or None
-                    val_augs = {k: v[val_idx] for k, v in augs_full.items()} or None
+                    train_augs = {k: v[train_idx] for k, v in augmentations.items()} or None
+                    val_augs = {k: v[val_idx] for k, v in augmentations.items()} or None
                     try:
+                        bp = blueprints[budget]
                         X_train, fi = create_hybrid(
                             train_reps, y_train,
-                            allocation_method='entropy_1.0',
-                            budget=budget,
-                            importance_method='treeshap',
+                            allocation_method=bp.allocation_method,
+                            budget=bp.budget,
+                            importance_method=bp.importance_method,
+                            internal_evaluator=bp.internal_evaluator,
                             augmentations=train_augs,
-                            augmentation_strategy='capped',
+                            augmentation_strategy=bp.augmentation_strategy,
                         )
                         X_val = apply_feature_selection(val_reps, fi)
                         aug_info = fi.get('augmentation_info', {})
@@ -243,15 +261,17 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                     y_train = noise_injector.inject(y_train, sigma=sigma)
 
                 train_reps = {k: v[train_idx] for k, v in reps.items()}
-                train_augs_stab = {k: v[train_idx] for k, v in (data.get('augmentations') or {}).items()} or None
+                train_augs_stab = {k: v[train_idx] for k, v in augmentations.items()} or None
                 try:
+                    bp_stab = blueprints[budget_for_stability]
                     _, fi = create_hybrid(
                         train_reps, y_train,
-                        allocation_method='entropy_1.0',
-                        budget=budget_for_stability,
-                        importance_method='treeshap',
+                        allocation_method=bp_stab.allocation_method,
+                        budget=bp_stab.budget,
+                        importance_method=bp_stab.importance_method,
+                        internal_evaluator=bp_stab.internal_evaluator,
                         augmentations=train_augs_stab,
-                        augmentation_strategy='capped',
+                        augmentation_strategy=bp_stab.augmentation_strategy,
                     )
                     # Collect selected feature identifiers: (rep_name, feature_idx) tuples
                     selected = set()

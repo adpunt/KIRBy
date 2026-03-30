@@ -217,11 +217,15 @@ def run_geometry_survey(
     if len(all_reps_for_hybrid) >= 2:
         try:
             from kirby.find_best_hybrid import find_best_hybrid
+            from kirby.hybrid import apply_feature_selection
             search = find_best_hybrid(
                 base_reps=all_reps_for_hybrid, labels=labels, groups=groups,
                 speed='fast', return_fitted=True, verbose=False, cache=True)
             if search.fitted_result is not None:
-                geo_reps['kirby_hybrid'] = search.fitted_result.X_hybrid
+                fi = {r: {'selected_indices': idx}
+                      for r, idx in search.fitted_result.selected_indices.items()}
+                geo_reps['kirby_hybrid'] = apply_feature_selection(
+                    all_reps_for_hybrid, fi)
                 print(f"  Hybrid built: {geo_reps['kirby_hybrid'].shape[1]}D")
         except Exception as e:
             print(f"  Hybrid build failed: {e}")

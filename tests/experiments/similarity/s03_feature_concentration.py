@@ -20,7 +20,7 @@ from sklearn.preprocessing import StandardScaler
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results,
-    get_hybrid_features_and_weights,
+    get_fitted_hybrid, flatten_weights,
     estimate_mutual_information_knn, compute_effective_rank,
 )
 
@@ -39,8 +39,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("=" * 70)
 
     weight_methods = kwargs.get('weight_methods', ['lightgbm_gain'])
-    shared_search = kwargs.get('shared_search', None)
-    search_speed = config['search_speed']
+    search_speed = config.get('search_speed', 'fast')
 
     reps = data['reps']
     labels = data['labels']
@@ -49,24 +48,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results = {'per_rep': {}, 'gini': {}}
 
     # Get hybrid selection
-    if shared_search is not None:
-        X_hybrid, weights_flat, search = shared_search
+    budget = kwargs.get('budget', 100)
+    augmentations = data.get('augmentations')
+    try:
+        X_hybrid, fi, search = get_fitted_hybrid(
+            reps, labels, groups, budget=budget,
+            aug_condition='uncapped', augmentations=augmentations,
+            speed=search_speed)
         fitted = search.fitted_result
-        print(f"  Using shared search (dim={X_hybrid.shape[1]})")
-    else:
-        # Try to load S02 results to get blueprint info (optional)
-        s02_results = load_experiment_results(output_dir, 's02_hybrid_similarity', dataset_name)
-        if s02_results and not s02_results.get('error'):
-            print("  Found S02 results (informational only, re-running search)")
-
-        try:
-            X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-                reps, labels, groups, search_speed, weight_methods[0],
-                augmentations=data.get('augmentations'))
-            fitted = search.fitted_result
-        except Exception as e:
-            print(f"  find_best_hybrid failed: {e}")
-            return {'error': str(e)}
+        weights_flat = flatten_weights(fitted) if fitted else np.ones(X_hybrid.shape[1])
+    except Exception as e:
+        print(f"  find_best_hybrid failed: {e}")
+        return {'error': str(e)}
 
     rng = np.random.RandomState(42)
 

@@ -33,8 +33,7 @@ from experiments._shared import (
     cv_split, get_domain_metric, get_model_factories,
     compute_feature_importance,
 )
-from kirby.hybrid import create_hybrid
-from kirby.hybrid import apply_feature_selection
+from experiments._shared import get_fitted_hybrid
 
 
 # =========================================================================
@@ -43,7 +42,8 @@ from kirby.hybrid import apply_feature_selection
 
 def _compute_importance_weights(X, y, method='lightgbm_gain'):
     """Compute normalised sqrt-importance weights for features."""
-    imp = compute_feature_importance(X, y, method=method)
+    imp_dict = compute_feature_importance({'_features': X}, y, method=method)
+    imp = imp_dict['_features']
     w = np.sqrt(np.maximum(imp, 0))
     w = w / (w.sum() + 1e-10)
     return w
@@ -119,13 +119,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # 2. Hybrid
     augmentations = data.get('augmentations')
     try:
-        X_hybrid, fi = create_hybrid(
-            reps, labels,
-            allocation_method='entropy_1.0',
-            importance_method='lightgbm_gain',
-            budget=budget,
-            augmentations=augmentations,
-            augmentation_strategy='capped',
+        X_hybrid, fi, _search = get_fitted_hybrid(
+            reps, labels, groups, budget=budget,
+            aug_condition='capped', augmentations=augmentations,
+            speed=config.get('search_speed', 'fast'),
         )
         input_spaces['hybrid'] = X_hybrid
     except Exception as e:

@@ -62,7 +62,7 @@ from sklearn.model_selection import GroupShuffleSplit, ShuffleSplit
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy, get_domain_metric,
-    make_structured_output,
+    make_structured_output, get_precomputed_search,
 )
 
 from sklearn.gaussian_process.kernels import Kernel, Hyperparameter
@@ -396,20 +396,30 @@ def build_pca_features(reps, seed_idx, pool_idx, n_components=50):
     return X_seed_pca, X_pool_pca, n_comp
 
 
-def build_hybrid_features(reps, labels, seed_idx, pool_idx, budget=50):
+def build_hybrid_features(reps, labels, seed_idx, pool_idx, budget=50, bp=None):
     """Build KIRBy hybrid on seed set and transform pool.
 
-    Returns (X_seed, X_pool, actual_dim, feature_info).
+    Args:
+        bp: Blueprint from search. If provided, uses blueprint params instead
+            of hardcoded defaults.
+
+    Returns (X_seed, X_pool, actual_dim, feature_info, scaler).
     """
     seed_reps = {k: v[seed_idx] for k, v in reps.items()}
     pool_reps = {k: v[pool_idx] for k, v in reps.items()}
     y_seed = labels[seed_idx]
 
+    alloc = bp.allocation_method if bp else 'entropy_1.0'
+    imp = bp.importance_method if bp else 'lightgbm_gain'
+    int_eval = bp.internal_evaluator if bp else 'ridge'
+    bgt = bp.budget if bp else budget
+
     X_seed, feature_info = create_hybrid(
         seed_reps, y_seed,
-        allocation_method='entropy_1.0',
-        importance_method='lightgbm_gain',
-        budget=budget,
+        allocation_method=alloc,
+        importance_method=imp,
+        internal_evaluator=int_eval,
+        budget=bgt,
     )
     X_pool = apply_feature_selection(pool_reps, feature_info)
 
@@ -536,6 +546,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if n_samples < 200:
         print(f"  Skipping S11: n={n_samples} < 200 (BO seed set too small for greedy allocation)")
         return {'error': 'dataset_too_small', 'n_samples': n_samples}
+
+    # Get blueprint from cached search (used by hybrid conditions)
+    try:
+        search = get_precomputed_search(
+            reps, labels, groups, budget=hybrid_budget,
+            aug_condition='none', speed=config.get('search_speed', 'fast'))
+        bp = search.best_overall['blueprint']
+    except Exception:
+        bp = None
 
     # Domain-aware metric for determining "lower_is_better"
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
@@ -709,7 +728,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         # BO with periodic hybrid rebuilding
                         curve, gp_fail = _run_bo_with_rebuild(
                             reps, y_bo, seed_idx, pool_idx,
-                            max_iterations, hybrid_budget, rebuild_interval)
+                            max_iterations, hybrid_budget, rebuild_interval,
+                            rng=rng, bp=bp)
                         all_curves.append(curve)
                         total_gp_failures += gp_fail
                         best_final = curve[-1] if curve else float('nan')
@@ -719,13 +739,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     else:
                         X_seed, X_pool, dim, _, _ = build_hybrid_features(
                             reps, y_bo, seed_idx, pool_idx,
-                            budget=hybrid_budget)
+                            budget=hybrid_budget, bp=bp)
 
                 elif condition == 'hybrid_50d_refit':
                     # Always rebuild hybrid every 25 iterations
                     curve, gp_fail = _run_bo_with_rebuild(
                         reps, y_bo, seed_idx, pool_idx,
-                        max_iterations, hybrid_budget, 25)
+                        max_iterations, hybrid_budget, 25,
+                        rng=rng, bp=bp)
                     all_curves.append(curve)
                     total_gp_failures += gp_fail
                     best_final = curve[-1] if curve else float('nan')
@@ -748,7 +769,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 elif condition == 'multi_obj_hybrid':
                     X_seed, X_pool, dim, _, _ = build_hybrid_features(
                         reps, y_cond, seed_idx, pool_idx,
-                        budget=hybrid_budget)
+                        budget=hybrid_budget, bp=bp)
 
                 elif condition == 'multi_obj_random':
                     curve = run_random_loop(y_seed, y_pool, max_iterations, rng)
@@ -881,14 +902,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 # =============================================================================
 
 def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
-                         max_iterations, hybrid_budget, rebuild_interval):
+                         max_iterations, hybrid_budget, rebuild_interval,
+                         rng=None, bp=None):
     """BO loop with periodic hybrid rebuilding.
 
     Every rebuild_interval iterations, re-create the hybrid using all
     labeled data accumulated so far, and re-transform the remaining pool.
+
+    Args:
+        bp: Blueprint from search. If provided, uses blueprint params instead
+            of hardcoded defaults.
     """
+    if rng is None:
+        rng = np.random.RandomState(42)
     y_seed = y_bo[seed_idx]
     y_pool = y_bo[pool_idx]
+
+    alloc = bp.allocation_method if bp else 'entropy_1.0'
+    imp = bp.importance_method if bp else 'lightgbm_gain'
+    int_eval = bp.internal_evaluator if bp else 'ridge'
+    bgt = bp.budget if bp else hybrid_budget
 
     # Initial hybrid build
     seed_reps = {k: v[seed_idx] for k, v in reps.items()}
@@ -896,9 +929,10 @@ def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
 
     X_seed, feature_info = create_hybrid(
         seed_reps, y_seed,
-        allocation_method='entropy_1.0',
-        importance_method='lightgbm_gain',
-        budget=hybrid_budget,
+        allocation_method=alloc,
+        importance_method=imp,
+        internal_evaluator=int_eval,
+        budget=bgt,
     )
     X_pool_all = apply_feature_selection(pool_reps_all, feature_info)
 
@@ -928,9 +962,10 @@ def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
 
                 X_lab_new, feature_info = create_hybrid(
                     lab_reps, y_lab,
-                    allocation_method='entropy_1.0',
-                    importance_method='lightgbm_gain',
-                    budget=hybrid_budget,
+                    allocation_method=alloc,
+                    importance_method=imp,
+                    internal_evaluator=int_eval,
+                    budget=bgt,
                 )
                 X_remaining = apply_feature_selection(remaining_reps, feature_info)
 

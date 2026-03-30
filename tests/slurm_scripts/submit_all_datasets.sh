@@ -23,7 +23,7 @@ GINKGO="ginkgo_acsins ginkgo_colloidal ginkgo_heparin ginkgo_hic ginkgo_pr_cho g
 REACTION="buchwald_hartwig bh_doyle_plates"
 TCGA="tcga_luad_vs_lusc tcga_brca_pam50"
 
-# Federated-eligible datasets (grows as fed02-fed06 add support)
+# Federated-eligible datasets (grows as fed02-fed05 add support)
 FEDERATED_DATASETS="herg caco2 logd"
 
 # ── Job name prefix ────────────────────────────────────────────────────

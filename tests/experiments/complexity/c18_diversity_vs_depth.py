@@ -31,8 +31,7 @@ from experiments._shared import (
     estimate_mutual_information_knn, compute_effective_rank,
     compute_feature_importance,
 )
-from kirby.hybrid import create_hybrid
-from kirby.hybrid import apply_feature_selection
+from experiments._shared import get_fitted_hybrid
 
 
 # =========================================================================
@@ -41,21 +40,8 @@ from kirby.hybrid import apply_feature_selection
 
 def _rank_reps_by_importance(reps, labels):
     """Rank reps by aggregate importance. Returns sorted list of (name, score)."""
-    # Concat all, get importance, aggregate per rep
-    rep_names = sorted(reps.keys())
-    X_concat = np.hstack([reps[n] for n in rep_names])
-    scaler = StandardScaler()
-    X_s = scaler.fit_transform(X_concat)
-    imp = compute_feature_importance(X_s, labels, method='lightgbm_gain')
-
-    # Map feature indices back to reps
-    rep_scores = {}
-    offset = 0
-    for name in rep_names:
-        dim = reps[name].shape[1]
-        rep_scores[name] = float(np.sum(imp[offset:offset + dim]))
-        offset += dim
-
+    imp_dict = compute_feature_importance(reps, labels, method='lightgbm_gain')
+    rep_scores = {name: float(np.sum(scores)) for name, scores in imp_dict.items()}
     ranked = sorted(rep_scores.items(), key=lambda x: x[1], reverse=True)
     return ranked
 
@@ -66,14 +52,18 @@ def _select_top_features_from_reps(reps, labels, rep_subset, budget):
     if not sub_reps:
         return None
 
-    X_concat = np.hstack([sub_reps[n] for n in sorted(sub_reps.keys())])
+    rep_names = sorted(sub_reps.keys())
+    imp_dict = compute_feature_importance(sub_reps, labels, method='lightgbm_gain')
+
+    # Concatenate features and importance in consistent order
+    X_concat = np.hstack([sub_reps[n] for n in rep_names])
     scaler = StandardScaler()
     X_s = scaler.fit_transform(X_concat)
-    imp = compute_feature_importance(X_s, labels, method='lightgbm_gain')
+    imp_concat = np.concatenate([imp_dict[n] for n in rep_names])
 
     # Select top-budget features
     n_select = min(budget, X_s.shape[1])
-    top_idx = np.argsort(imp)[::-1][:n_select]
+    top_idx = np.argsort(imp_concat)[::-1][:n_select]
     return X_s[:, top_idx]
 
 
@@ -88,7 +78,8 @@ def _forced_uniform_allocation(reps, labels, rep_subset, budget):
 
     for name in sub_names:
         X = StandardScaler().fit_transform(reps[name])
-        imp = compute_feature_importance(X, labels, method='lightgbm_gain')
+        imp_dict = compute_feature_importance({name: reps[name]}, labels, method='lightgbm_gain')
+        imp = imp_dict[name]
         n_sel = min(per_rep, X.shape[1])
         top_idx = np.argsort(imp)[::-1][:n_sel]
         selected_parts.append(X[:, top_idx])
@@ -196,13 +187,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Natural hybrid allocation (greedy)
         augmentations = data.get('augmentations')
         try:
-            X_h, fi = create_hybrid(
-                reps, labels,
-                allocation_method='entropy_1.0',
-                importance_method='lightgbm_gain',
-                budget=budget,
-                augmentations=augmentations,
-                augmentation_strategy='capped',
+            X_h, fi, _search = get_fitted_hybrid(
+                reps, labels, groups, budget=budget,
+                aug_condition='capped', augmentations=augmentations,
+                speed=config.get('search_speed', 'fast'),
             )
             metrics = _evaluate(X_h, labels, groups, n_folds, mode, metric_fn)
             # Count how many reps contributed

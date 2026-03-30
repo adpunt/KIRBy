@@ -45,12 +45,9 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric,
-    apply_feature_selection,
     compute_effective_rank,
+    get_fitted_hybrid, get_precomputed_search, build_fold_hybrid,
 )
-from kirby.hybrid import create_hybrid
-# TODO: create_hybrid API not finalised — allocation_method / importance_method
-#       semantics may change after framework experiments. Revisit call sites below.
 
 
 # =========================================================================
@@ -71,6 +68,7 @@ def _run_distance_concentration(data, budgets):
 
     reps = data['reps']
     labels = data['labels']
+    groups = data['groups']
     n_samples = len(labels)
 
     results = {'per_rep': {}, 'per_budget': {}, 'concat': {}}
@@ -105,12 +103,9 @@ def _run_distance_concentration(data, budgets):
     print(f"\n    Budget sweep (hybrid):")
     for budget in sorted(budgets):
         try:
-            X_hybrid, _ = create_hybrid(
-                reps, labels,
-                allocation_method='entropy_1.0',
-                importance_method='lightgbm_gain',
-                budget=budget,
-            )
+            X_hybrid, _, _search = get_fitted_hybrid(
+                reps, labels, groups, budget=budget,
+                aug_condition='none', speed='fast')
             X_hybrid_s = StandardScaler().fit_transform(X_hybrid)
             metrics = _compute_concentration_metrics(X_hybrid_s, k=5)
             results['per_budget'][budget] = {
@@ -259,6 +254,7 @@ def _run_kernel_analysis(data, budgets):
 
     reps = data['reps']
     labels = data['labels']
+    groups = data['groups']
     n_samples = len(labels)
 
     # Subsample for computational feasibility (kernel matrix is n×n)
@@ -300,13 +296,9 @@ def _run_kernel_analysis(data, budgets):
     print(f"\n    Budget sweep (hybrid kernel):")
     for budget in sorted(budgets):
         try:
-            full_reps = data['reps']
-            X_hybrid, feat_info = create_hybrid(
-                full_reps, data['labels'],
-                allocation_method='entropy_1.0',
-                importance_method='lightgbm_gain',
-                budget=budget,
-            )
+            X_hybrid, _, _search = get_fitted_hybrid(
+                reps, labels, groups, budget=budget,
+                aug_condition='none', speed='fast')
             # Subsample to match
             X_hybrid_sub = X_hybrid[idx] if n_samples > max_n else X_hybrid
             X_hybrid_s = StandardScaler().fit_transform(X_hybrid_sub)
@@ -335,12 +327,9 @@ def _run_kernel_analysis(data, budgets):
     sweep_spaces['concat'] = X_concat_s
     if 50 in results['per_budget']:
         try:
-            X_h50, _ = create_hybrid(
-                data['reps'], data['labels'],
-                allocation_method='entropy_1.0',
-                importance_method='lightgbm_gain',
-                budget=50,
-            )
+            X_h50, _, _search = get_fitted_hybrid(
+                reps, labels, groups, budget=50,
+                aug_condition='none', speed='fast')
             X_h50_sub = X_h50[idx] if n_samples > max_n else X_h50
             sweep_spaces['hybrid_b50'] = StandardScaler().fit_transform(X_h50_sub)
         except Exception:
@@ -613,21 +602,21 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
         make_model = lambda: RandomForestRegressor(
             n_estimators=100, max_depth=None, random_state=42, n_jobs=-1)
 
+    # Get blueprint from cached search
+    search = get_precomputed_search(reps, labels, groups, budget=budget,
+                                    aug_condition='none', speed='fast')
+    bp = search.best_overall['blueprint']
+
     scores = []
     sample_X = next(iter(reps.values()))
     for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, mode=mode):
         train_reps = {k: v[train_idx] for k, v in reps.items()}
-        val_reps = {k: v[val_idx] for k, v in reps.items()}
+        val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
         y_train, y_val = labels[train_idx], labels[val_idx]
 
         try:
-            X_train, feat_info = create_hybrid(
-                train_reps, y_train,
-                allocation_method='entropy_1.0',
-                importance_method='lightgbm_gain',
-                budget=budget,
-            )
-            X_val = apply_feature_selection(val_reps, feat_info)
+            X_train, X_val, feat_info = build_fold_hybrid(
+                train_reps, val_reps_fold, y_train, bp)
 
             scaler = StandardScaler()
             X_train_s = scaler.fit_transform(X_train)
@@ -851,6 +840,11 @@ def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
     """
     from sklearn.linear_model import Ridge
 
+    # Get blueprint from cached search using REAL labels
+    search = get_precomputed_search(reps, y, groups, budget=budget,
+                                    aug_condition='none', speed='fast')
+    bp = search.best_overall['blueprint']
+
     sample_X = next(iter(reps.values()))
     folds = list(cv_split(groups, n_folds, sample_X, y, mode=mode))
 
@@ -861,14 +855,10 @@ def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
         for train_idx, val_idx in folds:
             try:
                 train_reps = {k: v[train_idx] for k, v in reps.items()}
-                # Create hybrid using REAL train labels (supervised selection)
+                # Build hybrid using REAL train labels (supervised selection)
                 # but evaluate memorization on RANDOM labels
-                X_train_hyb, _ = create_hybrid(
-                    train_reps, y[train_idx],
-                    allocation_method='entropy_1.0',
-                    importance_method='lightgbm_gain',
-                    budget=budget,
-                )
+                X_train_hyb, _, _fi = build_fold_hybrid(
+                    train_reps, train_reps, y[train_idx], bp)
                 scaler = StandardScaler()
                 X_train_s = scaler.fit_transform(X_train_hyb)
                 model = Ridge(alpha=1.0)

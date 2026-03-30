@@ -37,11 +37,11 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, make_structured_output, convert_numpy,
     get_model_factories, get_domain_metric, cv_split, make_cv_splitter,
+    get_hybrid_features_and_weights, build_fold_hybrid,
 )
 
 from kirby.hybrid import apply_feature_selection, compute_feature_importance
 from kirby.hybrid import create_hybrid
-# TODO: create_hybrid API not finalised — revisit after framework experiments.
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix, ActivityCliffDetector
 
 
@@ -484,15 +484,11 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
         def _get_hybrid(tr, va, yt):
             train_reps = {name: rep[tr] for name, rep in reps.items()}
             val_reps = {name: rep[va] for name, rep in reps.items()}
-            X_tr_h, feat_info = create_hybrid(
-                train_reps, yt,
-                allocation_method=hybrid_blueprint.allocation_method,
-                budget=hybrid_blueprint.budget,
-                importance_method=hybrid_blueprint.importance_method,
-                augmentations=augmentations,
-                augmentation_strategy=augmentation_strategy,
-            )
-            X_va_h = apply_feature_selection(val_reps, feat_info)
+            train_augs = {k: v[tr] for k, v in augmentations.items()} if augmentations else None
+            val_augs = {k: v[va] for k, v in augmentations.items()} if augmentations else None
+            X_tr_h, X_va_h, _ = build_fold_hybrid(
+                train_reps, val_reps, yt, hybrid_blueprint,
+                augmentations_train=train_augs, augmentations_val=val_augs)
             return X_tr_h, X_va_h
 
         res = _evaluate_condition(_get_hybrid, 'hybrid')
@@ -556,13 +552,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Sim threshold: {sim_threshold}  Activity threshold: {activity_threshold} MAD")
 
     # --- Build hybrid for sub-analyses 2, 3, 4 ---
+    augmentations = data.get('augmentations')
     hybrid_blueprint = None
     X_hybrid = None
 
     try:
-        from experiments._shared import get_hybrid_features_and_weights
         X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-            reps, labels, groups, search_speed, 'lightgbm_gain')
+            reps, labels, groups, search_speed, 'lightgbm_gain',
+            augmentations=augmentations)
         if search.best_overall:
             hybrid_blueprint = search.best_overall['blueprint']
         print(f"  Hybrid: dim={X_hybrid.shape[1]}")
@@ -624,7 +621,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         reps, labels, X_hybrid, sim_threshold, activity_threshold)
 
     # --- Sub-analysis 4: Cliff-stratified prediction error ---
-    augmentations = data.get('augmentations')
     augmentation_strategy = 'uncapped'
     results['stratified'] = _run_cliff_stratified(
         reps, labels, groups, config, data,

@@ -180,6 +180,38 @@ def run_all(dataset_name: str, output_dir: str,
     else:
         data['augmentations'] = None
 
+    # ── Precompute hybrid searches (general reps) ──
+    if len(reps_data) >= 2:
+        from experiments._shared import precompute_hybrid_searches
+        print(f"\n  Precomputing hybrid searches (general, {len(reps_data)} reps)...")
+        precompute_results = precompute_hybrid_searches(
+            reps=reps_data,
+            labels=data['labels'],
+            groups=data.get('groups'),
+            config=config,
+            augmentations=data.get('augmentations'),
+        )
+        data['precomputed_searches'] = precompute_results
+    else:
+        data['precomputed_searches'] = {}
+
+    # ── Precompute hybrid searches (top-tier reps) ──
+    top_tier_names = DATASET_REPS.get(dataset_name, {}).get('top_tier', [])
+    top_tier_reps = {k: v for k, v in reps_data.items() if k in top_tier_names}
+    data['top_tier_reps'] = top_tier_reps
+    if len(top_tier_reps) >= 2:
+        print(f"\n  Precomputing hybrid searches (top-tier, {len(top_tier_reps)} reps)...")
+        precompute_top = precompute_hybrid_searches(
+            reps=top_tier_reps,
+            labels=data['labels'],
+            groups=data.get('groups'),
+            config=config,
+            augmentations=data.get('augmentations'),
+        )
+        data['precomputed_searches_top'] = precompute_top
+    else:
+        data['precomputed_searches_top'] = {}
+
     # ── Run experiments ──
     results = {}
     for exp_id in experiments:

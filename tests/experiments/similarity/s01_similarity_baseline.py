@@ -17,98 +17,17 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
-from scipy.stats import spearmanr
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results,
 )
-
-from kirby.hybrid import compute_feature_importance
-from kirby.utils.noise_mitigation_methods import (
-    compute_distance_matrix, get_k_neighbors_from_distances,
+from experiments.similarity.similarity_helpers import (
+    similarity_activity_correlation, compute_sali, violation_rate,
 )
 
-
-# =============================================================================
-# LOCAL METRIC FUNCTIONS
-# =============================================================================
-
-def similarity_activity_correlation(D, y, n_sample=5000):
-    """Spearman correlation between pairwise distance and |delta_y|.
-
-    Positive = good (large distance -> large activity difference means the
-    representation preserves the structure-activity relationship).
-    Returns (rho, p_value).
-    """
-    n = len(y)
-    triu_i, triu_j = np.triu_indices(n, k=1)
-    n_pairs = len(triu_i)
-
-    if n_pairs > n_sample:
-        rng = np.random.RandomState(42)
-        idx = rng.choice(n_pairs, n_sample, replace=False)
-        triu_i, triu_j = triu_i[idx], triu_j[idx]
-
-    dists = D[triu_i, triu_j]
-    delta_y = np.abs(y[triu_i] - y[triu_j])
-
-    rho, p = spearmanr(dists, delta_y)
-    return float(rho), float(p)
-
-
-def compute_sali(D, y, eps=1e-6):
-    """SALI: |y_i - y_j| / (1 - sim(i,j)), sim = 1/(1+d).
-
-    Returns per-sample max SALI and summary stats.
-    """
-    n = len(y)
-    sim = 1.0 / (1.0 + D)
-    np.fill_diagonal(sim, 0)
-
-    delta_y = np.abs(y[:, None] - y[None, :])
-    denom = 1.0 - sim + eps
-    sali_matrix = delta_y / denom
-    np.fill_diagonal(sali_matrix, 0)
-
-    per_sample_max = sali_matrix.max(axis=1)
-    per_sample_mean = sali_matrix.mean(axis=1)
-
-    return {
-        'mean': float(np.mean(per_sample_max)),
-        'max': float(np.max(per_sample_max)),
-        'std': float(np.std(per_sample_max)),
-        'median': float(np.median(per_sample_max)),
-        'per_sample_mean_avg': float(np.mean(per_sample_mean)),
-    }
-
-
-def violation_rate(D, y, k=5):
-    """Fraction of k-NN pairs where |delta_y| > median(|delta_y|)."""
-    n = len(y)
-    k = min(k, n - 1)
-
-    indices, _ = get_k_neighbors_from_distances(D, k)
-
-    triu_i, triu_j = np.triu_indices(n, k=1)
-    if len(triu_i) > 50000:
-        rng = np.random.RandomState(42)
-        sample_idx = rng.choice(len(triu_i), 50000, replace=False)
-        all_delta = np.abs(y[triu_i[sample_idx]] - y[triu_j[sample_idx]])
-    else:
-        all_delta = np.abs(y[triu_i] - y[triu_j])
-    median_delta = np.median(all_delta)
-
-    n_violations = 0
-    n_total = 0
-    for i in range(n):
-        for j_idx in range(k):
-            j = indices[i, j_idx]
-            if np.abs(y[i] - y[j]) > median_delta:
-                n_violations += 1
-            n_total += 1
-
-    return float(n_violations / n_total) if n_total > 0 else 0.0
+from kirby.hybrid import compute_feature_importance
+from kirby.utils.noise_mitigation_methods import compute_distance_matrix
 
 
 # =============================================================================

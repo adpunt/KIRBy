@@ -280,6 +280,7 @@ def evaluate_dataset(rep_names, n_folds):
     # augmentation = [] (no augmentation reps for antibody classification)
     try:
         from kirby.find_best_hybrid import find_best_hybrid
+        from kirby.hybrid import apply_feature_selection
         search = find_best_hybrid(
             base_reps=reps,
             labels=labels, groups=groups,
@@ -288,7 +289,9 @@ def evaluate_dataset(rep_names, n_folds):
             augmentation_strategy='uncapped',
             speed='fast', return_fitted=True, verbose=False, cache=True)
         if search.fitted_result is not None:
-            reps['kirby_hybrid'] = search.fitted_result.X_hybrid
+            fi = {r: {'selected_indices': idx}
+                  for r, idx in search.fitted_result.selected_indices.items()}
+            reps['kirby_hybrid'] = apply_feature_selection(reps, fi)
             print(f"  kirby_hybrid: {reps['kirby_hybrid'].shape[1]}D (hybrid)")
     except Exception as e:
         print(f"  Hybrid build failed: {e}")

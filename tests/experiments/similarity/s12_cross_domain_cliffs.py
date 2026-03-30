@@ -26,10 +26,10 @@ from sklearn.neighbors import NearestNeighbors
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    cv_split, get_domain_metric, get_model_factories, get_hybrid_features_and_weights,
+    cv_split, get_domain_metric, get_model_factories, get_precomputed_search,
+    build_fold_hybrid,
 )
 from kirby.hybrid import create_hybrid
-# TODO: create_hybrid API not finalised — revisit after framework experiments.
 from kirby.hybrid import apply_feature_selection
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
 
@@ -104,6 +104,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     reps = data['reps']
     labels = data['labels']
     groups = data['groups']
+    augmentations = data.get('augmentations')
     domain = data.get('domain', 'molecular')
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
@@ -141,14 +142,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         return {'error': 'no_cliffs_found', 'cliff_info': cliff_info}
 
     # Get hybrid blueprint
-    shared_search = kwargs.get('shared_search')
+    budget = kwargs.get('budget', 100)
     try:
-        if shared_search is not None:
-            _, _, search = shared_search
-        else:
-            _, _, search = get_hybrid_features_and_weights(
-                reps, labels, groups, search_speed, 'lightgbm_gain',
-                augmentations=data.get('augmentations'))
+        search = get_precomputed_search(
+            reps, labels, groups, budget=budget,
+            aug_condition='uncapped', augmentations=data.get('augmentations'),
+            speed=search_speed)
         bp = search.best_overall['blueprint']
     except Exception as e:
         print(f"  Hybrid search failed: {e}")
@@ -191,17 +190,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     hybrid_cliff_scores = []
     hybrid_noncliff_scores = []
     for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, mode=mode):
-        train_reps = {k: v[train_idx] for k, v in reps.items()}
-        val_reps = {k: v[val_idx] for k, v in reps.items()}
+        train_reps_h = {k: v[train_idx] for k, v in reps.items()}
+        val_reps_h = {k: v[val_idx] for k, v in reps.items()}
+        aug_tr = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
+        aug_va = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
 
         try:
-            X_tr_h, fi = create_hybrid(
-                train_reps, labels[train_idx],
-                allocation_method=bp.allocation_method,
-                budget=bp.budget,
-                importance_method=bp.importance_method,
-            )
-            X_va_h = apply_feature_selection(val_reps, fi)
+            X_tr_h, X_va_h, fi = build_fold_hybrid(
+                train_reps_h, val_reps_h, labels[train_idx], bp,
+                augmentations_train=aug_tr, augmentations_val=aug_va)
         except Exception:
             continue
 
