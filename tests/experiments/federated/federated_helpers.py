@@ -44,10 +44,11 @@ import builtins
 _original_display = getattr(builtins, 'display', None)
 builtins.display = lambda *a, **kw: None
 
-_fluid_path = os.environ.get(
-    'FLUID_PATH',
-    '/Users/apunt/repos/lhasa/FLuID_POC/preprocessing',
-)
+_fluid_default = '/Users/apunt/repos/lhasa/FLuID_POC/preprocessing'
+_fluid_server = '/data/stat-cadd/scat9264/FLuID_POC/preprocessing'
+if os.path.isdir(_fluid_server):
+    _fluid_default = _fluid_server
+_fluid_path = os.environ.get('FLUID_PATH', _fluid_default)
 sys.path.insert(0, _fluid_path)
 
 try:
