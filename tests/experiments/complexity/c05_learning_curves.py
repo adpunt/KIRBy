@@ -32,7 +32,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
-    models = get_model_factories(config['models'])
+    models = get_model_factories(config['models'],
+                                    task_type=data.get('task_type', 'regression'),
+                                    n_samples=len(data['labels']))
     n_folds = config['n_splits']
     search_speed = config.get('search_speed', 'fast')
     sweep_budgets = config.get('budgets', [25, 50, 100, 200, 500])

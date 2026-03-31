@@ -33,7 +33,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("EXPERIMENT C02: COMPLEXITY MATCHING GRID")
     print("=" * 70)
 
-    models = get_model_factories(config['models'])
+    models = get_model_factories(config['models'],
+                                    task_type=data.get('task_type', 'regression'),
+                                    n_samples=len(data['labels']))
     budgets = config['budgets']
     allocation_methods = config['allocations']
     importance_methods = config['importance_methods']

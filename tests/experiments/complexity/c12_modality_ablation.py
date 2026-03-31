@@ -397,7 +397,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if task_type == 'classification':
         model_factories = get_clf_model_factories(model_names)
     else:
-        model_factories = get_model_factories(model_names)
+        model_factories = get_model_factories(model_names,
+                                                task_type=task_type,
+                                                n_samples=len(labels))
 
     if not model_factories:
         raise RuntimeError("No valid model factories available.")

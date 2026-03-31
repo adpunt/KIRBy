@@ -35,7 +35,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("EXPERIMENT C01: REPRESENTATION CHARACTERIZATION")
     print("=" * 70)
 
-    models = get_model_factories(config['models'])
+    models = get_model_factories(config['models'],
+                                    task_type=data.get('task_type', 'regression'),
+                                    n_samples=len(data['labels']))
     n_folds = config['n_splits']
     reps = data['reps']
     labels = data['labels']

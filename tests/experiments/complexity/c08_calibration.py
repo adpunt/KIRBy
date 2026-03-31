@@ -82,7 +82,9 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
         optimal_alloc = overall_best['allocation']
         optimal_imp = overall_best['importance']
         best_model = overall_best['model']
-        optimal_model_factory = get_model_factories([best_model]).get(best_model)
+        optimal_model_factory = get_model_factories(
+            [best_model], task_type=data.get('task_type', 'regression'),
+            n_samples=len(data['labels'])).get(best_model)
         optimal_desc = (f"{best_model} at budget={optimal_budget} "
                         f"[{optimal_imp}/{optimal_alloc}] (from Exp 2)")
         print(f"  Using Exp 2 optimal: {optimal_desc}")
@@ -105,7 +107,9 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 optimal_internal_eval = best['blueprint'].internal_evaluator
                 optimal_aug_strategy = best['blueprint'].augmentation_strategy
                 best_model = best['model']
-                optimal_model_factory = get_model_factories([best_model]).get(best_model)
+                optimal_model_factory = get_model_factories(
+                    [best_model], task_type=data.get('task_type', 'regression'),
+                    n_samples=len(data['labels'])).get(best_model)
                 optimal_desc = (f"{best_model} at budget={optimal_budget} "
                                 f"[{optimal_imp}/{optimal_alloc}] (from find_best_hybrid)")
                 print(f"  Discovered optimal: {optimal_desc}")
