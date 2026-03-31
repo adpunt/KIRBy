@@ -443,6 +443,7 @@ SINGLE_DATASET_EXPERIMENTS = [
     'c18',                  # diversity vs depth
     'c19',                  # importance-weighted training
     'c21',                  # single-rep augmentation (merged C20)
+    'c22',                  # hybrid explainability
 ]
 
 
@@ -467,6 +468,7 @@ def _import_experiment(exp_id: str):
         'c18': 'c18_diversity_vs_depth',
         'c19': 'c19_importance_weighted_training',
         'c21': 'c21_single_rep_augmentation',
+        'c22': 'c22_explainability',
     }
     mod_name = module_map[exp_id]
     import importlib
