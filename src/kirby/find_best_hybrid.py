@@ -1071,6 +1071,7 @@ def _evaluate_hybrid_config(
     fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
     cv_splitter=None,
+    importance_cache: Optional[Dict] = None,
 ) -> dict:
     """Evaluate a single hybrid configuration. Returns result dict."""
     from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
@@ -1107,6 +1108,11 @@ def _evaluate_hybrid_config(
             train_augs = {name: X[train_idx] for name, X in augmentations.items()}
             val_augs = {name: X[val_idx] for name, X in augmentations.items()}
 
+        # Look up precomputed importance for this (fold, importance_method)
+        fold_importance = None
+        if importance_cache is not None:
+            fold_importance = importance_cache.get((fold_idx, importance_method))
+
         try:
             X_train, feature_info = create_hybrid(
                 train_reps, y_train,
@@ -1123,6 +1129,7 @@ def _evaluate_hybrid_config(
                 model=model,
                 metric_fn=metric_fn,
                 lower_is_better=lower_is_better,
+                precomputed_importance=fold_importance,
             )
             X_val = apply_feature_selection(val_reps, feature_info)
 
@@ -1388,6 +1395,43 @@ def _run_search(
     if verbose:
         print(f"\nSearching {total} unique configurations ({speed} mode)...")
 
+    # ── Pre-compute importance scores for deduplication ──
+    # Importance for a given (rep, fold_train_data, method) is identical across
+    # all (alloc, budget, evaluator, model) configs. Compute once, reuse everywhere.
+    from kirby.hybrid import compute_feature_importance
+
+    if precomputed_folds is not None:
+        _fold_splits_for_cache = precomputed_folds
+    else:
+        _splitter, _use_groups = _make_cv_splitter(groups, search_folds, seed, cv_splitter=cv_splitter)
+        _sample_X = next(iter(base_reps.values()))
+        _split_args = (_sample_X, labels, groups) if _use_groups else (_sample_X, labels)
+        _fold_splits_for_cache = list(_splitter.split(*_split_args))
+
+    importance_cache = {}  # (fold_idx, imp_method) -> {rep_name: scores_array}
+    n_imp_total = len(_fold_splits_for_cache) * len(search_importance)
+    if verbose:
+        print(f"  Pre-computing importance: {len(search_importance)} methods × "
+              f"{len(_fold_splits_for_cache)} folds × {len(base_reps)} reps...")
+    _imp_t0 = time.time()
+    for fold_idx, (train_idx, _) in enumerate(_fold_splits_for_cache):
+        fold_train_reps = {k: v[train_idx] for k, v in base_reps.items()}
+        fold_train_labels = labels[train_idx]
+        # Merge fine-tuned reps for this fold
+        if fold_reps and fold_idx in fold_reps:
+            for rep_name, (ft_train, _) in fold_reps[fold_idx].items():
+                fold_train_reps[rep_name] = ft_train
+        for imp_method in search_importance:
+            try:
+                importance_cache[(fold_idx, imp_method)] = compute_feature_importance(
+                    fold_train_reps, fold_train_labels, method=imp_method)
+            except Exception as e:
+                if verbose:
+                    print(f"    importance {imp_method} fold {fold_idx}: FAILED ({e})")
+    if verbose:
+        print(f"  Importance pre-computed in {time.time() - _imp_t0:.1f}s "
+              f"({len(importance_cache)}/{n_imp_total} successful)")
+
     results = []
     idx = 0
 
@@ -1471,6 +1515,7 @@ def _run_search(
                                     fold_reps=fold_reps,
                                     precomputed_folds=precomputed_folds,
                                     cv_splitter=cv_splitter,
+                                    importance_cache=importance_cache,
                                 )
                                 if rep_set_name != 'all':
                                     result['rep_subset'] = rep_set_name
