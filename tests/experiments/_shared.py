@@ -1628,7 +1628,7 @@ def get_precomputed_search(reps, labels, groups, budget=None,
     # On-demand: call find_best_hybrid with all budgets and cache=True
     from kirby.find_best_hybrid import find_best_hybrid
 
-    default_budgets = [10, 25, 50, 100, 200, 500, 1000, 2000]
+    default_budgets = [50, 500, 1000, 2000]
 
     augs = augmentations if aug_condition != 'none' else None
     aug_strat = aug_condition if aug_condition != 'none' else 'uncapped'
@@ -1946,8 +1946,9 @@ def get_config(args) -> dict:
     tier = SPEED_TIERS[speed]
 
     # Budget grids (from pipeline readiness decisions)
+    # Screening: reduced set for fast iteration. Full set for publication.
     if speed == 'fast':
-        default_budgets = [10, 25, 50, 100, 200, 500, 1000, 2000]
+        default_budgets = [50, 500, 1000, 2000]
     else:
         default_budgets = [10, 25, 50, 100, 200, 300, 500, 750, 1000, 1500, 2000]
 
