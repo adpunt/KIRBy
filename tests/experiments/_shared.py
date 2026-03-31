@@ -215,6 +215,11 @@ def _cache_rep_dict(dataset_name: str, compute_all_fn,
 # The only experiment-level configs are: n_splits, models, budgets.
 # These are set per-experiment or via get_config(args).
 
+# Canonical budget lists — used by get_config() and all 4 helpers' run_all().
+# Change here to change everywhere.
+SCREENING_BUDGETS = [50, 500, 1000, 2000]
+FULL_BUDGETS = [10, 25, 50, 100, 250, 500, 1000, 2000]
+
 
 # =============================================================================
 # REP TIER CLASSIFICATION
@@ -1636,8 +1641,6 @@ def get_precomputed_search(reps, labels, groups, budget=None,
     # On-demand: call find_best_hybrid with all budgets and cache=True
     from kirby.find_best_hybrid import find_best_hybrid
 
-    default_budgets = [50, 500, 1000, 2000]
-
     augs = augmentations if aug_condition != 'none' else None
     aug_strat = aug_condition if aug_condition != 'none' else 'uncapped'
 
@@ -1645,7 +1648,7 @@ def get_precomputed_search(reps, labels, groups, budget=None,
         base_reps=reps,
         labels=labels,
         groups=groups,
-        budgets=default_budgets,
+        budgets=SCREENING_BUDGETS,
         augmentations=augs,
         augmentation_strategy=aug_strat,
         speed=speed,
@@ -1953,12 +1956,8 @@ def get_config(args) -> dict:
     speed = 'full' if args.mode == 'full' else 'fast'
     tier = SPEED_TIERS[speed]
 
-    # Budget grids (from pipeline readiness decisions)
-    # Screening: reduced set for fast iteration. Full set for publication.
-    if speed == 'fast':
-        default_budgets = [50, 500, 1000, 2000]
-    else:
-        default_budgets = [10, 25, 50, 100, 200, 300, 500, 750, 1000, 1500, 2000]
+    # Budget grids — from SCREENING_BUDGETS / FULL_BUDGETS constants
+    default_budgets = SCREENING_BUDGETS if speed == 'fast' else FULL_BUDGETS
 
     config = {
         'n_splits': tier['n_folds'],
