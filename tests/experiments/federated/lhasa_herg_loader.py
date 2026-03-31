@@ -16,9 +16,11 @@ import warnings
 import numpy as np
 import pandas as pd
 
+_local_default = '/Users/apunt/repos/dphil/data'
+_server_default = '/data/stat-cadd/scat9264/lhasa_data'
 _DEFAULT_DATA_DIR = os.environ.get(
     'LHASA_DATA_DIR',
-    '/Users/apunt/repos/dphil/data',
+    _server_default if os.path.isdir(_server_default) else _local_default,
 )
 
 
