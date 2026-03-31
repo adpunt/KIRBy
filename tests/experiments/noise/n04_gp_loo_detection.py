@@ -176,6 +176,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reps, labels, groups, budget=budget,
             aug_condition='uncapped', augmentations=augmentations,
             speed=config.get('search_speed', 'fast'),
+            precomputed=data.get('precomputed_searches'),
         )
         spaces['hybrid'] = X_hybrid
     except Exception as e:

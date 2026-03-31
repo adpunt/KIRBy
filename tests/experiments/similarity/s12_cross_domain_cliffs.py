@@ -147,7 +147,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         search = get_precomputed_search(
             reps, labels, groups, budget=budget,
             aug_condition='uncapped', augmentations=data.get('augmentations'),
-            speed=search_speed)
+            speed=search_speed,
+            precomputed=data.get('precomputed_searches'))
         bp = search.best_overall['blueprint']
     except Exception as e:
         print(f"  Hybrid search failed: {e}")

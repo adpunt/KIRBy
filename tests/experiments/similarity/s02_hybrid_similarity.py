@@ -145,7 +145,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         X_hybrid, fi, search = get_fitted_hybrid(
             reps, labels, groups, budget=budget,
             aug_condition='uncapped', augmentations=augmentations,
-            speed=search_speed)
+            speed=search_speed,
+            precomputed=data.get('precomputed_searches'))
         fitted = search.fitted_result
     except Exception as e:
         print(f"    Search FAILED: {e}")

@@ -124,7 +124,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reps, labels, groups,
             budget=100, aug_condition=aug_cond,
             augmentations=augs,
-            speed=config.get('search_speed', 'fast'))
+            speed=config.get('search_speed', 'fast'),
+            precomputed=data.get('precomputed_searches'))
         bp = search.best_overall['blueprint'] if search.best_overall else None
     except Exception:
         bp = None

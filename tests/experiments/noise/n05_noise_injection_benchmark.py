@@ -83,6 +83,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reps, labels, groups, budget=budget,
             aug_condition='uncapped', augmentations=augmentations,
             speed=config.get('search_speed', 'fast'),
+            precomputed=data.get('precomputed_searches'),
         )
         D_hybrid = compute_distance_matrix(X_hybrid, standardize=True)
         print(f"  Hybrid distance matrix: {X_hybrid.shape[1]}D")

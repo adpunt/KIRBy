@@ -101,11 +101,13 @@ def _run_distance_concentration(data, budgets):
 
     # --- Per-budget analysis (hybrid at each budget) ---
     print(f"\n    Budget sweep (hybrid):")
+    _precomp = data.get('precomputed_searches')
     for budget in sorted(budgets):
         try:
             X_hybrid, _, _search = get_fitted_hybrid(
                 reps, labels, groups, budget=budget,
-                aug_condition='none', speed='fast')
+                aug_condition='none', speed='fast',
+                precomputed=_precomp)
             X_hybrid_s = StandardScaler().fit_transform(X_hybrid)
             metrics = _compute_concentration_metrics(X_hybrid_s, k=5)
             results['per_budget'][budget] = {
@@ -294,11 +296,13 @@ def _run_kernel_analysis(data, budgets):
 
     # --- Per-budget hybrid ---
     print(f"\n    Budget sweep (hybrid kernel):")
+    _precomp = data.get('precomputed_searches')
     for budget in sorted(budgets):
         try:
             X_hybrid, _, _search = get_fitted_hybrid(
                 reps, labels, groups, budget=budget,
-                aug_condition='none', speed='fast')
+                aug_condition='none', speed='fast',
+                precomputed=_precomp)
             # Subsample to match
             X_hybrid_sub = X_hybrid[idx] if n_samples > max_n else X_hybrid
             X_hybrid_s = StandardScaler().fit_transform(X_hybrid_sub)
@@ -329,7 +333,8 @@ def _run_kernel_analysis(data, budgets):
         try:
             X_h50, _, _search = get_fitted_hybrid(
                 reps, labels, groups, budget=50,
-                aug_condition='none', speed='fast')
+                aug_condition='none', speed='fast',
+                precomputed=_precomp)
             X_h50_sub = X_h50[idx] if n_samples > max_n else X_h50
             sweep_spaces['hybrid_b50'] = StandardScaler().fit_transform(X_h50_sub)
         except Exception:
@@ -517,9 +522,11 @@ def _run_double_descent(data, config):
         n_feat = min(budget, total_dim, n_samples - 1)
 
         # --- Hybrid ---
+        _precomp = data.get('precomputed_searches')
         hybrid_score = _eval_at_budget(
             reps, labels, groups, n_folds, mode, metric_fn,
-            budget=budget, method='hybrid'
+            budget=budget, method='hybrid',
+            precomputed=_precomp,
         )
 
         # --- PCA ---
@@ -537,7 +544,8 @@ def _run_double_descent(data, config):
         # --- Ridge only (most sensitive to interpolation) ---
         ridge_hybrid = _eval_at_budget(
             reps, labels, groups, n_folds, mode, metric_fn,
-            budget=budget, method='hybrid', model_name='ridge'
+            budget=budget, method='hybrid', model_name='ridge',
+            precomputed=_precomp,
         )
         ridge_pca = _eval_at_budget_pca(
             X_concat, labels, groups, n_folds, mode, metric_fn,
@@ -591,7 +599,8 @@ def _run_double_descent(data, config):
 
 
 def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
-                    budget, method='hybrid', model_name='rf'):
+                    budget, method='hybrid', model_name='rf',
+                    precomputed=None):
     """Evaluate a hybrid at a given budget with a given model."""
     from sklearn.ensemble import RandomForestRegressor
     from sklearn.linear_model import Ridge
@@ -604,7 +613,8 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
 
     # Get blueprint from cached search
     search = get_precomputed_search(reps, labels, groups, budget=budget,
-                                    aug_condition='none', speed='fast')
+                                    aug_condition='none', speed='fast',
+                                    precomputed=precomputed)
     bp = search.best_overall['blueprint']
 
     scores = []
@@ -759,6 +769,7 @@ def _run_approximation_theory(data, budgets, config):
           f"Rademacher={full_rademacher:.4f}, real_{metric_name}={full_real:.4f}")
 
     # --- Per-budget ---
+    _precomp = data.get('precomputed_searches')
     for budget in sorted(budgets):
         n_feat = min(budget, X_concat.shape[1], n_samples - 1)
 
@@ -766,10 +777,11 @@ def _run_approximation_theory(data, budgets, config):
         # Rademacher: estimate on per-fold hybrid features (no leakage)
         rad_hybrid = _estimate_rademacher_hybrid(
             reps, labels, groups, n_folds, mode, n_random_trials,
-            np.random.RandomState(42), budget)
+            np.random.RandomState(42), budget, precomputed=_precomp)
         real_hybrid = _eval_at_budget(
             reps, labels, groups, n_folds, mode, metric_fn,
-            budget=budget, method='hybrid', model_name='ridge')
+            budget=budget, method='hybrid', model_name='ridge',
+            precomputed=_precomp)
 
         # PCA — fresh RNG per budget for fair comparison
         rad_pca = _estimate_rademacher_pca(
@@ -832,7 +844,7 @@ def _estimate_rademacher(X, y, groups, n_folds, mode, n_trials, rng):
 
 
 def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
-                                budget):
+                                budget, precomputed=None):
     """Estimate Rademacher complexity of hybrid features WITHOUT label leakage.
 
     Creates the hybrid per-fold on training data only, then measures how well
@@ -842,7 +854,8 @@ def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
 
     # Get blueprint from cached search using REAL labels
     search = get_precomputed_search(reps, y, groups, budget=budget,
-                                    aug_condition='none', speed='fast')
+                                    aug_condition='none', speed='fast',
+                                    precomputed=precomputed)
     bp = search.best_overall['blueprint']
 
     sample_X = next(iter(reps.values()))

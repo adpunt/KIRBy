@@ -154,7 +154,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             search = get_precomputed_search(
                 reps, labels, groups, budget=budget,
                 aug_condition='capped', augmentations=augmentations,
-                speed=config.get('search_speed', 'fast'))
+                speed=config.get('search_speed', 'fast'),
+                precomputed=data.get('precomputed_searches'))
             blueprints[budget] = search.best_overall['blueprint']
         except Exception:
             pass  # will skip this budget later

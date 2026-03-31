@@ -93,7 +93,8 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
             reps_chembl, labels_chembl, data.get('groups'),
             budget=100, aug_condition=aug_cond,
             augmentations=augs,
-            speed=config.get('search_speed', 'fast'))
+            speed=config.get('search_speed', 'fast'),
+            precomputed=data.get('precomputed_searches'))
         _bp = _search.best_overall['blueprint'] if _search.best_overall else None
     except Exception:
         _bp = None
@@ -536,7 +537,8 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
             reps, labels, groups,
             budget=100, aug_condition=aug_cond,
             augmentations=augs,
-            speed=config.get('search_speed', 'fast'))
+            speed=config.get('search_speed', 'fast'),
+            precomputed=data.get('precomputed_searches'))
         _bp = _search.best_overall['blueprint'] if _search.best_overall else None
     except Exception:
         _bp = None

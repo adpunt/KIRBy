@@ -63,7 +63,8 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
             search = get_precomputed_search(
                 reps, labels, groups, budget=budget,
                 aug_condition='capped', augmentations=augmentations or None,
-                speed=config.get('search_speed', 'fast'))
+                speed=config.get('search_speed', 'fast'),
+                precomputed=data.get('precomputed_searches'))
             blueprints[budget] = search.best_overall['blueprint']
             print(f"  Blueprint for budget={budget}: "
                   f"{blueprints[budget].allocation_method}, "

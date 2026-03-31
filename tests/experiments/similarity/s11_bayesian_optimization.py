@@ -551,7 +551,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     try:
         search = get_precomputed_search(
             reps, labels, groups, budget=hybrid_budget,
-            aug_condition='none', speed=config.get('search_speed', 'fast'))
+            aug_condition='none', speed=config.get('search_speed', 'fast'),
+            precomputed=data.get('precomputed_searches'))
         bp = search.best_overall['blueprint']
     except Exception:
         bp = None
