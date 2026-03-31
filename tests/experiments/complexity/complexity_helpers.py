@@ -197,20 +197,20 @@ DATASET_REPS = {
             'esm2_midlayers', 'abroberta', 'esm2', 'ablang2'],
     },
     'flab_aggregation_jain': {
-        'general': _AB_GENERAL + ['paratope', 'structural'],
-        'augmentation': [],
+        'general': _AB_GENERAL + ['structural'],
+        'augmentation': ['paratope'],
         'top_tier': ['esm2_concat', 'ablang2', 'igt5'],
     },
     'flab_immunogenicity_marks': {
-        'general': _AB_GENERAL + ['paratope', 'structural'],
-        'augmentation': [],
+        'general': _AB_GENERAL + ['structural'],
+        'augmentation': ['paratope'],
         'top_tier': [
             'antiberty_cdr', 'antiberty', 'esm2_entropy_top20', 'igt5',
             'prot_t5', 'prot_t5_cdr', 'abroberta_cdr', 'abroberta'],
     },
     'flab_polyreact_jain_bvp': {
-        'general': _AB_GENERAL + ['paratope', 'structural'],
-        'augmentation': [],
+        'general': _AB_GENERAL + ['structural'],
+        'augmentation': ['paratope'],
         'top_tier': ['ablang2', 'igt5', 'antiberty', 'antiberty_cdr'],
     },
     'ddg_combined': {
@@ -244,9 +244,8 @@ DATASET_REPS = {
     'flab_binding_adams': {
         'general': _AB_GENERAL + [
             'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
-            'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr',
-            'paratope'],
-        'augmentation': [],
+            'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr'],
+        'augmentation': ['paratope'],
         'top_tier': [
             'blosum', 'onehot', 'esm3', 'esm3_cdr', 'saprot',
             'saprot_cdr', 'esm2_cdr', 'esm2_cdr3'],
@@ -263,21 +262,20 @@ DATASET_REPS = {
     'flab_binding_phillips_h3': {
         'general': _AB_GENERAL + [
             'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
-            'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr',
-            'paratope'],
-        'augmentation': ['mutation_features'],
+            'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr'],
+        'augmentation': ['mutation_features', 'paratope'],
         'top_tier': ['onehot', 'blosum', 'igt5', 'esm2_early'],
     },
 
     # ── AbAgym DMS (5 datasets) ─────────────────────────────────────────
     'abagym_Ang2': {
-        'general': _AB_GENERAL + ['paratope', 'structural', 'mutation_features'],
-        'augmentation': [],
+        'general': _AB_GENERAL + ['structural', 'mutation_features'],
+        'augmentation': ['paratope'],
         'top_tier': ['saprot', 'esm3', 'esm2_midlayers', 'esm2_layer24'],
     },
     'abagym_EGFR': {
-        'general': _AB_GENERAL + ['paratope', 'structural', 'mutation_features'],
-        'augmentation': [],
+        'general': _AB_GENERAL + ['structural', 'mutation_features'],
+        'augmentation': ['paratope'],
         'top_tier': [
             'antiberty', 'antiberty_cdr', 'esm2_layer24', 'esm2_early',
             'esm2_midlayers'],
@@ -295,15 +293,15 @@ DATASET_REPS = {
         'top_tier': [],
     },
     'abagym_VEGF': {
-        'general': _AB_GENERAL + ['paratope', 'structural', 'mutation_features'],
-        'augmentation': [],
+        'general': _AB_GENERAL + ['structural', 'mutation_features'],
+        'augmentation': ['paratope'],
         'top_tier': [ 'aac', 'prot_t5_cdr', 'prot_t5'],
     },
 
     # ── Antibody CLF (2 datasets) ───────────────────────────────────────
     'tz_her2_binary': {
-        'general': _AB_GENERAL + ['paratope', 'structural'],
-        'augmentation': [],
+        'general': _AB_GENERAL + ['structural'],
+        'augmentation': ['paratope'],
         'top_tier': ['blosum', 'onehot'],
     },
     'humanness_therapeutic': {
@@ -352,8 +350,13 @@ DATASET_REPS = {
             'gene_geneformer_v2', 'gene_bulkrnabert', 'methyl_hvg',
             'gene_geneformer', 'gene_chromosome_arm', 'wsi_titan',
             'methyl_pca50', 'cnv_pca50', 'mirna_top200', 'wsi_gigapath',
-            'rppa', 'immune_xcell', 'mut_driver', 'stemness_mrnasi'],
-        'augmentation': [],
+            'wsi_hoptimus0', 'cnv_gistic', 'wsi_ctranspath', 'wsi_moco',
+            'wsi_phikon', 'rppa', 'mutation_matrix', 'mut_driver',
+            'mut_pca50', 'mut_pathway'],
+        'augmentation': [
+            'immune_xcell', 'gene_stats', 'stemness_mrnasi',
+            'immune_cibersort', 'cimp_status', 'mut_tmb',
+            'hrd_score', 'purity_consensus'],
         'top_tier': [
             'gene_geneformer_v2', 'gene_bulkrnabert', 'methyl_hvg',
             'gene_geneformer', 'gene_chromosome_arm', 'wsi_titan',
@@ -364,10 +367,10 @@ DATASET_REPS = {
             'gene_geneformer_v2', 'gene_bulkrnabert', 'methyl_hvg',
             'gene_geneformer', 'gene_chromosome_arm', 'wsi_titan',
             'methyl_pca50', 'cnv_pca50', 'mirna_top200', 'wsi_gigapath',
-            'rppa', 'immune_xcell', 'mut_driver', 'stemness_mrnasi'],
+            'rppa', 'mut_driver'],
         'augmentation': [
             'hrd_score', 'mut_tmb', 'purity_consensus', 'gene_stats',
-            'gene_chromosome_arm', 'immune_xcell'],
+            'immune_xcell', 'stemness_mrnasi'],
         'top_tier': [
             'gene_geneformer_v2', 'gene_geneformer', 'gene_bulkrnabert'],
     },
@@ -534,12 +537,14 @@ def run_all(dataset_name: str, output_dir: str,
     if len(data['reps']) >= 2:
         from experiments._shared import precompute_hybrid_searches
         print(f"\n  Precomputing hybrid searches (general, {len(data['reps'])} reps)...")
+        _task_type = data.get('task_type', 'regression')
         precompute_results = precompute_hybrid_searches(
             reps=data['reps'],
             labels=data['labels'],
             groups=data.get('groups'),
             config=config,
             augmentations=data.get('augmentations'),
+            task_type=_task_type,
         )
         data['precomputed_searches'] = precompute_results
     else:
@@ -557,6 +562,7 @@ def run_all(dataset_name: str, output_dir: str,
             groups=data.get('groups'),
             config=config,
             augmentations=data.get('augmentations'),
+            task_type=_task_type,
         )
         data['precomputed_searches_top'] = precompute_top
     else:

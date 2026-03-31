@@ -1578,6 +1578,7 @@ def run_all(dataset_name: str, output_dir: str,
             data['augmentations'] = None
 
         # ── Precompute hybrid searches (general reps) ──
+        _task_type = data.get('task_type', 'regression')
         if len(reps_data) >= 2:
             from experiments._shared import precompute_hybrid_searches
             print(f"\n  Precomputing hybrid searches (general, {len(reps_data)} reps)...")
@@ -1587,6 +1588,7 @@ def run_all(dataset_name: str, output_dir: str,
                 groups=data.get('groups'),
                 config=config,
                 augmentations=data.get('augmentations'),
+                task_type=_task_type,
             )
             data['precomputed_searches'] = precompute_results
         else:
@@ -1606,6 +1608,7 @@ def run_all(dataset_name: str, output_dir: str,
                 groups=data.get('groups'),
                 config=config,
                 augmentations=data.get('augmentations'),
+                task_type=_task_type,
             )
             data['precomputed_searches_top'] = precompute_top
         else:
