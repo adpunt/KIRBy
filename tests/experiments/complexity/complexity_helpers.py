@@ -140,32 +140,35 @@ DATASET_REPS = {
             'esm2_concat', 'esm2_midlayers', 'abroberta', 'abroberta_cdr',
             'antiberty_cdr', 'esm2_layer24', 'esm2_entropy_top20', 'aac'
         ],
-        'augmentation': ['structural'],
+        'augmentation': ['structural', 'mutation_features'],
         'top_tier': [
             'esm3', 'saprot', 'blosum', 'esmc', 'prot_t5', 'igt5', 'onehot',
             'prot_t5_cdr', 'esm2_early'],
     },
     'flab_pk_jain_heprt': {
         'general': [
-            'igt5', 'esm2_concat', 'ablang2', 'prot_t5',
+            'igt5', 'mutation_features', 'esm2_concat', 'ablang2', 'prot_t5',
             'prot_t5_cdr', 'esm2_early'],
         'augmentation': ['paratope', 'structural'],
         'top_tier': [
-            'igt5', 'esm2_concat', 'ablang2', 'prot_t5',
+            'igt5', 'mutation_features', 'esm2_concat', 'ablang2', 'prot_t5',
             'prot_t5_cdr'],
     },
     'flab_pk_jain_fcrnrt': {
         'general': [
-            'ablang2', 'igt5', 'esm2_early', 'prot_t5', 'saprot', 'antiberty', 'esmc', 'esm2', 'aac',
+            'ablang2', 'igt5', 'esm2_early', 'prot_t5', 'saprot', 'antiberty', 'esmc', 'esm2',
             'abroberta'],
-        'augmentation': [],
+        'augmentation': ['aac'],
         'top_tier': ['ablang2', 'igt5'],
     },
     'flab_polyreact_jain_cic': {
         'general': [
             'prot_t5', 'prot_t5_cdr', 'esm2_early', 'ablang2', 'igt5',
             'esm2', 'esmc', 'antiberty', 'saprot', 'esm2_concat',
-            'esm2_midlayers'
+            'esm2_midlayers',
+            'aac', 'saprot_cdr', 'esm2_layer24', 'mutation_features',
+            'esm2_per_region', 'esm2_per_cdr', 'esm2_cdr3', 'esm2_cdr',
+            'esm2_wt_delta', 'esmc_cdr', 'esm2_mutsite'
         ],
         'augmentation': [],
         'top_tier': ['prot_t5', 'prot_t5_cdr', 'esm2_early'],
@@ -174,9 +177,12 @@ DATASET_REPS = {
         'general': [
             'prot_t5', 'prot_t5_cdr', 'esm2_early', 'ablang2', 'igt5',
             'esm2', 'esmc', 'antiberty', 'saprot', 'esm2_concat',
-            'esm2_midlayers', 'abroberta', 'esm2_layer24'
+            'esm2_midlayers', 'abroberta', 'esm2_layer24',
+            'aac', 'esm2_mutsite', 'esmc_cdr', 'esm3_cdr', 'esm3',
+            'saprot_cdr', 'esm2_per_region', 'blosum', 'esm2_wt_delta',
+            'esm2_cdr3', 'esm2_cdr', 'esm2_per_cdr', 'onehot'
         ],
-        'augmentation': ['paratope', 'structural'],
+        'augmentation': ['paratope', 'structural', 'mutation_features'],
         'top_tier': ['prot_t5', 'prot_t5_cdr', 'esm2_early'],
     },
     'flab_thermo_jain': {
@@ -184,13 +190,13 @@ DATASET_REPS = {
             'ablang2', 'abroberta', 'igt5', 'esm3', 'prot_t5', 'prot_t5_cdr',
             'esm2_early', 'esmc', 'esm2', 'antiberty', 'saprot',
             'esm2_concat', 'esm2_midlayers', 'esm2_layer24',
-            'esm2_entropy_top20', 'aac'
+            'esm2_entropy_top20'
         ],
-        'augmentation': [],
+        'augmentation': ['aac'],
         'top_tier': ['ablang2', 'abroberta', 'igt5', 'esm3'],
     },
     'abcov_kd': {
-        'general': list(_AB_GENERAL),
+        'general': list(_AB_GENERAL) + ['esm2_cdr3', 'esmc_cdr', 'saprot_cdr', 'esm3_cdr'],
         'augmentation': [],
         'top_tier': [
             'esm2_entropy_top20', 'prot_t5', 'blosum', 'antiberty',
@@ -202,7 +208,7 @@ DATASET_REPS = {
         'top_tier': ['esm2_concat', 'ablang2', 'igt5'],
     },
     'flab_immunogenicity_marks': {
-        'general': _AB_GENERAL + ['structural'],
+        'general': _AB_GENERAL + ['structural', 'saprot_cdr', 'esm2_cdr3', 'esmc_cdr', 'esm3_cdr'],
         'augmentation': ['paratope'],
         'top_tier': [
             'antiberty_cdr', 'antiberty', 'esm2_entropy_top20', 'igt5',
@@ -214,56 +220,58 @@ DATASET_REPS = {
         'top_tier': ['ablang2', 'igt5', 'antiberty', 'antiberty_cdr'],
     },
     'ddg_combined': {
-        'general': [ 'prot_t5', 'esm2_midlayers', 'esm2', 'esmc',
+        'general': ['esm2_wt_delta', 'prot_t5', 'esm2_midlayers', 'esm2', 'esmc',
             'ablang2', 'igt5', 'esm2_early', 'esm2_concat', 'esm2_layer24',
             'antiberty', 'prot_t5_cdr', 'saprot', 'esm3', 'abroberta',
             'esm2_entropy_top20', 'blosum', 'mutation_features'],
         'augmentation': ['aac'],
-        'top_tier': [ 'prot_t5', 'esm2_midlayers'],
+        'top_tier': ['esm2_wt_delta', 'prot_t5', 'esm2_midlayers'],
     },
 
     # ── Antibody DMS / Large DMS (5 datasets) ──────────────────────────
     'flab_binding_koenig': {
-        'general': _AB_GENERAL + [
+        'general': [r for r in _AB_GENERAL
+                    if r not in ('aac', 'blosum', 'onehot', 'antiberty_cdr')] + [
             'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
-            'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr'],
-        'augmentation': ['esm2_llr', 'mutation_features', 'antiberty_llr'],
+            'saprot_cdr', 'esmc_cdr', 'esm3_cdr'],
+        'augmentation': ['esm2_llr', 'mutation_features', 'antiberty_llr', 'aac'],
         'top_tier': [
             'ablang2', 'saprot', 'saprot_cdr', 'esm3', 'esm3_cdr',
             'prot_t5', 'prot_t5_cdr', 'igt5'],
     },
     'flab_expression_koenig': {
-        'general': _AB_GENERAL + [
+        'general': [r for r in _AB_GENERAL
+                    if r not in ('aac', 'blosum', 'onehot')] + [
             'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
             'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr'],
-        'augmentation': ['mutation_features', 'esm2_llr'],
+        'augmentation': ['mutation_features', 'esm2_llr', 'aac'],
         'top_tier': [
             'esm3', 'esm3_cdr', 'prot_t5_cdr', 'prot_t5', 'saprot',
             'saprot_cdr', 'igt5'],
     },
     'flab_binding_adams': {
-        'general': _AB_GENERAL + [
+        'general': [r for r in _AB_GENERAL if r != 'aac'] + [
             'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
             'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr'],
-        'augmentation': ['paratope'],
+        'augmentation': ['paratope', 'aac'],
         'top_tier': [
             'blosum', 'onehot', 'esm3', 'esm3_cdr', 'saprot',
             'saprot_cdr', 'esm2_cdr', 'esm2_cdr3'],
     },
     'flab_expression_adams': {
-        'general': _AB_GENERAL + [
+        'general': [r for r in _AB_GENERAL if r != 'aac'] + [
             'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
             'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr'],
-        'augmentation': ['esm2_llr'],
+        'augmentation': ['esm2_llr', 'aac'],
         'top_tier': [
             'blosum', 'saprot', 'saprot_cdr', 'esm3', 'esm3_cdr',
             'prot_t5', 'prot_t5_cdr'],
     },
     'flab_binding_phillips_h3': {
-        'general': _AB_GENERAL + [
+        'general': [r for r in _AB_GENERAL if r != 'aac'] + [
             'esm2_cdr3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_wt_delta',
             'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr'],
-        'augmentation': ['mutation_features', 'paratope'],
+        'augmentation': ['mutation_features', 'paratope', 'aac'],
         'top_tier': ['onehot', 'blosum', 'igt5', 'esm2_early'],
     },
 
@@ -285,22 +293,25 @@ DATASET_REPS = {
             'esm2', 'esmc', 'ablang2', 'igt5', 'antiberty', 'esm2_midlayers',
             'esm2_layer24', 'saprot', 'aac', 'mutation_features'],
         'augmentation': [],
-        'top_tier': [ 'prot_t5_cdr', 'prot_t5'],
+        'top_tier': ['mutation_features', 'prot_t5_cdr', 'prot_t5'],
     },
     'abagym_lysozyme': {
-        'general': [ 'aac', 'blosum', 'mutation_features'],
-        'augmentation': ['structural'],
-        'top_tier': [],
+        'general': ['aac', 'blosum', 'mutation_features'],
+        'augmentation': ['structural', 'antiberty_llr'],
+        'top_tier': ['mutation_features'],
     },
     'abagym_VEGF': {
         'general': _AB_GENERAL + ['structural', 'mutation_features'],
         'augmentation': ['paratope'],
-        'top_tier': [ 'aac', 'prot_t5_cdr', 'prot_t5'],
+        'top_tier': ['mutation_features', 'aac', 'prot_t5_cdr', 'prot_t5'],
     },
 
     # ── Antibody CLF (2 datasets) ───────────────────────────────────────
     'tz_her2_binary': {
-        'general': _AB_GENERAL + ['structural'],
+        'general': _AB_GENERAL + [
+            'structural', 'esm2_mutsite', 'esm2_wt_delta', 'esm2_per_region',
+            'esm2_per_cdr', 'esm2_cdr3', 'esmc_cdr', 'esm3_cdr',
+            'saprot_cdr', 'mutation_features'],
         'augmentation': ['paratope'],
         'top_tier': ['blosum', 'onehot'],
     },
@@ -314,32 +325,44 @@ DATASET_REPS = {
 
     # ── Ginkgo Developability (6 datasets) ──────────────────────────────
     'ginkgo_acsins': {
-        'general': list(_AB_GENERAL),
+        'general': list(_AB_GENERAL) + [
+            'saprot_cdr', 'esm3_cdr', 'esm2_per_region', 'esm2_per_cdr',
+            'esmc_cdr', 'esm2_cdr3'],
         'augmentation': ['paratope', 'structural'],
         'top_tier': ['igt5', 'ablang2'],
     },
     'ginkgo_colloidal': {
-        'general': list(_AB_GENERAL),
+        'general': list(_AB_GENERAL) + [
+            'saprot_cdr', 'esmc_cdr', 'esm3_cdr', 'esm2_per_cdr',
+            'esm2_per_region', 'esm2_cdr3'],
         'augmentation': ['paratope', 'structural'],
         'top_tier': ['prot_t5', 'prot_t5_cdr'],
     },
     'ginkgo_heparin': {
-        'general': list(_AB_GENERAL),
+        'general': list(_AB_GENERAL) + [
+            'esm2_per_region', 'esm2_per_cdr', 'esm2_cdr3', 'esmc_cdr',
+            'esm3_cdr', 'saprot_cdr'],
         'augmentation': ['paratope', 'structural'],
         'top_tier': ['esm2_concat', 'prot_t5', 'prot_t5_cdr', 'ablang2'],
     },
     'ginkgo_hic': {
-        'general': list(_AB_GENERAL),
+        'general': list(_AB_GENERAL) + [
+            'esmc_cdr', 'saprot_cdr', 'esm2_per_region', 'esm2_per_cdr',
+            'esm2_cdr3', 'esm3_cdr'],
         'augmentation': ['paratope', 'structural'],
         'top_tier': ['esm2_concat', 'prot_t5', 'prot_t5_cdr'],
     },
     'ginkgo_pr_cho': {
-        'general': list(_AB_GENERAL),
+        'general': list(_AB_GENERAL) + [
+            'esmc_cdr', 'saprot_cdr', 'esm2_per_cdr', 'esm2_per_region',
+            'esm2_cdr3', 'esm3_cdr'],
         'augmentation': ['paratope', 'structural'],
         'top_tier': ['prot_t5', 'prot_t5_cdr'],
     },
     'ginkgo_titer': {
-        'general': list(_AB_GENERAL) + ['saprot_cdr'],
+        'general': list(_AB_GENERAL) + [
+            'saprot_cdr', 'esm3_cdr', 'esm2_cdr3', 'esm2_per_region',
+            'esm2_per_cdr', 'esmc_cdr'],
         'augmentation': ['paratope', 'structural'],
         'top_tier': ['saprot', 'saprot_cdr'],
     },
@@ -364,13 +387,15 @@ DATASET_REPS = {
     },
     'tcga_brca_pam50': {
         'general': [
-            'gene_geneformer_v2', 'gene_bulkrnabert', 'methyl_hvg',
-            'gene_geneformer', 'gene_chromosome_arm', 'wsi_titan',
-            'methyl_pca50', 'cnv_pca50', 'mirna_top200', 'wsi_gigapath',
-            'rppa', 'mut_driver'],
+            'gene_geneformer_v2', 'gene_geneformer', 'gene_bulkrnabert',
+            'rppa', 'gene_chromosome_arm', 'cnv_pca50', 'wsi_titan',
+            'methyl_pca50', 'wsi_hoptimus0', 'wsi_gigapath', 'mirna_top200',
+            'methyl_hvg', 'wsi_moco', 'wsi_phikon', 'cnv_gistic',
+            'wsi_ctranspath', 'mutation_matrix', 'mut_pathway',
+            'mut_driver', 'mut_pca50'],
         'augmentation': [
-            'hrd_score', 'mut_tmb', 'purity_consensus', 'gene_stats',
-            'immune_xcell', 'stemness_mrnasi'],
+            'stemness_mrnasi', 'immune_xcell', 'immune_cibersort',
+            'gene_stats', 'purity_consensus', 'mut_tmb', 'hrd_score'],
         'top_tier': [
             'gene_geneformer_v2', 'gene_geneformer', 'gene_bulkrnabert'],
     },
