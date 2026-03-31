@@ -199,6 +199,8 @@ For federated-eligible datasets: also add to federated experiment list per `FEDE
 - Antibody: ρ > 0.15
 - DTA: CI > 0.55
 
+**Small rep rule (dim < 25D → augmentation):** For datasets with N > 1000 samples, reps with fewer than 25 dimensions are placed in augmentation instead of general, regardless of their standalone score. Their value is as supplementary features, not as budget competitors. For datasets with N ≤ 1000, this rule does NOT apply — small reps may be the only viable options and need to participate in allocation.
+
 **FT rep notation:**
 - `*` = **FT-only.** The frozen version of this rep is dead (produces no signal). There is no fallback — if FT is turned off, this rep is excluded entirely.
 - `**` = **FT improves, frozen fallback exists.** The FT version is better, but the frozen version is a viable base rep in its own right. When FT is disabled, the frozen version substitutes in.
@@ -256,7 +258,9 @@ For federated-eligible datasets: also add to federated experiment list per `FEDE
 | 50 | buchwald_hartwig | Reaction | 3,955 | DONE | Section 10 (new format) |
 | 52 | bh_doyle_plates | Reaction | 4,312 | DONE | Section 10 (new format) |
 | 51 | suzuki | Reaction | 5,760 | DROPPED | R²=0.453 ceiling, 1 viable rep |
+| 75 | graphinity_foldx | Graphinity | 48,900 | DROPPED | best ρ=0.052, all R² negative |
 | 76 | graphinity_rosetta | Graphinity | ~21K | DROPPED | all R² negative, best ρ=0.079 |
+| 77 | graphinity_augmented | Graphinity | 49,329 | DROPPED | best ρ=0.057, all R² negative |
 
 **caco2 (2,158 samples):**
 | Tier | Reps |
@@ -807,9 +811,9 @@ Old Sections 10B/10C/12D/12E have writeups. Need new-format review.
 |---|---------|---------|------|------|--------|
 | — | ddg_combined | 429 | 34 | 4 | Listed above (#21) in antibody inter-family |
 | — | ddg_combined_full | 1,536 | 30 | 8 | Listed above (#22) |
-| 75 | graphinity_foldx | ~50K | 0 | 0 | BLOCKED — bus error (OOM), resubmitting with 370G |
+| 75 | graphinity_foldx | 48,900 | 29 | 0 | DROPPED — best ρ=0.052, all R² negative |
 | 76 | graphinity_rosetta | ~21K | 29 | 0 | DROPPED — all R² negative, best ρ=0.079 |
-| 77 | graphinity_augmented | ~50K | 0 | 0 | BLOCKED — bus error (OOM) + NaN light_seq fix, resubmitting with 370G |
+| 77 | graphinity_augmented | 49,329 | 28 | 0 | DROPPED — best ρ=0.057, all R² negative |
 
 ---
 
@@ -827,8 +831,8 @@ Old Sections 10B/10C/12D/12E have writeups. Need new-format review.
 | Reaction | 3 | 2 | 0 | 0 | 0 | 1 (suzuki) |
 | DTA | 3 | 0 | 0 | 3 (partial data) | 0 | 0 |
 | Nucleotide | 19 | 0 | 0 | 0 | 17 (survey on server, needs pull + review) | 2 (splice_all, H3K9me3) |
-| Graphinity DDG | 3 | 0 | 0 | 0 | 2 (foldx, augmented — OOM, resubmitting) | 1 (rosetta) |
-| **TOTAL** | **77** | **40** | **0** | **0** | **23** | **14** |
+| Graphinity DDG | 3 | 0 | 0 | 0 | 0 | 3 (rosetta, foldx, augmented) |
+| **TOTAL** | **77** | **40** | **0** | **0** | **21** | **16** |
 
 ---
 
