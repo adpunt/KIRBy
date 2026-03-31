@@ -583,6 +583,23 @@ def get_model(name: str, task_type: str = 'regression',
     return spec[key]()
 
 
+def _predict_for_metric(model, X, metric_fn):
+    """Predict using predict_proba if available (for AUC), else predict."""
+    if hasattr(model, 'predict_proba'):
+        try:
+            y_prob = model.predict_proba(X)
+            if y_prob.ndim == 2 and y_prob.shape[1] == 2:
+                y_pred = y_prob[:, 1]
+            else:
+                y_pred = y_prob
+            # Test that metric works with these predictions
+            # (will raise if metric expects labels not probabilities)
+            return y_pred
+        except Exception:
+            pass
+    return model.predict(X)
+
+
 def _detect_task_type(labels: np.ndarray) -> str:
     """Auto-detect regression vs classification from labels."""
     unique = np.unique(labels)
@@ -1027,13 +1044,14 @@ def _evaluate_single(
             k = min(5, max(1, int(np.sqrt(len(train_idx)))))
             m.set_params(n_neighbors=k)
         m.fit(X_train_s, y_train)
-        y_pred = m.predict(X_val_s)
+        y_pred = _predict_for_metric(m, X_val_s, metric_fn)
         scores.append(metric_fn(y_val, y_pred))
 
         if secondary_metric_fns:
+            y_pred_labels = m.predict(X_val_s)
             for sec_name, sec_fn in secondary_metric_fns.items():
                 try:
-                    sec_scores[sec_name].append(sec_fn(y_val, y_pred))
+                    sec_scores[sec_name].append(sec_fn(y_val, y_pred_labels))
                 except Exception:
                     pass
 
@@ -1161,7 +1179,7 @@ def _evaluate_hybrid_config(
             k = min(5, max(1, int(np.sqrt(len(train_idx)))))
             m.set_params(n_neighbors=k)
         m.fit(X_train_s, y_train)
-        y_pred = m.predict(X_val_s)
+        y_pred = _predict_for_metric(m, X_val_s, metric_fn)
         fold_scores.append(metric_fn(y_val, y_pred))
         fold_n_features.append(X_train.shape[1])
 
@@ -1290,13 +1308,14 @@ def _evaluate_baselines(
 
                     m = deepcopy(model)
                     m.fit(X_train_s, y_train)
-                    y_pred = m.predict(X_val_s)
+                    y_pred = _predict_for_metric(m, X_val_s, metric_fn)
                     fold_scores.append(metric_fn(y_val, y_pred))
 
                     if secondary_metric_fns:
+                        y_pred_labels = m.predict(X_val_s)
                         for sec_name, sec_fn in secondary_metric_fns.items():
                             try:
-                                fold_sec_scores[sec_name].append(sec_fn(y_val, y_pred))
+                                fold_sec_scores[sec_name].append(sec_fn(y_val, y_pred_labels))
                             except Exception:
                                 pass
 

@@ -327,9 +327,9 @@ def get_domain_metric(data: dict) -> Tuple[str, Any, bool]:
     task_type = data.get('task_type', 'regression')
 
     if task_type == 'classification':
-        # TCGA clf, trastuzumab, humanness
-        fn, lib = BUILTIN_METRICS['accuracy']
-        return 'accuracy', fn, lib
+        # AUROC per TODO. find_best_hybrid uses predict_proba when available.
+        fn, lib = BUILTIN_METRICS['auc']
+        return 'auc', fn, lib
     elif domain == 'dta':
         fn, lib = BUILTIN_METRICS['ci']
         return 'ci', fn, lib
@@ -1527,7 +1527,7 @@ def precompute_hybrid_searches(reps, labels, groups, config,
     # Resolve metric using same logic as get_domain_metric
     if metric == 'auto':
         if task_type == 'classification':
-            metric = 'accuracy'
+            metric = 'auc'
         elif domain == 'dta':
             metric = 'ci'
         elif domain == 'antibody':
