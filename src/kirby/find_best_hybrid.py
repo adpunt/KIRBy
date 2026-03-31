@@ -1072,6 +1072,7 @@ def _evaluate_hybrid_config(
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
     cv_splitter=None,
     importance_cache: Optional[Dict] = None,
+    alloc_cache: Optional[Dict] = None,
 ) -> dict:
     """Evaluate a single hybrid configuration. Returns result dict."""
     from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
@@ -1113,6 +1114,11 @@ def _evaluate_hybrid_config(
         if importance_cache is not None:
             fold_importance = importance_cache.get((fold_idx, importance_method))
 
+        # Look up precomputed allocation scores for this (fold, evaluator)
+        fold_alloc_scores = None
+        if alloc_cache is not None:
+            fold_alloc_scores = alloc_cache.get((fold_idx, internal_evaluator))
+
         try:
             X_train, feature_info = create_hybrid(
                 train_reps, y_train,
@@ -1130,6 +1136,7 @@ def _evaluate_hybrid_config(
                 metric_fn=metric_fn,
                 lower_is_better=lower_is_better,
                 precomputed_importance=fold_importance,
+                precomputed_alloc_scores=fold_alloc_scores,
             )
             X_val = apply_feature_selection(val_reps, feature_info)
 
@@ -1432,6 +1439,52 @@ def _run_search(
         print(f"  Importance pre-computed in {time.time() - _imp_t0:.1f}s "
               f"({len(importance_cache)}/{n_imp_total} successful)")
 
+    # ── Pre-compute allocation baseline scores for deduplication ──
+    # allocate_performance_weighted trains the internal evaluator on each rep
+    # to score them. For a given (fold, evaluator), these scores are identical
+    # across all (budget, importance, model) configs. Compute once, reuse.
+    from kirby.hybrid import _evaluate_allocation
+
+    alloc_cache = {}  # (fold_idx, evaluator) -> {rep_name: score}
+    _alloc_t0 = time.time()
+    for fold_idx, (train_idx, _) in enumerate(_fold_splits_for_cache):
+        fold_train_reps = {k: v[train_idx] for k, v in base_reps.items()}
+        fold_train_labels = labels[train_idx]
+        if fold_reps and fold_idx in fold_reps:
+            for rep_name, (ft_train, _) in fold_reps[fold_idx].items():
+                fold_train_reps[rep_name] = ft_train
+
+        # Replicate create_hybrid's internal 80/20 split (same RandomState(42))
+        n_fold = len(fold_train_labels)
+        n_val_internal = max(1, int(n_fold * 0.2))
+        _indices = np.random.RandomState(42).permutation(n_fold)
+        _tr_idx = _indices[n_val_internal:]
+        _va_idx = _indices[:n_val_internal]
+        _train_labels = fold_train_labels[_tr_idx]
+        _val_labels = fold_train_labels[_va_idx]
+
+        for ev in search_evaluators:
+            if ev == 'match':
+                continue
+            scores = {}
+            for rep_name, X_full in fold_train_reps.items():
+                X_tr = np.nan_to_num(np.clip(X_full[_tr_idx], -1e10, 1e10),
+                                     nan=0.0, posinf=1e10, neginf=-1e10)
+                X_va = np.nan_to_num(np.clip(X_full[_va_idx], -1e10, 1e10),
+                                     nan=0.0, posinf=1e10, neginf=-1e10)
+                try:
+                    scores[rep_name] = max(
+                        _evaluate_allocation(X_tr, X_va, _train_labels,
+                                             _val_labels, internal_evaluator=ev),
+                        0.0)
+                except Exception:
+                    scores[rep_name] = 0.0
+            alloc_cache[(fold_idx, ev)] = scores
+
+    if verbose:
+        print(f"  Allocation scores pre-computed in {time.time() - _alloc_t0:.1f}s "
+              f"({len(alloc_cache)} (fold, evaluator) combos)")
+
     results = []
     idx = 0
 
@@ -1516,6 +1569,7 @@ def _run_search(
                                     precomputed_folds=precomputed_folds,
                                     cv_splitter=cv_splitter,
                                     importance_cache=importance_cache,
+                                    alloc_cache=alloc_cache,
                                 )
                                 if rep_set_name != 'all':
                                     result['rep_subset'] = rep_set_name

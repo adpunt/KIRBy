@@ -495,14 +495,15 @@ def _compute_allocation_weights(baseline_scores, scheme='linear', params=None,
 
 def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, val_labels,
                                   total_budget=100, weighting_scheme='linear',
-                                  weighting_params=None, internal_evaluator='ridge'):
+                                  weighting_params=None, internal_evaluator='ridge',
+                                  precomputed_scores=None):
     """
     Allocate features proportional to each representation's baseline performance.
-    
+
     Tests each representation individually on validation set, then allocates budget
     proportional to their R² scores (regression) or accuracy (classification).
     Better performing reps get more features.
-    
+
     Args:
         rep_dict_train: Dict of {rep_name: train_features}
         rep_dict_val: Dict of {rep_name: val_features}
@@ -514,29 +515,35 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
             'thresholded', 'top_k', 'min_floor', 'rank_linear', 'exponential',
             'score_gap', 'entropy'.
         weighting_params: Dict of scheme-specific parameters.
+        precomputed_scores: Pre-computed {rep_name: score} dict (optional).
+            If provided, skips per-rep model fitting entirely.
 
     Returns:
         dict: Allocation of {rep_name: n_features}
     """
-    baseline_scores = {}
+    if precomputed_scores is not None:
+        baseline_scores = {rn: precomputed_scores.get(rn, 0.0)
+                           for rn in rep_dict_train}
+    else:
+        baseline_scores = {}
 
-    # Test each representation individually using _evaluate_allocation
-    # so that monkey-patching the evaluator (e.g. F11 experiments) affects
-    # performance_weighted uniformly.
-    for rep_name, X_train in rep_dict_train.items():
-        X_val = rep_dict_val[rep_name]
+        # Test each representation individually using _evaluate_allocation
+        # so that monkey-patching the evaluator (e.g. F11 experiments) affects
+        # performance_weighted uniformly.
+        for rep_name, X_train in rep_dict_train.items():
+            X_val = rep_dict_val[rep_name]
 
-        # Clean
-        X_train_clean = np.clip(X_train, -1e10, 1e10)
-        X_train_clean = np.nan_to_num(X_train_clean, nan=0.0, posinf=1e10, neginf=-1e10)
-        X_val_clean = np.clip(X_val, -1e10, 1e10)
-        X_val_clean = np.nan_to_num(X_val_clean, nan=0.0, posinf=1e10, neginf=-1e10)
+            # Clean
+            X_train_clean = np.clip(X_train, -1e10, 1e10)
+            X_train_clean = np.nan_to_num(X_train_clean, nan=0.0, posinf=1e10, neginf=-1e10)
+            X_val_clean = np.clip(X_val, -1e10, 1e10)
+            X_val_clean = np.nan_to_num(X_val_clean, nan=0.0, posinf=1e10, neginf=-1e10)
 
-        score = _evaluate_allocation(X_train_clean, X_val_clean,
-                                     train_labels, val_labels,
-                                     internal_evaluator=internal_evaluator)
+            score = _evaluate_allocation(X_train_clean, X_val_clean,
+                                         train_labels, val_labels,
+                                         internal_evaluator=internal_evaluator)
 
-        baseline_scores[rep_name] = max(score, 0.0)  # Clip negative scores to 0
+            baseline_scores[rep_name] = max(score, 0.0)  # Clip negative scores to 0
     
     # Apply weighting scheme to transform baseline scores into weights
     weights = _compute_allocation_weights(baseline_scores, weighting_scheme,
@@ -2925,8 +2932,9 @@ def create_hybrid(base_reps, labels,
                  lower_is_better=False,
                  # Internal evaluator for greedy/performance_weighted allocation
                  internal_evaluator='svm',
-                 # Pre-computed importance scores (deduplication optimisation)
+                 # Pre-computed scores (deduplication optimisation)
                  precomputed_importance=None,
+                 precomputed_alloc_scores=None,
                  **kwargs):
     """
     Create hybrid representation by combining features from multiple base representations.
@@ -3170,6 +3178,7 @@ def create_hybrid(base_reps, labels,
             rep_dict_train, rep_dict_val, train_labels, val_labels,
             total_budget=budget, weighting_scheme=ws, weighting_params=wp,
             internal_evaluator=internal_evaluator,
+            precomputed_scores=precomputed_alloc_scores,
         )
 
         # Compute importance on ALL data passed to create_hybrid (the full fold
