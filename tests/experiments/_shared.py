@@ -1497,7 +1497,8 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
 # =============================================================================
 
 def precompute_hybrid_searches(reps, labels, groups, config,
-                               augmentations=None, verbose=True):
+                               augmentations=None, verbose=True,
+                               task_type='auto', metric='auto'):
     """Find the best hybrid across all budgets for each augmentation condition.
 
     ONE find_best_hybrid call per aug_condition with ALL budgets. Baselines
@@ -1521,6 +1522,13 @@ def precompute_hybrid_searches(reps, labels, groups, config,
 
     budgets = config.get('budgets', [100])
     speed = config.get('search_speed', 'fast')
+
+    # Resolve metric from task_type if 'auto'
+    if metric == 'auto':
+        if task_type == 'classification':
+            metric = 'accuracy'
+        else:
+            metric = 'r2'
 
     # Determine which aug conditions to precompute
     # Skip 'capped' — experiments that need it compute on demand
@@ -1549,6 +1557,8 @@ def precompute_hybrid_searches(reps, labels, groups, config,
                 augmentations=augs,
                 augmentation_strategy=aug_strat,
                 speed=speed,
+                task_type=task_type,
+                metric=metric,
                 cache=True,
                 verbose=verbose,
             )
