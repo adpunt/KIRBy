@@ -2925,6 +2925,8 @@ def create_hybrid(base_reps, labels,
                  lower_is_better=False,
                  # Internal evaluator for greedy/performance_weighted allocation
                  internal_evaluator='svm',
+                 # Pre-computed importance scores (deduplication optimisation)
+                 precomputed_importance=None,
                  **kwargs):
     """
     Create hybrid representation by combining features from multiple base representations.
@@ -3169,11 +3171,17 @@ def create_hybrid(base_reps, labels,
             total_budget=budget, weighting_scheme=ws, weighting_params=wp,
             internal_evaluator=internal_evaluator,
         )
-        
-        # Compute importance on TRAIN split (consistent with allocation decision)
-        importance_scores = compute_feature_importance(
-            rep_dict_train, train_labels, method=importance_method, **kwargs
-        )
+
+        # Compute importance on ALL data passed to create_hybrid (the full fold
+        # training set). The internal train/val split above is for allocation
+        # evaluation only. Importance should use all available labeled data.
+        # Use precomputed scores if available (deduplication across search configs).
+        if precomputed_importance is not None:
+            importance_scores = precomputed_importance
+        else:
+            importance_scores = compute_feature_importance(
+                base_reps, labels, method=importance_method, **kwargs
+            )
         
         # Select features based on train importance, then apply to full data
         _, feature_info = concatenate_features(
@@ -3201,10 +3209,13 @@ def create_hybrid(base_reps, labels,
         
     # FIXED ALLOCATION (BACKWARDS COMPATIBLE)
     elif allocation_method == 'fixed':
-        # Compute importance on TRAIN split (consistent with other methods)
-        importance_scores = compute_feature_importance(
-            rep_dict_train, train_labels, method=importance_method, **kwargs
-        )
+        # Compute importance on all data (consistent with performance_weighted)
+        if precomputed_importance is not None:
+            importance_scores = precomputed_importance
+        else:
+            importance_scores = compute_feature_importance(
+                base_reps, labels, method=importance_method, **kwargs
+            )
         
         # Use same n_per_rep for all reps
         allocation = {rep: n_per_rep for rep in base_reps.keys()}
