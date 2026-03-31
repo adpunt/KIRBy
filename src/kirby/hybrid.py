@@ -3178,6 +3178,14 @@ def create_hybrid(base_reps, labels,
         # Use precomputed scores if available (deduplication across search configs).
         if precomputed_importance is not None:
             importance_scores = precomputed_importance
+            # If filters were applied, subset precomputed importance to match
+            # filtered feature indices (precomputed on unfiltered data)
+            if filter_index_maps:
+                importance_scores = {
+                    rn: scores[filter_index_maps[rn]]
+                    if rn in filter_index_maps else scores
+                    for rn, scores in importance_scores.items()
+                }
         else:
             importance_scores = compute_feature_importance(
                 base_reps, labels, method=importance_method, **kwargs
@@ -3212,6 +3220,12 @@ def create_hybrid(base_reps, labels,
         # Compute importance on all data (consistent with performance_weighted)
         if precomputed_importance is not None:
             importance_scores = precomputed_importance
+            if filter_index_maps:
+                importance_scores = {
+                    rn: scores[filter_index_maps[rn]]
+                    if rn in filter_index_maps else scores
+                    for rn, scores in importance_scores.items()
+                }
         else:
             importance_scores = compute_feature_importance(
                 base_reps, labels, method=importance_method, **kwargs
