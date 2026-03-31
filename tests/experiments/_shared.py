@@ -1550,7 +1550,7 @@ def precompute_hybrid_searches(reps, labels, groups, config,
                 augmentation_strategy=aug_strat,
                 speed=speed,
                 cache=True,
-                verbose=False,
+                verbose=verbose,
             )
             results[aug_cond] = search
             elapsed = time.time() - t0
