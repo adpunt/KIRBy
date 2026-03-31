@@ -1498,11 +1498,11 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
 
 def precompute_hybrid_searches(reps, labels, groups, config,
                                augmentations=None, verbose=True):
-    """Warm find_best_hybrid disk cache for all (budget, aug_condition) combos.
+    """Find the best hybrid across all budgets for each augmentation condition.
 
-    Calls find_best_hybrid with budgets=[budget] for each budget value and
-    each augmentation condition. All calls use cache=True — first run computes,
-    subsequent runs hit disk cache instantly.
+    ONE find_best_hybrid call per aug_condition with ALL budgets. Baselines
+    and importance scores are computed once and reused across budgets.
+    best_overall from each search is the best config INCLUDING the winning budget.
 
     Args:
         reps: Base representations {name: array}.
@@ -1513,7 +1513,9 @@ def precompute_hybrid_searches(reps, labels, groups, config,
         verbose: Print progress.
 
     Returns:
-        Dict mapping (budget, aug_cond) -> SearchResult.
+        Dict mapping aug_cond -> SearchResult. Keys: 'none', and 'uncapped'
+        if augmentations are available. Each SearchResult contains results
+        across ALL budgets.
     """
     from kirby.find_best_hybrid import find_best_hybrid
 
@@ -1521,89 +1523,102 @@ def precompute_hybrid_searches(reps, labels, groups, config,
     speed = config.get('search_speed', 'fast')
 
     # Determine which aug conditions to precompute
+    # Skip 'capped' — experiments that need it compute on demand
     aug_conditions = ['none']
     if augmentations is not None and len(augmentations) > 0:
-        aug_conditions.extend(['uncapped', 'capped'])
+        aug_conditions.append('uncapped')
 
-    total = len(budgets) * len(aug_conditions)
     results = {}
     t_start = time.time()
-    idx = 0
 
-    for budget in budgets:
-        for aug_cond in aug_conditions:
-            idx += 1
-            augs = augmentations if aug_cond != 'none' else None
-            aug_strat = aug_cond if aug_cond != 'none' else 'uncapped'
+    for idx, aug_cond in enumerate(aug_conditions, 1):
+        augs = augmentations if aug_cond != 'none' else None
+        aug_strat = aug_cond if aug_cond != 'none' else 'uncapped'
+
+        if verbose:
+            print(f"  [{idx}/{len(aug_conditions)}] aug={aug_cond} "
+                  f"budgets={budgets} ...", end='', flush=True)
+
+        t0 = time.time()
+        try:
+            search = find_best_hybrid(
+                base_reps=reps,
+                labels=labels,
+                groups=groups,
+                budgets=budgets,
+                augmentations=augs,
+                augmentation_strategy=aug_strat,
+                speed=speed,
+                cache=True,
+                verbose=False,
+            )
+            results[aug_cond] = search
+            elapsed = time.time() - t0
 
             if verbose:
-                print(f"  [{idx}/{total}] budget={budget} aug={aug_cond} ...",
-                      end='', flush=True)
+                if search.best_overall:
+                    bp = search.best_overall['blueprint']
+                    score = search.best_overall.get('score_mean', 0)
+                    print(f" done {elapsed:.1f}s "
+                          f"(alloc={bp.allocation_method}, "
+                          f"budget={bp.budget}, score={score:.4f})")
+                else:
+                    print(f" done {elapsed:.1f}s (no results)")
 
-            t0 = time.time()
-            try:
-                search = find_best_hybrid(
-                    base_reps=reps,
-                    labels=labels,
-                    groups=groups,
-                    budgets=[budget],
-                    augmentations=augs,
-                    augmentation_strategy=aug_strat,
-                    speed=speed,
-                    cache=True,
-                    verbose=False,
-                )
-                results[(budget, aug_cond)] = search
-                elapsed = time.time() - t0
-
-                if verbose:
-                    if search.best_overall:
-                        bp = search.best_overall['blueprint']
-                        score = search.best_overall.get('score_mean', 0)
-                        print(f" done {elapsed:.1f}s "
-                              f"(alloc={bp.allocation_method}, score={score:.4f})")
-                    else:
-                        print(f" done {elapsed:.1f}s (no results)")
-
-            except Exception as e:
-                if verbose:
-                    print(f" FAILED: {e}")
-                results[(budget, aug_cond)] = None
+        except Exception as e:
+            if verbose:
+                print(f" FAILED: {e}")
+            results[aug_cond] = None
 
     if verbose:
         total_time = time.time() - t_start
         n_ok = sum(1 for v in results.values() if v is not None)
-        print(f"  Precompute complete: {n_ok}/{total} searches in {total_time:.0f}s")
+        print(f"  Precompute complete: {n_ok}/{len(aug_conditions)} "
+              f"searches in {total_time:.0f}s")
 
     return results
 
 
-def get_precomputed_search(reps, labels, groups, budget,
+def get_precomputed_search(reps, labels, groups, budget=None,
                            aug_condition='uncapped', augmentations=None,
                            speed='fast', return_fitted=False,
-                           weight_method=None, **kwargs):
-    """Retrieve a hybrid search result for a specific (budget, aug_condition).
+                           weight_method=None, precomputed=None, **kwargs):
+    """Retrieve a hybrid search result for a given aug_condition.
 
-    Calls find_best_hybrid with budgets=[budget] and cache=True.
-    If precompute_hybrid_searches() already ran with matching params,
-    this returns instantly from disk cache.
+    If precomputed dict is passed (from data['precomputed_searches']),
+    returns the cached SearchResult directly — instant, no computation.
+    Otherwise calls find_best_hybrid with all budgets and cache=True.
+
+    The returned SearchResult contains results across ALL budgets.
+    Use search.best_overall for the best config (including optimal budget).
 
     Args:
         reps: Base representations {name: array}.
         labels: Target values.
         groups: Group labels for CV (or None).
-        budget: Feature budget (int).
+        budget: DEPRECATED — ignored. Budget is searched, not specified.
+            Kept for backwards compatibility (old callers pass it).
         aug_condition: 'none', 'uncapped', or 'capped'.
         augmentations: {aug_name: array} or None.
         speed: Search speed tier ('fast' or 'full').
         return_fitted: If True, also fit best config on full data.
         weight_method: Importance method for weights (needed if return_fitted).
+        precomputed: Dict from data['precomputed_searches'] (optional).
         **kwargs: Additional args passed to find_best_hybrid.
 
     Returns:
         SearchResult from find_best_hybrid.
     """
+    # Fast path: return from in-memory precomputed results
+    if precomputed is not None:
+        result = precomputed.get(aug_condition)
+        if result is not None:
+            return result
+
+    # On-demand: call find_best_hybrid with all budgets and cache=True
     from kirby.find_best_hybrid import find_best_hybrid
+
+    default_budgets = [10, 25, 50, 100, 200, 500, 1000, 2000]
 
     augs = augmentations if aug_condition != 'none' else None
     aug_strat = aug_condition if aug_condition != 'none' else 'uncapped'
@@ -1612,7 +1627,7 @@ def get_precomputed_search(reps, labels, groups, budget,
         base_reps=reps,
         labels=labels,
         groups=groups,
-        budgets=[budget],
+        budgets=default_budgets,
         augmentations=augs,
         augmentation_strategy=aug_strat,
         speed=speed,
@@ -1624,8 +1639,8 @@ def get_precomputed_search(reps, labels, groups, budget,
     )
 
 
-def get_fitted_hybrid(reps, labels, groups, budget, aug_condition='uncapped',
-                      augmentations=None, speed='fast'):
+def get_fitted_hybrid(reps, labels, groups, budget=None, aug_condition='uncapped',
+                      augmentations=None, speed='fast', precomputed=None):
     """Get X_hybrid and feature_info from a cached search (return_fitted=True).
 
     For full-dataset experiments that need the hybrid matrix without per-fold splitting.
@@ -1634,20 +1649,21 @@ def get_fitted_hybrid(reps, labels, groups, budget, aug_condition='uncapped',
         reps: Base representations {name: array}.
         labels: Target values.
         groups: Group labels for CV (or None).
-        budget: Feature budget (int).
+        budget: DEPRECATED — ignored. Budget is searched, not specified.
         aug_condition: 'none', 'uncapped', or 'capped'.
         augmentations: {aug_name: array} or None.
         speed: Search speed tier ('fast' or 'full').
+        precomputed: Dict from data['precomputed_searches'] (optional).
 
     Returns:
         (X_hybrid, feature_info, SearchResult)
     """
     search = get_precomputed_search(
-        reps, labels, groups, budget=budget,
+        reps, labels, groups,
         aug_condition=aug_condition, augmentations=augmentations,
-        speed=speed, return_fitted=True)
+        speed=speed, return_fitted=True, precomputed=precomputed)
     if search.fitted_result is None:
-        raise RuntimeError(f"No fitted result for budget={budget} aug={aug_condition}")
+        raise RuntimeError(f"No fitted result for aug={aug_condition}")
     fitted = search.fitted_result
     fi = {}
     for rep_name, indices in fitted.selected_indices.items():

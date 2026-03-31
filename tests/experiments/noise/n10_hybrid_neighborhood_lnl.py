@@ -400,7 +400,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             search = get_precomputed_search(
                 reps, labels, groups, budget=b,
                 aug_condition='uncapped', augmentations=augmentations,
-                speed=config.get('search_speed', 'fast'))
+                speed=config.get('search_speed', 'fast'),
+                precomputed=data.get('precomputed_searches'))
             if search.best_overall:
                 blueprints[b] = search.best_overall['blueprint']
         except Exception as e:

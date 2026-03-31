@@ -690,7 +690,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         search = get_precomputed_search(
             reps, labels, groups, budget=budget,
             aug_condition='uncapped', augmentations=data.get('augmentations'),
-            speed=search_speed)
+            speed=search_speed,
+            precomputed=data.get('precomputed_searches'))
         if search.best_overall:
             hybrid_blueprint = search.best_overall['blueprint']
             print(f"  Hybrid blueprint: alloc={hybrid_blueprint.allocation_method}, "

@@ -147,7 +147,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Get hybrid blueprint ONCE (shared across all strategies/folds)
     search = get_precomputed_search(
         reps, labels, groups, budget=budget, aug_condition='uncapped',
-        augmentations=augmentations, speed=config.get('search_speed', 'fast'))
+        augmentations=augmentations, speed=config.get('search_speed', 'fast'),
+        precomputed=data.get('precomputed_searches'))
     bp = search.best_overall['blueprint'] if search.best_overall else None
     if bp is None:
         print("  WARNING: No blueprint found, skipping")
