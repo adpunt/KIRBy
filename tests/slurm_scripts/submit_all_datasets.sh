@@ -75,6 +75,8 @@ get_mem_override() {
             echo "128G" ;;
         tz_her2_binary|bh_doyle_plates|flab_binding_koenig|flab_expression_koenig)
             echo "128G" ;;
+        flab_immunogenicity_marks)
+            echo "128G" ;;
         tcga_luad_vs_lusc|tcga_brca_pam50)
             echo "128G" ;;
         *) echo "" ;;

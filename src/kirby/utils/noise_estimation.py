@@ -221,21 +221,26 @@ class DistanceWeightedResidualEstimator(NoiseEstimator):
 class ActivityCliffAwareEstimator(NoiseEstimator):
     """
     Distinguish noise from activity cliffs.
-    
+
     Key insight:
     - NOISE: Sample deviates from neighbors, but neighbors agree with each other
     - ACTIVITY CLIFF: Sample deviates from neighbors, and neighbors also disagree
-    
+
     noise_score = deviation * (1 - local_variance_normalized)
-    
+
     This downweights deviations in high-variance regions (cliffs).
     """
-    
+
     def __init__(self, k: int = 10, metric: str = 'cosine', random_state: int = 42):
         super().__init__(random_state)
         self.k = k
         self.metric = metric
-        
+
+    def fit(self, X: np.ndarray, y: np.ndarray):
+        """Sklearn-style fit interface. Delegates to estimate()."""
+        self.estimate(X, y)
+        return self
+
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         k = min(self.k, len(y) - 1)
         global_std = np.std(y) + 1e-10
