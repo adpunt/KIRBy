@@ -22,14 +22,15 @@ import time
 import numpy as np
 from scipy.stats import spearmanr
 from sklearn.preprocessing import StandardScaler
-from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    get_hybrid_features_and_weights, estimate_intrinsic_dim_mle, make_cv_splitter,
+    get_fitted_hybrid, flatten_fold_weights,
+    estimate_intrinsic_dim_mle, make_cv_splitter,
     get_domain_metric, get_model_factories,
     build_fold_hybrid,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DOWNSTREAM_MODELS,
 )
 from experiments.similarity.similarity_helpers import (
     similarity_activity_correlation, violation_rate,
@@ -46,7 +47,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     n_folds = config['n_splits']
     search_speed = config['search_speed']
-    budgets = kwargs.get('budgets', config.get('budgets', [15, 25, 50, 75, 100, 150, 200]))
+    budgets = kwargs.get('budgets', config.get('budgets',
+                         [10, 25, 50, 100, 250, 500, 1000, 2000]))
     n_sample = kwargs.get('n_sample', 5000)
 
     reps = data['reps']
@@ -57,14 +59,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     task_type = data.get('task_type', 'regression')
     is_clf = task_type == 'classification'
-    rf_factory = get_model_factories(['rf'], task_type=task_type,
-                                      n_samples=len(labels))['rf']
-
-    def _make_knn(n_train):
-        k = min(5, n_train - 1)
-        if is_clf:
-            return KNeighborsClassifier(n_neighbors=k)
-        return KNeighborsRegressor(n_neighbors=k)
+    model_factories = get_model_factories(DOWNSTREAM_MODELS, task_type=task_type,
+                                           n_samples=len(labels))
+    print(f"  Models: {list(model_factories.keys())}")
 
     results = {'budgets': {}}
 
@@ -93,10 +90,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         t0 = time.time()
 
         try:
-            X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-                reps, labels, groups, search_speed, 'lightgbm_gain',
-                budget=budget,
-                augmentations=data.get('augmentations'))
+            X_hybrid, fi, search = get_fitted_hybrid(
+                reps, labels, groups,
+                aug_condition='uncapped' if data.get('augmentations') else 'none',
+                augmentations=data.get('augmentations'),
+                speed=search_speed,
+                precomputed=data.get('precomputed_searches'),
+                internal_evaluators=DISTANCE_EVALUATORS,
+                budgets=[budget],
+                downstream_model='knn')
+            weights_flat = flatten_fold_weights(fi) if fi else np.ones(X_hybrid.shape[1])
         except Exception as e:
             print(f"    Failed: {e}")
             results['budgets'][budget] = {'error': str(e)}
@@ -122,13 +125,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         dist_corr, _ = spearmanr(d_full_sampled, d_hybrid_sampled)
 
         # Prediction quality: RF R2 (CV) -- use search blueprint's method
-        bp = search.best_overall['blueprint'] if search.best_overall else None
+        bp = search.best_by_model['knn']['blueprint'] if search.best_by_model.get('knn') else None
         if bp is None:
             print(f"    No blueprint at budget={budget}, skipping prediction")
             continue
 
-        rf_scores = []
-        knn_scores = []
+        model_scores = {mname: [] for mname in model_factories}
         for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
             y_train, y_val = labels[train_idx], labels[val_idx]
 
@@ -148,34 +150,37 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             X_tr_s = scaler.fit_transform(X_tr_h)
             X_va_s = scaler.transform(X_va_h)
 
-            # RF
-            rf = rf_factory()
-            rf.fit(X_tr_s, y_train)
-            rf_scores.append(metric_fn(y_val, rf.predict(X_va_s)))
+            for mname, mfactory in model_factories.items():
+                try:
+                    m = mfactory()
+                    m.fit(X_tr_s, y_train)
+                    model_scores[mname].append(metric_fn(y_val, m.predict(X_va_s)))
+                except Exception:
+                    pass
 
-            # kNN
-            knn = _make_knn(len(y_train))
-            knn.fit(X_tr_s, y_train)
-            knn_scores.append(metric_fn(y_val, knn.predict(X_va_s)))
-
-        rf_score = float(np.mean(rf_scores)) if rf_scores else float('nan')
-        knn_score = float(np.mean(knn_scores)) if knn_scores else float('nan')
+        model_means = {mname: float(np.mean(s)) if s else float('nan')
+                       for mname, s in model_scores.items()}
 
         elapsed = time.time() - t0
 
-        results['budgets'][budget] = {
+        budget_result = {
             'actual_dim': actual_dim,
             'mle_id': mle_id,
-            'rf_score': rf_score,
-            'knn_score': knn_score,
             'metric': metric_name,
             'sac_rho': sac_rho,
             'violation_rate': viol,
             'dist_corr_with_full': dist_corr,
             'time_seconds': elapsed,
+            'model_scores': model_means,
         }
-        print(f"    dim={actual_dim} (MLE_ID={mle_id:.1f}): RF_{metric_name}={rf_score:.4f}, "
-              f"kNN_{metric_name}={knn_score:.4f}, "
+        # Keep rf_score/knn_score for backwards compat with Pareto/optimal analysis
+        budget_result['rf_score'] = model_means.get('rf', float('nan'))
+        budget_result['knn_score'] = model_means.get('knn', float('nan'))
+        results['budgets'][budget] = budget_result
+
+        scores_str = ', '.join(f"{mn}={model_means[mn]:.4f}" for mn in model_means
+                               if not np.isnan(model_means[mn]))
+        print(f"    dim={actual_dim} (MLE_ID={mle_id:.1f}): {scores_str}, "
               f"SAC={sac_rho:.4f}, viol={viol:.3f}, dist_corr={dist_corr:.3f}")
 
     # Per-rep baselines (unweighted + weighted)
@@ -203,21 +208,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                               standardize=True)
             sac_rep_w, _ = similarity_activity_correlation(D_rep_w, labels, n_sample, is_clf=is_clf)
 
-        rf_rep = []
-        knn_rep = []
+        rep_model_scores = {mname: [] for mname in model_factories}
         for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
             y_train, y_val = labels[train_idx], labels[val_idx]
             scaler = StandardScaler()
             X_tr = scaler.fit_transform(X[train_idx])
             X_va = scaler.transform(X[val_idx])
 
-            rf = rf_factory()
-            rf.fit(X_tr, y_train)
-            rf_rep.append(metric_fn(y_val, rf.predict(X_va)))
+            for mname, mfactory in model_factories.items():
+                try:
+                    m = mfactory()
+                    m.fit(X_tr, y_train)
+                    rep_model_scores[mname].append(metric_fn(y_val, m.predict(X_va)))
+                except Exception:
+                    pass
 
-            knn = _make_knn(len(y_train))
-            knn.fit(X_tr, y_train)
-            knn_rep.append(metric_fn(y_val, knn.predict(X_va)))
+        rep_model_means = {mname: float(np.mean(s)) if s else float('nan')
+                           for mname, s in rep_model_scores.items()}
 
         # MLE ID for individual rep
         try:
@@ -226,91 +233,74 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         except Exception:
             rep_mle = float('nan')
 
-        results['per_rep'][rep_name] = {
+        rep_result = {
             'dim': X.shape[1],
             'mle_id': rep_mle,
-            'rf_score': float(np.mean(rf_rep)),
-            'knn_score': float(np.mean(knn_rep)),
             'metric': metric_name,
             'sac_rho': sac_rep,
             'sac_rho_weighted': sac_rep_w,
             'violation_rate': viol_rep,
+            'model_scores': rep_model_means,
+            'rf_score': rep_model_means.get('rf', float('nan')),
+            'knn_score': rep_model_means.get('knn', float('nan')),
         }
+        results['per_rep'][rep_name] = rep_result
         if best_rep_name is None or sac_rep > best_rep_sac:
             best_rep_sac = sac_rep
             best_rep_name = rep_name
-        print(f"    {rep_name} (dim={X.shape[1]}): RF_{metric_name}={np.mean(rf_rep):.4f}, "
-              f"kNN_{metric_name}={np.mean(knn_rep):.4f}, SAC={sac_rep:.4f}, SAC_w={sac_rep_w:.4f}")
+        scores_str = ', '.join(f"{mn}={rep_model_means[mn]:.4f}" for mn in rep_model_means
+                               if not np.isnan(rep_model_means[mn]))
+        print(f"    {rep_name} (dim={X.shape[1]}): {scores_str}, "
+              f"SAC={sac_rep:.4f}, SAC_w={sac_rep_w:.4f}")
 
     results['best_individual_rep'] = best_rep_name
     print(f"  Best individual rep: {best_rep_name} (SAC={best_rep_sac:.4f})")
 
-    # Concat (reference, not standard practice)
-    print(f"\n  Concat reference (dim={full_dim}):")
-    sac_full, _ = similarity_activity_correlation(D_full, labels, n_sample, is_clf=is_clf)
-    viol_full = violation_rate(D_full, labels, k=5, is_clf=is_clf)
+    # Top-3 baselines per model
+    _best_fn = min if lower_is_better else max
+    _default = 999 if lower_is_better else -999
+    results['top3_by_model'] = {}
+    for mname in model_factories:
+        top3 = sorted(results['per_rep'].items(),
+                       key=lambda x: x[1].get('model_scores', {}).get(mname, _default),
+                       reverse=not lower_is_better)[:3]
+        results['top3_by_model'][mname] = [
+            (name, r['model_scores'].get(mname, float('nan'))) for name, r in top3]
+    # Backwards compat
+    results['top3_rf'] = results['top3_by_model'].get('rf', [])
+    results['top3_knn'] = results['top3_by_model'].get('knn', [])
+    for mname in list(model_factories.keys())[:3]:
+        print(f"\n  Top-3 baselines by {mname} {metric_name}:")
+        for name, score in results['top3_by_model'][mname]:
+            print(f"    {name}: {score:.4f}")
 
-    rf_scores_full = []
-    knn_scores_full = []
-    for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
-        y_train, y_val = labels[train_idx], labels[val_idx]
-        scaler = StandardScaler()
-        X_tr = scaler.fit_transform(X_concat[train_idx])
-        X_va = scaler.transform(X_concat[val_idx])
-
-        rf = rf_factory()
-        rf.fit(X_tr, y_train)
-        rf_scores_full.append(metric_fn(y_val, rf.predict(X_va)))
-
-        knn = _make_knn(len(y_train))
-        knn.fit(X_tr, y_train)
-        knn_scores_full.append(metric_fn(y_val, knn.predict(X_va)))
-
-    concat_ref = {
-        'dim': full_dim,
-        'rf_score': float(np.mean(rf_scores_full)),
-        'knn_score': float(np.mean(knn_scores_full)),
-        'metric': metric_name,
-        'sac_rho': sac_full,
-        'violation_rate': viol_full,
-    }
-    # Weighted concat SAC
-    if importance is not None:
-        w_concat = np.concatenate([importance[k] for k in sorted(reps.keys())
-                                   if k in importance])
-        D_full_w = compute_distance_matrix(X_concat, feature_weights=w_concat,
-                                           standardize=True)
-        sac_full_w, _ = similarity_activity_correlation(D_full_w, labels, n_sample, is_clf=is_clf)
-        concat_ref['sac_rho_weighted'] = sac_full_w
-        print(f"    RF_{metric_name}={concat_ref['rf_score']:.4f}, "
-              f"kNN_{metric_name}={concat_ref['knn_score']:.4f}, "
-              f"SAC={sac_full:.4f}, SAC_w={sac_full_w:.4f}")
-    else:
-        print(f"    RF_{metric_name}={concat_ref['rf_score']:.4f}, "
-              f"kNN_{metric_name}={concat_ref['knn_score']:.4f}, "
-              f"SAC={sac_full:.4f}, viol={viol_full:.3f}")
-    results['concat_reference'] = concat_ref
-
-    # Find optimal budget for prediction vs similarity
+    # Find optimal budget for prediction (per model) vs similarity
     budget_list = sorted(results['budgets'].keys())
     if budget_list:
         _best_fn = min if lower_is_better else max
         _default = 999 if lower_is_better else -999
-        best_rf_budget = _best_fn(budget_list,
-                                   key=lambda b: results['budgets'][b].get('rf_score', _default))
-        best_knn_budget = _best_fn(budget_list,
-                                    key=lambda b: results['budgets'][b].get('knn_score', _default))
+
+        # Per-model optimal budget
+        best_model_budgets = {}
+        for mname in model_factories:
+            best_model_budgets[mname] = _best_fn(
+                budget_list,
+                key=lambda b: results['budgets'][b].get('model_scores', {}).get(mname, _default))
+
         # Highest SAC = best distance-activity correlation
         best_sac_budget = max(budget_list,
                               key=lambda b: results['budgets'][b].get('sac_rho', -999))
 
         results['optimal'] = {
-            'best_rf_budget': best_rf_budget,
-            'best_knn_budget': best_knn_budget,
+            'best_model_budgets': best_model_budgets,
             'best_sac_budget': best_sac_budget,
+            # Backwards compat
+            'best_rf_budget': best_model_budgets.get('rf'),
+            'best_knn_budget': best_model_budgets.get('knn'),
         }
-        print(f"\n  Optimal budgets: RF={best_rf_budget}, "
-              f"kNN={best_knn_budget}, SAC={best_sac_budget}")
+        best_rf_budget = best_model_budgets.get('rf', budget_list[0])
+        budget_strs = ', '.join(f"{mn}={b}" for mn, b in best_model_budgets.items())
+        print(f"\n  Optimal budgets: {budget_strs}, SAC={best_sac_budget}")
 
         # ── Pareto frontier: SAC (higher=better) vs RF (direction depends on metric) ──
         # Both objectives should be "higher is better" for Pareto.
@@ -379,7 +369,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 if __name__ == '__main__':
     parser = create_experiment_parser('S08: Optimal Dimension for Similarity vs Prediction',
                                      has_delta=True, has_augment=True)
-    parser.add_argument('--budgets', type=int, nargs='+', default=[15, 25, 50, 75, 100, 150, 200],
+    parser.add_argument('--budgets', type=int, nargs='+', default=[10, 25, 50, 100, 250, 500, 1000, 2000],
                         help='Budget values to test')
     parser.add_argument('--n-sample', type=int, default=5000,
                         help='Number of pairs to sample for SAC (default: 5000)')

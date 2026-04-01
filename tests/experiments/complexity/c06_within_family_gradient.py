@@ -125,7 +125,8 @@ def run(data, config, output_dir, dataset_name, families=None):
                           f"[{bp.importance_method}/{bp.allocation_method}]")
 
             # Optimal budget comes from find_best_hybrid's own search
-            best = search.best_overall
+            # Single-model search: var_name is the only model
+            best = search.best_by_model.get(var_name)
             if best:
                 fam_result['optimal_budget'][var_name] = {
                     'budget': best['blueprint'].budget,

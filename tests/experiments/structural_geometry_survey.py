@@ -221,9 +221,10 @@ def run_geometry_survey(
             search = find_best_hybrid(
                 base_reps=all_reps_for_hybrid, labels=labels, groups=groups,
                 speed='fast', return_fitted=True, verbose=False, cache=True)
-            if search.fitted_result is not None:
+            fitted = search.fitted_results.get('rf')
+            if fitted is not None:
                 fi = {r: {'selected_indices': idx}
-                      for r, idx in search.fitted_result.selected_indices.items()}
+                      for r, idx in fitted.selected_indices.items()}
                 geo_reps['kirby_hybrid'] = apply_feature_selection(
                     all_reps_for_hybrid, fi)
                 print(f"  Hybrid built: {geo_reps['kirby_hybrid'].shape[1]}D")

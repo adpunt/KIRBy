@@ -154,11 +154,11 @@ def expected_improvement(mu, sigma, y_best, xi=0.01):
 
 
 # =============================================================================
-# GP FITTING WITH ERROR HANDLING
+# SURROGATE MODEL FITTING (GP, NGBoost, BNN)
 # =============================================================================
 
 def fit_gp(X_train, y_train, optimize=True, kernel_type='rbf'):
-    """Fit a GP with specified kernel. Returns (gp, success).
+    """Fit a GP with specified kernel. Returns (model, success).
 
     In high-D, the kernel matrix may become singular. We catch LinAlgError
     and return (None, False) — this IS the expected result showing GP failure.
@@ -184,6 +184,136 @@ def fit_gp(X_train, y_train, optimize=True, kernel_type='rbf'):
         return None, False
     except ValueError:
         return None, False
+
+
+def fit_ngboost(X_train, y_train, **kwargs):
+    """Fit NGBoost for probabilistic prediction. Returns (model, success).
+
+    NGBoost gives mu + sigma via natural gradient boosting over a Normal base.
+    """
+    try:
+        from ngboost import NGBRegressor
+        from ngboost.distns import Normal
+        model = NGBRegressor(Dist=Normal, n_estimators=100, learning_rate=0.05,
+                             random_state=42, verbose=False)
+        model.fit(X_train, y_train)
+        return model, True
+    except ImportError:
+        print("      WARNING: ngboost not installed, skipping")
+        return None, False
+    except Exception:
+        return None, False
+
+
+def fit_bnn(X_train, y_train, **kwargs):
+    """Fit a Bayesian Neural Network for probabilistic prediction. Returns (model, success).
+
+    Uses MC-Dropout BNN (sklearn-compatible wrapper). Predictions via
+    multiple forward passes with dropout enabled give mean + std.
+    """
+    try:
+        from kirby.models.bnn import BNNRegressor
+        model = BNNRegressor(hidden_sizes=(64, 32), dropout=0.1, epochs=100,
+                             mc_samples=20, random_state=42)
+        model.fit(X_train, y_train)
+        return model, True
+    except ImportError:
+        print("      WARNING: BNN model not available, skipping")
+        return None, False
+    except Exception:
+        return None, False
+
+
+def fit_gauche_gp(X_train, y_train, **kwargs):
+    """Fit a Gauche GP for molecular BO. Returns (model, success).
+
+    Gauche provides molecular-aware GP kernels (Tanimoto on fingerprints,
+    graph kernels, etc.) via GPyTorch.
+    """
+    try:
+        from gauche.dataloader import MolPropLoader
+        from gauche.kernels.fingerprint_kernels.tanimoto_kernel import TanimotoKernel as GaucheTanimoto
+        import gpytorch
+        import torch
+
+        # Lightweight Gauche GP wrapper with predict(X, return_std=True) interface
+        class _GaucheGPModel:
+            def __init__(self):
+                self.model = None
+                self.likelihood = None
+                self.train_x = None
+
+            def fit(self, X, y):
+                self.train_x = torch.tensor(X, dtype=torch.float64)
+                train_y = torch.tensor(y, dtype=torch.float64)
+                self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
+
+                class _ExactGP(gpytorch.models.ExactGP):
+                    def __init__(self_, lh, tx, ty):
+                        super().__init__(tx, ty, lh)
+                        self_.mean_module = gpytorch.means.ConstantMean()
+                        self_.covar_module = gpytorch.kernels.ScaleKernel(GaucheTanimoto())
+                    def forward(self_, x):
+                        return gpytorch.distributions.MultivariateNormal(
+                            self_.mean_module(x), self_.covar_module(x))
+
+                self.model = _ExactGP(self.likelihood, self.train_x, train_y)
+                self.model.double()
+                self.likelihood.double()
+                self.model.train()
+                self.likelihood.train()
+                optimizer = torch.optim.Adam(self.model.parameters(), lr=0.1)
+                mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.model)
+                for _ in range(50):
+                    optimizer.zero_grad()
+                    output = self.model(self.train_x)
+                    loss = -mll(output, train_y)
+                    loss.backward()
+                    optimizer.step()
+
+            def predict(self, X, return_std=False):
+                self.model.eval()
+                self.likelihood.eval()
+                with torch.no_grad(), gpytorch.settings.fast_pred_var():
+                    test_x = torch.tensor(X, dtype=torch.float64)
+                    pred = self.likelihood(self.model(test_x))
+                mu = pred.mean.numpy()
+                if return_std:
+                    return mu, pred.stddev.numpy()
+                return mu
+
+        model = _GaucheGPModel()
+        model.fit(X_train, y_train)
+        return model, True
+    except ImportError:
+        print("      WARNING: gauche not installed, skipping")
+        return None, False
+    except Exception as e:
+        print(f"      Gauche GP failed: {e}")
+        return None, False
+
+
+# Map surrogate names to (fit_fn, supports_kernel_type)
+SURROGATE_MODELS = {
+    'gp': (fit_gp, True),         # sklearn GP, supports kernel_type arg
+    'gauche_gp': (fit_gauche_gp, False),  # Gauche GP with Tanimoto
+    'ngboost': (fit_ngboost, False),
+    'bnn': (fit_bnn, False),
+}
+
+
+def predict_with_uncertainty(model, X):
+    """Unified predict interface: returns (mu, sigma).
+
+    Works with sklearn GP, NGBoost, BNN, and Gauche GP — all support
+    predict(X, return_std=True) or equivalent.
+    """
+    # NGBoost uses .pred_dist()
+    if hasattr(model, 'pred_dist'):
+        dist = model.pred_dist(X)
+        return dist.loc, dist.scale
+    # Everything else (GP, BNN) uses predict(X, return_std=True)
+    return model.predict(X, return_std=True)
 
 
 # =============================================================================
@@ -237,7 +367,7 @@ def compute_combined_objective(y, qed_scores, lower_is_better=False):
 
 def run_bo_loop(X_labeled, y_labeled, X_pool, y_pool,
                 max_iterations, refit_interval=10, rng=None,
-                kernel_type='rbf'):
+                kernel_type='rbf', surrogate='gp'):
     """Run a single BO loop in a given representation space.
 
     Args:
@@ -246,57 +376,57 @@ def run_bo_loop(X_labeled, y_labeled, X_pool, y_pool,
         X_pool: pool features, shape (n_pool, d)
         y_pool: pool targets (hidden, revealed one at a time)
         max_iterations: BO budget
-        refit_interval: refit GP hyperparameters every N iterations
-        kernel_type: 'rbf' or 'tanimoto' (for binary fingerprints)
+        refit_interval: refit surrogate every N iterations
+        kernel_type: 'rbf' or 'tanimoto' (for GP kernels only)
+        surrogate: surrogate model name ('gp', 'gauche_gp', 'ngboost', 'bnn')
 
     Returns:
         best_so_far: list of best-found-so-far at each iteration
-        gp_failures: number of GP fitting failures
+        surrogate_failures: number of surrogate fitting failures
     """
     if rng is None:
         rng = np.random.RandomState(42)
+
+    fit_fn, supports_kt = SURROGATE_MODELS.get(surrogate, (fit_gp, True))
+
     X_lab = X_labeled.copy()
     y_lab = y_labeled.copy()
-    pool_mask = np.ones(len(y_pool), dtype=bool)  # True = still in pool
+    pool_mask = np.ones(len(y_pool), dtype=bool)
 
     best_so_far = [float(np.max(y_lab))]
-    gp_failures = 0
-    gp = None
-    last_optimize = -refit_interval  # force optimization on first fit
+    surrogate_failures = 0
+    last_optimize = -refit_interval
 
     for it in range(max_iterations):
         if pool_mask.sum() == 0:
             break
 
-        # Decide whether to optimize hyperparameters
         optimize = (it - last_optimize) >= refit_interval
         if optimize:
             last_optimize = it
 
-        # Fit GP on labeled set
-        gp, success = fit_gp(X_lab, y_lab, optimize=optimize,
-                             kernel_type=kernel_type)
+        # Fit surrogate on labeled set
+        fit_kwargs = {}
+        if supports_kt:
+            fit_kwargs['optimize'] = optimize
+            fit_kwargs['kernel_type'] = kernel_type
+        model, success = fit_fn(X_lab, y_lab, **fit_kwargs)
 
         if not success:
-            gp_failures += 1
-            # Fall back to random selection when GP fails
+            surrogate_failures += 1
             available = np.where(pool_mask)[0]
             selected_pool_idx = available[rng.randint(len(available))]
         else:
-            # Predict on pool
             X_pool_available = X_pool[pool_mask]
-            mu, sigma = gp.predict(X_pool_available, return_std=True)
+            mu, sigma = predict_with_uncertainty(model, X_pool_available)
 
-            # Compute EI
             y_best = float(np.max(y_lab))
             ei = expected_improvement(mu, sigma, y_best)
 
-            # Select top-1 by EI
             best_ei_idx = np.argmax(ei)
             available = np.where(pool_mask)[0]
             selected_pool_idx = available[best_ei_idx]
 
-        # "Reveal" label: move from pool to labeled set
         x_new = X_pool[selected_pool_idx:selected_pool_idx + 1]
         y_new = y_pool[selected_pool_idx]
 
@@ -306,7 +436,7 @@ def run_bo_loop(X_labeled, y_labeled, X_pool, y_pool,
 
         best_so_far.append(float(max(best_so_far[-1], y_new)))
 
-    return best_so_far, gp_failures
+    return best_so_far, surrogate_failures
 
 
 def run_random_loop(y_labeled, y_pool, max_iterations, rng):
@@ -563,6 +693,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     groups = data.get('groups')
     n_samples = len(labels)
 
+    # S11 is molecular-only: requires ECFP4 or molecular fingerprints for
+    # Tanimoto kernel condition and library-screening framing.
+    domain = data.get('domain', 'molecular')
+    if domain not in ('molecular', 'reaction'):
+        print(f"  Skipping S11: domain='{domain}' (molecular-only experiment)")
+        return {'skipped': True, 'reason': f'domain={domain}', 'domain': domain}
+
     if n_samples < 200:
         print(f"  Skipping S11: n={n_samples} < 200 (BO seed set too small for greedy allocation)")
         return {'error': 'dataset_too_small', 'n_samples': n_samples}
@@ -573,7 +710,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reps, labels, groups, budget=hybrid_budget,
             aug_condition='none', speed=config.get('search_speed', 'fast'),
             precomputed=data.get('precomputed_searches'))
-        bp = search.best_overall['blueprint']
+        bp = search.best_by_model['rf']['blueprint'] if search.best_by_model.get('rf') else None
     except Exception:
         bp = None
 
@@ -640,6 +777,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'hybrid_50d_refit',
         'random_50d',
         'random_acq',
+        # Surrogate model comparison on hybrid space
+        'hybrid_ngboost',
+        'hybrid_bnn',
+        'hybrid_gauche_gp',
     ]
     if multi_objective and y_multi is not None:
         conditions.extend(['multi_obj_hybrid', 'multi_obj_random'])
@@ -814,6 +955,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     X_pool = scaler.transform(X_rep[pool_idx])
                     dim = X_rep.shape[1]
 
+                elif condition.startswith('hybrid_') and condition.split('_', 1)[1] in SURROGATE_MODELS:
+                    # Surrogate model variant on hybrid features
+                    X_seed, X_pool, dim, _, _ = build_hybrid_features(
+                        reps, y_bo, seed_idx, pool_idx,
+                        budget=hybrid_budget, bp=bp)
+
                 else:
                     print(f"      Unknown condition: {condition}")
                     continue
@@ -826,12 +973,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             cond_dim = dim
             print(f"      dim: {dim}")
 
+            # --- Determine surrogate model ---
+            if condition.startswith('hybrid_') and condition.split('_', 1)[1] in SURROGATE_MODELS:
+                surr = condition.split('_', 1)[1]
+            else:
+                surr = 'gp'
+
             # --- Run BO loop ---
             kt = 'tanimoto' if condition == 'tanimoto_ecfp4' else 'rbf'
             curve, gp_fail = run_bo_loop(
                 X_seed, y_seed, X_pool, y_pool,
                 max_iterations=max_iterations,
                 refit_interval=10, rng=rng,
+                surrogate=surr,
                 kernel_type=kt,
             )
             all_curves.append(curve)

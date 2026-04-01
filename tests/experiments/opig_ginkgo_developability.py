@@ -242,10 +242,11 @@ def evaluate_property(prop_name, rep_names, n_folds):
             augmentations=aug_dict if aug_dict else None,
             augmentation_strategy='uncapped',
             speed='fast', return_fitted=True, verbose=False, cache=True)
-        if search.fitted_result is not None:
+        fitted = search.fitted_results.get('rf')
+        if fitted is not None:
             all_reps = {**reps, **(aug_dict or {})}
             fi = {r: {'selected_indices': idx}
-                  for r, idx in search.fitted_result.selected_indices.items()}
+                  for r, idx in fitted.selected_indices.items()}
             reps['kirby_hybrid'] = apply_feature_selection(all_reps, fi)
     except Exception:
         pass

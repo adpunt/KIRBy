@@ -9,7 +9,7 @@ The actual search logic lives in the domain-agnostic library.
 Datasets (all regression):
   - logd:  OpenADMET-LogD (7309 molecules, lipophilicity)
   - caco2: OpenADMET-Caco2_Efflux (3777 molecules, P-gp efflux ratio, log-transformed)
-  - herg:  ChEMBL-hERG-Ki (1415 molecules, hERG binding affinity pKi)
+  - herg_ki: ChEMBL-hERG-Ki (1415 molecules, hERG binding affinity pKi)
   - qm9:   QM9 HOMO-LUMO gap (2000 molecules, quantum mechanical property)
 
 Usage:
@@ -380,7 +380,7 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
     Built-in datasets (all regression):
       - logd:  OpenADMET-LogD (~7309 molecules)
       - caco2: OpenADMET-Caco2_Efflux (~3777 molecules, log-transformed)
-      - herg:  ChEMBL-hERG-Ki (~1415 molecules, pKi)
+      - herg_ki: ChEMBL-hERG-Ki (~1415 molecules, pKi)
       - qm9:   QM9 HOMO-LUMO gap (~2000 molecules, normalized)
       - adme_hlm:  Polaris ADME-Fang — human liver microsome clearance (~3087 molecules)
       - adme_rlm:  Polaris ADME-Fang — rat liver microsome clearance (~3054 molecules)
@@ -416,10 +416,18 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
         print(f"  Loaded {len(smiles)} molecules from OpenADMET-Caco2_Efflux")
         smiles, labels, task_type = smiles, labels, 'regression'
 
-    elif name_lower == 'herg':
+    elif name_lower in ('herg_ki',):
         smiles, labels = _fetch_chembl_herg_ki()
         print(f"  Loaded {len(smiles)} molecules from ChEMBL-hERG-Ki (pKi)")
         smiles, labels, task_type = smiles, labels, 'regression'
+
+    elif name_lower == 'herg':
+        from kirby.datasets.herg import load_herg_tdc
+        data = load_herg_tdc()
+        smiles = data['smiles']
+        labels = data['labels']
+        print(f"  Loaded {len(smiles)} molecules from TDC-hERG (binary blocker clf)")
+        smiles, labels, task_type = smiles, labels, 'classification'
 
     elif name_lower == 'qm9':
         from kirby.datasets.qm9 import load_qm9
@@ -471,7 +479,7 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
 
     else:
         raise ValueError(f"Unknown dataset: {name_or_path}. "
-                         f"Built-in options: logd, caco2, herg, qm9, "
+                         f"Built-in options: logd, caco2, herg_ki, herg, qm9, "
                          f"adme_hlm, adme_rlm, adme_mdr1, adme_solubility")
 
     # InChIKey deduplication: same molecule with different SMILES notation
@@ -748,18 +756,9 @@ def print_summary(result: SearchResult, task_type: str):
     print("RESULTS SUMMARY")
     print("=" * 80)
 
-    # Best overall
-    best = result.best_overall
-    if best is None:
+    if not result.best_by_model:
         print("\nNo results found.")
         return
-
-    bp = _get(best, 'blueprint')
-    print(f"\n=== BEST OVERALL ===")
-    print(f"Model: {_get(best, 'model')}, Method: {bp.allocation_method}, "
-          f"Importance: {bp.importance_method}, Budget: {bp.budget}")
-    print(f"{metric}: {_get(best, 'score_mean'):.4f} +/- {_get(best, 'score_std'):.4f}, "
-          f"Dimension: {_get(best, 'n_features')}")
 
     # Best by model
     print(f"\n=== BEST BY MODEL ===")
@@ -921,7 +920,6 @@ def save_results(
 
         return d
 
-    best = result.best_overall
     output = {
         'metadata': {
             'dataset': dataset_name,
@@ -929,7 +927,6 @@ def save_results(
             'reps_available': reps_tested,
             'timestamp': datetime.now().isoformat(),
         },
-        'best_overall': result_to_dict(best, include_weights=True) if best else None,
         'best_by_dimension': {
             str(tier): result_to_dict(r)
             for tier, r in result.best_by_dimension.items()
@@ -1204,7 +1201,7 @@ Output:
         """
     )
 
-    parser.add_argument('dataset', type=str, help="'logd', 'caco2', 'herg', 'qm9', 'adme_hlm', 'adme_rlm', 'adme_mdr1', 'adme_solubility', or path to CSV")
+    parser.add_argument('dataset', type=str, help="'logd', 'caco2', 'herg_ki', 'qm9', 'adme_hlm', 'adme_rlm', 'adme_mdr1', 'adme_solubility', or path to CSV")
     parser.add_argument('--smiles-col', type=str, default='smiles')
     parser.add_argument('--target-col', type=str, default='target')
     parser.add_argument('--reps', type=str, default='fast',
@@ -1432,15 +1429,17 @@ Output:
     save_results(result, args.dataset, args.search, list(base_reps.keys()), output_path,
                  base_reps=base_reps, labels=labels)
 
-    # Generate explanations if requested
-    if args.explain and result.best_overall is not None:
-        generate_explanations(
-            best_result=result.best_overall,
-            base_reps=base_reps,
-            smiles=smiles,
-            labels=labels,
-            output_path=output_path,
-        )
+    # Generate explanations if requested (iterate over models)
+    if args.explain and result.best_by_model:
+        for model_name, best_result in result.best_by_model.items():
+            print(f"\n--- Explanations for model: {model_name} ---")
+            generate_explanations(
+                best_result=best_result,
+                base_reps=base_reps,
+                smiles=smiles,
+                labels=labels,
+                output_path=output_path.replace('.json', f'_{model_name}.json'),
+            )
 
     return 0
 

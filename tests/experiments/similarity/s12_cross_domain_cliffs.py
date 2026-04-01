@@ -27,7 +27,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories, get_precomputed_search,
-    build_fold_hybrid,
+    build_fold_hybrid, DOWNSTREAM_MODELS,
 )
 from kirby.hybrid import create_hybrid
 from kirby.hybrid import apply_feature_selection
@@ -121,8 +121,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     task_type = data.get('task_type', 'regression')
     is_clf = task_type == 'classification'
-    _rf_factory = get_model_factories(['rf'], task_type=task_type,
-                                       n_samples=len(labels))['rf']
+    model_factories = get_model_factories(DOWNSTREAM_MODELS, task_type=task_type,
+                                           n_samples=len(labels))
+    print(f"  Models: {list(model_factories.keys())}")
 
     sim_threshold = kwargs.get('sim_threshold', 0.55)
     activity_k = kwargs.get('activity_k', 2.0)
@@ -159,7 +160,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             aug_condition='uncapped', augmentations=data.get('augmentations'),
             speed=search_speed,
             precomputed=data.get('precomputed_searches'))
-        bp = search.best_overall['blueprint']
+        bp = search.best_by_model['rf']['blueprint'] if search.best_by_model.get('rf') else None
     except Exception as e:
         print(f"  Hybrid search failed: {e}")
         return {'error': str(e), 'cliff_info': cliff_info}
@@ -167,67 +168,81 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # CV evaluation: per-rep baselines + hybrid on cliff vs non-cliff
     sample_X = next(iter(reps.values()))
 
-    # Per-rep baselines (best single rep)
-    best_rep_cliff_score = None
-    best_rep_name = None
+    # Per-rep baselines per model
     per_rep_results = {}
 
     for rep_name, X_rep in reps.items():
-        cliff_scores = []
-        noncliff_scores = []
-        for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, mode=mode):
-            scaler = StandardScaler()
-            X_tr = scaler.fit_transform(X_rep[train_idx])
-            X_va = scaler.transform(X_rep[val_idx])
+        rep_model_results = {}
+        for mname, mfactory in model_factories.items():
+            cliff_scores = []
+            noncliff_scores = []
+            for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, mode=mode):
+                scaler = StandardScaler()
+                X_tr = scaler.fit_transform(X_rep[train_idx])
+                X_va = scaler.transform(X_rep[val_idx])
 
-            rf = _rf_factory()
-            rf.fit(X_tr, labels[train_idx])
-            y_pred = rf.predict(X_va)
+                try:
+                    m = mfactory()
+                    m.fit(X_tr, labels[train_idx])
+                    y_pred = m.predict(X_va)
+                except Exception:
+                    continue
+
+                val_cliff = [i for i, vi in enumerate(val_idx) if vi in cliff_indices]
+                val_noncliff = [i for i, vi in enumerate(val_idx) if vi not in cliff_indices]
+
+                if len(val_cliff) >= 2:
+                    cliff_scores.append(metric_fn(labels[val_idx[val_cliff]], y_pred[val_cliff]))
+                if len(val_noncliff) >= 2:
+                    noncliff_scores.append(metric_fn(labels[val_idx[val_noncliff]], y_pred[val_noncliff]))
+
+            rep_model_results[mname] = {
+                'cliff_score': float(np.mean(cliff_scores)) if cliff_scores else float('nan'),
+                'noncliff_score': float(np.mean(noncliff_scores)) if noncliff_scores else float('nan'),
+            }
+        per_rep_results[rep_name] = rep_model_results
+
+    # Hybrid evaluation per model
+    hybrid_results_by_model = {}
+    for mname, mfactory in model_factories.items():
+        h_cliff_scores = []
+        h_noncliff_scores = []
+        for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, mode=mode):
+            train_reps_h = {k: v[train_idx] for k, v in reps.items()}
+            val_reps_h = {k: v[val_idx] for k, v in reps.items()}
+            aug_tr = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
+            aug_va = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
+
+            try:
+                X_tr_h, X_va_h, fi = build_fold_hybrid(
+                    train_reps_h, val_reps_h, labels[train_idx], bp,
+                    augmentations_train=aug_tr, augmentations_val=aug_va)
+            except Exception:
+                continue
+
+            scaler = StandardScaler()
+            X_tr_s = scaler.fit_transform(X_tr_h)
+            X_va_s = scaler.transform(X_va_h)
+
+            try:
+                m = mfactory()
+                m.fit(X_tr_s, labels[train_idx])
+                y_pred = m.predict(X_va_s)
+            except Exception:
+                continue
 
             val_cliff = [i for i, vi in enumerate(val_idx) if vi in cliff_indices]
             val_noncliff = [i for i, vi in enumerate(val_idx) if vi not in cliff_indices]
 
             if len(val_cliff) >= 2:
-                cliff_scores.append(metric_fn(labels[val_idx[val_cliff]], y_pred[val_cliff]))
+                h_cliff_scores.append(metric_fn(labels[val_idx[val_cliff]], y_pred[val_cliff]))
             if len(val_noncliff) >= 2:
-                noncliff_scores.append(metric_fn(labels[val_idx[val_noncliff]], y_pred[val_noncliff]))
+                h_noncliff_scores.append(metric_fn(labels[val_idx[val_noncliff]], y_pred[val_noncliff]))
 
-        per_rep_results[rep_name] = {
-            'cliff_score': float(np.mean(cliff_scores)) if cliff_scores else float('nan'),
-            'noncliff_score': float(np.mean(noncliff_scores)) if noncliff_scores else float('nan'),
+        hybrid_results_by_model[mname] = {
+            'cliff_score': float(np.mean(h_cliff_scores)) if h_cliff_scores else float('nan'),
+            'noncliff_score': float(np.mean(h_noncliff_scores)) if h_noncliff_scores else float('nan'),
         }
-
-    # Hybrid evaluation
-    hybrid_cliff_scores = []
-    hybrid_noncliff_scores = []
-    for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, mode=mode):
-        train_reps_h = {k: v[train_idx] for k, v in reps.items()}
-        val_reps_h = {k: v[val_idx] for k, v in reps.items()}
-        aug_tr = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
-        aug_va = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
-
-        try:
-            X_tr_h, X_va_h, fi = build_fold_hybrid(
-                train_reps_h, val_reps_h, labels[train_idx], bp,
-                augmentations_train=aug_tr, augmentations_val=aug_va)
-        except Exception:
-            continue
-
-        scaler = StandardScaler()
-        X_tr_s = scaler.fit_transform(X_tr_h)
-        X_va_s = scaler.transform(X_va_h)
-
-        rf = _rf_factory()
-        rf.fit(X_tr_s, labels[train_idx])
-        y_pred = rf.predict(X_va_s)
-
-        val_cliff = [i for i, vi in enumerate(val_idx) if vi in cliff_indices]
-        val_noncliff = [i for i, vi in enumerate(val_idx) if vi not in cliff_indices]
-
-        if len(val_cliff) >= 2:
-            hybrid_cliff_scores.append(metric_fn(labels[val_idx[val_cliff]], y_pred[val_cliff]))
-        if len(val_noncliff) >= 2:
-            hybrid_noncliff_scores.append(metric_fn(labels[val_idx[val_noncliff]], y_pred[val_noncliff]))
 
     results = {
         'domain': domain,
@@ -235,20 +250,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'lower_is_better': lower_is_better,
         'cliff_info': convert_numpy(cliff_info),
         'per_rep': convert_numpy(per_rep_results),
-        'hybrid': {
-            'cliff_score': float(np.mean(hybrid_cliff_scores)) if hybrid_cliff_scores else float('nan'),
-            'noncliff_score': float(np.mean(hybrid_noncliff_scores)) if hybrid_noncliff_scores else float('nan'),
-        },
+        'hybrid': convert_numpy(hybrid_results_by_model),
     }
 
-    # Summary
-    h_cliff = results['hybrid']['cliff_score']
-    best_rep_cliff = max((r['cliff_score'] for r in per_rep_results.values()
-                          if not np.isnan(r['cliff_score'])), default=float('nan'))
-    if not np.isnan(h_cliff) and not np.isnan(best_rep_cliff):
-        results['hybrid_cliff_delta'] = float(h_cliff - best_rep_cliff)
-        print(f"\n  Hybrid cliff {metric_name}: {h_cliff:.4f} "
-              f"(best rep: {best_rep_cliff:.4f}, delta: {h_cliff - best_rep_cliff:+.4f})")
+    # Summary per model
+    print(f"\n  Hybrid cliff {metric_name} per model:")
+    results['hybrid_cliff_delta'] = {}
+    for mname in model_factories:
+        h_cliff = hybrid_results_by_model.get(mname, {}).get('cliff_score', float('nan'))
+        # Best single rep cliff score for this model
+        rep_cliffs = [r.get(mname, {}).get('cliff_score', float('nan'))
+                      for r in per_rep_results.values()]
+        rep_cliffs = [s for s in rep_cliffs if not np.isnan(s)]
+        best_rep_cliff = max(rep_cliffs, default=float('nan')) if not lower_is_better \
+            else min(rep_cliffs, default=float('nan'))
+        if not np.isnan(h_cliff) and not np.isnan(best_rep_cliff):
+            delta = h_cliff - best_rep_cliff
+            results['hybrid_cliff_delta'][mname] = float(delta)
+            print(f"    {mname}: {h_cliff:.4f} (best rep: {best_rep_cliff:.4f}, "
+                  f"delta: {delta:+.4f})")
 
     return results
 

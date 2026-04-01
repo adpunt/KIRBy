@@ -254,16 +254,16 @@ def print_summary(result: SearchResult, task_type: str):
     print("NUCLEOTIDE HYBRID SEARCH RESULTS")
     print("=" * 70)
 
-    best = result.best_overall
-    if best is None:
+    if not result.best_by_model:
         print("No results found.")
         return
 
-    print(f"\nBest overall:")
-    print(f"  Model:      {best.get('model', 'unknown')}")
-    print(f"  Dimension:  {best.get('budget', 'unknown')}")
-    print(f"  Allocation: {best.get('allocation_method', 'unknown')}")
-    print(f"  MCC:        {best.get('score_mean', float('nan')):.4f}")
+    print(f"\nBest by model:")
+    for model_name, best in result.best_by_model.items():
+        print(f"  [{model_name}]")
+        print(f"    Dimension:  {best.get('budget', 'unknown')}")
+        print(f"    Allocation: {best.get('allocation_method', 'unknown')}")
+        print(f"    MCC:        {best.get('score_mean', float('nan')):.4f}")
 
     if hasattr(result, 'baselines') and result.baselines:
         print(f"\nBaseline comparison (individual reps):")
@@ -308,7 +308,6 @@ def save_results(result: SearchResult, dataset_name: str,
             'reps_tested': reps_tested,
             'timestamp': datetime.now().isoformat(),
         },
-        'best_overall': result.best_overall,
         'best_by_model': result.best_by_model if hasattr(result, 'best_by_model') else {},
         'baselines': result.baselines if hasattr(result, 'baselines') else {},
     }

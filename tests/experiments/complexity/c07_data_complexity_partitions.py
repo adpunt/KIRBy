@@ -145,9 +145,15 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                     verbose=False,
                     cache=True,
                 )
-                best = search.best_overall
+                # Pick the best result across all models
+                best = None
+                best_model_name = None
+                for m_name, m_best in search.best_by_model.items():
+                    if best is None or m_best['score_mean'] > best['score_mean']:
+                        best = m_best
+                        best_model_name = m_name
                 best_config = {
-                    'model': best['model'],
+                    'model': best.get('model', best_model_name),
                     'budget': best['blueprint'].budget,
                     'r2': best['score_mean'],
                     'r2_std': best['score_std'],

@@ -28,6 +28,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories,
+    DOWNSTREAM_MODELS_NOISE,
     get_precomputed_search,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
@@ -177,9 +178,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
-    model_factory = get_model_factories(
-        ['rf'], task_type=task_type,
-        n_samples=len(labels))['rf']
+    model_factories = get_model_factories(
+        DOWNSTREAM_MODELS_NOISE, task_type=task_type,
+        n_samples=len(labels))
+    print(f"  Models: {list(model_factories.keys())}")
 
     sample_X = next(iter(reps.values()))
 
@@ -210,7 +212,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         reps, labels, groups, budget=100, aug_condition='uncapped',
         augmentations=augmentations, speed=config.get('search_speed', 'fast'),
         precomputed=data.get('precomputed_searches'))
-    bp = search.best_overall['blueprint'] if search.best_overall else None
+    best_rf = search.best_by_model.get('rf')
+    bp = best_rf['blueprint'] if best_rf else None
     if bp is None:
         print("  WARNING: No blueprint found, skipping")
         return {'error': 'no_blueprint', 'metric': metric_name}
@@ -226,7 +229,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     }
 
     # ── Cache fold splits and label-independent eval features ──
-    clean_scores = []
+    clean_scores_by_model = {}
     fold_data = []
 
     for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
@@ -244,10 +247,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         X_eval_train_s = sc_eval.fit_transform(X_eval_train)
         X_eval_val_s = sc_eval.transform(X_eval_val)
 
-        # Clean baseline
-        rf_clean = model_factory()
-        rf_clean.fit(X_eval_train_s, y_train_clean)
-        clean_scores.append(float(metric_fn(y_val, rf_clean.predict(X_eval_val_s))))
+        # Clean baseline per model
+        for mname, mfactory in model_factories.items():
+            if mname not in clean_scores_by_model:
+                clean_scores_by_model[mname] = []
+            try:
+                m = mfactory()
+                m.fit(X_eval_train_s, y_train_clean)
+                clean_scores_by_model[mname].append(
+                    float(metric_fn(y_val, m.predict(X_eval_val_s))))
+            except Exception:
+                pass
 
         train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
 
@@ -263,7 +273,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'X_eval_val_s': X_eval_val_s,
         })
 
-    clean_mean = float(np.mean(clean_scores))
+    clean_mean_by_model = {mn: float(np.mean(s)) if s else float('nan')
+                           for mn, s in clean_scores_by_model.items()}
+    # Primary clean score for retention calculation (use RF)
+    clean_mean = clean_mean_by_model.get('rf', float('nan'))
 
     # ── Main loop: noise type × strength ──
     for noise_type in NOISE_TYPES:
@@ -280,10 +293,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for strength, partial_frac in strength_variants:
             strength_key = str(strength) if partial_frac is None else f'{strength}_frac{partial_frac}'
 
-            noisy_baseline_scores = []
+            noisy_baseline_by_model = {mn: [] for mn in model_factories}
             # {space: {method: [scores]}} for track A
             track_a_acc = {}
-            # {space: {estimator: [scores]}} for track B
+            # {space: {estimator: {model: [scores]}}} for track B
             track_b_acc = {}
 
             for fi, fd in enumerate(fold_data):
@@ -295,11 +308,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                          strength, seed=42 + fi,
                                          is_clf=is_clf, **kw)
 
-                # Noisy baseline
-                rf_noisy = model_factory()
-                rf_noisy.fit(fd['X_eval_train_s'], y_noisy)
-                noisy_baseline_scores.append(float(
-                    metric_fn(fd['y_val'], rf_noisy.predict(fd['X_eval_val_s']))))
+                # Noisy baseline per model
+                for mname, mfactory in model_factories.items():
+                    try:
+                        m = mfactory()
+                        m.fit(fd['X_eval_train_s'], y_noisy)
+                        noisy_baseline_by_model[mname].append(
+                            float(metric_fn(fd['y_val'], m.predict(fd['X_eval_val_s']))))
+                    except Exception:
+                        pass
 
                 # Build spaces from NOISY labels (realistic — no oracle leak)
                 spaces, feature_info, scaler_h = _build_spaces(
@@ -360,39 +377,52 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                     for est_name in estimators:
                         if est_name not in track_b_acc[space_name]:
-                            track_b_acc[space_name][est_name] = []
+                            track_b_acc[space_name][est_name] = {}
                         try:
                             est = get_noise_estimator(est_name)
-                            scores = est.estimate(X_space, y_noisy)
-                            weights = weights_from_scores(scores, strength=0.1,
+                            noise_scores = est.estimate(X_space, y_noisy)
+                            weights = weights_from_scores(noise_scores, strength=0.1,
                                                           method='exponential')
-                            rf = model_factory()
-                            rf.fit(fd['X_eval_train_s'], y_noisy,
-                                   sample_weight=weights)
-                            score = float(metric_fn(fd['y_val'],
-                                                     rf.predict(fd['X_eval_val_s'])))
-                            track_b_acc[space_name][est_name].append(score)
+                            for mname, mfactory in model_factories.items():
+                                if mname not in track_b_acc[space_name][est_name]:
+                                    track_b_acc[space_name][est_name][mname] = []
+                                try:
+                                    m = mfactory()
+                                    # Try sample_weight; skip if unsupported
+                                    try:
+                                        m.fit(fd['X_eval_train_s'], y_noisy,
+                                              sample_weight=weights)
+                                    except TypeError:
+                                        m.fit(fd['X_eval_train_s'], y_noisy)
+                                    score = float(metric_fn(fd['y_val'],
+                                                             m.predict(fd['X_eval_val_s'])))
+                                    track_b_acc[space_name][est_name][mname].append(score)
+                                except Exception:
+                                    pass
                         except Exception:
                             pass
 
-            # Aggregate
-            noisy_mean = float(np.mean(noisy_baseline_scores)) if noisy_baseline_scores else float('nan')
+            # Aggregate per model
+            noisy_mean_by_model = {mn: float(np.mean(s)) if s else float('nan')
+                                   for mn, s in noisy_baseline_by_model.items()}
+            noisy_mean = noisy_mean_by_model.get('rf', float('nan'))
             gap = clean_mean - noisy_mean
 
             strength_result = {
+                'noisy_score_by_model': noisy_mean_by_model,
+                'clean_score_by_model': clean_mean_by_model,
                 'noisy_score': noisy_mean,
                 'clean_score': clean_mean,
                 'track_a': {},
                 'track_b': {},
             }
 
-            # Track A aggregation
+            # Track A aggregation (DNN-specific, no model loop)
             for space_name, methods in track_a_acc.items():
                 space_a = {}
                 for method_name, score_list in methods.items():
                     if score_list:
                         mean_s = float(np.mean(score_list))
-                        # Retention: score / clean_score
                         retention = float(mean_s / clean_mean * 100) if abs(clean_mean) > 1e-10 else float('nan')
                         space_a[method_name] = {
                             'score': mean_s,
@@ -400,17 +430,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         }
                 strength_result['track_a'][space_name] = space_a
 
-            # Track B aggregation
-            for space_name, estimators in track_b_acc.items():
+            # Track B aggregation (per estimator × per model)
+            for space_name, est_dict in track_b_acc.items():
                 space_b = {}
-                for est_name, score_list in estimators.items():
-                    if score_list:
-                        denoised = float(np.mean(score_list))
-                        recovery = float((denoised - noisy_mean) / gap * 100) if abs(gap) > 1e-10 else float('nan')
-                        space_b[est_name] = {
-                            'denoised': denoised,
-                            'recovery': recovery,
-                        }
+                for est_name, model_dict in est_dict.items():
+                    est_results = {}
+                    for mname, score_list in model_dict.items():
+                        if score_list:
+                            denoised = float(np.mean(score_list))
+                            mn_noisy = noisy_mean_by_model.get(mname, noisy_mean)
+                            mn_clean = clean_mean_by_model.get(mname, clean_mean)
+                            mn_gap = mn_clean - mn_noisy
+                            recovery = float((denoised - mn_noisy) / mn_gap * 100) if abs(mn_gap) > 1e-10 else float('nan')
+                            est_results[mname] = {
+                                'denoised': denoised,
+                                'recovery': recovery,
+                            }
+                    space_b[est_name] = est_results
                 strength_result['track_b'][space_name] = space_b
 
             nt_result['per_strength'][strength_key] = convert_numpy(strength_result)

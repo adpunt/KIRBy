@@ -112,7 +112,8 @@ NAMED_ALLOCATIONS = {
 def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labels,
                            total_budget=100, step_size=10, patience=3,
                            internal_evaluator='ridge',
-                           model=None, metric_fn=None, lower_is_better=False):
+                           model=None, metric_fn=None, lower_is_better=False,
+                           greedy_tolerance=0.0):
     """
     Greedy forward feature allocation with plateau detection.
 
@@ -130,6 +131,9 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
         model: Optional sklearn estimator for metric-aware evaluation.
         metric_fn: Optional callable(y_true, y_pred) -> float.
         lower_is_better: Whether lower metric values are better (default: False).
+        greedy_tolerance: Absolute tolerance for patience tracking (default: 0.0).
+            When > 0, iterations that score within tolerance of the best are
+            treated as non-degrading and reset the patience counter.
 
     Returns:
         tuple: (best_allocation, history, final_feature_info)
@@ -206,6 +210,9 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
             best_val_r2 = iter_best_gain
             best_allocation = allocation.copy()
             best_feature_info = iter_best_feat_info
+            steps_without_improvement = 0
+        elif greedy_tolerance > 0 and iter_best_gain >= best_val_r2 - greedy_tolerance:
+            # Within tolerance of best — don't count as degradation
             steps_without_improvement = 0
         else:
             steps_without_improvement += 1
@@ -653,7 +660,8 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
 def allocate_dominant_greedy(rep_dict_train, rep_dict_val, train_labels, val_labels,
                              total_budget=100, step_size=10, patience=3,
                              dominant_fraction=0.7, internal_evaluator='ridge',
-                             model=None, metric_fn=None, lower_is_better=False):
+                             model=None, metric_fn=None, lower_is_better=False,
+                             greedy_tolerance=0.0):
     """
     Dominant-greedy allocation: give the best rep a large share, greedy-fill the rest.
 
@@ -767,6 +775,8 @@ def allocate_dominant_greedy(rep_dict_train, rep_dict_val, train_labels, val_lab
             best_val_score = iter_best_gain
             best_allocation = allocation.copy()
             best_feature_info = iter_best_feat_info
+            steps_without_improvement = 0
+        elif greedy_tolerance > 0 and iter_best_gain >= best_val_score - greedy_tolerance:
             steps_without_improvement = 0
         else:
             steps_without_improvement += 1
@@ -1175,6 +1185,102 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             return m.score(X_val_scaled, y_val)
         return r2_score(y_val, m.predict(X_val_scaled))
 
+    elif internal_evaluator == 'knn':
+        from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
+        # Adaptive k matching find_best_hybrid's model factory
+        k = min(5, max(1, int(np.sqrt(X_train_scaled.shape[0]))))
+        k = min(k, X_train_scaled.shape[0] - 1)
+        if k < 1:
+            return 0.0
+        if is_classification:
+            m = KNeighborsClassifier(n_neighbors=k, n_jobs=-1)
+        else:
+            m = KNeighborsRegressor(n_neighbors=k, n_jobs=-1)
+        m.fit(X_train_scaled, y_train)
+        if is_classification:
+            return m.score(X_val_scaled, y_val)
+        return r2_score(y_val, m.predict(X_val_scaled))
+
+    elif internal_evaluator == 'catboost':
+        try:
+            from catboost import CatBoostRegressor, CatBoostClassifier
+            if is_classification:
+                m = CatBoostClassifier(iterations=50, depth=4, verbose=0,
+                                       random_seed=42)
+            else:
+                m = CatBoostRegressor(iterations=50, depth=4, verbose=0,
+                                      random_seed=42)
+            m.fit(X_train_scaled, y_train)
+            if is_classification:
+                return m.score(X_val_scaled, y_val)
+            return r2_score(y_val, m.predict(X_val_scaled))
+        except ImportError:
+            return _evaluate_allocation(X_train, X_val, y_train, y_val,
+                                        internal_evaluator='lightgbm')
+
+    elif internal_evaluator == 'dnn':
+        try:
+            from kirby.models.dnn import DNNRegressor, DNNClassifier
+            if is_classification:
+                m = DNNClassifier(epochs=50, patience=10)
+            else:
+                m = DNNRegressor(epochs=50, patience=10)
+            m.fit(X_train_scaled, y_train)
+            if is_classification:
+                return m.score(X_val_scaled, y_val)
+            return r2_score(y_val, m.predict(X_val_scaled))
+        except Exception:
+            return _evaluate_allocation(X_train, X_val, y_train, y_val,
+                                        internal_evaluator='mlp')
+
+    elif internal_evaluator == 'cnn':
+        try:
+            from kirby.models.cnn import CNNRegressor, CNNClassifier
+            if is_classification:
+                m = CNNClassifier(epochs=50, patience=10)
+            else:
+                m = CNNRegressor(epochs=50, patience=10)
+            m.fit(X_train_scaled, y_train)
+            if is_classification:
+                return m.score(X_val_scaled, y_val)
+            return r2_score(y_val, m.predict(X_val_scaled))
+        except Exception:
+            return _evaluate_allocation(X_train, X_val, y_train, y_val,
+                                        internal_evaluator='mlp')
+
+    elif internal_evaluator == 'ngboost':
+        try:
+            from ngboost import NGBRegressor, NGBClassifier
+            from ngboost.distns import Normal, Bernoulli
+            if is_classification:
+                m = NGBClassifier(Dist=Bernoulli, n_estimators=50,
+                                  learning_rate=0.05, random_state=42, verbose=False)
+            else:
+                m = NGBRegressor(Dist=Normal, n_estimators=50,
+                                 learning_rate=0.05, random_state=42, verbose=False)
+            m.fit(X_train_scaled, y_train)
+            if is_classification:
+                return m.score(X_val_scaled, y_val)
+            return r2_score(y_val, m.predict(X_val_scaled))
+        except ImportError:
+            return _evaluate_allocation(X_train, X_val, y_train, y_val,
+                                        internal_evaluator='lightgbm')
+
+    elif internal_evaluator == 'bnn':
+        try:
+            from kirby.models.bnn import BNNRegressor, BNNClassifier
+            if is_classification:
+                m = BNNClassifier(epochs=50, patience=10, mc_samples=5)
+            else:
+                m = BNNRegressor(epochs=50, patience=10, mc_samples=5)
+            m.fit(X_train_scaled, y_train)
+            if is_classification:
+                return m.score(X_val_scaled, y_val)
+            return r2_score(y_val, m.predict(X_val_scaled))
+        except Exception:
+            return _evaluate_allocation(X_train, X_val, y_train, y_val,
+                                        internal_evaluator='mlp')
+
     elif callable(internal_evaluator):
         # Custom evaluator: must be a callable that returns a fresh sklearn-compatible model
         m = internal_evaluator()
@@ -1186,6 +1292,7 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
     else:
         raise ValueError(f"Unknown internal_evaluator: {internal_evaluator}. "
                          f"Use 'ridge', 'rf', 'xgboost', 'lightgbm', 'mlp', 'svm', 'gp', "
+                         f"'knn', 'catboost', 'dnn', 'cnn', 'ngboost', 'bnn', "
                          f"or a callable that returns an sklearn-compatible model.")
 
 
@@ -3154,6 +3261,8 @@ def create_hybrid(base_reps, labels,
                 internal_evaluator = 'svm'
             elif 'gaussianprocess' in model_class or model_class == 'gp':
                 internal_evaluator = 'gp'
+            elif 'kneighbors' in model_class or model_class == 'knn':
+                internal_evaluator = 'knn'
             else:
                 internal_evaluator = 'ridge'  # safe fallback
         else:
@@ -3234,6 +3343,7 @@ def create_hybrid(base_reps, labels,
             total_budget=budget, step_size=step_size, patience=patience,
             internal_evaluator=internal_evaluator,
             model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
+            greedy_tolerance=kwargs.get('greedy_tolerance', 0.0),
         )
         
         # If filters were applied, remap indices from filtered space to original space
@@ -3355,6 +3465,7 @@ def create_hybrid(base_reps, labels,
             dominant_fraction=dominant_fraction,
             internal_evaluator=internal_evaluator,
             model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
+            greedy_tolerance=kwargs.get('greedy_tolerance', 0.0),
         )
 
         if filter_index_maps:

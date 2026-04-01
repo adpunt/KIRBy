@@ -147,8 +147,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reps, labels, groups, budget=budget,
             aug_condition='uncapped', augmentations=augmentations,
             speed=search_speed,
-            precomputed=data.get('precomputed_searches'))
-        fitted = search.fitted_result
+            precomputed=data.get('precomputed_searches'),
+            downstream_model='knn')
+        fitted = search.fitted_results.get('knn')
     except Exception as e:
         print(f"    Search FAILED: {e}")
         results['best_weight_method'] = best_method
@@ -208,7 +209,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             },
             'sac_delta_from_best_rep': sac_weighted - best_rep_sac,
             'search_time_seconds': search_time,
-            'blueprint': search.best_overall['blueprint'].to_dict() if search.best_overall else None,
+            'blueprint': search.best_by_model['knn']['blueprint'].to_dict() if search.best_by_model.get('knn') else None,
         }
 
         results['weight_methods'][wm] = wm_result

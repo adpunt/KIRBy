@@ -162,7 +162,7 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
     """Run find_best_hybrid and evaluate the best config per fold.
 
     Returns (per_fold_scores, search_result_dict).
-    search_result_dict contains best_overall, baselines, allocation info.
+    search_result_dict contains best_by_model results, baselines, allocation info.
     """
     if len(reps) < 2:
         # find_best_hybrid needs >= 2 reps; fall back to single-rep eval
@@ -171,7 +171,7 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
         scores = _eval_single_rep_per_fold(
             X, labels, groups, model_factory, n_folds, mode, metric_fn)
         return scores, {
-            'best_overall': {'score_mean': float(np.mean(scores)) if scores else float('nan')},
+            'best_result': {'score_mean': float(np.mean(scores)) if scores else float('nan')},
             'baselines': {},
             'allocation': {rep_name: X.shape[1]},
             'n_features': X.shape[1],
@@ -192,14 +192,17 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
         print(f"      find_best_hybrid failed: {e}")
         return [], {'error': str(e)}
 
-    # Extract the best blueprint and re-evaluate per fold
-    best = search.best_overall
-    if best is None:
-        return [], {'error': 'no best_overall found'}
+    # Extract the best blueprint: pick highest-scoring model from best_by_model
+    if not search.best_by_model:
+        return [], {'error': 'no best_by_model found'}
+
+    _lib = search.lower_is_better
+    best = (min if _lib else max)(
+        search.best_by_model.values(), key=lambda r: r['score_mean'])
 
     blueprint = best.get('blueprint')
     if blueprint is None:
-        return [], {'error': 'no blueprint in best_overall'}
+        return [], {'error': 'no blueprint in best_by_model'}
 
     scores = []
     allocation_dicts = []
@@ -241,7 +244,7 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
             avg_alloc[k] = float(np.mean([ad.get(k, 0) for ad in allocation_dicts]))
 
     result_info = {
-        'best_overall': convert_numpy(best),
+        'best_result': convert_numpy(best),
         'baselines': convert_numpy(search.baselines),
         'allocation': avg_alloc,
         'n_features': best.get('n_features', sum(avg_alloc.values()) if avg_alloc else 0),

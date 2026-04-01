@@ -41,6 +41,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_domain_metric, get_fitted_hybrid,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 from kirby.utils.noise_estimation import ActivityCliffAwareEstimator
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
@@ -188,6 +189,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             aug_condition='uncapped', augmentations=augmentations,
             speed=config.get('search_speed', 'fast'),
             precomputed=data.get('precomputed_searches'),
+            internal_evaluators=DISTANCE_EVALUATORS,
+            budgets=DISTANCE_BUDGETS,
+            downstream_model='gp',
         )
         spaces['hybrid'] = X_hybrid
     except Exception as e:

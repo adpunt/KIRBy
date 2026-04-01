@@ -24,9 +24,11 @@ from sklearn.neighbors import NearestNeighbors
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results, convert_numpy,
-    get_fitted_hybrid, flatten_weights, make_cv_splitter,
+    get_fitted_hybrid, flatten_weights, flatten_fold_weights, make_cv_splitter,
     apply_feature_selection, compute_feature_importance,
     get_domain_metric, get_model_factories, build_fold_hybrid,
+    get_best_for_downstream,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 from kirby.hybrid import create_hybrid
 
@@ -62,10 +64,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reps, labels, groups, budget=budget,
             aug_condition='uncapped', augmentations=augmentations_search,
             speed=config.get('search_speed', 'fast'),
-            precomputed=data.get('precomputed_searches'))
-        fitted = search.fitted_result
-        weights_flat = flatten_weights(fitted) if fitted else np.ones(X_hybrid.shape[1])
-        bp = search.best_overall['blueprint']
+            precomputed=data.get('precomputed_searches'),
+            internal_evaluators=DISTANCE_EVALUATORS,
+            budgets=DISTANCE_BUDGETS,
+            downstream_model='knn')
+        weights_flat = flatten_fold_weights(fi) if fi else np.ones(X_hybrid.shape[1])
+        best_config = get_best_for_downstream(search, 'knn')
+        bp = best_config['blueprint'] if best_config and 'blueprint' in best_config else None
     except Exception as e:
         print(f"  Hybrid search failed: {e}")
         return {'error': str(e)}

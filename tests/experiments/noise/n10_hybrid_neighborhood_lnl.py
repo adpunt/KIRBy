@@ -418,8 +418,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 aug_condition='uncapped', augmentations=augmentations,
                 speed=config.get('search_speed', 'fast'),
                 precomputed=data.get('precomputed_searches'))
-            if search.best_overall:
-                blueprints[b] = search.best_overall['blueprint']
+            best_rf = search.best_by_model.get('rf')
+            if best_rf:
+                blueprints[b] = best_rf['blueprint']
         except Exception as e:
             print(f"  Blueprint for budget={b} failed: {e}")
 

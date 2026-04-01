@@ -192,12 +192,15 @@ def _evaluate_task(task_name, rep_preset, config):
         fbh_kwargs['augmentations'] = aug_dict
     search = find_best_hybrid(**fbh_kwargs)
 
-    if search.best_overall is None:
+    if not search.best_by_model:
         print(f"    WARNING: find_best_hybrid returned no result for {task_name}")
         return None
 
-    hybrid_score = search.best_overall['score_mean']
-    hybrid_fold_scores = search.best_overall.get('fold_scores', [])
+    # Pick the best result across all models (respecting metric direction)
+    best_entry = (min if lower_is_better else max)(
+        search.best_by_model.values(), key=lambda r: r['score_mean'])
+    hybrid_score = best_entry['score_mean']
+    hybrid_fold_scores = best_entry.get('fold_scores', [])
 
     # Compute delta and pct improvement
     if lower_is_better:
@@ -229,9 +232,9 @@ def _evaluate_task(task_name, rep_preset, config):
         'hybrid_score': hybrid_score,
         'hybrid_fold_scores': hybrid_fold_scores,
         'hybrid_config': {
-            'model': search.best_overall.get('model', ''),
-            'n_features': search.best_overall.get('n_features', 0),
-            'allocation_method': search.best_overall.get('allocation_method', ''),
+            'model': best_entry.get('model', ''),
+            'n_features': best_entry.get('n_features', 0),
+            'allocation_method': best_entry.get('allocation_method', ''),
         },
         'delta': delta,
         'pct_improvement': pct,

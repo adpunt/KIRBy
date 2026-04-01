@@ -95,7 +95,8 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
             augmentations=augs,
             speed=config.get('search_speed', 'fast'),
             precomputed=data.get('precomputed_searches'))
-        _bp = _search.best_overall['blueprint'] if _search.best_overall else None
+        _bp_entry = _search.best_by_model.get('rf')
+        _bp = _bp_entry['blueprint'] if _bp_entry else None
     except Exception:
         _bp = None
     _alloc = _bp.allocation_method if _bp else 'performance_weighted'
@@ -539,7 +540,8 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
             augmentations=augs,
             speed=config.get('search_speed', 'fast'),
             precomputed=data.get('precomputed_searches'))
-        _bp = _search.best_overall['blueprint'] if _search.best_overall else None
+        _bp_entry = _search.best_by_model.get('rf')
+        _bp = _bp_entry['blueprint'] if _bp_entry else None
     except Exception:
         _bp = None
     _alloc = _bp.allocation_method if _bp else 'performance_weighted'
@@ -804,8 +806,9 @@ def _run_antibody_federated(data, config, output_dir, dataset_name):
                     sd['reps'], sd['labels'],
                     groups=sd.get('groups'),
                     speed='fast', cache=True, verbose=False)
-                if s_search.best_overall:
-                    silo_blueprints[silo_name] = s_search.best_overall['blueprint']
+                s_bp_entry = s_search.best_by_model.get('rf')
+                if s_bp_entry:
+                    silo_blueprints[silo_name] = s_bp_entry['blueprint']
             except Exception:
                 pass
     # Use first available blueprint as default
@@ -1051,7 +1054,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     """
     strategy = kwargs.get('strategy', None)
 
-    if strategy == 'source' or (strategy is None and dataset_name == 'herg'):
+    if strategy == 'source' or (strategy is None and dataset_name == 'herg_ki'):
         return _run_herg_source_based(data, config, output_dir, dataset_name)
     elif strategy == 'asymmetric':
         return _run_asymmetric_reps(data, config, output_dir, dataset_name)
@@ -1065,8 +1068,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 if __name__ == '__main__':
     import argparse as _ap
     parser = _ap.ArgumentParser(description='Fed03: Synthetic Private Datasets')
-    parser.add_argument('--dataset', type=str, default='herg',
-                        help='Dataset name (herg, logd, caco2, ddg_combined, etc.)')
+    parser.add_argument('--dataset', type=str, default='herg_ki',
+                        help='Dataset name (herg_ki, logd, caco2, ddg_combined, etc.)')
     parser.add_argument('--strategy', type=str, default=None,
                         choices=['source', 'asymmetric', 'antibody'],
                         help='Sub-experiment: source (Part A), '

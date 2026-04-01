@@ -809,9 +809,10 @@ def run_cross_context_analysis(
                 cache=True,
             )
 
-            best = search_result.best_overall
-            if best:
-                bp = best['blueprint']
+            # Use first model's best config for blueprint
+            first_model_best = next(iter(search_result.best_by_model.values()), None)
+            if first_model_best:
+                bp = first_model_best['blueprint']
                 novel_results = {}
                 for novel_name, novel_model in novel_models.items():
                     try:
@@ -1327,7 +1328,7 @@ def run_within_family_complexity(
                           f"[{bp.importance_method}/{bp.allocation_method}]")
 
             # Optimal budget comes from find_best_hybrid's own search
-            best = search.best_overall
+            best = next(iter(search.best_by_model.values()), None)
             if best:
                 fam_result['optimal_budget'][var_name] = {
                     'budget': best['blueprint'].budget,
@@ -1496,7 +1497,7 @@ def run_data_complexity_analysis(
                     verbose=False,
                     cache=True,
                 )
-                best = search.best_overall
+                best = next(iter(search.best_by_model.values()), None)
                 best_config = {
                     'model': best['model'],
                     'budget': best['blueprint'].budget,
@@ -1740,7 +1741,7 @@ def run_uncertainty_calibration(
                 verbose=False,
                 cache=True,
             )
-            best = search.best_overall
+            best = next(iter(search.best_by_model.values()), None)
             if best:
                 optimal_budget = best['blueprint'].budget
                 optimal_alloc = best['blueprint'].allocation_method
@@ -2153,7 +2154,7 @@ def _run_information_retention(
                 verbose=False,
                 cache=True,
             )
-            best = search.best_overall
+            best = next(iter(search.best_by_model.values()), None)
             if best:
                 bp = best['blueprint']
             else:
@@ -2262,7 +2263,7 @@ def _run_effective_rank_analysis(
                 verbose=False,
                 cache=True,
             )
-            best = search.best_overall
+            best = next(iter(search.best_by_model.values()), None)
             bp = best['blueprint'] if best else None
         except Exception:
             bp = None
@@ -2772,7 +2773,7 @@ def main():
         exp10_strategies = ['legacy', 'quantile']
         search_speed = 'fast'
     else:  # full
-        dataset_names = ['logd', 'caco2', 'herg', 'qm9']
+        dataset_names = ['logd', 'caco2', 'herg_ki', 'qm9']
         rep_preset = args.reps or 'fast+hf'
         n_folds = 5
         model_names = ['rf', 'knn', 'ridge', 'xgboost', 'mlp', 'lightgbm']

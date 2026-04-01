@@ -54,6 +54,7 @@ from experiments._shared import (
     compute_effective_rank, estimate_mutual_information_knn,
     get_domain_metric, get_hybrid_features_and_weights,
     get_fitted_hybrid,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 
 from kirby.hybrid import create_hybrid
@@ -240,42 +241,27 @@ def _run_hybrid_sas(reps, labels, X_hybrid, act_sim, struct_t, act_t,
     zones = compute_sas_zones(struct_sim, act_sim, struct_t, act_t)
     _print_zones('hybrid', zones, dim=X_hybrid.shape[1])
 
-    # Per-rep averages (exclude canonical ECFP4 entry)
-    rep_zone_I = [v['zones']['pct_I'] for k, v in per_rep_results.items()
-                  if not k.startswith('_')]
-    rep_zone_IV = [v['zones']['pct_IV'] for k, v in per_rep_results.items()
-                   if not k.startswith('_')]
-    avg_rep_I = float(np.mean(rep_zone_I)) if rep_zone_I else 0.0
-    avg_rep_IV = float(np.mean(rep_zone_IV)) if rep_zone_IV else 0.0
-
-    # Best individual rep (lowest Zone I)
-    rep_keys = [k for k in per_rep_results if not k.startswith('_')]
-    best_rep = min(rep_keys,
-                   key=lambda k: per_rep_results[k]['zones']['pct_I'],
-                   default=None) if rep_keys else None
-    best_rep_I = per_rep_results[best_rep]['zones']['pct_I'] if best_rep else 0.0
+    # Top-3 baselines: lowest Zone I (fewest cliffs) and highest Zone IV (smoothest)
+    rep_items = [(k, v) for k, v in per_rep_results.items() if not k.startswith('_')]
+    top3_zone_I = sorted(rep_items, key=lambda x: x[1]['zones']['pct_I'])[:3]
+    top3_zone_IV = sorted(rep_items, key=lambda x: x[1]['zones']['pct_IV'], reverse=True)[:3]
 
     comparison = {
-        'avg_rep_zone_I': avg_rep_I,
-        'avg_rep_zone_IV': avg_rep_IV,
+        'top3_fewest_cliffs': [(k, v['zones']['pct_I']) for k, v in top3_zone_I],
+        'top3_smoothest': [(k, v['zones']['pct_IV']) for k, v in top3_zone_IV],
         'hybrid_zone_I': zones['pct_I'],
         'hybrid_zone_IV': zones['pct_IV'],
-        'delta_zone_I_vs_avg': float(zones['pct_I'] - avg_rep_I),
-        'delta_zone_IV_vs_avg': float(zones['pct_IV'] - avg_rep_IV),
-        'delta_zone_I_vs_best': float(zones['pct_I'] - best_rep_I),
-        'best_rep': best_rep,
-        'best_rep_zone_I': best_rep_I,
     }
 
     print(f"\n    Comparison (Zone I = cliffs, Zone IV = smooth):")
-    print(f"      Avg rep Zone I:    {avg_rep_I:5.2f}%")
-    print(f"      Hybrid Zone I:     {zones['pct_I']:5.2f}% "
-          f"(delta={comparison['delta_zone_I_vs_avg']:+.2f}%)")
-    print(f"      Best rep ({best_rep}) Zone I: {best_rep_I:5.2f}%")
-    print(f"      Hybrid vs best:    delta={comparison['delta_zone_I_vs_best']:+.2f}%")
-    print(f"      Avg rep Zone IV:   {avg_rep_IV:5.2f}%")
-    print(f"      Hybrid Zone IV:    {zones['pct_IV']:5.2f}% "
-          f"(delta={comparison['delta_zone_IV_vs_avg']:+.2f}%)")
+    print(f"      Top-3 fewest cliffs (Zone I):")
+    for rn, ri in comparison['top3_fewest_cliffs']:
+        print(f"        {rn}: {ri:5.2f}%")
+    print(f"      Hybrid Zone I: {zones['pct_I']:5.2f}%")
+    print(f"      Top-3 smoothest (Zone IV):")
+    for rn, riv in comparison['top3_smoothest']:
+        print(f"        {rn}: {riv:5.2f}%")
+    print(f"      Hybrid Zone IV: {zones['pct_IV']:5.2f}%")
 
     return {
         'dim': X_hybrid.shape[1],
@@ -427,7 +413,10 @@ def _run_sas_bo_bridge(reps, labels, groups, struct_t, act_t,
         X_h, _, _search = get_fitted_hybrid(
             reps, labels, groups, budget=50,
             aug_condition=aug_cond, augmentations=augmentations,
-            speed=search_speed, precomputed=precomputed)
+            speed=search_speed, precomputed=precomputed,
+            internal_evaluators=DISTANCE_EVALUATORS,
+            budgets=DISTANCE_BUDGETS,
+            downstream_model='gp')
         conditions['hybrid_50d'] = StandardScaler().fit_transform(X_h)
     except Exception as e:
         print(f"    WARNING: hybrid build failed ({e})")
@@ -609,12 +598,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if results.get('hybrid') and results['hybrid'] is not None:
         c = results['hybrid'].get('comparison', {})
         if c:
-            print(f"  Zone I (cliffs):  avg rep {c['avg_rep_zone_I']:.2f}% -> "
-                  f"hybrid {c['hybrid_zone_I']:.2f}% "
-                  f"(delta={c['delta_zone_I_vs_avg']:+.2f}%)")
-            print(f"  Zone IV (smooth): avg rep {c['avg_rep_zone_IV']:.2f}% -> "
-                  f"hybrid {c['hybrid_zone_IV']:.2f}% "
-                  f"(delta={c['delta_zone_IV_vs_avg']:+.2f}%)")
+            print(f"  Zone I (cliffs) — top-3 fewest:")
+            for rn, ri in c.get('top3_fewest_cliffs', []):
+                print(f"    {rn}: {ri:.2f}%")
+            print(f"    Hybrid: {c['hybrid_zone_I']:.2f}%")
+            print(f"  Zone IV (smooth) — top-3 highest:")
+            for rn, riv in c.get('top3_smoothest', []):
+                print(f"    {rn}: {riv:.2f}%")
+            print(f"    Hybrid: {c['hybrid_zone_IV']:.2f}%")
 
     if results.get('bo_bridge') and '_correlation' in results['bo_bridge']:
         corr = results['bo_bridge']['_correlation']

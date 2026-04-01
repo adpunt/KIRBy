@@ -20,7 +20,7 @@ Usage:
         groups=scaffold_groups,
         speed='fast',
     )
-    print(result.best_overall)
+    print(result.best_by_model)  # best hybrid per downstream model
 
     # With fine-tuned reps:
     from kirby.finetuning import make_antibody_lora_factory
@@ -106,8 +106,11 @@ class FittedResult:
 
 @dataclass
 class SearchResult:
-    """Full output of find_best_hybrid()."""
-    best_overall: dict
+    """Full output of find_best_hybrid().
+
+    Primary selection unit: best_by_model_budget[model][budget].
+    Each downstream model gets its own best hybrid configuration.
+    """
     best_by_model: Dict[str, dict]
     best_by_dimension: Dict[int, dict]
     performance_matrix: Dict[str, Dict[str, float]]
@@ -115,13 +118,12 @@ class SearchResult:
     all_results: List[dict]
     metric_name: str = 'r2'
     lower_is_better: bool = False
-    fitted_result: Optional[FittedResult] = None
+    # Per-model fitted results: {model_name: FittedResult}
+    fitted_results: Dict[str, FittedResult] = field(default_factory=dict)
     finetuned_embeddings: Optional[Dict[str, np.ndarray]] = None
-    # Added after initial release — default for pickle compat with old caches
     best_by_budget: Dict[int, dict] = field(default_factory=dict)
     # Primary selection unit: best features per (model, budget) pair.
     # {model_name: {budget: best_config_dict}}
-    # Avoids selection overfitting by not picking across downstream models.
     best_by_model_budget: Dict[str, Dict[int, dict]] = field(default_factory=dict)
 
 
@@ -519,6 +521,18 @@ DEFAULT_MODELS = {
         'classifier': _get_cnn_classifier,
         'tier': 'full',
     },
+    'bnn': {
+        'regressor': lambda: __import__('kirby.models.bnn', fromlist=['BNNRegressor']).BNNRegressor(),
+        'classifier': lambda: __import__('kirby.models.bnn', fromlist=['BNNClassifier']).BNNClassifier(),
+        'tier': 'full',
+    },
+    'ngboost': {
+        'regressor': lambda: __import__('ngboost', fromlist=['NGBRegressor']).NGBRegressor(
+            n_estimators=500, learning_rate=0.05, random_state=42, verbose=False),
+        'classifier': lambda: __import__('ngboost', fromlist=['NGBClassifier']).NGBClassifier(
+            n_estimators=500, learning_rate=0.05, random_state=42, verbose=False),
+        'tier': 'full',
+    },
 }
 
 # Tier ordering for filtering
@@ -858,7 +872,7 @@ SPEED_TIERS = {
         'allocation_methods': [
             'entropy_1.0', 'top_3', 'greedy_fill_s25',
         ],
-        'internal_evaluators': ['lightgbm', 'mlp', 'xgboost'],
+        'internal_evaluators': ['match'],
         'n_folds': 3,
     },
     'full': {
@@ -879,7 +893,7 @@ SPEED_TIERS = {
             'greedy_fill_s5', 'greedy_fill_s10', 'greedy_fill_s25',
             'dom_greedy_f0.7', 'dom_greedy_f0.9',
         ],
-        'internal_evaluators': ['ridge', 'rf', 'xgboost', 'lightgbm', 'mlp', 'svm', 'gp'],
+        'internal_evaluators': ['match'],
         'n_folds': 5,
     },
 }
@@ -1143,6 +1157,7 @@ def _evaluate_hybrid_config(
     importance_cache: Optional[Dict] = None,
     alloc_cache: Optional[Dict] = None,
     selection_dedup: Optional[Dict] = None,
+    greedy_tolerance: float = 0.0,
 ) -> dict:
     """Evaluate a single hybrid configuration. Returns result dict."""
     from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
@@ -1207,6 +1222,7 @@ def _evaluate_hybrid_config(
                 lower_is_better=lower_is_better,
                 precomputed_importance=fold_importance,
                 precomputed_alloc_scores=fold_alloc_scores,
+                greedy_tolerance=greedy_tolerance,
             )
             X_val = apply_feature_selection(val_reps, feature_info)
 
@@ -1442,6 +1458,7 @@ def _run_search(
     fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
     cv_splitter=None,
+    greedy_tolerance: float = 0.0,
 ) -> List[dict]:
     """Main search loop over all configurations."""
     tier = SPEED_TIERS[speed]
@@ -1474,6 +1491,8 @@ def _run_search(
             match_map = {
                 'rf': 'rf', 'lightgbm': 'lightgbm', 'xgboost': 'xgboost',
                 'mlp': 'mlp', 'svm': 'svm', 'gp': 'gp', 'ridge': 'ridge',
+                'knn': 'knn', 'catboost': 'catboost', 'dnn': 'dnn', 'cnn': 'cnn',
+                'bnn': 'bnn', 'ngboost': 'ngboost',
             }
             matched_ev = match_map.get(model_name)
             if matched_ev and matched_ev not in evs:
@@ -1666,6 +1685,7 @@ def _run_search(
                                     importance_cache=importance_cache,
                                     alloc_cache=alloc_cache,
                                     selection_dedup=selection_dedup,
+                                    greedy_tolerance=greedy_tolerance,
                                 )
                                 if rep_set_name != 'all':
                                     result['rep_subset'] = rep_set_name
@@ -1916,10 +1936,9 @@ def _aggregate_results(
     lower_is_better: bool,
     dimension_tiers: List[int],
 ) -> dict:
-    """Aggregate results into best_overall, best_by_model, best_by_dimension, performance_matrix."""
+    """Aggregate results into best_by_model, best_by_dimension, performance_matrix."""
     if not results:
         return {
-            'best_overall': None,
             'best_by_model': {},
             'best_by_dimension': {},
             'best_by_budget': {},
@@ -1929,8 +1948,6 @@ def _aggregate_results(
 
     def _key(r):
         return _score_to_comparable(r['score_mean'], lower_is_better)
-
-    best_overall = max(results, key=_key)
 
     # Best by model
     model_names = sorted(set(r['model'] for r in results))
@@ -1981,7 +1998,6 @@ def _aggregate_results(
                 performance_matrix[mname][str(tier)] = round(best['score_mean'], 4)
 
     return {
-        'best_overall': best_overall,
         'best_by_model': best_by_model,
         'best_by_dimension': best_by_dimension,
         'best_by_budget': best_by_budget,
@@ -2136,6 +2152,7 @@ def find_best_hybrid(
     verbose: bool = True,
     cache: bool = False,
     cache_dir: Optional[str] = None,
+    greedy_tolerance: float = 0.0,
 ) -> SearchResult:
     """
     Find the best hybrid representation configuration.
@@ -2354,6 +2371,7 @@ def find_best_hybrid(
         fold_reps=fold_reps,
         precomputed_folds=precomputed_folds,
         cv_splitter=cv_splitter,
+        greedy_tolerance=greedy_tolerance,
     )
 
     # --- Two-phase refinement ---
@@ -2392,20 +2410,26 @@ def find_best_hybrid(
             rep_factories, labels, verbose
         )
 
-    # --- Fitted result ---
-    fitted = None
-    if return_fitted and agg['best_overall'] is not None:
+    # --- Per-model fitted results ---
+    fitted_results = {}
+    if return_fitted and agg['best_by_model']:
         if verbose:
-            print("\nFitting best config on full data...")
-        fitted = _compute_fitted_result(
-            base_reps, labels, agg['best_overall']['blueprint'], weight_method,
-            augmentations=augmentations,
-            augmentation_strategy=augmentation_strategy,
-            augmentation_threshold=augmentation_threshold,
-            augmentation_budget=augmentation_budget,
-            candidate_ranking=candidate_ranking,
-            finetuned_embeddings=finetuned_embeddings,
-        )
+            print(f"\nFitting best configs on full data ({len(agg['best_by_model'])} models)...")
+        for model_name, best_r in agg['best_by_model'].items():
+            try:
+                fitted_results[model_name] = _compute_fitted_result(
+                    base_reps, labels, best_r['blueprint'], weight_method,
+                    augmentations=augmentations,
+                    augmentation_strategy=augmentation_strategy,
+                    augmentation_threshold=augmentation_threshold,
+                    augmentation_budget=augmentation_budget,
+                    candidate_ranking=candidate_ranking,
+                    finetuned_embeddings=finetuned_embeddings,
+                )
+            except Exception as e:
+                if verbose:
+                    print(f"  WARNING: fitted result for {model_name} failed: {e}")
+
 
     # --- Resolve metric name for display ---
     metric_name = metric if isinstance(metric, str) else 'custom'
@@ -2421,7 +2445,6 @@ def find_best_hybrid(
         bp.task_type = task_type
 
     search_result = SearchResult(
-        best_overall=agg['best_overall'],
         best_by_model=agg['best_by_model'],
         best_by_dimension=agg['best_by_dimension'],
         best_by_budget=agg['best_by_budget'],
@@ -2431,7 +2454,7 @@ def find_best_hybrid(
         all_results=all_results,
         metric_name=metric_name,
         lower_is_better=lower_is_better,
-        fitted_result=fitted,
+        fitted_results=fitted_results,
         finetuned_embeddings=finetuned_embeddings,
     )
 

@@ -280,9 +280,10 @@ def evaluate_dataset(rep_names, n_folds):
             task_type='classification',
             augmentation_strategy='uncapped',
             speed='fast', return_fitted=True, verbose=False, cache=True)
-        if search.fitted_result is not None:
+        fitted = search.fitted_results.get('rf')
+        if fitted is not None:
             fi = {r: {'selected_indices': idx}
-                  for r, idx in search.fitted_result.selected_indices.items()}
+                  for r, idx in fitted.selected_indices.items()}
             reps['kirby_hybrid'] = apply_feature_selection(reps, fi)
             print(f"  kirby_hybrid: {reps['kirby_hybrid'].shape[1]}D (hybrid)")
     except Exception as e:

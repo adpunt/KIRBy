@@ -9,7 +9,7 @@ Conclusion: The best hybrid is interpretable — we can trace every
 Dependencies: Precomputed search (from precompute step).
 
 Design:
-    1. Retrieve the best hybrid from precomputed search (best_overall).
+    1. Retrieve the best hybrid from precomputed search (best_by_model).
     2. Build it on 80% of data (train), evaluate on 20% (val).
     3. Train downstream models on the hybrid.
     4. Run SHAP analysis on the best model → per-feature SHAP values.
@@ -74,12 +74,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         speed=config.get('search_speed', 'fast'),
         precomputed=data.get('precomputed_searches'))
 
-    if search is None or search.best_overall is None:
+    best = search.best_by_model.get('rf') or (
+        next(iter(search.best_by_model.values()), None)
+        if search is not None and search.best_by_model else None)
+    if search is None or best is None:
         print("  No hybrid search result available — skipping C22")
         return {'error': 'no_search_result'}
 
-    bp = search.best_overall['blueprint']
-    search_score = search.best_overall.get('score_mean', 0)
+    bp = best['blueprint']
+    search_score = best.get('score_mean', 0)
     print(f"  Blueprint: alloc={bp.allocation_method}, imp={bp.importance_method}, "
           f"eval={bp.internal_evaluator}, budget={bp.budget}")
     print(f"  Search score: {search_score:.4f}")

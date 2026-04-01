@@ -272,7 +272,11 @@ def get_hybrid_features_and_weights(
         kwargs['budgets'] = [budget]
 
     search = find_best_hybrid(**kwargs)
-    fitted = search.fitted_result
+
+    # Pick first available model's fitted result (similarity is model-agnostic)
+    fitted = None
+    if search.fitted_results:
+        fitted = next(iter(search.fitted_results.values()))
 
     if fitted is None:
         raise RuntimeError("find_best_hybrid returned no fitted result")
@@ -517,14 +521,14 @@ def run_hybrid_similarity(data: dict, n_folds: int,
     t0 = time.time()
     if shared_search is not None:
         X_hybrid, _, search = shared_search
-        fitted = search.fitted_result
+        fitted = next(iter(search.fitted_results.values())) if search.fitted_results else None
         print(f"  Using shared search (dim={X_hybrid.shape[1]})")
     else:
         print(f"  Running hybrid search ({search_speed})...")
         try:
             X_hybrid, _, search = get_hybrid_features_and_weights(
                 reps, labels, groups, search_speed, weight_methods[0])
-            fitted = search.fitted_result
+            fitted = next(iter(search.fitted_results.values())) if search.fitted_results else None
         except Exception as e:
             print(f"    Search FAILED: {e}")
             results['best_weight_method'] = best_method
@@ -584,7 +588,7 @@ def run_hybrid_similarity(data: dict, n_folds: int,
             },
             'sac_delta_from_best_rep': sac_weighted - best_rep_sac,
             'search_time_seconds': search_time,
-            'blueprint': search.best_overall['blueprint'].to_dict() if search.best_overall else None,
+            'blueprint': next(iter(search.best_by_model.values()))['blueprint'].to_dict() if search.best_by_model else None,
         }
 
         results['weight_methods'][wm] = wm_result
@@ -636,13 +640,13 @@ def run_feature_concentration(data: dict, search_speed: str = 'fast',
     # Get hybrid selection
     if shared_search is not None:
         X_hybrid, weights_flat, search = shared_search
-        fitted = search.fitted_result
+        fitted = next(iter(search.fitted_results.values())) if search.fitted_results else None
         print(f"  Using shared search (dim={X_hybrid.shape[1]})")
     else:
         try:
             X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
                 reps, labels, groups, search_speed, weight_methods[0])
-            fitted = search.fitted_result
+            fitted = next(iter(search.fitted_results.values())) if search.fitted_results else None
         except Exception as e:
             print(f"  find_best_hybrid failed: {e}")
             return {'error': str(e)}
@@ -821,15 +825,15 @@ def run_activity_cliff_analysis(data: dict, n_folds: int = 5,
     hybrid_blueprint = None
     if shared_search is not None:
         X_hybrid, weights_flat, search = shared_search
-        if search.best_overall:
-            hybrid_blueprint = search.best_overall['blueprint']
+        if search.best_by_model:
+            hybrid_blueprint = next(iter(search.best_by_model.values()))['blueprint']
         print(f"  Using shared search (dim={X_hybrid.shape[1]})")
     else:
         try:
             X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
                 reps, labels, groups, search_speed, 'lightgbm_gain')
-            if search.best_overall:
-                hybrid_blueprint = search.best_overall['blueprint']
+            if search.best_by_model:
+                hybrid_blueprint = next(iter(search.best_by_model.values()))['blueprint']
         except Exception as e:
             print(f"  Hybrid search failed: {e}")
 
@@ -1070,8 +1074,8 @@ def run_knn_prediction(data: dict, n_folds: int,
             else:
                 X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
                     reps, labels, groups, search_speed, 'lightgbm_gain')
-            if search.best_overall:
-                hybrid_blueprint = search.best_overall['blueprint']
+            if search.best_by_model:
+                hybrid_blueprint = next(iter(search.best_by_model.values()))['blueprint']
         except Exception as e:
             print(f"  Hybrid search failed: {e}")
 
@@ -1348,7 +1352,7 @@ def run_applicability_domain(data: dict, n_folds: int,
         else:
             X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
                 reps, labels, groups, search_speed, 'lightgbm_gain')
-        bp = search.best_overall['blueprint']
+        bp = next(iter(search.best_by_model.values()))['blueprint']
     except Exception as e:
         print(f"  Hybrid search failed: {e}")
         return {'error': str(e)}
@@ -1768,7 +1772,7 @@ def run_optimal_similarity_dimension(data: dict, n_folds: int,
         dist_corr, _ = spearmanr(d_full_sampled, d_hybrid_sampled)
 
         # Prediction quality: RF R² (CV) — use search blueprint's method
-        bp = search.best_overall['blueprint'] if search.best_overall else None
+        bp = next(iter(search.best_by_model.values()))['blueprint'] if search.best_by_model else None
         alloc = bp.allocation_method if bp else 'greedy'
         imp_method = bp.importance_method if bp else 'lightgbm_gain'
 
@@ -2098,7 +2102,7 @@ def main():
         n_sample = 3000
         knn_conditions = ['hybrid_unweighted', 'hybrid_weighted']
     else:  # full
-        dataset_names = ['logd', 'caco2', 'herg', 'qm9']
+        dataset_names = ['logd', 'caco2', 'herg_ki', 'qm9']
         rep_preset = args.reps or 'fast+hf'
         n_folds = 5
         search_speed = 'medium'
