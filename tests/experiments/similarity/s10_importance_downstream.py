@@ -31,7 +31,8 @@ from experiments._shared import (
     save_experiment_results, make_structured_output,
     cv_split, get_domain_metric, get_model_factories, convert_numpy,
     compute_feature_importance, build_fold_hybrid,
-    get_precomputed_search,
+    get_precomputed_search, get_best_for_downstream,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 
 from kirby.hybrid import apply_feature_selection
@@ -694,12 +695,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reps, labels, groups, budget=budget,
             aug_condition='uncapped', augmentations=data.get('augmentations'),
             speed=search_speed,
-            precomputed=data.get('precomputed_searches'))
-        if search.best_overall:
-            hybrid_blueprint = search.best_overall['blueprint']
+            precomputed=None,  # bypass tree-only precomputed; use disk cache
+            internal_evaluators=DISTANCE_EVALUATORS,
+            budgets=DISTANCE_BUDGETS)
+        # Select kNN-optimized blueprint (primary downstream model in S10)
+        best_config = get_best_for_downstream(search, 'knn')
+        if best_config and 'blueprint' in best_config:
+            hybrid_blueprint = best_config['blueprint']
+        if hybrid_blueprint:
             print(f"  Hybrid blueprint: alloc={hybrid_blueprint.allocation_method}, "
                   f"budget={hybrid_blueprint.budget}, "
-                  f"imp={hybrid_blueprint.importance_method}")
+                  f"imp={hybrid_blueprint.importance_method}, "
+                  f"ev={hybrid_blueprint.internal_evaluator}")
     except Exception as e:
         print(f"  Hybrid search failed: {e}")
 

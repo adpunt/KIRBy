@@ -105,7 +105,8 @@ def _run_distance_concentration(data, budgets):
     for budget in sorted(budgets):
         try:
             X_hybrid, _, _search = get_fitted_hybrid(
-                reps, labels, groups, budget=budget,
+                reps, labels, groups, downstream_model='rf',
+                budget=budget,
                 aug_condition='none', speed='fast',
                 precomputed=_precomp)
             X_hybrid_s = StandardScaler().fit_transform(X_hybrid)
@@ -300,7 +301,8 @@ def _run_kernel_analysis(data, budgets):
     for budget in sorted(budgets):
         try:
             X_hybrid, _, _search = get_fitted_hybrid(
-                reps, labels, groups, budget=budget,
+                reps, labels, groups, downstream_model='rf',
+                budget=budget,
                 aug_condition='none', speed='fast',
                 precomputed=_precomp)
             # Subsample to match
@@ -332,7 +334,8 @@ def _run_kernel_analysis(data, budgets):
     if 50 in results['per_budget']:
         try:
             X_h50, _, _search = get_fitted_hybrid(
-                reps, labels, groups, budget=50,
+                reps, labels, groups, downstream_model='rf',
+                budget=50,
                 aug_condition='none', speed='fast',
                 precomputed=_precomp)
             X_h50_sub = X_h50[idx] if n_samples > max_n else X_h50
@@ -615,7 +618,11 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
     search = get_precomputed_search(reps, labels, groups, budget=budget,
                                     aug_condition='none', speed='fast',
                                     precomputed=precomputed)
-    bp = search.best_overall['blueprint']
+    best = search.best_by_model.get(model_name) or search.best_by_model.get('rf') or next(
+        iter(search.best_by_model.values()), None)
+    if best is None:
+        raise RuntimeError(f"No best config found for model={model_name} at budget={budget}")
+    bp = best['blueprint']
 
     scores = []
     sample_X = next(iter(reps.values()))
@@ -856,7 +863,11 @@ def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
     search = get_precomputed_search(reps, y, groups, budget=budget,
                                     aug_condition='none', speed='fast',
                                     precomputed=precomputed)
-    bp = search.best_overall['blueprint']
+    best = search.best_by_model.get('ridge') or search.best_by_model.get('rf') or next(
+        iter(search.best_by_model.values()), None)
+    if best is None:
+        return float('nan')
+    bp = best['blueprint']
 
     sample_X = next(iter(reps.values()))
     folds = list(cv_split(groups, n_folds, sample_X, y, mode=mode))

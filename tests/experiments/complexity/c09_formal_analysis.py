@@ -300,7 +300,11 @@ def _run_information_retention(data, budgets, search_speed='fast'):
                 verbose=False,
                 cache=True,
             )
-            best = search.best_overall
+            # Pick the best result across all models (for blueprint)
+            best = None
+            for m_best in search.best_by_model.values():
+                if best is None or m_best['score_mean'] > best['score_mean']:
+                    best = m_best
             if best:
                 bp = best['blueprint']
             else:
@@ -424,7 +428,11 @@ def _run_effective_rank_analysis(data, budgets, search_speed='fast'):
                 verbose=False,
                 cache=True,
             )
-            best = search.best_overall
+            # Pick the best result across all models (for blueprint)
+            best = None
+            for m_best in search.best_by_model.values():
+                if best is None or m_best['score_mean'] > best['score_mean']:
+                    best = m_best
             bp = best['blueprint'] if best else None
         except Exception:
             bp = None

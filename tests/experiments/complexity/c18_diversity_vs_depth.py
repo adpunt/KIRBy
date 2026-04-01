@@ -192,6 +192,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 aug_condition='capped', augmentations=augmentations,
                 speed=config.get('search_speed', 'fast'),
                 precomputed=data.get('precomputed_searches'),
+                downstream_model='rf',
             )
             metrics = _evaluate(X_h, labels, groups, n_folds, mode, metric_fn)
             # Count how many reps contributed

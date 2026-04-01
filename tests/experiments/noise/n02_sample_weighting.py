@@ -243,7 +243,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         reps, labels, groups, budget=100, aug_condition='uncapped',
         augmentations=augmentations, speed=config.get('search_speed', 'fast'),
         precomputed=data.get('precomputed_searches'))
-    bp = search.best_overall['blueprint'] if search.best_overall else None
+    best_rf = search.best_by_model.get('rf')
+    bp = best_rf['blueprint'] if best_rf else None
     if bp is None:
         print("  WARNING: No blueprint found, skipping hybrid conditions")
         return {'error': 'no_blueprint', 'metric': metric_name}
@@ -388,77 +389,52 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # =========================================================================
     print(f"\n  --- Summary ---")
 
-    # Average delta across models for base reps vs hybrid
-    base_deltas = []
-    for rep_name, rep_results in results['per_rep'].items():
-        for model_name, model_res in rep_results.items():
-            d = model_res.get('delta', float('nan'))
-            if not np.isnan(d):
-                base_deltas.append(d)
-
     hybrid_deltas = []
     for model_name, model_res in results['hybrid'].items():
         d = model_res.get('delta', float('nan'))
         if not np.isnan(d):
             hybrid_deltas.append(d)
+    n_hybrid_improved = int(sum(1 for d in hybrid_deltas if (d < 0 if lower_is_better else d > 0)))
+    print(f"  Hybrid weighting: {n_hybrid_improved}/{len(hybrid_deltas)} models improved")
 
-    avg_base_delta = float(np.mean(base_deltas)) if base_deltas else float('nan')
-    avg_hybrid_delta = float(np.mean(hybrid_deltas)) if hybrid_deltas else float('nan')
-
-    results['summary'] = {
-        'avg_base_delta': avg_base_delta,
-        'avg_hybrid_delta': avg_hybrid_delta,
-        'base_benefits_more': (avg_base_delta < avg_hybrid_delta) if lower_is_better else (avg_base_delta > avg_hybrid_delta),
-        'n_base_improved': int(sum(1 for d in base_deltas if (d < 0 if lower_is_better else d > 0))),
-        'n_base_total': len(base_deltas),
-        'n_hybrid_improved': int(sum(1 for d in hybrid_deltas if (d < 0 if lower_is_better else d > 0))),
-        'n_hybrid_total': len(hybrid_deltas),
-    }
-
-    sign_label = "negative" if lower_is_better else "positive"
-    print(f"  Avg delta (base reps):  {avg_base_delta:+.4f} "
-          f"({results['summary']['n_base_improved']}/{len(base_deltas)} improved)")
-    print(f"  Avg delta (hybrid):     {avg_hybrid_delta:+.4f} "
-          f"({results['summary']['n_hybrid_improved']}/{len(hybrid_deltas)} improved)")
-
-    if not np.isnan(avg_base_delta) and not np.isnan(avg_hybrid_delta):
-        # For lower_is_better: more negative delta = bigger improvement
-        base_benefit = -avg_base_delta if lower_is_better else avg_base_delta
-        hybrid_benefit = -avg_hybrid_delta if lower_is_better else avg_hybrid_delta
-        if base_benefit > hybrid_benefit:
-            print("  >> Base reps benefit MORE from sample weighting")
-            print("     => Hybrids may already handle noise implicitly")
-        elif hybrid_benefit > base_benefit:
-            print("  >> Hybrid benefits MORE from sample weighting")
-            print("     => Effects are complementary")
-        else:
-            print("  >> Both benefit equally")
-
-    # Per-model comparison table
-    print(f"\n  PER-MODEL COMPARISON (avg delta across reps):")
-    print(f"  {'Model':<12} {'Base delta':>12} {'Hybrid delta':>14} {'Winner':>10}")
-    print(f"  {'-'*48}")
+    # Per-model comparison: top-3 base reps vs hybrid
+    print(f"\n  PER-MODEL COMPARISON (top-3 base reps vs hybrid):")
+    results['per_model_top3'] = {}
     for model_name in model_factories:
-        # Average base delta for this model across all reps
-        model_base_deltas = []
+        # Collect (rep_name, unweighted_score) for this model
+        rep_scores = []
         for rep_name, rep_results in results['per_rep'].items():
             if model_name in rep_results:
+                uw = rep_results[model_name].get('unweighted', float('nan'))
+                w = rep_results[model_name].get('weighted', float('nan'))
                 d = rep_results[model_name].get('delta', float('nan'))
-                if not np.isnan(d):
-                    model_base_deltas.append(d)
-        model_base_avg = float(np.mean(model_base_deltas)) if model_base_deltas else float('nan')
+                if not np.isnan(uw):
+                    rep_scores.append((rep_name, uw, w, d))
 
+        # Sort by unweighted score (best first)
+        rep_scores.sort(key=lambda x: x[1], reverse=not lower_is_better)
+        top3 = rep_scores[:3]
+
+        model_hybrid_uw = float('nan')
+        model_hybrid_w = float('nan')
         model_hybrid_delta = float('nan')
         if model_name in results['hybrid']:
+            model_hybrid_uw = results['hybrid'][model_name].get('unweighted', float('nan'))
+            model_hybrid_w = results['hybrid'][model_name].get('weighted', float('nan'))
             model_hybrid_delta = results['hybrid'][model_name].get('delta', float('nan'))
 
-        winner = '--'
-        if not np.isnan(model_base_avg) and not np.isnan(model_hybrid_delta):
-            base_b = -model_base_avg if lower_is_better else model_base_avg
-            hyb_b = -model_hybrid_delta if lower_is_better else model_hybrid_delta
-            winner = 'base' if base_b > hyb_b else 'hybrid'
+        results['per_model_top3'][model_name] = {
+            'top3': [(n, uw, w, d) for n, uw, w, d in top3],
+            'hybrid_unweighted': model_hybrid_uw,
+            'hybrid_weighted': model_hybrid_w,
+            'hybrid_delta': model_hybrid_delta,
+        }
 
-        print(f"  {model_name:<12} {model_base_avg:>+12.4f} {model_hybrid_delta:>+14.4f} {winner:>10}")
+        print(f"\n  {model_name}:")
+        for rn, uw, w, d in top3:
+            print(f"    {rn:<20} uw={uw:.4f}, w={w:.4f} (delta={d:+.4f})")
+        print(f"    {'HYBRID':<20} uw={model_hybrid_uw:.4f}, w={model_hybrid_w:.4f} "
+              f"(delta={model_hybrid_delta:+.4f})")
 
     return make_structured_output(
         experiment_id='n02',

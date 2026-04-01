@@ -126,7 +126,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             augmentations=augs,
             speed=config.get('search_speed', 'fast'),
             precomputed=data.get('precomputed_searches'))
-        bp = search.best_overall['blueprint'] if search.best_overall else None
+        bp_entry = search.best_by_model.get('rf')
+        bp = bp_entry['blueprint'] if bp_entry else None
     except Exception:
         bp = None
     _alloc = bp.allocation_method if bp else 'performance_weighted'

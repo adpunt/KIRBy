@@ -55,8 +55,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reps, labels, groups, budget=budget,
             aug_condition='uncapped', augmentations=augmentations,
             speed=search_speed,
-            precomputed=data.get('precomputed_searches'))
-        fitted = search.fitted_result
+            precomputed=data.get('precomputed_searches'),
+            downstream_model='rf')
+        fitted = search.fitted_results.get('rf')
         weights_flat = flatten_weights(fitted) if fitted else np.ones(X_hybrid.shape[1])
     except Exception as e:
         print(f"  find_best_hybrid failed: {e}")

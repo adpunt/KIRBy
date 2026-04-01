@@ -588,17 +588,9 @@ def print_summary(result: SearchResult, task_type: str):
     print("RESULTS SUMMARY")
     print("=" * 80)
 
-    best = result.best_overall
-    if best is None:
+    if not result.best_by_model:
         print("\nNo results found.")
         return
-
-    bp = _get(best, 'blueprint')
-    print(f"\n=== BEST OVERALL ===")
-    print(f"Model: {_get(best, 'model')}, Method: {bp.allocation_method}, "
-          f"Importance: {bp.importance_method}, Budget: {bp.budget}")
-    print(f"{metric}: {_get(best, 'score_mean'):.4f} +/- {_get(best, 'score_std'):.4f}, "
-          f"Dimension: {_get(best, 'n_features')}")
 
     print(f"\n=== BEST BY MODEL ===")
     models_evaluated = list(result.best_by_model.keys())
@@ -755,7 +747,6 @@ def save_results(
 
         return d
 
-    best = result.best_overall
     output = {
         'metadata': {
             'dataset': dataset_name,
@@ -764,7 +755,6 @@ def save_results(
             'timestamp': datetime.now().isoformat(),
             'domain': 'tcga',
         },
-        'best_overall': result_to_dict(best, include_weights=True) if best else None,
         'best_by_dimension': {
             str(tier): result_to_dict(r)
             for tier, r in result.best_by_dimension.items()
@@ -1060,9 +1050,12 @@ Output:
     save_results(result, args.dataset, args.search, list(base_reps.keys()), output_path,
                  base_reps=base_reps, labels=labels)
 
-    # Explanations
-    if args.explain and result.best_overall is not None:
-        generate_explanations(result.best_overall, base_reps, labels, output_path)
+    # Explanations (iterate over models)
+    if args.explain and result.best_by_model:
+        for model_name, best_result in result.best_by_model.items():
+            print(f"\n--- Explanations for model: {model_name} ---")
+            generate_explanations(best_result, base_reps, labels,
+                                  output_path.replace('.json', f'_{model_name}.json'))
 
     return 0
 

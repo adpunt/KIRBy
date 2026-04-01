@@ -156,7 +156,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 aug_condition='capped', augmentations=augmentations,
                 speed=config.get('search_speed', 'fast'),
                 precomputed=data.get('precomputed_searches'))
-            blueprints[budget] = search.best_overall['blueprint']
+            best = search.best_by_model.get('rf') or next(iter(search.best_by_model.values()), None)
+            if best and 'blueprint' in best:
+                blueprints[budget] = best['blueprint']
         except Exception:
             pass  # will skip this budget later
 

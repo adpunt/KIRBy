@@ -37,7 +37,9 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, make_structured_output, convert_numpy,
     get_model_factories, get_domain_metric, cv_split, make_cv_splitter,
-    get_hybrid_features_and_weights, build_fold_hybrid,
+    get_fitted_hybrid, flatten_fold_weights, build_fold_hybrid,
+    get_best_for_downstream,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 
 from kirby.hybrid import apply_feature_selection, compute_feature_importance
@@ -272,24 +274,20 @@ def _run_sali_smoothing(reps, labels, X_hybrid, is_clf=False):
         print(f"    {'_hybrid':<20} SALI mean={stats_hybrid['mean']:.3f}  "
               f"max={stats_hybrid['max']:.3f}  std={stats_hybrid['std']:.3f}")
 
-        # Compare: hybrid vs average of individual reps
-        rep_means = [v['mean'] for k, v in sali_results.items() if k != '_hybrid']
-        rep_maxes = [v['max'] for k, v in sali_results.items() if k != '_hybrid']
-        rep_stds = [v['std'] for k, v in sali_results.items() if k != '_hybrid']
+        # Compare: hybrid vs top-3 reps (lowest SALI mean = smoothest landscape)
+        rep_sali = [(k, v['mean']) for k, v in sali_results.items() if k != '_hybrid']
+        top3_sali = sorted(rep_sali, key=lambda x: x[1])[:3]
 
         sali_results['_comparison'] = {
-            'avg_rep_mean': float(np.mean(rep_means)),
-            'avg_rep_max': float(np.mean(rep_maxes)),
-            'avg_rep_std': float(np.mean(rep_stds)),
+            'top3_smoothest': top3_sali,
             'hybrid_mean': stats_hybrid['mean'],
             'hybrid_max': stats_hybrid['max'],
             'hybrid_std': stats_hybrid['std'],
-            'delta_mean': float(stats_hybrid['mean'] - np.mean(rep_means)),
-            'delta_max': float(stats_hybrid['max'] - np.mean(rep_maxes)),
         }
-        print(f"    Hybrid vs avg-rep SALI mean: "
-              f"{stats_hybrid['mean']:.3f} vs {np.mean(rep_means):.3f} "
-              f"(delta={sali_results['_comparison']['delta_mean']:+.3f})")
+        print(f"    Top-3 smoothest (lowest SALI mean):")
+        for rn, rv in top3_sali:
+            print(f"      {rn}: {rv:.3f}")
+        print(f"    Hybrid: {stats_hybrid['mean']:.3f}")
 
     return sali_results
 
@@ -330,22 +328,19 @@ def _run_cliff_mitigation(reps, labels, X_hybrid, sim_threshold, activity_k,
             'pct_cliff_compounds': info_h['pct_cliff_compounds'],
         }
 
-        # Summary
-        rep_pair_counts = [v['n_cliff_pairs'] for k, v in mitigation.items()
-                          if k != '_hybrid']
-        avg_rep = float(np.mean(rep_pair_counts)) if rep_pair_counts else 0.0
+        # Summary: top-3 fewest cliff pairs
+        rep_pairs = [(k, v['n_cliff_pairs']) for k, v in mitigation.items()
+                     if not k.startswith('_')]
+        top3_fewest = sorted(rep_pairs, key=lambda x: x[1])[:3]
         mitigation['_comparison'] = {
-            'avg_rep_cliff_pairs': avg_rep,
+            'top3_fewest_cliffs': top3_fewest,
             'hybrid_cliff_pairs': info_h['n_cliff_pairs'],
-            'reduction_vs_avg': float(avg_rep - info_h['n_cliff_pairs']),
-            'reduction_pct': float(100.0 * (avg_rep - info_h['n_cliff_pairs']) / avg_rep)
-            if avg_rep > 0 else 0.0,
         }
 
-        print(f"    Per-rep cliff pairs (avg): {avg_rep:.0f}")
-        print(f"    Hybrid cliff pairs:        {info_h['n_cliff_pairs']}")
-        print(f"    Reduction: {mitigation['_comparison']['reduction_vs_avg']:.0f} pairs "
-              f"({mitigation['_comparison']['reduction_pct']:.1f}%)")
+        print(f"    Top-3 fewest cliff pairs:")
+        for rn, rp in top3_fewest:
+            print(f"      {rn}: {rp}")
+        print(f"    Hybrid: {info_h['n_cliff_pairs']}")
     else:
         print("    (hybrid not available, skipping comparison)")
 
@@ -378,28 +373,47 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
 
-    # Identify cliff compounds using a reference similarity.
-    # For molecular: ECFP4 Tanimoto if SMILES available, else Euclidean on concat.
-    # For antibody/DTA: Euclidean on concatenated reps.
+    # Identify cliff compounds using a REPRESENTATION-INDEPENDENT reference.
+    # For molecular: ECFP4 Tanimoto (Bajorath standard).
+    # For antibody: edit distance on heavy-chain sequences.
+    # Fallback: Euclidean on concatenated reps.
     n = len(labels)
-    if smiles is not None and domain == 'molecular':
+    heavy_seqs = data.get('heavy_seqs')
+
+    if heavy_seqs is not None and domain == 'antibody':
+        # Edit-distance ground truth for antibodies
+        from experiments.similarity.similarity_helpers import identify_cliff_compounds_editdist
+        max_edits = kwargs.get('max_edits', 5)
+        cliff_mask, cliff_info = identify_cliff_compounds_editdist(
+            heavy_seqs, labels, max_edits=max_edits, activity_k=activity_k,
+            is_clf=is_clf)
+        cliff_indices = set(np.where(cliff_mask)[0].tolist())
+        sim_source = f'edit_distance(max_edits={max_edits})'
+    elif smiles is not None and domain == 'molecular':
         try:
             ref_sim = _compute_ecfp4_tanimoto_sim(smiles)
             sim_source = 'ecfp4_tanimoto'
+            cliff_pair_mask, cliff_info = identify_cliff_pairs(
+                ref_sim, labels, sim_threshold, activity_k, is_clf=is_clf)
+            cliff_mask = cliff_pair_mask.any(axis=1)
+            cliff_indices = set(np.where(cliff_mask)[0].tolist())
         except Exception as e:
             print(f"    WARNING: ECFP4 Tanimoto failed ({e}), falling back to Euclidean")
             X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
             ref_sim = _compute_euclidean_sim(X_concat)
             sim_source = 'euclidean_concat'
+            cliff_pair_mask, cliff_info = identify_cliff_pairs(
+                ref_sim, labels, sim_threshold, activity_k, is_clf=is_clf)
+            cliff_mask = cliff_pair_mask.any(axis=1)
+            cliff_indices = set(np.where(cliff_mask)[0].tolist())
     else:
         X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
         ref_sim = _compute_euclidean_sim(X_concat)
         sim_source = 'euclidean_concat'
-
-    cliff_pair_mask, cliff_info = identify_cliff_pairs(
-        ref_sim, labels, sim_threshold, activity_k, is_clf=is_clf)
-    cliff_mask = cliff_pair_mask.any(axis=1)
-    cliff_indices = set(np.where(cliff_mask)[0].tolist())
+        cliff_pair_mask, cliff_info = identify_cliff_pairs(
+            ref_sim, labels, sim_threshold, activity_k, is_clf=is_clf)
+        cliff_mask = cliff_pair_mask.any(axis=1)
+        cliff_indices = set(np.where(cliff_mask)[0].tolist())
 
     print(f"    Cliff source: {sim_source}")
     print(f"    Cliff compounds: {cliff_info['n_cliff_compounds']} / {n} "
@@ -517,19 +531,20 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                   f"{mn}_cliff={res[f'{mn}_cliff']:.4f}  {mn}_noncliff={res[f'{mn}_noncliff']:.4f}  "
                   f"gap={res['cliff_noncliff_gap']:.4f}")
 
-        # Comparison
-        rep_gaps = [v['cliff_noncliff_gap'] for k, v in strat_results.items()
-                    if k != '_hybrid' and not np.isnan(v.get('cliff_noncliff_gap', float('nan')))]
-        if rep_gaps and '_hybrid' in strat_results:
-            avg_rep_gap = float(np.mean(rep_gaps))
+        # Comparison: top-3 smallest gap
+        rep_gap_list = [(k, v['cliff_noncliff_gap']) for k, v in strat_results.items()
+                        if k != '_hybrid' and not np.isnan(v.get('cliff_noncliff_gap', float('nan')))]
+        if rep_gap_list and '_hybrid' in strat_results:
+            top3_gap = sorted(rep_gap_list, key=lambda x: abs(x[1]))[:3]
             hybrid_gap = strat_results['_hybrid']['cliff_noncliff_gap']
             strat_results['_comparison'] = {
-                'avg_rep_gap': avg_rep_gap,
+                'top3_smallest_gap': top3_gap,
                 'hybrid_gap': hybrid_gap,
-                'gap_reduction': float(avg_rep_gap - hybrid_gap),
             }
-            print(f"      Gap reduction: {avg_rep_gap:.4f} -> {hybrid_gap:.4f} "
-                  f"(delta={avg_rep_gap - hybrid_gap:+.4f})")
+            print(f"      Top-3 smallest cliff-noncliff gap:")
+            for rn, rg in top3_gap:
+                print(f"        {rn}: {rg:.4f}")
+            print(f"      Hybrid: {hybrid_gap:.4f}")
 
     return {
         'cliff_source': sim_source,
@@ -578,11 +593,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     X_hybrid = None
 
     try:
-        X_hybrid, weights_flat, search = get_hybrid_features_and_weights(
-            reps, labels, groups, search_speed, 'lightgbm_gain',
-            augmentations=augmentations)
-        if search.best_overall:
-            hybrid_blueprint = search.best_overall['blueprint']
+        X_hybrid, fi_hybrid, search = get_fitted_hybrid(
+            reps, labels, groups,
+            aug_condition='uncapped' if augmentations else 'none',
+            augmentations=augmentations,
+            speed=search_speed,
+            precomputed=data.get('precomputed_searches'),
+            internal_evaluators=DISTANCE_EVALUATORS,
+            budgets=DISTANCE_BUDGETS,
+            downstream_model='knn')
+        best_config = get_best_for_downstream(search, 'knn')
+        if best_config and 'blueprint' in best_config:
+            hybrid_blueprint = best_config['blueprint']
         print(f"  Hybrid: dim={X_hybrid.shape[1]}")
     except Exception as e:
         print(f"  WARNING: Hybrid search failed ({e}), hybrid comparisons skipped")
@@ -668,24 +690,28 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # SALI
     if 'sali' in results and '_comparison' in results['sali']:
         s = results['sali']['_comparison']
-        print(f"  2. SALI smoothing: hybrid mean={s['hybrid_mean']:.3f} vs "
-              f"avg-rep={s['avg_rep_mean']:.3f} (delta={s['delta_mean']:+.3f})")
+        print(f"  2. SALI smoothing:")
+        for rn, rv in s.get('top3_smoothest', []):
+            print(f"     {rn}: {rv:.3f}")
+        print(f"     Hybrid: {s['hybrid_mean']:.3f}")
 
     # Mitigation
     if 'mitigation' in results and '_comparison' in results['mitigation']:
         m = results['mitigation']['_comparison']
-        print(f"  3. Cliff mitigation: {m['avg_rep_cliff_pairs']:.0f} -> "
-              f"{m['hybrid_cliff_pairs']} pairs "
-              f"({m['reduction_pct']:.1f}% reduction)")
+        print(f"  3. Cliff mitigation (top-3 fewest):")
+        for rn, rp in m.get('top3_fewest_cliffs', []):
+            print(f"     {rn}: {rp} pairs")
+        print(f"     Hybrid: {m['hybrid_cliff_pairs']} pairs")
 
     # Stratified
     if 'stratified' in results:
         st = results['stratified']
         if isinstance(st, dict) and 'stratified' in st and '_comparison' in st['stratified']:
             comp = st['stratified']['_comparison']
-            print(f"  4. Cliff-stratified gap: avg-rep={comp['avg_rep_gap']:.4f}, "
-                  f"hybrid={comp['hybrid_gap']:.4f} "
-                  f"(reduction={comp['gap_reduction']:+.4f})")
+            print(f"  4. Cliff-stratified gap (top-3 smallest):")
+            for rn, rg in comp.get('top3_smallest_gap', []):
+                print(f"     {rn}: {rg:.4f}")
+            print(f"     Hybrid: {comp['hybrid_gap']:.4f}")
 
     return make_structured_output(
         experiment_id='n01',

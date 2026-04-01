@@ -421,9 +421,10 @@ def main():
                 search = find_best_hybrid(
                     base_reps=rep_matrices, labels=labels, groups=groups,
                     speed='fast', return_fitted=True, verbose=False, cache=True)
-                if search.fitted_result is not None:
+                fitted = search.fitted_results.get('rf')
+                if fitted is not None:
                     fi = {r: {'selected_indices': idx}
-                          for r, idx in search.fitted_result.selected_indices.items()}
+                          for r, idx in fitted.selected_indices.items()}
                     rep_matrices['kirby_hybrid'] = apply_feature_selection(rep_matrices, fi)
                     if 'kirby_hybrid' not in rep_names:
                         rep_names = list(rep_names) + ['kirby_hybrid']

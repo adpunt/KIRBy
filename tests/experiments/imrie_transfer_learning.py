@@ -63,7 +63,7 @@ from experiments._shared import convert_numpy
 # CONFIGURATION
 # =============================================================================
 
-DEFAULT_DATASETS = ['logd', 'caco2', 'herg']
+DEFAULT_DATASETS = ['logd', 'caco2', 'herg_ki']
 DEFAULT_REPS = ['ecfp4', 'maccs', 'pdv', 'mol2vec', 'mordred', 'avalon']
 DEFAULT_PRETRAIN_DIR = '/Volumes/seagate/kirby/chembl_pretrain'
 HIDDEN_SIZES = (256, 128, 64)
@@ -188,9 +188,10 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pretrain_dir):
         search = find_best_hybrid(
             base_reps=reps, labels=labels, groups=groups,
             speed='fast', return_fitted=True, verbose=False, cache=True)
-        if search.fitted_result is not None:
+        fitted = search.fitted_results.get('rf')
+        if fitted is not None:
             fi = {r: {'selected_indices': idx}
-                  for r, idx in search.fitted_result.selected_indices.items()}
+                  for r, idx in fitted.selected_indices.items()}
             reps['kirby_hybrid'] = apply_feature_selection(reps, fi)
             rep_names = list(rep_names) + ['kirby_hybrid']
             print(f"  Hybrid built: {reps['kirby_hybrid'].shape[1]}D")

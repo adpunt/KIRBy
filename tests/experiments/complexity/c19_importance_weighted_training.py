@@ -120,7 +120,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     augmentations = data.get('augmentations')
     try:
         X_hybrid, fi, _search = get_fitted_hybrid(
-            reps, labels, groups, budget=budget,
+            reps, labels, groups, downstream_model='rf',
+            budget=budget,
             aug_condition='capped', augmentations=augmentations,
             speed=config.get('search_speed', 'fast'),
             precomputed=data.get('precomputed_searches'),

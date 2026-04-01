@@ -226,7 +226,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         reps, labels, groups, budget=100, aug_condition='uncapped',
         augmentations=augmentations, speed=config.get('search_speed', 'fast'),
         precomputed=data.get('precomputed_searches'))
-    bp = search.best_overall['blueprint'] if search.best_overall else None
+    best_rf = search.best_by_model.get('rf')
+    bp = best_rf['blueprint'] if best_rf else None
     if bp is None:
         print("  WARNING: No blueprint found, skipping")
         return {'error': 'no_blueprint', 'metric': metric_name}

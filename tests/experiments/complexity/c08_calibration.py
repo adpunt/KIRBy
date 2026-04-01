@@ -99,14 +99,20 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 verbose=False,
                 cache=True,
             )
-            best = search.best_overall
+            # Pick the best result across all models
+            best = None
+            best_model = None
+            for m_name, m_best in search.best_by_model.items():
+                if best is None or m_best['score_mean'] > best['score_mean']:
+                    best = m_best
+                    best_model = m_name
             if best:
                 optimal_budget = best['blueprint'].budget
                 optimal_alloc = best['blueprint'].allocation_method
                 optimal_imp = best['blueprint'].importance_method
                 optimal_internal_eval = best['blueprint'].internal_evaluator
                 optimal_aug_strategy = best['blueprint'].augmentation_strategy
-                best_model = best['model']
+                best_model = best.get('model', best_model)
                 optimal_model_factory = get_model_factories(
                     [best_model], task_type=data.get('task_type', 'regression'),
                     n_samples=len(data['labels'])).get(best_model)

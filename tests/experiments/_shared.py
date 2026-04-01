@@ -219,6 +219,15 @@ def _cache_rep_dict(dataset_name: str, compute_all_fn,
 # Change here to change everywhere.
 SCREENING_BUDGETS = [50, 500, 1000, 2000, 3000, 4000]
 FULL_BUDGETS = [10, 25, 50, 100, 250, 500, 1000, 2000, 3000, 4000]
+DISTANCE_BUDGETS = [10, 25, 50, 100, 250, 500]
+DISTANCE_EVALUATORS = ['knn', 'ridge', 'rf', 'mlp', 'lightgbm', 'svm']
+
+# Standard downstream model set — covers every major family.
+# Use this whenever an experiment's conclusions should generalise across model types.
+DOWNSTREAM_MODELS = ['rf', 'knn', 'svm', 'mlp', 'xgboost', 'lightgbm', 'gp']
+
+# Probabilistic models for noise/uncertainty experiments (N09, N13, S11).
+DOWNSTREAM_MODELS_NOISE = ['rf', 'knn', 'svm', 'mlp', 'xgboost', 'lightgbm', 'gp', 'ngboost']
 
 
 # =============================================================================
@@ -1384,10 +1393,11 @@ def get_hybrid_features_and_weights(
         kwargs['augmentations'] = augmentations
 
     search = find_best_hybrid(**kwargs)
-    fitted = search.fitted_result
+    # Use RF as default downstream model for weight extraction
+    fitted = (search.fitted_results or {}).get('rf')
 
     if fitted is None:
-        raise RuntimeError("find_best_hybrid returned no fitted result")
+        raise RuntimeError("find_best_hybrid returned no fitted result for 'rf'")
 
     X_hybrid = apply_feature_selection(reps, _fitted_to_feature_info(fitted))
     # Append augmentation features if present (must match flatten_weights layout)
@@ -1474,7 +1484,7 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
         train_reps: {rep_name: X_train} for this fold.
         val_reps: {rep_name: X_val} for this fold.
         y_train: Training labels for this fold.
-        blueprint: Blueprint from search.best_overall['blueprint'].
+        blueprint: Blueprint from search result (e.g. best_by_model[model]['blueprint']).
         augmentations_train: {aug_name: X_train} sliced augmentation reps, or None.
         augmentations_val: {aug_name: X_val} sliced augmentation reps, or None.
 
@@ -1516,7 +1526,7 @@ def precompute_hybrid_searches(reps, labels, groups, config,
 
     ONE find_best_hybrid call per aug_condition with ALL budgets. Baselines
     and importance scores are computed once and reused across budgets.
-    best_overall from each search is the best config INCLUDING the winning budget.
+    best_by_model from each search gives per-model best configs across all budgets.
 
     Args:
         reps: Base representations {name: array}.
@@ -1589,12 +1599,16 @@ def precompute_hybrid_searches(reps, labels, groups, config,
             elapsed = time.time() - t0
 
             if verbose:
-                if search.best_overall:
-                    bp = search.best_overall['blueprint']
-                    score = search.best_overall.get('score_mean', 0)
+                if search.best_by_model:
+                    # Show summary from best across all models
+                    all_bests = list(search.best_by_model.values())
+                    _cmp = min if search.lower_is_better else max
+                    top = _cmp(all_bests, key=lambda r: r.get('score_mean', 0))
+                    bp = top['blueprint']
+                    score = top.get('score_mean', 0)
                     print(f" done {elapsed:.1f}s "
-                          f"(alloc={bp.allocation_method}, "
-                          f"budget={bp.budget}, score={score:.4f})")
+                          f"({len(all_bests)} models, "
+                          f"top={top['model']} score={score:.4f})")
                 else:
                     print(f" done {elapsed:.1f}s (no results)")
 
@@ -1623,7 +1637,8 @@ def get_precomputed_search(reps, labels, groups, budget=None,
     Otherwise calls find_best_hybrid with all budgets and cache=True.
 
     The returned SearchResult contains results across ALL budgets.
-    Use search.best_overall for the best config (including optimal budget).
+    Use search.best_by_model[model] or search.best_by_model_budget[model][budget]
+    for per-model best configs.
 
     Args:
         reps: Base representations {name: array}.
@@ -1654,7 +1669,8 @@ def get_precomputed_search(reps, labels, groups, budget=None,
     augs = augmentations if aug_condition != 'none' else None
     aug_strat = aug_condition if aug_condition != 'none' else 'uncapped'
 
-    return find_best_hybrid(
+    # Allow kwargs to override defaults (e.g., budgets, internal_evaluators)
+    call_kwargs = dict(
         base_reps=reps,
         labels=labels,
         groups=groups,
@@ -1666,36 +1682,85 @@ def get_precomputed_search(reps, labels, groups, budget=None,
         weight_method=weight_method,
         cache=True,
         verbose=False,
-        **kwargs,
     )
+    call_kwargs.update(kwargs)
+
+    return find_best_hybrid(**call_kwargs)
 
 
-def get_fitted_hybrid(reps, labels, groups, budget=None, aug_condition='uncapped',
-                      augmentations=None, speed='fast', precomputed=None):
+def get_fitted_hybrid(reps, labels, groups, *, downstream_model,
+                      budget=None, aug_condition='uncapped',
+                      augmentations=None, speed='fast', precomputed=None,
+                      internal_evaluators=None, budgets=None):
     """Get X_hybrid and feature_info from a cached search (return_fitted=True).
 
     For full-dataset experiments that need the hybrid matrix without per-fold splitting.
+    Each downstream model gets its own best hybrid — downstream_model is required.
 
     Args:
         reps: Base representations {name: array}.
         labels: Target values.
         groups: Group labels for CV (or None).
-        budget: DEPRECATED — ignored. Budget is searched, not specified.
+        downstream_model: Model name (e.g., 'rf', 'knn', 'gp'). Required.
+            Selects from best_by_model_budget[downstream_model].
+        budget: Specific budget to select (None = best across budgets for this model).
         aug_condition: 'none', 'uncapped', or 'capped'.
         augmentations: {aug_name: array} or None.
         speed: Search speed tier ('fast' or 'full').
         precomputed: Dict from data['precomputed_searches'] (optional).
+        internal_evaluators: Override evaluator list (e.g., DISTANCE_EVALUATORS).
+            When set, bypasses precomputed dict and runs on-demand (disk-cached).
+        budgets: Override budget list (e.g., DISTANCE_BUDGETS).
+            When set, bypasses precomputed dict and runs on-demand (disk-cached).
 
     Returns:
         (X_hybrid, feature_info, SearchResult)
     """
+    # If custom evaluators or budgets requested, bypass precomputed dict
+    # (it was computed with different params). Disk cache handles dedup.
+    kwargs = {}
+    use_precomputed = precomputed
+    if internal_evaluators is not None:
+        kwargs['internal_evaluators'] = internal_evaluators
+        use_precomputed = None  # force on-demand search
+    if budgets is not None:
+        kwargs['budgets'] = budgets
+        use_precomputed = None
+
     search = get_precomputed_search(
         reps, labels, groups,
         aug_condition=aug_condition, augmentations=augmentations,
-        speed=speed, return_fitted=True, precomputed=precomputed)
-    if search.fitted_result is None:
-        raise RuntimeError(f"No fitted result for aug={aug_condition}")
-    fitted = search.fitted_result
+        speed=speed, return_fitted=True, precomputed=use_precomputed,
+        **kwargs)
+
+    best_config = get_best_for_downstream(search, downstream_model, budget=budget)
+
+    if best_config is not None and 'blueprint' in best_config:
+        # Build hybrid from the selected blueprint on full data
+        from kirby.hybrid import create_hybrid
+        bp = best_config['blueprint']
+        augs = augmentations if augmentations is not None else None
+        X_hybrid, fi = create_hybrid(
+            reps, labels,
+            allocation_method=bp.allocation_method,
+            budget=bp.budget,
+            step_size=getattr(bp, 'step_size', 5),
+            importance_method=bp.importance_method,
+            internal_evaluator=bp.internal_evaluator,
+            augmentations=augs,
+            augmentation_strategy=getattr(bp, 'augmentation_strategy', 'uncapped'),
+        )
+        # NOTE: create_hybrid already includes augmentation features in X_hybrid
+        # when augmentations are provided — do NOT append them again.
+        return X_hybrid, fi, search
+
+    # Fallback: use per-model fitted_results from search
+    fitted = search.fitted_results.get(downstream_model)
+    if fitted is None:
+        available = list(search.fitted_results.keys()) if search.fitted_results else []
+        raise RuntimeError(
+            f"No fitted result for model={downstream_model}, aug={aug_condition}. "
+            f"Available models: {available}")
     fi = {}
     for rep_name, indices in fitted.selected_indices.items():
         fi[rep_name] = {
@@ -1715,6 +1780,47 @@ def get_fitted_hybrid(reps, labels, groups, budget=None, aug_condition='uncapped
             X_hybrid = np.hstack([X_hybrid, X_aug])
 
     return X_hybrid, fi, search
+
+
+def get_best_for_downstream(search, downstream_model, budget=None):
+    """Select the best config from a SearchResult for a specific downstream model.
+
+    Lookup chain:
+    1. best_by_model_budget[model][budget] (exact match)
+    2. best across all budgets for this model in best_by_model_budget
+    3. best_by_budget[budget] (model-agnostic, budget-specific)
+    4. best_by_model[model] (model-specific, budget-agnostic)
+    5. None — caller must handle.
+
+    Args:
+        search: SearchResult from find_best_hybrid.
+        downstream_model: Model name (e.g., 'knn', 'gp', 'svm').
+        budget: Specific budget to select (None = best across budgets for this model).
+
+    Returns:
+        best_config dict with 'blueprint', 'score_mean', etc. or None.
+    """
+    # Try model-specific budget lookup
+    if search.best_by_model_budget and downstream_model in search.best_by_model_budget:
+        model_budgets = search.best_by_model_budget[downstream_model]
+        if budget is not None and budget in model_budgets:
+            return model_budgets[budget]
+        # Best across all budgets for this model
+        if model_budgets:
+            lower = getattr(search, 'lower_is_better', False)
+            return (min if lower else max)(
+                model_budgets.values(),
+                key=lambda r: r.get('score_mean', 0))
+
+    # Fallback: budget-specific (model-agnostic)
+    if budget is not None and search.best_by_budget and budget in search.best_by_budget:
+        return search.best_by_budget[budget]
+
+    # Fallback: model-specific (budget-agnostic)
+    if search.best_by_model and downstream_model in search.best_by_model:
+        return search.best_by_model[downstream_model]
+
+    return None
 
 
 # =============================================================================

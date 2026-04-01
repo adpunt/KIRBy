@@ -137,7 +137,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 cache=True,
                 verbose=False,
             )
-            bp = search.best_overall['blueprint'] if search.best_overall else None
+            best = search.best_by_model.get('rf') or next(iter(search.best_by_model.values()), None)
+            bp = best['blueprint'] if best else None
         except Exception as e:
             print(f"FAILED: {e}")
             bp = None

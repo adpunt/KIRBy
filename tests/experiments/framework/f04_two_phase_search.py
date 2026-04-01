@@ -269,7 +269,10 @@ def run(data, config, output_dir, dataset_name, importance_method='treeshap',
                                              metric_name)
     n_two_phase = len(search.all_results)
 
-    two_phase_best = search.best_overall
+    # Pick best across all models (for comparison with full grid)
+    two_phase_best = (min if lower_is_better else max)(
+        search.best_by_model.values(),
+        key=lambda r: r.get('score_mean', float('inf') if lower_is_better else float('-inf')))
     print(f"\n  Two-phase best: {two_phase_best['allocation_method']}/"
           f"b={two_phase_best['budget']}/"
           f"step={two_phase_best.get('step_size', 10)}/{two_phase_best['model']} "

@@ -54,7 +54,7 @@ from experiments._shared import convert_numpy
 # CONFIGURATION
 # =============================================================================
 
-DEFAULT_DATASETS = ['logd', 'caco2', 'herg']
+DEFAULT_DATASETS = ['logd', 'caco2', 'herg_ki']
 SPLIT_STRATEGIES = ['scaffold', 'mw', 'spectral']
 SURVEY_MODELS = ['rf', 'ridge', 'xgboost']
 
@@ -238,9 +238,10 @@ def main():
             search = find_best_hybrid(
                 base_reps=reps, labels=labels, groups=scaffold_groups,
                 speed='fast', return_fitted=True, verbose=False, cache=True)
-            if search.fitted_result is not None:
+            fitted = search.fitted_results.get('rf')
+            if fitted is not None:
                 fi = {r: {'selected_indices': idx}
-                      for r, idx in search.fitted_result.selected_indices.items()}
+                      for r, idx in fitted.selected_indices.items()}
                 reps['kirby_hybrid'] = apply_feature_selection(reps, fi)
                 print(f"  Hybrid built: {reps['kirby_hybrid'].shape[1]}D")
         except Exception as e:

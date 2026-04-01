@@ -143,8 +143,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     sd['reps'], sd['labels'],
                     groups=sd.get('groups'),
                     speed='fast', cache=True, verbose=False)
-                if s_search.best_overall:
-                    silo_blueprints[sname] = s_search.best_overall['blueprint']
+                s_bp_entry = s_search.best_by_model.get('rf')
+                if s_bp_entry:
+                    silo_blueprints[sname] = s_bp_entry['blueprint']
             except Exception:
                 pass
     _default_bp = next(iter(silo_blueprints.values()), None) if silo_blueprints else None

@@ -27,6 +27,8 @@ from experiments._shared import (
     save_experiment_results, convert_numpy, cv_split, _cv_split,
     compute_dataset_complexity, get_domain_metric,
     find_best_hybrid, create_hybrid, apply_feature_selection,
+    get_best_for_downstream,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 from kirby.hybrid import apply_augmentation_selection
 
@@ -87,9 +89,17 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                 augmentations=data.get('augmentations'),
                 verbose=False,
                 cache=True,
+                internal_evaluators=DISTANCE_EVALUATORS,
+                budgets=DISTANCE_BUDGETS,
             )
 
-            best = search_result.best_overall
+            # Prefer SVM-evaluated config for SVR downstream, fall back to RF
+            best = get_best_for_downstream(search_result, 'svm')
+            if best is None or 'blueprint' not in best:
+                best = search_result.best_by_model.get('rf') or (
+                    next(iter(search_result.best_by_model.values()), None)
+                    if search_result.best_by_model else None
+                )
             metric_name, metric_fn, _ = get_domain_metric(data)
             augs = data.get('augmentations')
             if best:
@@ -310,7 +320,7 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
 if __name__ == '__main__':
     parser = create_experiment_parser('C03: Cross-Dataset Transfer',
                                      has_delta=True, has_augment=True)
-    parser.add_argument('--datasets', type=str, nargs='+', default=['logd', 'caco2', 'herg'],
+    parser.add_argument('--datasets', type=str, nargs='+', default=['logd', 'caco2', 'herg_ki'],
                         help='Dataset names to compare (at least 2)')
     args = parser.parse_args()
     config = get_config(args)

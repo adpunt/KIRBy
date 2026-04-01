@@ -25,16 +25,13 @@ from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.neighbors import NearestNeighbors
 from sklearn.metrics import silhouette_score
-from scipy.stats import spearmanr
-
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    get_hybrid_features_and_weights,
+    get_fitted_hybrid,
     compute_feature_importance,
-    get_precomputed_search,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
-from kirby.hybrid import create_hybrid, apply_feature_selection
 
 
 # =========================================================================
@@ -178,13 +175,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Build spaces to compare
     spaces = {}
 
-    # Per-rep (top 3 by dimension)
-    sorted_reps = sorted(reps.items(), key=lambda x: x[1].shape[1], reverse=True)
-    for rname, X_rep in sorted_reps[:3]:
+    # All per-rep spaces (top-3 selected after evaluation)
+    for rname, X_rep in reps.items():
         spaces[f'rep_{rname}'] = X_rep
-
-    # Concat
-    spaces['concat'] = X_concat
 
     # PCA-matched (same dim as hybrid budget)
     pca_dim = min(budget, total_dim, len(labels) - 1)
@@ -193,41 +186,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             StandardScaler().fit_transform(X_concat))
         spaces['pca_matched'] = X_pca
 
-    # Hybrid — use held-out split to avoid label leakage:
-    # fit feature selection on 80% of data, transform ALL data for analysis.
+    # Hybrid — distance-aware evaluators, held-out split to avoid label leakage.
     try:
-        search = get_precomputed_search(
-            reps, labels, groups, budget=budget,
+        X_hybrid, fi, search = get_fitted_hybrid(
+            reps, labels, groups,
             aug_condition='none', speed=config.get('search_speed', 'fast'),
-            precomputed=data.get('precomputed_searches'))
-        bp = search.best_overall['blueprint']
-
-        from sklearn.model_selection import GroupShuffleSplit, ShuffleSplit
-        if groups is not None and len(np.unique(groups)) >= 2:
-            _splitter = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-            fit_idx, _ = next(_splitter.split(labels, labels, groups=groups))
-        else:
-            _splitter = ShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-            fit_idx, _ = next(_splitter.split(labels, labels))
-        fit_reps = {k: v[fit_idx] for k, v in reps.items()}
-        _, fi = create_hybrid(
-            fit_reps, labels[fit_idx],
-            allocation_method=bp.allocation_method,
-            importance_method=bp.importance_method,
-            internal_evaluator=bp.internal_evaluator,
-            budget=bp.budget,
-        )
-        X_hybrid = apply_feature_selection(reps, fi)
+            precomputed=data.get('precomputed_searches'),
+            internal_evaluators=DISTANCE_EVALUATORS,
+            budgets=DISTANCE_BUDGETS,
+            downstream_model='knn')
         spaces['hybrid'] = X_hybrid
     except Exception as e:
         print(f"  Hybrid creation failed: {e}")
-
-    # Importance weights for weighted retrieval
-    # compute_feature_importance expects {rep_name: array} dict, not raw ndarray
-    X_concat_s = StandardScaler().fit_transform(X_concat)
-    imp_dict = compute_feature_importance(
-        {'concat': X_concat_s}, labels, method='lightgbm_gain')
-    imp_concat = imp_dict.get('concat', np.ones(X_concat.shape[1]))
 
     print(f"  Spaces: {list(spaces.keys())}")
 
@@ -247,17 +217,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("\n  13b: Retrieval quality")
     retrieval_results = {}
     for space_name, X in spaces.items():
-        # Unweighted
         ret_uw = _retrieval_quality(X, labels, k=k_retrieval, is_clf=is_clf)
 
-        # Weighted (only for concat and hybrid)
+        # Weighted retrieval for hybrid only
         ret_w = None
-        if space_name == 'concat':
-            ret_w = _retrieval_quality(X, labels, k=k_retrieval,
-                                       importance_weights=imp_concat,
-                                       is_clf=is_clf)
-        elif space_name == 'hybrid' and 'hybrid' in spaces:
-            # Importance on hybrid features
+        if space_name == 'hybrid':
             imp_h_dict = compute_feature_importance(
                 {'hybrid': StandardScaler().fit_transform(X)}, labels, method='lightgbm_gain')
             imp_h = imp_h_dict.get('hybrid', np.ones(X.shape[1]))
@@ -283,22 +247,44 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         },
     }
 
-    # Summary: does hybrid win on label coherence AND retrieval?
-    if 'hybrid' in clustering_results and 'concat' in clustering_results:
+    # Summary: hybrid vs top-3 per-rep baselines
+    # Top-3 by retrieval (lower mean_delta_y = better)
+    rep_retrieval = {k: v['unweighted']['mean_delta_y']
+                     for k, v in retrieval_results.items() if k.startswith('rep_')}
+    top3_retrieval = sorted(rep_retrieval.items(), key=lambda x: x[1])[:3]
+    # Top-3 by clustering coherence (higher = better)
+    rep_clustering = {}
+    for k, v in clustering_results.items():
+        if k.startswith('rep_') and v:
+            rep_clustering[k] = max(val['label_coherence'] for val in v.values())
+    top3_clustering = sorted(rep_clustering.items(), key=lambda x: x[1], reverse=True)[:3]
+
+    results['top3_retrieval'] = top3_retrieval
+    results['top3_clustering'] = top3_clustering
+
+    if 'hybrid' in clustering_results and 'hybrid' in retrieval_results:
         h_coh = max((v['label_coherence'] for v in clustering_results['hybrid'].values()),
                     default=float('nan'))
-        c_coh = max((v['label_coherence'] for v in clustering_results['concat'].values()),
-                    default=float('nan'))
+        h_ret = retrieval_results['hybrid']['unweighted']['mean_delta_y']
+        best_rep_ret_name, best_rep_ret_val = top3_retrieval[0] if top3_retrieval else ('?', 1e10)
+        best_rep_coh_name, best_rep_coh_val = top3_clustering[0] if top3_clustering else ('?', 0)
+
         results['summary'] = {
-            'hybrid_clustering_wins': h_coh > c_coh if not any(
-                np.isnan(x) for x in [h_coh, c_coh]) else None,
-            'hybrid_retrieval_wins': (
-                retrieval_results.get('hybrid', {}).get('unweighted', {}).get('mean_delta_y', 1e10) <
-                retrieval_results.get('concat', {}).get('unweighted', {}).get('mean_delta_y', 1e10)
-            ),
+            'hybrid_coherence': h_coh,
+            'hybrid_retrieval': h_ret,
+            'best_rep_coherence': (best_rep_coh_name, best_rep_coh_val),
+            'best_rep_retrieval': (best_rep_ret_name, best_rep_ret_val),
+            'hybrid_clustering_wins': h_coh > best_rep_coh_val,
+            'hybrid_retrieval_wins': h_ret < best_rep_ret_val,
         }
-        print(f"\n  Hybrid vs concat: clustering={'win' if results['summary']['hybrid_clustering_wins'] else 'loss'}, "
-              f"retrieval={'win' if results['summary']['hybrid_retrieval_wins'] else 'loss'}")
+        print(f"\n  Top-3 baselines (retrieval): "
+              + ", ".join(f"{n}={v:.4f}" for n, v in top3_retrieval))
+        print(f"  Top-3 baselines (clustering): "
+              + ", ".join(f"{n}={v:.4f}" for n, v in top3_clustering))
+        print(f"  Hybrid: coherence={h_coh:.4f} vs best_rep={best_rep_coh_val:.4f} "
+              f"({'win' if h_coh > best_rep_coh_val else 'loss'}), "
+              f"retrieval={h_ret:.4f} vs best_rep={best_rep_ret_val:.4f} "
+              f"({'win' if h_ret < best_rep_ret_val else 'loss'})")
 
     return results
 
