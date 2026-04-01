@@ -501,7 +501,7 @@ def _run_sas_bo_bridge(reps, labels, groups, struct_t, act_t,
         z = r['zones']
         print(f"    {cond_name:<18} {r['dim']:>5} {z['pct_I']:>7.2f} "
               f"{z['pct_IV']:>8.2f} {r['gp_r2']:>8.4f} "
-              f"{r['gp_mean_std']:>8.4f} {r['gp_log_ml']:>9.1f}")
+              f"{r['gp_mean_std']:>8.4f} {r['gp_log_marginal_likelihood']:>9.1f}")
 
     # ---- Correlation: Zone I vs GP R2 ----
     successful = {k: v for k, v in results.items()

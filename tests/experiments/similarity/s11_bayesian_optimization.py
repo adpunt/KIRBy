@@ -65,7 +65,7 @@ from experiments._shared import (
     make_structured_output, get_precomputed_search,
 )
 
-from sklearn.gaussian_process.kernels import Kernel, Hyperparameter
+from sklearn.gaussian_process.kernels import Kernel
 from kirby.hybrid import apply_feature_selection
 from kirby.hybrid import create_hybrid
 
@@ -76,33 +76,53 @@ class TanimotoKernel(Kernel):
     k(x, y) = <x, y> / (||x||² + ||y||² - <x, y>)
 
     Appropriate for molecular fingerprints where RBF assumes smooth
-    continuous features. Bounded in [0, 1].
+    continuous features. Bounded in [0, 1]. No learnable hyperparameters.
     """
 
     def __init__(self):
-        pass
-
-    @property
-    def hyperparameter_constant(self):
-        return Hyperparameter("constant", "fixed", 1.0)
+        super().__init__()
 
     def __call__(self, X, Y=None, eval_gradient=False):
+        X = np.asarray(X, dtype=np.float64)
         if Y is None:
             Y = X
+        else:
+            Y = np.asarray(Y, dtype=np.float64)
         XY = X @ Y.T
         X_sq = np.sum(X ** 2, axis=1)
         Y_sq = np.sum(Y ** 2, axis=1)
         denom = X_sq[:, None] + Y_sq[None, :] - XY
-        K = np.where(denom > 0, XY / denom, 1.0)
+        K = np.where(denom > 0, XY / denom, 0.0)
         if eval_gradient:
             return K, np.empty((X.shape[0], Y.shape[0], 0))
         return K
 
     def diag(self, X):
-        return np.ones(X.shape[0])
+        X = np.asarray(X, dtype=np.float64)
+        norms = np.sum(X ** 2, axis=1)
+        return np.where(norms > 0, 1.0, 0.0)
 
     def is_stationary(self):
         return False
+
+    @property
+    def hyperparameter_names(self):
+        return []
+
+    @property
+    def theta(self):
+        return np.empty(0)
+
+    @theta.setter
+    def theta(self, value):
+        pass
+
+    @property
+    def bounds(self):
+        return np.empty((0, 2))
+
+    def clone_with_theta(self, theta):
+        return TanimotoKernel()
 # TODO: create_hybrid API not finalised — revisit after framework experiments.
 
 
