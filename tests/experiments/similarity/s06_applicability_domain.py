@@ -122,7 +122,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             rf = _rf_factory()
             rf.fit(X_tr_s, y_train)
             y_pred = rf.predict(X_va_s)
-            errors = np.abs(y_val - y_pred)
+            # Classification: error = misclassification (0/1). Regression: |residual|.
+            if task_type == 'classification':
+                errors = (y_val != y_pred).astype(float)
+            else:
+                errors = np.abs(y_val - y_pred)
 
             # Neutral model: RF on concat (removes tautology — errors are
             # independent of hybrid space, so hybrid distance advantage is genuine)
@@ -131,7 +135,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             X_va_c = scaler_c.transform(X_concat[val_idx])
             rf_neutral = _rf_factory()
             rf_neutral.fit(X_tr_c, y_train)
-            errors_neutral = np.abs(y_val - rf_neutral.predict(X_va_c))
+            y_pred_neutral = rf_neutral.predict(X_va_c)
+            if task_type == 'classification':
+                errors_neutral = (y_val != y_pred_neutral).astype(float)
+            else:
+                errors_neutral = np.abs(y_val - y_pred_neutral)
 
             # Concat weights for this fold
             w_concat = np.concatenate([imp[name] for name in sorted(reps.keys())
@@ -262,83 +270,87 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'decile_counts': decile_counts,
             }
 
-    # Conformal calibration comparison (proper CV -- per-fold hybrid, no data leakage)
-    print("\n  Conformal calibration (CV):")
-    try:
-        splitter_conf, use_groups_conf = make_cv_splitter(n_folds, groups)
-        conf_picp = {'concat': [], 'hybrid': []}
-        conf_mpiw = {'concat': [], 'hybrid': []}
-        alpha = 0.1
+    # Conformal calibration comparison (regression only — residual-based intervals)
+    if task_type == 'classification':
+        print("\n  Conformal calibration: SKIP (regression-only, not applicable to classification)")
+        results['conformal'] = {'skipped': True, 'reason': 'classification'}
+    else:
+        print("\n  Conformal calibration (CV):")
+        try:
+            splitter_conf, use_groups_conf = make_cv_splitter(n_folds, groups)
+            conf_picp = {'concat': [], 'hybrid': []}
+            conf_mpiw = {'concat': [], 'hybrid': []}
+            alpha = 0.1
 
-        for train_idx, val_idx in (splitter_conf.split(sample_X, labels, groups=groups) if use_groups_conf else splitter_conf.split(sample_X, labels)):
-            y_train, y_val = labels[train_idx], labels[val_idx]
+            for train_idx, val_idx in (splitter_conf.split(sample_X, labels, groups=groups) if use_groups_conf else splitter_conf.split(sample_X, labels)):
+                y_train, y_val = labels[train_idx], labels[val_idx]
 
-            # Per-fold hybrid using search blueprint (avoids data leakage)
-            train_reps_fold = {k: v[train_idx] for k, v in reps.items()}
-            val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
-            aug_tr_c = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
-            aug_va_c = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
-            try:
-                X_hybrid_tr, X_hybrid_va, fi = build_fold_hybrid(
-                    train_reps_fold, val_reps_fold, y_train, bp,
-                    augmentations_train=aug_tr_c, augmentations_val=aug_va_c)
-            except Exception:
-                continue
+                # Per-fold hybrid using search blueprint (avoids data leakage)
+                train_reps_fold = {k: v[train_idx] for k, v in reps.items()}
+                val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
+                aug_tr_c = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
+                aug_va_c = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
+                try:
+                    X_hybrid_tr, X_hybrid_va, fi = build_fold_hybrid(
+                        train_reps_fold, val_reps_fold, y_train, bp,
+                        augmentations_train=aug_tr_c, augmentations_val=aug_va_c)
+                except Exception:
+                    continue
 
-            # Split train into proper-train and calibration
-            n_cal = max(int(len(y_train) * 0.2), 10)
-            rng = np.random.RandomState(42)
-            perm = rng.permutation(len(y_train))
-            cal_local, tr_local = perm[:n_cal], perm[n_cal:]
+                # Split train into proper-train and calibration
+                n_cal = max(int(len(y_train) * 0.2), 10)
+                rng = np.random.RandomState(42)
+                perm = rng.permutation(len(y_train))
+                cal_local, tr_local = perm[:n_cal], perm[n_cal:]
 
-            for feat_name, X_tr_all, X_va in [
-                ('concat', X_concat[train_idx], X_concat[val_idx]),
-                ('hybrid', X_hybrid_tr, X_hybrid_va),
-            ]:
-                scaler = StandardScaler()
-                X_tr_all_s = scaler.fit_transform(X_tr_all)
-                X_va_s = scaler.transform(X_va)
+                for feat_name, X_tr_all, X_va in [
+                    ('concat', X_concat[train_idx], X_concat[val_idx]),
+                    ('hybrid', X_hybrid_tr, X_hybrid_va),
+                ]:
+                    scaler = StandardScaler()
+                    X_tr_all_s = scaler.fit_transform(X_tr_all)
+                    X_va_s = scaler.transform(X_va)
 
-                X_tr = X_tr_all_s[tr_local]
-                X_cal = X_tr_all_s[cal_local]
-                y_tr = y_train[tr_local]
-                y_cal = y_train[cal_local]
+                    X_tr = X_tr_all_s[tr_local]
+                    X_cal = X_tr_all_s[cal_local]
+                    y_tr = y_train[tr_local]
+                    y_cal = y_train[cal_local]
 
-                # Train RF, compute conformal quantile on calibration set
-                rf = _rf_factory()
-                rf.fit(X_tr, y_tr)
+                    # Train RF, compute conformal quantile on calibration set
+                    rf = _rf_factory()
+                    rf.fit(X_tr, y_tr)
 
-                # Calibration: residuals normalized by tree variance
-                y_pred_cal = rf.predict(X_cal)
-                tree_preds_cal = np.array([t.predict(X_cal) for t in rf.estimators_])
-                cal_std = tree_preds_cal.std(axis=0) + 1e-10
-                conformity = np.abs(y_cal - y_pred_cal) / cal_std
-                q = np.quantile(conformity, 1 - alpha)
+                    # Calibration: residuals normalized by tree variance
+                    y_pred_cal = rf.predict(X_cal)
+                    tree_preds_cal = np.array([t.predict(X_cal) for t in rf.estimators_])
+                    cal_std = tree_preds_cal.std(axis=0) + 1e-10
+                    conformity = np.abs(y_cal - y_pred_cal) / cal_std
+                    q = np.quantile(conformity, 1 - alpha)
 
-                # Val: predict + interval
-                y_pred_va = rf.predict(X_va_s)
-                tree_preds_va = np.array([t.predict(X_va_s) for t in rf.estimators_])
-                va_std = tree_preds_va.std(axis=0)
-                interval_width = 2 * q * va_std
+                    # Val: predict + interval
+                    y_pred_va = rf.predict(X_va_s)
+                    tree_preds_va = np.array([t.predict(X_va_s) for t in rf.estimators_])
+                    va_std = tree_preds_va.std(axis=0)
+                    interval_width = 2 * q * va_std
 
-                picp = float(np.mean(np.abs(y_val - y_pred_va) <= interval_width / 2))
-                mpiw = float(np.mean(interval_width))
-                conf_picp[feat_name].append(picp)
-                conf_mpiw[feat_name].append(mpiw)
+                    picp = float(np.mean(np.abs(y_val - y_pred_va) <= interval_width / 2))
+                    mpiw = float(np.mean(interval_width))
+                    conf_picp[feat_name].append(picp)
+                    conf_mpiw[feat_name].append(mpiw)
 
-        results['conformal'] = {}
-        for feat_name in ['concat', 'hybrid']:
-            if conf_picp[feat_name]:
-                picp_mean = float(np.mean(conf_picp[feat_name]))
-                mpiw_mean = float(np.mean(conf_mpiw[feat_name]))
-                results['conformal'][feat_name] = {
-                    'picp': picp_mean, 'mpiw': mpiw_mean,
-                }
-                print(f"    {feat_name.capitalize()}:  PICP={picp_mean:.3f}, "
-                      f"MPIW={mpiw_mean:.3f}")
-    except Exception as e:
-        print(f"    Conformal failed: {e}")
-        results['conformal'] = {'error': str(e)}
+            results['conformal'] = {}
+            for feat_name in ['concat', 'hybrid']:
+                if conf_picp[feat_name]:
+                    picp_mean = float(np.mean(conf_picp[feat_name]))
+                    mpiw_mean = float(np.mean(conf_mpiw[feat_name]))
+                    results['conformal'][feat_name] = {
+                        'picp': picp_mean, 'mpiw': mpiw_mean,
+                    }
+                    print(f"    {feat_name.capitalize()}:  PICP={picp_mean:.3f}, "
+                          f"MPIW={mpiw_mean:.3f}")
+        except Exception as e:
+            print(f"    Conformal failed: {e}")
+            results['conformal'] = {'error': str(e)}
 
     return results
 

@@ -39,14 +39,19 @@ from kirby.utils.noise_mitigation_methods import compute_distance_matrix
 # =========================================================================
 
 def identify_cliff_pairs_euclidean(X_concat, y, sim_threshold=0.55, activity_k=2.0,
-                                   max_compounds=5000):
+                                   max_compounds=5000, is_clf=False):
     """Identify activity cliff pairs using Euclidean similarity.
 
     sim = 1/(1+d) on standardised features. Cliff = high structural similarity
-    AND high activity difference (|delta_y| > k * MAD(y)).
+    AND high activity difference.
+
+    Regression / binary: |delta_y| > k * MAD(y).
+    Classification (is_clf): different class (high sim + different label).
 
     Returns (cliff_mask, info) where cliff_mask is boolean array marking cliff compounds.
     """
+    from experiments.similarity.similarity_helpers import _pairwise_delta_matrix
+
     n = len(y)
     if n > max_compounds:
         rng = np.random.RandomState(42)
@@ -62,10 +67,14 @@ def identify_cliff_pairs_euclidean(X_concat, y, sim_threshold=0.55, activity_k=2
     sim = 1.0 / (1.0 + D)
     np.fill_diagonal(sim, 0.0)
 
-    mad_y = float(np.median(np.abs(y_sub - np.median(y_sub))))
-    activity_threshold = activity_k * mad_y
+    if is_clf:
+        activity_threshold = 0.5  # indicator is 0 or 1
+        mad_y = 0.0
+    else:
+        mad_y = float(np.median(np.abs(y_sub - np.median(y_sub))))
+        activity_threshold = activity_k * mad_y
 
-    delta_y = np.abs(y_sub[:, None] - y_sub[None, :])
+    delta_y = _pairwise_delta_matrix(y_sub, is_clf=is_clf)
     cliff_pair_mask = (sim >= sim_threshold) & (delta_y > activity_threshold)
     np.fill_diagonal(cliff_pair_mask, False)
 
@@ -111,6 +120,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     search_speed = config['search_speed']
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     task_type = data.get('task_type', 'regression')
+    is_clf = task_type == 'classification'
     _rf_factory = get_model_factories(['rf'], task_type=task_type,
                                        n_samples=len(labels))['rf']
 
@@ -122,7 +132,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Identify cliffs
     cliff_indices, cliff_info = identify_cliff_pairs_euclidean(
-        X_concat, labels, sim_threshold, activity_k)
+        X_concat, labels, sim_threshold, activity_k, is_clf=is_clf)
     print(f"  Cliffs: {cliff_info['n_cliff_compounds']}/{cliff_info['n_analyzed']} "
           f"({cliff_info['pct_cliff_compounds']:.1f}%), "
           f"{cliff_info['n_cliff_pairs']} pairs")
@@ -132,7 +142,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Auto-threshold: find threshold that gives ~10% cliff compounds
         for t in [0.4, 0.3, 0.2, 0.1]:
             cliff_indices, cliff_info = identify_cliff_pairs_euclidean(
-                X_concat, labels, t, activity_k)
+                X_concat, labels, t, activity_k, is_clf=is_clf)
             if cliff_info['pct_cliff_compounds'] >= 5:
                 print(f"  Auto-threshold {t}: {cliff_info['n_cliff_compounds']} cliffs "
                       f"({cliff_info['pct_cliff_compounds']:.1f}%)")

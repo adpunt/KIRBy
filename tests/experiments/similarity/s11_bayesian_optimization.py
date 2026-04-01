@@ -667,7 +667,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # Total used = seed + pool = 85%, held out = 15%
 
             all_idx = np.arange(n_samples)
-            if groups is not None and len(np.unique(groups)) >= 4:
+            n_unique_groups = len(np.unique(groups)) if groups is not None else 0
+            # Need enough groups for 5%/80% split — at least 20 groups so
+            # seed gets ≥1 group. Fall through to simple shuffle otherwise.
+            if groups is not None and n_unique_groups >= 20:
                 # Use GroupShuffleSplit: first split off seed set
                 gss_seed = GroupShuffleSplit(
                     n_splits=1, test_size=1.0 - seed_frac, random_state=seed)

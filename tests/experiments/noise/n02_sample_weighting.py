@@ -63,14 +63,11 @@ def compute_cliff_aware_weights(X, y, k=10, strength=1.0):
     return estimator.get_weights(strength=strength)
 
 
-def compute_reliability_scores(X, y, importance_scores, k=10):
+def compute_reliability_scores(X, y, importance_scores, k=10, is_clf=False):
     """Compute per-sample reliability as neighbor-agreement in importance-weighted space.
 
-    For each training sample, find its k nearest neighbors in the
-    importance-weighted feature space, then measure how well the sample's
-    label agrees with its neighbors' mean label.
-
-    reliability_i = 1 - |y_i - mean(y_neighbors)| / range(y)
+    For regression: reliability_i = 1 - |y_i - mean(y_neighbors)| / range(y)
+    For classification: reliability_i = fraction of k-NN with same class label.
 
     Clamped to [0.1, 1.0] so no sample is fully zero-weighted.
 
@@ -79,6 +76,7 @@ def compute_reliability_scores(X, y, importance_scores, k=10):
         y: Labels (n_samples,).
         importance_scores: Per-feature importance (n_features,).
         k: Number of neighbors.
+        is_clf: If True, use class-agreement instead of label proximity.
 
     Returns:
         reliability: Array (n_samples,) in [0.1, 1.0].
@@ -96,17 +94,18 @@ def compute_reliability_scores(X, y, importance_scores, k=10):
     # Exclude self (first neighbor)
     neighbor_idx = indices[:, 1:]
 
-    # Neighbor mean labels
-    neighbor_mean = np.mean(y[neighbor_idx], axis=1)
-
-    # Label range (avoid division by zero)
-    y_range = y.max() - y.min()
-    if y_range < 1e-10:
-        return np.ones(len(y))
-
-    # Agreement: 1 - normalized deviation
-    deviation = np.abs(y - neighbor_mean) / y_range
-    reliability = 1.0 - deviation
+    if is_clf:
+        # Classification: fraction of neighbors with same class
+        same_class = (y[neighbor_idx] == y[:, None]).astype(float)
+        reliability = np.mean(same_class, axis=1)
+    else:
+        # Regression: neighbor mean agreement
+        neighbor_mean = np.mean(y[neighbor_idx], axis=1)
+        y_range = y.max() - y.min()
+        if y_range < 1e-10:
+            return np.ones(len(y))
+        deviation = np.abs(y - neighbor_mean) / y_range
+        reliability = 1.0 - deviation
 
     # Clamp to [0.1, 1.0]
     reliability = np.clip(reliability, 0.1, 1.0)
@@ -125,6 +124,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     n_samples = len(data['labels'])
     task_type = data.get('task_type', 'regression')
+    is_clf = task_type == 'classification'
     domain = data.get('domain', 'molecular')
 
     # Only use models that support sample_weight
@@ -194,7 +194,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                     # Compute per-sample reliability in importance-weighted space
                     sample_weights = compute_reliability_scores(
-                        X_train, y_train, imp_scores, k=k_neighbors)
+                        X_train, y_train, imp_scores, k=k_neighbors,
+                        is_clf=is_clf)
 
                     reliability_stats.append({
                         'mean': float(np.mean(sample_weights)),

@@ -60,12 +60,24 @@ OPTIONAL_ESTIMATORS = ['ngboost']
 GP_MAX = 1000
 
 
-def _inject_noise(y, sigma_frac, seed=42):
-    """Inject Gaussian noise at sigma_frac × label range."""
+def _inject_noise(y, sigma_frac, seed=42, is_clf=False):
+    """Inject noise. Regression: Gaussian additive. Classification: label flipping."""
     rng = np.random.RandomState(seed)
-    y_range = np.max(y) - np.min(y)
-    noise = rng.normal(0, sigma_frac * y_range, len(y))
-    return y + noise
+    n = len(y)
+    if is_clf:
+        n_flip = max(1, int(n * sigma_frac))
+        y_noisy = y.copy()
+        flip_idx = rng.choice(n, n_flip, replace=False)
+        classes = np.unique(y)
+        for i in flip_idx:
+            other = classes[classes != y[i]]
+            if len(other) > 0:
+                y_noisy[i] = rng.choice(other)
+        return y_noisy
+    else:
+        y_range = np.max(y) - np.min(y)
+        noise = rng.normal(0, sigma_frac * y_range, n)
+        return y + noise
 
 
 def _get_correction_target(estimator):
@@ -228,17 +240,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     augmentations = data.get('augmentations')
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
+    task_type = data.get('task_type', 'regression')
+    is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     n_samples = len(labels)
 
     model_factory = get_model_factories(
-        ['rf'], task_type=data.get('task_type', 'regression'),
+        ['rf'], task_type=task_type,
         n_samples=n_samples)['rf']
 
     sigmas = kwargs.get('sigmas', SIGMAS)
     sample_X = next(iter(reps.values()))
 
     available_estimators = _resolve_estimators()
+    # GP is regression-only
+    if is_clf:
+        available_estimators = [e for e in available_estimators
+                                if e != 'gaussian_process']
 
     # Resolve base rep name once (same logic as _build_estimation_spaces)
     base_rep_name = None
@@ -307,7 +325,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             clean_scores.append(float(metric_fn(y_val, rf_clean.predict(X_eval_val_s))))
 
             # Inject noise BEFORE building estimation spaces (no oracle leak)
-            y_noisy = _inject_noise(y_train_clean, sigma, seed=42 + fold_idx)
+            y_noisy = _inject_noise(y_train_clean, sigma, seed=42 + fold_idx,
+                                    is_clf=is_clf)
 
             # Slice augmentations to train fold
             train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None

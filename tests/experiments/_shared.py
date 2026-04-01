@@ -325,6 +325,8 @@ def get_domain_metric(data: dict) -> Tuple[str, Any, bool]:
 
     Centralised metric selection for all framework experiments. Matches the
     primary metrics used in run_baseline_survey.py.
+
+    Classification: AUROC for binary, F1 weighted for multi-class (>2 classes).
     """
     from kirby.find_best_hybrid import BUILTIN_METRICS
 
@@ -332,9 +334,14 @@ def get_domain_metric(data: dict) -> Tuple[str, Any, bool]:
     task_type = data.get('task_type', 'regression')
 
     if task_type == 'classification':
-        # AUROC per TODO. find_best_hybrid uses predict_proba when available.
-        fn, lib = BUILTIN_METRICS['auc']
-        return 'auc', fn, lib
+        labels = data.get('labels')
+        n_classes = len(np.unique(labels)) if labels is not None else 2
+        if n_classes > 2:
+            fn, lib = BUILTIN_METRICS['f1_weighted']
+            return 'f1_weighted', fn, lib
+        else:
+            fn, lib = BUILTIN_METRICS['auc']
+            return 'auc', fn, lib
     elif domain == 'dta':
         fn, lib = BUILTIN_METRICS['ci']
         return 'ci', fn, lib
@@ -1010,7 +1017,7 @@ FRAMEWORK_TASKS = {
         'mhg_gnn', 'grover', 'mordred', 'mol2vec', 'ecfp4', 'molformer',
         'pdv', 'smited', 'avalon', 'chemberta', 'graph_kernel', 'maccs',
     ],
-    'herg': [
+    'herg_ki': [
         'mhg_gnn', 'graph_kernel', 'avalon', 'grover', 'ecfp4', 'mordred',
         'pdv', 'molformer', 'smited', 'chemberta', 'maccs',
     ],
@@ -1528,11 +1535,13 @@ def precompute_hybrid_searches(reps, labels, groups, config,
 
     budgets = config.get('budgets', [100])
     speed = config.get('search_speed', 'fast')
+    models = config.get('models', None)
 
     # Resolve metric using same logic as get_domain_metric
     if metric == 'auto':
         if task_type == 'classification':
-            metric = 'auc'
+            n_classes = len(np.unique(labels)) if labels is not None else 2
+            metric = 'f1_weighted' if n_classes > 2 else 'auc'
         elif domain == 'dta':
             metric = 'ci'
         elif domain == 'antibody':
@@ -1567,6 +1576,7 @@ def precompute_hybrid_searches(reps, labels, groups, config,
                 labels=labels,
                 groups=groups,
                 budgets=budgets,
+                models=models,
                 augmentations=augs,
                 augmentation_strategy=aug_strat,
                 speed=speed,

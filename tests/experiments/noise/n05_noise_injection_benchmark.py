@@ -42,16 +42,31 @@ ALL_METHODS = [
 ]
 
 
-def _inject_noise(y, sigma_frac, seed=42):
-    """Inject Gaussian noise at sigma_frac × label range."""
+def _inject_noise(y, sigma_frac, seed=42, is_clf=False):
+    """Inject noise. Regression: Gaussian additive. Classification: label flipping."""
     rng = np.random.RandomState(seed)
-    y_range = np.max(y) - np.min(y)
+    n = len(y)
     y_noisy = y.copy()
-    noise = rng.normal(0, sigma_frac * y_range, len(y))
-    y_noisy += noise
-    # Ground truth: samples where |noise| > MAD(y) are "truly noisy"
-    mad = float(np.median(np.abs(y - np.median(y))))
-    noise_mask = np.abs(noise) > mad
+
+    if is_clf:
+        # Classification: flip labels for sigma_frac fraction of samples
+        n_flip = max(1, int(n * sigma_frac))
+        flip_idx = rng.choice(n, n_flip, replace=False)
+        classes = np.unique(y)
+        for i in flip_idx:
+            other = classes[classes != y[i]]
+            if len(other) > 0:
+                y_noisy[i] = rng.choice(other)
+        noise_mask = np.zeros(n, dtype=bool)
+        noise_mask[flip_idx] = True
+    else:
+        y_range = np.max(y) - np.min(y)
+        noise = rng.normal(0, sigma_frac * y_range, n)
+        y_noisy = y + noise
+        # Ground truth: samples where |noise| > MAD(y) are "truly noisy"
+        mad = float(np.median(np.abs(y - np.median(y))))
+        noise_mask = np.abs(noise) > mad
+
     return y_noisy, noise_mask
 
 
@@ -64,6 +79,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     reps = data['reps']
     labels = data['labels']
     augmentations = data.get('augmentations')
+    task_type = data.get('task_type', 'regression')
+    is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     sigmas = kwargs.get('sigmas', [0.05, 0.1, 0.2, 0.3])
@@ -110,7 +127,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     for sigma in sigmas:
         print(f"\n  === Sigma={sigma} ===")
-        y_noisy, noise_mask = _inject_noise(labels, sigma)
+        y_noisy, noise_mask = _inject_noise(labels, sigma, is_clf=is_clf)
         n_noisy = int(noise_mask.sum())
         print(f"    {n_noisy}/{len(labels)} truly noisy samples")
 

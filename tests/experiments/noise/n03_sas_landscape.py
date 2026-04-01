@@ -68,13 +68,19 @@ MAX_COMPOUNDS_GP = 500
 # CORE SAS COMPUTATION
 # =============================================================================
 
-def compute_activity_similarity(y):
+def compute_activity_similarity(y, is_clf=False):
     """Activity similarity per Shanmugasundaram & Maggiora (2001).
 
-    SimAct(A,B) = 1 - |Act(A) - Act(B)| / (Act_max - Act_min)
+    Regression: SimAct(A,B) = 1 - |Act(A) - Act(B)| / (Act_max - Act_min)
+    Classification: SimAct(A,B) = 1 if same class, 0 if different class.
 
     Returns (n, n) matrix with values in [0, 1].
     """
+    if is_clf:
+        act_sim = (y[:, None] == y[None, :]).astype(np.float32)
+        np.fill_diagonal(act_sim, 1.0)
+        return act_sim
+
     y_range = float(np.max(y) - np.min(y))
     if y_range < 1e-10:
         return np.ones((len(y), len(y)), dtype=np.float32)
@@ -181,11 +187,11 @@ def _print_zones(label, zones, dim=None):
 # SUB-ANALYSIS 1: PER-REP SAS MAPS
 # =============================================================================
 
-def _run_per_rep_sas(reps, labels, smiles, struct_t, act_t, domain):
+def _run_per_rep_sas(reps, labels, smiles, struct_t, act_t, domain, is_clf=False):
     """SAS zones for each rep + canonical ECFP4 (molecular only)."""
     print("\n  --- Sub-analysis 1: Per-Rep SAS Maps ---")
 
-    act_sim = compute_activity_similarity(labels)
+    act_sim = compute_activity_similarity(labels, is_clf=is_clf)
     results = {}
 
     # Canonical ECFP4 Tanimoto (molecular only)
@@ -355,11 +361,12 @@ def _run_landscape_comparison(reps, labels, per_rep_results):
 
 def _run_sas_bo_bridge(reps, labels, groups, struct_t, act_t,
                        augmentations=None, augmentation_strategy='uncapped',
-                       search_speed='fast', precomputed=None):
+                       search_speed='fast', precomputed=None, is_clf=False):
     """Zone I fraction predicts GP quality -- explains why compact spaces help BO.
 
     Builds 4 representation conditions matching S11, computes SAS zones and
     GP quality in each. Shows correlation: fewer cliffs -> better GP fit.
+    GP evaluation is regression-only; skipped for classification.
     """
     from sklearn.model_selection import GroupShuffleSplit
 
@@ -431,7 +438,7 @@ def _run_sas_bo_bridge(reps, labels, groups, struct_t, act_t,
     conditions['random_50d'] = X_concat_s @ proj
 
     # ---- Evaluate each condition ----
-    act_sim_sub = compute_activity_similarity(labels[gp_idx])
+    act_sim_sub = compute_activity_similarity(labels[gp_idx], is_clf=is_clf)
 
     results = {}
     for cond_name, X_full in conditions.items():
@@ -442,25 +449,31 @@ def _run_sas_bo_bridge(reps, labels, groups, struct_t, act_t,
         struct_sim = compute_cosine_sim(X_sub)
         zones = compute_sas_zones(struct_sim, act_sim_sub, struct_t, act_t)
 
-        # GP quality
-        X_tr, X_va = X_full[train_idx], X_full[val_idx]
-        kernel = ConstantKernel(1.0) * RBF(1.0) + WhiteKernel(0.1)
-        gp = GaussianProcessRegressor(
-            kernel=kernel, n_restarts_optimizer=2,
-            alpha=1e-6, normalize_y=True, random_state=42,
-        )
-        try:
-            gp.fit(X_tr, y_train)
-            mu, sigma = gp.predict(X_va, return_std=True)
-            gp_r2 = float(r2_score(y_val, mu))
-            gp_mean_std = float(np.mean(sigma))
-            gp_log_ml = float(gp.log_marginal_likelihood_value_)
-            gp_success = True
-        except (np.linalg.LinAlgError, ValueError):
+        # GP quality (regression-only — GP assumes continuous targets)
+        if is_clf:
             gp_r2 = float('nan')
             gp_mean_std = float('nan')
             gp_log_ml = float('nan')
             gp_success = False
+        else:
+            X_tr, X_va = X_full[train_idx], X_full[val_idx]
+            kernel = ConstantKernel(1.0) * RBF(1.0) + WhiteKernel(0.1)
+            gp = GaussianProcessRegressor(
+                kernel=kernel, n_restarts_optimizer=2,
+                alpha=1e-6, normalize_y=True, random_state=42,
+            )
+            try:
+                gp.fit(X_tr, y_train)
+                mu, sigma = gp.predict(X_va, return_std=True)
+                gp_r2 = float(r2_score(y_val, mu))
+                gp_mean_std = float(np.mean(sigma))
+                gp_log_ml = float(gp.log_marginal_likelihood_value_)
+                gp_success = True
+            except (np.linalg.LinAlgError, ValueError):
+                gp_r2 = float('nan')
+                gp_mean_std = float('nan')
+                gp_log_ml = float('nan')
+                gp_success = False
 
         results[cond_name] = {
             'dim': dim,
@@ -527,6 +540,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = data['labels']
     groups = data['groups']
     domain = data.get('domain', 'molecular')
+    task_type = data.get('task_type', 'regression')
+    is_clf = task_type == 'classification'
     smiles = data.get('smiles', None)
 
     n = len(labels)
@@ -552,7 +567,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # --- Sub-analysis 1: Per-rep SAS maps ---
     per_rep_results, act_sim = _run_per_rep_sas(
-        sub_reps, sub_labels, sub_smiles, struct_t, act_t, domain)
+        sub_reps, sub_labels, sub_smiles, struct_t, act_t, domain, is_clf=is_clf)
     results['per_rep'] = per_rep_results
 
     # --- Build hybrid for sub-analyses 2-3 ---
@@ -583,7 +598,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         augmentations=augmentations,
         augmentation_strategy=augmentation_strategy,
         search_speed=search_speed,
-        precomputed=data.get('precomputed_searches'))
+        precomputed=data.get('precomputed_searches'),
+        is_clf=is_clf)
 
     # --- Grand summary ---
     print("\n" + "=" * 70)

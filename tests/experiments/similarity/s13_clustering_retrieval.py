@@ -47,7 +47,7 @@ def _is_classification(y):
     return len(unique) <= 20 and np.allclose(y, np.round(y))
 
 
-def _cluster_label_coherence(X, y, n_clusters_list=(3, 5, 10)):
+def _cluster_label_coherence(X, y, n_clusters_list=(3, 5, 10), is_clf=False):
     """Cluster in X-space, measure label coherence.
 
     For regression: 1 - mean(within-cluster std(y)) / std(y_global).
@@ -56,7 +56,6 @@ def _cluster_label_coherence(X, y, n_clusters_list=(3, 5, 10)):
     """
     scaler = StandardScaler()
     X_s = scaler.fit_transform(X)
-    is_clf = _is_classification(y)
 
     if not is_clf:
         y_std_global = np.std(y)
@@ -114,10 +113,11 @@ def _cluster_label_coherence(X, y, n_clusters_list=(3, 5, 10)):
 # 13b: RETRIEVAL PRECISION
 # =========================================================================
 
-def _retrieval_quality(X, y, k=5, importance_weights=None):
-    """k-NN retrieval: mean |y_query - y_neighbor| across all queries.
+def _retrieval_quality(X, y, k=5, importance_weights=None, is_clf=False):
+    """k-NN retrieval quality.
 
-    Lower = retrieved neighbors have more similar labels = better metric space.
+    Regression: mean |y_query - y_neighbor| (lower = better).
+    Classification: precision@k (fraction of same-class neighbors, higher = better).
     If importance_weights provided, pre-weight features.
     """
     scaler = StandardScaler()
@@ -135,15 +135,16 @@ def _retrieval_quality(X, y, k=5, importance_weights=None):
 
     # Exclude self (first neighbor)
     nbr_idx = indices[:, 1:]
-    delta_y = np.abs(y[:, None] - y[nbr_idx])
-    mean_delta = float(np.mean(delta_y))
 
-    # For classification: precision@k (fraction of neighbors with same label)
-    is_clf = len(np.unique(y)) <= 10 and np.issubdtype(np.asarray(y).dtype, np.integer)
-    precision_at_k = None
     if is_clf:
         same_label = (y[:, None] == y[nbr_idx]).astype(float)
         precision_at_k = float(np.mean(same_label))
+        # For classification, mean_delta_y is fraction of different-class neighbors
+        mean_delta = 1.0 - precision_at_k
+    else:
+        delta_y = np.abs(y[:, None] - y[nbr_idx])
+        mean_delta = float(np.mean(delta_y))
+        precision_at_k = None
 
     return {
         'mean_delta_y': mean_delta,
@@ -164,6 +165,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     reps = data['reps']
     labels = data['labels']
     groups = data['groups']
+    task_type = data.get('task_type', 'regression')
+    is_clf = task_type == 'classification'
     search_speed = config['search_speed']
     budget = kwargs.get('budget', 100)
     k_retrieval = kwargs.get('k_retrieval', 5)
@@ -232,7 +235,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("\n  13a: Clustering quality")
     clustering_results = {}
     for space_name, X in spaces.items():
-        cluster_res = _cluster_label_coherence(X, labels, n_clusters_list)
+        cluster_res = _cluster_label_coherence(X, labels, n_clusters_list,
+                                               is_clf=is_clf)
         clustering_results[space_name] = cluster_res
         if cluster_res:
             best_k = max(cluster_res, key=lambda k: cluster_res[k]['label_coherence'])
@@ -244,20 +248,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     retrieval_results = {}
     for space_name, X in spaces.items():
         # Unweighted
-        ret_uw = _retrieval_quality(X, labels, k=k_retrieval)
+        ret_uw = _retrieval_quality(X, labels, k=k_retrieval, is_clf=is_clf)
 
         # Weighted (only for concat and hybrid)
         ret_w = None
         if space_name == 'concat':
             ret_w = _retrieval_quality(X, labels, k=k_retrieval,
-                                       importance_weights=imp_concat)
+                                       importance_weights=imp_concat,
+                                       is_clf=is_clf)
         elif space_name == 'hybrid' and 'hybrid' in spaces:
             # Importance on hybrid features
             imp_h_dict = compute_feature_importance(
                 {'hybrid': StandardScaler().fit_transform(X)}, labels, method='lightgbm_gain')
             imp_h = imp_h_dict.get('hybrid', np.ones(X.shape[1]))
             ret_w = _retrieval_quality(X, labels, k=k_retrieval,
-                                       importance_weights=imp_h)
+                                       importance_weights=imp_h,
+                                       is_clf=is_clf)
 
         retrieval_results[space_name] = {
             'unweighted': ret_uw,

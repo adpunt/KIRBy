@@ -43,6 +43,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     weight_methods = kwargs.get('weight_methods', ['lightgbm_gain'])
     n_sample = kwargs.get('n_sample', 5000)
     search_speed = config.get('search_speed', 'fast')
+    is_classification = data.get('task_type', 'regression') == 'classification'
 
     reps = data['reps']
     labels = data['labels']
@@ -65,8 +66,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     best_rep_name_weighted = None
     for rep_name, X in reps.items():
         D_rep = compute_distance_matrix(X, standardize=True)
-        sac_rep, _ = similarity_activity_correlation(D_rep, labels, n_sample)
-        viol_rep = violation_rate(D_rep, labels, k=5)
+        sac_rep, _ = similarity_activity_correlation(D_rep, labels, n_sample, is_clf=is_classification)
+        viol_rep = violation_rate(D_rep, labels, k=5, is_clf=is_classification)
         rep_result = {
             'dim': X.shape[1], 'sac_rho': sac_rep, 'violation_rate': viol_rep,
         }
@@ -75,8 +76,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if importance is not None and rep_name in importance:
             D_rep_w = compute_distance_matrix(X, feature_weights=importance[rep_name],
                                               standardize=True)
-            sac_rep_w, _ = similarity_activity_correlation(D_rep_w, labels, n_sample)
-            viol_rep_w = violation_rate(D_rep_w, labels, k=5)
+            sac_rep_w, _ = similarity_activity_correlation(D_rep_w, labels, n_sample, is_clf=is_classification)
+            viol_rep_w = violation_rate(D_rep_w, labels, k=5, is_clf=is_classification)
             rep_result['sac_rho_weighted'] = sac_rep_w
             rep_result['violation_rate_weighted'] = viol_rep_w
             if sac_rep_w > best_rep_sac_weighted:
@@ -108,8 +109,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Concat baseline (unweighted + weighted)
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
     D_concat = compute_distance_matrix(X_concat, standardize=True)
-    sac_concat, _ = similarity_activity_correlation(D_concat, labels, n_sample)
-    viol_concat = violation_rate(D_concat, labels, k=5)
+    sac_concat, _ = similarity_activity_correlation(D_concat, labels, n_sample, is_clf=is_classification)
+    viol_concat = violation_rate(D_concat, labels, k=5, is_clf=is_classification)
 
     concat_result = {
         'dim': X_concat.shape[1],
@@ -121,8 +122,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         w_concat = np.concatenate([importance[k] for k in sorted(reps.keys())])
         D_concat_w = compute_distance_matrix(X_concat, feature_weights=w_concat,
                                              standardize=True)
-        sac_concat_w, _ = similarity_activity_correlation(D_concat_w, labels, n_sample)
-        viol_concat_w = violation_rate(D_concat_w, labels, k=5)
+        sac_concat_w, _ = similarity_activity_correlation(D_concat_w, labels, n_sample, is_clf=is_classification)
+        viol_concat_w = violation_rate(D_concat_w, labels, k=5, is_clf=is_classification)
         concat_result['sac_rho_weighted'] = sac_concat_w
         concat_result['violation_rate_weighted'] = viol_concat_w
         print(f"  Concat: SAC={sac_concat:.4f}, SAC_w={sac_concat_w:.4f}, "
@@ -159,9 +160,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Hybrid unweighted (same for all weight methods -- only compute once)
     D_hybrid = compute_distance_matrix(X_hybrid, standardize=True)
-    sac_hybrid, _ = similarity_activity_correlation(D_hybrid, labels, n_sample)
-    viol_hybrid = violation_rate(D_hybrid, labels, k=5)
-    sali_hybrid = compute_sali(D_hybrid, labels)
+    sac_hybrid, _ = similarity_activity_correlation(D_hybrid, labels, n_sample, is_clf=is_classification)
+    viol_hybrid = violation_rate(D_hybrid, labels, k=5, is_clf=is_classification)
+    sali_hybrid = compute_sali(D_hybrid, labels, is_clf=is_classification)
 
     print(f"    Search done ({search_time:.1f}s), dim={hybrid_dim}")
     print(f"    Hybrid unweighted: SAC={sac_hybrid:.4f}, viol={viol_hybrid:.3f}")
@@ -188,9 +189,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Hybrid weighted
         D_weighted = compute_distance_matrix(X_hybrid, feature_weights=weights_flat,
                                              standardize=True)
-        sac_weighted, _ = similarity_activity_correlation(D_weighted, labels, n_sample)
-        viol_weighted = violation_rate(D_weighted, labels, k=5)
-        sali_weighted = compute_sali(D_weighted, labels)
+        sac_weighted, _ = similarity_activity_correlation(D_weighted, labels, n_sample, is_clf=is_classification)
+        viol_weighted = violation_rate(D_weighted, labels, k=5, is_clf=is_classification)
+        sali_weighted = compute_sali(D_weighted, labels, is_clf=is_classification)
 
         wm_result = {
             'hybrid_unweighted': {

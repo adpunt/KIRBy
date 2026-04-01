@@ -139,12 +139,32 @@ def _concordance_index(y_true, y_pred):
     return concordant / total if total > 0 else 0.5
 
 
+def _safe_roc_auc(y_true, y_pred):
+    """AUROC that handles both binary and multi-class safely.
+
+    Binary: expects 1D scores/probabilities.
+    Multi-class: expects (n, n_classes) probability matrix, uses OVR macro.
+    Falls back to 0.5 if computation fails.
+    """
+    n_classes = len(np.unique(y_true))
+    if n_classes <= 2:
+        return roc_auc_score(y_true, y_pred)
+    # Multi-class: need probability matrix
+    if np.asarray(y_pred).ndim == 2:
+        return roc_auc_score(y_true, y_pred, multi_class='ovr', average='macro')
+    # Got class labels instead of probabilities — can't compute AUC
+    raise ValueError(
+        f"Multi-class AUROC requires probability matrix, got 1D predictions. "
+        f"Use 'f1_weighted' metric for multi-class classification."
+    )
+
+
 BUILTIN_METRICS = {
     'r2':          (r2_score, False),
     'rmse':        (lambda y, p: np.sqrt(mean_squared_error(y, p)), True),
     'mae':         (mean_absolute_error, True),
     'accuracy':    (accuracy_score, False),
-    'auc':         (roc_auc_score, False),
+    'auc':         (_safe_roc_auc, False),
     'spearman':    (lambda y, p: float(spearmanr(y, p)[0]), False),
     'pearson':     (lambda y, p: float(pearsonr(y, p)[0]), False),
     'ci':          (_concordance_index, False),
@@ -584,17 +604,19 @@ def get_model(name: str, task_type: str = 'regression',
 
 
 def _predict_for_metric(model, X, metric_fn):
-    """Predict using predict_proba if available (for AUC), else predict."""
+    """Predict using predict_proba for binary AUC, else predict (class labels).
+
+    Only returns probabilities for binary classification (2-class predict_proba).
+    Multi-class metrics (f1_weighted, accuracy, mcc) need class labels from predict().
+    """
     if hasattr(model, 'predict_proba'):
         try:
             y_prob = model.predict_proba(X)
             if y_prob.ndim == 2 and y_prob.shape[1] == 2:
-                y_pred = y_prob[:, 1]
-            else:
-                y_pred = y_prob
-            # Test that metric works with these predictions
-            # (will raise if metric expects labels not probabilities)
-            return y_pred
+                # Binary: return positive-class probabilities (for AUC)
+                return y_prob[:, 1]
+            # Multi-class: fall through to predict() — metrics like f1_weighted
+            # need class labels, not probability matrices
         except Exception:
             pass
     return model.predict(X)

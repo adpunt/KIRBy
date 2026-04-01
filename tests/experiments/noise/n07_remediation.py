@@ -29,7 +29,7 @@ from kirby.utils.noise_estimation import (
 )
 
 
-def _inject_noise(y, fraction=0.1, seed=42):
+def _inject_noise(y, fraction=0.1, seed=42, is_clf=False):
     """Inject noise into fraction of labels."""
     rng = np.random.RandomState(seed)
     n = len(y)
@@ -38,13 +38,20 @@ def _inject_noise(y, fraction=0.1, seed=42):
     noise_mask = np.zeros(n, dtype=bool)
     noise_mask[noise_idx] = True
     y_noisy = y.copy()
-    y_range = np.max(y) - np.min(y)
-    y_noisy[noise_idx] += rng.normal(0, y_range * 0.3, n_noisy)
+    if is_clf:
+        classes = np.unique(y)
+        for i in noise_idx:
+            other = classes[classes != y[i]]
+            if len(other) > 0:
+                y_noisy[i] = rng.choice(other)
+    else:
+        y_range = np.max(y) - np.min(y)
+        y_noisy[noise_idx] += rng.normal(0, y_range * 0.3, n_noisy)
     return y_noisy, noise_mask
 
 
 def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
-                   model_factory, metric_fn):
+                   model_factory, metric_fn, is_clf=False):
     """Evaluate a single remediation strategy on one fold.
 
     Returns the fold score (float) or None if the fold failed.
@@ -53,7 +60,7 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
     if strategy == 'no_noise':
         y_tr = y_train.copy()
     else:
-        y_tr, _noise_mask = _inject_noise(y_train, noise_fraction)
+        y_tr, _noise_mask = _inject_noise(y_train, noise_fraction, is_clf=is_clf)
 
     # Detect noise (for strategies that need it)
     noise_scores = None
@@ -87,17 +94,34 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
             return metric_fn(y_val, m.predict(X_va_s))
 
         elif strategy == 'label_smooth':
-            nn = NearestNeighbors(n_neighbors=min(10, len(y_tr) - 1))
-            nn.fit(X_tr_s)
-            _, nbr_idx = nn.kneighbors(X_tr_s)
-            nbr_means = np.mean(y_tr[nbr_idx[:, 1:]], axis=1)
-            y_smoothed = smooth_by_scores(y_tr, noise_scores, nbr_means,
-                                          alpha=0.5, method='proportional')
-            m = model_factory()
-            m.fit(X_tr_s, y_smoothed)
-            return metric_fn(y_val, m.predict(X_va_s))
+            if is_clf:
+                # Label smooth uses neighbor means — use neighbor mode for clf
+                nn = NearestNeighbors(n_neighbors=min(10, len(y_tr) - 1))
+                nn.fit(X_tr_s)
+                _, nbr_idx = nn.kneighbors(X_tr_s)
+                from scipy.stats import mode as scipy_mode
+                nbr_modes = scipy_mode(y_tr[nbr_idx[:, 1:]], axis=1).mode.ravel()
+                # Only correct high-noise-score samples
+                threshold = np.percentile(noise_scores, 80)
+                y_smoothed = y_tr.copy()
+                y_smoothed[noise_scores >= threshold] = nbr_modes[noise_scores >= threshold]
+                m = model_factory()
+                m.fit(X_tr_s, y_smoothed)
+                return metric_fn(y_val, m.predict(X_va_s))
+            else:
+                nn = NearestNeighbors(n_neighbors=min(10, len(y_tr) - 1))
+                nn.fit(X_tr_s)
+                _, nbr_idx = nn.kneighbors(X_tr_s)
+                nbr_means = np.mean(y_tr[nbr_idx[:, 1:]], axis=1)
+                y_smoothed = smooth_by_scores(y_tr, noise_scores, nbr_means,
+                                              alpha=0.5, method='proportional')
+                m = model_factory()
+                m.fit(X_tr_s, y_smoothed)
+                return metric_fn(y_val, m.predict(X_va_s))
 
         elif strategy == 'robust_loss':
+            if is_clf:
+                return None  # HuberRegressor is regression-only
             huber = HuberRegressor(epsilon=1.35, max_iter=500)
             huber.fit(X_tr_s, y_tr)
             return metric_fn(y_val, huber.predict(X_va_s))
@@ -108,9 +132,15 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
             nn = NearestNeighbors(n_neighbors=min(10, len(y_tr) - 1))
             nn.fit(X_tr_s)
             _, nbr_idx = nn.kneighbors(X_tr_s)
-            nbr_means = np.mean(y_tr[nbr_idx[:, 1:]], axis=1)
-            y_corrected = y_tr.copy()
-            y_corrected[flagged] = nbr_means[flagged]
+            if is_clf:
+                from scipy.stats import mode as scipy_mode
+                nbr_modes = scipy_mode(y_tr[nbr_idx[:, 1:]], axis=1).mode.ravel()
+                y_corrected = y_tr.copy()
+                y_corrected[flagged] = nbr_modes[flagged]
+            else:
+                nbr_means = np.mean(y_tr[nbr_idx[:, 1:]], axis=1)
+                y_corrected = y_tr.copy()
+                y_corrected[flagged] = nbr_means[flagged]
             m = model_factory()
             m.fit(X_tr_s, y_corrected)
             return metric_fn(y_val, m.predict(X_va_s))
@@ -127,8 +157,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("EXPERIMENT N07: NOISE REMEDIATION STRATEGIES")
     print("=" * 70)
 
+    task_type = data.get('task_type', 'regression')
+    is_clf = task_type == 'classification'
     model_factory = get_model_factories(
-        ['rf'], task_type=data.get('task_type', 'regression'),
+        ['rf'], task_type=task_type,
         n_samples=len(data['labels']))['rf']
 
     reps = data['reps']
@@ -199,7 +231,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             fold_score = _evaluate_fold(
                 X_tr_s, X_va_s, y_train_clean, y_val, strategy,
-                noise_fraction, model_factory, metric_fn)
+                noise_fraction, model_factory, metric_fn, is_clf=is_clf)
             if fold_score is not None:
                 fold_scores.append(fold_score)
 

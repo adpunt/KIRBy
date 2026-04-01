@@ -94,7 +94,7 @@ def _compute_euclidean_sim(X, standardize=True):
     return sim
 
 
-def identify_cliff_pairs(sim_matrix, y, sim_threshold, activity_k):
+def identify_cliff_pairs(sim_matrix, y, sim_threshold, activity_k, is_clf=False):
     """Identify activity cliff pairs from a similarity matrix.
 
     Args:
@@ -102,16 +102,24 @@ def identify_cliff_pairs(sim_matrix, y, sim_threshold, activity_k):
         y: (n,) activity values.
         sim_threshold: minimum similarity to count as "structurally similar".
         activity_k: activity difference threshold in MAD units.
+        is_clf: if True, use binary indicator (different class = cliff).
 
     Returns:
         cliff_pair_mask: (n, n) boolean, True where (i,j) is a cliff pair.
         info: dict with thresholds and counts.
     """
     n = len(y)
-    mad_y = float(np.median(np.abs(y - np.median(y))))
-    activity_threshold = activity_k * mad_y
 
-    delta_y = np.abs(y[:, None] - y[None, :])
+    if is_clf:
+        # Classification: cliff = similar structure, different class
+        delta_y = (y[:, None] != y[None, :]).astype(float)
+        activity_threshold = 0.5  # any class difference
+        mad_y = 0.0
+    else:
+        mad_y = float(np.median(np.abs(y - np.median(y))))
+        activity_threshold = activity_k * mad_y
+        delta_y = np.abs(y[:, None] - y[None, :])
+
     cliff_pair_mask = (sim_matrix >= sim_threshold) & (delta_y > activity_threshold)
     np.fill_diagonal(cliff_pair_mask, False)
 
@@ -153,10 +161,11 @@ def _jaccard_index(set_a, set_b):
 # SALI COMPUTATION
 # =============================================================================
 
-def compute_sali_stats(D, y, eps=1e-6):
+def compute_sali_stats(D, y, eps=1e-6, is_clf=False):
     """Compute SALI landscape statistics from a distance matrix.
 
     SALI(i,j) = |y_i - y_j| / (1 - sim(i,j)), where sim = 1/(1+d).
+    For classification: delta_y = 1{y_i != y_j} (binary indicator).
 
     Returns dict with mean, max, std, median of per-sample max-SALI.
     """
@@ -164,7 +173,10 @@ def compute_sali_stats(D, y, eps=1e-6):
     sim = 1.0 / (1.0 + D)
     np.fill_diagonal(sim, 0.0)
 
-    delta_y = np.abs(y[:, None] - y[None, :])
+    if is_clf:
+        delta_y = (y[:, None] != y[None, :]).astype(float)
+    else:
+        delta_y = np.abs(y[:, None] - y[None, :])
     denom = 1.0 - sim + eps
     sali_matrix = delta_y / denom
     np.fill_diagonal(sali_matrix, 0.0)
@@ -183,7 +195,8 @@ def compute_sali_stats(D, y, eps=1e-6):
 # SUB-ANALYSIS 1: CONSENSUS CLIFF IDENTIFICATION
 # =============================================================================
 
-def _run_consensus(reps, labels, sim_threshold, activity_k, domain, smiles=None):
+def _run_consensus(reps, labels, sim_threshold, activity_k, domain, smiles=None,
+                   is_clf=False):
     """Compute cliff sets per rep and pairwise Jaccard overlap."""
     print("\n  --- Sub-analysis 1: Consensus Cliff Identification ---")
 
@@ -196,7 +209,8 @@ def _run_consensus(reps, labels, sim_threshold, activity_k, domain, smiles=None)
         sim = 1.0 / (1.0 + D)
         np.fill_diagonal(sim, 0.0)
 
-        mask, info = identify_cliff_pairs(sim, labels, sim_threshold, activity_k)
+        mask, info = identify_cliff_pairs(sim, labels, sim_threshold, activity_k,
+                                          is_clf=is_clf)
         cliff_sets[rep_name] = _cliff_pair_set(mask)
         cliff_infos[rep_name] = info
         print(f"    {rep_name:<20} cliffs={info['n_cliff_pairs']:>5} "
@@ -237,7 +251,7 @@ def _run_consensus(reps, labels, sim_threshold, activity_k, domain, smiles=None)
 # SUB-ANALYSIS 2: SALI LANDSCAPE SMOOTHING
 # =============================================================================
 
-def _run_sali_smoothing(reps, labels, X_hybrid):
+def _run_sali_smoothing(reps, labels, X_hybrid, is_clf=False):
     """Compare SALI landscape smoothness across reps and hybrid."""
     print("\n  --- Sub-analysis 2: SALI Landscape Smoothing ---")
 
@@ -245,7 +259,7 @@ def _run_sali_smoothing(reps, labels, X_hybrid):
 
     for rep_name, X_rep in reps.items():
         D = compute_distance_matrix(X_rep, standardize=True)
-        stats = compute_sali_stats(D, labels)
+        stats = compute_sali_stats(D, labels, is_clf=is_clf)
         sali_results[rep_name] = stats
         print(f"    {rep_name:<20} SALI mean={stats['mean']:.3f}  "
               f"max={stats['max']:.3f}  std={stats['std']:.3f}")
@@ -253,7 +267,7 @@ def _run_sali_smoothing(reps, labels, X_hybrid):
     # Hybrid SALI
     if X_hybrid is not None:
         D_hybrid = compute_distance_matrix(X_hybrid, standardize=True)
-        stats_hybrid = compute_sali_stats(D_hybrid, labels)
+        stats_hybrid = compute_sali_stats(D_hybrid, labels, is_clf=is_clf)
         sali_results['_hybrid'] = stats_hybrid
         print(f"    {'_hybrid':<20} SALI mean={stats_hybrid['mean']:.3f}  "
               f"max={stats_hybrid['max']:.3f}  std={stats_hybrid['std']:.3f}")
@@ -284,7 +298,8 @@ def _run_sali_smoothing(reps, labels, X_hybrid):
 # SUB-ANALYSIS 3: CLIFF MITIGATION BY HYBRIDIZATION
 # =============================================================================
 
-def _run_cliff_mitigation(reps, labels, X_hybrid, sim_threshold, activity_k):
+def _run_cliff_mitigation(reps, labels, X_hybrid, sim_threshold, activity_k,
+                          is_clf=False):
     """Count cliff pairs in each rep space vs hybrid space at same threshold."""
     print("\n  --- Sub-analysis 3: Cliff Mitigation by Hybridization ---")
 
@@ -294,7 +309,8 @@ def _run_cliff_mitigation(reps, labels, X_hybrid, sim_threshold, activity_k):
         D = compute_distance_matrix(X_rep, standardize=True)
         sim = 1.0 / (1.0 + D)
         np.fill_diagonal(sim, 0.0)
-        mask, info = identify_cliff_pairs(sim, labels, sim_threshold, activity_k)
+        mask, info = identify_cliff_pairs(sim, labels, sim_threshold, activity_k,
+                                          is_clf=is_clf)
         mitigation[rep_name] = {
             'n_cliff_pairs': info['n_cliff_pairs'],
             'n_cliff_compounds': info['n_cliff_compounds'],
@@ -306,7 +322,8 @@ def _run_cliff_mitigation(reps, labels, X_hybrid, sim_threshold, activity_k):
         D_hybrid = compute_distance_matrix(X_hybrid, standardize=True)
         sim_hybrid = 1.0 / (1.0 + D_hybrid)
         np.fill_diagonal(sim_hybrid, 0.0)
-        mask_h, info_h = identify_cliff_pairs(sim_hybrid, labels, sim_threshold, activity_k)
+        mask_h, info_h = identify_cliff_pairs(sim_hybrid, labels, sim_threshold, activity_k,
+                                               is_clf=is_clf)
         mitigation['_hybrid'] = {
             'n_cliff_pairs': info_h['n_cliff_pairs'],
             'n_cliff_compounds': info_h['n_cliff_compounds'],
@@ -348,7 +365,8 @@ def _run_cliff_mitigation(reps, labels, X_hybrid, sim_threshold, activity_k):
 def _run_cliff_stratified(reps, labels, groups, config, data,
                           sim_threshold, activity_k,
                           hybrid_blueprint, smiles=None,
-                          augmentations=None, augmentation_strategy='uncapped'):
+                          augmentations=None, augmentation_strategy='uncapped',
+                          is_clf=False):
     """Compare prediction error on cliff vs non-cliff compounds."""
     print("\n  --- Sub-analysis 4: Cliff-Stratified Prediction Error ---")
 
@@ -379,7 +397,7 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
         sim_source = 'euclidean_concat'
 
     cliff_pair_mask, cliff_info = identify_cliff_pairs(
-        ref_sim, labels, sim_threshold, activity_k)
+        ref_sim, labels, sim_threshold, activity_k, is_clf=is_clf)
     cliff_mask = cliff_pair_mask.any(axis=1)
     cliff_indices = set(np.where(cliff_mask)[0].tolist())
 
@@ -547,6 +565,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     domain = data.get('domain', 'molecular')
     smiles = data.get('smiles', None)
 
+    task_type = data.get('task_type', 'regression')
+    is_clf = task_type == 'classification'
+
     n = len(labels)
     print(f"  Dataset: {dataset_name} ({domain}, {n} samples, {len(reps)} reps)")
     print(f"  Sim threshold: {sim_threshold}  Activity threshold: {activity_threshold} MAD")
@@ -578,7 +599,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # --- Sub-analysis 1: Consensus cliff identification ---
     results['consensus'] = _run_consensus(
-        reps, labels, sim_threshold, activity_threshold, domain, smiles)
+        reps, labels, sim_threshold, activity_threshold, domain, smiles,
+        is_clf=is_clf)
 
     # Add hybrid consensus if available
     if X_hybrid is not None:
@@ -587,7 +609,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         sim_hybrid = 1.0 / (1.0 + D_hybrid)
         np.fill_diagonal(sim_hybrid, 0.0)
         mask_h, _ = identify_cliff_pairs(sim_hybrid, labels, sim_threshold,
-                                         activity_threshold)
+                                         activity_threshold, is_clf=is_clf)
         hybrid_cliff_set = _cliff_pair_set(mask_h)
 
         # Jaccard of hybrid vs each rep
@@ -597,7 +619,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             sim_rep = 1.0 / (1.0 + D_rep)
             np.fill_diagonal(sim_rep, 0.0)
             mask_r, _ = identify_cliff_pairs(sim_rep, labels, sim_threshold,
-                                             activity_threshold)
+                                             activity_threshold, is_clf=is_clf)
             rep_cliff_set = _cliff_pair_set(mask_r)
             jac = _jaccard_index(hybrid_cliff_set, rep_cliff_set)
             hybrid_jaccards[rep_name] = float(jac)
@@ -614,11 +636,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"{results['consensus']['avg_pairwise_jaccard']:.4f})")
 
     # --- Sub-analysis 2: SALI landscape smoothing ---
-    results['sali'] = _run_sali_smoothing(reps, labels, X_hybrid)
+    results['sali'] = _run_sali_smoothing(reps, labels, X_hybrid, is_clf=is_clf)
 
     # --- Sub-analysis 3: Cliff mitigation by hybridization ---
     results['mitigation'] = _run_cliff_mitigation(
-        reps, labels, X_hybrid, sim_threshold, activity_threshold)
+        reps, labels, X_hybrid, sim_threshold, activity_threshold,
+        is_clf=is_clf)
 
     # --- Sub-analysis 4: Cliff-stratified prediction error ---
     augmentation_strategy = 'uncapped'
@@ -627,7 +650,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         sim_threshold, activity_threshold,
         hybrid_blueprint, smiles,
         augmentations=augmentations,
-        augmentation_strategy=augmentation_strategy)
+        augmentation_strategy=augmentation_strategy,
+        is_clf=is_clf)
 
     # --- Grand summary ---
     print("\n" + "=" * 70)

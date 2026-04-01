@@ -72,6 +72,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     augmentations = data.get('augmentations')
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
+    task_type = data.get('task_type', 'regression')
+    is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     budget = kwargs.get('budget', 100)
     n_samples = len(labels)
@@ -107,9 +109,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     D = compute_distance_matrix(X_concat, standardize=True)
     sim = 1.0 / (1.0 + D)
     np.fill_diagonal(sim, 0.0)
-    mad_y = float(np.median(np.abs(labels - np.median(labels))))
-    delta_y = np.abs(labels[:, None] - labels[None, :])
-    cliff_mask = ((sim >= 0.55) & (delta_y > 2.0 * mad_y)).any(axis=1)
+    if is_clf:
+        delta_y = (labels[:, None] != labels[None, :]).astype(float)
+        cliff_mask = ((sim >= 0.55) & (delta_y > 0.5)).any(axis=1)
+    else:
+        mad_y = float(np.median(np.abs(labels - np.median(labels))))
+        delta_y = np.abs(labels[:, None] - labels[None, :])
+        cliff_mask = ((sim >= 0.55) & (delta_y > 2.0 * mad_y)).any(axis=1)
     # Subsample cliff mask
     cliff_mask_sub = cliff_mask[sub_idx]
     n_cliffs = int(cliff_mask_sub.sum())

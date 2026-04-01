@@ -85,7 +85,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     cliff_indices = set()
     cliff_info = None
     if 'ecfp4' in reps:
-        cliff_mask, cliff_info = identify_cliff_compounds(reps['ecfp4'], labels)
+        cliff_mask, cliff_info = identify_cliff_compounds(reps['ecfp4'], labels,
+                                                          is_clf=is_clf)
         cliff_indices = set(np.where(cliff_mask)[0].tolist())
         print(f"  Cliff molecules (ECFP4 Tanimoto): {len(cliff_indices)} / {len(labels)} "
               f"({cliff_info['pct_cliff_compounds']:.1f}%)")

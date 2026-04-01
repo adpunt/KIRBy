@@ -41,12 +41,24 @@ SIGMAS = [0.0, 0.1, 0.3, 0.6, 1.0]
 ALL_METHODS = list(LNL_REGISTRY.keys())
 
 
-def _inject_noise(y, sigma_frac, seed=42):
-    """Inject Gaussian noise at sigma_frac × label range into training labels."""
+def _inject_noise(y, sigma_frac, seed=42, is_clf=False):
+    """Inject noise. Regression: Gaussian additive. Classification: label flipping."""
     rng = np.random.RandomState(seed)
-    y_range = np.max(y) - np.min(y)
-    noise = rng.normal(0, sigma_frac * y_range, len(y))
-    return y + noise
+    if is_clf:
+        n = len(y)
+        n_flip = max(1, int(n * sigma_frac))
+        y_noisy = y.copy()
+        flip_idx = rng.choice(n, n_flip, replace=False)
+        classes = np.unique(y)
+        for i in flip_idx:
+            other = classes[classes != y[i]]
+            if len(other) > 0:
+                y_noisy[i] = rng.choice(other)
+        return y_noisy
+    else:
+        y_range = np.max(y) - np.min(y)
+        noise = rng.normal(0, sigma_frac * y_range, len(y))
+        return y + noise
 
 
 def _run_baseline(X_train, y_train, X_val, y_val, random_state=42):
@@ -73,11 +85,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     augmentation_strategy = 'uncapped'
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
+    task_type = data.get('task_type', 'regression')
+    is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     sigmas = kwargs.get('sigmas', SIGMAS)
     budget = kwargs.get('budget', 100)
     methods_to_test = kwargs.get('methods', ALL_METHODS)
+
+    # Filter out regression-only LNL methods for classification
+    REGRESSION_ONLY_LNL = {'heteroscedastic_gp'}
+    if is_clf:
+        methods_to_test = [m for m in methods_to_test if m not in REGRESSION_ONLY_LNL]
 
     sample_X = next(iter(reps.values()))
 
@@ -143,7 +162,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # Inject noise (training only)
             if sigma > 0:
                 y_train = _inject_noise(y_train_clean, sigma,
-                                        seed=42 + fold_idx)
+                                        seed=42 + fold_idx, is_clf=is_clf)
             else:
                 y_train = y_train_clean.copy()
 
