@@ -15,7 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SUBMIT_SCRIPT="${SCRIPT_DIR}/submit_dataset.sh"
 
 # ── Dataset lists by domain (matches DATASET_REPS keys) ─────────────────
-MOLECULAR="herg caco2 logd qm9 adme_hlm adme_rlm adme_mdr1"
+MOLECULAR="herg_ki caco2 logd qm9 adme_hlm adme_rlm adme_mdr1"
 ANTIBODY="flab_thermo_tresanco flab_pk_jain_heprt flab_pk_jain_fcrnrt flab_polyreact_jain_cic flab_aggregation_jain_hicrt flab_thermo_jain abcov_kd flab_aggregation_jain flab_immunogenicity_marks flab_polyreact_jain_bvp ddg_combined flab_binding_koenig flab_expression_koenig flab_binding_adams flab_expression_adams flab_binding_phillips_h3"
 ABAGYM="abagym_Ang2 abagym_EGFR abagym_HER2 abagym_lysozyme abagym_VEGF"
 AB_CLF="tz_her2_binary humanness_therapeutic"
@@ -24,7 +24,8 @@ REACTION="buchwald_hartwig bh_doyle_plates"
 TCGA="tcga_luad_vs_lusc tcga_brca_pam50"
 
 # Federated-eligible datasets (grows as fed02-fed05 add support)
-FEDERATED_DATASETS="herg caco2 logd"
+# Uses herg_ki (regression) until herg (clf) gets a DATASET_REPS entry.
+FEDERATED_DATASETS="herg_ki caco2 logd"
 
 # ── Job name prefix ────────────────────────────────────────────────────
 case $CATEGORY in
@@ -65,14 +66,34 @@ else
     esac
 fi
 
+# ── Per-dataset resource overrides ─────────────────────────────────────
+# Large datasets (>4K samples or many high-dim reps) need more memory.
+# TCGA datasets with methyl_hvg (5000D) need more time for importance.
+get_mem_override() {
+    case $1 in
+        qm9|flab_binding_adams|flab_expression_adams|flab_binding_phillips_h3)
+            echo "128G" ;;
+        tz_her2_binary|bh_doyle_plates|flab_binding_koenig|flab_expression_koenig)
+            echo "128G" ;;
+        tcga_luad_vs_lusc|tcga_brca_pam50)
+            echo "128G" ;;
+        *) echo "" ;;
+    esac
+}
+
 # ── Submit ──────────────────────────────────────────────────────────────
 COUNT=0
 for DS in $DATASETS; do
-    CMD="sbatch --job-name=${PREFIX}_${DS} ${SUBMIT_SCRIPT} ${CATEGORY} ${DS}"
+    MEM_OVERRIDE=$(get_mem_override $DS)
+    if [ -n "$MEM_OVERRIDE" ]; then
+        CMD="sbatch --job-name=${PREFIX}_${DS} --mem=${MEM_OVERRIDE} ${SUBMIT_SCRIPT} ${CATEGORY} ${DS}"
+    else
+        CMD="sbatch --job-name=${PREFIX}_${DS} ${SUBMIT_SCRIPT} ${CATEGORY} ${DS}"
+    fi
     if [ "$DRY_RUN" = true ]; then
         echo "[dry-run] $CMD"
     else
-        echo "Submitting: ${CATEGORY}/${DS}"
+        echo "Submitting: ${CATEGORY}/${DS}${MEM_OVERRIDE:+ (mem=${MEM_OVERRIDE})}"
         $CMD
     fi
     COUNT=$((COUNT + 1))

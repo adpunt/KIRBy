@@ -2193,6 +2193,7 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
         n_estimators = kwargs.get('n_estimators', 50)
         max_depth = kwargs.get('max_depth', 10)
         random_state = kwargs.get('random_state', 42)
+        max_features_shap = kwargs.get('max_features_shap', 2000)
 
         for rep_name, X in base_reps.items():
             if X.shape[1] == 0:
@@ -2205,6 +2206,16 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
             scaler = StandardScaler()
             X_scaled = scaler.fit_transform(X_clipped)
 
+            # Pre-screen high-dimensional reps to avoid slow RF + SHAP
+            selected_idx = None
+            if X_scaled.shape[1] > max_features_shap:
+                variances = np.var(X_scaled, axis=0)
+                selected_idx = np.argsort(variances)[-max_features_shap:]
+                selected_idx.sort()
+                X_fit = X_scaled[:, selected_idx]
+            else:
+                X_fit = X_scaled
+
             # Use provided model or train new one
             if model is not None:
                 tree_model = model
@@ -2215,11 +2226,11 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
                 else:
                     tree_model = RandomForestRegressor(n_estimators=n_estimators, max_depth=max_depth,
                                                       random_state=random_state, n_jobs=-1)
-                tree_model.fit(X_scaled, labels)
+                tree_model.fit(X_fit, labels)
 
             # Compute SHAP values using TreeExplainer (fast, exact for trees)
             explainer = shap.TreeExplainer(tree_model)
-            shap_values = explainer.shap_values(X_scaled)
+            shap_values = explainer.shap_values(X_fit)
 
             # Handle different SHAP output formats:
             # - Older SHAP: list of arrays [class0_values, class1_values, ...]
@@ -2244,7 +2255,14 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
                         shap_values = np.mean(np.abs(shap_values), axis=2)
 
             # Feature importance = mean absolute SHAP value per feature
-            feature_importance = np.mean(np.abs(shap_values), axis=0)
+            feature_importance_fit = np.mean(np.abs(shap_values), axis=0)
+
+            # Map back to full feature space if pre-screened
+            if selected_idx is not None:
+                feature_importance = np.zeros(X_scaled.shape[1])
+                feature_importance[selected_idx] = feature_importance_fit
+            else:
+                feature_importance = feature_importance_fit
             importance_scores[rep_name] = np.nan_to_num(feature_importance, nan=0.0)
 
     # INTEGRATED GRADIENTS - Neural network attribution
