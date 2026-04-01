@@ -69,15 +69,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     aug_rep_names = ds_config.get('augmentation', [])
     general_rep_names = ds_config.get('general', [])
 
+    # Small general reps (≤256D) also serve as augmentation sources.
+    # E.g. MACCs (167D), PDV (200D), aac, blosum — these carry complementary
+    # structural/engineered signal that can augment larger reps.
+    SMALL_REP_THRESHOLD = 256
+    small_general = [r for r in general_rep_names
+                     if r in reps and reps[r].shape[1] <= SMALL_REP_THRESHOLD]
+    # Merge: augmentation reps + small general reps (deduplicated)
+    all_aug_candidates = list(dict.fromkeys(aug_rep_names + small_general))
+
     # Load augmentation reps that aren't already in data
-    missing_aug = [r for r in aug_rep_names if r not in reps]
+    missing_aug = [r for r in all_aug_candidates if r not in reps]
     if missing_aug:
         print(f"  Loading {len(missing_aug)} augmentation reps: {missing_aug}")
         aug_data = load_data(dataset_name, rep_preset='all', rep_names=missing_aug)
         for rname, arr in aug_data['reps'].items():
             reps[rname] = arr
 
-    aug_reps_available = [r for r in aug_rep_names if r in reps]
+    aug_reps_available = [r for r in all_aug_candidates if r in reps]
     base_reps_available = [r for r in general_rep_names if r in reps]
 
     if not aug_reps_available:
@@ -88,12 +97,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  No base reps available for {dataset_name} — skipping C21")
         return {'error': 'no_base_reps', 'dataset': dataset_name}
 
-    # Build augmentation dict (shared across all base reps)
-    aug_dict = {rn: reps[rn] for rn in aug_reps_available}
-    aug_dims = {rn: reps[rn].shape[1] for rn in aug_reps_available}
+    print(f"  Small general reps added to aug pool: {small_general}")
 
+    aug_dims = {rn: reps[rn].shape[1] for rn in aug_reps_available}
     print(f"  Base reps ({len(base_reps_available)}): {base_reps_available}")
-    print(f"  Aug reps ({len(aug_reps_available)}): "
+    print(f"  Aug pool ({len(aug_reps_available)}): "
           f"{', '.join(f'{k}={v}D' for k, v in aug_dims.items())}")
 
     search_speed = config.get('search_speed', 'fast')
@@ -106,11 +114,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         base_dim = X_base.shape[1]
         print(f"\n  {base_name} ({base_dim}D)")
 
+        # Build per-base augmentation dict: exclude base rep itself
+        aug_dict = {rn: reps[rn] for rn in aug_reps_available if rn != base_name}
+        if not aug_dict:
+            print(f"    No augmentation reps after excluding self — skipping")
+            continue
+
         # Run find_best_hybrid for this base rep + augmentations
         # Search over importance_method × internal_evaluator at budget=base_dim
         # Allocation is trivial (1 base rep)
         base_rep_dict = {base_name: X_base}
-        print(f"    Searching (budget={base_dim}, uncapped aug)...", end=' ')
+        print(f"    Searching (budget={base_dim}, {len(aug_dict)} aug reps)...", end=' ')
         try:
             search = find_best_hybrid(
                 base_reps=base_rep_dict,
@@ -161,9 +175,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 train_base = {base_name: X_base[train_idx]}
                 val_base = {base_name: X_base[val_idx]}
                 train_augs = {rn: aug_dict[rn][train_idx]
-                              for rn in aug_reps_available}
+                              for rn in aug_dict}
                 val_augs = {rn: aug_dict[rn][val_idx]
-                            for rn in aug_reps_available}
+                            for rn in aug_dict}
 
                 try:
                     Xtr_h, Xva_h, feature_info = build_fold_hybrid(

@@ -56,8 +56,8 @@ fi
 
 # --- DDG / Molecular experiments ---
 if [[ "$FILTER" == "all" || "$FILTER" == "molecular" || "$FILTER" == "graphinity" ]]; then
-    submit graphinity 128G 23:59:00 long \
-        "python tests/experiments/opig_graphinity_ddg.py"
+    submit graphinity 64G 11:59:00 short \
+        "python tests/experiments/opig_graphinity_ddg.py --max-samples 5000"
 fi
 
 if [[ "$FILTER" == "all" || "$FILTER" == "molecular" || "$FILTER" == "qsar" ]]; then

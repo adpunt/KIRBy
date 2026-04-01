@@ -211,19 +211,14 @@ def evaluate_property(prop_name, rep_names, n_folds):
     n = len(labels)
     print(f"  {n} samples, target={data.get('property_name', prop_name)}")
 
-    # Generate representations
-    from kirby.representations.antibody import ANTIBODY_REPS
-    reps = {}
-    for rep_name in rep_names:
-        if rep_name not in ANTIBODY_REPS:
-            continue
-        try:
-            X = ANTIBODY_REPS[rep_name](heavy_seqs, light_seqs)
-            X = np.asarray(X, dtype=np.float64)
-            if X.ndim == 2 and X.shape[0] == n:
-                reps[rep_name] = X
-        except Exception:
-            pass
+    # Generate representations (with disk caching for expensive LM reps)
+    from experiments.rep_cache import compute_or_load_reps
+    reps = compute_or_load_reps(
+        rep_names=rep_names,
+        heavy_seqs=heavy_seqs,
+        light_seqs=light_seqs,
+        dataset_tag=prop_name,
+    )
 
     if not reps:
         print(f"  No reps available, skipping")

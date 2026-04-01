@@ -151,7 +151,7 @@ def evaluate_rep_ddg(X, labels, groups, model, n_folds):
     return result
 
 
-def evaluate_transfer(rep_names, n_folds):
+def evaluate_transfer(rep_names, n_folds, max_samples=5000):
     """Transfer learning: train on FoldX synthetic, evaluate on experimental.
 
     No cross-validation — train on ALL synthetic data, test on ALL experimental.
@@ -165,44 +165,42 @@ def evaluate_transfer(rep_names, n_folds):
     print(f"Condition: transfer_foldx (train=synthetic, test=experimental)")
     print(f"{'=' * 60}")
 
-    train_data = load_dataset('graphinity_foldx')
+    from kirby.datasets.graphinity import load_graphinity_dataset
+    train_data = load_graphinity_dataset(preset='foldx', max_samples=max_samples)
     test_data = load_dataset('ddg_combined')
+
+    # Guard: unpaired sequences → empty strings
+    for d in [train_data, test_data]:
+        if d['light_seqs'] is None:
+            d['light_seqs'] = [''] * len(d['heavy_seqs'])
 
     n_train = len(train_data['labels'])
     n_test = len(test_data['labels'])
     print(f"  Train: {n_train} synthetic FoldX samples")
     print(f"  Test: {n_test} experimental SKEMPI samples")
 
-    # Generate representations for both sets
-    from kirby.representations.antibody import ANTIBODY_REPS
-    from kirby.representations.mutation import MUTATION_REPS
+    # Generate representations for both sets (with disk caching)
+    from experiments.rep_cache import compute_or_load_reps
 
-    reps_train, reps_test = {}, {}
-    for rep_name in rep_names:
-        rep_fn = ANTIBODY_REPS.get(rep_name) or MUTATION_REPS.get(rep_name)
-        if rep_fn is None:
-            continue
-        try:
-            if rep_name in MUTATION_REPS:
-                X_tr = rep_fn(train_data['heavy_seqs'],
-                              train_data['light_seqs'],
-                              train_data.get('mutations', []))
-                X_te = rep_fn(test_data['heavy_seqs'],
-                              test_data['light_seqs'],
-                              test_data.get('mutations', []))
-            else:
-                X_tr = ANTIBODY_REPS[rep_name](train_data['heavy_seqs'],
-                                               train_data['light_seqs'])
-                X_te = ANTIBODY_REPS[rep_name](test_data['heavy_seqs'],
-                                               test_data['light_seqs'])
-            X_tr = np.asarray(X_tr, dtype=np.float64)
-            X_te = np.asarray(X_te, dtype=np.float64)
-            if X_tr.ndim == 2 and X_tr.shape[0] == n_train and X_te.shape[0] == n_test:
-                reps_train[rep_name] = X_tr
-                reps_test[rep_name] = X_te
-                print(f"  {rep_name}: {X_tr.shape[1]}D")
-        except Exception as e:
-            print(f"  {rep_name}: FAILED ({e})")
+    reps_train = compute_or_load_reps(
+        rep_names=rep_names,
+        heavy_seqs=train_data['heavy_seqs'],
+        light_seqs=train_data['light_seqs'],
+        mutations=train_data.get('mutations'),
+        dataset_tag=f"graphinity_foldx_{n_train}",
+    )
+    reps_test = compute_or_load_reps(
+        rep_names=rep_names,
+        heavy_seqs=test_data['heavy_seqs'],
+        light_seqs=test_data['light_seqs'],
+        mutations=test_data.get('mutations'),
+        dataset_tag=f"ddg_combined_{n_test}",
+    )
+
+    # Only keep reps present in both train and test
+    common_reps = sorted(set(reps_train) & set(reps_test))
+    reps_train = {k: reps_train[k] for k in common_reps}
+    reps_test = {k: reps_test[k] for k in common_reps}
 
     if not reps_train:
         print("  No reps available, skipping condition")
@@ -250,13 +248,13 @@ def evaluate_transfer(rep_names, n_folds):
     }
 
 
-def evaluate_condition(condition, rep_names, n_folds):
+def evaluate_condition(condition, rep_names, n_folds, max_samples=5000):
     """Evaluate one condition: load data, generate reps, evaluate all.
 
     Returns dict with per-rep results.
     """
     if condition == 'transfer_foldx':
-        return evaluate_transfer(rep_names, n_folds)
+        return evaluate_transfer(rep_names, n_folds, max_samples=max_samples)
 
     ds_name = CONDITION_DATASETS[condition]
 
@@ -264,9 +262,18 @@ def evaluate_condition(condition, rep_names, n_folds):
     print(f"Condition: {condition} (dataset: {ds_name})")
     print(f"{'=' * 60}")
 
-    data = load_dataset(ds_name)
+    # For graphinity presets, load directly with max_samples control
+    if ds_name in ('graphinity_foldx', 'graphinity_rosetta'):
+        from kirby.datasets.graphinity import load_graphinity_dataset
+        preset = 'foldx' if ds_name == 'graphinity_foldx' else 'rosetta'
+        data = load_graphinity_dataset(preset=preset, max_samples=max_samples)
+    else:
+        data = load_dataset(ds_name)
+
     heavy_seqs = data['heavy_seqs']
     light_seqs = data['light_seqs']
+    if light_seqs is None:
+        light_seqs = [''] * len(heavy_seqs)
     labels = data['labels']
     groups = data.get('groups')
     n = len(labels)
@@ -275,26 +282,15 @@ def evaluate_condition(condition, rep_names, n_folds):
     if groups is not None:
         print(f"  {len(np.unique(groups))} groups (PDB complexes)")
 
-    # Generate representations
-    from kirby.representations.antibody import ANTIBODY_REPS
-    from kirby.representations.mutation import MUTATION_REPS
-    reps = {}
-    for rep_name in rep_names:
-        rep_fn = ANTIBODY_REPS.get(rep_name) or MUTATION_REPS.get(rep_name)
-        if rep_fn is None:
-            continue
-        try:
-            if rep_name in MUTATION_REPS:
-                mutations = data.get('mutations', [])
-                X = rep_fn(heavy_seqs, light_seqs, mutations)
-            else:
-                X = ANTIBODY_REPS[rep_name](heavy_seqs, light_seqs)
-            X = np.asarray(X, dtype=np.float64)
-            if X.ndim == 2 and X.shape[0] == n:
-                reps[rep_name] = X
-                print(f"  {rep_name}: {X.shape[1]}D")
-        except Exception as e:
-            print(f"  {rep_name}: FAILED ({e})")
+    # Generate representations (with disk caching for expensive LM reps)
+    from experiments.rep_cache import compute_or_load_reps
+    reps = compute_or_load_reps(
+        rep_names=rep_names,
+        heavy_seqs=heavy_seqs,
+        light_seqs=light_seqs,
+        mutations=data.get('mutations'),
+        dataset_tag=f"{ds_name}_{n}",
+    )
 
     if not reps:
         print("  No reps available, skipping condition")
@@ -450,6 +446,9 @@ def main():
         '--n-folds', type=int, default=5,
         help='Number of GroupKFold folds (default: 5)')
     parser.add_argument(
+        '--max-samples', type=int, default=5000,
+        help='Max samples for FoldX synthetic dataset (default: 5000, was 50000)')
+    parser.add_argument(
         '--output', type=str, default=None,
         help='Output JSON path '
              '(default: tests/results/comparisons/opig_graphinity_ddg.json)')
@@ -460,6 +459,8 @@ def main():
                   else ALL_CONDITIONS)
     rep_names = (args.reps.split(',') if args.reps else DEFAULT_REPS)
 
+    max_samples = args.max_samples
+
     print("=" * 70)
     print("GRAPHINITY DDG EXPERIMENT (OPIG B2)")
     print(f"  Paper: Hummer et al. 2025, Nature Computational Science")
@@ -467,6 +468,7 @@ def main():
     print(f"  Reps: {rep_names}")
     print(f"  Models: {MODELS_LIST}")
     print(f"  Folds: {args.n_folds}")
+    print(f"  Max samples (FoldX): {max_samples}")
     print("=" * 70)
 
     all_results = {}
@@ -480,7 +482,8 @@ def main():
             print(f"WARNING: Dataset '{ds_name}' not in registry, skipping")
             continue
         try:
-            cond_results = evaluate_condition(cond, rep_names, args.n_folds)
+            cond_results = evaluate_condition(
+                cond, rep_names, args.n_folds, max_samples=max_samples)
             if cond_results is not None:
                 all_results[cond] = cond_results
         except Exception as e:
