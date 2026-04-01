@@ -836,20 +836,22 @@ def create_maccs(smiles_list):
 def create_pdv(smiles_list, descriptor_list=None):
     """
     Create Physical Descriptor Vectors (static, no training).
-    
+
+    Returns z-score normalised descriptors (zero mean, unit variance per feature).
+
     Args:
         smiles_list: List of SMILES strings
         descriptor_list: List of RDKit descriptor names (default: 200 descriptors)
-        
+
     Returns:
-        np.ndarray: Descriptor matrix (n_molecules, n_descriptors)
+        np.ndarray: Descriptor matrix (n_molecules, n_descriptors), z-score normalised
     """
     if descriptor_list is None:
         descriptor_list = DEFAULT_DESCRIPTOR_LIST
-    
+
     calc = MolecularDescriptorCalculator(descriptor_list)
     descriptors = []
-    
+
     n_desc = len(descriptor_list)
     for i, smiles in enumerate(smiles_list):
         mol = _safe_mol(smiles)
@@ -860,7 +862,14 @@ def create_pdv(smiles_list, descriptor_list=None):
         desc = np.nan_to_num(desc, nan=0.0, posinf=0.0, neginf=0.0)
         descriptors.append(desc)
 
-    return np.array(descriptors)
+    X = np.array(descriptors)
+
+    # Z-score normalise: raw descriptors have wildly different scales
+    from sklearn.preprocessing import StandardScaler
+    X = StandardScaler().fit_transform(X).astype(np.float32)
+    X = np.nan_to_num(X, nan=0.0)  # constant columns → 0
+
+    return X
 
 
 def create_mordred(smiles_list, ignore_3D=True):

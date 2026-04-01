@@ -51,7 +51,8 @@ except Exception:
 LNL_EPOCHS = 50  # reduced for speed
 
 
-def _inject_noise(y, noise_type, strength, seed=42, partial_fraction=0.3):
+def _inject_noise(y, noise_type, strength, seed=42, partial_fraction=0.3,
+                  is_clf=False):
     """Inject noise of the specified distribution.
 
     Args:
@@ -60,14 +61,31 @@ def _inject_noise(y, noise_type, strength, seed=42, partial_fraction=0.3):
         strength: Noise magnitude (sigma for Gaussian, width for uniform, etc.).
         seed: Random seed.
         partial_fraction: Fraction of samples to corrupt (for 'partial' type).
+        is_clf: If True, use label flipping (strength = flip fraction).
 
     Returns:
         y_noisy: Noisy labels (same shape as y).
     """
     rng = np.random.RandomState(seed)
     y = np.asarray(y, dtype=np.float64)
-    y_range = float(np.max(y) - np.min(y))
     n = len(y)
+
+    if is_clf:
+        # Classification: all noise types → label flipping at varying rates
+        flip_frac = strength
+        if noise_type == 'partial':
+            flip_frac = strength * partial_fraction
+        n_flip = max(1, int(n * flip_frac))
+        y_noisy = y.copy()
+        flip_idx = rng.choice(n, n_flip, replace=False)
+        classes = np.unique(y)
+        for i in flip_idx:
+            other = classes[classes != y[i]]
+            if len(other) > 0:
+                y_noisy[i] = rng.choice(other)
+        return y_noisy.astype(np.float32)
+
+    y_range = float(np.max(y) - np.min(y))
 
     if noise_type == 'gaussian':
         noise = rng.normal(0, strength * y_range, n)
@@ -155,10 +173,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     augmentations = data.get('augmentations')
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
+    task_type = data.get('task_type', 'regression')
+    is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     model_factory = get_model_factories(
-        ['rf'], task_type=data.get('task_type', 'regression'),
+        ['rf'], task_type=task_type,
         n_samples=len(labels))['rf']
 
     sample_X = next(iter(reps.values()))
@@ -174,10 +194,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     print(f"  Dataset: {dataset_name} ({len(labels)} samples)")
     print(f"  Metric: {metric_name}")
+    # Filter out regression-only methods for classification
+    REGRESSION_ONLY_LNL = {'heteroscedastic_gp'}
+    lnl_methods = [m for m in LNL_METHODS if not (is_clf and m in REGRESSION_ONLY_LNL)]
+    estimators = [e for e in ESTIMATORS if not (is_clf and e == 'gaussian_process')]
+
     print(f"  Base rep: {base_rep_name}")
     print(f"  Noise types: {NOISE_TYPES}")
-    print(f"  LNL methods: {LNL_METHODS}")
-    print(f"  Estimators: {ESTIMATORS}")
+    print(f"  LNL methods: {lnl_methods}")
+    print(f"  Estimators: {estimators}")
     print(f"  Folds: {n_folds}")
 
     # Get blueprint ONCE from cached search (uses clean labels)
@@ -195,8 +220,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'lower_is_better': lower_is_better,
         'noise_types': NOISE_TYPES,
         'strengths': STRENGTHS,
-        'lnl_methods': LNL_METHODS,
-        'estimators': ESTIMATORS,
+        'lnl_methods': lnl_methods,
+        'estimators': estimators,
         'per_noise_type': {},
     }
 
@@ -267,7 +292,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if noise_type == 'partial' and partial_frac is not None:
                     kw['partial_fraction'] = partial_frac
                 y_noisy = _inject_noise(fd['y_train_clean'], noise_type,
-                                         strength, seed=42 + fi, **kw)
+                                         strength, seed=42 + fi,
+                                         is_clf=is_clf, **kw)
 
                 # Noisy baseline
                 rf_noisy = model_factory()
@@ -310,7 +336,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     if space_name not in track_a_acc:
                         track_a_acc[space_name] = {}
 
-                    for method_name in LNL_METHODS:
+                    for method_name in lnl_methods:
                         if method_name not in track_a_acc[space_name]:
                             track_a_acc[space_name][method_name] = []
                         try:
@@ -332,7 +358,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     if space_name not in track_b_acc:
                         track_b_acc[space_name] = {}
 
-                    for est_name in ESTIMATORS:
+                    for est_name in estimators:
                         if est_name not in track_b_acc[space_name]:
                             track_b_acc[space_name][est_name] = []
                         try:

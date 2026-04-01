@@ -22,7 +22,7 @@ import time
 
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from sklearn.neighbors import KNeighborsRegressor, NearestNeighbors
+from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier, NearestNeighbors
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, WhiteKernel, ConstantKernel
 from sklearn.svm import SVR
@@ -124,9 +124,10 @@ def _compute_sim_descriptors(X_train, y_train, X_query, k=10):
 
 def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
                       metric_fn, metric_name, lower_is_better=False,
-                      augmentations=None):
+                      augmentations=None, task_type='regression'):
     """Weighted kNN: per-rep and hybrid, weighted vs unweighted."""
-    print("\n  --- Task 1: Weighted kNN Regression ---")
+    is_clf = task_type == 'classification'
+    print(f"\n  --- Task 1: Weighted kNN {'Classification' if is_clf else 'Regression'} ---")
 
     k_values = [5, 10, 20]
     n_folds = config['n_splits']
@@ -150,7 +151,8 @@ def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
                 k_eff = min(k, len(y_train) - 1)
 
                 # Unweighted
-                model = KNeighborsRegressor(n_neighbors=k_eff)
+                KNN = KNeighborsClassifier if is_clf else KNeighborsRegressor
+                model = KNN(n_neighbors=k_eff)
                 model.fit(X_tr, y_train)
                 uw_scores.append(metric_fn(y_val, model.predict(X_va)))
 
@@ -160,7 +162,7 @@ def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
                         {rep_name: X_rep[train_idx]}, y_train,
                         method='lightgbm_gain')
                     w = _importance_weights(imp[rep_name])
-                    model_w = KNeighborsRegressor(n_neighbors=k_eff)
+                    model_w = KNN(n_neighbors=k_eff)
                     model_w.fit(X_tr * w, y_train)
                     w_scores.append(metric_fn(y_val, model_w.predict(X_va * w)))
                 except Exception:
@@ -208,7 +210,8 @@ def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
                 k_eff = min(k, len(y_train) - 1)
 
                 # Unweighted
-                model = KNeighborsRegressor(n_neighbors=k_eff)
+                KNN = KNeighborsClassifier if is_clf else KNeighborsRegressor
+                model = KNN(n_neighbors=k_eff)
                 model.fit(X_tr, y_train)
                 uw_scores.append(metric_fn(y_val, model.predict(X_va)))
 
@@ -216,7 +219,7 @@ def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
                 try:
                     w = _compute_importance_for_hybrid(
                         train_reps, y_train, feat_info)
-                    model_w = KNeighborsRegressor(n_neighbors=k_eff)
+                    model_w = KNN(n_neighbors=k_eff)
                     model_w.fit(X_tr * w, y_train)
                     w_scores.append(metric_fn(y_val, model_w.predict(X_va * w)))
                 except Exception:
@@ -704,34 +707,43 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results = {}
 
     augmentations = data.get('augmentations')
+    task_type = data.get('task_type', 'regression')
+    is_clf = task_type == 'classification'
 
     # Task 1: Weighted kNN
     t0 = time.time()
     results['weighted_knn'] = _run_weighted_knn(
         reps, labels, groups, config, hybrid_blueprint,
         metric_fn, metric_name, lower_is_better,
-        augmentations=augmentations)
+        augmentations=augmentations, task_type=task_type)
     print(f"  [Task 1 elapsed: {time.time() - t0:.1f}s]")
 
-    # Task 2: GP with importance-weighted RBF
-    t0 = time.time()
-    results['weighted_gp'] = _run_weighted_gp(
-        reps, labels, groups, config, hybrid_blueprint,
-        metric_fn, metric_name, n_samples,
-        augmentations=augmentations)
-    print(f"  [Task 2 elapsed: {time.time() - t0:.1f}s]")
+    # Task 2: GP with importance-weighted RBF (regression only)
+    if is_clf:
+        print("\n  --- Task 2: GP --- SKIP (regression-only)")
+        results['weighted_gp'] = {'skipped': True, 'reason': 'classification'}
+    else:
+        t0 = time.time()
+        results['weighted_gp'] = _run_weighted_gp(
+            reps, labels, groups, config, hybrid_blueprint,
+            metric_fn, metric_name, n_samples,
+            augmentations=augmentations)
+        print(f"  [Task 2 elapsed: {time.time() - t0:.1f}s]")
 
-    # Task 3: SVR with importance-weighted RBF
-    t0 = time.time()
-    results['weighted_svr'] = _run_weighted_svr(
-        reps, labels, groups, config, hybrid_blueprint,
-        metric_fn, metric_name, n_samples,
-        augmentations=augmentations)
-    print(f"  [Task 3 elapsed: {time.time() - t0:.1f}s]")
+    # Task 3: SVR with importance-weighted RBF (regression only)
+    if is_clf:
+        print("  --- Task 3: SVR --- SKIP (regression-only)")
+        results['weighted_svr'] = {'skipped': True, 'reason': 'classification'}
+    else:
+        t0 = time.time()
+        results['weighted_svr'] = _run_weighted_svr(
+            reps, labels, groups, config, hybrid_blueprint,
+            metric_fn, metric_name, n_samples,
+            augmentations=augmentations)
+        print(f"  [Task 3 elapsed: {time.time() - t0:.1f}s]")
 
     # Task 4: q-RASAR similarity-augmented features
     t0 = time.time()
-    task_type = data.get('task_type', 'regression')
     results['qrasar'] = _run_qrasar(
         reps, labels, groups, config, hybrid_blueprint,
         metric_fn, metric_name, task_type=task_type,

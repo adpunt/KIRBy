@@ -59,14 +59,18 @@ def _subsample_if_needed(X, y, max_n, seed=42):
     return X[idx], y[idx], idx
 
 
-def _identify_cliffs_euclidean(X, y, sim_threshold=0.55, activity_k=2.0):
+def _identify_cliffs_euclidean(X, y, sim_threshold=0.55, activity_k=2.0, is_clf=False):
     """Identify activity cliff compounds using Euclidean distance."""
     D = compute_distance_matrix(X, standardize=True)
     sim = 1.0 / (1.0 + D)
     np.fill_diagonal(sim, 0.0)
-    mad_y = float(np.median(np.abs(y - np.median(y))))
-    activity_threshold = activity_k * mad_y
-    delta_y = np.abs(y[:, None] - y[None, :])
+    if is_clf:
+        delta_y = (y[:, None] != y[None, :]).astype(float)
+        activity_threshold = 0.5
+    else:
+        mad_y = float(np.median(np.abs(y - np.median(y))))
+        activity_threshold = activity_k * mad_y
+        delta_y = np.abs(y[:, None] - y[None, :])
     cliff_mask = ((sim >= sim_threshold) & (delta_y > activity_threshold)).any(axis=1)
     return cliff_mask
 
@@ -154,6 +158,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("\n" + "=" * 70)
     print("EXPERIMENT N04: GP-LOO CLIFF-AWARE NOISE DETECTION")
     print("=" * 70)
+
+    task_type = data.get('task_type', 'regression')
+    is_clf = task_type == 'classification'
+
+    if is_clf:
+        print("  SKIP: N04 is GP-based (regression-only). Classification not supported.")
+        return {'skipped': True, 'reason': 'GP-LOO is regression-only'}
 
     reps = data['reps']
     labels = data['labels']

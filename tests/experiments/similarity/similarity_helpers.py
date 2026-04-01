@@ -36,8 +36,39 @@ from experiments.complexity.complexity_helpers import DATASET_REPS
 # SHARED SIMILARITY METRIC FUNCTIONS
 # =============================================================================
 
-def similarity_activity_correlation(D, y, n_sample=5000):
-    """Spearman correlation between pairwise distance and |delta_y|.
+def _is_nominal(y):
+    """Detect if labels are nominal multi-class (>2 discrete classes).
+
+    DEPRECATED for direct use — prefer passing is_clf=True explicitly.
+    Only reliable on the FULL label array, not individual elements.
+    """
+    unique = np.unique(y)
+    return len(unique) > 2 and np.allclose(y, y.astype(int))
+
+
+def _pairwise_delta(y_i, y_j, is_clf=False):
+    """Compute pairwise activity difference.
+
+    Regression / binary: |y_i - y_j| (continuous difference).
+    Classification (is_clf=True): 1{y_i != y_j} (binary indicator).
+    """
+    if is_clf:
+        return (y_i != y_j).astype(float)
+    return np.abs(y_i - y_j)
+
+
+def _pairwise_delta_matrix(y, is_clf=False):
+    """Compute full n×n pairwise activity difference matrix."""
+    if is_clf:
+        return (y[:, None] != y[None, :]).astype(float)
+    return np.abs(y[:, None] - y[None, :])
+
+
+def similarity_activity_correlation(D, y, n_sample=5000, is_clf=False):
+    """Spearman correlation between pairwise distance and activity difference.
+
+    Regression / binary: |delta_y| (continuous).
+    Classification (is_clf): 1{y_i != y_j} — do nearby samples share a class?
 
     Positive = good (large distance -> large activity difference means the
     representation preserves the structure-activity relationship).
@@ -53,22 +84,23 @@ def similarity_activity_correlation(D, y, n_sample=5000):
         triu_i, triu_j = triu_i[idx], triu_j[idx]
 
     dists = D[triu_i, triu_j]
-    delta_y = np.abs(y[triu_i] - y[triu_j])
+    delta_y = _pairwise_delta(y[triu_i], y[triu_j], is_clf=is_clf)
 
     rho, p = spearmanr(dists, delta_y)
     return float(rho), float(p)
 
 
-def compute_sali(D, y, eps=1e-6):
-    """SALI: |y_i - y_j| / (1 - sim(i,j)), sim = 1/(1+d).
+def compute_sali(D, y, eps=1e-6, is_clf=False):
+    """SALI: activity_diff / (1 - sim(i,j)), sim = 1/(1+d).
 
+    Classification (is_clf): uses binary indicator (same/different class).
     Returns per-sample max SALI and summary stats.
     """
     n = len(y)
     sim = 1.0 / (1.0 + D)
     np.fill_diagonal(sim, 0)
 
-    delta_y = np.abs(y[:, None] - y[None, :])
+    delta_y = _pairwise_delta_matrix(y, is_clf=is_clf)
     denom = 1.0 - sim + eps
     sali_matrix = delta_y / denom
     np.fill_diagonal(sali_matrix, 0)
@@ -85,8 +117,12 @@ def compute_sali(D, y, eps=1e-6):
     }
 
 
-def violation_rate(D, y, k=5):
-    """Fraction of k-NN pairs where |delta_y| > median(|delta_y|)."""
+def violation_rate(D, y, k=5, is_clf=False):
+    """Fraction of k-NN pairs with large activity difference.
+
+    Regression / binary: |delta_y| > median(|delta_y|).
+    Classification (is_clf): fraction of k-NN that are a different class.
+    """
     from kirby.utils.noise_mitigation_methods import get_k_neighbors_from_distances
 
     n = len(y)
@@ -94,6 +130,19 @@ def violation_rate(D, y, k=5):
 
     indices, _ = get_k_neighbors_from_distances(D, k)
 
+    if is_clf:
+        # Multi-class: fraction of k-NN that belong to a different class
+        n_violations = 0
+        n_total = 0
+        for i in range(n):
+            for j_idx in range(k):
+                j = indices[i, j_idx]
+                if y[i] != y[j]:
+                    n_violations += 1
+                n_total += 1
+        return float(n_violations / n_total) if n_total > 0 else 0.0
+
+    # Regression / binary: threshold-based
     triu_i, triu_j = np.triu_indices(n, k=1)
     if len(triu_i) > 50000:
         rng = np.random.RandomState(42)
@@ -115,12 +164,15 @@ def violation_rate(D, y, k=5):
     return float(n_violations / n_total) if n_total > 0 else 0.0
 
 
-def identify_cliff_compounds(ecfp4, y, tanimoto_threshold=0.55, activity_k=2.0):
+def identify_cliff_compounds(ecfp4, y, tanimoto_threshold=0.55, activity_k=2.0,
+                             is_clf=False):
     """Identify activity cliff compounds using ECFP4 Tanimoto.
 
     Definition based on Bajorath standard for ECFP4 (Stumpfe & Bajorath 2019):
       - Structural similarity: Tanimoto(ECFP4) >= tanimoto_threshold (default 0.55)
       - Activity difference: |delta_y| > activity_k * MAD(y)
+
+    Classification (is_clf): cliff = similar structure but different class.
 
     Returns:
         cliff_mask: boolean array, True for cliff compounds
@@ -128,17 +180,22 @@ def identify_cliff_compounds(ecfp4, y, tanimoto_threshold=0.55, activity_k=2.0):
     """
     n = len(y)
 
-    # Adaptive activity threshold: k * MAD(y)
-    mad_y = float(np.median(np.abs(y - np.median(y))))
-    activity_threshold = activity_k * mad_y
-
     # Tanimoto similarity from binary ECFP4 (Tanimoto = 1 - Jaccard distance)
     jaccard_dist = scipy_cdist(ecfp4, ecfp4, metric='jaccard')
     tanimoto_sim = 1.0 - jaccard_dist
     np.fill_diagonal(tanimoto_sim, 0)
 
     # Activity difference matrix
-    delta_y = np.abs(y[:, None] - y[None, :])
+    delta_y = _pairwise_delta_matrix(y, is_clf=is_clf)
+
+    if is_clf:
+        # Multi-class: cliff = high similarity AND different class
+        activity_threshold = 0.5  # indicator is 0 or 1
+        mad_y = 0.0
+    else:
+        # Regression: adaptive threshold k * MAD(y)
+        mad_y = float(np.median(np.abs(y - np.median(y))))
+        activity_threshold = activity_k * mad_y
 
     # Cliff pair mask: high similarity AND large activity difference
     cliff_pair_mask = (tanimoto_sim >= tanimoto_threshold) & (delta_y > activity_threshold)
@@ -239,7 +296,7 @@ def run_all(dataset_name: str, output_dir: str,
     """Load data once and run all single-dataset similarity experiments.
 
     Args:
-        dataset_name: Dataset name (e.g. 'herg', 'logd', 'flab_thermo_tresanco').
+        dataset_name: Dataset name (e.g. 'herg_ki', 'logd', 'flab_thermo_tresanco').
         output_dir: Base output directory for results JSON files.
         experiments: List of experiment IDs to run (default: SINGLE_DATASET_EXPERIMENTS).
         config: Config dict override (default: fast tier + similarity extras).

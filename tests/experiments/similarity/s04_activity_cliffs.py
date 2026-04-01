@@ -62,6 +62,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     groups = data['groups']
 
     # --- Identify cliff compounds using ECFP4 Tanimoto ---
+    # S04 is molecular-only (Bajorath ECFP4 standard). Non-molecular domains
+    # should use S12 (cross-domain Euclidean cliffs) instead.
+    domain = data.get('domain', 'molecular')
+    if domain != 'molecular':
+        print(f"  SKIP: S04 requires molecular ECFP4 (domain={domain}). Use S12 for cross-domain cliffs.")
+        return {'skipped': True, 'reason': f'molecular-only experiment, domain={domain}'}
     if 'ecfp4' not in reps:
         print("  ERROR: ecfp4 not in reps, cannot identify cliffs")
         return {'error': 'ecfp4 not available'}

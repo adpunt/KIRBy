@@ -436,13 +436,24 @@ class ActivityCliffDetector(NoiseMitigationMethod):
             non_diag = distances[np.triu_indices_from(distances, k=1)]
             self.similarity_threshold = np.percentile(non_diag, 10)
         
+        # Multi-class: use binary indicator (same/different class) instead of |delta_y|
+        n_classes = len(np.unique(y))
+        nominal = n_classes > 2 and np.allclose(y, y.astype(int))
+
         if self.activity_threshold is None:
-            activity_diffs = np.abs(y[:, None] - y[None, :])
-            self.activity_threshold = np.percentile(activity_diffs, 90)
-        
+            if nominal:
+                self.activity_threshold = 0.5  # indicator is 0 or 1
+            else:
+                activity_diffs = np.abs(y[:, None] - y[None, :])
+                self.activity_threshold = np.percentile(activity_diffs, 90)
+
         # Find activity cliffs
+        if nominal:
+            delta_y = (y[:, None] != y[None, :]).astype(float)
+        else:
+            delta_y = np.abs(y[:, None] - y[None, :])
         cliff_mask = (distances < self.similarity_threshold) & \
-                     (np.abs(y[:, None] - y[None, :]) > self.activity_threshold)
+                     (delta_y > self.activity_threshold)
         
         # Count cliff involvement per sample
         cliff_counts = cliff_mask.sum(axis=1)

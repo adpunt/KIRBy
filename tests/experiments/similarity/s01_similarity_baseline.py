@@ -65,9 +65,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     for rep_name, X in reps.items():
         print(f"\n  {rep_name} (dim={X.shape[1]}):")
         D = compute_distance_matrix(X, standardize=True)
-        sac_rho, sac_p = similarity_activity_correlation(D, labels, n_sample)
-        viol = violation_rate(D, labels, k=5)
-        sali = compute_sali(D, labels)
+        sac_rho, sac_p = similarity_activity_correlation(D, labels, n_sample, is_clf=is_classification)
+        viol = violation_rate(D, labels, k=5, is_clf=is_classification)
+        sali = compute_sali(D, labels, is_clf=is_classification)
 
         # Permutation test: is SAC significantly above random?
         n_perm = 200
@@ -75,7 +75,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         perm_sacs = []
         for _ in range(n_perm):
             y_perm = rng_perm.permutation(labels)
-            perm_rho, _ = similarity_activity_correlation(D, y_perm, n_sample)
+            perm_rho, _ = similarity_activity_correlation(D, y_perm, n_sample, is_clf=is_classification)
             perm_sacs.append(perm_rho)
         perm_sacs = np.array(perm_sacs)
         sac_perm_p = float(np.mean(perm_sacs >= sac_rho))
@@ -96,9 +96,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if importance is not None and rep_name in importance:
             D_w = compute_distance_matrix(X, feature_weights=importance[rep_name],
                                           standardize=True)
-            sac_w, sac_w_p = similarity_activity_correlation(D_w, labels, n_sample)
-            viol_w = violation_rate(D_w, labels, k=5)
-            sali_w = compute_sali(D_w, labels)
+            sac_w, sac_w_p = similarity_activity_correlation(D_w, labels, n_sample, is_clf=is_classification)
+            viol_w = violation_rate(D_w, labels, k=5, is_clf=is_classification)
+            sali_w = compute_sali(D_w, labels, is_clf=is_classification)
             rep_result['sac_rho_weighted'] = sac_w
             rep_result['sac_p_weighted'] = sac_w_p
             rep_result['violation_rate_weighted'] = viol_w

@@ -76,12 +76,26 @@ DETECTION_METHODS = [
 ]
 
 
-def _inject_noise(y, sigma_frac, seed=42):
-    """Inject Gaussian noise at sigma_frac × label range. Returns (y_noisy, noise_vector)."""
+def _inject_noise(y, sigma_frac, seed=42, is_clf=False):
+    """Inject noise. Returns (y_noisy, noise_vector).
+    Classification: label flipping (noise_vector is zero where unchanged)."""
     rng = np.random.RandomState(seed)
-    y_range = np.max(y) - np.min(y)
-    noise = rng.normal(0, sigma_frac * y_range, len(y))
-    return y + noise, noise
+    n = len(y)
+    if is_clf:
+        n_flip = max(1, int(n * sigma_frac))
+        y_noisy = y.copy()
+        flip_idx = rng.choice(n, n_flip, replace=False)
+        classes = np.unique(y)
+        for i in flip_idx:
+            other = classes[classes != y[i]]
+            if len(other) > 0:
+                y_noisy[i] = rng.choice(other)
+        noise = np.zeros(n)  # placeholder — use y_noisy != y for mask
+        return y_noisy, noise
+    else:
+        y_range = np.max(y) - np.min(y)
+        noise = rng.normal(0, sigma_frac * y_range, n)
+        return y + noise, noise
 
 
 def _build_neighbor_spaces(train_reps, y_train, blueprints, train_augs):
@@ -381,12 +395,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = data['labels']
     groups = data['groups']
     augmentations = data.get('augmentations')
+    task_type = data.get('task_type', 'regression')
+    is_clf = task_type == 'classification'
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     model_factory = get_model_factories(
-        ['rf'], task_type=data.get('task_type', 'regression'),
+        ['rf'], task_type=task_type,
         n_samples=len(labels))['rf']
 
     sigmas = kwargs.get('sigmas', SIGMAS)
@@ -455,7 +471,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             # Inject noise
             y_noisy, noise_vec = _inject_noise(y_train_clean, sigma,
-                                                seed=42 + fold_idx)
+                                                seed=42 + fold_idx,
+                                                is_clf=is_clf)
 
             spaces, base_rep_name = _build_neighbor_spaces(
                 train_reps_fold, y_noisy,
@@ -483,8 +500,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             noisy_scores.append(float(metric_fn(y_val, rf_noisy.predict(X_eval_val_s))))
 
             # Ground-truth noise mask
-            mad = float(np.median(np.abs(y_train_clean - np.median(y_train_clean))))
-            noise_mask = np.abs(noise_vec) > max(mad, 1e-10)
+            if is_clf:
+                noise_mask = (y_noisy != y_train_clean)
+            else:
+                mad = float(np.median(np.abs(y_train_clean - np.median(y_train_clean))))
+                noise_mask = np.abs(noise_vec) > max(mad, 1e-10)
 
             # Per-space evaluation
             for space_name, X_space in spaces.items():

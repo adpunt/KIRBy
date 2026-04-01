@@ -114,8 +114,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Similarity quality
         D_weighted = compute_distance_matrix(X_hybrid, feature_weights=weights_flat,
                                              standardize=True)
-        sac_rho, _ = similarity_activity_correlation(D_weighted, labels, n_sample)
-        viol = violation_rate(D_weighted, labels, k=5)
+        sac_rho, _ = similarity_activity_correlation(D_weighted, labels, n_sample, is_clf=is_clf)
+        viol = violation_rate(D_weighted, labels, k=5, is_clf=is_clf)
 
         # Distance correlation with full concat (using pre-computed pairs)
         d_hybrid_sampled = D_weighted[triu_i_s, triu_j_s]
@@ -193,15 +193,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     for rep_name, X in reps.items():
         D_rep = compute_distance_matrix(X, standardize=True)
-        sac_rep, _ = similarity_activity_correlation(D_rep, labels, n_sample)
-        viol_rep = violation_rate(D_rep, labels, k=5)
+        sac_rep, _ = similarity_activity_correlation(D_rep, labels, n_sample, is_clf=is_clf)
+        viol_rep = violation_rate(D_rep, labels, k=5, is_clf=is_clf)
 
         # Weighted SAC
         sac_rep_w = float('nan')
         if importance is not None and rep_name in importance:
             D_rep_w = compute_distance_matrix(X, feature_weights=importance[rep_name],
                                               standardize=True)
-            sac_rep_w, _ = similarity_activity_correlation(D_rep_w, labels, n_sample)
+            sac_rep_w, _ = similarity_activity_correlation(D_rep_w, labels, n_sample, is_clf=is_clf)
 
         rf_rep = []
         knn_rep = []
@@ -247,8 +247,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Concat (reference, not standard practice)
     print(f"\n  Concat reference (dim={full_dim}):")
-    sac_full, _ = similarity_activity_correlation(D_full, labels, n_sample)
-    viol_full = violation_rate(D_full, labels, k=5)
+    sac_full, _ = similarity_activity_correlation(D_full, labels, n_sample, is_clf=is_clf)
+    viol_full = violation_rate(D_full, labels, k=5, is_clf=is_clf)
 
     rf_scores_full = []
     knn_scores_full = []
@@ -280,7 +280,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                    if k in importance])
         D_full_w = compute_distance_matrix(X_concat, feature_weights=w_concat,
                                            standardize=True)
-        sac_full_w, _ = similarity_activity_correlation(D_full_w, labels, n_sample)
+        sac_full_w, _ = similarity_activity_correlation(D_full_w, labels, n_sample, is_clf=is_clf)
         concat_ref['sac_rho_weighted'] = sac_full_w
         print(f"    RF_{metric_name}={concat_ref['rf_score']:.4f}, "
               f"kNN_{metric_name}={concat_ref['knn_score']:.4f}, "

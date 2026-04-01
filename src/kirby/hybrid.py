@@ -111,13 +111,14 @@ NAMED_ALLOCATIONS = {
 
 def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labels,
                            total_budget=100, step_size=10, patience=3,
-                           internal_evaluator='ridge'):
+                           internal_evaluator='ridge',
+                           model=None, metric_fn=None, lower_is_better=False):
     """
     Greedy forward feature allocation with plateau detection.
-    
+
     Iteratively adds features from the representation that improves validation
     performance most, stopping when performance plateaus or budget is exhausted.
-    
+
     Args:
         rep_dict_train: Dict of {rep_name: train_features}
         rep_dict_val: Dict of {rep_name: val_features}
@@ -126,7 +127,10 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
         total_budget: Maximum total features to select (default: 100)
         step_size: Features to add per iteration (default: 10)
         patience: Early stopping patience, None to disable (default: 3)
-        
+        model: Optional sklearn estimator for metric-aware evaluation.
+        metric_fn: Optional callable(y_true, y_pred) -> float.
+        lower_is_better: Whether lower metric values are better (default: False).
+
     Returns:
         tuple: (best_allocation, history, final_feature_info)
             - best_allocation: Dict of {rep_name: n_features} for best-performing iteration
@@ -178,6 +182,8 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
             
             # Evaluate on validation
             r2 = _evaluate_allocation(X_train_trial, X_val_trial, train_labels, val_labels,
+                                     model=model, metric_fn=metric_fn,
+                                     lower_is_better=lower_is_better,
                                      internal_evaluator=internal_evaluator)
 
             if r2 > iter_best_gain:
@@ -227,7 +233,8 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
 
 def allocate_greedy_feature(rep_dict_train, rep_dict_val, train_labels, val_labels,
                             total_budget=100, patience=5, importance_method='treeshap',
-                            internal_evaluator='ridge'):
+                            internal_evaluator='ridge',
+                            model=None, metric_fn=None, lower_is_better=False):
     """
     Feature-level greedy allocation.
 
@@ -302,6 +309,8 @@ def allocate_greedy_feature(rep_dict_train, rep_dict_val, train_labels, val_labe
 
             # Evaluate
             score = _evaluate_allocation(X_train_trial, X_val_trial, train_labels, val_labels,
+                                         model=model, metric_fn=metric_fn,
+                                         lower_is_better=lower_is_better,
                                          internal_evaluator=internal_evaluator)
 
             if score > iter_best_score:
@@ -496,7 +505,8 @@ def _compute_allocation_weights(baseline_scores, scheme='linear', params=None,
 def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, val_labels,
                                   total_budget=100, weighting_scheme='linear',
                                   weighting_params=None, internal_evaluator='ridge',
-                                  precomputed_scores=None):
+                                  precomputed_scores=None,
+                                  model=None, metric_fn=None, lower_is_better=False):
     """
     Allocate features proportional to each representation's baseline performance.
 
@@ -541,6 +551,8 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
 
             score = _evaluate_allocation(X_train_clean, X_val_clean,
                                          train_labels, val_labels,
+                                         model=model, metric_fn=metric_fn,
+                                         lower_is_better=lower_is_better,
                                          internal_evaluator=internal_evaluator)
 
             baseline_scores[rep_name] = max(score, 0.0)  # Clip negative scores to 0
@@ -640,7 +652,8 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
 
 def allocate_dominant_greedy(rep_dict_train, rep_dict_val, train_labels, val_labels,
                              total_budget=100, step_size=10, patience=3,
-                             dominant_fraction=0.7, internal_evaluator='ridge'):
+                             dominant_fraction=0.7, internal_evaluator='ridge',
+                             model=None, metric_fn=None, lower_is_better=False):
     """
     Dominant-greedy allocation: give the best rep a large share, greedy-fill the rest.
 
@@ -669,6 +682,8 @@ def allocate_dominant_greedy(rep_dict_train, rep_dict_val, train_labels, val_lab
         X_tr = rep_dict_train[rep_name]
         X_va = rep_dict_val[rep_name]
         score = _evaluate_allocation(X_tr, X_va, train_labels, val_labels,
+                                     model=model, metric_fn=metric_fn,
+                                     lower_is_better=lower_is_better,
                                      internal_evaluator=internal_evaluator)
         rep_scores[rep_name] = score
 
@@ -692,6 +707,8 @@ def allocate_dominant_greedy(rep_dict_train, rep_dict_val, train_labels, val_lab
     )
     X_val_init = apply_feature_selection(rep_dict_val, init_feat_info)
     best_val_score = _evaluate_allocation(X_train_init, X_val_init, train_labels, val_labels,
+                                         model=model, metric_fn=metric_fn,
+                                         lower_is_better=lower_is_better,
                                          internal_evaluator=internal_evaluator)
 
     best_allocation = allocation.copy()
@@ -729,6 +746,8 @@ def allocate_dominant_greedy(rep_dict_train, rep_dict_val, train_labels, val_lab
             )
             X_val_trial = apply_feature_selection(rep_dict_val, feat_info)
             score = _evaluate_allocation(X_train_trial, X_val_trial, train_labels, val_labels,
+                                         model=model, metric_fn=metric_fn,
+                                         lower_is_better=lower_is_better,
                                          internal_evaluator=internal_evaluator)
 
             if score > iter_best_gain:
@@ -1220,27 +1239,30 @@ def _evaluate_augmentation_addition(
     X_base_train, X_base_val,
     X_aug_train, X_aug_val,
     y_train, y_val,
-    baseline_score
+    baseline_score,
+    model=None, metric_fn=None, lower_is_better=False,
 ):
     """
     Evaluate whether adding an augmentation improves performance.
-    
+
     Args:
         X_base_train, X_base_val: Base hybrid features
         X_aug_train, X_aug_val: Augmentation features to test
         y_train, y_val: Labels
         baseline_score: Current validation score without augmentation
-        
+
     Returns:
         tuple: (new_score, improvement)
     """
     # Combine base + augmentation
     X_train_combined = np.hstack([X_base_train, X_aug_train])
     X_val_combined = np.hstack([X_base_val, X_aug_val])
-    
-    new_score = _evaluate_allocation(X_train_combined, X_val_combined, y_train, y_val)
+
+    new_score = _evaluate_allocation(X_train_combined, X_val_combined, y_train, y_val,
+                                     model=model, metric_fn=metric_fn,
+                                     lower_is_better=lower_is_better)
     improvement = new_score - baseline_score
-    
+
     return new_score, improvement
 
 
@@ -1250,7 +1272,8 @@ def greedy_augmentation_ablation(
     y_train, y_val,
     augmentation_budget=20,
     threshold=None,
-    return_all_scores=False
+    return_all_scores=False,
+    model=None, metric_fn=None, lower_is_better=False,
 ):
     """
     Greedily select augmentations that improve validation performance.
@@ -1280,7 +1303,9 @@ def greedy_augmentation_ablation(
     is_classification = _is_classification_task(y_train)
     
     # Get baseline score (base hybrid only)
-    baseline_score = _evaluate_allocation(X_base_train, X_base_val, y_train, y_val)
+    baseline_score = _evaluate_allocation(X_base_train, X_base_val, y_train, y_val,
+                                          model=model, metric_fn=metric_fn,
+                                          lower_is_better=lower_is_better)
     
     kept_augmentations = []
     augmentation_info = {}
@@ -1308,7 +1333,8 @@ def greedy_augmentation_ablation(
             X_current_train, X_current_val,
             X_aug_train_selected, X_aug_val_selected,
             y_train, y_val,
-            current_score
+            current_score,
+            model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
         )
         
         all_scores[aug_name] = {
@@ -2444,6 +2470,8 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
         max_depth = kwargs.get('max_depth', 6)
         random_state = kwargs.get('random_state', 42)
 
+        max_features_xgb = kwargs.get('max_features_xgb', 2000)
+
         for rep_name, X in base_reps.items():
             if X.shape[1] == 0:
                 raise ValueError(f"Representation '{rep_name}' has 0 features")
@@ -2453,6 +2481,16 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
 
             scaler = StandardScaler()
             X_scaled = scaler.fit_transform(X_clipped)
+
+            # Pre-screen high-dimensional reps
+            selected_idx = None
+            if X_scaled.shape[1] > max_features_xgb:
+                variances = np.var(X_scaled, axis=0)
+                selected_idx = np.argsort(variances)[-max_features_xgb:]
+                selected_idx.sort()
+                X_fit = X_scaled[:, selected_idx]
+            else:
+                X_fit = X_scaled
 
             # Use provided model or train new one
             if model is not None:
@@ -2466,18 +2504,25 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
                 else:
                     xgb_model = xgb.XGBRegressor(n_estimators=n_estimators, max_depth=max_depth,
                                                 random_state=random_state, n_jobs=-1, verbosity=0)
-                xgb_model.fit(X_scaled, labels)
+                xgb_model.fit(X_fit, labels)
 
             booster = xgb_model.get_booster()
             scores = booster.get_score(importance_type='gain')
 
-            # Convert to array (XGBoost uses f0, f1, ... naming)
-            feature_importance = np.zeros(X_scaled.shape[1])
+            # Convert to array
+            feature_importance_fit = np.zeros(X_fit.shape[1])
             for fname, score in scores.items():
                 idx = int(fname[1:])  # 'f0' -> 0
-                feature_importance[idx] = score
+                feature_importance_fit[idx] = score
 
-            importance_scores[rep_name] = np.nan_to_num(feature_importance, nan=0.0)
+            # Map back to full feature space if pre-screened
+            if selected_idx is not None:
+                feature_importance = np.zeros(X_scaled.shape[1])
+                feature_importance[selected_idx] = feature_importance_fit
+            else:
+                feature_importance = feature_importance_fit
+
+            importance_scores[rep_name] = np.nan_to_num(feature_importance.astype(float), nan=0.0)
 
     # LIGHTGBM GAIN
     elif method == 'lightgbm_gain':
@@ -2489,6 +2534,7 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
         n_estimators = kwargs.get('n_estimators', 50)
         max_depth = kwargs.get('max_depth', 6)
         random_state = kwargs.get('random_state', 42)
+        max_features_lgb = kwargs.get('max_features_lgb', 2000)
 
         for rep_name, X in base_reps.items():
             if X.shape[1] == 0:
@@ -2499,6 +2545,17 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
 
             scaler = StandardScaler()
             X_scaled = scaler.fit_transform(X_clipped)
+
+            # Pre-screen high-dimensional reps to avoid slow LightGBM fits
+            selected_idx = None
+            if X_scaled.shape[1] > max_features_lgb:
+                # Use variance as a fast pre-filter, keep top max_features_lgb
+                variances = np.var(X_scaled, axis=0)
+                selected_idx = np.argsort(variances)[-max_features_lgb:]
+                selected_idx.sort()
+                X_fit = X_scaled[:, selected_idx]
+            else:
+                X_fit = X_scaled
 
             # Use provided model or train new one
             if model is not None:
@@ -2512,9 +2569,17 @@ def compute_feature_importance(base_reps, labels, method='treeshap', model=None,
                 else:
                     lgb_model = lgb.LGBMRegressor(n_estimators=n_estimators, max_depth=max_depth,
                                                  random_state=random_state, n_jobs=1, verbosity=-1)
-                lgb_model.fit(X_scaled, labels)
+                lgb_model.fit(X_fit, labels)
 
-            feature_importance = lgb_model.booster_.feature_importance(importance_type='gain')
+            feature_importance_fit = lgb_model.booster_.feature_importance(importance_type='gain')
+
+            # Map back to full feature space if pre-screened
+            if selected_idx is not None:
+                feature_importance = np.zeros(X_scaled.shape[1])
+                feature_importance[selected_idx] = feature_importance_fit
+            else:
+                feature_importance = feature_importance_fit
+
             importance_scores[rep_name] = np.nan_to_num(feature_importance.astype(float), nan=0.0)
 
     # DEEPLIFT - DeepLIFT attribution
@@ -3150,6 +3215,7 @@ def create_hybrid(base_reps, labels,
             rep_dict_train, rep_dict_val, train_labels, val_labels,
             total_budget=budget, step_size=step_size, patience=patience,
             internal_evaluator=internal_evaluator,
+            model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
         )
         
         # If filters were applied, remap indices from filtered space to original space
@@ -3179,6 +3245,7 @@ def create_hybrid(base_reps, labels,
             total_budget=budget, weighting_scheme=ws, weighting_params=wp,
             internal_evaluator=internal_evaluator,
             precomputed_scores=precomputed_alloc_scores,
+            model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
         )
 
         # Compute importance on ALL data passed to create_hybrid (the full fold
@@ -3269,6 +3336,7 @@ def create_hybrid(base_reps, labels,
             total_budget=budget, step_size=step_size, patience=patience,
             dominant_fraction=dominant_fraction,
             internal_evaluator=internal_evaluator,
+            model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
         )
 
         if filter_index_maps:
@@ -3317,6 +3385,8 @@ def create_hybrid(base_reps, labels,
                 X_vl_c = np.nan_to_num(np.clip(X_vl, -1e10, 1e10), nan=0.0)
                 _fill_baselines[rep_name] = _evaluate_allocation(
                     X_tr_c, X_vl_c, train_labels, val_labels,
+                    model=model, metric_fn=metric_fn,
+                    lower_is_better=lower_is_better,
                     internal_evaluator=internal_evaluator,
                 )
 
@@ -3403,7 +3473,8 @@ def create_hybrid(base_reps, labels,
                 train_labels, val_labels,
                 augmentation_budget=augmentation_budget,
                 threshold=augmentation_threshold,
-                return_all_scores=True
+                return_all_scores=True,
+                model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
             )
             
             feature_info['augmentation_info'] = aug_result['augmentation_info']
