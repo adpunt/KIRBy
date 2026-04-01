@@ -217,8 +217,8 @@ def _cache_rep_dict(dataset_name: str, compute_all_fn,
 
 # Canonical budget lists — used by get_config() and all 4 helpers' run_all().
 # Change here to change everywhere.
-SCREENING_BUDGETS = [50, 500, 1000, 2000]
-FULL_BUDGETS = [10, 25, 50, 100, 250, 500, 1000, 2000]
+SCREENING_BUDGETS = [50, 500, 1000, 2000, 3000, 4000]
+FULL_BUDGETS = [10, 25, 50, 100, 250, 500, 1000, 2000, 3000, 4000]
 
 
 # =============================================================================
