@@ -117,6 +117,8 @@ class SearchResult:
     lower_is_better: bool = False
     fitted_result: Optional[FittedResult] = None
     finetuned_embeddings: Optional[Dict[str, np.ndarray]] = None
+    # Added after initial release — default for pickle compat with old caches
+    best_by_budget: Dict[int, dict] = field(default_factory=dict)
 
 
 # =============================================================================
@@ -1088,6 +1090,29 @@ def _evaluate_single(
     return mean, std, sec_results
 
 
+def _hash_feature_selection(feature_info: dict) -> str:
+    """Hash selected indices from feature_info for dedup.
+
+    Two configs that select the exact same features from each rep
+    produce identical hybrid matrices, so downstream model evaluation
+    can be reused.
+    """
+    parts = []
+    for rep_name in sorted(feature_info.keys()):
+        info = feature_info[rep_name]
+        if isinstance(info, dict) and 'selected_indices' in info:
+            idx = tuple(sorted(info['selected_indices']))
+            parts.append(f"{rep_name}:{idx}")
+    # Include augmentation info if present
+    aug_info = feature_info.get('augmentation_info')
+    if aug_info and isinstance(aug_info, dict):
+        for aname in sorted(aug_info.keys()):
+            ainfo = aug_info[aname]
+            if isinstance(ainfo, dict) and 'selected_indices' in ainfo:
+                parts.append(f"aug_{aname}:{tuple(sorted(ainfo['selected_indices']))}")
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+
+
 def _evaluate_hybrid_config(
     base_reps: Dict[str, np.ndarray],
     labels: np.ndarray,
@@ -1113,6 +1138,7 @@ def _evaluate_hybrid_config(
     cv_splitter=None,
     importance_cache: Optional[Dict] = None,
     alloc_cache: Optional[Dict] = None,
+    selection_dedup: Optional[Dict] = None,
 ) -> dict:
     """Evaluate a single hybrid configuration. Returns result dict."""
     from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
@@ -1189,6 +1215,19 @@ def _evaluate_hybrid_config(
         except Exception:
             continue
 
+        # Dedup: if identical feature selection was already evaluated with
+        # the same downstream model on this fold, reuse the score.
+        sel_hash = None
+        if selection_dedup is not None:
+            sel_hash = _hash_feature_selection(feature_info)
+            dedup_key = (fold_idx, model_name, sel_hash)
+            cached = selection_dedup.get(dedup_key)
+            if cached is not None:
+                fold_scores.append(cached[0])
+                fold_n_features.append(cached[1])
+                selection_dedup['_hits'] = selection_dedup.get('_hits', 0) + 1
+                continue
+
         scaler = StandardScaler()
         X_train_s = scaler.fit_transform(X_train)
         X_val_s = scaler.transform(X_val)
@@ -1202,8 +1241,13 @@ def _evaluate_hybrid_config(
             m.set_params(n_neighbors=k)
         m.fit(X_train_s, y_train)
         y_pred = _predict_for_metric(m, X_val_s, metric_fn)
-        fold_scores.append(metric_fn(y_val, y_pred))
+        score = metric_fn(y_val, y_pred)
+        fold_scores.append(score)
         fold_n_features.append(X_train.shape[1])
+
+        # Store in dedup cache
+        if selection_dedup is not None and sel_hash is not None:
+            selection_dedup[(fold_idx, model_name, sel_hash)] = (score, X_train.shape[1])
 
     if not fold_scores:
         raise ValueError("All folds failed")
@@ -1526,6 +1570,12 @@ def _run_search(
         print(f"  Allocation scores pre-computed in {time.time() - _alloc_t0:.1f}s "
               f"({len(alloc_cache)} (fold, evaluator) combos)")
 
+    # Feature selection dedup: (fold_idx, model_name, selection_hash) -> (score, n_features)
+    # Avoids redundant downstream model training when different evaluators
+    # produce identical feature selections (common for greedy allocs).
+    # Uses '_hits' key as a counter (incremented inside _evaluate_hybrid_config).
+    selection_dedup = {'_hits': 0}
+
     results = []
     idx = 0
 
@@ -1611,6 +1661,7 @@ def _run_search(
                                     cv_splitter=cv_splitter,
                                     importance_cache=importance_cache,
                                     alloc_cache=alloc_cache,
+                                    selection_dedup=selection_dedup,
                                 )
                                 if rep_set_name != 'all':
                                     result['rep_subset'] = rep_set_name
@@ -1689,6 +1740,13 @@ def _run_search(
 
             if not first_alloc_sweep_done and len(alloc_best_scores) >= len(search_allocation):
                 first_alloc_sweep_done = True
+
+    if verbose and selection_dedup:
+        dedup_hits = selection_dedup.get('_hits', 0)
+        dedup_entries = len(selection_dedup) - 1  # exclude '_hits' key
+        if dedup_hits > 0:
+            print(f"  Feature selection dedup: {dedup_hits} fold evaluations skipped "
+                  f"({dedup_entries} unique selections cached)")
 
     return results
 
@@ -1860,6 +1918,7 @@ def _aggregate_results(
             'best_overall': None,
             'best_by_model': {},
             'best_by_dimension': {},
+            'best_by_budget': {},
             'performance_matrix': {},
         }
 
@@ -1883,6 +1942,14 @@ def _aggregate_results(
         if eligible:
             best_by_dimension[tier] = max(eligible, key=_key)
 
+    # Best by budget
+    budget_values = sorted(set(r['budget'] for r in results))
+    best_by_budget = {}
+    for bgt in budget_values:
+        budget_results = [r for r in results if r['budget'] == bgt]
+        if budget_results:
+            best_by_budget[bgt] = max(budget_results, key=_key)
+
     # Performance matrix: model x dimension
     performance_matrix = {}
     for mname in model_names:
@@ -1900,6 +1967,7 @@ def _aggregate_results(
         'best_overall': best_overall,
         'best_by_model': best_by_model,
         'best_by_dimension': best_by_dimension,
+        'best_by_budget': best_by_budget,
         'performance_matrix': performance_matrix,
     }
 
@@ -2338,6 +2406,7 @@ def find_best_hybrid(
         best_overall=agg['best_overall'],
         best_by_model=agg['best_by_model'],
         best_by_dimension=agg['best_by_dimension'],
+        best_by_budget=agg['best_by_budget'],
         performance_matrix=agg['performance_matrix'],
         baselines=baselines,
         all_results=all_results,
@@ -2346,6 +2415,23 @@ def find_best_hybrid(
         fitted_result=fitted,
         finetuned_embeddings=finetuned_embeddings,
     )
+
+    # --- Print best-by-budget summary ---
+    if verbose and agg['best_by_budget']:
+        print(f"\nBest by budget ({metric_name}):")
+        raw_best = agg['best_overall']['score_mean'] if agg['best_overall'] else 0
+        for bgt in sorted(agg['best_by_budget'].keys()):
+            r = agg['best_by_budget'][bgt]
+            raw_this = r['score_mean']
+            # Percentage of best: higher-is-better uses this/best, lower-is-better uses best/this
+            if raw_best > 0 and raw_this > 0:
+                pct = (raw_best / raw_this * 100) if lower_is_better else (raw_this / raw_best * 100)
+                pct_str = f"({pct:.1f}% of best)"
+            else:
+                delta = abs(raw_this - raw_best)
+                pct_str = "(= best)" if delta < 1e-6 else f"(delta={delta:.4f})"
+            print(f"  budget={bgt:>5d}: {r['score_mean']:.4f} +/- {r['score_std']:.3f} "
+                  f"{pct_str} [{r['model']}/{r['allocation_method']}]")
 
     # --- Save to cache ---
     if cache and cache_path is not None:
