@@ -119,6 +119,10 @@ class SearchResult:
     finetuned_embeddings: Optional[Dict[str, np.ndarray]] = None
     # Added after initial release — default for pickle compat with old caches
     best_by_budget: Dict[int, dict] = field(default_factory=dict)
+    # Primary selection unit: best features per (model, budget) pair.
+    # {model_name: {budget: best_config_dict}}
+    # Avoids selection overfitting by not picking across downstream models.
+    best_by_model_budget: Dict[str, Dict[int, dict]] = field(default_factory=dict)
 
 
 # =============================================================================
@@ -1919,6 +1923,7 @@ def _aggregate_results(
             'best_by_model': {},
             'best_by_dimension': {},
             'best_by_budget': {},
+            'best_by_model_budget': {},
             'performance_matrix': {},
         }
 
@@ -1950,6 +1955,18 @@ def _aggregate_results(
         if budget_results:
             best_by_budget[bgt] = max(budget_results, key=_key)
 
+    # Best by (model, budget) — primary selection unit.
+    # For each downstream model, find the best feature config per budget.
+    # Avoids selection overfitting by not picking across models.
+    best_by_model_budget = {}
+    for mname in model_names:
+        best_by_model_budget[mname] = {}
+        for bgt in budget_values:
+            eligible = [r for r in results
+                        if r['model'] == mname and r['budget'] == bgt]
+            if eligible:
+                best_by_model_budget[mname][bgt] = max(eligible, key=_key)
+
     # Performance matrix: model x dimension
     performance_matrix = {}
     for mname in model_names:
@@ -1968,6 +1985,7 @@ def _aggregate_results(
         'best_by_model': best_by_model,
         'best_by_dimension': best_by_dimension,
         'best_by_budget': best_by_budget,
+        'best_by_model_budget': best_by_model_budget,
         'performance_matrix': performance_matrix,
     }
 
@@ -2407,6 +2425,7 @@ def find_best_hybrid(
         best_by_model=agg['best_by_model'],
         best_by_dimension=agg['best_by_dimension'],
         best_by_budget=agg['best_by_budget'],
+        best_by_model_budget=agg['best_by_model_budget'],
         performance_matrix=agg['performance_matrix'],
         baselines=baselines,
         all_results=all_results,
@@ -2416,22 +2435,24 @@ def find_best_hybrid(
         finetuned_embeddings=finetuned_embeddings,
     )
 
-    # --- Print best-by-budget summary ---
-    if verbose and agg['best_by_budget']:
-        print(f"\nBest by budget ({metric_name}):")
-        raw_best = agg['best_overall']['score_mean'] if agg['best_overall'] else 0
-        for bgt in sorted(agg['best_by_budget'].keys()):
-            r = agg['best_by_budget'][bgt]
-            raw_this = r['score_mean']
-            # Percentage of best: higher-is-better uses this/best, lower-is-better uses best/this
-            if raw_best > 0 and raw_this > 0:
-                pct = (raw_best / raw_this * 100) if lower_is_better else (raw_this / raw_best * 100)
-                pct_str = f"({pct:.1f}% of best)"
-            else:
-                delta = abs(raw_this - raw_best)
-                pct_str = "(= best)" if delta < 1e-6 else f"(delta={delta:.4f})"
-            print(f"  budget={bgt:>5d}: {r['score_mean']:.4f} +/- {r['score_std']:.3f} "
-                  f"{pct_str} [{r['model']}/{r['allocation_method']}]")
+    # --- Print per-model-budget summary (primary selection unit) ---
+    if verbose and agg['best_by_model_budget']:
+        model_names = sorted(agg['best_by_model_budget'].keys())
+        budget_values = sorted(set(
+            bgt for mb in agg['best_by_model_budget'].values() for bgt in mb.keys()))
+        print(f"\nBest features per model x budget ({metric_name}):")
+        header = f"  {'model':<12s}" + "".join(f"  b={b:<5d}" for b in budget_values)
+        print(header)
+        print("  " + "-" * (len(header) - 2))
+        for mname in model_names:
+            parts = [f"  {mname:<12s}"]
+            for bgt in budget_values:
+                r = agg['best_by_model_budget'][mname].get(bgt)
+                if r:
+                    parts.append(f"  {r['score_mean']:.4f}")
+                else:
+                    parts.append(f"  {'—':>6s}")
+            print("".join(parts))
 
     # --- Save to cache ---
     if cache and cache_path is not None:
@@ -2444,6 +2465,228 @@ def find_best_hybrid(
             pass  # Cache write failure is non-fatal
 
     return search_result
+
+
+# =============================================================================
+# NESTED CROSS-VALIDATION (HONEST EVALUATION)
+# =============================================================================
+
+@dataclass
+class NestedCVResult:
+    """Honest evaluation via nested cross-validation.
+
+    Outer folds hold out test data that the search never sees.
+    Inner search runs find_best_hybrid on outer_train only.
+    Reports both search-optimized and honestly-evaluated scores.
+    The gap between them quantifies selection bias.
+    """
+    # {model: {budget: {'honest_mean': float, 'honest_std': float,
+    #                    'search_mean': float, 'search_std': float,
+    #                    'bias': float, 'fold_scores': list}}}
+    scores: Dict[str, Dict[int, dict]]
+    # Summary: best honest score per model (across budgets)
+    best_honest_by_model: Dict[str, dict]
+    metric_name: str
+    lower_is_better: bool
+    n_outer_folds: int
+    # The inner SearchResult from the last outer fold (for inspection)
+    last_inner_search: Optional[SearchResult] = None
+
+
+def nested_cv_evaluate(
+    base_reps: Dict[str, np.ndarray],
+    labels: np.ndarray,
+    groups: Optional[np.ndarray] = None,
+    *,
+    n_outer_folds: int = 5,
+    seed: int = 42,
+    verbose: bool = True,
+    **search_kwargs,
+) -> NestedCVResult:
+    """Nested CV: honest evaluation of find_best_hybrid.
+
+    Runs n_outer_folds outer splits. For each:
+      1. Inner: find_best_hybrid on outer_train (with caching)
+      2. For each (model, budget): take the best feature config from inner search
+      3. Outer: create_hybrid on outer_train, apply to outer_test, evaluate
+
+    Reports honest (outer) scores alongside search-optimized (inner) scores.
+    The gap = search_mean - honest_mean quantifies selection overfitting.
+
+    Args:
+        base_reps: Feature matrices {name: array}.
+        labels: Target values.
+        groups: Group labels for group-aware splitting.
+        n_outer_folds: Number of outer CV folds (default: 5).
+        seed: Random seed for outer splitting.
+        verbose: Print progress.
+        **search_kwargs: Passed to find_best_hybrid (budgets, speed, metric, etc.).
+
+    Returns:
+        NestedCVResult with honest and search-optimized scores per (model, budget).
+    """
+    from kirby.hybrid import create_hybrid, apply_feature_selection
+
+    # Resolve metric for outer evaluation
+    metric = search_kwargs.get('metric', 'r2')
+    metric_fn, lower_is_better = _resolve_metric(metric)
+    task_type = search_kwargs.get('task_type', 'auto')
+    if task_type == 'auto':
+        n_unique = len(np.unique(labels))
+        task_type = 'classification' if (n_unique <= 20 and np.allclose(labels, np.round(labels))) else 'regression'
+
+    # Outer CV splitter
+    outer_splitter, use_groups = _make_cv_splitter(groups, n_outer_folds, seed)
+    sample_X = next(iter(base_reps.values()))
+    split_args = (sample_X, labels, groups) if use_groups else (sample_X, labels)
+    outer_folds = list(outer_splitter.split(*split_args))
+
+    # Collect: {model: {budget: [outer_fold_scores]}}
+    outer_scores = {}     # honest outer test scores
+    inner_scores = {}     # search-optimized inner CV scores
+    last_inner_search = None
+
+    for fold_i, (outer_train_idx, outer_test_idx) in enumerate(outer_folds):
+        if verbose:
+            print(f"\n{'=' * 60}")
+            print(f"Nested CV outer fold {fold_i + 1}/{n_outer_folds} "
+                  f"(train={len(outer_train_idx)}, test={len(outer_test_idx)})")
+            print(f"{'=' * 60}")
+
+        # Split data
+        train_reps = {k: v[outer_train_idx] for k, v in base_reps.items()}
+        test_reps = {k: v[outer_test_idx] for k, v in base_reps.items()}
+        y_train = labels[outer_train_idx]
+        y_test = labels[outer_test_idx]
+        train_groups = groups[outer_train_idx] if groups is not None else None
+
+        # Inner search on outer_train only
+        inner_kwargs = dict(search_kwargs)
+        inner_kwargs['cache'] = True  # cache inner searches
+        inner_kwargs['verbose'] = verbose
+        inner_search = find_best_hybrid(
+            base_reps=train_reps,
+            labels=y_train,
+            groups=train_groups,
+            **inner_kwargs,
+        )
+        last_inner_search = inner_search
+
+        # For each (model, budget): evaluate on outer test
+        for model_name, budget_dict in inner_search.best_by_model_budget.items():
+            if model_name not in outer_scores:
+                outer_scores[model_name] = {}
+                inner_scores[model_name] = {}
+
+            for budget, best_config in budget_dict.items():
+                if budget not in outer_scores[model_name]:
+                    outer_scores[model_name][budget] = []
+                    inner_scores[model_name][budget] = []
+
+                bp = best_config['blueprint']
+
+                # Record inner (search-optimized) score
+                inner_scores[model_name][budget].append(best_config['score_mean'])
+
+                # Create hybrid on outer_train with the winning config
+                try:
+                    X_train, feature_info = create_hybrid(
+                        train_reps, y_train,
+                        allocation_method=bp.allocation_method,
+                        importance_method=bp.importance_method,
+                        internal_evaluator=bp.internal_evaluator,
+                        budget=bp.budget,
+                    )
+                    X_test = apply_feature_selection(test_reps, feature_info)
+
+                    # Scale
+                    scaler = StandardScaler()
+                    X_train_s = scaler.fit_transform(X_train)
+                    X_test_s = scaler.transform(X_test)
+                    X_train_s = np.nan_to_num(X_train_s, nan=0.0, posinf=1e10, neginf=-1e10)
+                    X_test_s = np.nan_to_num(X_test_s, nan=0.0, posinf=1e10, neginf=-1e10)
+
+                    # Train downstream model and evaluate on held-out outer test
+                    model = get_model(model_name, task_type)
+                    model.fit(X_train_s, y_train)
+                    y_pred = _predict_for_metric(model, X_test_s, metric_fn)
+                    score = metric_fn(y_test, y_pred)
+                    outer_scores[model_name][budget].append(float(score))
+
+                except Exception as e:
+                    if verbose:
+                        print(f"  Outer eval failed: {model_name}/b={budget}: {e}")
+                    outer_scores[model_name][budget].append(float('nan'))
+
+    # Aggregate
+    def _comparable(s):
+        return _score_to_comparable(s, lower_is_better)
+
+    result_scores = {}
+    best_honest_by_model = {}
+    for model_name in sorted(outer_scores.keys()):
+        result_scores[model_name] = {}
+        best_honest = None
+        best_honest_comp = -np.inf
+
+        for budget in sorted(outer_scores[model_name].keys()):
+            honest_vals = [s for s in outer_scores[model_name][budget] if np.isfinite(s)]
+            search_vals = inner_scores[model_name][budget]
+
+            if not honest_vals:
+                continue
+
+            honest_mean = float(np.mean(honest_vals))
+            honest_std = float(np.std(honest_vals))
+            search_mean = float(np.mean(search_vals))
+            search_std = float(np.std(search_vals))
+            bias = search_mean - honest_mean
+
+            entry = {
+                'honest_mean': honest_mean,
+                'honest_std': honest_std,
+                'search_mean': search_mean,
+                'search_std': search_std,
+                'bias': bias,
+                'fold_scores': honest_vals,
+            }
+            result_scores[model_name][budget] = entry
+
+            comp = _comparable(honest_mean)
+            if comp > best_honest_comp:
+                best_honest_comp = comp
+                best_honest = {'budget': budget, **entry}
+
+        if best_honest is not None:
+            best_honest_by_model[model_name] = best_honest
+
+    # Print summary
+    if verbose:
+        print(f"\n{'=' * 60}")
+        print(f"NESTED CV SUMMARY ({n_outer_folds} outer folds)")
+        print(f"{'=' * 60}")
+        metric_name = metric if isinstance(metric, str) else 'custom'
+        for model_name in sorted(result_scores.keys()):
+            print(f"\n  {model_name}:")
+            for budget in sorted(result_scores[model_name].keys()):
+                e = result_scores[model_name][budget]
+                bias_dir = "optimistic" if (not lower_is_better and e['bias'] > 0) or \
+                           (lower_is_better and e['bias'] < 0) else "pessimistic"
+                print(f"    b={budget:>5d}: honest={e['honest_mean']:.4f}+/-{e['honest_std']:.3f}  "
+                      f"search={e['search_mean']:.4f}  bias={e['bias']:+.4f} ({bias_dir})")
+            bh = best_honest_by_model.get(model_name)
+            if bh:
+                print(f"    >> best honest: b={bh['budget']}, {bh['honest_mean']:.4f}")
+
+    metric_name = metric if isinstance(metric, str) else 'custom'
+    return NestedCVResult(
+        scores=result_scores,
+        best_honest_by_model=best_honest_by_model,
+        metric_name=metric_name,
+        lower_is_better=lower_is_better,
+        n_outer_folds=n_outer_folds,
+        last_inner_search=last_inner_search,
+    )
 
 
 # =============================================================================
