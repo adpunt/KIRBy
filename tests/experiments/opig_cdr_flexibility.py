@@ -191,21 +191,14 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds):
         group_ids[i] = unique_seqs[s]
     groups = group_ids
 
-    # Generate representations
-    from kirby.representations.antibody import ANTIBODY_REPS
-    reps = {}
-    for rep_name in rep_names:
-        if rep_name not in ANTIBODY_REPS:
-            print(f"  WARNING: unknown rep '{rep_name}', skipping")
-            continue
-        try:
-            X = ANTIBODY_REPS[rep_name](heavy_seqs, light_seqs)
-            X = np.asarray(X, dtype=np.float64)
-            if X.ndim == 2 and X.shape[0] == n:
-                reps[rep_name] = X
-                print(f"  {rep_name}: {X.shape[1]}D")
-        except Exception as e:
-            print(f"  {rep_name}: FAILED ({e})")
+    # Generate representations (with disk caching for expensive LM reps)
+    from experiments.rep_cache import compute_or_load_reps
+    reps = compute_or_load_reps(
+        rep_names=rep_names,
+        heavy_seqs=heavy_seqs,
+        light_seqs=light_seqs,
+        dataset_tag=cdr_name,
+    )
 
     if not reps:
         print("  No reps available, skipping")
