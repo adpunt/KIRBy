@@ -2607,7 +2607,11 @@ def nested_cv_evaluate(
                     X_test_s = np.nan_to_num(X_test_s, nan=0.0, posinf=1e10, neginf=-1e10)
 
                     # Train downstream model and evaluate on held-out outer test
-                    model = get_model(model_name, task_type)
+                    model = get_model(model_name, task_type,
+                                      n_samples=len(y_train))
+                    if model is None:
+                        outer_scores[model_name][budget].append(float('nan'))
+                        continue
                     model.fit(X_train_s, y_train)
                     y_pred = _predict_for_metric(model, X_test_s, metric_fn)
                     score = metric_fn(y_test, y_pred)
@@ -2670,10 +2674,12 @@ def nested_cv_evaluate(
             print(f"\n  {model_name}:")
             for budget in sorted(result_scores[model_name].keys()):
                 e = result_scores[model_name][budget]
+                n_folds_eval = len(e['fold_scores'])
                 bias_dir = "optimistic" if (not lower_is_better and e['bias'] > 0) or \
                            (lower_is_better and e['bias'] < 0) else "pessimistic"
+                folds_note = f" [{n_folds_eval}/{n_outer_folds} folds]" if n_folds_eval < n_outer_folds else ""
                 print(f"    b={budget:>5d}: honest={e['honest_mean']:.4f}+/-{e['honest_std']:.3f}  "
-                      f"search={e['search_mean']:.4f}  bias={e['bias']:+.4f} ({bias_dir})")
+                      f"search={e['search_mean']:.4f}  bias={e['bias']:+.4f} ({bias_dir}){folds_note}")
             bh = best_honest_by_model.get(model_name)
             if bh:
                 print(f"    >> best honest: b={bh['budget']}, {bh['honest_mean']:.4f}")
