@@ -12,7 +12,7 @@
 # hERG classification survey (TDC binary blocker, ~10K molecules)
 # No GPU needed — molecular reps are CPU-only.
 
-set -euo pipefail
+set -eo pipefail
 
 echo "=== hERG classification baseline survey ==="
 echo "Branch: $(git branch --show-current) ($(git rev-parse --short HEAD))"
