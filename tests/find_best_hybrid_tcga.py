@@ -668,6 +668,23 @@ def print_summary(result: SearchResult, task_type: str):
                         row += f"{'--':<10}"
                 print(row)
 
+    # Top-3 base representations (ranked by RF)
+    if baselines:
+        metric_name = result.metric_name
+        rf_scores = []
+        for rep_name, model_scores in baselines.items():
+            if rep_name.startswith('_'):
+                continue
+            rf_score = model_scores.get('rf')
+            if rf_score is not None and not np.isnan(rf_score):
+                rf_scores.append((rep_name, rf_score))
+        rf_scores.sort(key=lambda x: x[1], reverse=not lower_is_better)
+        top3 = rf_scores[:3]
+        if top3:
+            print(f"\n  TOP-3 BASE REPS (by RF {metric}):")
+            for i, (rname, score) in enumerate(top3, 1):
+                print(f"    {i}. {rname:<25} {score:.4f}")
+
     print(f"\n=== HYBRID IMPROVEMENT ===")
     for model_name, r in result.best_by_model.items():
         hybrid_score = _get(r, 'score_mean')
@@ -766,6 +783,20 @@ def save_results(
         'performance_matrix': result.performance_matrix,
         'baselines': result.baselines,
     }
+
+    # Extract top-3 base reps by RF score
+    lower_is_better = result.lower_is_better
+    rf_scores = []
+    for rep_name, model_scores in result.baselines.items():
+        if rep_name.startswith('_'):
+            continue
+        rf_score = model_scores.get('rf')
+        if rf_score is not None and not np.isnan(rf_score):
+            rf_scores.append((rep_name, rf_score))
+    rf_scores.sort(key=lambda x: x[1], reverse=not lower_is_better)
+    output['top3_base_reps'] = [
+        {'rep': name, 'rf_score': round(score, 4)} for name, score in rf_scores[:3]
+    ]
 
     with open(output_path, 'w') as f:
         json.dump(output, f, indent=2)
