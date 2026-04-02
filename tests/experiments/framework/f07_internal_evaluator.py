@@ -39,19 +39,21 @@ from experiments._shared import (
     save_experiment_results, make_structured_output,
     get_model_factories, get_domain_metric, cv_split,
     parse_rep_args, FRAMEWORK_TASKS,
+    INTERNAL_EVALUATORS as SHARED_INTERNAL_EVALUATORS,
+    DOWNSTREAM_MODELS, extract_top3_base_reps,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection
 import kirby.hybrid as hybrid_module
 
 
-# Internal evaluator models to test
-INTERNAL_EVALUATORS = ['rf', 'xgboost', 'ridge']
+# Internal evaluator models to test (f07-specific list for monkey-patching)
+F07_INTERNAL_EVALUATORS = ['rf', 'xgboost', 'ridge']
 
 # Greedy-based allocation methods (the ones that call _evaluate_allocation)
 GREEDY_ALLOCATIONS = ['greedy', 'dominant_greedy']
 
 # Downstream models for final hybrid evaluation
-DOWNSTREAM_MODELS = ['rf', 'ridge', 'xgboost', 'lightgbm']
+F07_DOWNSTREAM_MODELS = DOWNSTREAM_MODELS
 
 # Budgets to test
 BUDGETS = [100, 200]
@@ -178,14 +180,14 @@ def run(data, config, output_dir, dataset_name, importance_method='treeshap',
     print(f"  Metric: {metric_name} "
           f"({'lower' if lower_is_better else 'higher'} is better)")
     print(f"  Importance method: {importance_method}")
-    print(f"  Internal evaluators: {INTERNAL_EVALUATORS}")
+    print(f"  Internal evaluators: {F07_INTERNAL_EVALUATORS}")
     print(f"  Allocation methods: {GREEDY_ALLOCATIONS}")
     print(f"  Budgets: {BUDGETS}")
-    print(f"  Downstream models: {DOWNSTREAM_MODELS}")
+    print(f"  Downstream models: {F07_DOWNSTREAM_MODELS}")
     print(f"  N folds: {n_folds}\n", flush=True)
 
     # Get downstream model factories
-    factories = get_model_factories(DOWNSTREAM_MODELS, task_type=task_type,
+    factories = get_model_factories(F07_DOWNSTREAM_MODELS, task_type=task_type,
                                     n_samples=n_samples)
     print(f"  Available downstream models: {sorted(factories.keys())}\n",
           flush=True)
@@ -193,12 +195,12 @@ def run(data, config, output_dir, dataset_name, importance_method='treeshap',
     # Save the original _evaluate_allocation to restore after each condition
     original_evaluate = hybrid_module._evaluate_allocation
 
-    total_configs = (len(INTERNAL_EVALUATORS) * len(GREEDY_ALLOCATIONS)
+    total_configs = (len(F07_INTERNAL_EVALUATORS) * len(GREEDY_ALLOCATIONS)
                      * len(BUDGETS))
     all_results = []
     config_idx = 0
 
-    for evaluator_name in INTERNAL_EVALUATORS:
+    for evaluator_name in F07_INTERNAL_EVALUATORS:
         for alloc_method in GREEDY_ALLOCATIONS:
             for budget in BUDGETS:
                 config_idx += 1
@@ -389,7 +391,7 @@ def run(data, config, output_dir, dataset_name, importance_method='treeshap',
     timing_by_ev = defaultdict(list)
     for r in all_results:
         timing_by_ev[r['internal_evaluator']].append(r['wall_time'])
-    for ev in INTERNAL_EVALUATORS:
+    for ev in F07_INTERNAL_EVALUATORS:
         times = timing_by_ev.get(ev, [])
         if times:
             print(f"    {ev:<12} mean={np.mean(times):.1f}s  "
@@ -403,10 +405,10 @@ def run(data, config, output_dir, dataset_name, importance_method='treeshap',
         dataset=dataset_name,
         data=data,
         config={
-            'internal_evaluators': INTERNAL_EVALUATORS,
+            'internal_evaluators': F07_INTERNAL_EVALUATORS,
             'allocation_methods': GREEDY_ALLOCATIONS,
             'budgets': BUDGETS,
-            'downstream_models': DOWNSTREAM_MODELS,
+            'downstream_models': F07_DOWNSTREAM_MODELS,
             'importance_method': importance_method,
             'step_size': STEP_SIZE,
             'patience': PATIENCE,

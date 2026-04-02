@@ -36,6 +36,7 @@ from experiments._shared import (
     save_experiment_results, make_structured_output,
     get_model_factories, get_domain_metric, cv_split,
     parse_rep_args, FRAMEWORK_TASKS,
+    INTERNAL_EVALUATORS, DOWNSTREAM_MODELS, extract_top3_base_reps,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection
 
@@ -315,17 +316,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                               flush=True)
 
                     # Incremental save every 500 configs
-                        if idx % 500 == 0:
-                            _incremental_save(all_configs, dataset_name, domain,
-                                              metric_name, lower_is_better,
-                                              n_samples, reps, models, budgets,
-                                              n_folds, max_folds, output_dir,
-                                              t_start)
+                    if idx % 500 == 0:
+                        _incremental_save(all_configs, dataset_name, domain,
+                                          metric_name, lower_is_better,
+                                          n_samples, reps, models, budgets,
+                                          n_folds, max_folds, output_dir,
+                                          t_start)
 
     total_time = time.time() - t_start
 
     # ── Summary ──
-    valid = [c for c in all_configs if c['score_mean'] == c['score_mean']]
+    valid = [c for c in all_configs if not np.isnan(c['score_mean'])]
     if valid:
         if lower_is_better:
             best = min(valid, key=lambda c: c['score_mean'])

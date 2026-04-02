@@ -35,6 +35,7 @@ from experiments._shared import (
     save_experiment_results, make_structured_output,
     get_model_factories, get_domain_metric, cv_split,
     parse_rep_args, FRAMEWORK_TASKS,
+    INTERNAL_EVALUATORS, DOWNSTREAM_MODELS, extract_top3_base_reps,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection
 
@@ -49,8 +50,12 @@ STRATEGY_CONFIGS = [
 ]
 
 IMPORTANCE_METHODS = ['treeshap', 'lightgbm_gain']
+# This experiment explicitly tests all evaluator x model combos.
+# Evaluators: all internal_evaluator values supported by create_hybrid
+# (knn is not a supported internal evaluator; gp is too slow).
 EVALUATORS = ['rf', 'xgboost', 'lightgbm', 'mlp', 'svm']
-MODELS = ['rf', 'xgboost', 'lightgbm', 'mlp', 'svm']
+# Models: all DOWNSTREAM_MODELS (includes knn and gp as downstream targets).
+MODELS = list(DOWNSTREAM_MODELS)
 BUDGETS = [150, 300]
 
 
@@ -216,7 +221,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     total_time = time.time() - t_start
 
     # ── Analysis: matched vs cross ──
-    valid = [c for c in all_configs if c['score_mean'] == c['score_mean']]
+    valid = [c for c in all_configs if not np.isnan(c['score_mean'])]
     matched = [c for c in valid if c['matched']]
     crossed = [c for c in valid if not c['matched']]
 

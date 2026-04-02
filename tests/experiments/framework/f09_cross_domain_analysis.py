@@ -35,6 +35,7 @@ from scipy.stats import spearmanr
 
 from experiments._shared import (
     FRAMEWORK_TASKS, convert_numpy,
+    INTERNAL_EVALUATORS, DOWNSTREAM_MODELS, extract_top3_base_reps,
 )
 
 

@@ -37,6 +37,7 @@ from experiments._shared import (
     save_experiment_results, make_structured_output, convert_numpy,
     get_model_factories, get_domain_metric, load_experiment_results,
     find_best_hybrid, parse_rep_args, FRAMEWORK_TASKS,
+    INTERNAL_EVALUATORS, DOWNSTREAM_MODELS, extract_top3_base_reps,
 )
 from kirby.find_best_hybrid import _score_to_comparable, _should_prune
 
@@ -372,6 +373,7 @@ def run(data, config, output_dir, dataset_name, thresholds=None, **kwargs):
         budgets=budgets,
         allocation_methods=config['allocations'],
         importance_methods=config['importance_methods'],
+        internal_evaluators=INTERNAL_EVALUATORS,
         n_folds=n_folds,
         augmentations=data.get('augmentations'),
         verbose=True,
@@ -382,6 +384,11 @@ def run(data, config, output_dir, dataset_name, thresholds=None, **kwargs):
 
     all_results = search.all_results
     print(f"\n  Full search: {len(all_results)} results collected")
+
+    # Extract top 3 base reps for reporting
+    top3 = extract_top3_base_reps(search)
+    if top3:
+        print(f"  Top 3 base reps: {[(r, f'{s:.4f}') for r, s in top3]}")
 
     # Normalise results
     normalised = [_normalise_result(r, 'search') for r in all_results]

@@ -46,11 +46,11 @@ from experiments._shared import (
     save_experiment_results, make_structured_output,
     get_model_factories, get_domain_metric, cv_split,
     parse_rep_args, FRAMEWORK_TASKS, FULL, INTERMEDIARY,
+    INTERNAL_EVALUATORS, DOWNSTREAM_MODELS, extract_top3_base_reps,
 )
 from kirby.hybrid import (
     create_hybrid, apply_feature_selection, apply_augmentation_selection,
-    allocate_greedy_forward, _create_hybrid_with_allocation,
-    _evaluate_allocation, _is_classification_task,
+    _is_classification_task,
 )
 
 
@@ -449,14 +449,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         has_aug = len(aug_reps_full) > 0
 
         for base_ss in BASE_STEP_SIZES:
-            # Build base hybrid with this step size
+            # Build base hybrid with this step size via create_hybrid
             t_base = time.time()
             try:
-                allocation, history, base_fi = allocate_greedy_forward(
-                    base_train, base_val, y_train, y_val,
-                    total_budget=HYBRID_BUDGET, step_size=base_ss, patience=3,
+                X_base_train, base_fi = create_hybrid(
+                    base_train, labels[train_idx],
+                    allocation_method='greedy',
+                    budget=HYBRID_BUDGET,
+                    step_size=base_ss,
+                    patience=3,
+                    internal_evaluator='rf',
                 )
-                X_base_train = apply_feature_selection(base_train, base_fi)
                 X_base_val = apply_feature_selection(base_val, base_fi)
                 n_base_features = X_base_train.shape[1]
                 base_time = time.time() - t_base

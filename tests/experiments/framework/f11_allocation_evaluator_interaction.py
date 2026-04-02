@@ -50,6 +50,7 @@ from experiments._shared import (
     save_experiment_results, make_structured_output,
     get_model_factories, get_domain_metric, cv_split,
     parse_rep_args,
+    INTERNAL_EVALUATORS, DOWNSTREAM_MODELS, extract_top3_base_reps,
 )
 from kirby.hybrid import (
     create_hybrid, apply_feature_selection, compute_feature_importance,
@@ -63,7 +64,8 @@ import kirby.hybrid as hybrid_module
 
 BUDGETS = [50, 100]
 
-DOWNSTREAM_MODELS = ['ridge', 'rf', 'lightgbm']
+# Use shared DOWNSTREAM_MODELS from _shared (imported above).
+F11_MODELS = DOWNSTREAM_MODELS
 
 ALLOCATION_STRATEGIES = [
     'performance_weighted', 'softmax_T2', 'power_2',

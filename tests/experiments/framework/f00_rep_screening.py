@@ -40,6 +40,7 @@ from experiments._shared import (
     get_model_factories, cv_split,
     create_hybrid, apply_feature_selection,
     parse_rep_args, FRAMEWORK_TASKS,
+    INTERNAL_EVALUATORS, DOWNSTREAM_MODELS, extract_top3_base_reps,
 )
 from kirby.find_best_hybrid import (
     _evaluate_single, _resolve_metric, _score_to_comparable,
