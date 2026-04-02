@@ -232,12 +232,24 @@ def print_dataset_results(ds_name, domain, searches):
         n_total = len(all_results)
         print(f"\n  HYBRID RESULTS [{aug_cond}] ({n_total} total configs):")
 
-        # Best by model x budget
-        if search.best_by_model_budget:
-            # Get all budgets
+        # Best by model x budget — build from all_results since older caches
+        # may not have best_by_model_budget
+        heatmap = {}  # {model: {budget: best_score}}
+        for r in all_results:
+            mn = r.get('model')
+            b = r.get('budget')
+            s = r.get('score_mean', 0)
+            if mn and b is not None:
+                if mn not in heatmap:
+                    heatmap[mn] = {}
+                prev = heatmap[mn].get(b)
+                if prev is None or (higher and s > prev) or (lower and s < prev):
+                    heatmap[mn][b] = s
+
+        if heatmap:
             all_budgets = set()
-            for model_budgets in search.best_by_model_budget.values():
-                all_budgets.update(model_budgets.keys())
+            for m_scores in heatmap.values():
+                all_budgets.update(m_scores.keys())
             budgets = sorted(all_budgets)
 
             print(f"\n    Heatmap (best {metric} per model x budget):")
@@ -246,15 +258,15 @@ def print_dataset_results(ds_name, domain, searches):
             print("    " + "-" * (12 + 10 * len(budgets)))
 
             model_order = ([sort_model] +
-                           [m for m in search.best_by_model_budget if m != sort_model])
+                           [m for m in heatmap if m != sort_model])
             for mn in model_order:
-                if mn not in search.best_by_model_budget:
+                if mn not in heatmap:
                     continue
                 row = f"    {mn:<12}"
                 for b in budgets:
-                    entry = search.best_by_model_budget[mn].get(b)
-                    if entry:
-                        row += f"{entry.get('score_mean', 0):>10.4f}"
+                    val = heatmap[mn].get(b)
+                    if val is not None:
+                        row += f"{val:>10.4f}"
                     else:
                         row += f"{'--':>10}"
                 print(row)
