@@ -2094,31 +2094,6 @@ def find_best_hybrid(
     Returns:
         SearchResult with best configs, baselines, and optional fitted result.
     """
-    # --- Check cache ---
-    cache_path = None
-    if cache:
-        factory_names = sorted(rep_factories.keys()) if rep_factories else None
-        key = _hybrid_cache_key(
-            base_reps, labels, groups, speed, budgets, allocation_methods,
-            importance_methods, internal_evaluators, n_folds, models, seed,
-            metric, task_type,
-            return_fitted=return_fitted, weight_method=weight_method,
-            two_phase=two_phase, refinement_top_n=refinement_top_n,
-            refinement_step_sizes=refinement_step_sizes,
-            rep_factory_names=factory_names,
-            augmentations=augmentations,
-            augmentation_strategy=augmentation_strategy,
-        )
-        cache_path = Path(cache_dir or Path.home() / '.cache' / 'kirby' / 'hybrid_search') / f'{key}.pkl'
-        if cache_path.exists():
-            try:
-                result = pickle.loads(cache_path.read_bytes())
-                if verbose:
-                    print(f"  Loaded cached result from {cache_path}")
-                return result
-            except Exception:
-                pass  # Corrupted cache, recompute
-
     # --- Validate inputs ---
     if budgets is None:
         import warnings
@@ -2144,6 +2119,42 @@ def find_best_hybrid(
 
     if len(labels) != n_samples:
         raise ValueError(f"labels length ({len(labels)}) != n_samples ({n_samples})")
+
+    # --- Drop budgets that exceed n_train (before cache key) ---
+    actual_folds_for_cap = n_folds if n_folds is not None else SPEED_TIERS[speed]['n_folds']
+    n_train_est = n_samples - int(np.ceil(n_samples / actual_folds_for_cap))
+    filtered = [b for b in budgets if b <= n_train_est]
+    if not filtered:
+        filtered = [n_train_est]
+    if filtered != list(budgets) and verbose:
+        dropped = [b for b in budgets if b > n_train_est]
+        print(f"Dropped budgets > n_train≈{n_train_est}: {dropped}")
+    budgets = filtered
+
+    # --- Check cache (uses filtered budgets) ---
+    cache_path = None
+    if cache:
+        factory_names = sorted(rep_factories.keys()) if rep_factories else None
+        key = _hybrid_cache_key(
+            base_reps, labels, groups, speed, budgets, allocation_methods,
+            importance_methods, internal_evaluators, n_folds, models, seed,
+            metric, task_type,
+            return_fitted=return_fitted, weight_method=weight_method,
+            two_phase=two_phase, refinement_top_n=refinement_top_n,
+            refinement_step_sizes=refinement_step_sizes,
+            rep_factory_names=factory_names,
+            augmentations=augmentations,
+            augmentation_strategy=augmentation_strategy,
+        )
+        cache_path = Path(cache_dir or Path.home() / '.cache' / 'kirby' / 'hybrid_search') / f'{key}.pkl'
+        if cache_path.exists():
+            try:
+                result = pickle.loads(cache_path.read_bytes())
+                if verbose:
+                    print(f"  Loaded cached result from {cache_path}")
+                return result
+            except Exception:
+                pass  # Corrupted cache, recompute
 
     if groups is not None:
         groups = np.asarray(groups).ravel()
@@ -2228,17 +2239,6 @@ def find_best_hybrid(
             base_reps, baselines, lower_is_better, screen_threshold,
             fold_reps=fold_reps, verbose=verbose,
         )
-
-    # --- Cap budgets at n_train ---
-    actual_folds = n_folds if n_folds is not None else SPEED_TIERS[speed]['n_folds']
-    n_train_est = n_samples - int(np.ceil(n_samples / actual_folds))
-    if budgets is not None:
-        capped = [min(b, n_train_est) for b in budgets]
-        capped = sorted(set(capped))  # deduplicate after capping
-        if capped != list(budgets) and verbose:
-            print(f"Budget cap: n_train≈{n_train_est}, "
-                  f"budgets {budgets} -> {capped}")
-        budgets = capped
 
     # --- Run search ---
     all_results = _run_search(

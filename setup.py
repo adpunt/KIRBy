@@ -23,7 +23,7 @@ setup(
         "numpy>=1.26.4,<2",
         "pandas>=2.2.0,<3",
         "scipy>=1.11.4,<2",
-        "scikit-learn>=1.4.0,<2",
+        "scikit-learn>=1.6.1,<2",
         "joblib>=1.2.0",
         "tqdm>=4.66.0",
     ],
