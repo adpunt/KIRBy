@@ -537,7 +537,7 @@ def cap_dimensions(X_train, X_val=None, max_dim=None):
         max_dim = X_train.shape[0]
     if X_train.shape[1] <= max_dim:
         return (X_train, X_val) if X_val is not None else (X_train,)
-    n_components = min(max_dim, X_train.shape[0] - 1)
+    n_components = max(1, min(max_dim, X_train.shape[0] - 1))
     pca = PCA(n_components=n_components)
     X_train_r = pca.fit_transform(X_train)
     if X_val is not None:
