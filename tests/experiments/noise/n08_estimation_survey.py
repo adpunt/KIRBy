@@ -25,6 +25,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_fitted_hybrid,
+    cap_dimensions,
 )
 from kirby.utils.noise_estimation import get_noise_estimator
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
@@ -97,7 +98,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Per-rep spaces
     for rep_name, X_rep in reps.items():
-        spaces[rep_name] = StandardScaler().fit_transform(X_rep)
+        spaces[rep_name] = cap_dimensions(StandardScaler().fit_transform(X_rep))[0]
 
     # Subsample for GP-based estimators
     if n_samples > GP_MAX:

@@ -38,6 +38,7 @@ from scipy.stats import zscore
 
 from experiments._shared import (
     load_data, save_experiment_results, convert_numpy, cv_split,
+    cap_dimensions,
 )
 from experiments.federated.federated_helpers import (
     compute_reg_metrics, inject_noise_per_silo,
@@ -622,6 +623,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             continue
         X_tr = np.hstack([reps_s[r][tr] for r in sorted(reps_s)])
         X_te = np.hstack([reps_s[r][te] for r in sorted(reps_s)])
+        X_tr, X_te = cap_dimensions(X_tr, X_te)
         y_tr = sd['labels'][tr]
         y_te = sd['labels'][te]
 

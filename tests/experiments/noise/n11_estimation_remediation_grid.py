@@ -26,7 +26,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories,
-    get_precomputed_search,
+    get_precomputed_search, cap_dimensions,
 )
 from kirby.hybrid import create_hybrid
 from kirby.utils.noise_estimation import (
@@ -146,7 +146,7 @@ def _build_estimation_spaces(train_reps, y_train, augmentations, bp):
     # All base rep spaces
     for rep_name, X_rep in train_reps.items():
         scaler = StandardScaler()
-        spaces[rep_name] = scaler.fit_transform(X_rep)
+        spaces[rep_name] = cap_dimensions(scaler.fit_transform(X_rep))[0]
 
     return spaces, base_rep_name
 

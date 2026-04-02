@@ -24,8 +24,8 @@ REACTION="buchwald_hartwig bh_doyle_plates"
 TCGA="tcga_luad_vs_lusc tcga_brca_pam50"
 
 # Federated-eligible datasets (grows as fed02-fed05 add support)
-# Uses herg_ki (regression) until herg (clf) gets a DATASET_REPS entry.
-FEDERATED_DATASETS="herg_ki caco2 logd"
+# lhasa_herg uses Lhasa's curated hERG data (binary classification).
+FEDERATED_DATASETS="lhasa_herg caco2 logd"
 
 # ── Job name prefix ────────────────────────────────────────────────────
 case $CATEGORY in

@@ -89,17 +89,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # ── Phase 1: Setup ───────────────────────────────────────────────────
     print("\n--- Phase 1: Setup ---")
 
-    # Binarize labels
-    labels_binary = (labels >= PKI_THRESHOLD).astype(int)
-    n_active = int(labels_binary.sum())
-    n_inactive = len(labels_binary) - n_active
-    print(f"  {dataset_name}: {len(labels)} samples, "
-          f"{n_active} active, {n_inactive} inactive "
-          f"(threshold pKi >= {PKI_THRESHOLD})")
+    # Binarize labels (skip if already binary from Lhasa loader)
+    if data.get('is_binary'):
+        labels_binary = labels.astype(int)
+        print(f"  {dataset_name}: {len(labels)} samples (pre-binarized), "
+              f"{int(labels_binary.sum())} active, "
+              f"{len(labels_binary) - int(labels_binary.sum())} inactive")
+    else:
+        labels_binary = (labels >= PKI_THRESHOLD).astype(int)
+        n_active = int(labels_binary.sum())
+        n_inactive = len(labels_binary) - n_active
+        print(f"  {dataset_name}: {len(labels)} samples, "
+              f"{n_active} active, {n_inactive} inactive "
+              f"(threshold pKi >= {PKI_THRESHOLD})")
 
     # Compute Morgan FPs for all molecules (to get valid_mask)
     fluid_df_all, valid_mask = smiles_to_fluid_df(
-        smiles, labels, pki_threshold=PKI_THRESHOLD)
+        smiles, labels_binary, pki_threshold=0.5)
 
     # Filter to valid molecules only
     groups = data.get('groups')

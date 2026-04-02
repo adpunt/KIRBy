@@ -18,7 +18,7 @@ from experiments.federated.federated_helpers import (
     run_all, SINGLE_DATASET_EXPERIMENTS,
 )
 
-DATASET = 'herg'
+DATASET = 'lhasa_herg'
 DEFAULT_OUTPUT = 'tests/results/federated'
 
 

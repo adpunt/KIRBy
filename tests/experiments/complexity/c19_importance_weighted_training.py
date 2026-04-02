@@ -33,7 +33,7 @@ from experiments._shared import (
     cv_split, get_domain_metric, get_model_factories,
     compute_feature_importance,
 )
-from experiments._shared import get_fitted_hybrid
+from experiments._shared import get_fitted_hybrid, cap_dimensions
 
 
 # =========================================================================
@@ -164,6 +164,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     scaler = StandardScaler()
                     X_tr_s = scaler.fit_transform(X_tr)
                     X_va_s = scaler.transform(X_va)
+                    X_tr_s, X_va_s = cap_dimensions(X_tr_s, X_va_s)
 
                     # Compute importance on training data
                     imp_weights = _compute_importance_weights(X_tr_s, y_train)
