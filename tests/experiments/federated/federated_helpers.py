@@ -83,15 +83,17 @@ def load_lhasa_herg_data(rep_names=None):
     print(f"  Lhasa hERG: {len(labels)} molecules, "
           f"{int(labels.sum())} active, {len(labels) - int(labels.sum())} inactive")
 
-    # Compute representations
-    from kirby.representations import get_representations
+    # Compute representations (same path as fed03)
+    from find_best_hybrid_molecular import (
+        get_representations as get_molecular_representations,
+        assign_scaffold_groups,
+    )
     if rep_names is None:
         rep_names = 'all'
-    reps = get_representations(smiles, rep_names)
+    reps = get_molecular_representations(smiles, rep_names)
 
     # Scaffold groups
     try:
-        from kirby.utils.splitting import assign_scaffold_groups
         groups, _ = assign_scaffold_groups(smiles)
     except Exception:
         groups = None
@@ -1553,8 +1555,8 @@ def run_all(dataset_name: str, output_dir: str,
     # Check if ALL requested experiments are self-loading (skip data load)
     all_self_loading = all(e in SELF_LOADING_EXPERIMENTS for e in experiments)
 
-    # Resolve rep list (skip if all experiments load their own data)
-    if not all_self_loading:
+    # Resolve rep list (skip if all experiments load their own data or Lhasa)
+    if not all_self_loading and dataset_name not in ('herg', 'lhasa_herg'):
         if rep_names is None:
             ds_reps = DATASET_REPS.get(dataset_name)
             if ds_reps is None:
