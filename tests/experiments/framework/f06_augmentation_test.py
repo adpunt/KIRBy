@@ -44,6 +44,7 @@ from experiments._shared import (
     save_experiment_results, make_structured_output,
     get_model_factories, get_domain_metric, cv_split,
     evaluate_single_rep_cv, parse_rep_args, FRAMEWORK_TASKS,
+    INTERNAL_EVALUATORS, DOWNSTREAM_MODELS, extract_top3_base_reps,
 )
 from kirby.hybrid import (
     create_hybrid, apply_feature_selection, apply_augmentation_selection,
@@ -56,8 +57,8 @@ AUG_BUDGETS = [10, 20, 50]
 # Hybrid budget for create_hybrid (base reps allocation)
 HYBRID_BUDGETS = [100, 200]
 
-# Models to evaluate downstream (keep small — this is about augmentation, not models)
-EVAL_MODELS = ['rf', 'ridge', 'xgboost']
+# Models to evaluate downstream
+EVAL_MODELS = DOWNSTREAM_MODELS
 
 # Default number of core reps
 DEFAULT_N_CORE = 5

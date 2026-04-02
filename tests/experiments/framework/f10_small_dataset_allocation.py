@@ -45,6 +45,7 @@ from experiments._shared import (
     save_experiment_results, make_structured_output,
     get_model_factories, get_domain_metric, cv_split,
     parse_rep_args,
+    INTERNAL_EVALUATORS, DOWNSTREAM_MODELS, extract_top3_base_reps,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection
 import kirby.hybrid as hybrid_module
@@ -54,7 +55,8 @@ import kirby.hybrid as hybrid_module
 
 BUDGETS = [25, 50, 100, 200]
 
-DOWNSTREAM_MODELS = ['ridge', 'rf', 'xgboost', 'lightgbm']
+# Use shared DOWNSTREAM_MODELS from _shared (imported above).
+F10_MODELS = DOWNSTREAM_MODELS
 
 CONDITIONS = ['A_baseline', 'B_budget_cap', 'C_ridge_eval', 'D_cv3_eval',
               'E_combined']
@@ -348,6 +350,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             importance_method='treeshap',
                             step_size=STEP_SIZE,
                             patience=PATIENCE,
+                            internal_evaluator='rf',
                         )
                         X_val_h = apply_feature_selection(
                             val_reps, feature_info)

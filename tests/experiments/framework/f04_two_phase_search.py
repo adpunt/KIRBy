@@ -40,6 +40,7 @@ from experiments._shared import (
     get_model_factories, get_domain_metric, cv_split,
     create_hybrid, apply_feature_selection,
     parse_rep_args, FRAMEWORK_TASKS,
+    INTERNAL_EVALUATORS, DOWNSTREAM_MODELS, extract_top3_base_reps,
 )
 from kirby.find_best_hybrid import find_best_hybrid, _score_to_comparable
 
@@ -211,6 +212,7 @@ def _run_two_phase(data, config, importance_method, metric_name):
         allocation_methods=ALLOCATIONS,
         budgets=budgets,
         importance_methods=[importance_method],
+        internal_evaluators=INTERNAL_EVALUATORS,
         two_phase=True,
         refinement_top_n=5,
         refinement_step_sizes=REFINEMENT_STEP_SIZES,
@@ -268,6 +270,11 @@ def run(data, config, output_dir, dataset_name, importance_method='treeshap',
     search, two_phase_time = _run_two_phase(data, config, importance_method,
                                              metric_name)
     n_two_phase = len(search.all_results)
+
+    # Extract top 3 base reps for reporting
+    top3 = extract_top3_base_reps(search)
+    if top3:
+        print(f"  Top 3 base reps: {[(r, f'{s:.4f}') for r, s in top3]}")
 
     # Pick best across all models (for comparison with full grid)
     two_phase_best = (min if lower_is_better else max)(

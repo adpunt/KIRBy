@@ -32,6 +32,7 @@ from experiments._shared import (
     get_model_factories, get_domain_metric, cv_split,
     create_hybrid, apply_feature_selection,
     parse_rep_args, FRAMEWORK_TASKS,
+    INTERNAL_EVALUATORS, DOWNSTREAM_MODELS, extract_top3_base_reps,
 )
 from kirby.hybrid import NAMED_ALLOCATIONS
 from kirby.find_best_hybrid import _score_to_comparable
