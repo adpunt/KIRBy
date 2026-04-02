@@ -25,7 +25,7 @@ from experiments._shared import (
     save_experiment_results, load_experiment_results,
     get_fitted_hybrid, flatten_weights, flatten_fold_weights, make_cv_splitter,
     get_domain_metric, get_model_factories, build_fold_hybrid,
-    get_best_for_downstream,
+    get_best_for_downstream, extract_top3_base_reps,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 from experiments.similarity.similarity_helpers import identify_cliff_compounds
@@ -118,6 +118,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         best_knn = get_best_for_downstream(search, 'knn')
         if best_knn and 'blueprint' in best_knn:
             hybrid_blueprint = best_knn['blueprint']
+        top3 = extract_top3_base_reps(search)
+        if top3:
+            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+            results['top3_base_reps'] = [(n, s) for n, s in top3]
     except Exception as e:
         print(f"  Hybrid search failed: {e}")
         X_hybrid = None
@@ -290,9 +294,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # --- RF baseline (on best individual rep) ---
     print("\n  RF baseline (per-rep, best rep):")
-    best_cmp = (lambda r: -results['per_rep'][r]['score_all']) if lower_is_better \
-               else (lambda r: results['per_rep'][r]['score_all'])
-    best_rep_name = max(results['per_rep'], key=lambda r: -best_cmp(r)) if results['per_rep'] else None
+    best_rep_name = (min if lower_is_better else max)(
+        results['per_rep'], key=lambda r: results['per_rep'][r]['score_all']
+    ) if results['per_rep'] else None
     if best_rep_name:
         X_best = reps[best_rep_name]
         rf_factory = get_model_factories(['rf'], task_type=task_type,

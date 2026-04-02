@@ -63,6 +63,11 @@ from kirby.representations.reaction import (
     create_rxnfp,
     create_onehot_components,
 )
+from experiments._shared import (
+    get_model_factories as _get_model_factories,
+    DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
+    extract_top3_base_reps,
+)
 
 warnings.filterwarnings('ignore')
 
@@ -127,28 +132,12 @@ def generate_rep(rep_name: str, rxn_smiles: List[str],
 # Model factories
 # =============================================================================
 
-def get_model_factories() -> Dict[str, callable]:
-    """Return {name: factory_fn} for the 3 comparison models."""
-    from sklearn.linear_model import RidgeCV
-    from sklearn.ensemble import RandomForestRegressor
+MODELS_LIST = DOWNSTREAM_MODELS
 
-    factories = {
-        'Ridge': lambda: RidgeCV(alphas=np.logspace(-4, 4, 50)),
-        'RF': lambda: RandomForestRegressor(
-            n_estimators=100, max_features='sqrt', random_state=42, n_jobs=-1,
-        ),
-    }
 
-    try:
-        from xgboost import XGBRegressor
-        factories['XGBoost'] = lambda: XGBRegressor(
-            n_estimators=100, colsample_bytree=0.5,
-            random_state=42, n_jobs=-1, verbosity=0,
-        )
-    except ImportError:
-        print("  WARNING: xgboost not installed, skipping XGBoost")
-
-    return factories
+def get_model_factories(n_samples: int = 1000) -> Dict[str, callable]:
+    """Return {name: factory_fn} using shared DOWNSTREAM_MODELS."""
+    return _get_model_factories(MODELS_LIST, 'regression', n_samples=n_samples)
 
 
 # =============================================================================
@@ -364,13 +353,10 @@ def main():
             print(f"ERROR: unknown rep '{r}'. Available: {ALL_REPS}")
             sys.exit(1)
 
-    model_factories = get_model_factories()
-    model_names = list(model_factories.keys())
-
     print(f"Reaction Representation Comparison")
     print(f"  Datasets:  {datasets}")
     print(f"  Reps:      {rep_names}")
-    print(f"  Models:    {model_names}")
+    print(f"  Models:    {MODELS_LIST}")
     print(f"  Folds:     {n_folds}")
     print()
 
@@ -389,6 +375,9 @@ def main():
         components = data['components']
         n_reactions = len(labels)
         n_groups = len(np.unique(groups))
+
+        model_factories = get_model_factories(n_samples=n_reactions)
+        model_names = list(model_factories.keys())
 
         print(f"  {n_reactions} reactions, {n_groups} groups, "
               f"yield range [{labels.min():.1f}, {labels.max():.1f}]")
@@ -420,7 +409,11 @@ def main():
                 from kirby.hybrid import apply_feature_selection
                 search = find_best_hybrid(
                     base_reps=rep_matrices, labels=labels, groups=groups,
+                    internal_evaluators=INTERNAL_EVALUATORS,
                     speed='fast', return_fitted=True, verbose=False, cache=True)
+                top3 = extract_top3_base_reps(search)
+                if top3:
+                    print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
                 fitted = search.fitted_results.get('rf')
                 if fitted is not None:
                     fi = {r: {'selected_indices': idx}

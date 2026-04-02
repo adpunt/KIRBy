@@ -24,6 +24,8 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     get_model_factories, cv_split, _cv_split,
     find_best_hybrid, get_domain_metric,
+    extract_top3_base_reps,
+    INTERNAL_EVALUATORS,
 )
 
 
@@ -75,6 +77,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             importance_methods=importance_methods,
             n_folds=n_folds,
             augmentations=None,
+            internal_evaluators=INTERNAL_EVALUATORS,
             verbose=True,
             cache=True,
         )
@@ -94,6 +97,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         importance_methods=importance_methods,
         n_folds=n_folds,
         augmentations=None,
+        internal_evaluators=INTERNAL_EVALUATORS,
         verbose=True,
         cache=True,
     )
@@ -113,6 +117,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             n_folds=n_folds,
             augmentations=augs,
             augmentation_strategy='uncapped',
+            internal_evaluators=INTERNAL_EVALUATORS,
             verbose=True,
             cache=True,
         )
@@ -132,6 +137,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             n_folds=n_folds,
             augmentations=augs,
             augmentation_strategy='capped',
+            internal_evaluators=INTERNAL_EVALUATORS,
             verbose=True,
             cache=True,
         )
@@ -146,6 +152,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Use uncapped as the primary search (best overall)
     search = search_uncapped
+
+    top3 = extract_top3_base_reps(search)
+    if top3:
+        print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
 
     # --- Reshape SearchResult to downstream format ---
     metric_label = search.metric_name
@@ -180,12 +190,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Baselines: reshape library format {rep: {model: score}} to Exp 2 format
     baselines = {}
     lib_baselines = search.baselines
+    _lower = search.lower_is_better
     for model_name in models:
         best_single_rep = None
-        best_single_score = -np.inf
+        best_single_score = np.inf if _lower else -np.inf
         for rep_name, rep_scores in lib_baselines.items():
-            rep_score = rep_scores.get(model_name, -np.inf)
-            if rep_score > best_single_score:
+            rep_score = rep_scores.get(model_name, np.inf if _lower else -np.inf)
+            if (_lower and rep_score < best_single_score) or \
+               (not _lower and rep_score > best_single_score):
                 best_single_score = rep_score
                 best_single_rep = rep_name
         baselines[model_name] = {
@@ -309,6 +321,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'importance_wins': importance_wins,
         'conditions': conditions,
         'has_augmentation': augs is not None,
+        'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
     }
 
 

@@ -884,8 +884,6 @@ Output:
                        help='Also test leave-one-rep-out subsets (when >=3 reps)')
     parser.add_argument('--cache', action='store_true',
                        help='Cache hybrid search results to disk')
-    parser.add_argument('--adaptive-pruning', action='store_true',
-                       help='Enable adaptive model pruning during search')
     parser.add_argument('--n-folds', type=int, default=None,
                        help='Override number of CV folds (default: from speed tier)')
     parser.add_argument('--finetune', type=str, default=None,
@@ -1033,7 +1031,6 @@ Output:
         test_rep_subsets=args.test_rep_subsets,
         seed=args.seed,
         cache=args.cache,
-        adaptive_pruning=args.adaptive_pruning,
         rep_factories=rep_factories,
     )
 

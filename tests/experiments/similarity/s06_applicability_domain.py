@@ -27,7 +27,7 @@ from experiments._shared import (
     get_fitted_hybrid, flatten_weights, flatten_fold_weights, make_cv_splitter,
     apply_feature_selection, compute_feature_importance,
     get_domain_metric, get_model_factories, build_fold_hybrid,
-    get_best_for_downstream,
+    get_best_for_downstream, extract_top3_base_reps,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 from kirby.hybrid import create_hybrid
@@ -71,6 +71,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         weights_flat = flatten_fold_weights(fi) if fi else np.ones(X_hybrid.shape[1])
         best_config = get_best_for_downstream(search, 'knn')
         bp = best_config['blueprint'] if best_config and 'blueprint' in best_config else None
+        top3 = extract_top3_base_reps(search)
+        if top3:
+            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+            results['top3_base_reps'] = [(n, s) for n, s in top3]
     except Exception as e:
         print(f"  Hybrid search failed: {e}")
         return {'error': str(e)}

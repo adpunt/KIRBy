@@ -29,7 +29,7 @@ from experiments._shared import (
     get_fitted_hybrid, flatten_fold_weights,
     estimate_intrinsic_dim_mle, make_cv_splitter,
     get_domain_metric, get_model_factories,
-    build_fold_hybrid,
+    build_fold_hybrid, extract_top3_base_reps,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS, DOWNSTREAM_MODELS,
 )
 from experiments.similarity.similarity_helpers import (
@@ -64,6 +64,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Models: {list(model_factories.keys())}")
 
     results = {'budgets': {}}
+    _top3_reported = False
 
     # Full-dim reference
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
@@ -100,6 +101,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 budgets=[budget],
                 downstream_model='knn')
             weights_flat = flatten_fold_weights(fi) if fi else np.ones(X_hybrid.shape[1])
+            if not _top3_reported:
+                top3 = extract_top3_base_reps(search)
+                if top3:
+                    print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+                    results['top3_base_reps'] = [(n, s) for n, s in top3]
+                _top3_reported = True
         except Exception as e:
             print(f"    Failed: {e}")
             results['budgets'][budget] = {'error': str(e)}

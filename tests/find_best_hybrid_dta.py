@@ -800,8 +800,6 @@ Output:
                        help='Cache hybrid search results to disk')
     parser.add_argument('--max-pairs', type=int, default=None,
                        help='Subsample to this many pairs (for KIBA which has 117K)')
-    parser.add_argument('--adaptive-pruning', action='store_true',
-                       help='Enable adaptive model pruning during search')
     parser.add_argument('--n-folds', type=int, default=None,
                        help='Override number of CV folds (default: from speed tier)')
     parser.add_argument('--finetune', type=str, default=None,
@@ -944,7 +942,6 @@ Output:
         test_rep_subsets=args.test_rep_subsets,
         seed=args.seed,
         cache=args.cache,
-        adaptive_pruning=args.adaptive_pruning,
         rep_factories=rep_factories,
     )
 

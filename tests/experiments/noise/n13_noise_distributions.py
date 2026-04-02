@@ -29,7 +29,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories,
     DOWNSTREAM_MODELS_NOISE,
-    get_precomputed_search,
+    get_precomputed_search, extract_top3_base_reps,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
 from kirby.utils.lnl_methods import get_lnl_method, _standard_dnn_train_predict
@@ -212,6 +212,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         reps, labels, groups, budget=100, aug_condition='uncapped',
         augmentations=augmentations, speed=config.get('search_speed', 'fast'),
         precomputed=data.get('precomputed_searches'))
+    top3 = extract_top3_base_reps(search)
+    if top3:
+        print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     best_rf = search.best_by_model.get('rf')
     bp = best_rf['blueprint'] if best_rf else None
     if bp is None:
@@ -225,6 +228,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'strengths': STRENGTHS,
         'lnl_methods': lnl_methods,
         'estimators': estimators,
+        'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
         'per_noise_type': {},
     }
 

@@ -19,6 +19,8 @@ from experiments._shared import (
     get_model_factories, _cv_split,
     create_hybrid, apply_feature_selection,
     find_best_hybrid, get_domain_metric,
+    extract_top3_base_reps,
+    INTERNAL_EVALUATORS,
 )
 from kirby.hybrid import apply_augmentation_selection
 
@@ -96,6 +98,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 reps, labels, groups=groups,
                 speed=search_speed,
                 augmentations=augs,
+                internal_evaluators=INTERNAL_EVALUATORS,
                 verbose=False,
                 cache=True,
             )
@@ -119,6 +122,9 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 optimal_desc = (f"{best_model} at budget={optimal_budget} "
                                 f"[{optimal_imp}/{optimal_alloc}] (from find_best_hybrid)")
                 print(f"  Discovered optimal: {optimal_desc}")
+                top3 = extract_top3_base_reps(search)
+                if top3:
+                    print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
         except Exception as e:
             print(f"  find_best_hybrid failed ({e}), using RF/budget=100 default")
 

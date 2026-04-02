@@ -22,7 +22,7 @@ from sklearn.preprocessing import StandardScaler
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results, convert_numpy,
-    get_fitted_hybrid, flatten_fold_weights,
+    get_fitted_hybrid, flatten_fold_weights, extract_top3_base_reps,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 
@@ -128,6 +128,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         weights_flat = flatten_fold_weights(fi) if fi else np.ones(X_hybrid.shape[1])
         if len(weights_flat) != X_hybrid.shape[1]:
             weights_flat = np.ones(X_hybrid.shape[1])
+        top3 = extract_top3_base_reps(search)
+        if top3:
+            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+            results['top3_base_reps'] = [(n, s) for n, s in top3]
     except Exception as e:
         print(f"  Hybrid search failed: {e}")
         X_hybrid = None

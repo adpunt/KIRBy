@@ -53,7 +53,7 @@ from experiments._shared import (
     save_experiment_results, make_structured_output, convert_numpy,
     compute_effective_rank, estimate_mutual_information_knn,
     get_domain_metric, get_hybrid_features_and_weights,
-    get_fitted_hybrid,
+    get_fitted_hybrid, extract_top3_base_reps,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 
@@ -552,6 +552,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'n_samples_sas': len(sub_labels),
             'n_reps': len(reps),
         },
+        'top3_base_reps': [(nm, s) for nm, s in top3] if top3 else [],
     }
 
     # --- Sub-analysis 1: Per-rep SAS maps ---
@@ -562,12 +563,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # --- Build hybrid for sub-analyses 2-3 ---
     augmentations = data.get('augmentations')
     X_hybrid = None
+    search = None
+    top3 = None
     try:
         X_hybrid_full, _, search = get_hybrid_features_and_weights(
             reps, labels, groups, search_speed, 'lightgbm_gain',
             augmentations=augmentations)
         X_hybrid = X_hybrid_full[sub_idx] if len(sub_idx) < n else X_hybrid_full
         print(f"  Hybrid: dim={X_hybrid.shape[1]}")
+        top3 = extract_top3_base_reps(search)
+        if top3:
+            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     except Exception as e:
         print(f"  WARNING: Hybrid search failed ({e})")
 

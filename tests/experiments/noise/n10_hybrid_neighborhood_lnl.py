@@ -33,6 +33,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories,
     get_precomputed_search, build_fold_hybrid,
+    extract_top3_base_reps,
 )
 from kirby.hybrid import create_hybrid, compute_feature_importance
 from kirby.utils.noise_estimation import (
@@ -411,6 +412,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Precompute hybrid blueprints ONCE (cached) for all 3 budgets
     hybrid_budgets = [25, 100, 200]
     blueprints = {}
+    search_for_top3 = None
     for b in hybrid_budgets:
         try:
             search = get_precomputed_search(
@@ -421,8 +423,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             best_rf = search.best_by_model.get('rf')
             if best_rf:
                 blueprints[b] = best_rf['blueprint']
+            if b == 100:
+                search_for_top3 = search
         except Exception as e:
             print(f"  Blueprint for budget={b} failed: {e}")
+
+    top3 = extract_top3_base_reps(search_for_top3) if search_for_top3 is not None else None
+    if top3:
+        print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
 
     print(f"  Dataset: {dataset_name} ({len(labels)} samples)")
     print(f"  Metric: {metric_name}")
@@ -438,6 +446,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'estimators': list(ESTIMATOR_CONFIGS.keys()),
         'detection_methods': DETECTION_METHODS,
         'sigmas': sigmas,
+        'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
         'per_sigma': {},
     }
 

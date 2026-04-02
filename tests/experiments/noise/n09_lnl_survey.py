@@ -32,6 +32,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric,
     get_precomputed_search, build_fold_hybrid,
+    extract_top3_base_reps,
 )
 from kirby.utils.lnl_methods import (
     get_lnl_method, LNL_REGISTRY, _standard_dnn_train_predict,
@@ -105,6 +106,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         reps, labels, groups, budget=budget, aug_condition='uncapped',
         augmentations=augmentations, speed=config.get('search_speed', 'fast'),
         precomputed=data.get('precomputed_searches'))
+    top3 = extract_top3_base_reps(search)
+    if top3:
+        print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     best_dnn = search.best_by_model.get('dnn') or search.best_by_model.get('rf')
     bp = best_dnn['blueprint'] if best_dnn else None
     if bp is None:
@@ -136,6 +140,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'sigmas': sigmas,
         'methods': methods_to_test,
         'budget': budget,
+        'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
         'per_sigma': {},
     }
 

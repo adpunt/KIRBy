@@ -38,6 +38,8 @@ from experiments._shared import (
     evaluate_single_rep_cv, cv_split,
     save_experiment_results, convert_numpy,
     find_best_hybrid, get_config,
+    extract_top3_base_reps,
+    INTERNAL_EVALUATORS,
 )
 from experiments.complexity.complexity_helpers import DATASET_REPS
 
@@ -184,6 +186,7 @@ def _evaluate_task(task_name, rep_preset, config):
         task_type=task_type,
         speed=speed,
         n_folds=n_folds,
+        internal_evaluators=INTERNAL_EVALUATORS,
         verbose=False,
         seed=42,
         cache=True,
@@ -191,6 +194,10 @@ def _evaluate_task(task_name, rep_preset, config):
     if aug_dict:
         fbh_kwargs['augmentations'] = aug_dict
     search = find_best_hybrid(**fbh_kwargs)
+
+    top3 = extract_top3_base_reps(search)
+    if top3:
+        print(f"    Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
 
     if not search.best_by_model:
         print(f"    WARNING: find_best_hybrid returned no result for {task_name}")
@@ -242,6 +249,7 @@ def _evaluate_task(task_name, rep_preset, config):
         'all_rep_scores': {
             k: v['score'] for k, v in all_rep_results.items()
         },
+        'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
     }
 
 

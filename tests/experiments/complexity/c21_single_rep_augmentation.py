@@ -38,6 +38,8 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     get_model_factories, cv_split, get_domain_metric,
     build_fold_hybrid,
+    extract_top3_base_reps,
+    INTERNAL_EVALUATORS,
 )
 from kirby.find_best_hybrid import find_best_hybrid
 
@@ -134,6 +136,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 augmentations=aug_dict,
                 augmentation_strategy='uncapped',
                 speed=search_speed,
+                internal_evaluators=INTERNAL_EVALUATORS,
                 cache=True,
                 verbose=False,
             )
@@ -145,6 +148,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         if bp:
             print(f"imp={bp.importance_method}, eval={bp.internal_evaluator}")
+            top3 = extract_top3_base_reps(search)
+            if top3:
+                print(f"    Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
         else:
             print("no result (using defaults)")
 

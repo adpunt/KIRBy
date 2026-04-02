@@ -229,6 +229,34 @@ DOWNSTREAM_MODELS = ['rf', 'knn', 'svm', 'mlp', 'xgboost', 'lightgbm', 'gp']
 # Probabilistic models for noise/uncertainty experiments (N09, N13, S11).
 DOWNSTREAM_MODELS_NOISE = ['rf', 'knn', 'svm', 'mlp', 'xgboost', 'lightgbm', 'gp', 'ngboost']
 
+# Generic internal evaluators for hybrid construction.
+# 'match' resolves to the downstream model type; the rest test robustness
+# across inductive biases: tree-ensemble (rf), kernel (svm), boosted (lightgbm), neural (mlp).
+INTERNAL_EVALUATORS = ['match', 'rf', 'svm', 'lightgbm', 'mlp']
+
+
+def extract_top3_base_reps(search, model='rf'):
+    """Extract top 3 base reps ranked by a single model from a SearchResult.
+
+    Args:
+        search: SearchResult from find_best_hybrid (must have .baselines).
+        model: Model name to rank by (default 'rf').
+
+    Returns:
+        List of (rep_name, score) tuples, sorted best-first, length <= 3.
+    """
+    baselines = getattr(search, 'baselines', {})
+    lower = getattr(search, 'lower_is_better', False)
+    scores = []
+    for rep_name, model_scores in baselines.items():
+        if rep_name.startswith('_'):
+            continue  # skip _secondary etc.
+        s = model_scores.get(model)
+        if s is not None and not np.isnan(s):
+            scores.append((rep_name, float(s)))
+    scores.sort(key=lambda x: x[1], reverse=not lower)
+    return scores[:3]
+
 
 # =============================================================================
 # REP TIER CLASSIFICATION

@@ -20,7 +20,7 @@ from sklearn.preprocessing import StandardScaler
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    get_fitted_hybrid,
+    get_fitted_hybrid, extract_top3_base_reps,
 )
 from kirby.utils.noise_estimation import get_noise_estimator
 
@@ -85,6 +85,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     X_concat_s = StandardScaler().fit_transform(X_concat)
 
     spaces = {'concat': X_concat_s}
+    _search = None
     try:
         X_hybrid, fi, _search = get_fitted_hybrid(
             reps, labels, groups, budget=budget,
@@ -94,6 +95,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             downstream_model='rf',
         )
         spaces['hybrid'] = StandardScaler().fit_transform(X_hybrid)
+        top3 = extract_top3_base_reps(_search)
+        if top3:
+            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     except Exception as e:
         print(f"  Hybrid failed: {e}")
 
@@ -104,10 +108,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     else:
         sub_idx = np.arange(n_samples)
 
+    top3 = extract_top3_base_reps(_search) if _search is not None else None
     results = {
         'n_samples': n_samples,
         'n_with_replicates': n_with_replicates,
         'has_ground_truth': replicate_stds is not None,
+        'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
         'estimators': {},
     }
 

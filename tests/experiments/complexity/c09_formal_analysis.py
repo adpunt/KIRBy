@@ -23,6 +23,7 @@ from experiments._shared import (
     estimate_mutual_information_knn, compute_effective_rank,
     apply_feature_selection,
     find_best_hybrid, get_domain_metric,
+    INTERNAL_EVALUATORS,
 )
 from kirby.hybrid import create_hybrid
 # TODO: create_hybrid API not finalised — allocation_method / importance_method
@@ -297,6 +298,7 @@ def _run_information_retention(data, budgets, search_speed='fast'):
                 speed=search_speed, budgets=[budget],
                 augmentations=augs,
                 augmentation_strategy='capped',
+                internal_evaluators=INTERNAL_EVALUATORS,
                 verbose=False,
                 cache=True,
             )
@@ -425,6 +427,7 @@ def _run_effective_rank_analysis(data, budgets, search_speed='fast'):
                 speed=search_speed, budgets=[budget],
                 augmentations=augs,
                 augmentation_strategy='capped',
+                internal_evaluators=INTERNAL_EVALUATORS,
                 verbose=False,
                 cache=True,
             )
@@ -547,6 +550,7 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                 budgets=[budget],
                 augmentations=augs,
                 augmentation_strategy='capped',
+                internal_evaluators=INTERNAL_EVALUATORS,
                 verbose=False,
                 cache=True,
             )

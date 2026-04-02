@@ -56,7 +56,10 @@ warnings.filterwarnings('ignore')
 
 from antibody_baseline_survey import load_dataset, DATASET_REGISTRY
 from run_baseline_survey import evaluate_rep as _evaluate_rep
-from experiments._shared import convert_numpy, get_model_factories
+from experiments._shared import (
+    convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
+    extract_top3_base_reps,
+)
 
 # =============================================================================
 # CONFIGURATION
@@ -70,7 +73,7 @@ DEFAULT_REPS = [
     'ablang2', 'prot_t5',                 # additional LMs
 ]
 
-MODELS_LIST = ['ridge', 'rf']
+MODELS_LIST = DOWNSTREAM_MODELS
 
 # Condition → dataset name mapping
 CONDITION_DATASETS = {
@@ -311,7 +314,11 @@ def evaluate_condition(condition, rep_names, n_folds, max_samples=5000):
             task_type='regression',
             augmentations=aug_dict if aug_dict else None,
             augmentation_strategy='uncapped',
+            internal_evaluators=INTERNAL_EVALUATORS,
             speed='fast', return_fitted=True, verbose=False, cache=True)
+        top3 = extract_top3_base_reps(search)
+        if top3:
+            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
         fitted = search.fitted_results.get('rf')
         if fitted is not None:
             all_reps = {**reps, **(aug_dict or {})}

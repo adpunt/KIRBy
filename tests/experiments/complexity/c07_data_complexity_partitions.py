@@ -17,10 +17,12 @@ from sklearn.preprocessing import StandardScaler
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results, convert_numpy,
-    get_model_factories,
+    get_model_factories, get_domain_metric,
     estimate_mutual_information_knn, compute_effective_rank,
     compute_intrinsic_dimensionality,
     find_best_hybrid,
+    extract_top3_base_reps,
+    INTERNAL_EVALUATORS,
 )
 
 
@@ -39,6 +41,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
     groups = data['groups']
     budgets = config['budgets']
     search_speed = config['search_speed']
+    _, _, lower_is_better = get_domain_metric(data)
 
     # For molecular datasets, use smiles; for antibody, this partition may not apply
     smiles = data.get('smiles')
@@ -135,6 +138,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                   f"MI={metrics.get('mi', '?')}, PCA95={metrics.get('pca_95', '?')}")
 
             # Use find_best_hybrid for proper search
+            top3 = []
             try:
                 search = find_best_hybrid(
                     sub_reps, sub_labels, groups=sub_groups,
@@ -142,14 +146,21 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                     budgets=budgets,
                     augmentations=sub_augs,
                     augmentation_strategy='capped',
+                    internal_evaluators=INTERNAL_EVALUATORS,
                     verbose=False,
                     cache=True,
                 )
+                top3 = extract_top3_base_reps(search)
+                if top3:
+                    print(f"    {subpop_name} Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+
                 # Pick the best result across all models
                 best = None
                 best_model_name = None
                 for m_name, m_best in search.best_by_model.items():
-                    if best is None or m_best['score_mean'] > best['score_mean']:
+                    if best is None or \
+                       (lower_is_better and m_best['score_mean'] < best['score_mean']) or \
+                       (not lower_is_better and m_best['score_mean'] > best['score_mean']):
                         best = m_best
                         best_model_name = m_name
                 best_config = {
@@ -181,6 +192,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 'best': best_config,
                 'best_by_model': best_by_model,
                 'baselines': search.baselines if best_config else {},
+                'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
             }
             if best_config:
                 print(f"    {subpop_name} best: {best_config['model']}/b={best_config['budget']} "

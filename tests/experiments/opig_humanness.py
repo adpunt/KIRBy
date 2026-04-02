@@ -67,7 +67,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 warnings.filterwarnings('ignore')
 
 from antibody_baseline_survey import load_dataset, DATASET_REGISTRY
-from experiments._shared import convert_numpy, get_model_factories
+from experiments._shared import (
+    convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
+    extract_top3_base_reps,
+)
 
 # =============================================================================
 # CONFIGURATION
@@ -85,7 +88,7 @@ DEFAULT_REPS = [
     'paratope',                            # structural (sequence-based)
 ]
 
-MODELS_LIST = ['ridge', 'rf']
+MODELS_LIST = DOWNSTREAM_MODELS
 
 # Published reference baselines
 # Prihoda et al. 2022 (BioPhi): threshold-sweep on full therapeutic dataset,
@@ -218,7 +221,7 @@ def evaluate_dataset(dataset_name, rep_names, n_folds):
         rep_names=rep_names,
         heavy_seqs=heavy_seqs,
         light_seqs=light_seqs,
-        dataset_tag=ds_name,
+        dataset_tag=dataset_name,
     )
 
     if not reps:
@@ -237,7 +240,11 @@ def evaluate_dataset(dataset_name, rep_names, n_folds):
             metric='accuracy',
             task_type='classification',
             augmentation_strategy='uncapped',
+            internal_evaluators=INTERNAL_EVALUATORS,
             speed='fast', return_fitted=True, verbose=False, cache=True)
+        top3 = extract_top3_base_reps(search)
+        if top3:
+            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
         fitted = search.fitted_results.get('rf')
         if fitted is not None:
             fi = {r: {'selected_indices': idx}

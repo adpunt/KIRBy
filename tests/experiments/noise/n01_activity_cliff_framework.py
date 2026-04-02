@@ -38,7 +38,7 @@ from experiments._shared import (
     save_experiment_results, make_structured_output, convert_numpy,
     get_model_factories, get_domain_metric, cv_split, make_cv_splitter,
     get_fitted_hybrid, flatten_fold_weights, build_fold_hybrid,
-    get_best_for_downstream,
+    get_best_for_downstream, extract_top3_base_reps,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 
@@ -383,7 +383,7 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
     if heavy_seqs is not None and domain == 'antibody':
         # Edit-distance ground truth for antibodies
         from experiments.similarity.similarity_helpers import identify_cliff_compounds_editdist
-        max_edits = kwargs.get('max_edits', 5)
+        max_edits = 5
         cliff_mask, cliff_info = identify_cliff_compounds_editdist(
             heavy_seqs, labels, max_edits=max_edits, activity_k=activity_k,
             is_clf=is_clf)
@@ -606,8 +606,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if best_config and 'blueprint' in best_config:
             hybrid_blueprint = best_config['blueprint']
         print(f"  Hybrid: dim={X_hybrid.shape[1]}")
+        top3 = extract_top3_base_reps(search)
+        if top3:
+            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     except Exception as e:
         print(f"  WARNING: Hybrid search failed ({e}), hybrid comparisons skipped")
+        search = None
+        top3 = None
 
     results = {
         'config': {
@@ -617,6 +622,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'n_samples': n,
             'n_reps': len(reps),
         },
+        'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
     }
 
     # --- Sub-analysis 1: Consensus cliff identification ---

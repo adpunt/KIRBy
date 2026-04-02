@@ -23,7 +23,7 @@ from sklearn.metrics import r2_score
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    get_domain_metric, get_fitted_hybrid,
+    get_domain_metric, get_fitted_hybrid, extract_top3_base_reps,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 from kirby.utils.noise_mitigation_methods import (
@@ -95,6 +95,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     D_hybrid = None
     X_hybrid = None
+    _search = None
     groups = data.get('groups')
     try:
         X_hybrid, fi, _search = get_fitted_hybrid(
@@ -108,6 +109,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         )
         D_hybrid = compute_distance_matrix(X_hybrid, standardize=True)
         print(f"  Hybrid distance matrix: {X_hybrid.shape[1]}D")
+        top3 = extract_top3_base_reps(_search)
+        if top3:
+            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     except Exception as e:
         print(f"  Hybrid failed: {e} — distance-aware methods will use concat only")
 
@@ -122,10 +126,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Sigmas: {sigmas}")
     print(f"  Methods: {len(ALL_METHODS)}")
 
+    top3 = extract_top3_base_reps(_search) if _search is not None else None
     results = {
         'metric': metric_name,
         'sigmas': sigmas,
         'methods': ALL_METHODS,
+        'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
         'per_sigma': {},
     }
 

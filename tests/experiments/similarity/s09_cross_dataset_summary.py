@@ -86,10 +86,13 @@ def run(all_dataset_results):
 
         # Exp 5: kNN improvement vs best individual rep
         exp5 = ds_results.get('s05_knn_prediction')
-        if exp5 and 'conditions' in exp5:
-            conds = exp5['conditions']
-            hw_scores = [v['score_mean'] for k, v in conds.items()
-                        if v.get('condition') == 'hybrid_weighted']
+        if exp5 and 'per_budget' in exp5:
+            # Collect hybrid_weighted scores across all budgets
+            hw_scores = []
+            for b_res in exp5['per_budget'].values():
+                for k, v in b_res.items():
+                    if 'hybrid_weighted' in k:
+                        hw_scores.append(v['score_mean'])
             # Compare against best individual rep kNN baseline
             per_rep = exp5.get('per_rep_baselines', {})
             if hw_scores and per_rep:
@@ -173,8 +176,8 @@ def run(all_dataset_results):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='S09: Cross-dataset summary')
-    parser.add_argument('--datasets', nargs='+', default=['logd', 'caco2', 'herg', 'qm9'],
-                        help='Datasets to aggregate (default: logd caco2 herg qm9)')
+    parser.add_argument('--datasets', nargs='+', default=['logd', 'caco2', 'herg_ki', 'qm9'],
+                        help='Datasets to aggregate (default: logd caco2 herg_ki qm9)')
     parser.add_argument('--results-dir', type=str, default='tests/results',
                         help='Directory containing experiment result subdirs')
     parser.add_argument('--output', type=str, default='tests/results',
