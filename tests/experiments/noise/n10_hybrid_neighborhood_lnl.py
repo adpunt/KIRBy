@@ -33,7 +33,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories,
     get_precomputed_search, build_fold_hybrid,
-    extract_top3_base_reps,
+    extract_top3_base_reps, cap_dimensions,
 )
 from kirby.hybrid import create_hybrid, compute_feature_importance
 from kirby.utils.noise_estimation import (
@@ -199,7 +199,7 @@ def _build_neighbor_spaces(train_reps, y_train, blueprints, train_augs):
     # Per-rep neighbor spaces
     for rep_name, X_rep in train_reps.items():
         scaler = StandardScaler()
-        spaces[rep_name] = scaler.fit_transform(X_rep)
+        spaces[rep_name] = cap_dimensions(scaler.fit_transform(X_rep))[0]
 
     return spaces, base_rep_name
 

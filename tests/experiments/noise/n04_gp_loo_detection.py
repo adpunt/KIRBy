@@ -41,6 +41,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_domain_metric, get_fitted_hybrid, extract_top3_base_reps,
+    cap_dimensions,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 from kirby.utils.noise_estimation import ActivityCliffAwareEstimator
@@ -212,7 +213,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # 4. Per-rep spaces (individual base reps)
     for rep_name, X_rep in reps.items():
-        spaces[rep_name] = StandardScaler().fit_transform(X_rep)
+        spaces[rep_name] = cap_dimensions(StandardScaler().fit_transform(X_rep))[0]
 
     print(f"  Spaces: {list(spaces.keys())}")
     print(f"  Noise fractions: {noise_fractions}")

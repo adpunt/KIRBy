@@ -527,6 +527,24 @@ def evaluate_cv_with_train(
     )
 
 
+def cap_dimensions(X_train, X_val=None, max_dim=None):
+    """PCA-reduce if features exceed max_dim. Returns (X_train, X_val) or (X_train,).
+
+    If max_dim is None, defaults to n_train (X_train.shape[0]).
+    Only applies PCA when X_train.shape[1] > max_dim.
+    """
+    if max_dim is None:
+        max_dim = X_train.shape[0]
+    if X_train.shape[1] <= max_dim:
+        return (X_train, X_val) if X_val is not None else (X_train,)
+    n_components = min(max_dim, X_train.shape[0] - 1)
+    pca = PCA(n_components=n_components)
+    X_train_r = pca.fit_transform(X_train)
+    if X_val is not None:
+        return X_train_r, pca.transform(X_val)
+    return (X_train_r,)
+
+
 def evaluate_single_rep_cv(
     X: np.ndarray,
     labels: np.ndarray,
@@ -545,6 +563,9 @@ def evaluate_single_rep_cv(
         scaler = StandardScaler()
         X_train = scaler.fit_transform(X[train_idx])
         X_val = scaler.transform(X[val_idx])
+
+        # PCA-reduce if features exceed training samples
+        X_train, X_val = cap_dimensions(X_train, X_val)
 
         model = model_factory()
         model.fit(X_train, labels[train_idx])

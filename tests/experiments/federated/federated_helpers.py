@@ -67,6 +67,47 @@ if _original_display is not None:
     builtins.display = _original_display
 
 
+# ── Lhasa hERG loader (returns data in load_data format) ─────────────────────
+
+def load_lhasa_herg_data(rep_names=None):
+    """Load Lhasa's curated hERG training data in the same format as load_data().
+
+    Returns a data dict compatible with fed01/02/04 with:
+    - Binary labels (0/1) already binarized
+    - task_type='classification'
+    - Scaffold groups for CV splitting
+    """
+    from experiments.federated.lhasa_herg_loader import load_lhasa_herg_training
+
+    smiles, labels, inchikeys, _ = load_lhasa_herg_training()
+    print(f"  Lhasa hERG: {len(labels)} molecules, "
+          f"{int(labels.sum())} active, {len(labels) - int(labels.sum())} inactive")
+
+    # Compute representations
+    from kirby.representations import get_representations
+    if rep_names is None:
+        rep_names = 'all'
+    reps = get_representations(smiles, rep_names)
+
+    # Scaffold groups
+    try:
+        from kirby.utils.splitting import assign_scaffold_groups
+        groups, _ = assign_scaffold_groups(smiles)
+    except Exception:
+        groups = None
+
+    return {
+        'reps': reps,
+        'labels': labels,
+        'smiles': smiles,
+        'groups': groups,
+        'task_type': 'classification',
+        'domain': 'molecular',
+        'is_binary': True,  # Signal to experiments: labels already binarized
+        'augmentations': None,
+    }
+
+
 # ── Federated-specific config ────────────────────────────────────────────────
 
 _FEDERATED_CONFIG_CACHE = None
@@ -1541,6 +1582,10 @@ def run_all(dataset_name: str, output_dir: str,
         print(f"\nSkipping load_data — all experiments load their own data")
         data = {'reps': {}, 'labels': np.array([]),
                 'domain': 'federated', 'augmentations': None}
+    elif dataset_name in ('herg', 'lhasa_herg'):
+        print(f"\nLoading Lhasa hERG data...")
+        data = load_lhasa_herg_data(rep_names=rep_names)
+        print(f"  Loaded in {time.time() - t0:.1f}s")
     else:
         print(f"\nLoading {dataset_name}...")
         data = load_data(dataset_name, rep_preset='all', rep_names=rep_names)

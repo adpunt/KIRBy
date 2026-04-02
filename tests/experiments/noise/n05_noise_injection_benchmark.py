@@ -24,6 +24,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_domain_metric, get_fitted_hybrid, extract_top3_base_reps,
+    cap_dimensions,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 from kirby.utils.noise_mitigation_methods import (
@@ -119,7 +120,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     per_rep_D = {}
     per_rep_Xs = {}
     for rep_name, X_rep in reps.items():
-        per_rep_Xs[rep_name] = StandardScaler().fit_transform(X_rep)
+        per_rep_Xs[rep_name] = cap_dimensions(StandardScaler().fit_transform(X_rep))[0]
         per_rep_D[rep_name] = compute_distance_matrix(X_rep, standardize=True)
     print(f"  Per-rep distance matrices: {list(per_rep_D.keys())}")
 

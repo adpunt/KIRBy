@@ -30,7 +30,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_model_factories, cv_split,
-    get_domain_metric,
+    get_domain_metric, cap_dimensions,
     get_precomputed_search, build_fold_hybrid,
     extract_top3_base_reps,
 )
@@ -124,6 +124,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 scaler = StandardScaler()
                 X_train = scaler.fit_transform(X_rep[train_idx])
                 X_val = scaler.transform(X_rep[val_idx])
+                X_train, X_val = cap_dimensions(X_train, X_val)
                 y_train, y_val = labels[train_idx], labels[val_idx]
 
                 preds, ft, pt = _time_fit_predict(model_factory, X_train, y_train, X_val)
