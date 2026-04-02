@@ -62,7 +62,7 @@ CONSTRAINTS="-c ${SCRIPT_DIR}/constraints.txt"
 # Core scientific stack — only install if broken
 if ! python -c "import numpy, pandas, scipy, sklearn" 2>/dev/null; then
     echo "Fixing broken scientific stack..."
-    pip install numpy==1.26.4 pandas==2.2.0 scipy==1.11.4 scikit-learn==1.4.0 pytz==2023.3.post1 \
+    pip install numpy==1.26.4 pandas==2.2.0 scipy==1.11.4 scikit-learn==1.6.1 pytz==2023.3.post1 \
         || { echo "FATAL: core scientific stack install failed"; return 1 2>/dev/null || exit 1; }
 fi
 
