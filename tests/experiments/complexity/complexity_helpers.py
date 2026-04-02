@@ -25,6 +25,7 @@ import numpy as np
 
 from experiments._shared import (
     load_data, save_experiment_results, convert_numpy,
+    DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
 )
 
 
@@ -68,7 +69,7 @@ _AB_GENERAL = [
 
 DATASET_REPS = {
     # ── Molecular (7 datasets) ──────────────────────────────────────────
-    'herg': {
+    'herg_ki': {
         'general': [
             'mhg_gnn', 'mordred', 'graph_kernel', 'avalon', 'grover', 'pdv',
             'mol2vec', 'ecfp4', 'molformer', 'chemberta', 'atom_pair',
@@ -584,7 +585,7 @@ def run_all(dataset_name: str, output_dir: str,
     """Load data once and run all single-dataset complexity experiments.
 
     Args:
-        dataset_name: Dataset name (e.g. 'herg', 'logd', 'flab_thermo_tresanco').
+        dataset_name: Dataset name (e.g. 'herg_ki', 'logd', 'flab_thermo_tresanco').
         output_dir: Base output directory for results JSON files.
         experiments: List of experiment IDs to run (default: SINGLE_DATASET_EXPERIMENTS).
         config: Config dict override (default: fast tier from SPEED_TIERS).
@@ -599,9 +600,9 @@ def run_all(dataset_name: str, output_dir: str,
             'search_speed': 'fast',
             'allocations': tier['allocation_methods'],
             'importance_methods': tier['importance_methods'],
-            'internal_evaluators': tier['internal_evaluators'],
+            'internal_evaluators': INTERNAL_EVALUATORS,
             'budgets': SCREENING_BUDGETS,
-            'models': ['rf', 'lightgbm', 'mlp'],
+            'models': DOWNSTREAM_MODELS,
         }
     if experiments is None:
         experiments = list(SINGLE_DATASET_EXPERIMENTS)

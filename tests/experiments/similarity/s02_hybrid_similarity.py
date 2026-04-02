@@ -21,6 +21,7 @@ import numpy as np
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, get_fitted_hybrid, flatten_weights,
+    extract_top3_base_reps,
 )
 from experiments.similarity.similarity_helpers import (
     similarity_activity_correlation, compute_sali, violation_rate,
@@ -158,6 +159,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     search_time = time.time() - t0
     hybrid_dim = X_hybrid.shape[1]
+
+    top3 = extract_top3_base_reps(search)
+    if top3:
+        print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+        results['top3_base_reps'] = [(n, s) for n, s in top3]
 
     # Hybrid unweighted (same for all weight methods -- only compute once)
     D_hybrid = compute_distance_matrix(X_hybrid, standardize=True)

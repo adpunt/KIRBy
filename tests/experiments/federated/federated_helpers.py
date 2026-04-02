@@ -33,6 +33,7 @@ from sklearn.metrics import (
 
 from experiments._shared import (
     load_data, save_experiment_results, convert_numpy,
+    DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
 )
 from experiments.complexity.complexity_helpers import DATASET_REPS
 
@@ -81,9 +82,9 @@ def _get_federated_config():
             'search_speed': 'fast',
             'allocations': tier['allocation_methods'],
             'importance_methods': tier['importance_methods'],
-            'internal_evaluators': tier['internal_evaluators'],
+            'internal_evaluators': INTERNAL_EVALUATORS,
             'budgets': [100],
-            'models': ['rf', 'lightgbm', 'mlp'],
+            'models': DOWNSTREAM_MODELS,
         }
     return _FEDERATED_CONFIG_CACHE
 
@@ -653,7 +654,7 @@ def federate_labels_and_train_student(teacher_models, cluster_data, fluid_df,
 def federated_feature_selection(rep_dict, labels, silo_indices, k,
                                 budget=100, allocation_method='performance_weighted',
                                 importance_method='treeshap',
-                                internal_evaluator='ridge', seed=42):
+                                internal_evaluator='rf', seed=42):
     """Privacy-preserving federated feature selection.
 
     Protocol:
@@ -702,7 +703,8 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
         silo_labels = labels[idx]
 
         # Local importance computation (generous budget — will be trimmed)
-        per_silo_budget = max(10, budget // k)
+        n_silo = len(idx)
+        per_silo_budget = min(max(10, budget // k), n_silo)
         try:
             X_silo, fi = create_hybrid(
                 silo_reps, silo_labels,
@@ -1104,7 +1106,7 @@ def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,
                               k_intra=3, budget=100, seed=42,
                               allocation_method='performance_weighted',
                               importance_method='treeshap',
-                              internal_evaluator='ridge'):
+                              internal_evaluator='rf'):
     """Condition 6: FLuID clustering within each silo, KIRBy across silos.
 
     For each representation (silo):
@@ -1182,7 +1184,8 @@ def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,
         silo_rep_tr = {parent_rep: rep_dict_train[parent_rep][idx]}
         silo_labels = labels[idx]
 
-        per_silo_budget = max(5, budget // k_expanded)
+        n_silo = len(idx)
+        per_silo_budget = min(max(5, budget // k_expanded), n_silo)
         try:
             X_s, fi = create_hybrid(
                 silo_rep_tr, silo_labels,
@@ -1490,7 +1493,7 @@ def run_all(dataset_name: str, output_dir: str,
     """Load data once and run all federated experiments.
 
     Args:
-        dataset_name: Dataset name (e.g. 'herg').
+        dataset_name: Dataset name (e.g. 'herg_ki').
         output_dir: Base output directory for results JSON files.
         experiments: List of experiment IDs to run (default: all).
         config: Config dict override (default: FEDERATED_CONFIG).

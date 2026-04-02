@@ -23,7 +23,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, get_fitted_hybrid, get_best_for_downstream,
     flatten_weights, make_cv_splitter,
-    get_domain_metric, build_fold_hybrid,
+    get_domain_metric, build_fold_hybrid, extract_top3_base_reps,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 
@@ -80,6 +80,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"  Best kNN config: alloc={bp.allocation_method}, "
                   f"imp={bp.importance_method}, ev={bp.internal_evaluator}, "
                   f"budget={bp.budget}, score={best_knn.get('score_mean', 0):.4f}")
+        top3 = extract_top3_base_reps(search)
+        if top3:
+            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+            results['top3_base_reps'] = [(n, s) for n, s in top3]
     except Exception as e:
         print(f"  Distance-aware search failed: {e}")
         search = None

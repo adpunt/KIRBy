@@ -18,6 +18,8 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     get_model_family_variants, evaluate_cv_with_train,
     find_best_hybrid, get_domain_metric,
+    extract_top3_base_reps,
+    INTERNAL_EVALUATORS,
 )
 
 
@@ -76,6 +78,7 @@ def run(data, config, output_dir, dataset_name, families=None):
                     budgets=budgets,
                     augmentations=augs,
                     augmentation_strategy='capped',
+                    internal_evaluators=INTERNAL_EVALUATORS,
                     verbose=False,
                     cache=True,
                 )
@@ -85,6 +88,10 @@ def run(data, config, output_dir, dataset_name, families=None):
                     'budget': None, 'r2': float('nan'), 'capacity_index': capacity_idx,
                 }
                 continue
+
+            top3 = extract_top3_base_reps(search, model=var_name)
+            if top3:
+                print(f"      Top-3 base reps (by {var_name}): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
 
             # Extract best score at each budget from all_results
             for budget in budgets:

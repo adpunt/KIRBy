@@ -181,7 +181,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         return {'error': 'all_folds_failed'}
 
     # ── Aggregate across folds ──
-    # Use last fold's feature_info for explanation (representative)
+    # Feature_info (selected indices, allocation) is deterministic given the same
+    # blueprint, so all folds produce identical structure. Use the last fold.
+    # SHAP values are properly averaged across folds below.
     feature_info = all_feature_infos[-1]
 
     # Average SHAP values across folds (if available)

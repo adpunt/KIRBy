@@ -28,7 +28,7 @@ from sklearn.metrics import silhouette_score
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    get_fitted_hybrid,
+    get_fitted_hybrid, extract_top3_base_reps,
     compute_feature_importance,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
@@ -196,8 +196,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             budgets=DISTANCE_BUDGETS,
             downstream_model='knn')
         spaces['hybrid'] = X_hybrid
+        top3 = extract_top3_base_reps(search)
+        if top3:
+            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     except Exception as e:
         print(f"  Hybrid creation failed: {e}")
+        top3 = None
 
     print(f"  Spaces: {list(spaces.keys())}")
 
@@ -246,6 +250,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'spaces': list(spaces.keys()),
         },
     }
+    if top3:
+        results['top3_base_reps'] = [(n, s) for n, s in top3]
 
     # Summary: hybrid vs top-3 per-rep baselines
     # Top-3 by retrieval (lower mean_delta_y = better)

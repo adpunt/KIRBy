@@ -32,6 +32,7 @@ from experiments._shared import (
     get_model_factories, cv_split,
     get_domain_metric,
     get_precomputed_search, build_fold_hybrid,
+    extract_top3_base_reps,
 )
 
 
@@ -79,6 +80,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Precompute hybrid blueprints ONCE (cached) for all budgets
     augmentations = data.get('augmentations')
     blueprints = {}
+    last_search = None
     for budget in budgets:
         try:
             search = get_precomputed_search(
@@ -89,9 +91,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             best = search.best_by_model.get('rf') or next(iter(search.best_by_model.values()), None)
             if best and 'blueprint' in best:
                 blueprints[budget] = best['blueprint']
+            last_search = search
         except Exception as e:
             print(f"  Blueprint for budget={budget} failed: {e}")
     print(f"  Blueprints: {sorted(blueprints.keys())}")
+
+    if last_search is not None:
+        top3 = extract_top3_base_reps(last_search)
+        if top3:
+            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
 
     results = []
 
@@ -101,7 +109,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # =====================================================================
         # 1. Best single base rep
         # =====================================================================
-        best_single_r2 = -np.inf
+        best_single_r2 = np.inf if lower_is_better else -np.inf
         best_single_rep = None
         single_rep_results = {}
 
@@ -140,7 +148,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'fit_time_s': float(np.mean(fold_fit_times)),
                 'predict_time_s': float(np.mean(fold_pred_times)),
             }
-            if r2_mean > best_single_r2:
+            if (lower_is_better and r2_mean < best_single_r2) or \
+               (not lower_is_better and r2_mean > best_single_r2):
                 best_single_r2 = r2_mean
                 best_single_rep = rep_name
 
@@ -390,7 +399,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             continue
 
         ens_r = ens[0]
-        best_hyb = max(hybs, key=lambda x: x['r2_mean'])
+        best_hyb = (min if lower_is_better else max)(hybs, key=lambda x: x['r2_mean'])
 
         delta = best_hyb['r2_mean'] - ens_r['r2_mean']
         speedup = ens_r['total_fit_time_s'] / best_hyb['total_fit_time_s'] if best_hyb['total_fit_time_s'] > 0 else 0
@@ -400,11 +409,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"{ens_r['total_fit_time_s']:>8.3f} "
               f"{best_hyb['total_fit_time_s']:>8.3f} {speedup:>7.1f}x")
 
+    top3 = extract_top3_base_reps(last_search) if last_search is not None else []
     return {
         'results': results,
         'n_reps': n_reps,
         'total_dim': total_dim,
         'rep_names': rep_names,
+        'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
     }
 
 

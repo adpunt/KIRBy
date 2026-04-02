@@ -40,7 +40,7 @@ from sklearn.ensemble import RandomForestRegressor
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    get_domain_metric, get_fitted_hybrid,
+    get_domain_metric, get_fitted_hybrid, extract_top3_base_reps,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 from kirby.utils.noise_estimation import ActivityCliffAwareEstimator
@@ -183,6 +183,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     spaces = {}
 
     # 1. Hybrid
+    _search = None
     try:
         X_hybrid, fi, _search = get_fitted_hybrid(
             reps, labels, groups, budget=budget,
@@ -194,6 +195,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             downstream_model='gp',
         )
         spaces['hybrid'] = X_hybrid
+        top3 = extract_top3_base_reps(_search)
+        if top3:
+            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     except Exception as e:
         print(f"  Hybrid creation failed: {e}")
 
@@ -219,6 +223,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     n_cliffs = int(cliff_mask.sum())
     print(f"  Cliff compounds: {n_cliffs}/{len(y_sub)} ({100*n_cliffs/len(y_sub):.1f}%)")
 
+    top3 = extract_top3_base_reps(_search) if _search is not None else None
     results = {
         'n_samples': len(labels),
         'n_subsampled': len(y_sub),
@@ -226,6 +231,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'pct_cliffs': float(100 * n_cliffs / len(y_sub)),
         'noise_fractions': noise_fractions,
         'spaces': list(spaces.keys()),
+        'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
         'per_noise_level': {},
     }
 

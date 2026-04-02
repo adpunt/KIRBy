@@ -21,6 +21,8 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     get_model_factories, evaluate_single_rep_cv, fit_learning_curve,
     find_best_hybrid, get_domain_metric,
+    extract_top3_base_reps,
+    INTERNAL_EVALUATORS,
 )
 
 
@@ -57,6 +59,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Repeats: {n_repeats}")
     print(f"  Search speed: {search_speed}")
 
+    last_search = None
     results = {'sample_sizes': sample_sizes, 'budgets': sweep_budgets,
                 'models': {}, 'search_speed': search_speed}
 
@@ -74,6 +77,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         single_by_model = {m: [] for m in model_names}
         configs_by_model = {m: [] for m in model_names}
 
+        last_search = None
         full_augs = data.get('augmentations')
         for seed in range(n_repeats):
             np.random.seed(seed)
@@ -103,9 +107,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     n_folds=sub_folds,
                     augmentations=sub_augs,
                     augmentation_strategy='capped',
+                    internal_evaluators=INTERNAL_EVALUATORS,
                     verbose=False,
                     cache=True,
                 )
+                last_search = search
                 for model_name in model_names:
                     if model_name in search.best_by_model:
                         mbest = search.best_by_model[model_name]
@@ -121,7 +127,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # Baselines per model
             for model_name, model_factory in models.items():
                 # Best single rep
-                best_single = -np.inf
+                best_single = np.inf if lower_is_better else -np.inf
                 for rep_name, X in sub_reps.items():
                     try:
                         r2, _ = evaluate_single_rep_cv(
@@ -130,11 +136,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             mode='intermediary' if sub_folds == 1 else 'full',
                             metric_fn=metric_fn,
                         )
-                        best_single = max(best_single, r2)
+                        if (lower_is_better and r2 < best_single) or \
+                           (not lower_is_better and r2 > best_single):
+                            best_single = r2
                     except Exception:
                         pass
-                if best_single > -np.inf:
+                if best_single != (np.inf if lower_is_better else -np.inf):
                     single_by_model[model_name].append(best_single)
+
+        if last_search is not None:
+            top3 = extract_top3_base_reps(last_search)
+            if top3:
+                print(f"    Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
 
         # Aggregate across repeats
         for model_name in model_names:
@@ -150,6 +163,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             delta = h - s if not (np.isnan(h) or np.isnan(s)) else float('nan')
             print(f"    {model_name}: hybrid={h:.4f}, best_single={s:.4f}, delta={delta:+.4f}")
+
+    # Top-3 from the last (full-data) subsample search
+    top3_full = extract_top3_base_reps(last_search) if last_search is not None else []
 
     # Fit learning curves per model
     for model_name in model_names:
@@ -188,6 +204,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         elif 'r2_max' in fit:
             print(f"    {model_name}: {metric_name}_max~{fit['r2_max']:.4f} (fit failed: {fit.get('error', '?')})")
 
+    results['top3_base_reps'] = [(n, s) for n, s in top3_full] if top3_full else []
     return results
 
 

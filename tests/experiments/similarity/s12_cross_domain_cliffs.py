@@ -27,7 +27,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories, get_precomputed_search,
-    build_fold_hybrid, DOWNSTREAM_MODELS,
+    build_fold_hybrid, extract_top3_base_reps, DOWNSTREAM_MODELS,
 )
 from kirby.hybrid import create_hybrid
 from kirby.hybrid import apply_feature_selection
@@ -161,6 +161,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             speed=search_speed,
             precomputed=data.get('precomputed_searches'))
         bp = search.best_by_model['rf']['blueprint'] if search.best_by_model.get('rf') else None
+        top3 = extract_top3_base_reps(search)
+        if top3:
+            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     except Exception as e:
         print(f"  Hybrid search failed: {e}")
         return {'error': str(e), 'cliff_info': cliff_info}
@@ -252,6 +255,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'per_rep': convert_numpy(per_rep_results),
         'hybrid': convert_numpy(hybrid_results_by_model),
     }
+    if top3:
+        results['top3_base_reps'] = [(n, s) for n, s in top3]
 
     # Summary per model
     print(f"\n  Hybrid cliff {metric_name} per model:")

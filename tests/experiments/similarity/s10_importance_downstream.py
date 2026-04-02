@@ -31,7 +31,7 @@ from experiments._shared import (
     save_experiment_results, make_structured_output,
     cv_split, get_domain_metric, get_model_factories, convert_numpy,
     compute_feature_importance, build_fold_hybrid,
-    get_precomputed_search, get_best_for_downstream,
+    get_precomputed_search, get_best_for_downstream, extract_top3_base_reps,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 
@@ -707,11 +707,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"budget={hybrid_blueprint.budget}, "
                   f"imp={hybrid_blueprint.importance_method}, "
                   f"ev={hybrid_blueprint.internal_evaluator}")
+        top3 = extract_top3_base_reps(search)
+        if top3:
+            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     except Exception as e:
         print(f"  Hybrid search failed: {e}")
+        top3 = None
 
     start_total = time.time()
     results = {}
+    if top3:
+        results['top3_base_reps'] = [(n, s) for n, s in top3]
 
     augmentations = data.get('augmentations')
     task_type = data.get('task_type', 'regression')

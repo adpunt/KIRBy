@@ -26,6 +26,7 @@ from scipy.spatial.distance import cdist as scipy_cdist
 from experiments._shared import (
     load_data, save_experiment_results, convert_numpy,
     load_experiment_results,
+    DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
 )
 
 # Reuse dataset rep configs — single source of truth
@@ -162,6 +163,83 @@ def violation_rate(D, y, k=5, is_clf=False):
             n_total += 1
 
     return float(n_violations / n_total) if n_total > 0 else 0.0
+
+
+def identify_cliff_compounds_editdist(sequences, y, max_edits=5, activity_k=2.0,
+                                      is_clf=False):
+    """Identify activity cliff compounds using pairwise edit distance (Hamming).
+
+    Representation-independent cliff definition for protein/antibody data.
+    Uses sequence Hamming distance (on aligned sequences of equal length)
+    or Levenshtein distance (if lengths differ).
+
+    Definition: cliff = few mutations (edits <= max_edits) but large activity
+    difference (|delta_y| > activity_k * MAD(y)).
+
+    Args:
+        sequences: list of str (aligned sequences, e.g., heavy chains).
+        y: array of activity values.
+        max_edits: Maximum edit distance to be considered "structurally similar".
+        activity_k: Multiplier for MAD-based activity threshold.
+        is_clf: If True, cliff = few edits + different class.
+
+    Returns:
+        cliff_mask: boolean array, True for cliff compounds.
+        info: dict with thresholds, counts, per-compound cliff pair counts.
+    """
+    n = len(y)
+    y = np.asarray(y)
+
+    # Pairwise edit distance (Hamming if equal length, else Levenshtein)
+    same_len = len(set(len(s) for s in sequences)) == 1
+    if same_len:
+        # Fast Hamming: vectorised character comparison
+        arr = np.array([list(s) for s in sequences])
+        edit_dist = np.zeros((n, n), dtype=np.int32)
+        for i in range(n):
+            edit_dist[i] = (arr != arr[i]).sum(axis=1)
+    else:
+        # Levenshtein fallback (slower)
+        edit_dist = np.zeros((n, n), dtype=np.int32)
+        for i in range(n):
+            for j in range(i + 1, n):
+                d = sum(a != b for a, b in zip(sequences[i], sequences[j]))
+                d += abs(len(sequences[i]) - len(sequences[j]))
+                edit_dist[i, j] = d
+                edit_dist[j, i] = d
+
+    # Activity difference
+    delta_y = _pairwise_delta_matrix(y, is_clf=is_clf)
+
+    if is_clf:
+        activity_threshold = 0.5
+        mad_y = 0.0
+    else:
+        mad_y = float(np.median(np.abs(y - np.median(y))))
+        activity_threshold = activity_k * mad_y
+
+    # Cliff: few edits AND large activity difference
+    cliff_pair_mask = (edit_dist <= max_edits) & (edit_dist > 0) & (delta_y > activity_threshold)
+    cliff_mask = cliff_pair_mask.any(axis=1)
+    cliff_pair_counts = cliff_pair_mask.sum(axis=1)
+    n_cliff_pairs = int(cliff_pair_mask.sum()) // 2
+    n_cliff_compounds = int(cliff_mask.sum())
+
+    info = {
+        'method': 'edit_distance',
+        'max_edits': max_edits,
+        'activity_k': activity_k,
+        'activity_threshold': activity_threshold,
+        'mad_y': mad_y,
+        'n_cliff_pairs': n_cliff_pairs,
+        'n_cliff_compounds': n_cliff_compounds,
+        'pct_cliff_compounds': float(100.0 * n_cliff_compounds / n),
+        'cliff_pair_counts': cliff_pair_counts,
+        'mean_edit_dist': float(edit_dist[np.triu_indices(n, k=1)].mean()),
+        'median_edit_dist': float(np.median(edit_dist[np.triu_indices(n, k=1)])),
+    }
+
+    return cliff_mask, info
 
 
 def identify_cliff_compounds(ecfp4, y, tanimoto_threshold=0.55, activity_k=2.0,
@@ -311,9 +389,9 @@ def run_all(dataset_name: str, output_dir: str,
             'search_speed': 'fast',
             'allocations': tier['allocation_methods'],
             'importance_methods': tier['importance_methods'],
-            'internal_evaluators': tier['internal_evaluators'],
+            'internal_evaluators': INTERNAL_EVALUATORS,
             'budgets': SCREENING_BUDGETS,
-            'models': ['rf', 'lightgbm', 'mlp'],
+            'models': DOWNSTREAM_MODELS,
         }
         config.update(SIMILARITY_EXTRA)
     if experiments is None:

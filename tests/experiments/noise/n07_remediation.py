@@ -23,6 +23,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories,
     get_precomputed_search, build_fold_hybrid,
+    extract_top3_base_reps,
 )
 from kirby.utils.noise_estimation import (
     ActivityCliffAwareEstimator, smooth_by_scores, weights_from_scores,
@@ -181,6 +182,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         reps, labels, groups, budget=budget, aug_condition='uncapped',
         augmentations=augmentations, speed=config.get('search_speed', 'fast'),
         precomputed=data.get('precomputed_searches'))
+    top3 = extract_top3_base_reps(search)
+    if top3:
+        print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     best_rf = search.best_by_model.get('rf')
     bp = best_rf['blueprint'] if best_rf else None
     if bp is None:
@@ -202,6 +206,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'lower_is_better': lower_is_better,
         'noise_fraction': noise_fraction,
         'strategies': strategies,
+        'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
         'per_strategy': {},
     }
 
