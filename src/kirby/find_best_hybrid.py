@@ -32,6 +32,7 @@ Usage:
 """
 
 import hashlib
+import os
 import pickle
 import time
 import warnings
@@ -851,38 +852,54 @@ def tune_models(
 # =============================================================================
 
 SPEED_TIERS = {
-    # F12/F13 results (2026-03-29). Two tiers: fast (screening) and full (publication).
+    # F12 validated (2026-04-03). Two tiers: fast (screening) and full (publication).
     # Budgets NOT in tiers — user must specify.
     # Downstream models NOT in tiers — experiment-controlled.
     'fast': {
         'importance_methods': ['treeshap', 'lightgbm_gain'],
         'allocation_methods': [
-            'entropy_1.0', 'top_3', 'greedy_fill_s25',
+            'entropy_1.0', 'top_3', 'top_2',
         ],
         'internal_evaluators': ['match'],
         'n_folds': 3,
     },
     'full': {
-        'importance_methods': ['treeshap', 'deeplift', 'lightgbm_gain'],
+        # 13 F12-validated strategies (covers all 24 dataset×model winners).
+        # Pruned from 31: dropped all never-top-3, redundant rank_exp variants,
+        # and strategies whose wins were <0.5% from another kept strategy.
+        'importance_methods': ['deeplift', 'lightgbm_gain'],
         'allocation_methods': [
-            # All 31 F12 survivors — PW family
-            'performance_weighted',
-            'softmax_T0.5', 'softmax_T2', 'softmax_T10',
-            'power_2', 'power_3',
-            'thresh_0.3', 'thresh_0.5', 'thresh_0.7',
+            # Multi-win strategies (2-3 wins each)
             'top_2', 'top_3', 'top_5',
+            'performance_weighted',  # = pw_linear
+            'min_floor',
+            'entropy_1.0',
+            'score_gap_0.2',
+            # Single-win strategies (each uniquely best on ≥1 dataset×model)
+            'power_2',
             'rank_linear',
-            'rank_exp_d0.1', 'rank_exp_d0.3', 'rank_exp_d0.5',
-            'score_gap_0.2', 'score_gap_0.3', 'score_gap_0.5', 'score_gap_0.7',
-            'entropy_0.5', 'entropy_1.0', 'entropy_2.0',
-            # Greedy family
-            'greedy_forced_s5', 'greedy_forced_s10', 'greedy_forced_s25',
-            'greedy_fill_s5', 'greedy_fill_s10', 'greedy_fill_s25',
-            'dom_greedy_f0.7', 'dom_greedy_f0.9',
+            'entropy_2.0',
+            'thresh_0.3',
+            'rank_exp_d0.5',
+            'greedy_fill_s5',
         ],
         'internal_evaluators': ['match'],
         'n_folds': 5,
     },
+}
+
+# Per-model maximum budget. Models sensitive to high dimensionality
+# (curse of dimensionality, kernel explosion, parameter count) are capped.
+# Tree-based models handle high-d natively via feature splitting.
+MODEL_MAX_BUDGET = {
+    'gp': 2000,
+    'knn': 2000,
+    'svm': 3000,
+    'mlp': 3000,
+    'bnn': 3000,
+    'dnn': 3000,
+    'cnn': 3000,
+    # No cap: rf, xgboost, lightgbm, catboost, ridge, ngboost
 }
 
 
@@ -1213,9 +1230,26 @@ def _evaluate_hybrid_config(
             )
             X_val = apply_feature_selection(val_reps, feature_info)
 
-            # Apply augmentation selection to val set
+            # Apply augmentation selection to val set.
+            # Auto-demote (top_k) may have added demoted base reps to the
+            # augmentation pool inside create_hybrid. train_augs was mutated
+            # to include full-data slices (n_samples, n_top_features) for
+            # demoted reps, so val indexing works directly.
             aug_info = feature_info.get('augmentation_info')
-            if aug_info and val_augs is not None:
+            if aug_info and train_augs is not None:
+                # Rebuild val_augs to pick up any demoted reps added by auto-demote.
+                # train_augs[name] for demoted reps is (n_full, top_k_features)
+                # from create_hybrid line 3642, so val_idx slicing is safe.
+                val_augs = {}
+                for name in train_augs:
+                    arr = train_augs[name]
+                    if arr.shape[0] == len(labels):
+                        # Full-data array (from auto-demote mutation)
+                        val_augs[name] = arr[val_idx]
+                    elif augmentations is not None and name in augmentations:
+                        val_augs[name] = augmentations[name][val_idx]
+                    else:
+                        val_augs[name] = base_reps[name][val_idx]
                 aug_val_features = apply_augmentation_selection(val_augs, aug_info)
                 if aug_val_features is not None:
                     X_val = np.hstack([X_val, aug_val_features])
@@ -1467,6 +1501,23 @@ def _run_search(
             rep_sets.append(subset)
             rep_set_names.append(f'no_{leave_out}')
 
+    # --- top_k guard: skip top_k strategies where k >= n_reps ---
+    n_reps = len(base_reps) + (len(fold_reps.get(0, {})) if fold_reps else 0)
+    _filtered_alloc = []
+    for alloc in search_allocation:
+        if alloc.startswith('top_'):
+            try:
+                k = int(alloc.split('_')[1])
+                if k >= n_reps:
+                    if verbose:
+                        print(f"  Skipping {alloc}: k={k} >= n_reps={n_reps} "
+                              f"(equivalent to performance_weighted)")
+                    continue
+            except (IndexError, ValueError):
+                pass
+        _filtered_alloc.append(alloc)
+    search_allocation = _filtered_alloc
+
     # Build effective evaluator list per model
     def _evaluators_for_model(model_name):
         """Return list of evaluator names to test for a given downstream model."""
@@ -1484,13 +1535,21 @@ def _run_search(
                 evs.append(matched_ev)
         return evs if evs else ['ridge']
 
-    # Compute effective config count
+    def _budgets_for_model(model_name):
+        """Return budgets filtered by per-model cap from MODEL_MAX_BUDGET."""
+        cap = MODEL_MAX_BUDGET.get(model_name)
+        if cap is None:
+            return search_budgets
+        return [b for b in search_budgets if b <= cap]
+
+    # Compute effective config count (respects per-model budget caps)
     total = 0
     for alloc in search_allocation:
         n_imp = 1 if not _is_importance_sensitive(alloc) else len(search_importance)
         for model_name in models:
             n_ev = len(_evaluators_for_model(model_name))
-            total += len(rep_sets) * len(search_budgets) * n_imp * n_ev
+            n_bgt = len(_budgets_for_model(model_name))
+            total += len(rep_sets) * n_bgt * n_imp * n_ev
 
     if verbose:
         print(f"\nSearching {total} unique configurations ({speed} mode)...")
@@ -1578,82 +1637,146 @@ def _run_search(
         print(f"  Allocation scores pre-computed in {time.time() - _alloc_t0:.1f}s "
               f"({len(alloc_cache)} (fold, evaluator) combos)")
 
-    # Feature selection dedup: (fold_idx, model_name, selection_hash) -> (score, n_features)
-    # Avoids redundant downstream model training when different evaluators
-    # produce identical feature selections (common for greedy allocs).
-    # Uses '_hits' key as a counter (incremented inside _evaluate_hybrid_config).
-    selection_dedup = {'_hits': 0}
-
-    results = []
-    idx = 0
-
+    # ── Build flat list of all configs to evaluate ──
+    configs = []
     for rep_set, rep_set_name in zip(rep_sets, rep_set_names):
         for alloc in search_allocation:
-            # Importance-insensitive allocs (greedy, dominant_greedy) produce
-            # identical results regardless of importance_method — run once.
             imp_sensitive = _is_importance_sensitive(alloc)
             effective_importance = search_importance if imp_sensitive else [search_importance[0]]
 
-            for bgt in search_budgets:
-                for imp in effective_importance:
-                    for model_name, model in models.items():
-                        model_evaluators = _evaluators_for_model(model_name)
-
+            for model_name, model in models.items():
+                model_budgets = _budgets_for_model(model_name)
+                model_evaluators = _evaluators_for_model(model_name)
+                for bgt in model_budgets:
+                    for imp in effective_importance:
                         for eval_name in model_evaluators:
-                            idx += 1
+                            configs.append((
+                                rep_set, rep_set_name, alloc, bgt, imp,
+                                model_name, model, eval_name,
+                            ))
 
-                            try:
-                                result = _evaluate_hybrid_config(
-                                    base_reps=rep_set,
-                                    labels=labels,
-                                    allocation_method=alloc,
-                                    budget=bgt,
-                                    importance_method=imp,
-                                    model=model,
-                                    model_name=model_name,
-                                    internal_evaluator=eval_name,
-                                    groups=groups,
-                                    n_folds=search_folds,
-                                    metric_fn=metric_fn,
-                                    seed=seed,
-                                    augmentations=augmentations,
-                                    augmentation_strategy=augmentation_strategy,
-                                    augmentation_threshold=augmentation_threshold,
-                                    augmentation_budget=augmentation_budget,
-                                    candidate_ranking=candidate_ranking,
-                                    lower_is_better=lower_is_better,
-                                    fold_reps=fold_reps,
-                                    precomputed_folds=precomputed_folds,
-                                    cv_splitter=cv_splitter,
-                                    importance_cache=importance_cache,
-                                    alloc_cache=alloc_cache,
-                                    selection_dedup=selection_dedup,
-                                    greedy_tolerance=greedy_tolerance,
-                                )
-                                if rep_set_name != 'all':
-                                    result['rep_subset'] = rep_set_name
-                                results.append(result)
+    # ── Evaluate configs (parallel or sequential) ──
+    # Use threads (not processes) to avoid pickling issues with lambdas/closures.
+    # sklearn releases the GIL during C-level operations (tree fitting, SVMs),
+    # so threading still provides meaningful parallelism.
+    n_jobs = min(total, os.cpu_count() or 1)
+    use_parallel = n_jobs > 1 and total > 4
 
-                                if verbose:
-                                    print(
-                                        f"  [{idx}/{total}] {model_name}/{alloc}/{imp}/b={bgt}/ev={eval_name}: "
-                                        f"score={result['score_mean']:.4f}+/-{result['score_std']:.3f}, "
-                                        f"dim={result['n_features']}"
-                                    )
+    if use_parallel:
+        try:
+            from joblib import Parallel, delayed
 
-                            except Exception as e:
-                                if verbose:
-                                    print(
-                                        f"  [{idx}/{total}] {model_name}/{alloc}/{imp}/b={bgt}/ev={eval_name}: "
-                                        f"FAILED - {e}"
-                                    )
+            def _eval_one(rep_set, rep_set_name, alloc, bgt, imp,
+                          model_name, model, eval_name):
+                try:
+                    result = _evaluate_hybrid_config(
+                        base_reps=rep_set,
+                        labels=labels,
+                        allocation_method=alloc,
+                        budget=bgt,
+                        importance_method=imp,
+                        model=model,
+                        model_name=model_name,
+                        internal_evaluator=eval_name,
+                        groups=groups,
+                        n_folds=search_folds,
+                        metric_fn=metric_fn,
+                        seed=seed,
+                        augmentations=augmentations,
+                        augmentation_strategy=augmentation_strategy,
+                        augmentation_threshold=augmentation_threshold,
+                        augmentation_budget=augmentation_budget,
+                        candidate_ranking=candidate_ranking,
+                        lower_is_better=lower_is_better,
+                        fold_reps=fold_reps,
+                        precomputed_folds=precomputed_folds,
+                        cv_splitter=cv_splitter,
+                        importance_cache=importance_cache,
+                        alloc_cache=alloc_cache,
+                        selection_dedup=None,
+                        greedy_tolerance=greedy_tolerance,
+                    )
+                    if rep_set_name != 'all':
+                        result['rep_subset'] = rep_set_name
+                    return result
+                except Exception:
+                    return None
 
-    if verbose and selection_dedup:
-        dedup_hits = selection_dedup.get('_hits', 0)
-        dedup_entries = len(selection_dedup) - 1  # exclude '_hits' key
-        if dedup_hits > 0:
-            print(f"  Feature selection dedup: {dedup_hits} fold evaluations skipped "
-                  f"({dedup_entries} unique selections cached)")
+            if verbose:
+                print(f"  Parallel search: {total} configs across {n_jobs} workers...")
+            _par_t0 = time.time()
+            raw_results = Parallel(n_jobs=n_jobs, prefer='threads')(
+                delayed(_eval_one)(*cfg) for cfg in configs
+            )
+            results = [r for r in raw_results if r is not None]
+            if verbose:
+                print(f"  Parallel search complete: {len(results)}/{total} succeeded "
+                      f"in {time.time() - _par_t0:.1f}s")
+
+        except ImportError:
+            use_parallel = False  # fall through to sequential
+
+    if not use_parallel:
+        # Sequential fallback (also used when joblib unavailable)
+        selection_dedup = {'_hits': 0}
+        results = []
+
+        for idx, cfg in enumerate(configs, 1):
+            (rep_set, rep_set_name, alloc, bgt, imp,
+             model_name, model, eval_name) = cfg
+
+            try:
+                result = _evaluate_hybrid_config(
+                    base_reps=rep_set,
+                    labels=labels,
+                    allocation_method=alloc,
+                    budget=bgt,
+                    importance_method=imp,
+                    model=model,
+                    model_name=model_name,
+                    internal_evaluator=eval_name,
+                    groups=groups,
+                    n_folds=search_folds,
+                    metric_fn=metric_fn,
+                    seed=seed,
+                    augmentations=augmentations,
+                    augmentation_strategy=augmentation_strategy,
+                    augmentation_threshold=augmentation_threshold,
+                    augmentation_budget=augmentation_budget,
+                    candidate_ranking=candidate_ranking,
+                    lower_is_better=lower_is_better,
+                    fold_reps=fold_reps,
+                    precomputed_folds=precomputed_folds,
+                    cv_splitter=cv_splitter,
+                    importance_cache=importance_cache,
+                    alloc_cache=alloc_cache,
+                    selection_dedup=selection_dedup,
+                    greedy_tolerance=greedy_tolerance,
+                )
+                if rep_set_name != 'all':
+                    result['rep_subset'] = rep_set_name
+                results.append(result)
+
+                if verbose:
+                    print(
+                        f"  [{idx}/{total}] {model_name}/{alloc}/{imp}/b={bgt}/ev={eval_name}: "
+                        f"score={result['score_mean']:.4f}+/-{result['score_std']:.3f}, "
+                        f"dim={result['n_features']}"
+                    )
+
+            except Exception as e:
+                if verbose:
+                    print(
+                        f"  [{idx}/{total}] {model_name}/{alloc}/{imp}/b={bgt}/ev={eval_name}: "
+                        f"FAILED - {e}"
+                    )
+
+        if verbose and selection_dedup:
+            dedup_hits = selection_dedup.get('_hits', 0)
+            dedup_entries = len(selection_dedup) - 1
+            if dedup_hits > 0:
+                print(f"  Feature selection dedup: {dedup_hits} fold evaluations skipped "
+                      f"({dedup_entries} unique selections cached)")
 
     return results
 
@@ -1995,6 +2118,49 @@ def _hybrid_cache_key(base_reps, labels, groups, speed, budgets, allocation_meth
     return h.hexdigest()[:16]
 
 
+def find_best_single_rep_augmented(
+    primary_rep: str,
+    primary_features: np.ndarray,
+    augmentation_pool: Dict[str, np.ndarray],
+    labels: np.ndarray,
+    groups: Optional[np.ndarray] = None,
+    **kwargs,
+) -> 'SearchResult':
+    """Find the best augmented version of a single representation.
+
+    Wraps find_best_hybrid for the single-rep augmentation pattern:
+    one primary rep gets 100% of the budget, and all other reps are
+    tested as augmentations (their best features added if they help).
+
+    Args:
+        primary_rep: Name of the primary representation.
+        primary_features: Feature matrix for the primary rep (n_samples, n_features).
+        augmentation_pool: Dict of {rep_name: features} to test as augmentations.
+            The primary rep is automatically excluded if present.
+        labels: Target values.
+        groups: Group labels for CV.
+        **kwargs: Passed to find_best_hybrid. Defaults:
+            budgets=[primary_features.shape[1]] (use full base dimension),
+            augmentation_strategy='uncapped'.
+
+    Returns:
+        SearchResult from find_best_hybrid.
+    """
+    base_reps = {primary_rep: primary_features}
+    augmentations = {k: v for k, v in augmentation_pool.items() if k != primary_rep}
+
+    kwargs.setdefault('budgets', [primary_features.shape[1]])
+    kwargs.setdefault('augmentation_strategy', 'uncapped')
+
+    return find_best_hybrid(
+        base_reps=base_reps,
+        labels=labels,
+        groups=groups,
+        augmentations=augmentations,
+        **kwargs,
+    )
+
+
 # =============================================================================
 # MAIN ENTRY POINT
 # =============================================================================
@@ -2109,8 +2275,10 @@ def find_best_hybrid(
     if not base_reps:
         raise ValueError("base_reps cannot be empty")
     total_reps = len(base_reps) + (len(rep_factories) if rep_factories else 0)
-    if total_reps < 2:
-        raise ValueError("Need at least 2 representations for a hybrid")
+    n_aug = len(augmentations) if augmentations else 0
+    if total_reps < 2 and n_aug == 0:
+        raise ValueError("Need at least 2 representations for a hybrid "
+                         "(or 1 base rep + augmentations)")
 
     n_samples_list = [X.shape[0] for X in base_reps.values()]
     if len(set(n_samples_list)) > 1:

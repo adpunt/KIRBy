@@ -529,6 +529,108 @@ DATASET_REPS = {
 }
 
 
+# ── Augmentation group categories (for C21 single-rep augmentation) ────────
+# Domain-aware rep groupings for testing whether augmentation value comes from
+# diversity of signal type vs depth within one type.
+# Each domain defines named groups; C21 tests each group as an augmentation pool.
+
+AUG_GROUPS = {
+    'molecular': {
+        'structural': ['pharmacophore3d', 'coulomb_matrix', 'usr', 'usrcat', 'pdv'],
+        'fingerprint': ['maccs', 'rdkfp', 'ecfp4', 'atom_pair', 'avalon',
+                        'top_torsion'],
+        'learned': ['mol2vec', 'chemberta', 'chembert', 'molformer', 'selformer',
+                    'grover', 'graphmvp', 'molclr', 'mhg_gnn'],
+        'descriptor': ['mordred', 'smited'],
+    },
+    'antibody': {
+        'structural': ['paratope', 'structural', 'esm2_cdr', 'esm2_cdr3',
+                       'esm2_per_cdr', 'esm2_per_region'],
+        'sequence': ['aac', 'blosum', 'onehot', 'mutation_features'],
+        'plm': ['esm2', 'esmc', 'prot_t5', 'igt5', 'ablang2', 'antiberty',
+                'esm3', 'saprot', 'abroberta', 'esm2_concat', 'esm2_early',
+                'esm2_layer24', 'esm2_midlayers'],
+        'mutation_signal': ['esm2_wt_delta', 'esm2_mutsite', 'esm2_llr',
+                            'antiberty_llr', 'esm2_entropy_top20'],
+    },
+    'dta': {
+        'drug_structural': ['drug_ecfp4', 'drug_maccs', 'drug_avalon',
+                            'drug_pharmacophore3d'],
+        'drug_learned': ['drug_chemberta', 'drug_molformer', 'drug_grover',
+                         'drug_mol2vec'],
+        'protein': ['prot_esm2', 'prot_prost', 'prot_t5', 'prot_aac'],
+        'interaction': ['drug_sns', 'mordred'],
+    },
+    'tcga': {
+        'expression': ['rnaseq_pca50', 'rnaseq_hallmark', 'rnaseq_kegg',
+                        'rnaseq_reactome', 'gsva_hallmark'],
+        'mutation': ['mutation_binary', 'mutation_burden', 'mutation_signature'],
+        'epigenetic': ['methylation_pca50', 'promoter_meth'],
+        'structural': ['cnv_arm', 'cnv_focal', 'splicing_psi50'],
+        'immune': ['immune_cibersort', 'immune_xcell', 'gene_immune'],
+        'histology': ['wsi_titan', 'wsi_uni2h'],
+    },
+    'reaction': {
+        'fingerprint': ['reactant_ecfp4', 'diff_ecfp4', 'reactant_avalon',
+                        'diff_avalon', 'reactant_maccs', 'diff_maccs'],
+        'learned': ['reactant_grover', 'reactant_chemberta', 'diff_mhg_gnn',
+                    'rxnfp'],
+        'component': ['onehot_components'],
+    },
+}
+
+
+def get_aug_groups(dataset_name, available_reps):
+    """Return augmentation group dict for a dataset, filtered to available reps.
+
+    Args:
+        dataset_name: Dataset name (used to determine domain).
+        available_reps: Set/list of rep names that are actually loaded.
+
+    Returns:
+        Dict of {group_name: [rep_names]} with only reps in available_reps.
+        Also includes 'mixed' group with one rep from each non-empty group.
+    """
+    # Determine domain
+    ds_config = DATASET_REPS.get(dataset_name, {})
+    if not ds_config:
+        return {}
+
+    # Detect domain from dataset name patterns
+    if dataset_name.startswith(('tcga_', 'luad', 'brca')):
+        domain = 'tcga'
+    elif dataset_name.startswith(('davis', 'kiba', 'bindingdb')):
+        domain = 'dta'
+    elif dataset_name.startswith(('buchwald', 'doyle', 'suzuki', 'bh_')):
+        domain = 'reaction'
+    elif any(dataset_name.startswith(p) for p in (
+            'flab_', 'abagym_', 'abcov_', 'ddg_', 'tz_', 'humanness',
+            'ginkgo_', 'graphinity_')):
+        domain = 'antibody'
+    else:
+        domain = 'molecular'
+
+    domain_groups = AUG_GROUPS.get(domain, {})
+    available = set(available_reps)
+
+    # Filter each group to available reps
+    groups = {}
+    for gname, rep_list in domain_groups.items():
+        filtered = [r for r in rep_list if r in available]
+        if filtered:
+            groups[gname] = filtered
+
+    # Build 'mixed' group: first available rep from each non-empty group
+    mixed = []
+    for gname, reps in groups.items():
+        if reps:
+            mixed.append(reps[0])
+    if len(mixed) >= 2:
+        groups['mixed'] = mixed
+
+    return groups
+
+
 # ── Single-dataset experiment list ─────────────────────────────────────────
 # In dependency order. C12 (TCGA-only) excluded from default.
 # C03 and C14 are cross-dataset — run separately.
