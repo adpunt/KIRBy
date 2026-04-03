@@ -1596,20 +1596,9 @@ def precompute_hybrid_searches(reps, labels, groups, config,
     speed = config.get('search_speed', 'fast')
     models = config.get('models', None)
 
-    # Resolve metric using same logic as get_domain_metric
-    if metric == 'auto':
-        if task_type == 'classification':
-            n_classes = len(np.unique(labels)) if labels is not None else 2
-            metric = 'f1_weighted' if n_classes > 2 else 'auc'
-        elif domain == 'dta':
-            metric = 'ci'
-        elif domain == 'antibody':
-            metric = 'spearman'
-        elif domain == 'nucleotide':
-            metric = 'mcc'
-        else:
-            # molecular, reaction
-            metric = 'rmse'
+    # Resolve metric using shared logic (matches get_precomputed_search fallback)
+    metric, task_type = _resolve_search_metric(
+        labels, task_type=task_type, metric=metric, domain=domain)
 
     # Determine which aug conditions to precompute
     # Skip 'capped' — experiments that need it compute on demand
@@ -1675,10 +1664,42 @@ def precompute_hybrid_searches(reps, labels, groups, config,
     return results
 
 
+def _resolve_search_metric(labels, task_type='auto', metric='auto', domain=None):
+    """Resolve metric and task_type for hybrid search cache key alignment.
+
+    Uses the same logic as precompute_hybrid_searches and precompute_hybrids.py
+    so that disk cache keys match between precomputation and retrieval.
+    """
+    if task_type == 'auto' and labels is not None:
+        unique = np.unique(labels)
+        if len(unique) <= 20 and np.allclose(labels, labels.astype(int)):
+            task_type = 'classification'
+        else:
+            task_type = 'regression'
+
+    if metric == 'auto':
+        if task_type == 'classification':
+            n_classes = len(np.unique(labels)) if labels is not None else 2
+            metric = 'f1_weighted' if n_classes > 2 else 'auc'
+        elif domain == 'dta':
+            metric = 'ci'
+        elif domain == 'antibody':
+            metric = 'spearman'
+        elif domain == 'nucleotide':
+            metric = 'mcc'
+        else:
+            # molecular, reaction
+            metric = 'rmse'
+
+    return metric, task_type
+
+
 def get_precomputed_search(reps, labels, groups, budget=None,
                            aug_condition='uncapped', augmentations=None,
                            speed='fast', return_fitted=False,
-                           weight_method=None, precomputed=None, **kwargs):
+                           weight_method=None, precomputed=None,
+                           metric='auto', task_type='auto', domain=None,
+                           **kwargs):
     """Retrieve a hybrid search result for a given aug_condition.
 
     If precomputed dict is passed (from data['precomputed_searches']),
@@ -1701,6 +1722,10 @@ def get_precomputed_search(reps, labels, groups, budget=None,
         return_fitted: If True, also fit best config on full data.
         weight_method: Importance method for weights (needed if return_fitted).
         precomputed: Dict from data['precomputed_searches'] (optional).
+        metric: Metric name ('auto' resolves from domain/task_type).
+            Must match what was used during precomputation for cache alignment.
+        task_type: 'regression', 'classification', or 'auto'.
+        domain: Domain hint for metric resolution ('molecular', 'antibody', etc.).
         **kwargs: Additional args passed to find_best_hybrid.
 
     Returns:
@@ -1715,6 +1740,10 @@ def get_precomputed_search(reps, labels, groups, budget=None,
     # On-demand: call find_best_hybrid with all budgets and cache=True
     from kirby.find_best_hybrid import find_best_hybrid
 
+    # Resolve metric and task_type so cache keys match precomputation
+    resolved_metric, resolved_task_type = _resolve_search_metric(
+        labels, task_type=task_type, metric=metric, domain=domain)
+
     augs = augmentations if aug_condition != 'none' else None
     aug_strat = aug_condition if aug_condition != 'none' else 'uncapped'
 
@@ -1727,6 +1756,8 @@ def get_precomputed_search(reps, labels, groups, budget=None,
         augmentations=augs,
         augmentation_strategy=aug_strat,
         speed=speed,
+        metric=resolved_metric,
+        task_type=resolved_task_type,
         return_fitted=return_fitted,
         weight_method=weight_method,
         cache=True,
@@ -1740,7 +1771,8 @@ def get_precomputed_search(reps, labels, groups, budget=None,
 def get_fitted_hybrid(reps, labels, groups, *, downstream_model,
                       budget=None, aug_condition='uncapped',
                       augmentations=None, speed='fast', precomputed=None,
-                      internal_evaluators=None, budgets=None):
+                      internal_evaluators=None, budgets=None,
+                      metric='auto', task_type='auto', domain=None):
     """Get X_hybrid and feature_info from a cached search (return_fitted=True).
 
     For full-dataset experiments that need the hybrid matrix without per-fold splitting.
@@ -1761,6 +1793,9 @@ def get_fitted_hybrid(reps, labels, groups, *, downstream_model,
             When set, bypasses precomputed dict and runs on-demand (disk-cached).
         budgets: Override budget list (e.g., DISTANCE_BUDGETS).
             When set, bypasses precomputed dict and runs on-demand (disk-cached).
+        metric: Metric name ('auto' resolves from domain/task_type).
+        task_type: 'regression', 'classification', or 'auto'.
+        domain: Domain hint for metric resolution.
 
     Returns:
         (X_hybrid, feature_info, SearchResult)
@@ -1780,6 +1815,7 @@ def get_fitted_hybrid(reps, labels, groups, *, downstream_model,
         reps, labels, groups,
         aug_condition=aug_condition, augmentations=augmentations,
         speed=speed, return_fitted=True, precomputed=use_precomputed,
+        metric=metric, task_type=task_type, domain=domain,
         **kwargs)
 
     best_config = get_best_for_downstream(search, downstream_model, budget=budget)
