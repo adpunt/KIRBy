@@ -61,6 +61,9 @@ NAMED_ALLOCATIONS = {
     'thresh_0.5': ('performance_weighted', {'weighting_scheme': 'thresholded', 'weighting_params': {'alpha': 0.5}}),
     'thresh_0.7': ('performance_weighted', {'weighting_scheme': 'thresholded', 'weighting_params': {'alpha': 0.7}}),
 
+    # --- Min-floor variant ---
+    'min_floor': ('performance_weighted', {'weighting_scheme': 'min_floor'}),
+
     # --- Top-k variants ---
     'top_2': ('performance_weighted', {'weighting_scheme': 'top_k', 'weighting_params': {'k': 2}}),
     'top_3': ('performance_weighted', {'weighting_scheme': 'top_k', 'weighting_params': {'k': 3}}),
@@ -3329,6 +3332,7 @@ def create_hybrid(base_reps, labels,
     # ========================================================================
 
     # Resolve named allocation methods
+    _original_allocation_name = allocation_method
     if allocation_method in NAMED_ALLOCATIONS:
         _base, _extra = NAMED_ALLOCATIONS[allocation_method]
         allocation_method = _base
@@ -3580,9 +3584,67 @@ def create_hybrid(base_reps, labels,
         hybrid_features = apply_feature_selection(original_base_reps, feature_info)
 
     # ========================================================================
+    # AUTO-DEMOTE: zeroed-out base reps → augmentation pool (top_k only)
+    # ========================================================================
+    # When a top_k allocation (top_2, top_3, top_5) zeros out base reps,
+    # their top features (ranked by importance, capped at augmentation_budget)
+    # are added to the augmentation pool for A/B testing. This lets top_k
+    # concentrate the main budget while still capturing opportunistic value
+    # from borderline reps. Only triggers for top_k + active augmentation.
+    _is_top_k = _original_allocation_name in ('top_2', 'top_3', 'top_5')
+    _has_augmentations = (aug_dict_train is not None and len(aug_dict_train) > 0) or \
+                         (augmentations is not None and len(augmentations) > 0)
+    if _is_top_k and _has_augmentations and augmentation_strategy not in ('none', None):
+        # Find base reps that got 0 allocated features
+        _alloc = feature_info.get('allocation', {})
+        demoted_reps = [name for name, count in _alloc.items() if count == 0]
+
+        if demoted_reps:
+            if aug_dict_train is None:
+                aug_dict_train = {}
+                aug_dict_val = {}
+
+            for rep_name in demoted_reps:
+                X_full = original_base_reps[rep_name]
+                X_train_rep = X_full[train_idx]
+                n_cols = X_train_rep.shape[1]
+
+                # Rank features by importance — reuse precomputed if available
+                if (precomputed_importance is not None and
+                        rep_name in precomputed_importance):
+                    imp_scores = precomputed_importance[rep_name]
+                else:
+                    X_clean = np.nan_to_num(
+                        np.clip(X_train_rep, -1e10, 1e10), nan=0.0)
+                    scaler = StandardScaler()
+                    X_scaled = scaler.fit_transform(X_clean)
+                    is_clf = _is_classification_task(train_labels)
+                    _rf = (RandomForestClassifier if is_clf else
+                           RandomForestRegressor)(
+                        n_estimators=50, max_depth=10,
+                        random_state=42, n_jobs=-1)
+                    _rf.fit(X_scaled, train_labels)
+                    imp_scores = np.nan_to_num(_rf.feature_importances_, nan=0.0)
+                    del _rf
+
+                # Take top augmentation_budget features
+                n_keep = min(augmentation_budget, n_cols)
+                top_idx = np.argsort(imp_scores)[::-1][:n_keep]
+                top_idx = np.sort(top_idx)  # preserve column order
+
+                aug_dict_train[rep_name] = X_full[train_idx][:, top_idx]
+                aug_dict_val[rep_name] = X_full[val_idx][:, top_idx]
+
+                # Also add to full-data augmentations so apply_augmentation_selection
+                # can reconstruct the final hybrid at the end
+                if augmentations is None:
+                    augmentations = {}
+                augmentations[rep_name] = X_full[:, top_idx]
+
+    # ========================================================================
     # AUGMENTATION HANDLING
     # ========================================================================
-    
+
     if aug_dict_train is not None and augmentation_strategy != 'none':
         # Get base hybrid for train/val
         X_base_train = apply_feature_selection(

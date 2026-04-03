@@ -2,7 +2,12 @@
 
 **Purpose:** Single operational document for the KIRBy experiment pipeline. Tracks dataset readiness, methodology status, blockers, and the path from preliminary runs to publication-quality results.
 
-**Last updated:** 2026-03-30
+**Last updated:** 2026-04-01
+
+### WARNING: Two hERG Datasets
+- **`herg_ki`** = ChEMBL hERG Ki (regression, pKi, ~1,412 molecules). Loaded via `find_best_hybrid_molecular.py`. All existing surveys/experiments use this version.
+- **`herg`** = Lhasa/TDC hERG blocker (binary classification, IC50 threshold, ~10K molecules). Loaded via `src/kirby/datasets/herg.py`. **No baseline survey yet — NEEDS SURVEY.**
+- The classification `herg` dataset is used by the federated experiments (FLuID). The regression `herg_ki` is used by complexity/similarity/noise experiments.
 
 ---
 
@@ -30,18 +35,21 @@ The pipeline follows a staged approach:
 
 Key findings:
 - **Model/evaluator choice dominates** (eta² 0.23–0.89). Strategy matters much less (eta² 0.01–0.07). Importance method barely registers (<0.01).
-- **Top strategies:** greedy_fill_s25 (#1 avg rank), pw_top_2/3, pw_rank_exp_d0.5, pw_entropy_1.0/2.0
-- **Cut:** greedy_feature, pw_min_floor, dom_greedy_f0.5 (+ two_stage, stability_selection from prior)
+- **Top strategies (by top-1 wins across 24 dataset×model combos):** pw_top_2 (3 wins), pw_top_3/5, pw_linear, pw_min_floor, pw_entropy_1.0, pw_score_gap_0.2 (2 each), 6 others with 1 win each
+- **Cut (2026-04-03):** All strategies that never produced a top-1 winner across any dataset×model combo. 31→13 strategies. All greedy family dropped except greedy_fill_s5 (1 win). Redundant rank_exp variants collapsed (kept d0.5 only).
 - **Matching evaluator→model:** weak signal (eta² < 0.003), top configs are overwhelmingly cross
-- **Budget:** 300 > 150 >> 50
-- **Importance:** dead heat (deeplift vs lightgbm_gain); treeshap retained from F05
+- **Budget:** 300 wins 12/24, 150 wins 7/24, 50 wins 5/24. All three matter.
+- **Importance:** dead heat (deeplift 3/6, lightgbm_gain 3/6); treeshap dropped from full tier (not tested in F12)
 
-Code changes applied (2026-03-29 → 2026-03-30):
-1. `NAMED_ALLOCATIONS` expanded from 22→39 entries (all F12 variants)
+Code changes applied (2026-03-29 → 2026-04-03):
+1. `NAMED_ALLOCATIONS` expanded from 22→39 entries (all F12 variants). `min_floor` added as named allocation.
 2. Dead strategies removed: greedy_feature, min_floor_0.05, two_stage, stability_selection (dispatch removed, defs kept)
 3. `SPEED_TIERS` → **two tiers only: `fast` and `full`**. No medium/long. Budgets not in tiers (in experiment configs).
-   - Fast: 3 allocs (entropy_1.0, top_3, greedy_fill_s25), 2 imp (treeshap, lightgbm_gain), 3 evals (lightgbm, mlp, xgboost), 3-fold
-   - Full: 31 allocs (all F12 survivors), 3 imp (+deeplift), 7 evals (+ridge, rf, svm, gp), 5-fold
+   - Fast: 3 allocs (entropy_1.0, top_3, top_2), 2 imp (treeshap, lightgbm_gain), match evaluator, 3-fold
+   - Full: 13 allocs (F12-validated winners only), 2 imp (deeplift, lightgbm_gain), match evaluator, 5-fold
+4. `MODEL_MAX_BUDGET` added: GP/KNN capped at 2000, SVM/MLP/BNN/DNN/CNN at 3000, tree models uncapped.
+5. `top_k` guard: skips top_k strategies when k >= n_reps (would be identical to performance_weighted).
+6. Parallel search: `_run_search` uses `joblib.Parallel(prefer='threads')` for ~8x speedup on multi-core. Sequential fallback if joblib unavailable.
 4. `internal_evaluator` wired through entire pipeline (find_best_hybrid → _run_search → _evaluate_hybrid_config → create_hybrid). Tracked in Blueprint + result dicts. Callable evaluators supported.
 5. GP added as internal evaluator (O(n³)-safe with 500-sample cap)
 6. `create_hybrid` defaults set from F12 top-2 analysis: `top_3` / `lightgbm_gain` / `svm`
@@ -61,7 +69,7 @@ Remaining:
 All HTC FT jobs failed due to inline `pip install` corrupting torch. Fixed by removing pip install from SLURM scripts (deps already in venv). Resubmitting:
 - Molecular FT fill (4 datasets: qm9, adme_hlm, adme_rlm, adme_mdr1): `submit_molecular_ft_fill.sh` on HTC
 - Antibody ESM-2 LoRA fill (20 failed / 11 completed): `submit_antibody_ft_fill.sh` on HTC. Completed: tresanco, thermo_jain, aggregation_jain, polyreact_bvp, pk_fcrnrt, ddg_combined, binding_adams, expression_adams, abagym_EGFR/lysozyme/VEGF. Results in `tests/results/antibody_ft_fill/`.
-- E2E SchNet (3 datasets: herg, caco2, logd): `run_baseline_survey.py --finetune` on HTC. ft_schnet already wired in make_ft_factories. Previous runs failed due to torch-cluster bug (fixed 2026-03-28). logd needs 256G (bus error at 128G).
+- E2E SchNet (3 datasets: herg_ki, caco2, logd): `run_baseline_survey.py --finetune` on HTC. ft_schnet already wired in make_ft_factories. Previous runs failed due to torch-cluster bug (fixed 2026-03-28). logd needs 256G (bus error at 128G).
 - Per-dataset FT swap decisions blocked until these land.
 - Don't wait on these for preliminary experiment runs — FT is an enhancement, not a requirement.
 
@@ -85,11 +93,11 @@ All HTC FT jobs failed due to inline `pip install` corrupting torch. Fixed by re
 
 | Component | Status | Blocked on |
 |-----------|--------|-----------|
-| SPEED_TIERS | **FINALIZED:** 2 tiers (fast/full). No medium/long. | — |
-| Allocation strategy | **FINALIZED:** 31 survivors from F12. Default: `top_3`. All 30 greedy hardcodes fixed. | — |
-| Importance methods | **FINALIZED:** treeshap, lightgbm_gain, deeplift. Default: `lightgbm_gain`. | — |
-| Internal evaluator | **FINALIZED:** 7 options + callable. Default: `svm`. Wired through full pipeline. | — |
-| Budgets | **FINALIZED:** In experiment config. Screening [10,25,...,2000], full [10,25,...,2000]. | — |
+| SPEED_TIERS | **FINALIZED:** 2 tiers (fast/full). No medium/long. Parallel search via joblib. | — |
+| Allocation strategy | **FINALIZED:** 13 F12-validated winners. Default: `top_3`. top_k guard skips when k>=n_reps. | — |
+| Importance methods | **FINALIZED:** deeplift, lightgbm_gain (full); treeshap, lightgbm_gain (fast). | — |
+| Internal evaluator | **FINALIZED:** match (default). Wired through full pipeline. | — |
+| Budgets | **FINALIZED:** In experiment config. Per-model caps: GP/KNN≤2000, SVM/MLP≤3000, trees uncapped. | — |
 | Augmentation defaults | **FINALIZED:** uncapped, step_size=5, patience=20 | — |
 | Hybrid caching | **FINALIZED:** Fold-aware `create_hybrid_cached` in _shared.py. Old full-data cache deleted. | — |
 | FT swap rules | **PARTIAL:** molecular 3/7 done, TCGA done, antibody pending | HTC queue |
@@ -98,7 +106,7 @@ All HTC FT jobs failed due to inline `pip install` corrupting torch. Fixed by re
 | Augmentation passing | **FINALIZED:** C11/C16-C19, all similarity, all noise fixed | — |
 
 **FT decisions already locked (from `EXPERIMENT_DESIGN_DISCUSSION.md` §9):**
-- Molecular: lora_molformer, contrastive_molformer, graphmvp_ft → general base reps. Per-dataset swap only where FT beats frozen. herg keeps frozen molformer. All chemberta/selformer/freeze_head FT excluded.
+- Molecular: lora_molformer, contrastive_molformer, graphmvp_ft → general base reps. Per-dataset swap only where FT beats frozen. herg_ki keeps frozen molformer. All chemberta/selformer/freeze_head FT excluded.
 - TCGA: scfoundation_ft is FT-only (frozen dead). geneformer_ft general tier (frozen v2 fallback).
 - Antibody/DTA FT: pending HTC results.
 - Excluded everywhere: antiberty_ft (broken), all DTA protein LoRA (broken), chemberta/selformer FT (worse on all datasets).
@@ -212,7 +220,8 @@ For federated-eligible datasets: also add to federated experiment list per `FEDE
 | # | Dataset | Domain | Samples | Status | BOM Location |
 |---|---------|--------|---------|--------|-------------|
 | 1 | caco2 | Molecular | 2,158 | DONE | Section 10 (new format) |
-| 2 | herg | Molecular | 1,412 | DONE | Section 10 (new format) |
+| 2 | herg_ki | Molecular (regression) | 1,412 | DONE | Section 10 (new format) |
+| 2b | herg | Molecular (classification) | ~10K | **NEEDS SURVEY** | — |
 | 3 | logd | Molecular | 5,028 | DONE | Section 10 (new format) |
 | 4 | qm9 | Molecular | 9,978 | DONE | Section 10 (new format) |
 | 5 | adme_hlm | Molecular | 3,086 | DONE | Section 10 (new format) |
@@ -269,14 +278,14 @@ For federated-eligible datasets: also add to federated experiment list per `FEDE
 | General (15) | graph_kernel, mol2vec, mhg_gnn, ecfp4, pdv, grover, avalon, mordred, top_torsion, smited, atom_pair, molformer, lora_molformer**, contrastive_molformer**, graphmvp_ft** |
 | Augmentation (5) | maccs, pharmacophore3d, usrcat, coulomb_matrix, usr |
 
-**herg (1,412 samples):**
+**herg_ki (1,412 samples, regression):**
 | Tier | Reps |
 |------|------|
 | Top Tier (8) | mhg_gnn, mordred, graph_kernel, avalon, grover, pdv, mol2vec, ecfp4 |
 | General (16) | mhg_gnn, mordred, graph_kernel, avalon, grover, pdv, mol2vec, ecfp4, molformer, chemberta, atom_pair, chembert, smited, top_torsion, graphmvp, graphmvp_ft** |
 | Augmentation (5) | maccs, pharmacophore3d, coulomb_matrix, usr, usrcat |
 
-*Note: lora_molformer and contrastive_molformer excluded from herg — both worse than frozen molformer on this dataset (-0.051 and -0.005 R² respectively). Frozen molformer stays.*
+*Note: lora_molformer and contrastive_molformer excluded from herg_ki — both worse than frozen molformer on this dataset (-0.051 and -0.005 R² respectively). Frozen molformer stays.*
 
 **logd (5,028 samples):**
 | Tier | Reps |
@@ -323,9 +332,9 @@ For federated-eligible datasets: also add to federated experiment list per `FEDE
 - All other FT variants (chemberta FT, selformer FT, freeze_head anything) are excluded — they never beat ecfp4.
 
 **Per-dataset FT swap rules (verified from molecular_finetune_comparison.json):**
-- lora_molformer replaces molformer on: logd (+0.020 R²), caco2 (+0.052 R²). Frozen kept on: herg (-0.051 R²).
-- contrastive_molformer replaces molformer on: logd (+0.014 R²), caco2 (+0.014 R²). Frozen kept on: herg (-0.005 R², negligible).
-- graphmvp_ft replaces graphmvp on: logd (+0.096 R²), caco2 (+0.025 R²), herg (+0.054 R²).
+- lora_molformer replaces molformer on: logd (+0.020 R²), caco2 (+0.052 R²). Frozen kept on: herg_ki (-0.051 R²).
+- contrastive_molformer replaces molformer on: logd (+0.014 R²), caco2 (+0.014 R²). Frozen kept on: herg_ki (-0.005 R², negligible).
+- graphmvp_ft replaces graphmvp on: logd (+0.096 R²), caco2 (+0.025 R²), herg_ki (+0.054 R²).
 - **qm9, adme_hlm, adme_rlm, adme_mdr1: FT results PENDING** (submit_molecular_ft_fill.sh).
 
 **Augmentation (apply to all molecular datasets):**
@@ -567,10 +576,10 @@ Developability properties (regression, Spearman ρ, pre-computed hierarchical cl
 | 8 | adme_solubility | 2,172 | 22 | 14 | No FT/comparison data | DROPPED — R²=0.32 ceiling |
 
 **Molecular supplementary data (applies across multiple datasets):**
-- `finetune_survey/`: 8 FT strategies × {logd, caco2, herg} — LoRA, LoRA r2/r4, freeze, contrastive, GNN, GROVER
-- `comparisons/molecular_finetune_comparison.json`: frozen vs FT for 25 conditions × {logd, caco2, herg}
-- `comparisons/imrie_transfer_learning.json`: ChEMBL DNN pretraining × {logd, caco2, herg}
-- `molecular_graph_survey/`: GNN augmentation for {herg, logd, qm9}
+- `finetune_survey/`: 8 FT strategies × {logd, caco2, herg_ki} — LoRA, LoRA r2/r4, freeze, contrastive, GNN, GROVER
+- `comparisons/molecular_finetune_comparison.json`: frozen vs FT for 25 conditions × {logd, caco2, herg_ki}
+- `comparisons/imrie_transfer_learning.json`: ChEMBL DNN pretraining × {logd, caco2, herg_ki}
+- `molecular_graph_survey/`: GNN augmentation for {herg_ki, logd, qm9}
 - `comparisons/qm9_3d_comparison/`: SchNet, DimeNet++ E2E vs frozen reps (qm9 only)
 
 ---
@@ -888,15 +897,15 @@ These sections have older-format writeups that were done before this dataset-by-
 
 ### EXPERIMENTS — Supplementary runs needed
 
-18. **E2E SchNet on more molecular datasets** — ft_schnet already wired in `make_ft_factories` (line 632-641 of run_baseline_survey.py). Previous HTC runs failed due to torch-cluster bug (now fixed). Resubmitting herg, caco2, logd on HTC with `--finetune`. Output: `tests/results/schnet_e2e/`.
+18. **E2E SchNet on more molecular datasets** — ft_schnet already wired in `make_ft_factories` (line 632-641 of run_baseline_survey.py). Previous HTC runs failed due to torch-cluster bug (now fixed). Resubmitting herg_ki, caco2, logd on HTC with `--finetune`. Output: `tests/results/schnet_e2e/`.
 19. ~~**Augmentation per-dataset assignment (usrcat, coulomb_matrix, usr)**~~ **DONE** (2026-03-28) — Results from `molecular_aug_fill/`: caco2 all 3 positive (usrcat +0.021, usr +0.020, coulomb +0.015), adme_mdr1 coulomb_matrix +0.092, logd/qm9 flat or negative. DATASET_REPS already had correct assignments.
 20. ~~**DNA foundation model rep implementation**~~ **DONE** — 14 FM reps implemented in `src/kirby/representations/nucleotide.py`. Survey results on server at `tests/results/nucleotide_survey/`.
 21. **Nucleotide tier review** — pull survey results, review all 22 datasets with FM reps, decide tiers. Implementation done, pipeline readiness pending review.
 
 ### Decisions already locked
 
-- **Molecular FT:** lora_molformer, contrastive_molformer, graphmvp_ft → general base reps. Per-dataset: swap frozen→FT only where FT beats frozen. herg keeps frozen molformer. All other FT variants (chemberta, selformer, freeze_head) excluded.
-- **Molecular augmentation (confirmed):** pharmacophore3d, maccs → domain-wide. usrcat, coulomb_matrix, usr → dataset-specific: caco2 (all 3), adme_mdr1 (coulomb_matrix only +0.092), herg (all 3 from original survey). logd/qm9 don't benefit.
+- **Molecular FT:** lora_molformer, contrastive_molformer, graphmvp_ft → general base reps. Per-dataset: swap frozen→FT only where FT beats frozen. herg_ki keeps frozen molformer. All other FT variants (chemberta, selformer, freeze_head) excluded.
+- **Molecular augmentation (confirmed):** pharmacophore3d, maccs → domain-wide. usrcat, coulomb_matrix, usr → dataset-specific: caco2 (all 3), adme_mdr1 (coulomb_matrix only +0.092), herg_ki (all 3 from original survey). logd/qm9 don't benefit.
 - **Molecular drops:** adme_solubility (R²=0.32 ceiling), unimol_v2 (dead everywhere).
 - **Nucleotide drops:** nt_splice_sites_all (MCC=0.245), nt_H3K9me3 (MCC=0.239).
 - **Augmentation defaults:** uncapped, step_size=5, patience=20. Per-experiment overrides in `EXPERIMENT_BUGS.md`.
@@ -910,10 +919,12 @@ These sections have older-format writeups that were done before this dataset-by-
 ## Dependency Chain
 
 ```
-F12/F13 — DONE (2026-03-30)
-  ✓ SPEED_TIERS → fast/full (31 allocs, 7 evals, 3 imp)
+F12/F13 — DONE (2026-04-03)
+  ✓ SPEED_TIERS → fast/full (13 allocs, match eval, 2 imp)
   ✓ Defaults: top_3 / lightgbm_gain / svm
   ✓ 30 greedy hardcodes fixed, all stale configs removed
+  ✓ MODEL_MAX_BUDGET: GP/KNN≤2000, SVM/MLP≤3000
+  ✓ top_k guard, parallel search (joblib threads)
   ✓ Caches cleared
   → git push + pull on server
   → PRELIMINARY RUNS on ready datasets (complexity/similarity/noise)
