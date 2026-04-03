@@ -77,7 +77,7 @@ def _datasets_for_domain(domain):
 
 
 def precompute_dataset(dataset_name, speed='fast', tiers=('general', 'top'),
-                       models=None):
+                       models=None, condition_filter=None):
     """Run all precompute conditions for one dataset."""
     ds_config = DATASET_REPS.get(dataset_name)
     if ds_config is None:
@@ -147,6 +147,21 @@ def precompute_dataset(dataset_name, speed='fast', tiers=('general', 'top'),
         if pool:
             conditions.append(('top', top_reps, pool, 'uncapped'))
 
+    # Filter to single condition if requested (for per-job SLURM)
+    if condition_filter:
+        _cond_map = {
+            'general_none': ('general', 'none'),
+            'general_uncapped': ('general', 'uncapped'),
+            'general_capped': ('general', 'capped'),
+            'top_none': ('top', 'none'),
+            'top_uncapped': ('top', 'uncapped'),
+            'top_capped': ('top', 'capped'),
+            'top_borderline': ('top+borderline', 'uncapped'),
+        }
+        want_tier, want_strat = _cond_map[condition_filter]
+        conditions = [(t, r, a, s) for t, r, a, s in conditions
+                      if t == want_tier and s == want_strat]
+
     print(f"  {len(conditions)} conditions to precompute:")
     for tier, reps, augs, strat in conditions:
         aug_str = f"{len(augs)} aug reps" if augs else "no aug"
@@ -205,6 +220,11 @@ def main():
     parser.add_argument('--tier', type=str, default='both',
                         choices=['general', 'top', 'both'],
                         help='Which rep tiers to precompute')
+    parser.add_argument('--condition', type=str, default=None,
+                        choices=['general_none', 'general_uncapped', 'general_capped',
+                                 'top_none', 'top_uncapped', 'top_capped',
+                                 'top_borderline'],
+                        help='Run a single specific condition (for per-job SLURM)')
     parser.add_argument('--speed', type=str, default='fast',
                         choices=['fast', 'full'],
                         help='Search speed tier')
@@ -228,11 +248,14 @@ def main():
     models = args.models.split(',') if args.models else None
 
     print(f"Precompute: {len(datasets)} datasets, tiers={tiers}, speed={args.speed}")
+    if args.condition:
+        print(f"Condition: {args.condition}")
     print(f"Datasets: {datasets}")
 
     t_start = time.time()
     for ds in datasets:
-        precompute_dataset(ds, speed=args.speed, tiers=tiers, models=models)
+        precompute_dataset(ds, speed=args.speed, tiers=tiers, models=models,
+                           condition_filter=args.condition)
 
     total = time.time() - t_start
     print(f"\n{'='*70}")
