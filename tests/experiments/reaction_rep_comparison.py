@@ -410,7 +410,8 @@ def main():
                 search = find_best_hybrid(
                     base_reps=rep_matrices, labels=labels, groups=groups,
                     internal_evaluators=INTERNAL_EVALUATORS,
-                    speed='fast', return_fitted=True, verbose=False, cache=True)
+                    speed='fast', return_fitted=True, verbose=False, cache=True,
+                    metric='rmse')
                 top3 = extract_top3_base_reps(search)
                 if top3:
                     print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")

@@ -108,6 +108,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     augmentations=sub_augs,
                     augmentation_strategy='capped',
                     internal_evaluators=INTERNAL_EVALUATORS,
+                    metric=metric_name,
                     verbose=False,
                     cache=True,
                 )

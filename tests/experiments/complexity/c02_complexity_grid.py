@@ -35,6 +35,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("EXPERIMENT C02: COMPLEXITY MATCHING GRID")
     print("=" * 70)
 
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+
     models = get_model_factories(config['models'],
                                     task_type=data.get('task_type', 'regression'),
                                     n_samples=len(data['labels']))
@@ -48,9 +50,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = data['labels']
     groups = data['groups']
 
-    total_dim = sum(v.shape[1] for v in reps.values())
-    # Include larger budgets up to total dim for dimension-matched comparison
-    full_budgets = sorted(set(budgets + [1000, 1500, 2000, total_dim]))
+    full_budgets = sorted(set(budgets))
 
     # Convert model factories to instances for the library
     model_instances = {name: factory() for name, factory in models.items()}
@@ -78,6 +78,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             n_folds=n_folds,
             augmentations=None,
             internal_evaluators=INTERNAL_EVALUATORS,
+            metric=metric_name,
             verbose=True,
             cache=True,
         )
@@ -98,6 +99,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         n_folds=n_folds,
         augmentations=None,
         internal_evaluators=INTERNAL_EVALUATORS,
+        metric=metric_name,
         verbose=True,
         cache=True,
     )
@@ -118,6 +120,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             augmentations=augs,
             augmentation_strategy='uncapped',
             internal_evaluators=INTERNAL_EVALUATORS,
+            metric=metric_name,
             verbose=True,
             cache=True,
         )
@@ -138,6 +141,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             augmentations=augs,
             augmentation_strategy='capped',
             internal_evaluators=INTERNAL_EVALUATORS,
+            metric=metric_name,
             verbose=True,
             cache=True,
         )
@@ -207,7 +211,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  {model_name}: best_rep={best_single_rep} {metric_label}={best_single_score:.4f}")
 
     # PCA baselines (library doesn't compute these -- keep manual)
-    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
     print("\n  Computing PCA baselines...")
     pca_baselines = {}

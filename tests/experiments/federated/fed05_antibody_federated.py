@@ -38,7 +38,7 @@ from scipy.stats import zscore
 
 from experiments._shared import (
     load_data, save_experiment_results, convert_numpy, cv_split,
-    cap_dimensions,
+    cap_dimensions, get_domain_metric,
 )
 from experiments.federated.federated_helpers import (
     compute_reg_metrics, inject_noise_per_silo,
@@ -140,10 +140,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     for sname, sd in silo_data.items():
         if len(sd['reps']) >= 2:
             try:
+                _metric = get_domain_metric(sd)[0]
                 s_search = find_best_hybrid(
                     sd['reps'], sd['labels'],
                     groups=sd.get('groups'),
-                    speed='fast', cache=True, verbose=False)
+                    speed='fast', cache=True, verbose=False,
+                    metric=_metric)
                 s_bp_entry = s_search.best_by_model.get('rf')
                 if s_bp_entry:
                     silo_blueprints[sname] = s_bp_entry['blueprint']

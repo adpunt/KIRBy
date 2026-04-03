@@ -159,7 +159,8 @@ def _eval_single_rep_per_fold(X, labels, groups, model_factory, n_folds, mode,
 
 
 def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
-                           metric_fn, search_speed='fast', augmentations=None):
+                           metric_fn, search_speed='fast', augmentations=None,
+                           metric_name='r2'):
     """Run find_best_hybrid and evaluate the best config per fold.
 
     Returns (per_fold_scores, search_result_dict).
@@ -187,6 +188,7 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
             augmentations=augmentations,
             return_fitted=True,
             internal_evaluators=INTERNAL_EVALUATORS,
+            metric=metric_name,
             verbose=False,
             cache=True,
         )
@@ -458,7 +460,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             c_scores, c_info = _eval_hybrid_per_fold(
                 existing_reps, labels, groups, c_model_factory,
                 n_folds, mode, metric_fn, search_speed=search_speed,
-                augmentations=augs)
+                augmentations=augs, metric_name=metric_name)
             c_mean = float(np.mean(c_scores)) if c_scores else float('nan')
             c_std = float(np.std(c_scores)) if c_scores else float('nan')
             rep_result['conditions']['C'] = {
@@ -492,7 +494,7 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             d_scores, d_info = _eval_hybrid_per_fold(
                 all_reps_for_d, labels, groups, d_model_factory,
                 n_folds, mode, metric_fn, search_speed=search_speed,
-                augmentations=augs)
+                augmentations=augs, metric_name=metric_name)
             d_mean = float(np.mean(d_scores)) if d_scores else float('nan')
             d_std = float(np.std(d_scores)) if d_scores else float('nan')
 
