@@ -1599,6 +1599,15 @@ def _run_search(
 
     alloc_cache = {}  # (fold_idx, evaluator) -> {rep_name: score}
     _alloc_t0 = time.time()
+
+    # Collect ALL unique evaluator names that will actually be used.
+    # This includes explicit evaluators AND matched evaluators (resolved per model).
+    _all_evaluator_names = set(explicit_evaluators)
+    if use_matched:
+        for model_name in models:
+            for ev in _evaluators_for_model(model_name):
+                _all_evaluator_names.add(ev)
+
     for fold_idx, (train_idx, _) in enumerate(_fold_splits_for_cache):
         fold_train_reps = {k: v[train_idx] for k, v in base_reps.items()}
         fold_train_labels = labels[train_idx]
@@ -1615,9 +1624,7 @@ def _run_search(
         _train_labels = fold_train_labels[_tr_idx]
         _val_labels = fold_train_labels[_va_idx]
 
-        for ev in search_evaluators:
-            if ev == 'match':
-                continue
+        for ev in _all_evaluator_names:
             scores = {}
             for rep_name, X_full in fold_train_reps.items():
                 X_tr = np.nan_to_num(np.clip(X_full[_tr_idx], -1e10, 1e10),
@@ -1635,7 +1642,8 @@ def _run_search(
 
     if verbose:
         print(f"  Allocation scores pre-computed in {time.time() - _alloc_t0:.1f}s "
-              f"({len(alloc_cache)} (fold, evaluator) combos)")
+              f"({len(alloc_cache)} (fold, evaluator) combos, "
+              f"evaluators: {sorted(_all_evaluator_names)})")
 
     # ── Build flat list of all configs to evaluate ──
     configs = []
@@ -1666,6 +1674,12 @@ def _run_search(
         try:
             from joblib import Parallel, delayed
 
+            # selection_dedup is safe to share across threads (prefer='threads'
+            # runs under the GIL). Worst case: two threads both miss the cache
+            # and both compute — redundant but not incorrect. The dedup savings
+            # from skipping identical fold evaluations outweigh the rare double-compute.
+            selection_dedup = {'_hits': 0}
+
             def _eval_one(rep_set, rep_set_name, alloc, bgt, imp,
                           model_name, model, eval_name):
                 try:
@@ -1693,7 +1707,7 @@ def _run_search(
                         cv_splitter=cv_splitter,
                         importance_cache=importance_cache,
                         alloc_cache=alloc_cache,
-                        selection_dedup=None,
+                        selection_dedup=selection_dedup,
                         greedy_tolerance=greedy_tolerance,
                     )
                     if rep_set_name != 'all':
@@ -1710,8 +1724,10 @@ def _run_search(
             )
             results = [r for r in raw_results if r is not None]
             if verbose:
+                dedup_hits = selection_dedup.get('_hits', 0)
                 print(f"  Parallel search complete: {len(results)}/{total} succeeded "
-                      f"in {time.time() - _par_t0:.1f}s")
+                      f"in {time.time() - _par_t0:.1f}s"
+                      f"{f' (dedup: {dedup_hits} fold evals skipped)' if dedup_hits else ''}")
 
         except ImportError:
             use_parallel = False  # fall through to sequential
@@ -1823,6 +1839,7 @@ def _run_refinement_phase(
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
     candidate_ranking: str = 'rf_importance',
+    lower_is_better: bool = False,
     fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
     cv_splitter=None,
@@ -1854,9 +1871,11 @@ def _run_refinement_phase(
             print("  Refinement: no step-size-sensitive allocations to refine.")
         return []
 
-    # Sort by score descending, deduplicate by (model, alloc, budget, importance).
+    # Sort by best score first, deduplicate by (model, alloc, budget, importance).
     # Normalize importance for insensitive allocations to avoid duplicate entries.
-    sensitive.sort(key=lambda r: r['score_mean'], reverse=True)
+    sensitive.sort(
+        key=lambda r: _score_to_comparable(r['score_mean'], lower_is_better),
+        reverse=True)
     seen = set()
     unique = []
     for r in sensitive:
@@ -2107,7 +2126,8 @@ def _hybrid_cache_key(base_reps, labels, groups, speed, budgets, allocation_meth
         h.update(groups.tobytes())
     if augmentations is not None:
         for aname in sorted(augmentations.keys()):
-            h.update(f"aug:{aname}:{augmentations[aname].shape}".encode())
+            arr = augmentations[aname]
+            h.update(f"aug:{aname}:{arr.shape}:{arr.ravel()[:5].tobytes()}".encode())
         h.update(f"aug_strategy:{augmentation_strategy}".encode())
     h.update(f"{speed}|{budgets}|{allocation_methods}|{importance_methods}|{internal_evaluators}|{n_folds}|{seed}|{metric}|{task_type}|{return_fitted}|{weight_method}|{two_phase}|{refinement_top_n}|{refinement_step_sizes}".encode())
     if models:
@@ -2452,6 +2472,7 @@ def find_best_hybrid(
             augmentation_threshold=augmentation_threshold,
             augmentation_budget=augmentation_budget,
             candidate_ranking=candidate_ranking,
+            lower_is_better=lower_is_better,
             fold_reps=fold_reps,
             precomputed_folds=precomputed_folds,
             cv_splitter=cv_splitter,
