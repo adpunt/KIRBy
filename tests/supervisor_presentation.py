@@ -277,22 +277,9 @@ def print_from_json(ds_name, ds_data):
     if bl_json:
         rep_scores, rep_dims, meta = extract_baseline_scores(bl_json)
 
-    # C02 configs always use R² (the key is literally 'r2_mean', and C02
-    # calls find_best_hybrid without metric= so it defaults to 'r2').
-    # Override baseline metric to match.
-    has_hybrid = bool(hybrid_jsons)
-    if has_hybrid:
-        # Check if hybrid configs use r2_mean key (C02 format)
-        sample_cfg = hybrid_jsons[0].get('configs', [{}])[0] if hybrid_jsons else {}
-        if 'r2_mean' in sample_cfg and 'score_mean' not in sample_cfg:
-            # C02 format: values are R², higher is better
-            meta = dict(meta)  # don't mutate original
-            meta['primary_metric'] = 'r2'
-            meta['higher_is_better'] = True
-            # Re-extract baselines using R² instead of whatever primary_metric was
-            if bl_json:
-                rep_scores, rep_dims, _ = extract_baseline_scores_r2(bl_json)
-
+    # Use the baseline JSON's metric — it's always domain-correct.
+    # C02 configs use 'r2_mean' as the key name regardless of actual metric,
+    # but the VALUES are whatever metric the search used.
     metric = meta.get('primary_metric', '?')
     higher = meta.get('higher_is_better', True)
     lower = not higher

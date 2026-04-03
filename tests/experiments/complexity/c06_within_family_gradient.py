@@ -79,6 +79,7 @@ def run(data, config, output_dir, dataset_name, families=None):
                     augmentations=augs,
                     augmentation_strategy='capped',
                     internal_evaluators=INTERNAL_EVALUATORS,
+                    metric=metric_name,
                     verbose=False,
                     cache=True,
                 )

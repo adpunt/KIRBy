@@ -237,7 +237,8 @@ def main():
             scaffold_groups, _ = assign_scaffold_groups(smiles)
             search = find_best_hybrid(
                 base_reps=reps, labels=labels, groups=scaffold_groups,
-                speed='fast', return_fitted=True, verbose=False, cache=True)
+                speed='fast', return_fitted=True, verbose=False, cache=True,
+                metric=metric_name)
             fitted = search.fitted_results.get('rf')
             if fitted is not None:
                 fi = {r: {'selected_indices': idx}

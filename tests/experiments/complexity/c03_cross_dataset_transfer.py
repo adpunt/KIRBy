@@ -58,6 +58,7 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
 
     for ds_name, data in datasets.items():
         print(f"\n  --- {ds_name} ---")
+        metric_name_ds, _, _ = get_domain_metric(data)
 
         # Compute dataset complexity profile
         print(f"  Computing complexity metrics...")
@@ -91,6 +92,7 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                 cache=True,
                 internal_evaluators=DISTANCE_EVALUATORS,
                 budgets=DISTANCE_BUDGETS,
+                metric=metric_name_ds,
             )
 
             # Prefer SVM-evaluated config for SVR downstream, fall back to RF

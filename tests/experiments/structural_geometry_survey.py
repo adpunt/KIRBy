@@ -218,9 +218,11 @@ def run_geometry_survey(
         try:
             from kirby.find_best_hybrid import find_best_hybrid
             from kirby.hybrid import apply_feature_selection
+            _metric = 'spearman' if not is_clf else 'auc'
             search = find_best_hybrid(
                 base_reps=all_reps_for_hybrid, labels=labels, groups=groups,
-                speed='fast', return_fitted=True, verbose=False, cache=True)
+                speed='fast', return_fitted=True, verbose=False, cache=True,
+                metric=_metric)
             fitted = search.fitted_results.get('rf')
             if fitted is not None:
                 fi = {r: {'selected_indices': idx}

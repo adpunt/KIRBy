@@ -352,8 +352,7 @@ def run(data, config, output_dir, dataset_name, thresholds=None, **kwargs):
     groups = data['groups']
     domain = data.get('domain', 'molecular')
 
-    total_dim = sum(v.shape[1] for v in reps.values())
-    budgets = config['budgets'] + [total_dim]
+    budgets = config['budgets']
 
     model_instances = {name: factory() for name, factory in models.items()}
 

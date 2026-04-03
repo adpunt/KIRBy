@@ -41,7 +41,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
     groups = data['groups']
     budgets = config['budgets']
     search_speed = config['search_speed']
-    _, _, lower_is_better = get_domain_metric(data)
+    metric_name, _, lower_is_better = get_domain_metric(data)
 
     # For molecular datasets, use smiles; for antibody, this partition may not apply
     smiles = data.get('smiles')
@@ -147,6 +147,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                     augmentations=sub_augs,
                     augmentation_strategy='capped',
                     internal_evaluators=INTERNAL_EVALUATORS,
+                    metric=metric_name,
                     verbose=False,
                     cache=True,
                 )

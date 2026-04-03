@@ -279,6 +279,7 @@ def _run_information_retention(data, budgets, search_speed='fast'):
     """
     print("\n  9b: Information Retention Curves")
 
+    metric_name_9b, _, _ = get_domain_metric(data)
     reps = data['reps']
     labels = data['labels']
     groups = data.get('groups')
@@ -299,6 +300,7 @@ def _run_information_retention(data, budgets, search_speed='fast'):
                 augmentations=augs,
                 augmentation_strategy='capped',
                 internal_evaluators=INTERNAL_EVALUATORS,
+                metric=metric_name_9b,
                 verbose=False,
                 cache=True,
             )
@@ -406,6 +408,7 @@ def _run_effective_rank_analysis(data, budgets, search_speed='fast'):
     """
     print("\n  9c: Effective Rank Profile")
 
+    metric_name_9c, _, _ = get_domain_metric(data)
     reps = data['reps']
     labels = data['labels']
     groups = data.get('groups')
@@ -428,6 +431,7 @@ def _run_effective_rank_analysis(data, budgets, search_speed='fast'):
                 augmentations=augs,
                 augmentation_strategy='capped',
                 internal_evaluators=INTERNAL_EVALUATORS,
+                metric=metric_name_9c,
                 verbose=False,
                 cache=True,
             )
@@ -551,6 +555,7 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                 augmentations=augs,
                 augmentation_strategy='capped',
                 internal_evaluators=INTERNAL_EVALUATORS,
+                metric=metric_name,
                 verbose=False,
                 cache=True,
             )

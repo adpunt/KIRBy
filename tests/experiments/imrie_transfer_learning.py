@@ -187,7 +187,8 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pretrain_dir):
         from kirby.hybrid import apply_feature_selection
         search = find_best_hybrid(
             base_reps=reps, labels=labels, groups=groups,
-            speed='fast', return_fitted=True, verbose=False, cache=True)
+            speed='fast', return_fitted=True, verbose=False, cache=True,
+            metric='rmse')
         fitted = search.fitted_results.get('rf')
         if fitted is not None:
             fi = {r: {'selected_indices': idx}

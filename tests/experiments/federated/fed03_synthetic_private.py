@@ -30,7 +30,7 @@ from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy, cv_split,
-    get_precomputed_search,
+    get_precomputed_search, get_domain_metric,
 )
 from experiments.federated.federated_helpers import (
     compute_clf_metrics, compute_reg_metrics,
@@ -802,10 +802,12 @@ def _run_antibody_federated(data, config, output_dir, dataset_name):
     for silo_name, sd in silo_data.items():
         if len(sd['reps']) >= 2:
             try:
+                _metric = get_domain_metric(sd)[0]
                 s_search = find_best_hybrid(
                     sd['reps'], sd['labels'],
                     groups=sd.get('groups'),
-                    speed='fast', cache=True, verbose=False)
+                    speed='fast', cache=True, verbose=False,
+                    metric=_metric)
                 s_bp_entry = s_search.best_by_model.get('rf')
                 if s_bp_entry:
                     silo_blueprints[silo_name] = s_bp_entry['blueprint']
