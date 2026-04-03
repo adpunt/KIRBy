@@ -2560,7 +2560,18 @@ def find_best_hybrid(
     if cache and cache_path is not None:
         try:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
-            cache_path.write_bytes(pickle.dumps(search_result))
+            # Atomic write: temp file + rename to prevent corruption
+            # from parallel jobs writing the same cache key.
+            import tempfile
+            fd, tmp = tempfile.mkstemp(dir=str(cache_path.parent), suffix='.tmp')
+            try:
+                with os.fdopen(fd, 'wb') as f:
+                    f.write(pickle.dumps(search_result))
+                os.replace(tmp, str(cache_path))
+            except BaseException:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+                raise
             if verbose:
                 print(f"  Cached result to {cache_path}")
         except Exception:

@@ -85,7 +85,17 @@ def load_or_compute(
 
     if cache:
         cache_path = get_cache_dir() / f'{cache_key}.npz'
-        np.savez(cache_path, train=train_embs, val=val_embs)
+        # Atomic write to prevent corruption from parallel jobs
+        import tempfile
+        fd, tmp = tempfile.mkstemp(dir=str(cache_path.parent), suffix='.tmp')
+        os.close(fd)
+        try:
+            np.savez(tmp, train=train_embs, val=val_embs)
+            os.replace(tmp, str(cache_path))
+        except BaseException:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+            raise
 
     return train_embs, val_embs
 

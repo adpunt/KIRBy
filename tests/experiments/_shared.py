@@ -2004,8 +2004,17 @@ def save_experiment_results(results: dict, output_dir: str, experiment_id: str,
         output.setdefault('timestamp', datetime.datetime.now().isoformat())
         output.setdefault('experiment', experiment_id)
 
-    with open(filepath, 'w') as f:
-        json.dump(output, f, indent=2)
+    # Atomic write: write to temp file then rename, so parallel jobs
+    # can't corrupt each other's output by truncating mid-write.
+    import tempfile
+    fd, tmp_path = tempfile.mkstemp(dir=str(out), suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(output, f, indent=2)
+        os.replace(tmp_path, str(filepath))  # atomic on same filesystem
+    except BaseException:
+        os.unlink(tmp_path)
+        raise
     print(f"  [saved {filepath}]")
     return filepath
 
