@@ -491,7 +491,7 @@ DEFAULT_MODELS = {
         'regressor': _get_gp_regressor,
         'classifier': _get_gp_classifier,
         'tier': 'full',
-        '_max_samples': 5000,
+        '_max_samples': 6000,
     },
     'catboost': {
         'regressor': _get_catboost_regressor,
