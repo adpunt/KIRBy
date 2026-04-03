@@ -114,9 +114,9 @@ def precompute_dataset(dataset_name, speed='fast', tiers=('general', 'top'),
     print(f"  general={len(general_reps)}, top={len(top_reps)}, aug={len(aug_reps)}")
     print(f"  metric={metric}, task={task_type}, n={len(labels)}")
 
-    if models is None:
-        models = DOWNSTREAM_MODELS
-
+    # NOTE: pass models=None so find_best_hybrid uses speed-tier defaults.
+    # This matches how get_precomputed_search() calls find_best_hybrid,
+    # ensuring identical cache keys. Do NOT pass DOWNSTREAM_MODELS explicitly.
     budgets = SCREENING_BUDGETS
 
     # Build conditions
