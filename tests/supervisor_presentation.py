@@ -217,6 +217,38 @@ def extract_baseline_scores(bl_data):
     return rep_scores, rep_dims, meta
 
 
+def extract_baseline_scores_r2(bl_data):
+    """Extract per-rep R² scores from phase5_baselines JSON.
+
+    Used when hybrid configs are in R² (C02 format) so baselines must match.
+    """
+    meta = bl_data.get('metadata', {})
+    baselines = bl_data.get('baselines', {})
+
+    rep_scores = {}
+    rep_dims = {}
+    for rep_name, rep_data in baselines.items():
+        rep_dims[rep_name] = rep_data.get('dimension', '?')
+        scores_raw = rep_data.get('scores', {})
+        rep_scores[rep_name] = {}
+        for model, val in scores_raw.items():
+            if isinstance(val, dict):
+                # Always use r2_mean
+                if 'r2_mean' in val:
+                    rep_scores[rep_name][model] = val['r2_mean']
+                elif 'r2' in val and isinstance(val['r2'], dict):
+                    rep_scores[rep_name][model] = val['r2'].get('mean', 0)
+            elif isinstance(val, (int, float)):
+                # Molecular format: scores.model = rmse_value
+                # Need to get R² from metrics instead
+                metrics = rep_data.get('metrics', {}).get(model, {})
+                r2_info = metrics.get('r2', {})
+                if isinstance(r2_info, dict) and 'mean' in r2_info:
+                    rep_scores[rep_name][model] = r2_info['mean']
+                # else: skip — can't get R² from this format
+    return rep_scores, rep_dims, meta
+
+
 # =========================================================================
 # DISPLAY
 # =========================================================================
@@ -244,6 +276,22 @@ def print_from_json(ds_name, ds_data):
     meta = {}
     if bl_json:
         rep_scores, rep_dims, meta = extract_baseline_scores(bl_json)
+
+    # C02 configs always use R² (the key is literally 'r2_mean', and C02
+    # calls find_best_hybrid without metric= so it defaults to 'r2').
+    # Override baseline metric to match.
+    has_hybrid = bool(hybrid_jsons)
+    if has_hybrid:
+        # Check if hybrid configs use r2_mean key (C02 format)
+        sample_cfg = hybrid_jsons[0].get('configs', [{}])[0] if hybrid_jsons else {}
+        if 'r2_mean' in sample_cfg and 'score_mean' not in sample_cfg:
+            # C02 format: values are R², higher is better
+            meta = dict(meta)  # don't mutate original
+            meta['primary_metric'] = 'r2'
+            meta['higher_is_better'] = True
+            # Re-extract baselines using R² instead of whatever primary_metric was
+            if bl_json:
+                rep_scores, rep_dims, _ = extract_baseline_scores_r2(bl_json)
 
     metric = meta.get('primary_metric', '?')
     higher = meta.get('higher_is_better', True)
