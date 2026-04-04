@@ -188,7 +188,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             StandardScaler().fit_transform(X_concat))
         spaces['pca_matched'] = X_pca
 
-    # Hybrid — distance-aware evaluators, held-out split to avoid label leakage.
+    # Hybrid — NOTE: feature selection uses all labels (supervised), so hybrid
+    # clustering/retrieval metrics have a tautological advantage over unsupervised
+    # baselines (PCA, raw reps). Results should be interpreted as "how well does
+    # the hybrid space organise labels" not "will this generalise to unseen data".
     try:
         X_hybrid, fi, search = get_fitted_hybrid(
             reps, labels, groups,

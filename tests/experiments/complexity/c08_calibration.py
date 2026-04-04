@@ -210,9 +210,11 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
             y_pred_cal = model_conf.predict(X_cal)
             cal_residuals = np.abs(y_cal - y_pred_cal)
 
-            # Conformal quantile (90% coverage target)
+            # Conformal quantile with finite-sample correction (Romano et al. 2019)
             alpha = 0.1
-            q = np.quantile(cal_residuals, 1 - alpha)
+            n_cal = len(cal_residuals)
+            conformal_level = min(1.0, np.ceil((n_cal + 1) * (1 - alpha)) / n_cal)
+            q = np.quantile(cal_residuals, conformal_level)
 
             # Predict on val with conformal intervals
             y_pred_conf = model_conf.predict(X_val_s)

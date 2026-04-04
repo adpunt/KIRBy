@@ -279,6 +279,11 @@ def evaluate_condition(condition, rep_names, n_folds, max_samples=5000):
         light_seqs = [''] * len(heavy_seqs)
     labels = data['labels']
     groups = data.get('groups')
+    # Graphinity direct load returns pdb_ids but not groups — convert
+    if groups is None and 'pdb_ids' in data:
+        pdb_ids = data['pdb_ids']
+        unique_ids = {pid: i for i, pid in enumerate(sorted(set(pdb_ids)))}
+        groups = np.array([unique_ids[pid] for pid in pdb_ids])
     n = len(labels)
 
     print(f"  {n} samples, DDG range [{labels.min():.2f}, {labels.max():.2f}]")

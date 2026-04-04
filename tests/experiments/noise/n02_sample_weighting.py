@@ -440,7 +440,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"    {'HYBRID':<20} uw={model_hybrid_uw:.4f}, w={model_hybrid_w:.4f} "
               f"(delta={model_hybrid_delta:+.4f})")
 
-    results['top3_base_reps'] = [(n, s) for n, s in top3] if top3 else []
+    results['top3_base_reps'] = [(n, uw) for n, uw, _w, _d in top3] if top3 else []
 
     return make_structured_output(
         experiment_id='n02',

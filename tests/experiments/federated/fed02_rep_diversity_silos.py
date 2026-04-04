@@ -163,7 +163,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     def _make_model():
         if is_clf:
             return RandomForestClassifier(
-                n_estimators=150, max_depth=15, random_state=0)
+                n_estimators=150, max_depth=15,
+                class_weight='balanced', random_state=0)
         return RandomForestRegressor(
             n_estimators=150, max_depth=15, random_state=0)
 

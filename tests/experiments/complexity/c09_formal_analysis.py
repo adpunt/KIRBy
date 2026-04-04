@@ -468,22 +468,28 @@ def _run_effective_rank_analysis(data, budgets, search_speed='fast'):
                 pass
         hybrid_rank = float(np.mean(fold_ranks)) if fold_ranks else float('nan')
 
-        # PCA
-        try:
-            pca = PCA(n_components=n_feat)
-            X_pca = pca.fit_transform(StandardScaler().fit_transform(X_concat))
-            pca_rank = compute_effective_rank(X_pca)
-        except Exception:
-            pca_rank = float('nan')
+        # PCA — per-fold to match hybrid (avoids using val data in fit)
+        pca_fold_ranks = []
+        for train_idx, _ in _cv_split_9c(groups, 3, sample_X, labels, mode='full'):
+            try:
+                pca = PCA(n_components=n_feat)
+                X_pca = pca.fit_transform(StandardScaler().fit_transform(X_concat[train_idx]))
+                pca_fold_ranks.append(compute_effective_rank(X_pca))
+            except Exception:
+                pass
+        pca_rank = float(np.mean(pca_fold_ranks)) if pca_fold_ranks else float('nan')
 
-        # Random subset
-        try:
-            rng = np.random.RandomState(42)
-            random_idx = rng.choice(X_concat.shape[1], n_feat, replace=False)
-            X_random = X_concat[:, random_idx]
-            random_rank = compute_effective_rank(X_random)
-        except Exception:
-            random_rank = float('nan')
+        # Random subset — per-fold to match hybrid
+        random_fold_ranks = []
+        rng = np.random.RandomState(42)
+        random_idx = rng.choice(X_concat.shape[1], n_feat, replace=False)
+        for train_idx, _ in _cv_split_9c(groups, 3, sample_X, labels, mode='full'):
+            try:
+                X_random = X_concat[train_idx][:, random_idx]
+                random_fold_ranks.append(compute_effective_rank(X_random))
+            except Exception:
+                pass
+        random_rank = float(np.mean(random_fold_ranks)) if random_fold_ranks else float('nan')
 
         results['budgets'].append(budget)
         results['hybrid_rank'].append(float(hybrid_rank))

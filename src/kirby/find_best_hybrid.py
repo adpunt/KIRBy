@@ -1261,9 +1261,8 @@ def _evaluate_hybrid_config(
                 if aug_val_features is not None:
                     X_val = np.hstack([X_val, aug_val_features])
         except Exception as _fold_err:
-            if verbose:
-                import traceback
-                traceback.print_exc()
+            import traceback
+            traceback.print_exc()
             continue
 
         # Dedup: if identical feature selection was already evaluated with
@@ -1894,6 +1893,7 @@ def _run_refinement_phase(
     fold_reps: Optional[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]]] = None,
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
     cv_splitter=None,
+    metric_name: Optional[str] = None,
 ) -> List[dict]:
     """Phase 2: re-evaluate top configs from Phase 1 with alternative step_sizes.
 
@@ -2566,6 +2566,7 @@ def find_best_hybrid(
             fold_reps=fold_reps,
             precomputed_folds=precomputed_folds,
             cv_splitter=cv_splitter,
+            metric_name=_metric_name_str,
         )
         all_results.extend(refinement_results)
 

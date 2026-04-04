@@ -964,16 +964,22 @@ def allocate_stability_selection(rep_dict_train, rep_dict_val, train_labels, val
 
 def _is_classification_task(labels):
     """Determine if this is a classification or regression task.
-    
-    Uses dtype check: integer types are classification, float types are regression.
+
+    Heuristic: classification if labels are a small set of non-negative integers.
+    Tighter than just checking dtype to avoid misclassifying count/age data.
     """
     labels = np.asarray(labels)
-    # Check if labels are integer type (classification)
+    unique = np.unique(labels)
+    n_unique = len(unique)
+    # Quick reject: too many unique values for classification
+    if n_unique >= 10:
+        return False
+    # Integer dtype with few unique values: classification
     if np.issubdtype(labels.dtype, np.integer):
         return True
-    # Check if float labels are actually integers (e.g., 0.0, 1.0, 2.0)
+    # Float labels that are actually integers (e.g., 0.0, 1.0, 2.0)
     if np.issubdtype(labels.dtype, np.floating):
-        return np.allclose(labels, labels.astype(int)) and len(np.unique(labels)) < 20
+        return np.allclose(labels, labels.astype(int))
     return False
 
 

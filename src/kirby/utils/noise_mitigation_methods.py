@@ -577,41 +577,47 @@ class BootstrapEnsembleFilter(NoiseMitigationMethod):
         self.threshold = threshold
         
     def identify_noise(self, X, y):
-        np.random.seed(self.random_state)
-        
+        rng = np.random.RandomState(self.random_state)
+
         # Bootstrap predictions
         predictions = np.zeros((len(y), self.n_estimators))
-        
+        has_prediction = np.zeros((len(y), self.n_estimators), dtype=bool)
+
         for i in range(self.n_estimators):
             # Bootstrap sample
-            bootstrap_idx = np.random.choice(len(y), size=len(y), replace=True)
+            bootstrap_idx = rng.choice(len(y), size=len(y), replace=True)
             oob_idx = np.setdiff1d(np.arange(len(y)), bootstrap_idx)
-            
+
             if len(oob_idx) == 0:
                 continue
-            
+
             X_boot, y_boot = X[bootstrap_idx], y[bootstrap_idx]
-            
+
             # Train model
             model = RandomForestRegressor(n_estimators=50, random_state=i, n_jobs=-1)
             model.fit(X_boot, y_boot)
-            
+
             # Predict on OOB samples
             predictions[oob_idx, i] = model.predict(X[oob_idx])
-        
+            has_prediction[oob_idx, i] = True
+
         # Calculate disagreement
         if self.disagreement_criterion == 'mean_error':
             # Average prediction error across ensemble
-            mask = predictions != 0  # Only count predictions that were made
-            mean_pred = np.where(mask.sum(axis=1) > 0,
-                                predictions.sum(axis=1) / mask.sum(axis=1),
+            n_preds = has_prediction.sum(axis=1)
+            masked_preds = np.where(has_prediction, predictions, 0.0)
+            mean_pred = np.where(n_preds > 0,
+                                masked_preds.sum(axis=1) / n_preds,
                                 y)  # Use true label if no predictions
             disagreement = np.abs(y - mean_pred)
         elif self.disagreement_criterion == 'vote_variance':
-            # Variance of predictions
-            mask = predictions != 0
-            disagreement = np.where(mask.sum(axis=1) > 1,
-                                   np.var(predictions, axis=1),
+            # Variance of predictions (only over OOB predictions)
+            n_preds = has_prediction.sum(axis=1)
+            masked_preds = np.where(has_prediction, predictions, 0.0)
+            mean_pred = np.where(n_preds > 0, masked_preds.sum(axis=1) / n_preds, 0.0)
+            sq_diff = np.where(has_prediction, (predictions - mean_pred[:, None]) ** 2, 0.0)
+            disagreement = np.where(n_preds > 1,
+                                   sq_diff.sum(axis=1) / n_preds,
                                    0)
         else:
             raise ValueError(f"Unknown criterion: {self.disagreement_criterion}")
@@ -648,43 +654,43 @@ class CoTeachingFilter(NoiseMitigationMethod):
         self.selection_rate = selection_rate
         
     def identify_noise(self, X, y):
-        np.random.seed(self.random_state)
-        
+        rng = np.random.RandomState(self.random_state)
+
         # Track rejection counts
         rejection_counts = np.zeros(len(y))
-        
+        n_select = int(len(y) * self.selection_rate)
+
+        # Initial training sets: full data for both models
+        idx1 = np.arange(len(y))
+        idx2 = np.arange(len(y))
+
         for epoch in range(self.n_epochs):
-            # Train two models
+            # Train each model on the subset selected by the OTHER model
             model1 = RandomForestRegressor(n_estimators=50, random_state=self.random_state + epoch, n_jobs=-1)
             model2 = RandomForestRegressor(n_estimators=50, random_state=self.random_state + epoch + 1000, n_jobs=-1)
-            
-            model1.fit(X, y)
-            model2.fit(X, y)
-            
-            # Get losses
-            pred1 = model1.predict(X)
-            pred2 = model2.predict(X)
-            
-            loss1 = np.abs(y - pred1)
-            loss2 = np.abs(y - pred2)
-            
-            # Select small-loss samples
-            n_select = int(len(y) * self.selection_rate)
-            
-            idx1 = np.argsort(loss1)[:n_select]
-            idx2 = np.argsort(loss2)[:n_select]
-            
-            # Track which samples were rejected
+
+            model1.fit(X[idx2], y[idx2])  # model1 trained on model2's selection
+            model2.fit(X[idx1], y[idx1])  # model2 trained on model1's selection
+
+            # Each model scores ALL samples, then selects small-loss for the other
+            loss1 = np.abs(y - model1.predict(X))
+            loss2 = np.abs(y - model2.predict(X))
+
+            # Model1's small-loss selection feeds model2, and vice versa
+            idx2 = np.argsort(loss1)[:n_select]  # model1 selects for model2
+            idx1 = np.argsort(loss2)[:n_select]  # model2 selects for model1
+
+            # Track which samples were rejected by both
             rejected1 = np.setdiff1d(np.arange(len(y)), idx1)
             rejected2 = np.setdiff1d(np.arange(len(y)), idx2)
-            
+
             rejection_counts[rejected1] += 1
             rejection_counts[rejected2] += 1
-        
+
         # Flag samples rejected in majority of epochs
         threshold = self.n_epochs * 0.6  # Rejected in >60% of epochs
         noisy_indices = np.where(rejection_counts >= threshold)[0]
-        
+
         return noisy_indices
 
 
@@ -703,12 +709,13 @@ class DivideMixFilter(NoiseMitigationMethod):
         self.n_components = n_components
         
     def identify_noise(self, X, y):
-        # Train model to get loss estimates
-        model = RandomForestRegressor(n_estimators=100, random_state=self.random_state, n_jobs=-1)
+        # Train model with OOB to get unbiased loss estimates
+        model = RandomForestRegressor(n_estimators=100, oob_score=True,
+                                      random_state=self.random_state, n_jobs=-1)
         model.fit(X, y)
-        
-        # Get prediction errors (proxy for loss)
-        pred = model.predict(X)
+
+        # Use OOB predictions to avoid in-sample bias
+        pred = model.oob_prediction_
         losses = np.abs(y - pred)
         
         # Fit GMM to loss distribution
@@ -747,12 +754,15 @@ class ZScoreFilter(NoiseMitigationMethod):
         self.threshold = threshold
         
     def identify_noise(self, X, y):
-        # Calculate z-scores
-        z_scores = np.abs((y - y.mean()) / y.std())
-        
+        # Calculate z-scores (handle constant labels gracefully)
+        std = y.std()
+        if std < 1e-10:
+            return np.array([], dtype=int)
+        z_scores = np.abs((y - y.mean()) / std)
+
         # Flag extreme values
         noisy_indices = np.where(z_scores > self.threshold)[0]
-        
+
         return noisy_indices
 
 
@@ -771,12 +781,13 @@ class PredictionErrorFilter(NoiseMitigationMethod):
         self.contamination = contamination
         
     def identify_noise(self, X, y):
-        # Train model on all data
-        model = RandomForestRegressor(n_estimators=100, random_state=self.random_state, n_jobs=-1)
+        # Train model with OOB to get unbiased error estimates
+        model = RandomForestRegressor(n_estimators=100, oob_score=True,
+                                      random_state=self.random_state, n_jobs=-1)
         model.fit(X, y)
-        
-        # Get prediction errors
-        pred = model.predict(X)
+
+        # Use OOB predictions to avoid in-sample bias
+        pred = model.oob_prediction_
         errors = np.abs(y - pred)
         
         # Flag top contamination% errors

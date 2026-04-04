@@ -199,12 +199,23 @@ def identify_cliff_compounds_editdist(sequences, y, max_edits=5, activity_k=2.0,
         for i in range(n):
             edit_dist[i] = (arr != arr[i]).sum(axis=1)
     else:
-        # Levenshtein fallback (slower)
+        # True Levenshtein edit distance (slower)
+        def _levenshtein(s1, s2):
+            if len(s1) < len(s2):
+                return _levenshtein(s2, s1)
+            prev = list(range(len(s2) + 1))
+            for i, c1 in enumerate(s1):
+                curr = [i + 1]
+                for j, c2 in enumerate(s2):
+                    curr.append(min(prev[j + 1] + 1, curr[j] + 1,
+                                    prev[j] + (0 if c1 == c2 else 1)))
+                prev = curr
+            return prev[-1]
+
         edit_dist = np.zeros((n, n), dtype=np.int32)
         for i in range(n):
             for j in range(i + 1, n):
-                d = sum(a != b for a, b in zip(sequences[i], sequences[j]))
-                d += abs(len(sequences[i]) - len(sequences[j]))
+                d = _levenshtein(sequences[i], sequences[j])
                 edit_dist[i, j] = d
                 edit_dist[j, i] = d
 

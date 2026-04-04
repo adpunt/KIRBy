@@ -225,11 +225,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if not np.isnan(s) and not np.isnan(baseline):
                     deltas[cond] = float(s - baseline)
 
+            _sentinel = -1e10 if not lower_is_better else 1e10
+            _best_fn = min if lower_is_better else max
             space_results[model_name] = {
                 'scores': model_results,
                 'deltas': deltas,
-                'best_condition': max(model_results, key=lambda k: model_results[k]
-                                      if not np.isnan(model_results[k]) else -1e10),
+                'best_condition': _best_fn(model_results, key=lambda k: model_results[k]
+                                           if not np.isnan(model_results[k]) else _sentinel),
             }
 
         results['per_space'][space_name] = convert_numpy(space_results)
