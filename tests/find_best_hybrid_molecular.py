@@ -72,7 +72,7 @@ def get_murcko_scaffold(smiles: str) -> str:
 def assign_scaffold_groups(smiles_list: List[str]) -> Tuple[np.ndarray, int]:
     """Assign scaffold group IDs to molecules for GroupKFold."""
     scaffolds = [get_murcko_scaffold(smi) for smi in smiles_list]
-    unique_scaffolds = list(set(scaffolds))
+    unique_scaffolds = sorted(set(scaffolds))
     scaffold_to_id = {s: i for i, s in enumerate(unique_scaffolds)}
     groups = np.array([scaffold_to_id[s] for s in scaffolds])
     return groups, len(unique_scaffolds)

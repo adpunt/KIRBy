@@ -57,7 +57,7 @@ from sklearn.preprocessing import StandardScaler
 
 warnings.filterwarnings('ignore')
 
-_CACHE_VERSION = 8  # Bump when pipeline changes affect cached results
+_CACHE_VERSION = 9  # Bumped: v8 caches had non-deterministic group indices (PYTHONHASHSEED)
 
 
 # =============================================================================

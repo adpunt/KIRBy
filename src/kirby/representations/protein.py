@@ -1157,7 +1157,7 @@ def create_pocket_features(
     # Pre-fetch KLIFS pocket data for kinase datasets
     klifs_cache = None
     if dataset_hint in ('davis', 'kiba') or (uniprot_ids and any(u is not None for u in uniprot_ids)):
-        unique_uids = list(set(u for u in (uniprot_ids or []) if u is not None))
+        unique_uids = sorted(set(u for u in (uniprot_ids or []) if u is not None))
         if unique_uids:
             klifs_cache = _get_klifs_pocket_residues(unique_uids)
 
@@ -1224,7 +1224,7 @@ def create_esm2_pocket_embeddings(
     # Pre-fetch KLIFS
     klifs_cache = None
     if uniprot_ids:
-        unique_uids = list(set(u for u in uniprot_ids if u is not None))
+        unique_uids = sorted(set(u for u in uniprot_ids if u is not None))
         if unique_uids:
             klifs_cache = _get_klifs_pocket_residues(unique_uids)
 
@@ -1296,7 +1296,7 @@ def create_pocket_composition_features(
 
     klifs_cache = None
     if uniprot_ids:
-        unique_uids = list(set(u for u in uniprot_ids if u is not None))
+        unique_uids = sorted(set(u for u in uniprot_ids if u is not None))
         if unique_uids:
             klifs_cache = _get_klifs_pocket_residues(unique_uids)
 
