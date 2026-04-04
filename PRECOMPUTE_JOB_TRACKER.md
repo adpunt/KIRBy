@@ -38,49 +38,49 @@ sacct -u scat9264 -S 2026-04-04 --name="pc_%" --format=JobID,JobName%45,State,El
 
 ## MOLECULAR (7 datasets × 6 = 42 jobs, IDs 11707673–11707714)
 
-### 1. herg_ki (1,412 samples) — 256G / 12h — ALL COMPLETED
+### 1. herg_ki (1,412 samples) — 256G / 12h — RESUBMITTED (v8→v9)
 
 | Job ID | Condition | Status | Elapsed |
 |--------|-----------|--------|---------|
-| 11707673 | general_none | COMPLETED | 00:42:26 |
-| 11707674 | general_uncapped | COMPLETED | 00:21:12 |
-| 11707675 | general_capped | COMPLETED | 06:01:18 |
-| 11707676 | top_none | COMPLETED | 00:09:50 |
-| 11707677 | top_uncapped | COMPLETED | 00:19:41 |
-| 11707678 | top_capped | COMPLETED | 04:08:56 |
+| **11716574** | general_none | PENDING (resub) | — |
+| **11716575** | general_uncapped | PENDING (resub) | — |
+| **11716576** | general_capped | PENDING (resub) | — |
+| **11716577** | top_none | PENDING (resub) | — |
+| **11716578** | top_uncapped | PENDING (resub) | — |
+| **11716579** | top_capped | PENDING (resub) | — |
 
-### 2. caco2 (2,158 samples) — 256G / 12h
-
-| Job ID | Condition | Status | Elapsed |
-|--------|-----------|--------|---------|
-| 11707679 | general_none | COMPLETED | 00:40:06 |
-| 11707680 | general_uncapped | COMPLETED | 00:48:12 |
-| 11707681 | general_capped | RUNNING | 05:32:38 |
-| 11707682 | top_none | COMPLETED | 00:15:05 |
-| 11707683 | top_uncapped | COMPLETED | 00:25:46 |
-| 11707684 | top_capped | RUNNING | 03:51:49 |
-
-### 3. logd (5,028 samples) — 256G / 12h
+### 2. caco2 (2,158 samples) — 256G / 12h — RESUBMITTED (v8→v9)
 
 | Job ID | Condition | Status | Elapsed |
 |--------|-----------|--------|---------|
-| 11707685 | general_none | COMPLETED | 01:19:57 |
-| 11707686 | general_uncapped | COMPLETED | 03:33:32 |
-| 11707687 | general_capped | RUNNING | 03:25:16 |
-| 11707688 | top_none | COMPLETED | 00:37:38 |
-| 11707689 | top_uncapped | COMPLETED | 02:39:35 |
-| 11707690 | top_capped | RUNNING | 02:37:00 |
+| **11716580** | general_none | PENDING (resub) | — |
+| **11716581** | general_uncapped | PENDING (resub) | — |
+| **11716582** | general_capped | PENDING (resub) | — |
+| **11716583** | top_none | PENDING (resub) | — |
+| **11716584** | top_uncapped | PENDING (resub) | — |
+| **11716585** | top_capped | PENDING (resub) | — |
 
-### 4. qm9 (9,978 samples) — 256G / 12h
+### 3. logd (5,028 samples) — 256G / 12h — RESUBMITTED (v8→v9)
 
 | Job ID | Condition | Status | Elapsed |
 |--------|-----------|--------|---------|
-| 11707691 | general_none | RUNNING | 01:55:23 |
-| 11707692 | general_uncapped | PENDING | — |
-| 11707693 | general_capped | PENDING | — |
-| 11707694 | top_none | PENDING | — |
-| 11707695 | top_uncapped | PENDING | — |
-| 11707696 | top_capped | PENDING | — |
+| **11716586** | general_none | PENDING (resub) | — |
+| **11716587** | general_uncapped | PENDING (resub) | — |
+| **11716588** | general_capped | PENDING (resub) | — |
+| **11716589** | top_none | PENDING (resub) | — |
+| **11716590** | top_uncapped | PENDING (resub) | — |
+| **11716591** | top_capped | PENDING (resub) | — |
+
+### 4. qm9 (9,978 samples) — 256G / 12h — PARTIAL RESUB (v8→v9)
+
+| Job ID | Condition | Status | Elapsed |
+|--------|-----------|--------|---------|
+| **11716592** | general_none | PENDING (resub) | — |
+| **11716593** | general_uncapped | PENDING (resub) | — |
+| **11716594** | general_capped | PENDING (resub) | — |
+| 11707694 | top_none | PENDING (original) | — |
+| 11707695 | top_uncapped | PENDING (original) | — |
+| 11707696 | top_capped | PENDING (original) | — |
 
 ### 5. adme_hlm (3,086 samples) — 256G / 12h
 
@@ -119,16 +119,16 @@ sacct -u scat9264 -S 2026-04-04 --name="pc_%" --format=JobID,JobName%45,State,El
 
 ## ANTIBODY INTER-FAMILY (11 datasets × 6 = 66 jobs, IDs 11707715–11707780)
 
-### 8. flab_thermo_tresanco (672 samples) — 256G / 12h
+### 8. flab_thermo_tresanco (672 samples) — 256G / 12h — PARTIAL RESUB (v8→v9)
 
 | Job ID | Condition | Status | Elapsed |
 |--------|-----------|--------|---------|
-| 11707715 | general_none | COMPLETED | 06:45:15 |
-| 11707716 | general_uncapped | COMPLETED | 08:15:11 |
-| 11707717 | general_capped | PENDING | — |
-| 11707718 | top_none | PENDING | — |
-| 11707719 | top_uncapped | PENDING | — |
-| 11707720 | top_capped | PENDING | — |
+| **11716595** | general_none | PENDING (resub) | — |
+| **11716596** | general_uncapped | PENDING (resub) | — |
+| 11707717 | general_capped | PENDING (original) | — |
+| 11707718 | top_none | PENDING (original) | — |
+| 11707719 | top_uncapped | PENDING (original) | — |
+| 11707720 | top_capped | PENDING (original) | — |
 
 ### 9. flab_pk_jain_heprt (130 samples) — 256G / 12h
 
@@ -553,4 +553,66 @@ sbatch --job-name="pc_<DATASET>_<CONDITION>" \
 
 | Date | Dataset | Condition | Old Job ID | Old State | New Job ID | New Time Limit |
 |------|---------|-----------|-----------|-----------|-----------|---------------|
-| | | | | | | |
+| 2026-04-04 | herg_ki | general_none | 11707673 | COMPLETED (stale v8) | 11716574 | 12:00:00 |
+| 2026-04-04 | herg_ki | general_uncapped | 11707674 | COMPLETED (stale v8) | 11716575 | 12:00:00 |
+| 2026-04-04 | herg_ki | general_capped | 11707675 | COMPLETED (stale v8) | 11716576 | 12:00:00 |
+| 2026-04-04 | herg_ki | top_none | 11707676 | COMPLETED (stale v8) | 11716577 | 12:00:00 |
+| 2026-04-04 | herg_ki | top_uncapped | 11707677 | COMPLETED (stale v8) | 11716578 | 12:00:00 |
+| 2026-04-04 | herg_ki | top_capped | 11707678 | COMPLETED (stale v8) | 11716579 | 12:00:00 |
+| 2026-04-04 | caco2 | general_none | 11707679 | COMPLETED (stale v8) | 11716580 | 12:00:00 |
+| 2026-04-04 | caco2 | general_uncapped | 11707680 | COMPLETED (stale v8) | 11716581 | 12:00:00 |
+| 2026-04-04 | caco2 | general_capped | 11707681 | CANCELLED | 11716582 | 12:00:00 |
+| 2026-04-04 | caco2 | top_none | 11707682 | COMPLETED (stale v8) | 11716583 | 12:00:00 |
+| 2026-04-04 | caco2 | top_uncapped | 11707683 | COMPLETED (stale v8) | 11716584 | 12:00:00 |
+| 2026-04-04 | caco2 | top_capped | 11707684 | CANCELLED | 11716585 | 12:00:00 |
+| 2026-04-04 | logd | general_none | 11707685 | COMPLETED (stale v8) | 11716586 | 12:00:00 |
+| 2026-04-04 | logd | general_uncapped | 11707686 | COMPLETED (stale v8) | 11716587 | 12:00:00 |
+| 2026-04-04 | logd | general_capped | 11707687 | CANCELLED | 11716588 | 12:00:00 |
+| 2026-04-04 | logd | top_none | 11707688 | COMPLETED (stale v8) | 11716589 | 12:00:00 |
+| 2026-04-04 | logd | top_uncapped | 11707689 | COMPLETED (stale v8) | 11716590 | 12:00:00 |
+| 2026-04-04 | logd | top_capped | 11707690 | CANCELLED | 11716591 | 12:00:00 |
+| 2026-04-04 | qm9 | general_none | 11707691 | COMPLETED (stale v8) | 11716592 | 12:00:00 |
+| 2026-04-04 | qm9 | general_uncapped | 11707692 | CANCELLED | 11716593 | 12:00:00 |
+| 2026-04-04 | qm9 | general_capped | 11707693 | CANCELLED | 11716594 | 12:00:00 |
+| 2026-04-04 | tresanco | general_none | 11707715 | COMPLETED (stale v8) | 11716595 | 12:00:00 |
+| 2026-04-04 | tresanco | general_uncapped | 11707716 | COMPLETED (stale v8) | 11716596 | 12:00:00 |
+
+**Reason:** All resubmitted due to non-deterministic scaffold group indices (PYTHONHASHSEED bug). Fix: `list(set())` → `sorted(set())` in `assign_scaffold_groups`. Cache version bumped v8→v9. Stale v8 caches cleared.
+
+---
+
+## FT PRECOMPUTE (12 jobs, HTC long partition, GPU)
+
+**Submitted:** 2026-04-04
+**Cluster:** HTC (GPU)
+**Script:** `tests/slurm_scripts/submit_precompute_ft.sh`
+**Total:** 12 jobs (7 molecular + 5 antibody) — IDs 7440351–7440362
+**Resources:** 1 GPU, 128G, 12h, long partition
+**Speeds:** both fast (3-fold) and full (5-fold) per job
+
+**Status check:**
+```bash
+sacct -u scat9264 -S 2026-04-04 --name="ft_%" --format=JobID,JobName%30,State,Elapsed,ExitCode | grep -v "\.ba\|\.ex\|extern\|batch"
+```
+
+### Molecular FT (7 jobs)
+
+| Job ID | Name | Dataset | FT Rep | Status |
+|--------|------|---------|--------|--------|
+| 7440351 | ft_logd_lora_mf | logd | lora_molformer | PENDING |
+| 7440352 | ft_logd_contr_mf | logd | contrastive_molformer | PENDING |
+| 7440353 | ft_logd_gnn_gmvp | logd | gnn_graphmvp | PENDING |
+| 7440354 | ft_caco2_lora_mf | caco2 | lora_molformer | PENDING |
+| 7440355 | ft_qm9_lora_mf | qm9 | lora_molformer | PENDING |
+| 7440356 | ft_herg_gnn_gmvp | herg_ki | gnn_graphmvp | PENDING |
+| 7440357 | ft_mdr1_gnn_gmvp | adme_mdr1 | gnn_graphmvp | PENDING |
+
+### Antibody FT (5 jobs)
+
+| Job ID | Name | Dataset | FT Rep | Status |
+|--------|------|---------|--------|--------|
+| 7440358 | ft_phil_h3_lora | flab_binding_phillips_h3 | antibody_lora_esm2 | PENDING |
+| 7440359 | ft_ang2_lora | abagym_Ang2 | antibody_lora_esm2 | PENDING |
+| 7440360 | ft_egfr_lora | abagym_EGFR | antibody_lora_esm2 | PENDING |
+| 7440361 | ft_her2_lora | abagym_HER2 | antibody_lora_esm2 | PENDING |
+| 7440362 | ft_abcov_lora | abcov_kd | antibody_lora_esm2 | PENDING |
