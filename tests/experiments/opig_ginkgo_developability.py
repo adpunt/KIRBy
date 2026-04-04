@@ -121,6 +121,10 @@ def _fold_assignments_to_splits(fold_assignments, n_folds):
     """Convert Ginkgo's pre-computed fold IDs to (train_idx, val_idx) list."""
     unique_folds = sorted(set(fold_assignments))
     actual_folds = min(n_folds, len(unique_folds))
+    if actual_folds < n_folds:
+        print(f"  WARNING: requested {n_folds} folds but only "
+              f"{len(unique_folds)} pre-computed folds available, "
+              f"using {actual_folds}")
     splits = []
     fa = np.asarray(fold_assignments)
     for fold_id in unique_folds[:actual_folds]:

@@ -47,6 +47,7 @@ from experiments._shared import (
     cv_split, get_domain_metric,
     compute_effective_rank,
     get_fitted_hybrid, get_precomputed_search, build_fold_hybrid,
+    get_best_for_downstream,
 )
 
 
@@ -614,12 +615,13 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
         make_model = lambda: RandomForestRegressor(
             n_estimators=100, max_depth=None, random_state=42, n_jobs=-1)
 
-    # Get blueprint from cached search
-    search = get_precomputed_search(reps, labels, groups, budget=budget,
+    # Get blueprint from cached search — budget-specific via get_best_for_downstream
+    search = get_precomputed_search(reps, labels, groups,
                                     aug_condition='none', speed='fast',
                                     precomputed=precomputed)
-    best = search.best_by_model.get(model_name) or search.best_by_model.get('rf') or next(
-        iter(search.best_by_model.values()), None)
+    best = get_best_for_downstream(search, model_name, budget=budget)
+    if best is None:
+        best = get_best_for_downstream(search, 'rf', budget=budget)
     if best is None:
         raise RuntimeError(f"No best config found for model={model_name} at budget={budget}")
     bp = best['blueprint']
@@ -859,12 +861,13 @@ def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
     """
     from sklearn.linear_model import Ridge
 
-    # Get blueprint from cached search using REAL labels
-    search = get_precomputed_search(reps, y, groups, budget=budget,
+    # Get blueprint from cached search using REAL labels — budget-specific
+    search = get_precomputed_search(reps, y, groups,
                                     aug_condition='none', speed='fast',
                                     precomputed=precomputed)
-    best = search.best_by_model.get('ridge') or search.best_by_model.get('rf') or next(
-        iter(search.best_by_model.values()), None)
+    best = get_best_for_downstream(search, 'ridge', budget=budget)
+    if best is None:
+        best = get_best_for_downstream(search, 'rf', budget=budget)
     if best is None:
         return float('nan')
     bp = best['blueprint']

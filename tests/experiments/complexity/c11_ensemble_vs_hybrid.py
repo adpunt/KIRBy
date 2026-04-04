@@ -32,7 +32,7 @@ from experiments._shared import (
     get_model_factories, cv_split,
     get_domain_metric, cap_dimensions,
     get_precomputed_search, build_fold_hybrid,
-    extract_top3_base_reps,
+    extract_top3_base_reps, get_best_for_downstream,
 )
 
 
@@ -78,26 +78,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     budgets = [b for b in [50, 100, 200, 500, 1024] if b <= total_dim]
 
     # Precompute hybrid blueprints ONCE (cached) for all budgets
+    # NOTE: get_precomputed_search returns results across ALL budgets (budget
+    # param is deprecated). Use get_best_for_downstream to select per-budget.
     augmentations = data.get('augmentations')
     blueprints = {}
-    last_search = None
-    for budget in budgets:
-        try:
-            search = get_precomputed_search(
-                reps, labels, groups, budget=budget,
-                aug_condition='capped', augmentations=augmentations,
-                speed=config.get('search_speed', 'fast'),
-                precomputed=data.get('precomputed_searches'))
-            best = search.best_by_model.get('rf') or next(iter(search.best_by_model.values()), None)
+    search = None
+    try:
+        search = get_precomputed_search(
+            reps, labels, groups,
+            aug_condition='capped', augmentations=augmentations,
+            speed=config.get('search_speed', 'fast'),
+            precomputed=data.get('precomputed_searches'))
+        for budget in budgets:
+            best = get_best_for_downstream(search, 'rf', budget=budget)
             if best and 'blueprint' in best:
                 blueprints[budget] = best['blueprint']
-            last_search = search
-        except Exception as e:
-            print(f"  Blueprint for budget={budget} failed: {e}")
+    except Exception as e:
+        print(f"  Blueprint search failed: {e}")
     print(f"  Blueprints: {sorted(blueprints.keys())}")
 
-    if last_search is not None:
-        top3 = extract_top3_base_reps(last_search)
+    if search is not None:
+        top3 = extract_top3_base_reps(search)
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
 

@@ -105,7 +105,7 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
         _bp = None
     _alloc = _bp.allocation_method if _bp else 'performance_weighted'
     _imp = _bp.importance_method if _bp else 'treeshap'
-    _int_eval = _bp.internal_evaluator if _bp else 'ridge'
+    _int_eval = _bp.internal_evaluator if _bp else 'match'
 
     # Binarize ChEMBL labels
     labels_chembl_binary = (labels_chembl >= PKI_THRESHOLD).astype(int)
@@ -554,7 +554,7 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
         _bp = None
     _alloc = _bp.allocation_method if _bp else 'performance_weighted'
     _imp = _bp.importance_method if _bp else 'treeshap'
-    _int_eval = _bp.internal_evaluator if _bp else 'ridge'
+    _int_eval = _bp.internal_evaluator if _bp else 'match'
 
     # Resolve available reps per silo
     silo_reps = {}
@@ -825,7 +825,7 @@ def _run_antibody_federated(data, config, output_dir, dataset_name):
     _default_bp = next(iter(silo_blueprints.values()), None) if silo_blueprints else None
     _alloc = _default_bp.allocation_method if _default_bp else 'performance_weighted'
     _imp = _default_bp.importance_method if _default_bp else 'treeshap'
-    _int_eval = _default_bp.internal_evaluator if _default_bp else 'ridge'
+    _int_eval = _default_bp.internal_evaluator if _default_bp else 'match'
 
     # Find shared reps across silos
     all_rep_sets = [set(sd['reps'].keys()) for sd in silo_data.values()]

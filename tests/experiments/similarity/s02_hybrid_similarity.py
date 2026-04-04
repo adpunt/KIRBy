@@ -215,7 +215,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             },
             'sac_delta_from_best_rep': sac_weighted - best_rep_sac,
             'search_time_seconds': search_time,
-            'blueprint': search.best_by_model['knn']['blueprint'].to_dict() if search.best_by_model.get('knn') else None,
+            'blueprint': (search.best_by_model['knn']['blueprint'].to_dict()
+                          if search.best_by_model.get('knn', {}).get('blueprint') else None),
         }
 
         results['weight_methods'][wm] = wm_result

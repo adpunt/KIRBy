@@ -556,7 +556,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 val_augs = ({k: v[val_idx] for k, v in augmentations.items()}
                             if augmentations else None)
                 try:
-                    # Build train+val hybrid via build_fold_hybrid (proper selection)
+                    # Build train+val hybrid via build_fold_hybrid (proper selection).
+                    # NOTE: y_noisy used intentionally — tests end-to-end noise
+                    # resilience (real-life conditions, no clean labels available).
                     X_h_train, X_h_val, fi_wh = build_fold_hybrid(
                         train_reps_fold, val_reps_fold, y_noisy, bp100,
                         augmentations_train=train_augs,

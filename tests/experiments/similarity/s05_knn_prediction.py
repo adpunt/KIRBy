@@ -113,16 +113,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             budget_results = {}
 
+            # Create splitter ONCE per budget so all conditions share
+            # the same fold splits — required for fair comparison.
+            splitter_b, use_groups_b = make_cv_splitter(n_folds, groups)
+            folds_b = list(
+                splitter_b.split(sample_X, labels, groups=groups)
+                if use_groups_b
+                else splitter_b.split(sample_X, labels)
+            )
+
             for condition in ['hybrid_unweighted', 'hybrid_weighted']:
                 for k in k_values:
                     fold_scores = []
-                    splitter_b, use_groups_b = make_cv_splitter(n_folds, groups)
 
-                    for train_idx, val_idx in (
-                        splitter_b.split(sample_X, labels, groups=groups)
-                        if use_groups_b
-                        else splitter_b.split(sample_X, labels)
-                    ):
+                    for train_idx, val_idx in folds_b:
                         y_train, y_val = labels[train_idx], labels[val_idx]
 
                         # Build per-fold hybrid from blueprint

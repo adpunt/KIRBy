@@ -312,6 +312,9 @@ def evaluate_condition(condition, rep_names, n_folds, max_samples=5000):
         AUG_REPS = {'aac'}
         base = {k: v for k, v in reps.items() if k not in AUG_REPS}
         aug_dict = {k: v for k, v in reps.items() if k in AUG_REPS}
+        if not aug_dict:
+            print(f"  WARNING: augmentation reps {AUG_REPS} not found in loaded reps, "
+                  f"proceeding without augmentation")
         search = find_best_hybrid(
             base_reps=base if base else reps,
             labels=labels, groups=grp,

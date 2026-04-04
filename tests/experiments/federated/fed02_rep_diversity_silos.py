@@ -121,7 +121,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         bp = None
     _alloc = bp.allocation_method if bp else 'performance_weighted'
     _imp = bp.importance_method if bp else 'treeshap'
-    _int_eval = bp.internal_evaluator if bp else 'ridge'
+    _int_eval = bp.internal_evaluator if bp else 'match'
 
     # ── Phase 1: Setup ───────────────────────────────────────────────────
     print("\n--- Phase 1: Setup ---")

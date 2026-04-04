@@ -443,6 +443,8 @@ def predict_fluid_similarity_ensemble(teacher_models, cluster_data_train,
 
     for t in range(1, k + 1):
         clf = teacher_models[t][0]
+        if clf is None:
+            continue  # Skip clusters with < 2 samples (no valid teacher)
         teacher_df = cluster_data_train[t]
 
         # Teacher predictions on test set
@@ -462,30 +464,35 @@ def predict_fluid_similarity_ensemble(teacher_models, cluster_data_train,
         distances, _ = knn.kneighbors(test_fps)
         all_weights[t] = distances.mean(axis=1)  # mean distance to 8-NN
 
+    if not all_probs:
+        # All teachers were None — return uniform predictions
+        return np.zeros(n_test, dtype=int), np.full(n_test, 0.5), {}
+
     # Normalize distances → similarities per silo (consistent with regression variant)
-    for t in range(1, k + 1):
+    active_teachers = sorted(all_probs.keys())
+    for t in active_teachers:
         raw = all_weights[t]
         min_t, max_t = raw.min(), raw.max()
         delta_t = max_t - min_t if max_t > min_t else 1.0
         normalized = (raw - min_t) / delta_t
         all_weights[t] = (1.0 - normalized) ** 2
 
-    # Normalize weights to sum to 1 per sample
-    weight_sum = sum(all_weights[t] for t in range(1, k + 1))
+    # Normalize weights to sum to 1 per sample (active teachers only)
+    weight_sum = sum(all_weights[t] for t in active_teachers)
     weight_sum = np.maximum(weight_sum, 1e-10)
-    for t in range(1, k + 1):
+    for t in active_teachers:
         all_weights[t] = all_weights[t] / weight_sum
 
     # Weighted average of probability distributions
     fed_probs = np.zeros((n_test, 2))
-    for t in range(1, k + 1):
+    for t in active_teachers:
         fed_probs += all_probs[t] * all_weights[t][:, np.newaxis]
 
     pred_classes = (fed_probs[:, 1] > fed_probs[:, 0]).astype(int)
     pred_probs_positive = fed_probs[:, 1]  # P(Active) for AUROC
 
     teacher_weights = np.column_stack(
-        [all_weights[t] for t in range(1, k + 1)])
+        [all_weights.get(t, np.zeros(n_test)) for t in range(1, k + 1)])
 
     return pred_classes, pred_probs_positive, teacher_weights
 
@@ -513,6 +520,9 @@ def predict_fluid_quality_ensemble(teacher_models, cluster_data_train,
 
     for t in range(1, k + 1):
         clf = teacher_models[t][0]
+        if clf is None:
+            mccs[t] = 0.0
+            continue  # Skip clusters with < 2 samples (no valid teacher)
         teacher_df = cluster_data_train[t]
 
         # Teacher predictions on test
@@ -536,16 +546,22 @@ def predict_fluid_quality_ensemble(teacher_models, cluster_data_train,
         except Exception:
             mccs[t] = 0.0
 
-    # Normalize MCC weights
-    total_mcc = sum(mccs.values())
+    if not all_probs:
+        # All teachers were None — return uniform predictions
+        return np.zeros(n_test, dtype=int), np.full(n_test, 0.5), {}
+
+    active_teachers = sorted(all_probs.keys())
+
+    # Normalize MCC weights (active teachers only)
+    total_mcc = sum(mccs.get(t, 0.0) for t in active_teachers)
     if total_mcc <= 0:
-        weights = {t: 1.0 / k for t in range(1, k + 1)}
+        weights = {t: 1.0 / len(active_teachers) for t in active_teachers}
     else:
-        weights = {t: mccs[t] / total_mcc for t in range(1, k + 1)}
+        weights = {t: mccs.get(t, 0.0) / total_mcc for t in active_teachers}
 
     # Weighted average
     fed_probs = np.zeros((n_test, 2))
-    for t in range(1, k + 1):
+    for t in active_teachers:
         fed_probs += all_probs[t] * weights[t]
 
     pred_classes = (fed_probs[:, 1] > fed_probs[:, 0]).astype(int)
@@ -1062,6 +1078,8 @@ def predict_fluid_similarity_ensemble_regression(teacher_models,
 
     for t in range(1, k + 1):
         reg = teacher_models[t][0]
+        if reg is None:
+            continue  # Skip clusters with < 2 samples (no valid teacher)
         X_train_t = silo_train_features[t]
         X_test_t = silo_test_features[t]
 
@@ -1080,28 +1098,34 @@ def predict_fluid_similarity_ensemble_regression(teacher_models,
         distances, _ = knn.kneighbors(X_test_t)
         all_weights[t] = distances.mean(axis=1)
 
+    if not all_preds:
+        # All teachers were None — return zeros
+        return np.zeros(n_test), np.zeros((n_test, k))
+
+    active_teachers = sorted(all_preds.keys())
+
     # Normalize distances → similarities PER SILO (each silo's feature
     # space has different scale, so global normalization would be meaningless)
-    for t in range(1, k + 1):
+    for t in active_teachers:
         raw = all_weights[t]
         min_t, max_t = raw.min(), raw.max()
         delta_t = max_t - min_t if max_t > min_t else 1.0
         normalized = (raw - min_t) / delta_t
         all_weights[t] = (1.0 - normalized) ** 2
 
-    # Normalize weights to sum to 1 per sample
-    weight_sum = sum(all_weights[t] for t in range(1, k + 1))
+    # Normalize weights to sum to 1 per sample (active teachers only)
+    weight_sum = sum(all_weights[t] for t in active_teachers)
     weight_sum = np.maximum(weight_sum, 1e-10)
-    for t in range(1, k + 1):
+    for t in active_teachers:
         all_weights[t] = all_weights[t] / weight_sum
 
     # Weighted mean of continuous predictions
     predictions = np.zeros(n_test)
-    for t in range(1, k + 1):
+    for t in active_teachers:
         predictions += all_preds[t] * all_weights[t]
 
     teacher_weights = np.column_stack(
-        [all_weights[t] for t in range(1, k + 1)])
+        [all_weights.get(t, np.zeros(n_test)) for t in range(1, k + 1)])
 
     return predictions, teacher_weights
 
@@ -1132,6 +1156,9 @@ def predict_fluid_quality_ensemble_regression(teacher_models,
 
     for t in range(1, k + 1):
         reg = teacher_models[t][0]
+        if reg is None:
+            rmses[t] = float('inf')
+            continue  # Skip clusters with < 2 samples (no valid teacher)
         X_train_t, y_train_t = silo_train_features[t]
         X_test_t = silo_test_features[t]
 
@@ -1147,17 +1174,24 @@ def predict_fluid_quality_ensemble_regression(teacher_models,
         except Exception:
             rmses[t] = float('inf')
 
-    # Weights: inverse RMSE (lower RMSE = higher weight)
-    inv_rmses = {t: 1.0 / max(r, 1e-6) for t, r in rmses.items()}
+    if not all_preds:
+        # All teachers were None — return zeros
+        return np.zeros(n_test), {}
+
+    active_teachers = sorted(all_preds.keys())
+
+    # Weights: inverse RMSE (lower RMSE = higher weight), active teachers only
+    inv_rmses = {t: 1.0 / max(rmses.get(t, float('inf')), 1e-6)
+                 for t in active_teachers}
     total = sum(inv_rmses.values())
     if total <= 0:
-        weights = {t: 1.0 / k for t in range(1, k + 1)}
+        weights = {t: 1.0 / len(active_teachers) for t in active_teachers}
     else:
         weights = {t: v / total for t, v in inv_rmses.items()}
 
     # Quality-weighted mean
     predictions = np.zeros(n_test)
-    for t in range(1, k + 1):
+    for t in active_teachers:
         predictions += all_preds[t] * weights[t]
 
     return predictions, weights
@@ -1190,6 +1224,8 @@ def predict_fluid_similarity_ensemble_classification(
 
     for t in range(1, k + 1):
         clf = teacher_models[t][0]
+        if clf is None:
+            continue  # Skip clusters with < 2 samples (no valid teacher)
         X_train_t = silo_train_features[t]
         X_test_t = silo_test_features[t]
 
@@ -1207,31 +1243,36 @@ def predict_fluid_similarity_ensemble_classification(
         distances, _ = knn.kneighbors(X_test_t)
         all_weights[t] = distances.mean(axis=1)
 
+    if not all_probs:
+        return np.zeros(n_test, dtype=int), np.full(n_test, 0.5), np.zeros((n_test, k))
+
+    active_teachers = sorted(all_probs.keys())
+
     # Normalize distances → similarities PER SILO
-    for t in range(1, k + 1):
+    for t in active_teachers:
         raw = all_weights[t]
         min_t, max_t = raw.min(), raw.max()
         delta_t = max_t - min_t if max_t > min_t else 1.0
         normalized = (raw - min_t) / delta_t
         all_weights[t] = (1.0 - normalized) ** 2
 
-    # Normalize weights to sum to 1 per sample
-    weight_sum = sum(all_weights[t] for t in range(1, k + 1))
+    # Normalize weights to sum to 1 per sample (active teachers only)
+    weight_sum = sum(all_weights[t] for t in active_teachers)
     weight_sum = np.maximum(weight_sum, 1e-10)
-    for t in range(1, k + 1):
+    for t in active_teachers:
         all_weights[t] = all_weights[t] / weight_sum
 
     # Weighted average of probability distributions
-    n_classes = all_probs[1].shape[1]
+    n_classes = all_probs[active_teachers[0]].shape[1]
     fed_probs = np.zeros((n_test, n_classes))
-    for t in range(1, k + 1):
+    for t in active_teachers:
         fed_probs += all_probs[t] * all_weights[t][:, np.newaxis]
 
     pred_classes = fed_probs.argmax(axis=1)
     pred_probs_positive = fed_probs[:, 1] if n_classes == 2 else None
 
     teacher_weights = np.column_stack(
-        [all_weights[t] for t in range(1, k + 1)])
+        [all_weights.get(t, np.zeros(n_test)) for t in range(1, k + 1)])
 
     return pred_classes, pred_probs_positive, teacher_weights
 
@@ -1260,6 +1301,9 @@ def predict_fluid_quality_ensemble_classification(
 
     for t in range(1, k + 1):
         clf = teacher_models[t][0]
+        if clf is None:
+            mccs[t] = 0.0
+            continue  # Skip clusters with < 2 samples (no valid teacher)
         X_train_t, y_train_t = silo_train_features[t]
         X_test_t = silo_test_features[t]
 
@@ -1280,17 +1324,22 @@ def predict_fluid_quality_ensemble_classification(
         except Exception:
             mccs[t] = 0.0
 
-    # Normalize MCC weights
-    total_mcc = sum(mccs.values())
+    if not all_probs:
+        return np.zeros(n_test, dtype=int), np.full(n_test, 0.5), {}
+
+    active_teachers = sorted(all_probs.keys())
+
+    # Normalize MCC weights (active teachers only)
+    total_mcc = sum(mccs.get(t, 0.0) for t in active_teachers)
     if total_mcc <= 0:
-        weights = {t: 1.0 / k for t in range(1, k + 1)}
+        weights = {t: 1.0 / len(active_teachers) for t in active_teachers}
     else:
-        weights = {t: mccs[t] / total_mcc for t in range(1, k + 1)}
+        weights = {t: mccs.get(t, 0.0) / total_mcc for t in active_teachers}
 
     # Weighted average of probabilities
-    n_classes = all_probs[1].shape[1]
+    n_classes = all_probs[active_teachers[0]].shape[1]
     fed_probs = np.zeros((n_test, n_classes))
-    for t in range(1, k + 1):
+    for t in active_teachers:
         fed_probs += all_probs[t] * weights[t]
 
     pred_classes = fed_probs.argmax(axis=1)

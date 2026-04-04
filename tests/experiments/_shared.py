@@ -1681,11 +1681,10 @@ def precompute_hybrid_searches(reps, labels, groups, config,
                     all_bests = list(search.best_by_model.values())
                     _cmp = min if search.lower_is_better else max
                     top = _cmp(all_bests, key=lambda r: r.get('score_mean', 0))
-                    bp = top['blueprint']
                     score = top.get('score_mean', 0)
                     print(f" done {elapsed:.1f}s "
                           f"({len(all_bests)} models, "
-                          f"top={top['model']} score={score:.4f})")
+                          f"top={top.get('model', '?')} score={score:.4f})")
                 else:
                     print(f" done {elapsed:.1f}s (no results)")
 

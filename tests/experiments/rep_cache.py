@@ -20,6 +20,8 @@ Usage:
 """
 
 import hashlib
+import os
+import tempfile
 import numpy as np
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -115,7 +117,22 @@ def compute_or_load_reps(
 
             X = np.asarray(X, dtype=np.float64)
             if X.ndim == 2 and X.shape[0] == n:
-                np.save(cache_file, X)
+                # Atomic write: tempfile + os.replace to prevent corruption
+                # if interrupted mid-write (e.g. SLURM timeout).
+                fd, tmp = tempfile.mkstemp(
+                    dir=str(cache_file.parent), suffix='.npy.tmp')
+                try:
+                    np.save(tmp, X)
+                    os.replace(tmp, str(cache_file))
+                except BaseException:
+                    if os.path.exists(tmp):
+                        os.unlink(tmp)
+                    raise
+                finally:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
                 reps[rep_name] = X
                 print(f"  {rep_name}: {X.shape[1]}D (computed + cached)"
                       f"{f' [{dataset_tag}]' if dataset_tag else ''}")
