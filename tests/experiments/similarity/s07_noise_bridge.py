@@ -39,13 +39,13 @@ from experiments.similarity.similarity_helpers import (
 )
 
 
-def _knn_noise_fp_rate(X, labels, ground_truth_cliffs, k=5):
+def _knn_noise_fp_rate(X, labels, ground_truth_cliffs, k=5, standardize=True):
     """Compute kNN noise detection FP rate against ground-truth cliffs.
 
     Returns:
         dict with n_noise_flagged, n_fp (cliffs flagged as noise), fp_rate.
     """
-    D = compute_distance_matrix(X, standardize=True)
+    D = compute_distance_matrix(X, standardize=standardize)
     knn_filter = KNNConsistencyFilter(k=k, precomputed_distances=D)
     noise_flagged = set(knn_filter.identify_noise(X, labels).tolist())
     fp = noise_flagged & ground_truth_cliffs
@@ -150,10 +150,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"FP rate={hybrid_uw['fp_rate']:.3f} "
               f"({hybrid_uw['n_fp_cliff_in_noise']}/{hybrid_uw['n_noise_flagged']})")
 
-        # Hybrid weighted
+        # Hybrid weighted — standardize first, then apply weights.
+        # Pass standardize=False to avoid re-standardizing after weighting.
         X_hybrid_w = StandardScaler().fit_transform(X_hybrid) * np.sqrt(
             np.maximum(weights_flat, 0))
-        hybrid_w = _knn_noise_fp_rate(X_hybrid_w, labels, ground_truth_cliffs)
+        hybrid_w = _knn_noise_fp_rate(X_hybrid_w, labels, ground_truth_cliffs,
+                                      standardize=False)
         results['hybrid_weighted'] = hybrid_w
         print(f"  Hybrid (weighted):   "
               f"FP rate={hybrid_w['fp_rate']:.3f} "
@@ -163,8 +165,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"\n  Per-rep baselines (kNN noise FP rate vs ground-truth cliffs):")
     per_rep_results = {}
     for rep_name, X_rep in reps.items():
-        X_s = StandardScaler().fit_transform(X_rep)
-        rep_fp = _knn_noise_fp_rate(X_s, labels, ground_truth_cliffs)
+        rep_fp = _knn_noise_fp_rate(X_rep, labels, ground_truth_cliffs)
         per_rep_results[rep_name] = rep_fp
 
     # Sort by FP rate (lower is better)

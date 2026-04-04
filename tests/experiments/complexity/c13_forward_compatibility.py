@@ -579,23 +579,23 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
         # =================================================================
         # Compute deltas
         # =================================================================
-        delta_dc = d_mean - c_mean  # does new rep help hybrid?
-        delta_eb = e_mean - best_b_mean if not np.isinf(best_b_mean) else float('nan')
+        delta_dc_raw = d_mean - c_mean  # does new rep help hybrid?
+        delta_eb_raw = e_mean - best_b_mean if not np.isinf(best_b_mean) else float('nan')
+        # Sign-normalize: positive = improvement regardless of metric direction
+        sign = -1 if lower_is_better else 1
+        delta_dc = sign * delta_dc_raw
+        delta_eb = sign * delta_eb_raw
 
         rep_result['deltas'] = {
             'D_minus_C': float(delta_dc) if not np.isnan(delta_dc) else float('nan'),
             'E_minus_B': float(delta_eb) if not np.isnan(delta_eb) else float('nan'),
             'D_minus_C_interpretation': (
-                'new rep HELPS hybrid' if (
-                    (not lower_is_better and delta_dc > 0)
-                    or (lower_is_better and delta_dc < 0)
-                ) else 'new rep HURTS or neutral for hybrid'
+                'new rep HELPS hybrid' if delta_dc > 0
+                else 'new rep HURTS or neutral for hybrid'
             ) if not np.isnan(delta_dc) else 'insufficient data',
             'E_minus_B_interpretation': (
-                'hybrid HELPS new rep' if (
-                    (not lower_is_better and delta_eb > 0)
-                    or (lower_is_better and delta_eb < 0)
-                ) else 'hybrid HURTS or neutral for new rep'
+                'hybrid HELPS new rep' if delta_eb > 0
+                else 'hybrid HURTS or neutral for new rep'
             ) if not np.isnan(delta_eb) else 'insufficient data',
         }
 

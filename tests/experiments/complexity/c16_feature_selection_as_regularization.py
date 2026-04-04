@@ -205,13 +205,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         full_dim_budget = max(budgets)
         full_vals = [(pval, heatmap[full_dim_budget].get(str(pval), {}).get('val', float('nan')))
                      for _, pval, _ in variants]
-        best_tuned_full = max(full_vals, key=lambda x: x[1] if not np.isnan(x[1]) else -1e10)
+        _sentinel = -1e10 if not lower_is_better else 1e10
+        _best_fn = min if lower_is_better else max
+        best_tuned_full = _best_fn(full_vals, key=lambda x: x[1] if not np.isnan(x[1]) else _sentinel)
 
         # Simple hybrid: default regularization, best non-full budget
         default_pval = variants[len(variants) // 2][1]  # middle regularization
         hybrid_scores = [(b, heatmap[b].get(str(default_pval), {}).get('val', float('nan')))
                          for b in budgets if b < full_dim_budget]
-        best_simple_hybrid = max(hybrid_scores, key=lambda x: x[1] if not np.isnan(x[1]) else -1e10) if hybrid_scores else (None, float('nan'))
+        best_simple_hybrid = _best_fn(hybrid_scores, key=lambda x: x[1] if not np.isnan(x[1]) else _sentinel) if hybrid_scores else (None, float('nan'))
+
+        if not any(np.isnan(x) for x in [best_simple_hybrid[1], best_tuned_full[1]]):
+            if lower_is_better:
+                hybrid_wins = best_simple_hybrid[1] < best_tuned_full[1]
+            else:
+                hybrid_wins = best_simple_hybrid[1] > best_tuned_full[1]
+        else:
+            hybrid_wins = None
 
         comparison = {
             'best_tuned_full_dim': {
@@ -223,8 +233,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'default_param': default_pval,
                 'score': best_simple_hybrid[1],
             },
-            'hybrid_wins': best_simple_hybrid[1] > best_tuned_full[1] if not any(
-                np.isnan(x) for x in [best_simple_hybrid[1], best_tuned_full[1]]) else None,
+            'hybrid_wins': hybrid_wins,
         }
 
         fam_result = {

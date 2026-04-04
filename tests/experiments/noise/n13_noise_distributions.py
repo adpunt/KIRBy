@@ -427,7 +427,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 for method_name, score_list in methods.items():
                     if score_list:
                         mean_s = float(np.mean(score_list))
-                        retention = float(mean_s / clean_mean * 100) if abs(clean_mean) > 1e-10 else float('nan')
+                        # For lower-is-better: retention = clean/noisy (higher noisy = worse)
+                        # For higher-is-better: retention = noisy/clean
+                        if abs(clean_mean) > 1e-10 and abs(mean_s) > 1e-10:
+                            if lower_is_better:
+                                retention = float(clean_mean / mean_s * 100)
+                            else:
+                                retention = float(mean_s / clean_mean * 100)
+                        else:
+                            retention = float('nan')
                         space_a[method_name] = {
                             'score': mean_s,
                             'retention': retention,

@@ -33,37 +33,51 @@ warnings.filterwarnings('ignore')
 
 class NoiseEstimator(ABC):
     """Base class for noise estimation methods."""
-    
+
     def __init__(self, random_state: int = 42):
         self.random_state = random_state
         self.noise_scores_ = None
-        
+
+    def fit(self, X: np.ndarray, y: np.ndarray):
+        """Sklearn-style fit interface. Calls estimate() and stores results."""
+        self.noise_scores_ = self.estimate(X, y)
+        self._fitted_X = X
+        self._fitted_y = y
+        return self
+
     @abstractmethod
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         """
         Estimate noise magnitude for each sample.
-        
+
         Args:
             X: Features (n_samples, n_features)
             y: Labels (n_samples,)
-        
+
         Returns:
             noise_scores: (n_samples,) - higher values = more noise
         """
         pass
-    
-    def get_weights(self, X: np.ndarray, y: np.ndarray, 
+
+    def get_weights(self, X: np.ndarray = None, y: np.ndarray = None,
                     strength: float = 1.0) -> np.ndarray:
         """
         Convert noise scores to sample weights.
-        
+
+        If X/y are None, uses scores from prior fit() or estimate() call.
+
         Args:
             strength: How aggressively to downweight noisy samples
-        
+
         Returns:
             weights: (n_samples,) - lower for noisy samples
         """
-        scores = self.estimate(X, y)
+        if X is not None and y is not None:
+            scores = self.estimate(X, y)
+        elif self.noise_scores_ is not None:
+            scores = self.noise_scores_
+        else:
+            raise ValueError("No scores available. Call fit() or pass X, y.")
         weights = 1 / (1 + strength * scores)
         return weights / weights.mean()  # Normalize to mean 1
     
@@ -235,11 +249,6 @@ class ActivityCliffAwareEstimator(NoiseEstimator):
         super().__init__(random_state)
         self.k = k
         self.metric = metric
-
-    def fit(self, X: np.ndarray, y: np.ndarray):
-        """Sklearn-style fit interface. Delegates to estimate()."""
-        self.estimate(X, y)
-        return self
 
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         k = min(self.k, len(y) - 1)
@@ -1155,14 +1164,18 @@ ESTIMATOR_REGISTRY = {
     'neighbor_residual': NeighborResidualEstimator,
     'local_variance_ratio': LocalVarianceRatioEstimator,
     'distance_weighted': DistanceWeightedResidualEstimator,
+    'distance_weighted_residual': DistanceWeightedResidualEstimator,  # alias
     'activity_cliff_aware': ActivityCliffAwareEstimator,
-    
+
     # Model-based (use prediction disagreement)
     'cross_val': CrossValResidualEstimator,
+    'cross_val_residual': CrossValResidualEstimator,  # alias
     'ensemble': EnsembleDisagreementEstimator,
+    'ensemble_disagreement': EnsembleDisagreementEstimator,  # alias
     'leave_one_out': LeaveOneOutEstimator,
     'hybrid': HybridNoiseEstimator,
-    
+    'hybrid_noise': HybridNoiseEstimator,  # alias
+
     # SOTA methods (estimate noise magnitude directly)
     'gaussian_process': GaussianProcessEstimator,
     'heteroscedastic_nn': HeteroscedasticNNEstimator,

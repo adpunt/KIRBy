@@ -129,11 +129,7 @@ def _gp_loo_scores(X, y):
         rf = RandomForestRegressor(n_estimators=200, oob_score=True,
                                    random_state=42, n_jobs=-1)
         rf.fit(X_s, y)
-        if hasattr(rf, 'oob_prediction_'):
-            oob_pred = rf.oob_prediction_
-        else:
-            # sklearn < 1.4 attribute name
-            oob_pred = rf.oob_prediction_
+        oob_pred = rf.oob_prediction_
         oob_residual = np.abs(y - oob_pred)
         scores = oob_residual / (np.std(oob_residual) + 1e-10)
 

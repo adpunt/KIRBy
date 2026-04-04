@@ -462,14 +462,12 @@ def predict_fluid_similarity_ensemble(teacher_models, cluster_data_train,
         distances, _ = knn.kneighbors(test_fps)
         all_weights[t] = distances.mean(axis=1)  # mean distance to 8-NN
 
-    # Normalize distances → similarities: (1 - normalized_distance)^2
-    all_raw = np.column_stack([all_weights[t] for t in range(1, k + 1)])
-    min_w = all_raw.min()
-    max_w = all_raw.max()
-    delta = max_w - min_w if max_w > min_w else 1.0
-
+    # Normalize distances → similarities per silo (consistent with regression variant)
     for t in range(1, k + 1):
-        normalized = (all_weights[t] - min_w) / delta
+        raw = all_weights[t]
+        min_t, max_t = raw.min(), raw.max()
+        delta_t = max_t - min_t if max_t > min_t else 1.0
+        normalized = (raw - min_t) / delta_t
         all_weights[t] = (1.0 - normalized) ** 2
 
     # Normalize weights to sum to 1 per sample
@@ -856,7 +854,10 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
             X_silo = apply_feature_selection(rep_dict, trimmed_fi)
             if X_silo.shape[1] > 0:
                 hybrid_parts.append(X_silo)
+            else:
+                silo_feature_infos[s] = None  # mark failed
         except Exception:
+            silo_feature_infos[s] = None  # mark failed
             continue
 
     if not hybrid_parts:

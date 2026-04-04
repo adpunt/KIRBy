@@ -40,13 +40,18 @@ def _sequence_hash(heavy_seqs: List[str], light_seqs: List[str],
                    mutations: Optional[List] = None) -> str:
     """Hash sequences to create a stable cache key component."""
     h = hashlib.sha256()
+    # Use delimiters to prevent boundary collisions:
+    # heavy=["AB","C"] vs heavy=["A","BC"] must hash differently
+    h.update(f"n_heavy={len(heavy_seqs)}\n".encode('utf-8'))
     for s in heavy_seqs:
-        h.update(s.encode('utf-8'))
+        h.update(f"{len(s)}:{s}\n".encode('utf-8'))
+    h.update(f"n_light={len(light_seqs)}\n".encode('utf-8'))
     for s in light_seqs:
-        h.update(s.encode('utf-8'))
+        h.update(f"{len(s)}:{s}\n".encode('utf-8'))
     if mutations:
+        h.update(b"mutations\n")
         for m in mutations:
-            h.update(str(m).encode('utf-8'))
+            h.update(f"{m}\n".encode('utf-8'))
     return h.hexdigest()[:16]
 
 
