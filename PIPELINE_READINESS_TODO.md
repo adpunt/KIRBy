@@ -142,26 +142,25 @@ Code changes applied (2026-03-29 → 2026-04-03):
 Remaining:
 1. ~~Clear hybrid caches on server~~ **DONE** (2026-03-29)
 2. Push code + pull on server (`git push` → `git pull` on ARC)
-3. Begin preliminary runs on ready datasets
+3. ~~Begin preliminary runs on ready datasets~~ **IN PROGRESS** (2026-04-04) — full precompute submitted for all 40 ready datasets. **Job tracker: [`PRECOMPUTE_JOB_TRACKER.md`](PRECOMPUTE_JOB_TRACKER.md)** (240 jobs, IDs 11707673–11707913). Verified against sacct — every job ID confirmed with full name.
 
-### FT experiments — HTC, resubmitting (2026-03-28)
+### ~~FT experiments~~ — MOSTLY DONE (2026-04-04)
 
-All HTC FT jobs failed due to inline `pip install` corrupting torch. Fixed by removing pip install from SLURM scripts (deps already in venv). Resubmitting:
-- Molecular FT fill (4 datasets: qm9, adme_hlm, adme_rlm, adme_mdr1): `submit_molecular_ft_fill.sh` on HTC
-- Antibody ESM-2 LoRA fill (20 failed / 11 completed): `submit_antibody_ft_fill.sh` on HTC. Completed: tresanco, thermo_jain, aggregation_jain, polyreact_bvp, pk_fcrnrt, ddg_combined, binding_adams, expression_adams, abagym_EGFR/lysozyme/VEGF. Results in `tests/results/antibody_ft_fill/`.
-- E2E SchNet (3 datasets: herg_ki, caco2, logd): `run_baseline_survey.py --finetune` on HTC. ft_schnet already wired in make_ft_factories. Previous runs failed due to torch-cluster bug (fixed 2026-03-28). logd needs 256G (bus error at 128G).
-- Per-dataset FT swap decisions blocked until these land.
-- Don't wait on these for preliminary experiment runs — FT is an enhancement, not a requirement.
+- **Molecular FT fill:** ALL 4 COMPLETED (qm9, adme_hlm, adme_rlm, adme_mdr1). Results in `tests/results/molecular_ft_fill/`. Pulled locally.
+- **Antibody ESM-2 LoRA fill:** ALL 29 datasets COMPLETED (was 11, now full coverage including ginkgo, abagym, DMS, Ab CLF). Results in `tests/results/antibody_ft_fill/`. Pulled locally.
+- **E2E SchNet:** caco2 + herg done (pulled locally). All 3 (logd, herg_ki, caco2) resubmitted on HTC long partition 2026-04-04 (previous runs failed exit 127 on ARC). In queue.
+- Per-dataset FT swap decisions can now proceed for molecular + antibody. SchNet logd still pending.
 
-### New dataset surveys — status as of 2026-03-28
+### New dataset surveys — status as of 2026-04-04
 
 - ~~Reaction: buchwald_hartwig, suzuki, bh_doyle_plates~~ **DONE** — buchwald_hartwig + bh_doyle_plates reviewed and added to experiments. suzuki DROPPED (R²=0.453, 1 viable rep).
 - ~~Ab DMS fill: adams (binding+expression), phillips_h3, koenig (binding+expression)~~ **DONE** — all 5 reviewed and added to experiments.
-- DTA: davis (OOM, resubmitting 370G on ARC), kiba (bug fixed, resubmitting on ARC), bindingdb_kd (timeout, resubmitting on ARC)
-- Nucleotide: 19 datasets — previous surveys had classical reps only (6 reps, default preset was 'fast'). Fixed default to 'all' (26 reps). Resubmitted on ARC (short partition, no GPU). Output: `tests/results/nucleotide_survey/`.
-- Graphinity DDG: foldx + augmented resubmitting on ARC (370G, NaN light_seq fix). rosetta DROPPED (all R² negative, best ρ=0.079).
-- Ab CLF: tz_her2_multiclass (timeout, resubmitting medium 48h 256G on HTC), humanness_species (OOM on SaProt, resubmitting medium 48h 256G on HTC), tz_her2_binary (FAILED exit 1, needs diagnosis)
+- ~~Graphinity DDG~~ **ALL DROPPED** — foldx (best ρ=0.052), rosetta (best ρ=0.079), augmented (best ρ=0.057). All R² negative.
 - ~~Molecular aug fill~~ **DONE** — caco2, logd, qm9, adme_mdr1 all completed. Confirmed existing augmentation assignments.
+- DTA: davis, kiba, bindingdb_kd — resubmitted on HTC long partition 2026-04-04 (ARC runs failed exit 127 / timed out). In queue.
+- Nucleotide: 22 datasets — ARC run completed with 7/14 FM reps (7 failed: caduceus, ntv3_100m, splicebert, dnabert_s, gpn, rnafm, rinalmo due to missing packages). Fixed on HTC (installed multimolecule, gpn-genomics, mamba-ssm). All 22 resubmitted on HTC long partition 2026-04-04.
+- Ab CLF: tz_her2_multiclass + humanness_species — resubmitted on HTC long partition 2026-04-04. tz_her2_binary DONE.
+- herg classification (TDC binary, ~10K): previous run loaded herg_ki (regression) by mistake — server code was stale. Resubmitted on HTC long partition 2026-04-04 after git pull.
 
 ### Cache warning
 
@@ -911,17 +910,20 @@ Old Sections 10B/10C/12D/12E have writeups. Need new-format review.
 | Domain | Total Datasets | DONE | IN PROGRESS | TODO | BLOCKED | DROPPED |
 |--------|---------------|------|-------------|------|---------|---------|
 | Molecular | 8 | 7 | 0 | 0 | 0 | 1 (adme_solubility) |
+| Molecular CLF | 1 | 0 | 0 | 0 | 1 (herg clf, HTC queue) | 0 |
 | Ab Inter-Family | 14 | 11 | 0 | 0 | 0 | 3 (hutchinson, sas, ddg_combined_full) |
 | Ab DMS/Large | 5 | 5 | 0 | 0 | 0 | 0 |
 | AbAgym | 6 | 5 | 0 | 0 | 0 | 1 (abagym_all) |
-| Ab CLF | 4 | 2 | 0 | 0 | 2 (multiclass, species) | 0 |
+| Ab CLF | 4 | 2 | 0 | 0 | 2 (multiclass + species, HTC queue) | 0 |
 | Ginkgo | 9 | 6 | 0 | 0 | 0 | 3 (aggregation, purity, tm2) |
 | TCGA | 3 | 2 | 0 | 0 | 0 | 1 (survival) |
 | Reaction | 3 | 2 | 0 | 0 | 0 | 1 (suzuki) |
-| DTA | 3 | 0 | 0 | 3 (partial data) | 0 | 0 |
-| Nucleotide | 19 | 0 | 0 | 0 | 17 (survey on server, needs pull + review) | 2 (splice_all, H3K9me3) |
+| DTA | 3 | 0 | 0 | 0 | 3 (davis, kiba, bindingdb_kd — HTC queue) | 0 |
+| Nucleotide | 22 | 0 | 0 | 0 | 22 (resubmitted HTC with all FM reps) | 0 |
 | Graphinity DDG | 3 | 0 | 0 | 0 | 0 | 3 (rosetta, foldx, augmented) |
-| **TOTAL** | **77** | **40** | **0** | **0** | **21** | **16** |
+| **TOTAL** | **81** | **40** | **0** | **0** | **28** | **13** |
+
+*Note: Previous nucleotide DROP decisions (splice_all, H3K9me3) deferred — FM reps may change the picture. herg clf added as separate entry (was #2b).*
 
 ---
 
@@ -950,20 +952,23 @@ These sections have older-format writeups that were done before this dataset-by-
 5. **Pull code on server** — `git pull` to get all fixes (classification metrics, augmentation passing, mutation reps, etc.)
 6. **Run preliminary experiments** on all 40 ready datasets — complexity, similarity, noise
 
-### NEXT — Resubmitted jobs (2026-03-28), waiting for results
+### NEXT — Jobs in HTC queue (2026-04-04)
 
-7. **DTA (ARC):** davis (370G), kiba (bug fixed), bindingdb_kd — resubmitted. Output: `tests/results/phase5_baselines/dta/`
-8. **Nucleotide (ARC):** 22 datasets resubmitted with FM reps (default preset fixed 'fast'→'all'). Output: `tests/results/nucleotide_survey/`
-9. **Graphinity DDG (ARC):** foldx + augmented resubmitted (370G, NaN light_seq fix). Output: `tests/results/opig/ddg/`
-10. **Ab CLF (HTC):** tz_her2_multiclass + humanness_species resubmitted (medium, 48h, 256G). tz_her2_binary needs diagnosis (FAILED exit 1 in 6min). Output: `tests/results/opig/clf/`
-11. **As results land** — follow the New Dataset Pipeline checklist: review → decide tiers → update DATASET_REPS → add to submit lists
+All resubmitted on HTC long partition with GPU, 256G, 48-96h wall time.
 
-### BLOCKED — FT experiments (HTC, resubmitting 2026-03-28)
+7. **DTA:** davis, kiba, bindingdb_kd. Output: `tests/results/phase5_baselines/dta/`
+8. **Nucleotide:** All 22 datasets with full FM reps (fixed: multimolecule, gpn-genomics, mamba-ssm installed). Output: `tests/results/nucleotide_survey/`
+9. **Ab CLF:** tz_her2_multiclass + humanness_species. Output: `tests/results/opig/clf/`
+10. **herg clf:** TDC binary blocker (~10K). Output: `tests/results/phase5_baselines/molecular/herg.json`
+11. **E2E SchNet:** logd, herg_ki, caco2. Output: `tests/results/schnet_e2e/`
+12. **As results land** — follow the New Dataset Pipeline checklist: rsync → review → decide tiers → update DATASET_REPS → add to submit lists
 
-12. **Molecular FT fill** — qm9, adme_hlm, adme_rlm, adme_mdr1. Script: `submit_molecular_ft_fill.sh`. Fixed: removed inline pip install that broke torch.
-13. **Antibody ESM-2 LoRA fill** — 20 failed datasets (11 completed, results in `antibody_ft_fill/`). Script: `submit_antibody_ft_fill.sh`. Same pip install fix.
-14. **E2E SchNet** — herg, caco2, logd via `run_baseline_survey.py --finetune`. ft_schnet wired in make_ft_factories. torch-cluster bug fixed. logd needs 256G.
-15. **When FT results land:** update per-dataset tier tables (swap frozen→FT only where FT wins).
+### ~~BLOCKED — FT experiments~~ — DONE (2026-04-04)
+
+- ~~Molecular FT fill~~ **DONE** — qm9, adme_hlm, adme_rlm, adme_mdr1 all completed. Results pulled locally.
+- ~~Antibody ESM-2 LoRA fill~~ **DONE** — All 29 datasets completed. Results pulled locally.
+- **E2E SchNet** — caco2 + herg pulled locally. All 3 resubmitted on HTC (in queue).
+- **When FT results are reviewed:** update per-dataset tier tables (swap frozen→FT only where FT wins).
 
 ### IMPLEMENTATION — New experiment categories
 
@@ -981,6 +986,23 @@ These sections have older-format writeups that were done before this dataset-by-
 19. ~~**Augmentation per-dataset assignment (usrcat, coulomb_matrix, usr)**~~ **DONE** (2026-03-28) — Results from `molecular_aug_fill/`: caco2 all 3 positive (usrcat +0.021, usr +0.020, coulomb +0.015), adme_mdr1 coulomb_matrix +0.092, logd/qm9 flat or negative. DATASET_REPS already had correct assignments.
 20. ~~**DNA foundation model rep implementation**~~ **DONE** — 14 FM reps implemented in `src/kirby/representations/nucleotide.py`. Survey results on server at `tests/results/nucleotide_survey/`.
 21. **Nucleotide tier review** — pull survey results, review all 22 datasets with FM reps, decide tiers. Implementation done, pipeline readiness pending review.
+
+### ANALYSIS — After precompute completes
+
+22. **General hybrid vs base rep analysis** — `tests/analysis/general_hybrid_vs_base.py`. Run on server after `precompute_hybrids.py` finishes:
+    ```bash
+    # All datasets (reads from hybrid search cache, no recomputation)
+    python tests/analysis/general_hybrid_vs_base.py
+    # By domain
+    python tests/analysis/general_hybrid_vs_base.py --domain molecular
+    # Export JSON for local analysis
+    python tests/analysis/general_hybrid_vs_base.py --export -o general_analysis.json
+    ```
+    Outputs: `tests/analysis/general_analysis.json` (full per-dataset baselines + hybrids + comparisons) and `tests/analysis/general_analysis_summary.json` (aggregate stats). To analyze locally from exported JSON:
+    ```bash
+    python tests/analysis/general_hybrid_vs_base.py --analyze general_analysis.json
+    ```
+    Uses `--speed fast` and `--aug uncapped` by default (must match precompute settings). Direction-aware: positive delta always means hybrid is better.
 
 ### Decisions already locked
 
