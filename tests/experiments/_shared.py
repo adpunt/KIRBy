@@ -1197,7 +1197,23 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
     dispatches accordingly.
     Returns dict with keys: labels, reps, groups, n_groups, task_type,
     augmentations, plus domain-specific keys.
+
+    When rep_names is None, auto-filters to the 'general' reps from
+    DATASET_REPS (if the dataset has an entry).  Pass rep_names explicitly
+    to override.
     """
+    # Auto-filter to DATASET_REPS general reps when no explicit list given
+    if rep_names is None:
+        try:
+            from experiments.complexity.complexity_helpers import DATASET_REPS
+            ds_reps = DATASET_REPS.get(dataset_name)
+            if ds_reps is not None and ds_reps.get('general'):
+                rep_names = ds_reps['general']
+                print(f"  [auto] {dataset_name}: filtering to "
+                      f"{len(rep_names)} general reps from DATASET_REPS")
+        except ImportError:
+            pass
+
     if _is_tcga_dataset(dataset_name):
         from find_best_hybrid_tcga import (
             load_dataset as load_tcga_dataset,
