@@ -1,14 +1,16 @@
 #!/bin/bash
 # Precompute hybrid searches — one SLURM job per (dataset × condition).
-# 6 conditions per dataset = 6 parallel jobs per dataset.
+# 4 conditions per dataset = 4 parallel jobs per dataset.
 #
 # Conditions:
 #   general_none       — general reps, no augmentation
 #   general_uncapped   — general reps, uncapped augmentation
-#   general_capped     — general reps, capped augmentation
 #   top_none           — top_tier reps, no augmentation
 #   top_uncapped       — top_tier reps, uncapped augmentation
-#   top_capped         — top_tier reps, capped augmentation
+#
+# Capped removed: iterative A/B testing makes it 10x slower. _shared.py
+# already skips capped in precompute. Experiments needing capped call
+# create_hybrid directly.
 #
 # Usage:
 #   bash tests/slurm_scripts/submit_precompute.sh              # all
@@ -63,7 +65,7 @@ echo "============================================"
 echo ""
 
 run_molecular() {
-    echo "--- Molecular (7 × 6 = 42 jobs) ---"
+    echo "--- Molecular (7 × 4 = 28 jobs) ---"
     for ds in herg_ki caco2 logd qm9 adme_hlm adme_rlm adme_mdr1; do
         submit_dataset "${ds}" 256G 12:00:00
     done
@@ -71,7 +73,7 @@ run_molecular() {
 }
 
 run_antibody() {
-    echo "--- Antibody Inter-Family (11 × 6 = 66 jobs) ---"
+    echo "--- Antibody Inter-Family (11 × 4 = 44 jobs) ---"
     for ds in flab_thermo_tresanco flab_pk_jain_heprt flab_pk_jain_fcrnrt \
               flab_polyreact_jain_cic flab_aggregation_jain_hicrt flab_thermo_jain \
               abcov_kd flab_aggregation_jain flab_immunogenicity_marks \
@@ -79,20 +81,24 @@ run_antibody() {
         submit_dataset "${ds}" 256G 12:00:00
     done
 
-    echo "--- Antibody DMS (5 × 6 = 30 jobs) ---"
+    echo "--- Antibody DMS (5 × 4 = 20 jobs) ---"
     for ds in flab_binding_koenig flab_expression_koenig flab_binding_adams \
               flab_expression_adams flab_binding_phillips_h3; do
         submit_dataset "${ds}" 256G 12:00:00
     done
 
-    echo "--- AbAgym (5 × 6 = 30 jobs) ---"
+    echo "--- AbAgym (5 × 4 = 20 jobs) ---"
     for ds in abagym_Ang2 abagym_EGFR abagym_HER2 abagym_lysozyme abagym_VEGF; do
         submit_dataset "${ds}" 256G 8:00:00
     done
 
-    echo "--- Antibody CLF + Ginkgo (8 × 6 = 48 jobs) ---"
-    for ds in tz_her2_binary humanness_therapeutic \
-              ginkgo_acsins ginkgo_colloidal ginkgo_heparin \
+    echo "--- Antibody CLF (2 × 4 = 8 jobs) ---"
+    for ds in tz_her2_binary humanness_therapeutic; do
+        submit_dataset "${ds}" 256G 12:00:00
+    done
+
+    echo "--- Ginkgo (6 × 4 = 24 jobs) ---"
+    for ds in ginkgo_acsins ginkgo_colloidal ginkgo_heparin \
               ginkgo_hic ginkgo_pr_cho ginkgo_titer; do
         submit_dataset "${ds}" 128G 8:00:00
     done
@@ -100,7 +106,7 @@ run_antibody() {
 }
 
 run_tcga() {
-    echo "--- TCGA (2 × 6 = 12 jobs) ---"
+    echo "--- TCGA (2 × 4 = 8 jobs) ---"
     for ds in tcga_luad_vs_lusc tcga_brca_pam50; do
         submit_dataset "${ds}" 256G 12:00:00
     done
@@ -108,7 +114,7 @@ run_tcga() {
 }
 
 run_reaction() {
-    echo "--- Reaction (2 × 6 = 12 jobs) ---"
+    echo "--- Reaction (2 × 4 = 8 jobs) ---"
     for ds in buchwald_hartwig bh_doyle_plates; do
         submit_dataset "${ds}" 128G 8:00:00
     done
