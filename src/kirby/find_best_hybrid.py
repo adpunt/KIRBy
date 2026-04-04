@@ -66,7 +66,12 @@ _CACHE_VERSION = 8  # Bump when pipeline changes affect cached results
 
 @dataclass
 class Blueprint:
-    """Minimal transferable recipe for recreating a hybrid."""
+    """Minimal transferable recipe for recreating a hybrid.
+
+    Carries metric + lower_is_better so that every downstream consumer
+    knows the direction without guessing.  Published blueprints should
+    always be round-tripped through to_dict() / from_dict().
+    """
     reps: List[str]
     allocation_method: str
     importance_method: str
@@ -79,9 +84,13 @@ class Blueprint:
     metric: str = 'r2'
     task_type: str = 'regression'
     augmentation_strategy: str = 'uncapped'
+    lower_is_better: bool = False
+    # Per-rep allocation scores from the search (enables label-free apply).
+    # {rep_name: float} — higher = more budget share.
+    rep_scores: Optional[Dict[str, float]] = None
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             'reps': self.reps,
             'allocation_method': self.allocation_method,
             'importance_method': self.importance_method,
@@ -94,7 +103,21 @@ class Blueprint:
             'metric': self.metric,
             'task_type': self.task_type,
             'augmentation_strategy': self.augmentation_strategy,
+            'lower_is_better': self.lower_is_better,
         }
+        if self.rep_scores is not None:
+            d['rep_scores'] = self.rep_scores
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> 'Blueprint':
+        """Reconstruct a Blueprint from a dict (e.g. loaded from JSON).
+
+        Ignores unknown keys so older/newer serialisations stay compatible.
+        """
+        known = {f.name for f in cls.__dataclass_fields__.values()}
+        filtered = {k: v for k, v in d.items() if k in known}
+        return cls(**filtered)
 
 
 @dataclass
@@ -113,6 +136,9 @@ class SearchResult:
 
     Primary selection unit: best_by_model_budget[model][budget].
     Each downstream model gets its own best hybrid configuration.
+
+    Every SearchResult carries metric_name + lower_is_better so that
+    downstream code NEVER has to guess comparison direction.
     """
     best_by_model: Dict[str, dict]
     best_by_dimension: Dict[int, dict]
@@ -128,6 +154,8 @@ class SearchResult:
     # Primary selection unit: best features per (model, budget) pair.
     # {model_name: {budget: best_config_dict}}
     best_by_model_budget: Dict[str, Dict[int, dict]] = field(default_factory=dict)
+    # Dataset provenance (set by callers who know the dataset name).
+    dataset_name: Optional[str] = None
 
 
 # =============================================================================
@@ -1320,6 +1348,8 @@ def _evaluate_hybrid_config(
         budget=budget,
         step_size=step_size,
         augmentation_strategy=augmentation_strategy,
+        metric=metric_name or 'r2',
+        lower_is_better=lower_is_better,
     )
 
     return {
@@ -2299,6 +2329,7 @@ def find_best_hybrid(
     cache: bool = False,
     cache_dir: Optional[str] = None,
     greedy_tolerance: float = 0.0,
+    dataset_name: Optional[str] = None,
 ) -> SearchResult:
     """
     Find the best hybrid representation configuration.
@@ -2606,6 +2637,21 @@ def find_best_hybrid(
     metric_name = metric if isinstance(metric, str) else 'custom'
     actual_folds = n_folds if n_folds is not None else SPEED_TIERS[speed]['n_folds']
 
+    # --- Build per-rep best baseline scores (for Blueprint.rep_scores) ---
+    # For each rep, take its best score across models (direction-aware).
+    # Stored in "higher is better" convention (negated for lower-is-better
+    # metrics) to match what _evaluate_allocation returns.  This ensures
+    # that apply_blueprint → precomputed_alloc_scores → top_k sorts
+    # correctly regardless of metric direction.
+    _rep_best = {}
+    for rep_name, model_scores in baselines.items():
+        vals = [v for k, v in model_scores.items()
+                if k not in ('dimension', '_secondary')
+                and isinstance(v, (int, float)) and np.isfinite(v)]
+        if vals:
+            raw_best = float(min(vals) if lower_is_better else max(vals))
+            _rep_best[rep_name] = -raw_best if lower_is_better else raw_best
+
     # --- Populate Blueprint reproducibility fields ---
     for r in all_results:
         bp = r['blueprint']
@@ -2614,6 +2660,9 @@ def find_best_hybrid(
         bp.seed = seed
         bp.metric = metric_name
         bp.task_type = task_type
+        bp.lower_is_better = lower_is_better
+        # Attach per-rep scores for the reps in this blueprint
+        bp.rep_scores = {rn: _rep_best[rn] for rn in bp.reps if rn in _rep_best}
 
     search_result = SearchResult(
         best_by_model=agg['best_by_model'],
@@ -2627,6 +2676,7 @@ def find_best_hybrid(
         lower_is_better=lower_is_better,
         fitted_results=fitted_results,
         finetuned_embeddings=finetuned_embeddings,
+        dataset_name=dataset_name,
     )
 
     # --- Print per-model-budget summary (primary selection unit) ---
@@ -2670,6 +2720,204 @@ def find_best_hybrid(
             pass  # Cache write failure is non-fatal
 
     return search_result
+
+
+# =============================================================================
+# PUBLIC API: APPLY A PUBLISHED BLUEPRINT
+# =============================================================================
+
+def apply_blueprint(
+    base_reps: Dict[str, np.ndarray],
+    blueprint: Union[Blueprint, dict],
+    labels: Optional[np.ndarray] = None,
+    augmentations: Optional[Dict[str, np.ndarray]] = None,
+) -> Tuple[np.ndarray, dict]:
+    """Create a hybrid representation from a published blueprint.
+
+    This is the user-facing "product" entry point.  Given a blueprint
+    (from a search, JSON lookup, or the registry), produce the hybrid
+    feature matrix.  No search is performed — the blueprint specifies
+    exactly which allocation, importance method, evaluator, and budget
+    to use.
+
+    For top_k blueprints that carry rep_scores, the per-rep evaluation
+    is skipped entirely (scores are injected from the blueprint).
+
+    Args:
+        base_reps: {rep_name: np.ndarray} feature matrices.
+            Must contain at least the reps listed in blueprint.reps.
+        blueprint: A Blueprint instance or dict (from Blueprint.to_dict() / JSON).
+        labels: Target values.  Required for importance-based feature selection.
+            If None AND the blueprint carries rep_scores, a variance-based
+            fallback is used (suitable for inference on unlabelled data).
+        augmentations: Optional augmentation reps.
+
+    Returns:
+        (X_hybrid, feature_info) — same contract as create_hybrid().
+    """
+    from kirby.hybrid import create_hybrid
+
+    if isinstance(blueprint, dict):
+        blueprint = Blueprint.from_dict(blueprint)
+
+    # Filter base_reps to only the reps in the blueprint
+    bp_reps = {k: base_reps[k] for k in blueprint.reps if k in base_reps}
+    missing = set(blueprint.reps) - set(bp_reps)
+    if missing:
+        raise ValueError(
+            f"base_reps is missing representations required by the blueprint: "
+            f"{sorted(missing)}")
+
+    # If labels are not provided, use variance-based feature selection.
+    # create_hybrid needs labels for its internal evaluator, so we synthesise
+    # dummy labels (variance selection doesn't depend on them when
+    # precomputed_alloc_scores are injected).
+    n_samples = next(iter(bp_reps.values())).shape[0]
+    if labels is None:
+        labels = np.zeros(n_samples)
+        # Force variance-based importance (no model fitting)
+        importance_method = 'lightgbm_gain'  # will be overridden by precomputed
+    else:
+        importance_method = blueprint.importance_method
+
+    kwargs = dict(
+        base_reps=bp_reps,
+        labels=labels,
+        allocation_method=blueprint.allocation_method,
+        budget=blueprint.budget,
+        step_size=blueprint.step_size,
+        importance_method=importance_method,
+        internal_evaluator=blueprint.internal_evaluator,
+        augmentations=augmentations,
+        augmentation_strategy=blueprint.augmentation_strategy,
+    )
+
+    # Inject stored rep_scores to skip per-rep model evaluation
+    if blueprint.rep_scores is not None:
+        kwargs['precomputed_alloc_scores'] = blueprint.rep_scores
+
+    return create_hybrid(**kwargs)
+
+
+def get_best_hybrid(
+    dataset_name: str,
+    model: str = 'rf',
+    budget: Optional[int] = None,
+    tier: str = 'general',
+    aug_condition: str = 'uncapped',
+    registry_path: Optional[str] = None,
+) -> dict:
+    """Look up the best published hybrid config for a dataset.
+
+    Reads from the hybrid registry (populated by precompute_hybrids.py)
+    and returns a self-contained dict with the blueprint, scores, and
+    metric direction.
+
+    This is the "product" lookup — one line to get the recommended hybrid
+    configuration for any dataset KIRBy has been run on.
+
+    Args:
+        dataset_name: Dataset name as used in DATASET_REPS (e.g. 'caco2').
+        model: Downstream model name (e.g. 'rf', 'lightgbm', 'knn').
+        budget: Specific budget (None = best across all budgets for this model).
+        tier: Rep tier ('general' or 'top').
+        aug_condition: Augmentation condition ('none', 'uncapped', 'capped').
+        registry_path: Override path to hybrid_registry.json.
+
+    Returns:
+        Dict with keys:
+          - 'blueprint': Blueprint instance (ready for apply_blueprint())
+          - 'score_mean': float
+          - 'score_std': float
+          - 'metric': str (e.g. 'rmse', 'r2', 'ci')
+          - 'lower_is_better': bool
+          - 'budget': int
+          - 'model': str
+          - 'dataset': str
+          - 'n_features': int
+
+    Raises:
+        KeyError if dataset/model/budget not found in registry.
+    """
+    import json as _json
+
+    if registry_path is None:
+        cache_root = Path(os.environ.get(
+            'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
+        reg_path = cache_root / 'hybrid_registry.json'
+    else:
+        reg_path = Path(registry_path)
+
+    if not reg_path.exists():
+        raise FileNotFoundError(
+            f"Hybrid registry not found at {reg_path}. "
+            f"Run precompute_hybrids.py first.")
+
+    registry = _json.loads(reg_path.read_text())
+
+    if dataset_name not in registry:
+        available = sorted(registry.keys())
+        raise KeyError(
+            f"Dataset '{dataset_name}' not in registry. "
+            f"Available: {available}")
+
+    ds_entry = registry[dataset_name]
+    metric_name = ds_entry['metric']
+    lower_is_better = ds_entry['lower_is_better']
+
+    config_key = f"{tier}/{aug_condition}"
+    if config_key not in ds_entry.get('configs', {}):
+        available = sorted(ds_entry.get('configs', {}).keys())
+        raise KeyError(
+            f"Config '{config_key}' not found for '{dataset_name}'. "
+            f"Available: {available}")
+
+    config_entry = ds_entry['configs'][config_key]
+
+    if model not in config_entry:
+        available = sorted(config_entry.keys())
+        raise KeyError(
+            f"Model '{model}' not found for '{dataset_name}/{config_key}'. "
+            f"Available: {available}")
+
+    model_entry = config_entry[model]
+
+    if budget is not None:
+        bgt_key = str(budget)
+        if bgt_key not in model_entry:
+            available = sorted(model_entry.keys(), key=int)
+            raise KeyError(
+                f"Budget {budget} not found for "
+                f"'{dataset_name}/{config_key}/{model}'. "
+                f"Available: {available}")
+        best = model_entry[bgt_key]
+    else:
+        # Pick the best budget (direction-aware)
+        candidates = list(model_entry.items())
+        if lower_is_better:
+            bgt_key, best = min(candidates, key=lambda kv: kv[1]['score_mean'])
+        else:
+            bgt_key, best = max(candidates, key=lambda kv: kv[1]['score_mean'])
+
+    bp_dict = best.get('blueprint')
+    if bp_dict is None:
+        raise ValueError(
+            f"No blueprint stored for '{dataset_name}/{config_key}/{model}/"
+            f"{bgt_key}'. Cache may need rebuilding.")
+
+    bp = Blueprint.from_dict(bp_dict)
+
+    return {
+        'blueprint': bp,
+        'score_mean': best['score_mean'],
+        'score_std': best.get('score_std', 0.0),
+        'metric': metric_name,
+        'lower_is_better': lower_is_better,
+        'budget': int(bgt_key) if budget is None else budget,
+        'model': model,
+        'dataset': dataset_name,
+        'n_features': best.get('n_features', 0),
+    }
 
 
 # =============================================================================

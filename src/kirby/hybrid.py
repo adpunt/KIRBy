@@ -551,6 +551,14 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
                 f"(defaulting to 0.0): {missing_reps[:5]}")
         baseline_scores = {rn: precomputed_scores.get(rn, 0.0)
                            for rn in rep_dict_train}
+        # Shift to non-negative (same as the computed path below).
+        # Precomputed scores may be in "higher is better" convention
+        # with negative values (e.g. -RMSE), so shift them up.
+        if baseline_scores:
+            min_val = min(baseline_scores.values())
+            if min_val < 0:
+                baseline_scores = {rn: s - min_val
+                                   for rn, s in baseline_scores.items()}
     else:
         baseline_scores = {}
 

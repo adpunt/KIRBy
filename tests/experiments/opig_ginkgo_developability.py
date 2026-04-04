@@ -77,7 +77,7 @@ DEFAULT_REPS = [
     'paratope',                            # structural
 ]
 
-MODELS_LIST = DOWNSTREAM_MODELS
+MODELS_LIST = [m for m in DOWNSTREAM_MODELS if m != 'gp']
 
 # Competition baselines (van Niekerk et al. 2026, 113 teams)
 # test_top = best team Spearman rho on held-out test set (80 antibodies)

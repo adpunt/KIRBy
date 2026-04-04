@@ -26,8 +26,10 @@ import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 import sys
+import json
 import time
 import argparse
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
@@ -40,6 +42,94 @@ from experiments._shared import (
 )
 from experiments.complexity.complexity_helpers import DATASET_REPS
 from kirby.find_best_hybrid import find_best_hybrid
+
+
+# =============================================================================
+# HYBRID REGISTRY — maps dataset name → published best configs
+# =============================================================================
+
+def _registry_path():
+    cache_root = Path(os.environ.get('KIRBY_CACHE_DIR',
+                      str(Path.home() / '.cache' / 'kirby')))
+    return cache_root / 'hybrid_registry.json'
+
+
+def _load_registry():
+    path = _registry_path()
+    if path.exists():
+        try:
+            return json.loads(path.read_text())
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_registry(registry):
+    path = _registry_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix='.tmp')
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(registry, f, indent=2)
+        os.replace(tmp, str(path))
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def _update_registry(dataset_name, tier, aug_strategy, result):
+    """Add a SearchResult's best configs to the registry.
+
+    Registry schema:
+    {
+      "dataset_name": {
+        "metric": "rmse",
+        "lower_is_better": true,
+        "configs": {
+          "tier/aug_strategy": {
+            "model_name": {
+              "budget": {
+                "score_mean": float,
+                "score_std": float,
+                "blueprint": {...}  (Blueprint.to_dict())
+              }
+            }
+          }
+        }
+      }
+    }
+
+    Every entry carries metric + lower_is_better. No guessing.
+    """
+    registry = _load_registry()
+    ds_entry = registry.setdefault(dataset_name, {
+        'metric': result.metric_name,
+        'lower_is_better': result.lower_is_better,
+        'configs': {},
+    })
+    # Update metric info (in case it changed)
+    ds_entry['metric'] = result.metric_name
+    ds_entry['lower_is_better'] = result.lower_is_better
+
+    config_key = f"{tier}/{aug_strategy}"
+    config_entry = ds_entry['configs'].setdefault(config_key, {})
+
+    for model_name, budget_dict in result.best_by_model_budget.items():
+        model_entry = config_entry.setdefault(model_name, {})
+        for budget, r in budget_dict.items():
+            bp = r.get('blueprint')
+            model_entry[str(budget)] = {
+                'score_mean': round(r['score_mean'], 6),
+                'score_std': round(r.get('score_std', 0), 6),
+                'n_features': r.get('n_features', 0),
+                'allocation_method': r.get('allocation_method', ''),
+                'importance_method': r.get('importance_method', ''),
+                'internal_evaluator': r.get('internal_evaluator', ''),
+                'blueprint': bp.to_dict() if bp else None,
+            }
+
+    _save_registry(registry)
 
 
 # Domain detection (matches complexity_helpers.get_aug_groups)
@@ -192,12 +282,20 @@ def precompute_dataset(dataset_name, speed='fast', tiers=('general', 'top'),
                 task_type=task_type,
                 cache=True,
                 verbose=True,
+                dataset_name=dataset_name,
             )
             elapsed = time.time() - t0
             n_models = len(result.best_by_model)
             n_results = len(result.all_results)
             print(f"  {label}: {n_results} configs, {n_models} models, "
                   f"{elapsed:.0f}s")
+
+            # Update the hybrid registry
+            try:
+                _update_registry(dataset_name, tier, strat, result)
+            except Exception as e:
+                print(f"  WARNING: registry update failed: {e}")
+
             n_ok += 1
         except Exception as e:
             elapsed = time.time() - t0
