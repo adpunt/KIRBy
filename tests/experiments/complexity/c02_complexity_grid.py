@@ -106,6 +106,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # --- All reps, uncapped augmentation ---
     search_uncapped = search_no_aug  # fallback if no augmentations
+    if not augs:
+        print("  WARNING: No augmentation reps available — uncapped/capped "
+              "conditions will be identical to no-augmentation.")
     if augs:
         print(f"\n  --- Uncapped augmentation ({len(augs)} aug reps) ---")
         search_uncapped = find_best_hybrid(
@@ -172,8 +175,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'allocation': r['allocation_method'],
             'importance': r['importance_method'],
             'budget': r['budget'],
-            'r2_mean': r['score_mean'],
-            'r2_std': r['score_std'],
+            'score_mean': r['score_mean'],
+            'score_std': r['score_std'],
             'fold_scores': r.get('fold_scores', []),
             'n_features': r['n_features'],
         })
@@ -186,8 +189,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'allocation': r['allocation_method'],
             'importance': r['importance_method'],
             'budget': r['budget'],
-            'r2_mean': r['score_mean'],
-            'r2_std': r['score_std'],
+            'score_mean': r['score_mean'],
+            'score_std': r['score_std'],
             'n_features': r['n_features'],
         }
 
@@ -206,7 +209,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 best_single_rep = rep_name
         baselines[model_name] = {
             'best_single_rep': best_single_rep,
-            'best_single_r2': best_single_score,
+            'best_single_score': best_single_score,
         }
         print(f"  {model_name}: best_rep={best_single_rep} {metric_label}={best_single_score:.4f}")
 
@@ -239,8 +242,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for budget in full_budgets:
             budget_configs = [c for c in model_configs if c['budget'] == budget]
             if budget_configs:
-                best = max(budget_configs, key=lambda c: c['r2_mean'])
-                heatmap[model_name][budget] = best['r2_mean']
+                best = (min if lower_is_better else max)(budget_configs, key=lambda c: c['score_mean'])
+                heatmap[model_name][budget] = best['score_mean']
 
     # Importance method wins
     importance_wins = {imp: 0 for imp in importance_methods}
@@ -252,11 +255,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Print summary
     print(f"\n  BEST BY MODEL (metric: {metric_label}):")
     for model_name, best in best_by_model.items():
-        baseline_score = baselines[model_name]['best_single_r2']
+        baseline_score = baselines[model_name]['best_single_score']
         baseline_rep = baselines[model_name]['best_single_rep']
-        delta = best['r2_mean'] - baseline_score
+        delta = best['score_mean'] - baseline_score
         print(f"  >> {model_name}: {best['allocation']}/{best['importance']}"
-              f"/b={best['budget']} -> {metric_label}={best['r2_mean']:.4f} "
+              f"/b={best['budget']} -> {metric_label}={best['score_mean']:.4f} "
               f"(vs {baseline_rep} {baseline_score:.4f}, delta={delta:+.4f})")
 
     print("\n  IMPORTANCE METHOD WINS:")
@@ -287,8 +290,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'allocation': r['allocation_method'],
                 'importance': r['importance_method'],
                 'budget': r['budget'],
-                'r2_mean': r['score_mean'],
-                'r2_std': r['score_std'],
+                'score_mean': r['score_mean'],
+                'score_std': r['score_std'],
                 'n_features': r['n_features'],
             }
         return out
@@ -310,7 +313,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         parts = []
         for cond_name, cond_best in conditions.items():
             if model_name in cond_best:
-                score = cond_best[model_name]['r2_mean']
+                score = cond_best[model_name]['score_mean']
                 parts.append(f"{cond_name}={score:.4f}")
         if parts:
             print(f"    {model_name}: {', '.join(parts)}")

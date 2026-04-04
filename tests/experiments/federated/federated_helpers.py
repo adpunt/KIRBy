@@ -194,7 +194,12 @@ def smiles_to_fluid_df(smiles_list, labels, pki_threshold=6.0, source='KIRBy'):
     valid_idx = np.where(valid_mask)[0]
     labels_valid = np.asarray(labels)[valid_idx]
 
-    binary_labels = (labels_valid >= pki_threshold).astype(int)
+    # If labels are already binary (0/1), skip thresholding
+    unique_vals = set(np.unique(labels_valid))
+    if unique_vals <= {0, 1, 0.0, 1.0}:
+        binary_labels = labels_valid.astype(int)
+    else:
+        binary_labels = (labels_valid >= pki_threshold).astype(int)
     activity_strs = np.where(binary_labels == 1, 'Active', 'Inactive')
 
     df = pd.DataFrame({
@@ -528,8 +533,7 @@ def predict_fluid_quality_ensemble(teacher_models, cluster_data_train,
             continue
         try:
             y_pred_cv = cross_val_predict(
-                clf, X_t, y_t, cv=KFold(n_splits=n_cv, shuffle=True,
-                                        random_state=42))
+                clf, X_t, y_t, cv=KFold(n_splits=n_cv, shuffle=False))
             mccs[t] = max(0.0, matthews_corrcoef(y_t, y_pred_cv))
         except Exception:
             mccs[t] = 0.0
@@ -1124,7 +1128,7 @@ def predict_fluid_quality_ensemble_regression(teacher_models,
         try:
             y_cv = cross_val_predict(
                 reg, X_train_t, y_train_t,
-                cv=KFold(n_splits=n_cv, shuffle=True, random_state=42))
+                cv=KFold(n_splits=n_cv, shuffle=False))
             rmses[t] = float(np.sqrt(mean_squared_error(y_train_t, y_cv)))
         except Exception:
             rmses[t] = float('inf')
@@ -1143,6 +1147,142 @@ def predict_fluid_quality_ensemble_regression(teacher_models,
         predictions += all_preds[t] * weights[t]
 
     return predictions, weights
+
+
+def predict_fluid_similarity_ensemble_classification(
+        teacher_models, silo_train_features, silo_test_features, k, seed=42):
+    """FLuID-style 8-NN similarity-weighted classification ensemble.
+
+    Mirrors predict_fluid_similarity_ensemble_regression but uses
+    predict_proba and weighted probability averaging for classification.
+
+    Args:
+        teacher_models: list (length k+1). Index 0 is None placeholder.
+            Indices 1..k are (classifier, n_train, X_train) tuples.
+        silo_train_features: list (length k+1). Index 0 is None.
+            Indices 1..k are training feature arrays for each silo.
+        silo_test_features: list (length k+1). Index 0 is None.
+            Indices 1..k are test feature arrays for each silo.
+        k: number of silos.
+        seed: random seed.
+
+    Returns:
+        (pred_classes, pred_probs_positive, teacher_weights_per_sample)
+    """
+    n_test = silo_test_features[1].shape[0]
+
+    all_probs = {}
+    all_weights = {}
+
+    for t in range(1, k + 1):
+        clf = teacher_models[t][0]
+        X_train_t = silo_train_features[t]
+        X_test_t = silo_test_features[t]
+
+        all_probs[t] = clf.predict_proba(X_test_t)
+
+        # 8-NN distance weighting in this silo's OWN feature space
+        n_sample = max(1, int(0.2 * len(X_train_t)))
+        rng = np.random.RandomState(seed + t)
+        sample_idx = rng.choice(len(X_train_t), size=n_sample, replace=False)
+        X_ref = X_train_t[sample_idx]
+
+        n_neighbors = min(8, len(X_ref))
+        knn = NearestNeighbors(n_neighbors=n_neighbors, metric='euclidean')
+        knn.fit(X_ref)
+        distances, _ = knn.kneighbors(X_test_t)
+        all_weights[t] = distances.mean(axis=1)
+
+    # Normalize distances → similarities PER SILO
+    for t in range(1, k + 1):
+        raw = all_weights[t]
+        min_t, max_t = raw.min(), raw.max()
+        delta_t = max_t - min_t if max_t > min_t else 1.0
+        normalized = (raw - min_t) / delta_t
+        all_weights[t] = (1.0 - normalized) ** 2
+
+    # Normalize weights to sum to 1 per sample
+    weight_sum = sum(all_weights[t] for t in range(1, k + 1))
+    weight_sum = np.maximum(weight_sum, 1e-10)
+    for t in range(1, k + 1):
+        all_weights[t] = all_weights[t] / weight_sum
+
+    # Weighted average of probability distributions
+    n_classes = all_probs[1].shape[1]
+    fed_probs = np.zeros((n_test, n_classes))
+    for t in range(1, k + 1):
+        fed_probs += all_probs[t] * all_weights[t][:, np.newaxis]
+
+    pred_classes = fed_probs.argmax(axis=1)
+    pred_probs_positive = fed_probs[:, 1] if n_classes == 2 else None
+
+    teacher_weights = np.column_stack(
+        [all_weights[t] for t in range(1, k + 1)])
+
+    return pred_classes, pred_probs_positive, teacher_weights
+
+
+def predict_fluid_quality_ensemble_classification(
+        teacher_models, silo_train_features, silo_test_features, k):
+    """Quality-weighted classification ensemble: weight by cross-val MCC.
+
+    Mirrors predict_fluid_quality_ensemble_regression but uses classifiers.
+
+    Args:
+        teacher_models: list (length k+1). Index 0 is None placeholder.
+        silo_train_features: list (length k+1) of (X_train, y_train) tuples.
+            Index 0 is None.
+        silo_test_features: list (length k+1) of X_test arrays.
+        k: number of silos.
+
+    Returns:
+        (pred_classes, pred_probs_positive, mcc_weights_dict)
+    """
+    from sklearn.model_selection import KFold, cross_val_predict
+
+    n_test = silo_test_features[1].shape[0]
+    mccs = {}
+    all_probs = {}
+
+    for t in range(1, k + 1):
+        clf = teacher_models[t][0]
+        X_train_t, y_train_t = silo_train_features[t]
+        X_test_t = silo_test_features[t]
+
+        all_probs[t] = clf.predict_proba(X_test_t)
+
+        # Cross-val MCC on own training data
+        n_classes = len(np.unique(y_train_t))
+        min_class = min(np.bincount(y_train_t.astype(int)))
+        n_cv = min(5, min_class, len(y_train_t))
+        if n_classes < 2 or n_cv < 2:
+            mccs[t] = 0.0
+            continue
+        try:
+            y_cv = cross_val_predict(
+                clf, X_train_t, y_train_t,
+                cv=KFold(n_splits=n_cv, shuffle=False))
+            mccs[t] = max(0.0, float(matthews_corrcoef(y_train_t, y_cv)))
+        except Exception:
+            mccs[t] = 0.0
+
+    # Normalize MCC weights
+    total_mcc = sum(mccs.values())
+    if total_mcc <= 0:
+        weights = {t: 1.0 / k for t in range(1, k + 1)}
+    else:
+        weights = {t: mccs[t] / total_mcc for t in range(1, k + 1)}
+
+    # Weighted average of probabilities
+    n_classes = all_probs[1].shape[1]
+    fed_probs = np.zeros((n_test, n_classes))
+    for t in range(1, k + 1):
+        fed_probs += all_probs[t] * weights[t]
+
+    pred_classes = fed_probs.argmax(axis=1)
+    pred_probs_positive = fed_probs[:, 1] if n_classes == 2 else None
+
+    return pred_classes, pred_probs_positive, weights
 
 
 def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,

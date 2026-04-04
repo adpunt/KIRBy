@@ -167,8 +167,8 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 best_config = {
                     'model': best.get('model', best_model_name),
                     'budget': best['blueprint'].budget,
-                    'r2': best['score_mean'],
-                    'r2_std': best['score_std'],
+                    'score': best['score_mean'],
+                    'score_std': best['score_std'],
                     'allocation': best['blueprint'].allocation_method,
                     'importance': best['blueprint'].importance_method,
                     'n_features': best['n_features'],
@@ -178,7 +178,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 best_by_model = {}
                 for model_name, mbest in search.best_by_model.items():
                     best_by_model[model_name] = {
-                        'r2': mbest['score_mean'],
+                        'score': mbest['score_mean'],
                         'budget': mbest['blueprint'].budget,
                         'importance': mbest['blueprint'].importance_method,
                     }
@@ -197,7 +197,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             }
             if best_config:
                 print(f"    {subpop_name} best: {best_config['model']}/b={best_config['budget']} "
-                      f"R²={best_config['r2']:.4f} "
+                      f"score={best_config['score']:.4f} "
                       f"[{best_config['importance']}/{best_config['allocation']}]")
 
         # Compare easy vs hard

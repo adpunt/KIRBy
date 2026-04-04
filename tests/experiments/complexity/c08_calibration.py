@@ -79,7 +79,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
     if exp2_results and exp2_results.get('best_by_model'):
         # Use best config from Exp 2
         all_best = exp2_results['best_by_model']
-        overall_best = max(all_best.values(), key=lambda c: c['r2_mean'])
+        overall_best = (min if lower_is_better else max)(all_best.values(), key=lambda c: c['score_mean'])
         optimal_budget = overall_best['budget']
         optimal_alloc = overall_best['allocation']
         optimal_imp = overall_best['importance']
@@ -107,7 +107,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
             best = None
             best_model = None
             for m_name, m_best in search.best_by_model.items():
-                if best is None or m_best['score_mean'] > best['score_mean']:
+                if best is None or (m_best['score_mean'] < best['score_mean'] if lower_is_better else m_best['score_mean'] > best['score_mean']):
                     best = m_best
                     best_model = m_name
             if best:

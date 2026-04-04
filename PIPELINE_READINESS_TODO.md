@@ -275,14 +275,14 @@ For federated-eligible datasets: also add to federated experiment list per `FEDE
 | Tier | Reps |
 |------|------|
 | Top Tier (8) | graph_kernel, mol2vec, mhg_gnn, ecfp4, pdv, grover, avalon, mordred |
-| General (15) | graph_kernel, mol2vec, mhg_gnn, ecfp4, pdv, grover, avalon, mordred, top_torsion, smited, atom_pair, molformer, lora_molformer**, contrastive_molformer**, graphmvp_ft** |
+| General (12) | graph_kernel, mol2vec, mhg_gnn, ecfp4, pdv, grover, avalon, mordred, top_torsion, smited, atom_pair, molformer |
 | Augmentation (5) | maccs, pharmacophore3d, usrcat, coulomb_matrix, usr |
 
 **herg_ki (1,412 samples, regression):**
 | Tier | Reps |
 |------|------|
 | Top Tier (8) | mhg_gnn, mordred, graph_kernel, avalon, grover, pdv, mol2vec, ecfp4 |
-| General (16) | mhg_gnn, mordred, graph_kernel, avalon, grover, pdv, mol2vec, ecfp4, molformer, chemberta, atom_pair, chembert, smited, top_torsion, graphmvp, graphmvp_ft** |
+| General (15) | mhg_gnn, mordred, graph_kernel, avalon, grover, pdv, mol2vec, ecfp4, molformer, chemberta, atom_pair, chembert, smited, top_torsion, graphmvp |
 | Augmentation (5) | maccs, pharmacophore3d, coulomb_matrix, usr, usrcat |
 
 *Note: lora_molformer and contrastive_molformer excluded from herg_ki — both worse than frozen molformer on this dataset (-0.051 and -0.005 R² respectively). Frozen molformer stays.*
@@ -291,7 +291,7 @@ For federated-eligible datasets: also add to federated experiment list per `FEDE
 | Tier | Reps |
 |------|------|
 | Top Tier (8) | mhg_gnn, mordred, grover, mol2vec, pdv, ecfp4, smited, molformer |
-| General (17) | mhg_gnn, mordred, grover, mol2vec, pdv, ecfp4, smited, molformer, avalon, atom_pair, chemberta, top_torsion, chembert, graph_kernel, lora_molformer**, contrastive_molformer**, graphmvp_ft** |
+| General (15) | mhg_gnn, mordred, grover, mol2vec, pdv, ecfp4, smited, molformer, avalon, atom_pair, chemberta, top_torsion, chembert, graph_kernel, graphmvp |
 | Augmentation (6) | selformer, rdkfp, maccs, pharmacophore3d, molclr, usrcat |
 
 **qm9 (9,978 samples):**
@@ -327,8 +327,8 @@ For federated-eligible datasets: also add to federated experiment list per `FEDE
 ### Molecular Domain-Level Decisions
 
 **FT reps (apply to all molecular datasets):**
-- lora_molformer** and contrastive_molformer** are added as general-tier base reps across all molecular datasets. They don't compete with the top tier but consistently beat maccs and provide FT-adapted LM signal. Frozen molformer is the fallback when FT is disabled.
-- graphmvp_ft** added as general-tier base rep across all molecular datasets. Beats frozen graphmvp on all 3 tested datasets (logd +0.096, caco2 +0.025, herg +0.054 R²). Frozen graphmvp is the fallback when FT is disabled.
+- lora_molformer, contrastive_molformer, graphmvp_ft: NOT YET in DATASET_REPS. Documented as future additions pending survey results. Currently only frozen variants are in DATASET_REPS.
+- graphmvp_ft beats frozen graphmvp on all 3 tested datasets (logd +0.096, caco2 +0.025, herg +0.054 R²). To be added when FT pipeline is finalized.
 - All other FT variants (chemberta FT, selformer FT, freeze_head anything) are excluded — they never beat ecfp4.
 
 **Per-dataset FT swap rules (verified from molecular_finetune_comparison.json):**

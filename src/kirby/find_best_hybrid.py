@@ -57,6 +57,8 @@ from sklearn.preprocessing import StandardScaler
 
 warnings.filterwarnings('ignore')
 
+_CACHE_VERSION = 8  # Bump when pipeline changes affect cached results
+
 
 # =============================================================================
 # DATA STRUCTURES
@@ -484,7 +486,7 @@ DEFAULT_MODELS = {
     },
     'svm': {
         'regressor': lambda: __import__('sklearn.svm', fromlist=['SVR']).SVR(),
-        'classifier': lambda: __import__('sklearn.svm', fromlist=['SVC']).SVC(),
+        'classifier': lambda: __import__('sklearn.svm', fromlist=['SVC']).SVC(probability=True),
         'tier': 'full',
         '_max_samples': 10000,
     },
@@ -614,17 +616,17 @@ def get_model(name: str, task_type: str = 'regression',
 def _predict_for_metric(model, X, metric_fn):
     """Predict using predict_proba for binary AUC, else predict (class labels).
 
-    Only returns probabilities for binary classification (2-class predict_proba).
-    Multi-class metrics (f1_weighted, accuracy, mcc) need class labels from predict().
+    Only returns probabilities when metric_fn is the built-in AUC metric.
+    Other binary classification metrics (accuracy, f1, mcc) need class labels.
     """
-    if hasattr(model, 'predict_proba'):
+    _auc_fn = BUILTIN_METRICS.get('auc', (None,))[0]
+    needs_proba = (metric_fn is _auc_fn)
+
+    if needs_proba and hasattr(model, 'predict_proba'):
         try:
             y_prob = model.predict_proba(X)
             if y_prob.ndim == 2 and y_prob.shape[1] == 2:
-                # Binary: return positive-class probabilities (for AUC)
                 return y_prob[:, 1]
-            # Multi-class: fall through to predict() — metrics like f1_weighted
-            # need class labels, not probability matrices
         except Exception:
             pass
     return model.predict(X)
@@ -1147,6 +1149,7 @@ def _evaluate_hybrid_config(
     groups: Optional[np.ndarray] = None,
     n_folds: int = 5,
     metric_fn: Callable = None,
+    metric_name: Optional[str] = None,
     seed: int = 42,
     step_size: int = 5,
     augmentations: Optional[Dict[str, np.ndarray]] = None,
@@ -1203,10 +1206,14 @@ def _evaluate_hybrid_config(
         if importance_cache is not None:
             fold_importance = importance_cache.get((fold_idx, importance_method))
 
-        # Look up precomputed allocation scores for this (fold, evaluator)
+        # Look up precomputed allocation scores for this (fold, evaluator).
+        # Prefer metric-specific scores when available.
         fold_alloc_scores = None
         if alloc_cache is not None:
-            fold_alloc_scores = alloc_cache.get((fold_idx, internal_evaluator))
+            if metric_name:
+                fold_alloc_scores = alloc_cache.get((fold_idx, internal_evaluator, metric_name))
+            if fold_alloc_scores is None:
+                fold_alloc_scores = alloc_cache.get((fold_idx, internal_evaluator))
 
         try:
             X_train, feature_info = create_hybrid(
@@ -1478,6 +1485,7 @@ def _run_search(
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
     cv_splitter=None,
     greedy_tolerance: float = 0.0,
+    metric_name: Optional[str] = None,
 ) -> List[dict]:
     """Main search loop over all configurations."""
     tier = SPEED_TIERS[speed]
@@ -1597,7 +1605,8 @@ def _run_search(
     # across all (budget, importance, model) configs. Compute once, reuse.
     from kirby.hybrid import _evaluate_allocation
 
-    alloc_cache = {}  # (fold_idx, evaluator) -> {rep_name: score}
+    alloc_cache = {}  # (fold_idx, evaluator) -> {rep_name: score}  (R²/accuracy, backward compat)
+                      # (fold_idx, evaluator, metric_name) -> {rep_name: comparable_score}
     _alloc_t0 = time.time()
 
     # Collect ALL unique evaluator names that will actually be used.
@@ -1607,6 +1616,11 @@ def _run_search(
         for model_name in models:
             for ev in _evaluators_for_model(model_name):
                 _all_evaluator_names.add(ev)
+
+    # Metrics to pre-compute from each evaluator's predictions
+    _alloc_metrics = {}
+    for mname, (mfn, mlib) in BUILTIN_METRICS.items():
+        _alloc_metrics[mname] = (mfn, mlib)
 
     for fold_idx, (train_idx, _) in enumerate(_fold_splits_for_cache):
         fold_train_reps = {k: v[train_idx] for k, v in base_reps.items()}
@@ -1625,24 +1639,53 @@ def _run_search(
         _val_labels = fold_train_labels[_va_idx]
 
         for ev in _all_evaluator_names:
-            scores = {}
+            default_scores = {}   # R²/accuracy (backward compat)
+            metric_scores = {mn: {} for mn in _alloc_metrics}
+
             for rep_name, X_full in fold_train_reps.items():
                 X_tr = np.nan_to_num(np.clip(X_full[_tr_idx], -1e10, 1e10),
                                      nan=0.0, posinf=1e10, neginf=-1e10)
                 X_va = np.nan_to_num(np.clip(X_full[_va_idx], -1e10, 1e10),
                                      nan=0.0, posinf=1e10, neginf=-1e10)
                 try:
-                    scores[rep_name] = max(
-                        _evaluate_allocation(X_tr, X_va, _train_labels,
-                                             _val_labels, internal_evaluator=ev),
-                        0.0)
+                    default_score, y_pred = _evaluate_allocation(
+                        X_tr, X_va, _train_labels, _val_labels,
+                        internal_evaluator=ev, return_predictions=True)
+                    default_scores[rep_name] = max(default_score, 0.0)
+
+                    # Compute all metrics from same predictions
+                    if y_pred is not None:
+                        for mn, (mfn, mlib) in _alloc_metrics.items():
+                            try:
+                                raw = mfn(_val_labels, y_pred)
+                                # Convert to "higher = better" comparable form.
+                                # No max(,0) clipping: negated RMSE=-0.5 means
+                                # "RMSE of 0.5" and must stay negative so reps
+                                # can be ranked correctly.
+                                metric_scores[mn][rep_name] = -raw if mlib else raw
+                            except Exception:
+                                metric_scores[mn][rep_name] = 0.0
+                    else:
+                        for mn in _alloc_metrics:
+                            metric_scores[mn][rep_name] = 0.0
                 except Exception:
-                    scores[rep_name] = 0.0
-            alloc_cache[(fold_idx, ev)] = scores
+                    default_scores[rep_name] = 0.0
+                    for mn in _alloc_metrics:
+                        metric_scores[mn][rep_name] = 0.0
+
+            alloc_cache[(fold_idx, ev)] = default_scores
+            for mn, rep_scores in metric_scores.items():
+                # Shift scores to be non-negative (allocation weighting
+                # requires >= 0). Preserves relative ordering.
+                if rep_scores:
+                    min_val = min(rep_scores.values())
+                    if min_val < 0:
+                        rep_scores = {rn: s - min_val for rn, s in rep_scores.items()}
+                alloc_cache[(fold_idx, ev, mn)] = rep_scores
 
     if verbose:
         print(f"  Allocation scores pre-computed in {time.time() - _alloc_t0:.1f}s "
-              f"({len(alloc_cache)} (fold, evaluator) combos, "
+              f"({len(_all_evaluator_names)} evaluators × {len(BUILTIN_METRICS)} metrics, "
               f"evaluators: {sorted(_all_evaluator_names)})")
 
     # ── Build flat list of all configs to evaluate ──
@@ -1695,6 +1738,7 @@ def _run_search(
                         groups=groups,
                         n_folds=search_folds,
                         metric_fn=metric_fn,
+                        metric_name=metric_name,
                         seed=seed,
                         augmentations=augmentations,
                         augmentation_strategy=augmentation_strategy,
@@ -1754,6 +1798,7 @@ def _run_search(
                     groups=groups,
                     n_folds=search_folds,
                     metric_fn=metric_fn,
+                    metric_name=metric_name,
                     seed=seed,
                     augmentations=augmentations,
                     augmentation_strategy=augmentation_strategy,
@@ -1920,6 +1965,7 @@ def _run_refinement_phase(
                     groups=groups,
                     n_folds=n_folds,
                     metric_fn=metric_fn,
+                    metric_name=metric_name,
                     seed=seed,
                     step_size=ss,
                     augmentations=augmentations,
@@ -1927,6 +1973,7 @@ def _run_refinement_phase(
                     augmentation_threshold=augmentation_threshold,
                     augmentation_budget=augmentation_budget,
                     candidate_ranking=candidate_ranking,
+                    lower_is_better=lower_is_better,
                     fold_reps=fold_reps,
                     precomputed_folds=precomputed_folds,
                     cv_splitter=cv_splitter,
@@ -2046,6 +2093,7 @@ def _compute_fitted_result(
     augmentation_budget: int = 20,
     candidate_ranking: str = 'rf_importance',
     finetuned_embeddings: Optional[Dict[str, np.ndarray]] = None,
+    lower_is_better: bool = False,
 ) -> FittedResult:
     """Fit on full data and return concrete feature indices + optional weights."""
     from kirby.hybrid import create_hybrid, compute_feature_importance
@@ -2063,11 +2111,13 @@ def _compute_fitted_result(
         budget=blueprint.budget,
         step_size=blueprint.step_size,
         importance_method=blueprint.importance_method,
+        internal_evaluator=blueprint.internal_evaluator,
         augmentations=augmentations,
         augmentation_strategy=augmentation_strategy,
         augmentation_threshold=augmentation_threshold,
         augmentation_budget=augmentation_budget,
         candidate_ranking=candidate_ranking,
+        lower_is_better=lower_is_better,
     )
 
     selected_indices = {}
@@ -2115,26 +2165,49 @@ def _hybrid_cache_key(base_reps, labels, groups, speed, budgets, allocation_meth
                       refinement_step_sizes=None,
                       rep_factory_names=None,
                       augmentations=None,
-                      augmentation_strategy='uncapped') -> str:
+                      augmentation_strategy='uncapped',
+                      screen_threshold=None,
+                      greedy_tolerance=0.0,
+                      augmentation_threshold=None,
+                      augmentation_budget=20,
+                      candidate_ranking='rf_importance',
+                      test_rep_subsets=False,
+                      cv_splitter=None) -> str:
     """SHA256 hash of all search-affecting inputs."""
     h = hashlib.sha256()
+    h.update(f"v{_CACHE_VERSION}".encode())
     for name in sorted(base_reps.keys()):
         arr = base_reps[name]
-        h.update(f"{name}:{arr.shape}:{arr.ravel()[:5].tobytes()}".encode())
+        flat = arr.ravel()
+        sample_idx = np.linspace(0, len(flat) - 1, min(200, len(flat)), dtype=int)
+        h.update(f"{name}:{arr.shape}:{flat[sample_idx].tobytes()}".encode())
     h.update(labels.tobytes())
     if groups is not None:
         h.update(groups.tobytes())
     if augmentations is not None:
         for aname in sorted(augmentations.keys()):
             arr = augmentations[aname]
-            h.update(f"aug:{aname}:{arr.shape}:{arr.ravel()[:5].tobytes()}".encode())
+            flat = arr.ravel()
+            sample_idx = np.linspace(0, len(flat) - 1, min(200, len(flat)), dtype=int)
+            h.update(f"aug:{aname}:{arr.shape}:{flat[sample_idx].tobytes()}".encode())
         h.update(f"aug_strategy:{augmentation_strategy}".encode())
-    h.update(f"{speed}|{budgets}|{allocation_methods}|{importance_methods}|{internal_evaluators}|{n_folds}|{seed}|{metric}|{task_type}|{return_fitted}|{weight_method}|{two_phase}|{refinement_top_n}|{refinement_step_sizes}".encode())
+    h.update(f"{speed}|{budgets}|{allocation_methods}|{importance_methods}|{internal_evaluators}|{n_folds}|{seed}|{metric}|{task_type}|{return_fitted}|{weight_method}|{two_phase}|{refinement_top_n}|{refinement_step_sizes}|{screen_threshold}|{greedy_tolerance}|{augmentation_threshold}|{augmentation_budget}|{candidate_ranking}".encode())
     if models:
         model_names = sorted(models.keys()) if isinstance(models, dict) else sorted(models)
         h.update("|".join(model_names).encode())
     if rep_factory_names:
         h.update("|".join(sorted(rep_factory_names)).encode())
+    # Additive fields: only affect hash when non-default, preserving
+    # existing cache entries that used the old key format.
+    if test_rep_subsets:
+        h.update(b"test_rep_subsets:1")
+    if cv_splitter is not None:
+        _cv_id = type(cv_splitter).__name__
+        if hasattr(cv_splitter, 'n_splits'):
+            _cv_id += f":{cv_splitter.n_splits}"
+        if hasattr(cv_splitter, 'random_state'):
+            _cv_id += f":{cv_splitter.random_state}"
+        h.update(f"cv_splitter:{_cv_id}".encode())
     return h.hexdigest()[:16]
 
 
@@ -2333,8 +2406,15 @@ def find_best_hybrid(
             rep_factory_names=factory_names,
             augmentations=augmentations,
             augmentation_strategy=augmentation_strategy,
+            screen_threshold=screen_threshold,
+            greedy_tolerance=greedy_tolerance,
+            augmentation_threshold=augmentation_threshold,
+            augmentation_budget=augmentation_budget,
+            candidate_ranking=candidate_ranking,
+            test_rep_subsets=test_rep_subsets,
+            cv_splitter=cv_splitter,
         )
-        cache_path = Path(cache_dir or Path.home() / '.cache' / 'kirby' / 'hybrid_search') / f'{key}.pkl'
+        cache_path = Path(cache_dir or Path(os.environ.get('KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby'))) / 'hybrid_search') / f'{key}.pkl'
         if cache_path.exists():
             try:
                 result = pickle.loads(cache_path.read_bytes())
@@ -2429,6 +2509,9 @@ def find_best_hybrid(
         )
 
     # --- Run search ---
+    # Resolve metric name string for alloc cache lookup
+    _metric_name_str = metric if isinstance(metric, str) else None
+
     all_results = _run_search(
         base_reps, labels, groups, speed, resolved_models,
         metric_fn,
@@ -2450,6 +2533,7 @@ def find_best_hybrid(
         precomputed_folds=precomputed_folds,
         cv_splitter=cv_splitter,
         greedy_tolerance=greedy_tolerance,
+        metric_name=_metric_name_str,
     )
 
     # --- Two-phase refinement ---
@@ -2504,6 +2588,7 @@ def find_best_hybrid(
                     augmentation_budget=augmentation_budget,
                     candidate_ranking=candidate_ranking,
                     finetuned_embeddings=finetuned_embeddings,
+                    lower_is_better=lower_is_better,
                 )
             except Exception as e:
                 if verbose:
@@ -2638,7 +2723,7 @@ def nested_cv_evaluate(
     Returns:
         NestedCVResult with honest and search-optimized scores per (model, budget).
     """
-    from kirby.hybrid import create_hybrid, apply_feature_selection
+    from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
 
     # Resolve metric for outer evaluation
     metric = search_kwargs.get('metric', 'r2')
@@ -2647,6 +2732,13 @@ def nested_cv_evaluate(
     if task_type == 'auto':
         n_unique = len(np.unique(labels))
         task_type = 'classification' if (n_unique <= 20 and np.allclose(labels, np.round(labels))) else 'regression'
+
+    # Extract augmentation params from search_kwargs for outer eval
+    full_augmentations = search_kwargs.get('augmentations', None)
+    aug_strategy = search_kwargs.get('augmentation_strategy', 'uncapped')
+    aug_threshold = search_kwargs.get('augmentation_threshold', None)
+    aug_budget = search_kwargs.get('augmentation_budget', 20)
+    cand_ranking = search_kwargs.get('candidate_ranking', 'rf_importance')
 
     # Outer CV splitter
     outer_splitter, use_groups = _make_cv_splitter(groups, n_outer_folds, seed)
@@ -2677,6 +2769,9 @@ def nested_cv_evaluate(
         inner_kwargs = dict(search_kwargs)
         inner_kwargs['cache'] = True  # cache inner searches
         inner_kwargs['verbose'] = verbose
+        # Subset augmentations to outer_train for inner search
+        if full_augmentations is not None:
+            inner_kwargs['augmentations'] = {k: v[outer_train_idx] for k, v in full_augmentations.items()}
         inner_search = find_best_hybrid(
             base_reps=train_reps,
             labels=y_train,
@@ -2703,14 +2798,35 @@ def nested_cv_evaluate(
 
                 # Create hybrid on outer_train with the winning config
                 try:
+                    # Split augmentations by outer fold
+                    train_augs = None
+                    test_augs = None
+                    if full_augmentations is not None:
+                        train_augs = {k: v[outer_train_idx] for k, v in full_augmentations.items()}
+                        test_augs = {k: v[outer_test_idx] for k, v in full_augmentations.items()}
+
                     X_train, feature_info = create_hybrid(
                         train_reps, y_train,
                         allocation_method=bp.allocation_method,
                         importance_method=bp.importance_method,
                         internal_evaluator=bp.internal_evaluator,
                         budget=bp.budget,
+                        step_size=bp.step_size,
+                        augmentations=train_augs,
+                        augmentation_strategy=aug_strategy,
+                        augmentation_threshold=aug_threshold,
+                        augmentation_budget=aug_budget,
+                        candidate_ranking=cand_ranking,
+                        lower_is_better=lower_is_better,
                     )
                     X_test = apply_feature_selection(test_reps, feature_info)
+
+                    # Apply augmentation selection to test set
+                    aug_info = feature_info.get('augmentation_info')
+                    if test_augs is not None and aug_info is not None:
+                        aug_test_features = apply_augmentation_selection(test_augs, aug_info)
+                        if aug_test_features is not None:
+                            X_test = np.hstack([X_test, aug_test_features])
 
                     # Scale
                     scaler = StandardScaler()

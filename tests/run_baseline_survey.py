@@ -55,7 +55,8 @@ DATASET_REGISTRY = {
     # Molecular
     'logd':  ('molecular', 'all'),
     'caco2': ('molecular', 'all'),
-    'herg':  ('molecular', 'all'),
+    'herg_ki':  ('molecular', 'all'),
+    'herg':     ('molecular', 'all'),
     'qm9':   ('molecular', 'all'),
     'adme_hlm':        ('molecular', 'all'),
     'adme_rlm':        ('molecular', 'all'),
@@ -65,7 +66,7 @@ DATASET_REGISTRY = {
     # TCGA
     'tcga_luad_vs_lusc':  ('tcga', 'all'),
     'tcga_brca_pam50':    ('tcga', 'all'),
-    'tcga_brca_survival': ('tcga', 'all'),
+    # tcga_brca_survival: DROPPED (all R² negative)
     # DTA
     'davis': ('dta', 'full'),
     'kiba':  ('dta', 'full'),
@@ -74,7 +75,7 @@ DATASET_REGISTRY = {
     'pdbbind_core':    ('dta', 'full'),
     # Reaction Yield
     'buchwald_hartwig': ('reaction', 'all'),
-    'suzuki':           ('reaction', 'all'),
+    # suzuki: DROPPED (R²=0.453, 1 viable rep)
     'bh_doyle_plates':  ('reaction', 'all'),
     # Nucleotide (NT Revised)
     'nt_promoter_all':            ('nucleotide', 'all'),
@@ -459,10 +460,12 @@ def _get_primary_metric(dataset_name: str, task_type: str) -> tuple:
                 return 'auroc', True
             return 'f1_weighted', True
         return 'accuracy', True
-    if domain == 'molecular':
+    if domain in ('molecular', 'reaction'):
         return 'rmse', False
     if domain == 'dta':
         return 'ci', True
+    if domain == 'antibody':
+        return 'spearman', True
     return 'r2', True
 
 
