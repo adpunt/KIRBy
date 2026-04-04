@@ -144,13 +144,16 @@ def export_dataset(dataset_name, speed='fast', aug_condition='uncapped'):
         return None
 
     # Get precomputed search (hits disk cache)
+    # When aug_condition='none', pass augmentations=None to match
+    # the precompute cache key (precompute passes None for 'none')
+    aug_for_search = aug_reps if (aug_condition != 'none' and aug_reps) else None
     try:
         search = get_precomputed_search(
             reps=general_reps,
             labels=labels,
             groups=groups,
             aug_condition=aug_condition,
-            augmentations=aug_reps if aug_reps else None,
+            augmentations=aug_for_search,
             speed=speed,
             domain=domain,
         )
