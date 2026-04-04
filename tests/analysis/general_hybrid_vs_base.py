@@ -121,9 +121,13 @@ def export_dataset(dataset_name, speed='fast', aug_condition='uncapped'):
 
     domain = _get_domain(dataset_name)
 
-    # Load data
+    # Only load the reps we actually need (general + augmentation)
+    general_names = ds_config.get('general', [])
+    aug_names = ds_config.get('augmentation', [])
+    needed_reps = sorted(set(general_names + aug_names))
+
     try:
-        data = load_data(dataset_name, rep_preset='all')
+        data = load_data(dataset_name, rep_names=needed_reps)
     except Exception as e:
         print(f"  {dataset_name}: load failed — {e}")
         return None
@@ -132,9 +136,6 @@ def export_dataset(dataset_name, speed='fast', aug_condition='uncapped'):
     labels = data['labels']
     groups = data.get('groups')
 
-    # Build rep dicts matching precompute
-    general_names = ds_config.get('general', [])
-    aug_names = ds_config.get('augmentation', [])
     general_reps = {k: all_reps[k] for k in general_names if k in all_reps}
     aug_reps = {k: all_reps[k] for k in aug_names if k in all_reps}
 
