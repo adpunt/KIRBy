@@ -142,7 +142,7 @@ Code changes applied (2026-03-29 → 2026-04-03):
 Remaining:
 1. ~~Clear hybrid caches on server~~ **DONE** (2026-03-29)
 2. Push code + pull on server (`git push` → `git pull` on ARC)
-3. ~~Begin preliminary runs on ready datasets~~ **IN PROGRESS** (2026-04-04) — full precompute submitted for all 40 ready datasets. **Job tracker: [`PRECOMPUTE_JOB_TRACKER.md`](PRECOMPUTE_JOB_TRACKER.md)** (240 jobs, IDs 11707673–11707913). Verified against sacct — every job ID confirmed with full name.
+3. ~~Begin preliminary runs on ready datasets~~ **IN PROGRESS** (2026-04-04) — full precompute v3 submitted for all 40 ready datasets. **Job tracker: [`PRECOMPUTE_JOB_TRACKER.md`](PRECOMPUTE_JOB_TRACKER.md)** (160 jobs, IDs 11717057–11717216). Full speed (5-fold, 13 strategies), 4 conditions (capped removed), cache v9 (deterministic scaffold groups). v1/v2 cancelled due to `list(set())` non-determinism bug + wrong speed tier.
 
 ### ~~FT experiments~~ — MOSTLY DONE (2026-04-04)
 
@@ -405,16 +405,51 @@ For federated-eligible datasets: also add to federated experiment list per `FEDE
 
 ### Molecular Domain-Level Decisions
 
-**FT reps (apply to all molecular datasets):**
-- lora_molformer, contrastive_molformer, graphmvp_ft: NOT YET in DATASET_REPS. Documented as future additions pending survey results. Currently only frozen variants are in DATASET_REPS.
-- graphmvp_ft beats frozen graphmvp on all 3 tested datasets (logd +0.096, caco2 +0.025, herg +0.054 R²). To be added when FT pipeline is finalized.
-- All other FT variants (chemberta FT, selformer FT, freeze_head anything) are excluded — they never beat ecfp4.
+**FT reps — FULL RESULTS (2026-04-04, all 7 datasets verified):**
 
-**Per-dataset FT swap rules (verified from molecular_finetune_comparison.json):**
-- lora_molformer replaces molformer on: logd (+0.020 R²), caco2 (+0.052 R²). Frozen kept on: herg_ki (-0.051 R²).
-- contrastive_molformer replaces molformer on: logd (+0.014 R²), caco2 (+0.014 R²). Frozen kept on: herg_ki (-0.005 R², negligible).
-- graphmvp_ft replaces graphmvp on: logd (+0.096 R²), caco2 (+0.025 R²), herg_ki (+0.054 R²).
-- **qm9, adme_hlm, adme_rlm, adme_mdr1: FT results PENDING** (submit_molecular_ft_fill.sh).
+Sources: `comparisons/molecular_finetune_comparison.json` (logd, caco2, herg_ki), `molecular_ft_fill/` (qm9, adme_hlm, adme_rlm, adme_mdr1), `phase5_baselines/molecular/` (frozen baselines). All numbers are RMSE (lower=better).
+
+| Dataset | lora_molformer vs frozen | contrastive vs frozen | graphmvp_ft vs frozen |
+|---------|------------------------|-----------------------|----------------------|
+| logd | **FT WINS** (0.549 vs 0.573, Δ-0.024) | **FT WINS** (0.557 vs 0.573, Δ-0.016) | **FT WINS** (0.560 vs 0.667, Δ-0.107) |
+| caco2 | **FT WINS** (0.322 vs 0.337, Δ-0.015) | ~TIE (0.333 vs 0.337, Δ-0.005) | FT WINS (0.339 vs 0.345, Δ-0.006) |
+| qm9 | **FT WINS** (0.534 vs 0.607, Δ-0.073) | MISSING | ~TIE (0.598 vs 0.600, Δ-0.001) |
+| herg_ki | FROZEN WINS (0.676 vs 0.643, Δ+0.033) | ~TIE (0.646 vs 0.643, Δ+0.003) | **FT WINS** (0.676 vs 0.702, Δ-0.026) |
+| adme_hlm | FROZEN WINS (0.512 vs 0.474, Δ+0.038) | FROZEN WINS (0.511 vs 0.474, Δ+0.037) | FROZEN WINS (0.538 vs 0.523, Δ+0.015) |
+| adme_rlm | FROZEN WINS (0.602 vs 0.547, Δ+0.055) | FROZEN WINS (0.606 vs 0.547, Δ+0.058) | FROZEN WINS (0.630 vs 0.607, Δ+0.022) |
+| adme_mdr1 | FROZEN WINS (0.533 vs 0.505, Δ+0.028) | FROZEN WINS (0.533 vs 0.505, Δ+0.029) | **FT WINS** (0.541 vs 0.565, Δ-0.024) |
+
+**Per-dataset FT swap decisions (clear wins only, Δ > 0.005):**
+- **logd:** lora_molformer replaces molformer, contrastive_molformer added to general, graphmvp_ft replaces graphmvp
+- **caco2:** lora_molformer replaces molformer. graphmvp_ft borderline (~TIE).
+- **qm9:** lora_molformer replaces molformer
+- **herg_ki:** graphmvp_ft replaces graphmvp. Frozen molformer kept.
+- **adme_hlm:** No FT reps — all frozen win
+- **adme_rlm:** No FT reps — all frozen win
+- **adme_mdr1:** graphmvp_ft replaces graphmvp (graphmvp not in current general tier but FT version is strong enough to add)
+
+Pattern: FT helps on logd/caco2/qm9 (larger, cleaner datasets). ADME datasets (harder tasks, lower R² ceiling) → FT hurts (overfitting).
+
+**Implementation blocker — FT reps not wired into experiment pipeline:**
+- FT reps need per-fold fine-tuning (different embeddings per fold)
+- Experiments currently only handle frozen reps (one matrix per rep)
+- No cached FT embeddings exist on server (surveys computed on-the-fly without caching)
+- **Plan: Precompute script (option B)**
+  1. New script: `tests/precompute_ft_reps.py` — for each (dataset, FT rep, fold), fine-tune and save embeddings to `~/.cache/kirby/finetuned_reps/`
+  2. Uses `fold_cache_key()` from `src/kirby/finetuning/_base.py` for deterministic cache keys
+  3. Folds must match experiments: `GroupKFold(n_splits=5)` with scaffold groups, same seed
+  4. Experiments then construct FT factories as normal — factories hit cache and load pre-saved `.npz` files instead of re-finetuning
+  5. `_shared.load_data()` needs to return `rep_factories` dict alongside `reps` for FT rep names
+  6. Experiment helpers pass both `base_reps` and `rep_factories` to `find_best_hybrid()`
+- **Precompute jobs needed (GPU, ~2h each):**
+  - logd: lora_molformer, contrastive_molformer, graphmvp_ft (3 reps × 5 folds)
+  - caco2: lora_molformer (1 rep × 5 folds)
+  - qm9: lora_molformer (1 rep × 5 folds)
+  - herg_ki: graphmvp_ft (1 rep × 5 folds)
+  - adme_mdr1: graphmvp_ft (1 rep × 5 folds)
+- FT factory constructors: `make_molecular_lora_factory`, `make_molecular_contrastive_factory`, `make_molecular_gnn_factory` in `src/kirby/finetuning/`
+
+All other FT variants (chemberta FT, selformer FT, freeze_head anything) excluded — never beat ecfp4.
 
 **Augmentation (apply to all molecular datasets):**
 - pharmacophore3d and maccs are domain-wide augmentation reps for all molecular datasets. pharmacophore3d is the most consistent augment rep tested (13/15 improve in graph survey, positive on 5/6 phase5 datasets). maccs shows small but reliable signal everywhere (6/7 datasets).
@@ -697,6 +732,52 @@ Old Section 10G has a bulk summary with 11 datasets. Each needs individual cutof
 - `antibody_survey/`: 3 ESM2 region reps × 24 datasets
 - `dms_baselines/`: 9 DMS datasets × 20 specialized reps (varpos, LLR scores, etc.)
 - `geometry_survey/`: 3D geometry reps on 15 antibody datasets (may be empty)
+
+### Antibody ESM-2 LoRA FT Results (2026-04-04, all 29 datasets verified)
+
+Source: `antibody_ft_fill/*.json`. Comparing frozen ESM-2 (best ρ across ridge/rf/xgboost) vs ESM-2 LoRA.
+
+**Summary: 5 FT wins, 20 frozen wins, 4 ties.** LoRA mostly hurts — overfits on small/hard datasets.
+
+**FT wins (esm2_lora replaces or supplements esm2):**
+
+| Dataset | n | Frozen ρ | LoRA ρ | Δ | Notes |
+|---------|---|---------|--------|---|-------|
+| flab_binding_phillips_h3 | 5,000 | 0.652 | 0.739 | +0.087 | Large DMS, strong improvement |
+| abagym_Ang2 | 397 | 0.486 | 0.604 | +0.118 | Largest AbAgym gain |
+| abagym_EGFR | 659 | 0.126 | 0.168 | +0.043 | Modest but clear |
+| abagym_HER2 | 146 | -0.049 | 0.101 | +0.150 | Frozen was dead, LoRA rescues |
+| abcov_kd | 141 | 0.390 | 0.460 | +0.070 | Clear gain |
+
+**~TIE (no change):**
+
+| Dataset | n | Frozen ρ/AUROC | LoRA | Δ |
+|---------|---|---------------|------|---|
+| flab_thermo_tresanco | 672 | 0.707 | 0.717 | +0.010 |
+| flab_binding_adams | 5,000 | 0.571 | 0.553 | -0.017 |
+| flab_expression_adams | 5,000 | 0.469 | 0.482 | +0.013 |
+| humanness_therapeutic | 564 | 0.915 | 0.897 | -0.017 |
+
+**Frozen wins (20 datasets) — LoRA excluded:**
+- All 8 inter-family small datasets (n=130-217): Δ ranges -0.044 to -0.200
+- All 6 Ginkgo datasets: Δ ranges -0.050 to -0.245
+- Both Koenig DMS datasets: Δ -0.097 and -0.242
+- ddg_combined: Δ -0.183
+- tz_her2_binary: Δ -0.021
+- abagym_VEGF: Δ -0.089
+- abagym_lysozyme: Δ -0.082
+
+**Pattern:** LoRA helps on DMS/mutation tasks where per-position fine-tuning adds signal (phillips_h3, AbAgym antigen-specific). Badly overfits on small inter-family (n~130), Ginkgo (n~200), and DDG datasets.
+
+**Per-dataset FT swap decisions:**
+- **flab_binding_phillips_h3:** esm2_lora replaces esm2 in general (LoRA ρ=0.739 would be top-2 rep)
+- **abagym_Ang2:** esm2_lora added to general (LoRA ρ=0.604 > frozen esm2 0.486)
+- **abagym_EGFR:** esm2_lora added to general (modest gain but clear)
+- **abagym_HER2:** esm2_lora added to general (frozen esm2 was dead)
+- **abcov_kd:** esm2_lora added to general (ρ=0.460 > frozen 0.390)
+- All other datasets: frozen esm2 kept, no LoRA
+
+**Same implementation blocker as molecular FT:** needs precompute pipeline (option B). esm2_lora is a per-fold factory rep.
 
 ---
 

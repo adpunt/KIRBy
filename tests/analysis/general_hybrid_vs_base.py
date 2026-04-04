@@ -470,7 +470,7 @@ def main():
                         help='Analyze all datasets in a domain')
     parser.add_argument('--all', action='store_true',
                         help='Analyze ALL datasets')
-    parser.add_argument('--speed', type=str, default='fast',
+    parser.add_argument('--speed', type=str, default='full',
                         choices=['fast', 'full'],
                         help='Search speed tier to load (must match precompute)')
     parser.add_argument('--aug', type=str, default='uncapped',
