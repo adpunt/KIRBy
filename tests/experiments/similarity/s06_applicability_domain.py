@@ -21,6 +21,7 @@ import numpy as np
 from scipy.stats import spearmanr
 from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import NearestNeighbors
+from sklearn.model_selection import GroupShuffleSplit
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results, convert_numpy,
@@ -48,6 +49,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     groups = data['groups']
 
     task_type = data.get('task_type', 'regression')
+    domain = data.get('domain', 'molecular')
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     _rf_factory = get_model_factories(['rf'], task_type=task_type,
                                        n_samples=len(labels))['rf']
 
@@ -67,6 +70,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             precomputed=data.get('precomputed_searches'),
             internal_evaluators=DISTANCE_EVALUATORS,
             budgets=DISTANCE_BUDGETS,
+            metric=metric_name, task_type=task_type, domain=domain,
             downstream_model='knn')
         weights_flat = flatten_fold_weights(fi) if fi else np.ones(X_hybrid.shape[1])
         best_config = get_best_for_downstream(search, 'knn')
@@ -306,11 +310,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 except Exception:
                     continue
 
-                # Split train into proper-train and calibration
-                n_cal = max(int(len(y_train) * 0.2), 10)
-                rng = np.random.RandomState(42)
-                perm = rng.permutation(len(y_train))
-                cal_local, tr_local = perm[:n_cal], perm[n_cal:]
+                # Split train into proper-train and calibration (group-aware)
+                train_groups = groups[train_idx] if groups is not None else None
+                if train_groups is not None and len(np.unique(train_groups)) >= 2:
+                    gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+                    tr_local, cal_local = next(gss.split(
+                        np.arange(len(y_train)), y_train, groups=train_groups))
+                else:
+                    n_cal = max(int(len(y_train) * 0.2), 10)
+                    rng = np.random.RandomState(42)
+                    perm = rng.permutation(len(y_train))
+                    cal_local, tr_local = perm[:n_cal], perm[n_cal:]
 
                 for feat_name, X_tr_all, X_va in [
                     ('concat', X_concat[train_idx], X_concat[val_idx]),

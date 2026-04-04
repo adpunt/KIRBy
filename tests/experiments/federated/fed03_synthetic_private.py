@@ -88,13 +88,17 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
     # Get optimal hybrid config from precomputed search
     augs = data.get('augmentations')
     aug_cond = 'uncapped' if augs else 'none'
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     try:
         _search = get_precomputed_search(
             reps_chembl, labels_chembl, data.get('groups'),
             budget=100, aug_condition=aug_cond,
             augmentations=augs,
             speed=config.get('search_speed', 'fast'),
-            precomputed=data.get('precomputed_searches'))
+            precomputed=data.get('precomputed_searches'),
+            metric=metric_name,
+            task_type=data.get('task_type', 'regression'),
+            domain=data.get('domain', 'molecular'))
         _bp_entry = _search.best_by_model.get('rf')
         _bp = _bp_entry['blueprint'] if _bp_entry else None
     except Exception:
@@ -189,7 +193,7 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
         # Build keep mask: which original ChEMBL indices survived dedup
         deduped_chembl_set = set(deduped_keys['chembl'])
         chembl_keep = np.array([
-            k in deduped_chembl_set and k != 'UNKNOWN'
+            k in deduped_chembl_set
             for k in chembl_inchikeys], dtype=bool)
         reps_chembl = {r: arr[chembl_keep] for r, arr in reps_chembl.items()}
         print(f"  ChEMBL filtered: {n_chembl_orig} → {n_chembl_deduped} "
@@ -533,13 +537,17 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
     # Get optimal hybrid config from precomputed search
     augs = data.get('augmentations')
     aug_cond = 'uncapped' if augs else 'none'
+    metric_name_b, metric_fn_b, lower_is_better_b = get_domain_metric(data)
     try:
         _search = get_precomputed_search(
             reps, labels, groups,
             budget=100, aug_condition=aug_cond,
             augmentations=augs,
             speed=config.get('search_speed', 'fast'),
-            precomputed=data.get('precomputed_searches'))
+            precomputed=data.get('precomputed_searches'),
+            metric=metric_name_b,
+            task_type=data.get('task_type', 'regression'),
+            domain=data.get('domain', 'molecular'))
         _bp_entry = _search.best_by_model.get('rf')
         _bp = _bp_entry['blueprint'] if _bp_entry else None
     except Exception:

@@ -29,7 +29,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_fitted_hybrid, extract_top3_base_reps,
-    compute_feature_importance,
+    compute_feature_importance, get_domain_metric,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 
@@ -163,7 +163,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = data['labels']
     groups = data['groups']
     task_type = data.get('task_type', 'regression')
+    domain = data.get('domain', 'molecular')
     is_clf = task_type == 'classification'
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     search_speed = config['search_speed']
     budget = kwargs.get('budget', 100)
     k_retrieval = kwargs.get('k_retrieval', 5)
@@ -194,6 +196,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             precomputed=data.get('precomputed_searches'),
             internal_evaluators=DISTANCE_EVALUATORS,
             budgets=DISTANCE_BUDGETS,
+            metric=metric_name, task_type=task_type, domain=domain,
             downstream_model='knn')
         spaces['hybrid'] = X_hybrid
         top3 = extract_top3_base_reps(search)

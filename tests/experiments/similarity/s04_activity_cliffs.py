@@ -87,6 +87,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
           f"({cliff_info['pct_cliff_compounds']:.1f}%)")
     print(f"  Cliff pairs: {cliff_info['n_cliff_pairs']}")
 
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    task_type = data.get('task_type', 'regression')
+    is_clf = task_type == 'classification'
+
     results = {
         'cliff_definition': {
             'tanimoto_threshold': tanimoto_threshold,
@@ -113,6 +117,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             precomputed=data.get('precomputed_searches'),
             internal_evaluators=DISTANCE_EVALUATORS,
             budgets=DISTANCE_BUDGETS,
+            metric=metric_name, task_type=task_type, domain=domain,
             downstream_model='knn')
         weights_flat = flatten_fold_weights(fi) if fi else np.ones(X_hybrid.shape[1])
         best_knn = get_best_for_downstream(search, 'knn')
@@ -130,10 +135,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # --- CV evaluation of prediction on cliff vs non-cliff ---
     splitter, use_groups = make_cv_splitter(n_folds, groups)
     sample_X = next(iter(reps.values()))
-
-    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
-    task_type = data.get('task_type', 'regression')
-    is_clf = task_type == 'classification'
 
     def _make_knn(n_train):
         k = min(5, n_train - 1)

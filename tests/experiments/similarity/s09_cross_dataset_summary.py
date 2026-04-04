@@ -21,6 +21,14 @@ from experiments._shared import (
     save_experiment_results, load_experiment_results, convert_numpy,
 )
 
+# Metrics where lower scores are better (RMSE, MAE).
+_LOWER_IS_BETTER_METRICS = {'rmse', 'mae'}
+
+
+def _metric_lower_is_better(metric_name):
+    """Infer metric direction from name.  Default: higher is better."""
+    return metric_name.lower() in _LOWER_IS_BETTER_METRICS if metric_name else False
+
 
 # Map from experiment IDs used internally to the result directory names
 EXPERIMENT_IDS = [
@@ -87,6 +95,16 @@ def run(all_dataset_results):
         # Exp 5: kNN improvement vs best individual rep
         exp5 = ds_results.get('s05_knn_prediction')
         if exp5 and 'per_budget' in exp5:
+            # Infer metric direction from per-rep baselines
+            _exp5_metric = None
+            per_rep = exp5.get('per_rep_baselines', {})
+            for _prv in per_rep.values():
+                _exp5_metric = _prv.get('metric')
+                if _exp5_metric:
+                    break
+            _exp5_lib = _metric_lower_is_better(_exp5_metric)
+            _best = min if _exp5_lib else max
+
             # Collect hybrid_weighted scores across all budgets
             hw_scores = []
             for b_res in exp5['per_budget'].values():
@@ -94,13 +112,18 @@ def run(all_dataset_results):
                     if 'hybrid_weighted' in k:
                         hw_scores.append(v['score_mean'])
             # Compare against best individual rep kNN baseline
-            per_rep = exp5.get('per_rep_baselines', {})
             if hw_scores and per_rep:
-                best_rep_knn = max(v['score_mean'] for v in per_rep.values())
-                delta_knn = max(hw_scores) - best_rep_knn
-                ds_summary['knn_delta_r2'] = delta_knn
+                best_rep_knn = _best(v['score_mean'] for v in per_rep.values())
+                best_hybrid_knn = _best(hw_scores)
+                # Delta should always be positive = improvement
+                if _exp5_lib:  # lower is better
+                    delta_knn = best_rep_knn - best_hybrid_knn
+                else:
+                    delta_knn = best_hybrid_knn - best_rep_knn
+                ds_summary['knn_delta'] = delta_knn
                 knn_deltas.append(delta_knn)
-                print(f"    kNN delta R2 (vs best rep): {delta_knn:+.4f}")
+                _label = _exp5_metric or 'score'
+                print(f"    kNN delta {_label} (vs best rep): {delta_knn:+.4f}")
 
         # Exp 6: AD correlation (hybrid_weighted vs concat baseline)
         exp6 = ds_results.get('s06_applicability_domain')
@@ -121,13 +144,17 @@ def run(all_dataset_results):
                           f"(delta={delta_ad:+.4f})")
                     break
 
-        # Exp 7: noise FP reduction
+        # Exp 7: noise FP reduction (computed from S07 summary + hybrid results)
         exp7 = ds_results.get('s07_noise_bridge')
-        if exp7 and 'fp_rate_reduction_pct' in exp7:
-            fp_red = exp7['fp_rate_reduction_pct']
-            ds_summary['noise_fp_reduction_pct'] = fp_red
-            fp_reductions.append(fp_red)
-            print(f"    Noise FP reduction: {fp_red:.1f}%")
+        if exp7:
+            hw_fp = exp7.get('hybrid_weighted', {}).get('fp_rate')
+            best_rep_fp = exp7.get('summary', {}).get('best_rep_fp_rate')
+            if hw_fp is not None and best_rep_fp is not None and best_rep_fp > 0:
+                fp_red = (best_rep_fp - hw_fp) / best_rep_fp * 100
+                ds_summary['noise_fp_reduction_pct'] = fp_red
+                fp_reductions.append(fp_red)
+                print(f"    Noise FP reduction: {fp_red:.1f}% "
+                      f"(best_rep={best_rep_fp:.3f} -> hybrid_w={hw_fp:.3f})")
 
         # Exp 8: optimal dim ratio
         exp8 = ds_results.get('s08_optimal_dimension')
@@ -147,7 +174,7 @@ def run(all_dataset_results):
     print("\n  Aggregate summary:")
     for name, values in [('SAC_delta', sac_deltas),
                           ('RMSE_cliff_reduction_%', cliff_reductions),
-                          ('kNN_delta_R2', knn_deltas),
+                          ('kNN_delta', knn_deltas),
                           ('AD_corr_delta', ad_deltas),
                           ('noise_FP_reduction_%', fp_reductions),
                           ('optimal_dim_ratio', dim_ratios)]:

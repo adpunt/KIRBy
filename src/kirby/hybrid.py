@@ -215,8 +215,9 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
             best_feature_info = iter_best_feat_info
             steps_without_improvement = 0
         elif greedy_tolerance > 0 and iter_best_gain >= best_val_r2 - greedy_tolerance:
-            # Within tolerance of best — don't count as degradation
-            steps_without_improvement = 0
+            # Within tolerance of best — increment at half rate to allow
+            # plateau exploration without preventing convergence
+            steps_without_improvement += 0.5
         else:
             steps_without_improvement += 1
         
@@ -542,6 +543,12 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
         dict: Allocation of {rep_name: n_features}
     """
     if precomputed_scores is not None:
+        missing_reps = [rn for rn in rep_dict_train if rn not in precomputed_scores]
+        if missing_reps:
+            import warnings
+            warnings.warn(
+                f"precomputed_scores missing {len(missing_reps)} reps "
+                f"(defaulting to 0.0): {missing_reps[:5]}")
         baseline_scores = {rn: precomputed_scores.get(rn, 0.0)
                            for rn in rep_dict_train}
     else:

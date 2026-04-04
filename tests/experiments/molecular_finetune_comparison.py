@@ -60,7 +60,7 @@ warnings.filterwarnings('ignore')
 # CONFIGURATION
 # =============================================================================
 
-DEFAULT_DATASETS = ['logd', 'caco2', 'herg']
+DEFAULT_DATASETS = ['logd', 'caco2', 'herg_ki']
 
 # LM models that support all three fine-tuning strategies (lora, freeze, contrastive)
 LM_MODELS = ['chemberta', 'molformer', 'selformer', 'gp_molformer', 'chembert']

@@ -36,6 +36,7 @@ from sklearn.decomposition import PCA
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, WhiteKernel, ConstantKernel
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import cross_val_predict
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
@@ -323,8 +324,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         scaler = StandardScaler()
         X_cs = scaler.fit_transform(X_concat_sub)
         rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-        rf.fit(X_cs, y_noisy_sub)
-        pe_scores = np.abs(y_noisy_sub - rf.predict(X_cs))
+        y_pred_cv = cross_val_predict(rf, X_cs, y_noisy_sub, cv=5)
+        pe_scores = np.abs(y_noisy_sub - y_pred_cv)
         threshold_pe = np.percentile(pe_scores, (1 - threshold_pct) * 100)
         flagged_pe = pe_scores >= threshold_pe
         tp_pe = int((flagged_pe & noise_mask).sum())

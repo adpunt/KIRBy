@@ -162,7 +162,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             results['models'][model_name]['best_configs'].append(
                 configs_by_model[model_name] if configs_by_model[model_name] else None)
 
-            delta = h - s if not (np.isnan(h) or np.isnan(s)) else float('nan')
+            delta = (s - h if lower_is_better else h - s) if not (np.isnan(h) or np.isnan(s)) else float('nan')
             print(f"    {model_name}: hybrid={h:.4f}, best_single={s:.4f}, delta={delta:+.4f}")
 
     # Top-3 from the last (full-data) subsample search
@@ -191,7 +191,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for m in model_names:
             h = results['models'][m]['hybrid'][i]
             s = results['models'][m]['best_single'][i]
-            d = h - s if not (np.isnan(h) or np.isnan(s)) else float('nan')
+            d = (s - h if lower_is_better else h - s) if not (np.isnan(h) or np.isnan(s)) else float('nan')
             row += f"  {h:>10.4f} {s:>10.4f} {d:>+8.4f}"
         print(row)
 

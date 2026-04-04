@@ -58,6 +58,8 @@ def _get_domain(dataset_name):
 
 
 def _get_metric(domain, task_type, labels):
+    if domain == 'nucleotide':
+        return 'mcc'
     if task_type == 'classification':
         n_classes = len(np.unique(labels))
         return 'f1_weighted' if n_classes > 2 else 'auc'

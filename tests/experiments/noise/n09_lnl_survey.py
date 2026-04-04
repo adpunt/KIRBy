@@ -361,12 +361,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         noisy_hybrid = sigma_data.get('hybrid_no_lnl', {}).get('mean', float('nan'))
         noisy_whybrid = sigma_data.get('weighted_hybrid_no_lnl', {}).get('mean', float('nan'))
 
-        if not np.isnan(clean_base) and abs(clean_base) > 1e-10:
-            sigma_ret['base_no_lnl'] = float(noisy_base / clean_base * 100)
-        if not np.isnan(clean_hybrid) and abs(clean_hybrid) > 1e-10:
-            sigma_ret['hybrid_no_lnl'] = float(noisy_hybrid / clean_hybrid * 100)
-        if not np.isnan(clean_whybrid) and abs(clean_whybrid) > 1e-10:
-            sigma_ret['weighted_hybrid_no_lnl'] = float(noisy_whybrid / clean_whybrid * 100)
+        # For lower-is-better metrics (e.g. RMSE), retention = clean/noisy
+        # (a higher noisy value means worse performance, so invert).
+        # For higher-is-better (e.g. R2), retention = noisy/clean as before.
+        def _retention(noisy_val, clean_val):
+            if lower_is_better:
+                return float(clean_val / noisy_val * 100)
+            return float(noisy_val / clean_val * 100)
+
+        if not np.isnan(clean_base) and abs(clean_base) > 1e-10 and abs(noisy_base) > 1e-10:
+            sigma_ret['base_no_lnl'] = _retention(noisy_base, clean_base)
+        if not np.isnan(clean_hybrid) and abs(clean_hybrid) > 1e-10 and abs(noisy_hybrid) > 1e-10:
+            sigma_ret['hybrid_no_lnl'] = _retention(noisy_hybrid, clean_hybrid)
+        if not np.isnan(clean_whybrid) and abs(clean_whybrid) > 1e-10 and abs(noisy_whybrid) > 1e-10:
+            sigma_ret['weighted_hybrid_no_lnl'] = _retention(noisy_whybrid, clean_whybrid)
 
         # LNL methods
         for cond in ['base_lnl', 'hybrid_lnl', 'weighted_hybrid_lnl']:
@@ -382,8 +390,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             for method_name in methods_to_test:
                 m_score = sigma_data.get(cond, {}).get(method_name, {}).get(
                     'mean', float('nan'))
-                if not np.isnan(m_score):
-                    sigma_ret[cond][method_name] = float(m_score / clean_ref * 100)
+                if not np.isnan(m_score) and abs(m_score) > 1e-10:
+                    sigma_ret[cond][method_name] = _retention(m_score, clean_ref)
 
         retention[sigma_key] = sigma_ret
 

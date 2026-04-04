@@ -71,6 +71,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             precomputed=data.get('precomputed_searches'),
             internal_evaluators=DISTANCE_EVALUATORS,
             budgets=budgets,
+            metric=metric_name, task_type=task_type,
+            domain=data.get('domain', 'molecular'),
             downstream_model='knn')
 
         # Report which evaluator won
@@ -192,52 +194,70 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             results['per_budget'][budget] = budget_results
 
     # ── Per-rep kNN baselines (individual representations) ──
+    # Try all k values and pick the best per metric direction.
     print(f"\n  Individual representation kNN baselines (metric={metric_name}):")
-    best_k = k_values[len(k_values) // 2]
-    splitter2, use_groups2 = make_cv_splitter(n_folds, groups)
     for rep_name, X_rep in reps.items():
-        fold_scores_uw = []
-        fold_scores_w = []
-        for train_idx, val_idx in (
-            splitter2.split(sample_X, labels, groups=groups)
-            if use_groups2
-            else splitter2.split(sample_X, labels)
-        ):
-            scaler = StandardScaler()
-            X_tr = scaler.fit_transform(X_rep[train_idx])
-            X_va = scaler.transform(X_rep[val_idx])
+        best_k_score = None
+        best_k_used = k_values[0]
+        best_k_scores_uw = None
+        best_k_scores_w = None
+        best_k_std = 0.0
+        best_k_w_mean = float('nan')
 
-            # Unweighted
-            model = _make_knn(best_k, len(train_idx))
-            model.fit(X_tr, labels[train_idx])
-            fold_scores_uw.append(metric_fn(labels[val_idx], model.predict(X_va)))
+        for k_candidate in k_values:
+            splitter2, use_groups2 = make_cv_splitter(n_folds, groups)
+            fold_scores_uw = []
+            fold_scores_w = []
+            for train_idx, val_idx in (
+                splitter2.split(sample_X, labels, groups=groups)
+                if use_groups2
+                else splitter2.split(sample_X, labels)
+            ):
+                scaler = StandardScaler()
+                X_tr = scaler.fit_transform(X_rep[train_idx])
+                X_va = scaler.transform(X_rep[val_idx])
 
-            # Weighted by importance
-            try:
-                imp = compute_feature_importance(
-                    {rep_name: X_rep[train_idx]}, labels[train_idx],
-                    method='lightgbm_gain')
-                w = np.sqrt(np.maximum(imp[rep_name], 0))
-                X_tr_w = X_tr * w
-                X_va_w = X_va * w
-                model_w = _make_knn(best_k, len(train_idx))
-                model_w.fit(X_tr_w, labels[train_idx])
-                fold_scores_w.append(metric_fn(labels[val_idx],
-                                               model_w.predict(X_va_w)))
-            except Exception:
-                fold_scores_w.append(float('nan'))
+                # Unweighted
+                model = _make_knn(k_candidate, len(train_idx))
+                model.fit(X_tr, labels[train_idx])
+                fold_scores_uw.append(metric_fn(labels[val_idx], model.predict(X_va)))
 
-        sc_mean = float(np.mean(fold_scores_uw))
-        sc_std = float(np.std(fold_scores_uw))
-        sc_w_mean = float(np.nanmean(fold_scores_w)) if fold_scores_w else float('nan')
+                # Weighted by importance
+                try:
+                    imp = compute_feature_importance(
+                        {rep_name: X_rep[train_idx]}, labels[train_idx],
+                        method='lightgbm_gain')
+                    w = np.sqrt(np.maximum(imp[rep_name], 0))
+                    X_tr_w = X_tr * w
+                    X_va_w = X_va * w
+                    model_w = _make_knn(k_candidate, len(train_idx))
+                    model_w.fit(X_tr_w, labels[train_idx])
+                    fold_scores_w.append(metric_fn(labels[val_idx],
+                                                   model_w.predict(X_va_w)))
+                except Exception:
+                    fold_scores_w.append(float('nan'))
+
+            if not fold_scores_uw:
+                continue
+            sc_mean = float(np.mean(fold_scores_uw))
+            if best_k_score is None or (sc_mean < best_k_score if lower_is_better else sc_mean > best_k_score):
+                best_k_score = sc_mean
+                best_k_used = k_candidate
+                best_k_std = float(np.std(fold_scores_uw))
+                best_k_scores_uw = fold_scores_uw
+                best_k_w_mean = float(np.nanmean(fold_scores_w)) if fold_scores_w else float('nan')
+
+        sc_mean = best_k_score if best_k_score is not None else float('nan')
+        sc_std = best_k_std
+        sc_w_mean = best_k_w_mean
         results['per_rep_baselines'][rep_name] = {
             'score_mean': sc_mean, 'score_std': sc_std,
             'score_weighted_mean': sc_w_mean,
             'metric': metric_name,
-            'k': best_k, 'dim': X_rep.shape[1],
+            'k': best_k_used, 'dim': X_rep.shape[1],
         }
         delta = sc_w_mean - sc_mean
-        print(f"    {rep_name} (dim={X_rep.shape[1]}): "
+        print(f"    {rep_name} (dim={X_rep.shape[1]}, k={best_k_used}): "
               f"kNN {metric_name}={sc_mean:.4f}+/-{sc_std:.3f}, "
               f"weighted {metric_name}={sc_w_mean:.4f} "
               f"(delta={delta:+.4f})")

@@ -253,6 +253,7 @@ def get_hybrid_features_and_weights(
     search_speed: str = 'fast',
     weight_method: str = 'lightgbm_gain',
     budget: Optional[int] = None,
+    metric: str = 'rmse',
 ) -> Tuple[np.ndarray, np.ndarray, SearchResult]:
     """Run find_best_hybrid and return hybrid features + flat importance weights.
 
@@ -265,6 +266,7 @@ def get_hybrid_features_and_weights(
         speed=search_speed,
         return_fitted=True,
         weight_method=weight_method,
+        metric=metric,
         verbose=False,
         cache=True,
     )
@@ -299,7 +301,11 @@ def _fitted_to_feature_info(fitted) -> dict:
 
 
 def _flatten_weights(fitted) -> np.ndarray:
-    """Flatten per-rep feature_weights into a single array matching X_hybrid columns."""
+    """Flatten per-rep feature_weights into a single array matching X_hybrid columns.
+
+    Iteration order must match apply_feature_selection (insertion order of
+    feature_info keys, which matches selected_indices insertion order).
+    """
     parts = []
     for rep_name in fitted.selected_indices:
         if fitted.feature_weights and rep_name in fitted.feature_weights:
@@ -724,7 +730,7 @@ def run_feature_concentration(data: dict, search_speed: str = 'fast',
                 rep_result['mi_density_selected'] = mi_sel / n_selected if n_selected > 0 else 0
                 rep_result['mi_density_ratio'] = (
                     rep_result['mi_density_selected'] / rep_result['mi_density_full']
-                    if rep_result['mi_density_full'] > 0 else float('nan')
+                    if rep_result['mi_density_full'] > 1e-10 else float('nan')
                 )
 
                 print(f"    MI full={mi_full:.4f} ({n_features}d), "
@@ -1243,7 +1249,7 @@ def run_knn_prediction(data: dict, n_folds: int,
     # Per-rep kNN baselines (individual representations — the real baselines)
     print("\n  Individual representation kNN baselines:")
     results['per_rep_baselines'] = {}
-    best_k = k_values[len(k_values) // 2]  # use middle k value
+    best_k = k_values[(len(k_values) - 1) // 2]  # use middle k value
     gkf2 = GroupKFold(n_splits=n_folds)
     for rep_name, X_rep in reps.items():
         fold_r2s_uw = []
