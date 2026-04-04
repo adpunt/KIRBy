@@ -483,7 +483,17 @@ def generate_representations(smiles: List[str], config: AnalysisConfig,
             elif rep_name == 'pdv':
                 base_reps['pdv'] = create_pdv(smiles)
             elif rep_name == 'sns':
-                base_reps['sns'] = create_sns(smiles)
+                # Fit featurizer on training split only to prevent
+                # test-data leakage in the analysis functions below.
+                from sklearn.model_selection import train_test_split as _tts
+                _tr_idx, _ = _tts(
+                    np.arange(len(smiles)),
+                    test_size=config.test_size,
+                    random_state=config.random_state)
+                _tr_smiles = [smiles[i] for i in _tr_idx]
+                _, _feat = create_sns(_tr_smiles, return_featurizer=True)
+                base_reps['sns'] = create_sns(
+                    smiles, reference_featurizer=_feat)
             print(f"  {rep_name}: {base_reps[rep_name].shape} ({time.time()-t0:.1f}s)")
         except Exception as e:
             print(f"  {rep_name}: FAILED ({e})")
