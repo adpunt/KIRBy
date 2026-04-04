@@ -46,7 +46,7 @@ def _compute_cluster_importance(train_reps, train_labels, silo_indices, k,
                                 budget=BUDGET,
                                 alloc='performance_weighted',
                                 imp='treeshap',
-                                int_eval='ridge'):
+                                int_eval='match'):
     """Run create_hybrid per cluster and extract importance profiles.
 
     Returns:
@@ -160,7 +160,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         _bp = None
     _alloc = _bp.allocation_method if _bp else 'performance_weighted'
     _imp = _bp.importance_method if _bp else 'treeshap'
-    _int_eval = _bp.internal_evaluator if _bp else 'ridge'
+    _int_eval = _bp.internal_evaluator if _bp else 'match'
 
     # SPLIT FIRST — scaffold-group-aware, matching FLuID's pattern
     train_idx, test_idx = next(cv_split(

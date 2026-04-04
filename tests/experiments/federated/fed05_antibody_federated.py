@@ -92,7 +92,7 @@ def _split_silo(sd, seed=42):
 
 def _silo_baseline(sd, shared_reps, seed=42,
                    alloc='performance_weighted', imp='treeshap',
-                   int_eval='ridge'):
+                   int_eval='match'):
     """Train create_hybrid on one silo and evaluate. Returns metrics + fi."""
     reps_s = {r: sd['reps'][r] for r in shared_reps if r in sd['reps']}
     if len(reps_s) < 2:
@@ -154,7 +154,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     _default_bp = next(iter(silo_blueprints.values()), None) if silo_blueprints else None
     _alloc = _default_bp.allocation_method if _default_bp else 'performance_weighted'
     _imp = _default_bp.importance_method if _default_bp else 'treeshap'
-    _int_eval = _default_bp.internal_evaluator if _default_bp else 'ridge'
+    _int_eval = _default_bp.internal_evaluator if _default_bp else 'match'
 
     # Find shared reps
     all_rep_sets = [set(sd['reps'].keys()) for sd in silo_data.values()]

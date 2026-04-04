@@ -32,6 +32,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric,
     get_precomputed_search, build_fold_hybrid,
+    get_best_for_downstream,
 )
 
 
@@ -148,19 +149,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     augmentations = data.get('augmentations')
 
     # Pre-compute search blueprints per budget (cached)
+    # NOTE: get_precomputed_search returns results across ALL budgets (budget
+    # param is deprecated). Use get_best_for_downstream to select per-budget.
     blueprints = {}
-    for budget in budgets:
-        try:
-            search = get_precomputed_search(
-                reps, labels, groups, budget=budget,
-                aug_condition='capped', augmentations=augmentations,
-                speed=config.get('search_speed', 'fast'),
-                precomputed=data.get('precomputed_searches'))
-            best = search.best_by_model.get('rf') or next(iter(search.best_by_model.values()), None)
+    try:
+        search = get_precomputed_search(
+            reps, labels, groups,
+            aug_condition='capped', augmentations=augmentations,
+            speed=config.get('search_speed', 'fast'),
+            precomputed=data.get('precomputed_searches'))
+        for budget in budgets:
+            best = get_best_for_downstream(search, 'rf', budget=budget)
             if best and 'blueprint' in best:
                 blueprints[budget] = best['blueprint']
-        except Exception:
-            pass  # will skip this budget later
+    except Exception:
+        pass  # will skip all budgets
 
     results = {
         'metric': metric_name,

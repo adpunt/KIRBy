@@ -179,7 +179,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             X_base_train_s = scaler_base.fit_transform(X_base_train)
             X_base_val_s = scaler_base.transform(X_base_val)
 
-            # Build hybrid features from blueprint
+            # Build hybrid features from blueprint.
+            # NOTE: y_train (noisy) is used intentionally — tests end-to-end
+            # noise resilience where both feature selection and model training
+            # see the same noisy labels (real-life conditions).
             train_reps = {k: v[train_idx] for k, v in reps.items()}
             val_reps = {k: v[val_idx] for k, v in reps.items()}
             try:

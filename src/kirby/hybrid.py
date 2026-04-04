@@ -1084,6 +1084,12 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
     if X_train.shape[1] == 0:
         return (-np.inf, None) if return_predictions else -np.inf
 
+    # Defensive clip + nan_to_num (consistent with concatenate_features)
+    X_train = np.clip(X_train, -1e10, 1e10)
+    X_train = np.nan_to_num(X_train, nan=0.0, posinf=1e10, neginf=-1e10)
+    X_val = np.clip(X_val, -1e10, 1e10)
+    X_val = np.nan_to_num(X_val, nan=0.0, posinf=1e10, neginf=-1e10)
+
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_val_scaled = scaler.transform(X_val)

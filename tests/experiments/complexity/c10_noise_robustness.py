@@ -18,7 +18,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     get_model_factories, _cv_split,
     apply_feature_selection, get_domain_metric,
-    get_precomputed_search,
+    get_precomputed_search, get_best_for_downstream,
 )
 from kirby.hybrid import create_hybrid, apply_augmentation_selection
 
@@ -57,22 +57,26 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
     n_folds = config['n_splits']
 
     # Precompute blueprints from cached search (clean labels)
+    # NOTE: get_precomputed_search returns results across ALL budgets (budget
+    # param is deprecated). Use get_best_for_downstream to select per-budget.
     blueprints = {}
-    for budget in budgets:
-        try:
-            search = get_precomputed_search(
-                reps, labels, groups, budget=budget,
-                aug_condition='capped', augmentations=augmentations or None,
-                speed=config.get('search_speed', 'fast'),
-                precomputed=data.get('precomputed_searches'))
-            best = search.best_by_model.get('rf') or next(iter(search.best_by_model.values()), None)
+    try:
+        search = get_precomputed_search(
+            reps, labels, groups,
+            aug_condition='capped', augmentations=augmentations or None,
+            speed=config.get('search_speed', 'fast'),
+            precomputed=data.get('precomputed_searches'))
+        for budget in budgets:
+            best = get_best_for_downstream(search, 'rf', budget=budget)
             if best and 'blueprint' in best:
                 blueprints[budget] = best['blueprint']
-            print(f"  Blueprint for budget={budget}: "
-                  f"{blueprints[budget].allocation_method}, "
-                  f"{blueprints[budget].importance_method}")
-        except Exception as e:
-            print(f"  Blueprint for budget={budget} failed: {e}")
+                print(f"  Blueprint for budget={budget}: "
+                      f"{blueprints[budget].allocation_method}, "
+                      f"{blueprints[budget].importance_method}")
+            else:
+                print(f"  Blueprint for budget={budget}: no config found")
+    except Exception as e:
+        print(f"  Blueprint search failed: {e}")
 
     if sigmas is None:
         sigmas = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
