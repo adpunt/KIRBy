@@ -271,11 +271,12 @@ def get_representations(
             mod = module_map[module_name]
             func = getattr(mod, func_name)
 
-            # Wrap with PCA if requested
+            # pca50 reps are in FACTORY_REPS and handled by
+            # get_rep_factories() — they never reach this loop.
             if transform == 'pca50':
-                from kirby.representations.molecular import create_pca_rep
-                from functools import partial
-                func = partial(create_pca_rep, base_fn=func)
+                raise RuntimeError(
+                    f"{rep_name} has pca50 transform but is not in "
+                    f"FACTORY_REPS — add it there to prevent leakage")
 
             if rep_type == 'drug':
                 # Compute on unique drugs, then expand to all pairs

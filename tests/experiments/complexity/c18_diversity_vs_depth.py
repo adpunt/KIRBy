@@ -28,98 +28,60 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric,
-    estimate_mutual_information_knn, compute_effective_rank,
     compute_feature_importance,
+    build_fold_hybrid, get_precomputed_search, get_best_for_downstream,
 )
-from experiments._shared import get_fitted_hybrid
 
 
 # =========================================================================
-# FORCED ALLOCATION
+# PER-FOLD HELPERS
 # =========================================================================
 
 def _rank_reps_by_importance(reps, labels):
     """Rank reps by aggregate importance. Returns sorted list of (name, score)."""
     imp_dict = compute_feature_importance(reps, labels, method='lightgbm_gain')
     rep_scores = {name: float(np.sum(scores)) for name, scores in imp_dict.items()}
-    ranked = sorted(rep_scores.items(), key=lambda x: x[1], reverse=True)
-    return ranked
+    return sorted(rep_scores.items(), key=lambda x: x[1], reverse=True)
 
 
-def _select_top_features_from_reps(reps, labels, rep_subset, budget):
-    """Select top-budget features from a subset of reps using importance."""
-    sub_reps = {k: reps[k] for k in rep_subset if k in reps}
-    if not sub_reps:
-        return None
+def _select_top_features(train_reps, val_reps, y_train, rep_subset, budget):
+    """Per-fold: select top features by train-only importance, apply to both."""
+    sub_tr = {k: train_reps[k] for k in rep_subset if k in train_reps}
+    sub_va = {k: val_reps[k] for k in rep_subset if k in val_reps}
+    if not sub_tr:
+        return None, None
 
-    rep_names = sorted(sub_reps.keys())
-    imp_dict = compute_feature_importance(sub_reps, labels, method='lightgbm_gain')
-
-    # Concatenate features and importance in consistent order
-    X_concat = np.hstack([sub_reps[n] for n in rep_names])
-    scaler = StandardScaler()
-    X_s = scaler.fit_transform(X_concat)
+    rep_names = sorted(sub_tr.keys())
+    imp_dict = compute_feature_importance(sub_tr, y_train, method='lightgbm_gain')
     imp_concat = np.concatenate([imp_dict[n] for n in rep_names])
 
-    # Select top-budget features
-    n_select = min(budget, X_s.shape[1])
+    X_tr = np.hstack([sub_tr[n] for n in rep_names])
+    X_va = np.hstack([sub_va[n] for n in rep_names])
+
+    n_select = min(budget, X_tr.shape[1])
     top_idx = np.argsort(imp_concat)[::-1][:n_select]
-    return X_s[:, top_idx]
+    return X_tr[:, top_idx], X_va[:, top_idx]
 
 
-def _forced_uniform_allocation(reps, labels, rep_subset, budget):
-    """Equal allocation: budget // n_reps features per rep, top by importance."""
-    sub_names = sorted([k for k in rep_subset if k in reps])
+def _uniform_allocation(train_reps, val_reps, y_train, rep_subset, budget):
+    """Per-fold: equal features per rep, top by train-only importance."""
+    sub_names = sorted([k for k in rep_subset if k in train_reps])
     if not sub_names:
-        return None
+        return None, None
 
     per_rep = max(1, budget // len(sub_names))
-    selected_parts = []
+    tr_parts, va_parts = [], []
 
     for name in sub_names:
-        X = StandardScaler().fit_transform(reps[name])
-        imp_dict = compute_feature_importance({name: reps[name]}, labels, method='lightgbm_gain')
+        imp_dict = compute_feature_importance(
+            {name: train_reps[name]}, y_train, method='lightgbm_gain')
         imp = imp_dict[name]
-        n_sel = min(per_rep, X.shape[1])
+        n_sel = min(per_rep, train_reps[name].shape[1])
         top_idx = np.argsort(imp)[::-1][:n_sel]
-        selected_parts.append(X[:, top_idx])
+        tr_parts.append(train_reps[name][:, top_idx])
+        va_parts.append(val_reps[name][:, top_idx])
 
-    return np.hstack(selected_parts)
-
-
-# =========================================================================
-# EVALUATE
-# =========================================================================
-
-def _evaluate(X, labels, groups, n_folds, mode, metric_fn):
-    """Evaluate a feature matrix. Returns dict with R², MI, erank."""
-    scores = []
-    for train_idx, val_idx in cv_split(groups, n_folds, X, labels, mode=mode):
-        scaler = StandardScaler()
-        X_tr = scaler.fit_transform(X[train_idx])
-        X_va = scaler.transform(X[val_idx])
-        rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-        rf.fit(X_tr, labels[train_idx])
-        scores.append(metric_fn(labels[val_idx], rf.predict(X_va)))
-
-    r2 = float(np.mean(scores)) if scores else float('nan')
-
-    # MI
-    n_pca = min(50, X.shape[1], len(labels) - 1)
-    from sklearn.decomposition import PCA
-    X_pca = PCA(n_components=max(1, n_pca)).fit_transform(
-        StandardScaler().fit_transform(X))
-    mi = estimate_mutual_information_knn(X_pca, labels, k=5)
-
-    erank = compute_effective_rank(X)
-
-    return {
-        'r2': r2,
-        'mi': float(mi),
-        'mi_density': float(mi / X.shape[1]) if X.shape[1] > 0 else 0.0,
-        'effective_rank': float(erank),
-        'n_features': X.shape[1],
-    }
+    return np.hstack(tr_parts), np.hstack(va_parts)
 
 
 # =========================================================================
@@ -142,69 +104,117 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     budgets = kwargs.get('budgets', [50, 100])
     all_rep_names = sorted(reps.keys())
     n_reps = len(all_rep_names)
+    sample_X = next(iter(reps.values()))
 
     print(f"  {n_reps} reps, budgets: {budgets}")
 
-    # Rank reps by importance
-    ranked = _rank_reps_by_importance(reps, labels)
-    print(f"  Rep ranking: {', '.join(f'{n}({s:.2f})' for n, s in ranked[:5])}...")
+    # Full-data ranking for reporting only (per-fold ranking used in evaluation)
+    ranked_full = _rank_reps_by_importance(reps, labels)
+    print(f"  Rep ranking (full data, reference only): "
+          f"{', '.join(f'{n}({s:.2f})' for n, s in ranked_full[:5])}...")
 
     results = {
         'metric': metric_name,
         'budgets': budgets,
         'n_reps': n_reps,
-        'rep_ranking': [(n, float(s)) for n, s in ranked],
+        'rep_ranking_full_data': [(n, float(s)) for n, s in ranked_full],
         'per_budget': {},
     }
 
+    # Precompute search for the "natural" condition
+    augmentations = data.get('augmentations')
+    search = None
+    try:
+        search = get_precomputed_search(
+            reps, labels, groups,
+            aug_condition='capped', augmentations=augmentations,
+            speed=config.get('search_speed', 'fast'),
+            precomputed=data.get('precomputed_searches'))
+    except Exception as e:
+        print(f"  WARNING: search failed: {e}")
+
     for budget in budgets:
         print(f"\n  Budget={budget}:")
+        fold_scores = {}  # {condition_name: [per_fold_scores]}
+
+        for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
+                                           labels, mode=mode):
+            train_reps = {name: X[train_idx] for name, X in reps.items()}
+            val_reps_fold = {name: X[val_idx] for name, X in reps.items()}
+            y_train = labels[train_idx]
+            y_val = labels[val_idx]
+
+            # Rank reps on training data only
+            fold_ranked = _rank_reps_by_importance(train_reps, y_train)
+
+            # Depth conditions (top-1, top-2, top-3)
+            for n_top in [1, 2, 3]:
+                if n_top > n_reps:
+                    continue
+                cond_name = f'depth_{n_top}'
+                top_rep_names = [name for name, _ in fold_ranked[:n_top]]
+                X_tr, X_va = _select_top_features(
+                    train_reps, val_reps_fold, y_train, top_rep_names, budget)
+                if X_tr is not None:
+                    scaler = StandardScaler()
+                    X_tr_s = scaler.fit_transform(X_tr)
+                    X_va_s = scaler.transform(X_va)
+                    rf = RandomForestRegressor(n_estimators=100,
+                                              random_state=42, n_jobs=-1)
+                    rf.fit(X_tr_s, y_train)
+                    fold_scores.setdefault(cond_name, []).append(
+                        metric_fn(y_val, rf.predict(X_va_s)))
+
+            # Uniform allocation across all reps
+            X_tr, X_va = _uniform_allocation(
+                train_reps, val_reps_fold, y_train, all_rep_names, budget)
+            if X_tr is not None:
+                scaler = StandardScaler()
+                X_tr_s = scaler.fit_transform(X_tr)
+                X_va_s = scaler.transform(X_va)
+                rf = RandomForestRegressor(n_estimators=100,
+                                          random_state=42, n_jobs=-1)
+                rf.fit(X_tr_s, y_train)
+                fold_scores.setdefault('uniform_all', []).append(
+                    metric_fn(y_val, rf.predict(X_va_s)))
+
+            # Natural hybrid (per-fold via search blueprint)
+            if search is not None:
+                try:
+                    best_config = get_best_for_downstream(
+                        search, 'rf', budget=budget)
+                    if best_config and 'blueprint' in best_config:
+                        bp = best_config['blueprint']
+                        train_augs = (
+                            {n: A[train_idx] for n, A in augmentations.items()}
+                            if augmentations else None)
+                        val_augs = (
+                            {n: A[val_idx] for n, A in augmentations.items()}
+                            if augmentations else None)
+                        X_tr_h, X_va_h, _fi = build_fold_hybrid(
+                            train_reps, val_reps_fold, y_train, bp,
+                            augmentations_train=train_augs,
+                            augmentations_val=val_augs)
+                        scaler = StandardScaler()
+                        X_tr_s = scaler.fit_transform(X_tr_h)
+                        X_va_s = scaler.transform(X_va_h)
+                        rf = RandomForestRegressor(n_estimators=100,
+                                                  random_state=42, n_jobs=-1)
+                        rf.fit(X_tr_s, y_train)
+                        fold_scores.setdefault('natural', []).append(
+                            metric_fn(y_val, rf.predict(X_va_s)))
+                except Exception as e:
+                    print(f"    natural fold FAILED: {e}")
+
+        # Aggregate per-fold scores
         conditions = {}
-
-        # Depth conditions
-        for n_top in [1, 2, 3]:
-            if n_top > n_reps:
-                continue
-            cond_name = f'depth_{n_top}'
-            top_reps = [name for name, _ in ranked[:n_top]]
-            X = _select_top_features_from_reps(reps, labels, top_reps, budget)
-            if X is not None:
-                metrics = _evaluate(X, labels, groups, n_folds, mode, metric_fn)
-                metrics['reps_used'] = top_reps
-                conditions[cond_name] = metrics
-                print(f"    {cond_name} ({', '.join(top_reps)}): "
-                      f"R²={metrics['r2']:.4f}, MI_d={metrics['mi_density']:.4f}")
-
-        # Uniform allocation across all reps
-        X_uniform = _forced_uniform_allocation(reps, labels, all_rep_names, budget)
-        if X_uniform is not None:
-            metrics = _evaluate(X_uniform, labels, groups, n_folds, mode, metric_fn)
-            metrics['reps_used'] = all_rep_names
-            conditions['uniform_all'] = metrics
-            print(f"    uniform_all ({n_reps} reps): "
-                  f"R²={metrics['r2']:.4f}, MI_d={metrics['mi_density']:.4f}")
-
-        # Natural hybrid allocation (greedy)
-        augmentations = data.get('augmentations')
-        try:
-            X_h, fi, _search = get_fitted_hybrid(
-                reps, labels, groups, budget=budget,
-                aug_condition='capped', augmentations=augmentations,
-                speed=config.get('search_speed', 'fast'),
-                precomputed=data.get('precomputed_searches'),
-                downstream_model='rf',
-            )
-            metrics = _evaluate(X_h, labels, groups, n_folds, mode, metric_fn)
-            # Count how many reps contributed
-            reps_used = [name for name, info in fi.items()
-                         if info.get('n_selected', 0) > 0]
-            metrics['reps_used'] = reps_used
-            metrics['n_reps_contributing'] = len(reps_used)
-            conditions['natural'] = metrics
-            print(f"    natural ({len(reps_used)} reps contributing): "
-                  f"R²={metrics['r2']:.4f}, MI_d={metrics['mi_density']:.4f}")
-        except Exception as e:
-            print(f"    natural FAILED: {e}")
+        for cond_name, scores in fold_scores.items():
+            r2 = float(np.mean(scores)) if scores else float('nan')
+            conditions[cond_name] = {
+                'r2': r2,
+                'n_features': budget,
+            }
+            print(f"    {cond_name}: R²={r2:.4f}")
 
         results['per_budget'][budget] = convert_numpy(conditions)
 
