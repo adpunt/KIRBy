@@ -103,7 +103,7 @@ python tests/analysis/general_hybrid_vs_base.py --export -o general_analysis.jso
 python tests/analysis/general_hybrid_vs_base.py --analyze general_analysis.json
 ```
 
-**Options:** `--speed fast|full` (must match precompute), `--aug none|uncapped|capped`
+**Options:** `--speed fast|full` (must match precompute — currently `full`), `--aug none|uncapped` (capped not precomputed — experiments needing capped call create_hybrid directly)
 
 **Output:** Prints summary tables to stdout + saves `tests/analysis/general_analysis.json` (full data) and `tests/analysis/general_analysis_summary.json` (aggregate stats). Tables include:
 1. Aggregate win rate
