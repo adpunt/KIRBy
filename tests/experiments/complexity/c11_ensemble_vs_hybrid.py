@@ -109,7 +109,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # =====================================================================
         # 1. Best single base rep
         # =====================================================================
-        best_single_r2 = np.inf if lower_is_better else -np.inf
+        best_single_score = np.inf if lower_is_better else -np.inf
         best_single_rep = None
         single_rep_results = {}
 
@@ -133,25 +133,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 fold_pred_times.append(pt)
 
             if not fold_scores:
-                r2_mean = float('nan')
+                score_mean = float('nan')
                 single_rep_results[rep_name] = {
-                    'r2_mean': r2_mean, 'r2_std': float('nan'),
+                    'score_mean': score_mean, 'score_std': float('nan'),
                     'dim': X_rep.shape[1],
                     'fit_time_s': 0.0, 'predict_time_s': 0.0,
                 }
                 continue
 
-            r2_mean = float(np.mean(fold_scores))
+            score_mean = float(np.mean(fold_scores))
             single_rep_results[rep_name] = {
-                'r2_mean': r2_mean,
-                'r2_std': float(np.std(fold_scores)),
+                'score_mean': score_mean,
+                'score_std': float(np.std(fold_scores)),
                 'dim': X_rep.shape[1],
                 'fit_time_s': float(np.mean(fold_fit_times)),
                 'predict_time_s': float(np.mean(fold_pred_times)),
             }
-            if (lower_is_better and r2_mean < best_single_r2) or \
-               (not lower_is_better and r2_mean > best_single_r2):
-                best_single_r2 = r2_mean
+            if (lower_is_better and score_mean < best_single_score) or \
+               (not lower_is_better and score_mean > best_single_score):
+                best_single_score = score_mean
                 best_single_rep = rep_name
 
         if best_single_rep is None:
@@ -160,14 +160,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         best_single = single_rep_results[best_single_rep]
         print(f"    Best single: {best_single_rep} "
-              f"R2={best_single['r2_mean']:.4f} dim={best_single['dim']}")
+              f"R2={best_single['score_mean']:.4f} dim={best_single['dim']}")
 
         results.append({
             'model': model_name,
             'method': 'best_single',
             'augmented': False,
-            'r2_mean': best_single['r2_mean'],
-            'r2_std': best_single['r2_std'],
+            'score_mean': best_single['score_mean'],
+            'score_std': best_single['score_std'],
             'total_dim': best_single['dim'],
             'n_models_trained': 1,
             'total_fit_time_s': best_single['fit_time_s'],
@@ -219,8 +219,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'model': model_name,
                 'method': 'ensemble',
                 'augmented': False,
-                'r2_mean': ens_r2,
-                'r2_std': float(np.std(fold_ensemble_scores)),
+                'score_mean': ens_r2,
+                'score_std': float(np.std(fold_ensemble_scores)),
                 'total_dim': total_dim,
                 'max_single_dim': max_single_dim,
                 'n_models_trained': n_reps,
@@ -277,8 +277,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'model': model_name,
                     'method': 'pca_matched',
                     'budget': budget,
-                    'r2_mean': float(np.mean(fold_pca_scores)),
-                    'r2_std': float(np.std(fold_pca_scores)),
+                    'score_mean': float(np.mean(fold_pca_scores)),
+                    'score_std': float(np.std(fold_pca_scores)),
                     'total_dim': n_comp,
                     'n_models_trained': 1,
                     'total_fit_time_s': float(np.mean(fold_pca_fit_times)),
@@ -344,8 +344,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 'method': 'hybrid',
                 'augmented': False,
                 'budget': budget,
-                'r2_mean': hyb_r2,
-                'r2_std': float(np.std(fold_hybrid_scores)),
+                'score_mean': hyb_r2,
+                'score_std': float(np.std(fold_hybrid_scores)),
                 'total_dim': last_n_features,
                 'n_models_trained': 1,
                 'total_fit_time_s': float(np.mean(fold_hybrid_fit_times)),
@@ -379,7 +379,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             if r['augmented']:
                 method_label += ' +aug'
 
-            print(f"    {method_label:<22} {r['r2_mean']:>8.4f} "
+            print(f"    {method_label:<22} {r['score_mean']:>8.4f} "
                   f"{r['total_dim']:>6} {r['n_models_trained']:>7} "
                   f"{r['total_fit_time_s']:>8.3f} {r['total_predict_time_s']:>8.4f}")
 
@@ -400,12 +400,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             continue
 
         ens_r = ens[0]
-        best_hyb = (min if lower_is_better else max)(hybs, key=lambda x: x['r2_mean'])
+        best_hyb = (min if lower_is_better else max)(hybs, key=lambda x: x['score_mean'])
 
-        delta = best_hyb['r2_mean'] - ens_r['r2_mean']
+        delta = best_hyb['score_mean'] - ens_r['score_mean']
         speedup = ens_r['total_fit_time_s'] / best_hyb['total_fit_time_s'] if best_hyb['total_fit_time_s'] > 0 else 0
 
-        print(f"    {model_name:<12} {ens_r['r2_mean']:>8.4f} {best_hyb['r2_mean']:>8.4f} "
+        print(f"    {model_name:<12} {ens_r['score_mean']:>8.4f} {best_hyb['score_mean']:>8.4f} "
               f"{delta:>+8.4f} {ens_r['n_models_trained']:>7} {best_hyb['total_dim']:>8} "
               f"{ens_r['total_fit_time_s']:>8.3f} "
               f"{best_hyb['total_fit_time_s']:>8.3f} {speedup:>7.1f}x")

@@ -51,8 +51,8 @@ def _compute_icc_check(configs):
         key = (c['model'], c['budget'])
         fold_scores = c.get('fold_scores', [])
         vals = [s for s in fold_scores if not np.isnan(s)] if fold_scores else []
-        if not vals and not np.isnan(c['r2_mean']):
-            vals = [c['r2_mean']]
+        if not vals and not np.isnan(c['score_mean']):
+            vals = [c['score_mean']]
         if vals:
             cell_means[key] = float(np.mean(vals))
 
@@ -172,9 +172,9 @@ def _run_anova_decomposition(exp2_results):
         fold_scores = c.get('fold_scores', [])
         if fold_scores:
             cells[key].extend([s for s in fold_scores if not np.isnan(s)])
-        elif not np.isnan(c['r2_mean']):
+        elif not np.isnan(c['score_mean']):
             # Fallback: use mean if fold_scores not available (old cached results)
-            cells[key].append(c['r2_mean'])
+            cells[key].append(c['score_mean'])
 
     # Compute means
     grand_mean = np.mean([r2 for vals in cells.values() for r2 in vals])
@@ -279,7 +279,7 @@ def _run_information_retention(data, budgets, search_speed='fast'):
     """
     print("\n  9b: Information Retention Curves")
 
-    metric_name_9b, _, _ = get_domain_metric(data)
+    metric_name_9b, _, lower_is_better_9b = get_domain_metric(data)
     reps = data['reps']
     labels = data['labels']
     groups = data.get('groups')
@@ -307,7 +307,7 @@ def _run_information_retention(data, budgets, search_speed='fast'):
             # Pick the best result across all models (for blueprint)
             best = None
             for m_best in search.best_by_model.values():
-                if best is None or m_best['score_mean'] > best['score_mean']:
+                if best is None or (m_best['score_mean'] < best['score_mean'] if lower_is_better_9b else m_best['score_mean'] > best['score_mean']):
                     best = m_best
             if best:
                 bp = best['blueprint']
@@ -408,7 +408,7 @@ def _run_effective_rank_analysis(data, budgets, search_speed='fast'):
     """
     print("\n  9c: Effective Rank Profile")
 
-    metric_name_9c, _, _ = get_domain_metric(data)
+    metric_name_9c, _, lower_is_better_9c = get_domain_metric(data)
     reps = data['reps']
     labels = data['labels']
     groups = data.get('groups')
@@ -438,7 +438,7 @@ def _run_effective_rank_analysis(data, budgets, search_speed='fast'):
             # Pick the best result across all models (for blueprint)
             best = None
             for m_best in search.best_by_model.values():
-                if best is None or m_best['score_mean'] > best['score_mean']:
+                if best is None or (m_best['score_mean'] < best['score_mean'] if lower_is_better_9c else m_best['score_mean'] > best['score_mean']):
                     best = m_best
             bp = best['blueprint'] if best else None
         except Exception:

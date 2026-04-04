@@ -1054,7 +1054,8 @@ def _create_hybrid_with_allocation(rep_dict, labels, allocation,
 
 def _evaluate_allocation(X_train, X_val, y_train, y_val,
                          model=None, metric_fn=None, lower_is_better=False,
-                         internal_evaluator='ridge'):
+                         internal_evaluator='ridge',
+                         return_predictions=False):
     """Helper: Evaluate allocation quality on a train/val split.
 
     If *model* is provided it is deep-copied, fitted on (X_train, y_train),
@@ -1063,9 +1064,12 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
 
     If *model* is None (default), uses the *internal_evaluator* ('ridge',
     'rf', or 'xgboost') with R²/accuracy as the score.
+
+    If *return_predictions* is True, returns (score, y_pred) so callers
+    can compute additional metrics from the same fitted model.
     """
     if X_train.shape[1] == 0:
-        return -np.inf
+        return (-np.inf, None) if return_predictions else -np.inf
 
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
@@ -1076,10 +1080,14 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
         m.fit(X_train_scaled, y_train)
         y_pred = m.predict(X_val_scaled)
         score = metric_fn(y_val, y_pred)
-        return -score if lower_is_better else score
+        score = -score if lower_is_better else score
+        return (score, y_pred) if return_predictions else score
 
-    # Internal evaluator — used during greedy allocation loops
+    # Internal evaluator — used during greedy allocation loops.
+    # Each branch creates and fits a model m. The common ending at the
+    # bottom computes score and optionally returns predictions.
     is_classification = _is_classification_task(y_train)
+    m = None  # set by each branch
 
     if internal_evaluator == 'ridge':
         if is_classification:
@@ -1089,9 +1097,6 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             from sklearn.linear_model import RidgeCV
             m = RidgeCV(alphas=[0.01, 0.1, 1.0, 10.0, 100.0])
         m.fit(X_train_scaled, y_train)
-        if is_classification:
-            return m.score(X_val_scaled, y_val)
-        return r2_score(y_val, m.predict(X_val_scaled))
 
     elif internal_evaluator == 'rf':
         if is_classification:
@@ -1103,9 +1108,6 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             m = RandomForestRegressor(n_estimators=50, max_depth=10,
                                       random_state=42, n_jobs=-1)
         m.fit(X_train_scaled, y_train)
-        if is_classification:
-            return m.score(X_val_scaled, y_val)
-        return r2_score(y_val, m.predict(X_val_scaled))
 
     elif internal_evaluator == 'xgboost':
         try:
@@ -1117,13 +1119,10 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
                 m = XGBRegressor(n_estimators=50, max_depth=4,
                                  random_state=42, verbosity=0, n_jobs=-1)
             m.fit(X_train_scaled, y_train)
-            if is_classification:
-                return m.score(X_val_scaled, y_val)
-            return r2_score(y_val, m.predict(X_val_scaled))
         except ImportError:
-            # Fallback to ridge if xgboost not available
             return _evaluate_allocation(X_train, X_val, y_train, y_val,
-                                        internal_evaluator='ridge')
+                                        internal_evaluator='ridge',
+                                        return_predictions=return_predictions)
 
     elif internal_evaluator == 'lightgbm':
         try:
@@ -1135,12 +1134,10 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
                 m = LGBMRegressor(n_estimators=50, max_depth=4,
                                   random_state=42, verbosity=-1, n_jobs=-1)
             m.fit(X_train_scaled, y_train)
-            if is_classification:
-                return m.score(X_val_scaled, y_val)
-            return r2_score(y_val, m.predict(X_val_scaled))
         except ImportError:
             return _evaluate_allocation(X_train, X_val, y_train, y_val,
-                                        internal_evaluator='xgboost')
+                                        internal_evaluator='xgboost',
+                                        return_predictions=return_predictions)
 
     elif internal_evaluator == 'mlp':
         from sklearn.neural_network import MLPRegressor, MLPClassifier
@@ -1151,9 +1148,6 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             m = MLPRegressor(hidden_layer_sizes=(64, 32), max_iter=200,
                              random_state=42, early_stopping=True)
         m.fit(X_train_scaled, y_train)
-        if is_classification:
-            return m.score(X_val_scaled, y_val)
-        return r2_score(y_val, m.predict(X_val_scaled))
 
     elif internal_evaluator == 'svm':
         from sklearn.svm import SVR, SVC
@@ -1162,9 +1156,6 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
         else:
             m = SVR(kernel='rbf', C=1.0)
         m.fit(X_train_scaled, y_train)
-        if is_classification:
-            return m.score(X_val_scaled, y_val)
-        return r2_score(y_val, m.predict(X_val_scaled))
 
     elif internal_evaluator == 'gp':
         from sklearn.gaussian_process import GaussianProcessRegressor, GaussianProcessClassifier
@@ -1176,7 +1167,6 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
         else:
             m = GaussianProcessRegressor(kernel=kernel, random_state=42,
                                          n_restarts_optimizer=0, alpha=1e-2)
-        # GP scales O(n³) — limit training samples for large datasets
         max_gp_samples = 500
         if X_train_scaled.shape[0] > max_gp_samples:
             rng = np.random.RandomState(42)
@@ -1184,25 +1174,18 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             m.fit(X_train_scaled[idx], y_train[idx])
         else:
             m.fit(X_train_scaled, y_train)
-        if is_classification:
-            return m.score(X_val_scaled, y_val)
-        return r2_score(y_val, m.predict(X_val_scaled))
 
     elif internal_evaluator == 'knn':
         from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
-        # Adaptive k matching find_best_hybrid's model factory
         k = min(5, max(1, int(np.sqrt(X_train_scaled.shape[0]))))
         k = min(k, X_train_scaled.shape[0] - 1)
         if k < 1:
-            return 0.0
+            return (0.0, None) if return_predictions else 0.0
         if is_classification:
             m = KNeighborsClassifier(n_neighbors=k, n_jobs=-1)
         else:
             m = KNeighborsRegressor(n_neighbors=k, n_jobs=-1)
         m.fit(X_train_scaled, y_train)
-        if is_classification:
-            return m.score(X_val_scaled, y_val)
-        return r2_score(y_val, m.predict(X_val_scaled))
 
     elif internal_evaluator == 'catboost':
         try:
@@ -1214,12 +1197,10 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
                 m = CatBoostRegressor(iterations=50, depth=4, verbose=0,
                                       random_seed=42)
             m.fit(X_train_scaled, y_train)
-            if is_classification:
-                return m.score(X_val_scaled, y_val)
-            return r2_score(y_val, m.predict(X_val_scaled))
         except ImportError:
             return _evaluate_allocation(X_train, X_val, y_train, y_val,
-                                        internal_evaluator='lightgbm')
+                                        internal_evaluator='lightgbm',
+                                        return_predictions=return_predictions)
 
     elif internal_evaluator == 'dnn':
         try:
@@ -1229,12 +1210,10 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             else:
                 m = DNNRegressor(epochs=50, patience=10)
             m.fit(X_train_scaled, y_train)
-            if is_classification:
-                return m.score(X_val_scaled, y_val)
-            return r2_score(y_val, m.predict(X_val_scaled))
         except Exception:
             return _evaluate_allocation(X_train, X_val, y_train, y_val,
-                                        internal_evaluator='mlp')
+                                        internal_evaluator='mlp',
+                                        return_predictions=return_predictions)
 
     elif internal_evaluator == 'cnn':
         try:
@@ -1244,12 +1223,10 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             else:
                 m = CNNRegressor(epochs=50, patience=10)
             m.fit(X_train_scaled, y_train)
-            if is_classification:
-                return m.score(X_val_scaled, y_val)
-            return r2_score(y_val, m.predict(X_val_scaled))
         except Exception:
             return _evaluate_allocation(X_train, X_val, y_train, y_val,
-                                        internal_evaluator='mlp')
+                                        internal_evaluator='mlp',
+                                        return_predictions=return_predictions)
 
     elif internal_evaluator == 'ngboost':
         try:
@@ -1262,12 +1239,10 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
                 m = NGBRegressor(Dist=Normal, n_estimators=50,
                                  learning_rate=0.05, random_state=42, verbose=False)
             m.fit(X_train_scaled, y_train)
-            if is_classification:
-                return m.score(X_val_scaled, y_val)
-            return r2_score(y_val, m.predict(X_val_scaled))
         except ImportError:
             return _evaluate_allocation(X_train, X_val, y_train, y_val,
-                                        internal_evaluator='lightgbm')
+                                        internal_evaluator='lightgbm',
+                                        return_predictions=return_predictions)
 
     elif internal_evaluator == 'bnn':
         try:
@@ -1277,26 +1252,29 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             else:
                 m = BNNRegressor(epochs=50, patience=10, mc_samples=5)
             m.fit(X_train_scaled, y_train)
-            if is_classification:
-                return m.score(X_val_scaled, y_val)
-            return r2_score(y_val, m.predict(X_val_scaled))
         except Exception:
             return _evaluate_allocation(X_train, X_val, y_train, y_val,
-                                        internal_evaluator='mlp')
+                                        internal_evaluator='mlp',
+                                        return_predictions=return_predictions)
 
     elif callable(internal_evaluator):
-        # Custom evaluator: must be a callable that returns a fresh sklearn-compatible model
         m = internal_evaluator()
         m.fit(X_train_scaled, y_train)
-        if is_classification:
-            return m.score(X_val_scaled, y_val)
-        return r2_score(y_val, m.predict(X_val_scaled))
 
     else:
         raise ValueError(f"Unknown internal_evaluator: {internal_evaluator}. "
                          f"Use 'ridge', 'rf', 'xgboost', 'lightgbm', 'mlp', 'svm', 'gp', "
                          f"'knn', 'catboost', 'dnn', 'cnn', 'ngboost', 'bnn', "
                          f"or a callable that returns an sklearn-compatible model.")
+
+    # Common ending: compute predictions and score from the fitted model
+    y_pred = m.predict(X_val_scaled)
+    if is_classification:
+        from sklearn.metrics import accuracy_score
+        score = accuracy_score(y_val, y_pred)
+    else:
+        score = r2_score(y_val, y_pred)
+    return (score, y_pred) if return_predictions else score
 
 
 # ============================================================================
@@ -1719,6 +1697,7 @@ def iterative_augmentation(
             if new_score > current_score:
                 X_cur_train = X_test_train
                 X_cur_val = X_test_val
+                prev_score = current_score
                 current_score = new_score
                 phase_b_replaced += 1
                 consecutive_failures = 0
@@ -1729,7 +1708,7 @@ def iterative_augmentation(
                     'replaced_base_col': worst_base_idx,
                     'replaced_by_aug': aug_name,
                     'replaced_by_col': col_idx,
-                    'score_delta': new_score - current_score,
+                    'score_delta': new_score - prev_score,
                 })
 
                 # Update base_feature_info: remove the replaced base feature
