@@ -1188,9 +1188,62 @@ def _is_reaction_dataset(name: str) -> bool:
     return name.lower() in _REACTION_DATASETS
 
 
+def _build_rep_factories(dataset_name, data):
+    """Construct FT factory callables from DATASET_REPS ft_reps config.
+
+    Returns dict mapping rep_name -> factory callable, or empty dict.
+    Each factory has signature: (train_idx, val_idx, train_labels) -> (train_embs, val_embs).
+    """
+    try:
+        from experiments.complexity.complexity_helpers import DATASET_REPS
+    except ImportError:
+        return {}
+
+    ds_config = DATASET_REPS.get(dataset_name, {})
+    ft_config = ds_config.get('ft_reps', {})
+    if not ft_config:
+        return {}
+
+    factories = {}
+    for rep_name, spec in ft_config.items():
+        factory_type = spec['factory']
+        base_model = spec['base_model']
+        try:
+            if factory_type == 'molecular_lora':
+                from kirby.finetuning import make_molecular_lora_factory
+                factories[rep_name] = make_molecular_lora_factory(
+                    smiles_list=data['smiles'], dataset_name=dataset_name,
+                    base_model=base_model)
+            elif factory_type == 'molecular_contrastive':
+                from kirby.finetuning import make_molecular_contrastive_factory
+                factories[rep_name] = make_molecular_contrastive_factory(
+                    smiles_list=data['smiles'], dataset_name=dataset_name,
+                    base_model=base_model)
+            elif factory_type == 'molecular_gnn':
+                from kirby.finetuning import make_molecular_gnn_factory
+                factories[rep_name] = make_molecular_gnn_factory(
+                    smiles_list=data['smiles'], dataset_name=dataset_name,
+                    base_model=base_model)
+            elif factory_type == 'antibody_lora':
+                from kirby.finetuning import make_antibody_lora_factory
+                factories[rep_name] = make_antibody_lora_factory(
+                    heavy_seqs=data['heavy_seqs'], light_seqs=data['light_seqs'],
+                    dataset_name=dataset_name, base_model=base_model)
+            else:
+                print(f"  WARNING: unknown FT factory type '{factory_type}'")
+        except Exception as e:
+            print(f"  WARNING: FT factory {rep_name} failed: {e}")
+
+    if factories:
+        print(f"  [ft] {len(factories)} FT factories: {', '.join(factories)}")
+
+    return factories
+
+
 def load_data(dataset_name: str, rep_preset: str = 'fast',
               delta: bool = False, augment: bool = False,
-              rep_names: Optional[List[str]] = None) -> dict:
+              rep_names: Optional[List[str]] = None,
+              finetune: bool = False) -> dict:
     """Load dataset, generate representations, assign groups.
 
     Domain-aware: detects TCGA, antibody, or molecular dataset names and
@@ -1252,6 +1305,7 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
             'domain': 'tcga',
             'augmentations': None,
             'metadata': metadata,
+            'rep_factories': {},
         }
 
     elif _is_antibody_dataset(dataset_name):
@@ -1306,7 +1360,7 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
         print(f"  {dataset_name}: {len(heavy_seqs)} antibodies, {n_groups} groups, "
               f"{len(reps)} reps ({', '.join(f'{k}={v.shape[1]}' for k, v in reps.items())})")
 
-        return {
+        result = {
             'heavy_seqs': heavy_seqs,
             'light_seqs': light_seqs,
             'labels': labels,
@@ -1318,6 +1372,8 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
             'domain': 'antibody',
             'augmentations': None,
         }
+        result['rep_factories'] = _build_rep_factories(dataset_name, result) if finetune else {}
+        return result
     elif _is_nucleotide_dataset(dataset_name):
         from find_best_hybrid_nucleotide import (
             load_dataset as load_nuc_dataset,
@@ -1350,6 +1406,7 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
             'task_type': task_type,
             'domain': 'nucleotide',
             'augmentations': None,
+            'rep_factories': {},
         }
 
     elif _is_reaction_dataset(dataset_name):
@@ -1434,6 +1491,7 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
             'task_type': 'regression',
             'domain': 'reaction',
             'augmentations': None,
+            'rep_factories': {},
         }
 
     else:
@@ -1453,7 +1511,7 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
         print(f"  {dataset_name}: {len(smiles)} samples, {n_scaffolds} scaffolds, "
               f"{len(reps)} reps ({', '.join(f'{k}={v.shape[1]}' for k, v in reps.items())})")
 
-        return {
+        result = {
             'smiles': smiles,
             'labels': labels,
             'reps': reps,
@@ -1463,6 +1521,8 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
             'domain': 'molecular',
             'augmentations': None,
         }
+        result['rep_factories'] = _build_rep_factories(dataset_name, result) if finetune else {}
+        return result
 
 
 # =============================================================================
