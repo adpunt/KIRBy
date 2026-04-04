@@ -181,9 +181,14 @@ def precompute_dataset(dataset_name, speed='fast', tiers=('general', 'top'),
     print(f"  {dataset_name} (domain={domain})")
     print(f"{'='*70}")
 
-    # Load data
+    # Only load the reps we actually need (general + top_tier + augmentation)
+    general_names = ds_config.get('general', [])
+    top_names = ds_config.get('top_tier', [])
+    aug_names = ds_config.get('augmentation', [])
+    needed_reps = sorted(set(general_names + top_names + aug_names))
+
     try:
-        data = load_data(dataset_name, rep_preset='all')
+        data = load_data(dataset_name, rep_names=needed_reps)
     except Exception as e:
         print(f"  FAILED to load: {e}")
         return
@@ -193,11 +198,6 @@ def precompute_dataset(dataset_name, speed='fast', tiers=('general', 'top'),
     groups = data.get('groups')
     task_type = data.get('task_type', 'regression')
     metric = _get_metric(domain, task_type, labels)
-
-    # Build rep sets
-    general_names = ds_config.get('general', [])
-    top_names = ds_config.get('top_tier', [])
-    aug_names = ds_config.get('augmentation', [])
 
     general_reps = {k: all_reps[k] for k in general_names if k in all_reps}
     top_reps = {k: all_reps[k] for k in top_names if k in all_reps}
