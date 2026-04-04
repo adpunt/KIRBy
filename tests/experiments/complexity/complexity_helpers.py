@@ -78,6 +78,9 @@ DATASET_REPS = {
         'top_tier': [
             'mhg_gnn', 'mordred', 'graph_kernel', 'avalon', 'grover', 'pdv',
             'mol2vec', 'ecfp4'],
+        'ft_reps': {
+            'gnn_graphmvp': {'factory': 'molecular_gnn', 'base_model': 'graphmvp'},
+        },
     },
     'caco2': {
         'general': [
@@ -87,6 +90,9 @@ DATASET_REPS = {
         'top_tier': [
             'graph_kernel', 'mol2vec', 'mhg_gnn', 'ecfp4', 'pdv', 'grover',
             'avalon', 'mordred'],
+        'ft_reps': {
+            'lora_molformer': {'factory': 'molecular_lora', 'base_model': 'molformer'},
+        },
     },
     'logd': {
         'general': [
@@ -99,6 +105,11 @@ DATASET_REPS = {
         'top_tier': [
             'mhg_gnn', 'mordred', 'grover', 'mol2vec', 'pdv', 'ecfp4',
             'smited', 'molformer'],
+        'ft_reps': {
+            'lora_molformer': {'factory': 'molecular_lora', 'base_model': 'molformer'},
+            'contrastive_molformer': {'factory': 'molecular_contrastive', 'base_model': 'molformer'},
+            'gnn_graphmvp': {'factory': 'molecular_gnn', 'base_model': 'graphmvp'},
+        },
     },
     'qm9': {
         'general': [
@@ -107,6 +118,9 @@ DATASET_REPS = {
             'mol2vec', 'chembert', 'graphmvp', 'molformer'],
         'augmentation': ['top_torsion', 'pharmacophore3d', 'usrcat', 'coulomb_matrix'],
         'top_tier': ['mordred', 'pdv', 'grover', 'mhg_gnn', 'avalon'],
+        'ft_reps': {
+            'lora_molformer': {'factory': 'molecular_lora', 'base_model': 'molformer'},
+        },
     },
     'adme_hlm': {
         'general': [
@@ -131,6 +145,9 @@ DATASET_REPS = {
             'ecfp4', 'chembert', 'selformer', 'top_torsion', 'rdkfp'],
         'augmentation': ['pharmacophore3d', 'coulomb_matrix'],
         'top_tier': ['mordred', 'pdv', 'mhg_gnn', 'avalon', 'grover'],
+        'ft_reps': {
+            'gnn_graphmvp': {'factory': 'molecular_gnn', 'base_model': 'graphmvp'},
+        },
     },
 
     # ── Antibody Inter-Family (11 datasets) ─────────────────────────────
@@ -211,6 +228,9 @@ DATASET_REPS = {
         'top_tier': [
             'esm2_entropy_top20', 'prot_t5', 'blosum', 'antiberty',
             'esm2_midlayers', 'abroberta', 'esm2', 'ablang2'],
+        'ft_reps': {
+            'antibody_lora_esm2': {'factory': 'antibody_lora', 'base_model': 'esm2'},
+        },
     },
     'flab_aggregation_jain': {
         'general': [
@@ -303,6 +323,9 @@ DATASET_REPS = {
             'esm2_mutsite', 'saprot_cdr', 'esmc_cdr', 'esm3_cdr'],
         'augmentation': ['mutation_features', 'paratope', 'aac'],
         'top_tier': ['onehot', 'blosum', 'igt5', 'esm2_early'],
+        'ft_reps': {
+            'antibody_lora_esm2': {'factory': 'antibody_lora', 'base_model': 'esm2'},
+        },
     },
 
     # ── AbAgym DMS (5 datasets) ─────────────────────────────────────────
@@ -319,6 +342,9 @@ DATASET_REPS = {
             'mutation_features', 'structural'],
         'augmentation': [],
         'top_tier': ['saprot', 'esm3', 'esm2_midlayers', 'esm2_layer24'],
+        'ft_reps': {
+            'antibody_lora_esm2': {'factory': 'antibody_lora', 'base_model': 'esm2'},
+        },
     },
     'abagym_EGFR': {  # n=659, ρ > 0.18, General (26)
         'general': [
@@ -334,6 +360,9 @@ DATASET_REPS = {
         'top_tier': [
             'antiberty', 'antiberty_cdr', 'esm2_layer24', 'esm2_early',
             'esm2_midlayers'],
+        'ft_reps': {
+            'antibody_lora_esm2': {'factory': 'antibody_lora', 'base_model': 'esm2'},
+        },
     },
     'abagym_HER2': {  # n=146, ρ > 0.24, General (13)
         'general': [
@@ -342,6 +371,9 @@ DATASET_REPS = {
             'esm2_layer24', 'saprot', 'aac', 'mutation_features'],
         'augmentation': [],
         'top_tier': ['mutation_features', 'prot_t5_cdr', 'prot_t5'],
+        'ft_reps': {
+            'antibody_lora_esm2': {'factory': 'antibody_lora', 'base_model': 'esm2'},
+        },
     },
     'abagym_lysozyme': {  # n=627, ρ > 0.15, General (3)
         'general': ['mutation_features', 'aac', 'blosum'],
