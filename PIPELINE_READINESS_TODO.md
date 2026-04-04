@@ -27,6 +27,86 @@ The pipeline follows a staged approach:
 
 ---
 
+## Publication Artifacts
+
+**What gets published per dataset.** Each dataset that goes through the pipeline produces a self-contained artifact — a "recipe" any researcher can use to reproduce or apply the best hybrid.
+
+### Per-dataset artifact contents
+
+For each dataset in the registry (`~/.cache/kirby/hybrid_registry.json`):
+
+| Field | Description | Example |
+|---|---|---|
+| `dataset` | Dataset name (matches DATASET_REPS key) | `caco2` |
+| `metric` | Primary evaluation metric | `rmse` |
+| **`lower_is_better`** | **CRITICAL: metric direction** | `true` |
+| `model` | Best downstream model | `rf` |
+| `budget` | Feature budget used | `200` |
+| `score_mean` | CV score (in original metric units) | `0.6234` |
+| `score_std` | CV standard deviation | `0.0312` |
+| `blueprint` | Full Blueprint dict (JSON-serialisable) | see below |
+
+### Blueprint contents (the recipe)
+
+```json
+{
+  "reps": ["ecfp4", "maccs", "pdv"],
+  "allocation_method": "top_3",
+  "importance_method": "lightgbm_gain",
+  "internal_evaluator": "svm",
+  "budget": 200,
+  "metric": "rmse",
+  "lower_is_better": true,
+  "rep_scores": {"ecfp4": 0.82, "maccs": 0.71, "pdv": 0.65}
+}
+```
+
+### METRIC DIRECTION — NON-NEGOTIABLE RULES
+
+**Every published artifact carries `metric` + `lower_is_better` as an inseparable pair.** This applies to:
+
+1. **Blueprint** — has `metric` and `lower_is_better` fields. `Blueprint.from_dict()` / `Blueprint.to_dict()` round-trip both.
+2. **SearchResult** — has `metric_name` and `lower_is_better` fields. Set at construction, never inferred.
+3. **Registry entries** — every dataset entry has top-level `metric` and `lower_is_better`.
+4. **Notebook output** — every score display includes `(lower is better)` or `(higher is better)`.
+5. **JSON exports** — always include both fields.
+
+**Direction-aware comparisons:** Code that selects "best" must always check `lower_is_better`:
+```python
+cmp = min if lower_is_better else max
+best = cmp(candidates, key=lambda x: x['score_mean'])
+```
+
+Never write bare `max(scores)` for "best" without checking direction.
+
+### How to use published artifacts
+
+```python
+# One-line lookup from registry
+from kirby.find_best_hybrid import get_best_hybrid, apply_blueprint
+
+info = get_best_hybrid('caco2', model='rf')  # reads registry
+# info['lower_is_better'] tells you the direction — always check it
+
+# Apply the blueprint to your data
+X_hybrid, feature_info = apply_blueprint(my_reps, info['blueprint'], labels=my_labels)
+```
+
+### Registry population
+
+`precompute_hybrids.py` populates the registry automatically. Each successful `find_best_hybrid` call writes the best config per (dataset, tier, aug_condition, model, budget) to `hybrid_registry.json`. The registry is additive — re-running a dataset updates its entries without touching others.
+
+### Notebook (kirby_quickstart.ipynb)
+
+The notebook demonstrates all three workflows:
+1. Full search from scratch
+2. One-line lookup by dataset name (`get_best_hybrid`)
+3. Apply a blueprint to new data (`apply_blueprint`)
+
+All comparisons are direction-aware. All score displays include the direction label.
+
+---
+
 ## Current Blockers
 
 ### ~~F12/F13 (framework experiments)~~ — DONE (2026-03-29)
