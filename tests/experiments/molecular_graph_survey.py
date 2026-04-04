@@ -66,7 +66,7 @@ from run_baseline_survey import evaluate_rep
 # CONFIGURATION
 # =============================================================================
 
-DATASETS = ['herg', 'logd', 'qm9']
+DATASETS = ['herg_ki', 'logd', 'qm9']
 
 # New graph/structural reps to test
 GRAPH_REP_NAMES = [

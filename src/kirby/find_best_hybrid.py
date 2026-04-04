@@ -1260,7 +1260,10 @@ def _evaluate_hybrid_config(
                 aug_val_features = apply_augmentation_selection(val_augs, aug_info)
                 if aug_val_features is not None:
                     X_val = np.hstack([X_val, aug_val_features])
-        except Exception:
+        except Exception as _fold_err:
+            if verbose:
+                import traceback
+                traceback.print_exc()
             continue
 
         # Dedup: if identical feature selection was already evaluated with
@@ -1757,7 +1760,10 @@ def _run_search(
                     if rep_set_name != 'all':
                         result['rep_subset'] = rep_set_name
                     return result
-                except Exception:
+                except Exception as _cfg_err:
+                    if verbose:
+                        import traceback
+                        traceback.print_exc()
                     return None
 
             if verbose:

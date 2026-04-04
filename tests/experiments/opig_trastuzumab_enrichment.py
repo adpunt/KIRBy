@@ -279,7 +279,7 @@ def evaluate_dataset(rep_names, n_folds):
         search = find_best_hybrid(
             base_reps=reps,
             labels=labels, groups=groups,
-            metric='accuracy',
+            metric='auc',
             task_type='classification',
             augmentation_strategy='uncapped',
             internal_evaluators=INTERNAL_EVALUATORS,

@@ -543,23 +543,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if len(sub_labels) < n:
         print(f"  Subsampled to {len(sub_labels)} compounds for pairwise analysis")
 
-    results = {
-        'config': {
-            'struct_threshold': struct_t,
-            'act_threshold': act_t,
-            'domain': domain,
-            'n_samples': n,
-            'n_samples_sas': len(sub_labels),
-            'n_reps': len(reps),
-        },
-        'top3_base_reps': [(nm, s) for nm, s in top3] if top3 else [],
-    }
-
-    # --- Sub-analysis 1: Per-rep SAS maps ---
-    per_rep_results, act_sim = _run_per_rep_sas(
-        sub_reps, sub_labels, sub_smiles, struct_t, act_t, domain, is_clf=is_clf)
-    results['per_rep'] = per_rep_results
-
     # --- Build hybrid for sub-analyses 2-3 ---
     augmentations = data.get('augmentations')
     X_hybrid = None
@@ -576,6 +559,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     except Exception as e:
         print(f"  WARNING: Hybrid search failed ({e})")
+
+    results = {
+        'config': {
+            'struct_threshold': struct_t,
+            'act_threshold': act_t,
+            'domain': domain,
+            'n_samples': n,
+            'n_samples_sas': len(sub_labels),
+            'n_reps': len(reps),
+        },
+        'top3_base_reps': [(nm, s) for nm, s in top3] if top3 else [],
+    }
+
+    # --- Sub-analysis 1: Per-rep SAS maps ---
+    per_rep_results, act_sim = _run_per_rep_sas(
+        sub_reps, sub_labels, sub_smiles, struct_t, act_t, domain, is_clf=is_clf)
+    results['per_rep'] = per_rep_results
 
     # --- Sub-analysis 2: Hybrid SAS map ---
     results['hybrid'] = _run_hybrid_sas(

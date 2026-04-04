@@ -137,7 +137,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         shap_info = None
         try:
             import shap
-            best_model = model_factory()  # Re-train best model type
+            best_model = models[best_model_name]()  # Re-train best model type
             best_model.fit(X_train_s, y_train)
 
             # Use TreeExplainer for tree models, KernelExplainer otherwise

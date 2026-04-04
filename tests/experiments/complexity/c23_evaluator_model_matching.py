@@ -76,7 +76,7 @@ TEST_MODELS = ['rf', 'lightgbm', 'xgboost', 'ridge', 'knn', 'mlp', 'svm', 'gp',
 
 
 def _run_single_config(reps, labels, groups, model_name, model_factory,
-                       evaluator, budgets, speed, metric_fn, task_type,
+                       evaluator, budgets, speed, metric_name, task_type,
                        lower_is_better, augmentations, aug_strategy):
     """Run find_best_hybrid for one (model, evaluator) pair."""
     models = {model_name: model_factory()}
@@ -89,7 +89,7 @@ def _run_single_config(reps, labels, groups, model_name, model_factory,
             models=models,
             internal_evaluators=[evaluator],
             speed=speed,
-            metric=metric_fn,
+            metric=metric_name,
             task_type=task_type,
             cache=True,
             verbose=False,
@@ -151,7 +151,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"    {cond_name} (eval={evaluator})...", end=' ', flush=True)
             r = _run_single_config(
                 reps, labels, groups, model_name, model_factory,
-                evaluator, budgets, search_speed, metric_fn, task_type,
+                evaluator, budgets, search_speed, metric_name, task_type,
                 lower_is_better, augmentations, aug_strategy)
             if r:
                 scores[cond_name] = r
@@ -187,7 +187,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"    {downstream} -> eval={evaluator}...", end=' ', flush=True)
         r = _run_single_config(
             reps, labels, groups, downstream, model_factory,
-            evaluator, budgets, search_speed, metric_fn, task_type,
+            evaluator, budgets, search_speed, metric_name, task_type,
             lower_is_better, augmentations, aug_strategy)
         if r:
             print(f"score={r['score_mean']:.4f}")
@@ -229,7 +229,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 models=models,
                 internal_evaluators=QUICK_EVALUATORS,
                 speed=search_speed,
-                metric=metric_fn,
+                metric=metric_name,
                 task_type=task_type,
                 cache=True,
                 verbose=False,

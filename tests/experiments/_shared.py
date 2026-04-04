@@ -10,6 +10,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import sys
 import json
 import time
+import tempfile
 import argparse
 import warnings
 from pathlib import Path
@@ -53,15 +54,17 @@ def _hybrid_fold_cache_dir() -> Path:
 
 def _hybrid_fold_cache_key(train_idx, rep_shapes, allocation_method,
                            importance_method, budget, internal_evaluator,
-                           augmentation_names, augmentation_strategy):
+                           augmentation_names, augmentation_strategy,
+                           step_size=5, patience=20, greedy_tolerance=0.0):
     """Hash fold + hybrid config into a cache key."""
     h = hashlib.sha256()
     h.update(train_idx.tobytes())
     for name, shape in sorted(rep_shapes.items()):
         h.update(f"{name}:{shape}".encode())
-    h.update(f"{allocation_method}|{importance_method}|{budget}|{internal_evaluator}".encode())
+    h.update(f"{allocation_method}|{importance_method}|{budget}|{internal_evaluator}|{step_size}|{patience}|{greedy_tolerance}".encode())
+    h.update(f"aug_strategy:{augmentation_strategy}".encode())
     if augmentation_names:
-        h.update(f"aug:{'|'.join(sorted(augmentation_names))}|{augmentation_strategy}".encode())
+        h.update(f"aug:{'|'.join(sorted(augmentation_names))}".encode())
     return h.hexdigest()[:24]
 
 
@@ -94,6 +97,9 @@ def create_hybrid_cached(train_reps, y_train, train_idx,
     key = _hybrid_fold_cache_key(
         train_idx, rep_shapes, allocation_method, importance_method,
         budget, internal_evaluator, aug_names, augmentation_strategy,
+        step_size=kwargs.get('step_size', 5),
+        patience=kwargs.get('patience', 20),
+        greedy_tolerance=kwargs.get('greedy_tolerance', 0.0),
     )
     cache_dir = _hybrid_fold_cache_dir()
     cache_path = cache_dir / f'{key}.pkl'
@@ -125,7 +131,17 @@ def create_hybrid_cached(train_reps, y_train, train_idx,
     )
 
     try:
-        cache_path.write_bytes(pickle.dumps(feature_info))
+        fd, tmp = tempfile.mkstemp(dir=str(cache_dir), suffix='.tmp')
+        try:
+            os.write(fd, pickle.dumps(feature_info))
+            os.close(fd)
+            os.replace(tmp, str(cache_path))
+        except Exception:
+            os.close(fd)
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
     except Exception:
         pass  # non-fatal
 
@@ -157,7 +173,16 @@ def _cache_rep(dataset_name: str, rep_name: str, compute_fn) -> np.ndarray:
 
     arr = compute_fn()
     cache_dir.mkdir(parents=True, exist_ok=True)
-    np.save(cache_file, arr)
+    tmp_path = cache_file.with_suffix('.tmp.npy')
+    try:
+        np.save(str(tmp_path), arr)
+        os.replace(str(tmp_path), str(cache_file))
+    except Exception:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:
+            pass
+        raise
     print(f"    {rep_name}: computed + cached ({arr.shape[1]}D)")
     return arr
 
@@ -200,7 +225,16 @@ def _cache_rep_dict(dataset_name: str, compute_all_fn,
     for k, v in all_reps.items():
         cache_file = cache_dir / f'{k}.npy'
         if not cache_file.exists():
-            np.save(cache_file, v)
+            tmp_path = cache_file.with_suffix('.tmp.npy')
+            try:
+                np.save(str(tmp_path), v)
+                os.replace(str(tmp_path), str(cache_file))
+            except Exception:
+                try:
+                    tmp_path.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                raise
         print(f"    {k}: computed + cached ({v.shape[1]}D)")
 
     if filter_names:
@@ -1424,6 +1458,7 @@ def get_hybrid_features_and_weights(
     weight_method: str = 'lightgbm_gain',
     budget: Optional[int] = None,
     augmentations: Optional[Dict[str, np.ndarray]] = None,
+    metric: str = 'rmse',
 ) -> Tuple[np.ndarray, np.ndarray, SearchResult]:
     """Run find_best_hybrid and return hybrid features + flat importance weights."""
     kwargs = dict(
@@ -1435,6 +1470,7 @@ def get_hybrid_features_and_weights(
         weight_method=weight_method,
         verbose=False,
         cache=True,
+        metric=metric,
     )
     if budget is not None:
         kwargs['budgets'] = [budget]

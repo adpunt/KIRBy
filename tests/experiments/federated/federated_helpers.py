@@ -954,6 +954,19 @@ def federated_noise_detection(rep_dict, labels, silo_indices, noise_mask_true,
 
     results['per_silo'] = per_silo_detail
 
+    # Setting 3: Federated hybrid (privacy-preserving feature selection)
+    try:
+        X_fed, _budgets, _scores, _fis = federated_feature_selection(
+            rep_dict, labels, silo_indices, k, budget=100,
+            allocation_method='performance_weighted',
+            importance_method='treeshap',
+            internal_evaluator='rf', seed=42)
+        D_fed = compute_distance_matrix(X_fed, standardize=True)
+        results['federated_hybrid'] = _eval_detectors(
+            X_fed, labels, noise_mask_true, 'federated_hybrid', D_fed)
+    except Exception as e:
+        results['federated_hybrid'] = {'_error': str(e)}
+
     return results
 
 

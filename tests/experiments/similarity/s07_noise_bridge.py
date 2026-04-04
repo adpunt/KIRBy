@@ -23,6 +23,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results, convert_numpy,
     get_fitted_hybrid, flatten_fold_weights, extract_top3_base_reps,
+    get_domain_metric,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 
@@ -69,7 +70,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = data['labels']
     groups = data['groups']
     task_type = data.get('task_type', 'regression')
+    domain = data.get('domain', 'molecular')
     is_clf = task_type == 'classification'
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     results = {}
 
@@ -124,6 +127,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             precomputed=data.get('precomputed_searches'),
             internal_evaluators=DISTANCE_EVALUATORS,
             budgets=DISTANCE_BUDGETS,
+            metric=metric_name, task_type=task_type, domain=domain,
             downstream_model='knn')
         weights_flat = flatten_fold_weights(fi) if fi else np.ones(X_hybrid.shape[1])
         if len(weights_flat) != X_hybrid.shape[1]:

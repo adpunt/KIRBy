@@ -301,7 +301,7 @@ def evaluate_target(target, rep_preset, n_folds):
         search = find_best_hybrid(
             base_reps=base if base else reps,
             labels=labels, groups=groups,
-            metric='r2',
+            metric='mae',
             task_type='regression',
             augmentations=aug_dict if aug_dict else None,
             augmentation_strategy='uncapped',

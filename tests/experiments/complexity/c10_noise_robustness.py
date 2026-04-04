@@ -132,7 +132,16 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
 
             baseline_r2 = sigma_scores.get(0.0, sigma_scores.get(min(sigmas)))
             max_noise_r2 = sigma_scores.get(max(sigmas), float('nan'))
-            retention = float(max_noise_r2 / baseline_r2 * 100) if baseline_r2 > 0 else 0.0
+            if baseline_r2 != 0 and not np.isnan(max_noise_r2):
+                if lower_is_better:
+                    # For lower-is-better (MAE/RMSE): retention = baseline / noisy * 100
+                    # (lower noisy score = better retention)
+                    retention = float(baseline_r2 / max_noise_r2 * 100)
+                else:
+                    # For higher-is-better (R²): retention = noisy / baseline * 100
+                    retention = float(max_noise_r2 / baseline_r2 * 100)
+            else:
+                retention = 0.0
 
             rep_results[strategy] = {
                 'scores_by_sigma': sigma_scores,
@@ -168,8 +177,8 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                     train_reps = {k: v[train_idx] for k, v in reps.items()}
                     val_reps = {k: v[val_idx] for k, v in reps.items()}
 
-                    train_augs = {k: v[train_idx] for k, v in augmentations.items()} or None
-                    val_augs = {k: v[val_idx] for k, v in augmentations.items()} or None
+                    train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
+                    val_augs = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
                     try:
                         bp = blueprints[budget]
                         X_train, fi = create_hybrid(
@@ -212,7 +221,13 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
 
             baseline_r2 = sigma_scores.get(0.0, sigma_scores.get(min(sigmas), 0))
             max_noise_r2 = sigma_scores.get(max(sigmas), float('nan'))
-            retention = float(max_noise_r2 / baseline_r2 * 100) if baseline_r2 > 0 else 0.0
+            if baseline_r2 != 0 and not np.isnan(max_noise_r2):
+                if lower_is_better:
+                    retention = float(baseline_r2 / max_noise_r2 * 100)
+                else:
+                    retention = float(max_noise_r2 / baseline_r2 * 100)
+            else:
+                retention = 0.0
 
             budget_results[strategy] = {
                 'scores_by_sigma': sigma_scores,
@@ -264,7 +279,7 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                     y_train = noise_injector.inject(y_train, sigma=sigma)
 
                 train_reps = {k: v[train_idx] for k, v in reps.items()}
-                train_augs_stab = {k: v[train_idx] for k, v in augmentations.items()} or None
+                train_augs_stab = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
                 try:
                     bp_stab = blueprints[budget_for_stability]
                     _, fi = create_hybrid(

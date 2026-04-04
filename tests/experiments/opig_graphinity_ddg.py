@@ -310,7 +310,7 @@ def evaluate_condition(condition, rep_names, n_folds, max_samples=5000):
         search = find_best_hybrid(
             base_reps=base if base else reps,
             labels=labels, groups=grp,
-            metric='r2',
+            metric='pearson',
             task_type='regression',
             augmentations=aug_dict if aug_dict else None,
             augmentation_strategy='uncapped',

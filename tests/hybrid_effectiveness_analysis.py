@@ -250,7 +250,7 @@ def load_dataset(name: str, max_samples: int = 1000) -> Dataset:
     # ══════════════════════════════════════════════════════════════════════
     # ChEMBL hERG Ki (cached extraction)
     # ══════════════════════════════════════════════════════════════════════
-    elif name == 'herg':
+    elif name == 'herg_ki':
         cached = CACHE_DIR / "chembl_herg_ki.csv"
         if not cached.exists():
             print("  Fetching hERG Ki from ChEMBL API (this may take a minute)...")
@@ -871,7 +871,7 @@ AVAILABLE_DATASETS = [
     'az_solubility',  # AstraZeneca
     'openadmet_logd', 'openadmet_ksol', 'openadmet_hlm',  # OpenADMET-ExpansionRx
     'openadmet_caco2_efflux',  # Caco-2 Efflux (smaller dataset)
-    'herg',  # ChEMBL hERG Ki
+    'herg_ki',  # ChEMBL hERG Ki
 ]
 
 

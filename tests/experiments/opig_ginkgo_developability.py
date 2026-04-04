@@ -130,6 +130,23 @@ def _fold_assignments_to_splits(fold_assignments, n_folds):
     return splits
 
 
+class _PrecomputedFoldSplitter:
+    """Sklearn-compatible CV splitter wrapping pre-computed fold assignments.
+
+    Enables find_best_hybrid to use the same hierarchical cluster splits
+    that Ginkgo datasets provide, via the cv_splitter parameter.
+    """
+
+    def __init__(self, fold_assignments, n_folds):
+        self._splits = _fold_assignments_to_splits(fold_assignments, n_folds)
+
+    def get_n_splits(self, X=None, y=None, groups=None):
+        return len(self._splits)
+
+    def split(self, X=None, y=None, groups=None):
+        yield from self._splits
+
+
 def _recall_at_k(y_true, y_pred, frac=0.1):
     """Top-K% recall: overlap between true top-K and predicted top-K.
 
@@ -237,15 +254,24 @@ def evaluate_property(prop_name, rep_names, n_folds):
         AUG_REPS = {'paratope', 'structural'}
         base = {k: v for k, v in reps.items() if k not in AUG_REPS}
         aug_dict = {k: v for k, v in reps.items() if k in AUG_REPS}
+
+        # Pass pre-computed hierarchical cluster folds to find_best_hybrid
+        # so hybrid search uses the same splits as downstream evaluation.
+        cv_kw = {}
+        if fold_assignments is not None:
+            cv_kw['cv_splitter'] = _PrecomputedFoldSplitter(
+                fold_assignments, n_folds)
+
         search = find_best_hybrid(
             base_reps=base if base else reps,
             labels=labels, groups=grp,
-            metric='r2',
+            metric='spearman',
             task_type='regression',
             augmentations=aug_dict if aug_dict else None,
             augmentation_strategy='uncapped',
             internal_evaluators=INTERNAL_EVALUATORS,
-            speed='fast', return_fitted=True, verbose=False, cache=True)
+            speed='fast', return_fitted=True, verbose=False, cache=True,
+            **cv_kw)
         top3 = extract_top3_base_reps(search)
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
@@ -255,8 +281,8 @@ def evaluate_property(prop_name, rep_names, n_folds):
             fi = {r: {'selected_indices': idx}
                   for r, idx in fitted.selected_indices.items()}
             reps['kirby_hybrid'] = apply_feature_selection(all_reps, fi)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"  Hybrid build failed: {e}")
 
     # Evaluate
     models = get_model_factories(MODELS_LIST, 'regression', n_samples=n)

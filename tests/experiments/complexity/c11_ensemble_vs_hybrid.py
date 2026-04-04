@@ -305,8 +305,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 y_train, y_val = labels[train_idx], labels[val_idx]
 
                 augs_full = augmentations or {}
-                train_augs = {k: v[train_idx] for k, v in augs_full.items()} or None
-                val_augs = {k: v[val_idx] for k, v in augs_full.items()} or None
+                train_augs = {k: v[train_idx] for k, v in augs_full.items()} if augs_full else None
+                val_augs = {k: v[val_idx] for k, v in augs_full.items()} if augs_full else None
 
                 try:
                     t0 = time.time()

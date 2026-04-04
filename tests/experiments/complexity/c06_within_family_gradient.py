@@ -99,7 +99,7 @@ def run(data, config, output_dir, dataset_name, families=None):
                 budget_results = [r for r in search.all_results
                                   if r['budget'] == budget and not np.isnan(r['score_mean'])]
                 if budget_results:
-                    best_at_budget = max(budget_results, key=lambda r: r['score_mean'])
+                    best_at_budget = (min if lower_is_better else max)(budget_results, key=lambda r: r['score_mean'])
                     bp = best_at_budget['blueprint']
 
                     # Get train R² for bias-variance analysis

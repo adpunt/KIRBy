@@ -882,7 +882,7 @@ def main():
     parser = argparse.ArgumentParser(
         description='Validation Noise Robustness: 3 Regression Datasets with Scaffold CV')
     parser.add_argument('--datasets', nargs='+',
-                        choices=['logd', 'caco2', 'herg', 'all'],
+                        choices=['logd', 'caco2', 'herg_ki', 'all'],
                         default=['all'],
                         help='Which datasets to test (default: all)')
     parser.add_argument('--openadmet-csv', type=str, default=None,
@@ -898,7 +898,7 @@ def main():
                         help='Only run these sigma levels (e.g. --sigmas 0.0 0.5 1.0). Default: all 11.')
     args = parser.parse_args()
 
-    ds_list = ['logd', 'caco2', 'herg'] if 'all' in args.datasets else args.datasets
+    ds_list = ['logd', 'caco2', 'herg_ki'] if 'all' in args.datasets else args.datasets
     sigma_levels = args.sigmas if args.sigmas else SIGMA_LEVELS
 
     print("=" * 80)
@@ -958,7 +958,7 @@ def main():
             print("ERROR: Cannot find Caco2 Efflux column")
 
     # 3. ChEMBL-hERG-Ki
-    if 'herg' in ds_list:
+    if 'herg_ki' in ds_list:
         print("\nPreparing ChEMBL-hERG-Ki...")
         smiles, labels = load_chembl_herg()
         print(f"  {len(smiles)} molecules")

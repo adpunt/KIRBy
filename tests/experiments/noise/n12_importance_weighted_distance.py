@@ -55,9 +55,19 @@ CONDITION_NAMES = [
 ]
 
 
-def _inject_noise(y, sigma_frac, seed=42):
-    """Inject Gaussian noise at sigma_frac × label range."""
+def _inject_noise(y, sigma_frac, seed=42, is_clf=False):
+    """Inject noise. Regression: Gaussian additive. Classification: label flipping."""
     rng = np.random.RandomState(seed)
+    if is_clf:
+        n_flip = max(1, int(len(y) * sigma_frac))
+        flip_idx = rng.choice(len(y), n_flip, replace=False)
+        y_noisy = y.copy()
+        classes = np.unique(y)
+        for i in flip_idx:
+            other = classes[classes != y[i]]
+            if len(other) > 0:
+                y_noisy[i] = rng.choice(other)
+        return y_noisy
     y_range = np.max(y) - np.min(y)
     return y + rng.normal(0, sigma_frac * y_range, len(y))
 
@@ -196,10 +206,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     augmentations = data.get('augmentations')
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
+    task_type = data.get('task_type', 'regression')
+    is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     model_factory = get_model_factories(
-        ['rf'], task_type=data.get('task_type', 'regression'),
+        ['rf'], task_type=task_type,
         n_samples=len(labels))['rf']
 
     sigmas = kwargs.get('sigmas', SIGMAS)
@@ -271,7 +283,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             clean_scores.append(float(metric_fn(y_val, rf_clean.predict(X_eval_val_s))))
 
             # Inject noise
-            y_noisy = _inject_noise(y_train_clean, sigma, seed=42 + fold_idx)
+            y_noisy = _inject_noise(y_train_clean, sigma, seed=42 + fold_idx, is_clf=is_clf)
 
             # Noisy baseline
             rf_noisy = model_factory()

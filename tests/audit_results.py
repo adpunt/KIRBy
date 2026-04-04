@@ -29,7 +29,7 @@ MOLECULAR_FACTORY_REPS = [
     'mordred_pca50',
 ]
 MOLECULAR_DATASETS = [
-    'logd', 'caco2', 'herg', 'qm9',
+    'logd', 'caco2', 'herg_ki', 'qm9',
     'adme_hlm', 'adme_rlm', 'adme_mdr1', 'adme_solubility',
 ]
 

@@ -32,7 +32,7 @@ from sklearn.ensemble import RandomForestClassifier
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy, cv_split,
-    get_precomputed_search,
+    get_precomputed_search, get_domain_metric,
 )
 from experiments.federated.federated_helpers import (
     smiles_to_fluid_df, cluster_training_only, inject_noise_per_silo,
@@ -119,19 +119,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         labels = labels[valid_idx]
         if groups is not None:
             groups = groups[valid_idx]
+        smiles = [smiles[i] for i in valid_idx]
 
     n_samples = len(labels_binary)
 
     # ── Get optimal hybrid config from precomputed search ──
     augs = data.get('augmentations')
     aug_cond = 'uncapped' if augs else 'none'
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     try:
         search = get_precomputed_search(
             reps, labels, groups,
             budget=100, aug_condition=aug_cond,
             augmentations=augs,
             speed=config.get('search_speed', 'fast'),
-            precomputed=data.get('precomputed_searches'))
+            precomputed=data.get('precomputed_searches'),
+            metric=metric_name,
+            task_type=data.get('task_type', 'regression'),
+            domain=data.get('domain', 'molecular'))
         bp_entry = search.best_by_model.get('rf')
         bp = bp_entry['blueprint'] if bp_entry else None
     except Exception:
