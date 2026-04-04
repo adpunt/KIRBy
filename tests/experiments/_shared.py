@@ -132,12 +132,15 @@ def create_hybrid_cached(train_reps, y_train, train_idx,
 
     try:
         fd, tmp = tempfile.mkstemp(dir=str(cache_dir), suffix='.tmp')
+        fd_closed = False
         try:
             os.write(fd, pickle.dumps(feature_info))
             os.close(fd)
+            fd_closed = True
             os.replace(tmp, str(cache_path))
         except Exception:
-            os.close(fd)
+            if not fd_closed:
+                os.close(fd)
             try:
                 os.unlink(tmp)
             except OSError:
