@@ -572,8 +572,18 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
                                          lower_is_better=lower_is_better,
                                          internal_evaluator=internal_evaluator)
 
-            baseline_scores[rep_name] = max(score, 0.0)  # Clip negative scores to 0
-    
+            baseline_scores[rep_name] = score
+
+        # Shift scores to non-negative (weighting schemes require >= 0).
+        # Preserves relative ordering.  Negated lower-is-better scores
+        # (e.g. -RMSE) are all negative, so a simple max(,0) would clip
+        # them all to 0 — shift by min instead.
+        if baseline_scores:
+            min_val = min(baseline_scores.values())
+            if min_val < 0:
+                baseline_scores = {rn: s - min_val
+                                   for rn, s in baseline_scores.items()}
+
     # Apply weighting scheme to transform baseline scores into weights
     weights = _compute_allocation_weights(baseline_scores, weighting_scheme,
                                           weighting_params,
@@ -1695,12 +1705,10 @@ def iterative_augmentation(
             # Only consider base feature columns for replacement (indices 0..n_base-1
             # of the *current* hybrid — augmentation cols are after n_base)
             base_perm_imp = perm_imp[:n_base]
-            if lower_is_better:
-                # For lower-is-better, permutation_importance with default scorer
-                # gives negative importances for helpful features; worst = highest
-                worst_base_idx = int(np.argmax(base_perm_imp))
-            else:
-                worst_base_idx = int(np.argmin(base_perm_imp))
+            # make_scorer with greater_is_better=False negates the metric, so
+            # importance is positive for helpful features regardless of metric
+            # direction.  Worst feature = lowest importance.
+            worst_base_idx = int(np.argmin(base_perm_imp))
 
             # A/B test: replace worst base feature with this aug feature
             X_test_train = X_cur_train.copy()
@@ -1892,8 +1900,9 @@ def _find_worst_base_feature(X_cur_train, X_cur_val, y_train, y_val,
                                     random_state=42, scoring=scoring)
     base_imp = result.importances_mean[:n_base]
 
-    if lower_is_better:
-        return int(np.argmax(base_imp))
+    # make_scorer with greater_is_better=False negates the metric, so
+    # permutation importance is always positive for helpful features
+    # regardless of metric direction.  Worst feature = lowest importance.
     return int(np.argmin(base_imp))
 
 
