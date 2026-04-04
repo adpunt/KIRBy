@@ -22,7 +22,10 @@ EMAIL="adelaide.punt@stcatz.ox.ac.uk"
 WRAP_PREFIX="cd /data/stat-cadd/scat9264/KIRBy && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
 COUNT=0
 
-CONDITIONS="general_none general_uncapped general_capped top_none top_uncapped top_capped"
+CONDITIONS="general_none general_uncapped top_none top_uncapped"
+# NOTE: capped conditions removed — _shared.py already skips capped in precompute.
+# Experiments that need capped (C02/C05/C06/C07/C09) call create_hybrid directly.
+# For on-demand capping of uncapped results, use cap_hybrid() (TODO).
 
 submit() {
     local name=$1
@@ -49,7 +52,7 @@ submit_dataset() {
 
     for cond in ${CONDITIONS}; do
         submit "${ds}_${cond}" \
-            "python tests/precompute_hybrids.py ${ds} --condition ${cond} --speed fast" \
+            "python tests/precompute_hybrids.py ${ds} --condition ${cond} --speed full" \
             "${mem}" "${time_limit}"
     done
 }
@@ -123,7 +126,7 @@ case "$MODE" in
         run_tcga
         run_reaction
         echo "============================================"
-        echo "Total: ${COUNT} SLURM jobs (40 datasets × 6 conditions)"
+        echo "Total: ${COUNT} SLURM jobs (40 datasets × 4 conditions)"
         echo "============================================"
         ;;
     *)
