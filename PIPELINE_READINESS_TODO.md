@@ -1068,6 +1068,27 @@ All resubmitted on HTC long partition with GPU, 256G, 48-96h wall time.
 20. ~~**DNA foundation model rep implementation**~~ **DONE** — 14 FM reps implemented in `src/kirby/representations/nucleotide.py`. Survey results on server at `tests/results/nucleotide_survey/`.
 21. **Nucleotide tier review** — pull survey results, review all 22 datasets with FM reps, decide tiers. Implementation done, pipeline readiness pending review.
 
+### OPEN — Adaptive pruning (F15)
+
+**Goal:** After fold 1 on a given dataset, prune search dimensions (strategies, evaluators, importance methods) that are consistently bad, then run folds 2-5 with reduced search space. Saves ~20-50% compute.
+
+**Status:** F15 experiment script written (`tests/experiments/framework/f15_adaptive_pruning_validation.py`) but has 8 known bugs (see below). CANNOT run independently — must run as part of the precompute pipeline (the precompute IS the search, and adaptive pruning reduces that search).
+
+**Preliminary analysis (F12 data, 6 datasets):**
+- Strategies are the only prunable dimension — evaluators and importance methods always produce winners
+- "Never top-1 on fold 1" rule prunes avg 4.2/13 strategies per dataset with 0 lost winners
+- "Top-3 in <10% of groups" rule prunes 2.2/ds with 0 lost
+- "Top-3 in <15%" starts losing winners (6/44)
+- These results are from F12's limited search space (24 groups/dataset). Full precompute has ~1,170 groups — rules need re-validation
+
+**Blockers:**
+1. F15 script has 8 bugs (missing _impute_nan in alloc cache, missing MODEL_MAX_BUDGET caps, bare except, non-deterministic set(), wrong n_folds, unnecessary import, no matched flag, unverified _resolve_metric import)
+2. Need per-fold data from full search space to validate fold stability (does fold 1's "bad" set predict folds 2-5?)
+3. Rule selection (top-k threshold, percentage threshold, budget filtering) needs data-driven decision
+4. Implementation in find_best_hybrid needs design: where does pruning happen, how is it cached, is it default-on or opt-in
+
+**Decision needed:** Whether to integrate pruning into find_best_hybrid BEFORE the precompute (saves compute but adds risk) or run the precompute without pruning first, then validate pruning rules on the results, then re-run with pruning.
+
 ### ANALYSIS — After precompute completes
 
 22. **General hybrid vs base rep analysis** — `tests/analysis/general_hybrid_vs_base.py`. Run on server after `precompute_hybrids.py` finishes:
