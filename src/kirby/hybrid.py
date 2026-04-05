@@ -743,6 +743,7 @@ def allocate_dominant_greedy(rep_dict_train, rep_dict_val, train_labels, val_lab
     X_train_init, init_feat_info = _create_hybrid_with_allocation(
         rep_dict_train, train_labels, allocation,
         importance_cache=_importance_cache,
+        precomputed_importance=precomputed_importance,
     )
     X_val_init = apply_feature_selection(rep_dict_val, init_feat_info)
     best_val_score = _evaluate_allocation(X_train_init, X_val_init, train_labels, val_labels,
@@ -782,6 +783,7 @@ def allocate_dominant_greedy(rep_dict_train, rep_dict_val, train_labels, val_lab
             X_train_trial, feat_info = _create_hybrid_with_allocation(
                 rep_dict_train, train_labels, trial_allocation,
                 importance_cache=_importance_cache,
+                precomputed_importance=precomputed_importance,
             )
             X_val_trial = apply_feature_selection(rep_dict_val, feat_info)
             score = _evaluate_allocation(X_train_trial, X_val_trial, train_labels, val_labels,
@@ -1052,20 +1054,12 @@ def _create_hybrid_with_allocation(rep_dict, labels, allocation,
             importances = importance_cache[name]
 
         if importances is None:
-            # Fallback: compute via RF (only if no precomputed scores available)
-            scaler = StandardScaler()
-            X_scaled = scaler.fit_transform(X_clipped)
-
-            if is_classification:
-                rf = RandomForestClassifier(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
-            else:
-                rf = RandomForestRegressor(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
-
-            rf.fit(X_scaled, labels)
-            importances = np.nan_to_num(rf.feature_importances_, nan=0.0)
-
-            if importance_cache is not None:
-                importance_cache[name] = importances
+            raise ValueError(
+                f"No importance scores for rep '{name}'. "
+                f"precomputed_importance and importance_cache are both missing this rep. "
+                f"This likely means the importance pre-computation in find_best_hybrid "
+                f"failed or the scores weren't passed through."
+            )
 
         n_select = min(n_select, X_clipped.shape[1])
         top_idx = np.argsort(importances)[-n_select:][::-1]
