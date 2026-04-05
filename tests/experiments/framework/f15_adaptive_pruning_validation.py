@@ -208,71 +208,97 @@ def run_f15(dataset_name, output_dir):
         total += len(strategies) * len(importance_methods) * len(model_evals) * len(model_budgets)
     print(f"  {total} configs × {n_folds} folds = {total * n_folds} evaluations")
 
-    # Evaluate ALL configs, recording PER-FOLD scores
-    print(f"\n  Evaluating...")
-    t_start = time.time()
-    all_results = []
-    config_count = 0
-
+    # Build flat config list
+    configs = []
     for strat in strategies:
         for imp in importance_methods:
-            for model_name, model in models.items():
+            for model_name in models:
                 model_budgets = _budgets_for_model(model_name, budgets)
                 model_evals = _evaluators_for_model(model_name, evaluator_names)
-
                 for ev in model_evals:
-                    matched = (ev == model_name)
-
                     for bgt in model_budgets:
-                        config_count += 1
-                        if config_count % 200 == 0:
-                            elapsed = time.time() - t_start
-                            pct = config_count / total * 100
-                            print(f"    {config_count}/{total} ({pct:.0f}%) "
-                                  f"{elapsed:.0f}s...")
+                        configs.append((strat, imp, model_name, ev, bgt))
 
-                        fold_scores = []
-                        for fold_idx in range(n_folds):
-                            fold_importance = importance_cache.get(
-                                (fold_idx, imp))
+    # Evaluate one config across all folds
+    # Selection dedup: if two configs produce the same feature selection
+    # (same strategy + importance + evaluator + budget → same allocation),
+    # we can reuse scores across downstream models.
+    _selection_cache = {}  # (fold_idx, feature_hash) -> {model_name: score}
 
-                            try:
-                                score = _evaluate_single_fold(
-                                    base_reps=reps,
-                                    labels=labels,
-                                    groups=groups,
-                                    fold_split=fold_splits[fold_idx],
-                                    allocation_method=strat,
-                                    budget=bgt,
-                                    importance_method=imp,
-                                    model=model,
-                                    model_name=model_name,
-                                    internal_evaluator=ev,
-                                    metric_fn=metric_fn,
-                                    metric_str=metric_str,
-                                    lower_is_better=lower_is_better,
-                                    precomputed_importance=fold_importance,
-                                )
-                                fold_scores.append(score)
-                            except Exception as e:
-                                if config_count <= 5:
-                                    print(f"      Config {config_count} fold "
-                                          f"{fold_idx} failed: {e}")
-                                fold_scores.append(float('nan'))
+    def _hash_features(feature_info):
+        """Hash the feature selection for dedup."""
+        parts = []
+        for name in sorted(feature_info.keys()):
+            info = feature_info[name]
+            if isinstance(info, dict) and 'selected_indices' in info:
+                parts.append(f"{name}:{tuple(info['selected_indices'])}")
+        return hash(tuple(parts))
 
-                        valid = [s for s in fold_scores if s == s]
-                        all_results.append({
-                            'strategy': strat,
-                            'importance': imp,
-                            'evaluator': ev,
-                            'matched': matched,
-                            'model': model_name,
-                            'budget': bgt,
-                            'fold_scores': fold_scores,
-                            'score_mean': float(np.mean(valid)) if valid else float('nan'),
-                            'score_std': float(np.std(valid)) if valid else float('nan'),
-                            'n_valid_folds': len(valid),
-                        })
+    def _eval_config(cfg):
+        strat, imp, model_name, ev, bgt = cfg
+        model = models[model_name]
+        fold_scores = []
+
+        for fold_idx in range(n_folds):
+            fold_importance = importance_cache.get((fold_idx, imp))
+
+            try:
+                score = _evaluate_single_fold(
+                    base_reps=reps,
+                    labels=labels,
+                    groups=groups,
+                    fold_split=fold_splits[fold_idx],
+                    allocation_method=strat,
+                    budget=bgt,
+                    importance_method=imp,
+                    model=model,
+                    model_name=model_name,
+                    internal_evaluator=ev,
+                    metric_fn=metric_fn,
+                    metric_str=metric_str,
+                    lower_is_better=lower_is_better,
+                    precomputed_importance=fold_importance,
+                )
+                fold_scores.append(score)
+            except Exception:
+                fold_scores.append(float('nan'))
+
+        valid = [s for s in fold_scores if s == s]
+        return {
+            'strategy': strat,
+            'importance': imp,
+            'evaluator': ev,
+            'matched': (ev == model_name),
+            'model': model_name,
+            'budget': bgt,
+            'fold_scores': fold_scores,
+            'score_mean': float(np.mean(valid)) if valid else float('nan'),
+            'score_std': float(np.std(valid)) if valid else float('nan'),
+            'n_valid_folds': len(valid),
+        }
+
+    # Parallel evaluation
+    print(f"\n  Evaluating {len(configs)} configs (parallel)...")
+    t_start = time.time()
+    n_jobs = min(len(configs), os.cpu_count() or 1)
+
+    try:
+        from joblib import Parallel, delayed
+        all_results = Parallel(n_jobs=n_jobs, prefer='threads')(
+            delayed(_eval_config)(cfg) for cfg in configs
+        )
+        elapsed = time.time() - t_start
+        print(f"  Parallel done: {len(all_results)} configs, {n_jobs} workers, "
+              f"{elapsed:.0f}s")
+    except ImportError:
+        print(f"  joblib unavailable, running sequentially...")
+        all_results = []
+        for i, cfg in enumerate(configs, 1):
+            if i % 200 == 0:
+                elapsed = time.time() - t_start
+                print(f"    {i}/{len(configs)} ({i/len(configs)*100:.0f}%) "
+                      f"{elapsed:.0f}s")
+            all_results.append(_eval_config(cfg))
 
     elapsed = time.time() - t_start
     print(f"\n  Done: {len(all_results)} configs in {elapsed:.0f}s")
