@@ -142,7 +142,7 @@ Code changes applied (2026-03-29 → 2026-04-03):
 Remaining:
 1. ~~Clear hybrid caches on server~~ **DONE** (2026-03-29)
 2. Push code + pull on server (`git push` → `git pull` on ARC)
-3. ~~Begin preliminary runs on ready datasets~~ **IN PROGRESS** (2026-04-04) — full precompute v3 submitted for all 40 ready datasets. **Job tracker: [`PRECOMPUTE_JOB_TRACKER.md`](PRECOMPUTE_JOB_TRACKER.md)** (160 jobs, IDs 11717057–11717216). Full speed (5-fold, 13 strategies), 4 conditions (capped removed), cache v9 (deterministic scaffold groups). v1/v2 cancelled due to `list(set())` non-determinism bug + wrong speed tier.
+3. ~~Begin preliminary runs on ready datasets~~ **IN PROGRESS** (2026-04-05) — precompute v4 submitted for all 40 ready datasets. **Job tracker: [`PRECOMPUTE_JOB_TRACKER.md`](PRECOMPUTE_JOB_TRACKER.md)** (160 jobs, IDs 11728481–11728687). Medium partition, 64G, full speed (5-fold, 13 strategies), 4 conditions (no capped), no FT, cache v9. v1-v3 cancelled (see tracker for history).
 
 ### ~~FT experiments~~ — MOSTLY DONE (2026-04-04)
 
