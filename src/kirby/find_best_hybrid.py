@@ -61,21 +61,27 @@ _CACHE_VERSION = 11  # v11: 5 evaluators in both tiers, Blueprint default match,
 
 
 def _impute_nan(X_train, X_val):
-    """Replace NaN with per-feature training median, clip inf.
+    """Impute NaN with training median, drop all-NaN columns, clip inf.
 
     Training median is computed from X_train and applied to both
     X_train and X_val (no leakage from val into imputation).
+    Columns that are entirely NaN in training are dropped from both.
     """
     # Clip inf first
     X_train = np.clip(X_train, -1e10, 1e10)
     X_val = np.clip(X_val, -1e10, 1e10)
 
+    # Drop columns that are entirely NaN in training (no signal)
+    all_nan_cols = np.isnan(X_train).all(axis=0)
+    if all_nan_cols.any():
+        keep = ~all_nan_cols
+        X_train = X_train[:, keep]
+        X_val = X_val[:, keep]
+
     # Per-feature median from training data only
     nan_mask_train = np.isnan(X_train)
     if nan_mask_train.any():
         medians = np.nanmedian(X_train, axis=0)
-        # If an entire column is NaN, median is NaN — fill with 0
-        medians = np.where(np.isnan(medians), 0.0, medians)
         # Apply to train
         inds_train = np.where(nan_mask_train)
         X_train[inds_train] = medians[inds_train[1]]
@@ -89,7 +95,6 @@ def _impute_nan(X_train, X_val):
         nan_mask_val = np.isnan(X_val)
         if nan_mask_val.any():
             medians = np.nanmedian(X_train, axis=0)
-            medians = np.where(np.isnan(medians), 0.0, medians)
             inds_val = np.where(nan_mask_val)
             X_val[inds_val] = medians[inds_val[1]]
 
