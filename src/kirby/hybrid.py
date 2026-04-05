@@ -3483,6 +3483,7 @@ def create_hybrid(base_reps, labels,
             internal_evaluator=internal_evaluator,
             model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
             greedy_tolerance=kwargs.get('greedy_tolerance', 0.0),
+            precomputed_importance=precomputed_importance,
         )
 
         if filter_index_maps:
