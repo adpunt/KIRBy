@@ -56,6 +56,19 @@ else
     export PYTHONNOUSERSITE=1
 fi
 
+# Fast mode: skip all install checks (for precompute and other batch jobs
+# where the venv is already set up). Set KIRBY_SKIP_INSTALLS=1 before sourcing.
+if [ "${KIRBY_SKIP_INSTALLS:-0}" = "1" ]; then
+    # Still need torch lib path for CUDA
+    module load CUDA 2>/dev/null || true
+    TORCH_LIB=$(python -c "import torch; print(torch.__path__[0] + '/lib')" 2>/dev/null)
+    if [ -n "$TORCH_LIB" ] && [ -d "$TORCH_LIB" ]; then
+        export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$TORCH_LIB"
+    fi
+    true
+    return 0 2>/dev/null || exit 0
+fi
+
 # constraints.txt locks numpy/pandas/scipy/sklearn/torch so NO pip install can upgrade them
 CONSTRAINTS="-c ${SCRIPT_DIR}/constraints.txt"
 

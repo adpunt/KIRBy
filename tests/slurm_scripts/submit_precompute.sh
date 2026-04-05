@@ -21,7 +21,7 @@ set -euo pipefail
 
 MODE=${1:-all}
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
-WRAP_PREFIX="cd /data/stat-cadd/scat9264/KIRBy && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
+WRAP_PREFIX="cd /data/stat-cadd/scat9264/KIRBy && export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
 COUNT=0
 
 CONDITIONS="general_none general_uncapped top_none top_uncapped"
@@ -41,7 +41,7 @@ submit() {
         --time="${time_limit}" --partition=medium \
         --mem="${mem}" \
         --mail-user="${EMAIL}" --mail-type=FAIL \
-        --wrap="${WRAP_PREFIX} && sleep \$((RANDOM % 120)) && ${cmd}" \
+        --wrap="${WRAP_PREFIX} && ${cmd}" \
         | awk '{print $4}')
     echo "  $J  pc_${name}"
     COUNT=$((COUNT + 1))
