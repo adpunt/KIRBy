@@ -897,7 +897,7 @@ SPEED_TIERS = {
         # 13 F12-validated strategies (covers all 24 dataset×model winners).
         # Pruned from 31: dropped all never-top-3, redundant rank_exp variants,
         # and strategies whose wins were <0.5% from another kept strategy.
-        'importance_methods': ['deeplift', 'lightgbm_gain'],
+        'importance_methods': ['deeplift', 'lightgbm_gain', 'treeshap'],
         'allocation_methods': [
             # Multi-win strategies (2-3 wins each)
             'top_2', 'top_3', 'top_5',
