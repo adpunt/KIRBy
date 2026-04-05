@@ -57,7 +57,7 @@ from sklearn.preprocessing import StandardScaler
 
 warnings.filterwarnings('ignore')
 
-_CACHE_VERSION = 11  # v11: 5 evaluators in both tiers, Blueprint default match, median NaN impute
+_CACHE_VERSION = 12  # v12: full budgets for full speed, greedy uses precomputed importance
 
 
 def _impute_nan(X_train, X_val):

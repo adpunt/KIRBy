@@ -41,7 +41,7 @@ submit() {
         --time="${time_limit}" --partition=medium \
         --mem="${mem}" \
         --mail-user="${EMAIL}" --mail-type=FAIL \
-        --wrap="${WRAP_PREFIX} && ${cmd}" \
+        --wrap="${WRAP_PREFIX} && sleep \$((RANDOM % 30)) && ${cmd}" \
         | awk '{print $4}')
     echo "  $J  pc_${name}"
     COUNT=$((COUNT + 1))

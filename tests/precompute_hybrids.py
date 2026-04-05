@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import numpy as np
 
 from experiments._shared import (
-    load_data, SCREENING_BUDGETS, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
+    load_data, SCREENING_BUDGETS, FULL_BUDGETS, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
 )
 from experiments.complexity.complexity_helpers import DATASET_REPS
 from kirby.find_best_hybrid import find_best_hybrid
@@ -209,7 +209,7 @@ def precompute_dataset(dataset_name, speed='fast', tiers=('general', 'top'),
     # NOTE: pass models=None so find_best_hybrid uses speed-tier defaults.
     # This matches how get_precomputed_search() calls find_best_hybrid,
     # ensuring identical cache keys. Do NOT pass DOWNSTREAM_MODELS explicitly.
-    budgets = SCREENING_BUDGETS
+    budgets = FULL_BUDGETS if speed == 'full' else SCREENING_BUDGETS
 
     # Build conditions
     conditions = []
