@@ -1143,6 +1143,7 @@ def _evaluate_single(
         if is_binary:
             X_train_s = X_train.astype(np.float32)
             X_val_s = X_val.astype(np.float32)
+            X_train_s, X_val_s = _impute_nan(X_train_s, X_val_s)
         else:
             scaler = StandardScaler()
             X_train_s = scaler.fit_transform(X_train)
