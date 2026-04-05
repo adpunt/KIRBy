@@ -142,7 +142,7 @@ Code changes applied (2026-03-29 → 2026-04-03):
 Remaining:
 1. ~~Clear hybrid caches on server~~ **DONE** (2026-03-29)
 2. Push code + pull on server (`git push` → `git pull` on ARC)
-3. ~~Begin preliminary runs on ready datasets~~ **IN PROGRESS** (2026-04-05) — precompute v5 submitted for all 40 ready datasets. **Job tracker: [`PRECOMPUTE_JOB_TRACKER.md`](PRECOMPUTE_JOB_TRACKER.md)** (160 jobs, IDs 11729100–11729261). Medium partition, 64G, 4 CPUs, full speed, 4 conditions, no FT, KIRBY_SKIP_INSTALLS=1, cache v9. v1-v4 cancelled (see tracker).
+3. ~~Begin preliminary runs on ready datasets~~ **IN PROGRESS** (2026-04-05) — precompute v6 submitted. **Job tracker: [`PRECOMPUTE_JOB_TRACKER.md`](PRECOMPUTE_JOB_TRACKER.md)** (160 jobs, IDs 11729406–11729565). Medium, 64G, 4 CPUs, full speed (3 imp methods incl treeshap), 4 conditions, no FT, SKIP_INSTALLS, cache v9.
 
 ### ~~FT experiments~~ — MOSTLY DONE (2026-04-04)
 
