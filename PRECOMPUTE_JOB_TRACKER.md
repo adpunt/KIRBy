@@ -1,10 +1,10 @@
 # Precompute Hybrid Search — Job ID Tracker
 
-**Submitted:** 2026-04-05 (v5 — KIRBY_SKIP_INSTALLS, medium, 64G, no FT, full speed)
+**Submitted:** 2026-04-05 (v6 — treeshap added to full tier)
 **Script:** `tests/slurm_scripts/submit_precompute.sh` (all domains)
-**Total:** 40 datasets × 4 conditions = 160 SLURM jobs (IDs 11729100–11729261)
-**Partition:** medium (48h max) | **Memory:** 64G | **CPUs:** 4 | **Time:** 12h | **Speed:** full (5-fold, 13 strategies)
-**Cache version:** v9 (deterministic scaffold groups)
+**Total:** 40 datasets × 4 conditions = 160 SLURM jobs (IDs 11729406–11729565)
+**Partition:** medium (48h max) | **Memory:** 64G | **CPUs:** 4 | **Time:** 12h | **Speed:** full (5-fold, 13 strategies, 3 importance methods)
+**Cache version:** v9 | **KIRBY_SKIP_INSTALLS:** 1 | **FT:** off
 
 ## Conditions (4 per dataset)
 
@@ -18,8 +18,8 @@
 ## Quick status check
 
 ```bash
-sacct -j 11729100-11729261 --format=State --noheader | grep -v "\.ba\|\.ex" | sort | uniq -c
-sacct -j 11729100-11729261 --format=JobID,JobName%45,State,Elapsed,ExitCode | grep -v "\.ba\|\.ex" | grep -E "FAILED|TIMEOUT|OUT_OF_ME"
+sacct -j 11729406-11729565 --format=State --noheader | grep -v "\.ba\|\.ex" | sort | uniq -c
+sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | grep -v "\.ba\|\.ex" | grep -E "FAILED|TIMEOUT|OUT_OF_ME"
 ```
 
 ---
@@ -29,58 +29,58 @@ sacct -j 11729100-11729261 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 ### 1. herg_ki
 | Job ID | Condition |
 |--------|-----------|
-| 11729100 | general_none |
-| 11729101 | general_uncapped |
-| 11729102 | top_none |
-| 11729103 | top_uncapped |
+| 11729406 | general_none |
+| 11729407 | general_uncapped |
+| 11729408 | top_none |
+| 11729409 | top_uncapped |
 
 ### 2. caco2
 | Job ID | Condition |
 |--------|-----------|
-| 11729104 | general_none |
-| 11729105 | general_uncapped |
-| 11729106 | top_none |
-| 11729107 | top_uncapped |
+| 11729410 | general_none |
+| 11729411 | general_uncapped |
+| 11729412 | top_none |
+| 11729413 | top_uncapped |
 
 ### 3. logd
 | Job ID | Condition |
 |--------|-----------|
-| 11729108 | general_none |
-| 11729109 | general_uncapped |
-| 11729110 | top_none |
-| 11729111 | top_uncapped |
+| 11729414 | general_none |
+| 11729415 | general_uncapped |
+| 11729416 | top_none |
+| 11729417 | top_uncapped |
 
 ### 4. qm9
 | Job ID | Condition |
 |--------|-----------|
-| 11729112 | general_none |
-| 11729113 | general_uncapped |
-| 11729114 | top_none |
-| 11729115 | top_uncapped |
+| 11729418 | general_none |
+| 11729419 | general_uncapped |
+| 11729420 | top_none |
+| 11729421 | top_uncapped |
 
 ### 5. adme_hlm
 | Job ID | Condition |
 |--------|-----------|
-| 11729116 | general_none |
-| 11729117 | general_uncapped |
-| 11729118 | top_none |
-| 11729119 | top_uncapped |
+| 11729422 | general_none |
+| 11729423 | general_uncapped |
+| 11729424 | top_none |
+| 11729425 | top_uncapped |
 
 ### 6. adme_rlm
 | Job ID | Condition |
 |--------|-----------|
-| 11729120 | general_none |
-| 11729121 | general_uncapped |
-| 11729122 | top_none |
-| 11729123 | top_uncapped |
+| 11729426 | general_none |
+| 11729427 | general_uncapped |
+| 11729428 | top_none |
+| 11729429 | top_uncapped |
 
 ### 7. adme_mdr1
 | Job ID | Condition |
 |--------|-----------|
-| 11729124 | general_none |
-| 11729125 | general_uncapped |
-| 11729126 | top_none |
-| 11729127 | top_uncapped |
+| 11729430 | general_none |
+| 11729431 | general_uncapped |
+| 11729432 | top_none |
+| 11729433 | top_uncapped |
 
 ---
 
@@ -89,90 +89,90 @@ sacct -j 11729100-11729261 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 ### 8. flab_thermo_tresanco
 | Job ID | Condition |
 |--------|-----------|
-| 11729128 | general_none |
-| 11729129 | general_uncapped |
-| 11729130 | top_none |
-| 11729132 | top_uncapped |
+| 11729434 | general_none |
+| 11729435 | general_uncapped |
+| 11729436 | top_none |
+| 11729437 | top_uncapped |
 
 ### 9. flab_pk_jain_heprt
 | Job ID | Condition |
 |--------|-----------|
-| 11729133 | general_none |
-| 11729134 | general_uncapped |
-| 11729135 | top_none |
-| 11729136 | top_uncapped |
+| 11729438 | general_none |
+| 11729439 | general_uncapped |
+| 11729440 | top_none |
+| 11729441 | top_uncapped |
 
 ### 10. flab_pk_jain_fcrnrt
 | Job ID | Condition |
 |--------|-----------|
-| 11729137 | general_none |
-| 11729138 | general_uncapped |
-| 11729139 | top_none |
-| 11729140 | top_uncapped |
+| 11729442 | general_none |
+| 11729443 | general_uncapped |
+| 11729444 | top_none |
+| 11729445 | top_uncapped |
 
 ### 11. flab_polyreact_jain_cic
 | Job ID | Condition |
 |--------|-----------|
-| 11729141 | general_none |
-| 11729142 | general_uncapped |
-| 11729143 | top_none |
-| 11729144 | top_uncapped |
+| 11729446 | general_none |
+| 11729447 | general_uncapped |
+| 11729448 | top_none |
+| 11729449 | top_uncapped |
 
 ### 12. flab_aggregation_jain_hicrt
 | Job ID | Condition |
 |--------|-----------|
-| 11729145 | general_none |
-| 11729146 | general_uncapped |
-| 11729147 | top_none |
-| 11729148 | top_uncapped |
+| 11729450 | general_none |
+| 11729451 | general_uncapped |
+| 11729452 | top_none |
+| 11729453 | top_uncapped |
 
 ### 13. flab_thermo_jain
 | Job ID | Condition |
 |--------|-----------|
-| 11729149 | general_none |
-| 11729150 | general_uncapped |
-| 11729151 | top_none |
-| 11729152 | top_uncapped |
+| 11729454 | general_none |
+| 11729455 | general_uncapped |
+| 11729456 | top_none |
+| 11729457 | top_uncapped |
 
 ### 14. abcov_kd
 | Job ID | Condition |
 |--------|-----------|
-| 11729153 | general_none |
-| 11729154 | general_uncapped |
-| 11729155 | top_none |
-| 11729156 | top_uncapped |
+| 11729458 | general_none |
+| 11729459 | general_uncapped |
+| 11729460 | top_none |
+| 11729461 | top_uncapped |
 
 ### 15. flab_aggregation_jain
 | Job ID | Condition |
 |--------|-----------|
-| 11729157 | general_none |
-| 11729158 | general_uncapped |
-| 11729159 | top_none |
-| 11729160 | top_uncapped |
+| 11729462 | general_none |
+| 11729463 | general_uncapped |
+| 11729464 | top_none |
+| 11729465 | top_uncapped |
 
 ### 16. flab_immunogenicity_marks
 | Job ID | Condition |
 |--------|-----------|
-| 11729161 | general_none |
-| 11729162 | general_uncapped |
-| 11729163 | top_none |
-| 11729164 | top_uncapped |
+| 11729466 | general_none |
+| 11729467 | general_uncapped |
+| 11729468 | top_none |
+| 11729469 | top_uncapped |
 
 ### 17. flab_polyreact_jain_bvp
 | Job ID | Condition |
 |--------|-----------|
-| 11729165 | general_none |
-| 11729166 | general_uncapped |
-| 11729167 | top_none |
-| 11729168 | top_uncapped |
+| 11729470 | general_none |
+| 11729471 | general_uncapped |
+| 11729472 | top_none |
+| 11729473 | top_uncapped |
 
 ### 18. ddg_combined
 | Job ID | Condition |
 |--------|-----------|
-| 11729169 | general_none |
-| 11729170 | general_uncapped |
-| 11729171 | top_none |
-| 11729172 | top_uncapped |
+| 11729474 | general_none |
+| 11729475 | general_uncapped |
+| 11729476 | top_none |
+| 11729477 | top_uncapped |
 
 ---
 
@@ -181,42 +181,42 @@ sacct -j 11729100-11729261 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 ### 19. flab_binding_koenig
 | Job ID | Condition |
 |--------|-----------|
-| 11729173 | general_none |
-| 11729174 | general_uncapped |
-| 11729175 | top_none |
-| 11729176 | top_uncapped |
+| 11729478 | general_none |
+| 11729479 | general_uncapped |
+| 11729480 | top_none |
+| 11729481 | top_uncapped |
 
 ### 20. flab_expression_koenig
 | Job ID | Condition |
 |--------|-----------|
-| 11729177 | general_none |
-| 11729178 | general_uncapped |
-| 11729179 | top_none |
-| 11729180 | top_uncapped |
+| 11729482 | general_none |
+| 11729483 | general_uncapped |
+| 11729484 | top_none |
+| 11729485 | top_uncapped |
 
 ### 21. flab_binding_adams
 | Job ID | Condition |
 |--------|-----------|
-| 11729181 | general_none |
-| 11729182 | general_uncapped |
-| 11729183 | top_none |
-| 11729184 | top_uncapped |
+| 11729486 | general_none |
+| 11729487 | general_uncapped |
+| 11729488 | top_none |
+| 11729489 | top_uncapped |
 
 ### 22. flab_expression_adams
 | Job ID | Condition |
 |--------|-----------|
-| 11729185 | general_none |
-| 11729186 | general_uncapped |
-| 11729187 | top_none |
-| 11729188 | top_uncapped |
+| 11729490 | general_none |
+| 11729491 | general_uncapped |
+| 11729492 | top_none |
+| 11729493 | top_uncapped |
 
 ### 23. flab_binding_phillips_h3
 | Job ID | Condition |
 |--------|-----------|
-| 11729189 | general_none |
-| 11729190 | general_uncapped |
-| 11729191 | top_none |
-| 11729192 | top_uncapped |
+| 11729494 | general_none |
+| 11729495 | general_uncapped |
+| 11729496 | top_none |
+| 11729497 | top_uncapped |
 
 ---
 
@@ -225,42 +225,42 @@ sacct -j 11729100-11729261 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 ### 24. abagym_Ang2
 | Job ID | Condition |
 |--------|-----------|
-| 11729193 | general_none |
-| 11729194 | general_uncapped |
-| 11729195 | top_none |
-| 11729196 | top_uncapped |
+| 11729498 | general_none |
+| 11729499 | general_uncapped |
+| 11729500 | top_none |
+| 11729501 | top_uncapped |
 
 ### 25. abagym_EGFR
 | Job ID | Condition |
 |--------|-----------|
-| 11729197 | general_none |
-| 11729198 | general_uncapped |
-| 11729199 | top_none |
-| 11729200 | top_uncapped |
+| 11729502 | general_none |
+| 11729503 | general_uncapped |
+| 11729504 | top_none |
+| 11729505 | top_uncapped |
 
 ### 26. abagym_HER2
 | Job ID | Condition |
 |--------|-----------|
-| 11729201 | general_none |
-| 11729202 | general_uncapped |
-| 11729203 | top_none |
-| 11729204 | top_uncapped |
+| 11729506 | general_none |
+| 11729507 | general_uncapped |
+| 11729508 | top_none |
+| 11729509 | top_uncapped |
 
 ### 27. abagym_lysozyme
 | Job ID | Condition |
 |--------|-----------|
-| 11729205 | general_none |
-| 11729206 | general_uncapped |
-| 11729207 | top_none |
-| 11729208 | top_uncapped |
+| 11729510 | general_none |
+| 11729511 | general_uncapped |
+| 11729512 | top_none |
+| 11729513 | top_uncapped |
 
 ### 28. abagym_VEGF
 | Job ID | Condition |
 |--------|-----------|
-| 11729209 | general_none |
-| 11729210 | general_uncapped |
-| 11729211 | top_none |
-| 11729212 | top_uncapped |
+| 11729514 | general_none |
+| 11729515 | general_uncapped |
+| 11729516 | top_none |
+| 11729517 | top_uncapped |
 
 ---
 
@@ -269,18 +269,18 @@ sacct -j 11729100-11729261 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 ### 29. tz_her2_binary
 | Job ID | Condition |
 |--------|-----------|
-| 11729213 | general_none |
-| 11729214 | general_uncapped |
-| 11729215 | top_none |
-| 11729216 | top_uncapped |
+| 11729518 | general_none |
+| 11729519 | general_uncapped |
+| 11729520 | top_none |
+| 11729521 | top_uncapped |
 
 ### 30. humanness_therapeutic
 | Job ID | Condition |
 |--------|-----------|
-| 11729217 | general_none |
-| 11729218 | general_uncapped |
-| 11729219 | top_none |
-| 11729220 | top_uncapped |
+| 11729522 | general_none |
+| 11729523 | general_uncapped |
+| 11729524 | top_none |
+| 11729525 | top_uncapped |
 
 ---
 
@@ -289,50 +289,50 @@ sacct -j 11729100-11729261 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 ### 31. ginkgo_acsins
 | Job ID | Condition |
 |--------|-----------|
-| 11729221 | general_none |
-| 11729222 | general_uncapped |
-| 11729223 | top_none |
-| 11729224 | top_uncapped |
+| 11729526 | general_none |
+| 11729527 | general_uncapped |
+| 11729528 | top_none |
+| 11729529 | top_uncapped |
 
 ### 32. ginkgo_colloidal
 | Job ID | Condition |
 |--------|-----------|
-| 11729225 | general_none |
-| 11729226 | general_uncapped |
-| 11729227 | top_none |
-| 11729228 | top_uncapped |
+| 11729530 | general_none |
+| 11729531 | general_uncapped |
+| 11729532 | top_none |
+| 11729533 | top_uncapped |
 
 ### 33. ginkgo_heparin
 | Job ID | Condition |
 |--------|-----------|
-| 11729229 | general_none |
-| 11729231 | general_uncapped |
-| 11729232 | top_none |
-| 11729233 | top_uncapped |
+| 11729534 | general_none |
+| 11729535 | general_uncapped |
+| 11729536 | top_none |
+| 11729537 | top_uncapped |
 
 ### 34. ginkgo_hic
 | Job ID | Condition |
 |--------|-----------|
-| 11729234 | general_none |
-| 11729235 | general_uncapped |
-| 11729236 | top_none |
-| 11729237 | top_uncapped |
+| 11729538 | general_none |
+| 11729539 | general_uncapped |
+| 11729540 | top_none |
+| 11729541 | top_uncapped |
 
 ### 35. ginkgo_pr_cho
 | Job ID | Condition |
 |--------|-----------|
-| 11729238 | general_none |
-| 11729239 | general_uncapped |
-| 11729240 | top_none |
-| 11729241 | top_uncapped |
+| 11729542 | general_none |
+| 11729543 | general_uncapped |
+| 11729544 | top_none |
+| 11729545 | top_uncapped |
 
 ### 36. ginkgo_titer
 | Job ID | Condition |
 |--------|-----------|
-| 11729242 | general_none |
-| 11729243 | general_uncapped |
-| 11729244 | top_none |
-| 11729245 | top_uncapped |
+| 11729546 | general_none |
+| 11729547 | general_uncapped |
+| 11729548 | top_none |
+| 11729549 | top_uncapped |
 
 ---
 
@@ -341,18 +341,18 @@ sacct -j 11729100-11729261 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 ### 37. tcga_luad_vs_lusc
 | Job ID | Condition |
 |--------|-----------|
-| 11729246 | general_none |
-| 11729247 | general_uncapped |
-| 11729248 | top_none |
-| 11729249 | top_uncapped |
+| 11729550 | general_none |
+| 11729551 | general_uncapped |
+| 11729552 | top_none |
+| 11729553 | top_uncapped |
 
 ### 38. tcga_brca_pam50
 | Job ID | Condition |
 |--------|-----------|
-| 11729250 | general_none |
-| 11729251 | general_uncapped |
-| 11729252 | top_none |
-| 11729253 | top_uncapped |
+| 11729554 | general_none |
+| 11729555 | general_uncapped |
+| 11729556 | top_none |
+| 11729557 | top_uncapped |
 
 ---
 
@@ -361,18 +361,18 @@ sacct -j 11729100-11729261 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 ### 39. buchwald_hartwig
 | Job ID | Condition |
 |--------|-----------|
-| 11729254 | general_none |
-| 11729255 | general_uncapped |
-| 11729256 | top_none |
-| 11729257 | top_uncapped |
+| 11729558 | general_none |
+| 11729559 | general_uncapped |
+| 11729560 | top_none |
+| 11729561 | top_uncapped |
 
 ### 40. bh_doyle_plates
 | Job ID | Condition |
 |--------|-----------|
-| 11729258 | general_none |
-| 11729259 | general_uncapped |
-| 11729260 | top_none |
-| 11729261 | top_uncapped |
+| 11729562 | general_none |
+| 11729563 | general_uncapped |
+| 11729564 | top_none |
+| 11729565 | top_uncapped |
 
 ---
 
@@ -380,8 +380,9 @@ sacct -j 11729100-11729261 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 
 | Date | Version | Jobs | Details |
 |------|---------|------|---------|
-| 2026-04-04 | v1 | 240 (11707673–11707913) | long, 128-256G, fast speed, 6 conditions. **BUG:** `list(set())` non-deterministic scaffold groups. Cancelled. |
-| 2026-04-04 | v2 | 23 (11716574–11716596) | Resubmit after group fix. Still fast speed. Cancelled. |
-| 2026-04-04 | v3 | 160 (11717057–11717216) | long, 128-256G, full speed, 4 conditions. **STUCK:** 256G too large for queue. FT flag on. Cancelled. |
-| 2026-04-05 | v4 | 160 (11728481–11728687) | medium, 64G, full speed, 4 conditions, no FT. **STUCK:** setup.sh install checks (30+ import checks × 11 jobs on one node). Cancelled. |
-| 2026-04-05 | **v5** | **160 (11729100–11729261)** | **medium, 64G, 4 CPUs, full speed, 4 conditions, no FT, KIRBY_SKIP_INSTALLS=1, cache v9.** |
+| 2026-04-04 | v1 | 240 | long, 128-256G, fast speed, 6 conditions. `list(set())` bug. Cancelled. |
+| 2026-04-04 | v2 | 23 | Resubmit after group fix. Still fast speed. Cancelled. |
+| 2026-04-04 | v3 | 160 | long, 128-256G, full speed, 4 conditions. 256G queue stuck + FT on. Cancelled. |
+| 2026-04-05 | v4 | 160 | medium, 64G, full speed, no FT. setup.sh install checks hung. Cancelled. |
+| 2026-04-05 | v5 | 160 | + KIRBY_SKIP_INSTALLS. Missing treeshap in full tier. Cancelled. |
+| 2026-04-05 | **v6** | **160 (11729406–11729565)** | **medium, 64G, 4 CPUs, full speed (3 imp methods), 4 conditions, no FT, SKIP_INSTALLS, cache v9.** |
