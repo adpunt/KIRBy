@@ -38,7 +38,7 @@ submit() {
     J=$(sbatch \
         --job-name="pc_${name}" \
         --nodes=1 --ntasks=1 --cpus-per-task=8 \
-        --time="${time_limit}" --partition=long \
+        --time="${time_limit}" --partition=medium \
         --mem="${mem}" \
         --mail-user="${EMAIL}" --mail-type=FAIL \
         --wrap="${WRAP_PREFIX} && ${cmd}" \
@@ -67,7 +67,7 @@ echo ""
 run_molecular() {
     echo "--- Molecular (7 × 4 = 28 jobs) ---"
     for ds in herg_ki caco2 logd qm9 adme_hlm adme_rlm adme_mdr1; do
-        submit_dataset "${ds}" 256G 12:00:00
+        submit_dataset "${ds}" 64G 12:00:00
     done
     echo ""
 }
@@ -78,29 +78,29 @@ run_antibody() {
               flab_polyreact_jain_cic flab_aggregation_jain_hicrt flab_thermo_jain \
               abcov_kd flab_aggregation_jain flab_immunogenicity_marks \
               flab_polyreact_jain_bvp ddg_combined; do
-        submit_dataset "${ds}" 256G 12:00:00
+        submit_dataset "${ds}" 64G 12:00:00
     done
 
     echo "--- Antibody DMS (5 × 4 = 20 jobs) ---"
     for ds in flab_binding_koenig flab_expression_koenig flab_binding_adams \
               flab_expression_adams flab_binding_phillips_h3; do
-        submit_dataset "${ds}" 256G 12:00:00
+        submit_dataset "${ds}" 64G 12:00:00
     done
 
     echo "--- AbAgym (5 × 4 = 20 jobs) ---"
     for ds in abagym_Ang2 abagym_EGFR abagym_HER2 abagym_lysozyme abagym_VEGF; do
-        submit_dataset "${ds}" 256G 8:00:00
+        submit_dataset "${ds}" 64G 12:00:00
     done
 
     echo "--- Antibody CLF (2 × 4 = 8 jobs) ---"
     for ds in tz_her2_binary humanness_therapeutic; do
-        submit_dataset "${ds}" 256G 12:00:00
+        submit_dataset "${ds}" 64G 12:00:00
     done
 
     echo "--- Ginkgo (6 × 4 = 24 jobs) ---"
     for ds in ginkgo_acsins ginkgo_colloidal ginkgo_heparin \
               ginkgo_hic ginkgo_pr_cho ginkgo_titer; do
-        submit_dataset "${ds}" 128G 8:00:00
+        submit_dataset "${ds}" 64G 12:00:00
     done
     echo ""
 }
@@ -108,7 +108,7 @@ run_antibody() {
 run_tcga() {
     echo "--- TCGA (2 × 4 = 8 jobs) ---"
     for ds in tcga_luad_vs_lusc tcga_brca_pam50; do
-        submit_dataset "${ds}" 256G 12:00:00
+        submit_dataset "${ds}" 64G 12:00:00
     done
     echo ""
 }
@@ -116,7 +116,7 @@ run_tcga() {
 run_reaction() {
     echo "--- Reaction (2 × 4 = 8 jobs) ---"
     for ds in buchwald_hartwig bh_doyle_plates; do
-        submit_dataset "${ds}" 128G 8:00:00
+        submit_dataset "${ds}" 64G 12:00:00
     done
     echo ""
 }
