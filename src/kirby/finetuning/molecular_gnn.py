@@ -309,7 +309,7 @@ def _load_graphmvp_model(device):
 
     emb_dim = 300
     model = GraphMVP_GNN(num_layer=5, emb_dim=emb_dim, drop_ratio=0.0)
-    state_dict = torch.load(ckpt_path, map_location=device)
+    state_dict = _safe_torch_load(ckpt_path, map_location=device)
     model.load_state_dict(state_dict)
     return model
 
