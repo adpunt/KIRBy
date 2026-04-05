@@ -1625,7 +1625,7 @@ def _run_search(
     # Compute effective config count (respects per-model budget caps)
     total = 0
     for alloc in search_allocation:
-        n_imp = 1 if not _is_importance_sensitive(alloc) else len(search_importance)
+        n_imp = len(search_importance)
         for model_name in models:
             n_ev = len(_evaluators_for_model(model_name))
             n_bgt = len(_budgets_for_model(model_name))
@@ -1763,8 +1763,7 @@ def _run_search(
     configs = []
     for rep_set, rep_set_name in zip(rep_sets, rep_set_names):
         for alloc in search_allocation:
-            imp_sensitive = _is_importance_sensitive(alloc)
-            effective_importance = search_importance if imp_sensitive else [search_importance[0]]
+            effective_importance = search_importance
 
             for model_name, model in models.items():
                 model_budgets = _budgets_for_model(model_name)
@@ -1923,23 +1922,6 @@ def _run_search(
 # Allocation methods where step_size has an effect (greedy-based methods)
 _STEP_SIZE_SENSITIVE = {'greedy', 'dominant_greedy'}
 
-# Allocation methods that ignore importance_method.
-# Empty — greedy now uses precomputed importance scores like everything else.
-_IMPORTANCE_INSENSITIVE = set()
-
-
-def _is_importance_sensitive(alloc_name: str) -> bool:
-    """Check if an allocation method actually uses importance_method.
-
-    Greedy and dominant_greedy use internal RF feature_importances_ regardless
-    of the importance_method parameter, so iterating over importance methods
-    for these allocations produces duplicate results.
-    """
-    from kirby.hybrid import NAMED_ALLOCATIONS
-    base = alloc_name
-    if alloc_name in NAMED_ALLOCATIONS:
-        base = NAMED_ALLOCATIONS[alloc_name][0]
-    return base not in _IMPORTANCE_INSENSITIVE
 
 
 def _run_refinement_phase(
@@ -2000,7 +1982,7 @@ def _run_refinement_phase(
     seen = set()
     unique = []
     for r in sensitive:
-        dedup_imp = r['importance_method'] if _is_importance_sensitive(r['allocation_method']) else '_any_'
+        dedup_imp = r['importance_method']
         key = (r['model'], r['allocation_method'], r['budget'], dedup_imp)
         if key not in seen:
             seen.add(key)
