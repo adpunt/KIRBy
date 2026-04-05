@@ -37,11 +37,11 @@ submit() {
 
     J=$(sbatch \
         --job-name="pc_${name}" \
-        --nodes=1 --ntasks=1 --cpus-per-task=8 \
+        --nodes=1 --ntasks=1 --cpus-per-task=4 \
         --time="${time_limit}" --partition=medium \
         --mem="${mem}" \
         --mail-user="${EMAIL}" --mail-type=FAIL \
-        --wrap="${WRAP_PREFIX} && ${cmd}" \
+        --wrap="${WRAP_PREFIX} && sleep \$((RANDOM % 120)) && ${cmd}" \
         | awk '{print $4}')
     echo "  $J  pc_${name}"
     COUNT=$((COUNT + 1))
