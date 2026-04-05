@@ -57,7 +57,7 @@ from sklearn.preprocessing import StandardScaler
 
 warnings.filterwarnings('ignore')
 
-_CACHE_VERSION = 10  # v10: median imputation for NaN (was zero-fill)
+_CACHE_VERSION = 11  # v11: 5 evaluators in both tiers, Blueprint default match, median NaN impute
 
 
 def _impute_nan(X_train, X_val):
@@ -112,7 +112,7 @@ class Blueprint:
     allocation_method: str
     importance_method: str
     budget: int
-    internal_evaluator: str = 'ridge'
+    internal_evaluator: str = 'match'
     step_size: int = 5
     speed: str = ''
     n_folds: int = 0
@@ -926,7 +926,7 @@ SPEED_TIERS = {
         'allocation_methods': [
             'entropy_1.0', 'top_3', 'top_2',
         ],
-        'internal_evaluators': ['match'],
+        'internal_evaluators': ['match', 'rf', 'svm', 'lightgbm', 'mlp'],
         'n_folds': 3,
     },
     'full': {
@@ -949,7 +949,7 @@ SPEED_TIERS = {
             'rank_exp_d0.5',
             'greedy_fill_s5',
         ],
-        'internal_evaluators': ['match'],
+        'internal_evaluators': ['match', 'rf', 'svm', 'lightgbm', 'mlp'],
         'n_folds': 5,
     },
 }
@@ -1209,7 +1209,7 @@ def _evaluate_hybrid_config(
     importance_method: str,
     model,
     model_name: str,
-    internal_evaluator: str = 'ridge',
+    internal_evaluator: str = 'match',
     groups: Optional[np.ndarray] = None,
     n_folds: int = 5,
     metric_fn: Callable = None,
@@ -1608,7 +1608,7 @@ def _run_search(
             matched_ev = match_map.get(model_name)
             if matched_ev and matched_ev not in evs:
                 evs.append(matched_ev)
-        return evs if evs else ['ridge']
+        return evs if evs else ['rf']
 
     def _budgets_for_model(model_name):
         """Return budgets filtered by per-model cap from MODEL_MAX_BUDGET."""
@@ -2031,7 +2031,7 @@ def _run_refinement_phase(
                     importance_method=r['importance_method'],
                     model=model,
                     model_name=model_name,
-                    internal_evaluator=r.get('internal_evaluator', 'ridge'),
+                    internal_evaluator=r.get('internal_evaluator', 'match'),
                     groups=groups,
                     n_folds=n_folds,
                     metric_fn=metric_fn,
