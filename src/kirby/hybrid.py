@@ -114,9 +114,10 @@ NAMED_ALLOCATIONS = {
 
 def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labels,
                            total_budget=100, step_size=10, patience=3,
-                           internal_evaluator='ridge',
+                           internal_evaluator='match',
                            model=None, metric_fn=None, lower_is_better=False,
-                           greedy_tolerance=0.0):
+                           greedy_tolerance=0.0,
+                           precomputed_importance=None):
     """
     Greedy forward feature allocation with plateau detection.
 
@@ -184,6 +185,7 @@ def allocate_greedy_forward(rep_dict_train, rep_dict_val, train_labels, val_labe
             X_train_trial, feat_info = _create_hybrid_with_allocation(
                 rep_dict_train, train_labels, trial_allocation,
                 importance_cache=_importance_cache,
+                precomputed_importance=precomputed_importance,
             )
             X_val_trial = apply_feature_selection(rep_dict_val, feat_info)
             
@@ -687,9 +689,10 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
 
 def allocate_dominant_greedy(rep_dict_train, rep_dict_val, train_labels, val_labels,
                              total_budget=100, step_size=10, patience=3,
-                             dominant_fraction=0.7, internal_evaluator='ridge',
+                             dominant_fraction=0.7, internal_evaluator='match',
                              model=None, metric_fn=None, lower_is_better=False,
-                             greedy_tolerance=0.0):
+                             greedy_tolerance=0.0,
+                             precomputed_importance=None):
     """
     Dominant-greedy allocation: give the best rep a large share, greedy-fill the rest.
 
@@ -1002,22 +1005,20 @@ def _is_classification_task(labels):
 
 
 def _create_hybrid_with_allocation(rep_dict, labels, allocation,
-                                    importance_cache=None):
+                                    importance_cache=None,
+                                    precomputed_importance=None):
     """Helper: Create hybrid with a pre-computed allocation dict {rep_name: n_features}.
 
-    Always uses RandomForest feature_importances_ for within-rep feature selection.
-    This is intentional: the importance_method parameter in create_hybrid() controls
-    how allocations are *computed* (for methods like performance_weighted), but once
-    we have an allocation, feature selection within each rep uses RF for speed.
-    Greedy/dominant_greedy bypass importance_method entirely — they evaluate
-    allocations by training RF models and using feature_importances_ directly.
+    Uses precomputed_importance scores if provided (from compute_feature_importance),
+    falls back to importance_cache (per-rep cached scores), then to RF as last resort.
 
     Args:
-        importance_cache: Optional dict {rep_name: importance_scores}. When
-            provided, cached importance scores are reused instead of re-fitting
-            an RF.  New scores are written back into the dict so callers in
-            iterative loops (greedy, dominant_greedy) pay the RF cost only once
-            per rep.
+        importance_cache: Optional dict {rep_name: importance_scores}. Mutable —
+            new scores are written back so iterative callers (greedy) pay the
+            compute cost only once per rep.
+        precomputed_importance: Optional dict {rep_name: importance_scores} from
+            the pre-computed importance cache in find_best_hybrid. Takes priority
+            over importance_cache and RF fallback.
     """
     selected_features = []
     feature_info = {}
@@ -1043,24 +1044,26 @@ def _create_hybrid_with_allocation(rep_dict, labels, allocation,
             }
             continue
 
-        # Check cache before fitting RF
-        if importance_cache is not None and name in importance_cache:
+        # Priority: precomputed_importance > importance_cache > RF fallback
+        importances = None
+        if precomputed_importance is not None and name in precomputed_importance:
+            importances = precomputed_importance[name]
+        elif importance_cache is not None and name in importance_cache:
             importances = importance_cache[name]
-        else:
-            # Compute importance via RF
+
+        if importances is None:
+            # Fallback: compute via RF (only if no precomputed scores available)
             scaler = StandardScaler()
             X_scaled = scaler.fit_transform(X_clipped)
 
             if is_classification:
-                model = RandomForestClassifier(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
+                rf = RandomForestClassifier(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
             else:
-                model = RandomForestRegressor(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
+                rf = RandomForestRegressor(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
 
-            model.fit(X_scaled, labels)
-            importances = model.feature_importances_
-            importances = np.nan_to_num(importances, nan=0.0)
+            rf.fit(X_scaled, labels)
+            importances = np.nan_to_num(rf.feature_importances_, nan=0.0)
 
-            # Store in cache for reuse
             if importance_cache is not None:
                 importance_cache[name] = importances
 
@@ -3363,6 +3366,7 @@ def create_hybrid(base_reps, labels,
             internal_evaluator=internal_evaluator,
             model=model, metric_fn=metric_fn, lower_is_better=lower_is_better,
             greedy_tolerance=kwargs.get('greedy_tolerance', 0.0),
+            precomputed_importance=precomputed_importance,
         )
         
         # If filters were applied, remap indices from filtered space to original space
