@@ -188,7 +188,7 @@ def precompute_dataset(dataset_name, speed='fast', tiers=('general', 'top'),
     needed_reps = sorted(set(general_names + top_names + aug_names))
 
     try:
-        data = load_data(dataset_name, rep_names=needed_reps, finetune=True)
+        data = load_data(dataset_name, rep_names=needed_reps)
     except Exception as e:
         print(f"  FAILED to load: {e}")
         return
@@ -198,14 +198,12 @@ def precompute_dataset(dataset_name, speed='fast', tiers=('general', 'top'),
     groups = data.get('groups')
     task_type = data.get('task_type', 'regression')
     metric = _get_metric(domain, task_type, labels)
-    rep_factories = data.get('rep_factories') or None
 
     general_reps = {k: all_reps[k] for k in general_names if k in all_reps}
     top_reps = {k: all_reps[k] for k in top_names if k in all_reps}
     aug_reps = {k: all_reps[k] for k in aug_names if k in all_reps}
 
-    ft_str = f", ft={len(rep_factories)}" if rep_factories else ""
-    print(f"  general={len(general_reps)}, top={len(top_reps)}, aug={len(aug_reps)}{ft_str}")
+    print(f"  general={len(general_reps)}, top={len(top_reps)}, aug={len(aug_reps)}")
     print(f"  metric={metric}, task={task_type}, n={len(labels)}")
 
     # NOTE: pass models=None so find_best_hybrid uses speed-tier defaults.
@@ -285,7 +283,6 @@ def precompute_dataset(dataset_name, speed='fast', tiers=('general', 'top'),
                 cache=True,
                 verbose=True,
                 dataset_name=dataset_name,
-                rep_factories=rep_factories,
             )
             elapsed = time.time() - t0
             n_models = len(result.best_by_model)
