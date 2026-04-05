@@ -1,9 +1,9 @@
 # Precompute Hybrid Search — Job ID Tracker
 
-**Submitted:** 2026-04-05 (v4 — medium partition, 64G, no FT, deterministic groups, full speed)
+**Submitted:** 2026-04-05 (v5 — KIRBY_SKIP_INSTALLS, medium, 64G, no FT, full speed)
 **Script:** `tests/slurm_scripts/submit_precompute.sh` (all domains)
-**Total:** 40 datasets × 4 conditions = 160 SLURM jobs (IDs 11728481–11728687)
-**Partition:** medium (48h max) | **Memory:** 64G | **Time:** 12h | **Speed:** full (5-fold, 13 strategies)
+**Total:** 40 datasets × 4 conditions = 160 SLURM jobs (IDs 11729100–11729261)
+**Partition:** medium (48h max) | **Memory:** 64G | **CPUs:** 4 | **Time:** 12h | **Speed:** full (5-fold, 13 strategies)
 **Cache version:** v9 (deterministic scaffold groups)
 
 ## Conditions (4 per dataset)
@@ -18,361 +18,361 @@
 ## Quick status check
 
 ```bash
-sacct -j 11728481-11728687 --format=State --noheader | grep -v "\.ba\|\.ex" | sort | uniq -c
-sacct -j 11728481-11728687 --format=JobID,JobName%45,State,Elapsed,ExitCode | grep -v "\.ba\|\.ex" | grep -E "FAILED|TIMEOUT|OUT_OF_ME"
+sacct -j 11729100-11729261 --format=State --noheader | grep -v "\.ba\|\.ex" | sort | uniq -c
+sacct -j 11729100-11729261 --format=JobID,JobName%45,State,Elapsed,ExitCode | grep -v "\.ba\|\.ex" | grep -E "FAILED|TIMEOUT|OUT_OF_ME"
 ```
 
 ---
 
 ## MOLECULAR (7 × 4 = 28 jobs)
 
-### 1. herg_ki — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728481 | general_none | PENDING |
-| 11728482 | general_uncapped | PENDING |
-| 11728483 | top_none | PENDING |
-| 11728484 | top_uncapped | PENDING |
+### 1. herg_ki
+| Job ID | Condition |
+|--------|-----------|
+| 11729100 | general_none |
+| 11729101 | general_uncapped |
+| 11729102 | top_none |
+| 11729103 | top_uncapped |
 
-### 2. caco2 — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728485 | general_none | PENDING |
-| 11728486 | general_uncapped | PENDING |
-| 11728487 | top_none | PENDING |
-| 11728488 | top_uncapped | PENDING |
+### 2. caco2
+| Job ID | Condition |
+|--------|-----------|
+| 11729104 | general_none |
+| 11729105 | general_uncapped |
+| 11729106 | top_none |
+| 11729107 | top_uncapped |
 
-### 3. logd — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728489 | general_none | PENDING |
-| 11728490 | general_uncapped | PENDING |
-| 11728491 | top_none | PENDING |
-| 11728492 | top_uncapped | PENDING |
+### 3. logd
+| Job ID | Condition |
+|--------|-----------|
+| 11729108 | general_none |
+| 11729109 | general_uncapped |
+| 11729110 | top_none |
+| 11729111 | top_uncapped |
 
-### 4. qm9 — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728493 | general_none | PENDING |
-| 11728494 | general_uncapped | PENDING |
-| 11728495 | top_none | PENDING |
-| 11728496 | top_uncapped | PENDING |
+### 4. qm9
+| Job ID | Condition |
+|--------|-----------|
+| 11729112 | general_none |
+| 11729113 | general_uncapped |
+| 11729114 | top_none |
+| 11729115 | top_uncapped |
 
-### 5. adme_hlm — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728497 | general_none | PENDING |
-| 11728498 | general_uncapped | PENDING |
-| 11728499 | top_none | PENDING |
-| 11728500 | top_uncapped | PENDING |
+### 5. adme_hlm
+| Job ID | Condition |
+|--------|-----------|
+| 11729116 | general_none |
+| 11729117 | general_uncapped |
+| 11729118 | top_none |
+| 11729119 | top_uncapped |
 
-### 6. adme_rlm — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728501 | general_none | PENDING |
-| 11728502 | general_uncapped | PENDING |
-| 11728503 | top_none | PENDING |
-| 11728504 | top_uncapped | PENDING |
+### 6. adme_rlm
+| Job ID | Condition |
+|--------|-----------|
+| 11729120 | general_none |
+| 11729121 | general_uncapped |
+| 11729122 | top_none |
+| 11729123 | top_uncapped |
 
-### 7. adme_mdr1 — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728505 | general_none | PENDING |
-| 11728506 | general_uncapped | PENDING |
-| 11728507 | top_none | PENDING |
-| 11728508 | top_uncapped | PENDING |
+### 7. adme_mdr1
+| Job ID | Condition |
+|--------|-----------|
+| 11729124 | general_none |
+| 11729125 | general_uncapped |
+| 11729126 | top_none |
+| 11729127 | top_uncapped |
 
 ---
 
 ## ANTIBODY INTER-FAMILY (11 × 4 = 44 jobs)
 
-### 8. flab_thermo_tresanco — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728509 | general_none | PENDING |
-| 11728510 | general_uncapped | PENDING |
-| 11728511 | top_none | PENDING |
-| 11728512 | top_uncapped | PENDING |
+### 8. flab_thermo_tresanco
+| Job ID | Condition |
+|--------|-----------|
+| 11729128 | general_none |
+| 11729129 | general_uncapped |
+| 11729130 | top_none |
+| 11729132 | top_uncapped |
 
-### 9. flab_pk_jain_heprt — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728513 | general_none | PENDING |
-| 11728514 | general_uncapped | PENDING |
-| 11728515 | top_none | PENDING |
-| 11728516 | top_uncapped | PENDING |
+### 9. flab_pk_jain_heprt
+| Job ID | Condition |
+|--------|-----------|
+| 11729133 | general_none |
+| 11729134 | general_uncapped |
+| 11729135 | top_none |
+| 11729136 | top_uncapped |
 
-### 10. flab_pk_jain_fcrnrt — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728517 | general_none | PENDING |
-| 11728518 | general_uncapped | PENDING |
-| 11728519 | top_none | PENDING |
-| 11728520 | top_uncapped | PENDING |
+### 10. flab_pk_jain_fcrnrt
+| Job ID | Condition |
+|--------|-----------|
+| 11729137 | general_none |
+| 11729138 | general_uncapped |
+| 11729139 | top_none |
+| 11729140 | top_uncapped |
 
-### 11. flab_polyreact_jain_cic — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728521 | general_none | PENDING |
-| 11728522 | general_uncapped | PENDING |
-| 11728523 | top_none | PENDING |
-| 11728524 | top_uncapped | PENDING |
+### 11. flab_polyreact_jain_cic
+| Job ID | Condition |
+|--------|-----------|
+| 11729141 | general_none |
+| 11729142 | general_uncapped |
+| 11729143 | top_none |
+| 11729144 | top_uncapped |
 
-### 12. flab_aggregation_jain_hicrt — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728525 | general_none | PENDING |
-| 11728526 | general_uncapped | PENDING |
-| 11728527 | top_none | PENDING |
-| 11728561 | top_uncapped | PENDING |
+### 12. flab_aggregation_jain_hicrt
+| Job ID | Condition |
+|--------|-----------|
+| 11729145 | general_none |
+| 11729146 | general_uncapped |
+| 11729147 | top_none |
+| 11729148 | top_uncapped |
 
-### 13. flab_thermo_jain — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728562 | general_none | PENDING |
-| 11728563 | general_uncapped | PENDING |
-| 11728564 | top_none | PENDING |
-| 11728565 | top_uncapped | PENDING |
+### 13. flab_thermo_jain
+| Job ID | Condition |
+|--------|-----------|
+| 11729149 | general_none |
+| 11729150 | general_uncapped |
+| 11729151 | top_none |
+| 11729152 | top_uncapped |
 
-### 14. abcov_kd — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728566 | general_none | PENDING |
-| 11728567 | general_uncapped | PENDING |
-| 11728568 | top_none | PENDING |
-| 11728569 | top_uncapped | PENDING |
+### 14. abcov_kd
+| Job ID | Condition |
+|--------|-----------|
+| 11729153 | general_none |
+| 11729154 | general_uncapped |
+| 11729155 | top_none |
+| 11729156 | top_uncapped |
 
-### 15. flab_aggregation_jain — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728570 | general_none | PENDING |
-| 11728571 | general_uncapped | PENDING |
-| 11728572 | top_none | PENDING |
-| 11728573 | top_uncapped | PENDING |
+### 15. flab_aggregation_jain
+| Job ID | Condition |
+|--------|-----------|
+| 11729157 | general_none |
+| 11729158 | general_uncapped |
+| 11729159 | top_none |
+| 11729160 | top_uncapped |
 
-### 16. flab_immunogenicity_marks — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728574 | general_none | PENDING |
-| 11728575 | general_uncapped | PENDING |
-| 11728576 | top_none | PENDING |
-| 11728577 | top_uncapped | PENDING |
+### 16. flab_immunogenicity_marks
+| Job ID | Condition |
+|--------|-----------|
+| 11729161 | general_none |
+| 11729162 | general_uncapped |
+| 11729163 | top_none |
+| 11729164 | top_uncapped |
 
-### 17. flab_polyreact_jain_bvp — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728578 | general_none | PENDING |
-| 11728579 | general_uncapped | PENDING |
-| 11728580 | top_none | PENDING |
-| 11728581 | top_uncapped | PENDING |
+### 17. flab_polyreact_jain_bvp
+| Job ID | Condition |
+|--------|-----------|
+| 11729165 | general_none |
+| 11729166 | general_uncapped |
+| 11729167 | top_none |
+| 11729168 | top_uncapped |
 
-### 18. ddg_combined — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728582 | general_none | PENDING |
-| 11728583 | general_uncapped | PENDING |
-| 11728584 | top_none | PENDING |
-| 11728585 | top_uncapped | PENDING |
+### 18. ddg_combined
+| Job ID | Condition |
+|--------|-----------|
+| 11729169 | general_none |
+| 11729170 | general_uncapped |
+| 11729171 | top_none |
+| 11729172 | top_uncapped |
 
 ---
 
 ## ANTIBODY DMS (5 × 4 = 20 jobs)
 
-### 19. flab_binding_koenig — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728586 | general_none | PENDING |
-| 11728587 | general_uncapped | PENDING |
-| 11728588 | top_none | PENDING |
-| 11728589 | top_uncapped | PENDING |
+### 19. flab_binding_koenig
+| Job ID | Condition |
+|--------|-----------|
+| 11729173 | general_none |
+| 11729174 | general_uncapped |
+| 11729175 | top_none |
+| 11729176 | top_uncapped |
 
-### 20. flab_expression_koenig — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728590 | general_none | PENDING |
-| 11728591 | general_uncapped | PENDING |
-| 11728592 | top_none | PENDING |
-| 11728593 | top_uncapped | PENDING |
+### 20. flab_expression_koenig
+| Job ID | Condition |
+|--------|-----------|
+| 11729177 | general_none |
+| 11729178 | general_uncapped |
+| 11729179 | top_none |
+| 11729180 | top_uncapped |
 
-### 21. flab_binding_adams — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728594 | general_none | PENDING |
-| 11728595 | general_uncapped | PENDING |
-| 11728596 | top_none | PENDING |
-| 11728597 | top_uncapped | PENDING |
+### 21. flab_binding_adams
+| Job ID | Condition |
+|--------|-----------|
+| 11729181 | general_none |
+| 11729182 | general_uncapped |
+| 11729183 | top_none |
+| 11729184 | top_uncapped |
 
-### 22. flab_expression_adams — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728598 | general_none | PENDING |
-| 11728599 | general_uncapped | PENDING |
-| 11728600 | top_none | PENDING |
-| 11728601 | top_uncapped | PENDING |
+### 22. flab_expression_adams
+| Job ID | Condition |
+|--------|-----------|
+| 11729185 | general_none |
+| 11729186 | general_uncapped |
+| 11729187 | top_none |
+| 11729188 | top_uncapped |
 
-### 23. flab_binding_phillips_h3 — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728602 | general_none | PENDING |
-| 11728603 | general_uncapped | PENDING |
-| 11728604 | top_none | PENDING |
-| 11728605 | top_uncapped | PENDING |
+### 23. flab_binding_phillips_h3
+| Job ID | Condition |
+|--------|-----------|
+| 11729189 | general_none |
+| 11729190 | general_uncapped |
+| 11729191 | top_none |
+| 11729192 | top_uncapped |
 
 ---
 
 ## ABAGYM (5 × 4 = 20 jobs)
 
-### 24. abagym_Ang2 — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728606 | general_none | PENDING |
-| 11728607 | general_uncapped | PENDING |
-| 11728608 | top_none | PENDING |
-| 11728609 | top_uncapped | PENDING |
+### 24. abagym_Ang2
+| Job ID | Condition |
+|--------|-----------|
+| 11729193 | general_none |
+| 11729194 | general_uncapped |
+| 11729195 | top_none |
+| 11729196 | top_uncapped |
 
-### 25. abagym_EGFR — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728610 | general_none | PENDING |
-| 11728611 | general_uncapped | PENDING |
-| 11728612 | top_none | PENDING |
-| 11728613 | top_uncapped | PENDING |
+### 25. abagym_EGFR
+| Job ID | Condition |
+|--------|-----------|
+| 11729197 | general_none |
+| 11729198 | general_uncapped |
+| 11729199 | top_none |
+| 11729200 | top_uncapped |
 
-### 26. abagym_HER2 — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728614 | general_none | PENDING |
-| 11728615 | general_uncapped | PENDING |
-| 11728616 | top_none | PENDING |
-| 11728617 | top_uncapped | PENDING |
+### 26. abagym_HER2
+| Job ID | Condition |
+|--------|-----------|
+| 11729201 | general_none |
+| 11729202 | general_uncapped |
+| 11729203 | top_none |
+| 11729204 | top_uncapped |
 
-### 27. abagym_lysozyme — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728618 | general_none | PENDING |
-| 11728619 | general_uncapped | PENDING |
-| 11728620 | top_none | PENDING |
-| 11728621 | top_uncapped | PENDING |
+### 27. abagym_lysozyme
+| Job ID | Condition |
+|--------|-----------|
+| 11729205 | general_none |
+| 11729206 | general_uncapped |
+| 11729207 | top_none |
+| 11729208 | top_uncapped |
 
-### 28. abagym_VEGF — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728622 | general_none | PENDING |
-| 11728624 | general_uncapped | PENDING |
-| 11728626 | top_none | PENDING |
-| 11728627 | top_uncapped | PENDING |
+### 28. abagym_VEGF
+| Job ID | Condition |
+|--------|-----------|
+| 11729209 | general_none |
+| 11729210 | general_uncapped |
+| 11729211 | top_none |
+| 11729212 | top_uncapped |
 
 ---
 
 ## ANTIBODY CLF (2 × 4 = 8 jobs)
 
-### 29. tz_her2_binary — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728628 | general_none | PENDING |
-| 11728629 | general_uncapped | PENDING |
-| 11728630 | top_none | PENDING |
-| 11728631 | top_uncapped | PENDING |
+### 29. tz_her2_binary
+| Job ID | Condition |
+|--------|-----------|
+| 11729213 | general_none |
+| 11729214 | general_uncapped |
+| 11729215 | top_none |
+| 11729216 | top_uncapped |
 
-### 30. humanness_therapeutic — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728632 | general_none | PENDING |
-| 11728633 | general_uncapped | PENDING |
-| 11728634 | top_none | PENDING |
-| 11728635 | top_uncapped | PENDING |
+### 30. humanness_therapeutic
+| Job ID | Condition |
+|--------|-----------|
+| 11729217 | general_none |
+| 11729218 | general_uncapped |
+| 11729219 | top_none |
+| 11729220 | top_uncapped |
 
 ---
 
 ## GINKGO (6 × 4 = 24 jobs)
 
-### 31. ginkgo_acsins — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728636 | general_none | PENDING |
-| 11728645 | general_uncapped | PENDING |
-| 11728646 | top_none | PENDING |
-| 11728647 | top_uncapped | PENDING |
+### 31. ginkgo_acsins
+| Job ID | Condition |
+|--------|-----------|
+| 11729221 | general_none |
+| 11729222 | general_uncapped |
+| 11729223 | top_none |
+| 11729224 | top_uncapped |
 
-### 32. ginkgo_colloidal — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728648 | general_none | PENDING |
-| 11728649 | general_uncapped | PENDING |
-| 11728650 | top_none | PENDING |
-| 11728651 | top_uncapped | PENDING |
+### 32. ginkgo_colloidal
+| Job ID | Condition |
+|--------|-----------|
+| 11729225 | general_none |
+| 11729226 | general_uncapped |
+| 11729227 | top_none |
+| 11729228 | top_uncapped |
 
-### 33. ginkgo_heparin — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728652 | general_none | PENDING |
-| 11728653 | general_uncapped | PENDING |
-| 11728654 | top_none | PENDING |
-| 11728655 | top_uncapped | PENDING |
+### 33. ginkgo_heparin
+| Job ID | Condition |
+|--------|-----------|
+| 11729229 | general_none |
+| 11729231 | general_uncapped |
+| 11729232 | top_none |
+| 11729233 | top_uncapped |
 
-### 34. ginkgo_hic — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728656 | general_none | PENDING |
-| 11728657 | general_uncapped | PENDING |
-| 11728658 | top_none | PENDING |
-| 11728659 | top_uncapped | PENDING |
+### 34. ginkgo_hic
+| Job ID | Condition |
+|--------|-----------|
+| 11729234 | general_none |
+| 11729235 | general_uncapped |
+| 11729236 | top_none |
+| 11729237 | top_uncapped |
 
-### 35. ginkgo_pr_cho — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728660 | general_none | PENDING |
-| 11728661 | general_uncapped | PENDING |
-| 11728662 | top_none | PENDING |
-| 11728663 | top_uncapped | PENDING |
+### 35. ginkgo_pr_cho
+| Job ID | Condition |
+|--------|-----------|
+| 11729238 | general_none |
+| 11729239 | general_uncapped |
+| 11729240 | top_none |
+| 11729241 | top_uncapped |
 
-### 36. ginkgo_titer — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728664 | general_none | PENDING |
-| 11728665 | general_uncapped | PENDING |
-| 11728666 | top_none | PENDING |
-| 11728667 | top_uncapped | PENDING |
+### 36. ginkgo_titer
+| Job ID | Condition |
+|--------|-----------|
+| 11729242 | general_none |
+| 11729243 | general_uncapped |
+| 11729244 | top_none |
+| 11729245 | top_uncapped |
 
 ---
 
 ## TCGA (2 × 4 = 8 jobs)
 
-### 37. tcga_luad_vs_lusc — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728668 | general_none | PENDING |
-| 11728669 | general_uncapped | PENDING |
-| 11728670 | top_none | PENDING |
-| 11728671 | top_uncapped | PENDING |
+### 37. tcga_luad_vs_lusc
+| Job ID | Condition |
+|--------|-----------|
+| 11729246 | general_none |
+| 11729247 | general_uncapped |
+| 11729248 | top_none |
+| 11729249 | top_uncapped |
 
-### 38. tcga_brca_pam50 — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728672 | general_none | PENDING |
-| 11728673 | general_uncapped | PENDING |
-| 11728674 | top_none | PENDING |
-| 11728675 | top_uncapped | PENDING |
+### 38. tcga_brca_pam50
+| Job ID | Condition |
+|--------|-----------|
+| 11729250 | general_none |
+| 11729251 | general_uncapped |
+| 11729252 | top_none |
+| 11729253 | top_uncapped |
 
 ---
 
 ## REACTION (2 × 4 = 8 jobs)
 
-### 39. buchwald_hartwig — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728676 | general_none | PENDING |
-| 11728677 | general_uncapped | PENDING |
-| 11728678 | top_none | PENDING |
-| 11728679 | top_uncapped | PENDING |
+### 39. buchwald_hartwig
+| Job ID | Condition |
+|--------|-----------|
+| 11729254 | general_none |
+| 11729255 | general_uncapped |
+| 11729256 | top_none |
+| 11729257 | top_uncapped |
 
-### 40. bh_doyle_plates — 64G / 12h
-| Job ID | Condition | Status |
-|--------|-----------|--------|
-| 11728680 | general_none | PENDING |
-| 11728681 | general_uncapped | PENDING |
-| 11728682 | top_none | PENDING |
-| 11728687 | top_uncapped | PENDING |
+### 40. bh_doyle_plates
+| Job ID | Condition |
+|--------|-----------|
+| 11729258 | general_none |
+| 11729259 | general_uncapped |
+| 11729260 | top_none |
+| 11729261 | top_uncapped |
 
 ---
 
@@ -382,5 +382,6 @@ sacct -j 11728481-11728687 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 |------|---------|------|---------|
 | 2026-04-04 | v1 | 240 (11707673–11707913) | long, 128-256G, fast speed, 6 conditions. **BUG:** `list(set())` non-deterministic scaffold groups. Cancelled. |
 | 2026-04-04 | v2 | 23 (11716574–11716596) | Resubmit after group fix. Still fast speed. Cancelled. |
-| 2026-04-04 | v3 | 160 (11717057–11717216) | long, 128-256G, full speed, 4 conditions. **STUCK:** 256G too large for queue, 12h+ wait. FT flag on (shouldn't be). Cancelled. |
-| 2026-04-05 | **v4** | **160 (11728481–11728687)** | **medium, 64G, full speed, 4 conditions, no FT, cache v9, deterministic groups.** |
+| 2026-04-04 | v3 | 160 (11717057–11717216) | long, 128-256G, full speed, 4 conditions. **STUCK:** 256G too large for queue. FT flag on. Cancelled. |
+| 2026-04-05 | v4 | 160 (11728481–11728687) | medium, 64G, full speed, 4 conditions, no FT. **STUCK:** setup.sh install checks (30+ import checks × 11 jobs on one node). Cancelled. |
+| 2026-04-05 | **v5** | **160 (11729100–11729261)** | **medium, 64G, 4 CPUs, full speed, 4 conditions, no FT, KIRBY_SKIP_INSTALLS=1, cache v9.** |
