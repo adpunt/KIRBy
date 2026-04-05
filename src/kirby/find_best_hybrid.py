@@ -1923,8 +1923,9 @@ def _run_search(
 # Allocation methods where step_size has an effect (greedy-based methods)
 _STEP_SIZE_SENSITIVE = {'greedy', 'dominant_greedy'}
 
-# Allocation methods that ignore importance_method (use internal RF feature_importances_)
-_IMPORTANCE_INSENSITIVE = {'greedy', 'dominant_greedy'}
+# Allocation methods that ignore importance_method.
+# Empty — greedy now uses precomputed importance scores like everything else.
+_IMPORTANCE_INSENSITIVE = set()
 
 
 def _is_importance_sensitive(alloc_name: str) -> bool:
