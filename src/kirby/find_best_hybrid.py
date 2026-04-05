@@ -66,7 +66,13 @@ def _impute_nan(X_train, X_val):
     Training median is computed from X_train and applied to both
     X_train and X_val (no leakage from val into imputation).
     Columns that are entirely NaN in training are dropped from both.
+
+    Returns:
+        (X_train, X_val, had_imputation) — had_imputation is True if
+        any NaN values were imputed or all-NaN columns were dropped.
     """
+    had_imputation = False
+
     # Clip inf first
     X_train = np.clip(X_train, -1e10, 1e10)
     X_val = np.clip(X_val, -1e10, 1e10)
@@ -77,10 +83,12 @@ def _impute_nan(X_train, X_val):
         keep = ~all_nan_cols
         X_train = X_train[:, keep]
         X_val = X_val[:, keep]
+        had_imputation = True
 
     # Per-feature median from training data only
     nan_mask_train = np.isnan(X_train)
     if nan_mask_train.any():
+        had_imputation = True
         medians = np.nanmedian(X_train, axis=0)
         # Apply to train
         inds_train = np.where(nan_mask_train)
@@ -94,11 +102,12 @@ def _impute_nan(X_train, X_val):
         # No NaN in train — still check val
         nan_mask_val = np.isnan(X_val)
         if nan_mask_val.any():
+            had_imputation = True
             medians = np.nanmedian(X_train, axis=0)
             inds_val = np.where(nan_mask_val)
             X_val[inds_val] = medians[inds_val[1]]
 
-    return X_train, X_val
+    return X_train, X_val, had_imputation
 
 
 # =============================================================================
@@ -1148,12 +1157,12 @@ def _evaluate_single(
         if is_binary:
             X_train_s = X_train.astype(np.float32)
             X_val_s = X_val.astype(np.float32)
-            X_train_s, X_val_s = _impute_nan(X_train_s, X_val_s)
+            X_train_s, X_val_s, _ = _impute_nan(X_train_s, X_val_s)
         else:
             scaler = StandardScaler()
             X_train_s = scaler.fit_transform(X_train)
             X_val_s = scaler.transform(X_val)
-            X_train_s, X_val_s = _impute_nan(X_train_s, X_val_s)
+            X_train_s, X_val_s, _ = _impute_nan(X_train_s, X_val_s)
 
         m = deepcopy(model)
         # Adaptive k for KNN: scale to sqrt(N_train), capped at 5
@@ -1251,6 +1260,7 @@ def _evaluate_hybrid_config(
 
     fold_scores = []
     fold_n_features = []
+    any_imputation = False
 
     for fold_idx, (train_idx, val_idx) in enumerate(fold_splits):
         train_reps = {k: v[train_idx] for k, v in base_reps.items()}
@@ -1350,7 +1360,9 @@ def _evaluate_hybrid_config(
         scaler = StandardScaler()
         X_train_s = scaler.fit_transform(X_train)
         X_val_s = scaler.transform(X_val)
-        X_train_s, X_val_s = _impute_nan(X_train_s, X_val_s)
+        X_train_s, X_val_s, _fold_imputed = _impute_nan(X_train_s, X_val_s)
+        if _fold_imputed:
+            any_imputation = True
 
         m = deepcopy(model)
         # Adaptive k for KNN: scale to sqrt(N_train), capped at 5
@@ -1405,6 +1417,7 @@ def _evaluate_hybrid_config(
         'internal_evaluator': internal_evaluator,
         'budget': budget,
         'step_size': step_size,
+        'had_imputation': any_imputation,
     }
 
 
@@ -1717,7 +1730,7 @@ def _run_search(
             for rep_name, X_full in fold_train_reps.items():
                 X_tr = X_full[_tr_idx].copy()
                 X_va = X_full[_va_idx].copy()
-                X_tr, X_va = _impute_nan(X_tr, X_va)
+                X_tr, X_va, _ = _impute_nan(X_tr, X_va)
                 try:
                     default_score, y_pred = _evaluate_allocation(
                         X_tr, X_va, _train_labels, _val_labels,
@@ -3109,7 +3122,7 @@ def nested_cv_evaluate(
                     scaler = StandardScaler()
                     X_train_s = scaler.fit_transform(X_train)
                     X_test_s = scaler.transform(X_test)
-                    X_train_s, X_test_s = _impute_nan(X_train_s, X_test_s)
+                    X_train_s, X_test_s, _ = _impute_nan(X_train_s, X_test_s)
 
                     # Train downstream model and evaluate on held-out outer test
                     model = get_model(model_name, task_type,

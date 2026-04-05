@@ -125,7 +125,7 @@ def _evaluate_single_fold(base_reps, labels, groups, fold_split,
     scaler = StandardScaler()
     X_train_s = scaler.fit_transform(X_train)
     X_val_s = scaler.transform(X_val)
-    X_train_s, X_val_s = _impute_nan(X_train_s, X_val_s)
+    X_train_s, X_val_s, _ = _impute_nan(X_train_s, X_val_s)
 
     # Predict and score
     m = deepcopy(model)
