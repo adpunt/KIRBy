@@ -39,7 +39,7 @@ sacct -u scat9264 -S 2026-04-04 -j 11717057-11717216 --format=JobID,JobName%45,S
 ### 1. herg_ki — 256G / 12h
 | Job ID | Condition | Status |
 |--------|-----------|--------|
-| 11717057 | general_none | PENDING |
+| **11720064** | general_none | PENDING (resub — 11717057 stuck on FT with old code) |
 | 11717058 | general_uncapped | PENDING |
 | 11717059 | top_none | PENDING |
 | 11717060 | top_uncapped | PENDING |
@@ -394,3 +394,4 @@ sacct -u scat9264 -S 2026-04-04 -j 11717057-11717216 --format=JobID,JobName%45,S
 | 2026-04-04 | v2 resubmit | 23 jobs (11716574–11716596) resubmitted after group fix. Still fast speed. |
 | 2026-04-04 | v1+v2 cancelled | All cancelled. Caches cleared. |
 | 2026-04-04 | **v3 submitted** | **160 jobs (11717057–11717216)**. Full speed (5-fold), 4 conditions (capped removed), cache v9, deterministic groups. |
+| 2026-04-05 | FT removed | `finetune=True` removed from precompute (FT is separate HTC pipeline). 11717057 (herg_ki general_none) cancelled (stuck on GraphMVP FT), resubmitted as **11720064**. |
