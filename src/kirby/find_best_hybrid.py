@@ -57,7 +57,43 @@ from sklearn.preprocessing import StandardScaler
 
 warnings.filterwarnings('ignore')
 
-_CACHE_VERSION = 9  # Bumped: v8 caches had non-deterministic group indices (PYTHONHASHSEED)
+_CACHE_VERSION = 10  # v10: median imputation for NaN (was zero-fill)
+
+
+def _impute_nan(X_train, X_val):
+    """Replace NaN with per-feature training median, clip inf.
+
+    Training median is computed from X_train and applied to both
+    X_train and X_val (no leakage from val into imputation).
+    """
+    # Clip inf first
+    X_train = np.clip(X_train, -1e10, 1e10)
+    X_val = np.clip(X_val, -1e10, 1e10)
+
+    # Per-feature median from training data only
+    nan_mask_train = np.isnan(X_train)
+    if nan_mask_train.any():
+        medians = np.nanmedian(X_train, axis=0)
+        # If an entire column is NaN, median is NaN — fill with 0
+        medians = np.where(np.isnan(medians), 0.0, medians)
+        # Apply to train
+        inds_train = np.where(nan_mask_train)
+        X_train[inds_train] = medians[inds_train[1]]
+        # Apply same medians to val
+        nan_mask_val = np.isnan(X_val)
+        if nan_mask_val.any():
+            inds_val = np.where(nan_mask_val)
+            X_val[inds_val] = medians[inds_val[1]]
+    else:
+        # No NaN in train — still check val
+        nan_mask_val = np.isnan(X_val)
+        if nan_mask_val.any():
+            medians = np.nanmedian(X_train, axis=0)
+            medians = np.where(np.isnan(medians), 0.0, medians)
+            inds_val = np.where(nan_mask_val)
+            X_val[inds_val] = medians[inds_val[1]]
+
+    return X_train, X_val
 
 
 # =============================================================================
@@ -1111,8 +1147,7 @@ def _evaluate_single(
             scaler = StandardScaler()
             X_train_s = scaler.fit_transform(X_train)
             X_val_s = scaler.transform(X_val)
-            X_train_s = np.nan_to_num(X_train_s, nan=0.0, posinf=1e10, neginf=-1e10)
-            X_val_s = np.nan_to_num(X_val_s, nan=0.0, posinf=1e10, neginf=-1e10)
+            X_train_s, X_val_s = _impute_nan(X_train_s, X_val_s)
 
         m = deepcopy(model)
         # Adaptive k for KNN: scale to sqrt(N_train), capped at 5
@@ -1309,8 +1344,7 @@ def _evaluate_hybrid_config(
         scaler = StandardScaler()
         X_train_s = scaler.fit_transform(X_train)
         X_val_s = scaler.transform(X_val)
-        X_train_s = np.nan_to_num(X_train_s, nan=0.0, posinf=1e10, neginf=-1e10)
-        X_val_s = np.nan_to_num(X_val_s, nan=0.0, posinf=1e10, neginf=-1e10)
+        X_train_s, X_val_s = _impute_nan(X_train_s, X_val_s)
 
         m = deepcopy(model)
         # Adaptive k for KNN: scale to sqrt(N_train), capped at 5
@@ -1675,10 +1709,9 @@ def _run_search(
             metric_scores = {mn: {} for mn in _alloc_metrics}
 
             for rep_name, X_full in fold_train_reps.items():
-                X_tr = np.nan_to_num(np.clip(X_full[_tr_idx], -1e10, 1e10),
-                                     nan=0.0, posinf=1e10, neginf=-1e10)
-                X_va = np.nan_to_num(np.clip(X_full[_va_idx], -1e10, 1e10),
-                                     nan=0.0, posinf=1e10, neginf=-1e10)
+                X_tr = X_full[_tr_idx].copy()
+                X_va = X_full[_va_idx].copy()
+                X_tr, X_va = _impute_nan(X_tr, X_va)
                 try:
                     default_score, y_pred = _evaluate_allocation(
                         X_tr, X_va, _train_labels, _val_labels,
@@ -3087,8 +3120,7 @@ def nested_cv_evaluate(
                     scaler = StandardScaler()
                     X_train_s = scaler.fit_transform(X_train)
                     X_test_s = scaler.transform(X_test)
-                    X_train_s = np.nan_to_num(X_train_s, nan=0.0, posinf=1e10, neginf=-1e10)
-                    X_test_s = np.nan_to_num(X_test_s, nan=0.0, posinf=1e10, neginf=-1e10)
+                    X_train_s, X_test_s = _impute_nan(X_train_s, X_test_s)
 
                     # Train downstream model and evaluate on held-out outer test
                     model = get_model(model_name, task_type,
