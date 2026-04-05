@@ -31,6 +31,7 @@ import argparse
 import numpy as np
 from pathlib import Path
 from collections import defaultdict
+from copy import deepcopy
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / 'src'))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -38,23 +39,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 from experiments._shared import load_data, FULL_BUDGETS
 from experiments.complexity.complexity_helpers import DATASET_REPS
 from kirby.find_best_hybrid import (
-    SPEED_TIERS, _resolve_models, _make_cv_splitter,
-    _evaluate_hybrid_config, DEFAULT_MODELS,
+    SPEED_TIERS, MODEL_MAX_BUDGET, _resolve_models, _resolve_metric,
+    _make_cv_splitter, _impute_nan,
 )
-from kirby.hybrid import compute_feature_importance
+from kirby.hybrid import compute_feature_importance, create_hybrid, apply_feature_selection
 
 F15_DATASETS = [
     'abagym_EGFR', 'buchwald_hartwig', 'caco2',
     'flab_pk_jain_fcrnrt', 'herg_ki', 'logd',
 ]
 
-# Domain detection (matches precompute)
+
 def _get_domain(name):
     if name.startswith(('tcga_',)): return 'tcga'
     if name.startswith(('buchwald', 'bh_')): return 'reaction'
-    if any(name.startswith(p) for p in ('flab_', 'abagym_', 'abcov_', 'ddg_', 'tz_', 'humanness', 'ginkgo_')):
+    if any(name.startswith(p) for p in ('flab_', 'abagym_', 'abcov_', 'ddg_',
+           'tz_', 'humanness', 'ginkgo_')):
         return 'antibody'
     return 'molecular'
+
 
 def _get_metric(domain, task_type, labels):
     if task_type == 'classification':
@@ -62,6 +65,78 @@ def _get_metric(domain, task_type, labels):
     if domain == 'dta': return 'ci'
     if domain == 'antibody': return 'spearman'
     return 'rmse'
+
+
+def _budgets_for_model(model_name, all_budgets):
+    """Filter budgets by per-model cap from MODEL_MAX_BUDGET."""
+    cap = MODEL_MAX_BUDGET.get(model_name)
+    if cap is None:
+        return all_budgets
+    return [b for b in all_budgets if b <= cap]
+
+
+def _evaluators_for_model(model_name, evaluator_names):
+    """Expand 'match' to the model's own type, deduplicate."""
+    match_map = {
+        'rf': 'rf', 'lightgbm': 'lightgbm', 'xgboost': 'xgboost',
+        'mlp': 'mlp', 'svm': 'svm', 'gp': 'gp', 'ridge': 'ridge',
+        'knn': 'knn', 'catboost': 'catboost', 'dnn': 'dnn',
+        'cnn': 'cnn', 'bnn': 'bnn', 'ngboost': 'ngboost',
+    }
+    explicit = [e for e in evaluator_names if e != 'match']
+    evs = list(explicit)
+    if 'match' in evaluator_names:
+        matched = match_map.get(model_name)
+        if matched and matched not in evs:
+            evs.append(matched)
+    return evs if evs else ['rf']
+
+
+def _evaluate_single_fold(base_reps, labels, groups, fold_split,
+                          allocation_method, budget, importance_method,
+                          model, model_name, internal_evaluator,
+                          metric_fn, metric_str, lower_is_better,
+                          precomputed_importance):
+    """Evaluate one config on one fold. Returns score or NaN."""
+    from sklearn.preprocessing import StandardScaler
+
+    train_idx, val_idx = fold_split
+    train_reps = {k: v[train_idx] for k, v in base_reps.items()}
+    val_reps = {k: v[val_idx] for k, v in base_reps.items()}
+    y_train, y_val = labels[train_idx], labels[val_idx]
+
+    # Create hybrid
+    X_train, feature_info = create_hybrid(
+        train_reps, y_train,
+        allocation_method=allocation_method,
+        budget=budget,
+        importance_method=importance_method,
+        internal_evaluator=internal_evaluator,
+        augmentations=None,
+        augmentation_strategy='none',
+        model=model,
+        metric_fn=metric_fn,
+        lower_is_better=lower_is_better,
+        precomputed_importance=precomputed_importance,
+    )
+    X_val = apply_feature_selection(val_reps, feature_info)
+
+    # Scale and impute
+    scaler = StandardScaler()
+    X_train_s = scaler.fit_transform(X_train)
+    X_val_s = scaler.transform(X_val)
+    X_train_s, X_val_s = _impute_nan(X_train_s, X_val_s)
+
+    # Predict and score
+    m = deepcopy(model)
+    if hasattr(m, 'n_neighbors') and hasattr(m, 'set_params'):
+        k = min(5, max(1, int(np.sqrt(len(train_idx)))))
+        m.set_params(n_neighbors=k)
+    m.fit(X_train_s, y_train)
+
+    from kirby.find_best_hybrid import _predict_for_metric
+    y_pred = _predict_for_metric(m, X_val_s, metric_fn)
+    return float(metric_fn(y_val, y_pred))
 
 
 def run_f15(dataset_name, output_dir):
@@ -84,10 +159,7 @@ def run_f15(dataset_name, output_dir):
     groups = data.get('groups')
     task_type = data.get('task_type', 'regression')
     metric_str = _get_metric(domain, task_type, labels)
-
-    # Resolve metric function
-    from kirby.find_best_hybrid import _resolve_metric
-    metric_fn, lower_is_better = _resolve_metric(metric_str, task_type)
+    metric_fn, lower_is_better = _resolve_metric(metric_str)
 
     # Full tier config
     tier = SPEED_TIERS['full']
@@ -96,17 +168,18 @@ def run_f15(dataset_name, output_dir):
     evaluator_names = tier['internal_evaluators']
     n_folds = tier['n_folds']
 
-    # Budget filtering
+    # Budget filtering by n_train
     n_train_est = len(labels) - int(np.ceil(len(labels) / n_folds))
     budgets = [b for b in FULL_BUDGETS if b <= n_train_est]
 
     # Resolve models
     models = _resolve_models(None, task_type, 'full', n_samples=len(labels))
 
-    print(f"  {len(reps)} reps, {len(labels)} samples, metric={metric_str}")
+    print(f"  {len(reps)} reps, {len(labels)} samples, metric={metric_str} "
+          f"(lower_is_better={lower_is_better})")
     print(f"  {len(strategies)} strategies × {len(importance_methods)} imp × "
           f"{len(evaluator_names)} eval × {len(models)} models × {len(budgets)} budgets")
-    print(f"  {n_folds} folds")
+    print(f"  {n_folds} folds, budgets={budgets}")
 
     # Pre-compute fold splits
     splitter, use_groups = _make_cv_splitter(groups, n_folds, seed=42)
@@ -127,119 +200,90 @@ def run_f15(dataset_name, output_dir):
             except Exception as e:
                 print(f"    WARNING: importance ({fold_idx}, {imp_method}) failed: {e}")
 
-    # Pre-compute allocation scores per (fold, evaluator)
-    print(f"  Pre-computing allocation scores...")
-    from kirby.find_best_hybrid import _evaluate_allocation
-    alloc_cache = {}
-    for fold_idx, (train_idx, val_idx) in enumerate(fold_splits):
-        fold_train_reps = {k: v[train_idx] for k, v in reps.items()}
-        fold_val_reps = {k: v[val_idx] for k, v in reps.items()}
-        y_train = labels[train_idx]
-        y_val = labels[val_idx]
+    # Count configs
+    total = 0
+    for model_name in models:
+        model_budgets = _budgets_for_model(model_name, budgets)
+        model_evals = _evaluators_for_model(model_name, evaluator_names)
+        total += len(strategies) * len(importance_methods) * len(model_evals) * len(model_budgets)
+    print(f"  {total} configs × {n_folds} folds = {total * n_folds} evaluations")
 
-        # Resolve evaluator names (expand 'match')
-        all_eval_names = set()
-        for ev in evaluator_names:
-            if ev == 'match':
-                for m in models:
-                    all_eval_names.add(m)
-            else:
-                all_eval_names.add(ev)
-
-        for ev in all_eval_names:
-            scores = {}
-            for rep_name in fold_train_reps:
-                try:
-                    X_tr = fold_train_reps[rep_name]
-                    X_va = fold_val_reps[rep_name]
-                    s = _evaluate_allocation(X_tr, X_va, y_train, y_val,
-                                            internal_evaluator=ev)
-                    scores[rep_name] = max(s, 0.0)
-                except:
-                    scores[rep_name] = 0.0
-            alloc_cache[(fold_idx, ev)] = scores
-
-    # Run ALL configs, recording PER-FOLD scores
-    print(f"\n  Evaluating configs...")
+    # Evaluate ALL configs, recording PER-FOLD scores
+    print(f"\n  Evaluating...")
     t_start = time.time()
-
     all_results = []
-    total_configs = len(strategies) * len(importance_methods) * len(models) * len(budgets)
-    # For evaluators: each model gets its own set
-    print(f"  ~{total_configs * 5} total config×evaluator combos (before eval expansion)")
-
     config_count = 0
+
     for strat in strategies:
         for imp in importance_methods:
             for model_name, model in models.items():
-                # Resolve evaluators for this model
-                from kirby.find_best_hybrid import _make_cv_splitter as _mcv
-                explicit_evals = [e for e in evaluator_names if e != 'match']
-                model_evals = list(explicit_evals)
-                if 'match' in evaluator_names:
-                    match_map = {
-                        'rf': 'rf', 'lightgbm': 'lightgbm', 'xgboost': 'xgboost',
-                        'mlp': 'mlp', 'svm': 'svm', 'gp': 'gp', 'ridge': 'ridge',
-                        'knn': 'knn', 'catboost': 'catboost', 'dnn': 'dnn',
-                        'cnn': 'cnn', 'bnn': 'bnn', 'ngboost': 'ngboost',
-                    }
-                    matched = match_map.get(model_name)
-                    if matched and matched not in model_evals:
-                        model_evals.append(matched)
+                model_budgets = _budgets_for_model(model_name, budgets)
+                model_evals = _evaluators_for_model(model_name, evaluator_names)
 
                 for ev in model_evals:
-                    for bgt in budgets:
+                    matched = (ev == model_name)
+
+                    for bgt in model_budgets:
                         config_count += 1
-                        if config_count % 500 == 0:
+                        if config_count % 200 == 0:
                             elapsed = time.time() - t_start
-                            print(f"    {config_count} configs evaluated ({elapsed:.0f}s)...")
+                            pct = config_count / total * 100
+                            print(f"    {config_count}/{total} ({pct:.0f}%) "
+                                  f"{elapsed:.0f}s...")
 
                         fold_scores = []
-                        for fold_idx, (train_idx, val_idx) in enumerate(fold_splits):
-                            fold_importance = importance_cache.get((fold_idx, imp))
-                            fold_alloc = alloc_cache.get((fold_idx, ev))
+                        for fold_idx in range(n_folds):
+                            fold_importance = importance_cache.get(
+                                (fold_idx, imp))
 
                             try:
-                                result = _evaluate_hybrid_config(
+                                score = _evaluate_single_fold(
                                     base_reps=reps,
                                     labels=labels,
+                                    groups=groups,
+                                    fold_split=fold_splits[fold_idx],
                                     allocation_method=strat,
                                     budget=bgt,
                                     importance_method=imp,
                                     model=model,
                                     model_name=model_name,
                                     internal_evaluator=ev,
-                                    groups=groups,
-                                    n_folds=n_folds,
                                     metric_fn=metric_fn,
-                                    metric_name=metric_str,
-                                    seed=42,
-                                    augmentations=None,
+                                    metric_str=metric_str,
                                     lower_is_better=lower_is_better,
-                                    precomputed_folds=[fold_splits[fold_idx]],
-                                    importance_cache={(0, imp): fold_importance} if fold_importance else None,
-                                    alloc_cache={(0, ev): fold_alloc} if fold_alloc else None,
+                                    precomputed_importance=fold_importance,
                                 )
-                                fold_scores.append(result.get('score_mean', float('nan')))
-                            except Exception:
+                                fold_scores.append(score)
+                            except Exception as e:
+                                if config_count <= 5:
+                                    print(f"      Config {config_count} fold "
+                                          f"{fold_idx} failed: {e}")
                                 fold_scores.append(float('nan'))
 
+                        valid = [s for s in fold_scores if s == s]
                         all_results.append({
                             'strategy': strat,
                             'importance': imp,
                             'evaluator': ev,
+                            'matched': matched,
                             'model': model_name,
                             'budget': bgt,
                             'fold_scores': fold_scores,
-                            'score_mean': float(np.nanmean(fold_scores)) if fold_scores else float('nan'),
+                            'score_mean': float(np.mean(valid)) if valid else float('nan'),
+                            'score_std': float(np.std(valid)) if valid else float('nan'),
+                            'n_valid_folds': len(valid),
                         })
 
     elapsed = time.time() - t_start
     print(f"\n  Done: {len(all_results)} configs in {elapsed:.0f}s")
+    n_nan = sum(1 for r in all_results if r['n_valid_folds'] < n_folds)
+    if n_nan:
+        print(f"  WARNING: {n_nan} configs had NaN folds")
 
     # Save results
     output = {
         'experiment': 'f15_adaptive_pruning_validation',
+        'timestamp': time.strftime('%Y-%m-%dT%H:%M:%S'),
         'dataset': dataset_name,
         'domain': domain,
         'metric': metric_str,
@@ -252,7 +296,7 @@ def run_f15(dataset_name, output_dir):
             'importance_methods': importance_methods,
             'evaluators': evaluator_names,
             'budgets': budgets,
-            'models': list(models.keys()),
+            'models': sorted(models.keys()),
         },
         'results': all_results,
     }
@@ -266,8 +310,9 @@ def run_f15(dataset_name, output_dir):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='F15: Adaptive Pruning Validation')
-    parser.add_argument('dataset', type=str, help='Dataset name')
+    parser = argparse.ArgumentParser(
+        description='F15: Adaptive Pruning Validation')
+    parser.add_argument('dataset', type=str, help='Dataset name or "all"')
     parser.add_argument('-o', '--output', type=str,
                         default='tests/results/framework',
                         help='Output directory')
