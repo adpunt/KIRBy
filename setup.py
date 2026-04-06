@@ -24,7 +24,6 @@ setup(
         "pandas>=2.2.0,<3",
         "scipy>=1.11.4,<2",
         "scikit-learn>=1.6.1,<2",
-        "joblib>=1.2.0",
         "tqdm>=4.66.0",
     ],
     extras_require={
