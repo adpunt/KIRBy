@@ -25,9 +25,14 @@ import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 import sys
+# Force line-buffered stdout so SLURM output is visible in real time
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+
 import json
 import time
 import argparse
+print(f"[{time.strftime('%H:%M:%S')}] Starting imports...", flush=True)
 import numpy as np
 from pathlib import Path
 from collections import defaultdict
@@ -36,6 +41,7 @@ from copy import deepcopy
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / 'src'))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+print(f"[{time.strftime('%H:%M:%S')}] Importing kirby modules...", flush=True)
 from experiments._shared import load_data, FULL_BUDGETS
 from experiments.complexity.complexity_helpers import DATASET_REPS
 from kirby.find_best_hybrid import (
@@ -43,6 +49,7 @@ from kirby.find_best_hybrid import (
     _make_cv_splitter, _impute_nan,
 )
 from kirby.hybrid import compute_feature_importance, create_hybrid, apply_feature_selection
+print(f"[{time.strftime('%H:%M:%S')}] Imports done.", flush=True)
 
 F15_DATASETS = [
     'abagym_EGFR', 'buchwald_hartwig', 'caco2',
@@ -144,17 +151,18 @@ def _evaluate_single_fold(base_reps, labels, groups, fold_split,
 def run_f15(dataset_name, output_dir):
     ds_config = DATASET_REPS.get(dataset_name)
     if ds_config is None:
-        print(f"  {dataset_name}: not in DATASET_REPS")
+        print(f"  {dataset_name}: not in DATASET_REPS", flush=True)
         return
 
     domain = _get_domain(dataset_name)
     general_names = ds_config.get('general', [])
     needed = sorted(set(general_names))
 
-    print(f"\n{'='*70}")
-    print(f"F15 Adaptive Pruning Validation: {dataset_name}")
-    print(f"{'='*70}")
+    print(f"\n{'='*70}", flush=True)
+    print(f"F15 Adaptive Pruning Validation: {dataset_name}", flush=True)
+    print(f"{'='*70}", flush=True)
 
+    print(f"[{time.strftime('%H:%M:%S')}] Loading data for {dataset_name}...", flush=True)
     data = load_data(dataset_name, rep_names=needed)
     reps = {k: data['reps'][k] for k in general_names if k in data['reps']}
     labels = np.asarray(data['labels']).ravel()
@@ -162,6 +170,7 @@ def run_f15(dataset_name, output_dir):
     task_type = data.get('task_type', 'regression')
     metric_str = _get_metric(domain, task_type, labels)
     metric_fn, lower_is_better = _resolve_metric(metric_str)
+    print(f"[{time.strftime('%H:%M:%S')}] Data loaded: {len(reps)} reps, {len(labels)} samples", flush=True)
 
     # Full tier config
     tier = SPEED_TIERS['full']
@@ -178,10 +187,10 @@ def run_f15(dataset_name, output_dir):
     models = _resolve_models(None, task_type, 'full', n_samples=len(labels))
 
     print(f"  {len(reps)} reps, {len(labels)} samples, metric={metric_str} "
-          f"(lower_is_better={lower_is_better})")
+          f"(lower_is_better={lower_is_better})", flush=True)
     print(f"  {len(strategies)} strategies × {len(importance_methods)} imp × "
-          f"{len(evaluator_names)} eval × {len(models)} models × {len(budgets)} budgets")
-    print(f"  {n_folds} folds, budgets={budgets}")
+          f"{len(evaluator_names)} eval × {len(models)} models × {len(budgets)} budgets", flush=True)
+    print(f"  {n_folds} folds, budgets={budgets}", flush=True)
 
     # Pre-compute fold splits
     splitter, use_groups = _make_cv_splitter(groups, n_folds, seed=42)
@@ -190,22 +199,27 @@ def run_f15(dataset_name, output_dir):
     fold_splits = list(splitter.split(*split_args))
 
     # Pre-compute importance per (fold, method)
-    print(f"\n  Pre-computing importance scores...")
+    print(f"\n[{time.strftime('%H:%M:%S')}] Pre-computing importance scores "
+          f"({n_folds} folds × {len(importance_methods)} methods)...", flush=True)
     importance_cache = {}
+    _imp_t0 = time.time()
     for fold_idx, (train_idx, _) in enumerate(fold_splits):
         fold_train_reps = {k: v[train_idx] for k, v in reps.items()}
         fold_train_labels = labels[train_idx]
         for imp_method in importance_methods:
+            t0 = time.time()
             try:
                 importance_cache[(fold_idx, imp_method)] = compute_feature_importance(
                     fold_train_reps, fold_train_labels, method=imp_method)
+                print(f"    fold {fold_idx} {imp_method}: {time.time()-t0:.1f}s", flush=True)
             except Exception as e:
-                print(f"    WARNING: importance ({fold_idx}, {imp_method}) failed: {e}")
+                print(f"    WARNING: fold {fold_idx} {imp_method} FAILED ({time.time()-t0:.1f}s): {e}", flush=True)
+    print(f"  Importance done in {time.time()-_imp_t0:.0f}s, "
+          f"{len(importance_cache)} entries cached", flush=True)
 
     # Pre-compute allocation scores per (fold, evaluator)
     # Same rep scored by the same evaluator produces the same alloc score
     # regardless of strategy/importance/budget/model — cache it.
-    print(f"  Pre-computing allocation scores...")
     from kirby.hybrid import _evaluate_allocation
     alloc_cache = {}  # (fold_idx, evaluator_name) -> {rep_name: score}
 
@@ -215,6 +229,9 @@ def run_f15(dataset_name, output_dir):
         for ev in _evaluators_for_model(model_name, evaluator_names)
     ))
 
+    print(f"\n[{time.strftime('%H:%M:%S')}] Pre-computing allocation scores "
+          f"({n_folds} folds × {len(all_eval_names)} evaluators × {len(reps)} reps)...", flush=True)
+    _alloc_t0 = time.time()
     for fold_idx, (train_idx, val_idx) in enumerate(fold_splits):
         fold_train_reps = {k: v[train_idx] for k, v in reps.items()}
         fold_val_reps = {k: v[val_idx] for k, v in reps.items()}
@@ -222,6 +239,7 @@ def run_f15(dataset_name, output_dir):
         y_val_fold = labels[val_idx]
 
         for ev in all_eval_names:
+            t0 = time.time()
             scores = {}
             for rep_name in fold_train_reps:
                 X_tr = fold_train_reps[rep_name].copy()
@@ -235,9 +253,10 @@ def run_f15(dataset_name, output_dir):
                 except Exception:
                     scores[rep_name] = 0.0
             alloc_cache[(fold_idx, ev)] = scores
+            print(f"    fold {fold_idx} {ev}: {time.time()-t0:.1f}s", flush=True)
 
-    print(f"  Allocation scores: {len(alloc_cache)} (fold × evaluator) entries, "
-          f"{len(all_eval_names)} evaluators")
+    print(f"  Allocation done in {time.time()-_alloc_t0:.0f}s, "
+          f"{len(alloc_cache)} entries ({len(all_eval_names)} evaluators)", flush=True)
 
     # Count configs
     total = 0
@@ -245,7 +264,7 @@ def run_f15(dataset_name, output_dir):
         model_budgets = _budgets_for_model(model_name, budgets)
         model_evals = _evaluators_for_model(model_name, evaluator_names)
         total += len(strategies) * len(importance_methods) * len(model_evals) * len(model_budgets)
-    print(f"  {total} configs × {n_folds} folds = {total * n_folds} evaluations")
+    print(f"  {total} configs × {n_folds} folds = {total * n_folds} evaluations", flush=True)
 
     # Build flat config list
     configs = []
@@ -258,9 +277,15 @@ def run_f15(dataset_name, output_dir):
                     for bgt in model_budgets:
                         configs.append((strat, imp, model_name, ev, bgt))
 
-    def _eval_config(cfg):
+    # Sequential evaluation with progress (reliable output vs silent joblib)
+    print(f"\n[{time.strftime('%H:%M:%S')}] Evaluating {len(configs)} configs "
+          f"(sequential, {n_folds} folds each)...", flush=True)
+    t_start = time.time()
+    all_results = []
+    n_nan_configs = 0
+    for i, cfg in enumerate(configs):
         strat, imp, model_name, ev, bgt = cfg
-        model = deepcopy(models[model_name])  # thread-safe: each thread gets its own copy
+        model = deepcopy(models[model_name])
         fold_scores = []
 
         for fold_idx in range(n_folds):
@@ -286,11 +311,13 @@ def run_f15(dataset_name, output_dir):
                     precomputed_alloc_scores=fold_alloc,
                 )
                 fold_scores.append(score)
-            except Exception:
+            except Exception as e:
                 fold_scores.append(float('nan'))
 
         valid = [s for s in fold_scores if s == s]
-        return {
+        if len(valid) < n_folds:
+            n_nan_configs += 1
+        result = {
             'strategy': strat,
             'importance': imp,
             'evaluator': ev,
@@ -302,35 +329,24 @@ def run_f15(dataset_name, output_dir):
             'score_std': float(np.std(valid)) if valid else float('nan'),
             'n_valid_folds': len(valid),
         }
+        all_results.append(result)
 
-    # Parallel evaluation
-    print(f"\n  Evaluating {len(configs)} configs (parallel)...")
-    t_start = time.time()
-    n_jobs = min(len(configs), os.cpu_count() or 1)
-
-    try:
-        from joblib import Parallel, delayed
-        all_results = Parallel(n_jobs=n_jobs, prefer='threads')(
-            delayed(_eval_config)(cfg) for cfg in configs
-        )
-        elapsed = time.time() - t_start
-        print(f"  Parallel done: {len(all_results)} configs, {n_jobs} workers, "
-              f"{elapsed:.0f}s")
-    except ImportError:
-        print(f"  joblib unavailable, running sequentially...")
-        all_results = []
-        for i, cfg in enumerate(configs, 1):
-            if i % 200 == 0:
-                elapsed = time.time() - t_start
-                print(f"    {i}/{len(configs)} ({i/len(configs)*100:.0f}%) "
-                      f"{elapsed:.0f}s")
-            all_results.append(_eval_config(cfg))
+        # Progress every 100 configs
+        if (i + 1) % 100 == 0 or (i + 1) == len(configs):
+            elapsed = time.time() - t_start
+            rate = (i + 1) / elapsed if elapsed > 0 else 0
+            eta = (len(configs) - i - 1) / rate if rate > 0 else 0
+            print(f"    [{time.strftime('%H:%M:%S')}] {i+1}/{len(configs)} "
+                  f"({(i+1)/len(configs)*100:.0f}%) {elapsed:.0f}s "
+                  f"({rate:.1f}/s, ETA {eta:.0f}s) nan={n_nan_configs}",
+                  flush=True)
 
     elapsed = time.time() - t_start
-    print(f"\n  Done: {len(all_results)} configs in {elapsed:.0f}s")
+    print(f"\n[{time.strftime('%H:%M:%S')}] Done: {len(all_results)} configs "
+          f"in {elapsed:.0f}s", flush=True)
     n_nan = sum(1 for r in all_results if r['n_valid_folds'] < n_folds)
     if n_nan:
-        print(f"  WARNING: {n_nan} configs had NaN folds")
+        print(f"  WARNING: {n_nan} configs had NaN folds", flush=True)
 
     # Save results
     output = {
@@ -358,7 +374,7 @@ def run_f15(dataset_name, output_dir):
     out_path = out_dir / f'{dataset_name}.json'
     with open(out_path, 'w') as f:
         json.dump(output, f, indent=2, default=str)
-    print(f"  Saved to {out_path}")
+    print(f"  Saved to {out_path}", flush=True)
 
 
 def main():
