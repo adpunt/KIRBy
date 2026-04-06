@@ -42,7 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent / 's
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 print(f"[{time.strftime('%H:%M:%S')}] Importing kirby modules...", flush=True)
-from experiments._shared import load_data, FULL_BUDGETS
+from experiments._shared import load_data
 from experiments.complexity.complexity_helpers import DATASET_REPS
 from kirby.find_best_hybrid import (
     SPEED_TIERS, MODEL_MAX_BUDGET, _resolve_models, _resolve_metric,
@@ -55,6 +55,9 @@ F15_DATASETS = [
     'abagym_EGFR', 'buchwald_hartwig', 'caco2',
     'flab_pk_jain_fcrnrt', 'herg_ki', 'logd',
 ]
+
+F15_MODELS = ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm']
+F15_BUDGETS = [250, 500, 1000, 2000]
 
 
 def _get_domain(name):
@@ -181,10 +184,10 @@ def run_f15(dataset_name, output_dir):
 
     # Budget filtering by n_train
     n_train_est = len(labels) - int(np.ceil(len(labels) / n_folds))
-    budgets = [b for b in FULL_BUDGETS if b <= n_train_est]
+    budgets = [b for b in F15_BUDGETS if b <= n_train_est]
 
-    # Resolve models
-    models = _resolve_models(None, task_type, 'full', n_samples=len(labels))
+    # Core 6 models (lit-validated: rf, xgboost, ridge, svm, mlp, lightgbm)
+    models = _resolve_models(F15_MODELS, task_type, 'full', n_samples=len(labels))
 
     print(f"  {len(reps)} reps, {len(labels)} samples, metric={metric_str} "
           f"(lower_is_better={lower_is_better})", flush=True)
