@@ -2383,15 +2383,13 @@ def find_best_hybrid(
     if len(labels) != n_samples:
         raise ValueError(f"labels length ({len(labels)}) != n_samples ({n_samples})")
 
-    # --- Drop budgets that exceed n_train (before cache key) ---
-    actual_folds_for_cap = n_folds if n_folds is not None else SPEED_TIERS[speed]['n_folds']
-    n_train_est = n_samples - int(np.ceil(n_samples / actual_folds_for_cap))
-    filtered = [b for b in budgets if b <= n_train_est]
+    # --- Drop budgets that exceed total n (before cache key) ---
+    filtered = [b for b in budgets if b <= n_samples]
     if not filtered:
-        filtered = [n_train_est]
+        filtered = [n_samples]
     if filtered != list(budgets) and verbose:
-        dropped = [b for b in budgets if b > n_train_est]
-        print(f"Dropped budgets > n_train≈{n_train_est}: {dropped}")
+        dropped = [b for b in budgets if b > n_samples]
+        print(f"Dropped budgets > n={n_samples}: {dropped}")
     budgets = filtered
 
     # --- Check cache (uses filtered budgets) ---
