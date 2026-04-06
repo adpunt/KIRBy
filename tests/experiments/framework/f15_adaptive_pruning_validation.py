@@ -57,7 +57,7 @@ F15_DATASETS = [
 ]
 
 F15_MODELS = ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm']
-F15_BUDGETS = [250, 500, 1000, 2000]
+F15_BUDGETS = [50, 100, 250, 500, 1000, 2000]
 
 
 def _get_domain(name):
