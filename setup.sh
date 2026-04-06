@@ -2,6 +2,9 @@
 # Environment setup for KIRBy
 # Called by SLURM scripts before running experiments
 
+# Force unbuffered Python output so SLURM logs show progress in real time
+export PYTHONUNBUFFERED=1
+
 # Redirect all caches and user packages to /data/ (home quota is tiny on ARC)
 # Load secrets (.env is gitignored)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || pwd)"
