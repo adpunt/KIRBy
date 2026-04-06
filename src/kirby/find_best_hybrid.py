@@ -545,7 +545,7 @@ DEFAULT_MODELS = {
             n_neighbors=5, n_jobs=-1),
         'classifier': lambda: __import__('sklearn.neighbors', fromlist=['KNeighborsClassifier']).KNeighborsClassifier(
             n_neighbors=5, n_jobs=-1),
-        'tier': 'full',
+        'tier': 'extra',
         '_adaptive_k': True,
     },
     'lightgbm': {
@@ -571,40 +571,42 @@ DEFAULT_MODELS = {
     'gp': {
         'regressor': _get_gp_regressor,
         'classifier': _get_gp_classifier,
-        'tier': 'full',
+        'tier': 'extra',
         '_max_samples': 6000,
     },
     'catboost': {
         'regressor': _get_catboost_regressor,
         'classifier': _get_catboost_classifier,
-        'tier': 'full',
+        'tier': 'extra',
     },
     'dnn': {
         'regressor': _get_dnn_regressor,
         'classifier': _get_dnn_classifier,
-        'tier': 'full',
+        'tier': 'extra',
     },
     'cnn': {
         'regressor': _get_cnn_regressor,
         'classifier': _get_cnn_classifier,
-        'tier': 'full',
+        'tier': 'extra',
     },
     'bnn': {
         'regressor': lambda: __import__('kirby.models.bnn', fromlist=['BNNRegressor']).BNNRegressor(),
         'classifier': lambda: __import__('kirby.models.bnn', fromlist=['BNNClassifier']).BNNClassifier(),
-        'tier': 'full',
+        'tier': 'extra',
     },
     'ngboost': {
         'regressor': lambda: __import__('ngboost', fromlist=['NGBRegressor']).NGBRegressor(
             n_estimators=500, learning_rate=0.05, random_state=42, verbose=False),
         'classifier': lambda: __import__('ngboost', fromlist=['NGBClassifier']).NGBClassifier(
             n_estimators=500, learning_rate=0.05, random_state=42, verbose=False),
-        'tier': 'full',
+        'tier': 'extra',
     },
 }
 
-# Tier ordering for filtering
-_TIER_ORDER = {'fast': 0, 'full': 1}
+# Tier ordering for filtering.
+# fast/full: auto-selected by _resolve_models(None, speed=...).
+# extra: only used when explicitly requested by name (e.g. DOWNSTREAM_MODELS_NOISE).
+_TIER_ORDER = {'fast': 0, 'full': 1, 'extra': 2}
 
 
 def _resolve_models(models, task_type: str, speed: str,

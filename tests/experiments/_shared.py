@@ -259,12 +259,12 @@ FULL_BUDGETS = [10, 25, 50, 100, 250, 500, 1000, 2000, 3000, 4000]
 DISTANCE_BUDGETS = [10, 25, 50, 100, 250, 500]
 DISTANCE_EVALUATORS = ['knn', 'ridge', 'rf', 'mlp', 'lightgbm', 'svm']
 
-# Standard downstream model set — covers every major family.
-# Use this whenever an experiment's conclusions should generalise across model types.
-DOWNSTREAM_MODELS = ['rf', 'knn', 'svm', 'mlp', 'xgboost', 'lightgbm', 'gp']
+# Core 6 downstream models (lit-validated across molecular, antibody, DTA, TCGA, reaction).
+# RF + XGBoost (tree ensembles), Ridge (linear probe), SVM (kernel), MLP (neural), LightGBM (boosting).
+DOWNSTREAM_MODELS = ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm']
 
 # Probabilistic models for noise/uncertainty experiments (N09, N13, S11).
-DOWNSTREAM_MODELS_NOISE = ['rf', 'knn', 'svm', 'mlp', 'xgboost', 'lightgbm', 'gp', 'ngboost']
+DOWNSTREAM_MODELS_NOISE = ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm', 'ngboost']
 
 # Generic internal evaluators for hybrid construction.
 # 'match' resolves to the downstream model type; the rest test robustness
