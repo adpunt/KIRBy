@@ -182,9 +182,8 @@ def run_f15(dataset_name, output_dir):
     evaluator_names = tier['internal_evaluators']
     n_folds = tier['n_folds']
 
-    # Budget filtering by n_train
-    n_train_est = len(labels) - int(np.ceil(len(labels) / n_folds))
-    budgets = [b for b in F15_BUDGETS if b <= n_train_est]
+    # Budget filtering by total n
+    budgets = [b for b in F15_BUDGETS if b <= len(labels)]
 
     # Core 6 models (lit-validated: rf, xgboost, ridge, svm, mlp, lightgbm)
     models = _resolve_models(F15_MODELS, task_type, 'full', n_samples=len(labels))
