@@ -96,7 +96,8 @@ def _evaluate_single_fold(base_reps, labels, groups, fold_split,
                           allocation_method, budget, importance_method,
                           model, model_name, internal_evaluator,
                           metric_fn, metric_str, lower_is_better,
-                          precomputed_importance):
+                          precomputed_importance,
+                          precomputed_alloc_scores=None):
     """Evaluate one config on one fold. Returns score or NaN."""
     from sklearn.preprocessing import StandardScaler
 
@@ -118,6 +119,7 @@ def _evaluate_single_fold(base_reps, labels, groups, fold_split,
         metric_fn=metric_fn,
         lower_is_better=lower_is_better,
         precomputed_importance=precomputed_importance,
+        precomputed_alloc_scores=precomputed_alloc_scores,
     )
     X_val = apply_feature_selection(val_reps, feature_info)
 
@@ -200,6 +202,43 @@ def run_f15(dataset_name, output_dir):
             except Exception as e:
                 print(f"    WARNING: importance ({fold_idx}, {imp_method}) failed: {e}")
 
+    # Pre-compute allocation scores per (fold, evaluator)
+    # Same rep scored by the same evaluator produces the same alloc score
+    # regardless of strategy/importance/budget/model — cache it.
+    print(f"  Pre-computing allocation scores...")
+    from kirby.hybrid import _evaluate_allocation
+    alloc_cache = {}  # (fold_idx, evaluator_name) -> {rep_name: score}
+
+    # Collect all unique evaluator names (expand 'match' for all models)
+    all_eval_names = sorted(set(
+        ev for model_name in models
+        for ev in _evaluators_for_model(model_name, evaluator_names)
+    ))
+
+    for fold_idx, (train_idx, val_idx) in enumerate(fold_splits):
+        fold_train_reps = {k: v[train_idx] for k, v in reps.items()}
+        fold_val_reps = {k: v[val_idx] for k, v in reps.items()}
+        y_train_fold = labels[train_idx]
+        y_val_fold = labels[val_idx]
+
+        for ev in all_eval_names:
+            scores = {}
+            for rep_name in fold_train_reps:
+                X_tr = fold_train_reps[rep_name].copy()
+                X_va = fold_val_reps[rep_name].copy()
+                X_tr, X_va, _ = _impute_nan(X_tr, X_va)
+                try:
+                    s = _evaluate_allocation(
+                        X_tr, X_va, y_train_fold, y_val_fold,
+                        internal_evaluator=ev)
+                    scores[rep_name] = max(float(s), 0.0)
+                except Exception:
+                    scores[rep_name] = 0.0
+            alloc_cache[(fold_idx, ev)] = scores
+
+    print(f"  Allocation scores: {len(alloc_cache)} (fold × evaluator) entries, "
+          f"{len(all_eval_names)} evaluators")
+
     # Count configs
     total = 0
     for model_name in models:
@@ -226,6 +265,7 @@ def run_f15(dataset_name, output_dir):
 
         for fold_idx in range(n_folds):
             fold_importance = importance_cache.get((fold_idx, imp))
+            fold_alloc = alloc_cache.get((fold_idx, ev))
 
             try:
                 score = _evaluate_single_fold(
@@ -243,6 +283,7 @@ def run_f15(dataset_name, output_dir):
                     metric_str=metric_str,
                     lower_is_better=lower_is_better,
                     precomputed_importance=fold_importance,
+                    precomputed_alloc_scores=fold_alloc,
                 )
                 fold_scores.append(score)
             except Exception:
