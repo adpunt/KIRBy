@@ -277,7 +277,7 @@ def run_f15(dataset_name, output_dir):
                     for bgt in model_budgets:
                         configs.append((strat, imp, model_name, ev, bgt))
 
-    # Sequential evaluation with progress (reliable output vs silent joblib)
+    # Sequential evaluation with progress
     print(f"\n[{time.strftime('%H:%M:%S')}] Evaluating {len(configs)} configs "
           f"(sequential, {n_folds} folds each)...", flush=True)
     t_start = time.time()

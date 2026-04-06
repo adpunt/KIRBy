@@ -23,7 +23,6 @@ from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
-from joblib import Parallel, delayed
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
@@ -43,7 +42,6 @@ from kirby.utils.noise_mitigation_methods import get_mitigation_method, DISTANCE
 
 NOISE_LEVELS = [0.3, 0.6]
 N_SAMPLES_QM9 = 5000
-N_JOBS = -1
 
 # Default hybrid config (from QM9 HOMO-LUMO gap optimization)
 DEFAULT_HYBRID = {
@@ -298,11 +296,7 @@ def run_all_methods(
             detection_rep=detection_rep
         )
     
-    parallel_results = Parallel(n_jobs=N_JOBS, verbose=0)(
-        delayed(run_one)(cfg) for cfg in configs
-    )
-    
-    results = [r for r in parallel_results if r is not None]
+    results = [r for r in (run_one(cfg) for cfg in configs) if r is not None]
     
     if results:
         best = max(results, key=lambda r: r.recovery_rate)

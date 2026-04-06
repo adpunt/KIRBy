@@ -129,7 +129,7 @@ Code changes applied (2026-03-29 → 2026-04-03):
    - Full: 13 allocs (F12-validated winners only), 2 imp (deeplift, lightgbm_gain), match evaluator, 5-fold
 4. `MODEL_MAX_BUDGET` added: GP/KNN capped at 2000, SVM/MLP/BNN/DNN/CNN at 3000, tree models uncapped.
 5. `top_k` guard: skips top_k strategies when k >= n_reps (would be identical to performance_weighted).
-6. Parallel search: `_run_search` uses `joblib.Parallel(prefer='threads')` for ~8x speedup on multi-core. Sequential fallback if joblib unavailable.
+6. Sequential search: sklearn models handle their own C-level parallelism via `n_jobs=-1`.
 4. `internal_evaluator` wired through entire pipeline (find_best_hybrid → _run_search → _evaluate_hybrid_config → create_hybrid). Tracked in Blueprint + result dicts. Callable evaluators supported.
 5. GP added as internal evaluator (O(n³)-safe with 500-sample cap)
 6. `create_hybrid` defaults set from F12 top-2 analysis: `top_3` / `lightgbm_gain` / `svm`
@@ -172,7 +172,7 @@ Remaining:
 
 | Component | Status | Blocked on |
 |-----------|--------|-----------|
-| SPEED_TIERS | **FINALIZED:** 2 tiers (fast/full). No medium/long. Parallel search via joblib. | — |
+| SPEED_TIERS | **FINALIZED:** 2 tiers (fast/full). No medium/long. Sequential search. | — |
 | Allocation strategy | **FINALIZED:** 13 F12-validated winners. Default: `top_3`. top_k guard skips when k>=n_reps. | — |
 | Importance methods | **FINALIZED:** deeplift, lightgbm_gain (full); treeshap, lightgbm_gain (fast). | — |
 | Internal evaluator | **FINALIZED:** match (default). Wired through full pipeline. | — |
@@ -1128,7 +1128,7 @@ F12/F13 — DONE (2026-04-03)
   ✓ Defaults: top_3 / lightgbm_gain / svm
   ✓ 30 greedy hardcodes fixed, all stale configs removed
   ✓ MODEL_MAX_BUDGET: GP/KNN≤2000, SVM/MLP≤3000
-  ✓ top_k guard, parallel search (joblib threads)
+  ✓ top_k guard, sequential search
   ✓ Caches cleared
   → git push + pull on server
   → PRELIMINARY RUNS on ready datasets (complexity/similarity/noise)

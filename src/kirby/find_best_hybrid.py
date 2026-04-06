@@ -1789,141 +1789,69 @@ def _run_search(
                                 model_name, model, eval_name,
                             ))
 
-    # ── Evaluate configs (parallel or sequential) ──
-    # Use threads (not processes) to avoid pickling issues with lambdas/closures.
-    # sklearn releases the GIL during C-level operations (tree fitting, SVMs),
-    # so threading still provides meaningful parallelism.
-    n_jobs = min(total, os.cpu_count() or 1)
-    use_parallel = n_jobs > 1 and total > 4
+    # ── Evaluate configs sequentially ──
+    # sklearn models use n_jobs=-1 internally for C-level parallelism.
+    # Python-level threading on top causes CPU oversubscription and GIL contention.
+    selection_dedup = {'_hits': 0}
+    results = []
 
-    if use_parallel:
+    for idx, cfg in enumerate(configs, 1):
+        (rep_set, rep_set_name, alloc, bgt, imp,
+         model_name, model, eval_name) = cfg
+
         try:
-            from joblib import Parallel, delayed
-
-            # selection_dedup is safe to share across threads (prefer='threads'
-            # runs under the GIL). Worst case: two threads both miss the cache
-            # and both compute — redundant but not incorrect. The dedup savings
-            # from skipping identical fold evaluations outweigh the rare double-compute.
-            selection_dedup = {'_hits': 0}
-
-            def _eval_one(rep_set, rep_set_name, alloc, bgt, imp,
-                          model_name, model, eval_name):
-                try:
-                    result = _evaluate_hybrid_config(
-                        base_reps=rep_set,
-                        labels=labels,
-                        allocation_method=alloc,
-                        budget=bgt,
-                        importance_method=imp,
-                        model=model,
-                        model_name=model_name,
-                        internal_evaluator=eval_name,
-                        groups=groups,
-                        n_folds=search_folds,
-                        metric_fn=metric_fn,
-                        metric_name=metric_name,
-                        seed=seed,
-                        augmentations=augmentations,
-                        augmentation_strategy=augmentation_strategy,
-                        augmentation_threshold=augmentation_threshold,
-                        augmentation_budget=augmentation_budget,
-                        candidate_ranking=candidate_ranking,
-                        lower_is_better=lower_is_better,
-                        fold_reps=fold_reps,
-                        precomputed_folds=precomputed_folds,
-                        cv_splitter=cv_splitter,
-                        importance_cache=importance_cache,
-                        alloc_cache=alloc_cache,
-                        selection_dedup=selection_dedup,
-                        greedy_tolerance=greedy_tolerance,
-                    )
-                    if rep_set_name != 'all':
-                        result['rep_subset'] = rep_set_name
-                    return result
-                except Exception as _cfg_err:
-                    if verbose:
-                        import traceback
-                        traceback.print_exc()
-                    return None
-
-            if verbose:
-                print(f"  Parallel search: {total} configs across {n_jobs} workers...")
-            _par_t0 = time.time()
-            raw_results = Parallel(n_jobs=n_jobs, prefer='threads')(
-                delayed(_eval_one)(*cfg) for cfg in configs
+            result = _evaluate_hybrid_config(
+                base_reps=rep_set,
+                labels=labels,
+                allocation_method=alloc,
+                budget=bgt,
+                importance_method=imp,
+                model=model,
+                model_name=model_name,
+                internal_evaluator=eval_name,
+                groups=groups,
+                n_folds=search_folds,
+                metric_fn=metric_fn,
+                metric_name=metric_name,
+                seed=seed,
+                augmentations=augmentations,
+                augmentation_strategy=augmentation_strategy,
+                augmentation_threshold=augmentation_threshold,
+                augmentation_budget=augmentation_budget,
+                candidate_ranking=candidate_ranking,
+                lower_is_better=lower_is_better,
+                fold_reps=fold_reps,
+                precomputed_folds=precomputed_folds,
+                cv_splitter=cv_splitter,
+                importance_cache=importance_cache,
+                alloc_cache=alloc_cache,
+                selection_dedup=selection_dedup,
+                greedy_tolerance=greedy_tolerance,
             )
-            results = [r for r in raw_results if r is not None]
+            if rep_set_name != 'all':
+                result['rep_subset'] = rep_set_name
+            results.append(result)
+
             if verbose:
-                dedup_hits = selection_dedup.get('_hits', 0)
-                print(f"  Parallel search complete: {len(results)}/{total} succeeded "
-                      f"in {time.time() - _par_t0:.1f}s"
-                      f"{f' (dedup: {dedup_hits} fold evals skipped)' if dedup_hits else ''}")
-
-        except ImportError:
-            use_parallel = False  # fall through to sequential
-
-    if not use_parallel:
-        # Sequential fallback (also used when joblib unavailable)
-        selection_dedup = {'_hits': 0}
-        results = []
-
-        for idx, cfg in enumerate(configs, 1):
-            (rep_set, rep_set_name, alloc, bgt, imp,
-             model_name, model, eval_name) = cfg
-
-            try:
-                result = _evaluate_hybrid_config(
-                    base_reps=rep_set,
-                    labels=labels,
-                    allocation_method=alloc,
-                    budget=bgt,
-                    importance_method=imp,
-                    model=model,
-                    model_name=model_name,
-                    internal_evaluator=eval_name,
-                    groups=groups,
-                    n_folds=search_folds,
-                    metric_fn=metric_fn,
-                    metric_name=metric_name,
-                    seed=seed,
-                    augmentations=augmentations,
-                    augmentation_strategy=augmentation_strategy,
-                    augmentation_threshold=augmentation_threshold,
-                    augmentation_budget=augmentation_budget,
-                    candidate_ranking=candidate_ranking,
-                    lower_is_better=lower_is_better,
-                    fold_reps=fold_reps,
-                    precomputed_folds=precomputed_folds,
-                    cv_splitter=cv_splitter,
-                    importance_cache=importance_cache,
-                    alloc_cache=alloc_cache,
-                    selection_dedup=selection_dedup,
-                    greedy_tolerance=greedy_tolerance,
+                print(
+                    f"  [{idx}/{total}] {model_name}/{alloc}/{imp}/b={bgt}/ev={eval_name}: "
+                    f"score={result['score_mean']:.4f}+/-{result['score_std']:.3f}, "
+                    f"dim={result['n_features']}"
                 )
-                if rep_set_name != 'all':
-                    result['rep_subset'] = rep_set_name
-                results.append(result)
 
-                if verbose:
-                    print(
-                        f"  [{idx}/{total}] {model_name}/{alloc}/{imp}/b={bgt}/ev={eval_name}: "
-                        f"score={result['score_mean']:.4f}+/-{result['score_std']:.3f}, "
-                        f"dim={result['n_features']}"
-                    )
+        except Exception as e:
+            if verbose:
+                print(
+                    f"  [{idx}/{total}] {model_name}/{alloc}/{imp}/b={bgt}/ev={eval_name}: "
+                    f"FAILED - {e}"
+                )
 
-            except Exception as e:
-                if verbose:
-                    print(
-                        f"  [{idx}/{total}] {model_name}/{alloc}/{imp}/b={bgt}/ev={eval_name}: "
-                        f"FAILED - {e}"
-                    )
-
-        if verbose and selection_dedup:
-            dedup_hits = selection_dedup.get('_hits', 0)
-            dedup_entries = len(selection_dedup) - 1
-            if dedup_hits > 0:
-                print(f"  Feature selection dedup: {dedup_hits} fold evaluations skipped "
-                      f"({dedup_entries} unique selections cached)")
+    if verbose and selection_dedup:
+        dedup_hits = selection_dedup.get('_hits', 0)
+        dedup_entries = len(selection_dedup) - 1
+        if dedup_hits > 0:
+            print(f"  Feature selection dedup: {dedup_hits} fold evaluations skipped "
+                  f"({dedup_entries} unique selections cached)")
 
     return results
 

@@ -37,7 +37,6 @@ import sys
 import warnings
 from typing import Dict, List, Tuple, Optional, Any
 from dataclasses import dataclass
-from joblib import Parallel, delayed
 import json
 
 warnings.filterwarnings('ignore')
@@ -60,7 +59,6 @@ from noise_mitigation_analysis import run_full_analysis
 
 NOISE_LEVELS = [0.3, 0.6]  # Only noisy conditions (baseline captured separately)
 N_SAMPLES_QM9 = 5000
-N_JOBS = -1
 
 # Budgets to test during selection phase
 CANDIDATE_BUDGETS = [50, 100, 150, 200, 300]
@@ -625,11 +623,7 @@ def run_representation_experiments(
             precomputed_distances=precomputed
         )
     
-    parallel_results = Parallel(n_jobs=N_JOBS, verbose=0)(
-        delayed(run_config)(cfg) for cfg in configs
-    )
-    
-    results = [r for r in parallel_results if r is not None]
+    results = [r for r in (run_config(cfg) for cfg in configs) if r is not None]
     
     # Summary
     if results:
