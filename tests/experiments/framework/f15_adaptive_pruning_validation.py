@@ -10,7 +10,7 @@ This validates whether after-fold-1 pruning is safe before implementing it
 in find_best_hybrid.
 
 Datasets: abagym_EGFR, buchwald_hartwig, caco2, flab_pk_jain_fcrnrt, herg_ki, logd
-Search: 13 strategies × 3 importance × 5 evaluators × 13 models × full budgets × 5 folds
+Search: 13 strategies × 3 importance × 5 evaluators × 6 models × [250,500,1000,2000] budgets × 5 folds
 Augmentation: none
 
 Output: tests/results/framework/f15_adaptive_pruning/{dataset}.json
