@@ -59,12 +59,15 @@ fi
 # Fast mode: skip all install checks (for precompute and other batch jobs
 # where the venv is already set up). Set KIRBY_SKIP_INSTALLS=1 before sourcing.
 if [ "${KIRBY_SKIP_INSTALLS:-0}" = "1" ]; then
+    echo "[setup.sh] skip mode: loading CUDA module..."
     module load CUDA 2>/dev/null || true
+    echo "[setup.sh] CUDA module done"
     # Set torch lib path without importing torch (avoids contention on shared nodes)
     _TORCH_DIR="${VENV_DIR}/lib/python3.11/site-packages/torch/lib"
     if [ -d "$_TORCH_DIR" ]; then
         export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:+$LD_LIBRARY_PATH:}$_TORCH_DIR"
     fi
+    echo "[setup.sh] setup complete (skip mode)"
     return 0 2>/dev/null || exit 0
 fi
 
@@ -198,4 +201,5 @@ torch_cluster.radius_graph(x, r=2.0, batch=b)
 fi
 
 # Always succeed so && chains in SLURM wraps don't break
+echo "[setup.sh] setup complete (full mode)"
 true
