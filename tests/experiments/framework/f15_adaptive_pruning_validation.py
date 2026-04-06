@@ -219,24 +219,9 @@ def run_f15(dataset_name, output_dir):
                     for bgt in model_budgets:
                         configs.append((strat, imp, model_name, ev, bgt))
 
-    # Evaluate one config across all folds
-    # Selection dedup: if two configs produce the same feature selection
-    # (same strategy + importance + evaluator + budget → same allocation),
-    # we can reuse scores across downstream models.
-    _selection_cache = {}  # (fold_idx, feature_hash) -> {model_name: score}
-
-    def _hash_features(feature_info):
-        """Hash the feature selection for dedup."""
-        parts = []
-        for name in sorted(feature_info.keys()):
-            info = feature_info[name]
-            if isinstance(info, dict) and 'selected_indices' in info:
-                parts.append(f"{name}:{tuple(info['selected_indices'])}")
-        return hash(tuple(parts))
-
     def _eval_config(cfg):
         strat, imp, model_name, ev, bgt = cfg
-        model = models[model_name]
+        model = deepcopy(models[model_name])  # thread-safe: each thread gets its own copy
         fold_scores = []
 
         for fold_idx in range(n_folds):
