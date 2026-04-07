@@ -58,6 +58,46 @@ F15_DATASETS = [
 
 F15_MODELS = ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm']
 F15_BUDGETS = [50, 100, 250, 500, 1000, 2000]
+F15_MAX_JOB_HOURS = 20  # drop largest budgets to keep each job under this
+
+
+def _cap_budgets(model, n_train, budgets, max_hours=F15_MAX_JOB_HOURS):
+    """Drop largest budgets until estimated runtime is under max_hours.
+
+    Complexity per fold:
+      SVM:  O(n^2 * budget)
+      MLP:  O(n * budget * hidden)
+      Ridge: O(n * budget^2 * n_alphas)
+      Trees: O(n_trees * n * budget * log(n))
+    """
+    import math
+    evals = {'rf': 4, 'xgboost': 5, 'ridge': 5, 'svm': 4, 'mlp': 4, 'lightgbm': 4}
+    n_ev = evals[model]
+
+    def _est_hours(blist):
+        total_s = 0
+        for b in blist:
+            if model == 'svm':
+                t_fold = (n_train**2 * b) / 1e8
+            elif model == 'mlp':
+                t_fold = (250 * n_train * b * 256) / 1e9
+            elif model == 'ridge':
+                t_fold = (n_train * b**2 * 50) / 5e9
+            else:
+                t_fold = (100 * n_train * b * math.log2(max(n_train, 2))) / 1e9
+            total_s += 13 * 3 * n_ev * t_fold * 5  # strats × imp × evals × folds
+        return total_s / 3600
+
+    capped = list(budgets)
+    dropped = []
+    while capped and _est_hours(capped) > max_hours:
+        dropped.append(capped.pop())
+
+    if dropped:
+        print(f"  Budget cap: dropped {dropped} for {model} "
+              f"(est {_est_hours(budgets):.0f}h → {_est_hours(capped):.1f}h)", flush=True)
+
+    return capped
 
 
 def _get_domain(name):
@@ -151,7 +191,7 @@ def _evaluate_single_fold(base_reps, labels, groups, fold_split,
     return float(metric_fn(y_val, y_pred))
 
 
-def run_f15(dataset_name, output_dir):
+def run_f15(dataset_name, output_dir, model_filter=None):
     ds_config = DATASET_REPS.get(dataset_name)
     if ds_config is None:
         print(f"  {dataset_name}: not in DATASET_REPS", flush=True)
@@ -182,11 +222,20 @@ def run_f15(dataset_name, output_dir):
     evaluator_names = tier['internal_evaluators']
     n_folds = tier['n_folds']
 
-    # Budget filtering by total n
-    budgets = [b for b in F15_BUDGETS if b <= len(labels)]
+    # Model selection (single model if --model specified, else all 6)
+    model_names = [model_filter] if model_filter else F15_MODELS
+    models = _resolve_models(model_names, task_type, 'full', n_samples=len(labels))
 
-    # Core 6 models (lit-validated: rf, xgboost, ridge, svm, mlp, lightgbm)
-    models = _resolve_models(F15_MODELS, task_type, 'full', n_samples=len(labels))
+    # Budget filtering by total n, then cap per-model to fit in wall time
+    base_budgets = [b for b in F15_BUDGETS if b <= len(labels)]
+    n_train_est = len(labels) - int(np.ceil(len(labels) / tier['n_folds']))
+
+    # Use tightest budget cap across all models in this run
+    budgets = base_budgets
+    for mn in models:
+        capped = _cap_budgets(mn, n_train_est, base_budgets)
+        if len(capped) < len(budgets):
+            budgets = capped
 
     print(f"  {len(reps)} reps, {len(labels)} samples, metric={metric_str} "
           f"(lower_is_better={lower_is_better})", flush=True)
@@ -367,7 +416,8 @@ def run_f15(dataset_name, output_dir):
             }
             _out_dir = Path(output_dir) / 'f15_adaptive_pruning'
             _out_dir.mkdir(parents=True, exist_ok=True)
-            _out_path = _out_dir / f'{dataset_name}.json'
+            _suffix = f'_{model_filter}' if model_filter else ''
+            _out_path = _out_dir / f'{dataset_name}{_suffix}.json'
             with open(_out_path, 'w') as _f:
                 json.dump(_partial, _f, indent=2, default=str)
 
@@ -378,23 +428,30 @@ def run_f15(dataset_name, output_dir):
     if n_nan:
         print(f"  WARNING: {n_nan} configs had NaN folds", flush=True)
 
-    print(f"  Final save to {Path(output_dir) / 'f15_adaptive_pruning' / f'{dataset_name}.json'}", flush=True)
+    _suffix = f'_{model_filter}' if model_filter else ''
+    print(f"  Final save to {Path(output_dir) / 'f15_adaptive_pruning' / f'{dataset_name}{_suffix}.json'}", flush=True)
 
 
 def main():
     parser = argparse.ArgumentParser(
         description='F15: Adaptive Pruning Validation')
     parser.add_argument('dataset', type=str, help='Dataset name or "all"')
+    parser.add_argument('--model', type=str, default=None,
+                        help='Single model to run (e.g. svm). Omit for all 6.')
     parser.add_argument('-o', '--output', type=str,
                         default='tests/results/framework',
                         help='Output directory')
     args = parser.parse_args()
 
+    if args.model and args.model not in F15_MODELS:
+        print(f"Unknown model '{args.model}'. Choose from: {F15_MODELS}")
+        return
+
     if args.dataset == 'all':
         for ds in F15_DATASETS:
-            run_f15(ds, args.output)
+            run_f15(ds, args.output, model_filter=args.model)
     else:
-        run_f15(args.dataset, args.output)
+        run_f15(args.dataset, args.output, model_filter=args.model)
 
 
 if __name__ == '__main__':
