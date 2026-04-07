@@ -333,7 +333,7 @@ def run_f15(dataset_name, output_dir):
         }
         all_results.append(result)
 
-        # Progress every 100 configs
+        # Progress + intermediate save every 100 configs
         if (i + 1) % 100 == 0 or (i + 1) == len(configs):
             elapsed = time.time() - t_start
             rate = (i + 1) / elapsed if elapsed > 0 else 0
@@ -343,6 +343,34 @@ def run_f15(dataset_name, output_dir):
                   f"({rate:.1f}/s, ETA {eta:.0f}s) nan={n_nan_configs}",
                   flush=True)
 
+            # Save partial results so nothing is lost if job gets killed
+            _partial = {
+                'experiment': 'f15_adaptive_pruning_validation',
+                'timestamp': time.strftime('%Y-%m-%dT%H:%M:%S'),
+                'dataset': dataset_name,
+                'domain': domain,
+                'metric': metric_str,
+                'lower_is_better': lower_is_better,
+                'n_samples': len(labels),
+                'n_reps': len(reps),
+                'n_folds': n_folds,
+                'config': {
+                    'strategies': strategies,
+                    'importance_methods': importance_methods,
+                    'evaluators': evaluator_names,
+                    'budgets': budgets,
+                    'models': sorted(models.keys()),
+                },
+                'results': all_results,
+                'complete': (i + 1) == len(configs),
+                'progress': f'{i+1}/{len(configs)}',
+            }
+            _out_dir = Path(output_dir) / 'f15_adaptive_pruning'
+            _out_dir.mkdir(parents=True, exist_ok=True)
+            _out_path = _out_dir / f'{dataset_name}.json'
+            with open(_out_path, 'w') as _f:
+                json.dump(_partial, _f, indent=2, default=str)
+
     elapsed = time.time() - t_start
     print(f"\n[{time.strftime('%H:%M:%S')}] Done: {len(all_results)} configs "
           f"in {elapsed:.0f}s", flush=True)
@@ -350,33 +378,7 @@ def run_f15(dataset_name, output_dir):
     if n_nan:
         print(f"  WARNING: {n_nan} configs had NaN folds", flush=True)
 
-    # Save results
-    output = {
-        'experiment': 'f15_adaptive_pruning_validation',
-        'timestamp': time.strftime('%Y-%m-%dT%H:%M:%S'),
-        'dataset': dataset_name,
-        'domain': domain,
-        'metric': metric_str,
-        'lower_is_better': lower_is_better,
-        'n_samples': len(labels),
-        'n_reps': len(reps),
-        'n_folds': n_folds,
-        'config': {
-            'strategies': strategies,
-            'importance_methods': importance_methods,
-            'evaluators': evaluator_names,
-            'budgets': budgets,
-            'models': sorted(models.keys()),
-        },
-        'results': all_results,
-    }
-
-    out_dir = Path(output_dir) / 'f15_adaptive_pruning'
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f'{dataset_name}.json'
-    with open(out_path, 'w') as f:
-        json.dump(output, f, indent=2, default=str)
-    print(f"  Saved to {out_path}", flush=True)
+    print(f"  Final save to {Path(output_dir) / 'f15_adaptive_pruning' / f'{dataset_name}.json'}", flush=True)
 
 
 def main():
