@@ -29,17 +29,43 @@ from collections import defaultdict
 
 
 def load_results(results_dir):
-    """Load all F15 JSON result files."""
+    """Load all F15 JSON result files, merging per-model splits.
+
+    Handles both formats:
+    - Single file: {dataset}.json (all models)
+    - Split files: {dataset}_{model}.json (one model each, merged)
+    """
     results_dir = Path(results_dir)
     datasets = {}
     for f in sorted(results_dir.glob('*.json')):
         with open(f) as fh:
             data = json.load(fh)
-        # Skip empty results
         if not data['results']:
-            print(f"  SKIP {data['dataset']}: 0 configs")
+            print(f"  SKIP {f.name}: 0 configs")
             continue
-        datasets[data['dataset']] = data
+
+        ds_name = data['dataset']
+        if ds_name not in datasets:
+            datasets[ds_name] = data
+        else:
+            # Merge: append results, union budgets and models
+            existing = datasets[ds_name]
+            existing['results'].extend(data['results'])
+            existing['config']['budgets'] = sorted(set(
+                existing['config']['budgets'] + data['config']['budgets']))
+            existing['config']['models'] = sorted(set(
+                existing['config']['models'] + data['config']['models']))
+            incomplete = not data.get('complete', True) or not existing.get('complete', True)
+            if incomplete:
+                existing['complete'] = False
+
+    for ds_name, data in datasets.items():
+        n_models = len(data['config']['models'])
+        n_results = len(data['results'])
+        complete = data.get('complete', True)
+        status = '' if complete else ' (PARTIAL)'
+        print(f"  {ds_name}: {n_results} configs, {n_models} models{status}")
+
     return datasets
 
 
