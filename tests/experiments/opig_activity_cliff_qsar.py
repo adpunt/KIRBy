@@ -64,7 +64,7 @@ from find_best_hybrid_molecular import (
 )
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
-    extract_top3_base_reps,
+    extract_top3_base_reps, SCREENING_BUDGETS,
 )
 
 # =============================================================================
@@ -303,6 +303,7 @@ def evaluate_target(target, rep_preset, n_folds):
             labels=labels, groups=groups,
             metric='mae',
             task_type='regression',
+            budgets=SCREENING_BUDGETS,
             augmentations=aug_dict if aug_dict else None,
             augmentation_strategy='uncapped',
             internal_evaluators=INTERNAL_EVALUATORS,

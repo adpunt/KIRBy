@@ -30,6 +30,62 @@ except ImportError:
     HAS_NOISEINJECT = False
 
 
+def _nogueira_stability(feature_sets, total_features):
+    """Compute Nogueira et al. (2018) stability index from per-fold feature sets.
+
+    Args:
+        feature_sets: list of sets, each containing (rep_name, feature_idx) tuples.
+        total_features: int, total number of features available.
+
+    Returns:
+        (phi, se): stability index in [-1, 1] and standard error.
+        phi=1 means identical selection every fold.
+
+    Reference:
+        Nogueira, Sechidis & Brown (2018). "On the Stability of Feature
+        Selection Algorithms." JMLR 18(174), 1-54.
+    """
+    M = len(feature_sets)
+    if M < 2 or total_features == 0:
+        return float('nan'), float('nan')
+
+    # Build unified feature index from all selected features across folds
+    all_features = set()
+    for fs in feature_sets:
+        all_features.update(fs)
+    all_features = sorted(all_features)
+    feat_to_idx = {f: i for i, f in enumerate(all_features)}
+    d = len(all_features)
+
+    if d == 0:
+        return float('nan'), float('nan')
+
+    # Binary matrix Z: M x d
+    Z = np.zeros((M, d), dtype=float)
+    for i, fs in enumerate(feature_sets):
+        for f in fs:
+            if f in feat_to_idx:
+                Z[i, feat_to_idx[f]] = 1.0
+
+    k_bar = Z.sum(axis=1).mean()
+    if k_bar == 0 or k_bar == d:
+        return float('nan'), float('nan')
+
+    p_f = Z.mean(axis=0)
+    numerator = (M / (M - 1)) * np.sum(p_f * (1 - p_f))
+    denominator = d * k_bar * (1 - k_bar / d)
+
+    if denominator == 0:
+        return float('nan'), float('nan')
+
+    phi = 1 - numerator / denominator
+    var_terms = p_f * (1 - p_f)
+    se = np.sqrt((4 / (M * d**2 * (k_bar * (1 - k_bar / d))**2)) *
+                 np.sum(var_terms**2)) if M > 2 else float('nan')
+
+    return float(phi), float(se)
+
+
 def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
     """Exp 10: Noise Degradation Slope (NDS) across noise strategies.
 
@@ -318,6 +374,18 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                     jaccard_across_folds.append(inter / union if union > 0 else 0)
             results['feature_stability']['fold_jaccard_sigma0'] = float(np.mean(jaccard_across_folds))
             print(f"    Fold stability (sigma=0): Jaccard={np.mean(jaccard_across_folds):.3f}")
+
+            # Nogueira stability index (Nogueira, Sechidis & Brown, JMLR 2018)
+            total_features = sum(v.shape[1] for v in reps.values())
+            nogueira_phi, nogueira_se = _nogueira_stability(fold_sets, total_features)
+            results['feature_stability']['nogueira_phi'] = nogueira_phi
+            results['feature_stability']['nogueira_se'] = nogueira_se
+            if not np.isnan(nogueira_phi):
+                ci_lo = nogueira_phi - 1.96 * nogueira_se
+                ci_hi = nogueira_phi + 1.96 * nogueira_se
+                results['feature_stability']['nogueira_ci_95'] = [ci_lo, ci_hi]
+                print(f"    Nogueira stability (sigma=0): phi={nogueira_phi:.3f} "
+                      f"(95% CI: [{ci_lo:.3f}, {ci_hi:.3f}])")
 
         # Feature stability across noise levels (compare sigma=0 features to each sigma)
         if features_by_sigma.get(0.0):

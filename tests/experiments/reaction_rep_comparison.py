@@ -66,7 +66,7 @@ from kirby.representations.reaction import (
 from experiments._shared import (
     get_model_factories as _get_model_factories,
     DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
-    extract_top3_base_reps,
+    extract_top3_base_reps, SCREENING_BUDGETS,
 )
 
 warnings.filterwarnings('ignore')
@@ -409,6 +409,7 @@ def main():
                 from kirby.hybrid import apply_feature_selection
                 search = find_best_hybrid(
                     base_reps=rep_matrices, labels=labels, groups=groups,
+                    budgets=SCREENING_BUDGETS,
                     internal_evaluators=INTERNAL_EVALUATORS,
                     speed='fast', return_fitted=True, verbose=False, cache=True,
                     metric='rmse')

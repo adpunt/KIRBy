@@ -63,7 +63,7 @@ warnings.filterwarnings('ignore')
 
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
-    extract_top3_base_reps,
+    extract_top3_base_reps, SCREENING_BUDGETS,
 )
 
 # =============================================================================
@@ -217,6 +217,7 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds):
             labels=labels, groups=groups,
             metric='auc',
             task_type='classification',
+            budgets=SCREENING_BUDGETS,
             augmentation_strategy='uncapped',
             internal_evaluators=INTERNAL_EVALUATORS,
             speed='fast', return_fitted=True, verbose=False, cache=True)

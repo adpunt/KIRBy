@@ -65,5 +65,11 @@ if [[ "$FILTER" == "all" || "$FILTER" == "molecular" || "$FILTER" == "qsar" ]]; 
         "python tests/experiments/opig_activity_cliff_qsar.py"
 fi
 
+# --- Cross-dataset blueprint transfer (OPIG C5) ---
+if [[ "$FILTER" == "all" || "$FILTER" == "molecular" || "$FILTER" == "blueprint" ]]; then
+    submit blueprint_transfer 64G 23:59:00 long \
+        "python tests/experiments/opig_blueprint_transfer.py --source logd --target herg_ki --mode full"
+fi
+
 echo ""
 echo "Results will be in tests/results/comparisons/opig_*.json"

@@ -39,7 +39,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     find_best_hybrid, get_config,
     extract_top3_base_reps,
-    INTERNAL_EVALUATORS,
+    INTERNAL_EVALUATORS, SCREENING_BUDGETS,
 )
 from experiments.complexity.complexity_helpers import DATASET_REPS
 
@@ -184,6 +184,7 @@ def _evaluate_task(task_name, rep_preset, config):
         groups=groups,
         metric=metric_name,
         task_type=task_type,
+        budgets=SCREENING_BUDGETS,
         speed=speed,
         n_folds=n_folds,
         internal_evaluators=INTERNAL_EVALUATORS,

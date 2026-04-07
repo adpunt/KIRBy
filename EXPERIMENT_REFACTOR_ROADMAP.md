@@ -23,7 +23,7 @@ settings. Thesis experiments (Step 4) use those settings to produce chapter resu
 
 ## Current Experiment Inventory (41 scripts)
 
-### Complexity (15 scripts — `tests/experiments/complexity/`)
+### Complexity (24 scripts — `tests/experiments/complexity/`)
 
 | ID | Script | What it tests | Chapter claim |
 |----|--------|---------------|---------------|
@@ -36,12 +36,25 @@ settings. Thesis experiments (Step 4) use those settings to produce chapter resu
 | **c07** | `c07_data_complexity_partitions.py` | Easy vs hard subpopulation behavior | Hybrids help most on hard partitions |
 | **c08** | `c08_calibration.py` | Conformal prediction at optimal vs suboptimal configs | Optimal complexity → better calibration |
 | **c09** | `c09_formal_analysis.py` | ANOVA, MI retention, effective rank, bias-variance | Theoretical grounding (4 sub-analyses) |
-| **c10** | `c10_noise_robustness.py` | Noise Degradation Slope (NDS) | Hybrids are more noise-robust **(→ Noise chapter too)** |
-| **c11** | `c11_ensemble_vs_hybrid.py` | Model ensemble vs feature-level hybrid | Rep-level fusion ≥ model-level fusion, cheaper |
+| **c10** | `c10_noise_robustness.py` | Noise Degradation Slope (NDS) | Hybrids are more noise-robust **(-> Noise chapter too)** |
+| **c11** | `c11_ensemble_vs_hybrid.py` | Model ensemble vs feature-level hybrid | Rep-level fusion >= model-level fusion, cheaper |
 | **c12** | `c12_modality_ablation.py` | TCGA modality combinations (9 omics types) | Multi-modal hybrids capture complementary info |
 | **c13** | `c13_forward_compatibility.py` | 5-condition ablation for new reps (A-E), controls | New reps benefit from and improve hybrids |
 | **c14** | `c14_cross_domain_summary.py` | KIRBy hybrid vs best single rep across domains, Wilcoxon | Consistent improvement across molecular/antibody/TCGA |
-| **c15** | `c15_ml_theory_depth.py` | Distance concentration, kernel degradation + **RBF γ sensitivity sweep**, double descent, Rademacher | Theoretical depth across 4 ML theory levels. γ sweep shows hybrid is most robust to kernel lengthscale (per Moesser 2023 Ch.2 p.84). |
+| **c15** | `c15_ml_theory_depth.py` | Distance concentration, kernel degradation + RBF gamma sensitivity, double descent, Rademacher | Theoretical depth across 4 ML theory levels |
+| **c16** | `c16_feature_selection_as_regularization.py` | Feature selection as implicit regularizer | Budget = regularization strength, not just compression |
+| **c17** | `c17_information_theoretic_decomposition.py` | MI decomposition of hybrid vs individual reps | Hybrid captures complementary information |
+| **c18** | `c18_diversity_vs_depth.py` | Rep diversity vs feature depth tradeoff | Many shallow reps > few deep reps (given budget) |
+| **c19** | `c19_importance_weighted_training.py` | Importance-weighted sample/feature training | Feature importance as training signal |
+| **c21** | `c21_single_rep_augmentation.py` | Augmentation on individual reps (merged C20) | Augmentation helps even without hybridization |
+| **c22** | `c22_explainability.py` | SHAP/importance explanations of hybrid decisions | Hybrid feature selection is interpretable |
+| **c23** | `c23_evaluator_model_matching.py` | Internal evaluator vs downstream model matching | Matched evaluators improve hybrid quality |
+| **c24** | `c24_blueprint_transfer.py` | Cross-fold blueprint generalization + Nogueira stability | Feature selection is not overfit to training folds |
+
+**Dispatch notes:**
+- c01-c24: Per-dataset experiments, triggered via `run_all()` in `complexity_helpers.py`.
+- c03, c14: Cross-dataset/cross-domain, standalone dispatch only.
+- Cross-dataset blueprint transfer is now OPIG C5 (`opig_blueprint_transfer.py`), dispatched via `submit_opig_experiments.sh`.
 
 ### Similarity (11 scripts — `tests/experiments/similarity/`)
 
@@ -194,18 +207,23 @@ c09/s09 cross-dataset summary gets at this but only within a domain.
 |----------------|--------------------|--------------------|
 | "Reps vary widely" | c01 | BOM tables |
 | "Optimal complexity exists" | c02, c06, c09d | c07 (partition analysis) |
-| "Complexity transfers" | c03 | c12 (modality ablation) |
-| "Information concentration" | c09b (MI retention), c09c (effective rank) | s03 (from Similarity) |
+| "Complexity transfers" | c03, c24, c25 | c12 (modality ablation) |
+| "Information concentration" | c09b (MI retention), c09c (effective rank), c17 | s03 (from Similarity) |
+| "Feature selection as regularization" | c16 | c09d (bias-variance) |
+| "Diversity vs depth" | c18 | c01 (characterization) |
 | "Hybrids vs ensembles" | c11 | Timing data |
-| "Forward compatible" | **c13 (GAP C-A)** | BOM forward-compat baselines |
+| "Forward compatible" | c13 | BOM forward-compat baselines |
 | "Calibrated uncertainty" | c08 | s06 (AD from Similarity) |
 | "Sample efficient" | c05 | c07 (hard partitions) |
-| "Domain agnostic" | **c14 (GAP C-D)** | All domain BOM results |
+| "Domain agnostic" | c14 | All domain BOM results |
 | "Noise robust" | c10 | s04, s07 (from Similarity/Noise) |
-| "Distance concentration" | **c15a** | Beyer (1999), hubness (Radovanovic 2010) |
-| "Kernel degradation" | **c15b** | Bengio (2005), kernel-target alignment |
-| "Double descent avoidance" | **c15c** | Budget always << n → no interpolation threshold |
-| "Generalization bounds" | **c15d** | Rademacher complexity, sqrt(d/n) scaling |
+| "Distance concentration" | c15a | Beyer (1999), hubness (Radovanovic 2010) |
+| "Kernel degradation" | c15b | Bengio (2005), kernel-target alignment |
+| "Double descent avoidance" | c15c | Budget always << n, no interpolation threshold |
+| "Generalization bounds" | c15d | Rademacher complexity, sqrt(d/n) scaling |
+| "Explainability" | c22 | SHAP feature attribution |
+| "Evaluator-model matching" | c23 | c02 grid (allocation matters) |
+| "Pretrained hybrids" | OPIG C5 (`opig_blueprint_transfer.py`) | c24 (cross-fold stability), c03 (within-domain transfer) |
 
 ---
 

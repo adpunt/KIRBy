@@ -38,7 +38,7 @@ from scipy.stats import zscore
 
 from experiments._shared import (
     load_data, save_experiment_results, convert_numpy, cv_split,
-    cap_dimensions, get_domain_metric,
+    cap_dimensions, get_domain_metric, SCREENING_BUDGETS,
 )
 from experiments.federated.federated_helpers import (
     compute_reg_metrics, inject_noise_per_silo,
@@ -144,6 +144,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 s_search = find_best_hybrid(
                     sd['reps'], sd['labels'],
                     groups=sd.get('groups'),
+                    budgets=SCREENING_BUDGETS,
                     speed='fast', cache=True, verbose=False,
                     metric=_metric)
                 s_bp_entry = s_search.best_by_model.get('rf')

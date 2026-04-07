@@ -682,6 +682,8 @@ SINGLE_DATASET_EXPERIMENTS = [
     'c19',                  # importance-weighted training
     'c21',                  # single-rep augmentation (merged C20)
     'c22',                  # hybrid explainability
+    'c23',                  # evaluator-model matching
+    'c24',                  # blueprint transfer (cross-fold)
 ]
 
 
@@ -707,6 +709,8 @@ def _import_experiment(exp_id: str):
         'c19': 'c19_importance_weighted_training',
         'c21': 'c21_single_rep_augmentation',
         'c22': 'c22_explainability',
+        'c23': 'c23_evaluator_model_matching',
+        'c24': 'c24_blueprint_transfer',
     }
     mod_name = module_map[exp_id]
     import importlib
@@ -899,5 +903,8 @@ def _experiment_full_name(exp_id: str) -> str:
         'c18': 'c18_diversity_vs_depth',
         'c19': 'c19_importance_weighted_training',
         'c21': 'c21_single_rep_augmentation',
+        'c22': 'c22_explainability',
+        'c23': 'c23_evaluator_model_matching',
+        'c24': 'c24_blueprint_transfer',
     }
     return name_map.get(exp_id, exp_id)

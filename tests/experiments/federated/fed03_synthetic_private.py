@@ -776,6 +776,7 @@ def _run_antibody_federated(data, config, output_dir, dataset_name):
     """
     from kirby.hybrid import create_hybrid, apply_feature_selection
     from kirby.find_best_hybrid import find_best_hybrid
+    from experiments._shared import SCREENING_BUDGETS
 
     print("\n" + "=" * 70)
     print("FED03 PART C: ANTIBODY FEDERATED (F6)")
@@ -814,6 +815,7 @@ def _run_antibody_federated(data, config, output_dir, dataset_name):
                 s_search = find_best_hybrid(
                     sd['reps'], sd['labels'],
                     groups=sd.get('groups'),
+                    budgets=SCREENING_BUDGETS,
                     speed='fast', cache=True, verbose=False,
                     metric=_metric)
                 s_bp_entry = s_search.best_by_model.get('rf')
