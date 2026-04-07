@@ -210,6 +210,18 @@ that could enhance KIRBy's downstream evaluation or reveal new insights about re
 | **Status** | **DONE** (2026-03-15). Self-contained comparison experiment, NOT a core pipeline change. Files: `src/kirby/datasets/chembl_bioactivity.py` (bulk ChEMBL IC50 loader, top-200 targets, InChIKey dedup per target, leakage exclusion), `src/kirby/models/dnn_pretrained.py` (sklearn-compatible DNN with pre-trained weight loading + layer freezing), `src/kirby/models/pretrain_chembl_dnn.py` (standalone pre-training script, 6 fast reps), `tests/experiments/imrie_transfer_learning.py` (5 conditions × 6 reps × 3 datasets: dnn_scratch, dnn_tl_full, dnn_tl_frozen, ridge, gp). SLURM: `imrie_pretrain.sh` (128G, 4h) + `imrie_eval.sh` (64G, 2h). Analysis: per-rep TL delta, rep ranking preservation (Spearman ρ), model-vs-rep trade-off. |
 | **Notes** | TL is a model-side improvement, not a rep-side one. KIRBy's thesis is about the input mattering more than the model. This experiment answers: "Does TL change the conclusion that reps matter?" Either way is thesis-relevant: if TL helps all reps equally → model improvement orthogonal; if TL collapses ranking → model matters more; if hybrid + TL > best single + TL → hybrid value persists. |
 
+### C5. Cross-Dataset Blueprint Transfer (pretrained hybrid evaluation)
+
+| | |
+|---|---|
+| **What it is** | Tests whether a hybrid blueprint (allocation method, importance method, budget, evaluator) discovered on a large source dataset transfers to a smaller target dataset within the same domain. Two transfer levels: *recipe transfer* (same meta-parameters, recompute feature selection on target) and *full transfer* (exact feature indices from source applied to target with zero recomputation). |
+| **KIRBy relevance** | If blueprints transfer, users can publish "pretrained hybrid" configs from common large datasets. New users apply them to their own small datasets without running the search, like pretrained model weights. |
+| **Scope** | Small — standalone experiment using existing `find_best_hybrid` + `create_hybrid` infrastructure. |
+| **Status** | **DONE** (2026-04-06). File: `tests/experiments/opig_blueprint_transfer.py`. Default pair: logd (7K) → herg_ki (1.4K). 4 conditions per model × fold: base_best, native hybrid, recipe transfer, full transfer. Also evaluates hybrid vs base on source. SLURM: `submit_opig_experiments.sh` (filter: `blueprint` or `molecular`). |
+| **Conditions** | A. `base_best`: Best single rep (fixed from search baselines). B. `native`: Hybrid optimised on target. C. `recipe_transfer`: Source blueprint recipe, feature selection recomputed on target data. D. `full_transfer`: Source's exact feature indices on target data. |
+| **Key questions** | (1) Does full_transfer beat base_best? → Publishable blueprints. (2) Does recipe_transfer match native? → Recipe generalises. (3) Does full_transfer match native? → Publish exact feature lists. |
+| **Notes** | Complements C24 (cross-fold blueprint stability within a dataset) and C03 (config transfer across datasets). C24 shows blueprints don't overfit to training folds; C5 shows they generalise across datasets entirely. Together they support the "pretrained hybrid" thesis claim. |
+
 ---
 
 ## Implementation Priority & Dependencies
@@ -232,6 +244,7 @@ that could enhance KIRBy's downstream evaluation or reveal new insights about re
 ### Larger scope (defer)
 10. ~~**C3 (AEV-PLIG / FEP)**~~ — **DONE** (2026-03-15). PDBBind metadata fix + LP-PDBBind splits. AEV rep deferred (3D structure requirement).
 11. ~~**C4 (Imrie TL)**~~ — **DONE** (2026-03-15). Self-contained experiment: 5 conditions × 6 reps × 3 datasets.
+12. ~~**C5 (Blueprint transfer)**~~ — **DONE** (2026-04-06). Cross-dataset blueprint transfer: logd → herg_ki default pair.
 
 ### Deferred (user decision)
 - **Activity cliffs (#30, Dablander)** — central to research but held for later experiments

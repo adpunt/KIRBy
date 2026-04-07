@@ -58,7 +58,7 @@ from antibody_baseline_survey import load_dataset, DATASET_REGISTRY
 from run_baseline_survey import evaluate_rep as _evaluate_rep
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
-    extract_top3_base_reps,
+    extract_top3_base_reps, SCREENING_BUDGETS,
 )
 
 # =============================================================================
@@ -320,6 +320,7 @@ def evaluate_condition(condition, rep_names, n_folds, max_samples=5000):
             labels=labels, groups=grp,
             metric='pearson',
             task_type='regression',
+            budgets=SCREENING_BUDGETS,
             augmentations=aug_dict if aug_dict else None,
             augmentation_strategy='uncapped',
             internal_evaluators=INTERNAL_EVALUATORS,

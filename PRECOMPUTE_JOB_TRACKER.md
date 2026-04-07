@@ -386,3 +386,61 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 2026-04-05 | v4 | 160 | medium, 64G, full speed, no FT. setup.sh install checks hung. Cancelled. |
 | 2026-04-05 | v5 | 160 | + KIRBY_SKIP_INSTALLS. Missing treeshap in full tier. Cancelled. |
 | 2026-04-05 | **v6** | **160 (11729406–11729565)** | **medium, 64G, 4 CPUs, full speed (3 imp methods), 4 conditions, no FT, SKIP_INSTALLS, cache v9.** |
+
+---
+
+## HTC SURVEY JOBS (2026-04-06)
+
+**Partition:** long | **Purpose:** Baseline surveys — if they pass, datasets get added to precompute.
+
+> **⚠️ WARNING:** These were submitted from `/home/scat9264/` by mistake — SLURM logs at `/home/scat9264/slurm-<jobid>.out` instead of `/data/`. Always `cd /data/stat-cadd/scat9264/KIRBy` before running `sbatch`.
+
+### DTA
+
+| Job ID | Name | Status |
+|--------|------|--------|
+| 7440291 | dta_davis | R |
+| 7440292 | dta_kiba | PD |
+| 7440293 | dta_bindingdb | PD |
+
+### Antibody CLF
+
+| Job ID | Name | Status |
+|--------|------|--------|
+| 7440294 | abclf_tz | PD |
+| 7440295 | abclf_humanness | PD |
+
+### SchNet (molecular)
+
+| Job ID | Name | Status |
+|--------|------|--------|
+| 7440325 | schnet_logd | PD |
+| 7440326 | schnet_herg | PD |
+| 7440327 | schnet_caco2 | PD |
+
+### Nucleotide (genomics)
+
+| Job ID | Name | Status |
+|--------|------|--------|
+| 7440301 | nuc_nt_promoter | PD |
+| 7440302 | nuc_nt_promoter | PD |
+| 7440303 | nuc_nt_promoter | PD |
+| 7440304 | nuc_nt_enhancer | PD |
+| 7440305 | nuc_nt_enhancer | PD |
+| 7440306 | nuc_nt_splice | PD |
+| 7440307 | nuc_nt_splice | PD |
+| 7440308 | nuc_nt_splice | PD |
+| 7440309 | nuc_nt_H3 | PD |
+| 7440310 | nuc_nt_H3 | PD |
+| 7440311 | nuc_nt_H3 | PD |
+| 7440312 | nuc_nt_H3 | PD |
+| 7440313 | nuc_nt_H3 | PD |
+| 7440314 | nuc_nt_H3 | PD |
+| 7440315 | nuc_nt_H3 | PD |
+| 7440316 | nuc_nt_H3 | PD |
+| 7440317 | nuc_nt_H3 | PD |
+| 7440318 | nuc_nt_H3 | PD |
+| 7440319 | nuc_gb_human | PD |
+| 7440320 | nuc_gb_human | PD |
+| 7440321 | nuc_gb_demo | PD |
+| 7440322 | nuc_gb_demo | PD |

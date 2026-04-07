@@ -54,7 +54,7 @@ from experiments._shared import (
     get_model_factories, get_domain_metric, cv_split,
     create_hybrid, apply_feature_selection,
     evaluate_single_rep_cv, build_fold_hybrid,
-    INTERNAL_EVALUATORS,
+    INTERNAL_EVALUATORS, SCREENING_BUDGETS,
 )
 from kirby.find_best_hybrid import find_best_hybrid
 
@@ -185,6 +185,7 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
             labels=labels,
             groups=groups,
             speed=search_speed,
+            budgets=SCREENING_BUDGETS,
             augmentations=augmentations,
             return_fitted=True,
             internal_evaluators=INTERNAL_EVALUATORS,

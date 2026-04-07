@@ -20,7 +20,7 @@ from experiments._shared import (
     create_hybrid, apply_feature_selection,
     find_best_hybrid, get_domain_metric,
     extract_top3_base_reps,
-    INTERNAL_EVALUATORS,
+    INTERNAL_EVALUATORS, SCREENING_BUDGETS,
 )
 from kirby.hybrid import apply_augmentation_selection
 
@@ -39,13 +39,11 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
     # Domain-aware metric
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
-    # Conformal calibration is regression-only; skip for classification
-    if data.get('task_type') == 'classification':
-        print("  SKIPPED: conformal calibration does not apply to classification tasks")
-        return {'skipped': True, 'reason': 'classification_task'}
+    task_type = data.get('task_type', 'regression')
+    is_classification = (task_type == 'classification')
 
-    from sklearn.ensemble import RandomForestRegressor
-    from sklearn.linear_model import Ridge
+    from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+    from sklearn.linear_model import Ridge, LogisticRegression
 
     reps = data['reps']
     labels = data['labels']
@@ -97,6 +95,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
             search = find_best_hybrid(
                 reps, labels, groups=groups,
                 speed=search_speed,
+                budgets=SCREENING_BUDGETS,
                 augmentations=augs,
                 internal_evaluators=INTERNAL_EVALUATORS,
                 metric=metric_name,
@@ -130,10 +129,21 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
             print(f"  find_best_hybrid failed ({e}), using RF/budget=100 default")
 
     if optimal_model_factory is None:
-        optimal_model_factory = lambda: RandomForestRegressor(
-            n_estimators=100, random_state=42, n_jobs=-1)
+        if is_classification:
+            optimal_model_factory = lambda: RandomForestClassifier(
+                n_estimators=100, random_state=42, n_jobs=-1)
+        else:
+            optimal_model_factory = lambda: RandomForestRegressor(
+                n_estimators=100, random_state=42, n_jobs=-1)
 
     # Define conditions: (model_factory, budget, alloc, imp, description)
+    if is_classification:
+        mismatched_factory = lambda: LogisticRegression(C=100, max_iter=1000, random_state=42)
+        mismatched_desc = 'LogReg at full dim (low-capacity model, high-dim input)'
+    else:
+        mismatched_factory = lambda: Ridge(alpha=0.01)
+        mismatched_desc = 'Ridge at full dim (low-capacity model, high-dim input)'
+
     condition_specs = {
         'optimal': (optimal_model_factory, optimal_budget, optimal_alloc, optimal_imp,
                     optimal_desc),
@@ -141,11 +151,11 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                      f'Same model at budget=25 (too compressed)'),
         'overfit': (optimal_model_factory, total_dim, optimal_alloc, optimal_imp,
                     f'Same model at full dim={total_dim} (too many features)'),
-        'mismatched': (lambda: Ridge(alpha=0.01), total_dim, 'greedy', 'treeshap',
-                       'Ridge at full dim (low-capacity model, high-dim input)'),
+        'mismatched': (mismatched_factory, total_dim, 'greedy', 'treeshap',
+                       mismatched_desc),
     }
 
-    results = {'conditions': {}}
+    results = {'conditions': {}, 'task_type': task_type}
 
     for cond_name in all_conditions:
         if cond_name not in condition_specs:
@@ -190,63 +200,139 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
             # Train base model
             model = model_factory()
             model.fit(X_train_s, y_train)
-            y_pred_val = model.predict(X_val_s)
-            val_r2 = metric_fn(y_val, y_pred_val)
 
-            # Conformal calibration: split train into proper-train + cal
-            n_train = len(y_train)
-            n_cal = max(20, int(n_train * 0.2))
-            cal_perm = np.random.RandomState(42 + fold_i).permutation(n_train)
-            cal_idx = cal_perm[:n_cal]
-            ptrain_idx = cal_perm[n_cal:]
+            if is_classification:
+                # Classification calibration via Platt scaling / prediction sets
+                val_score = metric_fn(y_val, model.predict(X_val_s))
 
-            X_ptrain, y_ptrain = X_train_s[ptrain_idx], y_train[ptrain_idx]
-            X_cal, y_cal = X_train_s[cal_idx], y_train[cal_idx]
+                # Conformal classification: split train into proper-train + cal
+                n_train = len(y_train)
+                n_cal = max(20, int(n_train * 0.2))
+                cal_perm = np.random.RandomState(42 + fold_i).permutation(n_train)
+                cal_idx = cal_perm[:n_cal]
+                ptrain_idx = cal_perm[n_cal:]
 
-            # Retrain on proper-train, calibrate on cal
-            model_conf = model_factory()
-            model_conf.fit(X_ptrain, y_ptrain)
+                X_ptrain, y_ptrain = X_train_s[ptrain_idx], y_train[ptrain_idx]
+                X_cal, y_cal = X_train_s[cal_idx], y_train[cal_idx]
 
-            y_pred_cal = model_conf.predict(X_cal)
-            cal_residuals = np.abs(y_cal - y_pred_cal)
+                model_conf = model_factory()
+                model_conf.fit(X_ptrain, y_ptrain)
 
-            # Conformal quantile with finite-sample correction (Romano et al. 2019)
-            alpha = 0.1
-            n_cal = len(cal_residuals)
-            conformal_level = min(1.0, np.ceil((n_cal + 1) * (1 - alpha)) / n_cal)
-            q = np.quantile(cal_residuals, conformal_level)
+                # Conformal classification: nonconformity = 1 - P(true class)
+                if hasattr(model_conf, 'predict_proba'):
+                    cal_probs = model_conf.predict_proba(X_cal)
+                    cal_scores = np.array([1 - cal_probs[i, int(y_cal[i])]
+                                           for i in range(len(y_cal))
+                                           if int(y_cal[i]) < cal_probs.shape[1]])
+                    if len(cal_scores) == 0:
+                        print(f"    fold {fold_i}: no valid calibration scores")
+                        continue
 
-            # Predict on val with conformal intervals
-            y_pred_conf = model_conf.predict(X_val_s)
-            interval_lo = y_pred_conf - q
-            interval_hi = y_pred_conf + q
+                    alpha = 0.1
+                    conformal_level = min(1.0, np.ceil((len(cal_scores) + 1) * (1 - alpha)) / len(cal_scores))
+                    q = np.quantile(cal_scores, conformal_level)
 
-            # Metrics
-            covered = (y_val >= interval_lo) & (y_val <= interval_hi)
-            picp = float(np.mean(covered))  # prediction interval coverage probability
-            mpiw = float(np.mean(interval_hi - interval_lo))  # mean interval width
-            target_range = float(np.ptp(y_val))
-            sharpness_ratio = mpiw / target_range if target_range > 0 else float('nan')
-            cal_error = abs(picp - (1 - alpha))
+                    # Prediction sets on val
+                    val_probs = model_conf.predict_proba(X_val_s)
+                    classes = model_conf.classes_
+                    pred_sets = []
+                    for i in range(len(y_val)):
+                        pset = [classes[j] for j in range(len(classes))
+                                if 1 - val_probs[i, j] <= q]
+                        pred_sets.append(pset)
 
-            # Uncertainty-error correlation (per-sample uncertainty from RF tree variance)
-            errors = np.abs(y_val - y_pred_conf)
-            ue_corr = float('nan')
-            if hasattr(model_conf, 'estimators_') and len(errors) >= 3:
-                tree_preds = np.array([t.predict(X_val_s) for t in model_conf.estimators_])
-                per_sample_unc = tree_preds.std(axis=0)
-                ue_corr, _ = spearmanr(per_sample_unc, errors)
-                ue_corr = float(ue_corr)
+                    # Coverage: true label in prediction set
+                    covered = np.array([y_val[i] in pred_sets[i] for i in range(len(y_val))])
+                    picp = float(np.mean(covered))
+                    avg_set_size = float(np.mean([len(ps) for ps in pred_sets]))
+                    n_classes = len(classes)
+                    # Sharpness: avg set size / n_classes (1/n_classes = trivial, 1 = perfect)
+                    sharpness_ratio = avg_set_size / n_classes if n_classes > 0 else float('nan')
+                    cal_error = abs(picp - (1 - alpha))
 
-            fold_result = {
-                'val_r2': val_r2, 'picp': picp, 'mpiw': mpiw,
-                'sharpness_ratio': sharpness_ratio, 'cal_error': cal_error,
-                'conformal_q': float(q), 'n_val': len(y_val),
-                'ue_corr': ue_corr,
-            }
-            fold_metrics.append(fold_result)
-            print(f"    fold {fold_i}: {metric_name}={val_r2:.4f}, PICP={picp:.3f}, "
-                  f"MPIW={mpiw:.3f}, cal_error={cal_error:.3f}")
+                    # Uncertainty-error: entropy of predicted probabilities vs correctness
+                    pred_labels = model_conf.predict(X_val_s)
+                    correct = (pred_labels == y_val).astype(float)
+                    entropy = -np.sum(val_probs * np.log(val_probs + 1e-12), axis=1)
+                    ue_corr = float('nan')
+                    if len(entropy) >= 3:
+                        ue_corr_val, _ = spearmanr(entropy, 1 - correct)
+                        ue_corr = float(ue_corr_val)
+
+                    fold_result = {
+                        'val_score': val_score, 'picp': picp,
+                        'avg_set_size': avg_set_size,
+                        'sharpness_ratio': sharpness_ratio, 'cal_error': cal_error,
+                        'conformal_q': float(q), 'n_val': len(y_val),
+                        'n_classes': n_classes,
+                        'ue_corr': ue_corr,
+                    }
+                else:
+                    # No predict_proba — report score only
+                    fold_result = {
+                        'val_score': val_score, 'picp': float('nan'),
+                        'avg_set_size': float('nan'),
+                        'sharpness_ratio': float('nan'), 'cal_error': float('nan'),
+                        'conformal_q': float('nan'), 'n_val': len(y_val),
+                        'ue_corr': float('nan'),
+                    }
+                fold_metrics.append(fold_result)
+                print(f"    fold {fold_i}: {metric_name}={val_score:.4f}, PICP={picp:.3f}, "
+                      f"set_size={avg_set_size:.2f}, cal_error={cal_error:.3f}")
+            else:
+                # Regression: conformal prediction intervals (existing logic)
+                y_pred_val = model.predict(X_val_s)
+                val_r2 = metric_fn(y_val, y_pred_val)
+
+                n_train = len(y_train)
+                n_cal = max(20, int(n_train * 0.2))
+                cal_perm = np.random.RandomState(42 + fold_i).permutation(n_train)
+                cal_idx = cal_perm[:n_cal]
+                ptrain_idx = cal_perm[n_cal:]
+
+                X_ptrain, y_ptrain = X_train_s[ptrain_idx], y_train[ptrain_idx]
+                X_cal, y_cal = X_train_s[cal_idx], y_train[cal_idx]
+
+                model_conf = model_factory()
+                model_conf.fit(X_ptrain, y_ptrain)
+
+                y_pred_cal = model_conf.predict(X_cal)
+                cal_residuals = np.abs(y_cal - y_pred_cal)
+
+                # Conformal quantile with finite-sample correction (Romano et al. 2019)
+                alpha = 0.1
+                n_cal = len(cal_residuals)
+                conformal_level = min(1.0, np.ceil((n_cal + 1) * (1 - alpha)) / n_cal)
+                q = np.quantile(cal_residuals, conformal_level)
+
+                y_pred_conf = model_conf.predict(X_val_s)
+                interval_lo = y_pred_conf - q
+                interval_hi = y_pred_conf + q
+
+                covered = (y_val >= interval_lo) & (y_val <= interval_hi)
+                picp = float(np.mean(covered))
+                mpiw = float(np.mean(interval_hi - interval_lo))
+                target_range = float(np.ptp(y_val))
+                sharpness_ratio = mpiw / target_range if target_range > 0 else float('nan')
+                cal_error = abs(picp - (1 - alpha))
+
+                errors = np.abs(y_val - y_pred_conf)
+                ue_corr = float('nan')
+                if hasattr(model_conf, 'estimators_') and len(errors) >= 3:
+                    tree_preds = np.array([t.predict(X_val_s) for t in model_conf.estimators_])
+                    per_sample_unc = tree_preds.std(axis=0)
+                    ue_corr, _ = spearmanr(per_sample_unc, errors)
+                    ue_corr = float(ue_corr)
+
+                fold_result = {
+                    'val_r2': val_r2, 'picp': picp, 'mpiw': mpiw,
+                    'sharpness_ratio': sharpness_ratio, 'cal_error': cal_error,
+                    'conformal_q': float(q), 'n_val': len(y_val),
+                    'ue_corr': ue_corr,
+                }
+                fold_metrics.append(fold_result)
+                print(f"    fold {fold_i}: {metric_name}={val_r2:.4f}, PICP={picp:.3f}, "
+                      f"MPIW={mpiw:.3f}, cal_error={cal_error:.3f}")
 
         if fold_metrics:
             avg = {}
@@ -259,17 +345,36 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 'avg': avg,
                 'folds': fold_metrics,
             }
-            print(f"  >> {cond_name} avg: {metric_name}={avg['val_r2']:.4f}, PICP={avg['picp']:.3f}, "
-                  f"MPIW={avg['mpiw']:.3f}, cal_error={avg['cal_error']:.3f}")
+            score_key = 'val_score' if is_classification else 'val_r2'
+            picp_val = avg.get('picp', float('nan'))
+            if is_classification:
+                set_key = avg.get('avg_set_size', float('nan'))
+                print(f"  >> {cond_name} avg: {metric_name}={avg.get(score_key, float('nan')):.4f}, "
+                      f"PICP={picp_val:.3f}, set_size={set_key:.2f}, "
+                      f"cal_error={avg.get('cal_error', float('nan')):.3f}")
+            else:
+                print(f"  >> {cond_name} avg: {metric_name}={avg.get(score_key, float('nan')):.4f}, "
+                      f"PICP={picp_val:.3f}, MPIW={avg.get('mpiw', float('nan')):.3f}, "
+                      f"cal_error={avg.get('cal_error', float('nan')):.3f}")
 
     # Summary table
     print("\n  CALIBRATION SUMMARY:")
-    print(f"  {'Condition':<14} {metric_name:<8} {'PICP':<8} {'MPIW':<8} {'Cal Error':<10} {'Budget':<8}")
-    print("  " + "-" * 56)
-    for cond_name, cond_data in results['conditions'].items():
-        a = cond_data['avg']
-        print(f"  {cond_name:<14} {a['val_r2']:.4f}  {a['picp']:.3f}  "
-              f"{a['mpiw']:.3f}  {a['cal_error']:.4f}    {cond_data['budget']}")
+    if is_classification:
+        print(f"  {'Condition':<14} {metric_name:<8} {'PICP':<8} {'SetSize':<8} {'Cal Error':<10} {'Budget':<8}")
+        print("  " + "-" * 56)
+        for cond_name, cond_data in results['conditions'].items():
+            a = cond_data['avg']
+            print(f"  {cond_name:<14} {a.get('val_score', float('nan')):.4f}  "
+                  f"{a.get('picp', float('nan')):.3f}  "
+                  f"{a.get('avg_set_size', float('nan')):.2f}    "
+                  f"{a.get('cal_error', float('nan')):.4f}    {cond_data['budget']}")
+    else:
+        print(f"  {'Condition':<14} {metric_name:<8} {'PICP':<8} {'MPIW':<8} {'Cal Error':<10} {'Budget':<8}")
+        print("  " + "-" * 56)
+        for cond_name, cond_data in results['conditions'].items():
+            a = cond_data['avg']
+            print(f"  {cond_name:<14} {a['val_r2']:.4f}  {a['picp']:.3f}  "
+                  f"{a['mpiw']:.3f}  {a['cal_error']:.4f}    {cond_data['budget']}")
 
     return results
 

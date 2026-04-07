@@ -234,9 +234,11 @@ def main():
         try:
             from kirby.find_best_hybrid import find_best_hybrid
             from kirby.hybrid import apply_feature_selection
+            from experiments._shared import SCREENING_BUDGETS
             scaffold_groups, _ = assign_scaffold_groups(smiles)
             search = find_best_hybrid(
                 base_reps=reps, labels=labels, groups=scaffold_groups,
+                budgets=SCREENING_BUDGETS,
                 speed='fast', return_fitted=True, verbose=False, cache=True,
                 metric=metric_name)
             fitted = search.fitted_results.get('rf')
