@@ -218,6 +218,15 @@ def run_f15(dataset_name, output_dir, model_filter=None):
     # Full tier config
     tier = SPEED_TIERS['full']
     strategies = tier['allocation_methods']
+    # Skip greedy strategies (O(budget/step × n_reps) model fits per fold)
+    # except on small datasets where they're tractable
+    GREEDY_STRATEGIES = {'greedy_fill_s5', 'greedy_fill_s10', 'greedy_fill_s25',
+                         'dominant_greedy', 'dom_greedy_f0.7', 'dom_greedy_f0.9'}
+    if len(labels) > 200:
+        skipped = [s for s in strategies if s in GREEDY_STRATEGIES]
+        strategies = [s for s in strategies if s not in GREEDY_STRATEGIES]
+        if skipped:
+            print(f"  Skipping greedy strategies for n={len(labels)}: {skipped}", flush=True)
     importance_methods = tier['importance_methods']
     evaluator_names = tier['internal_evaluators']
     n_folds = tier['n_folds']
