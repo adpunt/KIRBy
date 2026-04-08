@@ -205,6 +205,7 @@ def _load_reaction(dataset_name: str) -> dict:
         create_diff_ecfp4, create_diff_maccs,
         create_component_descriptors, create_ligand_descriptors,
         create_reaction_rep_variant, _MOL_REP_VARIANTS,
+        create_cgr_morgan,
     )
 
     if dataset_name == 'buchwald_hartwig':
@@ -280,6 +281,14 @@ def _load_reaction(dataset_name: str) -> dict:
         reps['diff_maccs'] = create_diff_maccs(data['rxn_smiles'])
     except Exception as e:
         print(f"  WARNING: diff_maccs failed: {e}")
+
+    # CGR Morgan fingerprint (condensed graph of reaction)
+    try:
+        reps['cgr_morgan'] = create_cgr_morgan(data['rxn_smiles'])
+    except ImportError:
+        print("  WARNING: chython/rxnmapper not installed, skipping CGR Morgan rep")
+    except Exception as e:
+        print(f"  WARNING: cgr_morgan failed: {e}")
 
     # Per-component physicochemical descriptors
     try:
@@ -971,7 +980,7 @@ def print_summary_table(result):
     meta = result['metadata']
     baselines = result['baselines']
     summary = result['summary']
-    models = meta['models']
+    models = meta.get('models', [])
     metric = meta.get('primary_metric', meta.get('metric', 'r2'))
 
     print(f"\n{'='*70}")
