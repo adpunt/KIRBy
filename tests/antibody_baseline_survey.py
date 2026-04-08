@@ -1050,7 +1050,7 @@ def print_summary_table(result):
     """Print compact summary table."""
     meta = result['metadata']
     baselines = result['baselines']
-    models = meta['models']
+    models = meta.get('models', [])
     is_clf = meta.get('task_type') == 'classification'
 
     print(f"\n{'='*70}")
@@ -1210,7 +1210,7 @@ Examples:
     from kirby.representations.antibody import (
         ANTIBODY_REPS, ANTIBODY_LM_REPS, ANTIBODY_FAST_REPS)
 
-    if args.reps:
+    if args.reps and args.reps.strip().lower() != 'all':
         rep_names = [r.strip() for r in args.reps.split(',')]
     elif args.skip_lm:
         rep_names = sorted(ANTIBODY_FAST_REPS)
