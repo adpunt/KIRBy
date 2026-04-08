@@ -2237,7 +2237,8 @@ def _hybrid_cache_key(base_reps, labels, groups, speed, budgets, allocation_meth
                       augmentation_budget=20,
                       candidate_ranking='rf_importance',
                       test_rep_subsets=False,
-                      cv_splitter=None) -> str:
+                      cv_splitter=None,
+                      adaptive_pruning=True) -> str:
     """SHA256 hash of all search-affecting inputs."""
     h = hashlib.sha256()
     h.update(f"v{_CACHE_VERSION}".encode())
@@ -2256,7 +2257,7 @@ def _hybrid_cache_key(base_reps, labels, groups, speed, budgets, allocation_meth
             sample_idx = np.linspace(0, len(flat) - 1, min(200, len(flat)), dtype=int)
             h.update(f"aug:{aname}:{arr.shape}:{flat[sample_idx].tobytes()}".encode())
         h.update(f"aug_strategy:{augmentation_strategy}".encode())
-    h.update(f"{speed}|{budgets}|{allocation_methods}|{importance_methods}|{internal_evaluators}|{n_folds}|{seed}|{metric}|{task_type}|{return_fitted}|{weight_method}|{two_phase}|{refinement_top_n}|{refinement_step_sizes}|{screen_threshold}|{greedy_tolerance}|{augmentation_threshold}|{augmentation_budget}|{candidate_ranking}".encode())
+    h.update(f"{speed}|{budgets}|{allocation_methods}|{importance_methods}|{internal_evaluators}|{n_folds}|{seed}|{metric}|{task_type}|{return_fitted}|{weight_method}|{two_phase}|{refinement_top_n}|{refinement_step_sizes}|{screen_threshold}|{greedy_tolerance}|{augmentation_threshold}|{augmentation_budget}|{candidate_ranking}|{adaptive_pruning}".encode())
     if models:
         model_names = sorted(models.keys()) if isinstance(models, dict) else sorted(models)
         h.update("|".join(model_names).encode())
@@ -2478,6 +2479,7 @@ def find_best_hybrid(
             candidate_ranking=candidate_ranking,
             test_rep_subsets=test_rep_subsets,
             cv_splitter=cv_splitter,
+            adaptive_pruning=adaptive_pruning,
         )
         cache_path = Path(cache_dir or Path(os.environ.get('KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby'))) / 'hybrid_search') / f'{key}.pkl'
         if cache_path.exists():
