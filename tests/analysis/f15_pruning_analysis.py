@@ -78,6 +78,20 @@ def analyze_dataset(data):
     results = [r for r in data['results'] if r['n_valid_folds'] == data['n_folds']]
     strategies = data['config']['strategies']
     n_folds = data['n_folds']
+    lower_is_better = data.get('lower_is_better', False)
+
+    # Direction-aware comparison helpers
+    def _best(items, key):
+        """Return best item (min if lower_is_better, max otherwise)."""
+        return min(items, key=key) if lower_is_better else max(items, key=key)
+
+    def _best_score(scores):
+        """Return best score from a collection."""
+        return min(scores) if lower_is_better else max(scores)
+
+    def _rank_sort(items, key):
+        """Sort items best-first."""
+        return sorted(items, key=key, reverse=not lower_is_better)
 
     groups = defaultdict(list)
     for r in results:
@@ -85,7 +99,7 @@ def analyze_dataset(data):
     n_groups = len(groups)
 
     # Overall winner
-    overall_best = max(results, key=lambda r: r['score_mean'])
+    overall_best = _best(results, key=lambda r: r['score_mean'])
 
     # Per-strategy overall mean
     strat_means = {}
@@ -99,7 +113,7 @@ def analyze_dataset(data):
     mb_best_score = {}  # (model, budget) -> best score
     for (model, budget) in sorted(set((r['model'], r['budget']) for r in results)):
         mb_results = [r for r in results if r['model'] == model and r['budget'] == budget]
-        best = max(mb_results, key=lambda r: r['score_mean'])
+        best = _best(mb_results, key=lambda r: r['score_mean'])
         mb_winners[(model, budget)] = best['strategy']
         mb_best_score[(model, budget)] = best['score_mean']
         mb_scores[(model, budget)] = {r['strategy']: r['score_mean'] for r in mb_results}
@@ -116,8 +130,8 @@ def analyze_dataset(data):
                 # Best surviving strategy for this (model, budget)
                 kept_scores = {s: sc for s, sc in mb_scores[mb].items() if s in kept_set}
                 if kept_scores:
-                    best_kept = max(kept_scores.values())
-                    regret = winner_score - best_kept
+                    best_kept = _best_score(kept_scores.values())
+                    regret = abs(winner_score - best_kept)
                 else:
                     best_kept = float('nan')
                     regret = float('nan')
@@ -135,7 +149,7 @@ def analyze_dataset(data):
             for k in range(n_folds):
                 topn_counts = defaultdict(int)
                 for group_configs in groups.values():
-                    ranked = sorted(group_configs, key=lambda r: r['fold_scores'][k], reverse=True)
+                    ranked = _rank_sort(group_configs, key=lambda r: r['fold_scores'][k])
                     for r in ranked[:top_n]:
                         topn_counts[r['strategy']] += 1
                 threshold = n_groups * threshold_pct / 100
@@ -154,7 +168,7 @@ def analyze_dataset(data):
     for k in range(n_folds):
         top1_strategies = set()
         for group_configs in groups.values():
-            ranked = sorted(group_configs, key=lambda r: r['fold_scores'][k], reverse=True)
+            ranked = _rank_sort(group_configs, key=lambda r: r['fold_scores'][k])
             top1_strategies.add(ranked[0]['strategy'])
         pruned = [s for s in strategies if s not in top1_strategies]
         kept = [s for s in strategies if s in top1_strategies]
@@ -187,7 +201,8 @@ def analyze_dataset(data):
         'overall_best': overall_best,
         'mb_winners': mb_winners,
         'strat_means': strat_means,
-        'strat_ranking': sorted(strategies, key=lambda s: strat_means[s], reverse=True),
+        'lower_is_better': lower_is_better,
+        'strat_ranking': sorted(strategies, key=lambda s: strat_means[s], reverse=not lower_is_better),
         'rule_results': rule_results,
     }
 
@@ -200,6 +215,8 @@ def print_dataset_report(analysis):
     print(f"\n{'='*70}")
     print(f"  {a['dataset']} ({a['n_samples']} samples, {a['n_reps']} reps)")
     print(f"  {a['n_configs']} configs, {a['n_groups']} groups, {a['n_strategies']} strategies, {a['n_folds']} folds")
+    direction = 'lower=better' if a.get('lower_is_better') else 'higher=better'
+    print(f"  Metric: {direction}")
     print(f"  Overall best: {ob['model']}/{ob['strategy']}/{ob['importance']}/b={ob['budget']}/ev={ob['evaluator']} = {ob['score_mean']:.4f}")
     print(f"  {len(mb)} (model, budget) winners to preserve")
     print(f"{'='*70}")
@@ -302,10 +319,13 @@ def print_cross_dataset_summary(analyses):
         print(f"    {s:20s}: top-3 in {count}/{len(analyses)} datasets")
 
     # Winner strategies across datasets
-    print(f"\n  Winner strategy per dataset:")
+    print(f"\n  Overall best config per dataset:")
     for a in analyses:
-        rank = a['strat_ranking'].index(a['winner_strategy']) + 1
-        print(f"    {a['dataset']:25s}: {a['winner_strategy']} (rank {rank} by overall mean)")
+        ob = a['overall_best']
+        strat = ob['strategy']
+        rank = a['strat_ranking'].index(strat) + 1 if strat in a['strat_ranking'] else '?'
+        print(f"    {a['dataset']:25s}: {strat} (rank {rank} by overall mean) "
+              f"[{ob['model']}/b={ob['budget']}/ev={ob['evaluator']} = {ob['score_mean']:.4f}]")
 
 
 def main():
