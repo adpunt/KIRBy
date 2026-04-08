@@ -1245,8 +1245,14 @@ def _evaluate_hybrid_config(
     alloc_cache: Optional[Dict] = None,
     selection_dedup: Optional[Dict] = None,
     greedy_tolerance: float = 0.0,
+    fold_indices: Optional[List[int]] = None,
 ) -> dict:
-    """Evaluate a single hybrid configuration. Returns result dict."""
+    """Evaluate a single hybrid configuration. Returns result dict.
+
+    Args:
+        fold_indices: If set, only evaluate these fold indices (0-based).
+            None (default) evaluates all folds.
+    """
     from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
 
     start_time = time.time()
@@ -1264,7 +1270,10 @@ def _evaluate_hybrid_config(
     fold_n_features = []
     any_imputation = False
 
-    for fold_idx, (train_idx, val_idx) in enumerate(fold_splits):
+    _eval_fold_indices = range(len(fold_splits)) if fold_indices is None else fold_indices
+
+    for fold_idx in _eval_fold_indices:
+        train_idx, val_idx = fold_splits[fold_idx]
         train_reps = {k: v[train_idx] for k, v in base_reps.items()}
         val_reps = {k: v[val_idx] for k, v in base_reps.items()}
         y_train, y_val = labels[train_idx], labels[val_idx]
@@ -1573,8 +1582,15 @@ def _run_search(
     cv_splitter=None,
     greedy_tolerance: float = 0.0,
     metric_name: Optional[str] = None,
+    adaptive_pruning: bool = True,
 ) -> List[dict]:
-    """Main search loop over all configurations."""
+    """Main search loop over all configurations.
+
+    If adaptive_pruning=True (default), runs fold 0 first on all configs,
+    then prunes strategies that appear in the top-3 in fewer than 15% of
+    (importance, evaluator, model, budget) groups. Surviving strategies
+    are evaluated on all folds. F15-validated.
+    """
     tier = SPEED_TIERS[speed]
     search_importance = importance_methods if importance_methods is not None else tier['importance_methods']
     search_allocation = allocation_methods if allocation_methods is not None else tier['allocation_methods']
@@ -1795,43 +1811,91 @@ def _run_search(
     # sklearn models use n_jobs=-1 internally for C-level parallelism.
     # Python-level threading on top causes CPU oversubscription and GIL contention.
     selection_dedup = {'_hits': 0}
-    results = []
 
-    for idx, cfg in enumerate(configs, 1):
+    _common_kwargs = dict(
+        labels=labels, groups=groups, n_folds=search_folds,
+        metric_fn=metric_fn, metric_name=metric_name, seed=seed,
+        augmentations=augmentations, augmentation_strategy=augmentation_strategy,
+        augmentation_threshold=augmentation_threshold,
+        augmentation_budget=augmentation_budget,
+        candidate_ranking=candidate_ranking, lower_is_better=lower_is_better,
+        fold_reps=fold_reps, precomputed_folds=precomputed_folds,
+        cv_splitter=cv_splitter, importance_cache=importance_cache,
+        alloc_cache=alloc_cache, selection_dedup=selection_dedup,
+        greedy_tolerance=greedy_tolerance,
+    )
+
+    def _eval_cfg(cfg, fold_indices=None):
         (rep_set, rep_set_name, alloc, bgt, imp,
          model_name, model, eval_name) = cfg
+        result = _evaluate_hybrid_config(
+            base_reps=rep_set, allocation_method=alloc, budget=bgt,
+            importance_method=imp, model=model, model_name=model_name,
+            internal_evaluator=eval_name, fold_indices=fold_indices,
+            **_common_kwargs,
+        )
+        if rep_set_name != 'all':
+            result['rep_subset'] = rep_set_name
+        return result
 
+    # ── Adaptive pruning: prune strategies after fold 0 ──
+    pruned_strategies = set()
+    if adaptive_pruning and search_folds > 1 and len(search_allocation) > 3:
+        if verbose:
+            print(f"\n  Adaptive pruning: evaluating fold 0 for {total} configs...")
+        fold0_results = []  # (config, result)
+        for idx, cfg in enumerate(configs, 1):
+            try:
+                result = _eval_cfg(cfg, fold_indices=[0])
+                fold0_results.append((cfg, result))
+            except Exception:
+                pass
+            if verbose and idx % 200 == 0:
+                print(f"    fold 0: {idx}/{total}")
+
+        # Group by (importance, evaluator, model, budget) — strategies compete
+        from collections import defaultdict
+        groups_f0 = defaultdict(list)
+        for cfg, result in fold0_results:
+            _, _, alloc, bgt, imp, model_name, _, eval_name = cfg
+            key = (imp, eval_name, model_name, bgt)
+            groups_f0[key].append((alloc, result['score_mean']))
+
+        n_groups_f0 = len(groups_f0)
+        threshold = n_groups_f0 * 0.15  # top-3 in <15% of groups
+
+        # Count how many groups each strategy appears in top-3
+        top3_counts = defaultdict(int)
+        for key, entries in groups_f0.items():
+            ranked = sorted(entries, key=lambda x: x[1],
+                            reverse=not lower_is_better)
+            for alloc, _ in ranked[:3]:
+                top3_counts[alloc] += 1
+
+        pruned_strategies = {s for s in search_allocation
+                             if top3_counts.get(s, 0) < threshold}
+
+        if pruned_strategies and verbose:
+            print(f"  Pruned {len(pruned_strategies)}/{len(search_allocation)} strategies "
+                  f"(top-3 in <15% of {n_groups_f0} groups): {sorted(pruned_strategies)}")
+
+        # Rebuild config list without pruned strategies
+        if pruned_strategies:
+            configs = [cfg for cfg in configs if cfg[2] not in pruned_strategies]
+            total = len(configs)
+            if verbose:
+                print(f"  Remaining: {total} configs")
+
+    # ── Full evaluation (all folds) ──
+    results = []
+    if verbose:
+        print(f"\n  Evaluating {total} configs (all {search_folds} folds)...")
+
+    for idx, cfg in enumerate(configs, 1):
+        (_, rep_set_name, alloc, bgt, imp,
+         model_name, _, eval_name) = cfg
         try:
-            result = _evaluate_hybrid_config(
-                base_reps=rep_set,
-                labels=labels,
-                allocation_method=alloc,
-                budget=bgt,
-                importance_method=imp,
-                model=model,
-                model_name=model_name,
-                internal_evaluator=eval_name,
-                groups=groups,
-                n_folds=search_folds,
-                metric_fn=metric_fn,
-                metric_name=metric_name,
-                seed=seed,
-                augmentations=augmentations,
-                augmentation_strategy=augmentation_strategy,
-                augmentation_threshold=augmentation_threshold,
-                augmentation_budget=augmentation_budget,
-                candidate_ranking=candidate_ranking,
-                lower_is_better=lower_is_better,
-                fold_reps=fold_reps,
-                precomputed_folds=precomputed_folds,
-                cv_splitter=cv_splitter,
-                importance_cache=importance_cache,
-                alloc_cache=alloc_cache,
-                selection_dedup=selection_dedup,
-                greedy_tolerance=greedy_tolerance,
-            )
-            if rep_set_name != 'all':
-                result['rep_subset'] = rep_set_name
+            result = _eval_cfg(cfg)
             results.append(result)
 
             if verbose:
@@ -2294,6 +2358,7 @@ def find_best_hybrid(
     cache: bool = False,
     cache_dir: Optional[str] = None,
     greedy_tolerance: float = 0.0,
+    adaptive_pruning: bool = True,
     dataset_name: Optional[str] = None,
 ) -> SearchResult:
     """
@@ -2534,6 +2599,7 @@ def find_best_hybrid(
         cv_splitter=cv_splitter,
         greedy_tolerance=greedy_tolerance,
         metric_name=_metric_name_str,
+        adaptive_pruning=adaptive_pruning,
     )
 
     # --- Two-phase refinement ---
