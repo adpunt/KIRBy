@@ -316,6 +316,14 @@ def print_cross_dataset_summary(analyses):
         row = f"  {rule_name:25s}" + "".join(f" | {c:>15s}" for c in cells)
         print(row)
 
+    # Overall best per dataset (sanity check)
+    print(f"\n  Overall best config per dataset:")
+    for a in analyses:
+        ob = a['overall_best']
+        direction = '↓' if a.get('lower_is_better') else '↑'
+        print(f"    {a['dataset']:25s}: {ob['strategy']} "
+              f"[{ob['model']}/b={ob['budget']}/ev={ob['evaluator']} = {ob['score_mean']:.4f} {direction}]")
+
 
 def main():
     parser = argparse.ArgumentParser(description='F15 Pruning Analysis')
@@ -337,9 +345,11 @@ def main():
         print("No results found.")
         return
 
-    # Filter out low budgets
+    # Filter out low budgets (keep b=50 for abagym which only has small budgets)
     if args.min_budget > 0:
         for ds_name, data in datasets.items():
+            if 'abagym' in ds_name:
+                continue  # keep all budgets for abagym
             data['results'] = [r for r in data['results'] if r['budget'] >= args.min_budget]
             data['config']['budgets'] = [b for b in data['config']['budgets'] if b >= args.min_budget]
 
