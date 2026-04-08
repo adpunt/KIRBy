@@ -268,66 +268,53 @@ def print_dataset_report(analysis):
 
 
 def print_cross_dataset_summary(analyses):
-    """Print summary across all datasets."""
+    """Print pruning rule comparison across all datasets.
+
+    For each rule and dataset: how many strategies pruned, how many
+    model×budget winners lost, and what's the average regret when
+    a winner IS lost. This is for tuning pruning thresholds.
+    """
     if len(analyses) < 2:
         return
 
-    print(f"\n{'='*70}")
-    print(f"  CROSS-DATASET SUMMARY ({len(analyses)} datasets)")
-    print(f"{'='*70}")
+    print(f"\n{'='*90}")
+    print(f"  PRUNING RULE COMPARISON ({len(analyses)} datasets)")
+    print(f"{'='*90}")
 
-    # Collect all rule names from first dataset
     rule_names = list(analyses[0]['rule_results'].keys())
+    ds_short = [a['dataset'][:15] for a in analyses]
 
-    print(f"\n  Rules safe across ALL datasets AND all folds (all model×budget winners preserved):")
+    # Table: for each rule, show per-dataset (avg_pruned, winners_lost, avg_regret)
+    print(f"\n  Per-dataset: strategies pruned / winners lost / avg regret (across folds)")
+    print()
+    header = f"  {'Rule':25s}" + "".join(f" | {n:>15s}" for n in ds_short)
+    print(header)
+    print("  " + "-" * (len(header) - 2))
+
     for rule_name in rule_names:
-        safe_datasets = 0
-        total_pruned = []
-        unsafe_datasets = []
+        cells = []
         for a in analyses:
             folds = a['rule_results'][rule_name]
-            all_safe = all(f['winners_safe'] == f['winners_total'] for f in folds)
-            if all_safe:
-                safe_datasets += 1
+            avg_pruned = np.mean([f['pruned'] for f in folds])
+
+            # Collect all regrets across all folds
+            all_regrets = []
+            total_lost = 0
+            for f in folds:
+                for (_, _, _, _, regret) in f['winners_lost']:
+                    if regret == regret:  # skip NaN
+                        all_regrets.append(regret)
+                total_lost += len(f['winners_lost'])
+
+            avg_lost = total_lost / len(folds)
+            if all_regrets:
+                avg_regret = np.mean(all_regrets)
+                cells.append(f"{avg_pruned:.0f}p {avg_lost:.1f}L r={avg_regret:.4f}")
             else:
-                unsafe_datasets.append(a['dataset'])
-            total_pruned.extend([f['pruned'] for f in folds])
+                cells.append(f"{avg_pruned:.0f}p   SAFE")
 
-        avg_pruned = np.mean(total_pruned)
-        n_ds = len(analyses)
-        n_unsafe = n_ds - safe_datasets
-        if safe_datasets == n_ds:
-            status = f'SAFE (all {n_ds})'
-        else:
-            status = f'{n_unsafe}/{n_ds} lost winners: {unsafe_datasets}'
-        print(f"    {rule_name:25s}: {status} — avg {avg_pruned:.1f} pruned")
-
-    # Which strategies are consistently pruned across datasets?
-    print(f"\n  Strategies consistently in bottom 3 (by overall mean):")
-    bottom3_counts = defaultdict(int)
-    for a in analyses:
-        for s in a['strat_ranking'][-3:]:
-            bottom3_counts[s] += 1
-    for s, count in sorted(bottom3_counts.items(), key=lambda x: -x[1]):
-        print(f"    {s:20s}: bottom-3 in {count}/{len(analyses)} datasets")
-
-    # Which strategies are consistently in top 3?
-    print(f"\n  Strategies consistently in top 3 (by overall mean):")
-    top3_counts = defaultdict(int)
-    for a in analyses:
-        for s in a['strat_ranking'][:3]:
-            top3_counts[s] += 1
-    for s, count in sorted(top3_counts.items(), key=lambda x: -x[1]):
-        print(f"    {s:20s}: top-3 in {count}/{len(analyses)} datasets")
-
-    # Winner strategies across datasets
-    print(f"\n  Overall best config per dataset:")
-    for a in analyses:
-        ob = a['overall_best']
-        strat = ob['strategy']
-        rank = a['strat_ranking'].index(strat) + 1 if strat in a['strat_ranking'] else '?'
-        print(f"    {a['dataset']:25s}: {strat} (rank {rank} by overall mean) "
-              f"[{ob['model']}/b={ob['budget']}/ev={ob['evaluator']} = {ob['score_mean']:.4f}]")
+        row = f"  {rule_name:25s}" + "".join(f" | {c:>15s}" for c in cells)
+        print(row)
 
 
 def main():
@@ -335,16 +322,26 @@ def main():
     parser.add_argument('--results-dir', type=str,
                         default='tests/results/framework/f15_adaptive_pruning',
                         help='Directory containing F15 JSON results')
+    parser.add_argument('--min-budget', type=int, default=100,
+                        help='Exclude results with budget below this (default: 100)')
     args = parser.parse_args()
 
     print("F15 Adaptive Pruning Analysis")
     print("Strategies are the ONLY prunable dimension.")
+    if args.min_budget > 0:
+        print(f"Excluding budgets < {args.min_budget}")
     print()
 
     datasets = load_results(args.results_dir)
     if not datasets:
         print("No results found.")
         return
+
+    # Filter out low budgets
+    if args.min_budget > 0:
+        for ds_name, data in datasets.items():
+            data['results'] = [r for r in data['results'] if r['budget'] >= args.min_budget]
+            data['config']['budgets'] = [b for b in data['config']['budgets'] if b >= args.min_budget]
 
     print(f"Found {len(datasets)} dataset(s): {sorted(datasets.keys())}")
 
