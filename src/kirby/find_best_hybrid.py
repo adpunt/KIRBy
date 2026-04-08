@@ -1582,11 +1582,11 @@ def _run_search(
     cv_splitter=None,
     greedy_tolerance: float = 0.0,
     metric_name: Optional[str] = None,
-    adaptive_pruning: bool = True,
+    adaptive_pruning: bool = False,
 ) -> List[dict]:
     """Main search loop over all configurations.
 
-    If adaptive_pruning=True (default), runs fold 0 first on all configs,
+    If adaptive_pruning=True, runs fold 0 first on all configs,
     then prunes strategies that appear in the top-3 in fewer than 15% of
     (importance, evaluator, model, budget) groups. Surviving strategies
     are evaluated on all folds. F15-validated.
@@ -2358,7 +2358,7 @@ def find_best_hybrid(
     cache: bool = False,
     cache_dir: Optional[str] = None,
     greedy_tolerance: float = 0.0,
-    adaptive_pruning: bool = True,
+    adaptive_pruning: bool = False,
     dataset_name: Optional[str] = None,
 ) -> SearchResult:
     """
