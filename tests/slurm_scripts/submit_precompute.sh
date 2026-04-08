@@ -113,30 +113,20 @@ run_tcga() {
     echo ""
 }
 
-run_reaction() {
-    echo "--- Reaction (2 × 4 = 8 jobs) ---"
-    for ds in buchwald_hartwig bh_doyle_plates; do
-        submit_dataset "${ds}" 64G 12:00:00
-    done
-    echo ""
-}
-
 case "$MODE" in
     molecular) run_molecular ;;
     antibody)  run_antibody ;;
     tcga)      run_tcga ;;
-    reaction)  run_reaction ;;
     all)
         run_molecular
         run_antibody
         run_tcga
-        run_reaction
         echo "============================================"
-        echo "Total: ${COUNT} SLURM jobs (40 datasets × 4 conditions)"
+        echo "Total: ${COUNT} SLURM jobs (38 datasets × 4 conditions)"
         echo "============================================"
         ;;
     *)
-        echo "Usage: bash submit_precompute.sh [all|molecular|antibody|tcga|reaction]"
+        echo "Usage: bash submit_precompute.sh [all|molecular|antibody|tcga]"
         exit 1
         ;;
 esac
