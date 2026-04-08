@@ -294,10 +294,12 @@ def print_cross_dataset_summary(analyses):
             total_pruned.extend([f['pruned'] for f in folds])
 
         avg_pruned = np.mean(total_pruned)
-        if safe_datasets == len(analyses):
-            status = f'SAFE ({len(analyses)}/{len(analyses)})'
+        n_ds = len(analyses)
+        n_unsafe = n_ds - safe_datasets
+        if safe_datasets == n_ds:
+            status = f'SAFE (all {n_ds})'
         else:
-            status = f'UNSAFE ({safe_datasets}/{len(analyses)}: lost on {unsafe_datasets})'
+            status = f'{n_unsafe}/{n_ds} lost winners: {unsafe_datasets}'
         print(f"    {rule_name:25s}: {status} — avg {avg_pruned:.1f} pruned")
 
     # Which strategies are consistently pruned across datasets?
