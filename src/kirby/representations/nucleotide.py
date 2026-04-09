@@ -649,7 +649,15 @@ def _embed_gpn(sequences: List[str]) -> np.ndarray:
     Dilated ConvNet trained on Brassicales (plant) genomes.
     May have limited transfer to human DNA tasks.
     Benegas et al., 2023.
+    Requires: pip install git+https://github.com/songlab-cal/gpn.git
     """
+    try:
+        import gpn.model  # noqa: F401 — registers ConvNet with AutoModel
+    except ImportError:
+        raise ImportError(
+            "GPN requires the gpn package. Install with:\n"
+            "  pip install git+https://github.com/songlab-cal/gpn.git"
+        )
     return _hf_embed(
         sequences,
         model_id='songlab/gpn-brassicales',
