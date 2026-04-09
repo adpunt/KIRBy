@@ -946,25 +946,19 @@ SPEED_TIERS = {
         'n_folds': 3,
     },
     'full': {
-        # 13 F12-validated strategies (covers all 24 dataset×model winners).
-        # Pruned from 31: dropped all never-top-3, redundant rank_exp variants,
-        # and strategies whose wins were <0.5% from another kept strategy.
+        # 9 F12/F15-validated strategies. Pruned from 13: dropped 4 zero-best
+        # in F15 (0/32 wins each, zero loss when removed across 6 datasets).
         'importance_methods': ['deeplift', 'lightgbm_gain', 'treeshap'],
         'allocation_methods': [
-            # Multi-win strategies (2-3 wins each)
             'top_2', 'top_3', 'top_5',
-            'performance_weighted',  # = pw_linear
-            'min_floor',
+            'performance_weighted',
             'entropy_1.0',
-            'score_gap_0.2',
-            # Single-win strategies (each uniquely best on ≥1 dataset×model)
             'power_2',
             'rank_linear',
             'entropy_2.0',
-            'thresh_0.3',
             'rank_exp_d0.5',
-            'greedy_fill_s5',
         ],
+        # xgboost evaluator dropped: F13 loss 0.001, F15 loss 0.001.
         'internal_evaluators': ['match', 'rf', 'svm', 'lightgbm', 'mlp'],
         'n_folds': 5,
     },

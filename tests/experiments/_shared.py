@@ -254,8 +254,8 @@ def _cache_rep_dict(dataset_name: str, compute_all_fn,
 
 # Canonical budget lists — used by get_config() and all 4 helpers' run_all().
 # Change here to change everywhere.
-SCREENING_BUDGETS = [50, 500, 1000, 2000, 3000, 4000]
-FULL_BUDGETS = [10, 25, 50, 100, 250, 500, 1000, 2000, 3000, 4000]
+SCREENING_BUDGETS = [50, 500, 1000, 2000]
+FULL_BUDGETS = [10, 25, 50, 100, 250, 500, 1000, 2000]
 DISTANCE_BUDGETS = [10, 25, 50, 100, 250, 500]
 DISTANCE_EVALUATORS = ['knn', 'ridge', 'rf', 'mlp', 'lightgbm', 'svm']
 
@@ -1422,6 +1422,7 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
             create_diff_ecfp4, create_diff_maccs,
             create_component_descriptors, create_ligand_descriptors,
             create_reactiont5,
+            create_cgr_morgan,
         )
 
         loaders = {
@@ -1454,6 +1455,7 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
             'component_descriptors': lambda: create_component_descriptors(components),
             'ligand_descriptors': lambda: create_ligand_descriptors(components),
             'reactiont5': lambda: create_reactiont5(rxn_smiles),
+            'cgr_morgan': lambda: create_cgr_morgan(rxn_smiles),
         }
 
         # Determine which reps to generate
