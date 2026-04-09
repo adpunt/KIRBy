@@ -1577,6 +1577,7 @@ def _run_search(
     greedy_tolerance: float = 0.0,
     metric_name: Optional[str] = None,
     adaptive_pruning: bool = True,
+    checkpoint_path: Optional[Path] = None,
 ) -> List[dict]:
     """Main search loop over all configurations.
 
@@ -1584,6 +1585,9 @@ def _run_search(
     then prunes strategies that appear in the top-3 in fewer than 15% of
     (importance, evaluator, model, budget) groups. Surviving strategies
     are evaluated on all folds. F15-validated.
+
+    If checkpoint_path is set, periodically saves progress so the search
+    can resume after a SLURM timeout without losing work.
     """
     tier = SPEED_TIERS[speed]
     search_importance = importance_methods if importance_methods is not None else tier['importance_methods']
@@ -1832,46 +1836,109 @@ def _run_search(
             result['rep_subset'] = rep_set_name
         return result
 
+    # ── Checkpoint helpers ──
+    _CHECKPOINT_INTERVAL = 100  # save every N configs
+
+    def _save_checkpoint(data):
+        if checkpoint_path is None:
+            return
+        try:
+            import tempfile
+            fd, tmp = tempfile.mkstemp(dir=str(checkpoint_path.parent), suffix='.tmp')
+            with os.fdopen(fd, 'wb') as f:
+                f.write(pickle.dumps(data))
+            os.replace(tmp, str(checkpoint_path))
+        except Exception:
+            pass
+
+    def _load_checkpoint():
+        if checkpoint_path is None or not checkpoint_path.exists():
+            return None
+        try:
+            return pickle.loads(checkpoint_path.read_bytes())
+        except Exception:
+            return None
+
+    def _cfg_key(cfg):
+        """Hashable key for a config tuple (excludes model callable)."""
+        return (cfg[1], cfg[2], cfg[3], cfg[4], cfg[5], cfg[7])  # rep_set_name, alloc, bgt, imp, model_name, eval_name
+
+    ckpt = _load_checkpoint()
+
     # ── Adaptive pruning: prune strategies after fold 0 ──
     pruned_strategies = set()
     if adaptive_pruning and search_folds > 1 and len(search_allocation) > 3:
-        if verbose:
-            print(f"\n  Adaptive pruning: evaluating fold 0 for {total} configs...")
-        fold0_results = []  # (config, result)
-        for idx, cfg in enumerate(configs, 1):
-            try:
-                result = _eval_cfg(cfg, fold_indices=[0])
-                fold0_results.append((cfg, result))
-            except Exception:
-                pass
-            if verbose and idx % 200 == 0:
-                print(f"    fold 0: {idx}/{total}")
+        # Check if fold 0 is already done (from checkpoint)
+        if ckpt and ckpt.get('fold0_done'):
+            fold0_results_saved = ckpt['fold0_results']  # list of (cfg_key, result)
+            pruned_strategies = ckpt.get('pruned_strategies', set())
+            if verbose:
+                print(f"\n  Resumed from checkpoint: fold 0 complete "
+                      f"({len(fold0_results_saved)} results, "
+                      f"{len(pruned_strategies)} strategies pruned)")
+        else:
+            if verbose:
+                print(f"\n  Adaptive pruning: evaluating fold 0 for {total} configs...")
 
-        # Group by (importance, evaluator, model, budget) — strategies compete
-        from collections import defaultdict
-        groups_f0 = defaultdict(list)
-        for cfg, result in fold0_results:
-            _, _, alloc, bgt, imp, model_name, _, eval_name = cfg
-            key = (imp, eval_name, model_name, bgt)
-            groups_f0[key].append((alloc, result['score_mean']))
+            # Resume fold 0 from partial checkpoint
+            fold0_done_keys = set()
+            fold0_results = []
+            if ckpt and 'fold0_results' in ckpt:
+                fold0_results = ckpt['fold0_results']
+                fold0_done_keys = {r[0] for r in fold0_results}
+                if verbose:
+                    print(f"    Resuming fold 0: {len(fold0_done_keys)}/{total} already done")
 
-        n_groups_f0 = len(groups_f0)
-        threshold = n_groups_f0 * 0.15  # top-3 in <15% of groups
+            for idx, cfg in enumerate(configs, 1):
+                ck = _cfg_key(cfg)
+                if ck in fold0_done_keys:
+                    continue
+                try:
+                    result = _eval_cfg(cfg, fold_indices=[0])
+                    fold0_results.append((ck, result))
+                except Exception:
+                    pass
+                if verbose and idx % 200 == 0:
+                    print(f"    fold 0: {idx}/{total}")
+                if idx % _CHECKPOINT_INTERVAL == 0:
+                    _save_checkpoint({
+                        'fold0_done': False,
+                        'fold0_results': fold0_results,
+                    })
 
-        # Count how many groups each strategy appears in top-3
-        top3_counts = defaultdict(int)
-        for key, entries in groups_f0.items():
-            ranked = sorted(entries, key=lambda x: x[1],
-                            reverse=not lower_is_better)
-            for alloc, _ in ranked[:3]:
-                top3_counts[alloc] += 1
+            # Pruning logic
+            from collections import defaultdict
+            groups_f0 = defaultdict(list)
+            for ck, result in fold0_results:
+                _, alloc, bgt, imp, model_name, eval_name = ck
+                key = (imp, eval_name, model_name, bgt)
+                groups_f0[key].append((alloc, result['score_mean']))
 
-        pruned_strategies = {s for s in search_allocation
-                             if top3_counts.get(s, 0) < threshold}
+            n_groups_f0 = len(groups_f0)
+            threshold = n_groups_f0 * 0.15
+
+            top3_counts = defaultdict(int)
+            for key, entries in groups_f0.items():
+                ranked = sorted(entries, key=lambda x: x[1],
+                                reverse=not lower_is_better)
+                for alloc, _ in ranked[:3]:
+                    top3_counts[alloc] += 1
+
+            pruned_strategies = {s for s in search_allocation
+                                 if top3_counts.get(s, 0) < threshold}
+
+            # Save completed fold 0 + pruning decisions
+            _save_checkpoint({
+                'fold0_done': True,
+                'fold0_results': fold0_results,
+                'pruned_strategies': pruned_strategies,
+                'full_results': [],
+                'full_done_keys': set(),
+            })
 
         if pruned_strategies and verbose:
             print(f"  Pruned {len(pruned_strategies)}/{len(search_allocation)} strategies "
-                  f"(top-3 in <15% of {n_groups_f0} groups): {sorted(pruned_strategies)}")
+                  f"(top-3 in <15% of groups): {sorted(pruned_strategies)}")
 
         # Rebuild config list without pruned strategies
         if pruned_strategies:
@@ -1881,16 +1948,28 @@ def _run_search(
                 print(f"  Remaining: {total} configs")
 
     # ── Full evaluation (all folds) ──
+    # Resume from checkpoint if available
     results = []
+    full_done_keys = set()
+    if ckpt and 'full_results' in ckpt:
+        results = ckpt['full_results']
+        full_done_keys = ckpt.get('full_done_keys', set())
+        if full_done_keys and verbose:
+            print(f"  Resuming full eval: {len(full_done_keys)}/{total} already done")
+
     if verbose:
         print(f"\n  Evaluating {total} configs (all {search_folds} folds)...")
 
     for idx, cfg in enumerate(configs, 1):
         (_, rep_set_name, alloc, bgt, imp,
          model_name, _, eval_name) = cfg
+        ck = _cfg_key(cfg)
+        if ck in full_done_keys:
+            continue
         try:
             result = _eval_cfg(cfg)
             results.append(result)
+            full_done_keys.add(ck)
 
             if verbose:
                 print(
@@ -1905,6 +1984,15 @@ def _run_search(
                     f"  [{idx}/{total}] {model_name}/{alloc}/{imp}/b={bgt}/ev={eval_name}: "
                     f"FAILED - {e}"
                 )
+
+        if idx % _CHECKPOINT_INTERVAL == 0:
+            _save_checkpoint({
+                'fold0_done': True,
+                'fold0_results': ckpt.get('fold0_results', []) if ckpt else [],
+                'pruned_strategies': pruned_strategies,
+                'full_results': results,
+                'full_done_keys': full_done_keys,
+            })
 
     if verbose and selection_dedup:
         dedup_hits = selection_dedup.get('_hits', 0)
@@ -2573,6 +2661,11 @@ def find_best_hybrid(
     # Resolve metric name string for alloc cache lookup
     _metric_name_str = metric if isinstance(metric, str) else None
 
+    # Derive checkpoint path from cache path (if caching enabled)
+    _ckpt_path = None
+    if cache and cache_path is not None:
+        _ckpt_path = cache_path.with_suffix('.ckpt.pkl')
+
     all_results = _run_search(
         base_reps, labels, groups, speed, resolved_models,
         metric_fn,
@@ -2596,6 +2689,7 @@ def find_best_hybrid(
         greedy_tolerance=greedy_tolerance,
         metric_name=_metric_name_str,
         adaptive_pruning=adaptive_pruning,
+        checkpoint_path=_ckpt_path,
     )
 
     # --- Two-phase refinement ---
@@ -2741,6 +2835,12 @@ def find_best_hybrid(
                 raise
             if verbose:
                 print(f"  Cached result to {cache_path}")
+            # Clean up checkpoint file — search completed successfully
+            if _ckpt_path is not None and _ckpt_path.exists():
+                try:
+                    _ckpt_path.unlink()
+                except Exception:
+                    pass
         except Exception:
             pass  # Cache write failure is non-fatal
 
