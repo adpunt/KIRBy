@@ -35,17 +35,16 @@ case "$STAGE" in
         echo "  $J  cgr_corpus  (short, 64G, 2h, 16 CPU, no GPU)"
         ;;
     pretrain)
-        # GPU job for MLM pretraining (assumes corpus already exists)
+        # MLM pretraining (assumes corpus already exists)
         J=$(sbatch \
             --job-name="cgr_pretrain" \
             --nodes=1 --ntasks=1 --cpus-per-task=8 \
             --time=06:00:00 --partition=medium \
             --mem=128G \
-            --gres=gpu:1 \
             --mail-user="${EMAIL}" --mail-type=END,FAIL \
             --wrap="${WRAP_PREFIX} && python -m kirby.finetuning.cgr_smiles_pretrain --stage pretrain --output-dir ${OUTPUT_DIR} --max-steps 50000 --batch-size 32 ${STDERR_FILTER}" \
             | awk '{print $4}')
-        echo "  $J  cgr_pretrain  (medium, 128G, 6h, GPU)"
+        echo "  $J  cgr_pretrain  (medium, 128G, 6h)"
         ;;
     all)
         # Single job: corpus + pretrain
@@ -54,11 +53,10 @@ case "$STAGE" in
             --nodes=1 --ntasks=1 --cpus-per-task=16 \
             --time=08:00:00 --partition=long \
             --mem=128G \
-            --gres=gpu:1 \
             --mail-user="${EMAIL}" --mail-type=END,FAIL \
             --wrap="${WRAP_PREFIX} && python -m kirby.finetuning.cgr_smiles_pretrain --stage all --output-dir ${OUTPUT_DIR} --n-workers 16 --max-steps 50000 --batch-size 32 ${STDERR_FILTER}" \
             | awk '{print $4}')
-        echo "  $J  cgr_smiles  (long, 128G, 8h, GPU + 16 CPU)"
+        echo "  $J  cgr_smiles  (long, 128G, 8h, 16 CPU)"
         ;;
     *)
         echo "Usage: bash tests/slurm_scripts/submit_cgr_smiles_pretrain.sh [STAGE]"
