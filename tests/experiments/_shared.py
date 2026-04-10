@@ -1423,6 +1423,8 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
             create_component_descriptors, create_ligand_descriptors,
             create_reactiont5,
             create_cgr_morgan,
+            create_chytorch_graphormer,
+            create_cgr_smiles_lm,
         )
 
         loaders = {
@@ -1456,6 +1458,8 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
             'ligand_descriptors': lambda: create_ligand_descriptors(components),
             'reactiont5': lambda: create_reactiont5(rxn_smiles),
             'cgr_morgan': lambda: create_cgr_morgan(rxn_smiles),
+            'chytorch_graphormer': lambda: create_chytorch_graphormer(rxn_smiles),
+            'cgr_smiles_lm': lambda: create_cgr_smiles_lm(rxn_smiles),
         }
 
         # Determine which reps to generate

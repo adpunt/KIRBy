@@ -206,6 +206,8 @@ def _load_reaction(dataset_name: str) -> dict:
         create_component_descriptors, create_ligand_descriptors,
         create_reaction_rep_variant, _MOL_REP_VARIANTS,
         create_cgr_morgan,
+        create_chytorch_graphormer,
+        create_cgr_smiles_lm,
     )
 
     if dataset_name == 'buchwald_hartwig':
@@ -289,6 +291,22 @@ def _load_reaction(dataset_name: str) -> dict:
         print("  WARNING: chython/rxnmapper not installed, skipping CGR Morgan rep")
     except Exception as e:
         print(f"  WARNING: cgr_morgan failed: {e}")
+
+    # Chytorch Graphormer CLS embedding (pretrained graph-based)
+    try:
+        reps['chytorch_graphormer'] = create_chytorch_graphormer(data['rxn_smiles'])
+    except ImportError:
+        print("  WARNING: chytorch/chytorch-rxnmap not installed, skipping Graphormer rep")
+    except Exception as e:
+        print(f"  WARNING: chytorch_graphormer failed: {e}")
+
+    # CGR-SMILES language model embedding (pretrained sequential)
+    try:
+        reps['cgr_smiles_lm'] = create_cgr_smiles_lm(data['rxn_smiles'])
+    except ImportError:
+        print("  WARNING: transformers/chython not installed, skipping CGR-SMILES LM rep")
+    except Exception as e:
+        print(f"  WARNING: cgr_smiles_lm failed: {e}")
 
     # Per-component physicochemical descriptors
     try:

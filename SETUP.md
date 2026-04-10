@@ -82,6 +82,13 @@ pip install -e ".[qsar,antibody,tcga,uncertainty,interpret]"
 
 # Reaction yield prediction (optional)
 pip install drfp rxnfp
+# CGR (Condensed Graph of Reaction) fingerprints — requires atom-atom mapping
+pip install chython rxnmapper
+# Chytorch Graphormer — pretrained graph-based reaction embeddings (1024D)
+pip install chytorch chytorch-rxnmap
+# CGR-SMILES LM — continued MLM pretraining on CGR-SMILES corpus (384D)
+# Requires pretraining first (see tests/slurm_scripts/submit_cgr_smiles_pretrain.sh)
+pip install datasets  # for HuggingFace Trainer corpus loading
 
 # Mordred 2D descriptors (~1613 features, superset of RDKit PDV)
 pip install mordred  # or: pip install mordredcommunity (maintained fork)

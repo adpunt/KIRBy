@@ -165,6 +165,10 @@ setup(
         "reaction": [
             "drfp",
             "rxnfp>=0.0.7",
+            "chython>=1.0",
+            "rxnmapper>=0.3.0",
+            "chytorch",
+            "chytorch-rxnmap",
         ],
 
         # TCGA genomics / histopathology

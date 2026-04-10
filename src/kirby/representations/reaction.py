@@ -29,6 +29,7 @@ One-Hot Components:
   One-hot encoding of factorial reaction components (categorical baseline).
 """
 
+import os
 import numpy as np
 from typing import List, Dict
 
@@ -362,6 +363,385 @@ def create_reactiont5(rxn_smiles: List[str], batch_size: int = 16) -> np.ndarray
     return result
 
 
+# =========================================================================
+# CHYTORCH GRAPHORMER (PRETRAINED GRAPH-BASED REACTION EMBEDDING)
+# =========================================================================
+
+
+def _chytorch_py311_patch():
+    """Patch chytorch NamedTuple+DataTypeMixin for Python 3.11+ compatibility.
+
+    chytorch uses `class Batch(NamedTuple, DataTypeMixin)` which is rejected
+    by Python 3.11's NamedTupleMeta. We strip `DataTypeMixin` from the
+    inheritance in the 3 affected source files. Idempotent — only patches once.
+    """
+    import sys
+    if sys.version_info < (3, 11):
+        return
+
+    import site
+
+    # Search both system and user site-packages
+    search_paths = list(site.getsitepackages() or [])
+    try:
+        search_paths.append(site.getusersitepackages())
+    except AttributeError:
+        pass
+
+    base = None
+    for p in search_paths:
+        candidate = os.path.join(p, 'chytorch', 'utils', 'data')
+        if os.path.isdir(candidate):
+            base = candidate
+            break
+    if base is None:
+        return
+
+    targets = [
+        os.path.join(base, 'molecule', 'conformer.py'),
+        os.path.join(base, 'molecule', 'encoder.py'),
+        os.path.join(base, 'reaction', 'encoder.py'),
+    ]
+    for fpath in targets:
+        if not os.path.isfile(fpath):
+            continue
+        try:
+            with open(fpath) as f:
+                src = f.read()
+            if 'NamedTuple, DataTypeMixin' in src:
+                with open(fpath, 'w') as f:
+                    f.write(src.replace('NamedTuple, DataTypeMixin',
+                                        'NamedTuple'))
+        except (PermissionError, OSError):
+            pass  # readonly site-packages — user must patch manually
+
+
+def create_chytorch_graphormer(rxn_smiles: List[str],
+                               batch_size: int = 20) -> np.ndarray:
+    """Chytorch Graphormer CLS embedding — pretrained graph-based reaction rep.
+
+    Extracts CLS token from a Bidirectional Graphormer pretrained on ~2M
+    reactions (USPTO + Pistachio) for atom-mapping. Operates on reaction
+    graph structure directly — no SMILES tokenization, no separate AAM step.
+
+    The model (chytorch-rxnmap) natively handles atom-atom mapping, so
+    unmapped reaction SMILES work directly (unlike CGR Morgan which needs
+    rxnmapper). CLS embedding is 1024D (Graphormer hidden dimension).
+
+    Nugmanov et al. / chytorch-rxnmap.
+
+    Args:
+        rxn_smiles: Reaction SMILES in 'reactants>>products' format.
+        batch_size: Reactions per batch (default 20).
+
+    Returns:
+        np.ndarray of shape (n_reactions, 1024), float32.
+
+    Requires: pip install chytorch chytorch-rxnmap torch
+    Note: Auto-downloads pretrained weights on first use (~78MB).
+    """
+    D = 1024  # Graphormer hidden dimension (verified from model architecture)
+
+    if not rxn_smiles:
+        return np.zeros((0, D), dtype=np.float32)
+
+    try:
+        import torch
+    except ImportError:
+        raise ImportError(
+            "Chytorch Graphormer requires PyTorch: pip install torch"
+        )
+    try:
+        _chytorch_py311_patch()
+        from chytorch.zoo.rxnmap import Model
+        from chytorch.utils.data import (
+            ReactionEncoderDataset, collate_encoded_reactions,
+        )
+    except ImportError:
+        raise ImportError(
+            "Chytorch Graphormer requires chytorch-rxnmap: "
+            "pip install chytorch chytorch-rxnmap"
+        )
+    try:
+        from chython import smiles as chython_smiles
+    except ImportError:
+        raise ImportError(
+            "Chytorch Graphormer requires chython: pip install chython"
+        )
+    from math import inf
+
+    print(f"  Loading Chytorch Graphormer (pretrained rxnmap)...")
+    model = Model()  # __init__ loads weights + calls eval()
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = model.to(device)
+
+    # Parse reactions → ReactionContainer objects
+    parsed = []       # (index, ReactionContainer) for successful parses
+    failed_idx = []   # indices of failed parses
+    for i, smi in enumerate(rxn_smiles):
+        try:
+            rxn = chython_smiles(smi)
+            rxn.canonicalize()
+            parsed.append((i, rxn))
+        except Exception:
+            failed_idx.append(i)
+
+    if not parsed:
+        print(f"  Chytorch Graphormer: all {len(rxn_smiles)} reactions "
+              f"failed parsing")
+        return np.zeros((len(rxn_smiles), D), dtype=np.float32)
+
+    # Extract embeddings in batches
+    X = np.zeros((len(rxn_smiles), D), dtype=np.float32)
+    indices = [idx for idx, _ in parsed]
+    rxn_objs = [rxn for _, rxn in parsed]
+    ds = ReactionEncoderDataset(rxn_objs)
+    n_batch_fail = 0
+
+    with torch.no_grad():
+        for start in range(0, len(ds), batch_size):
+            end = min(start + batch_size, len(ds))
+            try:
+                items = [ds[j] for j in range(start, end)]
+                batch = collate_encoded_reactions(items)
+                atoms, neighbors, distances, roles = batch
+                atoms = atoms.to(device)
+                neighbors = neighbors.to(device)
+                distances = distances.to(device)
+                roles = roles.to(device)
+
+                # Parent-class forward: get embeddings (not attention weights)
+                n = atoms.size(1)
+                d_mask = (torch.zeros_like(roles, dtype=torch.float)
+                          .masked_fill_(roles == 0, -inf)
+                          .view(-1, 1, 1, n))
+                d_mask = (d_mask.expand(-1, model.nhead, n, -1)
+                          .flatten(end_dim=1))
+
+                x = (model.molecule_encoder((atoms, neighbors, distances))
+                     * (roles > 1).unsqueeze_(-1))
+                x = x + model.role_encoder(roles)
+                for lr in model.layers:
+                    x, _ = lr(x, d_mask)
+
+                cls_tokens = x[:, 0, :].cpu().numpy().astype(np.float32)
+                for k, global_idx in enumerate(indices[start:end]):
+                    X[global_idx] = cls_tokens[k]
+            except Exception:
+                n_batch_fail += (end - start)
+                # Failed reactions keep zero vectors in X
+
+            if end < len(ds) and end % 100 == 0:
+                print(f"    Graphormer progress: {end}/{len(ds)}")
+
+    n_ok = int((X.sum(axis=1) != 0).sum())
+    n_fail_total = len(failed_idx) + n_batch_fail
+    if n_fail_total > 0:
+        print(f"  Chytorch Graphormer: {n_fail_total}/{len(rxn_smiles)} "
+              f"reactions failed ({len(failed_idx)} parse, "
+              f"{n_batch_fail} encoding)")
+    print(f"  Chytorch Graphormer embeddings: {X.shape} "
+          f"({n_ok}/{len(rxn_smiles)} non-zero rows)")
+    return X
+
+
+# =========================================================================
+# CGR-SMILES LANGUAGE MODEL (PRETRAINED SEQUENTIAL EMBEDDING)
+# =========================================================================
+
+# Global cache for CGR-SMILES LM model/tokenizer
+_CGR_SMILES_MODEL = None
+_CGR_SMILES_TOKENIZER = None
+
+
+def _rxn_to_cgr_smiles_batch(rxn_smiles: List[str]) -> List[str]:
+    """Batch convert reaction SMILES to CGR-SMILES strings.
+
+    Atom-maps first via rxnmapper, then converts to CGR-SMILES via
+    chython compose + str. Shared by create_cgr_smiles_lm and
+    cgr_smiles_lora.
+
+    Args:
+        rxn_smiles: Reaction SMILES (unmapped or mapped).
+
+    Returns:
+        List of CGR-SMILES strings (empty string for failures).
+    """
+    from chython import smiles as chython_smiles
+
+    if not rxn_smiles:
+        return []
+
+    # Atom-map first (required for CGR compose)
+    mapped = _map_reactions(rxn_smiles)
+
+    cgr_smiles = []
+    for smi in mapped:
+        try:
+            rxn = chython_smiles(smi)
+            if rxn is None:
+                cgr_smiles.append('')
+                continue
+            rxn.canonicalize()
+            cgr = rxn.compose()
+            cgr_smiles.append(str(cgr))
+        except Exception:
+            cgr_smiles.append('')
+
+    n_ok = sum(1 for s in cgr_smiles if s)
+    print(f"  CGR-SMILES conversion: {n_ok}/{len(rxn_smiles)} success")
+    return cgr_smiles
+
+
+def _find_cgr_smiles_checkpoint() -> str:
+    """Find the MLM-pretrained CGR-SMILES checkpoint.
+
+    Searches:
+    1. KIRBY_CGR_CHECKPOINT env var
+    2. {KIRBY_CACHE_DIR}/cgr_smiles_pretrain/checkpoint/
+    3. /data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/checkpoint/
+
+    Returns:
+        Path string to checkpoint, or base model ID as fallback.
+    """
+    from pathlib import Path
+
+    # Env var override
+    env_path = os.environ.get('KIRBY_CGR_CHECKPOINT')
+    if env_path and Path(env_path).is_dir():
+        return env_path
+
+    # Default cache locations
+    cache_root = os.environ.get(
+        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby'))
+    candidates = [
+        Path(cache_root) / 'cgr_smiles_pretrain' / 'checkpoint',
+        Path('/data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/checkpoint'),
+    ]
+    for p in candidates:
+        if p.is_dir() and (p / 'config.json').exists():
+            return str(p)
+
+    # Fallback: base ChemBERTa (no CGR pretraining)
+    print("  WARNING: No CGR-SMILES pretrained checkpoint found. "
+          "Using base ChemBERTa (dynamic bond token embeddings will be "
+          "near-zero). Run cgr_smiles_pretrain first for best results.")
+    return 'DeepChem/ChemBERTa-77M-MLM'
+
+
+def create_cgr_smiles_lm(rxn_smiles: List[str],
+                         batch_size: int = 32,
+                         checkpoint_dir: str = None) -> np.ndarray:
+    """CGR-SMILES language model embeddings (frozen, 384D).
+
+    Extracts mean-pooled hidden states from a ChemBERTa model that was
+    continued-pretrained on CGR-SMILES (Phase 4 of CGR_EMBEDDING_RESEARCH.md).
+
+    Pipeline: rxn_smiles -> atom-map -> CGR-SMILES -> tokenize -> encode -> mean-pool
+
+    Falls back to base ChemBERTa with extended tokenizer if no checkpoint
+    is found (dynamic bond token embeddings will be near-zero).
+
+    Args:
+        rxn_smiles: Reaction SMILES in 'reactants>>products' format.
+        batch_size: Sequences per batch (default 32).
+        checkpoint_dir: Path to MLM-pretrained checkpoint. If None, auto-detects.
+
+    Returns:
+        np.ndarray of shape (n_reactions, 384), float32.
+
+    Requires: pip install chython rxnmapper transformers torch
+    """
+    import torch
+    from transformers import AutoTokenizer, AutoModel
+
+    D = 384  # ChemBERTa-77M-MLM hidden_size
+
+    if not rxn_smiles:
+        return np.zeros((0, D), dtype=np.float32)
+
+    # Load model (global cache)
+    global _CGR_SMILES_MODEL, _CGR_SMILES_TOKENIZER
+
+    if _CGR_SMILES_MODEL is None:
+        model_path = checkpoint_dir or _find_cgr_smiles_checkpoint()
+        print(f"  Loading CGR-SMILES model from {model_path}...")
+
+        _CGR_SMILES_TOKENIZER = AutoTokenizer.from_pretrained(model_path)
+        _CGR_SMILES_MODEL = AutoModel.from_pretrained(model_path)
+
+        # If using base model (no checkpoint), extend tokenizer + resize
+        if model_path == 'DeepChem/ChemBERTa-77M-MLM':
+            from kirby.finetuning.cgr_smiles_pretrain import (
+                get_dynamic_bond_tokens,
+            )
+            new_tokens = get_dynamic_bond_tokens()
+            existing = set(_CGR_SMILES_TOKENIZER.get_vocab().keys())
+            to_add = [t for t in new_tokens if t not in existing]
+            if to_add:
+                _CGR_SMILES_TOKENIZER.add_special_tokens(
+                    {'additional_special_tokens': to_add})
+                _CGR_SMILES_MODEL.resize_token_embeddings(
+                    len(_CGR_SMILES_TOKENIZER))
+
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        _CGR_SMILES_MODEL = _CGR_SMILES_MODEL.to(device).eval()
+        print(f"  CGR-SMILES model loaded on {device} "
+              f"(vocab={len(_CGR_SMILES_TOKENIZER)})")
+
+    tokenizer = _CGR_SMILES_TOKENIZER
+    model = _CGR_SMILES_MODEL
+    device = next(model.parameters()).device
+
+    # Convert reactions to CGR-SMILES
+    cgr_smiles = _rxn_to_cgr_smiles_batch(rxn_smiles)
+
+    # Track which indices have valid CGR-SMILES
+    valid_idx = [i for i, s in enumerate(cgr_smiles) if s]
+    valid_strings = [cgr_smiles[i] for i in valid_idx]
+
+    if not valid_strings:
+        print("  WARNING: All CGR-SMILES conversions failed")
+        return np.zeros((len(rxn_smiles), D), dtype=np.float32)
+
+    # Extract embeddings in batches
+    all_embeddings = []
+    with torch.no_grad():
+        for start in range(0, len(valid_strings), batch_size):
+            batch = valid_strings[start:start + batch_size]
+            try:
+                inputs = tokenizer(
+                    batch, padding=True, truncation=True,
+                    max_length=256, return_tensors='pt',
+                )
+                inputs = {k: v.to(device) for k, v in inputs.items()}
+                outputs = model(**inputs)
+
+                # Mean pooling over non-padding tokens
+                attention_mask = inputs['attention_mask'].unsqueeze(-1).float()
+                sum_emb = (outputs.last_hidden_state * attention_mask).sum(dim=1)
+                count = attention_mask.sum(dim=1).clamp(min=1)
+                mean_emb = (sum_emb / count).cpu().numpy()
+                all_embeddings.append(mean_emb)
+            except Exception as e:
+                # Zero vectors for failed batches
+                all_embeddings.append(
+                    np.zeros((len(batch), D), dtype=np.float32))
+                print(f"  WARNING: CGR-SMILES batch failed: {e}")
+
+    valid_embs = np.vstack(all_embeddings).astype(np.float32)
+
+    # Build full array with zero vectors for failures
+    X = np.zeros((len(rxn_smiles), D), dtype=np.float32)
+    for local_i, global_i in enumerate(valid_idx):
+        X[global_i] = valid_embs[local_i]
+
+    n_zero = np.sum(np.all(X == 0, axis=1))
+    print(f"  CGR-SMILES LM embeddings: {X.shape} "
+          f"({len(rxn_smiles) - n_zero}/{len(rxn_smiles)} non-zero rows)")
+    return X
+
+
 def create_onehot_components(components: List[Dict[str, str]]) -> np.ndarray:
     """One-hot encode reaction components (categorical baseline).
 
@@ -421,6 +801,201 @@ def create_diff_maccs(rxn_smiles: List[str]) -> np.ndarray:
         np.ndarray of shape (n_reactions, 167), float32 in {-1, 0, 1}.
     """
     return create_product_maccs(rxn_smiles) - create_reactant_maccs(rxn_smiles)
+
+
+# =========================================================================
+# CGR (CONDENSED GRAPH OF REACTION) FINGERPRINTS
+# =========================================================================
+# CGR superimposes reactant and product graphs into a single graph where
+# bonds that change during the reaction are "dynamic bonds" (order != p_order).
+# This encodes the reaction center as a first-class structural feature.
+#
+# CGR Morgan FP: extends standard Morgan/ECFP circular hashing to CGR graphs.
+# Atom invariants include both reactant and product properties (charge, p_charge,
+# etc.). Bond invariants include (order, p_order) — dynamic bonds hash differently
+# from static bonds, giving substructure patterns that natively encode the
+# transformation context. This is NOT a published method; it is a synthesis of
+# standard Morgan iteration with CGR graph properties.
+#
+# Requires: chython (CGR parsing), rxnmapper (atom-atom mapping).
+# =========================================================================
+
+
+def _stable_hash(tup) -> int:
+    """Deterministic hash of a tuple for Morgan fingerprinting.
+
+    Python's built-in hash() is randomized (PYTHONHASHSEED) since 3.3.
+    We need deterministic hashing for reproducible fingerprints and caching.
+    """
+    import hashlib
+    import struct
+    data = str(tup).encode('utf-8')
+    digest = hashlib.blake2b(data, digest_size=8).digest()
+    return struct.unpack('<Q', digest)[0]
+
+
+def _map_reactions(rxn_smiles: List[str], batch_size: int = 10) -> List[str]:
+    """Atom-map reaction SMILES using rxnmapper.
+
+    Atom-atom mapping (AAM) is required for CGR construction — chython's
+    compose() needs to know which atoms correspond between reactant and
+    product sides. Uses rxnmapper (Schwaller et al.) for attention-based AAM.
+
+    Args:
+        rxn_smiles: Unmapped reaction SMILES.
+        batch_size: Reactions per rxnmapper batch.
+
+    Returns:
+        List of atom-mapped reaction SMILES (same length as input).
+    """
+    try:
+        from rxnmapper import RXNMapper
+    except ImportError:
+        raise ImportError(
+            "CGR Morgan requires rxnmapper for atom-atom mapping: "
+            "pip install rxnmapper"
+        )
+
+    if not rxn_smiles:
+        return []
+
+    rxn_mapper = RXNMapper()
+    mapped = []
+
+    for start in range(0, len(rxn_smiles), batch_size):
+        batch = rxn_smiles[start:start + batch_size]
+        try:
+            results = rxn_mapper.get_attention_guided_atom_maps(batch)
+            mapped.extend(r['mapped_rxn'] for r in results)
+        except Exception:
+            # Fall back to unmapped — will fail at compose() → zero vector
+            mapped.extend(batch)
+
+        done = min(start + batch_size, len(rxn_smiles))
+        if done < len(rxn_smiles) and done % 500 == 0:
+            print(f"    rxnmapper progress: {done}/{len(rxn_smiles)}")
+
+    return mapped
+
+
+def _cgr_morgan_single(mapped_rxn_smi: str, radius: int = 2,
+                        n_bits: int = 2048) -> np.ndarray:
+    """Compute CGR Morgan fingerprint for a single atom-mapped reaction.
+
+    Parses mapped SMILES → CGR → runs Morgan iteration with dynamic
+    atom/bond invariants → folds into bit vector.
+
+    Args:
+        mapped_rxn_smi: Atom-mapped reaction SMILES (with :N tokens).
+        radius: Morgan iteration radius (default 2, like ECFP4).
+        n_bits: Fingerprint length (default 2048).
+
+    Returns:
+        1D uint8 array of length n_bits. Zero vector on any failure.
+    """
+    try:
+        from chython import smiles as chython_smiles
+    except ImportError:
+        raise ImportError("CGR Morgan requires chython: pip install chython")
+
+    try:
+        rxn = chython_smiles(mapped_rxn_smi)
+        cgr = rxn.compose()
+    except Exception:
+        return np.zeros(n_bits, dtype=np.uint8)
+
+    atom_ids = list(cgr._atoms.keys())
+    if not atom_ids:
+        return np.zeros(n_bits, dtype=np.uint8)
+
+    # Build adjacency: atom_id -> [(neighbor_id, bond_invariant), ...]
+    adjacency = {aid: [] for aid in atom_ids}
+    for n1, n2, bond in cgr.bonds():
+        bond_inv = _stable_hash((bond.order, bond.p_order))
+        adjacency[n1].append((n2, bond_inv))
+        adjacency[n2].append((n1, bond_inv))
+
+    # Atom invariants (radius 0)
+    current_hash = {}
+    for aid in atom_ids:
+        atom = cgr._atoms[aid]
+        current_hash[aid] = _stable_hash((
+            atom.atomic_number,
+            atom.isotope,
+            atom.charge,
+            atom.p_charge,
+            atom.is_radical,
+            atom.p_is_radical,
+            len(adjacency[aid]),
+        ))
+
+    # Collect environment hashes across all radii
+    all_hashes = set(current_hash.values())
+
+    # Morgan iteration
+    for _ in range(radius):
+        new_hash = {}
+        for aid in atom_ids:
+            neighbor_info = sorted(
+                (bond_inv, current_hash[nbr_id])
+                for nbr_id, bond_inv in adjacency[aid]
+            )
+            new_hash[aid] = _stable_hash((current_hash[aid], tuple(neighbor_info)))
+            all_hashes.add(new_hash[aid])
+        current_hash = new_hash
+
+    # Fold into bit vector
+    fp = np.zeros(n_bits, dtype=np.uint8)
+    for h in all_hashes:
+        fp[h % n_bits] = 1
+
+    return fp
+
+
+def create_cgr_morgan(rxn_smiles: List[str], radius: int = 2,
+                      n_bits: int = 2048) -> np.ndarray:
+    """CGR Morgan fingerprint — extended Morgan iteration on CGR graph.
+
+    Parses reaction SMILES → atom-maps via rxnmapper → builds CGR via
+    chython → runs Morgan iteration with dynamic bond invariants → folds
+    into binary fingerprint. Dynamic bonds (where order != p_order) hash
+    differently from static bonds, encoding the reaction center natively.
+
+    This is a novel method (synthesis of Morgan iteration + CGR properties),
+    not a published fingerprint. Closest published: DOPtools CircuS
+    (Sidorov et al., Digital Discovery 2025).
+
+    Args:
+        rxn_smiles: Reaction SMILES in 'reactants>>products' format.
+        radius: Morgan iteration radius (default 2, like ECFP4).
+        n_bits: Fingerprint length (default 2048).
+
+    Returns:
+        np.ndarray of shape (n_reactions, n_bits), float32 with binary values.
+
+    Requires: pip install chython rxnmapper
+    """
+    if not rxn_smiles:
+        return np.zeros((0, n_bits), dtype=np.float32)
+
+    print(f"  CGR Morgan: mapping {len(rxn_smiles)} reactions with rxnmapper...")
+    mapped = _map_reactions(rxn_smiles)
+
+    X = np.zeros((len(rxn_smiles), n_bits), dtype=np.float32)
+    n_failed = 0
+    for i, msmi in enumerate(mapped):
+        try:
+            X[i] = _cgr_morgan_single(msmi, radius, n_bits).astype(np.float32)
+        except Exception:
+            n_failed += 1
+
+    n_nonzero = int((X.sum(axis=1) > 0).sum())
+    if n_failed > 0:
+        print(f"  CGR Morgan: {n_failed}/{len(rxn_smiles)} reactions failed "
+              f"CGR conversion")
+    print(f"  CGR Morgan fingerprint: {X.shape} "
+          f"({n_nonzero}/{len(rxn_smiles)} non-zero rows)")
+    return X
 
 
 # =========================================================================
@@ -653,6 +1228,7 @@ def create_ligand_descriptors(components: List[Dict[str, str]]) -> np.ndarray:
     X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
     print(f"  Ligand descriptors: {X.shape} (8 steric + 8 electronic)")
     return X
+
 
 
 # =========================================================================
