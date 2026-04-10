@@ -283,7 +283,7 @@ def main():
         'ridge': lambda: Ridge(alpha=1.0),
     }
 
-    budgets_to_test = [10, 25, 50, 100]
+    budgets_to_test = [25, 50, 100]
 
     for budget in budgets_to_test:
         print(f"\n  --- Budget={budget} ---")
