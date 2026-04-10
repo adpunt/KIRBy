@@ -146,13 +146,15 @@ def print_comparison(search_results, domain_filter=None):
           f"{len(set(r['dataset'] for r in all_rows))} datasets)")
     print(f"Wins: {wins}  |  Ties: {ties}  |  Losses: {losses}")
     print()
-    print(f"{'Delta':>8}  {'Dataset':<30} {'Model':<10} "
+    print(f"{'Delta':>8}  {'Dataset':<30} {'Metric':<8} {'Model':<10} "
           f"{'Baseline':>9} {'Best Rep':<22} {'Hybrid':>8} {'Budget':>6}")
-    print("-" * 105)
+    print("-" * 115)
     for r in all_rows:
+        direction = 'v' if r['lower'] else '^'
         flag = '+' if r['delta'] > 0.005 else \
                ('-' if r['delta'] < -0.005 else '=')
-        print(f"{r['delta']:>+8.4f}  {r['dataset']:<30} {r['model']:<10} "
+        print(f"{r['delta']:>+8.4f}  {r['dataset']:<30} "
+              f"{r['metric']}{direction:<7} {r['model']:<10} "
               f"{r['base_score']:>9.4f} {r['base_rep']:<22} "
               f"{r['hybrid_score']:>8.4f} {r['hybrid_budget']:>6}  {flag}")
 
