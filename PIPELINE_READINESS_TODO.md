@@ -896,9 +896,9 @@ Old Sections 10B/10C/12D/12E have writeups. Need new-format review.
 
 | # | Dataset | Samples | Reps | Augs | Status |
 |---|---------|---------|------|------|--------|
-| 50 | buchwald_hartwig | 3,955 | 14 | 6 | DONE |
+| 50 | buchwald_hartwig | 3,955 | 14 | 6 | DONE (re-survey pending after CGR reps added, see CGR_EMBEDDING_RESEARCH.md) |
 | 51 | suzuki | 5,760 | 14 | 4 | DROPPED — R²=0.453 ceiling, only 1 viable rep |
-| 52 | bh_doyle_plates | 4,312 | 35 | 24 | DONE |
+| 52 | bh_doyle_plates | 4,312 | 35 | 24 | DONE (re-survey pending after CGR reps added, see CGR_EMBEDDING_RESEARCH.md) |
 
 **buchwald_hartwig (n=3,955, best R²=0.718, cutoff=0.50):**
 | Tier | Reps |
@@ -1060,6 +1060,32 @@ All resubmitted on HTC long partition with GPU, 256G, 48-96h wall time.
 
 16. ~~**Implement per-dataset file redesign**~~ **DONE** (2026-03-27) — replaced ~100 boilerplate .py files + 6 SLURM scripts with `run_dataset.py` + `submit_dataset.sh` + `submit_all_datasets.sh`. N10-N13 and fed02-fed05 pre-registered in helpers.
 17. **S01-S09 classification metrics** — lower priority, but S04/S05/S06 compute R² on predictions which is wrong for classification datasets. See `EXPERIMENT_BUGS.md` Tier 2 similarity.
+
+### EXPERIMENTS — CGR-SMILES pretraining (Phase 4 CGR_EMBEDDING_RESEARCH.md)
+
+**Goal:** Continue-pretrain ChemBERTa-77M-MLM on CGR-SMILES corpus from USPTO (~1M reactions) for 384D reaction embeddings.
+
+**Two-stage SLURM job** (`tests/slurm_scripts/submit_cgr_smiles_pretrain.sh`):
+- **Stage 1 — Corpus generation (CPU):** Download USPTO from Figshare (~200MB 7z), extract, convert ~1M atom-mapped reactions to CGR-SMILES via chython compose. Expects 60-80% success rate (~600-800K lines).
+  - Partition: **short**, Time: **2h**, Mem: **64G**, CPUs: **16**, GPU: **none**
+  - Deps: `py7zr` (for 7z extraction), `chython`
+  - Output: `/data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/corpus.txt`
+- **Stage 2 — MLM pretraining (GPU):** Extend tokenizer with 30 dynamic bond tokens, resize embeddings, train 50K steps with HuggingFace Trainer.
+  - Partition: **medium**, Time: **6h**, Mem: **128G**, CPUs: **8**, GPU: **1**
+  - Deps: `transformers`, `datasets`, `torch`
+  - Output: `/data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/checkpoint/`
+- **Combined job:** Partition: **long**, Time: **8h**, Mem: **128G**, CPUs: **16**, GPU: **1**
+- **NOT HTC** — single job, not per-dataset. Run once, checkpoint reused by all reaction datasets.
+
+**After pretraining:**
+- `create_cgr_smiles_lm()` auto-detects checkpoint at `/data/.../cgr_smiles_pretrain/checkpoint/`
+- Frozen 384D embeddings available in survey + experiments
+- Optional LoRA FT variant via `make_cgr_smiles_lora_factory()` (per-fold, ~2h per dataset with GPU)
+
+**Install on server before running:**
+```
+pip install py7zr
+```
 
 ### EXPERIMENTS — Supplementary runs needed
 
