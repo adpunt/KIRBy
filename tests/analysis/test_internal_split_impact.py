@@ -248,6 +248,96 @@ def main():
 
         print()
 
+    # ── End-to-end hybrid comparison ──
+    # Build actual hybrids using each internal split method,
+    # evaluate on the held-out outer test fold.
+    print(f"\n{'='*70}")
+    print("END-TO-END: Build hybrid with each split method, evaluate on test fold")
+    print(f"{'='*70}")
+
+    from kirby.hybrid import create_hybrid, apply_feature_selection
+    from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+    from sklearn.linear_model import Ridge
+    from sklearn.metrics import mean_squared_error
+    from scipy.stats import spearmanr as _spearmanr
+
+    test_reps = {k: v[test_idx] for k, v in reps.items()}
+    test_labels = labels[test_idx]
+
+    # Determine metric direction from dataset
+    domain = data.get('domain', '')
+    if domain in ('molecular', 'reaction'):
+        metric_name = 'rmse'
+        lower_is_better = True
+        def eval_fn(y_true, y_pred):
+            return np.sqrt(mean_squared_error(y_true, y_pred))
+    else:
+        metric_name = 'spearman'
+        lower_is_better = False
+        def eval_fn(y_true, y_pred):
+            rho, _ = _spearmanr(y_true, y_pred)
+            return rho
+
+    downstream_models = {
+        'rf': lambda: RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1),
+        'ridge': lambda: Ridge(alpha=1.0),
+    }
+
+    budgets_to_test = [50, 100, 250]
+
+    for budget in budgets_to_test:
+        print(f"\n  --- Budget={budget} ---")
+        print(f"  {'Method':<12} {'Model':<8} {'Score':>8}  {'N_feat':>6}  Top reps")
+        print(f"  {'-'*12} {'-'*8} {'-'*8}  {'-'*6}  {'-'*30}")
+
+        for method_name, split_method in [('random', 'random'), ('group', 'group'), ('logo', 'logo')]:
+            # We need to monkey-patch create_hybrid's internal split.
+            # Instead, we use the allocation scores we already computed
+            # to manually build the hybrid with the same allocation logic.
+
+            # Simpler approach: call create_hybrid with precomputed_alloc_scores
+            # from each method. This bypasses the internal split entirely.
+            for model_name, model_fn in downstream_models.items():
+                # Use the first evaluator's scores for allocation
+                ev = evaluators[0]
+                alloc_scores = methods.get(method_name, methods['random'])
+
+                try:
+                    X_train, feature_info = create_hybrid(
+                        fold_reps, fold_labels,
+                        allocation_method='top_3',
+                        budget=budget,
+                        importance_method='lightgbm_gain',
+                        internal_evaluator=ev,
+                        precomputed_alloc_scores=alloc_scores,
+                    )
+
+                    X_test = apply_feature_selection(test_reps, feature_info)
+
+                    model = model_fn()
+                    model.fit(X_train, fold_labels)
+                    y_pred = model.predict(X_test)
+                    score = eval_fn(test_labels, y_pred)
+
+                    # Get which reps were selected
+                    selected = feature_info.get('selected_reps', feature_info.get('rep_names', []))
+                    if isinstance(selected, dict):
+                        top = sorted(selected.keys(), key=lambda r: -selected[r])[:3]
+                    elif isinstance(selected, list):
+                        top = selected[:3]
+                    else:
+                        top = []
+
+                    print(f"  {method_name:<12} {model_name:<8} {score:>8.4f}  "
+                          f"{X_train.shape[1]:>6}  {', '.join(str(t) for t in top)}")
+
+                except Exception as e:
+                    print(f"  {method_name:<12} {model_name:<8} FAILED: {e}")
+
+    # Summary
+    print(f"\n  Metric: {metric_name} ({'lower' if lower_is_better else 'higher'} is better)")
+    print()
+
 
 if __name__ == '__main__':
     main()
