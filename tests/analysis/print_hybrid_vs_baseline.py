@@ -205,6 +205,7 @@ def main():
                         if k in args.datasets}
 
     if args.domain:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
         from precompute_hybrids import _get_domain
         all_searches = {k: v for k, v in all_searches.items()
                         if _get_domain(k) == args.domain}
