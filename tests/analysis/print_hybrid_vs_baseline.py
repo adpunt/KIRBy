@@ -146,17 +146,26 @@ def print_comparison(search_results, domain_filter=None):
           f"{len(set(r['dataset'] for r in all_rows))} datasets)")
     print(f"Wins: {wins}  |  Ties: {ties}  |  Losses: {losses}")
     print()
-    print(f"{'Delta':>8}  {'Dataset':<30} {'Metric':<8} {'Model':<10} "
-          f"{'Baseline':>9} {'Best Rep':<22} {'Hybrid':>8} {'Budget':>6}")
-    print("-" * 115)
+    sep = '\t'
+    header = sep.join(['Delta', 'Dataset', 'Metric', 'Direction', 'Model',
+                       'Baseline', 'Best Rep', 'Hybrid', 'Budget', 'Win'])
+    print(header)
     for r in all_rows:
-        direction = 'v' if r['lower'] else '^'
-        flag = '+' if r['delta'] > 0.005 else \
-               ('-' if r['delta'] < -0.005 else '=')
-        print(f"{r['delta']:>+8.4f}  {r['dataset']:<30} "
-              f"{r['metric']}{direction:<7} {r['model']:<10} "
-              f"{r['base_score']:>9.4f} {r['base_rep']:<22} "
-              f"{r['hybrid_score']:>8.4f} {r['hybrid_budget']:>6}  {flag}")
+        direction = 'lower=better' if r['lower'] else 'higher=better'
+        flag = 'win' if r['delta'] > 0.005 else \
+               ('loss' if r['delta'] < -0.005 else 'tie')
+        print(sep.join([
+            f"{r['delta']:+.4f}",
+            r['dataset'],
+            r['metric'],
+            direction,
+            r['model'],
+            f"{r['base_score']:.4f}",
+            r['base_rep'],
+            f"{r['hybrid_score']:.4f}",
+            str(r['hybrid_budget']),
+            flag,
+        ]))
 
     # Per-model summary
     print()
@@ -171,15 +180,16 @@ def print_comparison(search_results, domain_filter=None):
         else:
             m['t'] += 1
 
-    print(f"{'Model':<10} {'Wins':>5} {'Ties':>5} {'Loss':>5}  "
-          f"{'Mean':>8} {'Min':>8} {'Max':>8}")
-    print("-" * 60)
     import numpy as np
+    print(sep.join(['Model', 'Wins', 'Ties', 'Losses', 'Mean Delta',
+                    'Min Delta', 'Max Delta']))
     for model in sorted(model_stats.keys()):
         s = model_stats[model]
         d = s['deltas']
-        print(f"{model:<10} {s['w']:>5} {s['t']:>5} {s['l']:>5}  "
-              f"{np.mean(d):>+8.4f} {min(d):>+8.4f} {max(d):>+8.4f}")
+        print(sep.join([
+            model, str(s['w']), str(s['t']), str(s['l']),
+            f"{np.mean(d):+.4f}", f"{min(d):+.4f}", f"{max(d):+.4f}",
+        ]))
 
 
 def main():
