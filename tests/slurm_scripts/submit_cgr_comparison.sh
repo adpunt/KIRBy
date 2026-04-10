@@ -28,11 +28,10 @@ submit() {
         --nodes=1 --ntasks=1 --cpus-per-task=8 \
         --time=23:59:00 --partition=long \
         --mem=256G \
-        --gres=gpu:1 \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
         --wrap="${WRAP_PREFIX} && mkdir -p ${OUTPUT} && python tests/experiments/opig_cgr_comparison.py --datasets ${dataset} --n-folds 5 --output ${OUTPUT}/opig_cgr_comparison_${dataset}.json ${STDERR_FILTER}" \
         | awk '{print $4}')
-    echo "  $J  cgr_${name}  (long, 256G, 24h, GPU)"
+    echo "  $J  cgr_${name}  (long, 256G, 24h)"
 }
 
 echo "Submitting CGR vs SMILES comparison experiment..."
