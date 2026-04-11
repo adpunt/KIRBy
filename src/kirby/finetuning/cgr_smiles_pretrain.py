@@ -292,13 +292,14 @@ def pretrain_mlm(
         Path to final checkpoint directory.
     """
     import torch
+    from torch.utils.data import DataLoader
     from transformers import (
         AutoModelForMaskedLM,
         DataCollatorForLanguageModeling,
-        TrainingArguments,
-        Trainer,
     )
     from datasets import Dataset
+
+    torch.manual_seed(seed)
 
     output_dir = Path(output_dir)
     checkpoint_dir = output_dir / 'checkpoint'
@@ -339,51 +340,86 @@ def pretrain_mlm(
         tokenize_fn, batched=True, remove_columns=['text'],
         desc='Tokenizing corpus')
 
-    # Data collator
+    # Data collator (handles MLM masking + dynamic padding)
     collator = DataCollatorForLanguageModeling(
         tokenizer=tokenizer,
         mlm=True,
         mlm_probability=mlm_probability,
     )
 
-    # Training args
+    # Manual training loop (avoids HF Trainer + accelerate version bugs)
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    use_fp16 = fp16 and device == 'cuda'
+    model = model.to(device)
+    model.train()
+
+    dataloader = DataLoader(
+        tokenized, batch_size=batch_size, shuffle=True,
+        collate_fn=collator, num_workers=4, pin_memory=(device == 'cuda'),
+    )
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
     warmup_steps = int(max_steps * warmup_fraction)
-    device_has_gpu = torch.cuda.is_available()
+    # torch.amp.GradScaler moved in torch 2.1+; fallback for older versions
+    try:
+        scaler = torch.amp.GradScaler(enabled=use_fp16)
+    except AttributeError:
+        scaler = torch.cuda.amp.GradScaler(enabled=use_fp16)
 
-    args = TrainingArguments(
-        output_dir=str(output_dir / 'trainer_output'),
-        overwrite_output_dir=True,
-        max_steps=max_steps,
-        per_device_train_batch_size=batch_size,
-        learning_rate=lr,
-        warmup_steps=warmup_steps,
-        weight_decay=0.01,
-        lr_scheduler_type='linear',
-        fp16=fp16 and device_has_gpu,
-        logging_steps=500,
-        save_steps=save_every,
-        save_total_limit=3,
-        seed=seed,
-        dataloader_num_workers=4,
-        report_to='none',
-    )
+    def get_lr(step):
+        if step < warmup_steps:
+            return step / max(warmup_steps, 1)
+        return max(0.0, (max_steps - step) / max(max_steps - warmup_steps, 1))
 
-    # Train
-    trainer = Trainer(
-        model=model,
-        args=args,
-        train_dataset=tokenized,
-        data_collator=collator,
-    )
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, get_lr)
 
     print(f"  Starting MLM pretraining: {max_steps} steps, "
-          f"batch_size={batch_size}, lr={lr}")
-    trainer.train()
+          f"batch_size={batch_size}, lr={lr}, device={device}, "
+          f"fp16={use_fp16}")
+
+    global_step = 0
+    total_loss = 0.0
+    data_iter = iter(dataloader)
+
+    while global_step < max_steps:
+        try:
+            batch = next(data_iter)
+        except StopIteration:
+            data_iter = iter(dataloader)
+            batch = next(data_iter)
+
+        batch = {k: v.to(device) for k, v in batch.items()}
+
+        with torch.amp.autocast(device_type=device, enabled=use_fp16):
+            outputs = model(**batch)
+            loss = outputs.loss
+
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+        optimizer.zero_grad()
+        scheduler.step()
+
+        total_loss += loss.item()
+        global_step += 1
+
+        if global_step % 500 == 0:
+            avg_loss = total_loss / 500
+            cur_lr = scheduler.get_last_lr()[0]
+            print(f"    Step {global_step}/{max_steps}  "
+                  f"loss={avg_loss:.4f}  lr={cur_lr:.2e}")
+            total_loss = 0.0
+
+        if global_step % save_every == 0:
+            ckpt = output_dir / f'checkpoint-{global_step}'
+            model.save_pretrained(str(ckpt))
+            tokenizer.save_pretrained(str(ckpt))
+            print(f"    Saved checkpoint: {ckpt}")
 
     # Save final checkpoint
     model.save_pretrained(str(checkpoint_dir))
     tokenizer.save_pretrained(str(checkpoint_dir))
-    print(f"  Saved checkpoint to {checkpoint_dir}")
+    print(f"  Saved final checkpoint to {checkpoint_dir}")
 
     return checkpoint_dir
 
