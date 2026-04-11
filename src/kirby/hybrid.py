@@ -3140,6 +3140,8 @@ def create_hybrid(base_reps, labels,
                  # Pre-computed scores (deduplication optimisation)
                  precomputed_importance=None,
                  precomputed_alloc_scores=None,
+                 # Group-aware internal split
+                 groups=None,
                  **kwargs):
     """
     Create hybrid representation by combining features from multiple base representations.
@@ -3312,18 +3314,26 @@ def create_hybrid(base_reps, labels,
                 f"apply_filters=True requires kirby.utils.feature_filtering module: {e}"
             )
     
-    # Common setup: create train/val split
-    n_val = int(n_samples * validation_split)
-    n_val = max(n_val, 1)
-    n_train = n_samples - n_val
-    
+    # Common setup: create train/val split (group-aware when groups provided)
+    if groups is not None and len(np.unique(groups)) >= 2:
+        from sklearn.model_selection import GroupShuffleSplit
+        gss = GroupShuffleSplit(n_splits=1, test_size=validation_split,
+                                random_state=42)
+        train_idx, val_idx = next(gss.split(
+            np.zeros(n_samples), labels, groups))
+    else:
+        n_val = int(n_samples * validation_split)
+        n_val = max(n_val, 1)
+        indices = np.random.RandomState(42).permutation(n_samples)
+        train_idx = indices[n_val:]
+        val_idx = indices[:n_val]
+
+    n_train = len(train_idx)
+    n_val = len(val_idx)
+
     if n_train < 2:
         raise ValueError(f"Need at least 2 training samples. "
                        f"Got {n_train} with validation_split={validation_split} and {n_samples} total samples.")
-    
-    indices = np.random.RandomState(42).permutation(n_samples)
-    train_idx = indices[n_val:]
-    val_idx = indices[:n_val]
     
     train_labels = labels[train_idx]
     val_labels = labels[val_idx]
