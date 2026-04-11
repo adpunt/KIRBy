@@ -1,15 +1,18 @@
 #!/bin/bash
-# Submit reaction baseline survey with expanded rep set (38 reps).
+# Submit reaction baseline survey with expanded rep set (41 reps).
 # Screening mode: 3 models × 3 folds (vs. full 5×5).
 #
-# 38 reps = 14 original + 24 molecular variants:
+# 41 reps = 14 original + 24 molecular variants + 3 CGR:
 #   Original: drfp_2048, product/reactant/diff_ecfp4, product/reactant/diff_maccs,
 #             product/reactant_pdv, rxnfp, reactiont5, onehot_components,
 #             component_descriptors, ligand_descriptors
-#   New:      {product,reactant,diff}_{mordred,mhg_gnn,grover,mol2vec,
+#   Mol vars: {product,reactant,diff}_{mordred,mhg_gnn,grover,mol2vec,
 #              chemberta,molformer,avalon,pharmacophore3d}
+#   CGR:      cgr_morgan, chytorch_graphormer, cgr_smiles_lm
 #
-# Needs GPU for: chemberta, molformer, grover, mhg_gnn, rxnfp, reactiont5.
+# Needs GPU for: chemberta, molformer, grover, mhg_gnn, rxnfp, reactiont5,
+#                chytorch_graphormer, cgr_smiles_lm.
+# cgr_smiles_lm requires pretrained checkpoint (submit_cgr_smiles_pretrain.sh).
 #
 # Usage (on login node):
 #   bash tests/slurm_scripts/submit_reaction_survey.sh           # all 3 datasets
@@ -47,7 +50,7 @@ echo "Submitting reaction baseline survey (screening mode)..."
 echo "  Output: ${OUTPUT}/"
 echo "  Models: ${MODELS}"
 echo "  Folds: ${FOLDS}"
-echo "  Reps: 38 (14 original + 24 molecular variants)"
+echo "  Reps: 41 (14 original + 24 molecular variants + 3 CGR)"
 echo ""
 
 case "$MODE" in
@@ -56,7 +59,7 @@ case "$MODE" in
         submit suzuki suzuki
         submit doyle bh_doyle_plates
         echo ""
-        echo "  Total: 3 jobs (38 reps × 3 models × 3 folds per dataset)"
+        echo "  Total: 3 jobs (41 reps × 3 models × 3 folds per dataset)"
         ;;
     bh)
         submit bh buchwald_hartwig
