@@ -50,12 +50,26 @@ def get_dynamic_bond_tokens() -> List[str]:
 # CORPUS GENERATION
 # =========================================================================
 
+def _patch_cgr_len():
+    """Patch CGRContainer.__len__ if missing.
+
+    chython's CGRContainer doesn't define __len__, but str() on complex
+    CGRs can trigger len(self) internally (via atoms_order/Morgan). This
+    causes 'TypeError: object of type CGRContainer has no len()'. Adding
+    __len__ = len(self._atoms) fixes it across all chython versions.
+    """
+    from chython.containers.cgr import CGRContainer
+    if not hasattr(CGRContainer, '__len__'):
+        CGRContainer.__len__ = lambda self: len(self._atoms)
+
+
 def _rxn_to_cgr_smiles(mapped_rxn_smi: str) -> Optional[str]:
     """Convert one atom-mapped reaction SMILES to CGR-SMILES.
 
     Returns None on failure (unmapped atoms, invalid SMILES, etc).
     """
     from chython import smiles as chython_smiles
+    _patch_cgr_len()
     try:
         rxn = chython_smiles(mapped_rxn_smi)
         if rxn is None:

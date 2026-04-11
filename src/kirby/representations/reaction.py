@@ -568,6 +568,7 @@ def _rxn_to_cgr_smiles_batch(rxn_smiles: List[str]) -> List[str]:
         List of CGR-SMILES strings (empty string for failures).
     """
     from chython import smiles as chython_smiles
+    _patch_cgr_len()
 
     if not rxn_smiles:
         return []
@@ -821,6 +822,18 @@ def create_diff_maccs(rxn_smiles: List[str]) -> np.ndarray:
 # =========================================================================
 
 
+def _patch_cgr_len():
+    """Patch CGRContainer.__len__ if missing.
+
+    chython's CGRContainer doesn't define __len__, but str() on complex
+    CGRs can trigger len(self) internally (via atoms_order/Morgan). Adding
+    __len__ = len(self._atoms) fixes it across all chython versions.
+    """
+    from chython.containers.cgr import CGRContainer
+    if not hasattr(CGRContainer, '__len__'):
+        CGRContainer.__len__ = lambda self: len(self._atoms)
+
+
 def _stable_hash(tup) -> int:
     """Deterministic hash of a tuple for Morgan fingerprinting.
 
@@ -897,6 +910,7 @@ def _cgr_morgan_single(mapped_rxn_smi: str, radius: int = 2,
         from chython import smiles as chython_smiles
     except ImportError:
         raise ImportError("CGR Morgan requires chython: pip install chython")
+    _patch_cgr_len()
 
     try:
         rxn = chython_smiles(mapped_rxn_smi)
@@ -904,9 +918,7 @@ def _cgr_morgan_single(mapped_rxn_smi: str, radius: int = 2,
     except Exception:
         return np.zeros(n_bits, dtype=np.uint8)
 
-    # Use public API: cgr.atoms() yields (atom_id, atom) pairs
-    atoms_dict = dict(cgr.atoms())
-    atom_ids = list(atoms_dict.keys())
+    atom_ids = list(cgr._atoms.keys())
     if not atom_ids:
         return np.zeros(n_bits, dtype=np.uint8)
 
@@ -920,7 +932,7 @@ def _cgr_morgan_single(mapped_rxn_smi: str, radius: int = 2,
     # Atom invariants (radius 0)
     current_hash = {}
     for aid in atom_ids:
-        atom = atoms_dict[aid]
+        atom = cgr._atoms[aid]
         current_hash[aid] = _stable_hash((
             atom.atomic_number,
             atom.isotope,
