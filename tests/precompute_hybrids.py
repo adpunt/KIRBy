@@ -145,6 +145,8 @@ def _get_domain(dataset_name):
             'flab_', 'abagym_', 'abcov_', 'ddg_', 'tz_', 'humanness',
             'ginkgo_', 'graphinity_')):
         return 'antibody'
+    elif dataset_name.startswith(('nt_', 'gb_')):
+        return 'nucleotide'
     return 'molecular'
 
 

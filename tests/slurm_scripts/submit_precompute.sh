@@ -91,6 +91,7 @@ ANTIBODY_CLF="tz_her2_binary humanness_therapeutic"
 GINKGO="ginkgo_acsins ginkgo_colloidal ginkgo_heparin ginkgo_hic ginkgo_pr_cho ginkgo_titer"
 TCGA="tcga_luad_vs_lusc tcga_brca_pam50"
 REACTION="buchwald_hartwig bh_doyle_plates"
+NUCLEOTIDE="nt_H2AFZ nt_H3K27ac nt_H3K27me3 nt_H3K36me3 nt_H3K4me1"
 
 echo "============================================"
 echo "Hybrid Precompute (v14 — normalized cache keys)"
@@ -135,6 +136,12 @@ run_standard() {
         for ds in ${REACTION}; do submit_dataset "${ds}" 64G; done
         echo ""
     fi
+
+    if [[ "$filter_domain" == "all" || "$filter_domain" == "nucleotide" ]]; then
+        echo "--- Nucleotide (5 × 6 = 30 jobs) ---"
+        for ds in ${NUCLEOTIDE}; do submit_dataset "${ds}" 128G; done
+        echo ""
+    fi
 }
 
 run_distance() {
@@ -165,10 +172,16 @@ run_distance() {
         for ds in ${REACTION}; do submit_dataset_distance "${ds}" 64G; done
         echo ""
     fi
+
+    if [[ "$filter_domain" == "all" || "$filter_domain" == "nucleotide" ]]; then
+        echo "--- Distance: Nucleotide (5 × 4 = 20 jobs) ---"
+        for ds in ${NUCLEOTIDE}; do submit_dataset_distance "${ds}" 128G; done
+        echo ""
+    fi
 }
 
 case "$MODE" in
-    molecular|antibody|tcga|reaction)
+    molecular|antibody|tcga|reaction|nucleotide)
         run_standard "$MODE"
         ;;
     distance)
@@ -177,7 +190,7 @@ case "$MODE" in
     all)
         run_standard all
         echo "============================================"
-        echo "Standard: ${COUNT} SLURM jobs (40 datasets × 6 conditions)"
+        echo "Standard: ${COUNT} SLURM jobs (45 datasets × 6 conditions)"
         echo "============================================"
         ;;
     all+distance)
