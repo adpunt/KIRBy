@@ -29,12 +29,26 @@ EMAIL="adelaide.punt@stcatz.ox.ac.uk"
 WRAP_PREFIX="cd /data/stat-cadd/scat9264/KIRBy && export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
 COUNT=0
 
+_time_for_partition() {
+    # Use partition max limits (leave no headroom to waste)
+    case "$1" in
+        short)   echo "12:00:00" ;;
+        medium)  echo "2-00:00:00" ;;
+        *)       echo "7-00:00:00" ;;
+    esac
+}
+
 submit() {
     local name=$1
     local cmd=$2
     local mem=${3:-256G}
-    local time_limit=${4:-6-23:59:00}
+    local time_limit=${4:-}
     local partition=${5:-long}
+
+    # Auto-resolve time limit from partition if not explicitly set
+    if [[ -z "$time_limit" ]]; then
+        time_limit=$(_time_for_partition "${partition}")
+    fi
 
     J=$(sbatch \
         --job-name="pc_${name}" \
@@ -44,7 +58,7 @@ submit() {
         --mail-user="${EMAIL}" --mail-type=FAIL \
         --wrap="${WRAP_PREFIX} && sleep \$((RANDOM % 30)) && ${cmd}" \
         | awk '{print $4}')
-    echo "  $J  pc_${name}  (${partition})"
+    echo "  $J  pc_${name}  (${partition}, ${time_limit})"
     COUNT=$((COUNT + 1))
 }
 
@@ -54,32 +68,31 @@ submit_dataset() {
     local ds=$1
     local has_aug=${2:-yes}
     local mem=${3:-256G}
-    local time_limit=${4:-6-23:59:00}
-    local partition=${5:-long}
+    local partition=${4:-long}
 
     # Always: general_none + top_none
     submit "${ds}_general_none" \
         "python tests/precompute_hybrids.py ${ds} --condition general_none --speed full" \
-        "${mem}" "${time_limit}" "${partition}"
+        "${mem}" "" "${partition}"
     submit "${ds}_top_none" \
         "python tests/precompute_hybrids.py ${ds} --condition top_none --speed full" \
-        "${mem}" "${time_limit}" "${partition}"
+        "${mem}" "" "${partition}"
 
     # Only if dataset has augmentation reps
     if [[ "$has_aug" == "yes" ]]; then
         submit "${ds}_general_uncapped" \
             "python tests/precompute_hybrids.py ${ds} --condition general_uncapped --speed full" \
-            "${mem}" "${time_limit}" "${partition}"
+            "${mem}" "" "${partition}"
         submit "${ds}_top_uncapped" \
             "python tests/precompute_hybrids.py ${ds} --condition top_uncapped --speed full" \
-            "${mem}" "${time_limit}" "${partition}"
+            "${mem}" "" "${partition}"
         # Capped — more aggressive pruning (0.25 threshold)
         submit "${ds}_general_capped" \
             "python tests/precompute_hybrids.py ${ds} --condition general_capped --speed full --pruning 0.25" \
-            "${mem}" "${time_limit}" "${partition}"
+            "${mem}" "" "${partition}"
         submit "${ds}_top_capped" \
             "python tests/precompute_hybrids.py ${ds} --condition top_capped --speed full --pruning 0.25" \
-            "${mem}" "${time_limit}" "${partition}"
+            "${mem}" "" "${partition}"
     fi
 }
 
@@ -88,17 +101,16 @@ submit_dataset_distance() {
     local ds=$1
     local has_aug=${2:-yes}
     local mem=${3:-256G}
-    local time_limit=${4:-6-23:59:00}
-    local partition=${5:-long}
+    local partition=${4:-long}
 
     submit "${ds}_general_distance_none" \
         "python tests/precompute_hybrids.py ${ds} --condition general_distance_none --speed full --distance" \
-        "${mem}" "${time_limit}" "${partition}"
+        "${mem}" "" "${partition}"
 
     if [[ "$has_aug" == "yes" ]]; then
         submit "${ds}_general_distance_uncapped" \
             "python tests/precompute_hybrids.py ${ds} --condition general_distance_uncapped --speed full --distance" \
-            "${mem}" "${time_limit}" "${partition}"
+            "${mem}" "" "${partition}"
     fi
 }
 
@@ -148,46 +160,46 @@ run_standard() {
 
     if [[ "$filter_domain" == "all" || "$filter_domain" == "molecular" ]]; then
         echo "--- Molecular (7 datasets, all have aug) ---"
-        for ds in ${MOLECULAR}; do submit_dataset "${ds}" yes 64G 6-23:59:00 "${P}"; done
+        for ds in ${MOLECULAR}; do submit_dataset "${ds}" yes 64G "${P}"; done
         echo ""
     fi
 
     if [[ "$filter_domain" == "all" || "$filter_domain" == "antibody" ]]; then
         echo "--- Antibody IF with aug (7 datasets) ---"
-        for ds in ${ANTIBODY_IF_AUG}; do submit_dataset "${ds}" yes 64G 6-23:59:00 "${P}"; done
+        for ds in ${ANTIBODY_IF_AUG}; do submit_dataset "${ds}" yes 64G "${P}"; done
         echo "--- Antibody IF no aug (4 datasets) ---"
-        for ds in ${ANTIBODY_IF_NOAUG}; do submit_dataset "${ds}" no 64G 6-23:59:00 "${P}"; done
+        for ds in ${ANTIBODY_IF_NOAUG}; do submit_dataset "${ds}" no 64G "${P}"; done
 
         echo "--- Antibody DMS (5 datasets, all have aug) ---"
-        for ds in ${ANTIBODY_DMS}; do submit_dataset "${ds}" yes 64G 6-23:59:00 "${P}"; done
+        for ds in ${ANTIBODY_DMS}; do submit_dataset "${ds}" yes 64G "${P}"; done
 
         echo "--- AbAgym (5 datasets, no aug) ---"
-        for ds in ${ABAGYM}; do submit_dataset "${ds}" no 64G 6-23:59:00 "${P}"; done
+        for ds in ${ABAGYM}; do submit_dataset "${ds}" no 64G "${P}"; done
 
         echo "--- Antibody CLF (2 datasets, no aug) ---"
-        for ds in ${ANTIBODY_CLF}; do submit_dataset "${ds}" no 64G 6-23:59:00 "${P}"; done
+        for ds in ${ANTIBODY_CLF}; do submit_dataset "${ds}" no 64G "${P}"; done
 
         echo "--- Ginkgo (6 datasets, all have aug) ---"
-        for ds in ${GINKGO}; do submit_dataset "${ds}" yes 64G 6-23:59:00 "${P}"; done
+        for ds in ${GINKGO}; do submit_dataset "${ds}" yes 64G "${P}"; done
         echo ""
     fi
 
     if [[ "$filter_domain" == "all" || "$filter_domain" == "tcga" ]]; then
         echo "--- TCGA (2 datasets, all have aug) ---"
-        for ds in ${TCGA}; do submit_dataset "${ds}" yes 64G 6-23:59:00 "${P}"; done
+        for ds in ${TCGA}; do submit_dataset "${ds}" yes 64G "${P}"; done
         echo ""
     fi
 
     if [[ "$filter_domain" == "all" || "$filter_domain" == "reaction" ]]; then
         echo "--- Reaction ---"
-        submit_dataset buchwald_hartwig no 64G 6-23:59:00 "${P}"
-        submit_dataset bh_doyle_plates yes 64G 6-23:59:00 "${P}"
+        submit_dataset buchwald_hartwig no 64G "${P}"
+        submit_dataset bh_doyle_plates yes 64G "${P}"
         echo ""
     fi
 
     if [[ "$filter_domain" == "all" || "$filter_domain" == "nucleotide" ]]; then
         echo "--- Nucleotide (5 datasets, all have aug, 128G) ---"
-        for ds in ${NUCLEOTIDE}; do submit_dataset "${ds}" yes 128G 6-23:59:00 "${P}"; done
+        for ds in ${NUCLEOTIDE}; do submit_dataset "${ds}" yes 128G "${P}"; done
         echo ""
     fi
 }
@@ -199,37 +211,37 @@ run_distance() {
 
     if [[ "$filter_domain" == "all" || "$filter_domain" == "molecular" ]]; then
         echo "--- Distance: Molecular (7 datasets) ---"
-        for ds in ${MOLECULAR}; do submit_dataset_distance "${ds}" yes 64G 6-23:59:00 "${P}"; done
+        for ds in ${MOLECULAR}; do submit_dataset_distance "${ds}" yes 64G "${P}"; done
         echo ""
     fi
 
     if [[ "$filter_domain" == "all" || "$filter_domain" == "antibody" ]]; then
         echo "--- Distance: Antibody ---"
-        for ds in ${ANTIBODY_IF_AUG}; do submit_dataset_distance "${ds}" yes 64G 6-23:59:00 "${P}"; done
-        for ds in ${ANTIBODY_IF_NOAUG}; do submit_dataset_distance "${ds}" no 64G 6-23:59:00 "${P}"; done
-        for ds in ${ANTIBODY_DMS}; do submit_dataset_distance "${ds}" yes 64G 6-23:59:00 "${P}"; done
-        for ds in ${ABAGYM}; do submit_dataset_distance "${ds}" no 64G 6-23:59:00 "${P}"; done
-        for ds in ${ANTIBODY_CLF}; do submit_dataset_distance "${ds}" no 64G 6-23:59:00 "${P}"; done
-        for ds in ${GINKGO}; do submit_dataset_distance "${ds}" yes 64G 6-23:59:00 "${P}"; done
+        for ds in ${ANTIBODY_IF_AUG}; do submit_dataset_distance "${ds}" yes 64G "${P}"; done
+        for ds in ${ANTIBODY_IF_NOAUG}; do submit_dataset_distance "${ds}" no 64G "${P}"; done
+        for ds in ${ANTIBODY_DMS}; do submit_dataset_distance "${ds}" yes 64G "${P}"; done
+        for ds in ${ABAGYM}; do submit_dataset_distance "${ds}" no 64G "${P}"; done
+        for ds in ${ANTIBODY_CLF}; do submit_dataset_distance "${ds}" no 64G "${P}"; done
+        for ds in ${GINKGO}; do submit_dataset_distance "${ds}" yes 64G "${P}"; done
         echo ""
     fi
 
     if [[ "$filter_domain" == "all" || "$filter_domain" == "tcga" ]]; then
         echo "--- Distance: TCGA ---"
-        for ds in ${TCGA}; do submit_dataset_distance "${ds}" yes 64G 6-23:59:00 "${P}"; done
+        for ds in ${TCGA}; do submit_dataset_distance "${ds}" yes 64G "${P}"; done
         echo ""
     fi
 
     if [[ "$filter_domain" == "all" || "$filter_domain" == "reaction" ]]; then
         echo "--- Distance: Reaction ---"
-        submit_dataset_distance buchwald_hartwig no 64G 6-23:59:00 "${P}"
-        submit_dataset_distance bh_doyle_plates yes 64G 6-23:59:00 "${P}"
+        submit_dataset_distance buchwald_hartwig no 64G "${P}"
+        submit_dataset_distance bh_doyle_plates yes 64G "${P}"
         echo ""
     fi
 
     if [[ "$filter_domain" == "all" || "$filter_domain" == "nucleotide" ]]; then
         echo "--- Distance: Nucleotide (128G) ---"
-        for ds in ${NUCLEOTIDE}; do submit_dataset_distance "${ds}" yes 128G 6-23:59:00 "${P}"; done
+        for ds in ${NUCLEOTIDE}; do submit_dataset_distance "${ds}" yes 128G "${P}"; done
         echo ""
     fi
 }
