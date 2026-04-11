@@ -896,9 +896,9 @@ Old Sections 10B/10C/12D/12E have writeups. Need new-format review.
 
 | # | Dataset | Samples | Reps | Augs | Status |
 |---|---------|---------|------|------|--------|
-| 50 | buchwald_hartwig | 3,955 | 14 | 6 | DONE (re-survey pending after CGR reps added, see CGR_EMBEDDING_RESEARCH.md) |
+| 50 | buchwald_hartwig | 3,955 | 14 | 6 | BLOCKED — re-survey needed with CGR reps (cgr_morgan, chytorch_graphormer ready; cgr_smiles_lm blocked on pretraining) |
 | 51 | suzuki | 5,760 | 14 | 4 | DROPPED — R²=0.453 ceiling, only 1 viable rep |
-| 52 | bh_doyle_plates | 4,312 | 35 | 24 | DONE (re-survey pending after CGR reps added, see CGR_EMBEDDING_RESEARCH.md) |
+| 52 | bh_doyle_plates | 4,312 | 35 | 24 | BLOCKED — re-survey needed with CGR reps (same as buchwald_hartwig) |
 
 **buchwald_hartwig (n=3,955, best R²=0.718, cutoff=0.50):**
 | Tier | Reps |
@@ -944,11 +944,11 @@ Old Sections 10B/10C/12D/12E have writeups. Need new-format review.
 | 56 | gb_human_nontata_promoters | 36,131 | 6 | MCC | Classical only — needs resubmit with FM reps |
 | 57 | nt_enhancers | — | 6 | MCC | Classical only — needs resubmit with FM reps |
 | 58 | nt_enhancers_types | — | 6 | MCC | Classical only — needs resubmit with FM reps |
-| 59 | nt_H2AFZ | — | 6 | MCC | Classical only — needs resubmit with FM reps |
-| 60 | nt_H3K27ac | — | 6 | MCC | Classical only — needs resubmit with FM reps |
-| 61 | nt_H3K27me3 | — | 6 | MCC | Classical only — needs resubmit with FM reps |
-| 62 | nt_H3K36me3 | — | 6 | MCC | Classical only — needs resubmit with FM reps |
-| 63 | nt_H3K4me1 | — | 6 | MCC | Classical only — needs resubmit with FM reps |
+| 59 | nt_H2AFZ | 33,000 | 18 | MCC | DONE — in DATASET_REPS + precompute pipeline |
+| 60 | nt_H3K27ac | 31,616 | 18 | MCC | DONE — in DATASET_REPS + precompute pipeline |
+| 61 | nt_H3K27me3 | 33,000 | 18 | MCC | DONE — in DATASET_REPS + precompute pipeline |
+| 62 | nt_H3K36me3 | 33,000 | 18 | MCC | DONE — in DATASET_REPS + precompute pipeline |
+| 63 | nt_H3K4me1 | 33,000 | 18 | MCC | DONE — in DATASET_REPS + precompute pipeline |
 | 64 | nt_H3K4me2 | — | 6 | MCC | Classical only — needs resubmit with FM reps |
 | 65 | nt_H3K4me3 | — | 6 | MCC | Classical only — needs resubmit with FM reps |
 | 66 | nt_H3K9ac | — | 6 | MCC | Classical only — needs resubmit with FM reps |
@@ -971,6 +971,56 @@ Old Sections 10B/10C/12D/12E have writeups. Need new-format review.
 - DROP nt_splice_sites_all (MCC=0.245) and nt_H3K9me3 (MCC=0.239) — near random (pending confirmation after FM reps land)
 - kmer4, kmer6, tetranuc_freq will be general-tier classical baselines
 - dinuc_freq, gc_content are lower-tier classical; complexity is augmentation-only
+
+**nt_H2AFZ (33,000 samples, 23 groups, MCC) — 18/25 reps ran (7 failed: splicebert, rnafm, dnabert_s, gpn, rinalmo, caduceus, ntv3_100m):**
+| Tier | Reps |
+|------|------|
+| Top Tier (5) | mistral_dna, hyenadna, grover_dna, gena_lm, kmer6 |
+| General (12) | mistral_dna, hyenadna, grover_dna, gena_lm, kmer6, nt_v2_250m, nt_v2_500m, tnf_canonical, kmer4, kmer5, tetranuc_freq, kmer3 |
+| Augmentation (5) | codon_usage, complexity, dinuc_freq, dna_shape, gc_content |
+| Dropped | dnabert2 (84% of best, weakest FM by large margin) |
+
+*Needs wiring into DATASET_REPS. Winner: mistral_dna+ridge=0.4323.*
+
+**nt_H3K27ac (31,616 samples, 23 groups, MCC) — 18/25 reps ran:**
+| Tier | Reps |
+|------|------|
+| Top Tier (5) | gena_lm, kmer6, grover_dna, mistral_dna, kmer5 |
+| General (12) | gena_lm, kmer6, grover_dna, mistral_dna, kmer5, tnf_canonical, nt_v2_500m, nt_v2_250m, kmer4, hyenadna, tetranuc_freq, kmer3 |
+| Augmentation (5) | codon_usage, complexity, dinuc_freq, dna_shape, gc_content |
+| Dropped | dnabert2 (83% of best, weakest FM by large margin) |
+
+*Needs wiring into DATASET_REPS. Winner: gena_lm+ridge=0.4569.*
+
+**nt_H3K27me3 (33,000 samples, 23 groups, MCC) — 18/25 reps ran:**
+| Tier | Reps |
+|------|------|
+| Top Tier (4) | gena_lm, mistral_dna, grover_dna, hyenadna |
+| General (12) | gena_lm, mistral_dna, grover_dna, hyenadna, nt_v2_250m, nt_v2_500m, tnf_canonical, kmer4, kmer3, kmer5, tetranuc_freq, kmer6 |
+| Augmentation (5) | codon_usage, complexity, dinuc_freq, dna_shape, gc_content |
+| Dropped | dnabert2 (84% of best, weakest FM by large margin) |
+
+*Needs wiring into DATASET_REPS. Winner: gena_lm+ridge=0.5522.*
+
+**nt_H3K36me3 (33,000 samples, 23 groups, MCC) — 18/25 reps ran:**
+| Tier | Reps |
+|------|------|
+| Top Tier (3) | gena_lm, mistral_dna, hyenadna |
+| General (12) | gena_lm, mistral_dna, hyenadna, grover_dna, nt_v2_250m, nt_v2_500m, kmer3, kmer4, kmer5, kmer6, tetranuc_freq, tnf_canonical |
+| Augmentation (5) | codon_usage, complexity, dinuc_freq, dna_shape, gc_content |
+| Dropped | dnabert2 (74% of best, weakest FM by large margin) |
+
+*Needs wiring into DATASET_REPS. Winner: gena_lm+ridge=0.5715.*
+
+**nt_H3K4me1 (33,000 samples, 23 groups, MCC) — 18/25 reps ran:**
+| Tier | Reps |
+|------|------|
+| Top Tier (4) | gena_lm, grover_dna, mistral_dna, hyenadna |
+| General (12) | gena_lm, grover_dna, mistral_dna, hyenadna, kmer6, nt_v2_250m, nt_v2_500m, kmer5, kmer4, tnf_canonical, tetranuc_freq, kmer3 |
+| Augmentation (5) | codon_usage, complexity, dinuc_freq, dna_shape, gc_content |
+| Dropped | dnabert2 (78% of best, weakest FM by large margin) |
+
+*Needs wiring into DATASET_REPS. Winner: gena_lm+ridge=0.4405.*
 
 ---
 
@@ -998,11 +1048,11 @@ Old Sections 10B/10C/12D/12E have writeups. Need new-format review.
 | Ab CLF | 4 | 2 | 0 | 0 | 2 (multiclass + species, HTC queue) | 0 |
 | Ginkgo | 9 | 6 | 0 | 0 | 0 | 3 (aggregation, purity, tm2) |
 | TCGA | 3 | 2 | 0 | 0 | 0 | 1 (survival) |
-| Reaction | 3 | 2 | 0 | 0 | 0 | 1 (suzuki) |
+| Reaction | 3 | 0 | 0 | 0 | 2 (buchwald, doyle — CGR re-survey) | 1 (suzuki) |
 | DTA | 3 | 0 | 0 | 0 | 3 (davis, kiba, bindingdb_kd — HTC queue) | 0 |
 | Nucleotide | 22 | 0 | 0 | 0 | 22 (resubmitted HTC with all FM reps) | 0 |
 | Graphinity DDG | 3 | 0 | 0 | 0 | 0 | 3 (rosetta, foldx, augmented) |
-| **TOTAL** | **81** | **40** | **0** | **0** | **28** | **13** |
+| **TOTAL** | **81** | **38** | **0** | **0** | **30** | **13** |
 
 *Note: Previous nucleotide DROP decisions (splice_all, H3K9me3) deferred — FM reps may change the picture. herg clf added as separate entry (was #2b).*
 
@@ -1065,27 +1115,31 @@ All resubmitted on HTC long partition with GPU, 256G, 48-96h wall time.
 
 **Goal:** Continue-pretrain ChemBERTa-77M-MLM on CGR-SMILES corpus from USPTO (~1M reactions) for 384D reaction embeddings.
 
+**Status:** First run failed (0/392K conversions) — chython was not installed, and `except Exception` silently swallowed the ImportError. Fixed in commit 9fa01f8. chython now installed. **Resubmit required.**
+
+**Dependency chain for reaction pipeline:**
+1. CGR-SMILES pretraining job (~8h) → produces checkpoint
+2. Reaction re-survey (buchwald_hartwig, bh_doyle_plates) with all CGR reps → new tier tables
+3. Precompute hybrids for reaction datasets → pipeline ready
+
+Note: `cgr_morgan` and `chytorch_graphormer` work without the pretraining checkpoint. Only `cgr_smiles_lm` is blocked. Options: (a) re-survey now with 2/3 CGR reps, add cgr_smiles_lm later; (b) wait for pretraining, survey all 3 at once.
+
 **Two-stage SLURM job** (`tests/slurm_scripts/submit_cgr_smiles_pretrain.sh`):
 - **Stage 1 — Corpus generation (CPU):** Download USPTO from Figshare (~200MB 7z), extract, convert ~1M atom-mapped reactions to CGR-SMILES via chython compose. Expects 60-80% success rate (~600-800K lines).
   - Partition: **short**, Time: **2h**, Mem: **64G**, CPUs: **16**, GPU: **none**
   - Deps: `py7zr` (for 7z extraction), `chython`
   - Output: `/data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/corpus.txt`
 - **Stage 2 — MLM pretraining (GPU):** Extend tokenizer with 30 dynamic bond tokens, resize embeddings, train 50K steps with HuggingFace Trainer.
-  - Partition: **medium**, Time: **6h**, Mem: **128G**, CPUs: **8**, GPU: **1**
+  - Partition: **medium**, Time: **6h**, Mem: **128G**, CPUs: **8**
   - Deps: `transformers`, `datasets`, `torch`
   - Output: `/data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/checkpoint/`
-- **Combined job:** Partition: **long**, Time: **8h**, Mem: **128G**, CPUs: **16**, GPU: **1**
+- **Combined job:** Partition: **long**, Time: **8h**, Mem: **128G**, CPUs: **16**
 - **NOT HTC** — single job, not per-dataset. Run once, checkpoint reused by all reaction datasets.
 
 **After pretraining:**
 - `create_cgr_smiles_lm()` auto-detects checkpoint at `/data/.../cgr_smiles_pretrain/checkpoint/`
 - Frozen 384D embeddings available in survey + experiments
 - Optional LoRA FT variant via `make_cgr_smiles_lora_factory()` (per-fold, ~2h per dataset with GPU)
-
-**Install on server before running:**
-```
-pip install py7zr
-```
 
 ### EXPERIMENTS — Supplementary runs needed
 
@@ -1190,9 +1244,8 @@ Federated experiments (fed01-fed05 IMPLEMENTED)
   → Datasets: herg, caco2, logd
   → See FEDERATED_EXPERIMENT_ROADMAP.md for full design
 
-OPIG standalone experiments (6 scripts, NEED RECONSTRUCTION)
-  → ALL 6 experiments deviate from original papers' methodology
-  → Audit completed 2026-03-28: see OPIG_EXPERIMENT_AUDIT.md
+OPIG standalone experiments (8 scripts — 6 original + 2 CGR)
+  → Original 6 deviate from papers' methodology. Audit: OPIG_EXPERIMENT_AUDIT.md
   → Key issues per experiment:
     - Trastuzumab: paper did zero-shot library design, KIRBy does supervised classification (different task)
     - Graphinity: paper uses CDR identity cutoff analysis, KIRBy only groups by PDB (weaker)
@@ -1203,6 +1256,10 @@ OPIG standalone experiments (6 scripts, NEED RECONSTRUCTION)
   → Cross-cutting: all 6 hardcode Ridge+RF instead of using config; all reimplement eval loops
   → Data loaders are CLEAN (verified against original repos)
   → MUST reconstruct before running
+  → NEW — CGR reaction experiments (C7, C8):
+    - C7 (CGR comparison): `opig_cgr_comparison.py` — CGR vs SMILES head-to-head on 3 reaction datasets. SLURM: `submit_cgr_comparison.sh` (long, 256G, 24h per dataset). WRITTEN, depends on C8.
+    - C8 (CGR-SMILES pretrain): `cgr_smiles_pretrain.py` — USPTO corpus + MLM pretraining. SLURM: `submit_cgr_smiles_pretrain.sh` (long, 128G, 8h, single job). SUBMITTED (job 11747734).
+    - C6 (King-Smith component splits): `opig_kingsmith_component_splits.py` — now includes cgr_morgan, chytorch_graphormer, cgr_smiles_lm in generator registry. WRITTEN, NOT YET RUN.
 ```
 
 ---
