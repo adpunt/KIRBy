@@ -466,7 +466,8 @@ Output: `/data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/`
 | Job ID | Name | Stage | Status |
 |--------|------|-------|--------|
 | 11747734 | cgr_smiles | corpus + pretrain | FAILED — chython not installed, 0/392K conversions. Fixed in 9fa01f8. |
-| 7467971 | cgr_smiles | corpus + pretrain | SUBMITTED — resubmit after fix. |
+| 7467971 | cgr_smiles | corpus + pretrain | FAILED — chython installed but 0/392K conversions. Empty corpus guard caught it. Diagnostics added in 4b7d9de. |
+| 11748808 | cgr_smiles | corpus + pretrain | PD — resubmit with smoke test + diagnostics. |
 
 ### Reaction re-survey (blocked on 7467971)
 
@@ -474,4 +475,4 @@ Re-survey with 41 reps (38 original + 3 CGR). Submit after pretraining checkpoin
 
 | Job ID | Name | Datasets | Status |
 |--------|------|----------|--------|
-| — | rxn_baselines | buchwald_hartwig, bh_doyle_plates, suzuki | BLOCKED — waiting on 7467971 |
+| — | rxn_baselines | buchwald_hartwig, bh_doyle_plates, suzuki | BLOCKED — waiting on 11748808 |
