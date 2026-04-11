@@ -347,7 +347,7 @@ def _run_landscape_comparison(reps, labels, per_rep_results):
 
 def _run_sas_bo_bridge(reps, labels, groups, struct_t, act_t,
                        augmentations=None, augmentation_strategy='uncapped',
-                       search_speed='fast', precomputed=None, is_clf=False):
+                       search_speed='full', precomputed=None, is_clf=False):
     """Zone I fraction predicts GP quality -- explains why compact spaces help BO.
 
     Builds 4 representation conditions matching S11, computes SAS zones and

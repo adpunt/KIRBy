@@ -108,7 +108,7 @@ def _run_distance_concentration(data, budgets):
             X_hybrid, _, _search = get_fitted_hybrid(
                 reps, labels, groups, downstream_model='rf',
                 budget=budget,
-                aug_condition='none', speed='fast',
+                aug_condition='none', speed='full',
                 precomputed=_precomp)
             X_hybrid_s = StandardScaler().fit_transform(X_hybrid)
             metrics = _compute_concentration_metrics(X_hybrid_s, k=5)
@@ -304,7 +304,7 @@ def _run_kernel_analysis(data, budgets):
             X_hybrid, _, _search = get_fitted_hybrid(
                 reps, labels, groups, downstream_model='rf',
                 budget=budget,
-                aug_condition='none', speed='fast',
+                aug_condition='none', speed='full',
                 precomputed=_precomp)
             # Subsample to match
             X_hybrid_sub = X_hybrid[idx] if n_samples > max_n else X_hybrid
@@ -337,7 +337,7 @@ def _run_kernel_analysis(data, budgets):
             X_h50, _, _search = get_fitted_hybrid(
                 reps, labels, groups, downstream_model='rf',
                 budget=50,
-                aug_condition='none', speed='fast',
+                aug_condition='none', speed='full',
                 precomputed=_precomp)
             X_h50_sub = X_h50[idx] if n_samples > max_n else X_h50
             sweep_spaces['hybrid_b50'] = StandardScaler().fit_transform(X_h50_sub)
@@ -617,7 +617,7 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
 
     # Get blueprint from cached search — budget-specific via get_best_for_downstream
     search = get_precomputed_search(reps, labels, groups,
-                                    aug_condition='none', speed='fast',
+                                    aug_condition='none', speed='full',
                                     precomputed=precomputed)
     best = get_best_for_downstream(search, model_name, budget=budget)
     if best is None:
@@ -863,7 +863,7 @@ def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
 
     # Get blueprint from cached search using REAL labels — budget-specific
     search = get_precomputed_search(reps, y, groups,
-                                    aug_condition='none', speed='fast',
+                                    aug_condition='none', speed='full',
                                     precomputed=precomputed)
     best = get_best_for_downstream(search, 'ridge', budget=budget)
     if best is None:

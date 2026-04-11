@@ -208,7 +208,7 @@ def _run_two_phase(data, config, importance_method, metric_name):
         groups=groups,
         models=model_instances,
         metric=metric_name,
-        speed='fast',
+        speed='full',
         allocation_methods=ALLOCATIONS,
         budgets=budgets,
         importance_methods=[importance_method],

@@ -155,7 +155,7 @@ def run(data, config, output_dir, dataset_name):
             search = find_best_hybrid(
                 train_reps, y_train, groups=groups[train_idx],
                 speed=config['search_speed'],
-                budgets=SCREENING_BUDGETS,
+                budgets=FULL_BUDGETS,
                 augmentations=train_augs,
                 internal_evaluators=INTERNAL_EVALUATORS,
                 metric=metric_name,

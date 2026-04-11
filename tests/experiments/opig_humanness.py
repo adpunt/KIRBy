@@ -69,7 +69,7 @@ warnings.filterwarnings('ignore')
 from antibody_baseline_survey import load_dataset, DATASET_REGISTRY
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
-    extract_top3_base_reps, SCREENING_BUDGETS,
+    extract_top3_base_reps, FULL_BUDGETS,
 )
 
 # =============================================================================
@@ -239,10 +239,11 @@ def evaluate_dataset(dataset_name, rep_names, n_folds):
             labels=labels, groups=groups,
             metric='auc',
             task_type='classification',
-            budgets=SCREENING_BUDGETS,
+            budgets=FULL_BUDGETS,
             augmentation_strategy='uncapped',
             internal_evaluators=INTERNAL_EVALUATORS,
-            speed='fast', return_fitted=True, verbose=False, cache=True)
+            speed='full', return_fitted=True, verbose=False, cache=True,
+            adaptive_pruning=0.25)
         top3 = extract_top3_base_reps(search)
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")

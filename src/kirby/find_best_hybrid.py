@@ -57,7 +57,7 @@ from sklearn.preprocessing import StandardScaler
 
 warnings.filterwarnings('ignore')
 
-_CACHE_VERSION = 13  # v13: group-aware internal split in create_hybrid + allocation pre-computation
+_CACHE_VERSION = 14  # v14: normalized cache keys (resolve defaults before hashing) + configurable pruning
 
 
 def _impute_nan(X_train, X_val):
@@ -545,7 +545,7 @@ DEFAULT_MODELS = {
             n_neighbors=5, n_jobs=-1),
         'classifier': lambda: __import__('sklearn.neighbors', fromlist=['KNeighborsClassifier']).KNeighborsClassifier(
             n_neighbors=5, n_jobs=-1),
-        'tier': 'extra',
+        'tier': 'full',
         '_adaptive_k': True,
     },
     'lightgbm': {
@@ -571,7 +571,7 @@ DEFAULT_MODELS = {
     'gp': {
         'regressor': _get_gp_regressor,
         'classifier': _get_gp_classifier,
-        'tier': 'extra',
+        'tier': 'full',
         '_max_samples': 6000,
     },
     'catboost': {
@@ -1579,7 +1579,7 @@ def _run_search(
     cv_splitter=None,
     greedy_tolerance: float = 0.0,
     metric_name: Optional[str] = None,
-    adaptive_pruning: bool = True,
+    adaptive_pruning: Union[bool, float] = True,
     checkpoint_path: Optional[Path] = None,
 ) -> List[dict]:
     """Main search loop over all configurations.
@@ -1925,7 +1925,10 @@ def _run_search(
                 groups_f0[key].append((alloc, result['score_mean']))
 
             n_groups_f0 = len(groups_f0)
-            threshold = n_groups_f0 * 0.15
+            # Configurable pruning: True → 0.15, float → custom threshold
+            _prune_frac = (float(adaptive_pruning) if isinstance(adaptive_pruning, (int, float))
+                           and adaptive_pruning > 0 else 0.15)
+            threshold = n_groups_f0 * _prune_frac
 
             top3_counts = defaultdict(int)
             for key, entries in groups_f0.items():
@@ -1948,7 +1951,7 @@ def _run_search(
 
         if pruned_strategies and verbose:
             print(f"  Pruned {len(pruned_strategies)}/{len(search_allocation)} strategies "
-                  f"(top-3 in <15% of groups): {sorted(pruned_strategies)}")
+                  f"(top-3 in <{_prune_frac:.0%} of groups): {sorted(pruned_strategies)}")
 
         # Rebuild config list without pruned strategies
         if pruned_strategies:
@@ -2317,7 +2320,6 @@ def _compute_fitted_result(
 def _hybrid_cache_key(base_reps, labels, groups, speed, budgets, allocation_methods,
                       importance_methods, internal_evaluators, n_folds, models,
                       seed, metric, task_type,
-                      return_fitted=False, weight_method=None,
                       two_phase=False, refinement_top_n=5,
                       refinement_step_sizes=None,
                       rep_factory_names=None,
@@ -2330,8 +2332,16 @@ def _hybrid_cache_key(base_reps, labels, groups, speed, budgets, allocation_meth
                       candidate_ranking='rf_importance',
                       test_rep_subsets=False,
                       cv_splitter=None,
-                      adaptive_pruning=True) -> str:
-    """SHA256 hash of all search-affecting inputs."""
+                      adaptive_pruning=0.15) -> str:
+    """SHA256 hash of all search-affecting inputs.
+
+    All parameters should be PRE-NORMALIZED by the caller (find_best_hybrid)
+    so that None vs explicit tier defaults produce identical keys.
+    return_fitted and weight_method are excluded because they only affect
+    post-search fitting, not the search itself.
+    adaptive_pruning is a float threshold (0.0 = off, 0.15 = default).
+    models is a sorted list of model name strings (not None/dict).
+    """
     h = hashlib.sha256()
     h.update(f"v{_CACHE_VERSION}".encode())
     for name in sorted(base_reps.keys()):
@@ -2349,14 +2359,17 @@ def _hybrid_cache_key(base_reps, labels, groups, speed, budgets, allocation_meth
             sample_idx = np.linspace(0, len(flat) - 1, min(200, len(flat)), dtype=int)
             h.update(f"aug:{aname}:{arr.shape}:{flat[sample_idx].tobytes()}".encode())
         h.update(f"aug_strategy:{augmentation_strategy}".encode())
-    h.update(f"{speed}|{budgets}|{allocation_methods}|{importance_methods}|{internal_evaluators}|{n_folds}|{seed}|{metric}|{task_type}|{return_fitted}|{weight_method}|{two_phase}|{refinement_top_n}|{refinement_step_sizes}|{screen_threshold}|{greedy_tolerance}|{augmentation_threshold}|{augmentation_budget}|{candidate_ranking}|{adaptive_pruning}".encode())
+    h.update(f"{speed}|{budgets}|{allocation_methods}|{importance_methods}|{internal_evaluators}|{n_folds}|{seed}|{metric}|{task_type}|{two_phase}|{refinement_top_n}|{refinement_step_sizes}|{screen_threshold}|{greedy_tolerance}|{augmentation_threshold}|{augmentation_budget}|{candidate_ranking}|{adaptive_pruning}".encode())
     if models:
-        model_names = sorted(models.keys()) if isinstance(models, dict) else sorted(models)
+        if isinstance(models, (list, tuple)):
+            model_names = sorted(models)
+        elif isinstance(models, dict):
+            model_names = sorted(models.keys())
+        else:
+            model_names = ['custom']
         h.update("|".join(model_names).encode())
     if rep_factory_names:
         h.update("|".join(sorted(rep_factory_names)).encode())
-    # Additive fields: only affect hash when non-default, preserving
-    # existing cache entries that used the old key format.
     if test_rep_subsets:
         h.update(b"test_rep_subsets:1")
     if cv_splitter is not None:
@@ -2451,7 +2464,7 @@ def find_best_hybrid(
     cache: bool = False,
     cache_dir: Optional[str] = None,
     greedy_tolerance: float = 0.0,
-    adaptive_pruning: bool = True,
+    adaptive_pruning: Union[bool, float] = True,
     dataset_name: Optional[str] = None,
 ) -> SearchResult:
     """
@@ -2550,15 +2563,45 @@ def find_best_hybrid(
         print(f"Dropped budgets > n={n_samples}: {dropped}")
     budgets = filtered
 
-    # --- Check cache (uses filtered budgets) ---
+    # --- Normalize parameters for cache key alignment ---
+    # Resolve defaults from SPEED_TIERS so that None and explicit tier
+    # values produce identical cache keys.
+    _tier = SPEED_TIERS[speed]
+    _norm_alloc = allocation_methods if allocation_methods is not None else _tier['allocation_methods']
+    _norm_imp = importance_methods if importance_methods is not None else _tier['importance_methods']
+    _norm_eval = internal_evaluators if internal_evaluators is not None else _tier['internal_evaluators']
+    _norm_folds = n_folds if n_folds is not None else _tier['n_folds']
+
+    # Normalize models to sorted list of names
+    if models is None:
+        _max_tier = _TIER_ORDER.get(speed, 1)
+        _norm_models = sorted(
+            name for name, spec in DEFAULT_MODELS.items()
+            if _TIER_ORDER.get(spec['tier'], 0) <= _max_tier
+        )
+    elif isinstance(models, dict):
+        _norm_models = sorted(models.keys())
+    elif isinstance(models, list):
+        _norm_models = sorted(models)
+    else:
+        _norm_models = None  # single model instance
+
+    # Normalize adaptive_pruning to float threshold
+    if adaptive_pruning is True:
+        _norm_pruning = 0.15
+    elif not adaptive_pruning:
+        _norm_pruning = 0.0
+    else:
+        _norm_pruning = float(adaptive_pruning)
+
+    # --- Check cache (uses normalized params) ---
     cache_path = None
     if cache:
         factory_names = sorted(rep_factories.keys()) if rep_factories else None
         key = _hybrid_cache_key(
-            base_reps, labels, groups, speed, budgets, allocation_methods,
-            importance_methods, internal_evaluators, n_folds, models, seed,
+            base_reps, labels, groups, speed, budgets, _norm_alloc,
+            _norm_imp, _norm_eval, _norm_folds, _norm_models, seed,
             metric, task_type,
-            return_fitted=return_fitted, weight_method=weight_method,
             two_phase=two_phase, refinement_top_n=refinement_top_n,
             refinement_step_sizes=refinement_step_sizes,
             rep_factory_names=factory_names,
@@ -2571,7 +2614,7 @@ def find_best_hybrid(
             candidate_ranking=candidate_ranking,
             test_rep_subsets=test_rep_subsets,
             cv_splitter=cv_splitter,
-            adaptive_pruning=adaptive_pruning,
+            adaptive_pruning=_norm_pruning,
         )
         cache_path = Path(cache_dir or Path(os.environ.get('KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby'))) / 'hybrid_search') / f'{key}.pkl'
         if cache_path.exists():

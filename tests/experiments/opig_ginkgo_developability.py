@@ -56,7 +56,7 @@ from antibody_baseline_survey import load_dataset, DATASET_REGISTRY
 from run_baseline_survey import evaluate_rep as _evaluate_rep
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
-    extract_top3_base_reps, SCREENING_BUDGETS,
+    extract_top3_base_reps, FULL_BUDGETS,
 )
 
 # =============================================================================
@@ -271,12 +271,12 @@ def evaluate_property(prop_name, rep_names, n_folds):
             labels=labels, groups=grp,
             metric='spearman',
             task_type='regression',
-            budgets=SCREENING_BUDGETS,
+            budgets=FULL_BUDGETS,
             augmentations=aug_dict if aug_dict else None,
             augmentation_strategy='uncapped',
             internal_evaluators=INTERNAL_EVALUATORS,
-            speed='fast', return_fitted=True, verbose=False, cache=True,
-            **cv_kw)
+            speed='full', return_fitted=True, verbose=False, cache=True,
+            adaptive_pruning=0.25, **cv_kw)
         top3 = extract_top3_base_reps(search)
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")

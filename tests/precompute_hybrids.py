@@ -39,6 +39,7 @@ import numpy as np
 
 from experiments._shared import (
     load_data, SCREENING_BUDGETS, FULL_BUDGETS, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 from experiments.complexity.complexity_helpers import DATASET_REPS
 from kirby.find_best_hybrid import find_best_hybrid
@@ -168,9 +169,17 @@ def _datasets_for_domain(domain):
     return sorted(result)
 
 
-def precompute_dataset(dataset_name, speed='fast', tiers=('general', 'top'),
-                       models=None, condition_filter=None):
-    """Run all precompute conditions for one dataset."""
+def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
+                       models=None, condition_filter=None, distance=False,
+                       adaptive_pruning=True):
+    """Run all precompute conditions for one dataset.
+
+    Args:
+        distance: If True, run distance-evaluator conditions (for similarity/noise
+            experiments that use DISTANCE_EVALUATORS + DISTANCE_BUDGETS).
+        adaptive_pruning: Pruning threshold for adaptive pruning (True=0.15,
+            float=custom, e.g. 0.25 for more aggressive pruning on capped).
+    """
     ds_config = DATASET_REPS.get(dataset_name)
     if ds_config is None:
         print(f"  {dataset_name}: not in DATASET_REPS, skipping")
@@ -213,31 +222,45 @@ def precompute_dataset(dataset_name, speed='fast', tiers=('general', 'top'),
 
     # Build conditions
     conditions = []
-    if 'general' in tiers and len(general_reps) >= 2:
-        conditions.append(('general', general_reps, None, 'none'))
-        if aug_reps:
-            conditions.append(('general', general_reps, aug_reps, 'uncapped'))
-            conditions.append(('general', general_reps, aug_reps, 'capped'))
-    elif 'general' in tiers and len(general_reps) == 1 and aug_reps:
-        # Single general rep — use augmentation mode
-        conditions.append(('general', general_reps, aug_reps, 'uncapped'))
 
-    if 'top' in tiers and len(top_reps) >= 2:
-        conditions.append(('top', top_reps, None, 'none'))
-        if aug_reps:
-            conditions.append(('top', top_reps, aug_reps, 'uncapped'))
-            conditions.append(('top', top_reps, aug_reps, 'capped'))
-        # Also test with general-minus-top as augmentation (borderline reps)
-        borderline = {k: v for k, v in general_reps.items() if k not in top_reps}
-        if borderline:
-            merged_aug = {**borderline, **aug_reps}
-            conditions.append(('top+borderline', top_reps, merged_aug, 'uncapped'))
-    elif 'top' in tiers and len(top_reps) == 1:
-        # Single top rep — augment with everything else
-        pool = {k: v for k, v in general_reps.items() if k not in top_reps}
-        pool.update(aug_reps)
-        if pool:
-            conditions.append(('top', top_reps, pool, 'uncapped'))
+    if distance:
+        # Distance conditions for similarity/noise experiments
+        # Uses DISTANCE_EVALUATORS + DISTANCE_BUDGETS (separate cache keys)
+        if 'general' in tiers and len(general_reps) >= 2:
+            conditions.append(('general_distance', general_reps, None, 'none'))
+            if aug_reps:
+                conditions.append(('general_distance', general_reps, aug_reps, 'uncapped'))
+        if 'top' in tiers and len(top_reps) >= 2:
+            conditions.append(('top_distance', top_reps, None, 'none'))
+            if aug_reps:
+                conditions.append(('top_distance', top_reps, aug_reps, 'uncapped'))
+    else:
+        # Standard conditions
+        if 'general' in tiers and len(general_reps) >= 2:
+            conditions.append(('general', general_reps, None, 'none'))
+            if aug_reps:
+                conditions.append(('general', general_reps, aug_reps, 'uncapped'))
+                conditions.append(('general', general_reps, aug_reps, 'capped'))
+        elif 'general' in tiers and len(general_reps) == 1 and aug_reps:
+            # Single general rep — use augmentation mode
+            conditions.append(('general', general_reps, aug_reps, 'uncapped'))
+
+        if 'top' in tiers and len(top_reps) >= 2:
+            conditions.append(('top', top_reps, None, 'none'))
+            if aug_reps:
+                conditions.append(('top', top_reps, aug_reps, 'uncapped'))
+                conditions.append(('top', top_reps, aug_reps, 'capped'))
+            # Also test with general-minus-top as augmentation (borderline reps)
+            borderline = {k: v for k, v in general_reps.items() if k not in top_reps}
+            if borderline:
+                merged_aug = {**borderline, **aug_reps}
+                conditions.append(('top+borderline', top_reps, merged_aug, 'uncapped'))
+        elif 'top' in tiers and len(top_reps) == 1:
+            # Single top rep — augment with everything else
+            pool = {k: v for k, v in general_reps.items() if k not in top_reps}
+            pool.update(aug_reps)
+            if pool:
+                conditions.append(('top', top_reps, pool, 'uncapped'))
 
     # Filter to single condition if requested (for per-job SLURM)
     if condition_filter:
@@ -249,10 +272,15 @@ def precompute_dataset(dataset_name, speed='fast', tiers=('general', 'top'),
             'top_uncapped': ('top', 'uncapped'),
             'top_capped': ('top', 'capped'),
             'top_borderline': ('top+borderline', 'uncapped'),
+            'general_distance_none': ('general_distance', 'none'),
+            'general_distance_uncapped': ('general_distance', 'uncapped'),
+            'top_distance_none': ('top_distance', 'none'),
+            'top_distance_uncapped': ('top_distance', 'uncapped'),
         }
-        want_tier, want_strat = _cond_map[condition_filter]
-        conditions = [(t, r, a, s) for t, r, a, s in conditions
-                      if t == want_tier and s == want_strat]
+        if condition_filter in _cond_map:
+            want_tier, want_strat = _cond_map[condition_filter]
+            conditions = [(t, r, a, s) for t, r, a, s in conditions
+                          if t == want_tier and s == want_strat]
 
     print(f"  {len(conditions)} conditions to precompute:")
     for tier, reps, augs, strat in conditions:
@@ -269,11 +297,18 @@ def precompute_dataset(dataset_name, speed='fast', tiers=('general', 'top'),
 
         t0 = time.time()
         try:
+            # Distance conditions use DISTANCE_EVALUATORS + DISTANCE_BUDGETS
+            is_distance = tier.endswith('_distance')
+            _budgets = DISTANCE_BUDGETS if is_distance else budgets
+            _extra = {}
+            if is_distance:
+                _extra['internal_evaluators'] = DISTANCE_EVALUATORS
+
             result = find_best_hybrid(
                 base_reps=reps,
                 labels=labels,
                 groups=groups,
-                budgets=budgets,
+                budgets=_budgets,
                 models=models,
                 augmentations=augs,
                 augmentation_strategy=strat,
@@ -283,6 +318,8 @@ def precompute_dataset(dataset_name, speed='fast', tiers=('general', 'top'),
                 cache=True,
                 verbose=True,
                 dataset_name=dataset_name,
+                adaptive_pruning=adaptive_pruning,
+                **_extra,
             )
             elapsed = time.time() - t0
             n_models = len(result.best_by_model)
@@ -323,13 +360,21 @@ def main():
     parser.add_argument('--condition', type=str, default=None,
                         choices=['general_none', 'general_uncapped', 'general_capped',
                                  'top_none', 'top_uncapped', 'top_capped',
-                                 'top_borderline'],
+                                 'top_borderline',
+                                 'general_distance_none', 'general_distance_uncapped',
+                                 'top_distance_none', 'top_distance_uncapped'],
                         help='Run a single specific condition (for per-job SLURM)')
-    parser.add_argument('--speed', type=str, default='fast',
+    parser.add_argument('--speed', type=str, default='full',
                         choices=['fast', 'full'],
-                        help='Search speed tier')
+                        help='Search speed tier (default: full)')
     parser.add_argument('--models', type=str, default=None,
-                        help='Comma-separated model names (default: DOWNSTREAM_MODELS)')
+                        help='Comma-separated model names (default: speed-tier models)')
+    parser.add_argument('--distance', action='store_true',
+                        help='Run distance-evaluator conditions (DISTANCE_EVALUATORS + '
+                             'DISTANCE_BUDGETS) for similarity/noise experiments')
+    parser.add_argument('--pruning', type=float, default=None,
+                        help='Adaptive pruning threshold (0.15=default, 0.25=aggressive). '
+                             'True if omitted.')
 
     args = parser.parse_args()
 
@@ -346,16 +391,22 @@ def main():
 
     tiers = ('general', 'top') if args.tier == 'both' else (args.tier,)
     models = args.models.split(',') if args.models else None
+    pruning = args.pruning if args.pruning is not None else True
 
     print(f"Precompute: {len(datasets)} datasets, tiers={tiers}, speed={args.speed}")
     if args.condition:
         print(f"Condition: {args.condition}")
+    if args.distance:
+        print(f"Mode: DISTANCE (evaluators={DISTANCE_EVALUATORS}, budgets={DISTANCE_BUDGETS})")
+    if args.pruning is not None:
+        print(f"Pruning threshold: {args.pruning}")
     print(f"Datasets: {datasets}")
 
     t_start = time.time()
     for ds in datasets:
         precompute_dataset(ds, speed=args.speed, tiers=tiers, models=models,
-                           condition_filter=args.condition)
+                           condition_filter=args.condition, distance=args.distance,
+                           adaptive_pruning=pruning)
 
     total = time.time() - t_start
     print(f"\n{'='*70}")

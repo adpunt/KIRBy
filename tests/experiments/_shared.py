@@ -1713,19 +1713,23 @@ def precompute_hybrid_searches(reps, labels, groups, config,
     """
     from kirby.find_best_hybrid import find_best_hybrid
 
-    budgets = config.get('budgets', [100])
-    speed = config.get('search_speed', 'fast')
-    models = config.get('models', None)
+    # Always use speed='full' + FULL_BUDGETS + models=None for precompute.
+    # This matches the SLURM precompute cache key regardless of the
+    # experiment's own --mode setting. When SLURM cache exists on disk,
+    # these calls hit it instantly (no compute).
+    budgets = FULL_BUDGETS
+    speed = 'full'
+    models = None
 
     # Resolve metric using shared logic (matches get_precomputed_search fallback)
     metric, task_type = _resolve_search_metric(
         labels, task_type=task_type, metric=metric, domain=domain)
 
-    # Determine which aug conditions to precompute
-    # Skip 'capped' — experiments that need it compute on demand
+    # Precompute all aug conditions (none, uncapped, capped)
     aug_conditions = ['none']
     if augmentations is not None and len(augmentations) > 0:
         aug_conditions.append('uncapped')
+        aug_conditions.append('capped')
 
     results = {}
     t_start = time.time()
@@ -1816,7 +1820,7 @@ def _resolve_search_metric(labels, task_type='auto', metric='auto', domain=None)
 
 def get_precomputed_search(reps, labels, groups, budget=None,
                            aug_condition='uncapped', augmentations=None,
-                           speed='fast', return_fitted=False,
+                           speed='full', return_fitted=False,
                            weight_method=None, precomputed=None,
                            metric='auto', task_type='auto', domain=None,
                            **kwargs):
@@ -1872,7 +1876,7 @@ def get_precomputed_search(reps, labels, groups, budget=None,
         base_reps=reps,
         labels=labels,
         groups=groups,
-        budgets=SCREENING_BUDGETS,
+        budgets=FULL_BUDGETS,
         augmentations=augs,
         augmentation_strategy=aug_strat,
         speed=speed,
@@ -1890,7 +1894,7 @@ def get_precomputed_search(reps, labels, groups, budget=None,
 
 def get_fitted_hybrid(reps, labels, groups, *, downstream_model,
                       budget=None, aug_condition='uncapped',
-                      augmentations=None, speed='fast', precomputed=None,
+                      augmentations=None, speed='full', precomputed=None,
                       internal_evaluators=None, budgets=None,
                       metric='auto', task_type='auto', domain=None):
     """Get X_hybrid and feature_info from a cached search (return_fitted=True).
@@ -2024,6 +2028,15 @@ def get_best_for_downstream(search, downstream_model, budget=None):
     # Fallback: model-specific (budget-agnostic)
     if search.best_by_model and downstream_model in search.best_by_model:
         return search.best_by_model[downstream_model]
+
+    # Cross-model fallback: use overall best blueprint from any model.
+    # The blueprint (allocation/importance/budget) is largely model-agnostic —
+    # create_hybrid builds the same hybrid regardless of downstream model.
+    if search.best_by_model:
+        lower = getattr(search, 'lower_is_better', False)
+        all_bests = list(search.best_by_model.values())
+        return (min if lower else max)(
+            all_bests, key=lambda r: r.get('score_mean', 0))
 
     return None
 
@@ -2283,20 +2296,26 @@ def get_config(args) -> dict:
     """
     from kirby.find_best_hybrid import SPEED_TIERS
 
-    speed = 'full' if args.mode == 'full' else 'fast'
+    # Always use speed='full' for hybrid search cache alignment with
+    # SLURM precompute. --mode only affects the experiment's own CV
+    # evaluation (n_splits), not the hybrid search speed.
+    speed = 'full'
     tier = SPEED_TIERS[speed]
+    default_budgets = FULL_BUDGETS
 
-    # Budget grids — from SCREENING_BUDGETS / FULL_BUDGETS constants
-    default_budgets = SCREENING_BUDGETS if speed == 'fast' else FULL_BUDGETS
+    # n_splits for experiment CV: 1 for intermediary (quick check), 5 for full
+    exp_folds = tier['n_folds'] if args.mode == 'full' else 1
 
     config = {
-        'n_splits': tier['n_folds'],
+        'n_splits': exp_folds,
         'search_speed': speed,
         'allocations': tier['allocation_methods'],
         'importance_methods': tier['importance_methods'],
         'internal_evaluators': tier['internal_evaluators'],
         'budgets': default_budgets,
-        # Models default to all 11; fast experiments can override via CLI
+        # Models for experiment use (baselines, evaluation, etc.)
+        # NOTE: precompute_hybrid_searches ignores this — uses models=None
+        # so the cache key matches the SLURM precompute.
         'models': ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp',
                     'svm', 'gp', 'catboost', 'dnn', 'cnn'],
     }
