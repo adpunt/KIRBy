@@ -57,7 +57,7 @@ from sklearn.preprocessing import StandardScaler
 
 warnings.filterwarnings('ignore')
 
-_CACHE_VERSION = 12  # v12: full budgets for full speed, greedy uses precomputed importance
+_CACHE_VERSION = 13  # v13: group-aware internal split in create_hybrid + allocation pre-computation
 
 
 def _impute_nan(X_train, X_val):
@@ -1300,6 +1300,8 @@ def _evaluate_hybrid_config(
                 fold_alloc_scores = alloc_cache.get((fold_idx, internal_evaluator))
 
         try:
+            # Pass fold-level groups for group-aware internal split
+            fold_groups = groups[train_idx] if groups is not None else None
             X_train, feature_info = create_hybrid(
                 train_reps, y_train,
                 allocation_method=allocation_method,
@@ -1318,6 +1320,7 @@ def _evaluate_hybrid_config(
                 precomputed_importance=fold_importance,
                 precomputed_alloc_scores=fold_alloc_scores,
                 greedy_tolerance=greedy_tolerance,
+                groups=fold_groups,
             )
             X_val = apply_feature_selection(val_reps, feature_info)
 
@@ -1730,12 +1733,19 @@ def _run_search(
             for rep_name, (ft_train, _) in fold_reps[fold_idx].items():
                 fold_train_reps[rep_name] = ft_train
 
-        # Replicate create_hybrid's internal 80/20 split (same RandomState(42))
+        # Replicate create_hybrid's internal train/val split (group-aware)
         n_fold = len(fold_train_labels)
-        n_val_internal = max(1, int(n_fold * 0.2))
-        _indices = np.random.RandomState(42).permutation(n_fold)
-        _tr_idx = _indices[n_val_internal:]
-        _va_idx = _indices[:n_val_internal]
+        fold_train_groups = groups[train_idx] if groups is not None else None
+        if fold_train_groups is not None and len(np.unique(fold_train_groups)) >= 2:
+            from sklearn.model_selection import GroupShuffleSplit
+            _gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+            _tr_idx, _va_idx = next(_gss.split(
+                np.zeros(n_fold), fold_train_labels, fold_train_groups))
+        else:
+            n_val_internal = max(1, int(n_fold * 0.2))
+            _indices = np.random.RandomState(42).permutation(n_fold)
+            _tr_idx = _indices[n_val_internal:]
+            _va_idx = _indices[:n_val_internal]
         _train_labels = fold_train_labels[_tr_idx]
         _val_labels = fold_train_labels[_va_idx]
 
