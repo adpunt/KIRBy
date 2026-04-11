@@ -399,16 +399,20 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 
 | Job ID | Name | Status |
 |--------|------|--------|
-| 7440291 | dta_davis | R |
-| 7440292 | dta_kiba | PD |
-| 7440293 | dta_bindingdb | PD |
+| 7440291 | dta_davis | TIMEOUT (48h wall limit) |
+| 7440292 | dta_kiba | DONE |
+| 7440293 | dta_bindingdb | R |
+| 7457314 | dta_kiba_fill (--skip-existing) | PD |
+| 7467954 | dta_davis (resubmit, --skip-existing) | PD |
 
 ### Antibody CLF
 
 | Job ID | Name | Status |
 |--------|------|--------|
-| 7440294 | abclf_tz | PD |
-| 7440295 | abclf_humanness | PD |
+| 7440294 | abclf_tz | FAILED (KeyError: 'models', --reps all bug) |
+| 7440295 | abclf_humanness | FAILED (KeyError: 'models', --reps all bug) |
+| 7457285 | abclf_tz (resubmit, bug fixed) | PD |
+| 7457286 | abclf_humanness (resubmit, bug fixed) | PD |
 
 ### SchNet (molecular)
 
@@ -422,20 +426,28 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 
 | Job ID | Name | Status |
 |--------|------|--------|
-| 7440301 | nuc_nt_promoter | PD |
-| 7440302 | nuc_nt_promoter | PD |
-| 7440303 | nuc_nt_promoter | PD |
-| 7440304 | nuc_nt_enhancer | PD |
-| 7440305 | nuc_nt_enhancer | PD |
-| 7440306 | nuc_nt_splice | PD |
-| 7440307 | nuc_nt_splice | PD |
-| 7440308 | nuc_nt_splice | PD |
-| 7440309 | nuc_nt_H3 | PD |
-| 7440310 | nuc_nt_H3 | PD |
-| 7440311 | nuc_nt_H3 | PD |
-| 7440312 | nuc_nt_H3 | PD |
-| 7440313 | nuc_nt_H3 | PD |
-| 7440314 | nuc_nt_H3 | PD |
+| 7440301 | nuc_nt_promoter_all | DONE (partial, pre-fix) |
+| 7440302 | nuc_nt_promoter_tata | DONE (partial, pre-fix) |
+| 7440303 | nuc_nt_promoter_no_tata | DONE (partial, pre-fix) |
+| 7440304 | nuc_nt_enhancers | CANCELLED (pre-fix, replaced by 7459731) |
+| 7440305 | nuc_nt_enhancers_types | CANCELLED (pre-fix, replaced by 7459732) |
+| 7440306 | nuc_nt_splice_sites_all | DONE (partial, pre-fix) |
+| 7440307 | nuc_nt_splice_sites_acceptors | CANCELLED (pre-fix, replaced by 7459733) |
+| 7440308 | nuc_nt_splice_sites_donors | CANCELLED (pre-fix, replaced by 7459734) |
+| 7459731 | nuc_nt_enhancers (resubmit, --skip-existing, post-fix) | FAILED (--models arg parse bug) |
+| 7459732 | nuc_nt_enhancers_types (resubmit, --skip-existing, post-fix) | FAILED (--models arg parse bug) |
+| 7459733 | nuc_nt_splice_sites_acceptors (resubmit, --skip-existing, post-fix) | FAILED (--models arg parse bug) |
+| 7459734 | nuc_nt_splice_sites_donors (resubmit, --skip-existing, post-fix) | FAILED (--models arg parse bug) |
+| 7467966 | nuc_nt_enhancers (resubmit 2, --skip-existing, no --models) | PD |
+| 7467967 | nuc_nt_enhancers_types (resubmit 2, --skip-existing, no --models) | PD |
+| 7467968 | nuc_nt_splice_sites_acceptors (resubmit 2, --skip-existing, no --models) | PD |
+| 7467969 | nuc_nt_splice_sites_donors (resubmit 2, --skip-existing, no --models) | PD |
+| 7440309 | nuc_nt_H2AFZ | DONE (18/25 reps, winner: mistral_dna+ridge=0.4323 mcc) |
+| 7440310 | nuc_nt_H3K27ac | DONE (winner: gena_lm+ridge=0.4569 mcc) |
+| 7440311 | nuc_nt_H3K27me3 | DONE (winner: gena_lm+ridge=0.5522 mcc) |
+| 7440312 | nuc_nt_H3K36me3 | DONE (winner: gena_lm+ridge=0.5715 mcc) |
+| 7440313 | nuc_nt_H3K4me1 | DONE (winner: gena_lm+ridge=0.4405 mcc) |
+| 7440314 | nuc_nt_H3 | R |
 | 7440315 | nuc_nt_H3 | PD |
 | 7440316 | nuc_nt_H3 | PD |
 | 7440317 | nuc_nt_H3 | PD |
@@ -444,3 +456,22 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 7440320 | nuc_gb_human | PD |
 | 7440321 | nuc_gb_demo | PD |
 | 7440322 | nuc_gb_demo | PD |
+
+### CGR-SMILES pretraining (Phase 4)
+
+Single job: corpus generation (~1M USPTO → CGR-SMILES) + continued MLM pretraining (50K steps).
+Partition: long, 128G, 8h, 16 CPU, no GPU.
+Output: `/data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/`
+
+| Job ID | Name | Stage | Status |
+|--------|------|-------|--------|
+| 11747734 | cgr_smiles | corpus + pretrain | FAILED — chython not installed, 0/392K conversions. Fixed in 9fa01f8. |
+| 7467971 | cgr_smiles | corpus + pretrain | SUBMITTED — resubmit after fix. |
+
+### Reaction re-survey (blocked on 7467971)
+
+Re-survey with 41 reps (38 original + 3 CGR). Submit after pretraining checkpoint exists.
+
+| Job ID | Name | Datasets | Status |
+|--------|------|----------|--------|
+| — | rxn_baselines | buchwald_hartwig, bh_doyle_plates, suzuki | BLOCKED — waiting on 7467971 |
