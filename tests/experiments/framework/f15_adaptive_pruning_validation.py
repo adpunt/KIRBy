@@ -106,10 +106,14 @@ def _get_domain(name):
     if any(name.startswith(p) for p in ('flab_', 'abagym_', 'abcov_', 'ddg_',
            'tz_', 'humanness', 'ginkgo_')):
         return 'antibody'
+    if name.startswith(('nt_', 'gb_')):
+        return 'nucleotide'
     return 'molecular'
 
 
 def _get_metric(domain, task_type, labels):
+    if domain == 'nucleotide':
+        return 'mcc'
     if task_type == 'classification':
         return 'f1_weighted' if len(np.unique(labels)) > 2 else 'auc'
     if domain == 'dta': return 'ci'

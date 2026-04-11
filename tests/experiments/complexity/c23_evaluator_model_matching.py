@@ -37,7 +37,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_model_factories, get_domain_metric,
-    SCREENING_BUDGETS,
+    FULL_BUDGETS,
 )
 from kirby.find_best_hybrid import find_best_hybrid
 
@@ -133,8 +133,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     available_models = {k: v for k, v in all_models.items() if k in MATCH_TABLE}
     print(f"  Models: {list(available_models.keys())}")
 
-    budgets = SCREENING_BUDGETS
-    search_speed = config.get('search_speed', 'fast')
+    budgets = FULL_BUDGETS
+    search_speed = config.get('search_speed', 'full')
     sign = -1 if lower_is_better else 1
 
     results = []
