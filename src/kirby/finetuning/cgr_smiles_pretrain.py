@@ -67,9 +67,39 @@ def _rxn_to_cgr_smiles(mapped_rxn_smi: str) -> Optional[str]:
         return None
 
 
+# Shared list for collecting error samples across workers
+_ERROR_SAMPLES = []
+
+
 def _worker_convert(batch: List[str]) -> List[Optional[str]]:
     """Worker function for multiprocessing CGR conversion."""
     return [_rxn_to_cgr_smiles(smi) for smi in batch]
+
+
+def _diagnose_failures(rxn_smiles: List[str], n_samples: int = 5):
+    """Print diagnostic info for CGR conversion failures.
+
+    Tests a few reactions with full error tracing to identify the
+    root cause of systematic failures.
+    """
+    from chython import smiles as chython_smiles
+
+    print(f"\n  === CGR CONVERSION DIAGNOSTICS ({n_samples} samples) ===")
+    for i, smi in enumerate(rxn_smiles[:n_samples]):
+        print(f"\n  Sample {i+1}: {smi[:120]}{'...' if len(smi) > 120 else ''}")
+        try:
+            rxn = chython_smiles(smi)
+            print(f"    parse: {type(rxn).__name__}")
+            if rxn is None:
+                print(f"    FAIL: chython_smiles() returned None")
+                continue
+            rxn.canonicalize()
+            print(f"    canonicalize: OK")
+            cgr = rxn.compose()
+            print(f"    compose: OK -> {str(cgr)[:80]}")
+        except Exception as e:
+            print(f"    FAIL: {type(e).__name__}: {e}")
+    print()
 
 
 def build_cgr_corpus(
@@ -99,6 +129,21 @@ def build_cgr_corpus(
             "chython is required for CGR-SMILES conversion: "
             "pip install 'chython>=1.0' or pip install -e '.[reaction]'"
         )
+
+    # Smoke test: try a single reaction before spawning workers
+    print(f"  Smoke test: converting first reaction...")
+    test_result = _rxn_to_cgr_smiles(rxn_smiles[0])
+    if test_result is None:
+        print(f"  Smoke test FAILED — running diagnostics...")
+        _diagnose_failures(rxn_smiles, n_samples=5)
+        raise RuntimeError(
+            "CGR conversion smoke test failed on the first reaction. "
+            "See diagnostics above. Common causes: reactions are not "
+            "atom-mapped, chython version incompatibility, or data "
+            "format issue."
+        )
+    print(f"  Smoke test OK: {test_result[:80]}")
+
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
