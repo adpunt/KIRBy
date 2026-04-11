@@ -159,7 +159,7 @@ def _eval_single_rep_per_fold(X, labels, groups, model_factory, n_folds, mode,
 
 
 def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
-                           metric_fn, search_speed='fast', augmentations=None,
+                           metric_fn, search_speed='full', augmentations=None,
                            metric_name='r2'):
     """Run find_best_hybrid and evaluate the best config per fold.
 
@@ -185,7 +185,7 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
             labels=labels,
             groups=groups,
             speed=search_speed,
-            budgets=SCREENING_BUDGETS,
+            budgets=FULL_BUDGETS,
             augmentations=augmentations,
             return_fitted=True,
             internal_evaluators=INTERNAL_EVALUATORS,

@@ -54,7 +54,7 @@ warnings.filterwarnings('ignore')
 
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS,
-    INTERNAL_EVALUATORS, SCREENING_BUDGETS, extract_top3_base_reps,
+    INTERNAL_EVALUATORS, FULL_BUDGETS, extract_top3_base_reps,
     _cache_rep, _fitted_to_feature_info,
 )
 
@@ -289,12 +289,13 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
         groups=groups,
         metric='rmse',
         task_type='regression',
-        budgets=SCREENING_BUDGETS,
+        budgets=FULL_BUDGETS,
         internal_evaluators=INTERNAL_EVALUATORS,
-        speed='fast',
+        speed='full',
         return_fitted=True,
         verbose=False,
         cache=True,
+        adaptive_pruning=0.25,
     )
 
     top3 = extract_top3_base_reps(search, model='rf')

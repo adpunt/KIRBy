@@ -271,7 +271,7 @@ def _run_anova_decomposition(exp2_results):
 # 9b: Information retention
 # =========================================================================
 
-def _run_information_retention(data, budgets, search_speed='fast'):
+def _run_information_retention(data, budgets, search_speed='full'):
     """9b: MI(X_selected, Y) and MI(X_selected, X_full) vs budget.
 
     At each budget, uses find_best_hybrid to discover the best hybrid config,
@@ -400,7 +400,7 @@ def _run_information_retention(data, budgets, search_speed='fast'):
 # 9c: Effective rank analysis
 # =========================================================================
 
-def _run_effective_rank_analysis(data, budgets, search_speed='fast'):
+def _run_effective_rank_analysis(data, budgets, search_speed='full'):
     """9c: Effective rank of hybrid vs PCA vs random at each budget.
 
     At each budget, uses find_best_hybrid to discover the best config,
@@ -506,7 +506,7 @@ def _run_effective_rank_analysis(data, budgets, search_speed='fast'):
 # =========================================================================
 
 def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=None,
-                                search_speed='fast'):
+                                search_speed='full'):
     """9d: Bias-variance proxy from train-val gap across budgets."""
     print("\n  9d: Bias-Variance Proxy")
 
