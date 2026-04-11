@@ -55,8 +55,8 @@ def _rxn_to_cgr_smiles(mapped_rxn_smi: str) -> Optional[str]:
 
     Returns None on failure (unmapped atoms, invalid SMILES, etc).
     """
+    from chython import smiles as chython_smiles
     try:
-        from chython import smiles as chython_smiles
         rxn = chython_smiles(mapped_rxn_smi)
         if rxn is None:
             return None
@@ -91,6 +91,14 @@ def build_cgr_corpus(
     Returns:
         Stats dict: {n_total, n_success, n_failed}.
     """
+    # Fail fast if chython is not installed
+    try:
+        from chython import smiles as _check  # noqa: F401
+    except ImportError:
+        raise ImportError(
+            "chython is required for CGR-SMILES conversion: "
+            "pip install 'chython>=1.0' or pip install -e '.[reaction]'"
+        )
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -381,6 +389,15 @@ def main():
             raise FileNotFoundError(
                 f"Corpus not found at {corpus_path}. "
                 f"Run --stage corpus first.")
+
+        # Check corpus is non-empty before spending GPU time
+        with open(corpus_path) as _f:
+            first_line = _f.readline()
+        if not first_line.strip():
+            raise RuntimeError(
+                f"Corpus at {corpus_path} is empty (0 CGR-SMILES). "
+                f"Check that chython is installed and reactions are "
+                f"atom-mapped. Aborting pretraining.")
 
         print("\n" + "=" * 60)
         print("STAGE 2: MLM PRETRAINING")

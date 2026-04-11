@@ -904,7 +904,9 @@ def _cgr_morgan_single(mapped_rxn_smi: str, radius: int = 2,
     except Exception:
         return np.zeros(n_bits, dtype=np.uint8)
 
-    atom_ids = list(cgr._atoms.keys())
+    # Use public API: cgr.atoms() yields (atom_id, atom) pairs
+    atoms_dict = dict(cgr.atoms())
+    atom_ids = list(atoms_dict.keys())
     if not atom_ids:
         return np.zeros(n_bits, dtype=np.uint8)
 
@@ -918,7 +920,7 @@ def _cgr_morgan_single(mapped_rxn_smi: str, radius: int = 2,
     # Atom invariants (radius 0)
     current_hash = {}
     for aid in atom_ids:
-        atom = cgr._atoms[aid]
+        atom = atoms_dict[aid]
         current_hash[aid] = _stable_hash((
             atom.atomic_number,
             atom.isotope,
