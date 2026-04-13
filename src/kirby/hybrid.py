@@ -1111,9 +1111,14 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
 
     if model is not None:
         m = deepcopy(model)
-        m.fit(X_train_scaled, y_train)
-        y_pred = m.predict(X_val_scaled)
-        score = metric_fn(y_val, y_pred)
+        try:
+            m.fit(X_train_scaled, y_train)
+            y_pred = m.predict(X_val_scaled)
+            score = metric_fn(y_val, y_pred)
+        except (np.linalg.LinAlgError, ValueError, FloatingPointError):
+            # Numerical failure (e.g. Ridge SVD non-convergence on pathological
+            # feature matrix). Treat this allocation as infeasible.
+            return (-np.inf, None) if return_predictions else -np.inf
         score = -score if lower_is_better else score
         return (score, y_pred) if return_predictions else score
 
@@ -1130,7 +1135,10 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
         else:
             from sklearn.linear_model import RidgeCV
             m = RidgeCV(alphas=[0.01, 0.1, 1.0, 10.0, 100.0])
-        m.fit(X_train_scaled, y_train)
+        try:
+            m.fit(X_train_scaled, y_train)
+        except (np.linalg.LinAlgError, ValueError, FloatingPointError):
+            return (-np.inf, None) if return_predictions else -np.inf
 
     elif internal_evaluator == 'rf':
         if is_classification:
@@ -1302,12 +1310,15 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
                          f"or a callable that returns an sklearn-compatible model.")
 
     # Common ending: compute predictions and score from the fitted model
-    y_pred = m.predict(X_val_scaled)
-    if is_classification:
-        from sklearn.metrics import accuracy_score
-        score = accuracy_score(y_val, y_pred)
-    else:
-        score = r2_score(y_val, y_pred)
+    try:
+        y_pred = m.predict(X_val_scaled)
+        if is_classification:
+            from sklearn.metrics import accuracy_score
+            score = accuracy_score(y_val, y_pred)
+        else:
+            score = r2_score(y_val, y_pred)
+    except (np.linalg.LinAlgError, ValueError, FloatingPointError):
+        return (-np.inf, None) if return_predictions else -np.inf
     return (score, y_pred) if return_predictions else score
 
 
@@ -1904,6 +1915,8 @@ def _find_worst_base_feature(X_cur_train, X_cur_val, y_train, y_val,
     result = permutation_importance(m, X_vl_s, y_val, n_repeats=3,
                                     random_state=42, scoring=scoring)
     base_imp = result.importances_mean[:n_base]
+    if base_imp.size == 0:
+        return -1
 
     # make_scorer with greater_is_better=False negates the metric, so
     # permutation importance is always positive for helpful features
@@ -2021,11 +2034,15 @@ def augment_capped(
             break
         if i in used:
             continue
+        if n_base <= 0:
+            break
 
         worst_idx = _find_worst_base_feature(
             X_cur_tr, X_cur_vl, y_train, y_val,
             model, metric_fn, lower_is_better, n_base, is_clf,
         )
+        if worst_idx < 0:
+            break
 
         X_test_tr = X_cur_tr.copy()
         X_test_vl = X_cur_vl.copy()
