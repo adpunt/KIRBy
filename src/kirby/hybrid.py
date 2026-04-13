@@ -399,6 +399,28 @@ def _build_from_selection(rep_dict_train, rep_dict_val, selected):
     return np.hstack(train_parts), np.hstack(val_parts)
 
 
+def _sanitize_baseline_scores(baseline_scores):
+    """Shift scores to non-negative, replacing non-finite scores with 0.
+
+    Non-finite scores arise when `_evaluate_allocation` returns -inf on a
+    numerical failure (e.g. Ridge SVD non-convergence). If such a score
+    reaches the `s - min_val` shift downstream, it poisons the weights
+    (-inf - -inf = NaN), which then crashes the proportional allocation
+    when `total_w` becomes NaN. Drop infeasible reps from the min
+    calculation and assign them weight 0 afterwards.
+    """
+    if not baseline_scores:
+        return baseline_scores
+    finite = {rn: s for rn, s in baseline_scores.items() if np.isfinite(s)}
+    if not finite:
+        # All reps infeasible — equal weight so allocation doesn't blow up.
+        return {rn: 1.0 for rn in baseline_scores}
+    min_val = min(finite.values())
+    shift = -min_val if min_val < 0 else 0.0
+    return {rn: (s + shift if np.isfinite(s) else 0.0)
+            for rn, s in baseline_scores.items()}
+
+
 def _compute_allocation_weights(baseline_scores, scheme='linear', params=None,
                                 rep_dict_train=None):
     """Compute allocation weights from baseline scores using various schemes.
@@ -556,11 +578,7 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
         # Shift to non-negative (same as the computed path below).
         # Precomputed scores may be in "higher is better" convention
         # with negative values (e.g. -RMSE), so shift them up.
-        if baseline_scores:
-            min_val = min(baseline_scores.values())
-            if min_val < 0:
-                baseline_scores = {rn: s - min_val
-                                   for rn, s in baseline_scores.items()}
+        baseline_scores = _sanitize_baseline_scores(baseline_scores)
     else:
         baseline_scores = {}
 
@@ -588,11 +606,10 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
         # Preserves relative ordering.  Negated lower-is-better scores
         # (e.g. -RMSE) are all negative, so a simple max(,0) would clip
         # them all to 0 — shift by min instead.
-        if baseline_scores:
-            min_val = min(baseline_scores.values())
-            if min_val < 0:
-                baseline_scores = {rn: s - min_val
-                                   for rn, s in baseline_scores.items()}
+        # Reps that returned -inf (numerical failure in _evaluate_allocation)
+        # would poison the shift (-inf - -inf = NaN), so drop them from the
+        # min calculation and assign them weight 0 afterwards.
+        baseline_scores = _sanitize_baseline_scores(baseline_scores)
 
     # Apply weighting scheme to transform baseline scores into weights
     weights = _compute_allocation_weights(baseline_scores, weighting_scheme,
@@ -641,8 +658,11 @@ def allocate_performance_weighted(rep_dict_train, rep_dict_val, train_labels, va
     # Standard path: proportional allocation from weights
     total_w = sum(weights.values())
 
-    if total_w == 0:
-        # All weights zero — fall back to equal allocation
+    if not np.isfinite(total_w) or total_w == 0:
+        # All weights zero or non-finite — fall back to equal allocation.
+        # Non-finite total_w can happen if a weighting scheme (e.g. power_law)
+        # amplifies a pathological score; sanitisation upstream should catch
+        # most cases, this is defensive insurance.
         n_reps = len(weights)
         base_alloc = total_budget // n_reps
         remainder = total_budget - base_alloc * n_reps
