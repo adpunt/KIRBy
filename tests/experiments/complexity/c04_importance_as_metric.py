@@ -251,6 +251,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("EXPERIMENT C04: IMPORTANCE WEIGHTS AS LEARNED METRICS")
     print("=" * 70)
 
+    # Classification support is TODO — the similarity-retrieval section uses
+    # continuous label averaging (np.average on y_train) which doesn't
+    # translate to class predictions without a majority/soft-voting rewrite.
+    # Skip gracefully rather than report nonsense on classification datasets.
+    task_type = data.get('task_type', 'regression')
+    if task_type == 'classification':
+        print(f"  SKIPPING: c04 currently only supports regression targets.")
+        print(f"  TODO: add classification branch (KNeighborsClassifier + majority-vote retrieval).")
+        return {'skipped': True, 'reason': 'classification_not_supported',
+                'task_type': task_type}
+
     importance_methods = config['importance_methods']
     n_folds = config['n_splits']
     budget = kwargs.get('budget', 25)
