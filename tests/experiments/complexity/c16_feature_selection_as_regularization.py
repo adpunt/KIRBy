@@ -24,9 +24,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import numpy as np
 from scipy.optimize import minimize_scalar
 from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import Ridge
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.svm import SVR
+from sklearn.linear_model import Ridge, LogisticRegression
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
+from sklearn.svm import SVR, SVC
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
@@ -40,9 +40,41 @@ from experiments._shared import (
 # MODEL FAMILIES WITH REGULARIZATION AXES
 # =========================================================================
 
-def _get_regularization_families():
-    """Return {family: [(param_name, param_value, factory_fn), ...]}."""
-    families = {
+def _get_regularization_families(task_type='regression'):
+    """Return {family: [(param_name, param_value, factory_fn), ...]}.
+
+    Regression families use Ridge/RFR/SVR. Classification families use
+    LogisticRegression/RFClassifier/SVC (the latter with probability=True so
+    AUROC can use class-1 probabilities downstream). LogReg's C parameter is
+    inverse regularization: smaller C → stronger L2 penalty (opposite
+    convention to Ridge's alpha). The sweep values are chosen so that
+    _best_fn picks the most-regularized model that still fits well.
+    """
+    if task_type == 'classification':
+        return {
+            'LogReg': [
+                # C is inverse reg: small C = strong L2 penalty.
+                ('C', 0.01, lambda: LogisticRegression(C=0.01, max_iter=2000)),
+                ('C', 0.1, lambda: LogisticRegression(C=0.1, max_iter=2000)),
+                ('C', 1.0, lambda: LogisticRegression(C=1.0, max_iter=2000)),
+                ('C', 10.0, lambda: LogisticRegression(C=10.0, max_iter=2000)),
+                ('C', 100.0, lambda: LogisticRegression(C=100.0, max_iter=2000)),
+                ('C', 1000.0, lambda: LogisticRegression(C=1000.0, max_iter=2000)),
+            ],
+            'RF': [
+                ('max_depth', 3, lambda: RandomForestClassifier(n_estimators=100, max_depth=3, random_state=42, n_jobs=-1)),
+                ('max_depth', 5, lambda: RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42, n_jobs=-1)),
+                ('max_depth', 10, lambda: RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1)),
+                ('max_depth', None, lambda: RandomForestClassifier(n_estimators=100, max_depth=None, random_state=42, n_jobs=-1)),
+            ],
+            'SVM': [
+                ('C', 0.01, lambda: SVC(kernel='rbf', C=0.01, probability=True)),
+                ('C', 0.1, lambda: SVC(kernel='rbf', C=0.1, probability=True)),
+                ('C', 1.0, lambda: SVC(kernel='rbf', C=1.0, probability=True)),
+                ('C', 10.0, lambda: SVC(kernel='rbf', C=10.0, probability=True)),
+            ],
+        }
+    return {
         'Ridge': [
             ('alpha', 0.001, lambda: Ridge(alpha=0.001)),
             ('alpha', 0.01, lambda: Ridge(alpha=0.01)),
@@ -64,15 +96,27 @@ def _get_regularization_families():
             ('C', 10.0, lambda: SVR(kernel='rbf', C=10.0)),
         ],
     }
-    return families
 
 
 # =========================================================================
 # CORE EVALUATION
 # =========================================================================
 
+def _score_prediction(model, X_val, y_val, metric_fn, task_type):
+    """Score predictions with metric-appropriate format (see c18 for rationale)."""
+    if task_type == 'classification' and hasattr(model, 'predict_proba'):
+        try:
+            probs = model.predict_proba(X_val)
+            if probs.shape[1] == 2:
+                return metric_fn(y_val, probs[:, 1])
+        except Exception:
+            pass
+    return metric_fn(y_val, model.predict(X_val))
+
+
 def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
-                   metric_fn, augmentations=None, blueprint=None):
+                   metric_fn, augmentations=None, blueprint=None,
+                   task_type='regression'):
     """Evaluate one (model, budget) cell. Returns (score, train_score)."""
     sample_X = next(iter(reps.values()))
     val_scores = []
@@ -107,8 +151,8 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
 
         model = model_factory()
         model.fit(X_tr_s, y_train)
-        val_scores.append(metric_fn(y_val, model.predict(X_va_s)))
-        train_scores.append(metric_fn(y_train, model.predict(X_tr_s)))
+        val_scores.append(_score_prediction(model, X_va_s, y_val, metric_fn, task_type))
+        train_scores.append(_score_prediction(model, X_tr_s, y_train, metric_fn, task_type))
 
     if not val_scores:
         return float('nan'), float('nan')
@@ -132,13 +176,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     mode = 'intermediary' if n_folds == 1 else 'full'
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    task_type = data.get('task_type', 'regression')
     total_dim = sum(v.shape[1] for v in reps.values())
     # Cap full_dim at 2048 to prevent MLP/SVM blowup on large concat spaces
     capped_full = min(total_dim, 2048)
     budgets = [b for b in [25, 50, 100, 200, 500, 1024, capped_full] if b <= total_dim]
     budgets = sorted(set(budgets))  # deduplicate
 
-    families = _get_regularization_families()
+    families = _get_regularization_families(task_type=task_type)
     n_samples = len(labels)
 
     # SVM is slow on large datasets
@@ -184,7 +229,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 val_score, train_score = _evaluate_cell(
                     reps, labels, groups, factory, budget, n_folds, mode, metric_fn,
                     augmentations=augmentations,
-                    blueprint=blueprints.get(budget))
+                    blueprint=blueprints.get(budget),
+                    task_type=task_type)
                 heatmap[budget][str(pval)] = {
                     'val': val_score,
                     'train': train_score,
@@ -246,31 +292,35 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'comparison': convert_numpy(comparison),
         }
 
-        # --- Analysis 3: L2 equivalence (Ridge only) ---
-        if fam_name == 'Ridge':
+        # --- Analysis 3: L2 equivalence (linear family — Ridge or LogReg) ---
+        if fam_name in ('Ridge', 'LogReg'):
+            # For Ridge, the default regularization pval is 1.0 (alpha=1.0).
+            # For LogReg, the default is 1.0 (C=1.0 = moderate regularization).
+            # Both live at index len(variants)//2 in the variants list.
+            default_pval = variants[len(variants) // 2][1]
             l2_equivalence = {}
             for budget in budgets:
                 if budget >= full_dim_budget:
                     continue
-                hybrid_gap = heatmap[budget].get('1.0', {}).get('gap', float('nan'))
+                hybrid_gap = heatmap[budget].get(str(default_pval), {}).get('gap', float('nan'))
                 if np.isnan(hybrid_gap):
                     continue
-                # Find alpha at full_dim that gives the same gap
+                # Find the regularization pval at full_dim that gives the same gap
                 full_gaps = [(pval, heatmap[full_dim_budget].get(str(pval), {}).get('gap', float('nan')))
                              for _, pval, _ in variants]
                 full_gaps = [(p, g) for p, g in full_gaps if not np.isnan(g)]
                 if len(full_gaps) >= 2:
-                    # Simple interpolation: find alpha where gap ≈ hybrid_gap
-                    alphas = np.array([p for p, _ in full_gaps])
+                    # Simple interpolation: find pval where gap ≈ hybrid_gap
+                    pvals = np.array([p for p, _ in full_gaps])
                     gaps = np.array([g for _, g in full_gaps])
                     # Find nearest gap
                     idx = np.argmin(np.abs(gaps - hybrid_gap))
                     l2_equivalence[budget] = {
                         'hybrid_gap': hybrid_gap,
-                        'equivalent_alpha': float(alphas[idx]),
-                        'alpha_gap': float(gaps[idx]),
+                        'equivalent_param': float(pvals[idx]),
+                        'param_gap': float(gaps[idx]),
                     }
-                    print(f"    L2 equiv: budget={budget} ≈ alpha={alphas[idx]:.3f} "
+                    print(f"    L2 equiv: budget={budget} ≈ {param_name}={pvals[idx]:.3f} "
                           f"(gap diff={abs(hybrid_gap - gaps[idx]):.4f})")
 
             fam_result['l2_equivalence'] = convert_numpy(l2_equivalence)
