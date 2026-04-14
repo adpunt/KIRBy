@@ -25,6 +25,7 @@ from experiments._shared import (
 )
 from experiments.similarity.similarity_helpers import (
     similarity_activity_correlation, compute_sali, violation_rate,
+    run_antibody_cliff_analysis,
 )
 
 from kirby.hybrid import compute_feature_importance
@@ -239,6 +240,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"    Best hybrid:        {best_method} (SAC={best_sac:.4f}, dim={hybrid_dim})")
     delta_sac = best_sac - best_rep_sac
     print(f"    Delta vs best rep:  {delta_sac:+.4f}")
+
+    # Sequence-based cliff sweep (antibody datasets + nucleotide) — independent
+    # of any representation choice. Same sweep as s01 for cross-experiment
+    # comparability; results cached in similarity_helpers cache where applicable.
+    cliff_results = run_antibody_cliff_analysis(data, is_clf=is_classification)
+    if cliff_results is not None:
+        results['_sequence_cliffs'] = cliff_results
 
     return results
 

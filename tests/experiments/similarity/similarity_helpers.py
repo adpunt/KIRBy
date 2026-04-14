@@ -311,6 +311,211 @@ def identify_cliff_compounds(ecfp4, y, tanimoto_threshold=0.55, activity_k=2.0,
 
     return cliff_mask, info
 
+
+# =============================================================================
+# ANTIBODY SEQUENCE CLIFF ANALYSIS (classification-aware edit-distance sweep)
+# =============================================================================
+#
+# References for threshold choices and precedent:
+#   Mason et al. 2021, Nat Biomed Eng — trastuzumab CDR-H3 DMS, Hamming ≤ 1/2/3
+#     neighborhoods with Hamming ≤ 2 as local-cliff default. Closest analog
+#     for binary binder/non-binder flip analysis.
+#   Adams et al. 2019, eLife — Ab-14 DMS, single/double mutant epistasis at
+#     Hamming 1 and 2.
+#   Phillips et al. 2023, eLife — CR9114/CR6261 DMS, pairs at Hamming 1 for
+#     epistasis, ≤ 2 for local landscape.
+#
+# Caveat: classification cliffs are under-formalized for antibodies. Hamming
+# on full V-region is length-biased; for variable-length CDR-H3 see Gupta 2017
+# normalized Levenshtein. Cite Mason 2021 as the primary methodological anchor.
+
+def _cdr_cache_path(dataset_name):
+    """Path for cached IMGT CDR residue indices per antibody dataset."""
+    from pathlib import Path
+    cache_root = Path(os.environ.get(
+        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
+    return cache_root / 'cdr_indices' / f'{dataset_name}.pkl'
+
+
+def _extract_cdr_sequences(heavy_seqs, dataset_name=None):
+    """Extract CDR-only substrings from heavy chains using ANARCI (IMGT).
+
+    Results are cached per dataset under ~/.cache/kirby/cdr_indices/ since
+    ANARCI is slow (~seconds per sequence). Returns list of CDR-concatenated
+    strings (CDR1+CDR2+CDR3). Returns None if ANARCI unavailable or fails.
+    """
+    import pickle
+    cache_path = _cdr_cache_path(dataset_name) if dataset_name else None
+    if cache_path and cache_path.exists():
+        try:
+            return pickle.loads(cache_path.read_bytes())
+        except Exception:
+            pass
+
+    try:
+        from kirby.representations.antibody import get_cdr_residue_indices
+    except Exception:
+        return None
+
+    cdr_seqs = []
+    failures = 0
+    for seq in heavy_seqs:
+        try:
+            idxs = get_cdr_residue_indices(seq)
+            if not idxs:
+                failures += 1
+                cdr_seqs.append(seq)  # fallback to full sequence for this one
+                continue
+            cdr_seqs.append(''.join(seq[i] for i in idxs))
+        except Exception:
+            failures += 1
+            cdr_seqs.append(seq)
+
+    if failures > 0.5 * len(heavy_seqs):
+        # More than half failed — likely ANARCI not installed or broken.
+        # Signal failure to caller so they can skip the CDR scope entirely.
+        return None
+
+    if cache_path:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_bytes(pickle.dumps(cdr_seqs))
+        except Exception:
+            pass  # cache write failure is non-fatal
+
+    return cdr_seqs
+
+
+def antibody_sequence_cliff_sweep(sequences, labels, is_clf,
+                                  max_edits_sweep=(1, 2, 3, 5),
+                                  max_compounds=3000, scope_label='full_V',
+                                  activity_k=2.0):
+    """Run edit-distance cliff detection across multiple Hamming thresholds.
+
+    For classification: cliff = pair within Hamming <= max_edits but with
+    different class labels (binder/non-binder flip, polyreactive/specific
+    flip, etc.).
+
+    Args:
+        sequences: list of str (heavy chains, or CDR-concatenated strings).
+        labels: array of activity or class labels.
+        is_clf: True for classification datasets.
+        max_edits_sweep: Hamming thresholds to report (sensitivity sweep).
+        max_compounds: subsample cap — n² Hamming matrix grows fast.
+        scope_label: 'full_V' or 'cdr_only' — for reporting/logging only.
+        activity_k: MAD multiplier for regression cliff threshold (unused
+            for classification; see identify_cliff_compounds_editdist).
+
+    Returns:
+        dict: {
+            'scope': scope_label,
+            'n_analyzed': int,
+            'thresholds': {max_edits: {
+                'n_cliff_pairs': int,
+                'n_cliff_compounds': int,
+                'pct_cliff_compounds': float,
+                'mean_edit_dist': float,
+                'median_edit_dist': float,
+            }},
+            'notes': str,  # interpretation caveats
+        }
+    """
+    n = len(sequences)
+    y = np.asarray(labels)
+
+    if n > max_compounds:
+        rng = np.random.RandomState(42)
+        idx = rng.choice(n, max_compounds, replace=False)
+        sequences = [sequences[i] for i in idx]
+        y = y[idx]
+        n = max_compounds
+
+    result = {
+        'scope': scope_label,
+        'n_analyzed': n,
+        'thresholds': {},
+    }
+
+    for max_edits in max_edits_sweep:
+        try:
+            _, info = identify_cliff_compounds_editdist(
+                sequences, y, max_edits=max_edits, activity_k=activity_k,
+                is_clf=is_clf)
+            # Drop the per-compound count array (too large for JSON).
+            info_clean = {k: v for k, v in info.items()
+                          if k not in ('cliff_pair_counts',)}
+            result['thresholds'][int(max_edits)] = info_clean
+        except Exception as e:
+            result['thresholds'][int(max_edits)] = {'error': str(e)}
+
+    if is_clf:
+        result['notes'] = (
+            "Classification cliff = pair within Hamming <= max_edits but "
+            "with different class labels. Binary indicator is coarser than "
+            "continuous |delta_y|, so interpretation should be qualitative "
+            "(cliff density, flip frequency) rather than quantitative. "
+            "Primary anchor: Mason et al. 2021 (trastuzumab CDR-H3 DMS). "
+            "See also Phillips 2023, Adams 2019."
+        )
+    else:
+        result['notes'] = (
+            "Regression cliff = pair within Hamming <= max_edits with "
+            "|delta_y| > activity_k * MAD(y). Anchor: Mason 2021 DMS."
+        )
+
+    return result
+
+
+def run_antibody_cliff_analysis(data, is_clf, max_edits_sweep=(1, 2, 3, 5)):
+    """Driver: run sequence cliff sweep at full V-region and CDR-only scopes.
+
+    Returns a dict or None if the dataset has no sequence data (non-antibody,
+    non-nucleotide, or sequences not exposed by the loader).
+    """
+    heavy_seqs = data.get('heavy_seqs')
+    if heavy_seqs is None or len(heavy_seqs) == 0:
+        # Antibody datasets expose heavy_seqs; nucleotide uses sequences key.
+        seqs = data.get('sequences')
+        if seqs is None or len(seqs) == 0:
+            return None
+        heavy_seqs = list(seqs)
+
+    labels = data['labels']
+    dataset_name = data.get('dataset_name')  # may be None, used for cache key
+    results = {}
+
+    # Scope 1: full V-region (fast, always available).
+    print(f"  Sequence cliff sweep (full V-region, n={len(heavy_seqs)})...")
+    results['full_V'] = antibody_sequence_cliff_sweep(
+        list(heavy_seqs), labels, is_clf,
+        max_edits_sweep=max_edits_sweep, scope_label='full_V')
+    for thresh, info in results['full_V']['thresholds'].items():
+        if 'error' not in info:
+            print(f"    Hamming<={thresh}: {info['n_cliff_pairs']} pairs, "
+                  f"{info['n_cliff_compounds']} cliff compounds "
+                  f"({info.get('pct_cliff_compounds', 0):.1f}%)")
+
+    # Scope 2: CDR-only (opt-in, slower due to ANARCI).
+    # Caches CDR extraction per dataset so repeated runs are fast.
+    cdr_seqs = _extract_cdr_sequences(list(heavy_seqs), dataset_name=dataset_name)
+    if cdr_seqs is not None:
+        print(f"  Sequence cliff sweep (CDR-only, from ANARCI/IMGT)...")
+        results['cdr_only'] = antibody_sequence_cliff_sweep(
+            cdr_seqs, labels, is_clf,
+            max_edits_sweep=max_edits_sweep, scope_label='cdr_only')
+        for thresh, info in results['cdr_only']['thresholds'].items():
+            if 'error' not in info:
+                print(f"    Hamming<={thresh}: {info['n_cliff_pairs']} pairs, "
+                      f"{info['n_cliff_compounds']} cliff compounds "
+                      f"({info.get('pct_cliff_compounds', 0):.1f}%)")
+    else:
+        results['cdr_only'] = {'skipped': True,
+                               'reason': 'ANARCI unavailable or failed on >50% of sequences'}
+        print(f"  Sequence cliff sweep (CDR-only): SKIPPED (ANARCI unavailable)")
+
+    return results
+
+
 # Similarity-specific extra params (layered on top of SPEED_TIERS config)
 SIMILARITY_EXTRA = {
     'weight_methods': ['lightgbm_gain'],
