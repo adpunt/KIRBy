@@ -243,8 +243,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Sequence-based cliff sweep (antibody datasets + nucleotide) — independent
     # of any representation choice. Same sweep as s01 for cross-experiment
-    # comparability; results cached in similarity_helpers cache where applicable.
-    cliff_results = run_antibody_cliff_analysis(data, is_clf=is_classification)
+    # comparability; CDR indices cached per-dataset for repeat runs.
+    cliff_results = run_antibody_cliff_analysis(
+        data, is_clf=is_classification, dataset_name=dataset_name)
     if cliff_results is not None:
         results['_sequence_cliffs'] = cliff_results
 
