@@ -156,15 +156,16 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                 'n_samples': len(data['labels']),
                 'elapsed_seconds': elapsed,
                 'complexity': complexity,
+                'metric': metric_name_ds,
                 'best_model': best['model'] if best else None,
-                'best_r2': best['score_mean'] if best else None,
+                'best_score': best['score_mean'] if best else None,
                 'best_allocation': best['blueprint'].allocation_method if best else None,
                 'best_importance': best['blueprint'].importance_method if best else None,
                 'best_budget': best['blueprint'].budget if best else None,
                 'best_dim': best['n_features'] if best else None,
                 'baselines': search_result.baselines,
                 'best_by_model': {
-                    m: {'budget': r['budget'], 'r2': r['score_mean'], 'dim': r['n_features']}
+                    m: {'budget': r['budget'], 'score': r['score_mean'], 'dim': r['n_features']}
                     for m, r in search_result.best_by_model.items()
                 },
                 'performance_matrix': search_result.performance_matrix,
@@ -172,7 +173,7 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
             }
             results[ds_name] = ds_result
 
-            print(f"    Best: {ds_result['best_model']}, R2={ds_result['best_r2']:.4f}, "
+            print(f"    Best: {ds_result['best_model']}, {metric_name_ds}={ds_result['best_score']:.4f}, "
                   f"alloc={ds_result['best_allocation']}, imp={ds_result['best_importance']}, "
                   f"budget={ds_result['best_budget']}")
 
@@ -182,12 +183,12 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
 
     # Cross-dataset comparison table
     print("\n  CROSS-CONTEXT COMPARISON:")
-    print(f"  {'Dataset':<10} {'N':<6} {'Best Model':<12} {'Importance':<15} {'Budget':<8} {'R2':<8}")
+    print(f"  {'Dataset':<10} {'N':<6} {'Best Model':<12} {'Importance':<15} {'Budget':<8} {'Score':<8}")
     print("  " + "-" * 65)
     for ds_name, r in results.items():
         if 'error' not in r:
             print(f"  {ds_name:<10} {r['n_samples']:<6} {r['best_model']:<12} "
-                  f"{r['best_importance']:<15} {r['best_budget']:<8} {r['best_r2']:.4f}")
+                  f"{r['best_importance']:<15} {r['best_budget']:<8} {r['best_score']:.4f}")
 
     # --- Dataset complexity vs optimal hybrid dimension ---
     valid = {ds: r for ds, r in results.items()
@@ -252,7 +253,7 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                 for ds in ds_names:
                     bm = valid[ds].get('best_by_model', {}).get(model)
                     if bm:
-                        row += f"b={bm['budget']:>3} R2={bm['r2']:.3f} "
+                        row += f"b={bm['budget']:>3} score={bm['score']:.3f} "
                     else:
                         row += f"{'--':>14}"
                 print(row)
@@ -260,22 +261,22 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
             # MODEL x DATASET INTERACTION ANALYSIS
             model_list = sorted(model_names)
             budget_matrix = []
-            r2_matrix = []
+            score_matrix = []
             for model in model_list:
                 model_budgets = []
-                model_r2s = []
+                model_scores = []
                 for ds in ds_names:
                     bm = valid[ds].get('best_by_model', {}).get(model)
                     if bm:
                         model_budgets.append(bm['budget'])
-                        model_r2s.append(bm['r2'])
+                        model_scores.append(bm['score'])
                     else:
                         model_budgets.append(np.nan)
-                        model_r2s.append(np.nan)
+                        model_scores.append(np.nan)
                 budget_matrix.append(model_budgets)
-                r2_matrix.append(model_r2s)
+                score_matrix.append(model_scores)
             budget_matrix = np.array(budget_matrix, dtype=float)
-            r2_matrix = np.array(r2_matrix, dtype=float)
+            score_matrix = np.array(score_matrix, dtype=float)
 
             # Budget variance decomposition
             if budget_matrix.shape[0] >= 2 and budget_matrix.shape[1] >= 2:
@@ -307,14 +308,14 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
 
                     # Does budget range differ across models?
                     print(f"\n  MODEL DIMENSION SENSITIVITY:")
-                    print(f"  {'Model':<12} {'Budget Range':<15} {'Budget Std':<12} {'R2 Range':<12}")
+                    print(f"  {'Model':<12} {'Budget Range':<15} {'Budget Std':<12} {'Score Range':<12}")
                     print("  " + "-" * 51)
                     for i, model in enumerate(model_list):
                         b_row = budget_matrix[i]
-                        r2_row = r2_matrix[i]
+                        score_row = score_matrix[i]
                         if not np.any(np.isnan(b_row)):
                             print(f"  {model:<12} {int(b_row.min())}-{int(b_row.max()):<10} "
-                                  f"{np.std(b_row):>8.1f}    {np.ptp(r2_row):>8.4f}")
+                                  f"{np.std(b_row):>8.1f}    {np.ptp(score_row):>8.4f}")
 
     return results
 
