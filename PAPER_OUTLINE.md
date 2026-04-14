@@ -311,7 +311,7 @@ Existing coverage: C10 Phase 3 (Jaccard + Nogueira), C16 (budget as regularizati
 | C15 (ML theory depth) | EXISTS | Run on 1-2 datasets; assess interest |
 | C18 (diversity vs depth) | EXISTS | Run on 2-3 datasets |
 | C22 (explainability) | EXISTS | Requires precomputed search results |
-| C23 (evaluator-model matching) | EXISTS | Run on 2-3 datasets |
+| ~~C23 (evaluator-model matching)~~ | ~~EXISTS~~ | **DEPRIORITIZED 2026-04-15** — prior runs confirm matched > mismatched; not re-running on antibody classification suite (~5× compute vs normal experiment). Retained for future cross-domain robustness appendix. |
 | C24 (blueprint transfer) | NEW | Run on 2-3 datasets |
 
 No new code needed for supplementary — they all exist and just need runs.

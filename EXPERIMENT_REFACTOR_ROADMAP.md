@@ -48,7 +48,7 @@ settings. Thesis experiments (Step 4) use those settings to produce chapter resu
 | **c19** | `c19_importance_weighted_training.py` | Importance-weighted sample/feature training | Feature importance as training signal |
 | **c21** | `c21_single_rep_augmentation.py` | Augmentation on individual reps (merged C20) | Augmentation helps even without hybridization |
 | **c22** | `c22_explainability.py` | SHAP/importance explanations of hybrid decisions | Hybrid feature selection is interpretable |
-| **c23** | `c23_evaluator_model_matching.py` | Internal evaluator vs downstream model matching | Matched evaluators improve hybrid quality |
+| ~~**c23**~~ | ~~`c23_evaluator_model_matching.py`~~ | ~~Internal evaluator vs downstream model matching~~ | **DEPRIORITIZED 2026-04-15** — methodology confirmation only, not re-running on antibody classification suite. Prior runs establish the finding (matched > mismatched, especially for NNs). ~5× compute cost of a normal experiment. Code retained for future appendix / cross-domain robustness if needed. |
 | **c24** | `c24_blueprint_transfer.py` | Cross-fold blueprint generalization + Nogueira stability | Feature selection is not overfit to training folds |
 
 **Dispatch notes:**
@@ -222,7 +222,7 @@ c09/s09 cross-dataset summary gets at this but only within a domain.
 | "Double descent avoidance" | c15c | Budget always << n, no interpolation threshold |
 | "Generalization bounds" | c15d | Rademacher complexity, sqrt(d/n) scaling |
 | "Explainability" | c22 | SHAP feature attribution |
-| "Evaluator-model matching" | c23 | c02 grid (allocation matters) |
+| ~~"Evaluator-model matching"~~ | ~~c23~~ **(deprioritized 2026-04-15)** | c02 grid (allocation matters) |
 | "Pretrained hybrids" | OPIG C5 (`opig_blueprint_transfer.py`) | c24 (cross-fold stability), c03 (within-domain transfer) |
 
 ---
