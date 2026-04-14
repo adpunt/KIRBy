@@ -11,9 +11,10 @@
 #   checkpoint/       — pretrained model + extended tokenizer
 #
 # Usage (on login node):
-#   bash tests/slurm_scripts/submit_cgr_smiles_pretrain.sh           # full pipeline
-#   bash tests/slurm_scripts/submit_cgr_smiles_pretrain.sh corpus    # corpus only
-#   bash tests/slurm_scripts/submit_cgr_smiles_pretrain.sh pretrain  # pretrain only
+#   bash tests/slurm_scripts/submit_cgr_smiles_pretrain.sh               # full pipeline (ARC, CPU)
+#   bash tests/slurm_scripts/submit_cgr_smiles_pretrain.sh corpus        # corpus only (ARC, CPU)
+#   bash tests/slurm_scripts/submit_cgr_smiles_pretrain.sh pretrain      # pretrain only (ARC, CPU — slow, see Issue 1/2 in FIXUP_PLAN.md)
+#   bash tests/slurm_scripts/submit_cgr_smiles_pretrain.sh pretrain_htc  # pretrain only (HTC, GPU — recommended)
 
 STAGE=${1:-all}
 OUTPUT_DIR="/data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain"
@@ -36,6 +37,8 @@ case "$STAGE" in
         ;;
     pretrain)
         # MLM pretraining (assumes corpus already exists)
+        # ARC CPU path — retained as fallback. CPU is ~14-28h for 50K steps,
+        # so this almost certainly TIMES OUT at 6h. Use pretrain_htc instead.
         J=$(sbatch \
             --job-name="cgr_pretrain" \
             --nodes=1 --ntasks=1 --cpus-per-task=8 \
@@ -44,7 +47,22 @@ case "$STAGE" in
             --mail-user="${EMAIL}" --mail-type=END,FAIL \
             --wrap="${WRAP_PREFIX} && python -m kirby.finetuning.cgr_smiles_pretrain --stage pretrain --output-dir ${OUTPUT_DIR} --max-steps 50000 --batch-size 32 ${STDERR_FILTER}" \
             | awk '{print $4}')
-        echo "  $J  cgr_pretrain  (medium, 128G, 6h)"
+        echo "  $J  cgr_pretrain  (medium, 128G, 6h, ARC CPU — likely timeout)"
+        ;;
+    pretrain_htc)
+        # HTC GPU path — runs on long partition with A100/V100. 50K steps in ~1-2h.
+        # Assumes corpus.txt already exists at OUTPUT_DIR (shared between clusters
+        # via arc-netapp home mount). Run from HTC login node.
+        J=$(sbatch \
+            --job-name="cgr_pretrain" \
+            --nodes=1 --ntasks=1 --cpus-per-task=8 \
+            --time=23:59:00 --partition=long \
+            --mem=128G \
+            --gres=gpu:1 \
+            --mail-user="${EMAIL}" --mail-type=END,FAIL \
+            --wrap="${WRAP_PREFIX} && python -m kirby.finetuning.cgr_smiles_pretrain --stage pretrain --output-dir ${OUTPUT_DIR} --max-steps 50000 --batch-size 32 ${STDERR_FILTER}" \
+            | awk '{print $4}')
+        echo "  $J  cgr_pretrain  (long, 128G, 24h, HTC + GPU)"
         ;;
     all)
         # Single job: corpus + pretrain
@@ -62,9 +80,10 @@ case "$STAGE" in
         echo "Usage: bash tests/slurm_scripts/submit_cgr_smiles_pretrain.sh [STAGE]"
         echo ""
         echo "Stages:"
-        echo "  all       Full pipeline: corpus + pretrain (default)"
-        echo "  corpus    Corpus generation only (CPU, ~30 min)"
-        echo "  pretrain  MLM pretraining only (GPU, ~2-4 hours)"
+        echo "  all           Full pipeline: corpus + pretrain (default, ARC)"
+        echo "  corpus        Corpus generation only (ARC, CPU, ~30 min)"
+        echo "  pretrain      MLM pretraining only (ARC, CPU, see Issue 1/2 — likely timeout)"
+        echo "  pretrain_htc  MLM pretraining only (HTC, GPU, ~1-2h — recommended)"
         exit 1
         ;;
 esac
