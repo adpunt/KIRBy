@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
@@ -88,6 +88,23 @@ def _uniform_allocation(train_reps, val_reps, y_train, rep_subset, budget):
 # RUN
 # =========================================================================
 
+def _score_prediction(model, X_val, y_val, metric_fn, task_type):
+    """Score model predictions appropriately for the metric.
+
+    Classification + binary: AUROC needs class-1 probabilities, not labels.
+    Classification + multi-class: F1 needs class labels, not probabilities.
+    Regression: anything that has .predict() works.
+    """
+    if task_type == 'classification' and hasattr(model, 'predict_proba'):
+        try:
+            probs = model.predict_proba(X_val)
+            if probs.shape[1] == 2:
+                return metric_fn(y_val, probs[:, 1])
+        except Exception:
+            pass
+    return metric_fn(y_val, model.predict(X_val))
+
+
 def run(data, config, output_dir, dataset_name, **kwargs):
     """C18: Diversity vs Depth."""
     print("\n" + "=" * 70)
@@ -100,6 +117,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
     metric_name, metric_fn, _ = get_domain_metric(data)
+    task_type = data.get('task_type', 'regression')
+    _RF = RandomForestClassifier if task_type == 'classification' else RandomForestRegressor
 
     budgets = kwargs.get('budgets', [50, 100])
     all_rep_names = sorted(reps.keys())
@@ -159,11 +178,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     scaler = StandardScaler()
                     X_tr_s = scaler.fit_transform(X_tr)
                     X_va_s = scaler.transform(X_va)
-                    rf = RandomForestRegressor(n_estimators=100,
-                                              random_state=42, n_jobs=-1)
+                    rf = _RF(n_estimators=100, random_state=42, n_jobs=-1)
                     rf.fit(X_tr_s, y_train)
                     fold_scores.setdefault(cond_name, []).append(
-                        metric_fn(y_val, rf.predict(X_va_s)))
+                        _score_prediction(rf, X_va_s, y_val, metric_fn, task_type))
 
             # Uniform allocation across all reps
             X_tr, X_va = _uniform_allocation(
@@ -172,11 +190,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 scaler = StandardScaler()
                 X_tr_s = scaler.fit_transform(X_tr)
                 X_va_s = scaler.transform(X_va)
-                rf = RandomForestRegressor(n_estimators=100,
-                                          random_state=42, n_jobs=-1)
+                rf = _RF(n_estimators=100, random_state=42, n_jobs=-1)
                 rf.fit(X_tr_s, y_train)
                 fold_scores.setdefault('uniform_all', []).append(
-                    metric_fn(y_val, rf.predict(X_va_s)))
+                    _score_prediction(rf, X_va_s, y_val, metric_fn, task_type))
 
             # Natural hybrid (per-fold via search blueprint)
             if search is not None:
@@ -198,23 +215,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         scaler = StandardScaler()
                         X_tr_s = scaler.fit_transform(X_tr_h)
                         X_va_s = scaler.transform(X_va_h)
-                        rf = RandomForestRegressor(n_estimators=100,
-                                                  random_state=42, n_jobs=-1)
+                        rf = _RF(n_estimators=100, random_state=42, n_jobs=-1)
                         rf.fit(X_tr_s, y_train)
                         fold_scores.setdefault('natural', []).append(
-                            metric_fn(y_val, rf.predict(X_va_s)))
+                            _score_prediction(rf, X_va_s, y_val, metric_fn, task_type))
                 except Exception as e:
                     print(f"    natural fold FAILED: {e}")
 
         # Aggregate per-fold scores
         conditions = {}
         for cond_name, scores in fold_scores.items():
-            r2 = float(np.mean(scores)) if scores else float('nan')
+            score = float(np.mean(scores)) if scores else float('nan')
             conditions[cond_name] = {
-                'r2': r2,
+                'score': score,
                 'n_features': budget,
             }
-            print(f"    {cond_name}: R²={r2:.4f}")
+            print(f"    {cond_name}: {metric_name}={score:.4f}")
 
         results['per_budget'][budget] = convert_numpy(conditions)
 
