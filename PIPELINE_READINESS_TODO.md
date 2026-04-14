@@ -198,11 +198,15 @@ Remaining:
 
 | Category | Experiments | Datasets | Helpers | Roadmap |
 |----------|------------|----------|---------|---------|
-| Complexity | C01-C21 | All 40 ready | `complexity_helpers.py` | `EXPERIMENT_REFACTOR_ROADMAP.md` |
+| Complexity | C01-C22, C24 (C23 deprioritized 2026-04-15) | All 40 ready | `complexity_helpers.py` | `EXPERIMENT_REFACTOR_ROADMAP.md` |
 | Similarity | S01-S13 | All 40 ready | `similarity_helpers.py` | `EXPERIMENT_REFACTOR_ROADMAP.md` |
-| Noise | N01-N13 all active | All 40 ready | `noise_helpers.py` | `NOISE_EXPERIMENT_ROADMAP.md` |
+| Noise | N01-N13 all active (regression datasets only — cut for classification 2026-04-15) | All regression datasets | `noise_helpers.py` | `NOISE_EXPERIMENT_ROADMAP.md` |
 | OPIG | 6 standalone scripts | Specific OPIG datasets | — | `OPIG_COLLAB_ROADMAP.md` |
 | Federated | fed01-fed05 all implemented | herg, caco2, logd | `federated_helpers.py` | `FEDERATED_EXPERIMENT_ROADMAP.md` |
+
+**C23 deprioritization (2026-04-15):** Evaluator-model matching experiment cut from the active run list. Prior runs confirm the methodology finding (matched > mismatched, especially NNs); ~5× compute cost per dataset makes re-running on 9 antibody classification datasets not worth it. Code retained for future cross-domain robustness appendix if needed. See `EXPERIMENT_REFACTOR_ROADMAP.md` for details.
+
+**Noise on classification (2026-04-15):** Noise category cut for classification datasets. Of 13 scripts, only n02 (sample weighting) is classification-ready; the rest assume continuous targets (Gaussian injection, residual-based detection, continuous noise distributions). n01/n03/n04/n05/n07/n08/n11/n12 could be reframed for classification with label-flip noise models but that's a significant rewrite — deferred. Noise experiments continue on regression datasets (molecular, DTA, reaction, regression antibody).
 
 **Noise (N09-N13):** All implemented. N09 (LNL survey, 12 methods), N10 (hybrid neighborhood LNL), N11 (estimation × remediation grid), N12 (importance-weighted distance), N13 (alt noise distributions). New utility: `src/kirby/utils/lnl_methods.py` (12 training-loop LNL methods). See `NOISE_EXPERIMENT_ROADMAP.md`.
 
