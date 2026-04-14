@@ -83,6 +83,40 @@ SBATCH_EOF
     echo "  ${jid}  dta_kiba_fill  (long, 256G, 24h, HTC+GPU)"
 }
 
+submit_dta_bindingdb_kd() {
+    # Full fresh resubmit. Previous run (7440293) hit 4d wall and
+    # produced no output because saves were end-only. Commit a81b0eb
+    # adds per-rep incremental checkpointing, so if this 48h run
+    # times out we resubmit with --skip-existing and pick up.
+    local jid
+    jid=$(sbatch --parsable <<SBATCH_EOF
+#!/bin/bash
+#SBATCH --job-name=dta_bindingdb_kd
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --time=47:59:00
+#SBATCH --partition=medium
+#SBATCH --mem=256G
+#SBATCH --gres=gpu:1
+#SBATCH --mail-user=${EMAIL}
+#SBATCH --mail-type=END,FAIL
+
+cd ${KIRBY}
+git pull 2>/dev/null || true
+. ./setup.sh
+export PYTHONWARNINGS=ignore
+export TRANSFORMERS_VERBOSITY=error
+mkdir -p tests/results/phase5_baselines/dta
+python tests/dta_baseline_survey.py bindingdb_kd \\
+    --n-folds 5 \\
+    --skip-existing \\
+    --output tests/results/phase5_baselines/dta/bindingdb_kd.json
+SBATCH_EOF
+)
+    echo "  ${jid}  dta_bindingdb_kd  (medium, 256G, 48h, HTC+GPU)"
+}
+
 submit_nuc() {
     local ds=$1
     local mem=$2
@@ -132,6 +166,10 @@ case "${MODE}" in
         submit_nuc gb_demo_coding_vs_intergenomic_seqs 256G
         submit_nuc gb_demo_human_or_worm            256G
         ;;
+    bindingdb)
+        echo "=== HTC bindingdb_kd fresh resubmit (medium+GPU+256G, 48h) ==="
+        submit_dta_bindingdb_kd
+        ;;
     all)
         echo "=== HTC GPU resubmits (antibody_clf + dta_kiba_fill) ==="
         submit_abclf tz_her2_binary       256G
@@ -147,13 +185,17 @@ case "${MODE}" in
         submit_nuc nt_splice_sites_donors           128G
         submit_nuc gb_demo_coding_vs_intergenomic_seqs 256G
         submit_nuc gb_demo_human_or_worm            256G
+        echo ""
+        echo "=== HTC bindingdb_kd fresh resubmit ==="
+        submit_dta_bindingdb_kd
         ;;
     *)
-        echo "Usage: bash tests/slurm_scripts/submit_fixup_resubmits.sh [gpu|cpu|all]"
+        echo "Usage: bash tests/slurm_scripts/submit_fixup_resubmits.sh [gpu|cpu|bindingdb|all]"
         echo ""
-        echo "  gpu — 4 abclf jobs + dta_kiba_fill (GPU, long, 24h)"
-        echo "  cpu — 4 nucleotide resubmits (128G) + 2 gb_demo OOM bumps (256G) (medium, 48h)"
-        echo "  all — both sets (11 jobs total)"
+        echo "  gpu       — 4 abclf jobs + dta_kiba_fill (GPU, long, 24h)"
+        echo "  cpu       — 4 nucleotide resubmits (128G) + 2 gb_demo OOM bumps (256G) (medium, 48h)"
+        echo "  bindingdb — dta_bindingdb_kd fresh (GPU, medium, 48h, 256G)"
+        echo "  all       — every set (12 jobs total)"
         exit 1
         ;;
 esac
