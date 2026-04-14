@@ -24,6 +24,7 @@ from experiments._shared import (
 )
 from experiments.similarity.similarity_helpers import (
     similarity_activity_correlation, compute_sali, violation_rate,
+    run_antibody_cliff_analysis,
 )
 
 from kirby.hybrid import compute_feature_importance
@@ -128,6 +129,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for name, r in results.items():
             print(f"  {name:<15} {r['dim']:>5} {r['sac_rho']:>9.4f} "
                   f"{r['violation_rate']:>7.3f} {r['sali_mean']:>8.3f}")
+
+    # Sequence-based cliff sweep (antibody datasets + nucleotide) — independent
+    # of any representation choice. Tests whether close pairs in sequence space
+    # carry label flips (classification) or large activity diffs (regression).
+    cliff_results = run_antibody_cliff_analysis(data, is_clf=is_classification)
+    if cliff_results is not None:
+        results['_sequence_cliffs'] = cliff_results
 
     return results
 
