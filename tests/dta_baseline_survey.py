@@ -460,8 +460,14 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
                skip_lm: bool = False, skip_kmer: bool = False,
                cold_setting: str = 'target', n_folds: int = 5,
                reps_filter: Optional[List[str]] = None,
-               skip_reps: Optional[set] = None):
-    """Run full baseline survey on one dataset."""
+               skip_reps: Optional[set] = None,
+               checkpoint_save=None):
+    """Run full baseline survey on one dataset.
+
+    checkpoint_save: optional callable(partial_result_dict) invoked after
+    each rep evaluation completes. Used to persist intermediate results
+    so a timeout/crash does not lose everything.
+    """
     print(f"\n{'='*70}")
     print(f"DTA BASELINE SURVEY: {dataset_name.upper()}")
     print(f"{'='*70}")
@@ -597,10 +603,33 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
     if tier_1_names:
         print(f"\n  Tier 1 (skip standalone): {tier_1_names}")
 
+    # Init results containers + checkpoint helper.
+    # _checkpoint() writes the current partial state to disk after each
+    # rep evaluation so a timeout/crash loses at most one rep of work.
+    standalone_results = {}
+    paired_results = {}
+    all_scores = None
+    def _checkpoint():
+        if checkpoint_save is None:
+            return
+        partial = {
+            'dataset': dataset_name,
+            'cold_setting': cold_setting,
+            'n_pairs': len(labels),
+            'standalone': standalone_results,
+            'paired': paired_results,
+            'all_combined': all_scores,
+            'reps_generated': list(generated.keys()) + list(factory_reps.keys()),
+            'reps_failed': [],
+        }
+        try:
+            checkpoint_save(partial)
+        except Exception as e:
+            print(f"  [checkpoint] save failed: {e!r}")
+
     # Evaluate: standalone mode (each rep alone) — skip tier 1
     print(f"\n--- STANDALONE EVALUATION (tier 2+3 reps only, "
           f"skipping {len(tier_1_names)} tier-1 reps) ---")
-    standalone_results = {}
     for rep_name, rep in generated.items():
         if rep_tiers.get(rep_name, 3) == 1:
             continue  # tier 1: augmentation-only, skip standalone
@@ -615,6 +644,7 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
         best_ci = scores[best_model]['ci_mean']
         best_r2 = scores[best_model]['mean']
         print(f"  {rep_name:<25} best={best_model} CI={best_ci:.4f} R²={best_r2:.4f} ({elapsed:.1f}s)")
+        _checkpoint()
 
     # Evaluate factory reps (standalone)
     for rep_name, factory in factory_reps.items():
@@ -631,10 +661,10 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
             print(f"  {rep_name:<25} best={best_model} CI={best_ci:.4f} R²={best_r2:.4f} ({elapsed:.1f}s) [factory]")
         else:
             print(f"  {rep_name:<25} FAILED ({elapsed:.1f}s)")
+        _checkpoint()
 
     # Evaluate: paired mode (drug + minimal protein, or protein + minimal drug)
     print(f"\n--- PAIRED EVALUATION (drug+protein_aac or protein+drug_ecfp4) ---")
-    paired_results = {}
     drug_partner = generated.get(DEFAULT_DRUG_PARTNER)
     protein_partner = generated.get(DEFAULT_PROTEIN_PARTNER)
 
@@ -656,6 +686,7 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
         best_ci = scores[best_model]['ci_mean']
         best_r2 = scores[best_model]['mean']
         print(f"  {rep_name:<25} +{partner:<20} best={best_model} CI={best_ci:.4f} R²={best_r2:.4f} ({elapsed:.1f}s)")
+        _checkpoint()
 
     # Paired evaluation for factory drug reps (concat with protein_aac)
     if protein_partner is not None:
@@ -681,6 +712,7 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
                 best_ci = scores[best_model]['ci_mean']
                 best_r2 = scores[best_model]['mean']
                 print(f"  {rep_name:<25} +{partner:<20} best={best_model} CI={best_ci:.4f} R²={best_r2:.4f} ({elapsed:.1f}s) [factory]")
+            _checkpoint()
 
     # Combined: all drug + all protein
     if drug_partner is not None and protein_partner is not None:
@@ -696,10 +728,7 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
             best_ci = all_scores[best_model]['ci_mean']
             best_r2 = all_scores[best_model]['mean']
             print(f"  all_concat ({X_all.shape[1]}D): best={best_model} CI={best_ci:.4f} R²={best_r2:.4f} ({elapsed:.1f}s)")
-        else:
-            all_scores = None
-    else:
-        all_scores = None
+            _checkpoint()
 
     # Summary table
     print(f"\n{'='*70}")
@@ -785,7 +814,39 @@ def main():
 
     datasets = (['davis', 'kiba', 'bindingdb_kd', 'pdbbind_refined', 'pdbbind_core']
                 if args.dataset == 'all' else [args.dataset])
+
+    # numpy -> json converter; defined early so _save_checkpoint can use it.
+    def convert(obj):
+        if isinstance(obj, (np.integer,)):
+            return int(obj)
+        if isinstance(obj, (np.floating,)):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return obj
+
+    # Load prior all_results from disk if output exists — lets checkpoint
+    # saves merge cleanly across reruns and across datasets.
     all_results = {}
+    if args.output:
+        out_path = Path(args.output)
+        if out_path.exists():
+            try:
+                with open(out_path) as f:
+                    all_results = json.load(f) or {}
+            except (json.JSONDecodeError, KeyError):
+                all_results = {}
+
+    def _make_checkpoint_saver(current_ds):
+        if not args.output:
+            return None
+        def save(partial_result):
+            all_results[current_ds] = partial_result
+            tmp_path = Path(args.output).with_suffix('.json.tmp')
+            with open(tmp_path, 'w') as f:
+                json.dump(all_results, f, indent=2, default=convert)
+            os.replace(tmp_path, args.output)
+        return save
 
     for ds in datasets:
         # --skip-existing: find reps already in the output JSON
@@ -811,37 +872,17 @@ def main():
                             cold_setting=args.cold_setting,
                             n_folds=args.n_folds,
                             reps_filter=reps_filter,
-                            skip_reps=skip_reps or None)
+                            skip_reps=skip_reps or None,
+                            checkpoint_save=_make_checkpoint_saver(ds))
         all_results[ds] = result
 
+    # Final write — mostly redundant with incremental checkpoints, but
+    # kept as a safety net and for the no-checkpoint case.
     if args.output:
-        # Convert numpy types for JSON serialization
-        def convert(obj):
-            if isinstance(obj, (np.integer,)):
-                return int(obj)
-            if isinstance(obj, (np.floating,)):
-                return float(obj)
-            if isinstance(obj, np.ndarray):
-                return obj.tolist()
-            return obj
-
-        # Merge with existing results if file exists
-        out_path = Path(args.output)
-        if out_path.exists():
-            try:
-                with open(out_path) as f:
-                    existing = json.load(f)
-                for section in ('standalone', 'paired', 'all_combined'):
-                    if section in all_results and all_results[section]:
-                        if section not in existing or not existing[section]:
-                            existing[section] = {}
-                        existing[section].update(all_results[section])
-                all_results = existing
-                print(f"  Merged with existing: {out_path}")
-            except (json.JSONDecodeError, KeyError):
-                pass
-        with open(args.output, 'w') as f:
+        tmp_path = Path(args.output).with_suffix('.json.tmp')
+        with open(tmp_path, 'w') as f:
             json.dump(all_results, f, indent=2, default=convert)
+        os.replace(tmp_path, args.output)
         print(f"\nResults saved to {args.output}")
 
 
