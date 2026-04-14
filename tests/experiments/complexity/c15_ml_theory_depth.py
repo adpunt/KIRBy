@@ -743,14 +743,14 @@ def _run_approximation_theory(data, budgets, config):
     mode = 'intermediary' if n_folds == 1 else 'full'
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    task_type = data.get('task_type', 'regression')
 
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
-
-    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     results = {
         'n_samples': n_samples,
         'metric': metric_name,
+        'task_type': task_type,
         'budgets': [],
         'rademacher_hybrid': [],
         'rademacher_pca': [],
@@ -766,7 +766,7 @@ def _run_approximation_theory(data, budgets, config):
     # Use fresh RNG per condition for reproducibility across budgets
     full_rademacher = _estimate_rademacher(
         X_concat, labels, groups, n_folds, mode, n_random_trials,
-        np.random.RandomState(42))
+        np.random.RandomState(42), task_type=task_type)
     results['rademacher_full'] = full_rademacher
 
     full_real = _eval_at_budget_pca(
@@ -786,7 +786,8 @@ def _run_approximation_theory(data, budgets, config):
         # Rademacher: estimate on per-fold hybrid features (no leakage)
         rad_hybrid = _estimate_rademacher_hybrid(
             reps, labels, groups, n_folds, mode, n_random_trials,
-            np.random.RandomState(42), budget, precomputed=_precomp)
+            np.random.RandomState(42), budget, precomputed=_precomp,
+            task_type=task_type)
         real_hybrid = _eval_at_budget(
             reps, labels, groups, n_folds, mode, metric_fn,
             budget=budget, method='hybrid', model_name='ridge',
@@ -795,7 +796,7 @@ def _run_approximation_theory(data, budgets, config):
         # PCA — fresh RNG per budget for fair comparison
         rad_pca = _estimate_rademacher_pca(
             X_concat, labels, groups, n_folds, mode, n_random_trials,
-            np.random.RandomState(42), n_feat)
+            np.random.RandomState(42), n_feat, task_type=task_type)
         real_pca = _eval_at_budget_pca(
             X_concat, labels, groups, n_folds, mode, metric_fn,
             n_components=n_feat, model_name='ridge')
@@ -820,14 +821,34 @@ def _run_approximation_theory(data, budgets, config):
     return results
 
 
-def _estimate_rademacher(X, y, groups, n_folds, mode, n_trials, rng):
-    """Estimate empirical Rademacher complexity: fit Ridge on random labels.
+def _fit_random_label_capacity(X_train_s, y_train_random, task_type):
+    """Fit a linear model on random labels and return memorization score.
+
+    Regression: Ridge + R² (fraction of variance in random continuous labels fit).
+    Classification: RidgeClassifier + accuracy (fraction of random class labels fit).
+
+    Both measure "how much noise can this feature geometry memorize", which is
+    the empirical proxy for Rademacher complexity that scales with sqrt(d/n).
+    """
+    if task_type == 'classification':
+        from sklearn.linear_model import RidgeClassifier
+        from sklearn.metrics import accuracy_score
+        model = RidgeClassifier(alpha=1.0)
+        model.fit(X_train_s, y_train_random)
+        return max(0.0, float(accuracy_score(y_train_random, model.predict(X_train_s))))
+    from sklearn.linear_model import Ridge
+    model = Ridge(alpha=1.0)
+    model.fit(X_train_s, y_train_random)
+    return max(0.0, float(r2_score(y_train_random, model.predict(X_train_s))))
+
+
+def _estimate_rademacher(X, y, groups, n_folds, mode, n_trials, rng,
+                         task_type='regression'):
+    """Estimate empirical Rademacher complexity: fit on random labels.
 
     Uses REAL labels for cv_split (consistent fold assignment) but fits on
     permuted labels to measure how well the model can memorize noise.
     """
-    from sklearn.linear_model import Ridge
-
     # Pre-compute fold assignments using real labels (consistent splitting)
     folds = list(cv_split(groups, n_folds, X, y, mode=mode))
 
@@ -839,11 +860,9 @@ def _estimate_rademacher(X, y, groups, n_folds, mode, n_trials, rng):
             try:
                 scaler = StandardScaler()
                 X_train_s = scaler.fit_transform(X[train_idx])
-                model = Ridge(alpha=1.0)
-                model.fit(X_train_s, y_random[train_idx])
-                # Training R²: how well can we fit random labels?
-                r2_train = r2_score(y_random[train_idx], model.predict(X_train_s))
-                scores.append(max(0, r2_train))
+                cap = _fit_random_label_capacity(
+                    X_train_s, y_random[train_idx], task_type)
+                scores.append(cap)
             except Exception:
                 continue
         if scores:
@@ -853,14 +872,12 @@ def _estimate_rademacher(X, y, groups, n_folds, mode, n_trials, rng):
 
 
 def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
-                                budget, precomputed=None):
+                                budget, precomputed=None, task_type='regression'):
     """Estimate Rademacher complexity of hybrid features WITHOUT label leakage.
 
     Creates the hybrid per-fold on training data only, then measures how well
-    Ridge can fit random labels on those features.
+    a linear model can fit random labels on those features.
     """
-    from sklearn.linear_model import Ridge
-
     # Get blueprint from cached search using REAL labels — budget-specific
     search = get_precomputed_search(reps, y, groups,
                                     aug_condition='none', speed='full',
@@ -888,10 +905,9 @@ def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
                     train_reps, train_reps, y[train_idx], bp)
                 scaler = StandardScaler()
                 X_train_s = scaler.fit_transform(X_train_hyb)
-                model = Ridge(alpha=1.0)
-                model.fit(X_train_s, y_random[train_idx])
-                r2_train = r2_score(y_random[train_idx], model.predict(X_train_s))
-                scores.append(max(0, r2_train))
+                cap = _fit_random_label_capacity(
+                    X_train_s, y_random[train_idx], task_type)
+                scores.append(cap)
             except Exception:
                 continue
         if scores:
@@ -901,10 +917,8 @@ def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
 
 
 def _estimate_rademacher_pca(X_concat, y, groups, n_folds, mode, n_trials, rng,
-                             n_components):
+                             n_components, task_type='regression'):
     """Estimate Rademacher complexity of PCA-reduced features."""
-    from sklearn.linear_model import Ridge
-
     folds = list(cv_split(groups, n_folds, X_concat, y, mode=mode))
 
     random_scores = []
@@ -919,10 +933,9 @@ def _estimate_rademacher_pca(X_concat, y, groups, n_folds, mode, n_trials, rng,
                              X_train_s.shape[1])
                 pca = PCA(n_components=n_comp)
                 X_train_pca = pca.fit_transform(X_train_s)
-                model = Ridge(alpha=1.0)
-                model.fit(X_train_pca, y_random[train_idx])
-                r2_train = r2_score(y_random[train_idx], model.predict(X_train_pca))
-                scores.append(max(0, r2_train))
+                cap = _fit_random_label_capacity(
+                    X_train_pca, y_random[train_idx], task_type)
+                scores.append(cap)
             except Exception:
                 continue
         if scores:
