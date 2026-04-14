@@ -75,26 +75,64 @@ def load_or_compute(
     Returns:
         (train_embs, val_embs) as numpy arrays.
     """
-    if cache:
-        cache_path = get_cache_dir() / f'{cache_key}.npz'
-        if cache_path.exists():
+    cache_path = get_cache_dir() / f'{cache_key}.npz' if cache else None
+
+    # Read path — tolerate corrupt cache entries by deleting + recomputing.
+    if cache and cache_path.exists():
+        try:
             data = np.load(cache_path)
-            return data['train'], data['val']
+            train = data['train']
+            val = data['val']
+            data.close()
+            if train.size == 0 or val.size == 0:
+                raise ValueError("empty arrays in cache")
+            return train, val
+        except Exception as e:
+            print(f"  [ft-cache] corrupt entry {cache_path.name} "
+                  f"({type(e).__name__}: {e}), recomputing", flush=True)
+            try:
+                cache_path.unlink()
+            except FileNotFoundError:
+                pass
 
     train_embs, val_embs = fn()
 
+    if train_embs.size == 0 or val_embs.size == 0:
+        raise RuntimeError(
+            f"FT factory returned empty arrays for cache_key={cache_key}")
+
     if cache:
-        cache_path = get_cache_dir() / f'{cache_key}.npz'
-        # Atomic write to prevent corruption from parallel jobs
+        # Atomic write via file descriptor — np.savez(str) auto-appends ".npz"
+        # to the filename, which historically caused mkstemp tempfiles to be
+        # orphaned and zero-byte files to be published. Passing a file object
+        # forces numpy to write bytes at the exact fd.
         import tempfile
-        fd, tmp = tempfile.mkstemp(dir=str(cache_path.parent), suffix='.tmp')
-        os.close(fd)
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(cache_path.parent),
+            prefix='.ft_cache_tmp_',
+            suffix='.npz',
+        )
         try:
-            np.savez(tmp, train=train_embs, val=val_embs)
-            os.replace(tmp, str(cache_path))
+            with os.fdopen(fd, 'wb') as fh:
+                np.savez(fh, train=train_embs, val=val_embs)
+            # Read-back verify before publishing.
+            verify = np.load(tmp_path)
+            try:
+                if verify['train'].shape != train_embs.shape:
+                    raise RuntimeError(
+                        f"cache read-back shape mismatch for {cache_key}")
+                if verify['val'].shape != val_embs.shape:
+                    raise RuntimeError(
+                        f"cache read-back shape mismatch for {cache_key}")
+            finally:
+                verify.close()
+            os.replace(tmp_path, str(cache_path))
         except BaseException:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
+            if os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
             raise
 
     return train_embs, val_embs
