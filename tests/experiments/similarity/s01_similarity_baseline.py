@@ -133,7 +133,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Sequence-based cliff sweep (antibody datasets + nucleotide) — independent
     # of any representation choice. Tests whether close pairs in sequence space
     # carry label flips (classification) or large activity diffs (regression).
-    cliff_results = run_antibody_cliff_analysis(data, is_clf=is_classification)
+    # dataset_name is passed so CDR extraction is cached per-dataset.
+    cliff_results = run_antibody_cliff_analysis(
+        data, is_clf=is_classification, dataset_name=dataset_name)
     if cliff_results is not None:
         results['_sequence_cliffs'] = cliff_results
 

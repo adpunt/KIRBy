@@ -466,8 +466,19 @@ def antibody_sequence_cliff_sweep(sequences, labels, is_clf,
     return result
 
 
-def run_antibody_cliff_analysis(data, is_clf, max_edits_sweep=(1, 2, 3, 5)):
+def run_antibody_cliff_analysis(data, is_clf, dataset_name=None,
+                                max_edits_sweep=(1, 2, 3, 5)):
     """Driver: run sequence cliff sweep at full V-region and CDR-only scopes.
+
+    Args:
+        data: dict from load_data(). Must contain 'labels' and either
+            'heavy_seqs' (antibody) or 'sequences' (nucleotide).
+        is_clf: True for classification datasets.
+        dataset_name: Optional dataset name for CDR cache keying. If provided,
+            extracted CDR indices are cached under ~/.cache/kirby/cdr_indices/
+            so subsequent runs skip ANARCI. Falls back to `data.get('dataset_name')`
+            if not passed.
+        max_edits_sweep: Hamming thresholds to sweep.
 
     Returns a dict or None if the dataset has no sequence data (non-antibody,
     non-nucleotide, or sequences not exposed by the loader).
@@ -481,7 +492,8 @@ def run_antibody_cliff_analysis(data, is_clf, max_edits_sweep=(1, 2, 3, 5)):
         heavy_seqs = list(seqs)
 
     labels = data['labels']
-    dataset_name = data.get('dataset_name')  # may be None, used for cache key
+    if dataset_name is None:
+        dataset_name = data.get('dataset_name')
     results = {}
 
     # Scope 1: full V-region (fast, always available).
