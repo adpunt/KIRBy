@@ -39,7 +39,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("=" * 70)
 
     weight_methods = kwargs.get('weight_methods', ['lightgbm_gain'])
-    search_speed = config.get('search_speed', 'fast')
+    search_speed = config.get('search_speed', 'full')
 
     reps = data['reps']
     labels = data['labels']

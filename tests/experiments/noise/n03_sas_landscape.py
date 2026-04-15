@@ -523,7 +523,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     struct_t = kwargs.get('struct_threshold', 0.5)
     act_t = kwargs.get('act_threshold', 0.5)
-    search_speed = config.get('search_speed', 'fast')
+    search_speed = config.get('search_speed', 'full')
 
     reps = data['reps']
     labels = data['labels']

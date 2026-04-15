@@ -688,7 +688,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Get hybrid blueprint via find_best_hybrid
     hybrid_blueprint = None
     budget = kwargs.get('budget', config.get('budgets', [100])[0])
-    search_speed = config.get('search_speed', 'fast')
+    search_speed = config.get('search_speed', 'full')
 
     try:
         search = get_precomputed_search(

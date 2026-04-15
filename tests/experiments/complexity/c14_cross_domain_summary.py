@@ -177,7 +177,7 @@ def _evaluate_task(task_name, rep_preset, config):
     # -----------------------------------------------------------------
     print(f"    Running find_best_hybrid...")
 
-    speed = config.get('search_speed', 'fast')
+    speed = config.get('search_speed', 'full')
     fbh_kwargs = dict(
         base_reps=reps,
         labels=labels,
@@ -451,7 +451,7 @@ def run(tasks, rep_preset, config, output_dir):
             'rep_preset': rep_preset,
             'n_splits': config['n_splits'],
             'models': config['models'],
-            'search_speed': config.get('search_speed', 'fast'),
+            'search_speed': config.get('search_speed', 'full'),
         },
         'per_task': convert_numpy(task_results),
         'aggregate': convert_numpy(aggregate),

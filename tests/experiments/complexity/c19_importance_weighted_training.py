@@ -121,7 +121,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reps, labels, groups, downstream_model='rf',
             budget=budget,
             aug_condition='capped', augmentations=augmentations,
-            speed=config.get('search_speed', 'fast'),
+            speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'),
         )
         input_spaces['hybrid'] = X_hybrid

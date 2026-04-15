@@ -115,10 +115,10 @@ def run_all(dataset_name: str, output_dir: str,
     if config is None:
         from kirby.find_best_hybrid import SPEED_TIERS
         from experiments._shared import SCREENING_BUDGETS
-        tier = SPEED_TIERS['fast']
+        tier = SPEED_TIERS['full']
         config = {
             'n_splits': tier['n_folds'],
-            'search_speed': 'fast',
+            'search_speed': 'full',
             'allocations': tier['allocation_methods'],
             'importance_methods': tier['importance_methods'],
             'internal_evaluators': INTERNAL_EVALUATORS,

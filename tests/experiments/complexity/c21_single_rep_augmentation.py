@@ -107,7 +107,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Aug pool ({len(aug_reps_available)}): "
           f"{', '.join(f'{k}={v}D' for k, v in aug_dims.items())}")
 
-    search_speed = config.get('search_speed', 'fast')
+    search_speed = config.get('search_speed', 'full')
 
     # ── Build augmentation group conditions ──
     # Condition A = baseline (no aug), B = all augs, C-F = domain-specific groups

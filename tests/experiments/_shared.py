@@ -1539,7 +1539,7 @@ def get_hybrid_features_and_weights(
     reps: Dict[str, np.ndarray],
     labels: np.ndarray,
     groups: np.ndarray,
-    search_speed: str = 'fast',
+    search_speed: str = 'full',
     weight_method: str = 'lightgbm_gain',
     budget: Optional[int] = None,
     augmentations: Optional[Dict[str, np.ndarray]] = None,

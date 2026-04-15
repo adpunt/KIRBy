@@ -195,7 +195,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     try:
         X_hybrid, fi, search = get_fitted_hybrid(
             reps, labels, groups,
-            aug_condition='none', speed=config.get('search_speed', 'fast'),
+            aug_condition='none', speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'),
             internal_evaluators=DISTANCE_EVALUATORS,
             budgets=DISTANCE_BUDGETS,

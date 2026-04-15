@@ -71,7 +71,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     search = get_precomputed_search(
         reps, labels, groups, aug_condition=aug_cond,
         augmentations=augmentations,
-        speed=config.get('search_speed', 'fast'),
+        speed=config.get('search_speed', 'full'),
         precomputed=data.get('precomputed_searches'))
 
     best = search.best_by_model.get('rf') or (
