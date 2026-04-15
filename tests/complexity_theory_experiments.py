@@ -642,6 +642,8 @@ def run_complexity_matching_grid(
         augmentations=augs,
         verbose=True,
         cache=True,
+        dataset_name=data.get('dataset_name', 'unknown'),
+        tier='general',
     )
 
     # --- Reshape SearchResult to downstream format ---
@@ -807,6 +809,8 @@ def run_cross_context_analysis(
                 augmentations=data.get('augmentations'),
                 verbose=False,
                 cache=True,
+                dataset_name=data.get('dataset_name', ds_name),
+                tier='general',
             )
 
             # Use first model's best config for blueprint
@@ -1283,6 +1287,8 @@ def run_within_family_complexity(
                     augmentations=augs,
                     verbose=False,
                     cache=True,
+                    dataset_name=f"{data.get('dataset_name', 'unknown')}_{var_name}",
+                    tier='general',
                 )
             except Exception as e:
                 print(f"      find_best_hybrid failed: {e}")
@@ -1496,6 +1502,8 @@ def run_data_complexity_analysis(
                     augmentations=sub_augs,
                     verbose=False,
                     cache=True,
+                    dataset_name=f"{data.get('dataset_name', 'unknown')}_{partition_name}_{subpop_name}",
+                    tier='general',
                 )
                 best = next(iter(search.best_by_model.values()), None)
                 best_config = {
@@ -1625,6 +1633,8 @@ def run_learning_curves(
                     augmentations=sub_augs,
                     verbose=False,
                     cache=True,
+                    dataset_name=f"{data.get('dataset_name', 'unknown')}_n{n_sub}_s{seed}",
+                    tier='general',
                 )
                 for model_name in model_names:
                     if model_name in search.best_by_model:
@@ -1740,6 +1750,8 @@ def run_uncertainty_calibration(
                 augmentations=augs,
                 verbose=False,
                 cache=True,
+                dataset_name=data.get('dataset_name', 'unknown'),
+                tier='general',
             )
             best = next(iter(search.best_by_model.values()), None)
             if best:
@@ -2153,6 +2165,8 @@ def _run_information_retention(
                 augmentations=augs,
                 verbose=False,
                 cache=True,
+                dataset_name=f"{data.get('dataset_name', 'unknown')}_b{budget}",
+                tier='general',
             )
             best = next(iter(search.best_by_model.values()), None)
             if best:
@@ -2262,6 +2276,8 @@ def _run_effective_rank_analysis(
                 augmentations=augs,
                 verbose=False,
                 cache=True,
+                dataset_name=f"{data.get('dataset_name', 'unknown')}_b{budget}",
+                tier='general',
             )
             best = next(iter(search.best_by_model.values()), None)
             bp = best['blueprint'] if best else None
@@ -2367,6 +2383,8 @@ def _run_bias_variance_analysis(
                 augmentations=augs,
                 verbose=False,
                 cache=True,
+                dataset_name=f"{data.get('dataset_name', 'unknown')}_b{budget}",
+                tier='general',
             )
         except Exception as e:
             print(f"    b={budget}: find_best_hybrid failed - {e}")
@@ -2866,6 +2884,7 @@ def main():
         print(f"  [checkpoint saved{': ' + label if label else ''}]")
 
     for ds_name, data in datasets.items():
+        data['dataset_name'] = ds_name
         print(f"\n{'#' * 70}")
         print(f"# DATASET: {ds_name.upper()} ({len(data['labels'])} samples)")
         print('#' * 70)

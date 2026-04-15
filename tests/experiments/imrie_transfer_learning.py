@@ -190,6 +190,7 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pretrain_dir):
             base_reps=reps, labels=labels, groups=groups,
             budgets=FULL_BUDGETS,
             speed='full', return_fitted=True, verbose=False, cache=True,
+            dataset_name=dataset_name, tier='general',
             metric='rmse', adaptive_pruning=0.25)
         fitted = search.fitted_results.get('rf')
         if fitted is not None:

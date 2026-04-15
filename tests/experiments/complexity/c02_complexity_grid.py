@@ -81,6 +81,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             metric=metric_name,
             verbose=True,
             cache=True,
+            dataset_name=dataset_name,
+            tier='top',
         )
 
     # --- All reps, no augmentation ---
@@ -102,6 +104,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         metric=metric_name,
         verbose=True,
         cache=True,
+        dataset_name=dataset_name,
+        tier='general',
     )
 
     # --- All reps, uncapped augmentation ---
@@ -126,6 +130,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             metric=metric_name,
             verbose=True,
             cache=True,
+            dataset_name=dataset_name,
+            tier='general',
         )
 
     # --- All reps, capped augmentation ---
@@ -147,6 +153,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             metric=metric_name,
             verbose=True,
             cache=True,
+            dataset_name=dataset_name,
+            tier='general',
         )
 
     # TODO: Frozen vs fine-tuned comparison. When FT reps are available as

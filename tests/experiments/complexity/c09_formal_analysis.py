@@ -271,7 +271,7 @@ def _run_anova_decomposition(exp2_results):
 # 9b: Information retention
 # =========================================================================
 
-def _run_information_retention(data, budgets, search_speed='full'):
+def _run_information_retention(data, budgets, search_speed='full', dataset_name=None):
     """9b: MI(X_selected, Y) and MI(X_selected, X_full) vs budget.
 
     At each budget, uses find_best_hybrid to discover the best hybrid config,
@@ -303,6 +303,8 @@ def _run_information_retention(data, budgets, search_speed='full'):
                 metric=metric_name_9b,
                 verbose=False,
                 cache=True,
+                dataset_name=dataset_name,
+                tier='general',
             )
             # Pick the best result across all models (for blueprint)
             best = None
@@ -400,7 +402,7 @@ def _run_information_retention(data, budgets, search_speed='full'):
 # 9c: Effective rank analysis
 # =========================================================================
 
-def _run_effective_rank_analysis(data, budgets, search_speed='full'):
+def _run_effective_rank_analysis(data, budgets, search_speed='full', dataset_name=None):
     """9c: Effective rank of hybrid vs PCA vs random at each budget.
 
     At each budget, uses find_best_hybrid to discover the best config,
@@ -434,6 +436,8 @@ def _run_effective_rank_analysis(data, budgets, search_speed='full'):
                 metric=metric_name_9c,
                 verbose=False,
                 cache=True,
+                dataset_name=dataset_name,
+                tier='general',
             )
             # Pick the best result across all models (for blueprint)
             best = None
@@ -506,7 +510,7 @@ def _run_effective_rank_analysis(data, budgets, search_speed='full'):
 # =========================================================================
 
 def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=None,
-                                search_speed='full'):
+                                search_speed='full', dataset_name=None):
     """9d: Bias-variance proxy from train-val gap across budgets."""
     print("\n  9d: Bias-Variance Proxy")
 
@@ -564,6 +568,8 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                 metric=metric_name,
                 verbose=False,
                 cache=True,
+                dataset_name=dataset_name,
+                tier='general',
             )
         except Exception as e:
             print(f"    b={budget}: find_best_hybrid failed - {e}")
@@ -654,14 +660,14 @@ def run(data, config, output_dir, dataset_name, sub_analyses=None,
         results['anova'] = _run_anova_decomposition(exp2_results)
 
     if 'information' in all_subs:
-        results['information'] = _run_information_retention(data, budgets, search_speed)
+        results['information'] = _run_information_retention(data, budgets, search_speed, dataset_name=dataset_name)
 
     if 'effective_rank' in all_subs:
-        results['effective_rank'] = _run_effective_rank_analysis(data, budgets, search_speed)
+        results['effective_rank'] = _run_effective_rank_analysis(data, budgets, search_speed, dataset_name=dataset_name)
 
     if 'bias_variance' in all_subs:
         results['bias_variance'] = _run_bias_variance_analysis(
-            data, models, budgets, n_folds, exp6_results, search_speed)
+            data, models, budgets, n_folds, exp6_results, search_speed, dataset_name=dataset_name)
 
     return results
 

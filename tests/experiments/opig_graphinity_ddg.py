@@ -325,6 +325,7 @@ def evaluate_condition(condition, rep_names, n_folds, max_samples=5000):
             augmentation_strategy='uncapped',
             internal_evaluators=INTERNAL_EVALUATORS,
             speed='full', return_fitted=True, verbose=False, cache=True,
+            dataset_name=f"{ds_name}_n{n}", tier='general',
             adaptive_pruning=0.25)
         top3 = extract_top3_base_reps(search)
         if top3:

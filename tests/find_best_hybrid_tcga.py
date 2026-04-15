@@ -1062,6 +1062,8 @@ Output:
         test_rep_subsets=args.test_rep_subsets,
         seed=args.seed,
         cache=args.cache,
+        dataset_name=args.dataset,
+        tier='general',
         rep_factories=rep_factories,
     )
 

@@ -111,6 +111,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     metric=metric_name,
                     verbose=False,
                     cache=True,
+                    dataset_name=f"{dataset_name}_n{n_sub}_s{seed}",
+                    tier='general',
                 )
                 last_search = search
                 for model_name in model_names:

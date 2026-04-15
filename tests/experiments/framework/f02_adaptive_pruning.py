@@ -377,6 +377,8 @@ def run(data, config, output_dir, dataset_name, thresholds=None, **kwargs):
         augmentations=data.get('augmentations'),
         verbose=True,
         cache=True,
+        dataset_name=dataset_name,
+        tier='general',
         adaptive_pruning=False,  # Disable pruning to get complete results
         metric=metric_name,
     )

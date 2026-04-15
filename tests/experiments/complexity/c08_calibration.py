@@ -101,6 +101,8 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 metric=metric_name,
                 verbose=False,
                 cache=True,
+                dataset_name=dataset_name,
+                tier='general',
             )
             # Pick the best result across all models
             best = None
