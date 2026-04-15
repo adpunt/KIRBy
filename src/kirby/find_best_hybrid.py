@@ -1847,6 +1847,17 @@ def _evaluate_baselines(
             baselines[rep_name] = {'dimension': dim}
             sec_all = {}
 
+            # Per-fold high-dim filter for factory reps — same policy as
+            # _evaluate_single. Currently no factory rep exceeds 5000D so
+            # this is future-proofing; turns on automatically if that changes.
+            _apply_hd_filter = dim > HIGH_DIM_FILTER_THRESHOLD
+            if _apply_hd_filter:
+                _hd_target_n = 500 if len(labels) >= 1000 else 200
+                if _hd_target_n >= dim:
+                    _apply_hd_filter = False
+                else:
+                    _hd_task_type = _detect_task_type(labels)
+
             for model_name, model in models.items():
                 fold_scores = []
                 fold_sec_scores = {name: [] for name in (secondary_metric_fns or {})}
@@ -1855,6 +1866,12 @@ def _evaluate_baselines(
                         continue
                     ft_train, ft_val = fold_reps[fold_idx][rep_name]
                     y_train, y_val = labels[train_idx], labels[val_idx]
+
+                    if _apply_hd_filter:
+                        top_idx = _select_top_features_per_fold(
+                            ft_train, y_train, _hd_target_n, _hd_task_type)
+                        ft_train = ft_train[:, top_idx]
+                        ft_val = ft_val[:, top_idx]
 
                     scaler = StandardScaler()
                     X_train_s = scaler.fit_transform(ft_train)
