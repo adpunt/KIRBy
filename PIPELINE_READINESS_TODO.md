@@ -943,27 +943,38 @@ Old Sections 10B/10C/12D/12E have writeups. Need new-format review.
 
 ## TODO — Nucleotide (19 datasets)
 
+**⚠️ 2026-04-15 DOWNGRADE:** All 5 datasets previously marked DONE
+(nt_H2AFZ, nt_H3K27ac, nt_H3K27me3, nt_H3K36me3, nt_H3K4me1) are
+reverted to survey-review status. The gena_lm rep in those JSONs was
+contaminated: `_embed_gena_lm` was returning 32000D LM-head logits
+instead of 1024D hidden states, and ridge regression on 32000 features
+with ~33000 samples memorized noise — which is why gena_lm was
+declared the winner on every H3K* task. Fixed in commit 3a5b5d5.
+Targeted gena_lm-only re-eval submitted as jobs 7485363-78 (gena_refix
+mode). Tier tables below are INVALID until those jobs complete and
+are reviewed. See PRECOMPUTE_JOB_TRACKER.md §Nucleotide gena_lm refix.
+
 | # | Dataset | Samples | Reps | Metric | Status |
 |---|---------|---------|------|--------|--------|
-| 56 | gb_human_nontata_promoters | 36,131 | 6 | MCC | Classical only — needs resubmit with FM reps |
-| 57 | nt_enhancers | — | 6 | MCC | Classical only — needs resubmit with FM reps |
-| 58 | nt_enhancers_types | — | 6 | MCC | Classical only — needs resubmit with FM reps |
-| 59 | nt_H2AFZ | 33,000 | 18 | MCC | DONE — in DATASET_REPS + precompute pipeline |
-| 60 | nt_H3K27ac | 31,616 | 18 | MCC | DONE — in DATASET_REPS + precompute pipeline |
-| 61 | nt_H3K27me3 | 33,000 | 18 | MCC | DONE — in DATASET_REPS + precompute pipeline |
-| 62 | nt_H3K36me3 | 33,000 | 18 | MCC | DONE — in DATASET_REPS + precompute pipeline |
-| 63 | nt_H3K4me1 | 33,000 | 18 | MCC | DONE — in DATASET_REPS + precompute pipeline |
-| 64 | nt_H3K4me2 | — | 6 | MCC | Classical only — needs resubmit with FM reps |
-| 65 | nt_H3K4me3 | — | 6 | MCC | Classical only — needs resubmit with FM reps |
-| 66 | nt_H3K9ac | — | 6 | MCC | Classical only — needs resubmit with FM reps |
-| 67 | nt_H3K9me3 | — | 6 | MCC | Classical only — needs resubmit with FM reps |
-| 68 | nt_H4K20me1 | — | 6 | MCC | Classical only — needs resubmit with FM reps |
-| 69 | nt_promoter_all | 31,584 | 6 | MCC | Classical only — needs resubmit with FM reps |
-| 70 | nt_promoter_no_tata | — | 6 | MCC | Classical only — needs resubmit with FM reps |
-| 71 | nt_promoter_tata | — | 6 | MCC | Classical only — needs resubmit with FM reps |
-| 72 | nt_splice_sites_acceptors | — | 6 | MCC | Classical only — needs resubmit with FM reps |
-| 73 | nt_splice_sites_all | — | 6 | MCC | Classical only — needs resubmit with FM reps |
-| 74 | nt_splice_sites_donors | — | 6 | MCC | Classical only — needs resubmit with FM reps |
+| 56 | gb_human_nontata_promoters | 36,131 | 6 | MCC | Survey review needed (gena_lm refix 7485377 PD) |
+| 57 | nt_enhancers | — | 6 | MCC | Classical only — survey pending (7483707 PD) |
+| 58 | nt_enhancers_types | — | 6 | MCC | Classical only — survey pending (7483708 PD) |
+| 59 | nt_H2AFZ | 33,000 | 18 | MCC | **DOWNGRADED** (gena_lm contaminated) — refix 7485363 PD |
+| 60 | nt_H3K27ac | 31,616 | 18 | MCC | **DOWNGRADED** — refix 7485364 PD |
+| 61 | nt_H3K27me3 | 33,000 | 18 | MCC | **DOWNGRADED** — refix 7485365 PD |
+| 62 | nt_H3K36me3 | 33,000 | 18 | MCC | **DOWNGRADED** — refix 7485366 PD |
+| 63 | nt_H3K4me1 | 33,000 | 18 | MCC | **DOWNGRADED** — refix 7485367 PD |
+| 64 | nt_H3K4me2 | — | 18 | MCC | Survey review needed (gena_lm refix 7485368 PD) |
+| 65 | nt_H3K4me3 | — | 18 | MCC | Survey review needed (gena_lm refix 7485369 PD) |
+| 66 | nt_H3K9ac | — | 18 | MCC | Survey review needed (gena_lm refix 7485370 PD) |
+| 67 | nt_H3K9me3 | — | 18 | MCC | Survey review needed (gena_lm refix 7485371 PD) |
+| 68 | nt_H4K20me1 | — | 18 | MCC | Survey review needed (gena_lm refix 7485372 PD) |
+| 69 | nt_promoter_all | 31,584 | 18 | MCC | Survey review needed (gena_lm refix 7485373 PD) |
+| 70 | nt_promoter_no_tata | — | 18 | MCC | Survey review needed (gena_lm refix 7485375 PD) |
+| 71 | nt_promoter_tata | — | 18 | MCC | Survey review needed (gena_lm refix 7485374 PD) |
+| 72 | nt_splice_sites_acceptors | — | 6 | MCC | Classical only — survey pending (7483709 PD) |
+| 73 | nt_splice_sites_all | — | 18 | MCC | Survey review needed (gena_lm refix 7485376 PD) |
+| 74 | nt_splice_sites_donors | — | 6 | MCC | Classical only — survey pending (7483710 PD) |
 
 **Root cause:** `DATASET_REGISTRY` in `run_baseline_survey.py` had default preset `'fast'` (6 classical reps only) for all nucleotide datasets. Survey was submitted without `--reps all` override, so FM reps never ran. **Fixed 2026-03-28** (commit a2a0d2d): default changed to `'all'` (26 reps: 14 FM + 11 classical + 1 factory).
 
@@ -976,55 +987,71 @@ Old Sections 10B/10C/12D/12E have writeups. Need new-format review.
 - kmer4, kmer6, tetranuc_freq will be general-tier classical baselines
 - dinuc_freq, gc_content are lower-tier classical; complexity is augmentation-only
 
+**⚠️ CONTAMINATED TIER TABLES BELOW (2026-04-15)**
+
+The 5 tier tables that follow all declare `gena_lm` as a top-tier / winner
+rep. Those claims are **INVALID**. The pre-3a5b5d5 `_embed_gena_lm` returned
+32000D LM-head logits instead of 1024D hidden states. Ridge regression on
+32000 features × ~33000 samples memorized noise, producing spuriously high
+MCC for gena_lm on every H3K* task. The real numbers land after
+jobs 7485363-78 complete. Tables below retained for historical record only.
+
 **nt_H2AFZ (33,000 samples, 23 groups, MCC) — 18/25 reps ran (7 failed: splicebert, rnafm, dnabert_s, gpn, rinalmo, caduceus, ntv3_100m):**
+
+CONTAMINATED — pending 7485363 refix. Historical values:
+
 | Tier | Reps |
 |------|------|
-| Top Tier (5) | mistral_dna, hyenadna, grover_dna, gena_lm, kmer6 |
-| General (12) | mistral_dna, hyenadna, grover_dna, gena_lm, kmer6, nt_v2_250m, nt_v2_500m, tnf_canonical, kmer4, kmer5, tetranuc_freq, kmer3 |
+| Top Tier (5) | mistral_dna, hyenadna, grover_dna, ~~gena_lm~~, kmer6 |
+| General (12) | mistral_dna, hyenadna, grover_dna, ~~gena_lm~~, kmer6, nt_v2_250m, nt_v2_500m, tnf_canonical, kmer4, kmer5, tetranuc_freq, kmer3 |
 | Augmentation (5) | codon_usage, complexity, dinuc_freq, dna_shape, gc_content |
 | Dropped | dnabert2 (84% of best, weakest FM by large margin) |
 
-*Needs wiring into DATASET_REPS. Winner: mistral_dna+ridge=0.4323.*
+*Winner claim invalid. mistral_dna+ridge=0.4323 may still be near top — re-verify after refix.*
 
-**nt_H3K27ac (31,616 samples, 23 groups, MCC) — 18/25 reps ran:**
+**nt_H3K27ac (31,616 samples, 23 groups, MCC) — 18/25 reps ran — CONTAMINATED, pending 7485364:**
+
 | Tier | Reps |
 |------|------|
-| Top Tier (5) | gena_lm, kmer6, grover_dna, mistral_dna, kmer5 |
-| General (12) | gena_lm, kmer6, grover_dna, mistral_dna, kmer5, tnf_canonical, nt_v2_500m, nt_v2_250m, kmer4, hyenadna, tetranuc_freq, kmer3 |
+| Top Tier (5) | ~~gena_lm~~, kmer6, grover_dna, mistral_dna, kmer5 |
+| General (12) | ~~gena_lm~~, kmer6, grover_dna, mistral_dna, kmer5, tnf_canonical, nt_v2_500m, nt_v2_250m, kmer4, hyenadna, tetranuc_freq, kmer3 |
 | Augmentation (5) | codon_usage, complexity, dinuc_freq, dna_shape, gc_content |
 | Dropped | dnabert2 (83% of best, weakest FM by large margin) |
 
-*Needs wiring into DATASET_REPS. Winner: gena_lm+ridge=0.4569.*
+*Winner claim gena_lm+ridge=0.4569 invalid.*
 
-**nt_H3K27me3 (33,000 samples, 23 groups, MCC) — 18/25 reps ran:**
+**nt_H3K27me3 (33,000 samples, 23 groups, MCC) — 18/25 reps ran — CONTAMINATED, pending 7485365:**
+
 | Tier | Reps |
 |------|------|
-| Top Tier (4) | gena_lm, mistral_dna, grover_dna, hyenadna |
-| General (12) | gena_lm, mistral_dna, grover_dna, hyenadna, nt_v2_250m, nt_v2_500m, tnf_canonical, kmer4, kmer3, kmer5, tetranuc_freq, kmer6 |
+| Top Tier (4) | ~~gena_lm~~, mistral_dna, grover_dna, hyenadna |
+| General (12) | ~~gena_lm~~, mistral_dna, grover_dna, hyenadna, nt_v2_250m, nt_v2_500m, tnf_canonical, kmer4, kmer3, kmer5, tetranuc_freq, kmer6 |
 | Augmentation (5) | codon_usage, complexity, dinuc_freq, dna_shape, gc_content |
 | Dropped | dnabert2 (84% of best, weakest FM by large margin) |
 
-*Needs wiring into DATASET_REPS. Winner: gena_lm+ridge=0.5522.*
+*Winner claim gena_lm+ridge=0.5522 invalid.*
 
-**nt_H3K36me3 (33,000 samples, 23 groups, MCC) — 18/25 reps ran:**
+**nt_H3K36me3 (33,000 samples, 23 groups, MCC) — 18/25 reps ran — CONTAMINATED, pending 7485366:**
+
 | Tier | Reps |
 |------|------|
-| Top Tier (3) | gena_lm, mistral_dna, hyenadna |
-| General (12) | gena_lm, mistral_dna, hyenadna, grover_dna, nt_v2_250m, nt_v2_500m, kmer3, kmer4, kmer5, kmer6, tetranuc_freq, tnf_canonical |
+| Top Tier (3) | ~~gena_lm~~, mistral_dna, hyenadna |
+| General (12) | ~~gena_lm~~, mistral_dna, hyenadna, grover_dna, nt_v2_250m, nt_v2_500m, kmer3, kmer4, kmer5, kmer6, tetranuc_freq, tnf_canonical |
 | Augmentation (5) | codon_usage, complexity, dinuc_freq, dna_shape, gc_content |
 | Dropped | dnabert2 (74% of best, weakest FM by large margin) |
 
-*Needs wiring into DATASET_REPS. Winner: gena_lm+ridge=0.5715.*
+*Winner claim gena_lm+ridge=0.5715 invalid.*
 
-**nt_H3K4me1 (33,000 samples, 23 groups, MCC) — 18/25 reps ran:**
+**nt_H3K4me1 (33,000 samples, 23 groups, MCC) — 18/25 reps ran — CONTAMINATED, pending 7485367:**
+
 | Tier | Reps |
 |------|------|
-| Top Tier (4) | gena_lm, grover_dna, mistral_dna, hyenadna |
-| General (12) | gena_lm, grover_dna, mistral_dna, hyenadna, kmer6, nt_v2_250m, nt_v2_500m, kmer5, kmer4, tnf_canonical, tetranuc_freq, kmer3 |
+| Top Tier (4) | ~~gena_lm~~, grover_dna, mistral_dna, hyenadna |
+| General (12) | ~~gena_lm~~, grover_dna, mistral_dna, hyenadna, kmer6, nt_v2_250m, nt_v2_500m, kmer5, kmer4, tnf_canonical, tetranuc_freq, kmer3 |
 | Augmentation (5) | codon_usage, complexity, dinuc_freq, dna_shape, gc_content |
 | Dropped | dnabert2 (78% of best, weakest FM by large margin) |
 
-*Needs wiring into DATASET_REPS. Winner: gena_lm+ridge=0.4405.*
+*Winner claim gena_lm+ridge=0.4405 invalid.*
 
 ---
 
@@ -1054,7 +1081,7 @@ Old Sections 10B/10C/12D/12E have writeups. Need new-format review.
 | TCGA | 3 | 2 | 0 | 0 | 0 | 1 (survival) |
 | Reaction | 3 | 0 | 0 | 0 | 2 (buchwald, doyle — CGR re-survey) | 1 (suzuki) |
 | DTA | 3 | 0 | 0 | 0 | 3 (davis, kiba, bindingdb_kd — HTC queue) | 0 |
-| Nucleotide | 22 | 0 | 0 | 0 | 22 (resubmitted HTC with all FM reps) | 0 |
+| Nucleotide | 22 | 0 | 0 | 0 | 22 (gena_lm refix 7485363-78 PD + 6 queued surveys) | 0 |
 | Graphinity DDG | 3 | 0 | 0 | 0 | 0 | 3 (rosetta, foldx, augmented) |
 | **TOTAL** | **81** | **38** | **0** | **0** | **30** | **13** |
 
@@ -1150,7 +1177,7 @@ Note: `cgr_morgan` and `chytorch_graphormer` work without the pretraining checkp
 18. **E2E SchNet on more molecular datasets** — ft_schnet already wired in `make_ft_factories` (line 632-641 of run_baseline_survey.py). Previous HTC runs failed due to torch-cluster bug (now fixed). Resubmitting herg_ki, caco2, logd on HTC with `--finetune`. Output: `tests/results/schnet_e2e/`.
 19. ~~**Augmentation per-dataset assignment (usrcat, coulomb_matrix, usr)**~~ **DONE** (2026-03-28) — Results from `molecular_aug_fill/`: caco2 all 3 positive (usrcat +0.021, usr +0.020, coulomb +0.015), adme_mdr1 coulomb_matrix +0.092, logd/qm9 flat or negative. DATASET_REPS already had correct assignments.
 20. ~~**DNA foundation model rep implementation**~~ **DONE** — 14 FM reps implemented in `src/kirby/representations/nucleotide.py`. Survey results on server at `tests/results/nucleotide_survey/`.
-21. **Nucleotide tier review** — pull survey results, review all 22 datasets with FM reps, decide tiers. Implementation done, pipeline readiness pending review.
+21. **Nucleotide tier review** — BLOCKED on gena_lm refix jobs 7485363-78 (all PD as of 2026-04-15). All 5 previously-reviewed datasets (H2AFZ, H3K27ac, H3K27me3, H3K36me3, H3K4me1) are downgraded because gena_lm was contaminated at 32000D. Wait for refix jobs + the 6 queued surveys (7483707-12) to land, then review all 22 datasets together.
 
 ### OPEN — Adaptive pruning (F15)
 
