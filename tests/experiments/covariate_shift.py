@@ -240,6 +240,7 @@ def main():
                 base_reps=reps, labels=labels, groups=scaffold_groups,
                 budgets=FULL_BUDGETS,
                 speed='full', return_fitted=True, verbose=False, cache=True,
+                dataset_name=ds_name, tier='general',
                 metric=metric_name, adaptive_pruning=0.25)
             fitted = search.fitted_results.get('rf')
             if fitted is not None:

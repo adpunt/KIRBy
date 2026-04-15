@@ -161,6 +161,8 @@ def run(data, config, output_dir, dataset_name):
                 metric=metric_name,
                 verbose=False,
                 cache=True,
+                dataset_name=f"{dataset_name}_fold{fold_i}",
+                tier='general',
             )
             # Pick best across models
             best = None

@@ -141,11 +141,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if len(sd['reps']) >= 2:
             try:
                 _metric = get_domain_metric(sd)[0]
+                _silo_ds_name = SILO_DATASETS.get(sname, sname)
                 s_search = find_best_hybrid(
                     sd['reps'], sd['labels'],
                     groups=sd.get('groups'),
                     budgets=FULL_BUDGETS,
                     speed='full', cache=True, verbose=False,
+                    dataset_name=_silo_ds_name, tier='general',
                     metric=_metric, adaptive_pruning=0.25)
                 s_bp_entry = s_search.best_by_model.get('rf')
                 if s_bp_entry:

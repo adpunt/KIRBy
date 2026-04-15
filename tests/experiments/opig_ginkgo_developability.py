@@ -276,6 +276,7 @@ def evaluate_property(prop_name, rep_names, n_folds):
             augmentation_strategy='uncapped',
             internal_evaluators=INTERNAL_EVALUATORS,
             speed='full', return_fitted=True, verbose=False, cache=True,
+            dataset_name=f"ginkgo_{prop_name}", tier='general',
             adaptive_pruning=0.25, **cv_kw)
         top3 = extract_top3_base_reps(search)
         if top3:

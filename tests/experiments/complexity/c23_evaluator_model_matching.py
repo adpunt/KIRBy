@@ -77,7 +77,8 @@ TEST_MODELS = ['rf', 'lightgbm', 'xgboost', 'ridge', 'knn', 'mlp', 'svm', 'gp',
 
 def _run_single_config(reps, labels, groups, model_name, model_factory,
                        evaluator, budgets, speed, metric_name, task_type,
-                       lower_is_better, augmentations, aug_strategy):
+                       lower_is_better, augmentations, aug_strategy,
+                       dataset_name=None):
     """Run find_best_hybrid for one (model, evaluator) pair."""
     models = {model_name: model_factory()}
     try:
@@ -95,6 +96,8 @@ def _run_single_config(reps, labels, groups, model_name, model_factory,
             verbose=False,
             augmentations=augmentations,
             augmentation_strategy=aug_strategy,
+            dataset_name=f"{dataset_name}_{model_name}_{evaluator}",
+            tier='general',
         )
         best = search.best_by_model.get(model_name)
         if best:
@@ -152,7 +155,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             r = _run_single_config(
                 reps, labels, groups, model_name, model_factory,
                 evaluator, budgets, search_speed, metric_name, task_type,
-                lower_is_better, augmentations, aug_strategy)
+                lower_is_better, augmentations, aug_strategy,
+                dataset_name=dataset_name)
             if r:
                 scores[cond_name] = r
                 print(f"score={r['score_mean']:.4f}")
@@ -188,7 +192,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         r = _run_single_config(
             reps, labels, groups, downstream, model_factory,
             evaluator, budgets, search_speed, metric_name, task_type,
-            lower_is_better, augmentations, aug_strategy)
+            lower_is_better, augmentations, aug_strategy,
+            dataset_name=dataset_name)
         if r:
             print(f"score={r['score_mean']:.4f}")
         else:
@@ -235,6 +240,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 verbose=False,
                 augmentations=augmentations,
                 augmentation_strategy=aug_strategy,
+                dataset_name=f"{dataset_name}_quick_{model_name}",
+                tier='general',
             )
             best = search.best_by_model.get(model_name)
             if best:

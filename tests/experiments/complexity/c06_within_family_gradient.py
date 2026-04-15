@@ -82,6 +82,8 @@ def run(data, config, output_dir, dataset_name, families=None):
                     metric=metric_name,
                     verbose=False,
                     cache=True,
+                    dataset_name=f"{dataset_name}_{var_name}",
+                    tier='general',
                 )
             except Exception as e:
                 print(f"      find_best_hybrid failed: {e}")

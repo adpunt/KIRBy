@@ -263,7 +263,7 @@ def evaluate_rep(X, labels, groups, model, n_folds):
 # =============================================================================
 
 def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
-                              pool_name='pool'):
+                              pool_name='pool', dataset_name=None):
     """Build hybrid from a rep pool and evaluate it.
 
     Args:
@@ -295,6 +295,8 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
         return_fitted=True,
         verbose=False,
         cache=True,
+        dataset_name=f"{dataset_name}_{pool_name}",
+        tier='general',
         adaptive_pruning=0.25,
     )
 
@@ -528,11 +530,13 @@ def evaluate_dataset(dataset_name, n_folds, skip_hybrid=False,
         smiles_only, smiles_plus_cgr, _ = partition_rep_pools(reps)
 
         hybrid_comparison['smiles_only'] = build_and_evaluate_hybrid(
-            smiles_only, reps, labels, groups, n_folds, 'SMILES-only')
+            smiles_only, reps, labels, groups, n_folds, 'SMILES-only',
+            dataset_name=dataset_name)
 
         if cgr_available:
             hybrid_comparison['smiles_plus_cgr'] = build_and_evaluate_hybrid(
-                smiles_plus_cgr, reps, labels, groups, n_folds, 'SMILES+CGR')
+                smiles_plus_cgr, reps, labels, groups, n_folds, 'SMILES+CGR',
+                dataset_name=dataset_name)
 
             # CGR selection info
             hybrid_comparison['smiles_plus_cgr']['cgr_selection'] = \

@@ -150,6 +150,8 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                     metric=metric_name,
                     verbose=False,
                     cache=True,
+                    dataset_name=f"{dataset_name}_{partition_name}_{subpop_name}",
+                    tier='general',
                 )
                 top3 = extract_top3_base_reps(search)
                 if top3:

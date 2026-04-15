@@ -285,6 +285,7 @@ def evaluate_dataset(rep_names, n_folds):
             augmentation_strategy='uncapped',
             internal_evaluators=INTERNAL_EVALUATORS,
             speed='full', return_fitted=True, verbose=False, cache=True,
+            dataset_name='tz_her2_binary', tier='general',
             adaptive_pruning=0.25)
         top3 = extract_top3_base_reps(search)
         if top3:
