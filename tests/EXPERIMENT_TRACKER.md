@@ -33,6 +33,7 @@ First experimental runs on the 9 antibody classification datasets that finished 
 | 11763185 | similarity | flab_polyreact_jain_cic |
 | 11763186 | complexity | humanness_therapeutic |
 | 11763187 | similarity | humanness_therapeutic |
+| 11763190 | noise (smoke test — n01 n02 n05) | buchwald_hartwig |
 
 **Precondition:** required commits landed before submission — `0e7775c` (c03/c04/c19), `6b311cf` (c15 Rademacher), `f09baed` (c16/c18 clf support), `c26aa07` (s01/s02 sequence cliffs), `f037628` (CDR cache keying), `9fb7681` (c23 deprioritized). All on `main`.
 
