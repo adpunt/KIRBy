@@ -218,11 +218,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("\n  Computing PCA baselines...")
     pca_baselines = {}
     for budget in budgets:
-        n_comp = min(budget, X_concat.shape[1], X_concat.shape[0] - 1)
         pca_baselines[budget] = {}
         for model_name, model_factory in models.items():
             pca_scores = []
             for train_idx, val_idx in cv_split(groups, n_folds, X_concat, labels, mode=mode):
+                # Cap n_components at per-fold train size, not the full dataset.
+                # With CV splits, train is a strict subset and PCA's
+                # n_components constraint is against the train slice.
+                n_train = len(train_idx)
+                n_comp = min(budget, X_concat.shape[1], n_train - 1)
+                if n_comp < 1:
+                    continue
                 pca = PCA(n_components=n_comp)
                 scaler = StandardScaler()
                 X_train_s = scaler.fit_transform(X_concat[train_idx])
@@ -232,7 +238,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 m = model_factory()
                 m.fit(X_train_p, labels[train_idx])
                 pca_scores.append(metric_fn(labels[val_idx], m.predict(X_val_p)))
-            pca_baselines[budget][model_name] = float(np.mean(pca_scores))
+            pca_baselines[budget][model_name] = (
+                float(np.mean(pca_scores)) if pca_scores else float('nan'))
 
     # Heatmap: model x budget -> best score
     heatmap = {}
