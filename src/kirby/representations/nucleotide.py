@@ -618,15 +618,24 @@ def _embed_nt_v2_250m(sequences: List[str]) -> np.ndarray:
 
 
 def _embed_gena_lm(sequences: List[str]) -> np.ndarray:
-    """GENA-LM BERT-large embeddings (1024D).
+    """GENA-LM BERT-large embeddings (1024D hidden states).
 
     Trained on T2T human genome assembly. BPE tokenization.
     Fishman et al., NAR 2024.
+
+    Must use auto_class='AutoModelForMaskedLM' + use_hidden_states=True:
+    the model ships as BertForMaskedLM and its output struct has `logits`
+    (shape [batch, seq_len, vocab=32000]) instead of `last_hidden_state`.
+    Without use_hidden_states, _hf_embed falls through to `outputs[0]`
+    which IS the logits, mean-pools them, and returns (N, 32000) instead
+    of (N, 1024). Caught in 2026-04-15 as the cause of spurious
+    gena_lm wins on H3K* histone-mod surveys.
     """
     return _hf_embed(
         sequences,
         model_id='AIRI-Institute/gena-lm-bert-large-t2t',
         batch_size=8, max_length=512,
+        auto_class='AutoModelForMaskedLM', use_hidden_states=True,
     )
 
 
