@@ -45,6 +45,7 @@ from experiments._shared import (
 from kirby.find_best_hybrid import (
     _evaluate_single, _resolve_metric, _score_to_comparable,
     BUILTIN_METRICS, _detect_task_type,
+    _select_top_features_per_fold, HIGH_DIM_FILTER_THRESHOLD,
 )
 
 
@@ -77,20 +78,48 @@ def _get_primary_metric(data):
 
 def evaluate_baselines(reps, labels, groups, model_factory, metric_fn,
                        n_folds, mode='full'):
-    """Evaluate each rep individually. Returns {rep_name: mean_score}."""
+    """Evaluate each rep individually. Returns {rep_name: mean_score}.
+
+    Applies the same per-fold high-dim feature-importance filter as
+    find_best_hybrid._evaluate_single when a rep exceeds
+    HIGH_DIM_FILTER_THRESHOLD. Filter is per-fold (fit LightGBM on train
+    only, pick top N, apply to train+val) so no val-label leakage. Target
+    N is 500 if dataset has >= 1000 samples else 200.
+    """
     sample_X = next(iter(reps.values()))
     baselines = {}
 
     for rep_name, X in reps.items():
+        X_arr = np.asarray(X)
+
+        # Decide filter params once per rep
+        _apply_hd_filter = X_arr.shape[1] > HIGH_DIM_FILTER_THRESHOLD
+        if _apply_hd_filter:
+            _hd_target_n = 500 if len(labels) >= 1000 else 200
+            if _hd_target_n >= X_arr.shape[1]:
+                _apply_hd_filter = False
+            else:
+                _hd_task_type = _detect_task_type(labels)
+
         scores = []
         for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
                                            labels, mode=mode):
+            X_train_raw = X_arr[train_idx]
+            X_val_raw = X_arr[val_idx]
+            y_train = labels[train_idx]
+
+            if _apply_hd_filter:
+                top_idx = _select_top_features_per_fold(
+                    X_train_raw, y_train, _hd_target_n, _hd_task_type)
+                X_train_raw = X_train_raw[:, top_idx]
+                X_val_raw = X_val_raw[:, top_idx]
+
             scaler = StandardScaler()
-            X_train = scaler.fit_transform(X[train_idx])
-            X_val = scaler.transform(X[val_idx])
+            X_train = scaler.fit_transform(X_train_raw)
+            X_val = scaler.transform(X_val_raw)
 
             model = model_factory()
-            model.fit(X_train, labels[train_idx])
+            model.fit(X_train, y_train)
             y_pred = model.predict(X_val)
             scores.append(metric_fn(labels[val_idx], y_pred))
 
