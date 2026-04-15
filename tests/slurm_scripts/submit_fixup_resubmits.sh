@@ -81,6 +81,52 @@ SBATCH_EOF
     echo "  ${jid}  dta_kiba_fill  (long, 256G, 24h, HTC+GPU)"
 }
 
+submit_gena_refix() {
+    # Per-dataset gena_lm-only re-evaluation for the 16 nucleotide datasets
+    # completed BEFORE 3a5b5d5. Those results contain a broken gena_lm entry
+    # at 32000D (LM head logits mean-pooled, not hidden states). This job:
+    #   1. Fails fast if any stale gena_lm.npy cache is still on disk.
+    #   2. Runs run_baseline_survey.py with --reps gena_lm (no --skip-existing),
+    #      so only gena_lm is generated + evaluated.
+    #   3. The survey's merge-with-existing logic in main() overwrites the
+    #      gena_lm entry in the existing JSON and preserves every other rep.
+    local ds=$1
+    local jid
+    jid=$(sbatch --parsable <<SBATCH_EOF
+#!/bin/bash
+#SBATCH --job-name=gena_refix_${ds}
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --time=06:00:00
+#SBATCH --partition=long
+#SBATCH --mem=64G
+#SBATCH --gres=gpu:1
+#SBATCH --mail-user=${EMAIL}
+#SBATCH --mail-type=END,FAIL
+
+# Preflight: refuse to run if any stale gena_lm.npy cache still exists.
+# If any are found, the fix (3a5b5d5) will not take effect because
+# get_representations() loads from cache before calling _embed_gena_lm.
+stale=\$(ls -1 ~/.cache/kirby/reps/nuc_*/gena_lm.npy 2>/dev/null | wc -l)
+if [ "\$stale" != "0" ]; then
+    echo "ABORT: \$stale stale gena_lm.npy file(s) still present in cache"
+    echo "Delete them first: rm -v ~/.cache/kirby/reps/nuc_*/gena_lm.npy"
+    exit 2
+fi
+
+cd ${KIRBY}
+git pull 2>/dev/null || true
+. ./setup.sh
+export PYTHONWARNINGS=ignore
+export TRANSFORMERS_VERBOSITY=error
+mkdir -p tests/results/nucleotide_survey
+python tests/run_baseline_survey.py ${ds} --reps gena_lm --n-folds 5 --output tests/results/nucleotide_survey/
+SBATCH_EOF
+)
+    echo "  ${jid}  gena_refix_${ds}  (long, 64G, 6h, HTC+GPU)"
+}
+
 submit_schnet_e2e() {
     # SchNet E2E rerun — previous 7440325-327 hit the zero-byte FT cache
     # and every FT factory returned "No data left in file". fc36c6c fixes
@@ -235,6 +281,31 @@ case "${MODE}" in
         submit_schnet_e2e herg
         submit_schnet_e2e caco2
         ;;
+    gena_refix)
+        echo "=== HTC gena_lm-only re-evaluation for 16 completed nucleotide datasets ==="
+        echo "    Requires: stale gena_lm.npy caches already deleted"
+        echo "              (rm -v ~/.cache/kirby/reps/nuc_*/gena_lm.npy)"
+        echo ""
+        # 10 histone modification tasks (post-fix code, broken gena_lm)
+        submit_gena_refix nt_H2AFZ
+        submit_gena_refix nt_H3K27ac
+        submit_gena_refix nt_H3K27me3
+        submit_gena_refix nt_H3K36me3
+        submit_gena_refix nt_H3K4me1
+        submit_gena_refix nt_H3K4me2
+        submit_gena_refix nt_H3K4me3
+        submit_gena_refix nt_H3K9ac
+        submit_gena_refix nt_H3K9me3
+        submit_gena_refix nt_H4K20me1
+        # 4 promoter/splice tasks (DONE partial pre-fix)
+        submit_gena_refix nt_promoter_all
+        submit_gena_refix nt_promoter_tata
+        submit_gena_refix nt_promoter_no_tata
+        submit_gena_refix nt_splice_sites_all
+        # 2 gb_human tasks (DONE)
+        submit_gena_refix gb_human_nontata_promoters
+        submit_gena_refix gb_human_enhancers_cohn
+        ;;
     all)
         echo "=== HTC GPU resubmits (antibody_clf + dta_kiba_fill) ==="
         submit_abclf tz_her2_binary       256G
@@ -255,14 +326,16 @@ case "${MODE}" in
         submit_dta_bindingdb_kd
         ;;
     *)
-        echo "Usage: bash tests/slurm_scripts/submit_fixup_resubmits.sh [gpu|cpu|bindingdb|davis|schnet|all]"
+        echo "Usage: bash tests/slurm_scripts/submit_fixup_resubmits.sh [gpu|cpu|bindingdb|davis|schnet|gena_refix|all]"
         echo ""
-        echo "  gpu       — 4 abclf jobs + dta_kiba_fill (GPU, long, 24h)"
-        echo "  cpu       — 4 nucleotide resubmits (128G) + 2 gb_demo OOM bumps (256G) (medium, 48h)"
-        echo "  bindingdb — dta_bindingdb_kd fresh (GPU, medium, 48h, 256G)"
-        echo "  davis     — dta_davis resubmit (GPU, long, 96h, 256G)"
-        echo "  schnet    — SchNet E2E rerun: logd, herg, caco2 (GPU, long, 24h, 128G)"
-        echo "  all       — every set (16 jobs total)"
+        echo "  gpu         — 4 abclf jobs + dta_kiba_fill (GPU, long, 24h)"
+        echo "  cpu         — 4 nucleotide resubmits (128G) + 2 gb_demo OOM bumps (256G) (medium, 48h)"
+        echo "  bindingdb   — dta_bindingdb_kd fresh (GPU, medium, 48h, 256G)"
+        echo "  davis       — dta_davis resubmit (GPU, long, 96h, 256G)"
+        echo "  schnet      — SchNet E2E rerun: logd, herg, caco2 (GPU, long, 24h, 128G)"
+        echo "  gena_refix  — gena_lm-only re-eval for 16 completed nucleotide datasets"
+        echo "                (requires stale caches already deleted)"
+        echo "  all         — every set (16 jobs total, does NOT include gena_refix)"
         exit 1
         ;;
 esac
