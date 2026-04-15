@@ -405,7 +405,7 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 7483661 | dta_bindingdb_kd (pre-c18342f heredoc bug) | **CANCELLED** (2026-04-15, same heredoc bug as 7483641-46) |
 | 7483718 | dta_bindingdb_kd (post-c18342f, per-rep checkpoint) | **PD** (2026-04-15, medium+GPU+256G, 48h) |
 | 7467954 | dta_davis (resubmit, --skip-existing) | **TIMEOUT** (2026-04-15 01:40, 48h wall, died at ~66% through contact graph features; no checkpointed output — pre-a81b0eb code) |
-| 7483719 | dta_davis (post-c18342f heredoc + a81b0eb checkpointing) | **NOT YET SUBMITTED** — run `bash submit_fixup_resubmits.sh davis` (long+GPU+256G, 96h wall) |
+| 7483719 | dta_davis (post-c18342f heredoc + a81b0eb checkpointing) | **PD** (2026-04-15, long+GPU+256G, 96h wall) |
 | 7457314 | dta_kiba_fill (--skip-existing) | **FAILED** (ExitCode 126:0, 6min — sbatch --wrap line-splitting bug) |
 | 7467954 | dta_davis (resubmit, --skip-existing) | **RUNNING** (1d22h as of 2026-04-15, ongoing) |
 | 7483635 | dta_kiba_fill (pre-c18342f heredoc bug) | **CANCELLED** (2026-04-15, bad heredoc) |
