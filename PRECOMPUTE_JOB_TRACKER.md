@@ -472,24 +472,57 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 7483708 | nuc_nt_enhancers_types (post-c18342f) | **PD** |
 | 7483709 | nuc_nt_splice_sites_acceptors (post-c18342f) | **PD** |
 | 7483710 | nuc_nt_splice_sites_donors (post-c18342f) | **PD** |
-| 7440309 | nuc_nt_H2AFZ | DONE (18/25 reps, winner: mistral_dna+ridge=0.4323 mcc) |
-| 7440310 | nuc_nt_H3K27ac | DONE (winner: gena_lm+ridge=0.4569 mcc) |
-| 7440311 | nuc_nt_H3K27me3 | DONE (winner: gena_lm+ridge=0.5522 mcc) |
-| 7440312 | nuc_nt_H3K36me3 | DONE (winner: gena_lm+ridge=0.5715 mcc) |
-| 7440313 | nuc_nt_H3K4me1 | DONE (winner: gena_lm+ridge=0.4405 mcc) |
-| 7440314 | nuc_nt_H3K4me2 | **DONE** (1d14h, 2026-04-12) |
-| 7440315 | nuc_nt_H3K4me3 | **DONE** (1d3h, 2026-04-12) |
-| 7440316 | nuc_nt_H3K9ac | **DONE** (1d11h, 2026-04-13) |
-| 7440317 | nuc_nt_H3K9me3 | **DONE** (1d20h, 2026-04-13) |
-| 7440318 | nuc_nt_H4K20me1 | **DONE** (22h, 2026-04-12) |
-| 7440319 | nuc_gb_human_nontata_promoters | **DONE** (10h38m, 2026-04-12) |
-| 7440320 | nuc_gb_human_enhancers_cohn | **DONE** (16h35m, 2026-04-12) |
+| 7440309 | nuc_nt_H2AFZ | DONE (2026-04-12) — **gena_lm CONTAMINATED (32000D logits)**, superseded by 7485363 refix |
+| 7440310 | nuc_nt_H3K27ac | DONE — **gena_lm CONTAMINATED**, superseded by 7485364 refix |
+| 7440311 | nuc_nt_H3K27me3 | DONE — **gena_lm CONTAMINATED**, superseded by 7485365 refix |
+| 7440312 | nuc_nt_H3K36me3 | DONE — **gena_lm CONTAMINATED**, superseded by 7485366 refix |
+| 7440313 | nuc_nt_H3K4me1 | DONE — **gena_lm CONTAMINATED**, superseded by 7485367 refix |
+| 7440314 | nuc_nt_H3K4me2 | DONE (1d14h, 2026-04-12) — **gena_lm CONTAMINATED**, superseded by 7485368 refix |
+| 7440315 | nuc_nt_H3K4me3 | DONE (1d3h, 2026-04-12) — **gena_lm CONTAMINATED**, superseded by 7485369 refix |
+| 7440316 | nuc_nt_H3K9ac | DONE (1d11h, 2026-04-13) — **gena_lm CONTAMINATED**, superseded by 7485370 refix |
+| 7440317 | nuc_nt_H3K9me3 | DONE (1d20h, 2026-04-13) — **gena_lm CONTAMINATED**, superseded by 7485371 refix |
+| 7440318 | nuc_nt_H4K20me1 | DONE (22h, 2026-04-12) — **gena_lm CONTAMINATED**, superseded by 7485372 refix |
+| 7440319 | nuc_gb_human_nontata_promoters | DONE (10h38m, 2026-04-12) — **gena_lm CONTAMINATED**, superseded by 7485377 refix |
+| 7440320 | nuc_gb_human_enhancers_cohn | DONE (16h35m, 2026-04-12) — **gena_lm CONTAMINATED**, superseded by 7485378 refix |
 | 7440321 | nuc_gb_demo_coding_vs_intergenomic | **OUT_OF_MEMORY** (1h44m, 2026-04-12) — 128G insufficient, resubmit with 256G |
 | 7440322 | nuc_gb_demo_human_or_worm | **OUT_OF_MEMORY** (1h46m, 2026-04-12) — 128G insufficient, resubmit with 256G |
 | 7483645 | nuc_gb_demo_coding_vs_intergenomic (pre-c18342f) | **FAILED** (same heredoc bug) |
 | 7483646 | nuc_gb_demo_human_or_worm (pre-c18342f) | **FAILED** (same heredoc bug) |
 | 7483711 | nuc_gb_demo_coding_vs_intergenomic (post-c18342f, OOM bump 256G) | **PD** (2026-04-15, medium+256G, 48h) |
 | 7483712 | nuc_gb_demo_human_or_worm (post-c18342f, OOM bump 256G) | **PD** (2026-04-15, medium+256G, 48h) |
+
+### Nucleotide gena_lm refix (2026-04-15)
+
+Target: fix broken gena_lm entries in 16 completed nucleotide JSONs.
+Root cause: `_embed_gena_lm` was returning 32000D LM head logits
+instead of 1024D hidden states (fixed in 3a5b5d5). Each job runs
+`run_baseline_survey.py <ds> --reps gena_lm --n-folds 5 --output
+tests/results/nucleotide_survey/`. No --skip-existing: the merge
+logic in run_baseline_survey.py lines 1243-1264 overwrites ONLY the
+gena_lm entry while preserving all other reps. Preflight check
+inside each job aborts if any stale `nuc_*/gena_lm.npy` cache files
+remain (they should have been deleted via rm before submission).
+
+Resource: long+GPU+64G+6h per job.
+
+| Job ID | Name | Status |
+|--------|------|--------|
+| 7485363 | gena_refix_nt_H2AFZ | **PD** (2026-04-15) |
+| 7485364 | gena_refix_nt_H3K27ac | **PD** |
+| 7485365 | gena_refix_nt_H3K27me3 | **PD** |
+| 7485366 | gena_refix_nt_H3K36me3 | **PD** |
+| 7485367 | gena_refix_nt_H3K4me1 | **PD** |
+| 7485368 | gena_refix_nt_H3K4me2 | **PD** |
+| 7485369 | gena_refix_nt_H3K4me3 | **PD** |
+| 7485370 | gena_refix_nt_H3K9ac | **PD** |
+| 7485371 | gena_refix_nt_H3K9me3 | **PD** |
+| 7485372 | gena_refix_nt_H4K20me1 | **PD** |
+| 7485373 | gena_refix_nt_promoter_all | **PD** |
+| 7485374 | gena_refix_nt_promoter_tata | **PD** |
+| 7485375 | gena_refix_nt_promoter_no_tata | **PD** |
+| 7485376 | gena_refix_nt_splice_sites_all | **PD** |
+| 7485377 | gena_refix_gb_human_nontata_promoters | **PD** |
+| 7485378 | gena_refix_gb_human_enhancers_cohn | **PD** |
 
 ### CGR-SMILES pretraining (Phase 4)
 
