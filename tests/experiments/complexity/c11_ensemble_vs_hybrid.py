@@ -411,7 +411,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"{ens_r['total_fit_time_s']:>8.3f} "
               f"{best_hyb['total_fit_time_s']:>8.3f} {speedup:>7.1f}x")
 
-    top3 = extract_top3_base_reps(last_search) if last_search is not None else []
+    top3 = extract_top3_base_reps(search) if search is not None else []
     return {
         'results': results,
         'n_reps': n_reps,
