@@ -4,51 +4,87 @@ Last updated: 2026-04-15
 
 ---
 
-## Antibody Classification Shakedown — 2026-04-15 (commit `ec0aae4`)
+## Antibody Classification Shakedown — Batch 2 (full-tier fix) — 2026-04-15 (commit `6124333`)
 
-First experimental runs on the 9 antibody classification datasets that finished precompute. Uses the unified `run_dataset.py` entry point — one SLURM job per (category, dataset) pair, each loads data once and runs a filtered experiment list. Noise category cut entirely for classification; c04/c12/c23 excluded from complexity; s04/s09/s11 excluded from similarity.
+Resubmitted after discovering the entire experiment pipeline was silently running at `speed='fast'` + 3-fold instead of `speed='full'` + 5-fold, which bypassed the SLURM precompute disk cache completely. Commit `6124333` flipped all experiment defaults to full tier. Batch 1 (below) cancelled before completion.
 
-**Submitted:** 2026-04-15. 18 jobs (9 datasets × 2 categories).
+**Submitted:** 2026-04-15. 19 jobs (9 datasets × 2 categories + 1 noise smoke test on a regression dataset).
 
 **Complexity experiments per job:** c01 c02 c05 c06 c07 c08 c09 c10 c11 c13 c15 c16 c17 c18 c19 c21 c22 c24
 **Similarity experiments per job:** s01 s02 s03 s05 s06 s07 s08 s10 s12 s13
+**Noise smoke test:** n01 n02 n05 on buchwald_hartwig (regression — noise cut for classification by design)
 
 | Job ID | Category | Dataset |
 |--------|----------|---------|
-| 11763170 | complexity | abagym_Ang2 |
-| 11763171 | similarity | abagym_Ang2 |
-| 11763172 | complexity | abagym_EGFR |
-| 11763173 | similarity | abagym_EGFR |
-| 11763174 | complexity | abagym_HER2 |
-| 11763175 | similarity | abagym_HER2 |
-| 11763176 | complexity | abagym_VEGF |
-| 11763177 | similarity | abagym_VEGF |
-| 11763178 | complexity | abcov_kd |
-| 11763179 | similarity | abcov_kd |
-| 11763180 | complexity | flab_immunogenicity_marks |
-| 11763181 | similarity | flab_immunogenicity_marks |
-| 11763182 | complexity | flab_polyreact_jain_bvp |
-| 11763183 | similarity | flab_polyreact_jain_bvp |
-| 11763184 | complexity | flab_polyreact_jain_cic |
-| 11763185 | similarity | flab_polyreact_jain_cic |
-| 11763186 | complexity | humanness_therapeutic |
-| 11763187 | similarity | humanness_therapeutic |
-| 11763190 | noise (smoke test — n01 n02 n05) | buchwald_hartwig |
+| 11763384 | complexity | abagym_Ang2 |
+| 11763385 | similarity | abagym_Ang2 |
+| 11763386 | complexity | abagym_EGFR |
+| 11763387 | similarity | abagym_EGFR |
+| 11763388 | complexity | abagym_HER2 |
+| 11763389 | similarity | abagym_HER2 |
+| 11763390 | complexity | abagym_VEGF |
+| 11763391 | similarity | abagym_VEGF |
+| 11763392 | complexity | abcov_kd |
+| 11763393 | similarity | abcov_kd |
+| 11763394 | complexity | flab_immunogenicity_marks |
+| 11763395 | similarity | flab_immunogenicity_marks |
+| 11763396 | complexity | flab_polyreact_jain_bvp |
+| 11763397 | similarity | flab_polyreact_jain_bvp |
+| 11763398 | complexity | flab_polyreact_jain_cic |
+| 11763399 | similarity | flab_polyreact_jain_cic |
+| 11763400 | complexity | humanness_therapeutic |
+| 11763401 | similarity | humanness_therapeutic |
+| 11763402 | noise (smoke test — n01 n02 n05) | buchwald_hartwig |
 
-**Precondition:** required commits landed before submission — `0e7775c` (c03/c04/c19), `6b311cf` (c15 Rademacher), `f09baed` (c16/c18 clf support), `c26aa07` (s01/s02 sequence cliffs), `f037628` (CDR cache keying), `9fb7681` (c23 deprioritized). All on `main`.
+**Preconditions (all on `main`):**
+- `0e7775c` c03/c04/c19 classification cleanup
+- `6b311cf` c15 Rademacher classification branch
+- `f09baed` c16/c18 classification downstream models
+- `c26aa07` s01/s02 sequence cliff analysis
+- `f037628` CDR cache keying
+- `9fb7681` c23 deprioritized
+- `c87aebd` c02 PCA n_components cap (PCA bug caught in Batch 1)
+- **`6124333` default speed='full' across the entire experiment pipeline** ← the critical fix
 
-**Monitoring commands:**
+**Monitoring:**
 ```bash
 # Queue state
-squeue -u $USER -j 11763170-11763187
+squeue -u $USER -j 11763384-11763402
 
 # Completed jobs summary
-sacct -u $USER -j 11763170-11763187 --format=JobID,JobName%40,State,Elapsed,ExitCode
+sacct -u $USER -j 11763384-11763402 --format=JobID,JobName%40,State,Elapsed,ExitCode
 
 # Output files
-ls -lt tests/results/complexity/*/
-ls -lt tests/results/similarity/*/
+ls -lt tests/results/complexity/*/ tests/results/similarity/*/ tests/results/noise/*/
 ```
+
+---
+
+## Antibody Classification Shakedown — Batch 1 (CANCELLED) — 2026-04-15 (commit `ec0aae4`)
+
+**Status: ALL CANCELLED** before completion. Reason: ran at `speed='fast'` + 3-fold, bypassing the on-disk SLURM precompute cache. See Batch 2 above for the resubmitted full-tier version.
+
+| Job ID | Category | Dataset | Status |
+|--------|----------|---------|--------|
+| 11763170 | complexity | abagym_Ang2 | CANCELLED |
+| 11763171 | similarity | abagym_Ang2 | CANCELLED |
+| 11763172 | complexity | abagym_EGFR | CANCELLED |
+| 11763173 | similarity | abagym_EGFR | CANCELLED |
+| 11763174 | complexity | abagym_HER2 | CANCELLED |
+| 11763175 | similarity | abagym_HER2 | CANCELLED |
+| 11763176 | complexity | abagym_VEGF | CANCELLED |
+| 11763177 | similarity | abagym_VEGF | CANCELLED |
+| 11763178 | complexity | abcov_kd | CANCELLED |
+| 11763179 | similarity | abcov_kd | CANCELLED |
+| 11763180 | complexity | flab_immunogenicity_marks | CANCELLED |
+| 11763181 | similarity | flab_immunogenicity_marks | CANCELLED |
+| 11763182 | complexity | flab_polyreact_jain_bvp | CANCELLED |
+| 11763183 | similarity | flab_polyreact_jain_bvp | CANCELLED |
+| 11763184 | complexity | flab_polyreact_jain_cic | CANCELLED |
+| 11763185 | similarity | flab_polyreact_jain_cic | CANCELLED |
+| 11763186 | complexity | humanness_therapeutic | CANCELLED |
+| 11763187 | similarity | humanness_therapeutic | CANCELLED |
+| 11763190 | noise (smoke test — n01 n02 n05) | buchwald_hartwig | CANCELLED |
 
 ---
 
