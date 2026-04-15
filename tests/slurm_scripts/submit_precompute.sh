@@ -289,4 +289,5 @@ esac
 
 echo ""
 echo "Monitor: squeue -u \$USER | grep pc_"
-echo "Cache:   ls -lt ~/.cache/kirby/hybrid_search/ | head"
+echo "Cache:   ls -lt ~/.cache/kirby/searches/ | head"
+echo "Status:  python tests/check_precompute_status.py --verbose"

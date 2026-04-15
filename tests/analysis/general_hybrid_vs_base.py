@@ -156,6 +156,7 @@ def export_dataset(dataset_name, speed='fast', aug_condition='uncapped'):
             augmentations=aug_for_search,
             speed=speed,
             domain=domain,
+            dataset_name=dataset_name, tier='general',
         )
     except Exception as e:
         print(f"  {dataset_name}: search failed — {e}")

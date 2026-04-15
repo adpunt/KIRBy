@@ -107,6 +107,7 @@ def run(source_data, target_data, config, output_dir, source_name, target_name):
         aug_condition='none', speed=config['search_speed'],
         metric=metric_name, task_type=task_type,
         domain=source_data.get('domain', 'molecular'),
+        dataset_name=source_name, tier='general',
     )
 
     # ── Step 2: Hybrid search on target (cached) ───────────────────────
@@ -116,6 +117,7 @@ def run(source_data, target_data, config, output_dir, source_name, target_name):
         aug_condition='none', speed=config['search_speed'],
         metric=metric_name, task_type=task_type,
         domain=target_data.get('domain', 'molecular'),
+        dataset_name=target_name, tier='general',
     )
 
     # ── Step 3: Per-model evaluation ────────────────────────────────────

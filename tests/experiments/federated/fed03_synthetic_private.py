@@ -98,7 +98,8 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
             precomputed=data.get('precomputed_searches'),
             metric=metric_name,
             task_type=data.get('task_type', 'regression'),
-            domain=data.get('domain', 'molecular'))
+            domain=data.get('domain', 'molecular'),
+            dataset_name=dataset_name, tier='general')
         _bp_entry = _search.best_by_model.get('rf')
         _bp = _bp_entry['blueprint'] if _bp_entry else None
     except Exception:
@@ -547,7 +548,8 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
             precomputed=data.get('precomputed_searches'),
             metric=metric_name_b,
             task_type=data.get('task_type', 'regression'),
-            domain=data.get('domain', 'molecular'))
+            domain=data.get('domain', 'molecular'),
+            dataset_name=dataset_name, tier='general')
         _bp_entry = _search.best_by_model.get('rf')
         _bp = _bp_entry['blueprint'] if _bp_entry else None
     except Exception:

@@ -347,7 +347,8 @@ def _run_landscape_comparison(reps, labels, per_rep_results):
 
 def _run_sas_bo_bridge(reps, labels, groups, struct_t, act_t,
                        augmentations=None, augmentation_strategy='uncapped',
-                       search_speed='full', precomputed=None, is_clf=False):
+                       search_speed='full', precomputed=None, is_clf=False,
+                       dataset_name=None):
     """Zone I fraction predicts GP quality -- explains why compact spaces help BO.
 
     Builds 4 representation conditions matching S11, computes SAS zones and
@@ -416,7 +417,8 @@ def _run_sas_bo_bridge(reps, labels, groups, struct_t, act_t,
             speed=search_speed, precomputed=precomputed,
             internal_evaluators=DISTANCE_EVALUATORS,
             budgets=DISTANCE_BUDGETS,
-            downstream_model='gp')
+            downstream_model='gp',
+            dataset_name=dataset_name, tier='general')
         conditions['hybrid_50d'] = StandardScaler().fit_transform(X_h)
     except Exception as e:
         print(f"    WARNING: hybrid build failed ({e})")
@@ -594,7 +596,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         augmentation_strategy=augmentation_strategy,
         search_speed=search_speed,
         precomputed=data.get('precomputed_searches'),
-        is_clf=is_clf)
+        is_clf=is_clf,
+        dataset_name=dataset_name)
 
     # --- Grand summary ---
     print("\n" + "=" * 70)

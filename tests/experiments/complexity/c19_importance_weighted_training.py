@@ -123,6 +123,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             aug_condition='capped', augmentations=augmentations,
             speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'),
+            dataset_name=dataset_name, tier='general',
         )
         input_spaces['hybrid'] = X_hybrid
     except Exception as e:

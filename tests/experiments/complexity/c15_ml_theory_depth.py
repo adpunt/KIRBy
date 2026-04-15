@@ -55,7 +55,7 @@ from experiments._shared import (
 # 15a: Distance Concentration (Beyer et al. 1999)
 # =========================================================================
 
-def _run_distance_concentration(data, budgets):
+def _run_distance_concentration(data, budgets, dataset_name=None):
     """15a: Measure distance concentration at each dimensionality.
 
     The Beyer ratio: (max_dist - min_dist) / min_dist → 0 as d → ∞.
@@ -109,7 +109,8 @@ def _run_distance_concentration(data, budgets):
                 reps, labels, groups, downstream_model='rf',
                 budget=budget,
                 aug_condition='none', speed='full',
-                precomputed=_precomp)
+                precomputed=_precomp,
+                dataset_name=dataset_name, tier='general')
             X_hybrid_s = StandardScaler().fit_transform(X_hybrid)
             metrics = _compute_concentration_metrics(X_hybrid_s, k=5)
             results['per_budget'][budget] = {
@@ -240,7 +241,7 @@ def _compute_concentration_metrics(X, k=5, max_subsample=2000):
 # 15b: Kernel Matrix Analysis
 # =========================================================================
 
-def _run_kernel_analysis(data, budgets):
+def _run_kernel_analysis(data, budgets, dataset_name=None):
     """15b: Kernel matrix properties at different dimensionalities.
 
     For RBF kernel: k(x,x') = exp(-γ||x-x'||²).
@@ -305,7 +306,8 @@ def _run_kernel_analysis(data, budgets):
                 reps, labels, groups, downstream_model='rf',
                 budget=budget,
                 aug_condition='none', speed='full',
-                precomputed=_precomp)
+                precomputed=_precomp,
+                dataset_name=dataset_name, tier='general')
             # Subsample to match
             X_hybrid_sub = X_hybrid[idx] if n_samples > max_n else X_hybrid
             X_hybrid_s = StandardScaler().fit_transform(X_hybrid_sub)
@@ -338,7 +340,8 @@ def _run_kernel_analysis(data, budgets):
                 reps, labels, groups, downstream_model='rf',
                 budget=50,
                 aug_condition='none', speed='full',
-                precomputed=_precomp)
+                precomputed=_precomp,
+                dataset_name=dataset_name, tier='general')
             X_h50_sub = X_h50[idx] if n_samples > max_n else X_h50
             sweep_spaces['hybrid_b50'] = StandardScaler().fit_transform(X_h50_sub)
         except Exception:
@@ -465,7 +468,7 @@ def _compute_kernel_metrics(X, y, gamma=None):
 # 15c: Double Descent Probe
 # =========================================================================
 
-def _run_double_descent(data, config):
+def _run_double_descent(data, config, dataset_name=None):
     """15c: Probe for double descent near the interpolation threshold.
 
     Classical double descent: test error peaks when p ≈ n (number of features
@@ -531,6 +534,7 @@ def _run_double_descent(data, config):
             reps, labels, groups, n_folds, mode, metric_fn,
             budget=budget, method='hybrid',
             precomputed=_precomp,
+            dataset_name=dataset_name,
         )
 
         # --- PCA ---
@@ -550,6 +554,7 @@ def _run_double_descent(data, config):
             reps, labels, groups, n_folds, mode, metric_fn,
             budget=budget, method='hybrid', model_name='ridge',
             precomputed=_precomp,
+            dataset_name=dataset_name,
         )
         ridge_pca = _eval_at_budget_pca(
             X_concat, labels, groups, n_folds, mode, metric_fn,
@@ -604,7 +609,7 @@ def _run_double_descent(data, config):
 
 def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
                     budget, method='hybrid', model_name='rf',
-                    precomputed=None):
+                    precomputed=None, dataset_name=None):
     """Evaluate a hybrid at a given budget with a given model."""
     from sklearn.ensemble import RandomForestRegressor
     from sklearn.linear_model import Ridge
@@ -618,7 +623,8 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
     # Get blueprint from cached search — budget-specific via get_best_for_downstream
     search = get_precomputed_search(reps, labels, groups,
                                     aug_condition='none', speed='full',
-                                    precomputed=precomputed)
+                                    precomputed=precomputed,
+                                    dataset_name=dataset_name, tier='general')
     best = get_best_for_downstream(search, model_name, budget=budget)
     if best is None:
         best = get_best_for_downstream(search, 'rf', budget=budget)
@@ -720,7 +726,7 @@ def _eval_at_budget_random(X_concat, labels, groups, n_folds, mode, metric_fn,
 # 15d: Approximation Theory (Rademacher complexity)
 # =========================================================================
 
-def _run_approximation_theory(data, budgets, config):
+def _run_approximation_theory(data, budgets, config, dataset_name=None):
     """15d: Empirical Rademacher complexity and generalization bounds.
 
     Rademacher complexity measures how well a hypothesis class can fit random
@@ -787,11 +793,11 @@ def _run_approximation_theory(data, budgets, config):
         rad_hybrid = _estimate_rademacher_hybrid(
             reps, labels, groups, n_folds, mode, n_random_trials,
             np.random.RandomState(42), budget, precomputed=_precomp,
-            task_type=task_type)
+            task_type=task_type, dataset_name=dataset_name)
         real_hybrid = _eval_at_budget(
             reps, labels, groups, n_folds, mode, metric_fn,
             budget=budget, method='hybrid', model_name='ridge',
-            precomputed=_precomp)
+            precomputed=_precomp, dataset_name=dataset_name)
 
         # PCA — fresh RNG per budget for fair comparison
         rad_pca = _estimate_rademacher_pca(
@@ -872,7 +878,8 @@ def _estimate_rademacher(X, y, groups, n_folds, mode, n_trials, rng,
 
 
 def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
-                                budget, precomputed=None, task_type='regression'):
+                                budget, precomputed=None, task_type='regression',
+                                dataset_name=None):
     """Estimate Rademacher complexity of hybrid features WITHOUT label leakage.
 
     Creates the hybrid per-fold on training data only, then measures how well
@@ -881,7 +888,8 @@ def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
     # Get blueprint from cached search using REAL labels — budget-specific
     search = get_precomputed_search(reps, y, groups,
                                     aug_condition='none', speed='full',
-                                    precomputed=precomputed)
+                                    precomputed=precomputed,
+                                    dataset_name=dataset_name, tier='general')
     best = get_best_for_downstream(search, 'ridge', budget=budget)
     if best is None:
         best = get_best_for_downstream(search, 'rf', budget=budget)
@@ -959,17 +967,20 @@ def run(data, config, output_dir, dataset_name, sub_analyses=None, **kwargs):
     results = {}
 
     if '15a' in all_subs:
-        results['distance_concentration'] = _run_distance_concentration(data, budgets)
+        results['distance_concentration'] = _run_distance_concentration(
+            data, budgets, dataset_name=dataset_name)
 
     if '15b' in all_subs:
-        results['kernel_analysis'] = _run_kernel_analysis(data, budgets)
+        results['kernel_analysis'] = _run_kernel_analysis(
+            data, budgets, dataset_name=dataset_name)
 
     if '15c' in all_subs:
-        results['double_descent'] = _run_double_descent(data, config)
+        results['double_descent'] = _run_double_descent(
+            data, config, dataset_name=dataset_name)
 
     if '15d' in all_subs:
         results['approximation_theory'] = _run_approximation_theory(
-            data, budgets, config)
+            data, budgets, config, dataset_name=dataset_name)
 
     return results
 

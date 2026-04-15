@@ -107,6 +107,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             internal_evaluators=DISTANCE_EVALUATORS,
             budgets=DISTANCE_BUDGETS,
             downstream_model='knn',
+            dataset_name=dataset_name, tier='general',
         )
         D_hybrid = compute_distance_matrix(X_hybrid, standardize=True)
         print(f"  Hybrid distance matrix: {X_hybrid.shape[1]}D")

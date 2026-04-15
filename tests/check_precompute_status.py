@@ -1,24 +1,32 @@
 #!/usr/bin/env python
-"""Check precompute status against the hybrid registry.
+"""Check precompute status by validating cache files on disk.
 
-Reads ~/.cache/kirby/hybrid_registry.json and compares every dataset in
-DATASET_REPS against the standard conditions it's supposed to have:
+Walks ~/.cache/kirby/searches/ (or $KIRBY_CACHE_DIR/searches/) and for each
+dataset in DATASET_REPS verifies that the expected condition files exist,
+load cleanly, carry a valid _cache_meta header, and contain non-empty
+best_by_model / all_results.
 
-    general/none, top/none, general/uncapped, top/uncapped,
-    general/capped, top/capped
+Standard expected conditions:
+    general__none,  general__uncapped,  general__capped
+    top__none,      top__uncapped,      top__capped
 
-Datasets without augmentation only get general/none + top/none.
-Distance conditions are not checked.
+Datasets without augmentation get the 'none' conditions only. The 'capped'
+conditions also require augmentations. Distance conditions are not checked
+by default — pass --distance to include them.
+
+This replaces the old registry-based status check, which only counted
+registry keys and could not detect empty / stale / corrupt cache files.
 
 Usage:
     python tests/check_precompute_status.py                # full report
     python tests/check_precompute_status.py --dataset NAME # one dataset
     python tests/check_precompute_status.py --done         # only DONE
     python tests/check_precompute_status.py --incomplete   # only not-DONE
+    python tests/check_precompute_status.py --distance     # include distance
 """
 import argparse
-import json
 import os
+import pickle
 import sys
 from pathlib import Path
 
@@ -29,10 +37,10 @@ sys.path.insert(0, str(REPO_ROOT / 'tests'))
 from experiments.complexity.complexity_helpers import DATASET_REPS
 
 
-def _registry_path():
+def _searches_dir() -> Path:
     cache_root = Path(os.environ.get(
         'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
-    return cache_root / 'hybrid_registry.json'
+    return cache_root / 'searches'
 
 
 def _get_domain(name):
@@ -51,45 +59,87 @@ def _get_domain(name):
     return 'molecular'
 
 
-def expected_conditions(cfg):
-    """Return set of expected standard condition keys for a dataset config."""
+def expected_conditions(cfg, include_distance=False):
+    """Return list of expected (tier, aug_strategy) tuples for a dataset."""
     general = cfg.get('general', [])
     top = cfg.get('top_tier', [])
     aug = cfg.get('augmentation', [])
-    expected = set()
+    expected = []
 
     if len(general) >= 2:
-        expected.add('general/none')
+        expected.append(('general', 'none'))
         if aug:
-            expected.add('general/uncapped')
-            expected.add('general/capped')
+            expected.append(('general', 'uncapped'))
+            expected.append(('general', 'capped'))
     elif len(general) == 1 and aug:
-        expected.add('general/uncapped')
+        expected.append(('general', 'uncapped'))
 
     if len(top) >= 2:
-        expected.add('top/none')
+        expected.append(('top', 'none'))
         if aug:
-            expected.add('top/uncapped')
-            expected.add('top/capped')
+            expected.append(('top', 'uncapped'))
+            expected.append(('top', 'capped'))
     elif len(top) == 1 and (general or aug):
-        expected.add('top/uncapped')
+        expected.append(('top', 'uncapped'))
+
+    if include_distance:
+        if len(general) >= 2:
+            expected.append(('general_distance', 'none'))
+            if aug:
+                expected.append(('general_distance', 'uncapped'))
+        if len(top) >= 2:
+            expected.append(('top_distance', 'none'))
+            if aug:
+                expected.append(('top_distance', 'uncapped'))
 
     return expected
 
 
-def classify(expected, found):
-    """Return ('DONE'|'partial'|'missing', n_found, missing_set)."""
-    found_std = {k for k in found
-                 if '/' in k
-                 and not k.startswith(('general_distance', 'top_distance'))
-                 and not k.startswith('top+borderline')}
-    have = found_std & expected
-    missing = expected - found_std
-    if not missing:
-        return 'DONE', len(have), missing
-    if not have:
-        return 'missing', 0, missing
-    return 'partial', len(have), missing
+def _check_file(path: Path) -> tuple:
+    """Return ('ok'|'missing'|'corrupt'|'empty'|'stale', detail_str)."""
+    if not path.exists():
+        return ('missing', '')
+    try:
+        wrapper = pickle.loads(path.read_bytes())
+    except Exception as e:
+        return ('corrupt', f'{type(e).__name__}: {e}')
+    if not isinstance(wrapper, dict):
+        return ('stale', 'pre-redesign SearchResult (no wrapper)')
+    if '_cache_meta' not in wrapper or 'payload' not in wrapper:
+        return ('stale', 'missing _cache_meta header')
+    meta = wrapper.get('_cache_meta') or {}
+    payload = wrapper.get('payload')
+    # Validate structural fields of payload
+    best = getattr(payload, 'best_by_model', None)
+    all_r = getattr(payload, 'all_results', None)
+    if not best or not all_r:
+        return ('empty',
+                f"best_by_model={len(best) if best else 0} "
+                f"all_results={len(all_r) if all_r else 0}")
+    return ('ok',
+            f"n_results={len(all_r)} "
+            f"models={sorted(best.keys())} "
+            f"metric={meta.get('metric_name', '?')}")
+
+
+def classify_dataset(dataset, cfg, searches_dir, include_distance):
+    expected = expected_conditions(cfg, include_distance=include_distance)
+    results = []
+    n_ok = 0
+    for tier, strat in expected:
+        fname = f"{dataset}__{tier}__{strat}__full.pkl"
+        path = searches_dir / fname
+        status, detail = _check_file(path)
+        results.append((tier, strat, status, detail))
+        if status == 'ok':
+            n_ok += 1
+    if n_ok == len(expected) and expected:
+        overall = 'DONE'
+    elif n_ok == 0:
+        overall = 'missing'
+    else:
+        overall = 'partial'
+    return overall, n_ok, len(expected), results
 
 
 def main():
@@ -98,13 +148,17 @@ def main():
     ap.add_argument('--done', action='store_true', help='show only DONE')
     ap.add_argument('--incomplete', action='store_true',
                     help='show only partial/missing')
+    ap.add_argument('--distance', action='store_true',
+                    help='also check distance conditions')
+    ap.add_argument('--verbose', action='store_true',
+                    help='print per-condition status')
     args = ap.parse_args()
 
-    reg_path = _registry_path()
-    if not reg_path.exists():
-        print(f"No registry at {reg_path}")
-        sys.exit(1)
-    registry = json.loads(reg_path.read_text())
+    searches_dir = _searches_dir()
+    if not searches_dir.exists():
+        print(f"No search cache at {searches_dir}")
+        print("  (will be created on first precompute run)")
+        sys.exit(0 if args.incomplete or not args.done else 1)
 
     # Select datasets to check
     if args.dataset:
@@ -115,7 +169,6 @@ def main():
     else:
         datasets = sorted(DATASET_REPS.keys())
 
-    # Group by domain
     by_domain = {}
     for ds in datasets:
         by_domain.setdefault(_get_domain(ds), []).append(ds)
@@ -126,33 +179,39 @@ def main():
         rows = []
         for ds in by_domain[domain]:
             cfg = DATASET_REPS[ds]
-            expected = expected_conditions(cfg)
-            if not expected:
+            overall, n_ok, n_exp, results = classify_dataset(
+                ds, cfg, searches_dir, include_distance=args.distance)
+            if n_exp == 0:
                 continue
-            found = set(registry.get(ds, {}).get('configs', {}).keys())
-            status, n_have, missing = classify(expected, found)
-            totals[status] += 1
-
-            if args.done and status != 'DONE':
+            totals[overall] += 1
+            if args.done and overall != 'DONE':
                 continue
-            if args.incomplete and status == 'DONE':
+            if args.incomplete and overall == 'DONE':
                 continue
-
-            rows.append((ds, status, n_have, len(expected), sorted(missing)))
+            rows.append((ds, overall, n_ok, n_exp, results))
 
         if not rows:
             continue
 
         print(f"\n=== {domain.upper()} ===")
-        print(f"  {'dataset':<38} {'status':<8} {'found':<8} missing")
+        print(f"  {'dataset':<38} {'status':<8} {'found':<8} missing/bad")
         print(f"  {'-'*38} {'-'*8} {'-'*8} {'-'*40}")
-        for ds, status, n_have, n_exp, missing in rows:
-            miss_str = ','.join(missing) if missing else ''
-            print(f"  {ds:<38} {status:<8} {n_have}/{n_exp:<6} {miss_str}")
+        for ds, overall, n_ok, n_exp, results in rows:
+            bad = [
+                f"{tier}/{strat}={status}"
+                for tier, strat, status, _ in results
+                if status != 'ok'
+            ]
+            bad_str = ', '.join(bad) if bad else ''
+            print(f"  {ds:<38} {overall:<8} {n_ok}/{n_exp:<6} {bad_str}")
+            if args.verbose:
+                for tier, strat, status, detail in results:
+                    mark = '✓' if status == 'ok' else 'X'
+                    print(f"      {mark} {tier}/{strat}: {status} {detail}")
 
     total = sum(totals.values())
     print(f"\n{'='*70}")
-    print(f"Total datasets: {total}  |  "
+    print(f"Total datasets checked: {total}  |  "
           f"DONE: {totals['DONE']}  |  "
           f"partial: {totals['partial']}  |  "
           f"missing: {totals['missing']}")

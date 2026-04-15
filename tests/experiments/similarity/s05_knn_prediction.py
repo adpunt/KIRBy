@@ -73,7 +73,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             budgets=budgets,
             metric=metric_name, task_type=task_type,
             domain=data.get('domain', 'molecular'),
-            downstream_model='knn')
+            downstream_model='knn',
+            dataset_name=dataset_name, tier='general')
 
         # Report which evaluator won
         best_knn = get_best_for_downstream(search, 'knn')

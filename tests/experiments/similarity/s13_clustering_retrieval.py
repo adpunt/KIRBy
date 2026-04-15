@@ -200,7 +200,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             internal_evaluators=DISTANCE_EVALUATORS,
             budgets=DISTANCE_BUDGETS,
             metric=metric_name, task_type=task_type, domain=domain,
-            downstream_model='knn')
+            downstream_model='knn',
+            dataset_name=dataset_name, tier='general')
         spaces['hybrid'] = X_hybrid
         top3 = extract_top3_base_reps(search)
         if top3:

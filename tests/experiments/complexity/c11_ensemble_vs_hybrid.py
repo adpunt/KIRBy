@@ -88,7 +88,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reps, labels, groups,
             aug_condition='capped', augmentations=augmentations,
             speed=config.get('search_speed', 'full'),
-            precomputed=data.get('precomputed_searches'))
+            precomputed=data.get('precomputed_searches'),
+            dataset_name=dataset_name, tier='general')
         for budget in budgets:
             best = get_best_for_downstream(search, 'rf', budget=budget)
             if best and 'blueprint' in best:
