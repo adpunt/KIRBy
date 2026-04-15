@@ -354,6 +354,55 @@ def _load_reaction(dataset_name: str) -> dict:
     }
 
 
+def _filter_high_dim_rep(
+    X: np.ndarray,
+    y: np.ndarray,
+    task_type: str,
+    threshold: int = 5000,
+    n_features: int = 500,
+    rep_name: str = '',
+) -> np.ndarray:
+    """Cut reps exceeding `threshold` dimensions down to `n_features` via
+    LightGBM feature importance. Applied right after rep generation to keep
+    absurdly-high-dim embeddings (e.g. gena_lm returning 32000D vocab-logits
+    instead of 1024D hidden states) out of the downstream pipeline.
+
+    Slight label leakage (importance is fit on full data) but it's a
+    screening pass and the DTA survey already uses the same pattern for
+    protein_kmer 8000D → 200D. Dispatches LGBMClassifier for classification
+    and LGBMRegressor for regression.
+    """
+    if X.shape[1] <= threshold:
+        return X
+
+    print(f"  [high-dim-filter] {rep_name}: {X.shape[1]}D → {n_features}D "
+          f"(via LightGBM feature importance)")
+
+    try:
+        if task_type == 'classification':
+            from lightgbm import LGBMClassifier
+            model = LGBMClassifier(n_estimators=50, max_depth=5,
+                                    random_state=42, n_jobs=-1, verbose=-1)
+        else:
+            from lightgbm import LGBMRegressor
+            model = LGBMRegressor(n_estimators=50, max_depth=5,
+                                   random_state=42, n_jobs=-1, verbose=-1)
+    except ImportError:
+        print(f"  [high-dim-filter] lightgbm missing, falling back to RF")
+        if task_type == 'classification':
+            from sklearn.ensemble import RandomForestClassifier as _M
+        else:
+            from sklearn.ensemble import RandomForestRegressor as _M
+        model = _M(n_estimators=50, max_depth=5, random_state=42, n_jobs=-1)
+
+    X_clean = np.nan_to_num(X, nan=0.0, posinf=1e6, neginf=-1e6)
+    model.fit(X_clean, y)
+    importances = model.feature_importances_
+    top_idx = np.argsort(importances)[-n_features:]
+    top_idx.sort()
+    return X[:, top_idx]
+
+
 def _load_nucleotide(dataset_name: str, rep_preset: str) -> dict:
     """Load nucleotide dataset with representations."""
     from find_best_hybrid_nucleotide import (
@@ -369,6 +418,15 @@ def _load_nucleotide(dataset_name: str, rep_preset: str) -> dict:
     task_type = data['task_type']
 
     reps = _get_nuc_reps(sequences, rep_preset)
+
+    # Safeguard: cut any rep > 5000D to top-500 features via LightGBM
+    # importance. Motivated by gena_lm returning 32000D logits instead of
+    # 1024D hidden states — a problem the user has hit before.
+    for rep_name in list(reps.keys()):
+        reps[rep_name] = _filter_high_dim_rep(
+            reps[rep_name], labels, task_type,
+            threshold=5000, n_features=500, rep_name=rep_name,
+        )
 
     print(f"  {dataset_name}: {len(sequences)} sequences, {n_groups} groups, "
           f"{len(reps)} reps "
