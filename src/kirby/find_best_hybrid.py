@@ -57,7 +57,214 @@ from sklearn.preprocessing import StandardScaler
 
 warnings.filterwarnings('ignore')
 
-_CACHE_VERSION = 14  # v14: normalized cache keys (resolve defaults before hashing) + configurable pruning
+
+# =============================================================================
+# CACHE (filename-based, content-validated, no version numbers)
+# =============================================================================
+#
+# Design rules:
+#   1. Filename IS the cache key. No hashing. No version prefix.
+#      A cache file's name tells you exactly what it holds.
+#   2. Every cache file carries a `_cache_meta` header dict. Load validates
+#      the header against the caller's expected metadata. Mismatch =
+#      silently recompute, never crash.
+#   3. Three layers, all under $KIRBY_CACHE_DIR (default ~/.cache/kirby):
+#        searches/   — full SearchResult per (dataset, tier, aug_strategy, speed)
+#        baselines/  — per-(dataset, rep, model, metric, folds, seed) scores
+#        folds/      — per-(dataset, folds, seed) CV split indices
+#   4. Atomic writes via tempfile + rename. Parallel writers to the same
+#      filename collide on os.replace, not on partial content.
+#   5. Failure to load is never fatal — the caller recomputes and rewrites.
+
+def _cache_base() -> Path:
+    return Path(os.environ.get('KIRBY_CACHE_DIR',
+                                str(Path.home() / '.cache' / 'kirby')))
+
+
+def _sanitize_filename_part(s: str) -> str:
+    return str(s).replace('+', '_').replace('/', '_').replace(' ', '_')
+
+
+def _search_cache_path(dataset_name: str, tier: str,
+                       aug_strategy: str, speed: str) -> Path:
+    t = _sanitize_filename_part(tier)
+    a = _sanitize_filename_part(aug_strategy)
+    s = _sanitize_filename_part(speed)
+    return (_cache_base() / 'searches' /
+            f'{dataset_name}__{t}__{a}__{s}.pkl')
+
+
+def _search_checkpoint_path(dataset_name: str, tier: str,
+                            aug_strategy: str, speed: str) -> Path:
+    p = _search_cache_path(dataset_name, tier, aug_strategy, speed)
+    return p.with_suffix('.ckpt.pkl')
+
+
+def _baseline_cache_path(dataset_name: str, rep_name: str, model_name: str,
+                         metric_name: str, n_folds: int, seed: int) -> Path:
+    return (_cache_base() / 'baselines' /
+            f'{dataset_name}__{rep_name}__{model_name}__'
+            f'{metric_name}__{n_folds}f_{seed}.pkl')
+
+
+def _folds_cache_path(dataset_name: str, n_folds: int, seed: int,
+                      has_groups: bool) -> Path:
+    g = 'grouped' if has_groups else 'ungrouped'
+    return (_cache_base() / 'folds' /
+            f'{dataset_name}__{n_folds}f_{seed}_{g}.pkl')
+
+
+def _atomic_write_pickle(path: Path, obj: Any) -> bool:
+    import tempfile
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix='.tmp')
+        try:
+            with os.fdopen(fd, 'wb') as f:
+                f.write(pickle.dumps(obj))
+            os.replace(tmp, str(path))
+            return True
+        except BaseException:
+            if os.path.exists(tmp):
+                try:
+                    os.unlink(tmp)
+                except Exception:
+                    pass
+            raise
+    except Exception:
+        return False
+
+
+def _load_cache_with_meta(
+    path: Path,
+    expected_meta: Dict[str, Any],
+    ignore_keys: Tuple[str, ...] = ('code_timestamp',),
+) -> Optional[Any]:
+    """Load a cache wrapper and validate its _cache_meta against expected.
+
+    Returns payload on success, None on any failure (missing file,
+    unpickle error, missing header, metadata mismatch). Failure is
+    never fatal — caller should recompute and rewrite.
+    """
+    if not path.exists():
+        return None
+    try:
+        wrapper = pickle.loads(path.read_bytes())
+    except Exception:
+        return None
+    if not isinstance(wrapper, dict):
+        return None
+    if '_cache_meta' not in wrapper or 'payload' not in wrapper:
+        return None
+    stored = wrapper.get('_cache_meta') or {}
+    for k, v in expected_meta.items():
+        if k in ignore_keys:
+            continue
+        if k not in stored or stored[k] != v:
+            return None
+    return wrapper['payload']
+
+
+def _save_cache_with_meta(path: Path, meta: Dict[str, Any],
+                          payload: Any) -> bool:
+    return _atomic_write_pickle(path, {'_cache_meta': meta, 'payload': payload})
+
+
+def _hash_bytes(b: bytes) -> int:
+    return int.from_bytes(hashlib.sha1(b).digest()[:8], 'big', signed=False)
+
+
+def _hash_array(arr: np.ndarray) -> int:
+    """Content hash of a numpy array. SHA1 of tobytes + shape + dtype."""
+    h = hashlib.sha1()
+    h.update(str(arr.shape).encode())
+    h.update(str(arr.dtype).encode())
+    h.update(np.ascontiguousarray(arr).tobytes())
+    return int.from_bytes(h.digest()[:8], 'big', signed=False)
+
+
+def _hash_rep_dict(reps: Dict[str, np.ndarray]) -> Tuple[Tuple[str, int], ...]:
+    """Sorted tuple of (rep_name, content_hash) for cache metadata."""
+    return tuple(sorted((k, _hash_array(v)) for k, v in reps.items()))
+
+
+def _make_search_meta(
+    dataset_name: str, tier: str, aug_strategy: str, speed: str,
+    base_reps: Dict[str, np.ndarray], labels: np.ndarray,
+    groups: Optional[np.ndarray], model_names: Optional[List[str]],
+    metric_name: str, task_type: str, n_folds: int, seed: int,
+    budgets: List[int],
+    augmentations: Optional[Dict[str, np.ndarray]] = None,
+    augmentation_strategy: str = 'uncapped',
+) -> Dict[str, Any]:
+    return {
+        'kind': 'search',
+        'dataset_name': dataset_name,
+        'tier': tier,
+        'aug_strategy': aug_strategy,
+        'speed': speed,
+        'n_samples': int(len(labels)),
+        'rep_names': tuple(sorted(base_reps.keys())),
+        'rep_shapes': tuple(sorted(
+            (k, tuple(v.shape)) for k, v in base_reps.items())),
+        'rep_hashes': _hash_rep_dict(base_reps),
+        'model_names': tuple(sorted(model_names)) if model_names else None,
+        'metric_name': metric_name,
+        'task_type': task_type,
+        'n_folds': n_folds,
+        'seed': seed,
+        'budgets': tuple(budgets),
+        'labels_hash': _hash_bytes(np.ascontiguousarray(labels).tobytes()),
+        'groups_hash': (_hash_bytes(np.ascontiguousarray(groups).tobytes())
+                        if groups is not None else None),
+        'aug_names': tuple(sorted(augmentations.keys())) if augmentations else (),
+        'aug_hashes': (_hash_rep_dict(augmentations) if augmentations else ()),
+        'augmentation_strategy': augmentation_strategy,
+        'code_timestamp': time.time(),
+    }
+
+
+def _make_baseline_meta(
+    dataset_name: str, rep_name: str, rep_shape: tuple,
+    model_name: str, metric_name: str, n_folds: int, seed: int,
+    labels: np.ndarray, groups: Optional[np.ndarray],
+) -> Dict[str, Any]:
+    return {
+        'kind': 'baseline',
+        'dataset_name': dataset_name,
+        'rep_name': rep_name,
+        'rep_shape': tuple(rep_shape),
+        'rep_hash': None,  # set by caller with _hash_array(X)
+        'model_name': model_name,
+        'metric_name': metric_name,
+        'n_folds': n_folds,
+        'seed': seed,
+        'n_samples': int(len(labels)),
+        'labels_hash': _hash_bytes(np.ascontiguousarray(labels).tobytes()),
+        'groups_hash': (_hash_bytes(np.ascontiguousarray(groups).tobytes())
+                        if groups is not None else None),
+        # Bump when _evaluate_single's filter policy changes so old
+        # unfiltered baseline scores don't get served stale.
+        'hd_filter_version': HIGH_DIM_FILTER_VERSION,
+        'hd_filter_threshold': HIGH_DIM_FILTER_THRESHOLD,
+        'code_timestamp': time.time(),
+    }
+
+
+def _make_folds_meta(
+    dataset_name: str, n_folds: int, seed: int,
+    n_samples: int, groups: Optional[np.ndarray],
+) -> Dict[str, Any]:
+    return {
+        'kind': 'folds',
+        'dataset_name': dataset_name,
+        'n_folds': n_folds,
+        'seed': seed,
+        'n_samples': n_samples,
+        'groups_hash': (_hash_bytes(np.ascontiguousarray(groups).tobytes())
+                        if groups is not None else None),
+        'code_timestamp': time.time(),
+    }
 
 
 def _impute_nan(X_train, X_val):
@@ -1120,6 +1327,51 @@ def _extract_full_embeddings(
     return full_embeddings
 
 
+#: High-dim rep filter — applied only in _evaluate_single standalone baseline scoring.
+#: Reps with more than HIGH_DIM_THRESHOLD features get cut down per-fold via
+#: LightGBM feature importance fit on the train fold only (no label leakage
+#: into val). Does NOT affect hybrid search feature selection — hybrid still
+#: sees the full-dim rep. Only the allocation-input baseline score is filtered.
+#: Version is baked into the baseline cache key so old unfiltered scores are
+#: automatically invalidated.
+HIGH_DIM_FILTER_THRESHOLD = 5000
+HIGH_DIM_FILTER_VERSION = 1
+
+
+def _select_top_features_per_fold(
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    target_n: int,
+    task_type: str,
+) -> np.ndarray:
+    """Fit LightGBM on train fold, return indices of top-N features.
+
+    Per-fold: no val-fold labels leak into feature selection. Falls back
+    to sklearn RandomForest if lightgbm is unavailable.
+    """
+    X_clean = np.nan_to_num(X_train, nan=0.0, posinf=1e6, neginf=-1e6)
+    try:
+        if task_type == 'classification':
+            from lightgbm import LGBMClassifier
+            model = LGBMClassifier(n_estimators=50, max_depth=5,
+                                    random_state=42, n_jobs=-1, verbose=-1)
+        else:
+            from lightgbm import LGBMRegressor
+            model = LGBMRegressor(n_estimators=50, max_depth=5,
+                                   random_state=42, n_jobs=-1, verbose=-1)
+    except ImportError:
+        if task_type == 'classification':
+            from sklearn.ensemble import RandomForestClassifier as _M
+        else:
+            from sklearn.ensemble import RandomForestRegressor as _M
+        model = _M(n_estimators=50, max_depth=5, random_state=42, n_jobs=-1)
+    model.fit(X_clean, y_train)
+    importances = model.feature_importances_
+    top_idx = np.argsort(importances)[-target_n:]
+    top_idx.sort()
+    return top_idx
+
+
 def _evaluate_single(
     X: np.ndarray,
     y: np.ndarray,
@@ -1135,11 +1387,26 @@ def _evaluate_single(
 
     Returns (mean_score, std_score) if no secondary metrics.
     Returns (mean_score, std_score, {name: (mean, std)}) if secondary metrics provided.
+
+    When X has more than HIGH_DIM_FILTER_THRESHOLD features, a per-fold
+    LightGBM feature importance filter is applied (train fold only → top N,
+    applied to both train and val for that fold). Target N is 500 if the
+    dataset has >= 1000 samples else 200. This is a standalone-eval-only
+    safeguard — hybrid search itself is unaffected.
     """
     splitter, use_groups = _make_cv_splitter(groups, n_folds, seed, cv_splitter=cv_splitter)
     split_args = (X, y, groups) if use_groups else (X, y)
     scores = []
     sec_scores = {name: [] for name in (secondary_metric_fns or {})}
+
+    # Decide filter params up-front (const per rep, reused across folds)
+    _apply_hd_filter = X.shape[1] > HIGH_DIM_FILTER_THRESHOLD
+    if _apply_hd_filter:
+        _hd_target_n = 500 if len(y) >= 1000 else 200
+        if _hd_target_n >= X.shape[1]:
+            _apply_hd_filter = False
+        else:
+            _hd_task_type = _detect_task_type(y)
 
     # Only scale continuous features; leave binary (ECFP, MACCS, etc.) raw
     is_binary = (X.dtype == np.uint8 or
@@ -1149,6 +1416,14 @@ def _evaluate_single(
     for train_idx, val_idx in splitter.split(*split_args):
         X_train, X_val = X[train_idx], X[val_idx]
         y_train, y_val = y[train_idx], y[val_idx]
+
+        # Per-fold high-dim filter — fit LGBM on train only, pick top N
+        # features, apply to this fold's train and val.
+        if _apply_hd_filter:
+            top_idx = _select_top_features_per_fold(
+                X_train, y_train, _hd_target_n, _hd_task_type)
+            X_train = X_train[:, top_idx]
+            X_val = X_val[:, top_idx]
 
         if is_binary:
             X_train_s = X_train.astype(np.float32)
@@ -1442,6 +1717,9 @@ def _evaluate_baselines(
     precomputed_folds: Optional[List[Tuple[np.ndarray, np.ndarray]]] = None,
     secondary_metric_fns: Optional[Dict[str, Callable]] = None,
     cv_splitter=None,
+    dataset_name: Optional[str] = None,
+    metric_name: Optional[str] = None,
+    use_baseline_cache: bool = True,
 ) -> Dict[str, Dict[str, float]]:
     """Evaluate full-dimension baselines for each rep x model.
 
@@ -1450,17 +1728,77 @@ def _evaluate_baselines(
 
     If secondary_metric_fns is provided, stores secondary metrics under
     '_secondary' key per rep: {f'{model}_{metric}': {'mean': ..., 'std': ...}}.
+
+    Per-rep baseline caching:
+        When dataset_name and metric_name are provided AND there are no
+        secondary metrics, individual (rep, model) baseline scores are
+        cached to ~/.cache/kirby/baselines/ and reused across find_best_hybrid
+        calls that share the same dataset. This is the main "dedup across
+        conditions" win — 6 precompute conditions per dataset all hit the
+        same baseline cache.
+
+        Cache invalidates when rep content, labels, groups, n_folds, or seed
+        changes (content-validated on load).
     """
     if verbose:
         print("\nEvaluating full-dimension baselines...")
 
     baselines = {}
+    # Only enable baseline caching when it's safe:
+    #   - dataset_name + metric_name both known
+    #   - no secondary metrics (cache key doesn't capture them)
+    _baseline_cache_enabled = (
+        use_baseline_cache
+        and dataset_name is not None
+        and metric_name is not None
+        and secondary_metric_fns is None
+    )
 
     # Frozen reps: standard global-array evaluation
     for rep_name, X in base_reps.items():
         baselines[rep_name] = {'dimension': X.shape[1]}
         sec_all = {}
+        # Hash rep once per rep (reused for every model)
+        _rep_hash = _hash_array(X) if _baseline_cache_enabled else None
+
         for model_name, model in models.items():
+            # --- Per-(rep, model) baseline cache lookup ---
+            _cached_score = None
+            _cache_path = None
+            _baseline_meta = None
+            if _baseline_cache_enabled:
+                _cache_path = _baseline_cache_path(
+                    dataset_name=dataset_name,
+                    rep_name=rep_name,
+                    model_name=model_name,
+                    metric_name=metric_name,
+                    n_folds=n_folds,
+                    seed=seed,
+                )
+                _baseline_meta = _make_baseline_meta(
+                    dataset_name=dataset_name,
+                    rep_name=rep_name,
+                    rep_shape=X.shape,
+                    model_name=model_name,
+                    metric_name=metric_name,
+                    n_folds=n_folds,
+                    seed=seed,
+                    labels=labels,
+                    groups=groups,
+                )
+                _baseline_meta['rep_hash'] = _rep_hash
+                _cached = _load_cache_with_meta(_cache_path, _baseline_meta)
+                if _cached is not None and isinstance(_cached, dict):
+                    _cached_score = _cached.get('score')
+
+            if _cached_score is not None:
+                baselines[rep_name][model_name] = _cached_score
+                if verbose:
+                    # Keep output concise — don't spam one line per rep
+                    pass
+                continue
+
+            # --- Compute (cache miss) ---
             result = _evaluate_single(
                 X, labels, model, groups, n_folds, metric_fn, seed,
                 cv_splitter=cv_splitter,
@@ -1474,7 +1812,16 @@ def _evaluate_baselines(
                     }
             else:
                 mean_score, _ = result
-            baselines[rep_name][model_name] = round(mean_score, 4)
+            rounded_score = round(mean_score, 4)
+            baselines[rep_name][model_name] = rounded_score
+
+            # --- Write to per-rep baseline cache (on miss only) ---
+            if _baseline_cache_enabled and _cache_path is not None:
+                _baseline_meta['code_timestamp'] = time.time()
+                _save_cache_with_meta(
+                    _cache_path, _baseline_meta,
+                    {'score': rounded_score, 'dimension': X.shape[1]},
+                )
 
         if sec_all:
             baselines[rep_name]['_secondary'] = sec_all
@@ -2313,75 +2660,6 @@ def _compute_fitted_result(
     )
 
 
-# =============================================================================
-# CACHE
-# =============================================================================
-
-def _hybrid_cache_key(base_reps, labels, groups, speed, budgets, allocation_methods,
-                      importance_methods, internal_evaluators, n_folds, models,
-                      seed, metric, task_type,
-                      two_phase=False, refinement_top_n=5,
-                      refinement_step_sizes=None,
-                      rep_factory_names=None,
-                      augmentations=None,
-                      augmentation_strategy='uncapped',
-                      screen_threshold=None,
-                      greedy_tolerance=0.0,
-                      augmentation_threshold=None,
-                      augmentation_budget=20,
-                      candidate_ranking='rf_importance',
-                      test_rep_subsets=False,
-                      cv_splitter=None,
-                      adaptive_pruning=0.15) -> str:
-    """SHA256 hash of all search-affecting inputs.
-
-    All parameters should be PRE-NORMALIZED by the caller (find_best_hybrid)
-    so that None vs explicit tier defaults produce identical keys.
-    return_fitted and weight_method are excluded because they only affect
-    post-search fitting, not the search itself.
-    adaptive_pruning is a float threshold (0.0 = off, 0.15 = default).
-    models is a sorted list of model name strings (not None/dict).
-    """
-    h = hashlib.sha256()
-    h.update(f"v{_CACHE_VERSION}".encode())
-    for name in sorted(base_reps.keys()):
-        arr = base_reps[name]
-        flat = arr.ravel()
-        sample_idx = np.linspace(0, len(flat) - 1, min(200, len(flat)), dtype=int)
-        h.update(f"{name}:{arr.shape}:{flat[sample_idx].tobytes()}".encode())
-    h.update(labels.tobytes())
-    if groups is not None:
-        h.update(groups.tobytes())
-    if augmentations is not None:
-        for aname in sorted(augmentations.keys()):
-            arr = augmentations[aname]
-            flat = arr.ravel()
-            sample_idx = np.linspace(0, len(flat) - 1, min(200, len(flat)), dtype=int)
-            h.update(f"aug:{aname}:{arr.shape}:{flat[sample_idx].tobytes()}".encode())
-        h.update(f"aug_strategy:{augmentation_strategy}".encode())
-    h.update(f"{speed}|{budgets}|{allocation_methods}|{importance_methods}|{internal_evaluators}|{n_folds}|{seed}|{metric}|{task_type}|{two_phase}|{refinement_top_n}|{refinement_step_sizes}|{screen_threshold}|{greedy_tolerance}|{augmentation_threshold}|{augmentation_budget}|{candidate_ranking}|{adaptive_pruning}".encode())
-    if models:
-        if isinstance(models, (list, tuple)):
-            model_names = sorted(models)
-        elif isinstance(models, dict):
-            model_names = sorted(models.keys())
-        else:
-            model_names = ['custom']
-        h.update("|".join(model_names).encode())
-    if rep_factory_names:
-        h.update("|".join(sorted(rep_factory_names)).encode())
-    if test_rep_subsets:
-        h.update(b"test_rep_subsets:1")
-    if cv_splitter is not None:
-        _cv_id = type(cv_splitter).__name__
-        if hasattr(cv_splitter, 'n_splits'):
-            _cv_id += f":{cv_splitter.n_splits}"
-        if hasattr(cv_splitter, 'random_state'):
-            _cv_id += f":{cv_splitter.random_state}"
-        h.update(f"cv_splitter:{_cv_id}".encode())
-    return h.hexdigest()[:16]
-
-
 def find_best_single_rep_augmented(
     primary_rep: str,
     primary_features: np.ndarray,
@@ -2466,6 +2744,7 @@ def find_best_hybrid(
     greedy_tolerance: float = 0.0,
     adaptive_pruning: Union[bool, float] = True,
     dataset_name: Optional[str] = None,
+    tier: Optional[str] = None,
 ) -> SearchResult:
     """
     Find the best hybrid representation configuration.
@@ -2519,9 +2798,16 @@ def find_best_hybrid(
             than 20% worse than the best". None (default) disables screening.
         seed: Random seed.
         verbose: Print progress.
-        cache: If True, cache results to disk and load from cache on subsequent
-            calls with identical inputs. Default False.
-        cache_dir: Directory for cache files. Defaults to ~/.cache/kirby/hybrid_search.
+        cache: If True, cache results to disk (filename-based, content-validated).
+            Requires dataset_name and tier to be set. Loading an existing cache
+            validates that the stored metadata matches the current call; a
+            mismatch triggers silent recompute + rewrite.
+        cache_dir: Optional override root for cache files. Defaults to
+            $KIRBY_CACHE_DIR or ~/.cache/kirby. Cache subdirectories
+            (searches/, baselines/, folds/) are created under this root.
+        dataset_name: Required when cache=True. Part of the cache filename.
+        tier: Required when cache=True. Condition name (e.g. 'general',
+            'top', 'general_distance'). Part of the cache filename.
 
     Returns:
         SearchResult with best configs, baselines, and optional fitted result.
@@ -2594,37 +2880,73 @@ def find_best_hybrid(
     else:
         _norm_pruning = float(adaptive_pruning)
 
-    # --- Check cache (uses normalized params) ---
+    # --- Resolve task type early so cache meta carries the real value ---
+    # (task_type='auto' must not leak into cache metadata.)
+    if task_type == 'auto':
+        _task_type_for_meta = _detect_task_type(labels)
+    else:
+        _task_type_for_meta = task_type
+
+    # Metric name as it appears in cached metadata. Callables can't be
+    # filename-encoded, so when metric is a callable the caller is expected
+    # to also use cache=False (caching a custom metric has no safe key).
+    _metric_name_for_meta = metric if isinstance(metric, str) else 'custom'
+
+    # --- Check cache (filename-based, content-validated) ---
     cache_path = None
+    expected_search_meta: Optional[Dict[str, Any]] = None
     if cache:
-        factory_names = sorted(rep_factories.keys()) if rep_factories else None
-        key = _hybrid_cache_key(
-            base_reps, labels, groups, speed, budgets, _norm_alloc,
-            _norm_imp, _norm_eval, _norm_folds, _norm_models, seed,
-            metric, task_type,
-            two_phase=two_phase, refinement_top_n=refinement_top_n,
-            refinement_step_sizes=refinement_step_sizes,
-            rep_factory_names=factory_names,
+        # Required when cache=True. Raise loudly instead of silently
+        # falling back to a hash-based key — we don't have one anymore.
+        if not dataset_name:
+            raise ValueError(
+                "find_best_hybrid(cache=True) requires dataset_name=... "
+                "and tier=... (filename-based cache has no fallback key)"
+            )
+        if not tier:
+            raise ValueError(
+                "find_best_hybrid(cache=True) requires tier=... "
+                "(e.g. 'general', 'top', 'general_distance')"
+            )
+        # Custom metric callables cannot be cache-validated safely.
+        if not isinstance(metric, str):
+            raise ValueError(
+                "find_best_hybrid(cache=True) requires a string metric "
+                "(callable metrics cannot be filename-encoded)"
+            )
+
+        cache_path = _search_cache_path(
+            dataset_name, tier, augmentation_strategy, speed)
+        if cache_dir is not None:
+            # Honor legacy cache_dir override by rerooting.
+            cache_path = Path(cache_dir) / cache_path.name
+
+        expected_search_meta = _make_search_meta(
+            dataset_name=dataset_name,
+            tier=tier,
+            aug_strategy=augmentation_strategy,
+            speed=speed,
+            base_reps=base_reps,
+            labels=labels,
+            groups=groups,
+            model_names=_norm_models,
+            metric_name=_metric_name_for_meta,
+            task_type=_task_type_for_meta,
+            n_folds=_norm_folds,
+            seed=seed,
+            budgets=budgets,
             augmentations=augmentations,
             augmentation_strategy=augmentation_strategy,
-            screen_threshold=screen_threshold,
-            greedy_tolerance=greedy_tolerance,
-            augmentation_threshold=augmentation_threshold,
-            augmentation_budget=augmentation_budget,
-            candidate_ranking=candidate_ranking,
-            test_rep_subsets=test_rep_subsets,
-            cv_splitter=cv_splitter,
-            adaptive_pruning=_norm_pruning,
         )
-        cache_path = Path(cache_dir or Path(os.environ.get('KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby'))) / 'hybrid_search') / f'{key}.pkl'
-        if cache_path.exists():
-            try:
-                result = pickle.loads(cache_path.read_bytes())
-                if verbose:
-                    print(f"  Loaded cached result from {cache_path}")
-                return result
-            except Exception:
-                pass  # Corrupted cache, recompute
+
+        payload = _load_cache_with_meta(cache_path, expected_search_meta)
+        if payload is not None:
+            if verbose:
+                print(f"  Loaded cached result from {cache_path}")
+            return payload
+        elif cache_path.exists() and verbose:
+            print(f"  Cache at {cache_path.name} failed validation — "
+                  f"recomputing")
 
     if groups is not None:
         groups = np.asarray(groups).ravel()
@@ -2701,6 +3023,11 @@ def find_best_hybrid(
         precomputed_folds=precomputed_folds,
         secondary_metric_fns=resolved_secondary,
         cv_splitter=cv_splitter,
+        # Pass through for per-rep baseline caching. _evaluate_baselines
+        # will only cache if these are non-None and no secondary metrics
+        # are requested (safe fallback to uncached otherwise).
+        dataset_name=dataset_name,
+        metric_name=_metric_name_for_meta,
     )
 
     # --- Pre-search rep screening ---
@@ -2870,32 +3197,18 @@ def find_best_hybrid(
                     parts.append(f"  {'—':>6s}")
             print("".join(parts))
 
-    # --- Save to cache ---
-    if cache and cache_path is not None:
-        try:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            # Atomic write: temp file + rename to prevent corruption
-            # from parallel jobs writing the same cache key.
-            import tempfile
-            fd, tmp = tempfile.mkstemp(dir=str(cache_path.parent), suffix='.tmp')
+    # --- Save to cache (atomic write + _cache_meta header) ---
+    if cache and cache_path is not None and expected_search_meta is not None:
+        # Refresh code_timestamp so the stored file shows the write time.
+        expected_search_meta['code_timestamp'] = time.time()
+        ok = _save_cache_with_meta(cache_path, expected_search_meta, search_result)
+        if ok and verbose:
+            print(f"  Cached result to {cache_path}")
+        if ok and _ckpt_path is not None and _ckpt_path.exists():
             try:
-                with os.fdopen(fd, 'wb') as f:
-                    f.write(pickle.dumps(search_result))
-                os.replace(tmp, str(cache_path))
-            except BaseException:
-                if os.path.exists(tmp):
-                    os.unlink(tmp)
-                raise
-            if verbose:
-                print(f"  Cached result to {cache_path}")
-            # Clean up checkpoint file — search completed successfully
-            if _ckpt_path is not None and _ckpt_path.exists():
-                try:
-                    _ckpt_path.unlink()
-                except Exception:
-                    pass
-        except Exception:
-            pass  # Cache write failure is non-fatal
+                _ckpt_path.unlink()
+            except Exception:
+                pass
 
     return search_result
 

@@ -191,6 +191,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             internal_evaluators=DISTANCE_EVALUATORS,
             budgets=DISTANCE_BUDGETS,
             downstream_model='gp',
+            dataset_name=dataset_name, tier='general',
         )
         spaces['hybrid'] = X_hybrid
         top3 = extract_top3_base_reps(_search)

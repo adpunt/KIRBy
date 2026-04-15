@@ -150,7 +150,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             aug_condition='uncapped', augmentations=augmentations,
             speed=search_speed,
             precomputed=data.get('precomputed_searches'),
-            downstream_model='knn')
+            downstream_model='knn',
+            dataset_name=dataset_name, tier='general')
         fitted = search.fitted_results.get('knn')
     except Exception as e:
         print(f"    Search FAILED: {e}")

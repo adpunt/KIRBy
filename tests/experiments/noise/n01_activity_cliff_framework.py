@@ -601,7 +601,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             precomputed=data.get('precomputed_searches'),
             internal_evaluators=DISTANCE_EVALUATORS,
             budgets=DISTANCE_BUDGETS,
-            downstream_model='knn')
+            downstream_model='knn',
+            dataset_name=dataset_name, tier='general')
         best_config = get_best_for_downstream(search, 'knn')
         if best_config and 'blueprint' in best_config:
             hybrid_blueprint = best_config['blueprint']

@@ -56,7 +56,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             aug_condition='uncapped', augmentations=augmentations,
             speed=search_speed,
             precomputed=data.get('precomputed_searches'),
-            downstream_model='rf')
+            downstream_model='rf',
+            dataset_name=dataset_name, tier='general')
         fitted = search.fitted_results.get('rf')
         weights_flat = flatten_weights(fitted) if fitted else np.ones(X_hybrid.shape[1])
     except Exception as e:

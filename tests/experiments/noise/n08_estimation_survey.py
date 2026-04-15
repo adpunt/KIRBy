@@ -91,6 +91,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'),
             downstream_model='rf',
+            dataset_name=dataset_name, tier='general',
         )
         spaces['hybrid'] = StandardScaler().fit_transform(X_hybrid)
     except Exception as e:

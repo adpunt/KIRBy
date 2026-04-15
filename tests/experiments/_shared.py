@@ -1691,7 +1691,8 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
 def precompute_hybrid_searches(reps, labels, groups, config,
                                augmentations=None, verbose=True,
                                task_type='auto', metric='auto',
-                               domain=None):
+                               domain=None,
+                               dataset_name=None, tier='general'):
     """Find the best hybrid across all budgets for each augmentation condition.
 
     ONE find_best_hybrid call per aug_condition with ALL budgets. Baselines
@@ -1705,6 +1706,10 @@ def precompute_hybrid_searches(reps, labels, groups, config,
         config: Dict with keys: search_speed, budgets.
         augmentations: {aug_name: array} or None.
         verbose: Print progress.
+        dataset_name: REQUIRED. Used as part of the cache filename
+            (e.g. '{dataset_name}__general__uncapped__full.pkl').
+        tier: Rep tier label for the cache filename. 'general' (default) or
+            'top' (experiments using the top_tier subset).
 
     Returns:
         Dict mapping aug_cond -> SearchResult. Keys: 'none', and 'uncapped'
@@ -1712,6 +1717,12 @@ def precompute_hybrid_searches(reps, labels, groups, config,
         across ALL budgets.
     """
     from kirby.find_best_hybrid import find_best_hybrid
+
+    if dataset_name is None:
+        raise ValueError(
+            "precompute_hybrid_searches requires dataset_name= "
+            "(used as part of the cache filename)"
+        )
 
     # Always use speed='full' + FULL_BUDGETS + models=None for precompute.
     # This matches the SLURM precompute cache key regardless of the
@@ -1757,6 +1768,8 @@ def precompute_hybrid_searches(reps, labels, groups, config,
                 metric=metric,
                 cache=True,
                 verbose=verbose,
+                dataset_name=dataset_name,
+                tier=tier,
             )
             results[aug_cond] = search
             elapsed = time.time() - t0
@@ -1823,6 +1836,7 @@ def get_precomputed_search(reps, labels, groups, budget=None,
                            speed='full', return_fitted=False,
                            weight_method=None, precomputed=None,
                            metric='auto', task_type='auto', domain=None,
+                           dataset_name=None, tier='general',
                            **kwargs):
     """Retrieve a hybrid search result for a given aug_condition.
 
@@ -1850,6 +1864,10 @@ def get_precomputed_search(reps, labels, groups, budget=None,
             Must match what was used during precomputation for cache alignment.
         task_type: 'regression', 'classification', or 'auto'.
         domain: Domain hint for metric resolution ('molecular', 'antibody', etc.).
+        dataset_name: REQUIRED when precomputed is None (falls back to
+            find_best_hybrid with cache=True). Used as part of the cache
+            filename.
+        tier: Rep tier label for the cache filename ('general' or 'top').
         **kwargs: Additional args passed to find_best_hybrid.
 
     Returns:
@@ -1863,6 +1881,12 @@ def get_precomputed_search(reps, labels, groups, budget=None,
 
     # On-demand: call find_best_hybrid with all budgets and cache=True
     from kirby.find_best_hybrid import find_best_hybrid
+
+    if dataset_name is None:
+        raise ValueError(
+            "get_precomputed_search requires dataset_name= when "
+            "precomputed is None (cache filenames are dataset-keyed)"
+        )
 
     # Resolve metric and task_type so cache keys match precomputation
     resolved_metric, resolved_task_type = _resolve_search_metric(
@@ -1886,6 +1910,8 @@ def get_precomputed_search(reps, labels, groups, budget=None,
         weight_method=weight_method,
         cache=True,
         verbose=False,
+        dataset_name=dataset_name,
+        tier=tier,
     )
     call_kwargs.update(kwargs)
 
@@ -1896,7 +1922,8 @@ def get_fitted_hybrid(reps, labels, groups, *, downstream_model,
                       budget=None, aug_condition='uncapped',
                       augmentations=None, speed='full', precomputed=None,
                       internal_evaluators=None, budgets=None,
-                      metric='auto', task_type='auto', domain=None):
+                      metric='auto', task_type='auto', domain=None,
+                      dataset_name=None, tier='general'):
     """Get X_hybrid and feature_info from a cached search (return_fitted=True).
 
     For full-dataset experiments that need the hybrid matrix without per-fold splitting.
@@ -1940,6 +1967,7 @@ def get_fitted_hybrid(reps, labels, groups, *, downstream_model,
         aug_condition=aug_condition, augmentations=augmentations,
         speed=speed, return_fitted=True, precomputed=use_precomputed,
         metric=metric, task_type=task_type, domain=domain,
+        dataset_name=dataset_name, tier=tier,
         **kwargs)
 
     best_config = get_best_for_downstream(search, downstream_model, budget=budget)

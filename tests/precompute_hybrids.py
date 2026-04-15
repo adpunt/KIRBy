@@ -9,8 +9,11 @@ For each dataset in DATASET_REPS, runs find_best_hybrid with cache=True for:
   5. top_tier reps + uncapped aug
   6. top_tier reps + capped aug
 
-Results are cached to ~/.cache/kirby/hybrid_search/ (or KIRBY_CACHE_DIR).
-Experiments then load these via get_precomputed_search() — instant, no recompute.
+Results are cached to ~/.cache/kirby/searches/{dataset}__{tier}__{aug}__{speed}.pkl
+(or under $KIRBY_CACHE_DIR). Per-rep baselines are deduped under
+~/.cache/kirby/baselines/ and shared across all conditions of the same
+dataset. Experiments load these via get_precomputed_search() — instant,
+no recompute.
 
 Usage:
     python tests/precompute_hybrids.py caco2                  # one dataset
@@ -320,6 +323,7 @@ def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
                 cache=True,
                 verbose=True,
                 dataset_name=dataset_name,
+                tier=tier,
                 adaptive_pruning=adaptive_pruning,
                 **_extra,
             )

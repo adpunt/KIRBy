@@ -1843,6 +1843,7 @@ def run_all(dataset_name: str, output_dir: str,
                 augmentations=data.get('augmentations'),
                 task_type=_task_type,
                 domain=data.get('domain', 'molecular'),
+                dataset_name=dataset_name, tier='general',
             )
             data['precomputed_searches'] = precompute_results
         else:
@@ -1864,6 +1865,7 @@ def run_all(dataset_name: str, output_dir: str,
                 augmentations=data.get('augmentations'),
                 task_type=_task_type,
                 domain=data.get('domain', 'molecular'),
+                dataset_name=dataset_name, tier='top',
             )
             data['precomputed_searches_top'] = precompute_top
         else:

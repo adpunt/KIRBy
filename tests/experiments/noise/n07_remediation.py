@@ -181,7 +181,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     search = get_precomputed_search(
         reps, labels, groups, budget=budget, aug_condition='uncapped',
         augmentations=augmentations, speed=config.get('search_speed', 'full'),
-        precomputed=data.get('precomputed_searches'))
+        precomputed=data.get('precomputed_searches'),
+        dataset_name=dataset_name, tier='general')
     top3 = extract_top3_base_reps(search)
     if top3:
         print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")

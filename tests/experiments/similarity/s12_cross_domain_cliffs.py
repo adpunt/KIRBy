@@ -159,7 +159,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reps, labels, groups, budget=budget,
             aug_condition='uncapped', augmentations=data.get('augmentations'),
             speed=search_speed,
-            precomputed=data.get('precomputed_searches'))
+            precomputed=data.get('precomputed_searches'),
+            dataset_name=dataset_name, tier='general')
         bp = search.best_by_model['rf']['blueprint'] if search.best_by_model.get('rf') else None
         top3 = extract_top3_base_reps(search)
         if top3:

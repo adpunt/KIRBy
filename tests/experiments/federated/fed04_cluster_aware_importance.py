@@ -153,7 +153,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             precomputed=data.get('precomputed_searches'),
             metric=metric_name,
             task_type=data.get('task_type', 'regression'),
-            domain=data.get('domain', 'molecular'))
+            domain=data.get('domain', 'molecular'),
+            dataset_name=dataset_name, tier='general')
         _bp_entry = _search.best_by_model.get('rf')
         _bp = _bp_entry['blueprint'] if _bp_entry else None
     except Exception:

@@ -709,7 +709,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         search = get_precomputed_search(
             reps, labels, groups, budget=hybrid_budget,
             aug_condition='none', speed=config.get('search_speed', 'full'),
-            precomputed=data.get('precomputed_searches'))
+            precomputed=data.get('precomputed_searches'),
+            dataset_name=dataset_name, tier='general')
         bp = search.best_by_model['rf']['blueprint'] if search.best_by_model.get('rf') else None
     except Exception:
         bp = None
