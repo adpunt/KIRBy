@@ -6,6 +6,12 @@
 # command lands on its own literal line — impossible to trigger whatever
 # slurmd is doing to --wrap strings that splits them mid-argument.
 #
+# NOTE on line continuations: do NOT use `\\` (or `\`) at end of lines inside
+# the heredoc body for python commands. Server-side bash parses `\\<LF>` as
+# `\` + `\<LF>` (line continuation wins, producing `\` + joined line → busted
+# command with orphaned backslashes and empty-string argparse args). Keep
+# python commands on a single logical line instead.
+#
 # Usage (on HTC login):
 #   bash tests/slurm_scripts/submit_fixup_resubmits.sh gpu   # abclf + dta_kiba_fill (GPU, long, 24h)
 #   bash tests/slurm_scripts/submit_fixup_resubmits.sh cpu   # nuc + gb_demo OOM  (CPU, medium, 48h)
@@ -42,12 +48,7 @@ git pull 2>/dev/null || true
 export PYTHONWARNINGS=ignore
 export TRANSFORMERS_VERBOSITY=error
 mkdir -p tests/results/opig/clf
-python tests/antibody_baseline_survey.py ${ds} \\
-    --output tests/results/opig/clf/ \\
-    --n-folds 5 \\
-    --augment \\
-    --skip-existing \\
-    --reps ${ALL_AB_REPS}
+python tests/antibody_baseline_survey.py ${ds} --output tests/results/opig/clf/ --n-folds 5 --augment --skip-existing --reps ${ALL_AB_REPS}
 SBATCH_EOF
 )
     echo "  ${jid}  abclf_${ds}  (long, ${mem}, 24h, HTC+GPU)"
@@ -74,10 +75,7 @@ git pull 2>/dev/null || true
 export PYTHONWARNINGS=ignore
 export TRANSFORMERS_VERBOSITY=error
 mkdir -p tests/results/phase5_baselines/dta
-python tests/dta_baseline_survey.py kiba \\
-    --n-folds 5 \\
-    --skip-existing \\
-    --output tests/results/phase5_baselines/dta/kiba.json
+python tests/dta_baseline_survey.py kiba --n-folds 5 --skip-existing --output tests/results/phase5_baselines/dta/kiba.json
 SBATCH_EOF
 )
     echo "  ${jid}  dta_kiba_fill  (long, 256G, 24h, HTC+GPU)"
@@ -109,11 +107,7 @@ git pull 2>/dev/null || true
 export PYTHONWARNINGS=ignore
 export TRANSFORMERS_VERBOSITY=error
 mkdir -p tests/results/schnet_e2e
-python tests/run_baseline_survey.py ${ds} \\
-    --finetune \\
-    --models ridge,rf,xgboost \\
-    --n-folds 3 \\
-    --output tests/results/schnet_e2e/
+python tests/run_baseline_survey.py ${ds} --finetune --models ridge,rf,xgboost --n-folds 3 --output tests/results/schnet_e2e/
 SBATCH_EOF
 )
     echo "  ${jid}  schnet_${ds}  (long, 128G, 24h, HTC+GPU)"
@@ -144,10 +138,7 @@ git pull 2>/dev/null || true
 export PYTHONWARNINGS=ignore
 export TRANSFORMERS_VERBOSITY=error
 mkdir -p tests/results/phase5_baselines/dta
-python tests/dta_baseline_survey.py bindingdb_kd \\
-    --n-folds 5 \\
-    --skip-existing \\
-    --output tests/results/phase5_baselines/dta/bindingdb_kd.json
+python tests/dta_baseline_survey.py bindingdb_kd --n-folds 5 --skip-existing --output tests/results/phase5_baselines/dta/bindingdb_kd.json
 SBATCH_EOF
 )
     echo "  ${jid}  dta_bindingdb_kd  (medium, 256G, 48h, HTC+GPU)"
@@ -175,10 +166,7 @@ git pull 2>/dev/null || true
 export PYTHONWARNINGS=ignore
 export TRANSFORMERS_VERBOSITY=error
 mkdir -p tests/results/nucleotide_survey
-python tests/run_baseline_survey.py ${ds} \\
-    --n-folds 5 \\
-    --skip-existing \\
-    --output tests/results/nucleotide_survey/
+python tests/run_baseline_survey.py ${ds} --n-folds 5 --skip-existing --output tests/results/nucleotide_survey/
 SBATCH_EOF
 )
     echo "  ${jid}  nuc_${ds}  (medium, ${mem}, 48h, HTC CPU)"
