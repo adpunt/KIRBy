@@ -83,6 +83,42 @@ SBATCH_EOF
     echo "  ${jid}  dta_kiba_fill  (long, 256G, 24h, HTC+GPU)"
 }
 
+submit_schnet_e2e() {
+    # SchNet E2E rerun — previous 7440325-327 hit the zero-byte FT cache
+    # and every FT factory returned "No data left in file". fc36c6c fixes
+    # the cache atomic write and adds auto-healing on read, so this run
+    # will produce real ft_schnet/lora_chemberta/lora_molformer scores.
+    local ds=$1
+    local jid
+    jid=$(sbatch --parsable <<SBATCH_EOF
+#!/bin/bash
+#SBATCH --job-name=schnet_${ds}
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --time=23:59:00
+#SBATCH --partition=long
+#SBATCH --mem=128G
+#SBATCH --gres=gpu:1
+#SBATCH --mail-user=${EMAIL}
+#SBATCH --mail-type=END,FAIL
+
+cd ${KIRBY}
+git pull 2>/dev/null || true
+. ./setup.sh
+export PYTHONWARNINGS=ignore
+export TRANSFORMERS_VERBOSITY=error
+mkdir -p tests/results/schnet_e2e
+python tests/run_baseline_survey.py ${ds} \\
+    --finetune \\
+    --models ridge,rf,xgboost \\
+    --n-folds 3 \\
+    --output tests/results/schnet_e2e/
+SBATCH_EOF
+)
+    echo "  ${jid}  schnet_${ds}  (long, 128G, 24h, HTC+GPU)"
+}
+
 submit_dta_bindingdb_kd() {
     # Full fresh resubmit. Previous run (7440293) hit 4d wall and
     # produced no output because saves were end-only. Commit a81b0eb
@@ -170,6 +206,12 @@ case "${MODE}" in
         echo "=== HTC bindingdb_kd fresh resubmit (medium+GPU+256G, 48h) ==="
         submit_dta_bindingdb_kd
         ;;
+    schnet)
+        echo "=== HTC SchNet E2E rerun (3 datasets, long+GPU+128G, 24h) ==="
+        submit_schnet_e2e logd
+        submit_schnet_e2e herg
+        submit_schnet_e2e caco2
+        ;;
     all)
         echo "=== HTC GPU resubmits (antibody_clf + dta_kiba_fill) ==="
         submit_abclf tz_her2_binary       256G
@@ -190,12 +232,13 @@ case "${MODE}" in
         submit_dta_bindingdb_kd
         ;;
     *)
-        echo "Usage: bash tests/slurm_scripts/submit_fixup_resubmits.sh [gpu|cpu|bindingdb|all]"
+        echo "Usage: bash tests/slurm_scripts/submit_fixup_resubmits.sh [gpu|cpu|bindingdb|schnet|all]"
         echo ""
         echo "  gpu       — 4 abclf jobs + dta_kiba_fill (GPU, long, 24h)"
         echo "  cpu       — 4 nucleotide resubmits (128G) + 2 gb_demo OOM bumps (256G) (medium, 48h)"
         echo "  bindingdb — dta_bindingdb_kd fresh (GPU, medium, 48h, 256G)"
-        echo "  all       — every set (12 jobs total)"
+        echo "  schnet    — SchNet E2E rerun: logd, herg, caco2 (GPU, long, 24h, 128G)"
+        echo "  all       — every set (15 jobs total)"
         exit 1
         ;;
 esac
