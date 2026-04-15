@@ -401,9 +401,11 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 |--------|------|--------|
 | 7440291 | dta_davis | TIMEOUT (48h wall limit) |
 | 7440292 | dta_kiba | DONE |
-| 7440293 | dta_bindingdb | R |
-| 7457314 | dta_kiba_fill (--skip-existing) | PD |
-| 7467954 | dta_davis (resubmit, --skip-existing) | PD |
+| 7440293 | dta_bindingdb_kd | **TIMEOUT** (4d wall limit, 2026-04-11) — end-of-run save only, zero output on disk |
+| 7483661 | dta_bindingdb_kd (fresh resubmit, heredoc, per-rep checkpoint via a81b0eb) | **PD** (2026-04-15, medium+GPU+256G, 48h) |
+| 7457314 | dta_kiba_fill (--skip-existing) | **FAILED** (ExitCode 126:0, 6min — sbatch --wrap line-splitting bug) |
+| 7467954 | dta_davis (resubmit, --skip-existing) | **RUNNING** (1d22h as of 2026-04-15, ongoing) |
+| 7483635 | dta_kiba_fill (heredoc resubmit via submit_fixup_resubmits.sh gpu) | **PD** (2026-04-15, long+GPU+256G, 24h) |
 
 ### Antibody CLF
 
@@ -411,16 +413,25 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 |--------|------|--------|
 | 7440294 | abclf_tz | FAILED (KeyError: 'models', --reps all bug) |
 | 7440295 | abclf_humanness | FAILED (KeyError: 'models', --reps all bug) |
-| 7457285 | abclf_tz (resubmit, bug fixed) | PD |
-| 7457286 | abclf_humanness (resubmit, bug fixed) | PD |
+| 7457285 | abclf_tz (resubmit, bug fixed) | **FAILED** (ExitCode 126:0, 7min — sbatch --wrap line-splitting bug; `python` prefix orphaned from script path at slurm_script line 5) |
+| 7457286 | abclf_humanness (resubmit, bug fixed) | **FAILED** (same — 126:0, 6min) |
+| 7483631 | abclf_tz_her2_binary (heredoc resubmit) | **PD** (2026-04-15, long+GPU+256G, 24h) |
+| 7483632 | abclf_tz_her2_multiclass (heredoc resubmit) | **PD** |
+| 7483633 | abclf_humanness_species (heredoc resubmit) | **PD** (long+GPU+128G, 24h) |
+| 7483634 | abclf_humanness_therapeutic (heredoc resubmit) | **PD** |
+| 7483636 | abclf_tz_her2_binary (DUPLICATE) | **CANCELLED** (2026-04-15) |
+| 7483637 | abclf_tz_her2_multiclass (DUPLICATE) | **CANCELLED** |
+| 7483638 | abclf_humanness_species (DUPLICATE) | **CANCELLED** |
+| 7483639 | abclf_humanness_therapeutic (DUPLICATE) | **CANCELLED** |
+| 7483640 | dta_kiba_fill (DUPLICATE) | **CANCELLED** |
 
 ### SchNet (molecular)
 
 | Job ID | Name | Status |
 |--------|------|--------|
-| 7440325 | schnet_logd | PD |
-| 7440326 | schnet_herg | PD |
-| 7440327 | schnet_caco2 | PD |
+| 7440325 | schnet_logd | **FAILED** (SLURM exit 0:0 but experiment broken, 4h17m, 2026-04-12) — baselines ran but all 3 FT reps (ft_schnet, lora_chemberta, lora_molformer) emitted `FT FACTORY ERROR: No data left in file` from `np.load(cache_path)` on every fold. Cache files are truncated/empty .npz. Whole point of job = FT reps. **Needs: clear corrupt FT cache, investigate why atomic write in `_base.py::load_or_compute` produced empty files, rerun.** |
+| 7440326 | schnet_herg_ki | **FAILED** (1h50m, 2026-04-12) — same FT cache corruption |
+| 7440327 | schnet_caco2 | **FAILED** (1h13m, 2026-04-12) — same FT cache corruption |
 
 ### Nucleotide (genomics)
 
@@ -438,24 +449,36 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 7459732 | nuc_nt_enhancers_types (resubmit, --skip-existing, post-fix) | FAILED (--models arg parse bug) |
 | 7459733 | nuc_nt_splice_sites_acceptors (resubmit, --skip-existing, post-fix) | FAILED (--models arg parse bug) |
 | 7459734 | nuc_nt_splice_sites_donors (resubmit, --skip-existing, post-fix) | FAILED (--models arg parse bug) |
-| 7467966 | nuc_nt_enhancers (resubmit 2, --skip-existing, no --models) | PD |
-| 7467967 | nuc_nt_enhancers_types (resubmit 2, --skip-existing, no --models) | PD |
-| 7467968 | nuc_nt_splice_sites_acceptors (resubmit 2, --skip-existing, no --models) | PD |
-| 7467969 | nuc_nt_splice_sites_donors (resubmit 2, --skip-existing, no --models) | PD |
+| 7467966 | nuc_nt_enhancers (resubmit 2) | **FAILED** (ExitCode 126:0, 6min — sbatch --wrap line-splitting bug; `mkdir -p` orphaned from operand at slurm_script line 5) |
+| 7467967 | nuc_nt_enhancers_types (resubmit 2) | **FAILED** (same — 126:0, 6min) |
+| 7467968 | nuc_nt_splice_sites_acceptors (resubmit 2) | **FAILED** (same — 126:0, 6min) |
+| 7467969 | nuc_nt_splice_sites_donors (resubmit 2) | **FAILED** (same — 126:0, 6min) |
+| 7483641 | nuc_nt_enhancers (heredoc resubmit 3, pre-c18342f) | **FAILED** (2026-04-15, heredoc `\\<LF>` parsing bug — bash joined continuation lines, argparse got empty-string args) |
+| 7483642 | nuc_nt_enhancers_types (pre-c18342f) | **FAILED** (same) |
+| 7483643 | nuc_nt_splice_sites_acceptors (pre-c18342f) | **FAILED** (same — user confirmed) |
+| 7483644 | nuc_nt_splice_sites_donors (pre-c18342f) | **FAILED** (same) |
+| 7483707 | nuc_nt_enhancers (heredoc resubmit 4, post-c18342f, inline python cmd) | **PD** (2026-04-15) |
+| 7483708 | nuc_nt_enhancers_types (post-c18342f) | **PD** |
+| 7483709 | nuc_nt_splice_sites_acceptors (post-c18342f) | **PD** |
+| 7483710 | nuc_nt_splice_sites_donors (post-c18342f) | **PD** |
 | 7440309 | nuc_nt_H2AFZ | DONE (18/25 reps, winner: mistral_dna+ridge=0.4323 mcc) |
 | 7440310 | nuc_nt_H3K27ac | DONE (winner: gena_lm+ridge=0.4569 mcc) |
 | 7440311 | nuc_nt_H3K27me3 | DONE (winner: gena_lm+ridge=0.5522 mcc) |
 | 7440312 | nuc_nt_H3K36me3 | DONE (winner: gena_lm+ridge=0.5715 mcc) |
 | 7440313 | nuc_nt_H3K4me1 | DONE (winner: gena_lm+ridge=0.4405 mcc) |
-| 7440314 | nuc_nt_H3 | R |
-| 7440315 | nuc_nt_H3 | PD |
-| 7440316 | nuc_nt_H3 | PD |
-| 7440317 | nuc_nt_H3 | PD |
-| 7440318 | nuc_nt_H3 | PD |
-| 7440319 | nuc_gb_human | PD |
-| 7440320 | nuc_gb_human | PD |
-| 7440321 | nuc_gb_demo | PD |
-| 7440322 | nuc_gb_demo | PD |
+| 7440314 | nuc_nt_H3K4me2 | **DONE** (1d14h, 2026-04-12) |
+| 7440315 | nuc_nt_H3K4me3 | **DONE** (1d3h, 2026-04-12) |
+| 7440316 | nuc_nt_H3K9ac | **DONE** (1d11h, 2026-04-13) |
+| 7440317 | nuc_nt_H3K9me3 | **DONE** (1d20h, 2026-04-13) |
+| 7440318 | nuc_nt_H4K20me1 | **DONE** (22h, 2026-04-12) |
+| 7440319 | nuc_gb_human_nontata_promoters | **DONE** (10h38m, 2026-04-12) |
+| 7440320 | nuc_gb_human_enhancers_cohn | **DONE** (16h35m, 2026-04-12) |
+| 7440321 | nuc_gb_demo_coding_vs_intergenomic | **OUT_OF_MEMORY** (1h44m, 2026-04-12) — 128G insufficient, resubmit with 256G |
+| 7440322 | nuc_gb_demo_human_or_worm | **OUT_OF_MEMORY** (1h46m, 2026-04-12) — 128G insufficient, resubmit with 256G |
+| 7483645 | nuc_gb_demo_coding_vs_intergenomic (pre-c18342f) | **FAILED** (same heredoc bug) |
+| 7483646 | nuc_gb_demo_human_or_worm (pre-c18342f) | **FAILED** (same heredoc bug) |
+| 7483711 | nuc_gb_demo_coding_vs_intergenomic (post-c18342f, OOM bump 256G) | **PD** (2026-04-15, medium+256G, 48h) |
+| 7483712 | nuc_gb_demo_human_or_worm (post-c18342f, OOM bump 256G) | **PD** (2026-04-15, medium+256G, 48h) |
 
 ### CGR-SMILES pretraining (Phase 4)
 
@@ -468,7 +491,8 @@ Output: `/data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/`
 | 11747734 | cgr_smiles | corpus + pretrain | FAILED — chython not installed, 0/392K conversions. Fixed in 9fa01f8. |
 | 7467971 | cgr_smiles | corpus + pretrain | FAILED — chython installed but 0/392K conversions. Empty corpus guard caught it. Diagnostics added in 4b7d9de. |
 | 11748808 | cgr_smiles | corpus + pretrain | FAILED — CGRContainer.__len__ missing, smoke test caught it. Fixed in f0b5e86. |
-| 11749515 | cgr_smiles | corpus + pretrain | PD — with __len__ patch. |
+| 11749515 | cgr_smiles | corpus + pretrain | **FAILED** (2026-04-11) — corpus stage OK (392324/392533, 99.9%), pretrain stage crashed: `AttributeError: 'AdamW' object has no attribute 'train'` in accelerate/optimizer.py line 128. Root cause: transformers Trainer → accelerate AcceleratedOptimizer.train() → calls inner optimizer.train() which torch.optim.AdamW does not implement (accelerate/transformers version mismatch). Fixed in 2c367d6 (manual training loop). |
+| 7483446 | cgr_pretrain | pretrain only | **PD/R** (2026-04-14, HTC + GPU) — resubmit with 2c367d6 manual loop + 4bdede7 pretrain_htc mode (`--gres=gpu:1 --partition=long --time=23:59:00`). Uses existing corpus.txt (40M, 392324 lines, unchanged from 11749515). Expected wall ~1-2h on A100/V100. Unblocks reaction re-survey with cgr_smiles_lm. |
 
 ### Reaction re-survey (blocked on 7467971)
 
