@@ -113,6 +113,37 @@ SBATCH_EOF
     echo "  ${jid}  schnet_${ds}  (long, 128G, 24h, HTC+GPU)"
 }
 
+submit_dta_davis() {
+    # dta_davis resubmit — previous 7467954 hit 48h wall at ~66% through
+    # contact graph features. a81b0eb adds per-rep incremental checkpoints,
+    # so if this timeout hits again we resubmit with --skip-existing and pick
+    # up. Using long partition with 96h wall for headroom.
+    local jid
+    jid=$(sbatch --parsable <<SBATCH_EOF
+#!/bin/bash
+#SBATCH --job-name=dta_davis
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --time=96:00:00
+#SBATCH --partition=long
+#SBATCH --mem=256G
+#SBATCH --gres=gpu:1
+#SBATCH --mail-user=${EMAIL}
+#SBATCH --mail-type=END,FAIL
+
+cd ${KIRBY}
+git pull 2>/dev/null || true
+. ./setup.sh
+export PYTHONWARNINGS=ignore
+export TRANSFORMERS_VERBOSITY=error
+mkdir -p tests/results/phase5_baselines/dta
+python tests/dta_baseline_survey.py davis --n-folds 5 --skip-existing --output tests/results/phase5_baselines/dta/davis.json
+SBATCH_EOF
+)
+    echo "  ${jid}  dta_davis  (long, 256G, 96h, HTC+GPU)"
+}
+
 submit_dta_bindingdb_kd() {
     # Full fresh resubmit. Previous run (7440293) hit 4d wall and
     # produced no output because saves were end-only. Commit a81b0eb
@@ -194,6 +225,10 @@ case "${MODE}" in
         echo "=== HTC bindingdb_kd fresh resubmit (medium+GPU+256G, 48h) ==="
         submit_dta_bindingdb_kd
         ;;
+    davis)
+        echo "=== HTC dta_davis resubmit (long+GPU+256G, 96h) ==="
+        submit_dta_davis
+        ;;
     schnet)
         echo "=== HTC SchNet E2E rerun (3 datasets, long+GPU+128G, 24h) ==="
         submit_schnet_e2e logd
@@ -220,13 +255,14 @@ case "${MODE}" in
         submit_dta_bindingdb_kd
         ;;
     *)
-        echo "Usage: bash tests/slurm_scripts/submit_fixup_resubmits.sh [gpu|cpu|bindingdb|schnet|all]"
+        echo "Usage: bash tests/slurm_scripts/submit_fixup_resubmits.sh [gpu|cpu|bindingdb|davis|schnet|all]"
         echo ""
         echo "  gpu       — 4 abclf jobs + dta_kiba_fill (GPU, long, 24h)"
         echo "  cpu       — 4 nucleotide resubmits (128G) + 2 gb_demo OOM bumps (256G) (medium, 48h)"
         echo "  bindingdb — dta_bindingdb_kd fresh (GPU, medium, 48h, 256G)"
+        echo "  davis     — dta_davis resubmit (GPU, long, 96h, 256G)"
         echo "  schnet    — SchNet E2E rerun: logd, herg, caco2 (GPU, long, 24h, 128G)"
-        echo "  all       — every set (15 jobs total)"
+        echo "  all       — every set (16 jobs total)"
         exit 1
         ;;
 esac
