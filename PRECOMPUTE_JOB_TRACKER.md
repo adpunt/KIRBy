@@ -437,9 +437,12 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 
 | Job ID | Name | Status |
 |--------|------|--------|
-| 7440325 | schnet_logd | **FAILED** (SLURM exit 0:0 but experiment broken, 4h17m, 2026-04-12) — baselines ran but all 3 FT reps (ft_schnet, lora_chemberta, lora_molformer) emitted `FT FACTORY ERROR: No data left in file` from `np.load(cache_path)` on every fold. Cache files are truncated/empty .npz. Whole point of job = FT reps. **Needs: clear corrupt FT cache, investigate why atomic write in `_base.py::load_or_compute` produced empty files, rerun.** |
+| 7440325 | schnet_logd | **FAILED** (SLURM exit 0:0 but experiment broken, 4h17m, 2026-04-12) — baselines ran but all 3 FT reps (ft_schnet, lora_chemberta, lora_molformer) emitted `FT FACTORY ERROR: No data left in file` from `np.load(cache_path)` on every fold. Root cause: fc36c6c np.savez suffix bug (zero-byte cache entries). |
 | 7440326 | schnet_herg_ki | **FAILED** (1h50m, 2026-04-12) — same FT cache corruption |
 | 7440327 | schnet_caco2 | **FAILED** (1h13m, 2026-04-12) — same FT cache corruption |
+| 7483721 | schnet_logd (post-fc36c6c heredoc rerun) | **PD** (2026-04-15, long+GPU+128G, 24h) — via `submit_fixup_resubmits.sh schnet` |
+| 7483722 | schnet_herg (post-fc36c6c heredoc rerun) | **PD** (2026-04-15, long+GPU+128G, 24h) |
+| 7483723 | schnet_caco2 (post-fc36c6c heredoc rerun) | **PD** (2026-04-15, long+GPU+128G, 24h) |
 
 ### Nucleotide (genomics)
 
