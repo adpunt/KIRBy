@@ -119,10 +119,10 @@ def _get_federated_config():
     global _FEDERATED_CONFIG_CACHE
     if _FEDERATED_CONFIG_CACHE is None:
         from kirby.find_best_hybrid import SPEED_TIERS
-        tier = SPEED_TIERS['fast']
+        tier = SPEED_TIERS['full']
         _FEDERATED_CONFIG_CACHE = {
             'n_splits': tier['n_folds'],
-            'search_speed': 'fast',
+            'search_speed': 'full',
             'allocations': tier['allocation_methods'],
             'importance_methods': tier['importance_methods'],
             'internal_evaluators': INTERNAL_EVALUATORS,

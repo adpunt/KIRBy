@@ -49,7 +49,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = data['labels']
     groups = data['groups']
     augmentations = data.get('augmentations')
-    search_speed = config.get('search_speed', 'fast')
+    search_speed = config.get('search_speed', 'full')
 
     task_type = data.get('task_type', 'regression')
     is_clf = task_type == 'classification'

@@ -558,6 +558,47 @@ DATASET_REPS = {
             'reactant_avalon', 'diff_avalon', 'diff_mhg_gnn', 'diff_ecfp4',
             'reactant_grover', 'reactant_ecfp4'],
     },
+    # --- Nucleotide (NT Revised, chromosome hold-out groups) ---
+    'nt_H2AFZ': {
+        'general': [
+            'mistral_dna', 'hyenadna', 'grover_dna', 'gena_lm', 'kmer6',
+            'nt_v2_250m', 'nt_v2_500m', 'tnf_canonical', 'kmer4', 'kmer5',
+            'tetranuc_freq', 'kmer3'],
+        'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
+        'top_tier': ['mistral_dna', 'hyenadna', 'grover_dna', 'gena_lm', 'kmer6'],
+    },
+    'nt_H3K27ac': {
+        'general': [
+            'gena_lm', 'kmer6', 'grover_dna', 'mistral_dna', 'kmer5',
+            'tnf_canonical', 'nt_v2_500m', 'nt_v2_250m', 'kmer4', 'hyenadna',
+            'tetranuc_freq', 'kmer3'],
+        'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
+        'top_tier': ['gena_lm', 'kmer6', 'grover_dna', 'mistral_dna', 'kmer5'],
+    },
+    'nt_H3K27me3': {
+        'general': [
+            'gena_lm', 'mistral_dna', 'grover_dna', 'hyenadna',
+            'nt_v2_250m', 'nt_v2_500m', 'tnf_canonical', 'kmer4', 'kmer3',
+            'kmer5', 'tetranuc_freq', 'kmer6'],
+        'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
+        'top_tier': ['gena_lm', 'mistral_dna', 'grover_dna', 'hyenadna'],
+    },
+    'nt_H3K36me3': {
+        'general': [
+            'gena_lm', 'mistral_dna', 'hyenadna', 'grover_dna',
+            'nt_v2_250m', 'nt_v2_500m', 'kmer3', 'kmer4', 'kmer5',
+            'kmer6', 'tetranuc_freq', 'tnf_canonical'],
+        'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
+        'top_tier': ['gena_lm', 'mistral_dna', 'hyenadna'],
+    },
+    'nt_H3K4me1': {
+        'general': [
+            'gena_lm', 'grover_dna', 'mistral_dna', 'hyenadna',
+            'kmer6', 'nt_v2_250m', 'nt_v2_500m', 'kmer5', 'kmer4',
+            'tnf_canonical', 'tetranuc_freq', 'kmer3'],
+        'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
+        'top_tier': ['gena_lm', 'grover_dna', 'mistral_dna', 'hyenadna'],
+    },
 }
 
 
@@ -732,10 +773,10 @@ def run_all(dataset_name: str, output_dir: str,
     if config is None:
         from kirby.find_best_hybrid import SPEED_TIERS
         from experiments._shared import SCREENING_BUDGETS
-        tier = SPEED_TIERS['fast']
+        tier = SPEED_TIERS['full']
         config = {
             'n_splits': tier['n_folds'],
-            'search_speed': 'fast',
+            'search_speed': 'full',
             'allocations': tier['allocation_methods'],
             'importance_methods': tier['importance_methods'],
             'internal_evaluators': INTERNAL_EVALUATORS,

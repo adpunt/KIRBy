@@ -236,7 +236,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Get blueprint ONCE from cached search (uses clean labels)
     search = get_precomputed_search(
         reps, labels, groups, budget=100, aug_condition='uncapped',
-        augmentations=augmentations, speed=config.get('search_speed', 'fast'),
+        augmentations=augmentations, speed=config.get('search_speed', 'full'),
         precomputed=data.get('precomputed_searches'))
     best_rf = search.best_by_model.get('rf')
     bp = best_rf['blueprint'] if best_rf else None

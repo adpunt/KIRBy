@@ -147,7 +147,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         search = get_precomputed_search(
             reps, labels, groups,
             aug_condition='capped', augmentations=augmentations,
-            speed=config.get('search_speed', 'fast'),
+            speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'))
     except Exception as e:
         print(f"  WARNING: search failed: {e}")

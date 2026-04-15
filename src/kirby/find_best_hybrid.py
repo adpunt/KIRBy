@@ -2438,7 +2438,7 @@ def find_best_hybrid(
     models: Optional[Any] = None,
     metric: Union[str, Callable, Tuple[Callable, bool]] = 'r2',
     task_type: str = 'auto',
-    speed: str = 'fast',
+    speed: str = 'full',
     allocation_methods: Optional[List[str]] = None,
     importance_methods: Optional[List[str]] = None,
     internal_evaluators: Optional[List[str]] = None,

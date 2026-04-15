@@ -104,7 +104,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Get hybrid blueprint ONCE (shared across all sigmas/folds)
     search = get_precomputed_search(
         reps, labels, groups, budget=budget, aug_condition='uncapped',
-        augmentations=augmentations, speed=config.get('search_speed', 'fast'),
+        augmentations=augmentations, speed=config.get('search_speed', 'full'),
         precomputed=data.get('precomputed_searches'))
     top3 = extract_top3_base_reps(search)
     if top3:

@@ -572,7 +572,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     sim_threshold = kwargs.get('sim_threshold', 0.55)
     activity_threshold = kwargs.get('activity_threshold', 2.0)
-    search_speed = config.get('search_speed', 'fast')
+    search_speed = config.get('search_speed', 'full')
 
     reps = data['reps']
     labels = data['labels']

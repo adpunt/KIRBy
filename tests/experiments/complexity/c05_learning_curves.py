@@ -38,7 +38,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                     task_type=data.get('task_type', 'regression'),
                                     n_samples=len(data['labels']))
     n_folds = config['n_splits']
-    search_speed = config.get('search_speed', 'fast')
+    search_speed = config.get('search_speed', 'full')
     sweep_budgets = config.get('budgets', [25, 50, 100, 200, 500])
     n_repeats = kwargs.get('n_repeats', 3)
 

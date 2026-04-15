@@ -110,7 +110,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             reps, labels, groups,
             budget=BUDGET, aug_condition=aug_cond,
             augmentations=augs,
-            speed=config.get('search_speed', 'fast'),
+            speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'),
             metric=metric_name,
             task_type=data.get('task_type', 'regression'),
