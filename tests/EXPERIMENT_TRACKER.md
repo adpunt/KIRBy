@@ -1,6 +1,55 @@
 # KIRBy Experiment Tracker
 
-Last updated: 2026-02-16
+Last updated: 2026-04-15
+
+---
+
+## Antibody Classification Shakedown — 2026-04-15 (commit `ec0aae4`)
+
+First experimental runs on the 9 antibody classification datasets that finished precompute. Uses the unified `run_dataset.py` entry point — one SLURM job per (category, dataset) pair, each loads data once and runs a filtered experiment list. Noise category cut entirely for classification; c04/c12/c23 excluded from complexity; s04/s09/s11 excluded from similarity.
+
+**Submitted:** 2026-04-15. 18 jobs (9 datasets × 2 categories).
+
+**Complexity experiments per job:** c01 c02 c05 c06 c07 c08 c09 c10 c11 c13 c15 c16 c17 c18 c19 c21 c22 c24
+**Similarity experiments per job:** s01 s02 s03 s05 s06 s07 s08 s10 s12 s13
+
+| Job ID | Category | Dataset |
+|--------|----------|---------|
+| 11763170 | complexity | abagym_Ang2 |
+| 11763171 | similarity | abagym_Ang2 |
+| 11763172 | complexity | abagym_EGFR |
+| 11763173 | similarity | abagym_EGFR |
+| 11763174 | complexity | abagym_HER2 |
+| 11763175 | similarity | abagym_HER2 |
+| 11763176 | complexity | abagym_VEGF |
+| 11763177 | similarity | abagym_VEGF |
+| 11763178 | complexity | abcov_kd |
+| 11763179 | similarity | abcov_kd |
+| 11763180 | complexity | flab_immunogenicity_marks |
+| 11763181 | similarity | flab_immunogenicity_marks |
+| 11763182 | complexity | flab_polyreact_jain_bvp |
+| 11763183 | similarity | flab_polyreact_jain_bvp |
+| 11763184 | complexity | flab_polyreact_jain_cic |
+| 11763185 | similarity | flab_polyreact_jain_cic |
+| 11763186 | complexity | humanness_therapeutic |
+| 11763187 | similarity | humanness_therapeutic |
+
+**Precondition:** required commits landed before submission — `0e7775c` (c03/c04/c19), `6b311cf` (c15 Rademacher), `f09baed` (c16/c18 clf support), `c26aa07` (s01/s02 sequence cliffs), `f037628` (CDR cache keying), `9fb7681` (c23 deprioritized). All on `main`.
+
+**Monitoring commands:**
+```bash
+# Queue state
+squeue -u $USER -j 11763170-11763187
+
+# Completed jobs summary
+sacct -u $USER -j 11763170-11763187 --format=JobID,JobName%40,State,Elapsed,ExitCode
+
+# Output files
+ls -lt tests/results/complexity/*/
+ls -lt tests/results/similarity/*/
+```
+
+---
 
 ## Papers
 
