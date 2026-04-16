@@ -210,7 +210,13 @@ def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
     all_reps = data['reps']
     labels = data['labels']
     groups = data.get('groups')
-    task_type = data.get('task_type', 'regression')
+    task_type = data.get('task_type')
+    if task_type not in ('classification', 'regression'):
+        raise ValueError(
+            f"precompute_hybrids: loader for '{dataset_name}' returned "
+            f"task_type={task_type!r}. Must be 'classification' or "
+            f"'regression' — silent defaults would cause wrong metrics."
+        )
     metric = _get_metric(domain, task_type, labels)
 
     general_reps = {k: all_reps[k] for k in general_names if k in all_reps}
