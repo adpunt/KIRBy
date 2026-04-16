@@ -147,10 +147,9 @@ REACTION_NOAUG="buchwald_hartwig"
 NUCLEOTIDE="nt_H2AFZ nt_H3K27ac nt_H3K27me3 nt_H3K36me3 nt_H3K4me1"
 
 echo "============================================"
-echo "Hybrid Precompute (v14 — normalized cache keys)"
-echo "  Standard: ~224 jobs (6 per aug dataset, 2 per no-aug)"
-echo "  Distance: ~79 jobs (general only, no top_distance)"
-echo "  Total: ~303 jobs"
+echo "Hybrid Precompute (filename-based cache)"
+echo "  Cache: ~/.cache/kirby/searches/{dataset}__{tier}__{aug}__{speed}.pkl"
+echo "  Nucleotides excluded (handled by survey scripts, not precompute)"
 echo "============================================"
 echo ""
 
@@ -197,8 +196,11 @@ run_standard() {
         echo ""
     fi
 
-    if [[ "$filter_domain" == "all" || "$filter_domain" == "nucleotide" ]]; then
+    # Nucleotides are handled by survey scripts (tests/survey_nucleotide_*.py)
+    # and intentionally NOT run through precompute. Use --nucleotide to override.
+    if [[ "$filter_domain" == "nucleotide" ]]; then
         echo "--- Nucleotide (5 datasets, all have aug, 128G) ---"
+        echo "    WARNING: nucleotides usually skip precompute. Proceeding anyway."
         for ds in ${NUCLEOTIDE}; do submit_dataset "${ds}" yes 128G "${P}"; done
         echo ""
     fi
@@ -239,8 +241,10 @@ run_distance() {
         echo ""
     fi
 
-    if [[ "$filter_domain" == "all" || "$filter_domain" == "nucleotide" ]]; then
+    # Nucleotides skip precompute by default (survey scripts own those).
+    if [[ "$filter_domain" == "nucleotide" ]]; then
         echo "--- Distance: Nucleotide (128G) ---"
+        echo "    WARNING: nucleotides usually skip precompute. Proceeding anyway."
         for ds in ${NUCLEOTIDE}; do submit_dataset_distance "${ds}" yes 128G "${P}"; done
         echo ""
     fi
@@ -258,7 +262,9 @@ case "$MODE" in
     all)
         run_standard all "$PARTITION"
         echo "============================================"
-        echo "Standard: ${COUNT} SLURM jobs (~224 needed)"
+        echo "Standard: ${COUNT} SLURM jobs submitted"
+        echo "Monitor: squeue -u \$USER | grep pc_"
+        echo "Status:  python tests/check_precompute_status.py"
         echo "============================================"
         ;;
     all+distance)
@@ -268,21 +274,27 @@ case "$MODE" in
         DIST_COUNT=$((COUNT - STD_COUNT))
         echo "============================================"
         echo "Standard: ${STD_COUNT} jobs, Distance: ${DIST_COUNT} jobs"
-        echo "Total: ${COUNT} SLURM jobs (~303 needed)"
+        echo "Total: ${COUNT} SLURM jobs submitted"
+        echo "Monitor: squeue -u \$USER | grep pc_"
+        echo "Status:  python tests/check_precompute_status.py --distance"
         echo "============================================"
         ;;
     *)
         echo "Usage: bash submit_precompute.sh <mode> [domain] [partition]"
         echo ""
         echo "Modes:"
-        echo "  all            Standard conditions only (~224 jobs)"
-        echo "  all+distance   Standard + distance (~303 jobs)"
-        echo "  distance       Distance conditions only (~79 jobs)"
-        echo "  molecular|antibody|tcga|reaction|nucleotide  One domain"
+        echo "  all            Standard conditions, all domains except nucleotide"
+        echo "  all+distance   Standard + distance conditions"
+        echo "  distance       Distance conditions only"
+        echo "  molecular|antibody|tcga|reaction  One domain (nucleotide skipped)"
+        echo "  nucleotide     Override — normally handled by survey scripts"
         echo ""
         echo "Partition (default: long):"
-        echo "  bash submit_precompute.sh all+distance all short"
+        echo "  bash submit_precompute.sh all all short"
         echo "  bash submit_precompute.sh molecular all medium"
+        echo ""
+        echo "After submission, check readiness with:"
+        echo "  python tests/check_precompute_status.py --verbose"
         exit 1
         ;;
 esac
