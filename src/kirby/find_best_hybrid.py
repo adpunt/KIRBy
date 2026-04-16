@@ -196,6 +196,12 @@ def _make_search_meta(
     budgets: List[int],
     augmentations: Optional[Dict[str, np.ndarray]] = None,
     augmentation_strategy: str = 'uncapped',
+    internal_evaluators: Optional[List[str]] = None,
+    allocation_methods: Optional[List[str]] = None,
+    importance_methods: Optional[List[str]] = None,
+    adaptive_pruning: float = 0.15,
+    augmentation_threshold: Optional[float] = None,
+    augmentation_budget: int = 20,
 ) -> Dict[str, Any]:
     return {
         'kind': 'search',
@@ -220,6 +226,16 @@ def _make_search_meta(
         'aug_names': tuple(sorted(augmentations.keys())) if augmentations else (),
         'aug_hashes': (_hash_rep_dict(augmentations) if augmentations else ()),
         'augmentation_strategy': augmentation_strategy,
+        'internal_evaluators': (tuple(sorted(internal_evaluators))
+                                if internal_evaluators else None),
+        'allocation_methods': (tuple(sorted(allocation_methods))
+                               if allocation_methods else None),
+        'importance_methods': (tuple(sorted(importance_methods))
+                               if importance_methods else None),
+        'adaptive_pruning': float(adaptive_pruning),
+        'augmentation_threshold': (float(augmentation_threshold)
+                                   if augmentation_threshold is not None else None),
+        'augmentation_budget': int(augmentation_budget),
         'code_timestamp': time.time(),
     }
 
@@ -2954,6 +2970,12 @@ def find_best_hybrid(
             budgets=budgets,
             augmentations=augmentations,
             augmentation_strategy=augmentation_strategy,
+            internal_evaluators=_norm_eval,
+            allocation_methods=_norm_alloc,
+            importance_methods=_norm_imp,
+            adaptive_pruning=_norm_pruning,
+            augmentation_threshold=augmentation_threshold,
+            augmentation_budget=augmentation_budget,
         )
 
         payload = _load_cache_with_meta(cache_path, expected_search_meta)

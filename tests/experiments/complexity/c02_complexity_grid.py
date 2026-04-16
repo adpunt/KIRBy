@@ -25,7 +25,7 @@ from experiments._shared import (
     get_model_factories, cv_split, _cv_split,
     find_best_hybrid, get_domain_metric,
     extract_top3_base_reps,
-    INTERNAL_EVALUATORS,
+    INTERNAL_EVALUATORS, FULL_BUDGETS,
 )
 
 
@@ -50,9 +50,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = data['labels']
     groups = data['groups']
 
-    full_budgets = sorted(set(budgets))
+    # Use FULL_BUDGETS so cache keys align with precompute (which always
+    # runs speed='full' with FULL_BUDGETS). config['budgets'] may be
+    # SCREENING_BUDGETS for survey-style configs; we ignore it here.
+    full_budgets = list(FULL_BUDGETS)
 
-    # Convert model factories to instances for the library
+    # Model factories kept for PCA baselines + heatmap iteration below.
+    # find_best_hybrid is called with models=None so it uses speed-tier
+    # defaults (matches precompute's cache keys).
     model_instances = {name: factory() for name, factory in models.items()}
 
     augs = data.get('augmentations')
@@ -71,7 +76,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             base_reps=top_tier_reps,
             labels=labels,
             groups=groups,
-            models=model_instances,
+            models=None,
             budgets=full_budgets,
             allocation_methods=allocation_methods,
             importance_methods=importance_methods,
@@ -119,7 +124,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             base_reps=reps,
             labels=labels,
             groups=groups,
-            models=model_instances,
+            models=None,
             budgets=full_budgets,
             allocation_methods=allocation_methods,
             importance_methods=importance_methods,
@@ -142,7 +147,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             base_reps=reps,
             labels=labels,
             groups=groups,
-            models=model_instances,
+            models=None,
             budgets=full_budgets,
             allocation_methods=allocation_methods,
             importance_methods=importance_methods,

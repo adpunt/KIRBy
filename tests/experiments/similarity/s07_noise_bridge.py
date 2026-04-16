@@ -129,7 +129,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             budgets=DISTANCE_BUDGETS,
             metric=metric_name, task_type=task_type, domain=domain,
             downstream_model='knn',
-            dataset_name=dataset_name, tier='general')
+            dataset_name=dataset_name, tier='general_distance')
         weights_flat = flatten_fold_weights(fi) if fi else np.ones(X_hybrid.shape[1])
         if len(weights_flat) != X_hybrid.shape[1]:
             weights_flat = np.ones(X_hybrid.shape[1])

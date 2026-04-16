@@ -72,7 +72,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             budgets=DISTANCE_BUDGETS,
             metric=metric_name, task_type=task_type, domain=domain,
             downstream_model='knn',
-            dataset_name=dataset_name, tier='general')
+            dataset_name=dataset_name, tier='general_distance')
         weights_flat = flatten_fold_weights(fi) if fi else np.ones(X_hybrid.shape[1])
         best_config = get_best_for_downstream(search, 'knn')
         bp = best_config['blueprint'] if best_config and 'blueprint' in best_config else None
