@@ -102,7 +102,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 budgets=[budget],
                 metric=metric_name, task_type=task_type, domain=domain,
                 downstream_model='knn',
-                dataset_name=dataset_name, tier='general')
+                dataset_name=dataset_name, tier='general_distance')
             weights_flat = flatten_fold_weights(fi) if fi else np.ones(X_hybrid.shape[1])
             if not _top3_reported:
                 top3 = extract_top3_base_reps(search)

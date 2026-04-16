@@ -698,7 +698,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             precomputed=None,  # bypass tree-only precomputed; use disk cache
             internal_evaluators=DISTANCE_EVALUATORS,
             budgets=DISTANCE_BUDGETS,
-            dataset_name=dataset_name, tier='general')
+            dataset_name=dataset_name, tier='general_distance')
         # Select kNN-optimized blueprint (primary downstream model in S10)
         best_config = get_best_for_downstream(search, 'knn')
         if best_config and 'blueprint' in best_config:

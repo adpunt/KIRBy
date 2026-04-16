@@ -405,7 +405,12 @@ def get_domain_metric(data: dict) -> Tuple[str, Any, bool]:
     from kirby.find_best_hybrid import BUILTIN_METRICS
 
     domain = data.get('domain', 'molecular')
-    task_type = data.get('task_type', 'regression')
+    task_type = data.get('task_type')
+    if task_type not in ('classification', 'regression'):
+        raise ValueError(
+            f"get_domain_metric: data['task_type']={task_type!r}. "
+            f"Must be 'classification' or 'regression'. Check the loader."
+        )
 
     if task_type == 'classification':
         labels = data.get('labels')
@@ -1240,6 +1245,24 @@ def _build_rep_factories(dataset_name, data):
     return factories
 
 
+def _require_task_type(data: dict, source: str) -> str:
+    """Assert data['task_type'] is set to a valid value. Raise if not.
+
+    Every dataset loader MUST set 'task_type' to 'classification' or
+    'regression'. Silent defaulting to 'regression' has caused classification
+    datasets to be scored with regression metrics in the past — this guard
+    turns that into a loud failure.
+    """
+    tt = data.get('task_type')
+    if tt not in ('classification', 'regression'):
+        raise ValueError(
+            f"Loader for '{source}' returned task_type={tt!r}. "
+            f"Every loader MUST set 'task_type' to 'classification' or "
+            f"'regression' — silent defaults are not allowed."
+        )
+    return tt
+
+
 def load_data(dataset_name: str, rep_preset: str = 'fast',
               delta: bool = False, augment: bool = False,
               rep_names: Optional[List[str]] = None,
@@ -1368,7 +1391,7 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
             'groups': groups,
             'n_scaffolds': n_groups,
             'n_groups': n_groups,
-            'task_type': data.get('task_type', 'regression'),
+            'task_type': _require_task_type(data, dataset_name),
             'domain': 'antibody',
             'augmentations': None,
         }
@@ -1893,7 +1916,7 @@ def get_precomputed_search(reps, labels, groups, budget=None,
         labels, task_type=task_type, metric=metric, domain=domain)
 
     augs = augmentations if aug_condition != 'none' else None
-    aug_strat = aug_condition if aug_condition != 'none' else 'uncapped'
+    aug_strat = aug_condition
 
     # Allow kwargs to override defaults (e.g., budgets, internal_evaluators)
     call_kwargs = dict(

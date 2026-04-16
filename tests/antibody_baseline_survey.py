@@ -209,7 +209,13 @@ def load_dataset(name: str) -> dict:
     heavy_seqs = data['heavy_seqs']
     light_seqs = data['light_seqs']
     labels = data['labels']
-    task_type = data.get('task_type', 'regression')
+    task_type = data.get('task_type')
+    if task_type not in ('classification', 'regression'):
+        raise ValueError(
+            f"Antibody loader for '{name}' (source={source}) returned "
+            f"task_type={task_type!r}. Every loader MUST set 'task_type' "
+            f"to 'classification' or 'regression'."
+        )
 
     # Guard: if light_seqs is None (unpaired), use empty strings
     if light_seqs is None:
