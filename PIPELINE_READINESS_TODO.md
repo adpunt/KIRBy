@@ -956,7 +956,7 @@ are reviewed. See PRECOMPUTE_JOB_TRACKER.md §Nucleotide gena_lm refix.
 
 | # | Dataset | Samples | Reps | Metric | Status |
 |---|---------|---------|------|--------|--------|
-| 56 | gb_human_nontata_promoters | 36,131 | 6 | MCC | Survey review needed (gena_lm refix 7485377 PD) |
+| 56 | gb_human_nontata_promoters | 36,131 | 14 | MCC | **DONE** — gena_lm corrected. Winner: kmer5+mlp=0.8917. Classicals dominate. |
 | 57 | nt_enhancers | — | 6 | MCC | Classical only — survey pending (7483707 PD) |
 | 58 | nt_enhancers_types | — | 6 | MCC | Classical only — survey pending (7483708 PD) |
 | 59 | nt_H2AFZ | 33,000 | 14 | MCC | **DONE** — gena_lm corrected (1024D, MCC=0.019, dropped). Winner: mistral_dna+ridge=0.4323 |
@@ -1144,6 +1144,17 @@ CORRECTED 2026-04-17 (gena_refix 7485363 + 7496791). gena_lm now 1024D hidden st
 **nt_splice_sites_all (33,000 samples, 23 groups, MCC) — 14/25 reps ran. DROPPED 2026-04-17.**
 
 Only 2 reps (nt_v2_250m, nt_v2_500m) reach MCC≥0.37; rest ≤0.28. Best winner: nt_v2_250m+ridge=0.3685. Dataset is too weak and has no rep diversity — dropping per original pre-survey decision.
+
+**gb_human_nontata_promoters (36,131 samples, 5 groups, MCC) — 14/25 reps ran. CORRECTED 2026-04-17 (gena_refix 7496805):**
+
+| Tier | Reps |
+|------|------|
+| Top Tier (4) | kmer5, kmer6, kmer4, tetranuc_freq |
+| General (9) | kmer5, kmer6, kmer4, tetranuc_freq, grover_dna, tnf_canonical, dnabert2, mistral_dna, kmer3 |
+| Augmentation (5) | codon_usage, complexity, dinuc_freq, dna_shape, gc_content |
+| Dropped (4) | hyenadna (85% of best), nt_v2_500m (80%), nt_v2_250m (78%), gena_lm (13%, near-random at 1024D) |
+
+*Winner: kmer5+mlp=0.8917 MCC. Best aug: kmer5+dna_shape=0.8935 (+0.0018, marginal — ceiling hit). Classical k-mer reps dominate — NT-v2 and hyenadna underperform on this genomic benchmark. Top Tier threshold ≥96%.*
 
 ---
 
