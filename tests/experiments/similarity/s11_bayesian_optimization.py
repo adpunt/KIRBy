@@ -691,6 +691,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     reps = data['reps']
     labels = data['labels']
     groups = data.get('groups')
+    task_type = data['task_type']
     n_samples = len(labels)
 
     # S11 is molecular-only: requires ECFP4 or molecular fingerprints for

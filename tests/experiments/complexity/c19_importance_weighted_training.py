@@ -94,12 +94,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    task_type = data['task_type']
     n_samples = len(labels)
 
     model_names = [m for m in config['models'] if m in WEIGHTED_MODELS]
     if not model_names:
         model_names = ['rf', 'ridge']
-    models = get_model_factories(model_names, task_type=data['task_type'],
+    models = get_model_factories(model_names, task_type=task_type,
                                  n_samples=n_samples)
 
     budget = kwargs.get('budget', 100)

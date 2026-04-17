@@ -45,7 +45,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     weight_methods = kwargs.get('weight_methods', ['lightgbm_gain'])
     n_sample = kwargs.get('n_sample', 5000)
     search_speed = config.get('search_speed', 'full')
-    is_classification = data['task_type'] == 'classification'
+    task_type = data['task_type']
+    is_classification = task_type == 'classification'
 
     reps = data['reps']
     labels = data['labels']

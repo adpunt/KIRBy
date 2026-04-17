@@ -104,6 +104,7 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
         return {'error': 'noiseInject not installed'}
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    task_type = data['task_type']
 
     reps = data['reps']
     labels = data['labels']

@@ -180,6 +180,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
     metric_name, metric_fn, _ = get_domain_metric(data)
+    task_type = data['task_type']
 
     # Concatenate all reps
     X_concat = np.hstack([v for v in reps.values()])

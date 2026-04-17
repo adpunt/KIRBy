@@ -79,6 +79,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     budget = kwargs.get('budget', 100)
     augmentations = data.get('augmentations')
+    task_type = data['task_type']
 
     # Build feature spaces
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])

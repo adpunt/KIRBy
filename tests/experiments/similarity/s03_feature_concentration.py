@@ -40,6 +40,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     weight_methods = kwargs.get('weight_methods', ['lightgbm_gain'])
     search_speed = config.get('search_speed', 'full')
+    task_type = data['task_type']
 
     reps = data['reps']
     labels = data['labels']
