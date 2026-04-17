@@ -973,7 +973,7 @@ are reviewed. See PRECOMPUTE_JOB_TRACKER.md §Nucleotide gena_lm refix.
 | 70 | nt_promoter_no_tata | 31,372 | 17 | MCC | **DONE** — gena_lm corrected. Winner: mistral_dna+ridge=0.7497 (saturated). |
 | 71 | nt_promoter_tata | 5,274 | 17 | MCC | **DONE** — gena_lm corrected. Winner: mistral_dna+ridge=0.6743. Smallest nucleotide ds. |
 | 72 | nt_splice_sites_acceptors | — | 6 | MCC | Classical only — survey pending (7483709 PD) |
-| 73 | nt_splice_sites_all | — | 18 | MCC | Survey review needed (gena_lm refix 7485376 PD) |
+| 73 | nt_splice_sites_all | 33,000 | 14 | MCC | **DROPPED** — only nt_v2_250m/500m reach MCC≥0.37; all other reps ≤0.28. Weak task, no diversity. |
 | 74 | nt_splice_sites_donors | — | 6 | MCC | Classical only — survey pending (7483710 PD) |
 
 **Root cause:** `DATASET_REGISTRY` in `run_baseline_survey.py` had default preset `'fast'` (6 classical reps only) for all nucleotide datasets. Survey was submitted without `--reps all` override, so FM reps never ran. **Fixed 2026-03-28** (commit a2a0d2d): default changed to `'all'` (26 reps: 14 FM + 11 classical + 1 factory).
@@ -1140,6 +1140,10 @@ CORRECTED 2026-04-17 (gena_refix 7485363 + 7496791). gena_lm now 1024D hidden st
 | Dropped (1) | gena_lm (21% of best at 1024D — still near-random as a proper rep) |
 
 *Winner: mistral_dna+ridge=0.7497 MCC. Best aug: mistral_dna+dinuc_freq=0.7510 (+0.0013, marginal — saturated task). Top Tier threshold ≥98%. dnabert2 kept (96% on saturated task).*
+
+**nt_splice_sites_all (33,000 samples, 23 groups, MCC) — 14/25 reps ran. DROPPED 2026-04-17.**
+
+Only 2 reps (nt_v2_250m, nt_v2_500m) reach MCC≥0.37; rest ≤0.28. Best winner: nt_v2_250m+ridge=0.3685. Dataset is too weak and has no rep diversity — dropping per original pre-survey decision.
 
 ---
 
