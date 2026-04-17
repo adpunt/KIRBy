@@ -571,3 +571,85 @@ Existing reaction JSONs are from Mar 19-26 (pre-CGR). Need new submission script
 | Job ID | Name | Datasets | Status |
 |--------|------|----------|--------|
 | — | rxn_baselines | buchwald_hartwig, bh_doyle_plates, suzuki | **NOT YET SUBMITTED** — needs heredoc submit script with cgr_smiles_lm |
+
+---
+
+## 2026-04-17 — Consolidated precompute (v10, registry-backed) — 114 jobs
+
+**Submitted:** 2026-04-17.
+**Script:** `tests/scripts/plan_precompute.py --consolidated --cluster arc`.
+**Infrastructure:** Phase A-H + D.2 hybrid_evals dedup (commits b28d092 → eccb6a3).
+**Cache:** content-validated, no version number. 23-field meta per search cache.
+**Mode:** consolidated — one sbatch per `(dataset, standard|distance)`, each
+running all applicable tier × aug_strategy conditions sequentially inside a
+single python process. 2 jobs per dataset instead of 10 = 5× fewer sbatch
+calls vs v6-v9 per-condition submissions.
+
+### Superseded (cancelled 2026-04-17)
+
+| Job ID range | Notes |
+|--------------|-------|
+| 11781449-11781478 | 30 jobs, per-condition mode for flab_pk_jain_fcrnrt + abagym_HER2 + humanness_therapeutic. Cancelled + resubmitted as part of the new consolidated batch. |
+
+### Summary by partition
+
+| Cluster | Partition | Range | Count | Band(s) | Time | Mem |
+|---------|-----------|-------|-------|---------|------|-----|
+| arc | short | 11781997-11782074 | 74 | XS / S / M | 12:00:00 | 64-128G |
+| arc | medium | 11782049-11782050, 11782075-11782082 | 10 | L, XL | 2-00:00:00 | 128-256G |
+| arc | long | 11782083-11782113 (11782090 missing) | 30 | NT | 2-00:00:00 | 128G |
+
+Total: **114 jobs, 57 datasets**.
+
+### Datasets by partition
+
+**arc short** (XS/S/M band, fits 12h):
+- Molecular (8 datasets × 2 = 16): caco2, logd, qm9, adme_hlm, adme_rlm, adme_mdr1, herg_ki, herg
+- Antibody inter-family + DMS (24 × 2 = 48): 5 abagym (Ang2, EGFR, VEGF, lysozyme, HER2), abcov_kd, 12 flab_* (all except thermo_tresanco), 6 ginkgo (acsins, colloidal, heparin, hic, pr_cho, titer), humanness_therapeutic, ddg_combined
+- Reaction (2 × 2 = 4): buchwald_hartwig, bh_doyle_plates
+- DTA (3 × 2 = 6): davis, kiba, bindingdb_kd
+
+**arc medium** (L/XL band, needs ≥12h buffer):
+- flab_thermo_tresanco (L; empirically 8h on general_uncapped)
+- tz_her2_binary, tz_her2_multiclass (L; n=5000)
+- tcga_luad_vs_lusc, tcga_brca_pam50 (XL; high-dim reps)
+
+**arc long** (NT band, 15 nucleotide datasets × 2 = 30):
+- nt_H2AFZ, nt_H3K27ac, nt_H3K27me3, nt_H3K36me3, nt_H3K4me1,
+  nt_H3K4me2, nt_H3K4me3, nt_H3K9ac, nt_H3K9me3, nt_H4K20me1,
+  nt_promoter_all, nt_promoter_tata, nt_promoter_no_tata,
+  gb_human_nontata_promoters, gb_human_enhancers_cohn
+
+### Conditions per dataset (consolidated mode)
+
+Each dataset gets 2 sbatch submissions:
+
+| Job suffix | Conditions run inside the process |
+|------------|----------------------------------|
+| `_all_standard` | general_none, general_uncapped, general_capped, top_none, top_uncapped, top_capped |
+| `_all_distance` | general_distance_none, general_distance_uncapped, top_distance_none, top_distance_uncapped (DISTANCE_EVALUATORS + DISTANCE_BUDGETS) |
+
+### Status checks
+
+```bash
+# Live queue
+squeue --clusters=all -u $USER | wc -l
+
+# Summary after completion
+sacct -j 11781997-11782113 --format=State --noheader -X | sort | uniq -c
+
+# Failures
+sacct -j 11781997-11782113 --format=JobID,JobName%40,State,Elapsed,ExitCode -X \
+  | grep -E "FAILED|TIMEOUT|OUT_OF_ME|CANCELLED"
+
+# [cache] summary lines from Phase E — confirms observability + D.2 dedup
+grep -h "^\[cache\]" slurm-*.out | sort | uniq -c
+```
+
+### Expected outcomes
+
+- XS band (abagym_HER2, ginkgo_heparin, ginkgo_pr_cho): 1-3h each
+- Full short-partition drain: ~12h depending on priority
+- Medium partition L/XL jobs: 8h–1d typical
+- Long partition nucleotide: 6-12h each (reps pre-cached as .npy)
+- `[cache] hybrid_eval: N hit` appears in SLURM logs when top_k allocation picks the same subset across general and top tier searches — first production test of Phase D.2 dedup
