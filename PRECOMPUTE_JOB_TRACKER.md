@@ -403,13 +403,13 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 7440292 | dta_kiba | DONE |
 | 7440293 | dta_bindingdb_kd | **TIMEOUT** (4d wall limit, 2026-04-11) — end-of-run save only, zero output on disk |
 | 7483661 | dta_bindingdb_kd (pre-c18342f heredoc bug) | **CANCELLED** (2026-04-15, same heredoc bug as 7483641-46) |
-| 7483718 | dta_bindingdb_kd (post-c18342f, per-rep checkpoint) | **PD** (2026-04-15, medium+GPU+256G, 48h) |
-| 7467954 | dta_davis (resubmit, --skip-existing) | **TIMEOUT** (2026-04-15 01:40, 48h wall, died at ~66% through contact graph features; no checkpointed output — pre-a81b0eb code) |
-| 7483719 | dta_davis (post-c18342f heredoc + a81b0eb checkpointing) | **PD** (2026-04-15, long+GPU+256G, 96h wall) |
-| 7457314 | dta_kiba_fill (--skip-existing) | **FAILED** (ExitCode 126:0, 6min — sbatch --wrap line-splitting bug) |
-| 7467954 | dta_davis (resubmit, --skip-existing) | **RUNNING** (1d22h as of 2026-04-15, ongoing) |
-| 7483635 | dta_kiba_fill (pre-c18342f heredoc bug) | **CANCELLED** (2026-04-15, bad heredoc) |
-| 7483717 | dta_kiba_fill (post-c18342f) | **PD** (2026-04-15, long+GPU+256G, 24h) |
+| 7483718 | dta_bindingdb_kd (post-c18342f, per-rep checkpoint) | **RUNNING** (2026-04-17, 18h35m elapsed, medium+GPU+256G, 48h wall) |
+| 7467954 | dta_davis (resubmit, --skip-existing) | **TIMEOUT** (2026-04-15, 48h wall) |
+| 7483719 | dta_davis (post-c18342f + a81b0eb) | **RUNNING** (2026-04-17, 12h elapsed, long+GPU+256G, 96h wall) |
+| 7457314 | dta_kiba_fill (--skip-existing) | FAILED (--wrap bug) |
+| 7483635 | dta_kiba_fill (pre-c18342f) | CANCELLED |
+| 7483717 | dta_kiba_fill (post-c18342f) | **COMPLETED** (23min, 2026-04-16) — **BUT destroyed kiba.json** (69KB→583B) due to merge bug in a81b0eb. Fixed in d1c45b9. |
+| 7496790 | dta_kiba (full re-run, post-d1c45b9 merge fix) | **PD** (2026-04-17, long+GPU+256G, 24h) |
 
 ### Antibody CLF
 
@@ -423,10 +423,11 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 7483632 | abclf_tz_her2_multiclass (pre-c18342f) | **CANCELLED** |
 | 7483633 | abclf_humanness_species (pre-c18342f) | **CANCELLED** |
 | 7483634 | abclf_humanness_therapeutic (pre-c18342f) | **CANCELLED** |
-| 7483713 | abclf_tz_her2_binary (post-c18342f) | **PD** (2026-04-15, long+GPU+256G, 24h) |
-| 7483714 | abclf_tz_her2_multiclass (post-c18342f) | **PD** |
-| 7483715 | abclf_humanness_species (post-c18342f) | **PD** (long+GPU+128G, 24h) |
-| 7483716 | abclf_humanness_therapeutic (post-c18342f) | **PD** |
+| 7483713 | abclf_tz_her2_binary (post-c18342f) | **COMPLETED** (3h51m, 2026-04-16) |
+| 7483714 | abclf_tz_her2_multiclass (post-c18342f) | **COMPLETED** (8h22m, 2026-04-16) |
+| 7483715 | abclf_humanness_species (post-c18342f) | **COMPLETED** (5h26m, 2026-04-16) — **output file missing from disk** despite "Saved" in slurm log. Resubmitted as 7496824. |
+| 7483716 | abclf_humanness_therapeutic (post-c18342f) | **COMPLETED** (38min, 2026-04-16) |
+| 7496824 | abclf_humanness_species (resubmit) | **PD** (2026-04-17, long+GPU+128G, 24h) |
 | 7483636 | abclf_tz_her2_binary (DUPLICATE) | **CANCELLED** (2026-04-15) |
 | 7483637 | abclf_tz_her2_multiclass (DUPLICATE) | **CANCELLED** |
 | 7483638 | abclf_humanness_species (DUPLICATE) | **CANCELLED** |
@@ -440,9 +441,9 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 7440325 | schnet_logd | **FAILED** (SLURM exit 0:0 but experiment broken, 4h17m, 2026-04-12) — baselines ran but all 3 FT reps (ft_schnet, lora_chemberta, lora_molformer) emitted `FT FACTORY ERROR: No data left in file` from `np.load(cache_path)` on every fold. Root cause: fc36c6c np.savez suffix bug (zero-byte cache entries). |
 | 7440326 | schnet_herg_ki | **FAILED** (1h50m, 2026-04-12) — same FT cache corruption |
 | 7440327 | schnet_caco2 | **FAILED** (1h13m, 2026-04-12) — same FT cache corruption |
-| 7483721 | schnet_logd (post-fc36c6c heredoc rerun) | **PD** (2026-04-15, long+GPU+128G, 24h) — via `submit_fixup_resubmits.sh schnet` |
-| 7483722 | schnet_herg (post-fc36c6c heredoc rerun) | **PD** (2026-04-15, long+GPU+128G, 24h) |
-| 7483723 | schnet_caco2 (post-fc36c6c heredoc rerun) | **PD** (2026-04-15, long+GPU+128G, 24h) |
+| 7483721 | schnet_logd (post-fc36c6c) | **COMPLETED** (1h05m, 2026-04-16) — real ft_schnet/lora_chemberta/lora_molformer scores |
+| 7483722 | schnet_herg (post-fc36c6c) | **FAILED** (7min, 2026-04-16, ExitCode 1:0) — TDC loader crash: `Please report this error to contact@tdcommons.ai` |
+| 7483723 | schnet_caco2 (post-fc36c6c) | **COMPLETED** (45min, 2026-04-16) |
 
 ### Nucleotide (genomics)
 
@@ -468,10 +469,10 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 7483642 | nuc_nt_enhancers_types (pre-c18342f) | **FAILED** (same) |
 | 7483643 | nuc_nt_splice_sites_acceptors (pre-c18342f) | **FAILED** (same — user confirmed) |
 | 7483644 | nuc_nt_splice_sites_donors (pre-c18342f) | **FAILED** (same) |
-| 7483707 | nuc_nt_enhancers (heredoc resubmit 4, post-c18342f, inline python cmd) | **PD** (2026-04-15) |
-| 7483708 | nuc_nt_enhancers_types (post-c18342f) | **PD** |
-| 7483709 | nuc_nt_splice_sites_acceptors (post-c18342f) | **PD** |
-| 7483710 | nuc_nt_splice_sites_donors (post-c18342f) | **PD** |
+| 7483707 | nuc_nt_enhancers (post-c18342f) | **COMPLETED** (3m39s, 2026-04-15) — gena_lm still 32000D (old cache loaded pre-3a5b5d5). Needs gena_refix. |
+| 7483708 | nuc_nt_enhancers_types (post-c18342f) | **COMPLETED** (3m17s) — same, gena_lm 32000D |
+| 7483709 | nuc_nt_splice_sites_acceptors (post-c18342f) | **COMPLETED** (3m29s) — same |
+| 7483710 | nuc_nt_splice_sites_donors (post-c18342f) | **COMPLETED** (3m18s) — same |
 | 7440309 | nuc_nt_H2AFZ | DONE (2026-04-12) — **gena_lm CONTAMINATED (32000D logits)**, superseded by 7485363 refix |
 | 7440310 | nuc_nt_H3K27ac | DONE — **gena_lm CONTAMINATED**, superseded by 7485364 refix |
 | 7440311 | nuc_nt_H3K27me3 | DONE — **gena_lm CONTAMINATED**, superseded by 7485365 refix |
@@ -488,8 +489,10 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 7440322 | nuc_gb_demo_human_or_worm | **OUT_OF_MEMORY** (1h46m, 2026-04-12) — 128G insufficient, resubmit with 256G |
 | 7483645 | nuc_gb_demo_coding_vs_intergenomic (pre-c18342f) | **FAILED** (same heredoc bug) |
 | 7483646 | nuc_gb_demo_human_or_worm (pre-c18342f) | **FAILED** (same heredoc bug) |
-| 7483711 | nuc_gb_demo_coding_vs_intergenomic (post-c18342f, OOM bump 256G) | **PD** (2026-04-15, medium+256G, 48h) |
-| 7483712 | nuc_gb_demo_human_or_worm (post-c18342f, OOM bump 256G) | **PD** (2026-04-15, medium+256G, 48h) |
+| 7483711 | nuc_gb_demo_coding (post-c18342f, 256G) | **CANCELLED** (12h42m in, 2026-04-16) |
+| 7483712 | nuc_gb_demo_human_or_worm (post-c18342f, 256G) | **CANCELLED** (12h42m) |
+| 7496807 | nuc_gb_demo_coding (resubmit, 256G) | **PD** (2026-04-17, medium+256G, 48h) |
+| 7496808 | nuc_gb_demo_human_or_worm (resubmit, 256G) | **PD** (2026-04-17) |
 
 ### Nucleotide gena_lm refix (2026-04-15)
 
@@ -507,22 +510,14 @@ Resource: long+GPU+64G+6h per job.
 
 | Job ID | Name | Status |
 |--------|------|--------|
-| 7485363 | gena_refix_nt_H2AFZ | **PD** (2026-04-15) |
-| 7485364 | gena_refix_nt_H3K27ac | **PD** |
-| 7485365 | gena_refix_nt_H3K27me3 | **PD** |
-| 7485366 | gena_refix_nt_H3K36me3 | **PD** |
-| 7485367 | gena_refix_nt_H3K4me1 | **PD** |
-| 7485368 | gena_refix_nt_H3K4me2 | **PD** |
-| 7485369 | gena_refix_nt_H3K4me3 | **PD** |
-| 7485370 | gena_refix_nt_H3K9ac | **PD** |
-| 7485371 | gena_refix_nt_H3K9me3 | **PD** |
-| 7485372 | gena_refix_nt_H4K20me1 | **PD** |
-| 7485373 | gena_refix_nt_promoter_all | **PD** |
-| 7485374 | gena_refix_nt_promoter_tata | **PD** |
-| 7485375 | gena_refix_nt_promoter_no_tata | **PD** |
-| 7485376 | gena_refix_nt_splice_sites_all | **PD** |
-| 7485377 | gena_refix_gb_human_nontata_promoters | **PD** |
-| 7485378 | gena_refix_gb_human_enhancers_cohn | **PD** |
+| 7485363 | gena_refix_nt_H2AFZ | **COMPLETED** (34min, 2026-04-15) — confirmed 1024D gena_lm |
+| 7485364-78 | gena_refix (15 remaining) | **FAILED** (instant, ExitCode 2) — preflight false-positive on newly-written gena_lm.npy. Fixed in 0913452 (preflight removed). |
+
+**Round 2 (post-0913452, no preflight):**
+
+| Job ID | Name | Status |
+|--------|------|--------|
+| 7496791-806 | gena_refix ×16 (all datasets, round 2) | **PD** (2026-04-17, long+GPU+64G, 6h) |
 
 ### CGR-SMILES pretraining (Phase 4)
 
@@ -536,12 +531,13 @@ Output: `/data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/`
 | 7467971 | cgr_smiles | corpus + pretrain | FAILED — chython installed but 0/392K conversions. Empty corpus guard caught it. Diagnostics added in 4b7d9de. |
 | 11748808 | cgr_smiles | corpus + pretrain | FAILED — CGRContainer.__len__ missing, smoke test caught it. Fixed in f0b5e86. |
 | 11749515 | cgr_smiles | corpus + pretrain | **FAILED** (2026-04-11) — corpus stage OK (392324/392533, 99.9%), pretrain stage crashed: `AttributeError: 'AdamW' object has no attribute 'train'` in accelerate/optimizer.py line 128. Root cause: transformers Trainer → accelerate AcceleratedOptimizer.train() → calls inner optimizer.train() which torch.optim.AdamW does not implement (accelerate/transformers version mismatch). Fixed in 2c367d6 (manual training loop). |
-| 7483446 | cgr_pretrain | pretrain only | **PD/R** (2026-04-14, HTC + GPU) — resubmit with 2c367d6 manual loop + 4bdede7 pretrain_htc mode (`--gres=gpu:1 --partition=long --time=23:59:00`). Uses existing corpus.txt (40M, 392324 lines, unchanged from 11749515). Expected wall ~1-2h on A100/V100. Unblocks reaction re-survey with cgr_smiles_lm. |
+| 7483446 | cgr_pretrain | pretrain only | **COMPLETED** (10min56s, 2026-04-15) — checkpoint at `/data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/checkpoint/` |
 
-### Reaction re-survey (blocked on 7467971)
+### Reaction re-survey — UNBLOCKED
 
-Re-survey with 41 reps (38 original + 3 CGR). Submit after pretraining checkpoint exists.
+CGR pretrain complete. Re-survey with 41 reps (38 original + 3 CGR) not yet submitted.
+Existing reaction JSONs are from Mar 19-26 (pre-CGR). Need new submission script (heredoc-style).
 
 | Job ID | Name | Datasets | Status |
 |--------|------|----------|--------|
-| — | rxn_baselines | buchwald_hartwig, bh_doyle_plates, suzuki | BLOCKED — waiting on 11749515 |
+| — | rxn_baselines | buchwald_hartwig, bh_doyle_plates, suzuki | **NOT YET SUBMITTED** — needs heredoc submit script with cgr_smiles_lm |
