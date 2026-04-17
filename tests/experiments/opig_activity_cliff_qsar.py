@@ -308,7 +308,8 @@ def evaluate_target(target, rep_preset, n_folds):
             augmentation_strategy='uncapped',
             internal_evaluators=INTERNAL_EVALUATORS,
             speed='full', return_fitted=True, verbose=False, cache=True,
-            dataset_name=f"chembl_qsar_{target}", tier='general',
+            dataset_name='chembl_qsar', tier='general',
+            condition_suffix=target,
             adaptive_pruning=0.25)
         top3 = extract_top3_base_reps(search)
         if top3:

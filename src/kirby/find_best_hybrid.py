@@ -86,17 +86,22 @@ def _sanitize_filename_part(s: str) -> str:
 
 
 def _search_cache_path(dataset_name: str, tier: str,
-                       aug_strategy: str, speed: str) -> Path:
+                       aug_strategy: str, speed: str,
+                       condition_suffix: Optional[str] = None) -> Path:
     t = _sanitize_filename_part(tier)
     a = _sanitize_filename_part(aug_strategy)
     s = _sanitize_filename_part(speed)
-    return (_cache_base() / 'searches' /
-            f'{dataset_name}__{t}__{a}__{s}.pkl')
+    stem = f'{dataset_name}__{t}__{a}__{s}'
+    if condition_suffix:
+        stem = f'{stem}__{_sanitize_filename_part(condition_suffix)}'
+    return _cache_base() / 'searches' / f'{stem}.pkl'
 
 
 def _search_checkpoint_path(dataset_name: str, tier: str,
-                            aug_strategy: str, speed: str) -> Path:
-    p = _search_cache_path(dataset_name, tier, aug_strategy, speed)
+                            aug_strategy: str, speed: str,
+                            condition_suffix: Optional[str] = None) -> Path:
+    p = _search_cache_path(dataset_name, tier, aug_strategy, speed,
+                           condition_suffix)
     return p.with_suffix('.ckpt.pkl')
 
 
@@ -3068,6 +3073,7 @@ def find_best_hybrid(
     # when cache=True AND the corresponding object is non-None.
     cv_splitter_id: Optional[str] = None,
     rep_factories_id: Optional[str] = None,
+    condition_suffix: Optional[str] = None,
 ) -> SearchResult:
     """
     Find the best hybrid representation configuration.
@@ -3141,6 +3147,13 @@ def find_best_hybrid(
             `rep_factories`. Required when cache=True AND rep_factories
             is not None. Use a per-factory version string
             (e.g., "lora_esm2_v3_2026_04_10").
+        condition_suffix: Optional extra label appended to the cache
+            filename. Use for synthetic variations on a registered
+            dataset (e.g. "n500" for a subsample, "loo_additive" for a
+            leave-one-out split, "asymmetric" for a synthetic silo).
+            Registry-backed metric resolution still uses dataset_name;
+            only the cache key differs. Distinct suffixes never
+            collide.
 
     Returns:
         SearchResult with best configs, baselines, and optional fitted result.
@@ -3265,7 +3278,8 @@ def find_best_hybrid(
             )
 
         cache_path = _search_cache_path(
-            dataset_name, tier, augmentation_strategy, speed)
+            dataset_name, tier, augmentation_strategy, speed,
+            condition_suffix=condition_suffix)
         if cache_dir is not None:
             # Honor legacy cache_dir override by rerooting.
             cache_path = Path(cache_dir) / cache_path.name
@@ -3306,6 +3320,9 @@ def find_best_hybrid(
             cv_splitter_id=cv_splitter_id,
             rep_factories_id=rep_factories_id,
         )
+        # condition_suffix is in the filename but also goes in meta so
+        # validation catches accidental collisions. Explicit None stored.
+        expected_search_meta['condition_suffix'] = condition_suffix
 
         payload = _load_cache_with_meta(
             cache_path, expected_search_meta,
