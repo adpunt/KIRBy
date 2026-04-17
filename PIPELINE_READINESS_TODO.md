@@ -970,7 +970,7 @@ are reviewed. See PRECOMPUTE_JOB_TRACKER.md §Nucleotide gena_lm refix.
 | 67 | nt_H3K9me3 | 28,288 | 17 | MCC | **DONE** — gena_lm corrected. Winner: mistral_dna+ridge=0.3482 (weak but retained). |
 | 68 | nt_H4K20me1 | 32,270 | 17 | MCC | **DONE** — gena_lm corrected. Winner: hyenadna+mlp=0.6041. |
 | 69 | nt_promoter_all | 31,584 | 17 | MCC | **DONE** — gena_lm corrected. Winner: mistral_dna+ridge=0.7281 (saturated). |
-| 70 | nt_promoter_no_tata | — | 18 | MCC | Survey review needed (gena_lm refix 7485375 PD) |
+| 70 | nt_promoter_no_tata | 31,372 | 17 | MCC | **DONE** — gena_lm corrected. Winner: mistral_dna+ridge=0.7497 (saturated). |
 | 71 | nt_promoter_tata | 5,274 | 17 | MCC | **DONE** — gena_lm corrected. Winner: mistral_dna+ridge=0.6743. Smallest nucleotide ds. |
 | 72 | nt_splice_sites_acceptors | — | 6 | MCC | Classical only — survey pending (7483709 PD) |
 | 73 | nt_splice_sites_all | — | 18 | MCC | Survey review needed (gena_lm refix 7485376 PD) |
@@ -1129,6 +1129,17 @@ CORRECTED 2026-04-17 (gena_refix 7485363 + 7496791). gena_lm now 1024D hidden st
 | Dropped (3) | kmer3 (88% of best), dnabert2 (87%), gena_lm (16%, near-random at 1024D) |
 
 *Winner: mistral_dna+ridge=0.6743 MCC. Best aug: mistral_dna+tnf_canonical=0.6926 (+0.0183). Top Tier threshold ≥98%. Smallest nucleotide dataset (n=5274) — useful augmentation delta.*
+
+**nt_promoter_no_tata (31,372 samples, 23 groups, MCC) — 17/25 reps ran. CORRECTED 2026-04-17 (gena_refix 7496803):**
+
+| Tier | Reps |
+|------|------|
+| Top Tier (4) | mistral_dna, hyenadna, grover_dna, nt_v2_500m |
+| General (12) | mistral_dna, hyenadna, grover_dna, nt_v2_500m, kmer6, nt_v2_250m, kmer5, kmer4, tnf_canonical, tetranuc_freq, kmer3, dnabert2 |
+| Augmentation (5) | codon_usage, complexity, dinuc_freq, dna_shape, gc_content |
+| Dropped (1) | gena_lm (21% of best at 1024D — still near-random as a proper rep) |
+
+*Winner: mistral_dna+ridge=0.7497 MCC. Best aug: mistral_dna+dinuc_freq=0.7510 (+0.0013, marginal — saturated task). Top Tier threshold ≥98%. dnabert2 kept (96% on saturated task).*
 
 ---
 
