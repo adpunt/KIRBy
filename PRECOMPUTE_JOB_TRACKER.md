@@ -403,13 +403,13 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 7440292 | dta_kiba | DONE |
 | 7440293 | dta_bindingdb_kd | **TIMEOUT** (4d wall limit, 2026-04-11) — end-of-run save only, zero output on disk |
 | 7483661 | dta_bindingdb_kd (pre-c18342f heredoc bug) | **CANCELLED** (2026-04-15, same heredoc bug as 7483641-46) |
-| 7483718 | dta_bindingdb_kd (post-c18342f, per-rep checkpoint) | **RUNNING** (2026-04-17, 18h35m elapsed, medium+GPU+256G, 48h wall) |
+| 7483718 | dta_bindingdb_kd (post-c18342f, per-rep checkpoint) | **RUNNING** (2026-04-17, 24h28m elapsed, medium+GPU+256G, 48h wall — ~23h remaining) |
 | 7467954 | dta_davis (resubmit, --skip-existing) | **TIMEOUT** (2026-04-15, 48h wall) |
-| 7483719 | dta_davis (post-c18342f + a81b0eb) | **RUNNING** (2026-04-17, 12h elapsed, long+GPU+256G, 96h wall) |
+| 7483719 | dta_davis (post-c18342f + a81b0eb) | **RUNNING** (2026-04-17, 18h elapsed, long+GPU+256G, 96h wall) |
 | 7457314 | dta_kiba_fill (--skip-existing) | FAILED (--wrap bug) |
 | 7483635 | dta_kiba_fill (pre-c18342f) | CANCELLED |
 | 7483717 | dta_kiba_fill (post-c18342f) | **COMPLETED** (23min, 2026-04-16) — **BUT destroyed kiba.json** (69KB→583B) due to merge bug in a81b0eb. Fixed in d1c45b9. |
-| 7496790 | dta_kiba (full re-run, post-d1c45b9 merge fix) | **PD** (2026-04-17, long+GPU+256G, 24h) |
+| 7496790 | dta_kiba (full re-run, post-d1c45b9 merge fix) | **RUNNING** (2026-04-17, 5h50m elapsed, long+GPU+256G, 24h wall) |
 
 ### Antibody CLF
 
@@ -427,7 +427,8 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 7483714 | abclf_tz_her2_multiclass (post-c18342f) | **COMPLETED** (8h22m, 2026-04-16) |
 | 7483715 | abclf_humanness_species (post-c18342f) | **COMPLETED** (5h26m, 2026-04-16) — **output file missing from disk** despite "Saved" in slurm log. Resubmitted as 7496824. |
 | 7483716 | abclf_humanness_therapeutic (post-c18342f) | **COMPLETED** (38min, 2026-04-16) |
-| 7496824 | abclf_humanness_species (resubmit) | **FAILED** (ExitCode 127, 4min — "command not found". Needs diagnosis.) |
+| 7496824 | abclf_humanness_species (resubmit) | **FAILED** (ExitCode 127, 4min — long --reps argument split across slurm_script lines by SLURM. Fixed by using `REPS=` shell variable.) |
+| 7498632 | abclf_humanness_species (resubmit 2, REPS= variable) | **PD** (2026-04-17, long+GPU+128G, 24h) |
 | 7483636 | abclf_tz_her2_binary (DUPLICATE) | **CANCELLED** (2026-04-15) |
 | 7483637 | abclf_tz_her2_multiclass (DUPLICATE) | **CANCELLED** |
 | 7483638 | abclf_humanness_species (DUPLICATE) | **CANCELLED** |
@@ -441,9 +442,12 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 7440325 | schnet_logd | **FAILED** (SLURM exit 0:0 but experiment broken, 4h17m, 2026-04-12) — baselines ran but all 3 FT reps (ft_schnet, lora_chemberta, lora_molformer) emitted `FT FACTORY ERROR: No data left in file` from `np.load(cache_path)` on every fold. Root cause: fc36c6c np.savez suffix bug (zero-byte cache entries). |
 | 7440326 | schnet_herg_ki | **FAILED** (1h50m, 2026-04-12) — same FT cache corruption |
 | 7440327 | schnet_caco2 | **FAILED** (1h13m, 2026-04-12) — same FT cache corruption |
-| 7483721 | schnet_logd (post-fc36c6c) | **COMPLETED** (1h05m, 2026-04-16) — real ft_schnet/lora_chemberta/lora_molformer scores |
-| 7483722 | schnet_herg (post-fc36c6c) | **FAILED** (7min, 2026-04-16, ExitCode 1:0) — TDC loader crash: `Please report this error to contact@tdcommons.ai` |
-| 7483723 | schnet_caco2 (post-fc36c6c) | **COMPLETED** (45min, 2026-04-16) |
+| 7483721 | schnet_logd (post-fc36c6c) | **COMPLETED** (1h05m, 2026-04-16) — real lora_chemberta/lora_molformer scores, **ft_schnet=NaN** (torch_cluster not CUDA-compiled) |
+| 7483722 | schnet_herg (post-fc36c6c) | **FAILED** (7min, 2026-04-16, ExitCode 1:0) — TDC loader crash |
+| 7483723 | schnet_caco2 (post-fc36c6c) | **COMPLETED** (45min, 2026-04-16) — same: ft_schnet=NaN (CUDA issue) |
+| 7498292 | schnet_logd (post-b59c11e CPU fallback) | **RUNNING** (2h13m as of 2026-04-17, long+GPU+128G, 24h) — should produce real ft_schnet now |
+| 7498293 | schnet_herg (post-b59c11e + 67803ab FLuID loader) | **PD** (2026-04-17) |
+| 7498294 | schnet_caco2 (post-b59c11e) | **PD** (2026-04-17) |
 
 ### Nucleotide (genomics)
 
@@ -491,8 +495,8 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 7483646 | nuc_gb_demo_human_or_worm (pre-c18342f) | **FAILED** (same heredoc bug) |
 | 7483711 | nuc_gb_demo_coding (post-c18342f, 256G) | **CANCELLED** (12h42m in, 2026-04-16) |
 | 7483712 | nuc_gb_demo_human_or_worm (post-c18342f, 256G) | **CANCELLED** (12h42m) |
-| 7496807 | nuc_gb_demo_coding (resubmit, 256G) | **PD** (2026-04-17, medium+256G, 48h) |
-| 7496808 | nuc_gb_demo_human_or_worm (resubmit, 256G) | **PD** (2026-04-17) |
+| 7496807 | nuc_gb_demo_coding (resubmit, 256G) | **RUNNING** (5h24m as of 2026-04-17, medium+256G, 48h wall) |
+| 7496808 | nuc_gb_demo_human_or_worm (resubmit, 256G) | **RUNNING** (5h24m) |
 
 ### Nucleotide gena_lm refix (2026-04-15)
 
@@ -534,7 +538,16 @@ Resource: long+GPU+64G+6h per job.
 | 7496805 | gena_refix_gb_human_nontata_promoters | **COMPLETED** (30min) |
 | 7496806 | gena_refix_gb_human_enhancers_cohn | **COMPLETED** (27min) |
 
-All 16 nucleotide datasets now have corrected 1024D gena_lm. Tier tables can be updated in bulk.
+**Round 3 (2026-04-17): 4 datasets missed from rounds 1-2 (the freshly-surveyed nt_enhancers/types + splice_acceptors/donors that ran pre-3a5b5d5 with old cache):**
+
+| Job ID | Name | Status |
+|--------|------|--------|
+| 7499338 | gena_refix_nt_* (first of 4) | **RUNNING** (14min as of 2026-04-17) |
+| 7499339 | gena_refix_nt_* (second) | **PD** |
+| 7499340 | gena_refix_nt_* (third) | **PD** |
+| 7499341 | gena_refix_nt_* (fourth) | **PD** |
+
+All 20 nucleotide datasets (16 + 4) will have corrected 1024D gena_lm once round 3 completes. Tier tables for the 4 round-3 datasets pending.
 
 ### CGR-SMILES pretraining (Phase 4)
 
