@@ -1156,6 +1156,17 @@ Only 2 reps (nt_v2_250m, nt_v2_500m) reach MCC≥0.37; rest ≤0.28. Best winner
 
 *Winner: kmer5+mlp=0.8917 MCC. Best aug: kmer5+dna_shape=0.8935 (+0.0018, marginal — ceiling hit). Classical k-mer reps dominate — NT-v2 and hyenadna underperform on this genomic benchmark. Top Tier threshold ≥96%.*
 
+**gb_human_enhancers_cohn (27,791 samples, 5 groups, MCC) — 14/25 reps ran. CORRECTED 2026-04-17 (gena_refix 7496806):**
+
+| Tier | Reps |
+|------|------|
+| Top Tier (4) | grover_dna, kmer6, kmer5, mistral_dna |
+| General (10) | grover_dna, kmer6, kmer5, mistral_dna, tnf_canonical, hyenadna, nt_v2_250m, kmer4, nt_v2_500m, tetranuc_freq |
+| Augmentation (5) | codon_usage, complexity, dinuc_freq, dna_shape, gc_content |
+| Dropped (3) | kmer3 (91% of best), dnabert2 (88%), gena_lm (11%, near-random at 1024D) |
+
+*Winner: grover_dna+ridge=0.4853 MCC. Best aug: grover_dna+tnf_canonical=0.5035 (+0.0182). Top Tier threshold ≥97%.*
+
 ---
 
 ## TODO — OPIG DDG (beyond what's in antibody inter-family)
