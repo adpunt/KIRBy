@@ -625,6 +625,17 @@ Classification tasks (AUROC). Different character from regression — sequence e
 
 *Winner: blosum+lightgbm=0.8616 AUROC. Top Tier threshold ≥99%. 5 reps broken (random-level). No useful augmentation.*
 
+**tz_her2_multiclass (5,000 samples, 10 groups, F1_weighted) — 32/42 reps ran. FULL SURVEY 2026-04-16 (job 7483714):**
+
+| Tier | Reps |
+|------|------|
+| Top Tier (3) | blosum, onehot, esm2_concat |
+| General (16) | blosum, onehot, esm2_concat, esm2_per_region, esm2_per_cdr, esm2_wt_delta, esm2, esm2_cdr3, esm2_cdr, esm2_midlayers, igt5, esm2_early, esm2_layer24, abroberta, abroberta_cdr, esm2_entropy_top20 |
+| Augmentation (0) | *none help — all 12 tested aug deltas ≤ 0 on saturated task* |
+| Dropped (16) | esm2_mutsite (92%), prot_t5/_cdr (92%), esm3/esm3_cdr (92%), esmc/_cdr (91%), ablang2 (90%), saprot/_cdr (90%), antiberty (89%), aac (81%), **xtrimopglm, mint, igbert_cls, igbert (all F1w=0.11, broken)** |
+
+*Winner: blosum+lightgbm=0.7083 F1w. Top Tier ≥96%, General ≥92%. 4 reps broken. 2 reps missing from this survey vs binary: antiberty_cdr, aido_protein.*
+
 **humanness_therapeutic (n=564, AUROC):**
 | Tier | Reps |
 |------|------|
