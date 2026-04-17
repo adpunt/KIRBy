@@ -354,6 +354,7 @@ def _make_baseline_meta(
 def _make_folds_meta(
     dataset_name: str, n_folds: int, seed: int,
     n_samples: int, groups: Optional[np.ndarray],
+    cv_splitter_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     return {
         'kind': 'folds',
@@ -363,8 +364,92 @@ def _make_folds_meta(
         'n_samples': n_samples,
         'groups_hash': (_hash_bytes(np.ascontiguousarray(groups).tobytes())
                         if groups is not None else None),
+        # Distinguishes default KFold/GroupKFold from custom splitters so a
+        # different splitter never silently serves cached splits.
+        'cv_splitter_id': cv_splitter_id,
         'code_timestamp': time.time(),
     }
+
+
+def _ft_embeddings_cache_path(dataset_name: str, factory_id: str,
+                              rep_name: str, fold_idx: int,
+                              n_folds: int, seed: int) -> Path:
+    """Per-(dataset, factory_id, rep, fold) FT embedding cache path.
+
+    One file per fold × rep. Factory_id is caller-supplied and carries
+    version information so a new factory invalidates the cache.
+    """
+    fid = _sanitize_filename_part(factory_id)
+    return (_cache_base() / 'ft_embeddings' /
+            f'{dataset_name}__{fid}__{rep_name}__'
+            f'f{fold_idx}of{n_folds}_{seed}.pkl')
+
+
+def _make_ft_embedding_meta(
+    dataset_name: str, factory_id: str, rep_name: str,
+    fold_idx: int, n_folds: int, seed: int,
+    train_idx: np.ndarray, val_idx: np.ndarray,
+    labels_hash: int, groups_hash: Optional[int],
+) -> Dict[str, Any]:
+    return {
+        'kind': 'ft_embedding',
+        'dataset_name': dataset_name,
+        'factory_id': factory_id,
+        'rep_name': rep_name,
+        'fold_idx': int(fold_idx),
+        'n_folds': int(n_folds),
+        'seed': int(seed),
+        # Fold identity: hash of the actual index tuples so we can detect
+        # splitter drift even if the rest of the key matches.
+        'train_idx_hash': _hash_bytes(np.ascontiguousarray(train_idx).tobytes()),
+        'val_idx_hash': _hash_bytes(np.ascontiguousarray(val_idx).tobytes()),
+        'labels_hash': labels_hash,
+        'groups_hash': groups_hash,
+        'code_timestamp': time.time(),
+    }
+
+
+def _load_or_compute_folds(
+    dataset_name: Optional[str],
+    splitter,
+    use_groups: bool,
+    labels: np.ndarray,
+    groups: Optional[np.ndarray],
+    n_folds: int,
+    seed: int,
+    cv_splitter_id: Optional[str] = None,
+    verbose: bool = False,
+) -> List[Tuple[np.ndarray, np.ndarray]]:
+    """Materialise CV fold indices, caching them per dataset.
+
+    When dataset_name is None, caching is skipped (caller is not yet
+    registry-aware) — the splits are still computed correctly, just not
+    persisted. Groups-hash + cv_splitter_id are the two axes that
+    invalidate.
+    """
+    # Always compute splits so the return type is stable.
+    dummy_X = np.zeros((len(labels), 1))
+    split_args = (dummy_X, labels, groups) if use_groups else (dummy_X, labels)
+
+    if not dataset_name:
+        return list(splitter.split(*split_args))
+
+    path = _folds_cache_path(dataset_name, n_folds, seed,
+                             has_groups=groups is not None)
+    meta = _make_folds_meta(dataset_name, n_folds, seed, len(labels),
+                            groups, cv_splitter_id=cv_splitter_id)
+    # Not counted in _CACHE_STATS today — folds are cheap; their cache is
+    # a determinism guarantee more than a speed gain.
+    cached = _load_cache_with_meta(path, meta, kind='search',
+                                    verbose=False)
+    if cached is not None:
+        return cached
+
+    folds = list(splitter.split(*split_args))
+    _save_cache_with_meta(path, meta, folds)
+    if verbose:
+        print(f"  Saved folds cache to {path.name}")
+    return folds
 
 
 def _impute_nan(X_train, X_val):
@@ -1347,11 +1432,19 @@ def _precompute_fold_reps(
     seed: int,
     cv_splitter=None,
     verbose: bool = True,
+    dataset_name: Optional[str] = None,
+    factory_ids: Optional[Dict[str, str]] = None,
+    cv_splitter_id: Optional[str] = None,
 ) -> Tuple[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]], List[Tuple[np.ndarray, np.ndarray]]]:
     """Pre-compute fine-tuned representations for each fold.
 
     Calls each factory once per fold. This happens BEFORE the search grid,
     so fine-tuning cost is n_folds × n_factories (NOT per search config).
+
+    When dataset_name and factory_ids are supplied, per-fold embeddings are
+    cached to ~/.cache/kirby/ft_embeddings/ so subsequent calls with the
+    same factory_id, fold indices, and labels hit the cache. Different
+    factory versions (different id) don't collide.
 
     Args:
         rep_factories: {rep_name: factory_callable}
@@ -1360,6 +1453,12 @@ def _precompute_fold_reps(
         n_folds: Number of CV folds.
         seed: Random seed.
         verbose: Print progress.
+        dataset_name: Optional — required for FT cache.
+        factory_ids: Optional {rep_name: factory_id_string} — required for
+            FT cache. Caller-supplied identifier, typically a version
+            string. Mismatched id = cache miss; no id = cache skipped.
+        cv_splitter_id: Optional identifier for a custom splitter (used
+            by the folds cache layer; not the FT cache directly).
 
     Returns:
         (fold_reps, precomputed_folds)
@@ -1373,19 +1472,46 @@ def _precompute_fold_reps(
         print(f"\nPre-computing fine-tuned representations "
               f"({len(rep_factories)} factories × {n_folds} folds)...")
 
-    # Materialize fold splits (ensures identical splits downstream)
+    # Materialize fold splits (cached when dataset_name is supplied)
     splitter, use_groups = _make_cv_splitter(groups, n_folds, seed, cv_splitter=cv_splitter)
-    # We need a dummy X for splitting
-    dummy_X = np.zeros((len(labels), 1))
-    split_args = (dummy_X, labels, groups) if use_groups else (dummy_X, labels)
-    precomputed_folds = list(splitter.split(*split_args))
+    precomputed_folds = _load_or_compute_folds(
+        dataset_name=dataset_name, splitter=splitter, use_groups=use_groups,
+        labels=labels, groups=groups, n_folds=n_folds, seed=seed,
+        cv_splitter_id=cv_splitter_id, verbose=verbose)
+
+    _labels_hash = _hash_bytes(np.ascontiguousarray(labels).tobytes())
+    _groups_hash = (_hash_bytes(np.ascontiguousarray(groups).tobytes())
+                    if groups is not None else None)
 
     fold_reps = {}
+    n_cache_hits = 0
+    n_cache_misses = 0
     for fold_idx, (train_idx, val_idx) in enumerate(precomputed_folds):
         fold_reps[fold_idx] = {}
         train_labels = labels[train_idx]
 
         for rep_name, factory in rep_factories.items():
+            # Attempt cache hit first. Gated on (dataset_name, factory_id).
+            fid = (factory_ids or {}).get(rep_name) if factory_ids else None
+            ft_cache_path = None
+            if dataset_name and fid:
+                ft_cache_path = _ft_embeddings_cache_path(
+                    dataset_name, fid, rep_name, fold_idx, n_folds, seed)
+                ft_meta = _make_ft_embedding_meta(
+                    dataset_name, fid, rep_name, fold_idx, n_folds, seed,
+                    train_idx, val_idx, _labels_hash, _groups_hash)
+                cached = _load_cache_with_meta(
+                    ft_cache_path, ft_meta, kind='search', verbose=False)
+                if cached is not None:
+                    fold_reps[fold_idx][rep_name] = cached
+                    n_cache_hits += 1
+                    if verbose:
+                        shape_msg = (f"{cached[0].shape[1]}D"
+                                     if isinstance(cached, tuple) else '?')
+                        print(f"  Fold {fold_idx+1}/{n_folds}, {rep_name}: "
+                              f"loaded from FT cache ({shape_msg}).")
+                    continue
+
             start = time.time()
             if verbose:
                 print(f"  Fold {fold_idx+1}/{n_folds}, {rep_name}...", end=' ', flush=True)
@@ -1396,9 +1522,18 @@ def _precompute_fold_reps(
                 elapsed = time.time() - start
                 if verbose:
                     print(f"done ({train_embs.shape[1]}D, {elapsed:.1f}s)")
+                # Persist to cache when we have an id for it.
+                if ft_cache_path is not None:
+                    _save_cache_with_meta(
+                        ft_cache_path, ft_meta, (train_embs, val_embs))
+                    n_cache_misses += 1
             except Exception as e:
                 if verbose:
                     print(f"FAILED: {e}")
+
+    if verbose and (n_cache_hits or n_cache_misses):
+        print(f"  FT embeddings: {n_cache_hits} cache hits, "
+              f"{n_cache_misses} computed + cached")
 
     return fold_reps, precomputed_folds
 
@@ -3236,9 +3371,21 @@ def find_best_hybrid(
     precomputed_folds = []
     if rep_factories:
         actual_folds_for_ft = n_folds if n_folds is not None else SPEED_TIERS[speed]['n_folds']
+        # Per-factory ids for the FT embeddings cache: compose the single
+        # caller-supplied rep_factories_id with each factory's name.
+        # Different rep_factories_id values invalidate independently.
+        _factory_ids = None
+        if rep_factories_id:
+            _factory_ids = {
+                name: f'{rep_factories_id}__{name}'
+                for name in rep_factories.keys()
+            }
         fold_reps, precomputed_folds = _precompute_fold_reps(
             rep_factories, labels, groups, actual_folds_for_ft, seed,
             cv_splitter=cv_splitter, verbose=verbose,
+            dataset_name=dataset_name,
+            factory_ids=_factory_ids,
+            cv_splitter_id=cv_splitter_id,
         )
     else:
         fold_reps = None
