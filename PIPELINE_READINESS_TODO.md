@@ -636,12 +636,16 @@ Classification tasks (AUROC). Different character from regression — sequence e
 
 *Winner: blosum+lightgbm=0.7083 F1w. Top Tier ≥96%, General ≥92%. 4 reps broken. 2 reps missing from this survey vs binary: antiberty_cdr, aido_protein.*
 
-**humanness_therapeutic (n=564, AUROC):**
+**humanness_therapeutic (564 samples, 506 groups, AUROC) — 32/42 reps ran. FULL SURVEY 2026-04-16 (job 7483716):**
+
 | Tier | Reps |
 |------|------|
-| Top Tier (5) | antiberty, igt5, abroberta, ablang2, blosum |
-| General (10) | all reps with AUROC > 0.83 (through aac) |
-| Augmentation | none |
+| Top Tier (21) | antiberty_cdr, antiberty, igt5, abroberta_cdr, abroberta, ablang2, blosum, onehot, esm2_per_cdr, esm2_cdr3, esm2_cdr, esm2_concat, esm2, esm2_per_region, esm2_midlayers, esmc_cdr, esmc, esm2_entropy_top20, prot_t5, prot_t5_cdr, esm2_layer24 |
+| General (26) | Top Tier + esm3_cdr, esm3, saprot_cdr, saprot, esm2_early |
+| Augmentation (0) | *none help — all 6 tested (antiberty/antiberty_cdr × {structural, paratope, aac}) = 0 delta* |
+| Dropped (6) | aac (87% of best), **igbert_cls (54%), igbert (53%), xtrimopglm, mint, aido_protein (all AUROC≈0.50, broken)** |
+
+*Winner: antiberty_cdr+rf=0.9623 AUROC. Top Tier >93%, General ≥92%. 5 reps broken. Saturated task — many reps score ≥0.90 AUROC.*
 
 ### Ginkgo Domain-Level Decisions
 
