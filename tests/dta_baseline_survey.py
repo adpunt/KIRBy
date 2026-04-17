@@ -837,11 +837,32 @@ def main():
             except (json.JSONDecodeError, KeyError):
                 all_results = {}
 
+    def _merge_result_into(existing_ds, new_result):
+        """Merge new run_survey result into existing dataset entry.
+
+        Preserves old standalone/paired rep entries that aren't in
+        new_result (i.e., reps that were skipped via --skip-existing).
+        Overwrites metadata fields with latest run values.
+        """
+        for section in ('standalone', 'paired'):
+            if section in new_result and new_result[section]:
+                existing_ds.setdefault(section, {}).update(new_result[section])
+        for k, v in new_result.items():
+            if k in ('standalone', 'paired'):
+                continue  # already merged above
+            if k == 'all_combined' and v is None:
+                continue  # don't overwrite existing all_combined with None
+            existing_ds[k] = v
+        return existing_ds
+
     def _make_checkpoint_saver(current_ds):
         if not args.output:
             return None
         def save(partial_result):
-            all_results[current_ds] = partial_result
+            if current_ds in all_results and isinstance(all_results[current_ds], dict):
+                _merge_result_into(all_results[current_ds], partial_result)
+            else:
+                all_results[current_ds] = partial_result
             tmp_path = Path(args.output).with_suffix('.json.tmp')
             with open(tmp_path, 'w') as f:
                 json.dump(all_results, f, indent=2, default=convert)
@@ -874,7 +895,12 @@ def main():
                             reps_filter=reps_filter,
                             skip_reps=skip_reps or None,
                             checkpoint_save=_make_checkpoint_saver(ds))
-        all_results[ds] = result
+
+        # Merge new results INTO existing (preserves skipped reps)
+        if ds in all_results and isinstance(all_results[ds], dict):
+            _merge_result_into(all_results[ds], result)
+        else:
+            all_results[ds] = result
 
     # Final write — mostly redundant with incremental checkpoints, but
     # kept as a safety net and for the no-checkpoint case.
