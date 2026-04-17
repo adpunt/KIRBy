@@ -961,7 +961,7 @@ are reviewed. See PRECOMPUTE_JOB_TRACKER.md §Nucleotide gena_lm refix.
 | 58 | nt_enhancers_types | — | 6 | MCC | Classical only — survey pending (7483708 PD) |
 | 59 | nt_H2AFZ | 33,000 | 14 | MCC | **DONE** — gena_lm corrected (1024D, MCC=0.019, dropped). Winner: mistral_dna+ridge=0.4323 |
 | 60 | nt_H3K27ac | 31,616 | 17 | MCC | **DONE** — gena_lm corrected (dropped, 4.5% of best). Winner: kmer6+ridge=0.4564 |
-| 61 | nt_H3K27me3 | 33,000 | 18 | MCC | **DOWNGRADED** — refix 7485365 PD |
+| 61 | nt_H3K27me3 | 33,000 | 14 | MCC | **DONE** — gena_lm corrected (dropped, 5.2% of best). Winner: mistral_dna+ridge=0.5487 |
 | 62 | nt_H3K36me3 | 33,000 | 18 | MCC | **DOWNGRADED** — refix 7485366 PD |
 | 63 | nt_H3K4me1 | 33,000 | 18 | MCC | **DOWNGRADED** — refix 7485367 PD |
 | 64 | nt_H3K4me2 | — | 18 | MCC | Survey review needed (gena_lm refix 7485368 PD) |
@@ -1020,16 +1020,16 @@ CORRECTED 2026-04-17 (gena_refix 7485363 + 7496791). gena_lm now 1024D hidden st
 
 *Winner: kmer6+ridge=0.4564 MCC. Best aug (excl. gena_lm): kmer6+complexity=0.4579 (+0.0015, marginal).*
 
-**nt_H3K27me3 (33,000 samples, 23 groups, MCC) — 18/25 reps ran — CONTAMINATED, pending 7485365:**
+**nt_H3K27me3 (33,000 samples, 23 groups, MCC) — 14/25 reps ran. CORRECTED 2026-04-17 (gena_refix 7496793):**
 
 | Tier | Reps |
 |------|------|
-| Top Tier (4) | ~~gena_lm~~, mistral_dna, grover_dna, hyenadna |
-| General (12) | ~~gena_lm~~, mistral_dna, grover_dna, hyenadna, nt_v2_250m, nt_v2_500m, tnf_canonical, kmer4, kmer3, kmer5, tetranuc_freq, kmer6 |
+| Top Tier (5) | mistral_dna, grover_dna, hyenadna, nt_v2_250m, nt_v2_500m |
+| General (11) | mistral_dna, grover_dna, hyenadna, nt_v2_250m, nt_v2_500m, tnf_canonical, kmer4, kmer3, kmer5, tetranuc_freq, kmer6 |
 | Augmentation (5) | codon_usage, complexity, dinuc_freq, dna_shape, gc_content |
-| Dropped | dnabert2 (84% of best, weakest FM by large margin) |
+| Dropped (2) | dnabert2 (84% of best), gena_lm (near-random at 1024D) |
 
-*Winner claim gena_lm+ridge=0.5522 invalid.*
+*Winner: mistral_dna+ridge=0.5487 MCC. Best aug: mistral_dna+tnf_canonical=0.5620 (+0.0133).*
 
 **nt_H3K36me3 (33,000 samples, 23 groups, MCC) — 18/25 reps ran — CONTAMINATED, pending 7485366:**
 
