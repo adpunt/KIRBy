@@ -202,6 +202,24 @@ def _make_search_meta(
     adaptive_pruning: float = 0.15,
     augmentation_threshold: Optional[float] = None,
     augmentation_budget: int = 20,
+    # Behaviour-affecting params added 2026-04-17 — silent drift bug fix.
+    # Any change in any of these produces a different search; they must be
+    # in the cache key or two non-equivalent runs collide on the same file.
+    candidate_ranking: str = 'rf_importance',
+    greedy_tolerance: float = 0.0,
+    screen_threshold: Optional[float] = None,
+    two_phase: bool = False,
+    refinement_top_n: int = 5,
+    refinement_step_sizes: Optional[List[int]] = None,
+    test_rep_subsets: bool = False,
+    dimension_tiers: Optional[List[int]] = None,
+    weight_method: Optional[str] = None,
+    step_size: int = 5,
+    secondary_metrics: Optional[List[str]] = None,
+    # Explicit identifiers for objects that can't be hashed (cv_splitter,
+    # rep_factories). Caller-supplied — see find_best_hybrid docstring.
+    cv_splitter_id: Optional[str] = None,
+    rep_factories_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     return {
         'kind': 'search',
@@ -236,6 +254,23 @@ def _make_search_meta(
         'augmentation_threshold': (float(augmentation_threshold)
                                    if augmentation_threshold is not None else None),
         'augmentation_budget': int(augmentation_budget),
+        'candidate_ranking': candidate_ranking,
+        'greedy_tolerance': float(greedy_tolerance),
+        'screen_threshold': (float(screen_threshold)
+                             if screen_threshold is not None else None),
+        'two_phase': bool(two_phase),
+        'refinement_top_n': int(refinement_top_n),
+        'refinement_step_sizes': (tuple(refinement_step_sizes)
+                                  if refinement_step_sizes else None),
+        'test_rep_subsets': bool(test_rep_subsets),
+        'dimension_tiers': (tuple(dimension_tiers)
+                            if dimension_tiers else None),
+        'weight_method': weight_method,
+        'step_size': int(step_size),
+        'secondary_metrics': (tuple(sorted(secondary_metrics))
+                              if secondary_metrics else None),
+        'cv_splitter_id': cv_splitter_id,
+        'rep_factories_id': rep_factories_id,
         'code_timestamp': time.time(),
     }
 
@@ -2805,6 +2840,10 @@ def find_best_hybrid(
     adaptive_pruning: Union[bool, float] = True,
     dataset_name: Optional[str] = None,
     tier: Optional[str] = None,
+    # Caller-supplied identifiers for objects that can't be hashed. Required
+    # when cache=True AND the corresponding object is non-None.
+    cv_splitter_id: Optional[str] = None,
+    rep_factories_id: Optional[str] = None,
 ) -> SearchResult:
     """
     Find the best hybrid representation configuration.
@@ -2868,6 +2907,16 @@ def find_best_hybrid(
         dataset_name: Required when cache=True. Part of the cache filename.
         tier: Required when cache=True. Condition name (e.g. 'general',
             'top', 'general_distance'). Part of the cache filename.
+        cv_splitter_id: Caller-supplied string that identifies the
+            `cv_splitter` object. Required when cache=True AND
+            cv_splitter is not None. Arbitrary splitter objects cannot
+            be compared for cache validation; the caller must supply a
+            stable identifier (e.g., "ginkgo_hierarchical_5fold_v1"). A
+            different id invalidates the cache.
+        rep_factories_id: Same contract as cv_splitter_id but for
+            `rep_factories`. Required when cache=True AND rep_factories
+            is not None. Use a per-factory version string
+            (e.g., "lora_esm2_v3_2026_04_10").
 
     Returns:
         SearchResult with best configs, baselines, and optional fitted result.
@@ -2975,6 +3024,21 @@ def find_best_hybrid(
                 "find_best_hybrid(cache=True) requires a string metric "
                 "(callable metrics cannot be filename-encoded)"
             )
+        # Identity must be caller-supplied for objects we can't hash.
+        if cv_splitter is not None and not cv_splitter_id:
+            raise ValueError(
+                "find_best_hybrid(cache=True) with a custom cv_splitter "
+                "requires cv_splitter_id=... A stable identifier is the "
+                "caller's responsibility — arbitrary splitter objects "
+                "cannot be compared for cache validation."
+            )
+        if rep_factories and not rep_factories_id:
+            raise ValueError(
+                "find_best_hybrid(cache=True) with rep_factories requires "
+                "rep_factories_id=... A stable per-version identifier is "
+                "the caller's responsibility — factory callables cannot "
+                "be introspected safely."
+            )
 
         cache_path = _search_cache_path(
             dataset_name, tier, augmentation_strategy, speed)
@@ -3004,6 +3068,19 @@ def find_best_hybrid(
             adaptive_pruning=_norm_pruning,
             augmentation_threshold=augmentation_threshold,
             augmentation_budget=augmentation_budget,
+            candidate_ranking=candidate_ranking,
+            greedy_tolerance=greedy_tolerance,
+            screen_threshold=screen_threshold,
+            two_phase=two_phase,
+            refinement_top_n=refinement_top_n,
+            refinement_step_sizes=refinement_step_sizes,
+            test_rep_subsets=test_rep_subsets,
+            dimension_tiers=dimension_tiers,
+            weight_method=weight_method,
+            step_size=5,  # currently hardcoded in _evaluate_hybrid_config
+            secondary_metrics=secondary_metrics,
+            cv_splitter_id=cv_splitter_id,
+            rep_factories_id=rep_factories_id,
         )
 
         payload = _load_cache_with_meta(cache_path, expected_search_meta)

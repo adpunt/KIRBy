@@ -261,10 +261,15 @@ def evaluate_property(prop_name, rep_names, n_folds):
 
         # Pass pre-computed hierarchical cluster folds to find_best_hybrid
         # so hybrid search uses the same splits as downstream evaluation.
+        # The splitter identity lives in cv_splitter_id so cache metadata
+        # captures it — different fold assignments produce different ids.
         cv_kw = {}
         if fold_assignments is not None:
             cv_kw['cv_splitter'] = _PrecomputedFoldSplitter(
                 fold_assignments, n_folds)
+            cv_kw['cv_splitter_id'] = (
+                f'ginkgo_hierarchical_{n_folds}fold_'
+                f'h{abs(hash(fold_assignments.tobytes())) % (10**12):012d}')
 
         search = find_best_hybrid(
             base_reps=base if base else reps,
