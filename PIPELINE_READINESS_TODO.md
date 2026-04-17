@@ -960,7 +960,7 @@ are reviewed. See PRECOMPUTE_JOB_TRACKER.md §Nucleotide gena_lm refix.
 | 57 | nt_enhancers | — | 6 | MCC | Classical only — survey pending (7483707 PD) |
 | 58 | nt_enhancers_types | — | 6 | MCC | Classical only — survey pending (7483708 PD) |
 | 59 | nt_H2AFZ | 33,000 | 14 | MCC | **DONE** — gena_lm corrected (1024D, MCC=0.019, dropped). Winner: mistral_dna+ridge=0.4323 |
-| 60 | nt_H3K27ac | 31,616 | 18 | MCC | **DOWNGRADED** — refix 7485364 PD |
+| 60 | nt_H3K27ac | 31,616 | 17 | MCC | **DONE** — gena_lm corrected (dropped, 4.5% of best). Winner: kmer6+ridge=0.4564 |
 | 61 | nt_H3K27me3 | 33,000 | 18 | MCC | **DOWNGRADED** — refix 7485365 PD |
 | 62 | nt_H3K36me3 | 33,000 | 18 | MCC | **DOWNGRADED** — refix 7485366 PD |
 | 63 | nt_H3K4me1 | 33,000 | 18 | MCC | **DOWNGRADED** — refix 7485367 PD |
@@ -1009,16 +1009,16 @@ CORRECTED 2026-04-17 (gena_refix 7485363 + 7496791). gena_lm now 1024D hidden st
 
 *Winner: mistral_dna+ridge=0.4323 MCC. Best augmentation: mistral_dna+tnf_canonical=0.4512 (+0.019).*
 
-**nt_H3K27ac (31,616 samples, 23 groups, MCC) — 18/25 reps ran — CONTAMINATED, pending 7485364:**
+**nt_H3K27ac (31,616 samples, 23 groups, MCC) — 17/25 reps ran. CORRECTED 2026-04-17 (gena_refix 7496792):**
 
 | Tier | Reps |
 |------|------|
-| Top Tier (5) | ~~gena_lm~~, kmer6, grover_dna, mistral_dna, kmer5 |
-| General (12) | ~~gena_lm~~, kmer6, grover_dna, mistral_dna, kmer5, tnf_canonical, nt_v2_500m, nt_v2_250m, kmer4, hyenadna, tetranuc_freq, kmer3 |
+| Top Tier (5) | kmer6, grover_dna, mistral_dna, kmer5, tnf_canonical |
+| General (10) | kmer6, grover_dna, mistral_dna, kmer5, tnf_canonical, nt_v2_500m, nt_v2_250m, kmer4, hyenadna, tetranuc_freq |
 | Augmentation (5) | codon_usage, complexity, dinuc_freq, dna_shape, gc_content |
-| Dropped | dnabert2 (83% of best, weakest FM by large margin) |
+| Dropped (3) | dnabert2 (84% of best), kmer3 (89% of best), gena_lm (near-random at 1024D) |
 
-*Winner claim gena_lm+ridge=0.4569 invalid.*
+*Winner: kmer6+ridge=0.4564 MCC. Best aug (excl. gena_lm): kmer6+complexity=0.4579 (+0.0015, marginal).*
 
 **nt_H3K27me3 (33,000 samples, 23 groups, MCC) — 18/25 reps ran — CONTAMINATED, pending 7485365:**
 
