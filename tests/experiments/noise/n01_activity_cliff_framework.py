@@ -368,7 +368,7 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
     domain = data.get('domain', 'molecular')
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     model_factory = get_model_factories(
-        ['rf'], task_type=data.get('task_type', 'regression'),
+        ['rf'], task_type=data['task_type'],
         n_samples=len(labels))['rf']
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
@@ -580,7 +580,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     domain = data.get('domain', 'molecular')
     smiles = data.get('smiles', None)
 
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     is_clf = task_type == 'classification'
 
     n = len(labels)
@@ -602,7 +602,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             internal_evaluators=DISTANCE_EVALUATORS,
             budgets=DISTANCE_BUDGETS,
             downstream_model='knn',
-            dataset_name=dataset_name, tier='general')
+            dataset_name=dataset_name, tier='general', task_type=task_type)
         best_config = get_best_for_downstream(search, 'knn')
         if best_config and 'blueprint' in best_config:
             hybrid_blueprint = best_config['blueprint']

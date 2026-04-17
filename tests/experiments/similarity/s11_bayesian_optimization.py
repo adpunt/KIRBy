@@ -707,10 +707,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Get blueprint from cached search (used by hybrid conditions)
     try:
         search = get_precomputed_search(
-            reps, labels, groups, budget=hybrid_budget,
+            reps, labels, groups,
             aug_condition='none', speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'),
-            dataset_name=dataset_name, tier='general')
+            dataset_name=dataset_name, tier='general', task_type=task_type)
         bp = search.best_by_model['rf']['blueprint'] if search.best_by_model.get('rf') else None
     except Exception:
         bp = None

@@ -99,7 +99,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     model_names = [m for m in config['models'] if m in WEIGHTED_MODELS]
     if not model_names:
         model_names = ['rf', 'ridge']
-    models = get_model_factories(model_names, task_type=data.get('task_type', 'regression'),
+    models = get_model_factories(model_names, task_type=data['task_type'],
                                  n_samples=n_samples)
 
     budget = kwargs.get('budget', 100)
@@ -124,7 +124,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'),
             dataset_name=dataset_name, tier='general',
-        )
+        task_type=task_type)
         input_spaces['hybrid'] = X_hybrid
     except Exception as e:
         print(f"  Hybrid creation failed: {e}")

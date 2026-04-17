@@ -152,7 +152,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'),
             metric=metric_name,
-            task_type=data.get('task_type', 'regression'),
+            task_type=data['task_type'],
             domain=data.get('domain', 'molecular'),
             dataset_name=dataset_name, tier='general')
         _bp_entry = _search.best_by_model.get('rf')
@@ -196,7 +196,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("\n--- Phase 2: Per-cluster importance (smooth=0.05) ---")
 
     profiles, feature_infos, cluster_stats = _compute_cluster_importance(
-        train_reps, y_train, train_silo_indices, K, budget=BUDGET,
+        train_reps, y_train, train_silo_indices, K,
         alloc=_alloc, imp=_imp, int_eval=_int_eval)
 
     # Global baseline (full training set)
@@ -318,7 +318,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             # Per-cluster importance
             prof_sf, _, stats_sf = _compute_cluster_importance(
-                train_reps, y_train, train_silo_idx_sf, K, budget=BUDGET,
+                train_reps, y_train, train_silo_idx_sf, K,
                 alloc=_alloc, imp=_imp, int_eval=_int_eval)
 
             # Profile stability

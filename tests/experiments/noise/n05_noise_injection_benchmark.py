@@ -81,7 +81,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     reps = data['reps']
     labels = data['labels']
     augmentations = data.get('augmentations')
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
@@ -100,7 +100,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     groups = data.get('groups')
     try:
         X_hybrid, fi, _search = get_fitted_hybrid(
-            reps, labels, groups, budget=budget,
+            reps, labels, groups,
             aug_condition='uncapped', augmentations=augmentations,
             speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'),
@@ -108,7 +108,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             budgets=DISTANCE_BUDGETS,
             downstream_model='knn',
             dataset_name=dataset_name, tier='general',
-        )
+        task_type=task_type)
         D_hybrid = compute_distance_matrix(X_hybrid, standardize=True)
         print(f"  Hybrid distance matrix: {X_hybrid.shape[1]}D")
         top3 = extract_top3_base_reps(_search)

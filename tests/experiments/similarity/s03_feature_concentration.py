@@ -52,12 +52,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     augmentations = data.get('augmentations')
     try:
         X_hybrid, fi, search = get_fitted_hybrid(
-            reps, labels, groups, budget=budget,
+            reps, labels, groups,
             aug_condition='uncapped', augmentations=augmentations,
             speed=search_speed,
             precomputed=data.get('precomputed_searches'),
             downstream_model='rf',
-            dataset_name=dataset_name, tier='general')
+            dataset_name=dataset_name, tier='general', task_type=task_type)
         fitted = search.fitted_results.get('rf')
         weights_flat = flatten_weights(fitted) if fitted else np.ones(X_hybrid.shape[1])
     except Exception as e:

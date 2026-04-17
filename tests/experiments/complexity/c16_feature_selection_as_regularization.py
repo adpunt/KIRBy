@@ -176,7 +176,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     mode = 'intermediary' if n_folds == 1 else 'full'
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     total_dim = sum(v.shape[1] for v in reps.values())
     # Cap full_dim at 2048 to prevent MLP/SVM blowup on large concat spaces
     capped_full = min(total_dim, 2048)
@@ -203,7 +203,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             aug_condition='capped', augmentations=augmentations,
             speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'),
-            dataset_name=dataset_name, tier='general')
+            dataset_name=dataset_name, tier='general', task_type=task_type)
         for budget in budgets:
             best = get_best_for_downstream(search, 'rf', budget=budget)
             if best and 'blueprint' in best:

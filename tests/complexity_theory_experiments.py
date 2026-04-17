@@ -128,7 +128,7 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
             'groups': groups,
             'n_scaffolds': n_groups,
             'n_groups': n_groups,
-            'task_type': data.get('task_type', 'regression'),
+            'task_type': data['task_type'],
             'domain': 'antibody',
             'augmentations': None,
         }

@@ -680,7 +680,7 @@ def run_all(dataset_name: str, output_dir: str,
         data['augmentations'] = None
 
     # ── Precompute hybrid searches (general reps) ──
-    _task_type = data.get('task_type', 'regression')
+    _task_type = data['task_type']
     if len(reps_data) >= 2:
         from experiments._shared import precompute_hybrid_searches
         print(f"\n  Precomputing hybrid searches (general, {len(reps_data)} reps)...")

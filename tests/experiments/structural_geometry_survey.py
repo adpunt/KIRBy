@@ -194,7 +194,7 @@ def run_geometry_survey(
     light_seqs = data['light_seqs']
     labels = data['labels']
     groups = data['groups']
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     is_clf = (task_type == 'classification')
 
     print(f"  {data['n_samples']} samples, {data['n_groups']} groups, "

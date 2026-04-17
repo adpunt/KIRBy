@@ -2748,7 +2748,7 @@ def find_best_hybrid(
     budgets: Optional[List[int]] = None,
     models: Optional[Any] = None,
     metric: Union[str, Callable, Tuple[Callable, bool]] = 'r2',
-    task_type: str = 'auto',
+    task_type: str = '',
     speed: str = 'full',
     allocation_methods: Optional[List[str]] = None,
     importance_methods: Optional[List[str]] = None,
@@ -2793,7 +2793,7 @@ def find_best_hybrid(
         metric: Evaluation metric. String ('r2','rmse','mae','accuracy','auc',
             'spearman','pearson','ci','f1_weighted')
             or callable(y_true, y_pred)->float, or (callable, lower_is_better).
-        task_type: 'regression', 'classification', or 'auto' (infer from labels).
+        task_type: 'regression' or 'classification'. Required — no auto-detect.
         speed: Search comprehensiveness: 'fast' or 'full'.
         budgets: List of feature budgets to search over (required).
         allocation_methods: Override allocation methods for the speed tier.
@@ -2913,12 +2913,13 @@ def find_best_hybrid(
     else:
         _norm_pruning = float(adaptive_pruning)
 
-    # --- Resolve task type early so cache meta carries the real value ---
-    # (task_type='auto' must not leak into cache metadata.)
-    if task_type == 'auto':
-        _task_type_for_meta = _detect_task_type(labels)
-    else:
-        _task_type_for_meta = task_type
+    # --- Validate task_type (required, no auto-detect) ---
+    if task_type not in ('classification', 'regression'):
+        raise ValueError(
+            f"find_best_hybrid: task_type={task_type!r}. "
+            f"Must be 'classification' or 'regression' — explicit, no auto."
+        )
+    _task_type_for_meta = task_type
 
     # Metric name as it appears in cached metadata. Callables can't be
     # filename-encoded, so when metric is a callable the caller is expected
@@ -3015,8 +3016,6 @@ def find_best_hybrid(
         n_folds = cv_splitter.get_n_splits()
 
     # --- Auto-detect task type ---
-    if task_type == 'auto':
-        task_type = _detect_task_type(labels)
         if verbose:
             print(f"Auto-detected task type: {task_type}")
 
@@ -3513,10 +3512,12 @@ def nested_cv_evaluate(
     # Resolve metric for outer evaluation
     metric = search_kwargs.get('metric', 'r2')
     metric_fn, lower_is_better = _resolve_metric(metric)
-    task_type = search_kwargs.get('task_type', 'auto')
-    if task_type == 'auto':
-        n_unique = len(np.unique(labels))
-        task_type = 'classification' if (n_unique <= 20 and np.allclose(labels, np.round(labels))) else 'regression'
+    task_type = search_kwargs.get('task_type')
+    if task_type not in ('classification', 'regression'):
+        raise ValueError(
+            f"nested_cv_hybrid: search_kwargs['task_type']={task_type!r}. "
+            f"Must be 'classification' or 'regression'. Pass explicitly."
+        )
 
     # Extract augmentation params from search_kwargs for outer eval
     full_augmentations = search_kwargs.get('augmentations', None)

@@ -158,7 +158,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("EXPERIMENT N04: GP-LOO CLIFF-AWARE NOISE DETECTION")
     print("=" * 70)
 
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     is_clf = task_type == 'classification'
 
     if is_clf:
@@ -184,7 +184,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     _search = None
     try:
         X_hybrid, fi, _search = get_fitted_hybrid(
-            reps, labels, groups, budget=budget,
+            reps, labels, groups,
             aug_condition='uncapped', augmentations=augmentations,
             speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'),
@@ -192,7 +192,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             budgets=DISTANCE_BUDGETS,
             downstream_model='gp',
             dataset_name=dataset_name, tier='general',
-        )
+        task_type=task_type)
         spaces['hybrid'] = X_hybrid
         top3 = extract_top3_base_reps(_search)
         if top3:

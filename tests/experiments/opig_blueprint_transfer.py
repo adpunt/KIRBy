@@ -71,7 +71,7 @@ def run(source_data, target_data, config, output_dir, source_name, target_name):
     target_groups = target_data['groups']
 
     n_folds = config['n_splits']
-    task_type = target_data.get('task_type', 'regression')
+    task_type = target_data['task_type']
 
     # ── Domain consistency check ───────────────────────────────────────
     src_domain = source_data.get('domain', 'molecular')

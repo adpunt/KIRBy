@@ -98,7 +98,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     reps = data['reps']
     labels = data['labels']
     groups = data.get('groups')
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     is_clf = task_type == 'classification'
 
     # ── Get optimal hybrid config from precomputed search ──
@@ -113,7 +113,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'),
             metric=metric_name,
-            task_type=data.get('task_type', 'regression'),
+            task_type=data['task_type'],
             domain=data.get('domain', 'molecular'),
             dataset_name=dataset_name, tier='general')
         bp_entry = _search.best_by_model.get('rf')
@@ -366,7 +366,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         X_c6_train, X_c6_test, budgets_c6, scores_c6, meta_c6 = \
             fluid_within_kirby_across(
                 kirby_train, kirby_test, y_train,
-                k_intra=K_INTRA, budget=BUDGET,
+                k_intra=K_INTRA,
                 allocation_method=_alloc, importance_method=_imp,
                 internal_evaluator=_int_eval)
 

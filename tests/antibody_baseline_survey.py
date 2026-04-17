@@ -727,7 +727,7 @@ def run_survey(
     light_seqs = data['light_seqs']
     labels = data['labels']
     groups = data['groups']
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     is_clf = (task_type == 'classification')
 
     print(f"  {data['n_samples']} samples, {data['n_groups']} groups, "
@@ -1062,7 +1062,7 @@ def print_summary_table(result):
     print(f"\n{'='*70}")
     print(f"SUMMARY: {meta['dataset']} ({meta['n_samples']} samples, "
           f"{meta['n_groups']} groups, {meta['n_folds']}-fold, "
-          f"task={meta.get('task_type', 'regression')})")
+          f"task={meta['task_type']})")
     print(f"{'='*70}")
 
     # Header

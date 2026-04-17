@@ -133,7 +133,7 @@ def run(data, config, output_dir, dataset_name):
     total_features = sum(v.shape[1] for v in reps.values())
 
     from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
 
     # --- Step 1: Collect per-fold blueprints and own-fold scores ---
     print(f"\n  Step 1: Discover blueprints on each of {n_folds} folds")

@@ -69,7 +69,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     reps = data['reps']
     labels = data['labels']
     groups = data['groups']
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     domain = data.get('domain', 'molecular')
     is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)

@@ -88,13 +88,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     _search = None
     try:
         X_hybrid, fi, _search = get_fitted_hybrid(
-            reps, labels, groups, budget=budget,
+            reps, labels, groups,
             aug_condition='uncapped', augmentations=augmentations,
             speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'),
             downstream_model='rf',
             dataset_name=dataset_name, tier='general',
-        )
+        task_type=task_type)
         spaces['hybrid'] = StandardScaler().fit_transform(X_hybrid)
         top3 = extract_top3_base_reps(_search)
         if top3:

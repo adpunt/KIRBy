@@ -110,7 +110,7 @@ def _run_distance_concentration(data, budgets, dataset_name=None):
                 budget=budget,
                 aug_condition='none', speed='full',
                 precomputed=_precomp,
-                dataset_name=dataset_name, tier='general')
+                dataset_name=dataset_name, tier='general', task_type=task_type)
             X_hybrid_s = StandardScaler().fit_transform(X_hybrid)
             metrics = _compute_concentration_metrics(X_hybrid_s, k=5)
             results['per_budget'][budget] = {
@@ -307,7 +307,7 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
                 budget=budget,
                 aug_condition='none', speed='full',
                 precomputed=_precomp,
-                dataset_name=dataset_name, tier='general')
+                dataset_name=dataset_name, tier='general', task_type=task_type)
             # Subsample to match
             X_hybrid_sub = X_hybrid[idx] if n_samples > max_n else X_hybrid
             X_hybrid_s = StandardScaler().fit_transform(X_hybrid_sub)
@@ -341,7 +341,7 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
                 budget=50,
                 aug_condition='none', speed='full',
                 precomputed=_precomp,
-                dataset_name=dataset_name, tier='general')
+                dataset_name=dataset_name, tier='general', task_type=task_type)
             X_h50_sub = X_h50[idx] if n_samples > max_n else X_h50
             sweep_spaces['hybrid_b50'] = StandardScaler().fit_transform(X_h50_sub)
         except Exception:
@@ -624,7 +624,7 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
     search = get_precomputed_search(reps, labels, groups,
                                     aug_condition='none', speed='full',
                                     precomputed=precomputed,
-                                    dataset_name=dataset_name, tier='general')
+                                    dataset_name=dataset_name, tier='general', task_type=task_type)
     best = get_best_for_downstream(search, model_name, budget=budget)
     if best is None:
         best = get_best_for_downstream(search, 'rf', budget=budget)
@@ -749,7 +749,7 @@ def _run_approximation_theory(data, budgets, config, dataset_name=None):
     mode = 'intermediary' if n_folds == 1 else 'full'
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
 
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
 
@@ -889,7 +889,7 @@ def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
     search = get_precomputed_search(reps, y, groups,
                                     aug_condition='none', speed='full',
                                     precomputed=precomputed,
-                                    dataset_name=dataset_name, tier='general')
+                                    dataset_name=dataset_name, tier='general', task_type=task_type)
     best = get_best_for_downstream(search, 'ridge', budget=budget)
     if best is None:
         best = get_best_for_downstream(search, 'rf', budget=budget)

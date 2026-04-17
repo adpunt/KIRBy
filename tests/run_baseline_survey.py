@@ -785,7 +785,7 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
     labels = data['labels']
     groups = data['groups']
     prebuilt_splits = data.get('prebuilt_splits')
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
 
     # Override groups for molecular datasets with alternative split strategies
     if split_strategy != 'scaffold' and data.get('domain') != 'molecular':

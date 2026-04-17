@@ -119,7 +119,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     mode = 'intermediary' if n_folds == 1 else 'full'
     search_speed = config['search_speed']
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     is_clf = task_type == 'classification'
     model_factories = get_model_factories(DOWNSTREAM_MODELS, task_type=task_type,
                                            n_samples=len(labels))
@@ -156,11 +156,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     budget = kwargs.get('budget', 100)
     try:
         search = get_precomputed_search(
-            reps, labels, groups, budget=budget,
+            reps, labels, groups,
             aug_condition='uncapped', augmentations=data.get('augmentations'),
             speed=search_speed,
             precomputed=data.get('precomputed_searches'),
-            dataset_name=dataset_name, tier='general')
+            dataset_name=dataset_name, tier='general', task_type=task_type)
         bp = search.best_by_model['rf']['blueprint'] if search.best_by_model.get('rf') else None
         top3 = extract_top3_base_reps(search)
         if top3:

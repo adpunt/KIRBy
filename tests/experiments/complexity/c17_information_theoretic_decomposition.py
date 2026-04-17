@@ -224,13 +224,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if strategy == 'hybrid':
                     augmentations = data.get('augmentations')
                     X_h, fi, _search = get_fitted_hybrid(
-                        reps, labels, groups, budget=budget,
+                        reps, labels, groups,
                         aug_condition='capped', augmentations=augmentations,
                         speed=config.get('search_speed', 'full'),
                         precomputed=data.get('precomputed_searches'),
                         downstream_model='rf',
                         dataset_name=dataset_name, tier='general',
-                    )
+                    task_type=task_type)
                     X_selected = X_h
 
                 elif strategy == 'pca':

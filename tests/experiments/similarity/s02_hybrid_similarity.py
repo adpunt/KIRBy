@@ -45,7 +45,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     weight_methods = kwargs.get('weight_methods', ['lightgbm_gain'])
     n_sample = kwargs.get('n_sample', 5000)
     search_speed = config.get('search_speed', 'full')
-    is_classification = data.get('task_type', 'regression') == 'classification'
+    is_classification = data['task_type'] == 'classification'
 
     reps = data['reps']
     labels = data['labels']
@@ -146,12 +146,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Running hybrid search (budget={budget}, speed={search_speed})...")
     try:
         X_hybrid, fi, search = get_fitted_hybrid(
-            reps, labels, groups, budget=budget,
+            reps, labels, groups,
             aug_condition='uncapped', augmentations=augmentations,
             speed=search_speed,
             precomputed=data.get('precomputed_searches'),
             downstream_model='knn',
-            dataset_name=dataset_name, tier='general')
+            dataset_name=dataset_name, tier='general', task_type=task_type)
         fitted = search.fitted_results.get('knn')
     except Exception as e:
         print(f"    Search FAILED: {e}")

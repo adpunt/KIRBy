@@ -39,7 +39,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
     # Domain-aware metric
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     is_classification = (task_type == 'classification')
 
     from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
@@ -83,7 +83,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
         optimal_imp = overall_best['importance']
         best_model = overall_best['model']
         optimal_model_factory = get_model_factories(
-            [best_model], task_type=data.get('task_type', 'regression'),
+            [best_model], task_type=data['task_type'],
             n_samples=len(data['labels'])).get(best_model)
         optimal_desc = (f"{best_model} at budget={optimal_budget} "
                         f"[{optimal_imp}/{optimal_alloc}] (from Exp 2)")
@@ -119,7 +119,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 optimal_aug_strategy = best['blueprint'].augmentation_strategy
                 best_model = best.get('model', best_model)
                 optimal_model_factory = get_model_factories(
-                    [best_model], task_type=data.get('task_type', 'regression'),
+                    [best_model], task_type=data['task_type'],
                     n_samples=len(data['labels'])).get(best_model)
                 optimal_desc = (f"{best_model} at budget={optimal_budget} "
                                 f"[{optimal_imp}/{optimal_alloc}] (from find_best_hybrid)")

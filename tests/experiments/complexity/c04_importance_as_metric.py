@@ -255,7 +255,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # continuous label averaging (np.average on y_train) which doesn't
     # translate to class predictions without a majority/soft-voting rewrite.
     # Skip gracefully rather than report nonsense on classification datasets.
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     if task_type == 'classification':
         print(f"  SKIPPING: c04 currently only supports regression targets.")
         print(f"  TODO: add classification branch (KNeighborsClassifier + majority-vote retrieval).")

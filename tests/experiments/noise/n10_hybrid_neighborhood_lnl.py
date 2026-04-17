@@ -396,7 +396,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = data['labels']
     groups = data['groups']
     augmentations = data.get('augmentations')
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     is_clf = task_type == 'classification'
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
@@ -416,11 +416,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     for b in hybrid_budgets:
         try:
             search = get_precomputed_search(
-                reps, labels, groups, budget=b,
+                reps, labels, groups,
                 aug_condition='uncapped', augmentations=augmentations,
                 speed=config.get('search_speed', 'full'),
                 precomputed=data.get('precomputed_searches'),
-                dataset_name=dataset_name, tier='general')
+                dataset_name=dataset_name, tier='general', task_type=task_type)
             best_rf = search.best_by_model.get('rf')
             if best_rf:
                 blueprints[b] = best_rf['blueprint']

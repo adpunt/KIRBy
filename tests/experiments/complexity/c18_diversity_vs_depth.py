@@ -117,7 +117,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
     metric_name, metric_fn, _ = get_domain_metric(data)
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     _RF = RandomForestClassifier if task_type == 'classification' else RandomForestRegressor
 
     budgets = kwargs.get('budgets', [50, 100])
@@ -149,7 +149,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             aug_condition='capped', augmentations=augmentations,
             speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'),
-            dataset_name=dataset_name, tier='general')
+            dataset_name=dataset_name, tier='general', task_type=task_type)
     except Exception as e:
         print(f"  WARNING: search failed: {e}")
 

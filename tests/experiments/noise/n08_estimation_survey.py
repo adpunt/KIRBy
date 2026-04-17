@@ -73,7 +73,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     augmentations = data.get('augmentations')
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     budget = kwargs.get('budget', 100)
@@ -86,13 +86,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     spaces = {'concat': X_concat_s}
     try:
         X_hybrid, fi, _search = get_fitted_hybrid(
-            reps, labels, groups, budget=budget,
+            reps, labels, groups,
             aug_condition='uncapped', augmentations=augmentations,
             speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'),
             downstream_model='rf',
             dataset_name=dataset_name, tier='general',
-        )
+        task_type=task_type)
         spaces['hybrid'] = StandardScaler().fit_transform(X_hybrid)
     except Exception as e:
         print(f"  Hybrid failed: {e}")

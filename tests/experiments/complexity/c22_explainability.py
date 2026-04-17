@@ -52,7 +52,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     reps = data['reps']
     labels = data['labels']
     groups = data.get('groups')
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     n_samples = len(labels)
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
@@ -73,7 +73,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         augmentations=augmentations,
         speed=config.get('search_speed', 'full'),
         precomputed=data.get('precomputed_searches'),
-        dataset_name=dataset_name, tier='general')
+        dataset_name=dataset_name, tier='general', task_type=task_type)
 
     best = search.best_by_model.get('rf') or (
         next(iter(search.best_by_model.values()), None)

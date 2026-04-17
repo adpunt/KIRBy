@@ -36,7 +36,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("=" * 70)
 
     models = get_model_factories(config['models'],
-                                    task_type=data.get('task_type', 'regression'),
+                                    task_type=data['task_type'],
                                     n_samples=len(data['labels']))
     n_folds = config['n_splits']
     reps = data['reps']
