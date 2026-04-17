@@ -153,7 +153,25 @@ def _get_domain(dataset_name):
     return 'molecular'
 
 
-def _get_metric(domain, task_type, labels):
+def _get_metric(domain, task_type, labels, dataset_name=None):
+    """Resolve metric for precompute.
+
+    Prefers DATASET_REGISTRY when dataset_name is given and registered.
+    Falls back to the historical task_type+domain heuristic otherwise —
+    keeps unregistered datasets working without blocking precompute.
+    """
+    if dataset_name is not None:
+        from kirby.registry import lookup as _registry_lookup
+        info = _registry_lookup(dataset_name)
+        if info is not None:
+            if info.task_type != task_type:
+                raise ValueError(
+                    f"Registry/loader task_type mismatch for "
+                    f"'{dataset_name}': loader={task_type!r}, "
+                    f"registry={info.task_type!r}."
+                )
+            return info.metric
+    # Fallback heuristic.
     if domain == 'nucleotide':
         return 'mcc'
     if task_type == 'classification':
@@ -217,7 +235,7 @@ def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
             f"task_type={task_type!r}. Must be 'classification' or "
             f"'regression' — silent defaults would cause wrong metrics."
         )
-    metric = _get_metric(domain, task_type, labels)
+    metric = _get_metric(domain, task_type, labels, dataset_name=dataset_name)
 
     general_reps = {k: all_reps[k] for k in general_names if k in all_reps}
     top_reps = {k: all_reps[k] for k in top_names if k in all_reps}

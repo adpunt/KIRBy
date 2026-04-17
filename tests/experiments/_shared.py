@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from kirby.hybrid import create_hybrid, apply_feature_selection, compute_feature_importance
 from kirby.find_best_hybrid import find_best_hybrid, SearchResult
+from kirby.registry import DATASET_REGISTRY, lookup as registry_lookup
 
 warnings.filterwarnings('ignore')
 
@@ -394,46 +395,118 @@ def make_cv_splitter(n_folds, groups=None, seed=42):
 # DOMAIN-AWARE METRIC DISPATCH
 # =============================================================================
 
-def get_domain_metric(data: dict) -> Tuple[str, Any, bool]:
-    """Return (metric_name, metric_fn, lower_is_better) based on domain/task_type.
+def _heuristic_metric_name(task_type: str, domain: Optional[str],
+                           labels: Optional[np.ndarray]) -> str:
+    """Fallback metric dispatcher for datasets not in DATASET_REGISTRY.
 
-    Centralised metric selection for all framework experiments. Matches the
-    primary metrics used in run_baseline_survey.py.
+    Matches the historical behaviour of get_domain_metric, _resolve_search_metric,
+    and precompute_hybrids._get_metric. Prefer the registry (see
+    _resolve_dataset_metric); this exists only for datasets that haven't been
+    registered yet.
+    """
+    if task_type == 'classification':
+        n_classes = len(np.unique(labels)) if labels is not None else 2
+        return 'f1_weighted' if n_classes > 2 else 'auc'
+    if domain == 'dta':
+        return 'ci'
+    if domain == 'antibody':
+        return 'spearman'
+    if domain == 'nucleotide':
+        return 'mcc'
+    # molecular, reaction, tcga-regression (none currently), other
+    return 'rmse'
 
-    Classification: AUROC for binary, F1 weighted for multi-class (>2 classes).
+
+def _resolve_dataset_metric(dataset_name: Optional[str] = None,
+                            labels: Optional[np.ndarray] = None,
+                            task_type: Optional[str] = None,
+                            domain: Optional[str] = None,
+                            metric: str = 'auto',
+                            ) -> Tuple[str, str, bool]:
+    """Canonical (metric, task_type, lower_is_better) resolver.
+
+    Resolution order:
+    1. If `metric` is an explicit string (not 'auto'), honour it and look up
+       direction from BUILTIN_METRICS.
+    2. If `dataset_name` is registered in DATASET_REGISTRY, use that entry —
+       this is the preferred path and the one experiments should hit.
+    3. Fallback: derive metric from task_type + domain via the heuristic
+       (historical behaviour).
+
+    Every return path is consistent with BUILTIN_METRICS for direction.
     """
     from kirby.find_best_hybrid import BUILTIN_METRICS
 
-    domain = data.get('domain', 'molecular')
+    # 1. Explicit metric wins. Still need task_type.
+    if metric != 'auto':
+        if task_type not in ('classification', 'regression') and dataset_name:
+            info = registry_lookup(dataset_name)
+            if info is not None:
+                task_type = info.task_type
+        if task_type not in ('classification', 'regression'):
+            raise ValueError(
+                f"_resolve_dataset_metric: explicit metric={metric!r} requires "
+                f"task_type. Got task_type={task_type!r}, "
+                f"dataset_name={dataset_name!r}."
+            )
+        if metric not in BUILTIN_METRICS:
+            raise ValueError(
+                f"_resolve_dataset_metric: metric={metric!r} is not in "
+                f"BUILTIN_METRICS. Available: {sorted(BUILTIN_METRICS.keys())}"
+            )
+        _, lower_is_better = BUILTIN_METRICS[metric]
+        return metric, task_type, lower_is_better
+
+    # 2. Registry lookup by dataset_name.
+    if dataset_name:
+        info = registry_lookup(dataset_name)
+        if info is not None:
+            # If caller also passed task_type, cross-check for safety.
+            if task_type is not None and task_type != info.task_type:
+                raise ValueError(
+                    f"_resolve_dataset_metric: caller passed "
+                    f"task_type={task_type!r} for '{dataset_name}' but "
+                    f"registry says {info.task_type!r}. Mismatch likely "
+                    f"indicates a loader bug — fix one side."
+                )
+            return info.metric, info.task_type, info.lower_is_better
+
+    # 3. Heuristic fallback.
+    if task_type not in ('classification', 'regression'):
+        raise ValueError(
+            f"_resolve_dataset_metric: task_type={task_type!r} invalid and "
+            f"dataset_name={dataset_name!r} is not in DATASET_REGISTRY. "
+            f"Register the dataset or pass task_type explicitly."
+        )
+    chosen = _heuristic_metric_name(task_type, domain, labels)
+    _, lower_is_better = BUILTIN_METRICS[chosen]
+    return chosen, task_type, lower_is_better
+
+
+def get_domain_metric(data: dict) -> Tuple[str, Any, bool]:
+    """Return (metric_name, metric_fn, lower_is_better) for a loaded dataset.
+
+    Prefers DATASET_REGISTRY when data['dataset_name'] is set (load_data sets
+    it as of 2026-04-17). Falls back to the task_type + domain heuristic for
+    datasets not yet registered.
+    """
+    from kirby.find_best_hybrid import BUILTIN_METRICS
+
+    dataset_name = data.get('dataset_name')
     task_type = data.get('task_type')
     if task_type not in ('classification', 'regression'):
         raise ValueError(
             f"get_domain_metric: data['task_type']={task_type!r}. "
             f"Must be 'classification' or 'regression'. Check the loader."
         )
+    domain = data.get('domain', 'molecular')
+    labels = data.get('labels')
 
-    if task_type == 'classification':
-        labels = data.get('labels')
-        n_classes = len(np.unique(labels)) if labels is not None else 2
-        if n_classes > 2:
-            fn, lib = BUILTIN_METRICS['f1_weighted']
-            return 'f1_weighted', fn, lib
-        else:
-            fn, lib = BUILTIN_METRICS['auc']
-            return 'auc', fn, lib
-    elif domain == 'dta':
-        fn, lib = BUILTIN_METRICS['ci']
-        return 'ci', fn, lib
-    elif domain == 'antibody':
-        fn, lib = BUILTIN_METRICS['spearman']
-        return 'spearman', fn, lib
-    elif domain == 'nucleotide':
-        fn, lib = BUILTIN_METRICS['mcc']
-        return 'mcc', fn, lib
-    else:
-        # molecular, reaction
-        fn, lib = BUILTIN_METRICS['rmse']
-        return 'rmse', fn, lib
+    metric, _, lower_is_better = _resolve_dataset_metric(
+        dataset_name=dataset_name, labels=labels, task_type=task_type,
+        domain=domain, metric='auto')
+    fn, _ = BUILTIN_METRICS[metric]
+    return metric, fn, lower_is_better
 
 
 # =============================================================================
@@ -1263,10 +1336,62 @@ def _require_task_type(data: dict, source: str) -> str:
     return tt
 
 
+def _finalize_load_data(data: dict, dataset_name: str) -> dict:
+    """Post-process a load_data result: inject dataset_name, cross-check registry.
+
+    - Adds `data['dataset_name']` for downstream consumers.
+    - If the dataset is in DATASET_REGISTRY, verifies that the loader's
+      task_type matches the registry entry, and backfills `data['domain']`
+      if the loader didn't set it. Mismatches raise loudly — a silent drift
+      between loader and registry is exactly the class of bug this registry
+      exists to prevent.
+    """
+    data['dataset_name'] = dataset_name
+    info = registry_lookup(dataset_name)
+    if info is not None:
+        loader_task = data.get('task_type')
+        if loader_task != info.task_type:
+            raise ValueError(
+                f"Registry/loader mismatch for '{dataset_name}': "
+                f"loader returned task_type={loader_task!r}, but "
+                f"DATASET_REGISTRY says {info.task_type!r}. "
+                f"Fix one side — they must agree."
+            )
+        if 'domain' not in data or data['domain'] is None:
+            data['domain'] = info.domain
+        elif data['domain'] != info.domain:
+            # Loader set a domain that disagrees — warn once, registry wins.
+            import warnings
+            warnings.warn(
+                f"Registry/loader domain mismatch for '{dataset_name}': "
+                f"loader set domain={data['domain']!r}, registry says "
+                f"{info.domain!r}. Using registry value."
+            )
+            data['domain'] = info.domain
+    return data
+
+
 def load_data(dataset_name: str, rep_preset: str = 'fast',
               delta: bool = False, augment: bool = False,
               rep_names: Optional[List[str]] = None,
               finetune: bool = False) -> dict:
+    """Public entry point — loads data and stamps it with registry metadata.
+
+    Thin wrapper around `_load_data_impl` that:
+    - Injects `data['dataset_name']`.
+    - Cross-checks `data['task_type']` against DATASET_REGISTRY.
+    - Backfills `data['domain']` from registry when missing.
+    """
+    data = _load_data_impl(
+        dataset_name, rep_preset=rep_preset, delta=delta, augment=augment,
+        rep_names=rep_names, finetune=finetune)
+    return _finalize_load_data(data, dataset_name)
+
+
+def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
+                    delta: bool = False, augment: bool = False,
+                    rep_names: Optional[List[str]] = None,
+                    finetune: bool = False) -> dict:
     """Load dataset, generate representations, assign groups.
 
     Domain-aware: detects TCGA, antibody, or molecular dataset names and
@@ -1277,6 +1402,9 @@ def load_data(dataset_name: str, rep_preset: str = 'fast',
     When rep_names is None, auto-filters to the 'general' reps from
     DATASET_REPS (if the dataset has an entry).  Pass rep_names explicitly
     to override.
+
+    **Do not call directly** — use `load_data()` so registry cross-checks
+    and `dataset_name` injection happen.
     """
     # Auto-filter to DATASET_REPS general reps when no explicit list given
     if rep_names is None:
@@ -1757,7 +1885,8 @@ def precompute_hybrid_searches(reps, labels, groups, config,
 
     # Resolve metric using shared logic (matches get_precomputed_search fallback)
     metric, task_type = _resolve_search_metric(
-        labels, task_type=task_type, metric=metric, domain=domain)
+        labels, task_type=task_type, metric=metric, domain=domain,
+        dataset_name=dataset_name)
 
     # Precompute all aug conditions (none, uncapped, capped)
     aug_conditions = ['none']
@@ -1824,35 +1953,18 @@ def precompute_hybrid_searches(reps, labels, groups, config,
     return results
 
 
-def _resolve_search_metric(labels, task_type, metric='auto', domain=None):
-    """Resolve metric for a given task_type + domain.
+def _resolve_search_metric(labels, task_type, metric='auto', domain=None,
+                           dataset_name=None):
+    """Resolve (metric_name, task_type) for cache alignment.
 
-    task_type is REQUIRED ('classification' or 'regression'). Callers pass it
-    from data['task_type'], which load_data guarantees is set. Metric may be
-    'auto' (resolves per domain/task) or an explicit string. Matches the
-    dispatch in precompute_hybrids._get_metric so cache keys align.
+    Delegates to _resolve_dataset_metric — prefers DATASET_REGISTRY when
+    dataset_name is given, falls back to heuristic. Kept as a thin wrapper
+    for existing callers that don't yet pass dataset_name.
     """
-    if task_type not in ('classification', 'regression'):
-        raise ValueError(
-            f"_resolve_search_metric: task_type={task_type!r}. "
-            f"Must be 'classification' or 'regression' — pass explicitly."
-        )
-
-    if metric == 'auto':
-        if task_type == 'classification':
-            n_classes = len(np.unique(labels)) if labels is not None else 2
-            metric = 'f1_weighted' if n_classes > 2 else 'auc'
-        elif domain == 'dta':
-            metric = 'ci'
-        elif domain == 'antibody':
-            metric = 'spearman'
-        elif domain == 'nucleotide':
-            metric = 'mcc'
-        else:
-            # molecular, reaction
-            metric = 'rmse'
-
-    return metric, task_type
+    metric_name, resolved_task, _ = _resolve_dataset_metric(
+        dataset_name=dataset_name, labels=labels, task_type=task_type,
+        domain=domain, metric=metric)
+    return metric_name, resolved_task
 
 
 def get_precomputed_search(reps, labels, groups,
@@ -1914,7 +2026,8 @@ def get_precomputed_search(reps, labels, groups,
 
     # Resolve metric and task_type so cache keys match precomputation
     resolved_metric, resolved_task_type = _resolve_search_metric(
-        labels, task_type=task_type, metric=metric, domain=domain)
+        labels, task_type=task_type, metric=metric, domain=domain,
+        dataset_name=dataset_name)
 
     augs = augmentations if aug_condition != 'none' else None
     aug_strat = aug_condition
