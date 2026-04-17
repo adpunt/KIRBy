@@ -966,7 +966,7 @@ are reviewed. See PRECOMPUTE_JOB_TRACKER.md §Nucleotide gena_lm refix.
 | 63 | nt_H3K4me1 | 33,000 | 14 | MCC | **DONE** — gena_lm corrected (dropped, 5.2% of best). Winner: grover_dna+ridge=0.4207 |
 | 64 | nt_H3K4me2 | 32,138 | 17 | MCC | **DONE** — gena_lm corrected (dropped, 6.6% of best). Winner: mistral_dna+ridge=0.5054 |
 | 65 | nt_H3K4me3 | 18,244 | 17 | MCC | **DONE** — gena_lm corrected. Winner: grover_dna+ridge=0.6519. Saturated task, small aug delta. |
-| 66 | nt_H3K9ac | — | 18 | MCC | Survey review needed (gena_lm refix 7485370 PD) |
+| 66 | nt_H3K9ac | 24,278 | 17 | MCC | **DONE** — gena_lm corrected. Winner: kmer6+ridge=0.5082. Saturated task. |
 | 67 | nt_H3K9me3 | — | 18 | MCC | Survey review needed (gena_lm refix 7485371 PD) |
 | 68 | nt_H4K20me1 | — | 18 | MCC | Survey review needed (gena_lm refix 7485372 PD) |
 | 69 | nt_promoter_all | 31,584 | 18 | MCC | Survey review needed (gena_lm refix 7485373 PD) |
@@ -1074,6 +1074,17 @@ CORRECTED 2026-04-17 (gena_refix 7485363 + 7496791). gena_lm now 1024D hidden st
 | Dropped (1) | gena_lm (near-random at 1024D) |
 
 *Winner: grover_dna+ridge=0.6519 MCC. Best aug: grover_dna+kmer3=0.6551 (+0.0032, marginal — saturated task). Top Tier threshold ≥98%. dnabert2 kept (94% of best, within main pack on this saturated dataset).*
+
+**nt_H3K9ac (24,278 samples, 23 groups, MCC) — 17/25 reps ran. CORRECTED 2026-04-17 (gena_refix 7496798):**
+
+| Tier | Reps |
+|------|------|
+| Top Tier (4) | kmer6, kmer5, mistral_dna, grover_dna |
+| General (12) | kmer6, kmer5, mistral_dna, grover_dna, nt_v2_500m, nt_v2_250m, hyenadna, tnf_canonical, kmer4, tetranuc_freq, kmer3, dnabert2 |
+| Augmentation (5) | codon_usage, complexity, dinuc_freq, dna_shape, gc_content |
+| Dropped (1) | gena_lm (near-random at 1024D) |
+
+*Winner: kmer6+ridge=0.5082 MCC. Best aug: kmer6+complexity=0.5096 (+0.0014, marginal). Top Tier threshold ≥98%.*
 
 ---
 
