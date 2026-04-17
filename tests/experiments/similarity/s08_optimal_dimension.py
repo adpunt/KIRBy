@@ -57,7 +57,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     augmentations = data.get('augmentations')
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     domain = data.get('domain', 'molecular')
     is_clf = task_type == 'classification'
     model_factories = get_model_factories(DOWNSTREAM_MODELS, task_type=task_type,

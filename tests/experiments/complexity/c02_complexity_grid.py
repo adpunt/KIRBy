@@ -38,7 +38,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     models = get_model_factories(config['models'],
-                                    task_type=data.get('task_type', 'regression'),
+                                    task_type=data['task_type'],
                                     n_samples=len(data['labels']))
     budgets = config['budgets']
     allocation_methods = config['allocations']

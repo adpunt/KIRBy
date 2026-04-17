@@ -106,7 +106,7 @@ def _silo_baseline(sd, shared_reps, seed=42,
     X_h, fi = create_hybrid(
         rep_tr, y_tr,
         allocation_method=alloc,
-        importance_method=imp, budget=100,
+        importance_method=imp,
         internal_evaluator=int_eval)
     X_h_te = apply_feature_selection(rep_te, fi)
 
@@ -300,7 +300,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     _, fi_c = create_hybrid(
                         c_reps, c_labels,
                         allocation_method=_alloc,
-                        importance_method=_imp, budget=c_budget,
+                        importance_method=_imp,
                         internal_evaluator=_int_eval)
                     profiles[c_id] = extract_importance_profile(fi_c)
                 except Exception:
@@ -380,7 +380,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             X_h_noisy, silo_budgets, silo_scores, _ = \
                 federated_feature_selection(
                     valid_reps, labels_noisy, noise_silo_idx,
-                    len(silo_names), budget=100,
+                    len(silo_names),
                     allocation_method=_alloc, importance_method=_imp,
                     internal_evaluator=_int_eval)
 
@@ -479,7 +479,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 X_h, fi = create_hybrid(
                     rep_tr, pool_labels[p_tr],
                     allocation_method=_alloc,
-                    importance_method=_imp, budget=100,
+                    importance_method=_imp,
                     internal_evaluator=_int_eval)
                 X_h_te = apply_feature_selection(rep_te, fi)
 
@@ -585,7 +585,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             X_h, fi_h = create_hybrid(
                 all_div_reps_tr, y_tr,
                 allocation_method=_alloc,
-                importance_method=_imp, budget=100,
+                importance_method=_imp,
                 internal_evaluator=_int_eval)
             X_h_te = apply_feature_selection(all_div_reps_te, fi_h)
 

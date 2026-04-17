@@ -48,7 +48,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = data['labels']
     groups = data['groups']
 
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     domain = data.get('domain', 'molecular')
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     _rf_factory = get_model_factories(['rf'], task_type=task_type,
@@ -64,7 +64,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         budget = kwargs.get('budget', 100)
         augmentations_search = data.get('augmentations')
         X_hybrid, fi, search = get_fitted_hybrid(
-            reps, labels, groups, budget=budget,
+            reps, labels, groups,
             aug_condition='uncapped', augmentations=augmentations_search,
             speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'),

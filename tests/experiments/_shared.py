@@ -1824,18 +1824,19 @@ def precompute_hybrid_searches(reps, labels, groups, config,
     return results
 
 
-def _resolve_search_metric(labels, task_type='auto', metric='auto', domain=None):
-    """Resolve metric and task_type for hybrid search cache key alignment.
+def _resolve_search_metric(labels, task_type, metric='auto', domain=None):
+    """Resolve metric for a given task_type + domain.
 
-    Uses the same logic as precompute_hybrid_searches and precompute_hybrids.py
-    so that disk cache keys match between precomputation and retrieval.
+    task_type is REQUIRED ('classification' or 'regression'). Callers pass it
+    from data['task_type'], which load_data guarantees is set. Metric may be
+    'auto' (resolves per domain/task) or an explicit string. Matches the
+    dispatch in precompute_hybrids._get_metric so cache keys align.
     """
-    if task_type == 'auto' and labels is not None:
-        unique = np.unique(labels)
-        if len(unique) <= 20 and np.allclose(labels, labels.astype(int)):
-            task_type = 'classification'
-        else:
-            task_type = 'regression'
+    if task_type not in ('classification', 'regression'):
+        raise ValueError(
+            f"_resolve_search_metric: task_type={task_type!r}. "
+            f"Must be 'classification' or 'regression' — pass explicitly."
+        )
 
     if metric == 'auto':
         if task_type == 'classification':
@@ -1854,11 +1855,11 @@ def _resolve_search_metric(labels, task_type='auto', metric='auto', domain=None)
     return metric, task_type
 
 
-def get_precomputed_search(reps, labels, groups, budget=None,
+def get_precomputed_search(reps, labels, groups,
                            aug_condition='uncapped', augmentations=None,
                            speed='full', return_fitted=False,
                            weight_method=None, precomputed=None,
-                           metric='auto', task_type='auto', domain=None,
+                           metric='auto', task_type=None, domain=None,
                            dataset_name=None, tier='general',
                            **kwargs):
     """Retrieve a hybrid search result for a given aug_condition.
@@ -1875,8 +1876,6 @@ def get_precomputed_search(reps, labels, groups, budget=None,
         reps: Base representations {name: array}.
         labels: Target values.
         groups: Group labels for CV (or None).
-        budget: DEPRECATED — ignored. Budget is searched, not specified.
-            Kept for backwards compatibility (old callers pass it).
         aug_condition: 'none', 'uncapped', or 'capped'.
         augmentations: {aug_name: array} or None.
         speed: Search speed tier ('fast' or 'full').
@@ -1885,13 +1884,15 @@ def get_precomputed_search(reps, labels, groups, budget=None,
         precomputed: Dict from data['precomputed_searches'] (optional).
         metric: Metric name ('auto' resolves from domain/task_type).
             Must match what was used during precomputation for cache alignment.
-        task_type: 'regression', 'classification', or 'auto'.
+        task_type: REQUIRED. 'classification' or 'regression'. Pass
+            `data['task_type']` from load_data — no auto-detect.
         domain: Domain hint for metric resolution ('molecular', 'antibody', etc.).
         dataset_name: REQUIRED when precomputed is None (falls back to
             find_best_hybrid with cache=True). Used as part of the cache
             filename.
         tier: Rep tier label for the cache filename ('general' or 'top').
-        **kwargs: Additional args passed to find_best_hybrid.
+        **kwargs: Additional args passed to find_best_hybrid (NOT `budget`;
+            per-budget selection is done downstream via best_by_model_budget).
 
     Returns:
         SearchResult from find_best_hybrid.
@@ -1945,7 +1946,7 @@ def get_fitted_hybrid(reps, labels, groups, *, downstream_model,
                       budget=None, aug_condition='uncapped',
                       augmentations=None, speed='full', precomputed=None,
                       internal_evaluators=None, budgets=None,
-                      metric='auto', task_type='auto', domain=None,
+                      metric='auto', task_type=None, domain=None,
                       dataset_name=None, tier='general'):
     """Get X_hybrid and feature_info from a cached search (return_fitted=True).
 
@@ -1968,7 +1969,8 @@ def get_fitted_hybrid(reps, labels, groups, *, downstream_model,
         budgets: Override budget list (e.g., DISTANCE_BUDGETS).
             When set, bypasses precomputed dict and runs on-demand (disk-cached).
         metric: Metric name ('auto' resolves from domain/task_type).
-        task_type: 'regression', 'classification', or 'auto'.
+        task_type: REQUIRED. 'classification' or 'regression'. Pass
+            `data['task_type']` from load_data — no auto-detect.
         domain: Domain hint for metric resolution.
 
     Returns:
@@ -2238,7 +2240,7 @@ def make_structured_output(experiment_id: str, dataset: str, data: dict,
             'n_samples': len(data.get('labels', [])),
             'n_reps': len(reps),
             'rep_dims': {k: v.shape[1] for k, v in reps.items()},
-            'task_type': data.get('task_type', 'regression'),
+            'task_type': data['task_type'],
         },
     }
 

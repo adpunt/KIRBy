@@ -122,7 +122,7 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
             aug_condition='capped', augmentations=augmentations or None,
             speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'),
-            dataset_name=dataset_name, tier='general')
+            dataset_name=dataset_name, tier='general', task_type=task_type)
         for budget in budgets:
             best = get_best_for_downstream(search, 'rf', budget=budget)
             if best and 'blueprint' in best:

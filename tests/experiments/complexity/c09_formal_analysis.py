@@ -631,7 +631,7 @@ def run(data, config, output_dir, dataset_name, sub_analyses=None,
     n_folds = config['n_splits']
     model_names = config['models']
     models = get_model_factories(model_names,
-                                    task_type=data.get('task_type', 'regression'),
+                                    task_type=data['task_type'],
                                     n_samples=len(data['labels']))
 
     all_subs = sub_analyses or ['anova', 'information', 'effective_rank', 'bias_variance']

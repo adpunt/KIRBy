@@ -54,7 +54,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     reps = data['reps']
     labels = data['labels']
     groups = data.get('groups')
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     n_samples = len(labels)
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'

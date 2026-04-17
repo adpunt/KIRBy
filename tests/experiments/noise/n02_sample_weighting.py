@@ -124,7 +124,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     n_samples = len(data['labels'])
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     is_clf = task_type == 'classification'
     domain = data.get('domain', 'molecular')
 
@@ -241,10 +241,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # CONDITIONS 3-5: Get hybrid blueprint ONCE (shared across all fold loops)
     # =========================================================================
     search = get_precomputed_search(
-        reps, labels, groups, budget=100, aug_condition='uncapped',
+        reps, labels, groups, aug_condition='uncapped',
         augmentations=augmentations, speed=config.get('search_speed', 'full'),
         precomputed=data.get('precomputed_searches'),
-        dataset_name=dataset_name, tier='general')
+        dataset_name=dataset_name, tier='general', task_type=task_type)
     top3 = extract_top3_base_reps(search)
     if top3:
         print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")

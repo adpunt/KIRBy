@@ -67,7 +67,7 @@ def _evaluate_task(task_name, rep_preset, config):
     labels = data['labels']
     groups = data['groups']
     domain = data.get('domain', 'molecular')
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     n_folds = config['n_splits']

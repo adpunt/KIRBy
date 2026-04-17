@@ -51,7 +51,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     augmentations = data.get('augmentations')
     search_speed = config.get('search_speed', 'full')
 
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 

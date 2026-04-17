@@ -88,7 +88,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Cliff pairs: {cliff_info['n_cliff_pairs']}")
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     is_clf = task_type == 'classification'
 
     results = {
@@ -111,7 +111,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         budget = kwargs.get('budget', 100)
         augmentations = data.get('augmentations')
         X_hybrid, fi, search = get_fitted_hybrid(
-            reps, labels, groups, budget=budget,
+            reps, labels, groups,
             aug_condition='uncapped', augmentations=augmentations,
             speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'),

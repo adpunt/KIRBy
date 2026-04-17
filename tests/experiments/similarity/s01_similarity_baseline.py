@@ -46,7 +46,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     reps = data['reps']
     labels = data['labels']
 
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     is_classification = task_type == 'classification'
     if is_classification:
         print("  NOTE: classification labels — SAC uses |delta_y| on 0/1, "

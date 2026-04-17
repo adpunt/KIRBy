@@ -974,7 +974,7 @@ def federated_noise_detection(rep_dict, labels, silo_indices, noise_mask_true,
     # Setting 3: Federated hybrid (privacy-preserving feature selection)
     try:
         X_fed, _budgets, _scores, _fis = federated_feature_selection(
-            rep_dict, labels, silo_indices, k, budget=100,
+            rep_dict, labels, silo_indices, k,
             allocation_method='performance_weighted',
             importance_method='treeshap',
             internal_evaluator='rf', seed=42)
@@ -1831,7 +1831,7 @@ def run_all(dataset_name: str, output_dir: str,
             data['augmentations'] = None
 
         # ── Precompute hybrid searches (general reps) ──
-        _task_type = data.get('task_type', 'regression')
+        _task_type = data['task_type']
         if len(reps_data) >= 2:
             from experiments._shared import precompute_hybrid_searches
             print(f"\n  Precomputing hybrid searches (general, {len(reps_data)} reps)...")

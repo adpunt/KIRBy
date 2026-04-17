@@ -135,7 +135,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'),
             metric=metric_name,
-            task_type=data.get('task_type', 'regression'),
+            task_type=data['task_type'],
             domain=data.get('domain', 'molecular'),
             dataset_name=dataset_name, tier='general')
         bp_entry = search.best_by_model.get('rf')
@@ -237,7 +237,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             X_h_train, fi_central = create_hybrid(
                 train_reps_all, train_labels_noisy,
                 allocation_method=_alloc,
-                importance_method=_imp, budget=100,
+                importance_method=_imp,
                 internal_evaluator=_int_eval)
             X_h_test = apply_feature_selection(
                 {r: arr[test_idx] for r, arr in reps.items()}, fi_central)
@@ -320,7 +320,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             X_hybrid_train, silo_budgets, silo_scores, silo_fis = \
                 federated_feature_selection(
                     train_reps, train_labels_noisy, train_silo_indices,
-                    K, budget=100,
+                    K,
                     allocation_method=_alloc, importance_method=_imp,
                     internal_evaluator=_int_eval)
 
@@ -423,7 +423,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             clean_reps,
                             train_labels_noisy[clean_idx],
                             allocation_method=_alloc,
-                            importance_method=_imp, budget=100,
+                            importance_method=_imp,
                             internal_evaluator=_int_eval)
                         X_c6_te = apply_feature_selection(
                             {r: arr[test_idx] for r, arr in reps.items()},
@@ -607,7 +607,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             train_reps_sf = {r: arr[train_idx] for r, arr in reps.items()}
             test_reps_sf = {r: arr[test_idx] for r, arr in reps.items()}
             X_h_train, sb, ss, sfis = federated_feature_selection(
-                train_reps_sf, tl_noisy, train_silo_sf, K, budget=100,
+                train_reps_sf, tl_noisy, train_silo_sf, K,
                 allocation_method=_alloc, importance_method=_imp,
                 internal_evaluator=_int_eval)
             h_test_parts = []

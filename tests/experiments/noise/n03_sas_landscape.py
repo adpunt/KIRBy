@@ -412,13 +412,13 @@ def _run_sas_bo_bridge(reps, labels, groups, struct_t, act_t,
     try:
         aug_cond = 'uncapped' if augmentations else 'none'
         X_h, _, _search = get_fitted_hybrid(
-            reps, labels, groups, budget=50,
+            reps, labels, groups,
             aug_condition=aug_cond, augmentations=augmentations,
             speed=search_speed, precomputed=precomputed,
             internal_evaluators=DISTANCE_EVALUATORS,
             budgets=DISTANCE_BUDGETS,
             downstream_model='gp',
-            dataset_name=dataset_name, tier='general')
+            dataset_name=dataset_name, tier='general', task_type=task_type)
         conditions['hybrid_50d'] = StandardScaler().fit_transform(X_h)
     except Exception as e:
         print(f"    WARNING: hybrid build failed ({e})")
@@ -531,7 +531,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = data['labels']
     groups = data['groups']
     domain = data.get('domain', 'molecular')
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     is_clf = task_type == 'classification'
     smiles = data.get('smiles', None)
 

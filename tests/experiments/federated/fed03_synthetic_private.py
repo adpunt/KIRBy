@@ -97,7 +97,7 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
             speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'),
             metric=metric_name,
-            task_type=data.get('task_type', 'regression'),
+            task_type=data['task_type'],
             domain=data.get('domain', 'molecular'),
             dataset_name=dataset_name, tier='general')
         _bp_entry = _search.best_by_model.get('rf')
@@ -348,7 +348,7 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
         X_h_train, silo_budgets, silo_scores, silo_fis = \
             federated_feature_selection(
                 train_reps, y_train, train_silo_indices,
-                K, budget=100,
+                K,
                 allocation_method=_alloc, importance_method=_imp,
                 internal_evaluator=_int_eval)
 
@@ -412,7 +412,7 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
         X_h_c6, fi_c6 = create_hybrid(
             train_single, y_train,
             allocation_method=_alloc,
-            importance_method=_imp, budget=100,
+            importance_method=_imp,
             internal_evaluator=_int_eval)
         X_h_c6_test = apply_feature_selection(test_single, fi_c6)
         clf_c6 = RandomForestClassifier(
@@ -547,7 +547,7 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
             speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'),
             metric=metric_name_b,
-            task_type=data.get('task_type', 'regression'),
+            task_type=data['task_type'],
             domain=data.get('domain', 'molecular'),
             dataset_name=dataset_name, tier='general')
         _bp_entry = _search.best_by_model.get('rf')
@@ -635,7 +635,7 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
         X_h_tr, fi = create_hybrid(
             all_silo_reps_tr, y_train,
             allocation_method=_alloc,
-            importance_method=_imp, budget=100,
+            importance_method=_imp,
             internal_evaluator=_int_eval)
         X_h_te = apply_feature_selection(all_silo_reps_te, fi)
 
@@ -684,7 +684,7 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
                 X_s, fi_s = _ch(
                     silo_rep_tr, y_train,
                     allocation_method=_alloc,
-                    importance_method=_imp, budget=50,
+                    importance_method=_imp,
                     internal_evaluator=_int_eval)
                 silo_fis[i] = fi_s
                 # Quick validation score
@@ -877,7 +877,7 @@ def _run_antibody_federated(data, config, output_dir, dataset_name):
             X_h, fi = create_hybrid(
                 rep_tr, y_tr,
                 allocation_method=s_alloc,
-                importance_method=s_imp, budget=100,
+                importance_method=s_imp,
                 internal_evaluator=s_int_eval)
             X_h_te = apply_feature_selection(rep_te, fi)
             silo_fis[silo_name] = fi
@@ -947,7 +947,7 @@ def _run_antibody_federated(data, config, output_dir, dataset_name):
             X_h, fi = create_hybrid(
                 rep_tr, pooled_labels[tr],
                 allocation_method=_alloc,
-                importance_method=_imp, budget=100,
+                importance_method=_imp,
                 internal_evaluator=_int_eval)
             X_h_te = apply_feature_selection(rep_te, fi)
 

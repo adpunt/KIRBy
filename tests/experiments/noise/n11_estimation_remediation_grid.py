@@ -240,7 +240,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     augmentations = data.get('augmentations')
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     is_clf = task_type == 'classification'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     n_samples = len(labels)
@@ -276,10 +276,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Get blueprint ONCE from cached search (uses clean labels)
     search = get_precomputed_search(
-        reps, labels, groups, budget=100, aug_condition='uncapped',
+        reps, labels, groups, aug_condition='uncapped',
         augmentations=augmentations, speed=config.get('search_speed', 'full'),
         precomputed=data.get('precomputed_searches'),
-        dataset_name=dataset_name, tier='general')
+        dataset_name=dataset_name, tier='general', task_type=task_type)
     best_rf = search.best_by_model.get('rf')
     bp = best_rf['blueprint'] if best_rf else None
     if bp is None:

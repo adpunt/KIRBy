@@ -692,13 +692,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     try:
         search = get_precomputed_search(
-            reps, labels, groups, budget=budget,
+            reps, labels, groups,
             aug_condition='uncapped', augmentations=data.get('augmentations'),
             speed=search_speed,
             precomputed=None,  # bypass tree-only precomputed; use disk cache
             internal_evaluators=DISTANCE_EVALUATORS,
             budgets=DISTANCE_BUDGETS,
-            dataset_name=dataset_name, tier='general_distance')
+            dataset_name=dataset_name, tier='general_distance', task_type=task_type)
         # Select kNN-optimized blueprint (primary downstream model in S10)
         best_config = get_best_for_downstream(search, 'knn')
         if best_config and 'blueprint' in best_config:
@@ -721,7 +721,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['top3_base_reps'] = [(n, s) for n, s in top3]
 
     augmentations = data.get('augmentations')
-    task_type = data.get('task_type', 'regression')
+    task_type = data['task_type']
     is_clf = task_type == 'classification'
 
     # Task 1: Weighted kNN
