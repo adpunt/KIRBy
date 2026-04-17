@@ -101,28 +101,23 @@ DATASET_REGISTRY: Dict[str, DatasetInfo] = {
     'abagym_lysozyme':              DatasetInfo('abagym_lysozyme',              'regression', 'spearman', False, 'antibody', n_samples=627),
     'abagym_VEGF':                  DatasetInfo('abagym_VEGF',                  'regression', 'spearman', False, 'antibody', n_samples=418),
 
-    # ── Antibody regression, OPIG Graphinity synthetic DDG ───────────────
-    # Uses pearson (NOT spearman) to match the paper's reported numbers.
-    'graphinity_foldx':     DatasetInfo('graphinity_foldx',     'regression', 'pearson', False, 'antibody', notes='Synthetic DDG from Zenodo 15384945 (FoldX).'),
-    'graphinity_rosetta':   DatasetInfo('graphinity_rosetta',   'regression', 'pearson', False, 'antibody', notes='Synthetic DDG (Rosetta).'),
-    'graphinity_augmented': DatasetInfo('graphinity_augmented', 'regression', 'pearson', False, 'antibody', notes='Experimental DDG + synthetic augmentation.'),
-
     # ── Antibody classification ──────────────────────────────────────────
-    'tz_her2_binary':         DatasetInfo('tz_her2_binary',         'classification', 'auc', False, 'antibody', n_samples=5000, notes='Trastuzumab-HER2 binary. Stratified subsample from 524K.'),
-    'humanness_therapeutic':  DatasetInfo('humanness_therapeutic',  'classification', 'auc', False, 'antibody', n_samples=564,  notes='IMGT/mAb-DB via BioPhi.'),
-    'humanness_species':      DatasetInfo('humanness_species',      'classification', 'auc', False, 'antibody', notes='OAS FASTA (Zenodo 10562968). Human vs non-human.'),
+    'tz_her2_binary':         DatasetInfo('tz_her2_binary',         'classification', 'auc',         False, 'antibody', n_samples=5000, notes='Trastuzumab-HER2 binary. Stratified subsample from 524K.'),
+    'tz_her2_multiclass':     DatasetInfo('tz_her2_multiclass',     'classification', 'f1_weighted', False, 'antibody', n_samples=5000, notes='Trastuzumab-HER2 multi-class. Winner blosum+lightgbm=0.7083 F1w.'),
+    'humanness_therapeutic':  DatasetInfo('humanness_therapeutic',  'classification', 'auc',         False, 'antibody', n_samples=564,  notes='IMGT/mAb-DB via BioPhi. Winner antiberty_cdr+rf=0.9623 AUROC.'),
+    'humanness_species':      DatasetInfo('humanness_species',      'classification', 'auc',         False, 'antibody', notes='OAS FASTA (Zenodo 10562968). Human vs non-human. Survey pending.'),
 
     # ── Antibody regression, Ginkgo developability (B5) ──────────────────
-    # Pre-computed 5-fold hierarchical cluster splits from GDPa1 (242 antibodies).
+    # 2026-04-17: aggregation, purity, tm2 dropped from registry (surveys
+    # confirmed all three near-random — best ρ < 0.22). Graphinity_* also
+    # dropped (best ρ ≤ 0.079, all R² negative across foldx/rosetta/aug).
+    # Pre-computed 5-fold hierarchical cluster splits from GDPa1.
     'ginkgo_acsins':        DatasetInfo('ginkgo_acsins',      'regression', 'spearman', False, 'antibody', n_samples=242),
     'ginkgo_colloidal':     DatasetInfo('ginkgo_colloidal',   'regression', 'spearman', False, 'antibody', n_samples=242),
     'ginkgo_heparin':       DatasetInfo('ginkgo_heparin',     'regression', 'spearman', False, 'antibody', n_samples=94),
     'ginkgo_hic':           DatasetInfo('ginkgo_hic',         'regression', 'spearman', False, 'antibody', n_samples=242),
     'ginkgo_pr_cho':        DatasetInfo('ginkgo_pr_cho',      'regression', 'spearman', False, 'antibody', n_samples=197),
     'ginkgo_titer':         DatasetInfo('ginkgo_titer',       'regression', 'spearman', False, 'antibody', n_samples=239),
-    'ginkgo_tm2':           DatasetInfo('ginkgo_tm2',         'regression', 'spearman', False, 'antibody', notes='Not yet in DATASET_REPS (survey pending).'),
-    'ginkgo_aggregation':   DatasetInfo('ginkgo_aggregation', 'regression', 'spearman', False, 'antibody', notes='Not yet in DATASET_REPS (survey pending).'),
-    'ginkgo_purity':        DatasetInfo('ginkgo_purity',      'regression', 'spearman', False, 'antibody', notes='Not yet in DATASET_REPS (survey pending).'),
 
     # ── TCGA classification ──────────────────────────────────────────────
     'tcga_luad_vs_lusc':    DatasetInfo('tcga_luad_vs_lusc',  'classification', 'auc',         False, 'tcga', n_samples=1016, notes='LUAD vs LUSC binary.'),
@@ -133,12 +128,28 @@ DATASET_REGISTRY: Dict[str, DatasetInfo] = {
     'bh_doyle_plates':      DatasetInfo('bh_doyle_plates',    'regression', 'rmse', True, 'reaction', notes='Doyle HTE plates.'),
 
     # ── Nucleotide classification ────────────────────────────────────────
-    # NT Revised 5 datasets, chromosome hold-out groups.
-    'nt_H2AFZ':             DatasetInfo('nt_H2AFZ',           'classification', 'mcc', False, 'nucleotide', n_samples=33000, notes='Survey DONE 2026-04-17. gena_lm dropped (MCC=0.019). Winner: mistral_dna+ridge MCC=0.4323.'),
-    'nt_H3K27ac':           DatasetInfo('nt_H3K27ac',         'classification', 'mcc', False, 'nucleotide'),
-    'nt_H3K27me3':          DatasetInfo('nt_H3K27me3',        'classification', 'mcc', False, 'nucleotide'),
-    'nt_H3K36me3':          DatasetInfo('nt_H3K36me3',        'classification', 'mcc', False, 'nucleotide'),
-    'nt_H3K4me1':           DatasetInfo('nt_H3K4me1',         'classification', 'mcc', False, 'nucleotide'),
+    # NT Revised + Genomic Benchmarks. Gena_lm corrected 2026-04-17 and
+    # dropped universally as near-random at 1024D. Dnabert2 dropped
+    # per-dataset where it underperforms (most; retained on saturated
+    # tasks). Surveys DONE for the 15 below. Remaining 4 NT + humanness
+    # species pending on server (gena_refix jobs).
+    #
+    # nt_splice_sites_all DROPPED — only nt_v2_* reps above MCC 0.28.
+    'nt_H2AFZ':                     DatasetInfo('nt_H2AFZ',                    'classification', 'mcc', False, 'nucleotide', n_samples=33000, notes='Winner mistral_dna+ridge=0.4323.'),
+    'nt_H3K27ac':                   DatasetInfo('nt_H3K27ac',                  'classification', 'mcc', False, 'nucleotide', n_samples=31616, notes='Winner kmer6+ridge=0.4564.'),
+    'nt_H3K27me3':                  DatasetInfo('nt_H3K27me3',                 'classification', 'mcc', False, 'nucleotide', n_samples=33000, notes='Winner mistral_dna+ridge=0.5487.'),
+    'nt_H3K36me3':                  DatasetInfo('nt_H3K36me3',                 'classification', 'mcc', False, 'nucleotide', n_samples=33000, notes='Winner mistral_dna+mlp=0.5310.'),
+    'nt_H3K4me1':                   DatasetInfo('nt_H3K4me1',                  'classification', 'mcc', False, 'nucleotide', n_samples=33000, notes='Winner grover_dna+ridge=0.4207.'),
+    'nt_H3K4me2':                   DatasetInfo('nt_H3K4me2',                  'classification', 'mcc', False, 'nucleotide', n_samples=32138, notes='Winner mistral_dna+ridge=0.5054.'),
+    'nt_H3K4me3':                   DatasetInfo('nt_H3K4me3',                  'classification', 'mcc', False, 'nucleotide', n_samples=18244, notes='Winner grover_dna+ridge=0.6519. Saturated.'),
+    'nt_H3K9ac':                    DatasetInfo('nt_H3K9ac',                   'classification', 'mcc', False, 'nucleotide', n_samples=24278, notes='Winner kmer6+ridge=0.5082. Saturated.'),
+    'nt_H3K9me3':                   DatasetInfo('nt_H3K9me3',                  'classification', 'mcc', False, 'nucleotide', n_samples=28288, notes='Winner mistral_dna+ridge=0.3482 (hardest nt task).'),
+    'nt_H4K20me1':                  DatasetInfo('nt_H4K20me1',                 'classification', 'mcc', False, 'nucleotide', n_samples=32270, notes='Winner hyenadna+mlp=0.6041.'),
+    'nt_promoter_all':              DatasetInfo('nt_promoter_all',             'classification', 'mcc', False, 'nucleotide', n_samples=31584, notes='Winner mistral_dna+ridge=0.7281. Saturated.'),
+    'nt_promoter_tata':             DatasetInfo('nt_promoter_tata',            'classification', 'mcc', False, 'nucleotide', n_samples=5274,  notes='Winner mistral_dna+ridge=0.6743. Smallest nt dataset.'),
+    'nt_promoter_no_tata':          DatasetInfo('nt_promoter_no_tata',         'classification', 'mcc', False, 'nucleotide', n_samples=31372, notes='Winner mistral_dna+ridge=0.7497. Saturated.'),
+    'gb_human_nontata_promoters':   DatasetInfo('gb_human_nontata_promoters',  'classification', 'mcc', False, 'nucleotide', n_samples=36131, notes='GB dataset, 5 groups. Winner kmer5+mlp=0.8917. Classicals dominate.'),
+    'gb_human_enhancers_cohn':      DatasetInfo('gb_human_enhancers_cohn',     'classification', 'mcc', False, 'nucleotide', n_samples=27791, notes='GB dataset, 5 groups. Winner grover_dna+ridge=0.4853.'),
 
     # ── DTA regression ───────────────────────────────────────────────────
     'davis':            DatasetInfo('davis',        'regression', 'ci', False, 'dta'),

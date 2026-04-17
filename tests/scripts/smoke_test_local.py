@@ -71,10 +71,10 @@ def _fail(test_num: int, msg: str):
 def test_1_registry():
     print('[1/8] Registry integrity')
     verify_registry()
-    # Graphinity is antibody domain but uses pearson (not spearman default)
-    info = lookup('graphinity_foldx')
+    # Antibody inter-family datasets default to spearman.
+    info = lookup('flab_thermo_tresanco')
     assert info is not None
-    assert info.metric == 'pearson'
+    assert info.metric == 'spearman'
     assert info.lower_is_better is False
     # Classification: tz_her2_binary → auc
     info = lookup('tz_her2_binary')
@@ -224,15 +224,15 @@ def test_8_registry_backed_metric_resolution():
     print('[8/8] Registry backs metric resolution in _shared + precompute')
     from experiments._shared import _resolve_dataset_metric
     from precompute_hybrids import _get_metric
-    # Graphinity: registry says pearson, not spearman default for antibody
-    m1, _, _ = _resolve_dataset_metric(dataset_name='graphinity_foldx')
+    # Antibody inter-family: registry-backed → spearman.
+    m1, _, _ = _resolve_dataset_metric(dataset_name='flab_thermo_tresanco')
     m2 = _get_metric('antibody', 'regression', None,
-                     dataset_name='graphinity_foldx')
-    assert m1 == m2 == 'pearson'
+                     dataset_name='flab_thermo_tresanco')
+    assert m1 == m2 == 'spearman'
     # Mismatched task_type raises
     try:
         _get_metric('antibody', 'classification', None,
-                    dataset_name='graphinity_foldx')
+                    dataset_name='flab_thermo_tresanco')
         _fail(8, 'mismatch should have raised')
     except ValueError:
         pass
