@@ -191,6 +191,26 @@ def _compute_radius_graph(pos, batch, cutoff=10.0, max_neighbors=32, device='cpu
     return edge_index, edge_weight
 
 
+def _check_pyg_cuda() -> bool:
+    """Check if torch_cluster scatter ops work on CUDA.
+
+    SchNet's interaction_graph uses radius_graph from torch_cluster.
+    If torch_cluster isn't CUDA-compiled, SchNet must run on CPU.
+    """
+    import torch
+    if not torch.cuda.is_available():
+        return False
+    try:
+        from torch_cluster import radius_graph
+        # Minimal test: 2 atoms, should produce edges
+        pos = torch.tensor([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], device='cuda')
+        batch = torch.zeros(2, dtype=torch.long, device='cuda')
+        radius_graph(pos, r=5.0, batch=batch)
+        return True
+    except Exception:
+        return False
+
+
 def _finetune_and_extract(
     train_smiles: List[str],
     val_smiles: List[str],
@@ -208,6 +228,12 @@ def _finetune_and_extract(
     from torch_geometric.loader import DataLoader as PyGDataLoader
 
     device = get_device()
+
+    # SchNet requires CUDA-compiled torch_cluster for radius_graph.
+    # Fall back to CPU if torch_cluster lacks CUDA support.
+    if device == 'cuda' and model_name == 'schnet' and not _check_pyg_cuda():
+        print("    [schnet] torch_cluster not CUDA-compiled, falling back to CPU")
+        device = 'cpu'
 
     # Convert SMILES to 3D graphs
     print(f"    Generating 3D conformers (train={len(train_smiles)}, "
