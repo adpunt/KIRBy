@@ -963,7 +963,7 @@ are reviewed. See PRECOMPUTE_JOB_TRACKER.md §Nucleotide gena_lm refix.
 | 60 | nt_H3K27ac | 31,616 | 17 | MCC | **DONE** — gena_lm corrected (dropped, 4.5% of best). Winner: kmer6+ridge=0.4564 |
 | 61 | nt_H3K27me3 | 33,000 | 14 | MCC | **DONE** — gena_lm corrected (dropped, 5.2% of best). Winner: mistral_dna+ridge=0.5487 |
 | 62 | nt_H3K36me3 | 33,000 | 14 | MCC | **DONE** — gena_lm corrected (dropped, 3.2% of best). Winner: mistral_dna+mlp=0.5310 |
-| 63 | nt_H3K4me1 | 33,000 | 18 | MCC | **DOWNGRADED** — refix 7485367 PD |
+| 63 | nt_H3K4me1 | 33,000 | 14 | MCC | **DONE** — gena_lm corrected (dropped, 5.2% of best). Winner: grover_dna+ridge=0.4207 |
 | 64 | nt_H3K4me2 | — | 18 | MCC | Survey review needed (gena_lm refix 7485368 PD) |
 | 65 | nt_H3K4me3 | — | 18 | MCC | Survey review needed (gena_lm refix 7485369 PD) |
 | 66 | nt_H3K9ac | — | 18 | MCC | Survey review needed (gena_lm refix 7485370 PD) |
@@ -1042,16 +1042,16 @@ CORRECTED 2026-04-17 (gena_refix 7485363 + 7496791). gena_lm now 1024D hidden st
 
 *Winner: mistral_dna+mlp=0.5310 MCC. Best aug: mistral_dna+tnf_canonical=0.5449 (+0.0139).*
 
-**nt_H3K4me1 (33,000 samples, 23 groups, MCC) — 18/25 reps ran — CONTAMINATED, pending 7485367:**
+**nt_H3K4me1 (33,000 samples, 23 groups, MCC) — 14/25 reps ran. CORRECTED 2026-04-17 (gena_refix 7496795):**
 
 | Tier | Reps |
 |------|------|
-| Top Tier (4) | ~~gena_lm~~, grover_dna, mistral_dna, hyenadna |
-| General (12) | ~~gena_lm~~, grover_dna, mistral_dna, hyenadna, kmer6, nt_v2_250m, nt_v2_500m, kmer5, kmer4, tnf_canonical, tetranuc_freq, kmer3 |
+| Top Tier (5) | grover_dna, mistral_dna, hyenadna, nt_v2_250m, kmer6 |
+| General (11) | grover_dna, mistral_dna, hyenadna, nt_v2_250m, kmer6, kmer5, nt_v2_500m, tnf_canonical, kmer4, tetranuc_freq, kmer3 |
 | Augmentation (5) | codon_usage, complexity, dinuc_freq, dna_shape, gc_content |
-| Dropped | dnabert2 (78% of best, weakest FM by large margin) |
+| Dropped (2) | dnabert2 (82% of best), gena_lm (near-random at 1024D) |
 
-*Winner claim gena_lm+ridge=0.4405 invalid.*
+*Winner: grover_dna+ridge=0.4207 MCC. Best aug: grover_dna+tnf_canonical=0.4422 (+0.0215).*
 
 ---
 
