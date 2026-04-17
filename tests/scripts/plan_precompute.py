@@ -155,8 +155,14 @@ _DISTANCE_CONDITIONS = [
 
 
 def _sbatch_line(dataset: str, condition: str, plan: ResourcePlan,
-                 distance: bool) -> str:
-    """Build one sbatch line for a single (dataset, condition)."""
+                 distance: bool, cluster: Optional[str] = None) -> str:
+    """Build one sbatch line for a single (dataset, condition).
+
+    `cluster`, when set (e.g. 'htc' or 'arc' or 'all'), adds
+    `--clusters=` so the job routes to that SLURM cluster. $HOME and
+    $DATA are shared between Oxford ARC and HTC, so the cache and repo
+    paths work from either.
+    """
     distance_flag = ' --distance' if distance else ''
     job_name = f'pc_{dataset}_{condition}'
     wrap = (
@@ -167,8 +173,10 @@ def _sbatch_line(dataset: str, condition: str, plan: ResourcePlan,
         f'python tests/precompute_hybrids.py {dataset} '
         f'--condition {condition} --speed full{distance_flag}'
     )
+    cluster_flag = f' --clusters={cluster}' if cluster else ''
     return (
-        f'sbatch --job-name={job_name} --partition={plan.partition} '
+        f'sbatch{cluster_flag} --job-name={job_name} '
+        f'--partition={plan.partition} '
         f'--mem={plan.mem} --time={plan.time} --cpus-per-task=4 '
         f'--output=slurm-%j-{job_name}.out '
         f'--wrap="{wrap}"'
@@ -178,7 +186,8 @@ def _sbatch_line(dataset: str, condition: str, plan: ResourcePlan,
 def plan_dataset(dataset: str, info: DatasetInfo,
                  forced: Optional[str] = None,
                  include_distance: bool = True,
-                 conditions: Optional[List[str]] = None) -> List[str]:
+                 conditions: Optional[List[str]] = None,
+                 cluster: Optional[str] = None) -> List[str]:
     """Return the list of sbatch lines for the selected conditions.
 
     When `conditions` is None: all 6 standard + 4 distance (unless
@@ -205,9 +214,11 @@ def plan_dataset(dataset: str, info: DatasetInfo,
         f'→ {plan.partition} / {plan.mem} / {plan.time})',
     ]
     for cond in standard:
-        lines.append(_sbatch_line(dataset, cond, plan, distance=False))
+        lines.append(_sbatch_line(dataset, cond, plan, distance=False,
+                                  cluster=cluster))
     for cond in distance:
-        lines.append(_sbatch_line(dataset, cond, plan, distance=True))
+        lines.append(_sbatch_line(dataset, cond, plan, distance=True,
+                                  cluster=cluster))
     lines.append('')  # blank line between datasets
     return lines
 
@@ -251,6 +262,12 @@ def main() -> int:
     parser.add_argument('--force', default='',
                         help='Per-dataset band override, e.g. '
                              '"adme_hlm=XL,flab_thermo_tresanco=M".')
+    parser.add_argument('--cluster', default=None,
+                        choices=['arc', 'htc', 'all'],
+                        help='Pass --clusters= to sbatch so jobs route to '
+                             'the given SLURM cluster. $HOME/$DATA are '
+                             'shared between arc and htc so caches work '
+                             'from either.')
     parser.add_argument('--summary', action='store_true',
                         help='Print a band summary instead of sbatch commands.')
     args = parser.parse_args()
@@ -341,7 +358,8 @@ def main() -> int:
         forced = forces.get(name)
         for line in plan_dataset(name, info, forced=forced,
                                  include_distance=not args.skip_distance,
-                                 conditions=conditions_filter):
+                                 conditions=conditions_filter,
+                                 cluster=args.cluster):
             print(line)
             if line.startswith('sbatch'):
                 total_jobs += 1
