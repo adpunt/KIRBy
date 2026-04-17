@@ -936,7 +936,24 @@ def _predict_for_metric(model, X, metric_fn):
 
 
 def _detect_task_type(labels: np.ndarray) -> str:
-    """Auto-detect regression vs classification from labels."""
+    """Auto-detect regression vs classification from labels.
+
+    LEGACY HEURISTIC — do not use in new code. find_best_hybrid and the
+    experiment entry points now require task_type explicitly (see
+    DATASET_REGISTRY / load_data). This function remains only for two
+    internal callers:
+
+    1. tune_models (callers: find_best_hybrid_{molecular,tcga,dta}.py) —
+       passes task_type=None by default, still auto-detects here.
+    2. _evaluate_single / _evaluate_baselines high-dim feature filter —
+       used as a fallback when task_type is not threaded through (older
+       internal call sites). The explicit task_type is preferred.
+
+    Silent misclassification here would mean the wrong type of LightGBM
+    (Regressor vs Classifier) running the HD filter — it would still
+    produce *a* filter, but with the wrong inductive bias. Registered
+    datasets never hit this path now.
+    """
     unique = np.unique(labels)
     if len(unique) <= 20 and np.allclose(labels, labels.astype(int)):
         return 'classification'
@@ -1398,6 +1415,7 @@ def _evaluate_single(
     seed: int = 42,
     cv_splitter=None,
     secondary_metric_fns: Optional[Dict[str, Callable]] = None,
+    task_type: Optional[str] = None,
 ) -> Union[Tuple[float, float], Tuple[float, float, Dict[str, Tuple[float, float]]]]:
     """Evaluate one (X, model) with CV.
 
@@ -1422,7 +1440,12 @@ def _evaluate_single(
         if _hd_target_n >= X.shape[1]:
             _apply_hd_filter = False
         else:
-            _hd_task_type = _detect_task_type(y)
+            # Prefer explicit task_type (from find_best_hybrid / caller) over
+            # the label-count heuristic. Heuristic remains as a fallback for
+            # the one legacy caller (tune_models) that still auto-detects.
+            _hd_task_type = (task_type
+                             if task_type in ('classification', 'regression')
+                             else _detect_task_type(y))
 
     # Only scale continuous features; leave binary (ECFP, MACCS, etc.) raw
     is_binary = (X.dtype == np.uint8 or
@@ -1736,6 +1759,7 @@ def _evaluate_baselines(
     dataset_name: Optional[str] = None,
     metric_name: Optional[str] = None,
     use_baseline_cache: bool = True,
+    task_type: Optional[str] = None,
 ) -> Dict[str, Dict[str, float]]:
     """Evaluate full-dimension baselines for each rep x model.
 
@@ -1819,6 +1843,7 @@ def _evaluate_baselines(
                 X, labels, model, groups, n_folds, metric_fn, seed,
                 cv_splitter=cv_splitter,
                 secondary_metric_fns=secondary_metric_fns,
+                task_type=task_type,
             )
             if secondary_metric_fns is not None:
                 mean_score, _, sec_dict = result
@@ -1872,7 +1897,9 @@ def _evaluate_baselines(
                 if _hd_target_n >= dim:
                     _apply_hd_filter = False
                 else:
-                    _hd_task_type = _detect_task_type(labels)
+                    _hd_task_type = (task_type
+                                     if task_type in ('classification', 'regression')
+                                     else _detect_task_type(labels))
 
             for model_name, model in models.items():
                 fold_scores = []
@@ -3066,6 +3093,7 @@ def find_best_hybrid(
         # are requested (safe fallback to uncached otherwise).
         dataset_name=dataset_name,
         metric_name=_metric_name_for_meta,
+        task_type=task_type,
     )
 
     # --- Pre-search rep screening ---
