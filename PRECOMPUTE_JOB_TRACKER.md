@@ -427,7 +427,7 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 7483714 | abclf_tz_her2_multiclass (post-c18342f) | **COMPLETED** (8h22m, 2026-04-16) |
 | 7483715 | abclf_humanness_species (post-c18342f) | **COMPLETED** (5h26m, 2026-04-16) — **output file missing from disk** despite "Saved" in slurm log. Resubmitted as 7496824. |
 | 7483716 | abclf_humanness_therapeutic (post-c18342f) | **COMPLETED** (38min, 2026-04-16) |
-| 7496824 | abclf_humanness_species (resubmit) | **PD** (2026-04-17, long+GPU+128G, 24h) |
+| 7496824 | abclf_humanness_species (resubmit) | **FAILED** (ExitCode 127, 4min — "command not found". Needs diagnosis.) |
 | 7483636 | abclf_tz_her2_binary (DUPLICATE) | **CANCELLED** (2026-04-15) |
 | 7483637 | abclf_tz_her2_multiclass (DUPLICATE) | **CANCELLED** |
 | 7483638 | abclf_humanness_species (DUPLICATE) | **CANCELLED** |
@@ -517,7 +517,24 @@ Resource: long+GPU+64G+6h per job.
 
 | Job ID | Name | Status |
 |--------|------|--------|
-| 7496791-806 | gena_refix ×16 (all datasets, round 2) | **PD** (2026-04-17, long+GPU+64G, 6h) |
+| 7496791 | gena_refix_nt_H2AFZ | **COMPLETED** (31min, 2026-04-17) |
+| 7496792 | gena_refix_nt_H3K27ac | **COMPLETED** (35min) |
+| 7496793 | gena_refix_nt_H3K27me3 | **COMPLETED** (35min) |
+| 7496794 | gena_refix_nt_H3K36me3 | **COMPLETED** (36min) |
+| 7496795 | gena_refix_nt_H3K4me1 | **COMPLETED** (34min) |
+| 7496796 | gena_refix_nt_H3K4me2 | **COMPLETED** (31min) |
+| 7496797 | gena_refix_nt_H3K4me3 | **COMPLETED** (19min) |
+| 7496798 | gena_refix_nt_H3K9ac | **COMPLETED** (22min) |
+| 7496799 | gena_refix_nt_H3K9me3 | **COMPLETED** (26min) |
+| 7496800 | gena_refix_nt_H4K20me1 | **COMPLETED** (36min) |
+| 7496801 | gena_refix_nt_promoter_all | **COMPLETED** (25min) |
+| 7496802 | gena_refix_nt_promoter_tata | **COMPLETED** (8min) |
+| 7496803 | gena_refix_nt_promoter_no_tata | **COMPLETED** (26min) |
+| 7496804 | gena_refix_nt_splice_sites_all | **COMPLETED** (40min) |
+| 7496805 | gena_refix_gb_human_nontata_promoters | **COMPLETED** (30min) |
+| 7496806 | gena_refix_gb_human_enhancers_cohn | **COMPLETED** (27min) |
+
+All 16 nucleotide datasets now have corrected 1024D gena_lm. Tier tables can be updated in bulk.
 
 ### CGR-SMILES pretraining (Phase 4)
 
