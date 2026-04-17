@@ -79,17 +79,32 @@ class ResourcePlan:
     rationale: str
 
 
-# n_samples upper-bound for each band. None is used for datasets where we
-# don't know the size — treated as "S" (conservative middle) unless
-# overridden.
+# Datasets where empirical sacct runtimes have exceeded the band the
+# size heuristic would pick. Source: scat9264 history, 2026-04-03 → -17.
+# Additions here should cite the run ID and observed Elapsed.
+_KNOWN_LONG_RUNNERS: Dict[str, str] = {
+    # flab_thermo_tresanco general_uncapped took 8h 15min (11707716)
+    # — well inside short 12h but ~4h shy of it. Upshift to L as a
+    # buffer against `capped` conditions going longer.
+    'flab_thermo_tresanco': 'L',
+    # qm9 general_none 2h 10min (11707691) — size hits L naturally,
+    # no override needed.
+}
+
+
+# Band → partition/mem/time. Calibrated against scat9264's sacct data from
+# 2026-04-03 to 2026-04-17: completed jobs ran 10 min – 8h 15min, well
+# inside `short`'s 12h limit. Memory peaks unverified (MaxRSS truncated)
+# but 128G fits the largest molecular/antibody baselines by a 2× margin
+# on prior 256G runs with no reported OOMs.
 _BANDS = {
-    'XS': ResourcePlan('XS', 'short',  '32G',  '12:00:00',   '<200 samples'),
-    'S':  ResourcePlan('S',  'short',  '64G',  '12:00:00',   '200-1k samples'),
-    'M':  ResourcePlan('M',  'medium', '128G', '2-00:00:00', '1k-3k samples'),
-    'L':  ResourcePlan('L',  'medium', '128G', '2-00:00:00', '3k-10k samples'),
-    'XL': ResourcePlan('XL', 'long',   '256G', '7-00:00:00', '>10k samples OR TCGA'),
-    'NT': ResourcePlan('NT', 'long',   '128G', '7-00:00:00', 'nucleotide (long reps)'),
-    'FT': ResourcePlan('FT', 'long',   '128G', '7-00:00:00', 'fine-tuning (DNN training)'),
+    'XS': ResourcePlan('XS', 'short',  '64G',  '12:00:00',   '<200 samples'),
+    'S':  ResourcePlan('S',  'short',  '128G', '12:00:00',   '200-1k samples'),
+    'M':  ResourcePlan('M',  'short',  '128G', '12:00:00',   '1k-3k samples (fits 12h from data)'),
+    'L':  ResourcePlan('L',  'medium', '128G', '2-00:00:00', '3k-10k samples (safety buffer)'),
+    'XL': ResourcePlan('XL', 'medium', '256G', '2-00:00:00', '>10k samples OR TCGA'),
+    'NT': ResourcePlan('NT', 'long',   '128G', '2-00:00:00', 'nucleotide (long reps)'),
+    'FT': ResourcePlan('FT', 'long',   '128G', '2-00:00:00', 'fine-tuning (DNN training)'),
 }
 
 
@@ -104,13 +119,14 @@ def _pick_band(info: DatasetInfo) -> str:
         return 'NT'
     if info.domain == 'tcga':
         return 'XL'
+    # Known-long-runner override from sacct data 2026-04-03 to -17.
+    if info.name in _KNOWN_LONG_RUNNERS:
+        return _KNOWN_LONG_RUNNERS[info.name]
     n = info.n_samples
     if n is None:
-        # Unknown size. Default to 'M' (medium partition, 2d, 128G) —
-        # conservative enough that we rarely time out. Datasets known
-        # to be smaller should be downshifted via --force once real
-        # runtimes are known. Prior default of 'S' (12h short) caused
-        # the timeouts the user reported.
+        # Unknown size defaults to M (short 12h 128G). If the sacct
+        # history shows a specific dataset needing more, add it to
+        # _KNOWN_LONG_RUNNERS rather than blanket-upshifting.
         return 'M'
     if n < 200:
         return 'XS'
