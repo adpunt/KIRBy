@@ -70,6 +70,7 @@ def _run_distance_concentration(data, budgets, dataset_name=None):
     reps = data['reps']
     labels = data['labels']
     groups = data['groups']
+    task_type = data['task_type']
     n_samples = len(labels)
 
     results = {'per_rep': {}, 'per_budget': {}, 'concat': {}}
@@ -260,6 +261,7 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
     reps = data['reps']
     labels = data['labels']
     groups = data['groups']
+    task_type = data['task_type']
     n_samples = len(labels)
 
     # Subsample for computational feasibility (kernel matrix is n×n)
@@ -486,6 +488,7 @@ def _run_double_descent(data, config, dataset_name=None):
     reps = data['reps']
     labels = data['labels']
     groups = data['groups']
+    task_type = data['task_type']
     n_samples = len(labels)
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
@@ -534,7 +537,7 @@ def _run_double_descent(data, config, dataset_name=None):
             reps, labels, groups, n_folds, mode, metric_fn,
             budget=budget, method='hybrid',
             precomputed=_precomp,
-            dataset_name=dataset_name,
+            dataset_name=dataset_name, task_type=task_type,
         )
 
         # --- PCA ---
@@ -554,7 +557,7 @@ def _run_double_descent(data, config, dataset_name=None):
             reps, labels, groups, n_folds, mode, metric_fn,
             budget=budget, method='hybrid', model_name='ridge',
             precomputed=_precomp,
-            dataset_name=dataset_name,
+            dataset_name=dataset_name, task_type=task_type,
         )
         ridge_pca = _eval_at_budget_pca(
             X_concat, labels, groups, n_folds, mode, metric_fn,
@@ -609,7 +612,7 @@ def _run_double_descent(data, config, dataset_name=None):
 
 def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
                     budget, method='hybrid', model_name='rf',
-                    precomputed=None, dataset_name=None):
+                    precomputed=None, dataset_name=None, task_type=None):
     """Evaluate a hybrid at a given budget with a given model."""
     from sklearn.ensemble import RandomForestRegressor
     from sklearn.linear_model import Ridge
@@ -797,7 +800,8 @@ def _run_approximation_theory(data, budgets, config, dataset_name=None):
         real_hybrid = _eval_at_budget(
             reps, labels, groups, n_folds, mode, metric_fn,
             budget=budget, method='hybrid', model_name='ridge',
-            precomputed=_precomp, dataset_name=dataset_name)
+            precomputed=_precomp, dataset_name=dataset_name,
+            task_type=task_type)
 
         # PCA — fresh RNG per budget for fair comparison
         rad_pca = _estimate_rademacher_pca(

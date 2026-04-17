@@ -20,7 +20,7 @@ from experiments._shared import (
     create_hybrid, apply_feature_selection,
     find_best_hybrid, get_domain_metric,
     extract_top3_base_reps,
-    INTERNAL_EVALUATORS, SCREENING_BUDGETS,
+    INTERNAL_EVALUATORS, SCREENING_BUDGETS, FULL_BUDGETS,
 )
 from kirby.hybrid import apply_augmentation_selection
 
