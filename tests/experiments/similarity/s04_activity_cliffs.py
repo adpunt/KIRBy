@@ -74,22 +74,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print("  ERROR: ecfp4 not in reps, cannot identify cliffs")
         return {'error': 'ecfp4 not available'}
 
+    # Derive task_type BEFORE cliff identification so classification cliffs
+    # use the class-mismatch indicator, not the regression |delta_y| rule.
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    task_type = data['task_type']
+    is_clf = task_type == 'classification'
+
     cliff_mask, cliff_info = identify_cliff_compounds(
         reps['ecfp4'], labels,
         tanimoto_threshold=tanimoto_threshold,
         activity_k=activity_k,
+        is_clf=is_clf,
     )
     cliff_indices = set(np.where(cliff_mask)[0].tolist())
 
-    print(f"  Cliff definition: Tanimoto>={tanimoto_threshold}, "
-          f"|delta_y|>{activity_k}*MAD(y) = {cliff_info['activity_threshold']:.3f}")
+    if is_clf:
+        print(f"  Cliff definition (clf): Tanimoto>={tanimoto_threshold}, "
+              f"different class")
+    else:
+        print(f"  Cliff definition: Tanimoto>={tanimoto_threshold}, "
+              f"|delta_y|>{activity_k}*MAD(y) = {cliff_info['activity_threshold']:.3f}")
     print(f"  Cliff compounds: {cliff_info['n_cliff_compounds']} / {len(labels)} "
           f"({cliff_info['pct_cliff_compounds']:.1f}%)")
     print(f"  Cliff pairs: {cliff_info['n_cliff_pairs']}")
-
-    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
-    task_type = data['task_type']
-    is_clf = task_type == 'classification'
 
     results = {
         'cliff_definition': {
