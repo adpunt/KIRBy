@@ -135,33 +135,82 @@ def _atomic_write_pickle(path: Path, obj: Any) -> bool:
         return False
 
 
+_CACHE_STATS = {
+    'search_hit': 0, 'search_miss': 0, 'search_stale': 0,
+    'baseline_hit': 0, 'baseline_miss': 0, 'baseline_stale': 0,
+}
+
+
+def _reset_cache_stats() -> None:
+    for k in _CACHE_STATS:
+        _CACHE_STATS[k] = 0
+
+
+def _cache_stats_summary() -> str:
+    s = _CACHE_STATS
+    return (
+        f"cache stats — search: {s['search_hit']} hit / "
+        f"{s['search_miss']} miss / {s['search_stale']} stale; "
+        f"baseline: {s['baseline_hit']} hit / "
+        f"{s['baseline_miss']} miss / {s['baseline_stale']} stale"
+    )
+
+
 def _load_cache_with_meta(
     path: Path,
     expected_meta: Dict[str, Any],
     ignore_keys: Tuple[str, ...] = ('code_timestamp',),
+    *,
+    kind: str = 'search',
+    verbose: bool = False,
 ) -> Optional[Any]:
     """Load a cache wrapper and validate its _cache_meta against expected.
 
     Returns payload on success, None on any failure (missing file,
     unpickle error, missing header, metadata mismatch). Failure is
     never fatal — caller should recompute and rewrite.
+
+    Increments _CACHE_STATS[f'{kind}_hit' | f'{kind}_miss' | f'{kind}_stale']
+    depending on outcome:
+    - hit: file exists and meta matches.
+    - miss: file doesn't exist.
+    - stale: file exists but meta mismatches (or is corrupt).
+
+    When verbose=True and a stale file is found, prints the first key that
+    drifted — helps diagnose silent drift before it causes a wrong-answer.
     """
     if not path.exists():
+        _CACHE_STATS[f'{kind}_miss'] = _CACHE_STATS.get(f'{kind}_miss', 0) + 1
         return None
     try:
         wrapper = pickle.loads(path.read_bytes())
     except Exception:
+        _CACHE_STATS[f'{kind}_stale'] = _CACHE_STATS.get(f'{kind}_stale', 0) + 1
+        if verbose:
+            print(f"  Cache {path.name}: unpickle failed — will recompute.")
         return None
     if not isinstance(wrapper, dict):
+        _CACHE_STATS[f'{kind}_stale'] = _CACHE_STATS.get(f'{kind}_stale', 0) + 1
+        if verbose:
+            print(f"  Cache {path.name}: not a dict wrapper — will recompute.")
         return None
     if '_cache_meta' not in wrapper or 'payload' not in wrapper:
+        _CACHE_STATS[f'{kind}_stale'] = _CACHE_STATS.get(f'{kind}_stale', 0) + 1
+        if verbose:
+            print(f"  Cache {path.name}: missing envelope — will recompute.")
         return None
     stored = wrapper.get('_cache_meta') or {}
     for k, v in expected_meta.items():
         if k in ignore_keys:
             continue
         if k not in stored or stored[k] != v:
+            _CACHE_STATS[f'{kind}_stale'] = _CACHE_STATS.get(f'{kind}_stale', 0) + 1
+            if verbose:
+                print(f"  Cache {path.name}: meta drift on '{k}' "
+                      f"(stored={stored.get(k)!r}, expected={v!r}) "
+                      f"— will recompute.")
             return None
+    _CACHE_STATS[f'{kind}_hit'] = _CACHE_STATS.get(f'{kind}_hit', 0) + 1
     return wrapper['payload']
 
 
@@ -1862,7 +1911,9 @@ def _evaluate_baselines(
                     groups=groups,
                 )
                 _baseline_meta['rep_hash'] = _rep_hash
-                _cached = _load_cache_with_meta(_cache_path, _baseline_meta)
+                _cached = _load_cache_with_meta(
+                    _cache_path, _baseline_meta,
+                    kind='baseline', verbose=verbose)
                 if _cached is not None and isinstance(_cached, dict):
                     _cached_score = _cached.get('score')
 
@@ -2023,6 +2074,7 @@ def _run_search(
     metric_name: Optional[str] = None,
     adaptive_pruning: Union[bool, float] = True,
     checkpoint_path: Optional[Path] = None,
+    checkpoint_meta: Optional[Dict[str, Any]] = None,
 ) -> List[dict]:
     """Main search loop over all configurations.
 
@@ -2296,20 +2348,57 @@ def _run_search(
             return
         try:
             import tempfile
+            # Wrap payload with meta (same envelope as _save_cache_with_meta)
+            # so _load_checkpoint can validate parameter alignment.
+            wrapper = {
+                '_cache_meta': checkpoint_meta or {},
+                'payload': data,
+            }
             fd, tmp = tempfile.mkstemp(dir=str(checkpoint_path.parent), suffix='.tmp')
             with os.fdopen(fd, 'wb') as f:
-                f.write(pickle.dumps(data))
+                f.write(pickle.dumps(wrapper))
             os.replace(tmp, str(checkpoint_path))
         except Exception:
             pass
 
     def _load_checkpoint():
+        """Load checkpoint, validating that its meta matches the current run.
+
+        Returns None on missing file, unpickle error, missing envelope, or
+        meta mismatch. A mismatched checkpoint is deleted so a crashed
+        resume can't pick up an incompatible partial result.
+        """
         if checkpoint_path is None or not checkpoint_path.exists():
             return None
         try:
-            return pickle.loads(checkpoint_path.read_bytes())
+            wrapper = pickle.loads(checkpoint_path.read_bytes())
         except Exception:
             return None
+        # Legacy un-wrapped checkpoints: treat as invalid (can't verify).
+        if not isinstance(wrapper, dict) or 'payload' not in wrapper:
+            if verbose:
+                print(f"  Checkpoint {checkpoint_path.name}: un-validated "
+                      f"legacy format — discarding.")
+            try:
+                checkpoint_path.unlink()
+            except Exception:
+                pass
+            return None
+        stored = wrapper.get('_cache_meta') or {}
+        if checkpoint_meta is not None:
+            for k, v in checkpoint_meta.items():
+                if k in ('code_timestamp',):
+                    continue
+                if k not in stored or stored[k] != v:
+                    if verbose:
+                        print(f"  Checkpoint {checkpoint_path.name} stale "
+                              f"({k} drifted) — discarding and recomputing.")
+                    try:
+                        checkpoint_path.unlink()
+                    except Exception:
+                        pass
+                    return None
+        return wrapper['payload']
 
     def _cfg_key(cfg):
         """Hashable key for a config tuple (excludes model callable)."""
@@ -3083,14 +3172,13 @@ def find_best_hybrid(
             rep_factories_id=rep_factories_id,
         )
 
-        payload = _load_cache_with_meta(cache_path, expected_search_meta)
+        payload = _load_cache_with_meta(
+            cache_path, expected_search_meta,
+            kind='search', verbose=verbose)
         if payload is not None:
             if verbose:
                 print(f"  Loaded cached result from {cache_path}")
             return payload
-        elif cache_path.exists() and verbose:
-            print(f"  Cache at {cache_path.name} failed validation — "
-                  f"recomputing")
 
     if groups is not None:
         groups = np.asarray(groups).ravel()
@@ -3213,6 +3301,9 @@ def find_best_hybrid(
         metric_name=_metric_name_str,
         adaptive_pruning=adaptive_pruning,
         checkpoint_path=_ckpt_path,
+        # Validate checkpoint payload against the same meta used for the
+        # final cache file. Resume only when parameters match.
+        checkpoint_meta=expected_search_meta,
     )
 
     # --- Two-phase refinement ---
@@ -3352,6 +3443,12 @@ def find_best_hybrid(
                 _ckpt_path.unlink()
             except Exception:
                 pass
+
+    # End-of-run cache observability. Always print — one line in SLURM logs
+    # is worth the past months of invisible cache misses.
+    _s = _CACHE_STATS
+    if any(_s.values()):
+        print(f"[cache] {_cache_stats_summary()}")
 
     return search_result
 
