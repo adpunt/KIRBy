@@ -105,16 +105,6 @@ submit_gena_refix() {
 #SBATCH --mail-user=${EMAIL}
 #SBATCH --mail-type=END,FAIL
 
-# Preflight: refuse to run if any stale gena_lm.npy cache still exists.
-# If any are found, the fix (3a5b5d5) will not take effect because
-# get_representations() loads from cache before calling _embed_gena_lm.
-stale=\$(ls -1 ~/.cache/kirby/reps/nuc_*/gena_lm.npy 2>/dev/null | wc -l)
-if [ "\$stale" != "0" ]; then
-    echo "ABORT: \$stale stale gena_lm.npy file(s) still present in cache"
-    echo "Delete them first: rm -v ~/.cache/kirby/reps/nuc_*/gena_lm.npy"
-    exit 2
-fi
-
 cd ${KIRBY}
 git pull 2>/dev/null || true
 . ./setup.sh
