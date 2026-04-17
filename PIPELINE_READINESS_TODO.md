@@ -959,7 +959,7 @@ are reviewed. See PRECOMPUTE_JOB_TRACKER.md §Nucleotide gena_lm refix.
 | 56 | gb_human_nontata_promoters | 36,131 | 6 | MCC | Survey review needed (gena_lm refix 7485377 PD) |
 | 57 | nt_enhancers | — | 6 | MCC | Classical only — survey pending (7483707 PD) |
 | 58 | nt_enhancers_types | — | 6 | MCC | Classical only — survey pending (7483708 PD) |
-| 59 | nt_H2AFZ | 33,000 | 18 | MCC | **DOWNGRADED** (gena_lm contaminated) — refix 7485363 PD |
+| 59 | nt_H2AFZ | 33,000 | 14 | MCC | **DONE** — gena_lm corrected (1024D, MCC=0.019, dropped). Winner: mistral_dna+ridge=0.4323 |
 | 60 | nt_H3K27ac | 31,616 | 18 | MCC | **DOWNGRADED** — refix 7485364 PD |
 | 61 | nt_H3K27me3 | 33,000 | 18 | MCC | **DOWNGRADED** — refix 7485365 PD |
 | 62 | nt_H3K36me3 | 33,000 | 18 | MCC | **DOWNGRADED** — refix 7485366 PD |
@@ -996,18 +996,18 @@ rep. Those claims are **INVALID**. The pre-3a5b5d5 `_embed_gena_lm` returned
 MCC for gena_lm on every H3K* task. The real numbers land after
 jobs 7485363-78 complete. Tables below retained for historical record only.
 
-**nt_H2AFZ (33,000 samples, 23 groups, MCC) — 18/25 reps ran (7 failed: splicebert, rnafm, dnabert_s, gpn, rinalmo, caduceus, ntv3_100m):**
+**nt_H2AFZ (33,000 samples, 23 groups, MCC) — 14/25 reps ran (7 failed: splicebert, rnafm, dnabert_s, gpn, rinalmo, caduceus, ntv3_100m):**
 
-CONTAMINATED — pending 7485363 refix. Historical values:
+CORRECTED 2026-04-17 (gena_refix 7485363 + 7496791). gena_lm now 1024D hidden states.
 
 | Tier | Reps |
 |------|------|
-| Top Tier (5) | mistral_dna, hyenadna, grover_dna, ~~gena_lm~~, kmer6 |
-| General (12) | mistral_dna, hyenadna, grover_dna, ~~gena_lm~~, kmer6, nt_v2_250m, nt_v2_500m, tnf_canonical, kmer4, kmer5, tetranuc_freq, kmer3 |
+| Top Tier (4) | mistral_dna, hyenadna, grover_dna, kmer6 |
+| General (11) | mistral_dna, hyenadna, grover_dna, kmer6, nt_v2_250m, nt_v2_500m, tnf_canonical, kmer4, kmer5, tetranuc_freq, kmer3 |
 | Augmentation (5) | codon_usage, complexity, dinuc_freq, dna_shape, gc_content |
-| Dropped | dnabert2 (84% of best, weakest FM by large margin) |
+| Dropped (2) | dnabert2 (84% of best), gena_lm (4% of best — near random at 1024D) |
 
-*Winner claim invalid. mistral_dna+ridge=0.4323 may still be near top — re-verify after refix.*
+*Winner: mistral_dna+ridge=0.4323 MCC. Best augmentation: mistral_dna+tnf_canonical=0.4512 (+0.019).*
 
 **nt_H3K27ac (31,616 samples, 23 groups, MCC) — 18/25 reps ran — CONTAMINATED, pending 7485364:**
 
