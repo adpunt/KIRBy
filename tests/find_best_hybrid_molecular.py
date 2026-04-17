@@ -422,11 +422,15 @@ def load_dataset(name_or_path: str, smiles_col: str = 'smiles',
         smiles, labels, task_type = smiles, labels, 'regression'
 
     elif name_lower == 'herg':
-        from kirby.datasets.herg import load_herg_tdc
-        data = load_herg_tdc()
+        # TDC's Tox21 hERG loader has been intermittently broken
+        # ("Please report this error to contact@tdcommons.ai"). Use FLuID
+        # local pickles instead — same binary blocker classification task,
+        # data from Lhasa Limited, no network dependency.
+        from kirby.datasets.herg import load_herg_fluid
+        data = load_herg_fluid()
         smiles = data['smiles']
         labels = data['labels']
-        print(f"  Loaded {len(smiles)} molecules from TDC-hERG (binary blocker clf)")
+        print(f"  Loaded {len(smiles)} molecules from FLuID-hERG (binary blocker clf)")
         smiles, labels, task_type = smiles, labels, 'classification'
 
     elif name_lower == 'qm9':
