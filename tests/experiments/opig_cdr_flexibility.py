@@ -221,8 +221,9 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds):
             augmentation_strategy='uncapped',
             internal_evaluators=INTERNAL_EVALUATORS,
             speed='full', return_fitted=True, verbose=False, cache=True,
-            dataset_name=f"cdr_flexibility_{'_'.join(cdr_types)}",
+            dataset_name='cdr_flexibility',
             tier='general',
+            condition_suffix='_'.join(cdr_types),
             adaptive_pruning=0.25)
         top3 = extract_top3_base_reps(search)
         if top3:

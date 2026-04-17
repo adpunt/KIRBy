@@ -295,8 +295,9 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
         return_fitted=True,
         verbose=False,
         cache=True,
-        dataset_name=f"{dataset_name}_{pool_name}",
+        dataset_name=dataset_name,
         tier='general',
+        condition_suffix=pool_name,
         adaptive_pruning=0.25,
     )
 

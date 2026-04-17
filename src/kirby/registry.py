@@ -144,6 +144,13 @@ DATASET_REGISTRY: Dict[str, DatasetInfo] = {
     'davis':            DatasetInfo('davis',        'regression', 'ci', False, 'dta'),
     'kiba':             DatasetInfo('kiba',         'regression', 'ci', False, 'dta'),
     'bindingdb_kd':     DatasetInfo('bindingdb_kd', 'regression', 'ci', False, 'dta', notes='TDC BindingDB_Kd, ~52K pairs.'),
+
+    # ── OPIG meta-entries ────────────────────────────────────────────────
+    # These cover experiment "families" that use the same underlying loader
+    # with a per-variant suffix. Use condition_suffix= on find_best_hybrid
+    # to keep cache entries distinct while sharing metric/task semantics.
+    'chembl_qsar':      DatasetInfo('chembl_qsar',     'regression',     'mae', True, 'molecular', notes='Parent registry entry for chembl_qsar_{target}. Call find_best_hybrid(dataset_name="chembl_qsar", condition_suffix="{target}").'),
+    'cdr_flexibility':  DatasetInfo('cdr_flexibility', 'classification', 'auc', False, 'antibody', notes='Parent registry entry for cdr_flexibility_{cdr_types}. Use condition_suffix={cdr_types}.'),
 }
 
 
