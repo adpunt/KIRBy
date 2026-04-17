@@ -614,12 +614,16 @@ DMS datasets — mutation_features is the standout rep (top 1-2 on lysozyme, HER
 
 Classification tasks (AUROC). Different character from regression — sequence encodings (blosum, onehot) do well.
 
-**tz_her2_binary (n=5,000, AUROC):**
+**tz_her2_binary (5,000 samples, 10 groups, AUROC) — 34/42 reps ran. FULL SURVEY 2026-04-16 (job 7483713):**
+
 | Tier | Reps |
 |------|------|
-| Top Tier (2) | blosum, onehot |
-| General (29) | all reps with AUROC > 0.80 (through aac) |
-| Augmentation | none |
+| Top Tier (3) | blosum, esm2_per_cdr, esm2_concat |
+| General (16) | blosum, esm2_per_cdr, esm2_concat, esm2_wt_delta, esm2_per_region, esm2, esm2_cdr3, esm2_cdr, antiberty_cdr, antiberty, onehot, esm2_midlayers, abroberta_cdr, abroberta, esmc_cdr, esmc |
+| Augmentation (0) | *none tested helped — all 12 tested pairs (base ∈ {onehot, blosum} × aug ∈ {aac, antiberty_llr, esm2_llr, mutation_features, paratope, structural}) gave delta ≤ 0 on saturated task* |
+| Dropped (15) | esm2_mutsite (95%), esm3/esm3_cdr (95%), esm2_early (94%), esm2_layer24 (94%), prot_t5/_cdr (94%), esm2_entropy_top20 (94%), saprot/_cdr (93%), igt5 (93%), ablang2 (91%), aac (87%), **xtrimopglm/mint/igbert/igbert_cls/aido_protein (all AUROC=0.50, broken)** |
+
+*Winner: blosum+lightgbm=0.8616 AUROC. Top Tier threshold ≥99%. 5 reps broken (random-level). No useful augmentation.*
 
 **humanness_therapeutic (n=564, AUROC):**
 | Tier | Reps |
