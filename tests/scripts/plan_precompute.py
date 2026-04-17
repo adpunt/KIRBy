@@ -183,23 +183,82 @@ def _sbatch_line(dataset: str, condition: str, plan: ResourcePlan,
     )
 
 
+def _sbatch_consolidated(dataset: str, plan: ResourcePlan,
+                         distance: bool,
+                         cluster: Optional[str] = None) -> str:
+    """Build one sbatch line that runs ALL conditions (standard OR distance)
+    for a dataset sequentially in one SLURM job.
+
+    precompute_hybrids.py without --condition runs all applicable tier ×
+    strategy combinations inside one python process. For small and
+    medium datasets this fits inside the 12h `short` window easily and
+    collapses 6 sbatch calls (or 4 for distance) to 1.
+
+    Uses a separate job per mode (standard vs distance) because the
+    precompute script treats --distance as a global switch: the two
+    modes can't be interleaved in one invocation without a code change.
+    """
+    group = 'distance' if distance else 'standard'
+    distance_flag = ' --distance' if distance else ''
+    job_name = f'pc_{dataset}_all_{group}'
+    wrap = (
+        f'cd /data/stat-cadd/scat9264/KIRBy && '
+        f'export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh && '
+        f'export PYTHONWARNINGS=ignore && '
+        f'export TRANSFORMERS_VERBOSITY=error && '
+        f'python tests/precompute_hybrids.py {dataset} '
+        f'--speed full{distance_flag}'
+    )
+    cluster_flag = f' --clusters={cluster}' if cluster else ''
+    return (
+        f'sbatch{cluster_flag} --job-name={job_name} '
+        f'--partition={plan.partition} '
+        f'--mem={plan.mem} --time={plan.time} --cpus-per-task=4 '
+        f'--output=slurm-%j-{job_name}.out '
+        f'--wrap="{wrap}"'
+    )
+
+
 def plan_dataset(dataset: str, info: DatasetInfo,
                  forced: Optional[str] = None,
                  include_distance: bool = True,
                  conditions: Optional[List[str]] = None,
-                 cluster: Optional[str] = None) -> List[str]:
+                 cluster: Optional[str] = None,
+                 consolidated: bool = False) -> List[str]:
     """Return the list of sbatch lines for the selected conditions.
 
     When `conditions` is None: all 6 standard + 4 distance (unless
     include_distance=False). When a list is given, only those conditions
     are emitted — used for 1-per-dataset smoke tests.
+
+    When `consolidated=True`, emit 2 sbatch calls per dataset (one for
+    all standard conditions, one for all distance) instead of 10.
+    Ignores `conditions` — consolidation means "everything in each
+    mode". Cuts total job count by 5x.
     """
     band = forced or _pick_band(info)
     if band not in _BANDS:
         raise ValueError(f"Unknown band: {band}. Choices: {list(_BANDS)}")
     plan = _BANDS[band]
 
-    # Resolve which conditions to emit.
+    header = [
+        f'# {dataset} ({info.domain}, '
+        f'task={info.task_type}, metric={info.metric}, '
+        f'n={info.n_samples}, band={band} '
+        f'→ {plan.partition} / {plan.mem} / {plan.time})',
+    ]
+
+    if consolidated:
+        lines = header[:]
+        lines.append(_sbatch_consolidated(dataset, plan, distance=False,
+                                           cluster=cluster))
+        if include_distance:
+            lines.append(_sbatch_consolidated(dataset, plan, distance=True,
+                                               cluster=cluster))
+        lines.append('')
+        return lines
+
+    # Resolve which conditions to emit (per-condition mode).
     if conditions is None:
         standard = list(_STANDARD_CONDITIONS)
         distance = list(_DISTANCE_CONDITIONS) if include_distance else []
@@ -207,12 +266,7 @@ def plan_dataset(dataset: str, info: DatasetInfo,
         standard = [c for c in conditions if c in _STANDARD_CONDITIONS]
         distance = [c for c in conditions if c in _DISTANCE_CONDITIONS]
 
-    lines = [
-        f'# {dataset} ({info.domain}, '
-        f'task={info.task_type}, metric={info.metric}, '
-        f'n={info.n_samples}, band={band} '
-        f'→ {plan.partition} / {plan.mem} / {plan.time})',
-    ]
+    lines = header[:]
     for cond in standard:
         lines.append(_sbatch_line(dataset, cond, plan, distance=False,
                                   cluster=cluster))
@@ -268,6 +322,13 @@ def main() -> int:
                              'the given SLURM cluster. $HOME/$DATA are '
                              'shared between arc and htc so caches work '
                              'from either.')
+    parser.add_argument('--consolidated', action='store_true',
+                        help='Emit 2 sbatch calls per dataset instead of '
+                             '10: one that runs ALL standard conditions '
+                             'sequentially, one that runs ALL distance '
+                             'conditions. 5x fewer jobs. Good for small/'
+                             'medium datasets where the combined runtime '
+                             'still fits the partition time limit.')
     parser.add_argument('--summary', action='store_true',
                         help='Print a band summary instead of sbatch commands.')
     args = parser.parse_args()
@@ -359,7 +420,8 @@ def main() -> int:
         for line in plan_dataset(name, info, forced=forced,
                                  include_distance=not args.skip_distance,
                                  conditions=conditions_filter,
-                                 cluster=args.cluster):
+                                 cluster=args.cluster,
+                                 consolidated=args.consolidated):
             print(line)
             if line.startswith('sbatch'):
                 total_jobs += 1
