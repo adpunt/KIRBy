@@ -1538,9 +1538,19 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
         n_groups = data['n_groups']
         task_type = data['task_type']
 
+        # Nucleotide rep generation: when explicit rep_names are given
+        # (precompute / experiments), pass them as a comma-joined list so
+        # foundation-model reps (mistral_dna, hyenadna, nt_v2_*) and
+        # classical augmentation reps both get generated. Without this,
+        # the default 'fast' preset skips foundation models entirely and
+        # the precompute never sees the reps DATASET_REPS asks for.
+        if rep_names:
+            _nuc_preset = ','.join(rep_names)
+        else:
+            _nuc_preset = rep_preset
         reps = _cache_rep_dict(
             dataset_name,
-            lambda: get_nuc_representations(sequences, rep_preset),
+            lambda: get_nuc_representations(sequences, _nuc_preset),
             filter_names=rep_names,
         )
 

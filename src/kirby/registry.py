@@ -134,7 +134,7 @@ DATASET_REGISTRY: Dict[str, DatasetInfo] = {
 
     # ── Nucleotide classification ────────────────────────────────────────
     # NT Revised 5 datasets, chromosome hold-out groups.
-    'nt_H2AFZ':             DatasetInfo('nt_H2AFZ',           'classification', 'mcc', False, 'nucleotide'),
+    'nt_H2AFZ':             DatasetInfo('nt_H2AFZ',           'classification', 'mcc', False, 'nucleotide', n_samples=33000, notes='Survey DONE 2026-04-17. gena_lm dropped (MCC=0.019). Winner: mistral_dna+ridge MCC=0.4323.'),
     'nt_H3K27ac':           DatasetInfo('nt_H3K27ac',         'classification', 'mcc', False, 'nucleotide'),
     'nt_H3K27me3':          DatasetInfo('nt_H3K27me3',        'classification', 'mcc', False, 'nucleotide'),
     'nt_H3K36me3':          DatasetInfo('nt_H3K36me3',        'classification', 'mcc', False, 'nucleotide'),

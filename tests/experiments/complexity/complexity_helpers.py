@@ -560,12 +560,14 @@ DATASET_REPS = {
     },
     # --- Nucleotide (NT Revised, chromosome hold-out groups) ---
     'nt_H2AFZ': {
+        # Survey 2026-04-17: gena_lm corrected to 1024D, MCC=0.019, dropped.
+        # Winner single rep: mistral_dna + ridge → MCC=0.4323.
         'general': [
-            'mistral_dna', 'hyenadna', 'grover_dna', 'gena_lm', 'kmer6',
+            'mistral_dna', 'hyenadna', 'grover_dna', 'kmer6',
             'nt_v2_250m', 'nt_v2_500m', 'tnf_canonical', 'kmer4', 'kmer5',
             'tetranuc_freq', 'kmer3'],
         'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
-        'top_tier': ['mistral_dna', 'hyenadna', 'grover_dna', 'gena_lm', 'kmer6'],
+        'top_tier': ['mistral_dna', 'hyenadna', 'grover_dna', 'kmer6'],
     },
     'nt_H3K27ac': {
         'general': [
