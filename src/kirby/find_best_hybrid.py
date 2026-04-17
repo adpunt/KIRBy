@@ -143,6 +143,7 @@ def _atomic_write_pickle(path: Path, obj: Any) -> bool:
 _CACHE_STATS = {
     'search_hit': 0, 'search_miss': 0, 'search_stale': 0,
     'baseline_hit': 0, 'baseline_miss': 0, 'baseline_stale': 0,
+    'hybrid_eval_hit': 0, 'hybrid_eval_miss': 0, 'hybrid_eval_stale': 0,
 }
 
 
@@ -157,7 +158,9 @@ def _cache_stats_summary() -> str:
         f"cache stats — search: {s['search_hit']} hit / "
         f"{s['search_miss']} miss / {s['search_stale']} stale; "
         f"baseline: {s['baseline_hit']} hit / "
-        f"{s['baseline_miss']} miss / {s['baseline_stale']} stale"
+        f"{s['baseline_miss']} miss / {s['baseline_stale']} stale; "
+        f"hybrid_eval: {s['hybrid_eval_hit']} hit / "
+        f"{s['hybrid_eval_miss']} miss / {s['hybrid_eval_stale']} stale"
     )
 
 
@@ -376,6 +379,33 @@ def _make_folds_meta(
     }
 
 
+def _hybrid_eval_cache_path(dataset_name: str, subset_hash: str,
+                            alloc: str, imp: str, evaluator: str,
+                            budget: int, fold_idx: int, n_folds: int,
+                            seed: int, model_name: str,
+                            aug_strategy: str = 'none') -> Path:
+    """Per-(rep_subset, config, fold, model) hybrid-eval cache path.
+
+    Layout: hybrid_evals/{dataset}/{...}.pkl so one subdir per dataset
+    stays under ~5k-10k files for typical speed=full precompute
+    (budgets x allocs x imps x evals x folds × models with adaptive
+    pruning). Flat-dir alternative would put ~130k files in one
+    directory.
+
+    subset_hash = short hex hash of the sorted rep names the allocation
+    picked. For top_k allocations this is predictable from baselines
+    before calling create_hybrid, so cache can be probed pre-compute.
+    """
+    a = _sanitize_filename_part(alloc)
+    i = _sanitize_filename_part(imp)
+    e = _sanitize_filename_part(evaluator)
+    ags = _sanitize_filename_part(aug_strategy)
+    m = _sanitize_filename_part(model_name)
+    fname = (f'{subset_hash}__{a}__{i}__{e}__b{budget}__'
+             f'f{fold_idx}of{n_folds}_{seed}__{m}__{ags}.pkl')
+    return _cache_base() / 'hybrid_evals' / dataset_name / fname
+
+
 def _ft_embeddings_cache_path(dataset_name: str, factory_id: str,
                               rep_name: str, fold_idx: int,
                               n_folds: int, seed: int) -> Path:
@@ -388,6 +418,123 @@ def _ft_embeddings_cache_path(dataset_name: str, factory_id: str,
     return (_cache_base() / 'ft_embeddings' /
             f'{dataset_name}__{fid}__{rep_name}__'
             f'f{fold_idx}of{n_folds}_{seed}.pkl')
+
+
+def _predict_top_k_subset(
+    alloc: str,
+    base_rep_names: List[str],
+    fold_alloc_scores: Optional[Dict[str, float]],
+    baselines: Optional[Dict[str, Dict[str, float]]],
+    evaluator_for_baseline: str,
+    lower_is_better: bool,
+) -> Optional[List[str]]:
+    """If `alloc` is a 'top_N' pattern, return the N rep names that the
+    allocator will select. Returns None for any other allocation style,
+    because non-top_k methods use all input reps with varying weights —
+    the rep subset isn't predictable pre-compute and dedup doesn't apply.
+
+    Score sources (in priority order):
+      1. fold_alloc_scores: alloc_cache entries are pre-shifted so
+         "higher-is-better" regardless of the underlying metric
+         direction (see alloc cache population in _run_search).
+         Sort descending.
+      2. baselines: raw per-rep per-model scores. For these,
+         lower_is_better matters — we pick by direction.
+
+    The prediction must match hybrid.allocate_performance_weighted's
+    top_k scheme, which sorts baseline_scores descending (higher-is-
+    better semantics on comparable scores).
+    """
+    if not alloc.startswith('top_'):
+        return None
+    try:
+        k = int(alloc.split('_', 1)[1])
+    except (ValueError, IndexError):
+        return None
+    if k <= 0 or k >= len(base_rep_names):
+        return None
+
+    used_alloc_scores = False
+    scored: List[Tuple[str, float]] = []
+    if fold_alloc_scores:
+        for name in base_rep_names:
+            v = fold_alloc_scores.get(name)
+            if v is not None and np.isfinite(v):
+                scored.append((name, float(v)))
+        used_alloc_scores = len(scored) >= k
+
+    if not used_alloc_scores and baselines:
+        # Fallback: best-model-per-rep from the baseline dict.
+        scored = []
+        for name in base_rep_names:
+            model_scores = baselines.get(name, {})
+            vals = [v for mk, v in model_scores.items()
+                    if mk not in ('dimension', '_secondary')
+                    and isinstance(v, (int, float)) and np.isfinite(v)]
+            if vals:
+                best = min(vals) if lower_is_better else max(vals)
+                scored.append((name, float(best)))
+    if len(scored) < k:
+        return None  # not enough scored reps to predict
+
+    if used_alloc_scores:
+        # alloc_cache is pre-shifted: always sort descending
+        scored.sort(key=lambda t: t[1], reverse=True)
+    else:
+        # baselines are raw: respect direction
+        scored.sort(key=lambda t: t[1], reverse=not lower_is_better)
+    return sorted(n for n, _ in scored[:k])
+
+
+def _make_hybrid_eval_meta(
+    dataset_name: str, subset_names: List[str], subset_hashes: Tuple[Tuple[str, int], ...],
+    alloc: str, imp: str, evaluator: str, budget: int,
+    fold_idx: int, n_folds: int, seed: int, model_name: str,
+    train_idx: np.ndarray, val_idx: np.ndarray,
+    labels_hash: int, aug_strategy: str,
+    aug_names: Tuple[str, ...], aug_hashes: Tuple[Tuple[str, int], ...],
+    step_size: int, candidate_ranking: str, greedy_tolerance: float,
+    augmentation_threshold: Optional[float], augmentation_budget: int,
+    metric_name: str, task_type: str,
+) -> Dict[str, Any]:
+    return {
+        'kind': 'hybrid_eval',
+        'dataset_name': dataset_name,
+        'subset_names': tuple(sorted(subset_names)),
+        'subset_hashes': subset_hashes,
+        'alloc': alloc,
+        'imp': imp,
+        'evaluator': evaluator,
+        'budget': int(budget),
+        'fold_idx': int(fold_idx),
+        'n_folds': int(n_folds),
+        'seed': int(seed),
+        'model_name': model_name,
+        'train_idx_hash': _hash_bytes(np.ascontiguousarray(train_idx).tobytes()),
+        'val_idx_hash': _hash_bytes(np.ascontiguousarray(val_idx).tobytes()),
+        'labels_hash': labels_hash,
+        'aug_strategy': aug_strategy,
+        'aug_names': aug_names,
+        'aug_hashes': aug_hashes,
+        'step_size': int(step_size),
+        'candidate_ranking': candidate_ranking,
+        'greedy_tolerance': float(greedy_tolerance),
+        'augmentation_threshold': (float(augmentation_threshold)
+                                   if augmentation_threshold is not None else None),
+        'augmentation_budget': int(augmentation_budget),
+        'metric_name': metric_name,
+        'task_type': task_type,
+        'code_timestamp': time.time(),
+    }
+
+
+def _subset_hash_str(subset_hashes: Tuple[Tuple[str, int], ...]) -> str:
+    """Short hex hash of the (rep_name, content_hash) tuples, for filenames."""
+    h = hashlib.sha1()
+    for name, content_hash in subset_hashes:
+        h.update(name.encode())
+        h.update(str(content_hash).encode())
+    return h.hexdigest()[:16]
 
 
 def _make_ft_embedding_meta(
@@ -1778,6 +1925,15 @@ def _evaluate_hybrid_config(
     selection_dedup: Optional[Dict] = None,
     greedy_tolerance: float = 0.0,
     fold_indices: Optional[List[int]] = None,
+    # Phase D.2: persistent hybrid_eval dedup cache. Active only for top_k
+    # allocations where the selected rep subset is predictable from
+    # per-fold alloc scores. `dataset_name` and `task_type` are required
+    # for the cache to activate; if either is missing the cache silently
+    # no-ops and behaviour is identical to pre-D.2.
+    dataset_name: Optional[str] = None,
+    task_type: Optional[str] = None,
+    baselines: Optional[Dict[str, Dict[str, float]]] = None,
+    use_hybrid_eval_cache: bool = True,
 ) -> dict:
     """Evaluate a single hybrid configuration. Returns result dict.
 
@@ -1803,6 +1959,23 @@ def _evaluate_hybrid_config(
     any_imputation = False
 
     _eval_fold_indices = range(len(fold_splits)) if fold_indices is None else fold_indices
+
+    # Phase D.2: precompute shared cache-key components for this call.
+    # Only built when the hybrid_eval cache is actually active — every
+    # other call path short-circuits _hybrid_cache_enabled below.
+    _hybrid_cache_enabled = (
+        use_hybrid_eval_cache
+        and dataset_name is not None
+        and task_type in ('classification', 'regression')
+        and metric_name is not None
+        and allocation_method.startswith('top_')
+    )
+    if _hybrid_cache_enabled:
+        _labels_hash = _hash_bytes(np.ascontiguousarray(labels).tobytes())
+        _aug_names_t = (tuple(sorted(augmentations.keys()))
+                        if augmentations else ())
+        _aug_hashes_t = (_hash_rep_dict(augmentations)
+                         if augmentations else ())
 
     for fold_idx in _eval_fold_indices:
         train_idx, val_idx = fold_splits[fold_idx]
@@ -1836,6 +2009,70 @@ def _evaluate_hybrid_config(
                 fold_alloc_scores = alloc_cache.get((fold_idx, internal_evaluator, metric_name))
             if fold_alloc_scores is None:
                 fold_alloc_scores = alloc_cache.get((fold_idx, internal_evaluator))
+
+        # Phase D.2: persistent hybrid_eval cache — probe before compute.
+        # Dedup applies when `alloc` is top_k and the predicted subset
+        # equals another run's subset (e.g. general top_3 and top_tier
+        # top_3 both pick the same 3 reps). Miss cases pay only the
+        # cost of predicting + hashing + one file stat.
+        _he_cache_path = None
+        _he_expected_meta = None
+        if _hybrid_cache_enabled:
+            _predicted_subset = _predict_top_k_subset(
+                allocation_method, sorted(base_reps.keys()),
+                fold_alloc_scores=fold_alloc_scores, baselines=baselines,
+                evaluator_for_baseline=internal_evaluator,
+                lower_is_better=lower_is_better,
+            )
+            if _predicted_subset is not None:
+                _subset_hashes = tuple(
+                    (name, _hash_array(base_reps[name]))
+                    for name in _predicted_subset)
+                _subset_hex = _subset_hash_str(_subset_hashes)
+                _he_cache_path = _hybrid_eval_cache_path(
+                    dataset_name=dataset_name,
+                    subset_hash=_subset_hex,
+                    alloc=allocation_method, imp=importance_method,
+                    evaluator=internal_evaluator, budget=budget,
+                    fold_idx=fold_idx, n_folds=len(fold_splits),
+                    seed=seed, model_name=model_name,
+                    aug_strategy=augmentation_strategy,
+                )
+                _he_expected_meta = _make_hybrid_eval_meta(
+                    dataset_name=dataset_name,
+                    subset_names=_predicted_subset,
+                    subset_hashes=_subset_hashes,
+                    alloc=allocation_method, imp=importance_method,
+                    evaluator=internal_evaluator, budget=budget,
+                    fold_idx=fold_idx, n_folds=len(fold_splits), seed=seed,
+                    model_name=model_name,
+                    train_idx=train_idx, val_idx=val_idx,
+                    labels_hash=_labels_hash,
+                    aug_strategy=augmentation_strategy,
+                    aug_names=_aug_names_t, aug_hashes=_aug_hashes_t,
+                    step_size=step_size,
+                    candidate_ranking=candidate_ranking,
+                    greedy_tolerance=greedy_tolerance,
+                    augmentation_threshold=augmentation_threshold,
+                    augmentation_budget=augmentation_budget,
+                    metric_name=metric_name, task_type=task_type,
+                )
+                _cached_eval = _load_cache_with_meta(
+                    _he_cache_path, _he_expected_meta,
+                    kind='hybrid_eval', verbose=False)
+                if _cached_eval is not None:
+                    fold_scores.append(_cached_eval['score'])
+                    fold_n_features.append(_cached_eval['n_features'])
+                    if _cached_eval.get('had_imputation'):
+                        any_imputation = True
+                    # Also feed the in-memory selection_dedup so sibling
+                    # configs within this call benefit.
+                    if (selection_dedup is not None
+                            and _cached_eval.get('selection_hash')):
+                        selection_dedup[(fold_idx, model_name,
+                                         _cached_eval['selection_hash'])] = (
+                            _cached_eval['score'], _cached_eval['n_features'])
+                    continue
 
         try:
             # Pass fold-level groups for group-aware internal split
@@ -1921,9 +2158,37 @@ def _evaluate_hybrid_config(
         fold_scores.append(score)
         fold_n_features.append(X_train.shape[1])
 
-        # Store in dedup cache
+        # Store in dedup cache (in-memory, per-call)
         if selection_dedup is not None and sel_hash is not None:
             selection_dedup[(fold_idx, model_name, sel_hash)] = (score, X_train.shape[1])
+
+        # Phase D.2: persist to disk for cross-invocation dedup. Skipped
+        # if the predicted subset disagreed with the actual picked
+        # subset (rare — only happens if baselines/alloc_scores lied
+        # about top-k ordering).
+        if _he_cache_path is not None and _he_expected_meta is not None:
+            # Cross-check: the reps the allocator actually picked match
+            # what we predicted. feature_info has per-rep sub-dicts
+            # (with 'selected_indices') plus bookkeeping entries like
+            # 'allocation' and 'augmentation_info' that we must exclude.
+            _nonrep_keys = {'allocation', 'augmentation_info'}
+            _actual_picked = sorted(
+                name for name, info in feature_info.items()
+                if name not in _nonrep_keys
+                and isinstance(info, dict)
+                and 'selected_indices' in info
+                and len(info['selected_indices']) > 0
+            )
+            _predicted_sorted = sorted(_predicted_subset)
+            if _actual_picked == _predicted_sorted:
+                _payload = {
+                    'score': float(score),
+                    'n_features': int(X_train.shape[1]),
+                    'selection_hash': sel_hash,
+                    'had_imputation': bool(_fold_imputed),
+                }
+                _save_cache_with_meta(
+                    _he_cache_path, _he_expected_meta, _payload)
 
     if not fold_scores:
         raise ValueError("All folds failed")
@@ -2215,6 +2480,10 @@ def _run_search(
     adaptive_pruning: Union[bool, float] = True,
     checkpoint_path: Optional[Path] = None,
     checkpoint_meta: Optional[Dict[str, Any]] = None,
+    # Phase D.2 hybrid_eval cache context.
+    dataset_name: Optional[str] = None,
+    task_type: Optional[str] = None,
+    baselines: Optional[Dict[str, Dict[str, float]]] = None,
 ) -> List[dict]:
     """Main search loop over all configurations.
 
@@ -2465,6 +2734,11 @@ def _run_search(
         cv_splitter=cv_splitter, importance_cache=importance_cache,
         alloc_cache=alloc_cache, selection_dedup=selection_dedup,
         greedy_tolerance=greedy_tolerance,
+        # Phase D.2: cross-invocation dedup cache activates only when
+        # the caller passes dataset_name + task_type. Otherwise no-ops.
+        dataset_name=dataset_name,
+        task_type=task_type,
+        baselines=baselines,
     )
 
     def _eval_cfg(cfg, fold_indices=None):
@@ -3468,6 +3742,14 @@ def find_best_hybrid(
         # Validate checkpoint payload against the same meta used for the
         # final cache file. Resume only when parameters match.
         checkpoint_meta=expected_search_meta,
+        # Phase D.2: hybrid_eval cache context. Activates the persistent
+        # per-(subset, config, fold, model) cache for top_k allocations
+        # so general-tier and top-tier runs share the identical-subset
+        # computation. Gated on dataset_name being set (i.e. caller
+        # wants persistent caching at all).
+        dataset_name=dataset_name,
+        task_type=_task_type_for_meta,
+        baselines=baselines,
     )
 
     # --- Two-phase refinement ---
