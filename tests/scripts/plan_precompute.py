@@ -177,12 +177,26 @@ def _sbatch_line(dataset: str, condition: str, plan: ResourcePlan,
 
 def plan_dataset(dataset: str, info: DatasetInfo,
                  forced: Optional[str] = None,
-                 include_distance: bool = True) -> List[str]:
-    """Return the list of sbatch lines for all conditions of one dataset."""
+                 include_distance: bool = True,
+                 conditions: Optional[List[str]] = None) -> List[str]:
+    """Return the list of sbatch lines for the selected conditions.
+
+    When `conditions` is None: all 6 standard + 4 distance (unless
+    include_distance=False). When a list is given, only those conditions
+    are emitted — used for 1-per-dataset smoke tests.
+    """
     band = forced or _pick_band(info)
     if band not in _BANDS:
         raise ValueError(f"Unknown band: {band}. Choices: {list(_BANDS)}")
     plan = _BANDS[band]
+
+    # Resolve which conditions to emit.
+    if conditions is None:
+        standard = list(_STANDARD_CONDITIONS)
+        distance = list(_DISTANCE_CONDITIONS) if include_distance else []
+    else:
+        standard = [c for c in conditions if c in _STANDARD_CONDITIONS]
+        distance = [c for c in conditions if c in _DISTANCE_CONDITIONS]
 
     lines = [
         f'# {dataset} ({info.domain}, '
@@ -190,11 +204,10 @@ def plan_dataset(dataset: str, info: DatasetInfo,
         f'n={info.n_samples}, band={band} '
         f'→ {plan.partition} / {plan.mem} / {plan.time})',
     ]
-    for cond in _STANDARD_CONDITIONS:
+    for cond in standard:
         lines.append(_sbatch_line(dataset, cond, plan, distance=False))
-    if include_distance:
-        for cond in _DISTANCE_CONDITIONS:
-            lines.append(_sbatch_line(dataset, cond, plan, distance=True))
+    for cond in distance:
+        lines.append(_sbatch_line(dataset, cond, plan, distance=True))
     lines.append('')  # blank line between datasets
     return lines
 
@@ -231,6 +244,10 @@ def main() -> int:
                         help='Skip nucleotide datasets (per CACHE_FIX_PLAN).')
     parser.add_argument('--skip-distance', action='store_true',
                         help='Skip the 4 distance conditions per dataset.')
+    parser.add_argument('--conditions', default='',
+                        help='Comma-separated subset of conditions to emit. '
+                             'E.g. --conditions general_none for a true '
+                             '1-job-per-dataset smoke test. Default: all.')
     parser.add_argument('--force', default='',
                         help='Per-dataset band override, e.g. '
                              '"adme_hlm=XL,flab_thermo_tresanco=M".')
@@ -239,6 +256,18 @@ def main() -> int:
     args = parser.parse_args()
 
     forces = _parse_forces(args.force)
+
+    # Validate --conditions against known condition names.
+    conditions_filter: Optional[List[str]] = None
+    if args.conditions:
+        valid = set(_STANDARD_CONDITIONS) | set(_DISTANCE_CONDITIONS)
+        requested = [c.strip() for c in args.conditions.split(',') if c.strip()]
+        bad = [c for c in requested if c not in valid]
+        if bad:
+            print(f'ERROR: unknown conditions: {bad}', file=sys.stderr)
+            print(f'Valid: {sorted(valid)}', file=sys.stderr)
+            return 1
+        conditions_filter = requested
 
     # Pick dataset list
     if args.datasets:
@@ -311,7 +340,8 @@ def main() -> int:
         info = DATASET_REGISTRY[name]
         forced = forces.get(name)
         for line in plan_dataset(name, info, forced=forced,
-                                 include_distance=not args.skip_distance):
+                                 include_distance=not args.skip_distance,
+                                 conditions=conditions_filter):
             print(line)
             if line.startswith('sbatch'):
                 total_jobs += 1
