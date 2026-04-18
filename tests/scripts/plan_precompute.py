@@ -178,7 +178,6 @@ def _sbatch_line(dataset: str, condition: str, plan: ResourcePlan,
         f'sbatch{cluster_flag} --job-name={job_name} '
         f'--partition={plan.partition} '
         f'--mem={plan.mem} --time={plan.time} --cpus-per-task=4 '
-        f'--output=slurm-%j-{job_name}.out '
         f'--wrap="{wrap}"'
     )
 
@@ -214,7 +213,6 @@ def _sbatch_consolidated(dataset: str, plan: ResourcePlan,
         f'sbatch{cluster_flag} --job-name={job_name} '
         f'--partition={plan.partition} '
         f'--mem={plan.mem} --time={plan.time} --cpus-per-task=4 '
-        f'--output=slurm-%j-{job_name}.out '
         f'--wrap="{wrap}"'
     )
 
