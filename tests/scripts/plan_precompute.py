@@ -100,7 +100,12 @@ _KNOWN_LONG_RUNNERS: Dict[str, str] = {
 _BANDS = {
     'XS': ResourcePlan('XS', 'short',  '64G',  '12:00:00',   '<200 samples'),
     'S':  ResourcePlan('S',  'short',  '128G', '12:00:00',   '200-1k samples'),
-    'M':  ResourcePlan('M',  'short',  '128G', '12:00:00',   '1k-3k samples (fits 12h from data)'),
+    # M promoted to medium 2d (2026-04-18): in consolidated mode a single
+    # job runs 6 standard conditions sequentially. Per-condition sacct
+    # shows capped conditions alone take 4-6h on M-band datasets (caco2,
+    # logd, herg_ki). Summed across 6 conditions, 12h `short` is too
+    # tight for reliable completion.
+    'M':  ResourcePlan('M',  'medium', '128G', '2-00:00:00', '1k-3k samples (safe for consolidated 6-condition runs)'),
     'L':  ResourcePlan('L',  'medium', '128G', '2-00:00:00', '3k-10k samples (safety buffer)'),
     'XL': ResourcePlan('XL', 'medium', '256G', '2-00:00:00', '>10k samples OR TCGA'),
     'NT': ResourcePlan('NT', 'long',   '128G', '2-00:00:00', 'nucleotide (long reps)'),
