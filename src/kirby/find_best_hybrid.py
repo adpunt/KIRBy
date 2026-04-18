@@ -2870,9 +2870,17 @@ def _run_search(
                 groups_f0[key].append((alloc, result['score_mean']))
 
             n_groups_f0 = len(groups_f0)
-            # Configurable pruning: True → 0.15, float → custom threshold
-            _prune_frac = (float(adaptive_pruning) if isinstance(adaptive_pruning, (int, float))
-                           and adaptive_pruning > 0 else 0.15)
+            # Configurable pruning: True → 0.15, float → custom threshold.
+            # Check `is True` FIRST — isinstance(True, (int, float)) is
+            # True in Python (bool subclasses int) and float(True) == 1.0,
+            # which would push the threshold to 100% of groups and prune
+            # every strategy. Explicit bool check avoids that.
+            if adaptive_pruning is True:
+                _prune_frac = 0.15
+            elif isinstance(adaptive_pruning, (int, float)) and not isinstance(adaptive_pruning, bool) and adaptive_pruning > 0:
+                _prune_frac = float(adaptive_pruning)
+            else:
+                _prune_frac = 0.15
             threshold = n_groups_f0 * _prune_frac
 
             top3_counts = defaultdict(int)
@@ -3737,7 +3745,11 @@ def find_best_hybrid(
         cv_splitter=cv_splitter,
         greedy_tolerance=greedy_tolerance,
         metric_name=_metric_name_str,
-        adaptive_pruning=adaptive_pruning,
+        # Pass the NORMALISED float, not the raw param. The inline
+        # normaliser inside _run_search tripped on bool-is-int for True
+        # (bug pre-2026-04-18 — every run pruned 100% of strategies
+        # after fold 0 and only fold-0 scores reached best_by_model).
+        adaptive_pruning=_norm_pruning,
         checkpoint_path=_ckpt_path,
         # Validate checkpoint payload against the same meta used for the
         # final cache file. Resume only when parameters match.
