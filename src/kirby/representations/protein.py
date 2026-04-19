@@ -322,11 +322,19 @@ def _extract_graph_features(G, n_res, ca_positions):
     """
     import networkx as nx
     from scipy.stats import skew, kurtosis as scipy_kurtosis
+    from scipy.sparse import csr_matrix
+    from scipy.sparse.csgraph import shortest_path, connected_components
+    from scipy.sparse.linalg import eigsh
 
     features = np.zeros(80, dtype=np.float64)
 
     if n_res < 10 or G.number_of_edges() == 0:
         return features
+
+    n_nodes = G.number_of_nodes()
+    n_edges = G.number_of_edges()
+    # Sparse adjacency once — reused for APSP, components, Laplacian eigsh
+    A = nx.to_scipy_sparse_array(G, format='csr', dtype=np.float64)
 
     degrees = np.array([d for _, d in G.degree()], dtype=np.float64)
 
@@ -340,25 +348,30 @@ def _extract_graph_features(G, n_res, ca_positions):
     features[6] = float(scipy_kurtosis(degrees)) if degrees.std() > 0 else 0.0
     threshold = degrees.mean() + 2 * degrees.std()
     features[7] = (degrees > threshold).mean() if threshold > 0 else 0.0
-    # Degree distribution entropy
     deg_counts = np.bincount(degrees.astype(int))
     deg_probs = deg_counts[deg_counts > 0] / deg_counts.sum()
     features[8] = -np.sum(deg_probs * np.log(deg_probs + 1e-12))
-    # Gini coefficient of degrees
     sorted_deg = np.sort(degrees)
     n_d = len(sorted_deg)
     index = np.arange(1, n_d + 1)
     features[9] = (2 * np.sum(index * sorted_deg) / (n_d * sorted_deg.sum() + 1e-12)) - (n_d + 1) / n_d
 
     # --- Centrality (12D) ---
+    # Betweenness: exact for small graphs, sampled (k sources) for large to keep cost bounded.
     try:
-        betweenness = np.array(list(nx.betweenness_centrality(G).values()))
+        if n_nodes <= 400:
+            bw_dict = nx.betweenness_centrality(G)
+        else:
+            k = min(128, n_nodes)
+            bw_dict = nx.betweenness_centrality(G, k=k, seed=0)
+        betweenness = np.array(list(bw_dict.values()))
         features[10] = betweenness.mean()
         features[11] = betweenness.std()
         features[12] = betweenness.max()
     except Exception:
         pass
 
+    # Closeness/eigenvector centrality remain — both cheap relative to APSP-derived features.
     try:
         closeness = np.array(list(nx.closeness_centrality(G).values()))
         features[13] = closeness.mean()
@@ -395,84 +408,107 @@ def _extract_graph_features(G, n_res, ca_positions):
 
     try:
         triangles = np.array(list(nx.triangles(G).values()))
-        features[24] = triangles.sum() / max(n_res ** 2, 1)  # normalized
+        features[24] = triangles.sum() / max(n_res ** 2, 1)
     except Exception:
         pass
+    # graph_clique_number uses find_cliques internally, exponential on dense graphs.
+    # Cap to small graphs; for larger, use k-core proxy (max-core size as a clique-number stand-in).
     try:
-        features[25] = nx.graph_clique_number(G)
-    except Exception:
-        pass
-    try:
-        features[26] = sum(1 for _ in nx.find_cliques(G))
+        if n_nodes <= 400:
+            features[25] = nx.graph_clique_number(G)
+            features[26] = sum(1 for _ in nx.find_cliques(G))
+        else:
+            kcore = nx.core_number(G)
+            features[25] = max(kcore.values()) + 1 if kcore else 0
+            features[26] = 0.0  # find_cliques not run at this size
     except Exception:
         pass
 
     # --- Community structure (6D) ---
+    # greedy_modularity_communities is O(N^2 log N)+ on dense graphs; cap at 600 nodes.
     try:
-        communities = list(nx.community.greedy_modularity_communities(G))
-        features[27] = len(communities)
-        features[28] = nx.community.modularity(G, communities)
-        sizes = [len(c) / n_res for c in communities]
-        features[29] = max(sizes) if sizes else 0.0
-        features[30] = min(sizes) if sizes else 0.0
-        features[31] = np.std(sizes) if sizes else 0.0
-        # Inter-community edge fraction
-        comm_map = {}
-        for ci, comm in enumerate(communities):
-            for node in comm:
-                comm_map[node] = ci
-        inter = sum(1 for u, v in G.edges() if comm_map.get(u) != comm_map.get(v))
-        features[32] = inter / max(G.number_of_edges(), 1)
+        if n_nodes <= 600:
+            communities = list(nx.community.greedy_modularity_communities(G))
+            features[27] = len(communities)
+            features[28] = nx.community.modularity(G, communities)
+            sizes = [len(c) / n_res for c in communities]
+            features[29] = max(sizes) if sizes else 0.0
+            features[30] = min(sizes) if sizes else 0.0
+            features[31] = np.std(sizes) if sizes else 0.0
+            comm_map = {}
+            for ci, comm in enumerate(communities):
+                for node in comm:
+                    comm_map[node] = ci
+            inter = sum(1 for u, v in G.edges() if comm_map.get(u) != comm_map.get(v))
+            features[32] = inter / max(n_edges, 1)
+        # else: leave features[27:33] as zeros
     except Exception:
         pass
 
     # --- Path/distance (10D) ---
-    # Use largest connected component for path-based features
-    if nx.is_connected(G):
-        Gc = G
-    else:
-        Gc = G.subgraph(max(nx.connected_components(G), key=len)).copy()
+    # ONE APSP call → all path-derived features. Replaces 4 separate networkx O(N(N+E)) calls.
+    try:
+        n_components, comp_labels = connected_components(A, directed=False)
+        features[42] = n_components
+        # Largest component for finite path metrics
+        if n_components > 1:
+            sizes = np.bincount(comp_labels)
+            largest = sizes.argmax()
+            mask = comp_labels == largest
+            A_c = A[mask][:, mask]
+            n_c = A_c.shape[0]
+        else:
+            A_c = A
+            n_c = n_nodes
 
-    try:
-        features[33] = nx.average_shortest_path_length(Gc)
+        if n_c > 1:
+            D = shortest_path(A_c, method='D' if n_c > 200 else 'auto',
+                              directed=False, unweighted=True)
+            # mask diagonals (self-distances == 0) for averages
+            iu = np.triu_indices(n_c, k=1)
+            d_pairs = D[iu]
+            finite = np.isfinite(d_pairs)
+            if finite.any():
+                features[33] = d_pairs[finite].mean()  # avg shortest path length
+            ecc_vals = D.max(axis=1)
+            ecc_vals = ecc_vals[np.isfinite(ecc_vals)]
+            if ecc_vals.size:
+                features[34] = ecc_vals.max()  # diameter
+                features[35] = ecc_vals.min()  # radius
+                features[36] = (ecc_vals == ecc_vals.max()).sum()  # periphery
+                features[37] = (ecc_vals == ecc_vals.min()).sum()  # center
+                features[38] = ecc_vals.mean()
+                features[39] = ecc_vals.std()
+            # global efficiency (over all pairs in the original graph; disconnected pairs → 1/inf = 0)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                inv = np.where(d_pairs > 0, 1.0 / d_pairs, 0.0)
+            features[40] = (2.0 * inv.sum()) / (n_nodes * (n_nodes - 1)) if n_nodes > 1 else 0.0
+            # Wiener index normalized by N^2 (matches old definition)
+            if finite.any():
+                features[41] = d_pairs[finite].sum() / max(n_c ** 2, 1)
     except Exception:
         pass
-    try:
-        ecc = nx.eccentricity(Gc)
-        ecc_vals = np.array(list(ecc.values()))
-        features[34] = max(ecc_vals)  # diameter
-        features[35] = min(ecc_vals)  # radius
-        features[36] = (ecc_vals == max(ecc_vals)).sum()  # periphery size
-        features[37] = (ecc_vals == min(ecc_vals)).sum()  # center size
-        features[38] = ecc_vals.mean()
-        features[39] = ecc_vals.std()
-    except Exception:
-        pass
-    try:
-        features[40] = nx.global_efficiency(G)
-    except Exception:
-        pass
-    # Wiener index (normalized)
-    try:
-        if Gc.number_of_nodes() > 1:
-            features[41] = nx.wiener_index(Gc) / max(Gc.number_of_nodes() ** 2, 1)
-    except Exception:
-        pass
-    features[42] = nx.number_connected_components(G)
 
     # --- Spectral (12D) ---
+    # Sparse top-k eigsh instead of dense O(N^3) eigvalsh.
     try:
-        L = nx.laplacian_matrix(G).toarray().astype(np.float64)
-        eigenvalues = np.sort(np.linalg.eigvalsh(L))
-        # Top-10 eigenvalues (largest)
-        top10 = eigenvalues[-10:] if len(eigenvalues) >= 10 else np.pad(
-            eigenvalues, (10 - len(eigenvalues), 0))
-        features[43:53] = top10
-        # Algebraic connectivity (2nd smallest eigenvalue)
-        features[53] = eigenvalues[1] if len(eigenvalues) > 1 else 0.0
-        # Spectral gap (difference between 2 largest)
-        if len(eigenvalues) >= 2:
-            features[54] = eigenvalues[-1] - eigenvalues[-2]
+        L = nx.laplacian_matrix(G).astype(np.float64)
+        # k must be < n_nodes - 1 for eigsh
+        k_top = min(10, n_nodes - 2)
+        if k_top >= 1 and n_nodes > 3:
+            top_eigs = np.sort(eigsh(L, k=k_top, which='LM', return_eigenvectors=False))
+            if top_eigs.size < 10:
+                top_eigs = np.pad(top_eigs, (10 - top_eigs.size, 0))
+            features[43:53] = top_eigs
+            # Algebraic connectivity = 2nd smallest eigenvalue (Fiedler value)
+            k_bot = min(2, n_nodes - 2)
+            try:
+                bot_eigs = np.sort(eigsh(L, k=k_bot, which='SM', return_eigenvectors=False, sigma=0))
+                features[53] = bot_eigs[-1] if bot_eigs.size >= 2 else (bot_eigs[0] if bot_eigs.size else 0.0)
+            except Exception:
+                # shift-invert fallback if SM fails
+                features[53] = 0.0
+            features[54] = top_eigs[-1] - top_eigs[-2] if top_eigs.size >= 2 else 0.0
     except Exception:
         pass
 
