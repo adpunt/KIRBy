@@ -172,40 +172,39 @@ def load_herg_tdc(n_samples: Optional[int] = None,
     }
 
 
-def load_herg_fluid(data_dir: str = 'data/fluid',
+def _resolve_fluid_dir(data_dir: Optional[str] = None) -> str:
+    if data_dir and os.path.isdir(data_dir):
+        return data_dir
+    env = os.environ.get('LHASA_DATA_DIR')
+    if env and os.path.isdir(env):
+        return env
+    for candidate in (
+        '/data/stat-cadd/scat9264/lhasa_data',
+        '/Users/apunt/repos/dphil/data',
+        'data/fluid',
+    ):
+        if os.path.isdir(candidate):
+            return candidate
+    return data_dir or 'data/fluid'
+
+
+def load_herg_fluid(data_dir: Optional[str] = None,
                     use_test: bool = False) -> Dict:
-    """
-    Load hERG federated data from FLuID (Lhasa Limited).
-    
-    Uses train/test split from FLuID pickle files.
-    Run `bash peek_fluid.sh` to see the actual file structure.
-    
-    Args:
-        data_dir: Directory containing FLuID data
-        use_test: If True, load test set; if False, load training set
-        
-    Returns:
-        dict: {
-            'smiles': List of SMILES strings,
-            'labels': Binary labels,
-            'source': 'fluid'
-        }
-    """
+    """Load hERG federated data from FLuID (Lhasa Limited)."""
     import pickle
     from rdkit import Chem
-    
-    # Determine which file to load
-    if use_test:
-        pkl_file = os.path.join(data_dir, 'hERG_lhasa_test.pkl')
-        dataset_type = "test"
-    else:
-        pkl_file = os.path.join(data_dir, 'hERG_lhasa_training.pkl')
-        dataset_type = "training"
-    
+
+    resolved_dir = _resolve_fluid_dir(data_dir)
+    fname = 'hERG_lhasa_test.pkl' if use_test else 'hERG_lhasa_training.pkl'
+    dataset_type = "test" if use_test else "training"
+    pkl_file = os.path.join(resolved_dir, fname)
+
     if not os.path.exists(pkl_file):
         raise FileNotFoundError(
             f"FLuID data not found at {pkl_file}\n"
-            f"Expected: hERG_lhasa_training.pkl or hERG_lhasa_test.pkl"
+            f"Set LHASA_DATA_DIR or place hERG_lhasa_training.pkl / hERG_lhasa_test.pkl in one of:\n"
+            f"  /data/stat-cadd/scat9264/lhasa_data (server)\n"
+            f"  /Users/apunt/repos/dphil/data (local)"
         )
     
     print(f"Loading FLuID hERG {dataset_type} data from {pkl_file}...")
