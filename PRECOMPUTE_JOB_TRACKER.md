@@ -403,13 +403,14 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 7440292 | dta_kiba | DONE |
 | 7440293 | dta_bindingdb_kd | **TIMEOUT** (4d wall limit, 2026-04-11) — end-of-run save only, zero output on disk |
 | 7483661 | dta_bindingdb_kd (pre-c18342f heredoc bug) | **CANCELLED** (2026-04-15, same heredoc bug as 7483641-46) |
-| 7483718 | dta_bindingdb_kd (post-c18342f, per-rep checkpoint) | **RUNNING** (2026-04-17, 24h28m elapsed, medium+GPU+256G, 48h wall — ~23h remaining) |
+| 7483718 | dta_bindingdb_kd (post-c18342f, per-rep checkpoint) | **TIMEOUT** (2026-04-18, 1d23h59m, exit 0:0). Died at contact_graph 50/1219 (~58 min/protein). 17 protein reps + 7 drug reps cached as `.npy`; protein_contact_graph + protein_usr_shape + protein_pocket + protein_pocket_composition + protein_esm2_pocket never computed. Superseded by 7515602 (post-d829df1 contact_graph speedup). |
 | 7467954 | dta_davis (resubmit, --skip-existing) | **TIMEOUT** (2026-04-15, 48h wall) |
-| 7483719 | dta_davis (post-c18342f + a81b0eb) | **RUNNING** (2026-04-17, 18h elapsed, long+GPU+256G, 96h wall) |
+| 7483719 | dta_davis (post-c18342f + a81b0eb) | **RUNNING** (2026-04-19, 2d15h+ elapsed, long+GPU+256G, 96h wall) |
 | 7457314 | dta_kiba_fill (--skip-existing) | FAILED (--wrap bug) |
 | 7483635 | dta_kiba_fill (pre-c18342f) | CANCELLED |
 | 7483717 | dta_kiba_fill (post-c18342f) | **COMPLETED** (23min, 2026-04-16) — **BUT destroyed kiba.json** (69KB→583B) due to merge bug in a81b0eb. Fixed in d1c45b9. |
-| 7496790 | dta_kiba (full re-run, post-d1c45b9 merge fix) | **RUNNING** (2026-04-17, 5h50m elapsed, long+GPU+256G, 24h wall) |
+| 7496790 | dta_kiba (full re-run, post-d1c45b9 merge fix) | **COMPLETED** (17h11m, 2026-04-18). Output `tests/results/phase5_baselines/dta/kiba.json`. Several ESM-family reps showed large negative R² (e.g. esm2 R²=-1.58, esmc R²=-2.37) but CIs in normal range — flag for analysis but not a job failure. |
+| 7515602 | dta_bindingdb_kd (post-d829df1 contact_graph speedup) | **SUBMITTED** (2026-04-20, long+GPU+128G, 24h wall). All cached reps load from `.npy`; only contact_graph + 4 cheap structure reps need computing. Estimated runtime 3-6h. |
 
 ### Antibody CLF
 
@@ -428,7 +429,7 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 7483715 | abclf_humanness_species (post-c18342f) | **COMPLETED** (5h26m, 2026-04-16) — **output file missing from disk** despite "Saved" in slurm log. Resubmitted as 7496824. |
 | 7483716 | abclf_humanness_therapeutic (post-c18342f) | **COMPLETED** (38min, 2026-04-16) |
 | 7496824 | abclf_humanness_species (resubmit) | **FAILED** (ExitCode 127, 4min — long --reps argument split across slurm_script lines by SLURM. Fixed by using `REPS=` shell variable.) |
-| 7498632 | abclf_humanness_species (resubmit 2, REPS= variable) | **PD** (2026-04-17, long+GPU+128G, 24h) |
+| 7498632 | abclf_humanness_species (resubmit 2, REPS= variable) | **COMPLETED** (4h04m, 2026-04-18). Output `tests/results/opig/clf/humanness_species.json`. **DATASET CUT (2026-04-19)** — most reps hit 0.99+ AUROC (germline V/J usage ≈ trivially separable per species), and igbert/igbert_cls/mint/xtrimopglm collapsed to majority-class 0.679/0.549 across all folds (paired-chain models incompatible with VH-only input). Not informative; remove from precompute config + tier table. |
 | 7483636 | abclf_tz_her2_binary (DUPLICATE) | **CANCELLED** (2026-04-15) |
 | 7483637 | abclf_tz_her2_multiclass (DUPLICATE) | **CANCELLED** |
 | 7483638 | abclf_humanness_species (DUPLICATE) | **CANCELLED** |
@@ -445,9 +446,10 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 7483721 | schnet_logd (post-fc36c6c) | **COMPLETED** (1h05m, 2026-04-16) — real lora_chemberta/lora_molformer scores, **ft_schnet=NaN** (torch_cluster not CUDA-compiled) |
 | 7483722 | schnet_herg (post-fc36c6c) | **FAILED** (7min, 2026-04-16, ExitCode 1:0) — TDC loader crash |
 | 7483723 | schnet_caco2 (post-fc36c6c) | **COMPLETED** (45min, 2026-04-16) — same: ft_schnet=NaN (CUDA issue) |
-| 7498292 | schnet_logd (post-b59c11e CPU fallback) | **RUNNING** (2h13m as of 2026-04-17, long+GPU+128G, 24h) — should produce real ft_schnet now |
-| 7498293 | schnet_herg (post-b59c11e + 67803ab FLuID loader) | **PD** (2026-04-17) |
-| 7498294 | schnet_caco2 (post-b59c11e) | **PD** (2026-04-17) |
+| 7498292 | schnet_logd (post-b59c11e CPU fallback) | **COMPLETED** (3h26m, 2026-04-18). Real ft_schnet finally landed: ft_schnet=0.609 (ridge), lora_chemberta=0.757, lora_molformer=0.565. CPU fallback works. |
+| 7498293 | schnet_herg (post-b59c11e + 67803ab FLuID loader) | **FAILED** (7min, 2026-04-18, ExitCode 1:0). FLuID `hERG_lhasa_training.pkl` not on server — `data_dir='data/fluid'` was hardcoded and never existed. Fixed in d3e2cc1 (env-var resolution + multiple fallback paths) + user scp'd pickles to `/data/stat-cadd/scat9264/lhasa_data/`. Superseded by 7515601. |
+| 7498294 | schnet_caco2 (post-b59c11e) | **COMPLETED** (1h06m, 2026-04-18). Real ft_schnet via CPU fallback. |
+| 7515601 | schnet_herg (post-d3e2cc1 + scp'd FLuID) | **SUBMITTED** (2026-04-20, long+GPU+128G, 24h wall). |
 
 ### Nucleotide (genomics)
 
@@ -495,8 +497,8 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 7483646 | nuc_gb_demo_human_or_worm (pre-c18342f) | **FAILED** (same heredoc bug) |
 | 7483711 | nuc_gb_demo_coding (post-c18342f, 256G) | **CANCELLED** (12h42m in, 2026-04-16) |
 | 7483712 | nuc_gb_demo_human_or_worm (post-c18342f, 256G) | **CANCELLED** (12h42m) |
-| 7496807 | nuc_gb_demo_coding (resubmit, 256G) | **RUNNING** (5h24m as of 2026-04-17, medium+256G, 48h wall) |
-| 7496808 | nuc_gb_demo_human_or_worm (resubmit, 256G) | **RUNNING** (5h24m) |
+| 7496807 | nuc_gb_demo_coding (resubmit, 256G) | **COMPLETED** (6h24m, 2026-04-18). Winner: nt_v2_250m+mlp=0.8392 MCC. |
+| 7496808 | nuc_gb_demo_human_or_worm (resubmit, 256G) | **COMPLETED** (6h25m, 2026-04-18). |
 
 ### Nucleotide gena_lm refix (2026-04-15)
 
@@ -542,12 +544,12 @@ Resource: long+GPU+64G+6h per job.
 
 | Job ID | Name | Status |
 |--------|------|--------|
-| 7499338 | gena_refix_nt_* (first of 4) | **RUNNING** (14min as of 2026-04-17) |
-| 7499339 | gena_refix_nt_* (second) | **PD** |
-| 7499340 | gena_refix_nt_* (third) | **PD** |
-| 7499341 | gena_refix_nt_* (fourth) | **PD** |
+| 7499338 | gena_refix_nt_enhancers | **COMPLETED** (~30min, 2026-04-17) |
+| 7499339 | gena_refix_nt_enhancers_types | **COMPLETED** (44min, 2026-04-18) |
+| 7499340 | gena_refix_nt_splice_sites_acceptors | **COMPLETED** (31min, 2026-04-18). Winner: gena_lm+ridge=0.0317 MCC (weak — confirms classicals dominate this task). |
+| 7499341 | gena_refix_nt_splice_sites_donors | **COMPLETED** (30min, 2026-04-18) |
 
-All 20 nucleotide datasets (16 + 4) will have corrected 1024D gena_lm once round 3 completes. Tier tables for the 4 round-3 datasets pending.
+All 20 nucleotide datasets (16 + 4) now have corrected 1024D gena_lm. Tier tables for the 6 newly-completed nucleotide datasets (4 round-3 + 2 gb_demo) pending PIPELINE_READINESS_TODO update — see analysis section below.
 
 ### CGR-SMILES pretraining (Phase 4)
 
