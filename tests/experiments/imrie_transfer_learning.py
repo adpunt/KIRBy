@@ -174,6 +174,10 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pretrain_dir):
     print(f"{'='*60}")
 
     smiles, labels, task_type = load_dataset(dataset_name)
+    # Registry cross-check — catches silent drift between molecular
+    # loaders and DATASET_REGISTRY.
+    from kirby.registry import crosscheck_task_type
+    crosscheck_task_type(dataset_name, task_type)
     groups, n_scaffolds = assign_scaffold_groups(smiles)
     print(f"  {len(labels)} samples, {n_scaffolds} scaffolds, task={task_type}")
 

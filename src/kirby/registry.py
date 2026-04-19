@@ -191,6 +191,35 @@ def require(dataset_name: str) -> DatasetInfo:
     return info
 
 
+def crosscheck_task_type(dataset_name: str, loader_task_type: str) -> None:
+    """Raise if a loader's task_type disagrees with the registry.
+
+    Use this at the top of any `load_dataset`-style wrapper that
+    doesn't route through `_shared.load_data` (which already does the
+    cross-check). Silent drift between loader and registry produces
+    metric-direction bugs that are expensive to find — fail loud.
+
+    Returns None on match (or unregistered dataset). Raises ValueError
+    on mismatch.
+    """
+    info = DATASET_REGISTRY.get(dataset_name)
+    if info is None:
+        return  # unregistered is fine — caller is on their own
+    if loader_task_type not in ('classification', 'regression'):
+        raise ValueError(
+            f"crosscheck_task_type({dataset_name!r}): loader returned "
+            f"task_type={loader_task_type!r}. Must be 'classification' "
+            f"or 'regression'."
+        )
+    if loader_task_type != info.task_type:
+        raise ValueError(
+            f"Registry/loader mismatch for {dataset_name!r}: "
+            f"loader returned task_type={loader_task_type!r}, but "
+            f"DATASET_REGISTRY says {info.task_type!r}. Fix one side — "
+            f"they must agree."
+        )
+
+
 def verify_registry() -> None:
     """Assert every entry is internally consistent.
 

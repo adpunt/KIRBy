@@ -33,43 +33,165 @@ from typing import Callable, Dict, List, Tuple
 
 import numpy as np
 from sklearn.base import clone
-from sklearn.linear_model import RidgeCV
+from sklearn.linear_model import RidgeCV, LogisticRegressionCV
 from scipy.stats import spearmanr
-from sklearn.metrics import r2_score
+from sklearn.metrics import r2_score, roc_auc_score, f1_score
 from sklearn.model_selection import GroupKFold
 from sklearn.preprocessing import StandardScaler
+
+try:
+    from sklearn.model_selection import StratifiedGroupKFold
+    _HAS_STRATIFIED_GROUP = True
+except ImportError:
+    _HAS_STRATIFIED_GROUP = False
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / 'src'))
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 warnings.filterwarnings('ignore')
 
-# Datasets to test: large DMS + key inter-family
-DEFAULT_DATASETS = [
-    'flab_binding_phillips_h3',   # 5000, DMS, ESM-2 R²=0.96
-    'flab_expression_koenig',     # 4275, DMS, ESM-2 R²=0.48
-    'flab_binding_koenig',        # 4275, DMS, ESM-2 R²=0.30
-    'flab_binding_adams',         # 5000, DMS, ESM-2 R²=0.41
-    'flab_thermo_tresanco',       # 672, inter-family, ProtT5 R²=0.54
-    'abcov_kd',                   # ~1780, inter-family, AbLang2 R²=0.15
+# Datasets to test. Default is broad — all registered antibody datasets
+# (regression + classification). Override with --datasets on CLI.
+#
+# Regression (spearman): inter-family (10) + DMS (16) + ginkgo (6) = 32.
+# Classification (auc / f1_weighted): tz_her2_binary, tz_her2_multiclass,
+# humanness_therapeutic. Classification datasets route through a
+# separate evaluation path with StratifiedGroupKFold and AUC/F1 metrics.
+DEFAULT_DATASETS_REGRESSION = [
+    # Inter-family
+    'flab_thermo_tresanco', 'flab_pk_jain_heprt', 'flab_pk_jain_fcrnrt',
+    'flab_polyreact_jain_cic', 'flab_aggregation_jain_hicrt',
+    'flab_thermo_jain', 'abcov_kd', 'flab_aggregation_jain',
+    'flab_immunogenicity_marks', 'flab_polyreact_jain_bvp',
+    # DMS + mutation scan
+    'ddg_combined', 'flab_binding_koenig', 'flab_expression_koenig',
+    'flab_binding_adams', 'flab_expression_adams',
+    'flab_binding_phillips_h3',
+    'abagym_Ang2', 'abagym_EGFR', 'abagym_HER2', 'abagym_lysozyme',
+    'abagym_VEGF',
+    # Ginkgo developability
+    'ginkgo_acsins', 'ginkgo_colloidal', 'ginkgo_heparin',
+    'ginkgo_hic', 'ginkgo_pr_cho', 'ginkgo_titer',
 ]
+
+DEFAULT_DATASETS_CLASSIFICATION = [
+    'tz_her2_binary',       # AUC
+    'tz_her2_multiclass',   # F1 weighted (multi-class)
+    'humanness_therapeutic',  # AUC
+]
+
+DEFAULT_DATASETS = DEFAULT_DATASETS_REGRESSION + DEFAULT_DATASETS_CLASSIFICATION
 
 
 def load_dataset(name):
-    """Load antibody dataset — delegates to antibody_baseline_survey."""
+    """Load antibody dataset — delegates to antibody_baseline_survey.
+
+    Cross-checks the loader's task_type against DATASET_REGISTRY so any
+    silent drift between loader and registry fails loudly here rather
+    than producing wrong numbers downstream.
+    """
     from antibody_baseline_survey import load_dataset as _load
-    return _load(name)
+    from kirby.registry import crosscheck_task_type, lookup
+    data = _load(name)
+    # antibody_baseline_survey.load_dataset may not set 'task_type' on
+    # the returned dict — infer from registry when missing.
+    loader_task = data.get('task_type')
+    if loader_task is None:
+        info = lookup(name)
+        loader_task = info.task_type if info else 'regression'
+        data['task_type'] = loader_task
+    crosscheck_task_type(name, loader_task)
+    return data
 
 
-def evaluate_frozen(X, labels, groups, n_folds=5):
-    """Evaluate a frozen rep with RidgeCV."""
+def _clf_metric_names(n_classes: int) -> List[str]:
+    """Keys reported per fold for classification."""
+    if n_classes > 2:
+        return ['f1_weighted']
+    return ['auc', 'f1']
+
+
+def _score_clf_fold(y_true, y_pred_labels, y_pred_proba, n_classes):
+    """Return dict of {metric_name: value} for one classification fold."""
+    out = {}
+    try:
+        if n_classes > 2:
+            out['f1_weighted'] = f1_score(y_true, y_pred_labels,
+                                           average='weighted')
+        else:
+            if y_pred_proba is not None:
+                out['auc'] = roc_auc_score(y_true, y_pred_proba)
+            else:
+                out['auc'] = float('nan')
+            out['f1'] = f1_score(y_true, y_pred_labels)
+    except Exception:
+        for k in _clf_metric_names(n_classes):
+            out[k] = float('nan')
+    return out
+
+
+def _make_clf_cv(labels, groups, n_folds):
+    """Stratified group k-fold when possible, else GroupKFold. Returns splits list."""
     n_unique = len(np.unique(groups)) if groups is not None else 0
+    effective_folds = min(n_folds, n_unique)
+    if _HAS_STRATIFIED_GROUP and n_unique >= effective_folds:
+        cv = StratifiedGroupKFold(n_splits=effective_folds, shuffle=True,
+                                   random_state=42)
+        return list(cv.split(np.zeros((len(labels), 1)), labels, groups=groups))
+    cv = GroupKFold(n_splits=effective_folds)
+    return list(cv.split(np.zeros((len(labels), 1)), labels, groups=groups))
 
+
+def evaluate_frozen(X, labels, groups, n_folds=5, task_type='regression'):
+    """Evaluate a frozen rep. Regression → RidgeCV, classification → LogisticRegressionCV.
+
+    Returns dict keyed by metric name, where each value is (mean, std)
+    across folds. Regression keys: 'r2', 'spearman'. Classification
+    keys: 'auc' + 'f1' (binary) or 'f1_weighted' (multi-class).
+    """
+    n_unique = len(np.unique(groups)) if groups is not None else 0
     if groups is None or n_unique < 2:
         print("  WARNING: <2 unique groups, skipping dataset")
+        if task_type == 'classification':
+            n_classes = len(np.unique(labels))
+            return {k: (float('nan'), float('nan'))
+                    for k in _clf_metric_names(n_classes)}
         return {'r2': (float('nan'), float('nan')),
                 'spearman': (float('nan'), float('nan'))}
 
+    if task_type == 'classification':
+        n_classes = len(np.unique(labels))
+        splits = _make_clf_cv(labels, groups, n_folds)
+
+        per_fold = []
+        for train_idx, val_idx in splits:
+            scaler = StandardScaler()
+            X_tr = scaler.fit_transform(X[train_idx])
+            X_va = scaler.transform(X[val_idx])
+
+            model = LogisticRegressionCV(
+                Cs=10, max_iter=2000, n_jobs=-1,
+                scoring='roc_auc_ovr_weighted' if n_classes > 2 else 'roc_auc',
+            )
+            model.fit(X_tr, labels[train_idx])
+            y_pred = model.predict(X_va)
+            if n_classes == 2 and hasattr(model, 'predict_proba'):
+                y_proba = model.predict_proba(X_va)[:, 1]
+            else:
+                y_proba = None
+            per_fold.append(_score_clf_fold(labels[val_idx], y_pred, y_proba, n_classes))
+
+        # Aggregate per metric
+        out = {}
+        for k in _clf_metric_names(n_classes):
+            vals = [d[k] for d in per_fold if not np.isnan(d.get(k, np.nan))]
+            if vals:
+                out[k] = (float(np.mean(vals)), float(np.std(vals)))
+            else:
+                out[k] = (float('nan'), float('nan'))
+        return out
+
+    # Regression path (unchanged)
     effective_folds = min(n_folds, n_unique)
     cv = GroupKFold(n_splits=effective_folds)
     splits = list(cv.split(X, labels, groups=groups))
@@ -93,16 +215,61 @@ def evaluate_frozen(X, labels, groups, n_folds=5):
             'spearman': (float(np.mean(rho_vals)), float(np.std(rho_vals)))}
 
 
-def evaluate_factory(factory, labels, groups, n_folds=5):
-    """Evaluate a fine-tuning factory with RidgeCV."""
+def evaluate_factory(factory, labels, groups, n_folds=5, task_type='regression'):
+    """Evaluate a fine-tuning factory with RidgeCV (reg) or LogisticRegressionCV (clf).
+
+    Same metric contract as evaluate_frozen.
+    """
     n_unique = len(np.unique(groups)) if groups is not None else 0
     dummy = np.zeros((len(labels), 1))
 
     if groups is None or n_unique < 2:
         print("  WARNING: <2 unique groups, skipping dataset")
+        if task_type == 'classification':
+            n_classes = len(np.unique(labels))
+            return {k: (float('nan'), float('nan'))
+                    for k in _clf_metric_names(n_classes)}
         return {'r2': (float('nan'), float('nan')),
                 'spearman': (float('nan'), float('nan'))}
 
+    if task_type == 'classification':
+        n_classes = len(np.unique(labels))
+        splits = _make_clf_cv(labels, groups, n_folds)
+
+        per_fold = []
+        for train_idx, val_idx in splits:
+            try:
+                X_tr, X_va = factory(train_idx, val_idx, labels[train_idx])
+            except Exception as e:
+                print(f" [FT error: {e}]", end='')
+                continue
+            scaler = StandardScaler()
+            X_tr = scaler.fit_transform(X_tr)
+            X_va = scaler.transform(X_va)
+
+            model = LogisticRegressionCV(
+                Cs=10, max_iter=2000, n_jobs=-1,
+                scoring='roc_auc_ovr_weighted' if n_classes > 2 else 'roc_auc',
+            )
+            model.fit(X_tr, labels[train_idx])
+            y_pred = model.predict(X_va)
+            if n_classes == 2 and hasattr(model, 'predict_proba'):
+                y_proba = model.predict_proba(X_va)[:, 1]
+            else:
+                y_proba = None
+            per_fold.append(_score_clf_fold(
+                labels[val_idx], y_pred, y_proba, n_classes))
+
+        out = {}
+        for k in _clf_metric_names(n_classes):
+            vals = [d[k] for d in per_fold if not np.isnan(d.get(k, np.nan))]
+            if vals:
+                out[k] = (float(np.mean(vals)), float(np.std(vals)))
+            else:
+                out[k] = (float('nan'), float('nan'))
+        return out
+
+    # Regression path (unchanged)
     effective_folds = min(n_folds, n_unique)
     cv = GroupKFold(n_splits=effective_folds)
     splits = list(cv.split(dummy, labels, groups=groups))
@@ -796,15 +963,81 @@ def make_igt5_ft(heavy_seqs, light_seqs, dataset_name, epochs=5,
 # =========================================================================
 
 def get_frozen_baselines(heavy_seqs, light_seqs):
-    """Generate frozen embeddings for all antibody LMs."""
+    """Generate frozen embeddings for the broad antibody baseline set.
+
+    Covers what's in DATASET_REPS for antibody: the 12 full-sequence LMs
+    + their _cdr variants + esm2 sub-variants (layer/entropy/concat/cdr3)
+    + mutation signal reps (llr / wt_delta / mutsite) + classical
+    (onehot/blosum/aac). Mapping follows the names used as keys in
+    complexity_helpers.DATASET_REPS so FT vs frozen comparisons can be
+    wired later.
+
+    Reps that can't generate (module missing, OOM, seq-pair mismatch)
+    are skipped with a WARNING; the run continues.
+    """
     from kirby.representations.antibody import (
         embed_esm2, embed_ablang2, embed_antiberty,
         embed_esmc, embed_esm3, embed_saprot,
-        embed_prot_t5, embed_amplify, embed_abroberta,
+        embed_prot_t5, embed_abroberta,
         embed_mint, embed_igbert, embed_igt5,
     )
 
     baselines = {}
+
+    # Try-import CDR and sub-variant embedders — these may not all be
+    # available depending on the kirby.representations.antibody version.
+    _optional = {}
+    _tried = [
+        # CDR-only variants
+        ('antiberty_cdr', 'embed_antiberty_cdr'),
+        ('esm2_cdr', 'embed_esm2_cdr'),
+        ('esm2_cdr3', 'embed_esm2_cdr3'),
+        ('esmc_cdr', 'embed_esmc_cdr'),
+        ('saprot_cdr', 'embed_saprot_cdr'),
+        ('esm3_cdr', 'embed_esm3_cdr'),
+        ('prot_t5_cdr', 'embed_prot_t5_cdr'),
+        ('abroberta_cdr', 'embed_abroberta_cdr'),
+        # esm2 sub-variants
+        ('esm2_midlayers', 'embed_esm2_midlayers'),
+        ('esm2_layer24', 'embed_esm2_layer24'),
+        ('esm2_early', 'embed_esm2_early'),
+        ('esm2_concat', 'embed_esm2_concat'),
+        ('esm2_per_cdr', 'embed_esm2_per_cdr'),
+        ('esm2_per_region', 'embed_esm2_per_region'),
+        ('esm2_entropy_top20', 'embed_esm2_entropy_top20'),
+        # Mutation signal
+        ('esm2_wt_delta', 'embed_esm2_wt_delta'),
+        ('esm2_mutsite', 'embed_esm2_mutsite'),
+        ('esm2_llr', 'embed_esm2_llr'),
+        ('antiberty_llr', 'embed_antiberty_llr'),
+        ('esmc_llr', 'embed_esmc_llr'),
+    ]
+    import kirby.representations.antibody as _ab_mod
+    for rep_name, attr in _tried:
+        fn = getattr(_ab_mod, attr, None)
+        if fn is not None:
+            _optional[rep_name] = fn
+
+    # Classical reps (simpler — separate module)
+    try:
+        from kirby.representations.antibody import (
+            embed_onehot, embed_blosum, embed_aac,
+        )
+        _optional['onehot'] = embed_onehot
+        _optional['blosum'] = embed_blosum
+        _optional['aac'] = embed_aac
+    except ImportError:
+        pass
+
+    # Paratope + structural + mutation_features (if available)
+    for rep_name, attr in [
+        ('paratope', 'embed_paratope'),
+        ('structural', 'embed_structural'),
+        ('mutation_features', 'embed_mutation_features'),
+    ]:
+        fn = getattr(_ab_mod, attr, None)
+        if fn is not None:
+            _optional[rep_name] = fn
 
     all_models = [
         ('esm2', embed_esm2),
@@ -813,13 +1046,12 @@ def get_frozen_baselines(heavy_seqs, light_seqs):
         ('esmc', embed_esmc),
         ('esm3', embed_esm3),
         ('saprot', embed_saprot),
-        ('prott5', embed_prot_t5),
-        ('amplify', embed_amplify),
+        ('prot_t5', embed_prot_t5),
         ('abroberta', embed_abroberta),
         ('mint', embed_mint),
         ('igbert', embed_igbert),
         ('igt5', embed_igt5),
-    ]
+    ] + list(_optional.items())
 
     for name, fn in all_models:
         try:
@@ -890,29 +1122,36 @@ def main():
         light_seqs = data['light_seqs']
         labels = data['labels']
         groups = data['groups']
+        task_type = data.get('task_type', 'regression')
         n = len(labels)
 
-        print(f"  {n} samples, {len(np.unique(groups))} groups")
+        print(f"  {n} samples, {len(np.unique(groups))} groups, "
+              f"task={task_type}")
 
-        ds_results = {'n_samples': n, 'frozen': {}, 'finetuned': {}}
+        ds_results = {'n_samples': n, 'task_type': task_type,
+                      'frozen': {}, 'finetuned': {}}
 
         # Frozen baselines
         print("\n  --- Frozen baselines ---")
         frozen = get_frozen_baselines(heavy_seqs, light_seqs)
         for rep_name, X in frozen.items():
             result = evaluate_frozen(
-                X, labels, groups, args.n_folds)
-            r2_mean, r2_std = result['r2']
-            rho_mean, rho_std = result['spearman']
-            ds_results['frozen'][rep_name] = {
-                'r2_mean': round(r2_mean, 4),
-                'r2_std': round(r2_std, 4),
-                'spearman_mean': round(rho_mean, 4),
-                'spearman_std': round(rho_std, 4),
-                'dim': X.shape[1],
-            }
-            print(f"    {rep_name}: R²={r2_mean:.4f} ± {r2_std:.4f}"
-                  f"  ρ={rho_mean:.4f} ± {rho_std:.4f}")
+                X, labels, groups, args.n_folds, task_type=task_type)
+            entry = {'dim': X.shape[1]}
+            for metric_name, (m_mean, m_std) in result.items():
+                entry[f'{metric_name}_mean'] = round(m_mean, 4)
+                entry[f'{metric_name}_std'] = round(m_std, 4)
+            ds_results['frozen'][rep_name] = entry
+            # Terse one-liner: show primary metric for the task
+            if task_type == 'classification':
+                primary = 'f1_weighted' if len(np.unique(labels)) > 2 else 'auc'
+                m, s = result[primary]
+                print(f"    {rep_name}: {primary}={m:.4f} ± {s:.4f}")
+            else:
+                r2_m, r2_s = result['r2']
+                rho_m, rho_s = result['spearman']
+                print(f"    {rep_name}: R²={r2_m:.4f} ± {r2_s:.4f}"
+                      f"  ρ={rho_m:.4f} ± {rho_s:.4f}")
 
         # Fine-tuned methods
         print("\n  --- Fine-tuned ---")
@@ -976,23 +1215,26 @@ def main():
         for ft_name, factory in factories.items():
             print(f"    {ft_name}:", end='', flush=True)
             result = evaluate_factory(
-                factory, labels, groups, args.n_folds)
-            r2_mean, r2_std = result['r2']
-            rho_mean, rho_std = result['spearman']
-            ds_results['finetuned'][ft_name] = {
-                'r2_mean': round(r2_mean, 4),
-                'r2_std': round(r2_std, 4),
-                'spearman_mean': round(rho_mean, 4),
-                'spearman_std': round(rho_std, 4),
-            }
-            print(f" R²={r2_mean:.4f} ± {r2_std:.4f}"
-                  f"  ρ={rho_mean:.4f} ± {rho_std:.4f}")
+                factory, labels, groups, args.n_folds, task_type=task_type)
+            entry = {}
+            for metric_name, (m_mean, m_std) in result.items():
+                entry[f'{metric_name}_mean'] = round(m_mean, 4)
+                entry[f'{metric_name}_std'] = round(m_std, 4)
+            ds_results['finetuned'][ft_name] = entry
+            if task_type == 'classification':
+                primary = 'f1_weighted' if len(np.unique(labels)) > 2 else 'auc'
+                m, s = result[primary]
+                print(f" {primary}={m:.4f} ± {s:.4f}")
+            else:
+                r2_m, r2_s = result['r2']
+                rho_m, rho_s = result['spearman']
+                print(f" R²={r2_m:.4f} ± {r2_s:.4f}"
+                      f"  ρ={rho_m:.4f} ± {rho_s:.4f}")
 
-            # Compare to frozen baseline
-            # Map method name to frozen baseline name
+            # Compare to frozen baseline on the primary metric
             ft_to_frozen = {
                 'esm2_lora': 'esm2', 'esmc_lora': 'esmc', 'esm3_lora': 'esm3',
-                'saprot_lora': 'saprot', 'prott5_lora': 'prott5',
+                'saprot_lora': 'saprot', 'prott5_lora': 'prot_t5',
                 'amplify_lora': 'amplify', 'abroberta_lora': 'abroberta',
                 'mint_lora': 'mint', 'ablang2_ft': 'ablang2',
                 'antiberty_ft': 'antiberty', 'igbert_ft': 'igbert',
@@ -1000,10 +1242,21 @@ def main():
             }
             base_name = ft_to_frozen.get(ft_name, ft_name.split('_')[0])
             if base_name in ds_results['frozen']:
-                base_r2 = ds_results['frozen'][base_name]['r2_mean']
-                delta = r2_mean - base_r2
-                sign = '+' if delta >= 0 else ''
-                print(f"      vs frozen {base_name}: {sign}{delta:.4f}")
+                if task_type == 'classification':
+                    primary = 'f1_weighted' if len(np.unique(labels)) > 2 else 'auc'
+                    base = ds_results['frozen'][base_name].get(f'{primary}_mean')
+                    cur = entry.get(f'{primary}_mean')
+                    if base is not None and cur is not None:
+                        delta = cur - base
+                        sign = '+' if delta >= 0 else ''
+                        print(f"      vs frozen {base_name} ({primary}): {sign}{delta:.4f}")
+                else:
+                    base_r2 = ds_results['frozen'][base_name].get('r2_mean')
+                    cur_r2 = entry.get('r2_mean')
+                    if base_r2 is not None and cur_r2 is not None:
+                        delta = cur_r2 - base_r2
+                        sign = '+' if delta >= 0 else ''
+                        print(f"      vs frozen {base_name}: {sign}{delta:.4f}")
 
         all_results[ds_name] = ds_results
 

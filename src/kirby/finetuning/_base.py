@@ -45,10 +45,18 @@ def fold_cache_key(
     rep_name: str,
     train_idx: np.ndarray,
     hyperparams: dict,
+    factory_version: Optional[str] = None,
 ) -> str:
     """Deterministic SHA256 hash for a (dataset, rep, fold, hyperparams) combo.
 
     Changing any hyperparameter or fold split produces a new cache entry.
+
+    `factory_version` is a caller-supplied string that should be bumped
+    whenever the factory's code path changes in a way that invalidates
+    previously-cached embeddings (model weights, training recipe, tokenizer
+    change, etc.). Factory modules conventionally declare a module-level
+    `_FACTORY_VERSION = 'v<N>'` and pass it here. Leaving as None keeps
+    the legacy behaviour (no version column in the hash).
     """
     h = hashlib.sha256()
     h.update(dataset_name.encode())
@@ -57,6 +65,8 @@ def fold_cache_key(
     # Sort hyperparams for determinism
     for k in sorted(hyperparams.keys()):
         h.update(f"{k}={hyperparams[k]}".encode())
+    if factory_version is not None:
+        h.update(f"__factory_version={factory_version}".encode())
     return h.hexdigest()
 
 

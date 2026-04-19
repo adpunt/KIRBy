@@ -156,8 +156,8 @@ def main():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument('dataset', choices=['davis', 'kiba'],
-                        help='DTA dataset')
+    parser.add_argument('dataset', choices=['davis', 'kiba', 'bindingdb_kd'],
+                        help='DTA dataset (davis | kiba | bindingdb_kd)')
     parser.add_argument('--max-pairs', type=int, default=None,
                         help='Subsample pairs (default: 30000 for KIBA)')
     parser.add_argument('--n-folds', type=int, default=5,
@@ -174,6 +174,7 @@ def main():
 
     # ── Load dataset ─────────────────────────────────────────────────────
     from kirby.datasets.dta import load_dataset, assign_cold_target_groups
+    from kirby.registry import crosscheck_task_type
 
     print(f"Loading {args.dataset}...")
     data = load_dataset(args.dataset)
@@ -181,6 +182,8 @@ def main():
     protein_seqs = data['protein_seqs']
     labels = data['labels']
     metadata = data['metadata']
+    # Registry cross-check: DTA datasets are all regression (ci metric).
+    crosscheck_task_type(args.dataset, data.get('task_type', 'regression'))
 
     # Subsample if needed
     max_pairs = args.max_pairs
