@@ -21,6 +21,10 @@ from kirby.finetuning._base import (
     load_or_compute,
 )
 
+# Factory version — bump when the training recipe, tokenizer, or base-model
+# weights change in a way that invalidates prior cached fold embeddings.
+_FACTORY_VERSION = 'v1'
+
 
 def _finetune_and_extract(
     train_cgr_smiles: List[str],
@@ -232,7 +236,7 @@ def make_cgr_smiles_lora_factory(
 
         if cache:
             cache_key = fold_cache_key(
-                dataset_name, 'cgr_smiles_lora', train_idx, hyperparams)
+                dataset_name, 'cgr_smiles_lora', train_idx, hyperparams, factory_version=_FACTORY_VERSION)
             return load_or_compute(
                 cache_key,
                 lambda: _finetune_and_extract(

@@ -23,6 +23,10 @@ from kirby.finetuning._base import (
     load_or_compute,
 )
 
+# Factory version — bump when the training recipe, tokenizer, or base-model
+# weights change in a way that invalidates prior cached fold embeddings.
+_FACTORY_VERSION = 'v1'
+
 # (embed_dim, model_class_name)
 _MODEL_CONFIGS = {
     'schnet': (128, 'SchNet'),
@@ -475,7 +479,7 @@ def make_molecular_3d_factory(
         val_idx: np.ndarray,
         train_labels: np.ndarray,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        key = fold_cache_key(dataset_name, rep_name, train_idx, hyperparams)
+        key = fold_cache_key(dataset_name, rep_name, train_idx, hyperparams, factory_version=_FACTORY_VERSION)
 
         def _compute():
             train_smi = [smiles_list[i] for i in train_idx]

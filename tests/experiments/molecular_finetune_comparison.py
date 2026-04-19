@@ -60,7 +60,8 @@ warnings.filterwarnings('ignore')
 # CONFIGURATION
 # =============================================================================
 
-DEFAULT_DATASETS = ['logd', 'caco2', 'herg_ki']
+DEFAULT_DATASETS = ['logd', 'caco2', 'herg_ki', 'qm9',
+                    'adme_hlm', 'adme_rlm', 'adme_mdr1']
 
 # LM models that support all three fine-tuning strategies (lora, freeze, contrastive)
 LM_MODELS = ['chemberta', 'molformer', 'selformer', 'gp_molformer', 'chembert']
@@ -564,6 +565,12 @@ def main():
         except Exception as e:
             print(f"  FAILED to load dataset: {e}")
             continue
+
+        # Cross-check loader's task_type against DATASET_REGISTRY so
+        # silent metric-direction drift between loader and registry
+        # fails loudly instead of producing wrong numbers.
+        from kirby.registry import crosscheck_task_type
+        crosscheck_task_type(ds_name, task_type)
 
         groups = _scaffold_groups(smiles_list)
         n_scaffolds = len(np.unique(groups))
