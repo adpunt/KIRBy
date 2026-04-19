@@ -87,6 +87,12 @@ _KNOWN_LONG_RUNNERS: Dict[str, str] = {
     # — well inside short 12h but ~4h shy of it. Upshift to L as a
     # buffer against `capped` conditions going longer.
     'flab_thermo_tresanco': 'L',
+    # humanness_therapeutic n=564 (would be S band by size) but has
+    # 26 general reps + 21 top_tier reps + GP enabled (n<6000 cap).
+    # Consolidated _all_standard job hit 12h limit on `short` before
+    # completing top+borderline_uncapped (job 11784359, 2026-04-19).
+    # Upshift to M so it gets medium/2d/128G.
+    'humanness_therapeutic': 'M',
     # qm9 general_none 2h 10min (11707691) — size hits L naturally,
     # no override needed.
 }
