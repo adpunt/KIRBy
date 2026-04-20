@@ -590,10 +590,13 @@ Submitted via `tests/slurm_scripts/submit_ft_precompute.sh` (commit 2a8ec09). Go
 |--------|------|----------|----------|
 | 7516559 | ftpc_molecular | long, 128G, 24h, GPU | **COMPLETED** (14m57s, 2026-04-20). 5 of 8 datasets had FT reps configured in `DATASET_REPS` (logd: 3 reps, qm9: 1, caco2/herg_ki/adme_*: subset). Cached `lora_molformer + contrastive_molformer + gnn_graphmvp` per fold per dataset. The 3 datasets without ft_reps in `DATASET_REPS` were skipped silently (expected). **Does NOT cover** `lora_chemberta` or `ft_schnet` (those are in `make_ft_factories` only). |
 | 7516560 | ftpc_antibody | long, 128G, 4d, GPU | **FAILED** (8s, ExitCode 1:0, 2026-04-20). Git ref-lock race: 5 jobs started concurrently, all ran `git pull --ff-only` at startup → `cannot lock ref 'refs/remotes/origin/main'`. Superseded by 7520844 (no `git pull` in wrap; user pulls on login first). |
-| 7516561 | ftpc_dta_davis | long, 256G, 4d, GPU | **COMPLETED** (6h27m, 2026-04-20). `run_baseline_survey.py davis --finetune --n-folds 5`. `protein_esm2_lora` per-fold cache populated. JSON merged with existing `tests/results/phase5_baselines/dta/davis.json`. |
-| 7516562 | ftpc_dta_kiba | long, 256G, 4d, GPU | PENDING (queued behind 7516561 / dta_davis 7483719 still running). |
-| 7516563 | ftpc_dta_bindingdb_kd | long, 256G, 4d, GPU | PENDING (queued; concurrency risk with hybrid resubmit 7520843 noted). |
+| 7516561 | ftpc_dta_davis | long, 256G, 4d, GPU | **COMPLETED but FT NaN** (6h27m, 2026-04-20). Baselines populated; protein_esm2_lora returned NaN on every fold due to **CUDA OOM during holdout eval** (full 2400-sample holdout passed through ESM-2 650M in one forward → 44 GiB A40 OOM). Cache NOT poisoned (factory caught exception, no .npz written). Fixed in 7b128aa: bf16 autocast + gradient checkpointing + mini-batched holdout eval + dynamic per-batch tokenization + max_length 1024→512 + `_FACTORY_VERSION` v1→v2. Superseded by 7521193. |
+| 7516562 | ftpc_dta_kiba | long, 256G, 4d, GPU | **CANCELLED** (would have hit same OOM). Superseded by 7521194. |
+| 7516563 | ftpc_dta_bindingdb_kd | long, 256G, 4d, GPU | **CANCELLED** (same OOM risk + hybrid concurrency). Superseded by 7521196. |
 | 7520844 | ftpc_antibody (post-race-fix, no git pull in wrap) | **SUBMITTED** (2026-04-20, long+GPU+128G, 4d wall). User pulled on login before submitting; wrap omits `git pull`. |
+| 7521193 | ftpc_dta_davis_v2 (post-7b128aa OOM fix) | **SUBMITTED** (2026-04-20, long+GPU+256G, 4d wall). Uses dta_protein_lora factory v2 — bf16 + grad ckpt + mini-batched holdout. |
+| 7521194 | ftpc_dta_kiba_v2 (post-7b128aa) | **SUBMITTED** (2026-04-20, long+GPU+256G, 4d wall). |
+| 7521196 | ftpc_dta_bindingdb_kd_v2 (post-7b128aa) | **SUBMITTED** (2026-04-20, long+GPU+256G, 4d wall). Concurrency risk with hybrid resubmit 7520843 if both run simultaneously (both write to `tests/results/phase5_baselines/dta/bindingdb_kd.json`). |
 
 ### CGR-SMILES pretraining (Phase 4)
 
@@ -699,3 +702,34 @@ grep -h "^\[cache\]" slurm-*.out | sort | uniq -c
 - Medium partition L/XL jobs: 8h–1d typical
 - Long partition nucleotide: 6-12h each (reps pre-cached as .npy)
 - `[cache] hybrid_eval: N hit` appears in SLURM logs when top_k allocation picks the same subset across general and top tier searches — first production test of Phase D.2 dedup
+
+---
+
+## 2026-04-20 — M-band timeout resubmit (12 datasets × 2 = 24 jobs)
+
+**Submitted:** 2026-04-20 | **Trigger:** 29 TIMEOUTs on short partition (12h). Root cause: many reps + GP enabled pushes consolidated runtime past 12h even for XS/S datasets. Fix: upshifted to M band in `_KNOWN_LONG_RUNNERS` (commit 507bc55).
+**Cluster:** arc | **Partition:** medium (2d/128G) | **Mode:** consolidated (standard + distance bundles)
+**ID range:** 11799082–11799105
+
+| Dataset | Standard | Distance |
+|---------|----------|----------|
+| ginkgo_heparin | 11799082 | 11799083 |
+| ginkgo_acsins | 11799084 | 11799085 |
+| ginkgo_colloidal | 11799086 | 11799087 |
+| ginkgo_hic | 11799088 | 11799089 |
+| ginkgo_pr_cho | 11799090 | 11799091 |
+| ginkgo_titer | 11799092 | 11799093 |
+| abagym_Ang2 | 11799094 | 11799095 |
+| abagym_EGFR | 11799096 | 11799097 |
+| abagym_HER2 | 11799098 | 11799099 |
+| abagym_VEGF | 11799100 | 11799101 |
+| abagym_lysozyme | 11799102 | 11799103 |
+| humanness_therapeutic | 11799104 | 11799105 |
+
+### Status checks
+
+```bash
+sacct -j 11799082-11799105 --format=State --noheader -X | sort | uniq -c
+sacct -j 11799082-11799105 --format=JobID,JobName%40,State,Elapsed,ExitCode -X \
+  | grep -E "FAILED|TIMEOUT|OUT_OF_ME|CANCELLED"
+```
