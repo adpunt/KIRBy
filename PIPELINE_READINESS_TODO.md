@@ -148,8 +148,8 @@ Remaining:
 
 - **Molecular FT fill:** ALL 4 COMPLETED (qm9, adme_hlm, adme_rlm, adme_mdr1). Results in `tests/results/molecular_ft_fill/`. Pulled locally.
 - **Antibody ESM-2 LoRA fill:** ALL 29 datasets COMPLETED (was 11, now full coverage including ginkgo, abagym, DMS, Ab CLF). Results in `tests/results/antibody_ft_fill/`. Pulled locally.
-- **E2E SchNet:** caco2 + herg done (pulled locally). All 3 (logd, herg_ki, caco2) resubmitted on HTC long partition 2026-04-04 (previous runs failed exit 127 on ARC). In queue.
-- Per-dataset FT swap decisions can now proceed for molecular + antibody. SchNet logd still pending.
+- **E2E SchNet:** ft_schnet now confirmed working on **logd** (RMSE 0.6094, job 7498292) and **caco2** (job 7498294) via CPU fallback (commit b59c11e) after CUDA torch_cluster issue. Both completed 2026-04-18. Numbers don't beat the existing molecular tier-table winners — kept as factory rep for qm9 only. herg resubmitted as 7515601 (post-FLuID loader fix d3e2cc1).
+- Per-dataset FT swap decisions can now proceed for molecular + antibody.
 
 ### New dataset surveys — status as of 2026-04-04
 
@@ -976,8 +976,8 @@ are reviewed. See PRECOMPUTE_JOB_TRACKER.md §Nucleotide gena_lm refix.
 | # | Dataset | Samples | Reps | Metric | Status |
 |---|---------|---------|------|--------|--------|
 | 56 | gb_human_nontata_promoters | 36,131 | 14 | MCC | **DONE** — gena_lm corrected. Winner: kmer5+mlp=0.8917. Classicals dominate. |
-| 57 | nt_enhancers | — | 6 | MCC | Classical only — survey pending (7483707 PD) |
-| 58 | nt_enhancers_types | — | 6 | MCC | Classical only — survey pending (7483708 PD) |
+| 57 | nt_enhancers | 33,000 | 17 | MCC | **DONE** — gena_lm corrected (gena_refix 7499338). Winner: grover_dna+ridge=0.4761. |
+| 58 | nt_enhancers_types | 33,000 | 14 | MCC | **DONE** — gena_lm corrected (gena_refix 7499339). Winner: mistral_dna+ridge=0.4368. Aug gap: only codon_usage of the 5 standard aug reps ran. |
 | 59 | nt_H2AFZ | 33,000 | 14 | MCC | **DONE** — gena_lm corrected (1024D, MCC=0.019, dropped). Winner: mistral_dna+ridge=0.4323 |
 | 60 | nt_H3K27ac | 31,616 | 17 | MCC | **DONE** — gena_lm corrected (dropped, 4.5% of best). Winner: kmer6+ridge=0.4564 |
 | 61 | nt_H3K27me3 | 33,000 | 14 | MCC | **DONE** — gena_lm corrected (dropped, 5.2% of best). Winner: mistral_dna+ridge=0.5487 |
@@ -991,9 +991,9 @@ are reviewed. See PRECOMPUTE_JOB_TRACKER.md §Nucleotide gena_lm refix.
 | 69 | nt_promoter_all | 31,584 | 17 | MCC | **DONE** — gena_lm corrected. Winner: mistral_dna+ridge=0.7281 (saturated). |
 | 70 | nt_promoter_no_tata | 31,372 | 17 | MCC | **DONE** — gena_lm corrected. Winner: mistral_dna+ridge=0.7497 (saturated). |
 | 71 | nt_promoter_tata | 5,274 | 17 | MCC | **DONE** — gena_lm corrected. Winner: mistral_dna+ridge=0.6743. Smallest nucleotide ds. |
-| 72 | nt_splice_sites_acceptors | — | 6 | MCC | Classical only — survey pending (7483709 PD) |
+| 72 | nt_splice_sites_acceptors | 33,000 | 14 | MCC | **DONE** — gena_lm corrected (gena_refix 7499340). Winner: nt_v2_250m+ridge=0.4933. dnabert2 dropped (65%). |
 | 73 | nt_splice_sites_all | 33,000 | 14 | MCC | **DROPPED** — only nt_v2_250m/500m reach MCC≥0.37; all other reps ≤0.28. Weak task, no diversity. |
-| 74 | nt_splice_sites_donors | — | 6 | MCC | Classical only — survey pending (7483710 PD) |
+| 74 | nt_splice_sites_donors | 33,000 | 14 | MCC | **DONE** — gena_lm corrected (gena_refix 7499341). Winner: nt_v2_250m+ridge=0.5380. dnabert2 dropped (67%). |
 
 **Root cause:** `DATASET_REGISTRY` in `run_baseline_survey.py` had default preset `'fast'` (6 classical reps only) for all nucleotide datasets. Survey was submitted without `--reps all` override, so FM reps never ran. **Fixed 2026-03-28** (commit a2a0d2d): default changed to `'all'` (26 reps: 14 FM + 11 classical + 1 factory).
 
@@ -1014,6 +1014,28 @@ rep. Those claims are **INVALID**. The pre-3a5b5d5 `_embed_gena_lm` returned
 32000 features × ~33000 samples memorized noise, producing spuriously high
 MCC for gena_lm on every H3K* task. The real numbers land after
 jobs 7485363-78 complete. Tables below retained for historical record only.
+
+**nt_enhancers (33,000 samples, 23 groups, MCC) — 17/25 reps ran. CORRECTED 2026-04-18 (gena_refix 7499338):**
+
+| Tier | Reps |
+|------|------|
+| Top Tier (5) | grover_dna, mistral_dna, kmer6, hyenadna, nt_v2_500m |
+| General (12) | grover_dna, mistral_dna, kmer6, hyenadna, nt_v2_500m, nt_v2_250m, kmer5, tetranuc_freq, kmer4, tnf_canonical, kmer3, dnabert2 |
+| Augmentation (4) | dinuc_freq, gc_content, codon_usage, complexity |
+| Dropped (1) | gena_lm (13% of best — confirmed near-random at 1024D) |
+
+*Winner: grover_dna+ridge=0.4761 MCC. Top-5 by best-model score; threshold ≈95% (consistent with H3K* histone tables that include nt_v2_250m/500m as a pair). dnabert2 retained in General at 84% of best.*
+
+**nt_enhancers_types (33,000 samples, 23 groups, MCC) — 14/25 reps ran. CORRECTED 2026-04-18 (gena_refix 7499339):**
+
+| Tier | Reps |
+|------|------|
+| Top Tier (5) | mistral_dna, grover_dna, kmer6, hyenadna, nt_v2_500m |
+| General (12) | mistral_dna, grover_dna, kmer6, hyenadna, nt_v2_500m, nt_v2_250m, kmer5, kmer4, tnf_canonical, tetranuc_freq, kmer3, dnabert2 |
+| Augmentation (1, partial) | codon_usage |
+| Dropped (1) | gena_lm (10% of best — confirmed near-random at 1024D) |
+
+*Winner: mistral_dna+ridge=0.4368 MCC. Survey gap: dinuc_freq, gc_content, complexity, dna_shape did not run (would have been augmentation tier per H3K* convention). Accepted as-is — best classical (kmer6=0.4260) far above any of the missing augmentation reps would reach.*
 
 **nt_H2AFZ (33,000 samples, 23 groups, MCC) — 14/25 reps ran (7 failed: splicebert, rnafm, dnabert_s, gpn, rinalmo, caduceus, ntv3_100m):**
 
@@ -1160,9 +1182,42 @@ CORRECTED 2026-04-17 (gena_refix 7485363 + 7496791). gena_lm now 1024D hidden st
 
 *Winner: mistral_dna+ridge=0.7497 MCC. Best aug: mistral_dna+dinuc_freq=0.7510 (+0.0013, marginal — saturated task). Top Tier threshold ≥98%. dnabert2 kept (96% on saturated task).*
 
+**nt_splice_sites_acceptors (33,000 samples, 23 groups, MCC) — 14/25 reps ran. CORRECTED 2026-04-18 (gena_refix 7499340):**
+
+| Tier | Reps |
+|------|------|
+| Top Tier (4) | nt_v2_250m, grover_dna, nt_v2_500m, mistral_dna |
+| General (11) | nt_v2_250m, grover_dna, nt_v2_500m, mistral_dna, hyenadna, kmer6, kmer4, kmer3, kmer5, tetranuc_freq, tnf_canonical |
+| Augmentation (1, partial) | codon_usage |
+| Dropped (2) | dnabert2 (65% of best), gena_lm (6.4% of best — confirmed near-random at 1024D) |
+
+*Winner: nt_v2_250m+ridge=0.4933 MCC. Wider FM-to-classical gap than nt_enhancers — Top Tier is 4 (hyenadna at 88% falls below the 93%+ cluster). NOT a drop candidate despite `nt_splice_sites_all` being dropped — acceptors has 5 reps clearing 0.43 with diverse FM/classical results. Survey gap: dinuc_freq, gc_content, complexity, dna_shape did not run.*
+
 **nt_splice_sites_all (33,000 samples, 23 groups, MCC) — 14/25 reps ran. DROPPED 2026-04-17.**
 
 Only 2 reps (nt_v2_250m, nt_v2_500m) reach MCC≥0.37; rest ≤0.28. Best winner: nt_v2_250m+ridge=0.3685. Dataset is too weak and has no rep diversity — dropping per original pre-survey decision.
+
+**nt_splice_sites_donors (33,000 samples, 23 groups, MCC) — 14/25 reps ran. CORRECTED 2026-04-18 (gena_refix 7499341):**
+
+| Tier | Reps |
+|------|------|
+| Top Tier (2) | nt_v2_250m, nt_v2_500m |
+| General (11) | nt_v2_250m, nt_v2_500m, grover_dna, mistral_dna, hyenadna, kmer6, kmer5, kmer4, tetranuc_freq, kmer3, tnf_canonical |
+| Augmentation (1, partial) | codon_usage |
+| Dropped (2) | dnabert2 (67% of best), gena_lm (8.6% of best — confirmed near-random at 1024D) |
+
+*Winner: nt_v2_250m+ridge=0.5380 MCC. More FM-dominated than acceptors — nt_v2 pair leads at ≥97%, grover_dna at 91% is the next jump. Higher absolute scores than acceptors (0.54 vs 0.49) — donor splice sites are apparently easier to predict from sequence. Survey gap: dinuc_freq, gc_content, complexity, dna_shape did not run.*
+
+**gb_demo_coding_vs_intergenomic_seqs (100,000 samples, 5 groups, MCC) — 14/25 reps ran (all 5 models on every rep). CORRECTED 2026-04-18 (job 7496807):**
+
+| Tier | Reps |
+|------|------|
+| Top Tier (5) | nt_v2_250m, nt_v2_500m, kmer5, grover_dna, kmer6 |
+| General (11) | nt_v2_250m, nt_v2_500m, kmer5, grover_dna, kmer6, mistral_dna, kmer4, tetranuc_freq, hyenadna, kmer3, tnf_canonical |
+| Augmentation (1) | codon_usage |
+| Dropped (2) | dnabert2 (88% of best — covered by other FM reps), gena_lm (14% of best — confirmed near-random at 1024D) |
+
+*Winner: nt_v2_250m+mlp=0.8392 MCC. Heavily saturated task (n=100K) — 12 reps cluster in 0.74–0.84. MLP dominates (winner for 9/14 reps), unlike NT datasets where ridge wins — larger n finally rewards capacity.*
 
 **gb_human_nontata_promoters (36,131 samples, 5 groups, MCC) — 14/25 reps ran. CORRECTED 2026-04-17 (gena_refix 7496805):**
 
