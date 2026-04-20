@@ -412,7 +412,8 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 7496790 | dta_kiba (full re-run, post-d1c45b9 merge fix) | **COMPLETED** (17h11m, 2026-04-18). Output `tests/results/phase5_baselines/dta/kiba.json`. Several ESM-family reps showed large negative R² (e.g. esm2 R²=-1.58, esmc R²=-2.37) but CIs in normal range — flag for analysis but not a job failure. |
 | 7515602 | dta_bindingdb_kd (post-d829df1, hand-rolled --wrap) | **FAILED** (14s, ExitCode 127:0, 2026-04-20). Long inline `--wrap` line-split by SLURM, python invocation orphaned from args (same bug class as 7457285/86, 7467966-9). Plus server git was on divergent branches → silent `git pull 2>/dev/null` swallowed the failure. Reset server to origin/main + dedicated heredoc script (commit 42a22c4). Superseded by 7515675. |
 | 7515675 | dta_bindingdb_kd (post-42a22c4, heredoc script v1) | **FAILED** (argparse "unrecognized arguments" + blank-line args). Heredoc backslash line-continuation (`\\<LF>`) garbled between heredoc → sbatch → compute-node bash. Same bug class as 7483641-46. Fixed in db6d769 (collapse python invocation to single line). Superseded by 7516299. |
-| 7516299 | dta_bindingdb_kd (post-db6d769, single-line python) | **SUBMITTED** (2026-04-20, long+GPU+128G, 24h wall). Estimated runtime 3-6h. |
+| 7516299 | dta_bindingdb_kd (post-db6d769, single-line python) | **FAILED** (1m23s, ExitCode 2:0, 2026-04-20). Stale job script: `bash submit_dta_bindingdb.sh` was run BEFORE the db6d769 fix landed on the server, so sbatch captured the OLD `\\` continuation heredoc. In-job `git pull` updated the python source but the SLURM job script itself was already locked at submission time. Superseded by 7520843 after `git pull` on login node. |
+| 7520843 | dta_bindingdb_kd (post-login-pull, db6d769 in script) | **SUBMITTED** (2026-04-20, long+GPU+128G, 24h wall). |
 
 ### Antibody CLF
 
@@ -451,7 +452,7 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 7498292 | schnet_logd (post-b59c11e CPU fallback) | **COMPLETED** (3h26m, 2026-04-18). Real ft_schnet finally landed: ft_schnet=0.609 (ridge), lora_chemberta=0.757, lora_molformer=0.565. CPU fallback works. |
 | 7498293 | schnet_herg (post-b59c11e + 67803ab FLuID loader) | **FAILED** (7min, 2026-04-18, ExitCode 1:0). FLuID `hERG_lhasa_training.pkl` not on server — `data_dir='data/fluid'` was hardcoded and never existed. Fixed in d3e2cc1 (env-var resolution + multiple fallback paths) + user scp'd pickles to `/data/stat-cadd/scat9264/lhasa_data/`. Superseded by 7515601. |
 | 7498294 | schnet_caco2 (post-b59c11e) | **COMPLETED** (1h06m, 2026-04-18). Real ft_schnet via CPU fallback. |
-| 7515601 | schnet_herg (post-d3e2cc1 + scp'd FLuID) | **SUBMITTED** (2026-04-20, long+GPU+128G, 24h wall). |
+| 7515601 | schnet_herg (post-d3e2cc1 + scp'd FLuID) | **COMPLETED** (4h05m, 2026-04-20). 22 frozen baselines + 3 FT reps (3-fold screening). Winner mhg_gnn+xgb=0.7712 acc. ft_schnet=0.684 (works post-CPU-fallback but not competitive vs frozen). `unimol_v2` collapsed to majority class (0.533) — flag for investigation. Tier table NOT assigned (3-fold screening is not publication-grade). |
 
 ### Nucleotide (genomics)
 
@@ -587,11 +588,12 @@ Submitted via `tests/slurm_scripts/submit_ft_precompute.sh` (commit 2a8ec09). Go
 
 | Job ID | Name | Resource | Coverage |
 |--------|------|----------|----------|
-| 7516559 | ftpc_molecular | long, 128G, 24h, GPU | `precompute_ft_reps.py --domain molecular --speed full` — caches `lora_molformer, contrastive_molformer, gnn_graphmvp` for the 8 molecular datasets. **Does NOT cover** `lora_chemberta` or `ft_schnet` (those are in `make_ft_factories` only — separate `run_baseline_survey.py --finetune` pass needed if wanted). |
-| 7516560 | ftpc_antibody | long, 128G, 4d, GPU | `precompute_ft_reps.py --domain antibody --speed full` — caches `antibody_lora` factories for the 29 antibody datasets. |
-| 7516561 | ftpc_dta_davis | long, 256G, 4d, GPU | `run_baseline_survey.py davis --finetune --n-folds 5` (no DTA support in `precompute_ft_reps.py`; survey populates cache as side effect). Caches `protein_esm2_lora`. |
-| 7516562 | ftpc_dta_kiba | long, 256G, 4d, GPU | `run_baseline_survey.py kiba --finetune --n-folds 5`. |
-| 7516563 | ftpc_dta_bindingdb_kd | long, 256G, 4d, GPU | `run_baseline_survey.py bindingdb_kd --finetune --n-folds 5`. **Concurrency risk**: writes to same JSON as in-flight 7516299 (hybrid resubmit). If both run concurrently, scancel one and resubmit later. |
+| 7516559 | ftpc_molecular | long, 128G, 24h, GPU | **COMPLETED** (14m57s, 2026-04-20). 5 of 8 datasets had FT reps configured in `DATASET_REPS` (logd: 3 reps, qm9: 1, caco2/herg_ki/adme_*: subset). Cached `lora_molformer + contrastive_molformer + gnn_graphmvp` per fold per dataset. The 3 datasets without ft_reps in `DATASET_REPS` were skipped silently (expected). **Does NOT cover** `lora_chemberta` or `ft_schnet` (those are in `make_ft_factories` only). |
+| 7516560 | ftpc_antibody | long, 128G, 4d, GPU | **FAILED** (8s, ExitCode 1:0, 2026-04-20). Git ref-lock race: 5 jobs started concurrently, all ran `git pull --ff-only` at startup → `cannot lock ref 'refs/remotes/origin/main'`. Superseded by 7520844 (no `git pull` in wrap; user pulls on login first). |
+| 7516561 | ftpc_dta_davis | long, 256G, 4d, GPU | **COMPLETED** (6h27m, 2026-04-20). `run_baseline_survey.py davis --finetune --n-folds 5`. `protein_esm2_lora` per-fold cache populated. JSON merged with existing `tests/results/phase5_baselines/dta/davis.json`. |
+| 7516562 | ftpc_dta_kiba | long, 256G, 4d, GPU | PENDING (queued behind 7516561 / dta_davis 7483719 still running). |
+| 7516563 | ftpc_dta_bindingdb_kd | long, 256G, 4d, GPU | PENDING (queued; concurrency risk with hybrid resubmit 7520843 noted). |
+| 7520844 | ftpc_antibody (post-race-fix, no git pull in wrap) | **SUBMITTED** (2026-04-20, long+GPU+128G, 4d wall). User pulled on login before submitting; wrap omits `git pull`. |
 
 ### CGR-SMILES pretraining (Phase 4)
 
