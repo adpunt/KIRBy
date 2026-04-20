@@ -411,7 +411,8 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 7483717 | dta_kiba_fill (post-c18342f) | **COMPLETED** (23min, 2026-04-16) — **BUT destroyed kiba.json** (69KB→583B) due to merge bug in a81b0eb. Fixed in d1c45b9. |
 | 7496790 | dta_kiba (full re-run, post-d1c45b9 merge fix) | **COMPLETED** (17h11m, 2026-04-18). Output `tests/results/phase5_baselines/dta/kiba.json`. Several ESM-family reps showed large negative R² (e.g. esm2 R²=-1.58, esmc R²=-2.37) but CIs in normal range — flag for analysis but not a job failure. |
 | 7515602 | dta_bindingdb_kd (post-d829df1, hand-rolled --wrap) | **FAILED** (14s, ExitCode 127:0, 2026-04-20). Long inline `--wrap` line-split by SLURM, python invocation orphaned from args (same bug class as 7457285/86, 7467966-9). Plus server git was on divergent branches → silent `git pull 2>/dev/null` swallowed the failure. Reset server to origin/main + dedicated heredoc script (commit 42a22c4). Superseded by 7515675. |
-| 7515675 | dta_bindingdb_kd (post-42a22c4, heredoc script) | **SUBMITTED** (2026-04-20, long+GPU+128G, 24h wall). Uses `tests/slurm_scripts/submit_dta_bindingdb.sh` (real `#SBATCH` directives, no `--wrap`). `git pull --ff-only` so any future divergence fails loudly. Estimated runtime 3-6h. |
+| 7515675 | dta_bindingdb_kd (post-42a22c4, heredoc script v1) | **FAILED** (argparse "unrecognized arguments" + blank-line args). Heredoc backslash line-continuation (`\\<LF>`) garbled between heredoc → sbatch → compute-node bash. Same bug class as 7483641-46. Fixed in db6d769 (collapse python invocation to single line). Superseded by 7516299. |
+| 7516299 | dta_bindingdb_kd (post-db6d769, single-line python) | **SUBMITTED** (2026-04-20, long+GPU+128G, 24h wall). Estimated runtime 3-6h. |
 
 ### Antibody CLF
 
