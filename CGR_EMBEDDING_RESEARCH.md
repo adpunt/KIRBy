@@ -2,6 +2,8 @@
 
 Status: RESEARCH / PLANNING — not yet implemented.
 
+**Related docs:** CGR reps are *features* for the reaction virtual model described in `DIGITAL_TWIN_REACTION_ROADMAP.md`. The DT roadmap covers surrogate modeling, uncertainty quantification (§6, §14), and the simulated-AL/BO loop. This doc covers only the feature (representation) layer.
+
 ## Background
 
 ### What is a CGR?
