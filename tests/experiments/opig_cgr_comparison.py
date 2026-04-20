@@ -64,7 +64,7 @@ from experiments._shared import (
 
 ALL_DATASETS = ['buchwald_hartwig', 'bh_doyle_plates', 'suzuki']
 
-CGR_REPS = {'cgr_morgan', 'chytorch_graphormer'}
+CGR_REPS = {'cgr_morgan', 'chytorch_graphormer', 'cgr_smiles_lm'}
 
 FAMILIES = {
     'fingerprint': {
@@ -72,14 +72,14 @@ FAMILIES = {
         'smiles': ['diff_ecfp4', 'drfp_2048'],
     },
     'neural': {
-        'cgr': ['chytorch_graphormer'],
+        'cgr': ['chytorch_graphormer', 'cgr_smiles_lm'],
         'smiles': ['rxnfp', 'reactiont5'],
     },
 }
 
 # All family reps for CKA analysis
 FAMILY_REPS = ['cgr_morgan', 'diff_ecfp4', 'drfp_2048',
-               'chytorch_graphormer', 'rxnfp', 'reactiont5']
+               'chytorch_graphormer', 'cgr_smiles_lm', 'rxnfp', 'reactiont5']
 
 MODELS_LIST = DOWNSTREAM_MODELS
 
@@ -102,6 +102,7 @@ def load_cgr_comparison_data(dataset_name):
         create_diff_ecfp4, create_diff_maccs,
         create_component_descriptors, create_ligand_descriptors,
         create_reactiont5, create_cgr_morgan, create_chytorch_graphormer,
+        create_cgr_smiles_lm,
         create_reaction_rep_variant, _MOL_REP_VARIANTS,
     )
 
@@ -143,6 +144,7 @@ def load_cgr_comparison_data(dataset_name):
         'reactiont5': lambda: create_reactiont5(rxn_smiles),
         'cgr_morgan': lambda: create_cgr_morgan(rxn_smiles),
         'chytorch_graphormer': lambda: create_chytorch_graphormer(rxn_smiles),
+        'cgr_smiles_lm': lambda: create_cgr_smiles_lm(rxn_smiles),
     }
 
     # Add molecular variant generators
