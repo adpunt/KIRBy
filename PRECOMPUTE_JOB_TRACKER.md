@@ -581,6 +581,18 @@ Submitted via `tests/slurm_scripts/submit_precompute_new_nucleotide.sh` (commit 
 
 `--models ridge,rf,xgboost,lightgbm,mlp` (SVM dropped due to O(n²-n³) kernel cost at n=100K).
 
+### Phase B FT precompute (HTC GPU, 2026-04-20)
+
+Submitted via `tests/slurm_scripts/submit_ft_precompute.sh` (commit 2a8ec09). Goal: populate per-fold `.npz` cache at `$KIRBY_CACHE_DIR/finetuned_reps/` (`/data/stat-cadd/scat9264/.cache/kirby/finetuned_reps/`) so downstream experiments can re-use FT embeddings via `load_or_compute()` without re-running fine-tuning. TCGA skipped per user.
+
+| Job ID | Name | Resource | Coverage |
+|--------|------|----------|----------|
+| 7516559 | ftpc_molecular | long, 128G, 24h, GPU | `precompute_ft_reps.py --domain molecular --speed full` — caches `lora_molformer, contrastive_molformer, gnn_graphmvp` for the 8 molecular datasets. **Does NOT cover** `lora_chemberta` or `ft_schnet` (those are in `make_ft_factories` only — separate `run_baseline_survey.py --finetune` pass needed if wanted). |
+| 7516560 | ftpc_antibody | long, 128G, 4d, GPU | `precompute_ft_reps.py --domain antibody --speed full` — caches `antibody_lora` factories for the 29 antibody datasets. |
+| 7516561 | ftpc_dta_davis | long, 256G, 4d, GPU | `run_baseline_survey.py davis --finetune --n-folds 5` (no DTA support in `precompute_ft_reps.py`; survey populates cache as side effect). Caches `protein_esm2_lora`. |
+| 7516562 | ftpc_dta_kiba | long, 256G, 4d, GPU | `run_baseline_survey.py kiba --finetune --n-folds 5`. |
+| 7516563 | ftpc_dta_bindingdb_kd | long, 256G, 4d, GPU | `run_baseline_survey.py bindingdb_kd --finetune --n-folds 5`. **Concurrency risk**: writes to same JSON as in-flight 7516299 (hybrid resubmit). If both run concurrently, scancel one and resubmit later. |
+
 ### CGR-SMILES pretraining (Phase 4)
 
 Single job: corpus generation (~1M USPTO → CGR-SMILES) + continued MLM pretraining (50K steps).
