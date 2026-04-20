@@ -35,10 +35,7 @@ git pull --ff-only
 export PYTHONWARNINGS=ignore
 export TRANSFORMERS_VERBOSITY=error
 
-python tests/dta_baseline_survey.py bindingdb_kd \\
-    --n-folds 5 \\
-    --max-pairs 30000 \\
-    --output ${OUT}/bindingdb_kd.json
+python tests/dta_baseline_survey.py bindingdb_kd --n-folds 5 --max-pairs 30000 --output ${OUT}/bindingdb_kd.json
 EOF
 )
 
