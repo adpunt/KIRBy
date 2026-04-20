@@ -150,6 +150,12 @@ DATASET_REGISTRY: Dict[str, DatasetInfo] = {
     'nt_promoter_no_tata':          DatasetInfo('nt_promoter_no_tata',         'classification', 'mcc', False, 'nucleotide', n_samples=31372, notes='Winner mistral_dna+ridge=0.7497. Saturated.'),
     'gb_human_nontata_promoters':   DatasetInfo('gb_human_nontata_promoters',  'classification', 'mcc', False, 'nucleotide', n_samples=36131, notes='GB dataset, 5 groups. Winner kmer5+mlp=0.8917. Classicals dominate.'),
     'gb_human_enhancers_cohn':      DatasetInfo('gb_human_enhancers_cohn',     'classification', 'mcc', False, 'nucleotide', n_samples=27791, notes='GB dataset, 5 groups. Winner grover_dna+ridge=0.4853.'),
+    'nt_enhancers':                 DatasetInfo('nt_enhancers',                'classification', 'mcc', False, 'nucleotide', n_samples=33000, notes='Winner grover_dna+ridge=0.4761. Survey 2026-04-18 (gena_refix 7499338).'),
+    'nt_enhancers_types':           DatasetInfo('nt_enhancers_types',          'classification', 'mcc', False, 'nucleotide', n_samples=33000, notes='Winner mistral_dna+ridge=0.4368. Aug gap (only codon_usage of 5 standard aug reps ran). Survey 2026-04-18 (gena_refix 7499339).'),
+    'nt_splice_sites_acceptors':    DatasetInfo('nt_splice_sites_acceptors',   'classification', 'mcc', False, 'nucleotide', n_samples=33000, notes='Winner nt_v2_250m+ridge=0.4933. dnabert2 dropped (65%). Survey 2026-04-18 (gena_refix 7499340).'),
+    'nt_splice_sites_donors':       DatasetInfo('nt_splice_sites_donors',      'classification', 'mcc', False, 'nucleotide', n_samples=33000, notes='Winner nt_v2_250m+ridge=0.5380. dnabert2 dropped (67%). Survey 2026-04-18 (gena_refix 7499341).'),
+    'gb_demo_coding_vs_intergenomic_seqs': DatasetInfo('gb_demo_coding_vs_intergenomic_seqs', 'classification', 'mcc', False, 'nucleotide', n_samples=100000, notes='GB demo, 5 groups. Winner nt_v2_250m+mlp=0.8392. dnabert2 dropped (88%). Saturated task (n=100K).'),
+    'gb_demo_human_or_worm':        DatasetInfo('gb_demo_human_or_worm',       'classification', 'mcc', False, 'nucleotide', n_samples=100000, notes='GB demo, 5 groups. Winner tetranuc_freq+mlp=0.9135. dnabert2 dropped (92%). Classicals win this task.'),
 
     # ── DTA regression ───────────────────────────────────────────────────
     'davis':            DatasetInfo('davis',        'regression', 'ci', False, 'dta'),
