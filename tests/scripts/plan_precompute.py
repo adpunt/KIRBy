@@ -87,12 +87,25 @@ _KNOWN_LONG_RUNNERS: Dict[str, str] = {
     # — well inside short 12h but ~4h shy of it. Upshift to L as a
     # buffer against `capped` conditions going longer.
     'flab_thermo_tresanco': 'L',
-    # humanness_therapeutic n=564 (would be S band by size) but has
-    # 26 general reps + 21 top_tier reps + GP enabled (n<6000 cap).
-    # Consolidated _all_standard job hit 12h limit on `short` before
-    # completing top+borderline_uncapped (job 11784359, 2026-04-19).
-    # Upshift to M so it gets medium/2d/128G.
+    # Broad antibody upshift (2026-04-20) — every small-n antibody
+    # dataset with a large rep set + GP enabled is timing out at 12h
+    # on `short` in consolidated mode (jobs 11784280-11784359 all
+    # hit TIMEOUT at exactly 12:00). Root cause: n<6000 triggers GP
+    # (O(n³) per fold), and 26+ general reps × 5+ evaluators × 9
+    # allocations × 3 imps × 6 budgets generates ~5000-8000 configs
+    # per tier condition. Pushing all of these to M.
     'humanness_therapeutic': 'M',
+    'ginkgo_heparin': 'M',
+    'ginkgo_acsins': 'M',
+    'ginkgo_colloidal': 'M',
+    'ginkgo_hic': 'M',
+    'ginkgo_pr_cho': 'M',
+    'ginkgo_titer': 'M',
+    'abagym_Ang2': 'M',
+    'abagym_EGFR': 'M',
+    'abagym_HER2': 'M',
+    'abagym_VEGF': 'M',
+    'abagym_lysozyme': 'M',
     # qm9 general_none 2h 10min (11707691) — size hits L naturally,
     # no override needed.
 }
