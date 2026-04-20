@@ -551,7 +551,35 @@ Resource: long+GPU+64G+6h per job.
 | 7499340 | gena_refix_nt_splice_sites_acceptors | **COMPLETED** (31min, 2026-04-18). Winner: gena_lm+ridge=0.0317 MCC (weak — confirms classicals dominate this task). |
 | 7499341 | gena_refix_nt_splice_sites_donors | **COMPLETED** (30min, 2026-04-18) |
 
-All 20 nucleotide datasets (16 + 4) now have corrected 1024D gena_lm. Tier tables for the 6 newly-completed nucleotide datasets (4 round-3 + 2 gb_demo) pending PIPELINE_READINESS_TODO update — see analysis section below.
+All 20 nucleotide datasets (16 + 4) now have corrected 1024D gena_lm. Tier tables for the 6 newly-completed nucleotide datasets (4 round-3 + 2 gb_demo) updated in PIPELINE_READINESS_TODO 2026-04-20 (commits a-f).
+
+### Precompute for the 6 new nucleotide datasets (2026-04-20)
+
+Submitted via `tests/slurm_scripts/submit_precompute_new_nucleotide.sh` (commit b58b1d0). Registry entries added (`src/kirby/registry.py`).
+
+**4 nt_\* datasets (n=33K, default 6 models, long+128G+2d):**
+
+| Job ID | Name |
+|--------|------|
+| 11794061 | pc_nt_enhancers_all_standard |
+| 11794062 | pc_nt_enhancers_all_distance |
+| 11794063 | pc_nt_enhancers_types_all_standard |
+| 11794064 | pc_nt_enhancers_types_all_distance |
+| 11794065 | pc_nt_splice_sites_acceptors_all_standard |
+| 11794066 | pc_nt_splice_sites_acceptors_all_distance |
+| 11794067 | pc_nt_splice_sites_donors_all_standard |
+| 11794068 | pc_nt_splice_sites_donors_all_distance |
+
+**2 gb_demo_\* datasets (n=100K, drop SVM, long+256G+4d):**
+
+| Job ID | Name |
+|--------|------|
+| 11794069 | pc_gb_demo_coding_vs_intergenomic_seqs_all_standard |
+| 11794070 | pc_gb_demo_coding_vs_intergenomic_seqs_all_distance |
+| 11794071 | pc_gb_demo_human_or_worm_all_standard |
+| 11794072 | pc_gb_demo_human_or_worm_all_distance |
+
+`--models ridge,rf,xgboost,lightgbm,mlp` (SVM dropped due to O(n²-n³) kernel cost at n=100K).
 
 ### CGR-SMILES pretraining (Phase 4)
 
