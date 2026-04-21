@@ -241,7 +241,8 @@ def main():
                 budgets=FULL_BUDGETS,
                 speed='full', return_fitted=True, verbose=False, cache=True,
                 dataset_name=ds_name, tier='general',
-                metric=metric_name, adaptive_pruning=0.25)
+                metric=metric_name, task_type=task_type,
+                adaptive_pruning=0.25)
             fitted = search.fitted_results.get('rf')
             if fitted is not None:
                 fi = {r: {'selected_indices': idx}

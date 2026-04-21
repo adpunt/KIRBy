@@ -160,6 +160,7 @@ def run(data, config, output_dir, dataset_name):
                 augmentation_strategy='uncapped' if train_augs else 'none',
                 internal_evaluators=INTERNAL_EVALUATORS,
                 metric=metric_name,
+                task_type=task_type,
                 verbose=False,
                 cache=True,
                 dataset_name=f"{dataset_name}_fold{fold_i}",

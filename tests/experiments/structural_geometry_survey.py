@@ -225,7 +225,8 @@ def run_geometry_survey(
                 budgets=FULL_BUDGETS,
                 speed='full', return_fitted=True, verbose=False, cache=True,
                 dataset_name=dataset_name, tier='general',
-                metric=_metric, adaptive_pruning=0.25)
+                metric=_metric, task_type=task_type,
+                adaptive_pruning=0.25)
             fitted = search.fitted_results.get('rf')
             if fitted is not None:
                 fi = {r: {'selected_indices': idx}

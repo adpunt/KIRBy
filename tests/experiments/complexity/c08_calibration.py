@@ -100,6 +100,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 augmentation_strategy='uncapped' if augs else 'none',
                 internal_evaluators=INTERNAL_EVALUATORS,
                 metric=metric_name,
+                task_type=data['task_type'],
                 verbose=False,
                 cache=True,
                 dataset_name=dataset_name,

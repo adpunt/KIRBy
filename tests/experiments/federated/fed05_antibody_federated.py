@@ -148,7 +148,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     budgets=FULL_BUDGETS,
                     speed='full', cache=True, verbose=False,
                     dataset_name=_silo_ds_name, tier='general',
-                    metric=_metric, adaptive_pruning=0.25,
+                    metric=_metric, task_type=sd['task_type'],
+                    adaptive_pruning=0.25,
                     augmentation_strategy='none')
                 s_bp_entry = s_search.best_by_model.get('rf')
                 if s_bp_entry:

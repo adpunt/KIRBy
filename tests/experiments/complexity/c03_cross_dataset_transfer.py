@@ -96,6 +96,7 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                 internal_evaluators=DISTANCE_EVALUATORS,
                 budgets=DISTANCE_BUDGETS,
                 metric=metric_name_ds,
+                task_type=data['task_type'],
             )
 
             # Prefer SVM-evaluated config for SVR downstream, fall back to RF
