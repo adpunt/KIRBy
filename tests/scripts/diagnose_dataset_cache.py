@@ -1,18 +1,16 @@
-"""Server-side diagnostic: check hybrid_eval cache state for a dataset.
+"""Server-side diagnostic: check hybrid_eval cache state.
 
-Run this on the server with the dataset you care about, e.g.:
-  cd /data/stat-cadd/scat9264/KIRBy
+Single-dataset mode:
   python tests/scripts/diagnose_dataset_cache.py ginkgo_heparin
 
-It answers three questions:
-  1. What aug_strategy suffixes exist on disk for this dataset?
-  2. For a sample of __uncapped.pkl files, does the stored meta match
-     what fixed c02 would expect? Or is aug_names=() (pre-fix corruption)?
-  3. Do __none.pkl files exist? (If no, c02's no_aug call will MISS every
-     probe and recompute from scratch.)
+All-dataset mode (one-line summary per dataset):
+  python tests/scripts/diagnose_dataset_cache.py --all
 
-Outputs one "[cache] ..." line-style summary at the end so it's
-pipe-friendly.
+It answers:
+  1. What aug_strategy suffixes exist for each dataset?
+  2. Are the stored aug_names what fixed c02 would expect, or
+     do they show pre-fix corruption (aug_names=() in __uncapped.pkl)?
+  3. Predicted hit/miss/stale for c02's no_aug / uncapped / capped probes.
 """
 import argparse
 import pickle
@@ -33,12 +31,117 @@ CACHE_ROOT = Path(os.environ.get(
 ))
 
 
+def _aug_names_summary(files_by_aug: dict, sample_size: int) -> dict:
+    """Per suffix, return majority aug_names stored in meta (None if mixed)."""
+    out = {}
+    for aug_suffix, files in files_by_aug.items():
+        sample = random.sample(files, min(sample_size, len(files)))
+        dist = Counter()
+        for f in sample:
+            try:
+                w = pickle.loads(f.read_bytes())
+                meta = w.get("_cache_meta", {})
+                dist[meta.get("aug_names", "<missing>")] += 1
+            except Exception:
+                dist["<unreadable>"] += 1
+        out[aug_suffix] = dist
+    return out
+
+
+def _scan_one(ds: str, sample: int) -> dict:
+    """Return a compact summary for one dataset: file counts, aug_names
+    distributions, and a verdict string."""
+    he_dir = CACHE_ROOT / "hybrid_evals" / ds
+    if not he_dir.exists():
+        return {"exists": False}
+    files_by_aug: dict = {}
+    for f in he_dir.glob("*.pkl"):
+        aug = f.stem.rsplit("__", 1)[1]
+        files_by_aug.setdefault(aug, []).append(f)
+    names_by_aug = _aug_names_summary(files_by_aug, sample)
+    n_none = len(files_by_aug.get("none", []))
+    n_uncapped = len(files_by_aug.get("uncapped", []))
+    n_capped = len(files_by_aug.get("capped", []))
+
+    # Classify uncapped files: aug_names=() is pre-fix corruption
+    uncapped_dist = names_by_aug.get("uncapped", Counter())
+    total_uncapped_sampled = sum(uncapped_dist.values())
+    empty_in_uncapped = uncapped_dist.get((), 0)
+    pct_corrupt_uncapped = (100.0 * empty_in_uncapped / total_uncapped_sampled
+                            if total_uncapped_sampled else 0.0)
+
+    verdict_parts = []
+    if n_none == 0:
+        verdict_parts.append("NO __none (no_aug will MISS)")
+    if total_uncapped_sampled == 0:
+        verdict_parts.append("NO __uncapped")
+    elif pct_corrupt_uncapped > 50:
+        verdict_parts.append(f"__uncapped corrupt ({pct_corrupt_uncapped:.0f}% empty aug_names)")
+    if n_capped == 0:
+        verdict_parts.append("NO __capped")
+    verdict = "; ".join(verdict_parts) if verdict_parts else "OK"
+
+    return {
+        "exists": True,
+        "total": sum(len(v) for v in files_by_aug.values()),
+        "n_none": n_none,
+        "n_uncapped": n_uncapped,
+        "n_capped": n_capped,
+        "pct_corrupt_uncapped": pct_corrupt_uncapped,
+        "verdict": verdict,
+        "names_by_aug": names_by_aug,
+        "files_by_aug": files_by_aug,
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("dataset", help="Dataset name, e.g. ginkgo_heparin")
+    ap.add_argument("dataset", nargs="?", default=None,
+                    help="Dataset name. Omit with --all to scan every dataset.")
+    ap.add_argument("--all", action="store_true",
+                    help="Scan every dataset under hybrid_evals/.")
     ap.add_argument("--sample", type=int, default=200,
-                    help="How many files per aug_strategy to open (default 200)")
+                    help="Files per aug_strategy to open for meta inspection (default 200)")
     args = ap.parse_args()
+
+    if args.all:
+        he_root = CACHE_ROOT / "hybrid_evals"
+        if not he_root.exists():
+            print(f"ERROR: {he_root} does not exist.")
+            sys.exit(1)
+        # Smaller per-dataset sample so the scan finishes in reasonable time.
+        sample_per_ds = min(args.sample, 50)
+        datasets = sorted(p.name for p in he_root.iterdir() if p.is_dir())
+        print(f"Scanning {len(datasets)} datasets "
+              f"(sampling {sample_per_ds} files per suffix)\n")
+        header = (f"{'dataset':<38} {'total':>7} {'none':>7} {'uncap':>7} "
+                  f"{'cap':>5} {'%corr':>5}  verdict")
+        print(header)
+        print("-" * len(header))
+        bad = []
+        for ds in datasets:
+            r = _scan_one(ds, sample_per_ds)
+            if not r["exists"]:
+                continue
+            v = r["verdict"]
+            line = (f"{ds:<38} {r['total']:>7} {r['n_none']:>7} "
+                    f"{r['n_uncapped']:>7} {r['n_capped']:>5} "
+                    f"{r['pct_corrupt_uncapped']:>4.0f}%  {v}")
+            print(line)
+            if v != "OK":
+                bad.append((ds, v))
+        print()
+        if bad:
+            print(f"=== {len(bad)} datasets need attention ===")
+            for ds, v in bad:
+                print(f"  {ds}: {v}")
+        else:
+            print("All datasets OK.")
+        return
+
+    if not args.dataset:
+        print("ERROR: provide a dataset name or --all")
+        sys.exit(1)
 
     ds = args.dataset
     he_dir = CACHE_ROOT / "hybrid_evals" / ds
