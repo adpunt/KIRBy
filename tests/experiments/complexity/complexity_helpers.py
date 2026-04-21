@@ -129,6 +129,11 @@ DATASET_REPS = {
             'avalon', 'top_torsion', 'ecfp4', 'selformer', 'graphmvp'],
         'augmentation': ['pharmacophore3d', 'maccs', 'usrcat', 'coulomb_matrix', 'usr'],
         'top_tier': ['mordred', 'pdv', 'mhg_gnn', 'smited', 'molformer', 'grover'],
+        'ft_reps': {
+            'lora_molformer': {'factory': 'molecular_lora', 'base_model': 'molformer'},
+            'contrastive_molformer': {'factory': 'molecular_contrastive', 'base_model': 'molformer'},
+            'gnn_graphmvp': {'factory': 'molecular_gnn', 'base_model': 'graphmvp'},
+        },
     },
     'adme_rlm': {
         'general': [
@@ -137,6 +142,11 @@ DATASET_REPS = {
             'selformer', 'avalon', 'ecfp4', 'top_torsion', 'graphmvp'],
         'augmentation': ['pharmacophore3d', 'maccs', 'usrcat', 'coulomb_matrix', 'usr'],
         'top_tier': ['pdv', 'mhg_gnn', 'smited', 'mordred', 'molformer', 'grover'],
+        'ft_reps': {
+            'lora_molformer': {'factory': 'molecular_lora', 'base_model': 'molformer'},
+            'contrastive_molformer': {'factory': 'molecular_contrastive', 'base_model': 'molformer'},
+            'gnn_graphmvp': {'factory': 'molecular_gnn', 'base_model': 'graphmvp'},
+        },
     },
     'adme_mdr1': {
         'general': [
