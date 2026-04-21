@@ -97,6 +97,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 speed=search_speed,
                 budgets=FULL_BUDGETS,
                 augmentations=augs,
+                augmentation_strategy='uncapped' if augs else 'none',
                 internal_evaluators=INTERNAL_EVALUATORS,
                 metric=metric_name,
                 verbose=False,

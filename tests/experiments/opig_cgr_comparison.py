@@ -301,6 +301,7 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
         tier='general',
         condition_suffix=pool_name,
         adaptive_pruning=0.25,
+        augmentation_strategy='none',
     )
 
     top3 = extract_top3_base_reps(search, model='rf')
