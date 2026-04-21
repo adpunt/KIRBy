@@ -611,8 +611,8 @@ Submit script: `tests/slurm_scripts/submit_ft_precompute_adme.sh`.
 
 | Job ID | Name | Status |
 |--------|------|--------|
-| (TBD) | ftpc_adme_hlm | **NOT YET SUBMITTED** — user to run `bash tests/slurm_scripts/submit_ft_precompute_adme.sh` on HTC login |
-| (TBD) | ftpc_adme_rlm | **NOT YET SUBMITTED** |
+| 7528901 | ftpc_adme_hlm | **SUBMITTED** (2026-04-21, long+GPU+128G, 24h wall) |
+| 7528902 | ftpc_adme_rlm | **SUBMITTED** (2026-04-21, long+GPU+128G, 24h wall) |
 
 ### CGR-SMILES pretraining (Phase 4)
 
