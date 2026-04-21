@@ -32,6 +32,7 @@ import os
 import pickle
 import sys
 from pathlib import Path
+from typing import Optional
 
 
 def cache_root() -> Path:
@@ -59,7 +60,7 @@ def inspect_file(path: Path):
     return 'healthy', meta
 
 
-def scan(out_path: Path, dataset_filter: str | None):
+def scan(out_path: Path, dataset_filter: Optional[str]):
     root = cache_root()
     if not root.exists():
         print(f'ERROR: cache root not found: {root}', file=sys.stderr)
