@@ -598,6 +598,22 @@ Submitted via `tests/slurm_scripts/submit_ft_precompute.sh` (commit 2a8ec09). Go
 | 7521194 | ftpc_dta_kiba_v2 (post-7b128aa) | **RUNNING** (2026-04-21, ~11h elapsed as of check). |
 | 7521196 | ftpc_dta_bindingdb_kd_v2 (post-7b128aa) | **RUNNING** (2026-04-21, ~9h elapsed as of check). Hybrid 7520843 already completed so the write-race concern is resolved. |
 
+### FT precompute fill-in (2026-04-21)
+
+Gap found while auditing FT coverage: `adme_hlm` + `adme_rlm` had no `ft_reps`
+configured in `DATASET_REPS`, so 7516559 (ftpc_molecular) skipped them. User
+confirmed D1: add the 3 successful FT reps (`lora_molformer`,
+`contrastive_molformer`, `gnn_graphmvp`) to both. `adme_solubility` is DROPPED
+(R²=0.32 ceiling per PIPELINE_READINESS_TODO:313), excluded.
+
+Config change: commit `fac257e` (tests/experiments/complexity/complexity_helpers.py).
+Submit script: `tests/slurm_scripts/submit_ft_precompute_adme.sh`.
+
+| Job ID | Name | Status |
+|--------|------|--------|
+| (TBD) | ftpc_adme_hlm | **NOT YET SUBMITTED** — user to run `bash tests/slurm_scripts/submit_ft_precompute_adme.sh` on HTC login |
+| (TBD) | ftpc_adme_rlm | **NOT YET SUBMITTED** |
+
 ### CGR-SMILES pretraining (Phase 4)
 
 Single job: corpus generation (~1M USPTO → CGR-SMILES) + continued MLM pretraining (50K steps).
