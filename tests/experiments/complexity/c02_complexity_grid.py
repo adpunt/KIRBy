@@ -25,6 +25,7 @@ from experiments._shared import (
     get_model_factories, cv_split, _cv_split,
     find_best_hybrid, get_domain_metric,
     extract_top3_base_reps,
+    _build_rep_factories,
     INTERNAL_EVALUATORS, FULL_BUDGETS,
 )
 
@@ -168,13 +169,47 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             tier='general',
         )
 
-    # TODO: Frozen vs fine-tuned comparison. When FT reps are available as
-    # cached .npy files, load them here and run a fifth search pass:
-    #   ft_reps = _load_ft_reps(dataset_name, reps)  # frozen + FT merged
-    #   search_ft = find_best_hybrid(base_reps=ft_reps, ...)
-    # Compare search_ft.best_by_model vs search_no_aug.best_by_model to
-    # answer: does hybrid(frozen+FT) beat hybrid(frozen_only)?
+    # --- Frozen + FT comparison (fifth search pass) ---
+    # Compares hybrid(frozen_only) vs hybrid(frozen+FT) by feeding the same
+    # rep pool plus factory callables for the per-fold FT embeddings. The
+    # factories hit the $KIRBY_CACHE_DIR/finetuned_reps/ cache populated by
+    # precompute_ft_reps.py. Empty on datasets with no 'ft_reps' entry.
     search_ft = None
+    ft_factories = _build_rep_factories(dataset_name, data)
+    if ft_factories:
+        # Stable id so the search cache for FT doesn't collide with non-FT
+        # calls at the same tier. Encodes the set of FT rep names + base
+        # models so adding/removing FT reps invalidates the cache.
+        import hashlib
+        ft_id_parts = sorted(
+            f"{k}:{DATASET_REPS[dataset_name]['ft_reps'][k]['base_model']}"
+            for k in ft_factories.keys()
+        )
+        ft_id = hashlib.sha256('|'.join(ft_id_parts).encode()).hexdigest()[:12]
+
+        print(f"\n  --- Frozen + FT ({len(reps)} frozen + "
+              f"{len(ft_factories)} FT: {', '.join(sorted(ft_factories))}) ---")
+        search_ft = find_best_hybrid(
+            base_reps=reps,
+            labels=labels,
+            groups=groups,
+            models=None,
+            budgets=full_budgets,
+            allocation_methods=allocation_methods,
+            importance_methods=importance_methods,
+            n_folds=n_folds,
+            augmentations=None,
+            augmentation_strategy='none',
+            internal_evaluators=INTERNAL_EVALUATORS,
+            metric=metric_name,
+            task_type=data['task_type'],
+            verbose=True,
+            cache=True,
+            dataset_name=dataset_name,
+            tier='general_ft',
+            rep_factories=ft_factories,
+            rep_factories_id=ft_id,
+        )
 
     # Use uncapped as the primary search (best overall)
     search = search_uncapped
