@@ -98,11 +98,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  {len(models)} models x {len(full_budgets)} budgets x "
           f"{len(allocation_methods)} allocations x {len(importance_methods)} importance")
 
+    # Pass models=None so model_names normalizes to the speed-tier default
+    # (8 models: gp, knn, lightgbm, mlp, rf, ridge, svm, xgboost). This is
+    # what precompute uses — any other value causes a search-cache meta
+    # drift on 'model_names' and triggers a full recompute. PCA baselines
+    # and the model×budget heatmap below still use all 11 models via the
+    # separate `models` / `model_instances` dicts.
     search_no_aug = find_best_hybrid(
         base_reps=reps,
         labels=labels,
         groups=groups,
-        models=model_instances,
+        models=None,
         budgets=full_budgets,
         allocation_methods=allocation_methods,
         importance_methods=importance_methods,
