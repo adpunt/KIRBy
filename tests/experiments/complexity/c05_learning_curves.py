@@ -109,6 +109,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     augmentation_strategy='capped',
                     internal_evaluators=INTERNAL_EVALUATORS,
                     metric=metric_name,
+                    task_type=data['task_type'],
                     verbose=False,
                     cache=True,
                     dataset_name=f"{dataset_name}_n{n_sub}_s{seed}",

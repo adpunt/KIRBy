@@ -413,7 +413,8 @@ def main():
                     internal_evaluators=INTERNAL_EVALUATORS,
                     speed='full', return_fitted=True, verbose=False, cache=True,
                     dataset_name=dataset_name, tier='general',
-                    metric='rmse', adaptive_pruning=0.25)
+                    metric='rmse', task_type='regression',
+                    adaptive_pruning=0.25)
                 top3 = extract_top3_base_reps(search)
                 if top3:
                     print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")

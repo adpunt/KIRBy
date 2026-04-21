@@ -160,7 +160,8 @@ def _eval_single_rep_per_fold(X, labels, groups, model_factory, n_folds, mode,
 
 def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
                            metric_fn, search_speed='full', augmentations=None,
-                           metric_name='r2', dataset_name=None):
+                           metric_name='r2', dataset_name=None,
+                           task_type='regression'):
     """Run find_best_hybrid and evaluate the best config per fold.
 
     Returns (per_fold_scores, search_result_dict).
@@ -191,6 +192,7 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
             return_fitted=True,
             internal_evaluators=INTERNAL_EVALUATORS,
             metric=metric_name,
+            task_type=task_type,
             verbose=False,
             cache=True,
             dataset_name=dataset_name,
@@ -465,7 +467,8 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                 existing_reps, labels, groups, c_model_factory,
                 n_folds, mode, metric_fn, search_speed=search_speed,
                 augmentations=augs, metric_name=metric_name,
-                dataset_name=f"{dataset_name}_without_{rep_name}")
+                dataset_name=f"{dataset_name}_without_{rep_name}",
+                task_type=data['task_type'])
             c_mean = float(np.mean(c_scores)) if c_scores else float('nan')
             c_std = float(np.std(c_scores)) if c_scores else float('nan')
             rep_result['conditions']['C'] = {
@@ -500,7 +503,8 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                 all_reps_for_d, labels, groups, d_model_factory,
                 n_folds, mode, metric_fn, search_speed=search_speed,
                 augmentations=augs, metric_name=metric_name,
-                dataset_name=f"{dataset_name}_with_{rep_name}")
+                dataset_name=f"{dataset_name}_with_{rep_name}",
+                task_type=data['task_type'])
             d_mean = float(np.mean(d_scores)) if d_scores else float('nan')
             d_std = float(np.std(d_scores)) if d_scores else float('nan')
 
