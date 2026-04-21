@@ -699,6 +699,55 @@ Developability properties (regression, Spearman ρ, pre-computed hierarchical cl
 
 ## In Progress
 
+### C02 Frozen vs Frozen+FT Comparison (2026-04-21)
+
+**Question:** Does adding FT reps to the hybrid candidate pool improve the
+hybrid's score, and by how much per-dataset?
+
+**Design:** C02 runs 4 search passes per dataset — `no_aug`, `uncapped`,
+`capped`, `top_tier_only`, plus a new 5th pass `frozen_plus_ft` that passes
+per-fold FT factory callables (`rep_factories`) to `find_best_hybrid`. FT
+factories hit the `$KIRBY_CACHE_DIR/finetuned_reps/` cache — no
+re-finetuning. FT reps **never** enter the default base-rep pool; they only
+appear in this gated comparison. (Commit `b3e7551`,
+`tests/experiments/complexity/c02_complexity_grid.py:171`.)
+
+**Datasets (12):** all those with `ft_reps` in `DATASET_REPS`:
+- **Molecular (7):** caco2, logd, qm9, herg_ki, adme_mdr1, adme_hlm, adme_rlm
+- **Antibody (5):** abcov_kd, flab_binding_phillips_h3, abagym_Ang2,
+  abagym_EGFR, abagym_HER2
+
+**FT reps by dataset:**
+- caco2, qm9: `lora_molformer`
+- logd: `lora_molformer`, `contrastive_molformer`, `gnn_graphmvp`
+- herg_ki, adme_mdr1: `gnn_graphmvp`
+- adme_hlm, adme_rlm: `lora_molformer`, `contrastive_molformer`,
+  `gnn_graphmvp` (added 2026-04-21, commit `fac257e`)
+- 5 antibody: `antibody_lora_esm2`
+
+**Scripts:**
+- Bug test: `tests/slurm_scripts/submit_c02_bugtest.sh` (caco2,
+  `--mode intermediary --reps all`, 1 GPU, 2h).
+- Full: `tests/slurm_scripts/submit_c02_full.sh` (12 datasets,
+  `--mode full --reps all`, 1 GPU per dataset, 4d wall each).
+
+**Output:** `tests/results/complexity_c02/full/<dataset>_c02_complexity_matching_grid.json`.
+Per-dataset JSON contains `conditions` dict with keys `no_aug` (frozen
+hybrid), `uncapped`, `capped`, `top_tier_only`, and **`frozen_plus_ft`**
+(frozen + FT hybrid). Delta per downstream model between `no_aug` and
+`frozen_plus_ft` is the FT contribution.
+
+**Interpretation:** If `frozen_plus_ft` scores consistently outperform
+`no_aug` across models and datasets → FT reps belong in the hybrid pool
+for the paper. If flat or worse → FT stays excluded from baseline reps
+(status quo). If mixed → per-dataset swap rules like the existing FT
+decisions in the Methodology Status table.
+
+**Status:** SCRIPTS WRITTEN, bug test not yet run. FT cache still warming
+(`7521194 kiba`, `7521196 bindingdb_kd` running; `7528901 adme_hlm`,
+`7528902 adme_rlm` queued). Do bug test first before full submission —
+failure there would waste ~100-300 GPU-hours on Stage 3.
+
 ---
 
 ## TODO — Molecular (8 datasets)
