@@ -48,7 +48,46 @@ def _aug_names_summary(files_by_aug: dict, sample_size: int) -> dict:
     return out
 
 
-def _scan_one(ds: str, sample: int) -> dict:
+def _load_dataset_aug_map() -> dict:
+    """Return {dataset_name: has_augs_bool} from DATASET_REPS.
+
+    Datasets without an 'augmentation' key in DATASET_REPS should only
+    ever have __none.pkl files — absence of __uncapped/__capped is
+    correct, not a bug."""
+    try:
+        from experiments.complexity.complexity_helpers import DATASET_REPS
+    except Exception:
+        return {}
+    return {name: bool(cfg.get("augmentation"))
+            for name, cfg in DATASET_REPS.items()}
+
+
+def _list_search_caches(ds: str) -> dict[str, dict]:
+    """Return {aug_strategy: {has_file: bool, has_ckpt: bool}} for this
+    dataset's search cache. Tells us whether precompute FINISHED writing
+    a full SearchResult (search cache), vs is still in-progress (only
+    a .ckpt.pkl exists)."""
+    sdir = CACHE_ROOT / "searches"
+    if not sdir.exists():
+        return {}
+    out: dict[str, dict] = {}
+    for p in sdir.glob(f"{ds}__*.pkl"):
+        is_ckpt = ".ckpt" in p.name
+        # Filename pattern: {ds}__{tier}__{aug_strategy}__{speed}[.ckpt].pkl
+        stem = p.stem.replace(".ckpt", "")
+        parts = stem.split("__")
+        if len(parts) < 4:
+            continue
+        aug_strategy = parts[2]
+        entry = out.setdefault(aug_strategy, {"has_file": False, "has_ckpt": False})
+        if is_ckpt:
+            entry["has_ckpt"] = True
+        else:
+            entry["has_file"] = True
+    return out
+
+
+def _scan_one(ds: str, sample: int, has_augs: bool) -> dict:
     """Return a compact summary for one dataset: file counts, aug_names
     distributions, and a verdict string."""
     he_dir = CACHE_ROOT / "hybrid_evals" / ds
@@ -70,25 +109,39 @@ def _scan_one(ds: str, sample: int) -> dict:
     pct_corrupt_uncapped = (100.0 * empty_in_uncapped / total_uncapped_sampled
                             if total_uncapped_sampled else 0.0)
 
+    # Search cache state: tells us whether precompute finished its
+    # per-aug-condition top-level write.
+    search_caches = _list_search_caches(ds)
+
+    # Verdict considers whether augs are expected for this dataset.
     verdict_parts = []
     if n_none == 0:
-        verdict_parts.append("NO __none (no_aug will MISS)")
-    if total_uncapped_sampled == 0:
-        verdict_parts.append("NO __uncapped")
-    elif pct_corrupt_uncapped > 50:
-        verdict_parts.append(f"__uncapped corrupt ({pct_corrupt_uncapped:.0f}% empty aug_names)")
-    if n_capped == 0:
-        verdict_parts.append("NO __capped")
+        verdict_parts.append("NO __none")
+    if has_augs:
+        if n_uncapped == 0:
+            if search_caches.get("uncapped", {}).get("has_file"):
+                verdict_parts.append("__uncapped files missing despite search cache present")
+            else:
+                verdict_parts.append("__uncapped incomplete (precompute not done)")
+        elif pct_corrupt_uncapped > 50:
+            verdict_parts.append(f"__uncapped corrupt ({pct_corrupt_uncapped:.0f}% empty aug_names)")
+        if n_capped == 0:
+            if search_caches.get("capped", {}).get("has_file"):
+                verdict_parts.append("__capped files missing despite search cache present")
+            else:
+                verdict_parts.append("__capped incomplete (precompute not done)")
     verdict = "; ".join(verdict_parts) if verdict_parts else "OK"
 
     return {
         "exists": True,
+        "has_augs": has_augs,
         "total": sum(len(v) for v in files_by_aug.values()),
         "n_none": n_none,
         "n_uncapped": n_uncapped,
         "n_capped": n_capped,
         "pct_corrupt_uncapped": pct_corrupt_uncapped,
         "verdict": verdict,
+        "search_caches": search_caches,
         "names_by_aug": names_by_aug,
         "files_by_aug": files_by_aug,
     }
@@ -109,34 +162,58 @@ def main():
         if not he_root.exists():
             print(f"ERROR: {he_root} does not exist.")
             sys.exit(1)
+        aug_map = _load_dataset_aug_map()
         # Smaller per-dataset sample so the scan finishes in reasonable time.
         sample_per_ds = min(args.sample, 50)
         datasets = sorted(p.name for p in he_root.iterdir() if p.is_dir())
         print(f"Scanning {len(datasets)} datasets "
               f"(sampling {sample_per_ds} files per suffix)\n")
-        header = (f"{'dataset':<38} {'total':>7} {'none':>7} {'uncap':>7} "
-                  f"{'cap':>5} {'%corr':>5}  verdict")
+        print(f"Legend: 'augs?' = dataset has augmentations per DATASET_REPS.")
+        print(f"        'S_n/u/c' = search cache file present for "
+              f"none/uncapped/capped.\n")
+        header = (f"{'dataset':<38} {'augs?':>5} {'total':>7} {'none':>7} "
+                  f"{'uncap':>7} {'cap':>5} {'%cor':>4} {'S_n/u/c':>7}  verdict")
         print(header)
         print("-" * len(header))
-        bad = []
+        bad_with_augs = []
+        bad_without_augs = []
         for ds in datasets:
-            r = _scan_one(ds, sample_per_ds)
+            has_augs = aug_map.get(ds, False)
+            r = _scan_one(ds, sample_per_ds, has_augs)
             if not r["exists"]:
                 continue
             v = r["verdict"]
-            line = (f"{ds:<38} {r['total']:>7} {r['n_none']:>7} "
+            sc = r["search_caches"]
+            # Compact search cache flag: Y = file, C = ckpt only, - = none
+            def _sc_flag(strategy):
+                s = sc.get(strategy, {})
+                if s.get("has_file"):
+                    return "Y"
+                if s.get("has_ckpt"):
+                    return "C"
+                return "-"
+            s_flags = f"{_sc_flag('none')}/{_sc_flag('uncapped')}/{_sc_flag('capped')}"
+            augs_str = "yes" if has_augs else "no"
+            line = (f"{ds:<38} {augs_str:>5} {r['total']:>7} {r['n_none']:>7} "
                     f"{r['n_uncapped']:>7} {r['n_capped']:>5} "
-                    f"{r['pct_corrupt_uncapped']:>4.0f}%  {v}")
+                    f"{r['pct_corrupt_uncapped']:>3.0f}% {s_flags:>7}  {v}")
             print(line)
             if v != "OK":
-                bad.append((ds, v))
+                if has_augs:
+                    bad_with_augs.append((ds, v))
+                else:
+                    bad_without_augs.append((ds, v))
         print()
-        if bad:
-            print(f"=== {len(bad)} datasets need attention ===")
-            for ds, v in bad:
+        if bad_with_augs:
+            print(f"=== {len(bad_with_augs)} antibody/aug datasets need attention ===")
+            for ds, v in bad_with_augs:
                 print(f"  {ds}: {v}")
         else:
-            print("All datasets OK.")
+            print("All aug-using datasets OK.")
+        if bad_without_augs:
+            print(f"\n=== {len(bad_without_augs)} non-aug datasets flagged (should be rare) ===")
+            for ds, v in bad_without_augs:
+                print(f"  {ds}: {v}")
         return
 
     if not args.dataset:
