@@ -194,6 +194,9 @@ def _evaluate_task(task_name, rep_preset, config):
     )
     if aug_dict:
         fbh_kwargs['augmentations'] = aug_dict
+        fbh_kwargs['augmentation_strategy'] = 'uncapped'
+    else:
+        fbh_kwargs['augmentation_strategy'] = 'none'
     search = find_best_hybrid(**fbh_kwargs)
 
     top3 = extract_top3_base_reps(search)

@@ -157,6 +157,7 @@ def run(data, config, output_dir, dataset_name):
                 speed=config['search_speed'],
                 budgets=FULL_BUDGETS,
                 augmentations=train_augs,
+                augmentation_strategy='uncapped' if train_augs else 'none',
                 internal_evaluators=INTERNAL_EVALUATORS,
                 metric=metric_name,
                 verbose=False,

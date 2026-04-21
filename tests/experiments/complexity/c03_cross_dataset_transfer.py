@@ -88,6 +88,7 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                 groups=data['groups'],
                 speed='full',
                 augmentations=data.get('augmentations'),
+                augmentation_strategy='uncapped' if data.get('augmentations') else 'none',
                 verbose=False,
                 cache=True,
                 dataset_name=ds_name,
