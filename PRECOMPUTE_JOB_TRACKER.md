@@ -405,7 +405,7 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 7483661 | dta_bindingdb_kd (pre-c18342f heredoc bug) | **CANCELLED** (2026-04-15, same heredoc bug as 7483641-46) |
 | 7483718 | dta_bindingdb_kd (post-c18342f, per-rep checkpoint) | **TIMEOUT** (2026-04-18, 1d23h59m, exit 0:0). Died at contact_graph 50/1219 (~58 min/protein). 17 protein reps + 7 drug reps cached as `.npy`; protein_contact_graph + protein_usr_shape + protein_pocket + protein_pocket_composition + protein_esm2_pocket never computed. Superseded by 7515602 (post-d829df1 contact_graph speedup). |
 | 7467954 | dta_davis (resubmit, --skip-existing) | **TIMEOUT** (2026-04-15, 48h wall) |
-| 7483719 | dta_davis (post-c18342f + a81b0eb) | **RUNNING** (2026-04-19, 2d15h+ elapsed, long+GPU+256G, 96h wall) |
+| 7483719 | dta_davis (post-c18342f + a81b0eb) | **TIMEOUT** (4d wall, 2026-04-21, ExitCode 0:0). `davis.json` written at 12:02 (67KB): 24 baselines + 1 FT (`protein_esm2_lora`) populated. 4 tier-1 reps absent (`alphafold_db`, `descriptors`, `esmfold`, `pocket_composition`) — expected, not produced by standard pipeline. No fill run needed. |
 | 7457314 | dta_kiba_fill (--skip-existing) | FAILED (--wrap bug) |
 | 7483635 | dta_kiba_fill (pre-c18342f) | CANCELLED |
 | 7483717 | dta_kiba_fill (post-c18342f) | **COMPLETED** (23min, 2026-04-16) — **BUT destroyed kiba.json** (69KB→583B) due to merge bug in a81b0eb. Fixed in d1c45b9. |
@@ -413,7 +413,7 @@ sacct -j 11729406-11729565 --format=JobID,JobName%45,State,Elapsed,ExitCode | gr
 | 7515602 | dta_bindingdb_kd (post-d829df1, hand-rolled --wrap) | **FAILED** (14s, ExitCode 127:0, 2026-04-20). Long inline `--wrap` line-split by SLURM, python invocation orphaned from args (same bug class as 7457285/86, 7467966-9). Plus server git was on divergent branches → silent `git pull 2>/dev/null` swallowed the failure. Reset server to origin/main + dedicated heredoc script (commit 42a22c4). Superseded by 7515675. |
 | 7515675 | dta_bindingdb_kd (post-42a22c4, heredoc script v1) | **FAILED** (argparse "unrecognized arguments" + blank-line args). Heredoc backslash line-continuation (`\\<LF>`) garbled between heredoc → sbatch → compute-node bash. Same bug class as 7483641-46. Fixed in db6d769 (collapse python invocation to single line). Superseded by 7516299. |
 | 7516299 | dta_bindingdb_kd (post-db6d769, single-line python) | **FAILED** (1m23s, ExitCode 2:0, 2026-04-20). Stale job script: `bash submit_dta_bindingdb.sh` was run BEFORE the db6d769 fix landed on the server, so sbatch captured the OLD `\\` continuation heredoc. In-job `git pull` updated the python source but the SLURM job script itself was already locked at submission time. Superseded by 7520843 after `git pull` on login node. |
-| 7520843 | dta_bindingdb_kd (post-login-pull, db6d769 in script) | **SUBMITTED** (2026-04-20, long+GPU+128G, 24h wall). |
+| 7520843 | dta_bindingdb_kd (post-login-pull, db6d769 in script) | **COMPLETED** (15h34m, 2026-04-21, ExitCode 0:0). `bindingdb_kd.json` written at 08:29 (70KB). Contact_graph speedup (d829df1) confirmed working — full run under 24h wall. |
 
 ### Antibody CLF
 
@@ -593,10 +593,10 @@ Submitted via `tests/slurm_scripts/submit_ft_precompute.sh` (commit 2a8ec09). Go
 | 7516561 | ftpc_dta_davis | long, 256G, 4d, GPU | **COMPLETED but FT NaN** (6h27m, 2026-04-20). Baselines populated; protein_esm2_lora returned NaN on every fold due to **CUDA OOM during holdout eval** (full 2400-sample holdout passed through ESM-2 650M in one forward → 44 GiB A40 OOM). Cache NOT poisoned (factory caught exception, no .npz written). Fixed in 7b128aa: bf16 autocast + gradient checkpointing + mini-batched holdout eval + dynamic per-batch tokenization + max_length 1024→512 + `_FACTORY_VERSION` v1→v2. Superseded by 7521193. |
 | 7516562 | ftpc_dta_kiba | long, 256G, 4d, GPU | **CANCELLED** (would have hit same OOM). Superseded by 7521194. |
 | 7516563 | ftpc_dta_bindingdb_kd | long, 256G, 4d, GPU | **CANCELLED** (same OOM risk + hybrid concurrency). Superseded by 7521196. |
-| 7520844 | ftpc_antibody (post-race-fix, no git pull in wrap) | **SUBMITTED** (2026-04-20, long+GPU+128G, 4d wall). User pulled on login before submitting; wrap omits `git pull`. |
-| 7521193 | ftpc_dta_davis_v2 (post-7b128aa OOM fix) | **SUBMITTED** (2026-04-20, long+GPU+256G, 4d wall). Uses dta_protein_lora factory v2 — bf16 + grad ckpt + mini-batched holdout. |
-| 7521194 | ftpc_dta_kiba_v2 (post-7b128aa) | **SUBMITTED** (2026-04-20, long+GPU+256G, 4d wall). |
-| 7521196 | ftpc_dta_bindingdb_kd_v2 (post-7b128aa) | **SUBMITTED** (2026-04-20, long+GPU+256G, 4d wall). Concurrency risk with hybrid resubmit 7520843 if both run simultaneously (both write to `tests/results/phase5_baselines/dta/bindingdb_kd.json`). |
+| 7520844 | ftpc_antibody (post-race-fix, no git pull in wrap) | **COMPLETED** (2h08m, 2026-04-21, ExitCode 0:0). Antibody FT reps cached per fold to `$KIRBY_CACHE_DIR/finetuned_reps/`. |
+| 7521193 | ftpc_dta_davis_v2 (post-7b128aa OOM fix) | **COMPLETED** (9h04m, 2026-04-21, ExitCode 0:0). 9× 153MB `.npz` files written (Apr 21 07:46–15:39) = davis protein_esm2_lora per fold. OOM fix confirmed — v2 factory (bf16 + grad ckpt + mini-batched holdout) works on 44GiB A40. Real FT scores present in `davis.json`. |
+| 7521194 | ftpc_dta_kiba_v2 (post-7b128aa) | **RUNNING** (2026-04-21, ~11h elapsed as of check). |
+| 7521196 | ftpc_dta_bindingdb_kd_v2 (post-7b128aa) | **RUNNING** (2026-04-21, ~9h elapsed as of check). Hybrid 7520843 already completed so the write-race concern is resolved. |
 
 ### CGR-SMILES pretraining (Phase 4)
 
