@@ -9,7 +9,10 @@ inputs, for a single fold and single evaluator, and compares the
 resulting per-rep scores. Any difference → non-determinism or failure.
 
 Usage:
-    python tests/scripts/test_alloc_determinism.py [dataset]
+    python tests/scripts/test_alloc_determinism.py                       # default set
+    python tests/scripts/test_alloc_determinism.py ginkgo_heparin
+    python tests/scripts/test_alloc_determinism.py ginkgo_heparin flab_thermo_jain
+    python tests/scripts/test_alloc_determinism.py all                   # every antibody dataset
 """
 import os
 import sys
@@ -89,81 +92,145 @@ def compute_alloc_scores(base_reps, labels, groups, fold_idx, evaluator,
     return scores
 
 
-def main(dataset: str) -> None:
-    ds_reps = DATASET_REPS[dataset]
-    print(f'Loading {dataset} with {len(ds_reps["general"])} general reps...')
-    data = load_data(dataset, rep_preset='all',
-                     rep_names=ds_reps['general'])
-    labels = data['labels']
-    groups = data['groups']
-    reps = data['reps']
+def test_one(dataset: str):
+    """Returns (n_failures_any_pass, n_score_diffs, n_top5_diffs)."""
+    ds_reps = DATASET_REPS.get(dataset)
+    if ds_reps is None or 'general' not in ds_reps:
+        print(f'[{dataset}] SKIP: no general rep list in DATASET_REPS')
+        return None
 
-    # Test fold 1 + evaluator rf — the specific config where we saw
-    # onehot/prot_t5 flip between Run A and Run B.
+    print(f'\n{"=" * 70}')
+    print(f'DATASET: {dataset}')
+    print(f'{"=" * 70}')
+
+    try:
+        data = load_data(dataset, rep_preset='all',
+                        rep_names=ds_reps['general'])
+    except Exception as e:
+        print(f'[{dataset}] load_data FAILED: {type(e).__name__}: {e}')
+        return None
+
+    labels = data['labels']
+    groups = data.get('groups')
+    reps = data['reps']
+    print(f'Loaded: {len(labels)} samples, {len(reps)} reps')
+
     FOLD = 1
     EVAL = 'rf'
 
-    print(f'\n=== PASS 1: fold={FOLD} evaluator={EVAL} ===')
     t0 = time.time()
-    scores_1 = compute_alloc_scores(reps, labels, groups, FOLD, EVAL,
-                                     verbose=True)
-    print(f'Pass 1 took {time.time() - t0:.1f}s')
-
-    print(f'\n=== PASS 2: fold={FOLD} evaluator={EVAL} (same inputs) ===')
+    scores_1 = compute_alloc_scores(reps, labels, groups, FOLD, EVAL)
+    t1 = time.time() - t0
     t0 = time.time()
-    scores_2 = compute_alloc_scores(reps, labels, groups, FOLD, EVAL,
-                                     verbose=True)
-    print(f'Pass 2 took {time.time() - t0:.1f}s')
+    scores_2 = compute_alloc_scores(reps, labels, groups, FOLD, EVAL)
+    t2 = time.time() - t0
+    print(f'Pass 1 took {t1:.1f}s, pass 2 took {t2:.1f}s')
 
-    print('\n=== COMPARISON ===')
     failures_1 = scores_1.pop('_failed')
     failures_2 = scores_2.pop('_failed')
-    print(f'Pass 1 failures: {len(failures_1)}')
-    for name, err in failures_1:
-        print(f'  {name}: {err}')
-    print(f'Pass 2 failures: {len(failures_2)}')
-    for name, err in failures_2:
-        print(f'  {name}: {err}')
+    n_fail = len(failures_1) + len(failures_2)
+    if failures_1:
+        print(f'Pass 1 failures ({len(failures_1)}):')
+        for name, err in failures_1:
+            print(f'  {name}: {err}')
+    if failures_2:
+        print(f'Pass 2 failures ({len(failures_2)}):')
+        for name, err in failures_2:
+            print(f'  {name}: {err}')
 
     diffs = []
     for name in sorted(set(scores_1) | set(scores_2)):
-        s1 = scores_1.get(name, 'MISSING')
-        s2 = scores_2.get(name, 'MISSING')
+        s1 = scores_1.get(name)
+        s2 = scores_2.get(name)
         if s1 != s2:
             diffs.append((name, s1, s2))
 
     if diffs:
-        print(f'\n{len(diffs)} reps scored DIFFERENTLY between passes:')
+        print(f'{len(diffs)} reps scored DIFFERENTLY between passes:')
         for name, s1, s2 in diffs:
-            print(f'  {name}: pass1={s1}  pass2={s2}')
+            print(f'  {name}: pass1={s1!r}  pass2={s2!r}')
     else:
-        print('\nAll reps scored identically between the two passes.')
+        print(f'All {len(scores_1)} reps scored identically between passes.')
 
-    # Also show top-5 per pass so we can see if top-k ranking is stable
-    def top5(scores):
-        items = [(n, s) for n, s in scores.items() if isinstance(s, (int, float))]
+    def topk(scores, k=5):
+        items = [(n, s) for n, s in scores.items()
+                 if isinstance(s, (int, float))]
         items.sort(key=lambda t: t[1], reverse=True)
-        return items[:5]
+        return [n for n, _ in items[:k]]
 
-    print('\nTop-5 by pass 1:')
-    for n, s in top5(scores_1):
-        print(f'  {n}: {s:.6f}')
-    print('Top-5 by pass 2:')
-    for n, s in top5(scores_2):
-        print(f'  {n}: {s:.6f}')
-
-    print('\n=== VERDICT ===')
-    if failures_1 or failures_2:
-        print('Silent failures exist. Bare-except path is ACTIVE.')
-    if diffs:
-        print('Scores are non-deterministic between passes — the '
-              'hypothesis is supported.')
+    top_1 = topk(scores_1, 5)
+    top_2 = topk(scores_2, 5)
+    top_same = top_1 == top_2
+    if not top_same:
+        print(f'Top-5 order differs:')
+        print(f'  pass 1: {top_1}')
+        print(f'  pass 2: {top_2}')
     else:
-        print('Scores are deterministic within a single process. '
-              'Fragmentation must come from elsewhere (rep set differences '
-              'between runs, code changes, or cross-process non-determinism).')
+        print(f'Top-5 is identical: {top_1}')
+
+    return (n_fail, len(diffs), 0 if top_same else 1)
+
+
+def main(datasets):
+    results = {}
+    for ds in datasets:
+        out = test_one(ds)
+        if out is not None:
+            results[ds] = out
+
+    print(f'\n{"=" * 70}')
+    print('SUMMARY')
+    print(f'{"=" * 70}')
+    print(f'{"dataset":<36} {"failures":>10} {"score_diffs":>13} '
+          f'{"top5_diff":>11}')
+    print('-' * 72)
+    any_fail = False
+    any_diff = False
+    any_top5 = False
+    for ds, (nf, nd, nt) in results.items():
+        print(f'{ds:<36} {nf:>10} {nd:>13} {nt:>11}')
+        if nf:
+            any_fail = True
+        if nd:
+            any_diff = True
+        if nt:
+            any_top5 = True
+
+    print('\n=== OVERALL VERDICT ===')
+    if any_fail:
+        print('- Silent failures happened: bare-except is active somewhere.')
+    if any_diff:
+        print('- Per-rep scores diverged between two identical passes: '
+              'non-determinism confirmed.')
+    if any_top5:
+        print('- Top-5 ordering differed on at least one dataset: '
+              'enough to flip the cached subset_hash.')
+    if not (any_fail or any_diff or any_top5):
+        print('- All datasets scored deterministically in-process. '
+              'Fragmentation originates from something that differs '
+              'between separate processes/runs (rep set, code version, '
+              'BLAS threading, process-level RNG state).')
+
+
+DEFAULT_DATASETS = [
+    # antibody
+    'ginkgo_heparin',
+    'ginkgo_acsins',
+    'flab_thermo_jain',
+    'abcov_kd',
+    # molecular
+    'caco2',
+    # reaction
+    'buchwald_hartwig',
+]
 
 
 if __name__ == '__main__':
-    dataset = sys.argv[1] if len(sys.argv) > 1 else 'ginkgo_heparin'
-    main(dataset)
+    args = sys.argv[1:]
+    if not args:
+        datasets = DEFAULT_DATASETS
+    elif args == ['all']:
+        datasets = [k for k, v in DATASET_REPS.items() if 'general' in v]
+    else:
+        datasets = args
+    main(datasets)
