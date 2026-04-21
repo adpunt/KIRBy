@@ -1909,7 +1909,10 @@ def precompute_hybrid_searches(reps, labels, groups, config,
 
     for idx, aug_cond in enumerate(aug_conditions, 1):
         augs = augmentations if aug_cond != 'none' else None
-        aug_strat = aug_cond if aug_cond != 'none' else 'uncapped'
+        # Pass aug_strat verbatim so 'none'/'uncapped'/'capped' each get
+        # their own cache filename. Mapping 'none'→'uncapped' collided
+        # the no-aug results with real uncapped files on the same path.
+        aug_strat = aug_cond
 
         if verbose:
             print(f"  [{idx}/{len(aug_conditions)}] aug={aug_cond} "
