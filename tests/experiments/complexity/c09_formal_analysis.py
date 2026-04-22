@@ -561,7 +561,7 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
         try:
             search = find_best_hybrid(
                 reps, labels, groups=groups,
-                models=model_names,
+                models=None,
                 speed=search_speed,
                 budgets=[budget],
                 augmentations=augs,
