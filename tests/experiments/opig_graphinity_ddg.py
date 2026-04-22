@@ -322,7 +322,7 @@ def evaluate_condition(condition, rep_names, n_folds, max_samples=5000):
             task_type='regression',
             budgets=FULL_BUDGETS,
             augmentations=aug_dict if aug_dict else None,
-            augmentation_strategy='uncapped',
+            augmentation_strategy='uncapped' if aug_dict else 'none',
             internal_evaluators=INTERNAL_EVALUATORS,
             speed='full', return_fitted=True, verbose=False, cache=True,
             dataset_name=ds_name, tier='general',
