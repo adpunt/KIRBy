@@ -2068,6 +2068,77 @@ def get_precomputed_search(reps, labels, groups,
     return find_best_hybrid(**call_kwargs)
 
 
+def get_best_precomputed_search(reps, labels, groups, augmentations=None,
+                                *, speed='full', precomputed=None,
+                                metric='auto', task_type=None, domain=None,
+                                dataset_name=None, tier='general',
+                                return_fitted=False, weight_method=None,
+                                **kwargs):
+    """Return the better of {'none', 'uncapped'} SearchResults.
+
+    For experiments that want the best downstream performance without
+    constraining feature count. Loads both precomputed SearchResults
+    (from cache or the precomputed dict), compares their top-model scores,
+    and returns the winner. When augmentations are unavailable, returns
+    just the 'none' result (uncapped is identical with no augs).
+
+    Does NOT consider 'capped' — capped is for dimension-controlled
+    experiments and rarely wins unconstrained. Callers who explicitly
+    want capped should use get_precomputed_search(aug_condition='capped').
+
+    Args:
+        Same signature as get_precomputed_search, minus aug_condition.
+        All other args are passed through to both underlying calls.
+
+    Returns:
+        (SearchResult, str) — the winning SearchResult and the condition
+        name ('none' or 'uncapped') it came from. Caller can log which
+        was chosen for reproducibility.
+    """
+    has_augs = bool(augmentations)
+
+    s_none = get_precomputed_search(
+        reps, labels, groups,
+        aug_condition='none', augmentations=None,
+        speed=speed, return_fitted=return_fitted, weight_method=weight_method,
+        precomputed=precomputed,
+        metric=metric, task_type=task_type, domain=domain,
+        dataset_name=dataset_name, tier=tier, **kwargs)
+
+    if not has_augs:
+        return s_none, 'none'
+
+    s_uncapped = get_precomputed_search(
+        reps, labels, groups,
+        aug_condition='uncapped', augmentations=augmentations,
+        speed=speed, return_fitted=return_fitted, weight_method=weight_method,
+        precomputed=precomputed,
+        metric=metric, task_type=task_type, domain=domain,
+        dataset_name=dataset_name, tier=tier, **kwargs)
+
+    def _top_score(search):
+        """Top-across-models best score from a SearchResult. Returns
+        +inf / -inf on empty so the other side wins."""
+        if search is None or not search.best_by_model:
+            return float('inf') if getattr(search, 'lower_is_better', False) else float('-inf')
+        scores = [r.get('score_mean') for r in search.best_by_model.values()
+                  if r.get('score_mean') is not None
+                  and np.isfinite(r.get('score_mean'))]
+        if not scores:
+            return float('inf') if search.lower_is_better else float('-inf')
+        return min(scores) if search.lower_is_better else max(scores)
+
+    none_score = _top_score(s_none)
+    unc_score = _top_score(s_uncapped)
+    lower_is_better = getattr(s_uncapped, 'lower_is_better',
+                              getattr(s_none, 'lower_is_better', False))
+
+    # Tie-break: prefer 'none' because it's smaller and simpler.
+    if lower_is_better:
+        return (s_none, 'none') if none_score <= unc_score else (s_uncapped, 'uncapped')
+    return (s_none, 'none') if none_score >= unc_score else (s_uncapped, 'uncapped')
+
+
 def get_fitted_hybrid(reps, labels, groups, *, downstream_model,
                       budget=None, aug_condition='uncapped',
                       augmentations=None, speed='full', precomputed=None,
