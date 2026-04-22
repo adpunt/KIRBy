@@ -273,6 +273,46 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         }
         print(f"  {model_name}: best_rep={best_single_rep} {metric_label}={best_single_score:.4f}")
 
+    # Option Z (2026-04-22): evaluate hybrid at each model's top-baseline-
+    # rep native dim. Baselines in _evaluate_single use full rep dim
+    # (e.g. ablang2 at 480D) while the main hybrid search is capped at
+    # n_samples — on antibody datasets with small n, the hybrid never gets
+    # evaluated at the budget that matches its best-single-rep comparator.
+    # This pass plugs that hole with one extra find_best_hybrid call at
+    # allow_budget_exceeds_n=True.
+    top_rep_dims = set()
+    for _model_name, _info in baselines.items():
+        _top_rep = _info.get('best_single_rep')
+        if _top_rep and _top_rep in reps:
+            top_rep_dims.add(reps[_top_rep].shape[1])
+    _already_tested_budgets = set(full_budgets) | {len(labels)}
+    extra_budgets = sorted(b for b in top_rep_dims
+                           if b not in _already_tested_budgets)
+    search_top_rep_dim = None
+    if extra_budgets:
+        print(f"\n  --- Hybrid at top-rep native dims ({extra_budgets}) ---")
+        search_top_rep_dim = find_best_hybrid(
+            base_reps=reps,
+            labels=labels,
+            groups=groups,
+            models=None,
+            budgets=extra_budgets,
+            allocation_methods=allocation_methods,
+            importance_methods=importance_methods,
+            n_folds=n_folds,
+            augmentations=None,
+            augmentation_strategy='none',
+            internal_evaluators=INTERNAL_EVALUATORS,
+            metric=metric_name,
+            task_type=data['task_type'],
+            verbose=True,
+            cache=True,
+            dataset_name=dataset_name,
+            tier='general',
+            condition_suffix='top_rep_dims',
+            allow_budget_exceeds_n=True,
+        )
+
     # PCA baselines (library doesn't compute these -- keep manual)
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
     # Some reps contain NaN (e.g. BLOSUM on sequences with unknown residues,
@@ -379,6 +419,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         conditions['top_tier_only'] = _extract_best(search_top_tier)
     if search_ft is not None:
         conditions['frozen_plus_ft'] = _extract_best(search_ft)
+    if search_top_rep_dim is not None:
+        conditions['at_top_rep_dim'] = _extract_best(search_top_rep_dim)
 
     # Print condition comparison
     print("\n  CONDITION COMPARISON (best score per model):")
