@@ -240,7 +240,7 @@ def evaluate_dataset(dataset_name, rep_names, n_folds):
             metric='auc',
             task_type='classification',
             budgets=FULL_BUDGETS,
-            augmentation_strategy='uncapped',
+            augmentation_strategy='none',
             internal_evaluators=INTERNAL_EVALUATORS,
             speed='full', return_fitted=True, verbose=False, cache=True,
             dataset_name=dataset_name, tier='general',
