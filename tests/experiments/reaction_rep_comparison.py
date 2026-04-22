@@ -414,6 +414,7 @@ def main():
                     speed='full', return_fitted=True, verbose=False, cache=True,
                     dataset_name=dataset_name, tier='general',
                     metric='rmse', task_type='regression',
+                    augmentation_strategy='none',
                     adaptive_pruning=0.25)
                 top3 = extract_top3_base_reps(search)
                 if top3:
