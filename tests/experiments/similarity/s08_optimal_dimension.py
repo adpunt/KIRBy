@@ -92,9 +92,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         t0 = time.time()
 
         try:
+            # Dimension is the study variable — use 'capped' so total
+            # feature count equals `budget` exactly (augs displace base
+            # features instead of extending beyond budget).
             X_hybrid, fi, search = get_fitted_hybrid(
                 reps, labels, groups,
-                aug_condition='uncapped' if data.get('augmentations') else 'none',
+                aug_condition='capped' if data.get('augmentations') else 'none',
                 augmentations=data.get('augmentations'),
                 speed=search_speed,
                 precomputed=data.get('precomputed_searches'),
