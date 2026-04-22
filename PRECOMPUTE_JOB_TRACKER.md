@@ -806,3 +806,88 @@ sacct -j 11825801-11825833 --format=State --noheader -X | sort | uniq -c
 sacct -j 11825801-11825833 --format=JobID,JobName%40,State,Elapsed,ExitCode -X \
   | grep -E "FAILED|TIMEOUT|OUT_OF_ME|CANCELLED"
 ```
+
+---
+
+## 2026-04-22 — Bundled fill-in submission (57 jobs, long)
+
+**Script:** `tests/slurm_scripts/resubmit_missing_bundled.sh` (commit 8577241). After migrating the 33 stuck PDs, the status check still reported 164 missing per-condition entries across 30 datasets. Bundled into 30 `_all_standard` + 27 `_all_distance` sbatch submissions (3 datasets have distance already covered by earlier runs, so only 27 distance bundles).
+**Partition:** long (7d). 64G default; 128G for `nt_*` / `gb_*` nucleotide loaders.
+**ID range:** 11825934–11825990.
+
+### `_all_standard` bundles (30 × long, 7d)
+
+| Job ID | Dataset | Mem |
+|--------|---------|-----|
+| 11825934 | adme_hlm | 64G |
+| 11825935 | adme_mdr1 | 64G |
+| 11825936 | adme_rlm | 64G |
+| 11825937 | bh_doyle_plates | 64G |
+| 11825938 | buchwald_hartwig | 64G |
+| 11825939 | caco2 | 64G |
+| 11825940 | ddg_combined | 64G |
+| 11825941 | flab_aggregation_jain | 64G |
+| 11825942 | flab_aggregation_jain_hicrt | 64G |
+| 11825943 | flab_binding_adams | 64G |
+| 11825944 | flab_binding_koenig | 64G |
+| 11825945 | flab_binding_phillips_h3 | 64G |
+| 11825946 | flab_expression_adams | 64G |
+| 11825947 | flab_expression_koenig | 64G |
+| 11825948 | flab_pk_jain_fcrnrt | 64G |
+| 11825949 | gb_human_enhancers_cohn | 128G |
+| 11825950 | gb_human_nontata_promoters | 128G |
+| 11825951 | nt_H2AFZ | 128G |
+| 11825952 | nt_H3K27ac | 128G |
+| 11825953 | nt_H3K27me3 | 128G |
+| 11825954 | nt_H3K36me3 | 128G |
+| 11825955 | nt_H3K4me1 | 128G |
+| 11825956 | nt_H3K4me2 | 128G |
+| 11825957 | nt_H3K4me3 | 128G |
+| 11825958 | nt_H3K9ac | 128G |
+| 11825959 | nt_H3K9me3 | 128G |
+| 11825960 | nt_H4K20me1 | 128G |
+| 11825961 | nt_promoter_all | 128G |
+| 11825962 | nt_promoter_no_tata | 128G |
+| 11825963 | nt_promoter_tata | 128G |
+
+### `_all_distance` bundles (27 × long, 7d)
+
+| Job ID | Dataset | Mem |
+|--------|---------|-----|
+| 11825964 | adme_hlm | 64G |
+| 11825965 | adme_mdr1 | 64G |
+| 11825966 | adme_rlm | 64G |
+| 11825967 | bh_doyle_plates | 64G |
+| 11825968 | buchwald_hartwig | 64G |
+| 11825969 | caco2 | 64G |
+| 11825970 | ddg_combined | 64G |
+| 11825971 | flab_binding_adams | 64G |
+| 11825972 | flab_binding_koenig | 64G |
+| 11825973 | flab_binding_phillips_h3 | 64G |
+| 11825974 | flab_expression_adams | 64G |
+| 11825975 | flab_expression_koenig | 64G |
+| 11825976 | gb_human_enhancers_cohn | 128G |
+| 11825977 | gb_human_nontata_promoters | 128G |
+| 11825978 | nt_H2AFZ | 128G |
+| 11825979 | nt_H3K27ac | 128G |
+| 11825980 | nt_H3K27me3 | 128G |
+| 11825981 | nt_H3K36me3 | 128G |
+| 11825982 | nt_H3K4me1 | 128G |
+| 11825983 | nt_H3K4me2 | 128G |
+| 11825984 | nt_H3K4me3 | 128G |
+| 11825985 | nt_H3K9ac | 128G |
+| 11825986 | nt_H3K9me3 | 128G |
+| 11825987 | nt_H4K20me1 | 128G |
+| 11825988 | nt_promoter_all | 128G |
+| 11825989 | nt_promoter_no_tata | 128G |
+| 11825990 | nt_promoter_tata | 128G |
+
+3 datasets had distance already populated (flab_aggregation_jain, flab_aggregation_jain_hicrt, flab_pk_jain_fcrnrt) so they appear in `_all_standard` only.
+
+### Status checks
+
+```bash
+sacct -j 11825934-11825990 --format=State --noheader -X | sort | uniq -c
+sacct -j 11825934-11825990 --format=JobID,JobName%40,State,Elapsed,ExitCode -X \
+  | grep -E "FAILED|TIMEOUT|OUT_OF_ME|CANCELLED"
+```
