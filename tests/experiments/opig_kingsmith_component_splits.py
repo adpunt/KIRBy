@@ -314,7 +314,7 @@ def evaluate_split(dataset_name, data, split_key, n_folds):
             task_type='regression',
             budgets=FULL_BUDGETS,
             augmentations=aug_dict if aug_dict else None,
-            augmentation_strategy='uncapped',
+            augmentation_strategy='uncapped' if aug_dict else 'none',
             internal_evaluators=INTERNAL_EVALUATORS,
             speed='full', return_fitted=True, verbose=False, cache=True,
             dataset_name=dataset_name, tier='general',
