@@ -3356,6 +3356,12 @@ def find_best_hybrid(
     cv_splitter_id: Optional[str] = None,
     rep_factories_id: Optional[str] = None,
     condition_suffix: Optional[str] = None,
+    # Caller opt-in: keep budgets > n_samples instead of dropping them.
+    # Used by c02's "hybrid at top-rep native dim" pass where we explicitly
+    # want to evaluate the hybrid at a budget that matches the best single
+    # rep's full dim (often > n_samples on small antibody datasets).
+    # Precompute leaves this False so its cache key is unaffected.
+    allow_budget_exceeds_n: bool = False,
 ) -> SearchResult:
     """
     Find the best hybrid representation configuration.
@@ -3468,13 +3474,37 @@ def find_best_hybrid(
     if len(labels) != n_samples:
         raise ValueError(f"labels length ({len(labels)}) != n_samples ({n_samples})")
 
-    # --- Drop budgets that exceed total n (before cache key) ---
-    filtered = [b for b in budgets if b <= n_samples]
-    if not filtered:
-        filtered = [n_samples]
-    if filtered != list(budgets) and verbose:
-        dropped = [b for b in budgets if b > n_samples]
-        print(f"Dropped budgets > n={n_samples}: {dropped}")
+    # --- Budget filter (before cache key) ---
+    # Fix A (2026-04-22): when the caller-supplied list had any budget
+    # above n_samples, append n_samples as an at-n boundary test point.
+    # Otherwise the hybrid gets silently capped at the largest < n budget
+    # (e.g. 100 on n=217) while the best-single-rep baselines in
+    # _evaluate_single use full native rep dim (e.g. 480D for ablang2) —
+    # that makes hybrid-vs-baseline unfair to the hybrid on small-n
+    # datasets.
+    # Fix Z (2026-04-22): c02 opts into allow_budget_exceeds_n=True to
+    # test the hybrid at a budget matching the best-baseline rep's full
+    # native dim, which is often > n_samples on antibody datasets.
+    if allow_budget_exceeds_n:
+        filtered = sorted(set(budgets))
+    else:
+        filtered = [b for b in budgets if b <= n_samples]
+        added_at_n = False
+        if any(b > n_samples for b in budgets) and n_samples not in filtered:
+            filtered.append(n_samples)
+            added_at_n = True
+        if not filtered:
+            filtered = [n_samples]
+        filtered = sorted(set(filtered))
+        if filtered != list(budgets) and verbose:
+            dropped = [b for b in budgets if b > n_samples]
+            parts = []
+            if dropped:
+                parts.append(f"Dropped budgets > n={n_samples}: {dropped}")
+            if added_at_n:
+                parts.append(f"added n={n_samples} as at-n boundary")
+            if parts:
+                print("; ".join(parts))
     budgets = filtered
 
     # --- Normalize parameters for cache key alignment ---
