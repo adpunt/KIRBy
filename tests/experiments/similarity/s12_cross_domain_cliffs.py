@@ -157,7 +157,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     try:
         search = get_precomputed_search(
             reps, labels, groups,
-            aug_condition='uncapped', augmentations=data.get('augmentations'),
+            aug_condition='uncapped' if data.get('augmentations') else 'none',
+            augmentations=data.get('augmentations'),
             speed=search_speed,
             precomputed=data.get('precomputed_searches'),
             dataset_name=dataset_name, tier='general', task_type=task_type)

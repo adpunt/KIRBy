@@ -66,7 +66,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Per-budget blueprints are used with build_fold_hybrid in the CV loop.
         _X_unused, _fi_unused, search = get_fitted_hybrid(
             reps, labels, groups,
-            aug_condition='uncapped', augmentations=augmentations,
+            aug_condition='uncapped' if augmentations else 'none', augmentations=augmentations,
             speed=search_speed,
             precomputed=data.get('precomputed_searches'),
             internal_evaluators=DISTANCE_EVALUATORS,

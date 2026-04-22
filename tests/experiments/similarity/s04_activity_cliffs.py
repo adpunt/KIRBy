@@ -119,7 +119,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         augmentations = data.get('augmentations')
         X_hybrid, fi, search = get_fitted_hybrid(
             reps, labels, groups,
-            aug_condition='uncapped', augmentations=augmentations,
+            aug_condition='uncapped' if augmentations else 'none', augmentations=augmentations,
             speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'),
             internal_evaluators=DISTANCE_EVALUATORS,
