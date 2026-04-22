@@ -693,7 +693,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     try:
         search = get_precomputed_search(
             reps, labels, groups,
-            aug_condition='uncapped', augmentations=data.get('augmentations'),
+            aug_condition='uncapped' if data.get('augmentations') else 'none',
+            augmentations=data.get('augmentations'),
             speed=search_speed,
             precomputed=None,  # bypass tree-only precomputed; use disk cache
             internal_evaluators=DISTANCE_EVALUATORS,

@@ -65,7 +65,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         augmentations_search = data.get('augmentations')
         X_hybrid, fi, search = get_fitted_hybrid(
             reps, labels, groups,
-            aug_condition='uncapped', augmentations=augmentations_search,
+            aug_condition='uncapped' if augmentations_search else 'none', augmentations=augmentations_search,
             speed=config.get('search_speed', 'full'),
             precomputed=data.get('precomputed_searches'),
             internal_evaluators=DISTANCE_EVALUATORS,
