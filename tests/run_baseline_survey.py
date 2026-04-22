@@ -588,6 +588,38 @@ def _maybe_scale(X_train, X_val):
     return X_train_s, X_val_s
 
 
+_HIGH_DIM_THRESHOLD = 500
+_HIGH_DIM_KEEP = 200
+
+
+def _filter_high_dim_per_fold(X_train, X_val, y_train, task_type):
+    """LightGBM-importance filter applied per-fold (no leakage).
+
+    Reps with dim > _HIGH_DIM_THRESHOLD are reduced to top-_HIGH_DIM_KEEP
+    features ranked by LightGBM importance fit on the training fold only.
+    This makes high-dim reps (mordred ~1613D, ESM-family 1280-2560D)
+    tractable for linear/MLP models without resorting to PCA.
+    Returns (X_train_filtered, X_val_filtered, n_kept).
+    """
+    if X_train.shape[1] <= _HIGH_DIM_THRESHOLD:
+        return X_train, X_val, X_train.shape[1]
+    try:
+        if task_type == 'classification':
+            from lightgbm import LGBMClassifier as _LGBM
+        else:
+            from lightgbm import LGBMRegressor as _LGBM
+        sel = _LGBM(n_estimators=50, max_depth=5, random_state=42,
+                    n_jobs=-1, verbose=-1)
+        sel.fit(np.nan_to_num(X_train, nan=0.0, posinf=1e6, neginf=-1e6),
+                y_train)
+        importances = sel.feature_importances_
+        top_idx = np.argsort(importances)[-_HIGH_DIM_KEEP:]
+        top_idx.sort()
+        return X_train[:, top_idx], X_val[:, top_idx], _HIGH_DIM_KEEP
+    except Exception:
+        return X_train, X_val, X_train.shape[1]
+
+
 def evaluate_rep(X, labels, groups, model, n_folds, task_type,
                  prebuilt_splits=None):
     """Evaluate one (rep, model) pair via CV. Returns (mean_metrics, std_metrics)."""
@@ -599,7 +631,10 @@ def evaluate_rep(X, labels, groups, model, n_folds, task_type,
     fold_metrics = []
 
     for train_idx, val_idx in splits:
-        X_train, X_val = _maybe_scale(X[train_idx], X[val_idx])
+        X_train, X_val = X[train_idx], X[val_idx]
+        X_train, X_val, _ = _filter_high_dim_per_fold(
+            X_train, X_val, labels[train_idx], task_type)
+        X_train, X_val = _maybe_scale(X_train, X_val)
 
         try:
             m = clone(model)
@@ -634,6 +669,10 @@ def evaluate_ft_rep(factory, labels, groups, model, n_folds, task_type):
             print(f" [ft error: {e}]", end='', flush=True)
             print(f"\n  FT FACTORY ERROR: {e}", file=sys.stderr)
             continue
+
+        # Importance-filter high-dim FT embeddings (e.g. ESM 1280D + ridge)
+        X_train, X_val, _ = _filter_high_dim_per_fold(
+            X_train, X_val, labels[train_idx], task_type)
 
         # FT reps are always continuous (LM embeddings) — always scale
         scaler = StandardScaler()
@@ -853,7 +892,14 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
         try:
             entry = {'dimension': dim, 'scores': {}, 'metrics': {}}
 
-            for mname in model_names:
+            # MLP is unstable on high-dim protein embeddings (severe negative
+            # R² on DTA — esm2/esmc/esm3/saprot/kmer/etc all blow up). Skip
+            # for protein_* reps in DTA only — TCGA / antibody work fine.
+            rep_models = list(model_names)
+            if data.get('domain') == 'dta' and rep_name.startswith('protein_'):
+                rep_models = [m for m in rep_models if m != 'mlp']
+
+            for mname in rep_models:
                 mean_m, std_m = evaluate_rep(
                     X, labels, groups, default_models[mname], n_folds, task_type,
                     prebuilt_splits=prebuilt_splits)
@@ -925,7 +971,12 @@ def run_survey(dataset_name, rep_preset, n_folds, do_finetune, seed,
                 print(f"  {ft_name}:", end='', flush=True)
                 entry = {'dimension': '?', 'scores': {}, 'metrics': {}}
 
-                for mname in model_names:
+                # MLP is unstable on high-dim protein embeddings (severe
+                # negative R² on DTA). Skip for protein_* FT reps.
+                ft_models = [m for m in model_names
+                             if not (ft_name.startswith('protein_') and m == 'mlp')]
+
+                for mname in ft_models:
                     mean_m, std_m = evaluate_ft_rep(
                         factory, labels, groups, default_models[mname],
                         n_folds, task_type)

@@ -69,6 +69,31 @@ DEFAULT_DRUG_PARTNER = 'drug_ecfp4'
 DEFAULT_PROTEIN_PARTNER = 'protein_aac'
 
 
+_HIGH_DIM_THRESHOLD = 500
+_HIGH_DIM_KEEP = 200
+
+
+def _filter_high_dim_per_fold(X_train, X_val, y_train):
+    """Per-fold LightGBM importance filter (no leakage).
+
+    Reps with dim > _HIGH_DIM_THRESHOLD reduced to top-_HIGH_DIM_KEEP
+    features ranked on training fold only.
+    """
+    if X_train.shape[1] <= _HIGH_DIM_THRESHOLD:
+        return X_train, X_val
+    try:
+        from lightgbm import LGBMRegressor
+        sel = LGBMRegressor(n_estimators=50, max_depth=5, random_state=42,
+                            n_jobs=-1, verbose=-1)
+        sel.fit(np.nan_to_num(X_train, nan=0.0, posinf=1e6, neginf=-1e6),
+                y_train)
+        top_idx = np.argsort(sel.feature_importances_)[-_HIGH_DIM_KEEP:]
+        top_idx.sort()
+        return X_train[:, top_idx], X_val[:, top_idx]
+    except Exception:
+        return X_train, X_val
+
+
 def _filter_features_by_importance(X: np.ndarray, y: np.ndarray,
                                     n_features: int = 200,
                                     rep_name: str = '') -> np.ndarray:
@@ -275,7 +300,8 @@ def generate_rep(rep_name: str, unique_drugs, unique_proteins,
 
 
 def evaluate_rep(X: np.ndarray, y: np.ndarray, groups: np.ndarray,
-                 n_folds: int = 5) -> Dict[str, float]:
+                 n_folds: int = 5,
+                 skip_models: Optional[List[str]] = None) -> Dict[str, float]:
     """Evaluate a representation with GroupKFold CV. Returns {model: R²}."""
     from sklearn.model_selection import GroupKFold
     from sklearn.preprocessing import StandardScaler
@@ -302,6 +328,8 @@ def evaluate_rep(X: np.ndarray, y: np.ndarray, groups: np.ndarray,
 
     from kirby.find_best_hybrid import get_model as _get_model
     _model_names = ['ridge', 'rf', 'xgboost', 'lightgbm', 'mlp']
+    if skip_models:
+        _model_names = [m for m in _model_names if m not in skip_models]
     models = {}
     for _mn in _model_names:
         try:
@@ -317,9 +345,11 @@ def evaluate_rep(X: np.ndarray, y: np.ndarray, groups: np.ndarray,
         fold_spearman = []
         fold_rmse = []
         for train_idx, test_idx in gkf.split(X, y, groups):
+            X_tr_raw, X_te_raw = _filter_high_dim_per_fold(
+                X[train_idx], X[test_idx], y[train_idx])
             scaler = StandardScaler()
-            X_train = scaler.fit_transform(X[train_idx])
-            X_test = scaler.transform(X[test_idx])
+            X_train = scaler.fit_transform(X_tr_raw)
+            X_test = scaler.transform(X_te_raw)
             # Clean up after scaling: zero-variance cols become NaN
             X_train = np.nan_to_num(X_train, nan=0.0, posinf=0.0, neginf=0.0)
             X_test = np.nan_to_num(X_test, nan=0.0, posinf=0.0, neginf=0.0)
@@ -386,7 +416,8 @@ def make_dta_sns_factory(drug_smiles):
 
 
 def evaluate_factory_rep(factory, y: np.ndarray, groups: np.ndarray,
-                         n_folds: int = 5) -> Dict[str, float]:
+                         n_folds: int = 5,
+                         skip_models: Optional[List[str]] = None) -> Dict[str, float]:
     """Evaluate a factory rep with GroupKFold CV. Returns {model: metrics}.
 
     Like evaluate_rep but calls the factory per fold to get train/val features.
@@ -400,6 +431,8 @@ def evaluate_factory_rep(factory, y: np.ndarray, groups: np.ndarray,
 
     from kirby.find_best_hybrid import get_model as _get_model
     _model_names = ['ridge', 'rf', 'xgboost', 'lightgbm', 'mlp']
+    if skip_models:
+        _model_names = [m for m in _model_names if m not in skip_models]
     models = {}
     for _mn in _model_names:
         try:
@@ -423,6 +456,8 @@ def evaluate_factory_rep(factory, y: np.ndarray, groups: np.ndarray,
                 print(f"    Factory error: {e}")
                 continue
 
+            X_train, X_test = _filter_high_dim_per_fold(
+                X_train, X_test, y[train_idx])
             scaler = StandardScaler()
             X_train = scaler.fit_transform(X_train)
             X_test = scaler.transform(X_test)
@@ -634,7 +669,9 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
         if rep_tiers.get(rep_name, 3) == 1:
             continue  # tier 1: augmentation-only, skip standalone
         t0 = time.time()
-        scores = evaluate_rep(rep, labels, groups, n_folds=n_folds)
+        # MLP is unstable on high-dim protein embeddings (severe negative R²)
+        skip = ['mlp'] if rep_name.startswith('protein_') else None
+        scores = evaluate_rep(rep, labels, groups, n_folds=n_folds, skip_models=skip)
         elapsed = time.time() - t0
         if not scores:
             print(f"  {rep_name:<25} ALL MODELS FAILED ({elapsed:.1f}s)")
@@ -679,7 +716,8 @@ def run_survey(dataset_name: str, max_pairs: Optional[int] = None,
             continue
 
         t0 = time.time()
-        scores = evaluate_rep(X, labels, groups, n_folds=n_folds)
+        skip = ['mlp'] if rep_name.startswith('protein_') else None
+        scores = evaluate_rep(X, labels, groups, n_folds=n_folds, skip_models=skip)
         elapsed = time.time() - t0
         paired_results[rep_name] = scores
         best_model = max(scores, key=lambda m: scores[m]['ci_mean'])
