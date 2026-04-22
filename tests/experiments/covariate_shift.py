@@ -242,6 +242,7 @@ def main():
                 speed='full', return_fitted=True, verbose=False, cache=True,
                 dataset_name=ds_name, tier='general',
                 metric=metric_name, task_type=task_type,
+                augmentation_strategy='none',
                 adaptive_pruning=0.25)
             fitted = search.fitted_results.get('rf')
             if fitted is not None:

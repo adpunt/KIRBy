@@ -226,6 +226,7 @@ def run_geometry_survey(
                 speed='full', return_fitted=True, verbose=False, cache=True,
                 dataset_name=dataset_name, tier='general',
                 metric=_metric, task_type=task_type,
+                augmentation_strategy='none',
                 adaptive_pruning=0.25)
             fitted = search.fitted_results.get('rf')
             if fitted is not None:
