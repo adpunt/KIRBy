@@ -595,8 +595,8 @@ Submitted via `tests/slurm_scripts/submit_ft_precompute.sh` (commit 2a8ec09). Go
 | 7516563 | ftpc_dta_bindingdb_kd | long, 256G, 4d, GPU | **CANCELLED** (same OOM risk + hybrid concurrency). Superseded by 7521196. |
 | 7520844 | ftpc_antibody (post-race-fix, no git pull in wrap) | **COMPLETED** (2h08m, 2026-04-21, ExitCode 0:0). Antibody FT reps cached per fold to `$KIRBY_CACHE_DIR/finetuned_reps/`. |
 | 7521193 | ftpc_dta_davis_v2 (post-7b128aa OOM fix) | **COMPLETED** (9h04m, 2026-04-21, ExitCode 0:0). 9× 153MB `.npz` files written (Apr 21 07:46–15:39) = davis protein_esm2_lora per fold. OOM fix confirmed — v2 factory (bf16 + grad ckpt + mini-batched holdout) works on 44GiB A40. Real FT scores present in `davis.json`. |
-| 7521194 | ftpc_dta_kiba_v2 (post-7b128aa) | **RUNNING** (2026-04-21, ~11h elapsed as of check). |
-| 7521196 | ftpc_dta_bindingdb_kd_v2 (post-7b128aa) | **RUNNING** (2026-04-21, ~9h elapsed as of check). Hybrid 7520843 already completed so the write-race concern is resolved. |
+| 7521194 | ftpc_dta_kiba_v2 (post-7b128aa) | **COMPLETED** (13h54m, 2026-04-22, ExitCode 0:0). v2 OOM fix held. Pull updated `kiba.json`. |
+| 7521196 | ftpc_dta_bindingdb_kd_v2 (post-7b128aa) | **COMPLETED** (16h55m, 2026-04-22, ExitCode 0:0). v2 OOM fix held. Pull updated `bindingdb_kd.json`. |
 
 ### FT precompute fill-in (2026-04-21)
 
@@ -611,8 +611,9 @@ Submit script: `tests/slurm_scripts/submit_ft_precompute_adme.sh`.
 
 | Job ID | Name | Status |
 |--------|------|--------|
-| 7528901 | ftpc_adme_hlm | **SUBMITTED** (2026-04-21, long+GPU+128G, 24h wall) |
-| 7528902 | ftpc_adme_rlm | **SUBMITTED** (2026-04-21, long+GPU+128G, 24h wall) |
+| 7528901 | ftpc_adme_hlm | **COMPLETED** (11m52s, 2026-04-22, ExitCode 0:0). 3 FT reps cached per fold. |
+| 7528902 | ftpc_adme_rlm | **COMPLETED** (11m47s, 2026-04-22, ExitCode 0:0). 3 FT reps cached per fold. |
+| 7529104 / 7529105 | ftpc_adme_hlm/rlm (dup) | **CANCELLED** (instant, accidental resubmit). |
 
 ### CGR-SMILES pretraining (Phase 4)
 
@@ -747,5 +748,61 @@ grep -h "^\[cache\]" slurm-*.out | sort | uniq -c
 ```bash
 sacct -j 11799082-11799105 --format=State --noheader -X | sort | uniq -c
 sacct -j 11799082-11799105 --format=JobID,JobName%40,State,Elapsed,ExitCode -X \
+  | grep -E "FAILED|TIMEOUT|OUT_OF_ME|CANCELLED"
+```
+
+---
+
+## 2026-04-22 — Medium→Long migration (33 pending, script-driven)
+
+**Trigger:** 33 of the 2026-04-20 M-band jobs (11799082–11799105) plus 8 older ones (11784367–11784374 tcga+tz) and 1 resubmit (11790814 humanness) were stuck PD on `medium` with `Priority` reason. Migrated to `long` (7d) via `tests/slurm_scripts/migrate_medium_to_long.sh`. Running jobs on medium (flab_*, herg_ki, logd, qm9) left alone.
+
+32 of 33 migrated. Duplicate `pc_humanness_therapeutic_all_standard` (11799104) scancelled manually before migrate; 11790814 kept as the survivor.
+
+**Old ID → New ID (on long, 7d, 64G):**
+
+| Old | New | Dataset / kind |
+|-----|-----|----------------|
+| 11784367 | 11825809 | tcga_brca_pam50 / all_standard |
+| 11784368 | 11825808 | tcga_brca_pam50 / all_distance |
+| 11784369 | 11825807 | tcga_luad_vs_lusc / all_standard |
+| 11784370 | 11825806 | tcga_luad_vs_lusc / all_distance |
+| 11784371 | 11825805 | tz_her2_binary / all_standard |
+| 11784372 | 11825804 | tz_her2_binary / all_distance |
+| 11784373 | 11825802 | tz_her2_multiclass / all_standard |
+| 11784374 | 11825801 | tz_her2_multiclass / all_distance |
+| 11790814 | 11825810 | humanness_therapeutic / all_standard |
+| 11799082 | 11825833 | ginkgo_heparin / all_standard |
+| 11799083 | 11825832 | ginkgo_heparin / all_distance |
+| 11799084 | 11825831 | ginkgo_acsins / all_standard |
+| 11799085 | 11825830 | ginkgo_acsins / all_distance |
+| 11799086 | 11825829 | ginkgo_colloidal / all_standard |
+| 11799087 | 11825828 | ginkgo_colloidal / all_distance |
+| 11799088 | 11825827 | ginkgo_hic / all_standard |
+| 11799089 | 11825826 | ginkgo_hic / all_distance |
+| 11799090 | 11825825 | ginkgo_pr_cho / all_standard |
+| 11799091 | 11825824 | ginkgo_pr_cho / all_distance |
+| 11799092 | 11825823 | ginkgo_titer / all_standard |
+| 11799093 | 11825822 | ginkgo_titer / all_distance |
+| 11799094 | 11825821 | abagym_Ang2 / all_standard |
+| 11799095 | 11825820 | abagym_Ang2 / all_distance |
+| 11799096 | 11825819 | abagym_EGFR / all_standard |
+| 11799097 | 11825818 | abagym_EGFR / all_distance |
+| 11799098 | 11825817 | abagym_HER2 / all_standard |
+| 11799099 | 11825816 | abagym_HER2 / all_distance |
+| 11799100 | 11825815 | abagym_VEGF / all_standard |
+| 11799101 | 11825814 | abagym_VEGF / all_distance |
+| 11799102 | 11825813 | abagym_lysozyme / all_standard |
+| 11799103 | 11825812 | abagym_lysozyme / all_distance |
+| 11799104 | (scancelled) | humanness_therapeutic / all_standard — duplicate of 11790814 |
+| 11799105 | 11825811 | humanness_therapeutic / all_distance |
+
+New ID range: **11825801–11825833** (11825803 unused).
+
+### Status checks
+
+```bash
+sacct -j 11825801-11825833 --format=State --noheader -X | sort | uniq -c
+sacct -j 11825801-11825833 --format=JobID,JobName%40,State,Elapsed,ExitCode -X \
   | grep -E "FAILED|TIMEOUT|OUT_OF_ME|CANCELLED"
 ```
