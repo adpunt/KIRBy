@@ -83,16 +83,30 @@ fi
 
 # ---------------------------------------------------------------------------
 # 2. Snapshot currently queued pc_ jobs so we don't double-submit.
+#    Track both per-condition names ({ds}_{cond}) AND the `_all_*`
+#    one-job-per-dataset covers.
 # ---------------------------------------------------------------------------
-declare -A QUEUED
+declare -A QUEUED               # exact `{ds}_{cond}` match
+declare -A QUEUED_ALL_STANDARD  # dataset has a pending `_all_standard` job
+declare -A QUEUED_ALL_DISTANCE  # dataset has a pending `_all_distance` job
+
 while IFS='|' read -r jobid name state; do
     [[ -z "$name" ]] && continue
-    # strip pc_ prefix
     local_name=${name#pc_}
-    QUEUED["$local_name"]=1
+    if [[ "$local_name" == *_all_standard ]]; then
+        ds=${local_name%_all_standard}
+        QUEUED_ALL_STANDARD["$ds"]=1
+    elif [[ "$local_name" == *_all_distance ]]; then
+        ds=${local_name%_all_distance}
+        QUEUED_ALL_DISTANCE["$ds"]=1
+    else
+        QUEUED["$local_name"]=1
+    fi
 done < <(squeue -u "$USER" -h -o "%i|%j|%t" | awk -F'|' '$2 ~ /^pc_/')
 
-echo "  ${#QUEUED[@]} pc_* jobs currently queued (R+PD) — will skip duplicates."
+echo "  ${#QUEUED[@]} per-condition pc_* jobs queued (R+PD)."
+echo "  ${#QUEUED_ALL_STANDARD[@]} datasets have a pending _all_standard job."
+echo "  ${#QUEUED_ALL_DISTANCE[@]} datasets have a pending _all_distance job."
 
 # ---------------------------------------------------------------------------
 # 3. Build action plan
@@ -108,9 +122,22 @@ for row in "${MISSING[@]}"; do
         continue
     fi
     job_local="${ds}_${suffix}"
+    # Covered by a queued per-condition job?
     if [[ -n "${QUEUED[$job_local]:-}" ]]; then
-        SKIPPED_QUEUED+=("$ds|$suffix|$status")
+        SKIPPED_QUEUED+=("$ds|$suffix|per-condition job queued")
         continue
+    fi
+    # Covered by a queued `_all_*` job for this dataset?
+    if [[ "$tier" == *_distance ]]; then
+        if [[ -n "${QUEUED_ALL_DISTANCE[$ds]:-}" ]]; then
+            SKIPPED_QUEUED+=("$ds|$suffix|_all_distance job queued")
+            continue
+        fi
+    else
+        if [[ -n "${QUEUED_ALL_STANDARD[$ds]:-}" ]]; then
+            SKIPPED_QUEUED+=("$ds|$suffix|_all_standard job queued")
+            continue
+        fi
     fi
     ACTIONS+=("$ds|$suffix|$status")
 done
