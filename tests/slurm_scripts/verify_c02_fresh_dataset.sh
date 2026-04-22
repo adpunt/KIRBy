@@ -37,6 +37,7 @@ echo "=================================================================="
 time python3 tests/experiments/complexity/c02_complexity_grid.py \
     --dataset "$DATASET" \
     --mode full \
+    --augment \
     --output "tests/results/c02_verify_fresh/"
 
 echo

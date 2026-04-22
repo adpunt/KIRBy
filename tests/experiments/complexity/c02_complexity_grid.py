@@ -275,6 +275,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # PCA baselines (library doesn't compute these -- keep manual)
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
+    # Some reps contain NaN (e.g. BLOSUM on sequences with unknown residues,
+    # protein LM embeddings on edge cases). PCA / StandardScaler can't handle
+    # them, so impute before the loop. Matches _evaluate_allocation's policy
+    # in hybrid.py:1124 — nan->0, inf->clip.
+    X_concat = np.clip(X_concat, -1e10, 1e10)
+    X_concat = np.nan_to_num(X_concat, nan=0.0, posinf=1e10, neginf=-1e10)
     print("\n  Computing PCA baselines...")
     pca_baselines = {}
     for budget in budgets:
