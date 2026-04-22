@@ -24,8 +24,12 @@ PARTITION="long"
 REGISTRY_PATH="${KIRBY_CACHE_DIR:-$HOME/.cache/kirby}/hybrid_registry.json"
 
 # Condition suffixes ordered longest-prefix-first so `general_distance_none`
-# matches before `general_none`, etc.
+# matches before `general_none`, etc. `all_standard` / `all_distance` come from
+# submit_precompute_new_nucleotide.sh — one-big-job-per-dataset convention,
+# no per-condition split.
 CONDITIONS=(
+    all_standard
+    all_distance
     general_distance_uncapped
     general_distance_none
     top_distance_uncapped
@@ -52,8 +56,13 @@ parse_name() {
     return 1
 }
 
+# For per-condition jobs, map to a registry key so we can skip if already done.
+# For `_all_*` jobs, we can't cleanly check "every inner condition is cached";
+# since these are pending (no checkpoint), just always resubmit. Returns empty
+# string to signal "skip registry check, always resubmit".
 cond_to_registry_key() {
     case "$1" in
+        all_standard|all_distance) echo "" ;;
         general_distance_none)      echo "general_distance/none" ;;
         general_distance_uncapped)  echo "general_distance/uncapped" ;;
         top_distance_none)          echo "top_distance/none" ;;
@@ -64,7 +73,7 @@ cond_to_registry_key() {
         top_none)                   echo "top/none" ;;
         top_uncapped)               echo "top/uncapped" ;;
         top_capped)                 echo "top/capped" ;;
-        *) echo "" ;;
+        *) echo "UNKNOWN" ;;
     esac
 }
 
@@ -123,11 +132,12 @@ for row in "${RAW[@]}"; do
         continue
     fi
     reg_key=$(cond_to_registry_key "$COND")
-    if [[ -z "$reg_key" ]]; then
+    if [[ "$reg_key" == "UNKNOWN" ]]; then
         UNPARSED+=("$jobid|$name")
         continue
     fi
-    if [[ -n "${DONE[$DS|$reg_key]:-}" ]]; then
+    # Empty reg_key = `_all_*` job -> always resubmit (pending, no checkpoint).
+    if [[ -n "$reg_key" && -n "${DONE[$DS|$reg_key]:-}" ]]; then
         ALREADY_DONE+=("$jobid|$name|$DS|$COND")
     else
         NEEDS_WORK+=("$jobid|$name|$DS|$COND")
@@ -218,12 +228,22 @@ for row in "${NEEDS_WORK[@]}"; do
     mem="64G"
     [[ "$ds" == nt_* ]] && mem="128G"
 
-    pruning=""
-    [[ "$cond" == *_capped ]] && pruning="--pruning 0.25"
-    dist=""
-    [[ "$cond" == *_distance_* ]] && dist="--distance"
+    # Build wrap command per job style:
+    #   all_standard    -> run every non-distance condition for this dataset
+    #   all_distance    -> run every distance condition for this dataset
+    #   <tier>_<strat>  -> single condition via --condition
+    if [[ "$cond" == "all_standard" ]]; then
+        cmd="python tests/precompute_hybrids.py ${ds} --speed full"
+    elif [[ "$cond" == "all_distance" ]]; then
+        cmd="python tests/precompute_hybrids.py ${ds} --speed full --distance"
+    else
+        pruning=""
+        [[ "$cond" == *_capped ]] && pruning="--pruning 0.25"
+        dist=""
+        [[ "$cond" == *_distance_* ]] && dist="--distance"
+        cmd="python tests/precompute_hybrids.py ${ds} --condition ${cond} --speed full ${pruning} ${dist}"
+    fi
 
-    cmd="python tests/precompute_hybrids.py ${ds} --condition ${cond} --speed full ${pruning} ${dist}"
     new=$(sbatch \
         --job-name="pc_${ds}_${cond}" \
         --nodes=1 --ntasks=1 --cpus-per-task=4 \
