@@ -1,0 +1,138 @@
+From: Claude
+Subject: precompute: drop GP + KNN — align precompute models with DOWNSTREAM_MODELS
+
+By default, find_best_hybrid resolves `models=None` at speed='full' to all
+tier-full models, which includes `gp` and `knn`. But every experiment reads
+`best_by_model[name]` filtered against `_shared.DOWNSTREAM_MODELS`:
+
+    DOWNSTREAM_MODELS = ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm']
+
+GP + KNN results are cached but never consumed. For small datasets (antibody
+n=100-250) where these models aren't sample-count-guarded, this adds ~25%
+to precompute wall time per job — 6× 8h on antibody = ~12h wasted per full
+precompute wave.
+
+This patch adds `--models rf,xgboost,ridge,svm,mlp,lightgbm` to every
+precompute submit script. precompute_hybrids.py already supports the
+`--models` CLI arg (tests/precompute_hybrids.py:423).
+
+CACHE IMPACT: existing cache entries (8-model `model_names`) will cache-miss
+against new experiment reads (6-model `model_names`). Existing cache entries
+are NOT invalidated — they remain on disk with their old keys; they just
+won't be hit unless an experiment explicitly passes `models=None`. Effect is
+that the NEXT precompute wave after applying this patch recomputes from
+scratch with 6 models, writing fresh cache entries under new keys.
+
+Only merge this AFTER the current wave (11825801-11825990, submitted
+2026-04-22) has run to completion. Merging mid-wave creates two cache-key
+generations in parallel.
+
+ tests/slurm_scripts/submit_precompute.sh             |  12 +++---
+ tests/slurm_scripts/submit_precompute_new_nucleotide.sh |   6 ++--
+ tests/slurm_scripts/resubmit_missing_bundled.sh      |   3 +-
+ 3 files changed
+
+diff --git a/tests/slurm_scripts/submit_precompute.sh b/tests/slurm_scripts/submit_precompute.sh
+--- a/tests/slurm_scripts/submit_precompute.sh
++++ b/tests/slurm_scripts/submit_precompute.sh
+@@ -24,6 +24,7 @@
+ set -euo pipefail
+
+ MODE=${1:-all}
+ DOMAIN=${2:-all}
+ EMAIL="adelaide.punt@stcatz.ox.ac.uk"
+ WRAP_PREFIX="cd /data/stat-cadd/scat9264/KIRBy && export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
++MODELS="rf,xgboost,ridge,svm,mlp,lightgbm"
+ COUNT=0
+
+@@ submit_dataset helper @@
+     submit "${ds}_general_none" \
+-        "python tests/precompute_hybrids.py ${ds} --condition general_none --speed full" \
++        "python tests/precompute_hybrids.py ${ds} --condition general_none --speed full --models ${MODELS}" \
+         "${mem}" "" "${partition}"
+     submit "${ds}_top_none" \
+-        "python tests/precompute_hybrids.py ${ds} --condition top_none --speed full" \
++        "python tests/precompute_hybrids.py ${ds} --condition top_none --speed full --models ${MODELS}" \
+         "${mem}" "" "${partition}"
+
+     if [[ "$has_aug" == "yes" ]]; then
+         submit "${ds}_general_uncapped" \
+-            "python tests/precompute_hybrids.py ${ds} --condition general_uncapped --speed full" \
++            "python tests/precompute_hybrids.py ${ds} --condition general_uncapped --speed full --models ${MODELS}" \
+             "${mem}" "" "${partition}"
+         submit "${ds}_top_uncapped" \
+-            "python tests/precompute_hybrids.py ${ds} --condition top_uncapped --speed full" \
++            "python tests/precompute_hybrids.py ${ds} --condition top_uncapped --speed full --models ${MODELS}" \
+             "${mem}" "" "${partition}"
+         # Capped — more aggressive pruning (0.25 threshold)
+         submit "${ds}_general_capped" \
+-            "python tests/precompute_hybrids.py ${ds} --condition general_capped --speed full --pruning 0.25" \
++            "python tests/precompute_hybrids.py ${ds} --condition general_capped --speed full --pruning 0.25 --models ${MODELS}" \
+             "${mem}" "" "${partition}"
+         submit "${ds}_top_capped" \
+-            "python tests/precompute_hybrids.py ${ds} --condition top_capped --speed full --pruning 0.25" \
++            "python tests/precompute_hybrids.py ${ds} --condition top_capped --speed full --pruning 0.25 --models ${MODELS}" \
+             "${mem}" "" "${partition}"
+     fi
+
+@@ submit_dataset_distance helper @@
+     submit "${ds}_general_distance_none" \
+-        "python tests/precompute_hybrids.py ${ds} --condition general_distance_none --speed full --distance" \
++        "python tests/precompute_hybrids.py ${ds} --condition general_distance_none --speed full --distance --models ${MODELS}" \
+         "${mem}" "" "${partition}"
+
+     if [[ "$has_aug" == "yes" ]]; then
+         submit "${ds}_general_distance_uncapped" \
+-            "python tests/precompute_hybrids.py ${ds} --condition general_distance_uncapped --speed full --distance" \
++            "python tests/precompute_hybrids.py ${ds} --condition general_distance_uncapped --speed full --distance --models ${MODELS}" \
+             "${mem}" "" "${partition}"
+     fi
+
+diff --git a/tests/slurm_scripts/submit_precompute_new_nucleotide.sh b/tests/slurm_scripts/submit_precompute_new_nucleotide.sh
+--- a/tests/slurm_scripts/submit_precompute_new_nucleotide.sh
++++ b/tests/slurm_scripts/submit_precompute_new_nucleotide.sh
+@@ -15,6 +15,7 @@ set -euo pipefail
+
+ WRAP_PREFIX="cd /data/stat-cadd/scat9264/KIRBy && export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
++MODELS="rf,xgboost,ridge,svm,mlp,lightgbm"
+
+ submit_nt() {
+     local ds=$1
+     local distance_flag=$2
+     local suffix=$3
+     JOB=$(sbatch --clusters=arc \
+         --job-name="pc_${ds}_all_${suffix}" \
+         --partition=long --mem=128G --time=2-00:00:00 --cpus-per-task=4 \
+-        --wrap="${WRAP_PREFIX} && python tests/precompute_hybrids.py ${ds} --speed full ${distance_flag}" \
++        --wrap="${WRAP_PREFIX} && python tests/precompute_hybrids.py ${ds} --speed full --models ${MODELS} ${distance_flag}" \
+         | awk '{print $4}')
+
+ # submit_gb() already passes --models (drops SVM at n=100K). Leave as-is.
+
+diff --git a/tests/slurm_scripts/resubmit_missing_bundled.sh b/tests/slurm_scripts/resubmit_missing_bundled.sh
+--- a/tests/slurm_scripts/resubmit_missing_bundled.sh
++++ b/tests/slurm_scripts/resubmit_missing_bundled.sh
+@@ -19,6 +19,7 @@ set -uo pipefail
+
+ EMAIL="adelaide.punt@stcatz.ox.ac.uk"
+ WRAP_PREFIX="cd /data/stat-cadd/scat9264/KIRBy && export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
++MODELS="rf,xgboost,ridge,svm,mlp,lightgbm"
+ TIME_LIMIT="7-00:00:00"
+ PARTITION="long"
+ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+@@ submit_bundle @@
+     local dist_flag=""
+     [[ "$kind" == "distance" ]] && dist_flag="--distance"
+-    local cmd="python tests/precompute_hybrids.py ${ds} --speed full ${dist_flag}"
++    local cmd="python tests/precompute_hybrids.py ${ds} --speed full --models ${MODELS} ${dist_flag}"
+     local new
+     new=$(sbatch ...)
+
+TO APPLY (after current wave finishes):
+  git apply DOWNSTREAM_MODELS_ALIGNMENT.patch
+  bash -n tests/slurm_scripts/submit_precompute.sh
+  bash -n tests/slurm_scripts/submit_precompute_new_nucleotide.sh
+  bash -n tests/slurm_scripts/resubmit_missing_bundled.sh
+  git add tests/slurm_scripts/
+  git commit -m "precompute: drop gp+knn via --models flag (align with DOWNSTREAM_MODELS)"
