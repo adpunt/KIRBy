@@ -273,45 +273,63 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         }
         print(f"  {model_name}: best_rep={best_single_rep} {metric_label}={best_single_score:.4f}")
 
-    # Option Z (2026-04-22): evaluate hybrid at each model's top-baseline-
-    # rep native dim. Baselines in _evaluate_single use full rep dim
-    # (e.g. ablang2 at 480D) while the main hybrid search is capped at
-    # n_samples — on antibody datasets with small n, the hybrid never gets
-    # evaluated at the budget that matches its best-single-rep comparator.
-    # This pass plugs that hole with one extra find_best_hybrid call at
-    # allow_budget_exceeds_n=True.
-    top_rep_dims = set()
-    for _model_name, _info in baselines.items():
+    # Per-(dataset, downstream model) hybrid at the model's best-baseline-rep
+    # native dim. Direct apples-to-apples comparison vs the model's best
+    # single-rep baseline (which _evaluate_single computes on the rep's full
+    # native dim, e.g. ablang2 at 480D). For each model M:
+    #   - find M's best baseline rep R and its dim D
+    #   - run find_best_hybrid restricted to {M} at budget=[D]
+    #   - allow_budget_exceeds_n=True so D > n_samples is permitted
+    # Each per-model call has its own cache namespace via condition_suffix=
+    # f'top_rep_dim_{model}'. Per-fold scores land in the standard
+    # hybrid_eval cache, keyed by (subset_hash, alloc, imp, eval, budget,
+    # fold, model, aug) — re-runs hit cache.
+    search_per_model_top_rep = {}  # model_name -> SearchResult
+    skipped_already_tested = set(full_budgets) | {len(labels)}
+    print("\n  --- Per-model hybrid at top-baseline-rep dim ---")
+    for _model_name in models:
+        _info = baselines.get(_model_name)
+        if not _info:
+            continue
         _top_rep = _info.get('best_single_rep')
-        if _top_rep and _top_rep in reps:
-            top_rep_dims.add(reps[_top_rep].shape[1])
-    _already_tested_budgets = set(full_budgets) | {len(labels)}
-    extra_budgets = sorted(b for b in top_rep_dims
-                           if b not in _already_tested_budgets)
-    search_top_rep_dim = None
-    if extra_budgets:
-        print(f"\n  --- Hybrid at top-rep native dims ({extra_budgets}) ---")
-        search_top_rep_dim = find_best_hybrid(
-            base_reps=reps,
-            labels=labels,
-            groups=groups,
-            models=None,
-            budgets=extra_budgets,
-            allocation_methods=allocation_methods,
-            importance_methods=importance_methods,
-            n_folds=n_folds,
-            augmentations=None,
-            augmentation_strategy='none',
-            internal_evaluators=INTERNAL_EVALUATORS,
-            metric=metric_name,
-            task_type=data['task_type'],
-            verbose=True,
-            cache=True,
-            dataset_name=dataset_name,
-            tier='general',
-            condition_suffix='top_rep_dims',
-            allow_budget_exceeds_n=True,
-        )
+        if not _top_rep or _top_rep not in reps:
+            continue
+        _top_dim = reps[_top_rep].shape[1]
+        if _top_dim in skipped_already_tested:
+            # Main search already covers this budget for this model.
+            continue
+        try:
+            _s = find_best_hybrid(
+                base_reps=reps,
+                labels=labels,
+                groups=groups,
+                models={_model_name: model_instances[_model_name]},
+                budgets=[_top_dim],
+                allocation_methods=allocation_methods,
+                importance_methods=importance_methods,
+                n_folds=n_folds,
+                augmentations=None,
+                augmentation_strategy='none',
+                internal_evaluators=INTERNAL_EVALUATORS,
+                metric=metric_name,
+                task_type=data['task_type'],
+                verbose=False,
+                cache=True,
+                dataset_name=dataset_name,
+                tier='general',
+                condition_suffix=f'top_rep_dim_{_model_name}',
+                allow_budget_exceeds_n=True,
+            )
+            search_per_model_top_rep[_model_name] = _s
+            if _model_name in _s.best_by_model:
+                _r = _s.best_by_model[_model_name]
+                _baseline = _info['best_single_score']
+                _delta = _r['score_mean'] - _baseline
+                print(f"    {_model_name}: hybrid@{_top_dim}D ({_top_rep}) "
+                      f"-> {metric_label}={_r['score_mean']:.4f} "
+                      f"(vs {_top_rep} {_baseline:.4f}, delta={_delta:+.4f})")
+        except Exception as _e:
+            print(f"    {_model_name}: failed — {_e}")
 
     # PCA baselines (library doesn't compute these -- keep manual)
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
@@ -419,8 +437,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         conditions['top_tier_only'] = _extract_best(search_top_tier)
     if search_ft is not None:
         conditions['frozen_plus_ft'] = _extract_best(search_ft)
-    if search_top_rep_dim is not None:
-        conditions['at_top_rep_dim'] = _extract_best(search_top_rep_dim)
+    # Per-model hybrid at top-rep dim is a distinct condition: each model
+    # has its own SearchResult restricted to that single model + budget.
+    # Stitch them into one model->config dict for the comparison table.
+    if search_per_model_top_rep:
+        per_model_at_top = {}
+        for _mname, _s in search_per_model_top_rep.items():
+            if _mname in _s.best_by_model:
+                _r = _s.best_by_model[_mname]
+                per_model_at_top[_mname] = {
+                    'model': _mname,
+                    'allocation': _r['allocation_method'],
+                    'importance': _r['importance_method'],
+                    'budget': _r['budget'],
+                    'score_mean': _r['score_mean'],
+                    'score_std': _r['score_std'],
+                    'n_features': _r['n_features'],
+                }
+        if per_model_at_top:
+            conditions['per_model_top_rep_dim'] = per_model_at_top
 
     # Print condition comparison
     print("\n  CONDITION COMPARISON (best score per model):")

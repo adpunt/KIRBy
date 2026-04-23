@@ -3475,16 +3475,17 @@ def find_best_hybrid(
         raise ValueError(f"labels length ({len(labels)}) != n_samples ({n_samples})")
 
     # --- Budget filter (before cache key) ---
-    # Fix A (2026-04-22): when the caller-supplied list had any budget
-    # above n_samples, append n_samples as an at-n boundary test point.
-    # Otherwise the hybrid gets silently capped at the largest < n budget
-    # (e.g. 100 on n=217) while the best-single-rep baselines in
-    # _evaluate_single use full native rep dim (e.g. 480D for ablang2) —
-    # that makes hybrid-vs-baseline unfair to the hybrid on small-n
-    # datasets.
-    # Fix Z (2026-04-22): c02 opts into allow_budget_exceeds_n=True to
-    # test the hybrid at a budget matching the best-baseline rep's full
-    # native dim, which is often > n_samples on antibody datasets.
+    # Rule: drop any caller-supplied budget > n_samples. If anything was
+    # dropped, also append n_samples as an at-n boundary test point so
+    # the hybrid is evaluated at the largest budget that still fits the
+    # dataset. Without this, _evaluate_single's baselines use full native
+    # rep dim while the hybrid stops at the largest pre-existing budget
+    # below n — unfair on small-n datasets.
+    #
+    # When allow_budget_exceeds_n=True, the caller has explicitly asked
+    # for budgets that may exceed n_samples (e.g. evaluating a hybrid at
+    # a base rep's full native dim on a small-n dataset). Pass through
+    # unchanged.
     if allow_budget_exceeds_n:
         filtered = sorted(set(budgets))
     else:
