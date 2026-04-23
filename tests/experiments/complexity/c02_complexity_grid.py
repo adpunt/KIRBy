@@ -433,6 +433,35 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if parts:
             print(f"    {model_name}: {', '.join(parts)}")
 
+    # Best per (dataset, model) across conditions: for each model, pick the
+    # condition with the highest score (or lowest if lower_is_better). This
+    # is the "best hybrid for this model on this dataset" answer the user
+    # cares about — disambiguates from "best single rep baseline" and from
+    # "best within one aug condition".
+    best_per_model_across_conditions = {}
+    print("\n  BEST PER MODEL ACROSS CONDITIONS:")
+    for model_name in models:
+        candidates = []
+        for cond_name, cond_best in conditions.items():
+            if model_name in cond_best:
+                candidates.append((cond_name, cond_best[model_name]))
+        if not candidates:
+            continue
+        if lower_is_better:
+            cond_name, best_entry = min(candidates,
+                                        key=lambda kv: kv[1]['score_mean'])
+        else:
+            cond_name, best_entry = max(candidates,
+                                        key=lambda kv: kv[1]['score_mean'])
+        best_per_model_across_conditions[model_name] = {
+            'condition': cond_name,
+            **best_entry,
+        }
+        print(f"    {model_name}: {cond_name} "
+              f"({best_entry['allocation']}/{best_entry['importance']}"
+              f"/b={best_entry['budget']}) "
+              f"-> {metric_label}={best_entry['score_mean']:.4f}")
+
     return {
         'configs': configs,
         'best_by_model': best_by_model,
@@ -441,6 +470,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'heatmap': heatmap,
         'importance_wins': importance_wins,
         'conditions': conditions,
+        'best_per_model_across_conditions': best_per_model_across_conditions,
         'has_augmentation': augs is not None,
         'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
     }
