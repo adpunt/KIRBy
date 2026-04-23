@@ -974,8 +974,17 @@ def _get_catboost_classifier():
 def _get_gp_regressor():
     from sklearn.gaussian_process import GaussianProcessRegressor
     from sklearn.gaussian_process.kernels import RBF, WhiteKernel
+    # normalize_y=True centers targets so LBFGS starts near the optimum;
+    # alpha=1e-6 regularizes Cholesky on ill-conditioned kernels.
+    # Widened kernel bounds let the optimizer escape poor initial length_scale
+    # on high-dimensional rep inputs without being clipped at the defaults.
     return GaussianProcessRegressor(
-        kernel=RBF() + WhiteKernel(), n_restarts_optimizer=3, random_state=42)
+        kernel=RBF(length_scale_bounds=(1e-3, 1e5))
+             + WhiteKernel(noise_level_bounds=(1e-5, 1e2)),
+        n_restarts_optimizer=3,
+        normalize_y=True,
+        alpha=1e-6,
+        random_state=42)
 
 
 def _get_gp_classifier():
