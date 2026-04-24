@@ -2831,6 +2831,15 @@ def _run_search(
 
     # ── Adaptive pruning: prune strategies after fold 0 ──
     pruned_strategies = set()
+    # Resolve the prune threshold up front so it's available on both the
+    # resume-from-checkpoint path AND the fresh-compute path. Used by the
+    # verbose "Pruned N strategies (top-3 in <X% of groups)" print later.
+    if adaptive_pruning is True:
+        _prune_frac = 0.15
+    elif isinstance(adaptive_pruning, (int, float)) and not isinstance(adaptive_pruning, bool) and adaptive_pruning > 0:
+        _prune_frac = float(adaptive_pruning)
+    else:
+        _prune_frac = 0.15
     if adaptive_pruning and search_folds > 1 and len(search_allocation) > 3:
         # Check if fold 0 is already done (from checkpoint)
         if ckpt and ckpt.get('fold0_done'):
@@ -2879,17 +2888,9 @@ def _run_search(
                 groups_f0[key].append((alloc, result['score_mean']))
 
             n_groups_f0 = len(groups_f0)
-            # Configurable pruning: True → 0.15, float → custom threshold.
-            # Check `is True` FIRST — isinstance(True, (int, float)) is
-            # True in Python (bool subclasses int) and float(True) == 1.0,
-            # which would push the threshold to 100% of groups and prune
-            # every strategy. Explicit bool check avoids that.
-            if adaptive_pruning is True:
-                _prune_frac = 0.15
-            elif isinstance(adaptive_pruning, (int, float)) and not isinstance(adaptive_pruning, bool) and adaptive_pruning > 0:
-                _prune_frac = float(adaptive_pruning)
-            else:
-                _prune_frac = 0.15
+            # _prune_frac is already resolved above (before the resume branch)
+            # so it's available whether we just computed fold 0 or loaded it
+            # from checkpoint.
             threshold = n_groups_f0 * _prune_frac
 
             top3_counts = defaultdict(int)
