@@ -45,7 +45,7 @@ from experiments._shared import (
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 from experiments.complexity.complexity_helpers import DATASET_REPS
-from kirby.find_best_hybrid import find_best_hybrid
+from kirby.find_best_hybrid import find_best_hybrid, _cache_stats_summary, _reset_cache_stats
 
 
 # =============================================================================
@@ -212,6 +212,7 @@ def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
     print(f"\n{'='*70}")
     print(f"  {dataset_name} (domain={domain})")
     print(f"{'='*70}")
+    _reset_cache_stats()
 
     # Only load the reps we actually need (general + top_tier + augmentation)
     general_names = ds_config.get('general', [])
@@ -371,6 +372,7 @@ def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
     total = time.time() - t_total
     print(f"\n  {dataset_name}: {n_ok}/{len(conditions)} conditions "
           f"precomputed in {total:.0f}s")
+    print(f"  {_cache_stats_summary()}")
 
 
 def main():
