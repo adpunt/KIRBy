@@ -48,11 +48,18 @@ from experiments.complexity.complexity_helpers import DATASET_REPS
 from kirby.find_best_hybrid import find_best_hybrid, _cache_stats_summary, _reset_cache_stats
 
 
-# Named multi-stage adaptive-pruning schedules (Phase 2). Use via
-# `--pruning-preset`. Default 'baseline' = current single-stage behavior;
-# more aggressive presets enable mid-flight pruning at low budgets so the
-# search avoids wasting fold-0 compute on configs already shown losing.
-# Calibration: see f16_multistage_pruning.
+# Named multi-stage adaptive-pruning schedules (Phase 2).
+#
+# IMPORTANT: 'baseline' is the only schedule below that has been validated.
+# It reproduces the current single-stage adaptive_pruning=0.15 behavior
+# bit-for-bit. The other entries (light/medium/aggressive/very_aggressive)
+# are CANDIDATE SCHEDULES that f16_multistage_pruning is designed to test
+# — their checkpoints + tail_drop_per_checkpoint values are illustrative
+# points in the calibration space, not validated production values.
+# DO NOT use them for production precompute runs until f16 has been run
+# against complete f15 data and `recommendation` in
+# tests/results/framework/f16_multistage_pruning/calibration_summary.json
+# explicitly endorses the chosen preset. Use via `--pruning-preset`.
 SCHEDULE_PRESETS = {
     'baseline': {
         'checkpoints': [],
@@ -87,31 +94,34 @@ SCHEDULE_PRESETS = {
 }
 
 
-# Per-model schedule override presets (Phase 3). Compose with --pruning-preset:
-# --pruning-preset baseline + --model-override-preset gp_aggressive means the
-# global schedule is single-stage (current) BUT GP gets aggressive mid-flight
-# pruning at low budgets. Goal: keep GP in the search (so best_by_model[gp]
-# is populated) but cap its compute when other models clearly outrank it.
+# Per-model schedule override presets (Phase 3).
+#
+# IMPORTANT: this dict is intentionally minimal. The named per-model presets
+# (gp_aggressive, svm_aggressive, expensive_models_aggressive, ...) that
+# previously lived here were UNCALIBRATED guesses written before f16 had real
+# data to set their thresholds. They have been removed to prevent accidental
+# use of made-up schedules in production precompute.
+#
+# To populate this dict with calibrated values:
+#   1. Run f15 to completion on the calibration datasets (caco2, herg_ki,
+#      flab_pk_jain_fcrnrt, abagym_EGFR, logd, buchwald_hartwig). At minimum
+#      the per-model split files {dataset}_{model}.json must be complete for
+#      every (dataset, model) pair that f16 needs.
+#   2. Run f16 (`tests/experiments/framework/f16_multistage_pruning.py`) on
+#      the server against complete f15 data. It writes
+#      `tests/results/framework/f16_multistage_pruning/calibration_summary.json`.
+#   3. Read the `recommendation` block + per-dataset `pct_evals_avoided` and
+#      `worst_relative_loss`. The most aggressive schedule that meets the
+#      acceptance criteria (max relative loss <= 2%, top-3 overlap >= 0.66)
+#      becomes the new `expensive_models_aggressive` entry below.
+#   4. Add the calibrated preset(s) to this dict and reference the f16 run
+#      that produced them in a comment.
+#
+# Until that calibration lands, the only acceptable preset is 'none' (i.e.
+# no per-model override). Use --pruning-preset baseline + no override
+# for production runs.
 MODEL_OVERRIDE_PRESETS = {
     'none': {},
-    'gp_aggressive': {
-        'gp': {'checkpoints': [10, 25, 50], 'tail_drop_per_checkpoint': 0.75},
-    },
-    'svm_aggressive': {
-        'svm': {'checkpoints': [25, 50], 'tail_drop_per_checkpoint': 0.6},
-    },
-    'gp_svm_aggressive': {
-        'gp':  {'checkpoints': [10, 25, 50], 'tail_drop_per_checkpoint': 0.75},
-        'svm': {'checkpoints': [25, 50],     'tail_drop_per_checkpoint': 0.6},
-    },
-    # Goal-driven preset for the current wave: keep GP results but cut its
-    # high-budget compute share aggressively. Use with --pruning-preset baseline
-    # so non-GP models behave exactly as before.
-    'expensive_models_aggressive': {
-        'gp':  {'checkpoints': [10, 25, 50],   'tail_drop_per_checkpoint': 0.75},
-        'svm': {'checkpoints': [25, 50, 100],  'tail_drop_per_checkpoint': 0.6},
-        'mlp': {'checkpoints': [50, 100],      'tail_drop_per_checkpoint': 0.5},
-    },
 }
 
 

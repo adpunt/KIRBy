@@ -30,7 +30,9 @@ set -euo pipefail
 : "${DATASET:?DATASET env var required}"
 : "${KIND:?KIND env var required (standard|distance)}"
 PRUNING_PRESET="${PRUNING_PRESET:-baseline}"
-MODEL_OVERRIDE_PRESET="${MODEL_OVERRIDE_PRESET:-gp_aggressive}"
+# 'none' = no per-model override. Currently the only safe value because the
+# named per-model presets have been removed pending real f16 calibration.
+MODEL_OVERRIDE_PRESET="${MODEL_OVERRIDE_PRESET:-none}"
 
 cd /data/stat-cadd/scat9264/KIRBy
 export KIRBY_SKIP_INSTALLS=1

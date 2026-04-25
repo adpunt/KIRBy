@@ -38,7 +38,9 @@ if (( $# < 1 )); then
 fi
 
 PRUNING_PRESET="${PRUNING_PRESET:-baseline}"
-MODEL_OVERRIDE_PRESET="${MODEL_OVERRIDE_PRESET:-gp_aggressive}"
+# 'none' = no per-model override. Currently the only available value because
+# named per-model presets were removed pending real f16 calibration.
+MODEL_OVERRIDE_PRESET="${MODEL_OVERRIDE_PRESET:-none}"
 KIND="${KIND:-both}"
 
 case "$KIND" in
