@@ -163,14 +163,14 @@ REP_PRESETS = {
 }
 
 _SEARCH_NAME_MAP = {
-    'quick': 'fast',
-    'balanced': 'fast',
-    'medium': 'medium',
-    'precise': 'medium',
-    'full': 'long',
-    'exhaustive': 'long',
-    'fast': 'fast',
-    'long': 'long',
+    'quick': 'full',
+    'balanced': 'full',
+    'medium': 'full',
+    'precise': 'full',
+    'full': 'full',
+    'exhaustive': 'full',
+    'fast': 'full',
+    'long': 'full',
 }
 
 # Reps that require per-fold fitting (z-scoring, PCA, etc.).

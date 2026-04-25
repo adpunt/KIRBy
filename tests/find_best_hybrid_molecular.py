@@ -167,16 +167,16 @@ FACTORY_REPS = {
 
 # Map old search names to new speed tiers for backward compat
 _SEARCH_NAME_MAP = {
-    'quick': 'fast',
-    'balanced': 'fast',
-    'medium': 'medium',
-    'precise': 'medium',
-    'importance_compare': 'medium',
-    'full': 'long',
-    'exhaustive': 'long',
+    'quick': 'full',
+    'balanced': 'full',
+    'medium': 'full',
+    'precise': 'full',
+    'importance_compare': 'full',
+    'full': 'full',
+    'exhaustive': 'full',
     # Direct speed tier names also work
-    'fast': 'fast',
-    'long': 'long',
+    'fast': 'full',
+    'long': 'full',
 }
 
 

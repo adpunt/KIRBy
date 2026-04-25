@@ -18,7 +18,7 @@ Usage:
         base_reps={'ecfp4': X_ecfp, 'maccs': X_maccs, 'pdv': X_pdv},
         labels=y,
         groups=scaffold_groups,
-        speed='fast',
+        speed='full',
     )
     print(result.best_by_model)  # best hybrid per downstream model
 
@@ -1193,7 +1193,7 @@ DEFAULT_MODELS = {
 # Tier ordering for filtering.
 # fast/full: auto-selected by _resolve_models(None, speed=...).
 # extra: only used when explicitly requested by name (e.g. DOWNSTREAM_MODELS_NOISE).
-_TIER_ORDER = {'fast': 0, 'full': 1, 'extra': 2}
+_TIER_ORDER = {'full': 1, 'extra': 2}
 
 
 def _resolve_models(models, task_type: str, speed: str,
@@ -1538,25 +1538,12 @@ def tune_models(
 # =============================================================================
 
 SPEED_TIERS = {
-    # F12 validated (2026-04-03). Two tiers: fast (screening) and full (publication).
-    # Budgets NOT in tiers — user must specify.
-    # Downstream models NOT in tiers — experiment-controlled.
-    #
-    # Phase 4 (2026-04-25): production precompute and experiment scripts use
-    # 'full' only. 'fast' is retained for smoke tests + ft precompute iteration
-    # but should NOT be used for new experiments — use 'full' with a custom
-    # adaptive_pruning_schedule (see SCHEDULE_PRESETS in precompute_hybrids.py)
-    # to get faster searches without diverging the cache key from production.
-    # See EXPERIMENT_TRACKER.md for the silent-cache-bypass regression that
-    # motivated this restriction.
-    'fast': {
-        'importance_methods': ['treeshap', 'lightgbm_gain'],
-        'allocation_methods': [
-            'entropy_1.0', 'top_3', 'top_2',
-        ],
-        'internal_evaluators': ['match', 'rf', 'svm', 'lightgbm', 'mlp'],
-        'n_folds': 3,
-    },
+    # Phase 4 (2026-04-25): single tier. The legacy 'fast' tier was removed
+    # because it diverged the cache key from production runs and caused the
+    # silent-cache-bypass regression in EXPERIMENT_TRACKER.md. Faster searches
+    # now go through Phase 2 multi-stage adaptive_pruning_schedule (see
+    # SCHEDULE_PRESETS in precompute_hybrids.py) which keeps the cache key
+    # identical to production.
     'full': {
         # 9 F12/F15-validated strategies. Pruned from 13: dropped 4 zero-best
         # in F15 (0/32 wins each, zero loss when removed across 6 datasets).

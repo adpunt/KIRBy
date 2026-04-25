@@ -190,7 +190,7 @@ def precompute_one(dataset_name, rep_name, spec, n_folds, seed=42):
     return success
 
 
-def precompute_dataset(dataset_name, speeds=('fast', 'full'), seed=42,
+def precompute_dataset(dataset_name, speeds=('full',), seed=42,
                        rep_filter=None):
     """Precompute all FT reps for one dataset at all requested speeds."""
     ds_config = DATASET_REPS.get(dataset_name)
@@ -255,9 +255,11 @@ def main():
                         help='Precompute all FT reps in a domain')
     parser.add_argument('--all', action='store_true',
                         help='Precompute ALL FT reps')
-    parser.add_argument('--speed', type=str, default='both',
-                        choices=['fast', 'full', 'both'],
-                        help='Which speed tiers to precompute folds for')
+    parser.add_argument('--speed', type=str, default='full',
+                        choices=['full'],
+                        help="Search speed tier (only 'full' remains; "
+                             "'fast' was retired in Phase 4 of the multi-stage "
+                             "pruning redesign).")
     parser.add_argument('--rep', type=str, default=None,
                         help='Filter to a single FT rep name')
     parser.add_argument('--seed', type=int, default=42,
@@ -278,7 +280,7 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    speeds = ('fast', 'full') if args.speed == 'both' else (args.speed,)
+    speeds = (args.speed,)
 
     # Summary
     total_combos = 0

@@ -117,7 +117,7 @@ def main() -> int:
         groups=data['groups'],
         metric=info.metric,
         task_type=info.task_type,
-        speed='fast',
+        speed='full',
         budgets=[5, 10, 20],
         allocation_methods=['top_3'],
         importance_methods=['lightgbm_gain'],
