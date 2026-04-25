@@ -96,7 +96,7 @@ def _get_domain(dataset_name):
 
 # ── Export: load from cache and extract comparison data ──────────────────────
 
-def export_dataset(dataset_name, speed='fast', aug_condition='uncapped'):
+def export_dataset(dataset_name, speed='full', aug_condition='uncapped'):
     """Load precomputed search for one dataset, return comparison dict.
 
     Returns dict with keys:
