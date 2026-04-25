@@ -402,18 +402,110 @@ def _evaluate_schedule(
 # IO + main
 # ---------------------------------------------------------------------------
 
+_F15_MODELS = ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm']
+
+
 def _load_f15(dataset_name: str, model_filter: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Load f15 results for a dataset. Returns None if missing or incomplete."""
-    suffix = f'_{model_filter}' if model_filter else ''
-    path = F15_DIR / f'{dataset_name}{suffix}.json'
-    if not path.exists():
+    """Load f15 results for a dataset, merging per-model split files when present.
+
+    F15 was originally run as one all-6-models job per dataset, writing
+    `{dataset}.json`. Many of those timed out before completion, and were
+    re-run as per-model jobs writing `{dataset}_{model}.json`. This function:
+
+      1. If `model_filter` is set, reads ONLY that single per-model file.
+      2. Otherwise, prefers per-model files (complete per model) over the
+         combined file (often incomplete). For each of the 6 standard
+         F15 models:
+             - if `{dataset}_{model}.json` exists AND is complete → use it
+             - else if combined `{dataset}.json` has results for this model
+               AND combined is marked complete → use the combined slice
+             - else SKIP the model (log a warning)
+      3. If the dataset has zero usable models, returns None.
+
+    Returns the standard F15-shaped dict (`{'results': [...], 'metric': ...,
+    'lower_is_better': ..., 'n_folds': ..., ...}`) constructed by merging.
+    """
+    if model_filter:
+        path = F15_DIR / f'{dataset_name}_{model_filter}.json'
+        if not path.exists():
+            return None
+        with open(path) as f:
+            data = json.load(f)
+        if not data.get('complete'):
+            print(f"    WARNING: {dataset_name}_{model_filter} incomplete: "
+                  f"{data.get('progress')}", flush=True)
+        return data
+
+    combined_path = F15_DIR / f'{dataset_name}.json'
+    combined_data: Optional[Dict[str, Any]] = None
+    combined_complete = False
+    if combined_path.exists():
+        with open(combined_path) as f:
+            combined_data = json.load(f)
+        combined_complete = bool(combined_data.get('complete'))
+
+    # Bucket combined results by model for fallback
+    combined_by_model: Dict[str, List[Dict[str, Any]]] = {m: [] for m in _F15_MODELS}
+    if combined_data is not None:
+        for r in combined_data.get('results', []):
+            m = r.get('model')
+            if m in combined_by_model:
+                combined_by_model[m].append(r)
+
+    merged_results: List[Dict[str, Any]] = []
+    sources: Dict[str, str] = {}    # model -> 'per-model' | 'combined' | 'skipped'
+    meta_seed: Optional[Dict[str, Any]] = None
+
+    for model in _F15_MODELS:
+        per_model_path = F15_DIR / f'{dataset_name}_{model}.json'
+        if per_model_path.exists():
+            with open(per_model_path) as f:
+                pm_data = json.load(f)
+            if pm_data.get('complete'):
+                merged_results.extend(pm_data.get('results', []))
+                sources[model] = 'per-model'
+                meta_seed = meta_seed or pm_data
+                continue
+            else:
+                # per-model file exists but incomplete — fall through to combined
+                pass
+        # Fallback to combined slice (only when combined IS complete)
+        if combined_complete and combined_by_model[model]:
+            merged_results.extend(combined_by_model[model])
+            sources[model] = 'combined'
+            meta_seed = meta_seed or combined_data
+        else:
+            sources[model] = 'skipped'
+
+    if not merged_results:
         return None
-    with open(path) as f:
-        data = json.load(f)
-    if not data.get('complete'):
-        print(f"    WARNING: {dataset_name} is incomplete: {data.get('progress')}",
-              flush=True)
-    return data
+
+    # Borrow metric/lower_is_better/n_folds/n_samples from whichever source we used
+    base = meta_seed or combined_data or {}
+    out = {
+        'experiment': 'f15_adaptive_pruning_validation',
+        'dataset': dataset_name,
+        'domain': base.get('domain'),
+        'metric': base.get('metric'),
+        'lower_is_better': base.get('lower_is_better'),
+        'n_samples': base.get('n_samples'),
+        'n_reps': base.get('n_reps'),
+        'n_folds': base.get('n_folds'),
+        'config': base.get('config'),
+        'results': merged_results,
+        'complete': True,
+        'merge_sources': sources,
+    }
+    n_per_model = {m: sum(1 for r in merged_results if r.get('model') == m)
+                   for m in _F15_MODELS}
+    print(f"    {dataset_name}: merged from {sources} "
+          f"(configs/model: {n_per_model})", flush=True)
+    skipped = [m for m, s in sources.items() if s == 'skipped']
+    if skipped:
+        print(f"    WARNING: missing models for {dataset_name}: {skipped} — "
+              f"these models will not appear in best_by_model and any schedule "
+              f"that depends on them is invalid for this dataset.", flush=True)
+    return out
 
 
 def _evaluate_dataset(
