@@ -223,7 +223,20 @@ def _evaluate_cell(
     lower: bool,
     baseline_best: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Compute rel_loss + pct_saved for one (model, ckpt, tail_drop) cell."""
+    """Compute rel_loss + pct_saved for one (model, ckpt, tail_drop) cell.
+
+    Convention: rel_loss POSITIVE means pruned is WORSE than baseline (a
+    loss). Negative would mean pruned is somehow better (numerical noise
+    from non-monotonic search, generally near zero).
+
+    For lower-is-better (rmse): worse = larger value, so
+        rel_loss = (pruned - baseline) / |baseline|   (positive when worse)
+    For higher-is-better (spearman): worse = smaller value, so
+        rel_loss = (baseline - pruned) / |baseline|   (positive when worse)
+
+    The pass criterion `rel_loss <= PASS_THRESHOLD` then reads as
+    "loss is at most PASS_THRESHOLD".
+    """
     kept, n_evals_avoided = _apply_for_model(
         results, model, checkpoints, tail_drop, lower)
     after = _best_for_model(kept, model, lower)
@@ -231,13 +244,15 @@ def _evaluate_cell(
     if after is None:
         rel_loss = float('inf')
     elif abs(base['score_mean']) < 1e-12:
-        delta = after['score_mean'] - base['score_mean']
-        rel_loss = -delta if lower else delta
+        # Degenerate baseline; report absolute delta with worse→positive sign
+        delta_signed = after['score_mean'] - base['score_mean']
+        rel_loss = delta_signed if lower else -delta_signed
     else:
-        delta = after['score_mean'] - base['score_mean']
-        rel_loss = delta / abs(base['score_mean'])
-        if lower:
-            rel_loss = -rel_loss
+        delta_signed = after['score_mean'] - base['score_mean']
+        # Worse: delta_signed > 0 for lower-better, delta_signed < 0 for higher-better.
+        # Flip for higher-better so positive = worse uniformly.
+        worse_magnitude = delta_signed if lower else -delta_signed
+        rel_loss = worse_magnitude / abs(base['score_mean'])
     total_evals = sum(len(r.get('fold_scores') or [])
                       for r in results if r.get('model') == model)
     pct_saved = (n_evals_avoided / total_evals * 100) if total_evals else 0.0
@@ -399,32 +414,46 @@ def _print_per_model_summary(
 
 def _universal_combos(
     max_safe: Dict[str, Dict[str, Any]],
-) -> List[Tuple[str, float, float]]:
-    """Identify (ckpt_config, tail_drop) combos where the max_safe is at
-    least tail_drop for EVERY model that has non-trivial data.
+    per_dataset: List[Dict[str, Any]],
+) -> List[Tuple[str, float, float, int]]:
+    """Identify (ckpt_config, tail_drop) combos where every model with
+    non-trivial evidence passes (rel_loss <= PASS_THRESHOLD on every
+    non-trivial dataset cell).
 
-    Returns list of (ckpt_name, tail_drop, avg_pct_saved_across_models),
-    sorted by descending tail_drop.
+    Returns list of (ckpt_name, tail_drop, avg_pct_saved, n_models_with_data),
+    sorted by descending tail_drop, then by descending avg_pct_saved.
+
+    A checkpoint_config that has ZERO models with non-trivial evidence
+    (e.g. ckpt_25 when no dataset has best > 25) is excluded — we can't
+    claim a schedule is universally safe when nothing actually tested it.
     """
     out = []
     for ckpt_name in CHECKPOINT_CONFIGS:
         ms = max_safe[ckpt_name]
-        # Models that have non-trivial evidence
         models_with_data = [m for m, e in ms.items()
                             if e.get('max_safe_tail_drop') is not None]
         if not models_with_data:
             continue
-        # The smallest max_safe across models is the universal cap
         caps = [ms[m]['max_safe_tail_drop'] for m in models_with_data]
         cap = min(caps)
-        # Avg pct saved at that cap, across models with data
-        # (use the entry's avg_pct_saved_at_max, which is at the model's own
-        #  max_safe — for a universal cap we'd need to re-evaluate at the
-        #  cap. Approx: use models that have max_safe == cap.)
-        saved_vals = [ms[m]['avg_pct_saved_at_max']
-                      for m in models_with_data
-                      if ms[m]['max_safe_tail_drop'] >= cap]
-        avg_saved = sum(saved_vals) / len(saved_vals) if saved_vals else 0.0
+        # Compute actual avg_pct_saved at the universal cap by looking up
+        # each model's per-dataset cells AT THIS tail_drop, not at each
+        # model's individual max.
+        td_key = f"{cap:.1f}"
+        saved_vals = []
+        for m in models_with_data:
+            for ds in per_dataset:
+                if ds.get('skipped'):
+                    continue
+                cell = ds.get('cells', {}).get(ckpt_name, {}).get(
+                    td_key, {}).get(m)
+                if cell is None:
+                    continue
+                # Include both trivial and non-trivial cells in the saving
+                # average — saving is real either way; only the loss claim
+                # is conditional on non-trivial.
+                saved_vals.append(cell['pct_saved'])
+        avg_saved = (sum(saved_vals) / len(saved_vals)) if saved_vals else 0.0
         out.append((ckpt_name, cap, avg_saved, len(models_with_data)))
     out.sort(key=lambda x: (-x[1], -x[2]))
     return out
@@ -470,7 +499,7 @@ def main():
     max_safe = _max_safe_tail_drop_per_model(per_dataset)
     _print_per_model_summary(max_safe)
 
-    universal = _universal_combos(max_safe)
+    universal = _universal_combos(max_safe, per_dataset)
     print(f"\n{'='*78}", flush=True)
     print(f"Universal combos (tail_drop ≤ this passes for ALL models with non-trivial data)",
           flush=True)
