@@ -2862,118 +2862,22 @@ def _run_search(
                 if verbose:
                     print(f"    Resuming fold 0: {len(fold0_done_keys)}/{total} already done")
 
-            # GP escalation: GP is O(n³) per fit and can dominate wall time at
-            # high budgets where it rarely wins. Strategy:
-            #   1. Evaluate all non-GP configs + GP at the smallest 2 budgets first.
-            #   2. Compare GP fold-0 scores to best non-GP fold-0 scores at those
-            #      probe budgets, per (alloc, importance, evaluator) group.
-            #   3. Skip GP at higher budgets iff GP failed to be within
-            #      GP_DELTA of best non-GP in at least GP_FRAC of comparable groups.
-            # Uses fold-0 evidence to avoid spending compute on GP configs that
-            # other models have already shown to be uncompetitive.
-            GP_DELTA = 0.05  # GP must be within 5% of best non-GP
-            GP_FRAC = 0.30   # ... in >=30% of comparable groups
-
-            gp_budgets_sorted = sorted(set(c[3] for c in configs if c[5] == 'gp'))
-            gp_probe_budgets = set(gp_budgets_sorted[:2])
-
-            def _is_gp_high(cfg):
-                return cfg[5] == 'gp' and cfg[3] not in gp_probe_budgets
-
-            phase1 = [c for c in configs if not _is_gp_high(c)]
-            phase2 = [c for c in configs if _is_gp_high(c)]
-
-            # Resume: was a GP-high decision already persisted?
-            gp_high_kept = ckpt.get('gp_high_kept') if ckpt else None
-
-            def _gp_high_should_run():
-                """Compare GP fold-0 scores to best non-GP scores at probe budgets.
-                Returns True iff GP is competitive in >=GP_FRAC of comparable
-                (alloc, importance, evaluator) groups at probe budgets.
-                """
-                if not phase2 or not gp_probe_budgets:
-                    return True
-                from collections import defaultdict as _dd
-                by_group = _dd(dict)  # (alloc, imp, eval, bgt) -> {model: score}
-                for ck, result in fold0_results:
-                    _, alloc, bgt, imp, model_name, eval_name = ck
-                    if bgt not in gp_probe_budgets:
-                        continue
-                    score = result.get('score_mean')
-                    if score is None or (isinstance(score, float) and np.isnan(score)):
-                        continue
-                    by_group[(alloc, imp, eval_name, bgt)][model_name] = score
-                n_compared = 0
-                n_competitive = 0
-                for _, scores in by_group.items():
-                    if 'gp' not in scores:
-                        continue
-                    nongp = [s for m, s in scores.items() if m != 'gp']
-                    if not nongp:
-                        continue
-                    best_nongp = min(nongp) if lower_is_better else max(nongp)
-                    gp_s = scores['gp']
-                    if lower_is_better:
-                        ok = gp_s <= best_nongp * (1 + GP_DELTA) if best_nongp > 0 \
-                             else gp_s <= best_nongp + GP_DELTA
-                    else:
-                        ok = gp_s >= best_nongp * (1 - GP_DELTA) if best_nongp > 0 \
-                             else gp_s >= best_nongp - GP_DELTA
-                    n_compared += 1
-                    if ok:
-                        n_competitive += 1
-                if n_compared == 0:
-                    return True  # no comparable data — be conservative, keep GP
-                return (n_competitive / n_compared) >= GP_FRAC
-
-            def _eval_phase(phase_configs, label, base_idx=0):
-                for idx, cfg in enumerate(phase_configs, 1):
-                    ck = _cfg_key(cfg)
-                    if ck in fold0_done_keys:
-                        continue
-                    try:
-                        result = _eval_cfg(cfg, fold_indices=[0])
-                        fold0_results.append((ck, result))
-                    except Exception:
-                        pass
-                    if verbose and idx % 200 == 0:
-                        print(f"    fold 0 ({label}): {idx}/{len(phase_configs)}")
-                    if idx % _CHECKPOINT_INTERVAL == 0:
-                        _save_checkpoint({
-                            'fold0_done': False,
-                            'fold0_results': fold0_results,
-                            'gp_high_kept': gp_high_kept,
-                        })
-
-            # Phase 1: non-GP-high configs (everything that isn't expensive GP)
-            _eval_phase(phase1, 'phase 1')
-
-            # Decide GP-high escalation if not already decided
-            if gp_high_kept is None:
-                gp_high_kept = _gp_high_should_run()
-                if verbose and phase2:
-                    msg = ('competitive, escalating' if gp_high_kept
-                           else f'not competitive (<{GP_FRAC:.0%} of groups within {GP_DELTA:.0%}), pruning')
-                    print(f"    GP at b not in {sorted(gp_probe_budgets)}: {msg}")
-                _save_checkpoint({
-                    'fold0_done': False,
-                    'fold0_results': fold0_results,
-                    'gp_high_kept': gp_high_kept,
-                })
-
-            # Phase 2: GP-high (only if competitive)
-            if gp_high_kept:
-                _eval_phase(phase2, 'phase 2 / GP-high')
-            elif phase2:
-                # Drop GP-high from configs so strategy pruning + full eval skip them.
-                # Also drop any stale fold0_results entries for GP-high keys.
-                configs = phase1
-                total = len(configs)
-                fold0_results = [(ck, r) for ck, r in fold0_results
-                                 if not (ck[4] == 'gp' and ck[2] not in gp_probe_budgets)]
-                if verbose:
-                    print(f"    Pruned {len(phase2)} GP configs at b not in "
-                          f"{sorted(gp_probe_budgets)}; {total} configs remain")
+            for idx, cfg in enumerate(configs, 1):
+                ck = _cfg_key(cfg)
+                if ck in fold0_done_keys:
+                    continue
+                try:
+                    result = _eval_cfg(cfg, fold_indices=[0])
+                    fold0_results.append((ck, result))
+                except Exception:
+                    pass
+                if verbose and idx % 200 == 0:
+                    print(f"    fold 0: {idx}/{total}")
+                if idx % _CHECKPOINT_INTERVAL == 0:
+                    _save_checkpoint({
+                        'fold0_done': False,
+                        'fold0_results': fold0_results,
+                    })
 
             # Pruning logic
             from collections import defaultdict
