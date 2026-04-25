@@ -338,7 +338,16 @@ def _evaluate_schedule(
     overrides: Optional[Dict[str, Dict[str, Any]]],
     lower_is_better: bool,
 ) -> Dict[str, Any]:
-    """Run one schedule, compute summary stats vs baseline."""
+    """Run one schedule, compute summary stats vs baseline.
+
+    Includes a `trivial_preservation` flag: True when every model's best
+    config sits at a budget <= max(checkpoints) for the schedule being
+    evaluated. In that case `worst_rel_loss=0%` is uninformative — the
+    schedule preserves best_by_model[m] only because the winning configs
+    are in the data used to make the pruning decision, not because the
+    schedule successfully predicted high-budget winners from low-budget
+    fold-0 evidence.
+    """
     survivors, per_model_dropped, n_evals_avoided = _apply_pruning(
         results, sched, overrides, lower_is_better)
 
@@ -375,6 +384,18 @@ def _evaluate_schedule(
     top10_overlap = _topk_overlap(results, survivors, 10, lower_is_better)
     top3_overlap = _topk_overlap(results, survivors, 3, lower_is_better)
 
+    # Trivial-preservation check: did any model's best config live ABOVE the
+    # highest checkpoint budget? If not, schedule was never tested on the
+    # case it's designed to handle (preserving high-budget winners from
+    # low-budget fold-0 evidence). worst_rel_loss=0% is uninformative.
+    checkpoints = sched.get('checkpoints', []) or [0]
+    max_ckpt = max(checkpoints) if checkpoints else 0
+    best_budgets = {m: r['budget'] for m, r in baseline_best.items()}
+    n_models_with_high_budget_winner = sum(
+        1 for b in best_budgets.values() if b > max_ckpt)
+    trivial_preservation = (n_models_with_high_budget_winner == 0
+                            and max_ckpt > 0)
+
     return {
         'n_configs_total': n_total_configs,
         'n_configs_survived': n_survived_configs,
@@ -387,6 +408,10 @@ def _evaluate_schedule(
         'per_model_score_delta': score_deltas,
         'per_model_relative_delta': rel_deltas,
         'per_model_dropped': per_model_dropped,
+        'baseline_best_budgets': best_budgets,
+        'max_checkpoint_budget': max_ckpt,
+        'n_models_with_high_budget_winner': n_models_with_high_budget_winner,
+        'trivial_preservation': bool(trivial_preservation),
         'baseline_best_by_model': {
             m: {'score_mean': r['score_mean'], 'budget': r['budget']}
             for m, r in baseline_best.items()
@@ -538,11 +563,13 @@ def _evaluate_dataset(
         out['schedules'][sched_name] = {'schedule': sched, **summary}
         worst_rel = max((d for d in summary['per_model_relative_delta'].values()
                          if d is not None), default=0.0)
+        trivial = ' [TRIVIAL: best at low budget]' if summary['trivial_preservation'] else ''
         print(f"    {sched_name:18s}  "
               f"dropped={summary['pct_configs_dropped']:5.1f}% "
               f"evals_avoided={summary['pct_evals_avoided']:5.1f}% "
               f"top3_keep={summary['top3_overlap_with_baseline']:.2f} "
-              f"worst_rel_loss={worst_rel*100:+.2f}%",
+              f"worst_rel_loss={worst_rel*100:+.2f}%"
+              f"{trivial}",
               flush=True)
 
     # Per-model overrides (each applied on top of global 'baseline' schedule
@@ -557,63 +584,126 @@ def _evaluate_dataset(
         }
         worst_rel = max((d for d in summary['per_model_relative_delta'].values()
                          if d is not None), default=0.0)
+        trivial = ' [TRIVIAL: best at low budget]' if summary['trivial_preservation'] else ''
         print(f"    [override] {ov_name:22s}  "
               f"dropped={summary['pct_configs_dropped']:5.1f}% "
               f"evals_avoided={summary['pct_evals_avoided']:5.1f}% "
               f"top3_keep={summary['top3_overlap_with_baseline']:.2f} "
-              f"worst_rel_loss={worst_rel*100:+.2f}%",
+              f"worst_rel_loss={worst_rel*100:+.2f}%"
+              f"{trivial}",
               flush=True)
+
+    # Where do the winning configs actually live? Answers "is f16 testing
+    # what we think it's testing on this dataset?"
+    baseline_best = _best_by_model(results, lower_is_better)
+    print(f"    best_by_model budgets: " +
+          ', '.join(f"{m}={r['budget']}"
+                    for m, r in sorted(baseline_best.items())),
+          flush=True)
 
     return out
 
 
 def _recommend_schedule(per_dataset_summary: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Pick the most aggressive schedule that meets quality criteria
-    on every dataset.
+    """Score every candidate schedule on the available f15 datasets and
+    surface what the data actually supports — without a single chosen
+    'recommendation' that hides the underlying caveats.
 
-    Acceptance: per-model relative loss <= 2% AND top-3 overlap >= 0.66
-    on every dataset.
+    For each schedule × dataset, we record:
+      - worst per-model relative loss  (absolute correctness signal)
+      - top-3 overlap with baseline    (ranking-stability signal)
+      - pct evals avoided              (compute saving)
+      - trivial_preservation flag      (TRUE iff best_by_model[m] all live
+                                         at budget <= max(checkpoints), i.e.
+                                         the schedule was not actually tested
+                                         on the case it's designed for)
+
+    The overall summary then reports, for each schedule:
+      - n_datasets total / non-trivial / passing-criterion-A / passing-B
+      - avg evals avoided across non-trivial datasets only
+
+    Criterion A (per-model loss): worst per-model relative loss <= 2%
+    Criterion B (per-model + ranking): A AND top-3 overlap >= 0.66
+
+    The caller must read this output and decide which criterion to apply
+    based on what their downstream experiments consume (best_by_model[m]
+    vs cross-model top-K). No single 'chosen' value is returned because
+    the trivial-preservation cases inflate apparent safety on every
+    schedule.
     """
     sched_names = list(SCHEDULES.keys())
-
-    # For each schedule, check pass/fail on every dataset
     scoreboard: Dict[str, Dict[str, Any]] = {}
+
     for sname in sched_names:
-        passes_all = True
-        worst_loss = 0.0
-        avg_savings = 0.0
+        per_ds = []
+        n_trivial = 0
+        n_pass_a = 0
+        n_pass_b = 0
+        avg_savings_nontrivial = 0.0
+        n_nontrivial = 0
+        worst_loss_overall = 0.0
         for ds_summary in per_dataset_summary:
             entry = ds_summary['schedules'].get(sname)
             if not entry:
-                passes_all = False
                 continue
             rels = [v for v in entry['per_model_relative_delta'].values()
                     if v is not None]
-            top3 = entry['top3_overlap_with_baseline']
             wl = max(rels) if rels else 0.0
-            worst_loss = max(worst_loss, wl)
-            if wl > 0.02 or top3 < 0.66:
-                passes_all = False
-            avg_savings += entry['pct_evals_avoided']
-        avg_savings /= max(1, len(per_dataset_summary))
+            top3 = entry['top3_overlap_with_baseline']
+            triv = entry.get('trivial_preservation', False)
+            pass_a = wl <= 0.02
+            pass_b = pass_a and top3 >= 0.66
+            per_ds.append({
+                'dataset': ds_summary['dataset'],
+                'worst_rel_loss': wl,
+                'top3_overlap': top3,
+                'pct_evals_avoided': entry['pct_evals_avoided'],
+                'trivial_preservation': triv,
+                'pass_criterion_A_per_model_only': pass_a,
+                'pass_criterion_B_per_model_plus_top3': pass_b,
+            })
+            if triv:
+                n_trivial += 1
+            else:
+                n_nontrivial += 1
+                avg_savings_nontrivial += entry['pct_evals_avoided']
+            worst_loss_overall = max(worst_loss_overall, wl)
+            if pass_a:
+                n_pass_a += 1
+            if pass_b:
+                n_pass_b += 1
+        avg_savings_nontrivial /= max(1, n_nontrivial)
         scoreboard[sname] = {
-            'passes': passes_all,
-            'worst_relative_loss': worst_loss,
-            'avg_pct_evals_avoided': avg_savings,
+            'n_datasets_total': len(per_ds),
+            'n_trivial_preservation': n_trivial,
+            'n_nontrivial': n_nontrivial,
+            'n_pass_criterion_A': n_pass_a,
+            'n_pass_criterion_B': n_pass_b,
+            'avg_pct_evals_avoided_on_nontrivial': avg_savings_nontrivial,
+            'worst_relative_loss': worst_loss_overall,
+            'per_dataset': per_ds,
         }
 
-    # Aggressiveness order, most → least
-    order = ['very_aggressive', 'aggressive', 'medium', 'light', 'baseline']
-    chosen = next((s for s in order if scoreboard.get(s, {}).get('passes')),
-                  'baseline')
-
     return {
-        'recommended_global_schedule': chosen,
         'scoreboard': scoreboard,
         'acceptance_criteria': {
-            'max_per_model_relative_loss': 0.02,
-            'min_top3_overlap': 0.66,
+            'A_per_model_only': {
+                'max_per_model_relative_loss': 0.02,
+                'description': 'best_by_model[m] within 2% of baseline for every m',
+            },
+            'B_per_model_plus_top3': {
+                'max_per_model_relative_loss': 0.02,
+                'min_top3_overlap': 0.66,
+                'description': 'A AND ≥66% of cross-model top-3 configs survive',
+            },
         },
+        'caveat': (
+            'A schedule that is "trivial_preservation=True" on every dataset '
+            'has not actually been tested on the high-budget-winner case it '
+            'is designed to handle. Report the n_nontrivial column when '
+            'choosing a preset; do not rely on n_pass_criterion_A alone if '
+            'all passing datasets are trivial.'
+        ),
     }
 
 
@@ -694,13 +784,19 @@ def main():
 
     print(f"\n[{time.strftime('%H:%M:%S')}] Done. Wrote {out_path}", flush=True)
     if recommendation:
-        chosen = recommendation['recommended_global_schedule']
-        sb = recommendation['scoreboard'][chosen]
-        print(f"  Recommended: {chosen}", flush=True)
-        print(f"    Worst per-model relative loss: "
-              f"{sb['worst_relative_loss']*100:+.2f}%", flush=True)
-        print(f"    Avg fold-evals avoided across datasets: "
-              f"{sb['avg_pct_evals_avoided']:.1f}%", flush=True)
+        print(f"\n  Scoreboard (n_datasets={len(per_dataset)}):", flush=True)
+        print(f"  {'schedule':18s}  total nontriv passA passB  avg_save_nontriv  worst_loss",
+              flush=True)
+        for sname, sb in recommendation['scoreboard'].items():
+            print(f"  {sname:18s}  "
+                  f"{sb['n_datasets_total']:5d} "
+                  f"{sb['n_nontrivial']:8d} "
+                  f"{sb['n_pass_criterion_A']:5d} "
+                  f"{sb['n_pass_criterion_B']:5d}  "
+                  f"{sb['avg_pct_evals_avoided_on_nontrivial']:14.1f}%  "
+                  f"{sb['worst_relative_loss']*100:+9.2f}%",
+                  flush=True)
+        print(f"\n  CAVEAT: {recommendation['caveat']}", flush=True)
 
 
 if __name__ == '__main__':
