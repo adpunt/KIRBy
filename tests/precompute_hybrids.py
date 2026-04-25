@@ -48,6 +48,73 @@ from experiments.complexity.complexity_helpers import DATASET_REPS
 from kirby.find_best_hybrid import find_best_hybrid, _cache_stats_summary, _reset_cache_stats
 
 
+# Named multi-stage adaptive-pruning schedules (Phase 2). Use via
+# `--pruning-preset`. Default 'baseline' = current single-stage behavior;
+# more aggressive presets enable mid-flight pruning at low budgets so the
+# search avoids wasting fold-0 compute on configs already shown losing.
+# Calibration: see f16_multistage_pruning.
+SCHEDULE_PRESETS = {
+    'baseline': {
+        'checkpoints': [],
+        'tail_drop_per_checkpoint': 0.0,
+        'final_strategy_threshold': 0.15,
+        'min_configs_per_model': 1,
+    },
+    'light': {
+        'checkpoints': [50],
+        'tail_drop_per_checkpoint': 0.25,
+        'final_strategy_threshold': 0.15,
+        'min_configs_per_model': 1,
+    },
+    'medium': {
+        'checkpoints': [25, 50],
+        'tail_drop_per_checkpoint': 0.50,
+        'final_strategy_threshold': 0.15,
+        'min_configs_per_model': 1,
+    },
+    'aggressive': {
+        'checkpoints': [25, 50, 100],
+        'tail_drop_per_checkpoint': 0.50,
+        'final_strategy_threshold': 0.15,
+        'min_configs_per_model': 1,
+    },
+    'very_aggressive': {
+        'checkpoints': [10, 25, 50],
+        'tail_drop_per_checkpoint': 0.75,
+        'final_strategy_threshold': 0.15,
+        'min_configs_per_model': 1,
+    },
+}
+
+
+# Per-model schedule override presets (Phase 3). Compose with --pruning-preset:
+# --pruning-preset baseline + --model-override-preset gp_aggressive means the
+# global schedule is single-stage (current) BUT GP gets aggressive mid-flight
+# pruning at low budgets. Goal: keep GP in the search (so best_by_model[gp]
+# is populated) but cap its compute when other models clearly outrank it.
+MODEL_OVERRIDE_PRESETS = {
+    'none': {},
+    'gp_aggressive': {
+        'gp': {'checkpoints': [10, 25, 50], 'tail_drop_per_checkpoint': 0.75},
+    },
+    'svm_aggressive': {
+        'svm': {'checkpoints': [25, 50], 'tail_drop_per_checkpoint': 0.6},
+    },
+    'gp_svm_aggressive': {
+        'gp':  {'checkpoints': [10, 25, 50], 'tail_drop_per_checkpoint': 0.75},
+        'svm': {'checkpoints': [25, 50],     'tail_drop_per_checkpoint': 0.6},
+    },
+    # Goal-driven preset for the current wave: keep GP results but cut its
+    # high-budget compute share aggressively. Use with --pruning-preset baseline
+    # so non-GP models behave exactly as before.
+    'expensive_models_aggressive': {
+        'gp':  {'checkpoints': [10, 25, 50],   'tail_drop_per_checkpoint': 0.75},
+        'svm': {'checkpoints': [25, 50, 100],  'tail_drop_per_checkpoint': 0.6},
+        'mlp': {'checkpoints': [50, 100],      'tail_drop_per_checkpoint': 0.5},
+    },
+}
+
+
 # =============================================================================
 # HYBRID REGISTRY — maps dataset name → published best configs
 # =============================================================================
@@ -194,14 +261,22 @@ def _datasets_for_domain(domain):
 
 def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
                        models=None, condition_filter=None, distance=False,
-                       adaptive_pruning=True):
+                       adaptive_pruning=True, adaptive_pruning_schedule=None,
+                       model_pruning_aggressiveness=None):
     """Run all precompute conditions for one dataset.
 
     Args:
         distance: If True, run distance-evaluator conditions (for similarity/noise
             experiments that use DISTANCE_EVALUATORS + DISTANCE_BUDGETS).
-        adaptive_pruning: Pruning threshold for adaptive pruning (True=0.15,
-            float=custom, e.g. 0.25 for more aggressive pruning on capped).
+        adaptive_pruning: Legacy single-stage threshold (True=0.15, float=custom).
+            Used as fallback when adaptive_pruning_schedule is None.
+        adaptive_pruning_schedule: Multi-stage pruning schedule dict
+            (Phase 2). Overrides adaptive_pruning when set. Schema:
+                {'checkpoints': [int, ...],
+                 'tail_drop_per_checkpoint': float,
+                 'final_strategy_threshold': float,
+                 'min_configs_per_model': int}
+            See SCHEDULE_PRESETS in this module for named presets.
     """
     ds_config = DATASET_REPS.get(dataset_name)
     if ds_config is None:
@@ -350,6 +425,8 @@ def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
                 dataset_name=dataset_name,
                 tier=tier,
                 adaptive_pruning=adaptive_pruning,
+                adaptive_pruning_schedule=adaptive_pruning_schedule,
+                model_pruning_aggressiveness=model_pruning_aggressiveness,
                 **_extra,
             )
             elapsed = time.time() - t0
@@ -397,16 +474,31 @@ def main():
                                  'top_distance_none', 'top_distance_uncapped'],
                         help='Run a single specific condition (for per-job SLURM)')
     parser.add_argument('--speed', type=str, default='full',
-                        choices=['fast', 'full'],
-                        help='Search speed tier (default: full)')
+                        choices=['full'],
+                        help="Search speed tier. Only 'full' is supported for "
+                             "production precompute. To run faster searches "
+                             "use --pruning-preset (Phase 2 multi-stage "
+                             "pruning). 'fast' tier was retired here to prevent "
+                             "the silent-cache-bypass regression from "
+                             "EXPERIMENT_TRACKER.md.")
     parser.add_argument('--models', type=str, default=None,
                         help='Comma-separated model names (default: speed-tier models)')
     parser.add_argument('--distance', action='store_true',
                         help='Run distance-evaluator conditions (DISTANCE_EVALUATORS + '
                              'DISTANCE_BUDGETS) for similarity/noise experiments')
     parser.add_argument('--pruning', type=float, default=None,
-                        help='Adaptive pruning threshold (0.15=default, 0.25=aggressive). '
-                             'True if omitted.')
+                        help='Legacy single-stage adaptive pruning threshold '
+                             '(0.15=default, 0.25=aggressive). True if omitted.')
+    parser.add_argument('--pruning-preset', type=str, default=None,
+                        choices=list(SCHEDULE_PRESETS.keys()),
+                        help='Multi-stage adaptive pruning schedule preset '
+                             '(Phase 2). Overrides --pruning if set. '
+                             'See SCHEDULE_PRESETS for definitions.')
+    parser.add_argument('--model-override-preset', type=str, default=None,
+                        choices=list(MODEL_OVERRIDE_PRESETS.keys()),
+                        help='Per-model pruning override preset (Phase 3). '
+                             'Composes with --pruning-preset. See '
+                             'MODEL_OVERRIDE_PRESETS for definitions.')
 
     args = parser.parse_args()
 
@@ -424,21 +516,33 @@ def main():
     tiers = ('general', 'top') if args.tier == 'both' else (args.tier,)
     models = args.models.split(',') if args.models else None
     pruning = args.pruning if args.pruning is not None else True
+    pruning_schedule = (SCHEDULE_PRESETS[args.pruning_preset]
+                        if args.pruning_preset else None)
+    model_overrides = (MODEL_OVERRIDE_PRESETS[args.model_override_preset]
+                       if args.model_override_preset else None)
+    if model_overrides is not None and not model_overrides:
+        model_overrides = None  # 'none' preset = empty dict = effectively None
 
     print(f"Precompute: {len(datasets)} datasets, tiers={tiers}, speed={args.speed}")
     if args.condition:
         print(f"Condition: {args.condition}")
     if args.distance:
         print(f"Mode: DISTANCE (evaluators={DISTANCE_EVALUATORS}, budgets={DISTANCE_BUDGETS})")
-    if args.pruning is not None:
-        print(f"Pruning threshold: {args.pruning}")
+    if pruning_schedule is not None:
+        print(f"Pruning preset: {args.pruning_preset} = {pruning_schedule}")
+    elif args.pruning is not None:
+        print(f"Pruning threshold (legacy): {args.pruning}")
+    if model_overrides is not None:
+        print(f"Model override preset: {args.model_override_preset} = {model_overrides}")
     print(f"Datasets: {datasets}")
 
     t_start = time.time()
     for ds in datasets:
         precompute_dataset(ds, speed=args.speed, tiers=tiers, models=models,
                            condition_filter=args.condition, distance=args.distance,
-                           adaptive_pruning=pruning)
+                           adaptive_pruning=pruning,
+                           adaptive_pruning_schedule=pruning_schedule,
+                           model_pruning_aggressiveness=model_overrides)
 
     total = time.time() - t_start
     print(f"\n{'='*70}")

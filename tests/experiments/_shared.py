@@ -1853,7 +1853,9 @@ def precompute_hybrid_searches(reps, labels, groups, config,
                                augmentations=None, verbose=True,
                                task_type='auto', metric='auto',
                                domain=None,
-                               dataset_name=None, tier='general'):
+                               dataset_name=None, tier='general',
+                               adaptive_pruning_schedule=None,
+                               model_pruning_aggressiveness=None):
     """Find the best hybrid across all budgets for each augmentation condition.
 
     ONE find_best_hybrid call per aug_condition with ALL budgets. Baselines
@@ -1935,6 +1937,8 @@ def precompute_hybrid_searches(reps, labels, groups, config,
                 verbose=verbose,
                 dataset_name=dataset_name,
                 tier=tier,
+                adaptive_pruning_schedule=adaptive_pruning_schedule,
+                model_pruning_aggressiveness=model_pruning_aggressiveness,
             )
             results[aug_cond] = search
             elapsed = time.time() - t0
@@ -2144,7 +2148,10 @@ def get_fitted_hybrid(reps, labels, groups, *, downstream_model,
                       augmentations=None, speed='full', precomputed=None,
                       internal_evaluators=None, budgets=None,
                       metric='auto', task_type=None, domain=None,
-                      dataset_name=None, tier='general'):
+                      dataset_name=None, tier='general',
+                      adaptive_pruning_schedule=None,
+                      model_pruning_aggressiveness=None,
+                      **extra_kwargs):
     """Get X_hybrid and feature_info from a cached search (return_fitted=True).
 
     For full-dataset experiments that need the hybrid matrix without per-fold splitting.
@@ -2173,15 +2180,22 @@ def get_fitted_hybrid(reps, labels, groups, *, downstream_model,
     Returns:
         (X_hybrid, feature_info, SearchResult)
     """
-    # If custom evaluators or budgets requested, bypass precomputed dict
-    # (it was computed with different params). Disk cache handles dedup.
-    kwargs = {}
+    # If custom evaluators, budgets, or pruning schedule requested, bypass
+    # the in-memory precomputed dict (it was computed with different params).
+    # Disk cache handles dedup based on full meta.
+    kwargs = dict(extra_kwargs)
     use_precomputed = precomputed
     if internal_evaluators is not None:
         kwargs['internal_evaluators'] = internal_evaluators
         use_precomputed = None  # force on-demand search
     if budgets is not None:
         kwargs['budgets'] = budgets
+        use_precomputed = None
+    if adaptive_pruning_schedule is not None:
+        kwargs['adaptive_pruning_schedule'] = adaptive_pruning_schedule
+        use_precomputed = None  # different schedule = different cache key
+    if model_pruning_aggressiveness is not None:
+        kwargs['model_pruning_aggressiveness'] = model_pruning_aggressiveness
         use_precomputed = None
 
     search = get_precomputed_search(
