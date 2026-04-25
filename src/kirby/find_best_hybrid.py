@@ -277,7 +277,40 @@ def _make_search_meta(
     # rep_factories). Caller-supplied — see find_best_hybrid docstring.
     cv_splitter_id: Optional[str] = None,
     rep_factories_id: Optional[str] = None,
+    # Multi-stage adaptive pruning (Phase 2). Schedule fields are added to
+    # the cache meta only when non-default, so legacy callers (no schedule)
+    # produce byte-identical cache keys to pre-Phase-2 runs.
+    pruning_schedule: Optional[Dict[str, Any]] = None,
+    # Per-model schedule overrides (Phase 3). Same compatibility rule:
+    # absent / empty dict = no contribution to cache key.
+    model_pruning_overrides: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
+    meta_extra: Dict[str, Any] = {}
+    if pruning_schedule is not None:
+        ckpts = tuple(sorted(int(b) for b in pruning_schedule.get('checkpoints', [])))
+        td = float(pruning_schedule.get('tail_drop_per_checkpoint', 0.0))
+        mc = int(pruning_schedule.get('min_configs_per_model', 1))
+        if ckpts:
+            meta_extra['pruning_checkpoints'] = ckpts
+        if td > 0:
+            meta_extra['pruning_tail_drop'] = td
+        if mc != 1:
+            meta_extra['pruning_min_configs'] = mc
+    if model_pruning_overrides:
+        # Canonicalize: sort by model name; freeze each override into a
+        # tuple of sorted (k, v) pairs so the meta is hashable + stable.
+        canonical = []
+        for mname in sorted(model_pruning_overrides.keys()):
+            ov = model_pruning_overrides[mname]
+            ov_items = []
+            for k in sorted(ov.keys()):
+                v = ov[k]
+                if isinstance(v, list):
+                    v = tuple(sorted(v) if k == 'checkpoints' else v)
+                ov_items.append((k, v))
+            canonical.append((mname, tuple(ov_items)))
+        if canonical:
+            meta_extra['model_pruning_overrides'] = tuple(canonical)
     return {
         'kind': 'search',
         'dataset_name': dataset_name,
@@ -329,6 +362,7 @@ def _make_search_meta(
         'cv_splitter_id': cv_splitter_id,
         'rep_factories_id': rep_factories_id,
         'code_timestamp': time.time(),
+        **meta_extra,
     }
 
 
@@ -1507,6 +1541,14 @@ SPEED_TIERS = {
     # F12 validated (2026-04-03). Two tiers: fast (screening) and full (publication).
     # Budgets NOT in tiers — user must specify.
     # Downstream models NOT in tiers — experiment-controlled.
+    #
+    # Phase 4 (2026-04-25): production precompute and experiment scripts use
+    # 'full' only. 'fast' is retained for smoke tests + ft precompute iteration
+    # but should NOT be used for new experiments — use 'full' with a custom
+    # adaptive_pruning_schedule (see SCHEDULE_PRESETS in precompute_hybrids.py)
+    # to get faster searches without diverging the cache key from production.
+    # See EXPERIMENT_TRACKER.md for the silent-cache-bypass regression that
+    # motivated this restriction.
     'fast': {
         'importance_methods': ['treeshap', 'lightgbm_gain'],
         'allocation_methods': [
@@ -1547,6 +1589,141 @@ MODEL_MAX_BUDGET = {
     'cnn': 3000,
     # No cap: rf, xgboost, lightgbm, catboost, ridge, ngboost
 }
+
+
+# Default adaptive-pruning schedule. Empty checkpoints + tail_drop=0 makes the
+# fold-0 mid-flight pruning a no-op, so behavior is identical to the legacy
+# single-stage adaptive_pruning=0.15 path. Callers wanting more aggressive
+# pruning override this with an explicit schedule (see f16_multistage_pruning
+# for calibrated schedules).
+DEFAULT_PRUNING_SCHEDULE: Dict[str, Any] = {
+    'checkpoints': [],                  # budgets at which to mid-flight prune
+    'tail_drop_per_checkpoint': 0.0,    # bottom X% of (alloc, imp) pairs to drop
+    'final_strategy_threshold': 0.15,   # end-of-fold-0 strategy prune (existing)
+    'min_configs_per_model': 1,         # floor — best_by_model[m] always exists
+}
+
+
+def _normalize_pruning_schedule(
+    adaptive_pruning: Union[bool, float, None] = True,
+    adaptive_pruning_schedule: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Translate legacy adaptive_pruning + new schedule into a canonical dict.
+
+    Precedence: explicit schedule wins. If only legacy adaptive_pruning is
+    given, build a schedule with empty checkpoints (current behavior).
+
+    Returns a dict with all four schedule fields present.
+    """
+    def _coerce(out: Dict[str, Any]) -> Dict[str, Any]:
+        out['checkpoints'] = sorted(int(float(b)) for b in out.get('checkpoints', []))
+        out['tail_drop_per_checkpoint'] = float(
+            out.get('tail_drop_per_checkpoint', 0.0))
+        out['final_strategy_threshold'] = float(
+            out.get('final_strategy_threshold', 0.15))
+        out['min_configs_per_model'] = int(
+            out.get('min_configs_per_model', 1))
+        return out
+
+    if adaptive_pruning_schedule is not None:
+        out = dict(DEFAULT_PRUNING_SCHEDULE)
+        out.update(adaptive_pruning_schedule)
+        return _coerce(out)
+
+    # Legacy path: translate adaptive_pruning to schedule.final_strategy_threshold
+    out = dict(DEFAULT_PRUNING_SCHEDULE)
+    if adaptive_pruning is True:
+        out['final_strategy_threshold'] = 0.15
+    elif not adaptive_pruning:
+        out['final_strategy_threshold'] = 0.0
+    elif isinstance(adaptive_pruning, (int, float)):
+        out['final_strategy_threshold'] = float(adaptive_pruning)
+    return out
+
+
+def _resolve_model_schedule(
+    model_name: str,
+    global_schedule: Dict[str, Any],
+    model_overrides: Optional[Dict[str, Dict[str, Any]]],
+) -> Dict[str, Any]:
+    """Merge per-model override on top of the global schedule for one model.
+
+    Models not listed in `model_overrides` use the global schedule unchanged.
+    Override fields are shallow-merged (e.g. an override can specify only
+    `checkpoints` and inherit the rest from the global schedule).
+    """
+    if not model_overrides or model_name not in model_overrides:
+        return global_schedule
+    merged = dict(global_schedule)
+    merged.update(model_overrides[model_name])
+    # Re-coerce in case override supplied wrongly-typed values
+    merged['checkpoints'] = sorted(int(float(b)) for b in merged.get('checkpoints', []))
+    merged['tail_drop_per_checkpoint'] = float(
+        merged.get('tail_drop_per_checkpoint', 0.0))
+    merged['final_strategy_threshold'] = float(
+        merged.get('final_strategy_threshold', 0.15))
+    merged['min_configs_per_model'] = int(
+        merged.get('min_configs_per_model', 1))
+    return merged
+
+
+def _compute_tail_prunes(
+    fold0_results: List[Tuple[Tuple, Dict[str, Any]]],
+    checkpoint_budget: int,
+    tail_drop: float,
+    min_configs: int,
+    lower_is_better: bool,
+    model_filter: Optional[set] = None,
+) -> Dict[Tuple[str, str], set]:
+    """At a checkpoint budget, compute (alloc, imp) pairs to drop per group.
+
+    Within each (model_name, evaluator) group restricted to fold-0 results
+    at budget <= checkpoint_budget:
+      1. Rank by fold-0 score_mean (NaN sinks to bottom).
+      2. Keep top max(min_configs, round(n * (1 - tail_drop))).
+      3. Identify dropped (alloc, imp) pairs.
+
+    Args:
+        model_filter: if set, only consider groups whose model_name is in this
+            set. Used by per-model schedules so e.g. an aggressive GP-specific
+            checkpoint at b=10 only fires on GP groups.
+
+    Returns: {(model_name, evaluator): {(alloc, imp), ...}} for dropped pairs.
+    Configs at higher budgets in the same group with these (alloc, imp) pairs
+    will never be evaluated.
+    """
+    from collections import defaultdict
+    if tail_drop <= 0.0:
+        return {}
+    by_group: Dict[Tuple[str, str], List] = defaultdict(list)
+    for ck, result in fold0_results:
+        # ck = (rep_set_name, alloc, bgt, imp, model_name, eval_name)
+        _, alloc, bgt, imp, model_name, eval_name = ck
+        if bgt > checkpoint_budget:
+            continue
+        if model_filter is not None and model_name not in model_filter:
+            continue
+        by_group[(model_name, eval_name)].append((alloc, imp, result))
+
+    dropped: Dict[Tuple[str, str], set] = {}
+    sentinel = float('inf') if lower_is_better else float('-inf')
+    for grp, entries in by_group.items():
+        if not entries:
+            continue
+        def _score(e):
+            s = e[2].get('score_mean')
+            if s is None or (isinstance(s, float) and np.isnan(s)):
+                return sentinel
+            return s
+        entries_sorted = sorted(entries, key=_score, reverse=not lower_is_better)
+        n = len(entries_sorted)
+        n_keep = max(min_configs, int(round(n * (1 - tail_drop))))
+        kept = {(a, i) for a, i, _ in entries_sorted[:n_keep]}
+        all_pairs = {(a, i) for a, i, _ in entries_sorted}
+        dropped_for_grp = all_pairs - kept
+        if dropped_for_grp:
+            dropped[grp] = dropped_for_grp
+    return dropped
 
 
 # =============================================================================
@@ -2487,6 +2664,8 @@ def _run_search(
     greedy_tolerance: float = 0.0,
     metric_name: Optional[str] = None,
     adaptive_pruning: Union[bool, float] = True,
+    adaptive_pruning_schedule: Optional[Dict[str, Any]] = None,
+    model_pruning_aggressiveness: Optional[Dict[str, Dict[str, Any]]] = None,
     checkpoint_path: Optional[Path] = None,
     checkpoint_meta: Optional[Dict[str, Any]] = None,
     # Phase D.2 hybrid_eval cache context.
@@ -2496,10 +2675,27 @@ def _run_search(
 ) -> List[dict]:
     """Main search loop over all configurations.
 
-    If adaptive_pruning=True (default), runs fold 0 first on all configs,
-    then prunes strategies that appear in the top-3 in fewer than 15% of
-    (importance, evaluator, model, budget) groups. Surviving strategies
-    are evaluated on all folds. F15-validated.
+    Adaptive pruning (Phase 2 multi-stage version):
+
+    - Default schedule = empty checkpoints + final_strategy_threshold=0.15
+      (matches legacy adaptive_pruning=True behavior bit-for-bit).
+    - When schedule['checkpoints'] is non-empty AND tail_drop_per_checkpoint>0,
+      mid-flight pruning fires after fold 0 has finished evaluating all configs
+      at each checkpoint budget. Within each (model, evaluator) group, configs
+      with fold-0 scores in the bottom tail_drop fraction are dropped — their
+      (alloc, importance) pair is excluded from higher budgets in the same
+      group AND from full-eval. min_configs_per_model is the floor: every
+      model retains at least N surviving configs so best_by_model[m] is
+      always populated.
+    - End-of-fold-0 strategy pruning at final_strategy_threshold (top-3 in
+      <X% of groups) runs after mid-flight pruning, on whatever survives.
+
+    Backwards compat: legacy `adaptive_pruning` param is translated into a
+    schedule with empty checkpoints. Callers passing the new
+    `adaptive_pruning_schedule` override the legacy param.
+
+    F15-validated for the legacy single-stage behavior; F16 calibrates the
+    multi-stage extension (see MULTISTAGE_PRUNING_PLAN.md).
 
     If checkpoint_path is set, periodically saves progress so the search
     can resume after a SLURM timeout without losing work.
@@ -2829,29 +3025,72 @@ def _run_search(
 
     ckpt = _load_checkpoint()
 
-    # ── Adaptive pruning: prune strategies after fold 0 ──
+    # ── Adaptive pruning (multi-stage): mid-flight + end-of-fold-0 ──
     pruned_strategies = set()
-    # Resolve the prune threshold up front so it's available on both the
-    # resume-from-checkpoint path AND the fresh-compute path. Used by the
-    # verbose "Pruned N strategies (top-3 in <X% of groups)" print later.
-    if adaptive_pruning is True:
-        _prune_frac = 0.15
-    elif isinstance(adaptive_pruning, (int, float)) and not isinstance(adaptive_pruning, bool) and adaptive_pruning > 0:
-        _prune_frac = float(adaptive_pruning)
-    else:
-        _prune_frac = 0.15
-    if adaptive_pruning and search_folds > 1 and len(search_allocation) > 3:
+    dropped_pairs: Dict[Tuple[str, str], set] = {}  # (model, eval) -> {(alloc, imp)}
+
+    # Resolve the global schedule once. Default = legacy single-stage behavior.
+    _global_schedule = _normalize_pruning_schedule(
+        adaptive_pruning=adaptive_pruning,
+        adaptive_pruning_schedule=adaptive_pruning_schedule,
+    )
+    _prune_frac = _global_schedule['final_strategy_threshold']
+
+    # Build per-model effective schedules. Models with no override use the
+    # global schedule; overridden models (e.g. {'gp': {'checkpoints': [10,25]}})
+    # have their schedule fields shallow-merged.
+    _model_schedules: Dict[str, Dict[str, Any]] = {}
+    for mname in models.keys():
+        _model_schedules[mname] = _resolve_model_schedule(
+            mname, _global_schedule, model_pruning_aggressiveness)
+
+    # Union of all checkpoints across global + per-model schedules. The fold-0
+    # loop fires the pruning step at each checkpoint; per-model filters inside
+    # _compute_tail_prunes ensure each schedule only prunes its own models.
+    _all_checkpoints = sorted(set(_global_schedule['checkpoints']) |
+                              set(b for s in _model_schedules.values()
+                                  for b in s['checkpoints']))
+    # Per-checkpoint: which models is this checkpoint active for?
+    _models_at_ckpt: Dict[int, set] = {b: set() for b in _all_checkpoints}
+    for mname, s in _model_schedules.items():
+        for b in s['checkpoints']:
+            if s['tail_drop_per_checkpoint'] > 0:
+                _models_at_ckpt.setdefault(b, set()).add(mname)
+    _mid_flight_active = bool(_all_checkpoints) and any(
+        _models_at_ckpt[b] for b in _all_checkpoints)
+
+    # Adaptive pruning runs only when there are enough strategies AND folds > 1.
+    # The legacy 'truthy adaptive_pruning' check is preserved via threshold > 0
+    # OR mid-flight active.
+    _pruning_enabled = (search_folds > 1 and len(search_allocation) > 3
+                        and (_prune_frac > 0 or _mid_flight_active))
+
+    if _pruning_enabled:
         # Check if fold 0 is already done (from checkpoint)
         if ckpt and ckpt.get('fold0_done'):
             fold0_results_saved = ckpt['fold0_results']  # list of (cfg_key, result)
             pruned_strategies = ckpt.get('pruned_strategies', set())
+            # Restore mid-flight pruning state (Phase 2). Lists from JSON-style
+            # serialization are converted back to sets for fast membership.
+            saved_drops = ckpt.get('dropped_pairs') or {}
+            dropped_pairs = {tuple(k) if isinstance(k, list) else k:
+                             set(tuple(p) for p in v)
+                             for k, v in saved_drops.items()}
             if verbose:
                 print(f"\n  Resumed from checkpoint: fold 0 complete "
                       f"({len(fold0_results_saved)} results, "
-                      f"{len(pruned_strategies)} strategies pruned)")
+                      f"{len(pruned_strategies)} strategies pruned, "
+                      f"{sum(len(v) for v in dropped_pairs.values())} mid-flight pairs dropped)")
         else:
             if verbose:
                 print(f"\n  Adaptive pruning: evaluating fold 0 for {total} configs...")
+                if _mid_flight_active:
+                    print(f"    Schedule: global checkpoints={_global_schedule['checkpoints']} "
+                          f"global tail_drop={_global_schedule['tail_drop_per_checkpoint']:.0%}")
+                    overrides_active = [m for m, s in _model_schedules.items()
+                                        if s != _global_schedule]
+                    if overrides_active:
+                        print(f"    Per-model overrides active for: {sorted(overrides_active)}")
 
             # Resume fold 0 from partial checkpoint
             fold0_done_keys = set()
@@ -2859,55 +3098,128 @@ def _run_search(
             if ckpt and 'fold0_results' in ckpt:
                 fold0_results = ckpt['fold0_results']
                 fold0_done_keys = {r[0] for r in fold0_results}
+                # Resume mid-flight drops too
+                saved_drops = ckpt.get('dropped_pairs') or {}
+                dropped_pairs = {tuple(k) if isinstance(k, list) else k:
+                                 set(tuple(p) for p in v)
+                                 for k, v in saved_drops.items()}
                 if verbose:
                     print(f"    Resuming fold 0: {len(fold0_done_keys)}/{total} already done")
 
-            for idx, cfg in enumerate(configs, 1):
+            # When mid-flight pruning is active, iterate configs by ascending
+            # budget so we can fire the checkpoint pruning step after the LAST
+            # config at each checkpoint budget completes. Order within the same
+            # budget is preserved (model, evaluator, alloc, importance).
+            if _mid_flight_active:
+                _iter_configs = sorted(
+                    configs,
+                    key=lambda c: (c[3], c[5], c[7], c[2], c[4]))
+            else:
+                _iter_configs = configs
+
+            def _is_dropped(cfg):
+                grp = (cfg[5], cfg[7])
+                if grp not in dropped_pairs:
+                    return False
+                return (cfg[2], cfg[4]) in dropped_pairs[grp]
+
+            n_iter = len(_iter_configs)
+            for idx, cfg in enumerate(_iter_configs, 1):
                 ck = _cfg_key(cfg)
                 if ck in fold0_done_keys:
+                    continue
+                if _is_dropped(cfg):
                     continue
                 try:
                     result = _eval_cfg(cfg, fold_indices=[0])
                     fold0_results.append((ck, result))
                 except Exception:
                     pass
+
+                # Mid-flight pruning: fires on transition out of a checkpoint budget.
+                # Each per-model schedule with tail_drop>0 can fire at its OWN
+                # checkpoints; the union is _all_checkpoints. _models_at_ckpt[b]
+                # tells us which models to prune at budget b.
+                if _mid_flight_active:
+                    cur_b = cfg[3]
+                    is_last = idx == n_iter
+                    next_b = _iter_configs[idx][3] if not is_last else None
+                    crossing = is_last or next_b != cur_b
+                    if cur_b in _all_checkpoints and crossing:
+                        active_models = _models_at_ckpt.get(cur_b, set())
+                        if active_models:
+                            # Group active models by their (tail_drop, min_configs)
+                            # so we make one _compute_tail_prunes call per unique
+                            # (frac, floor, model_subset).
+                            from collections import defaultdict as _dd
+                            buckets = _dd(set)
+                            for mname in active_models:
+                                s = _model_schedules[mname]
+                                if cur_b not in s['checkpoints']:
+                                    continue
+                                bucket_key = (s['tail_drop_per_checkpoint'],
+                                              s['min_configs_per_model'])
+                                buckets[bucket_key].add(mname)
+                            new_drops_total = {}
+                            for (td, mc), mset in buckets.items():
+                                drops = _compute_tail_prunes(
+                                    fold0_results, cur_b, td, mc,
+                                    lower_is_better, model_filter=mset)
+                                for grp, pairs in drops.items():
+                                    new_drops_total.setdefault(grp, set()).update(pairs)
+                            for grp, pairs in new_drops_total.items():
+                                dropped_pairs.setdefault(grp, set()).update(pairs)
+                            if verbose and new_drops_total:
+                                n_new = sum(len(v) for v in new_drops_total.values())
+                                print(f"    checkpoint b={cur_b}: "
+                                      f"pruned {n_new} (alloc, imp) pairs across "
+                                      f"{len(new_drops_total)} (model, eval) groups "
+                                      f"[active models: {sorted(active_models)}]")
+
                 if verbose and idx % 200 == 0:
                     print(f"    fold 0: {idx}/{total}")
                 if idx % _CHECKPOINT_INTERVAL == 0:
                     _save_checkpoint({
                         'fold0_done': False,
                         'fold0_results': fold0_results,
+                        'dropped_pairs': {list(k): [list(p) for p in v]
+                                          for k, v in dropped_pairs.items()},
                     })
 
-            # Pruning logic
+            # End-of-fold-0 strategy pruning (top-3 in <X% of groups).
+            # Runs on whatever survives mid-flight pruning. Skipped if
+            # _prune_frac == 0 (caller explicitly disabled strategy prune).
             from collections import defaultdict
-            groups_f0 = defaultdict(list)
-            for ck, result in fold0_results:
-                _, alloc, bgt, imp, model_name, eval_name = ck
-                key = (imp, eval_name, model_name, bgt)
-                groups_f0[key].append((alloc, result['score_mean']))
+            if _prune_frac > 0:
+                groups_f0 = defaultdict(list)
+                for ck, result in fold0_results:
+                    _, alloc, bgt, imp, model_name, eval_name = ck
+                    if (model_name, eval_name) in dropped_pairs and \
+                       (alloc, imp) in dropped_pairs[(model_name, eval_name)]:
+                        continue  # don't count tail-pruned configs
+                    key = (imp, eval_name, model_name, bgt)
+                    groups_f0[key].append((alloc, result['score_mean']))
 
-            n_groups_f0 = len(groups_f0)
-            # _prune_frac is already resolved above (before the resume branch)
-            # so it's available whether we just computed fold 0 or loaded it
-            # from checkpoint.
-            threshold = n_groups_f0 * _prune_frac
+                n_groups_f0 = len(groups_f0)
+                threshold = n_groups_f0 * _prune_frac
 
-            top3_counts = defaultdict(int)
-            for key, entries in groups_f0.items():
-                ranked = sorted(entries, key=lambda x: x[1],
-                                reverse=not lower_is_better)
-                for alloc, _ in ranked[:3]:
-                    top3_counts[alloc] += 1
+                top3_counts = defaultdict(int)
+                for key, entries in groups_f0.items():
+                    ranked = sorted(entries, key=lambda x: x[1],
+                                    reverse=not lower_is_better)
+                    for alloc, _ in ranked[:3]:
+                        top3_counts[alloc] += 1
 
-            pruned_strategies = {s for s in search_allocation
-                                 if top3_counts.get(s, 0) < threshold}
+                pruned_strategies = {s for s in search_allocation
+                                     if top3_counts.get(s, 0) < threshold}
 
             # Save completed fold 0 + pruning decisions
             _save_checkpoint({
                 'fold0_done': True,
                 'fold0_results': fold0_results,
                 'pruned_strategies': pruned_strategies,
+                'dropped_pairs': {list(k): [list(p) for p in v]
+                                  for k, v in dropped_pairs.items()},
                 'full_results': [],
                 'full_done_keys': set(),
             })
@@ -2916,9 +3228,17 @@ def _run_search(
             print(f"  Pruned {len(pruned_strategies)}/{len(search_allocation)} strategies "
                   f"(top-3 in <{_prune_frac:.0%} of groups): {sorted(pruned_strategies)}")
 
-        # Rebuild config list without pruned strategies
-        if pruned_strategies:
-            configs = [cfg for cfg in configs if cfg[2] not in pruned_strategies]
+        # Rebuild config list without pruned strategies AND tail-pruned pairs
+        def _survives_pruning(cfg):
+            if cfg[2] in pruned_strategies:
+                return False
+            grp = (cfg[5], cfg[7])
+            if grp in dropped_pairs and (cfg[2], cfg[4]) in dropped_pairs[grp]:
+                return False
+            return True
+
+        if pruned_strategies or dropped_pairs:
+            configs = [cfg for cfg in configs if _survives_pruning(cfg)]
             total = len(configs)
             if verbose:
                 print(f"  Remaining: {total} configs")
@@ -3359,6 +3679,8 @@ def find_best_hybrid(
     cache_dir: Optional[str] = None,
     greedy_tolerance: float = 0.0,
     adaptive_pruning: Union[bool, float] = True,
+    adaptive_pruning_schedule: Optional[Dict[str, Any]] = None,
+    model_pruning_aggressiveness: Optional[Dict[str, Dict[str, Any]]] = None,
     dataset_name: Optional[str] = None,
     tier: Optional[str] = None,
     # Caller-supplied identifiers for objects that can't be hashed. Required
@@ -3642,6 +3964,8 @@ def find_best_hybrid(
             secondary_metrics=secondary_metrics,
             cv_splitter_id=cv_splitter_id,
             rep_factories_id=rep_factories_id,
+            pruning_schedule=adaptive_pruning_schedule,
+            model_pruning_overrides=model_pruning_aggressiveness,
         )
         # condition_suffix is in the filename but also goes in meta so
         # validation catches accidental collisions. Explicit None stored.
@@ -3791,6 +4115,8 @@ def find_best_hybrid(
         # (bug pre-2026-04-18 — every run pruned 100% of strategies
         # after fold 0 and only fold-0 scores reached best_by_model).
         adaptive_pruning=_norm_pruning,
+        adaptive_pruning_schedule=adaptive_pruning_schedule,
+        model_pruning_aggressiveness=model_pruning_aggressiveness,
         checkpoint_path=_ckpt_path,
         # Validate checkpoint payload against the same meta used for the
         # final cache file. Resume only when parameters match.

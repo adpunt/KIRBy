@@ -710,6 +710,19 @@ DATASET_REPS = {
         'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
         'top_tier': ['grover_dna', 'kmer6', 'kmer5', 'mistral_dna'],
     },
+    'gb_demo_human_or_worm': {  # 100,000 samples, 5 groups. Winner: tetranuc_freq+mlp=0.9135 MCC.
+        # Saturated task — top 8 reps within 98.7% of best. Classicals dominate.
+        # dnabert2 dropped (91.5% of best, pattern consistent with gb_demo_coding sibling).
+        # gena_lm dropped (5% of best — near-random at 1024D post-refix, all-nucleotide pattern).
+        # Survey gap: gc_content, dinuc_freq, complexity, dna_shape did not run.
+        'general': [
+            'tetranuc_freq', 'tnf_canonical', 'kmer4', 'kmer5', 'grover_dna',
+            'kmer3', 'nt_v2_500m', 'nt_v2_250m', 'mistral_dna', 'kmer6',
+            'hyenadna', 'codon_usage'],
+        'augmentation': ['codon_usage'],
+        'top_tier': ['tetranuc_freq', 'tnf_canonical', 'kmer4', 'kmer5',
+                     'grover_dna', 'kmer3', 'nt_v2_500m', 'nt_v2_250m'],
+    },
 }
 
 
