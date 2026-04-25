@@ -1,54 +1,54 @@
 #!/usr/bin/env python3
-"""F16: Multi-stage adaptive pruning calibration — offline simulation.
+"""F16: per-model pruning threshold sweep — offline simulation on f15 data.
 
-Reuses the per-(config, fold) score data captured by F15 to simulate
-various multi-stage pruning schedules WITHOUT running new searches.
+For each (model M, schedule S) on each f15 dataset D, simulate applying
+schedule S ONLY to model M's configs (other models stay at baseline).
+Report two numbers:
 
-A "schedule" is a dict:
-    {
-        # Budgets at which to checkpoint and drop tail configs.
-        # Empty = single end-of-fold-0 prune only (= current behaviour).
-        'checkpoints': [25, 50, 100],
+    rel_loss(M, S, D)
+        = (pruned_best_for_M - baseline_best_for_M) / |baseline_best_for_M|
+          sign-corrected for lower-is-better metrics
+        Interpretation: how much worse is the best fold-mean score for
+        model M after applying schedule S, expressed as a % of M's
+        unpruned best. Zero means the same config was preserved.
 
-        # Within each (model, evaluator) group at a checkpoint, drop
-        # bottom X% by fold-0 score. Dropped configs do no further
-        # fold-0 work AND are excluded from full-eval.
-        'tail_drop_per_checkpoint': 0.5,
+    saved(M, S, D)
+        = (M's fold-evals avoided by S) / (M's total fold-evals)
+        Interpretation: fraction of compute spent on model M that would
+        not have been done under schedule S. Higher = more saved.
 
-        # End-of-fold-0 strategy pruning threshold (current top-3 logic).
-        'final_strategy_threshold': 0.15,
+A schedule "passes" for (M, D) if rel_loss <= 2%. A schedule is
+universally good for model M if it passes on every dataset where M has
+data. A schedule is universally good overall if it passes for every
+(M, D) pair.
 
-        # Floor: never prune a model below this many surviving configs.
-        # Guarantees best_by_model[m] exists for every m.
-        'min_configs_per_model': 1,
-    }
+Why per-model: pruning is most useful for expensive models (svm, mlp)
+and harmless on cheap ones (rf, ridge). We want to know whether the
+SAME schedule can be applied uniformly OR whether different models need
+different schedules.
 
-Per-model overrides (optional) merge on top of the global schedule for the
-named models only.
+Why this criterion: experiments consume best_by_model[m]. If pruning
+preserves that score within 2%, the experiment result is unchanged in
+practice. Top-K rank-stability across models is irrelevant — different
+models are read independently.
 
-For each (dataset, schedule), this script reports:
-- Wall-time saving estimate (fraction of fold-evals avoided across folds 1-N)
-- Result quality vs unpruned baseline (best_by_model score deltas per model)
-- Top-K stability (fraction of unpruned top-K configs that survive pruning)
-- Per-model survivor count at end of fold-0
+Caveat: if every model's best config sits at budget <= max(checkpoints)
+on a dataset, that (model, dataset) is flagged "trivial preservation"
+because the schedule wasn't given the chance to fail (the winner's data
+is in the cut-decision set). Trivial cases are reported but don't count
+toward "passes" — they're inconclusive, not pass.
 
-Why offline: F15 ran the full unpruned search on these datasets and saved
-fold_scores[0..n-1] for every config. From that we can replay any pruning
-schedule and ask "would the surviving configs have produced a different
-best_by_model?" without re-evaluating anything. Saves days of compute.
+f15 source: tests/results/framework/f15_adaptive_pruning/
+  - {dataset}_{model}.json: per-model split file (preferred, complete)
+  - {dataset}.json: combined file (often incomplete; only used as fallback
+    for models lacking a per-model file)
 
-Why SVM and not GP: F15 didn't include GP. SVM is the closest cost-shape
-analogue (kernel-based, expensive at high budgets). If multi-stage pruning
-preserves SVM rankings, the methodology is sound; we then apply it to GP
-with confidence that the algorithm — not a GP-specific NaN pathology — is
-what's being tested.
-
-Output: tests/results/framework/f16_multistage_pruning/calibration_summary.json
+Output: tests/results/framework/f16_multistage_pruning/per_model_sweep.json
+        + a printed table per dataset and a final cross-dataset summary.
 
 Usage:
     python tests/experiments/framework/f16_multistage_pruning.py
     python tests/experiments/framework/f16_multistage_pruning.py --dataset caco2
-    python tests/experiments/framework/f16_multistage_pruning.py --schedule aggressive
 """
 
 import argparse
@@ -56,7 +56,6 @@ import json
 import sys
 import time
 from collections import defaultdict
-from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -66,401 +65,60 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 F15_DIR = REPO_ROOT / 'tests' / 'results' / 'framework' / 'f15_adaptive_pruning'
 F16_DIR = REPO_ROOT / 'tests' / 'results' / 'framework' / 'f16_multistage_pruning'
 
-# Datasets to evaluate: span small antibody and mid-size molecular,
-# chosen to cover the regimes where multi-stage pruning would actually
-# bite (i.e. SVM/MLP at high budgets is expensive).
 F16_DATASETS = [
-    'flab_pk_jain_fcrnrt',  # small antibody, n≈241
-    'abagym_EGFR',          # small antibody (no aug)
-    'caco2',                # mid molecular, n≈2158
-    'herg_ki',              # mid molecular
-    'logd',                 # mid molecular
-    'buchwald_hartwig',     # reaction, n≈3955
+    'flab_pk_jain_fcrnrt',
+    'abagym_EGFR',
+    'caco2',
+    'herg_ki',
+    'logd',
+    'buchwald_hartwig',
 ]
 
-# Candidate schedules to compare. baseline = current single-stage pruning.
-# Each entry will be applied to every dataset; per-model overrides applied
-# only on top of the schedule named in the override block (see below).
+# Candidate schedules. Each defines: at which budgets do we look at fold-0
+# scores within a model's group, and what fraction of the bottom (alloc, imp)
+# pairs do we drop. Pruned pairs lose all their higher-budget configs too.
 SCHEDULES: Dict[str, Dict[str, Any]] = {
     'baseline': {
         'checkpoints': [],
         'tail_drop_per_checkpoint': 0.0,
-        'final_strategy_threshold': 0.15,
-        'min_configs_per_model': 1,
     },
     'light': {
         'checkpoints': [50],
         'tail_drop_per_checkpoint': 0.25,
-        'final_strategy_threshold': 0.15,
-        'min_configs_per_model': 1,
     },
     'medium': {
         'checkpoints': [25, 50],
         'tail_drop_per_checkpoint': 0.50,
-        'final_strategy_threshold': 0.15,
-        'min_configs_per_model': 1,
     },
     'aggressive': {
         'checkpoints': [25, 50, 100],
         'tail_drop_per_checkpoint': 0.50,
-        'final_strategy_threshold': 0.15,
-        'min_configs_per_model': 1,
     },
     'very_aggressive': {
         'checkpoints': [10, 25, 50],
         'tail_drop_per_checkpoint': 0.75,
-        'final_strategy_threshold': 0.15,
-        'min_configs_per_model': 1,
     },
 }
 
-# Per-model overrides (applied to the named global schedule). Tested separately
-# from the global schedule levels above.
-MODEL_OVERRIDES_TO_TEST: Dict[str, Dict[str, Dict[str, Any]]] = {
-    'svm_aggressive_only': {
-        'svm': {'checkpoints': [25, 50, 100], 'tail_drop_per_checkpoint': 0.75},
-    },
-    'mlp_aggressive_only': {
-        'mlp': {'checkpoints': [25, 50, 100], 'tail_drop_per_checkpoint': 0.75},
-    },
-    'svm_mlp_aggressive': {
-        'svm': {'checkpoints': [25, 50, 100], 'tail_drop_per_checkpoint': 0.75},
-        'mlp': {'checkpoints': [25, 50, 100], 'tail_drop_per_checkpoint': 0.75},
-    },
-}
+# Acceptance threshold for rel_loss. 2% means the pruned best is within 2% of
+# baseline best for that model. Configurable but default is the same threshold
+# F15 used when validating the legacy single-stage adaptive_pruning=0.15.
+PASS_THRESHOLD = 0.02
+
+F16_MODELS = ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm']
 
 
 # ---------------------------------------------------------------------------
-# Schedule application — pure simulation against f15 data
+# F15 loading: merge per-model split files
 # ---------------------------------------------------------------------------
 
-def _resolve_model_schedule(
-    model_name: str,
-    global_sched: Dict[str, Any],
-    overrides: Optional[Dict[str, Dict[str, Any]]],
-) -> Dict[str, Any]:
-    """Merge per-model override on top of global schedule for one model."""
-    sched = dict(global_sched)
-    if overrides and model_name in overrides:
-        for k, v in overrides[model_name].items():
-            sched[k] = v
-    return sched
+def _load_f15(dataset_name: str) -> Optional[Dict[str, Any]]:
+    """Merge per-model f15 files into a single results list.
 
-
-def _apply_pruning(
-    results: List[Dict[str, Any]],
-    global_sched: Dict[str, Any],
-    overrides: Optional[Dict[str, Dict[str, Any]]],
-    lower_is_better: bool,
-) -> Tuple[List[Dict[str, Any]], Dict[str, int], int]:
-    """Simulate a pruning schedule against f15 result rows.
-
-    Args:
-        results: list of f15 result dicts. Each must have fields
-            'strategy', 'importance', 'evaluator', 'model', 'budget',
-            'fold_scores' (list of per-fold scores, NaN allowed).
-        global_sched: schedule dict.
-        overrides: optional per-model override dict.
-        lower_is_better: metric direction.
-
-    Returns:
-        survivors: list of result dicts that pass the schedule (i.e. would
-            have been evaluated on all folds).
-        per_model_dropped: {model_name: n_dropped} for accounting.
-        n_fold0_evals_avoided: total fold-evals avoided beyond fold 0
-            by the mid-flight pruning steps (used as a wall-time proxy).
+    Prefers per-model files (complete per model). Falls back to the combined
+    file's slice ONLY when the combined file is marked complete. Returns None
+    if no usable data exists.
     """
-    # Group results by (model, evaluator). Within each group, ascending budget
-    # is the order in which configs would be encountered if we run the search
-    # budget-first.
-    by_group: Dict[Tuple[str, str], List[Dict[str, Any]]] = defaultdict(list)
-    for r in results:
-        by_group[(r['model'], r['evaluator'])].append(r)
-    for k in by_group:
-        by_group[k].sort(key=lambda r: (r['budget'], r['strategy'], r['importance']))
-
-    per_model_dropped: Dict[str, int] = defaultdict(int)
-    n_fold0_evals_avoided = 0
-
-    surviving_keys = set()  # set of (strategy, importance, evaluator, model, budget)
-
-    for (model, evaluator), group_results in by_group.items():
-        sched = _resolve_model_schedule(model, global_sched, overrides)
-        checkpoints = sorted(sched.get('checkpoints', []))
-        tail_drop = float(sched.get('tail_drop_per_checkpoint', 0.0))
-        floor = int(sched.get('min_configs_per_model', 1))
-
-        # Track which configs are still "alive" at each point in the schedule
-        alive = list(group_results)
-
-        # Simulate checkpoint pruning
-        # At each checkpoint b: among configs with budget <= b that are still
-        # alive, rank by fold-0 score, drop bottom (tail_drop * n_alive_so_far).
-        # All higher-budget configs whose (strategy, importance) pair was in the
-        # dropped set are also pruned (since we'd never run them).
-        budgets_seen_so_far = []
-        for ckpt in checkpoints:
-            # Configs at or below this checkpoint that are alive
-            up_to_ckpt = [r for r in alive if r['budget'] <= ckpt]
-            if not up_to_ckpt:
-                continue
-
-            # Rank by fold-0 score (NaN sinks to bottom)
-            def f0_score(r):
-                fs = r.get('fold_scores') or []
-                if not fs:
-                    return float('inf') if lower_is_better else float('-inf')
-                v = fs[0]
-                if v != v:  # NaN
-                    return float('inf') if lower_is_better else float('-inf')
-                return v
-
-            up_to_ckpt_sorted = sorted(up_to_ckpt, key=f0_score,
-                                       reverse=not lower_is_better)
-            n = len(up_to_ckpt_sorted)
-            n_keep = max(floor, int(round(n * (1 - tail_drop))))
-            kept_strats_imps = {(r['strategy'], r['importance'])
-                                for r in up_to_ckpt_sorted[:n_keep]}
-
-            new_alive = []
-            for r in alive:
-                pair = (r['strategy'], r['importance'])
-                if pair in kept_strats_imps:
-                    new_alive.append(r)
-                else:
-                    per_model_dropped[model] += 1
-                    # Wall-time savings proxy: any fold-eval beyond fold 0
-                    # that would have been done is now avoided. f15 reports
-                    # fold_scores so we count len(fold_scores)-1 avoided.
-                    fs = r.get('fold_scores') or []
-                    n_folds_total = len(fs)
-                    if r['budget'] > ckpt:
-                        # Also avoid the fold-0 eval (config never reached).
-                        n_fold0_evals_avoided += n_folds_total
-                    else:
-                        # Already did fold 0; saved folds 1..N-1.
-                        n_fold0_evals_avoided += max(0, n_folds_total - 1)
-            alive = new_alive
-
-        # End-of-fold-0 strategy pruning (top-3 in <X% of groups).
-        # We apply this as a SECOND stage on whatever survives mid-flight.
-        # NOTE: this matches the existing find_best_hybrid logic; we just
-        # apply it after the mid-flight pruning instead of as the only step.
-        for r in alive:
-            surviving_keys.add((r['strategy'], r['importance'], r['evaluator'],
-                                r['model'], r['budget']))
-
-    # Final strategy pruning (top-3 within each (imp, eval, model, bgt) group)
-    f0_groups: Dict[Tuple[str, str, str, int], List[Tuple[str, float]]] = \
-        defaultdict(list)
-    for r in results:
-        key = (r['strategy'], r['importance'], r['evaluator'],
-               r['model'], r['budget'])
-        if key not in surviving_keys:
-            continue
-        fs = r.get('fold_scores') or []
-        f0 = fs[0] if fs and fs[0] == fs[0] else (
-            float('inf') if lower_is_better else float('-inf'))
-        gk = (r['importance'], r['evaluator'], r['model'], r['budget'])
-        f0_groups[gk].append((r['strategy'], f0))
-
-    threshold_frac = float(global_sched.get('final_strategy_threshold', 0.15))
-    n_groups = len(f0_groups)
-    threshold = n_groups * threshold_frac
-    top3_counts: Dict[str, int] = defaultdict(int)
-    for gk, entries in f0_groups.items():
-        ranked = sorted(entries, key=lambda x: x[1], reverse=not lower_is_better)
-        for s, _ in ranked[:3]:
-            top3_counts[s] += 1
-    pruned_strategies = {s for s in top3_counts
-                         if top3_counts[s] < threshold}
-
-    # Apply strategy pruning on top of mid-flight pruning
-    final_keys = {k for k in surviving_keys if k[0] not in pruned_strategies}
-
-    survivors = [r for r in results
-                 if (r['strategy'], r['importance'], r['evaluator'],
-                     r['model'], r['budget']) in final_keys]
-
-    return survivors, dict(per_model_dropped), n_fold0_evals_avoided
-
-
-# ---------------------------------------------------------------------------
-# Quality metrics — what we lose / keep
-# ---------------------------------------------------------------------------
-
-def _best_by_model(
-    results: List[Dict[str, Any]],
-    lower_is_better: bool,
-) -> Dict[str, Dict[str, Any]]:
-    """For each model, find the single best config (by 5-fold mean score)."""
-    by_model: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
-    for r in results:
-        by_model[r['model']].append(r)
-    out: Dict[str, Dict[str, Any]] = {}
-    cmp = min if lower_is_better else max
-    for m, rows in by_model.items():
-        valid = [r for r in rows
-                 if r.get('score_mean') is not None
-                 and r['score_mean'] == r['score_mean']]
-        if not valid:
-            continue
-        out[m] = cmp(valid, key=lambda r: r['score_mean'])
-    return out
-
-
-def _topk_overlap(
-    baseline: List[Dict[str, Any]],
-    pruned: List[Dict[str, Any]],
-    k: int,
-    lower_is_better: bool,
-) -> float:
-    """Fraction of baseline top-K configs that survive pruning."""
-    cmp_key = (lambda r: r['score_mean']) if lower_is_better else \
-              (lambda r: -r['score_mean'])
-    valid_b = [r for r in baseline
-               if r.get('score_mean') == r.get('score_mean')]
-    if not valid_b:
-        return 0.0
-    top_b = sorted(valid_b, key=cmp_key)[:k]
-    top_b_keys = {(r['strategy'], r['importance'], r['evaluator'],
-                   r['model'], r['budget']) for r in top_b}
-    pruned_keys = {(r['strategy'], r['importance'], r['evaluator'],
-                    r['model'], r['budget']) for r in pruned}
-    if not top_b_keys:
-        return 0.0
-    return len(top_b_keys & pruned_keys) / len(top_b_keys)
-
-
-def _evaluate_schedule(
-    results: List[Dict[str, Any]],
-    sched: Dict[str, Any],
-    overrides: Optional[Dict[str, Dict[str, Any]]],
-    lower_is_better: bool,
-) -> Dict[str, Any]:
-    """Run one schedule, compute summary stats vs baseline.
-
-    Includes a `trivial_preservation` flag: True when every model's best
-    config sits at a budget <= max(checkpoints) for the schedule being
-    evaluated. In that case `worst_rel_loss=0%` is uninformative — the
-    schedule preserves best_by_model[m] only because the winning configs
-    are in the data used to make the pruning decision, not because the
-    schedule successfully predicted high-budget winners from low-budget
-    fold-0 evidence.
-    """
-    survivors, per_model_dropped, n_evals_avoided = _apply_pruning(
-        results, sched, overrides, lower_is_better)
-
-    baseline_best = _best_by_model(results, lower_is_better)
-    pruned_best = _best_by_model(survivors, lower_is_better)
-
-    score_deltas: Dict[str, Optional[float]] = {}
-    rel_deltas: Dict[str, Optional[float]] = {}
-    for m in baseline_best:
-        b_score = baseline_best[m]['score_mean']
-        if m not in pruned_best:
-            score_deltas[m] = None  # model entirely lost — should never happen with floor=1
-            rel_deltas[m] = None
-            continue
-        p_score = pruned_best[m]['score_mean']
-        delta = p_score - b_score
-        score_deltas[m] = float(delta)
-        if abs(b_score) > 1e-9:
-            rel = (delta / abs(b_score))
-            if lower_is_better:
-                rel = -rel  # larger relative delta = worse
-            rel_deltas[m] = float(rel)
-        else:
-            rel_deltas[m] = None
-
-    n_total_configs = len(results)
-    n_survived_configs = len(survivors)
-    pct_dropped_configs = (1 - n_survived_configs / n_total_configs) * 100 \
-                          if n_total_configs else 0.0
-
-    n_total_evals = sum(len(r.get('fold_scores') or []) for r in results)
-    pct_evals_avoided = (n_evals_avoided / n_total_evals * 100) if n_total_evals else 0.0
-
-    top10_overlap = _topk_overlap(results, survivors, 10, lower_is_better)
-    top3_overlap = _topk_overlap(results, survivors, 3, lower_is_better)
-
-    # Trivial-preservation check: did any model's best config live ABOVE the
-    # highest checkpoint budget? If not, schedule was never tested on the
-    # case it's designed to handle (preserving high-budget winners from
-    # low-budget fold-0 evidence). worst_rel_loss=0% is uninformative.
-    checkpoints = sched.get('checkpoints', []) or [0]
-    max_ckpt = max(checkpoints) if checkpoints else 0
-    best_budgets = {m: r['budget'] for m, r in baseline_best.items()}
-    n_models_with_high_budget_winner = sum(
-        1 for b in best_budgets.values() if b > max_ckpt)
-    trivial_preservation = (n_models_with_high_budget_winner == 0
-                            and max_ckpt > 0)
-
-    return {
-        'n_configs_total': n_total_configs,
-        'n_configs_survived': n_survived_configs,
-        'pct_configs_dropped': float(pct_dropped_configs),
-        'n_evals_total': n_total_evals,
-        'n_evals_avoided': n_evals_avoided,
-        'pct_evals_avoided': float(pct_evals_avoided),
-        'top3_overlap_with_baseline': float(top3_overlap),
-        'top10_overlap_with_baseline': float(top10_overlap),
-        'per_model_score_delta': score_deltas,
-        'per_model_relative_delta': rel_deltas,
-        'per_model_dropped': per_model_dropped,
-        'baseline_best_budgets': best_budgets,
-        'max_checkpoint_budget': max_ckpt,
-        'n_models_with_high_budget_winner': n_models_with_high_budget_winner,
-        'trivial_preservation': bool(trivial_preservation),
-        'baseline_best_by_model': {
-            m: {'score_mean': r['score_mean'], 'budget': r['budget']}
-            for m, r in baseline_best.items()
-        },
-        'pruned_best_by_model': {
-            m: {'score_mean': r['score_mean'], 'budget': r['budget']}
-            for m, r in pruned_best.items()
-        },
-    }
-
-
-# ---------------------------------------------------------------------------
-# IO + main
-# ---------------------------------------------------------------------------
-
-_F15_MODELS = ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm']
-
-
-def _load_f15(dataset_name: str, model_filter: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Load f15 results for a dataset, merging per-model split files when present.
-
-    F15 was originally run as one all-6-models job per dataset, writing
-    `{dataset}.json`. Many of those timed out before completion, and were
-    re-run as per-model jobs writing `{dataset}_{model}.json`. This function:
-
-      1. If `model_filter` is set, reads ONLY that single per-model file.
-      2. Otherwise, prefers per-model files (complete per model) over the
-         combined file (often incomplete). For each of the 6 standard
-         F15 models:
-             - if `{dataset}_{model}.json` exists AND is complete → use it
-             - else if combined `{dataset}.json` has results for this model
-               AND combined is marked complete → use the combined slice
-             - else SKIP the model (log a warning)
-      3. If the dataset has zero usable models, returns None.
-
-    Returns the standard F15-shaped dict (`{'results': [...], 'metric': ...,
-    'lower_is_better': ..., 'n_folds': ..., ...}`) constructed by merging.
-    """
-    if model_filter:
-        path = F15_DIR / f'{dataset_name}_{model_filter}.json'
-        if not path.exists():
-            return None
-        with open(path) as f:
-            data = json.load(f)
-        if not data.get('complete'):
-            print(f"    WARNING: {dataset_name}_{model_filter} incomplete: "
-                  f"{data.get('progress')}", flush=True)
-        return data
-
     combined_path = F15_DIR / f'{dataset_name}.json'
     combined_data: Optional[Dict[str, Any]] = None
     combined_complete = False
@@ -469,334 +127,422 @@ def _load_f15(dataset_name: str, model_filter: Optional[str] = None) -> Optional
             combined_data = json.load(f)
         combined_complete = bool(combined_data.get('complete'))
 
-    # Bucket combined results by model for fallback
-    combined_by_model: Dict[str, List[Dict[str, Any]]] = {m: [] for m in _F15_MODELS}
+    combined_by_model: Dict[str, List[Dict[str, Any]]] = {m: [] for m in F16_MODELS}
     if combined_data is not None:
         for r in combined_data.get('results', []):
             m = r.get('model')
             if m in combined_by_model:
                 combined_by_model[m].append(r)
 
-    merged_results: List[Dict[str, Any]] = []
-    sources: Dict[str, str] = {}    # model -> 'per-model' | 'combined' | 'skipped'
+    merged: List[Dict[str, Any]] = []
+    sources: Dict[str, str] = {}
     meta_seed: Optional[Dict[str, Any]] = None
-
-    for model in _F15_MODELS:
-        per_model_path = F15_DIR / f'{dataset_name}_{model}.json'
-        if per_model_path.exists():
-            with open(per_model_path) as f:
-                pm_data = json.load(f)
-            if pm_data.get('complete'):
-                merged_results.extend(pm_data.get('results', []))
+    for model in F16_MODELS:
+        per_path = F15_DIR / f'{dataset_name}_{model}.json'
+        if per_path.exists():
+            with open(per_path) as f:
+                pm = json.load(f)
+            if pm.get('complete'):
+                merged.extend(pm.get('results', []))
                 sources[model] = 'per-model'
-                meta_seed = meta_seed or pm_data
+                meta_seed = meta_seed or pm
                 continue
-            else:
-                # per-model file exists but incomplete — fall through to combined
-                pass
-        # Fallback to combined slice (only when combined IS complete)
         if combined_complete and combined_by_model[model]:
-            merged_results.extend(combined_by_model[model])
+            merged.extend(combined_by_model[model])
             sources[model] = 'combined'
             meta_seed = meta_seed or combined_data
         else:
             sources[model] = 'skipped'
 
-    if not merged_results:
+    if not merged:
         return None
-
-    # Borrow metric/lower_is_better/n_folds/n_samples from whichever source we used
     base = meta_seed or combined_data or {}
-    out = {
-        'experiment': 'f15_adaptive_pruning_validation',
+    return {
         'dataset': dataset_name,
-        'domain': base.get('domain'),
         'metric': base.get('metric'),
-        'lower_is_better': base.get('lower_is_better'),
+        'lower_is_better': bool(base.get('lower_is_better')),
         'n_samples': base.get('n_samples'),
-        'n_reps': base.get('n_reps'),
         'n_folds': base.get('n_folds'),
-        'config': base.get('config'),
-        'results': merged_results,
-        'complete': True,
+        'results': merged,
         'merge_sources': sources,
     }
-    n_per_model = {m: sum(1 for r in merged_results if r.get('model') == m)
-                   for m in _F15_MODELS}
-    print(f"    {dataset_name}: merged from {sources} "
-          f"(configs/model: {n_per_model})", flush=True)
-    skipped = [m for m, s in sources.items() if s == 'skipped']
-    if skipped:
-        print(f"    WARNING: missing models for {dataset_name}: {skipped} — "
-              f"these models will not appear in best_by_model and any schedule "
-              f"that depends on them is invalid for this dataset.", flush=True)
-    return out
 
 
-def _evaluate_dataset(
-    dataset_name: str,
-    f15_data: Dict[str, Any],
-    schedules: Dict[str, Dict[str, Any]],
-    model_overrides: Dict[str, Dict[str, Dict[str, Any]]],
-) -> Dict[str, Any]:
-    """Run all schedules + override variants on one dataset's f15 data."""
-    results = f15_data['results']
-    lower_is_better = bool(f15_data.get('lower_is_better', False))
-    metric = f15_data.get('metric', '?')
-    print(f"\n  {dataset_name}: {len(results)} configs, "
-          f"metric={metric} (lower={lower_is_better})", flush=True)
+# ---------------------------------------------------------------------------
+# Pruning simulation, scoped to one model
+# ---------------------------------------------------------------------------
 
-    out: Dict[str, Any] = {
-        'dataset': dataset_name,
-        'metric': metric,
-        'lower_is_better': lower_is_better,
-        'n_samples': f15_data.get('n_samples'),
-        'n_reps': f15_data.get('n_reps'),
-        'n_folds': f15_data.get('n_folds'),
-        'schedules': {},
-        'overrides': {},
-    }
+def _f0_score(result: Dict[str, Any], lower_is_better: bool) -> float:
+    fs = result.get('fold_scores') or []
+    if not fs:
+        return float('inf') if lower_is_better else float('-inf')
+    v = fs[0]
+    if v != v:  # NaN
+        return float('inf') if lower_is_better else float('-inf')
+    return v
 
-    # Plain schedules (no per-model override)
-    for sched_name, sched in schedules.items():
-        summary = _evaluate_schedule(results, sched, None, lower_is_better)
-        out['schedules'][sched_name] = {'schedule': sched, **summary}
-        worst_rel = max((d for d in summary['per_model_relative_delta'].values()
-                         if d is not None), default=0.0)
-        trivial = ' [TRIVIAL: best at low budget]' if summary['trivial_preservation'] else ''
-        print(f"    {sched_name:18s}  "
-              f"dropped={summary['pct_configs_dropped']:5.1f}% "
-              f"evals_avoided={summary['pct_evals_avoided']:5.1f}% "
-              f"top3_keep={summary['top3_overlap_with_baseline']:.2f} "
-              f"worst_rel_loss={worst_rel*100:+.2f}%"
-              f"{trivial}",
-              flush=True)
 
-    # Per-model overrides (each applied on top of global 'baseline' schedule
-    # so we isolate the contribution of the override)
-    for ov_name, ov in model_overrides.items():
-        summary = _evaluate_schedule(
-            results, schedules['baseline'], ov, lower_is_better)
-        out['overrides'][ov_name] = {
-            'global_schedule': 'baseline',
-            'overrides': ov,
-            **summary,
-        }
-        worst_rel = max((d for d in summary['per_model_relative_delta'].values()
-                         if d is not None), default=0.0)
-        trivial = ' [TRIVIAL: best at low budget]' if summary['trivial_preservation'] else ''
-        print(f"    [override] {ov_name:22s}  "
-              f"dropped={summary['pct_configs_dropped']:5.1f}% "
-              f"evals_avoided={summary['pct_evals_avoided']:5.1f}% "
-              f"top3_keep={summary['top3_overlap_with_baseline']:.2f} "
-              f"worst_rel_loss={worst_rel*100:+.2f}%"
-              f"{trivial}",
-              flush=True)
+def _apply_per_model_pruning(
+    results: List[Dict[str, Any]],
+    model: str,
+    schedule: Dict[str, Any],
+    lower_is_better: bool,
+) -> Tuple[List[Dict[str, Any]], int, int]:
+    """Apply a pruning schedule ONLY to one model's configs.
 
-    # Where do the winning configs actually live? Answers "is f16 testing
-    # what we think it's testing on this dataset?"
-    baseline_best = _best_by_model(results, lower_is_better)
-    print(f"    best_by_model budgets: " +
-          ', '.join(f"{m}={r['budget']}"
-                    for m, r in sorted(baseline_best.items())),
+    Returns: (kept_configs_for_this_model, n_configs_dropped, n_evals_avoided).
+
+    Within the model's results, group by `evaluator`. At each checkpoint
+    budget b in schedule['checkpoints'] (in ascending order):
+      1. Take all surviving configs with budget <= b.
+      2. Sort by fold-0 score; keep top (1 - tail_drop) fraction by count.
+      3. Identify dropped (alloc, importance) pairs (those NOT in keep set).
+      4. Mark all surviving configs (at any budget) with those (alloc, imp)
+         pairs as dropped — they would never have run.
+    """
+    checkpoints = sorted(int(b) for b in schedule.get('checkpoints', []))
+    tail_drop = float(schedule.get('tail_drop_per_checkpoint', 0.0))
+
+    model_results = [r for r in results if r.get('model') == model]
+    if not model_results or tail_drop <= 0.0 or not checkpoints:
+        return model_results, 0, 0
+
+    # Group by evaluator
+    by_eval: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+    for r in model_results:
+        by_eval[r['evaluator']].append(r)
+
+    kept_results: List[Dict[str, Any]] = []
+    n_dropped = 0
+    n_evals_avoided = 0
+
+    for ev, group_results in by_eval.items():
+        alive = list(group_results)
+        for ckpt in checkpoints:
+            up_to = [r for r in alive if r['budget'] <= ckpt]
+            if not up_to:
+                continue
+            up_to_sorted = sorted(up_to,
+                                  key=lambda r: _f0_score(r, lower_is_better),
+                                  reverse=not lower_is_better)
+            n = len(up_to_sorted)
+            n_keep = max(1, int(round(n * (1 - tail_drop))))
+            kept_pairs = {(r['strategy'], r['importance'])
+                          for r in up_to_sorted[:n_keep]}
+            new_alive = []
+            for r in alive:
+                pair = (r['strategy'], r['importance'])
+                if pair in kept_pairs:
+                    new_alive.append(r)
+                else:
+                    n_dropped += 1
+                    fs = r.get('fold_scores') or []
+                    n_folds_total = len(fs)
+                    if r['budget'] > ckpt:
+                        # Never reached even fold 0
+                        n_evals_avoided += n_folds_total
+                    else:
+                        # Did fold 0; saved folds 1..N-1
+                        n_evals_avoided += max(0, n_folds_total - 1)
+            alive = new_alive
+        kept_results.extend(alive)
+
+    return kept_results, n_dropped, n_evals_avoided
+
+
+def _best_for_model(results: List[Dict[str, Any]], model: str,
+                    lower_is_better: bool) -> Optional[Dict[str, Any]]:
+    rows = [r for r in results
+            if r.get('model') == model
+            and r.get('score_mean') is not None
+            and r['score_mean'] == r['score_mean']]
+    if not rows:
+        return None
+    return min(rows, key=lambda r: r['score_mean']) if lower_is_better \
+        else max(rows, key=lambda r: r['score_mean'])
+
+
+# ---------------------------------------------------------------------------
+# Per-(dataset, schedule, model) sweep
+# ---------------------------------------------------------------------------
+
+def _sweep_dataset(f15: Dict[str, Any]) -> Dict[str, Any]:
+    results = f15['results']
+    lower = f15['lower_is_better']
+    metric = f15['metric']
+    dataset = f15['dataset']
+
+    print(f"\n{dataset} (metric={metric}, lower_is_better={lower}):", flush=True)
+    print(f"  merge sources: " + ', '.join(f"{m}={s}"
+                                           for m, s in sorted(f15['merge_sources'].items())),
           flush=True)
 
+    # Baseline best-per-model (used as the reference for rel_loss)
+    baseline_best: Dict[str, Optional[Dict[str, Any]]] = {
+        m: _best_for_model(results, m, lower) for m in F16_MODELS
+    }
+
+    # Header row
+    models_present = [m for m in F16_MODELS if baseline_best[m] is not None]
+    if not models_present:
+        print("  no usable models — skipping", flush=True)
+        return {'dataset': dataset, 'skipped': True}
+
+    print(f"  baseline best (model: score@budget):", flush=True)
+    for m in models_present:
+        b = baseline_best[m]
+        print(f"    {m:10s}  {b['score_mean']:+.4f} @ b={b['budget']}", flush=True)
+
+    out_schedules: Dict[str, Dict[str, Any]] = {}
+    for sname, sched in SCHEDULES.items():
+        max_ckpt = max(sched['checkpoints']) if sched['checkpoints'] else 0
+        per_model: Dict[str, Dict[str, Any]] = {}
+        for m in models_present:
+            kept_for_m, n_dropped, n_evals_avoided = _apply_per_model_pruning(
+                results, m, sched, lower)
+            best_after = _best_for_model(kept_for_m, m, lower)
+            base_best = baseline_best[m]
+            if best_after is None:
+                rel_loss = float('inf')
+            elif abs(base_best['score_mean']) < 1e-12:
+                # Avoid divide-by-zero on near-zero baseline; report absolute delta
+                rel_loss = best_after['score_mean'] - base_best['score_mean']
+                if lower:
+                    rel_loss = -rel_loss
+            else:
+                delta = best_after['score_mean'] - base_best['score_mean']
+                rel_loss = delta / abs(base_best['score_mean'])
+                if lower:
+                    rel_loss = -rel_loss
+
+            # Total fold-evals for this model (baseline)
+            m_total_evals = sum(len(r.get('fold_scores') or [])
+                                for r in results if r.get('model') == m)
+            pct_saved = (n_evals_avoided / m_total_evals * 100) \
+                if m_total_evals else 0.0
+
+            # Trivial preservation: best config sits at or below all checkpoints
+            trivial = (max_ckpt > 0 and base_best['budget'] <= max_ckpt)
+            passed = (not trivial) and (rel_loss <= PASS_THRESHOLD) \
+                if max_ckpt > 0 else True
+            per_model[m] = {
+                'baseline_best_budget': base_best['budget'],
+                'baseline_best_score': base_best['score_mean'],
+                'pruned_best_score': best_after['score_mean'] if best_after else None,
+                'rel_loss': rel_loss,
+                'pct_evals_saved_for_this_model': pct_saved,
+                'n_configs_dropped': n_dropped,
+                'trivial_preservation': trivial,
+                'passes': bool(passed),
+            }
+        out_schedules[sname] = {
+            'schedule': sched,
+            'per_model': per_model,
+        }
+
+    # Print table: rows = schedules, columns = models, cells = "loss% / saved%"
+    # plus a trivial flag.
+    print(f"\n  per-model (rel_loss / pct_evals_saved) — T = trivial preservation",
+          flush=True)
+    header = f"  {'schedule':16s}  " + "  ".join(f"{m:>15s}" for m in models_present)
+    print(header, flush=True)
+    for sname in SCHEDULES.keys():
+        cells = []
+        for m in models_present:
+            entry = out_schedules[sname]['per_model'][m]
+            triv = 'T' if entry['trivial_preservation'] else ' '
+            if entry['rel_loss'] == float('inf'):
+                cells.append(f"  {triv} INF / -    ")
+            else:
+                cells.append(
+                    f"  {triv} {entry['rel_loss']*100:+5.2f}% / {entry['pct_evals_saved_for_this_model']:4.1f}%")
+        print(f"  {sname:16s}  " + "".join(cells), flush=True)
+
+    return {
+        'dataset': dataset,
+        'metric': metric,
+        'lower_is_better': lower,
+        'n_samples': f15.get('n_samples'),
+        'merge_sources': f15.get('merge_sources'),
+        'baseline_best_by_model': {
+            m: {'score_mean': baseline_best[m]['score_mean'],
+                'budget': baseline_best[m]['budget']}
+            for m in models_present
+        },
+        'schedules': out_schedules,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Cross-dataset aggregation
+# ---------------------------------------------------------------------------
+
+def _cross_dataset_summary(per_dataset: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """For each (schedule, model), report:
+        - n_total: number of (dataset) cells where this model has data
+        - n_trivial: cells where the best budget <= max(checkpoint), so the
+          schedule wasn't given a chance to fail. Inconclusive, not pass.
+        - n_pass: cells where rel_loss <= PASS_THRESHOLD AND not trivial.
+        - n_fail: cells where rel_loss > PASS_THRESHOLD.
+        - max_rel_loss: worst non-trivial rel_loss for this (schedule, model).
+        - avg_pct_saved_nontrivial: average compute saved on non-trivial cells.
+    """
+    summary: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    for sname in SCHEDULES.keys():
+        summary[sname] = {}
+        for m in F16_MODELS:
+            cells = []
+            for ds in per_dataset:
+                if ds.get('skipped'):
+                    continue
+                entry = ds['schedules'].get(sname, {}).get('per_model', {}).get(m)
+                if entry is None:
+                    continue
+                cells.append(entry)
+            if not cells:
+                continue
+            n_total = len(cells)
+            n_trivial = sum(1 for c in cells if c['trivial_preservation'])
+            n_nontrivial = n_total - n_trivial
+            nontrivial_cells = [c for c in cells if not c['trivial_preservation']]
+            n_pass = sum(1 for c in nontrivial_cells
+                         if c['rel_loss'] <= PASS_THRESHOLD)
+            n_fail = n_nontrivial - n_pass
+            max_loss = max((c['rel_loss'] for c in nontrivial_cells),
+                           default=0.0)
+            avg_save_nt = (
+                sum(c['pct_evals_saved_for_this_model'] for c in nontrivial_cells)
+                / n_nontrivial) if n_nontrivial else 0.0
+            avg_save_all = (
+                sum(c['pct_evals_saved_for_this_model'] for c in cells) / n_total)
+            summary[sname][m] = {
+                'n_total': n_total,
+                'n_trivial': n_trivial,
+                'n_nontrivial': n_nontrivial,
+                'n_pass': n_pass,
+                'n_fail': n_fail,
+                'max_rel_loss_nontrivial': max_loss,
+                'avg_pct_evals_saved_nontrivial': avg_save_nt,
+                'avg_pct_evals_saved_all': avg_save_all,
+            }
+    return summary
+
+
+def _print_summary(summary: Dict[str, Dict[str, Dict[str, Any]]]) -> None:
+    print(f"\n{'='*78}", flush=True)
+    print(f"Cross-dataset summary — pass = (rel_loss <= {PASS_THRESHOLD*100:.0f}%) "
+          f"on non-trivial cells", flush=True)
+    print(f"{'='*78}", flush=True)
+    for m in F16_MODELS:
+        # Show only models that have data in at least one schedule
+        has_data = any(m in summary[s] for s in summary)
+        if not has_data:
+            continue
+        print(f"\nModel: {m}", flush=True)
+        print(f"  {'schedule':16s}  total  trivial  nontriv  pass  fail   max_loss  avg_saved_nontriv",
+              flush=True)
+        for sname in SCHEDULES.keys():
+            s = summary[sname].get(m)
+            if s is None:
+                continue
+            print(f"  {sname:16s}  "
+                  f"{s['n_total']:5d}  "
+                  f"{s['n_trivial']:7d}  "
+                  f"{s['n_nontrivial']:7d}  "
+                  f"{s['n_pass']:4d}  "
+                  f"{s['n_fail']:4d}   "
+                  f"{s['max_rel_loss_nontrivial']*100:+7.2f}%  "
+                  f"{s['avg_pct_evals_saved_nontrivial']:14.1f}%",
+                  flush=True)
+
+
+def _universal_winners(summary: Dict[str, Dict[str, Dict[str, Any]]]) -> Dict[str, Any]:
+    """Identify schedules that pass for every (model × dataset) non-trivial cell.
+
+    Returns: {schedule_name: {'universal': bool, 'fails_for': [...], ...}}
+    """
+    out: Dict[str, Any] = {}
+    for sname in SCHEDULES.keys():
+        fails = []
+        n_nontriv_total = 0
+        n_pass_total = 0
+        for m, s in summary.get(sname, {}).items():
+            n_nontriv_total += s['n_nontrivial']
+            n_pass_total += s['n_pass']
+            if s['n_fail'] > 0:
+                fails.append(f"{m}({s['n_fail']}/{s['n_nontrivial']})")
+        out[sname] = {
+            'universal_pass': len(fails) == 0 and n_nontriv_total > 0,
+            'fails_for_models': fails,
+            'n_pass_total': n_pass_total,
+            'n_nontrivial_total': n_nontriv_total,
+        }
     return out
 
 
-def _recommend_schedule(per_dataset_summary: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Score every candidate schedule on the available f15 datasets and
-    surface what the data actually supports — without a single chosen
-    'recommendation' that hides the underlying caveats.
-
-    For each schedule × dataset, we record:
-      - worst per-model relative loss  (absolute correctness signal)
-      - top-3 overlap with baseline    (ranking-stability signal)
-      - pct evals avoided              (compute saving)
-      - trivial_preservation flag      (TRUE iff best_by_model[m] all live
-                                         at budget <= max(checkpoints), i.e.
-                                         the schedule was not actually tested
-                                         on the case it's designed for)
-
-    The overall summary then reports, for each schedule:
-      - n_datasets total / non-trivial / passing-criterion-A / passing-B
-      - avg evals avoided across non-trivial datasets only
-
-    Criterion A (per-model loss): worst per-model relative loss <= 2%
-    Criterion B (per-model + ranking): A AND top-3 overlap >= 0.66
-
-    The caller must read this output and decide which criterion to apply
-    based on what their downstream experiments consume (best_by_model[m]
-    vs cross-model top-K). No single 'chosen' value is returned because
-    the trivial-preservation cases inflate apparent safety on every
-    schedule.
-    """
-    sched_names = list(SCHEDULES.keys())
-    scoreboard: Dict[str, Dict[str, Any]] = {}
-
-    for sname in sched_names:
-        per_ds = []
-        n_trivial = 0
-        n_pass_a = 0
-        n_pass_b = 0
-        avg_savings_nontrivial = 0.0
-        n_nontrivial = 0
-        worst_loss_overall = 0.0
-        for ds_summary in per_dataset_summary:
-            entry = ds_summary['schedules'].get(sname)
-            if not entry:
-                continue
-            rels = [v for v in entry['per_model_relative_delta'].values()
-                    if v is not None]
-            wl = max(rels) if rels else 0.0
-            top3 = entry['top3_overlap_with_baseline']
-            triv = entry.get('trivial_preservation', False)
-            pass_a = wl <= 0.02
-            pass_b = pass_a and top3 >= 0.66
-            per_ds.append({
-                'dataset': ds_summary['dataset'],
-                'worst_rel_loss': wl,
-                'top3_overlap': top3,
-                'pct_evals_avoided': entry['pct_evals_avoided'],
-                'trivial_preservation': triv,
-                'pass_criterion_A_per_model_only': pass_a,
-                'pass_criterion_B_per_model_plus_top3': pass_b,
-            })
-            if triv:
-                n_trivial += 1
-            else:
-                n_nontrivial += 1
-                avg_savings_nontrivial += entry['pct_evals_avoided']
-            worst_loss_overall = max(worst_loss_overall, wl)
-            if pass_a:
-                n_pass_a += 1
-            if pass_b:
-                n_pass_b += 1
-        avg_savings_nontrivial /= max(1, n_nontrivial)
-        scoreboard[sname] = {
-            'n_datasets_total': len(per_ds),
-            'n_trivial_preservation': n_trivial,
-            'n_nontrivial': n_nontrivial,
-            'n_pass_criterion_A': n_pass_a,
-            'n_pass_criterion_B': n_pass_b,
-            'avg_pct_evals_avoided_on_nontrivial': avg_savings_nontrivial,
-            'worst_relative_loss': worst_loss_overall,
-            'per_dataset': per_ds,
-        }
-
-    return {
-        'scoreboard': scoreboard,
-        'acceptance_criteria': {
-            'A_per_model_only': {
-                'max_per_model_relative_loss': 0.02,
-                'description': 'best_by_model[m] within 2% of baseline for every m',
-            },
-            'B_per_model_plus_top3': {
-                'max_per_model_relative_loss': 0.02,
-                'min_top3_overlap': 0.66,
-                'description': 'A AND ≥66% of cross-model top-3 configs survive',
-            },
-        },
-        'caveat': (
-            'A schedule that is "trivial_preservation=True" on every dataset '
-            'has not actually been tested on the high-budget-winner case it '
-            'is designed to handle. Report the n_nontrivial column when '
-            'choosing a preset; do not rely on n_pass_criterion_A alone if '
-            'all passing datasets are trivial.'
-        ),
-    }
-
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(
-        description='F16: Multi-stage adaptive pruning calibration (offline).')
+        description='F16: per-model pruning threshold sweep on f15 data.')
     parser.add_argument('--dataset', type=str, default=None,
-                        help='Single dataset (default: all six F16 datasets).')
-    parser.add_argument('--model-filter', type=str, default=None,
-                        help='Use F15 single-model run if available '
-                             '(e.g. "svm" → reads f15/{dataset}_svm.json).')
-    parser.add_argument('--schedule', type=str, default=None,
-                        help='Single schedule by name (default: all).')
+                        help='Single dataset (default: all f16 datasets).')
     parser.add_argument('-o', '--output', type=str,
-                        default=str(F16_DIR / 'calibration_summary.json'),
+                        default=str(F16_DIR / 'per_model_sweep.json'),
                         help='Output JSON path.')
     args = parser.parse_args()
 
-    if args.schedule:
-        if args.schedule not in SCHEDULES:
-            print(f"Unknown schedule '{args.schedule}'. "
-                  f"Choose from: {list(SCHEDULES.keys())}")
-            sys.exit(1)
-        scheds = {args.schedule: SCHEDULES[args.schedule]}
-    else:
-        scheds = SCHEDULES
-
-    if args.dataset:
-        datasets = [args.dataset]
-    else:
-        datasets = F16_DATASETS
-
+    datasets = [args.dataset] if args.dataset else F16_DATASETS
     F16_DIR.mkdir(parents=True, exist_ok=True)
 
-    print(f"[{time.strftime('%H:%M:%S')}] F16 multi-stage pruning calibration",
+    print(f"[{time.strftime('%H:%M:%S')}] F16 per-model pruning sweep",
           flush=True)
-    print(f"  F15 source: {F15_DIR}", flush=True)
-    print(f"  Datasets: {datasets}", flush=True)
-    print(f"  Schedules: {list(scheds.keys())}", flush=True)
-    print(f"  Per-model overrides: {list(MODEL_OVERRIDES_TO_TEST.keys())}",
-          flush=True)
+    print(f"  schedules: {list(SCHEDULES.keys())}", flush=True)
+    print(f"  models:    {F16_MODELS}", flush=True)
+    print(f"  pass threshold (rel_loss): {PASS_THRESHOLD*100:.1f}%", flush=True)
 
     per_dataset = []
-    missing = []
     for ds in datasets:
-        f15_data = _load_f15(ds, model_filter=args.model_filter)
-        if f15_data is None:
-            print(f"  {ds}: f15 data missing — skip", flush=True)
-            missing.append(ds)
+        f15 = _load_f15(ds)
+        if f15 is None:
+            print(f"\n  {ds}: no f15 data, skip", flush=True)
             continue
-        per_dataset.append(
-            _evaluate_dataset(ds, f15_data, scheds, MODEL_OVERRIDES_TO_TEST))
+        per_dataset.append(_sweep_dataset(f15))
 
-    if not per_dataset:
-        print("\nNo f15 data found. Run f15 first or check F15_DIR path.",
-              flush=True)
-        sys.exit(1)
+    summary = _cross_dataset_summary(per_dataset)
+    _print_summary(summary)
+    universal = _universal_winners(summary)
 
-    recommendation = _recommend_schedule(per_dataset) \
-        if not args.schedule else None
+    print(f"\n{'='*78}", flush=True)
+    print("Universal-pass check (a schedule passes for EVERY model × dataset "
+          "non-trivial cell)", flush=True)
+    print(f"{'='*78}", flush=True)
+    for sname, info in universal.items():
+        if info['universal_pass']:
+            print(f"  {sname:16s}  UNIVERSAL PASS  "
+                  f"({info['n_pass_total']}/{info['n_nontrivial_total']} cells)",
+                  flush=True)
+        else:
+            print(f"  {sname:16s}  fails: {info['fails_for_models']}  "
+                  f"({info['n_pass_total']}/{info['n_nontrivial_total']} cells)",
+                  flush=True)
 
-    output = {
-        'experiment': 'f16_multistage_pruning',
-        'timestamp': time.strftime('%Y-%m-%dT%H:%M:%S'),
-        'f15_source': str(F15_DIR),
-        'datasets_evaluated': [d['dataset'] for d in per_dataset],
-        'datasets_missing': missing,
-        'schedules_tested': list(scheds.keys()),
-        'overrides_tested': list(MODEL_OVERRIDES_TO_TEST.keys()),
-        'per_dataset': per_dataset,
-        'recommendation': recommendation,
-    }
-
+    # Write JSON
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with open(out_path, 'w') as f:
-        json.dump(output, f, indent=2, default=str)
-
-    print(f"\n[{time.strftime('%H:%M:%S')}] Done. Wrote {out_path}", flush=True)
-    if recommendation:
-        print(f"\n  Scoreboard (n_datasets={len(per_dataset)}):", flush=True)
-        print(f"  {'schedule':18s}  total nontriv passA passB  avg_save_nontriv  worst_loss",
-              flush=True)
-        for sname, sb in recommendation['scoreboard'].items():
-            print(f"  {sname:18s}  "
-                  f"{sb['n_datasets_total']:5d} "
-                  f"{sb['n_nontrivial']:8d} "
-                  f"{sb['n_pass_criterion_A']:5d} "
-                  f"{sb['n_pass_criterion_B']:5d}  "
-                  f"{sb['avg_pct_evals_avoided_on_nontrivial']:14.1f}%  "
-                  f"{sb['worst_relative_loss']*100:+9.2f}%",
-                  flush=True)
-        print(f"\n  CAVEAT: {recommendation['caveat']}", flush=True)
+        json.dump({
+            'experiment': 'f16_multistage_pruning',
+            'timestamp': time.strftime('%Y-%m-%dT%H:%M:%S'),
+            'pass_threshold_rel_loss': PASS_THRESHOLD,
+            'schedules': SCHEDULES,
+            'per_dataset': per_dataset,
+            'cross_dataset_summary': summary,
+            'universal_pass': universal,
+        }, f, indent=2, default=str)
+    print(f"\n[{time.strftime('%H:%M:%S')}] Wrote {out_path}", flush=True)
 
 
 if __name__ == '__main__':
