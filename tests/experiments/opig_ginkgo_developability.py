@@ -219,7 +219,7 @@ def evaluate_rep_reg(X, labels, groups, fold_assignments, model, n_folds,
     return result
 
 
-def evaluate_property(prop_name, rep_names, n_folds):
+def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruning'):
     """Evaluate all reps × models on one Ginkgo property.
 
     Returns dict with per-rep results.
@@ -271,6 +271,9 @@ def evaluate_property(prop_name, rep_names, n_folds):
                 f'ginkgo_hierarchical_{n_folds}fold_'
                 f'h{abs(hash(fold_assignments.tobytes())) % (10**12):012d}')
 
+        from experiments._shared import resolve_pruning_kwargs
+        _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
+                                       dataset_label=f"ginkgo_{prop_name}")
         search = find_best_hybrid(
             base_reps=base if base else reps,
             labels=labels, groups=grp,
@@ -282,7 +285,7 @@ def evaluate_property(prop_name, rep_names, n_folds):
             internal_evaluators=INTERNAL_EVALUATORS,
             speed='full', return_fitted=True, verbose=False, cache=True,
             dataset_name=f"ginkgo_{prop_name}", tier='general',
-            adaptive_pruning=0.25, **cv_kw)
+            adaptive_pruning=0.25, **cv_kw, **_pkw)
         top3 = extract_top3_base_reps(search)
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
@@ -405,6 +408,11 @@ def main():
         '--output', type=str, default=None,
         help='Output JSON path '
              '(default: tests/results/comparisons/opig_ginkgo_developability.json)')
+    parser.add_argument(
+        '--pruning-mode', type=str, default='default_pruning',
+        help="Adaptive pruning mode (default 'default_pruning'). "
+             "'aggressive_pruning' = td=0.5 at b=50 mid-flight prune for "
+             "gp/svm/mlp on n>=1000 datasets.")
 
     args = parser.parse_args()
 
@@ -427,7 +435,8 @@ def main():
             print(f"WARNING: Unknown property '{prop_name}', skipping")
             continue
         try:
-            prop_results = evaluate_property(prop_name, rep_names, args.n_folds)
+            prop_results = evaluate_property(prop_name, rep_names, args.n_folds,
+                                              pruning_mode=args.pruning_mode)
             if prop_results is not None:
                 all_results[prop_name] = prop_results
         except Exception as e:

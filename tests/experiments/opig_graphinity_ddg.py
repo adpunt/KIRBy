@@ -251,7 +251,8 @@ def evaluate_transfer(rep_names, n_folds, max_samples=5000):
     }
 
 
-def evaluate_condition(condition, rep_names, n_folds, max_samples=5000):
+def evaluate_condition(condition, rep_names, n_folds, max_samples=5000,
+                       pruning_mode='default_pruning'):
     """Evaluate one condition: load data, generate reps, evaluate all.
 
     Returns dict with per-rep results.
@@ -315,6 +316,9 @@ def evaluate_condition(condition, rep_names, n_folds, max_samples=5000):
         if not aug_dict:
             print(f"  WARNING: augmentation reps {AUG_REPS} not found in loaded reps, "
                   f"proceeding without augmentation")
+        from experiments._shared import resolve_pruning_kwargs
+        _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
+                                       dataset_label=f"{ds_name}/n{n}")
         search = find_best_hybrid(
             base_reps=base if base else reps,
             labels=labels, groups=grp,
@@ -327,7 +331,8 @@ def evaluate_condition(condition, rep_names, n_folds, max_samples=5000):
             speed='full', return_fitted=True, verbose=False, cache=True,
             dataset_name=ds_name, tier='general',
             condition_suffix=f'n{n}',
-            adaptive_pruning=0.25)
+            adaptive_pruning=0.25,
+            **_pkw)
         top3 = extract_top3_base_reps(search)
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
@@ -472,6 +477,11 @@ def main():
         '--output', type=str, default=None,
         help='Output JSON path '
              '(default: tests/results/comparisons/opig_graphinity_ddg.json)')
+    parser.add_argument(
+        '--pruning-mode', type=str, default='default_pruning',
+        help="Adaptive pruning mode (default 'default_pruning'). "
+             "'aggressive_pruning' = td=0.5 at b=50 mid-flight prune for "
+             "gp/svm/mlp on n>=1000 datasets.")
 
     args = parser.parse_args()
 
@@ -503,7 +513,8 @@ def main():
             continue
         try:
             cond_results = evaluate_condition(
-                cond, rep_names, args.n_folds, max_samples=max_samples)
+                cond, rep_names, args.n_folds, max_samples=max_samples,
+                pruning_mode=args.pruning_mode)
             if cond_results is not None:
                 all_results[cond] = cond_results
         except Exception as e:

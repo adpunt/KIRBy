@@ -233,7 +233,7 @@ def evaluate_rep_enrichment(X, labels, groups, model, n_folds):
     return result
 
 
-def evaluate_dataset(rep_names, n_folds):
+def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
     """Evaluate all reps × models on tz_her2_binary for enrichment."""
     print(f"\n{'=' * 60}")
     print(f"Dataset: tz_her2_binary (Trastuzumab-HER2 binding)")
@@ -276,6 +276,9 @@ def evaluate_dataset(rep_names, n_folds):
     try:
         from kirby.find_best_hybrid import find_best_hybrid
         from kirby.hybrid import apply_feature_selection
+        from experiments._shared import resolve_pruning_kwargs
+        _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
+                                       dataset_label='tz_her2_binary')
         search = find_best_hybrid(
             base_reps=reps,
             labels=labels, groups=groups,
@@ -286,7 +289,8 @@ def evaluate_dataset(rep_names, n_folds):
             internal_evaluators=INTERNAL_EVALUATORS,
             speed='full', return_fitted=True, verbose=False, cache=True,
             dataset_name='tz_her2_binary', tier='general',
-            adaptive_pruning=0.25)
+            adaptive_pruning=0.25,
+            **_pkw)
         top3 = extract_top3_base_reps(search)
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
@@ -447,6 +451,11 @@ def main():
         '--output', type=str, default=None,
         help='Output JSON path '
              '(default: tests/results/comparisons/opig_trastuzumab_enrichment.json)')
+    parser.add_argument(
+        '--pruning-mode', type=str, default='default_pruning',
+        help="Adaptive pruning mode (default 'default_pruning'). "
+             "'aggressive_pruning' = td=0.5 at b=50 mid-flight prune for "
+             "gp/svm/mlp on n>=1000 datasets.")
 
     args = parser.parse_args()
     rep_names = args.reps.split(',') if args.reps else DEFAULT_REPS
@@ -460,7 +469,8 @@ def main():
     print(f"  Enrichment fractions: {ENRICHMENT_FRACTIONS}")
     print("=" * 70)
 
-    ds_results = evaluate_dataset(rep_names, args.n_folds)
+    ds_results = evaluate_dataset(rep_names, args.n_folds,
+                                    pruning_mode=args.pruning_mode)
     if ds_results is not None:
         print_analysis(ds_results)
 

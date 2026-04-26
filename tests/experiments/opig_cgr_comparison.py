@@ -265,7 +265,8 @@ def evaluate_rep(X, labels, groups, model, n_folds):
 # =============================================================================
 
 def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
-                              pool_name='pool', dataset_name=None):
+                              pool_name='pool', dataset_name=None,
+                              pruning_mode='default_pruning'):
     """Build hybrid from a rep pool and evaluate it.
 
     Args:
@@ -282,9 +283,12 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
     """
     from kirby.find_best_hybrid import find_best_hybrid
     from kirby.hybrid import apply_feature_selection
+    from experiments._shared import resolve_pruning_kwargs
 
     print(f"\n  Building hybrid ({pool_name}, {len(pool_reps)} reps)...")
 
+    _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
+                                   dataset_label=f"{dataset_name}/{pool_name}")
     search = find_best_hybrid(
         base_reps=pool_reps,
         labels=labels,
@@ -302,6 +306,7 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
         condition_suffix=pool_name,
         adaptive_pruning=0.25,
         augmentation_strategy='none',
+        **_pkw,
     )
 
     top3 = extract_top3_base_reps(search, model='rf')
@@ -467,7 +472,7 @@ def _best_in_group(individual_results, rep_names, model):
 # =============================================================================
 
 def evaluate_dataset(dataset_name, n_folds, skip_hybrid=False,
-                     skip_correlation=False):
+                     skip_correlation=False, pruning_mode='default_pruning'):
     """Run full CGR comparison for one dataset."""
     print(f"\n{'=' * 60}")
     print(f"Dataset: {dataset_name}")
@@ -535,12 +540,12 @@ def evaluate_dataset(dataset_name, n_folds, skip_hybrid=False,
 
         hybrid_comparison['smiles_only'] = build_and_evaluate_hybrid(
             smiles_only, reps, labels, groups, n_folds, 'SMILES-only',
-            dataset_name=dataset_name)
+            dataset_name=dataset_name, pruning_mode=pruning_mode)
 
         if cgr_available:
             hybrid_comparison['smiles_plus_cgr'] = build_and_evaluate_hybrid(
                 smiles_plus_cgr, reps, labels, groups, n_folds, 'SMILES+CGR',
-                dataset_name=dataset_name)
+                dataset_name=dataset_name, pruning_mode=pruning_mode)
 
             # CGR selection info
             hybrid_comparison['smiles_plus_cgr']['cgr_selection'] = \
@@ -733,6 +738,11 @@ def main():
     parser.add_argument(
         '--skip-correlation', action='store_true',
         help='Skip CKA correlation analysis')
+    parser.add_argument(
+        '--pruning-mode', type=str, default='default_pruning',
+        help="Adaptive pruning mode (default 'default_pruning'). "
+             "'aggressive_pruning' = td=0.5 at b=50 mid-flight prune for "
+             "gp/svm/mlp on n>=1000 datasets.")
 
     args = parser.parse_args()
 
@@ -754,7 +764,8 @@ def main():
             result = evaluate_dataset(
                 ds_name, args.n_folds,
                 skip_hybrid=args.skip_hybrid,
-                skip_correlation=args.skip_correlation)
+                skip_correlation=args.skip_correlation,
+                pruning_mode=args.pruning_mode)
             all_results[ds_name] = result
         except Exception as e:
             print(f"  FAILED: {e}")

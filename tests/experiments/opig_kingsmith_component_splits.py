@@ -278,7 +278,7 @@ def evaluate_rep(X, labels, groups, model, n_folds):
     }
 
 
-def evaluate_split(dataset_name, data, split_key, n_folds):
+def evaluate_split(dataset_name, data, split_key, n_folds, pruning_mode='default_pruning'):
     """Evaluate all reps + hybrid under one component split.
 
     Returns dict with per-rep per-model metrics and hybrid comparison.
@@ -306,7 +306,10 @@ def evaluate_split(dataset_name, data, split_key, n_folds):
     try:
         from kirby.find_best_hybrid import find_best_hybrid
         from kirby.hybrid import apply_feature_selection
+        from experiments._shared import resolve_pruning_kwargs
 
+        _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
+                                       dataset_label=f'{dataset_name}/loo_{split_key}')
         search = find_best_hybrid(
             base_reps=base_reps if base_reps else reps,
             labels=labels, groups=groups,
@@ -319,7 +322,8 @@ def evaluate_split(dataset_name, data, split_key, n_folds):
             speed='full', return_fitted=True, verbose=False, cache=True,
             dataset_name=dataset_name, tier='general',
             condition_suffix=f'loo_{split_key}',
-            adaptive_pruning=0.25)
+            adaptive_pruning=0.25,
+            **_pkw)
 
         top3 = extract_top3_base_reps(search)
         if top3:
@@ -465,6 +469,11 @@ def main():
         '--output', type=str, default=None,
         help='Output JSON path (default: tests/results/comparisons/'
              'opig_kingsmith_component_splits.json)')
+    parser.add_argument(
+        '--pruning-mode', type=str, default='default_pruning',
+        help="Adaptive pruning mode (default 'default_pruning'). "
+             "'aggressive_pruning' = td=0.5 at b=50 mid-flight prune for "
+             "gp/svm/mlp on n>=1000 datasets.")
 
     args = parser.parse_args()
 
@@ -500,7 +509,8 @@ def main():
         for split_key in split_keys:
             try:
                 split_result = evaluate_split(
-                    ds_name, data, split_key, args.n_folds)
+                    ds_name, data, split_key, args.n_folds,
+                    pruning_mode=args.pruning_mode)
                 ds_result['splits'][split_key] = split_result
             except Exception as e:
                 print(f"  FAILED split={split_key}: {e}")

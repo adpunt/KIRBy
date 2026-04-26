@@ -51,7 +51,8 @@ from experiments._shared import (
 from kirby.hybrid import create_hybrid, apply_feature_selection
 
 
-def run(source_data, target_data, config, output_dir, source_name, target_name):
+def run(source_data, target_data, config, output_dir, source_name, target_name,
+        pruning_mode='default_pruning'):
     """OPIG C5: Cross-dataset blueprint transfer."""
     print("\n" + "=" * 70)
     print("OPIG C5: CROSS-DATASET BLUEPRINT TRANSFER")
@@ -100,6 +101,12 @@ def run(source_data, target_data, config, output_dir, source_name, target_name):
     print(f"\n  Shared reps ({len(shared_rep_names)}): {', '.join(shared_rep_names)}")
     print(f"  Metric: {metric_name} ({'lower' if lower_is_better else 'higher'} is better)")
 
+    from experiments._shared import resolve_pruning_kwargs
+    _src_pkw = resolve_pruning_kwargs(pruning_mode, len(source_labels),
+                                       dataset_label=source_name)
+    _tgt_pkw = resolve_pruning_kwargs(pruning_mode, len(target_labels),
+                                       dataset_label=target_name)
+
     # ── Step 1: Hybrid search on source (cached) ───────────────────────
     print(f"\n  Step 1: Hybrid search on source ({source_name})")
     source_search = get_precomputed_search(
@@ -108,6 +115,7 @@ def run(source_data, target_data, config, output_dir, source_name, target_name):
         metric=metric_name, task_type=task_type,
         domain=source_data.get('domain', 'molecular'),
         dataset_name=source_name, tier='general',
+        **_src_pkw,
     )
 
     # ── Step 2: Hybrid search on target (cached) ───────────────────────
@@ -118,6 +126,7 @@ def run(source_data, target_data, config, output_dir, source_name, target_name):
         metric=metric_name, task_type=task_type,
         domain=target_data.get('domain', 'molecular'),
         dataset_name=target_name, tier='general',
+        **_tgt_pkw,
     )
 
     # ── Step 3: Per-model evaluation ────────────────────────────────────
@@ -474,6 +483,10 @@ if __name__ == '__main__':
                         help='Max folds to evaluate (stops early)')
     parser.add_argument('--augment', action='store_true',
                         help='Include augmentation reps')
+    parser.add_argument('--pruning-mode', type=str, default='default_pruning',
+                        help="Adaptive pruning mode (default 'default_pruning'). "
+                             "'aggressive_pruning' = td=0.5 at b=50 mid-flight prune "
+                             "for gp/svm/mlp on n>=1000 datasets.")
     args = parser.parse_args()
 
     # Compute shared reps from DATASET_REPS intersection
@@ -504,7 +517,8 @@ if __name__ == '__main__':
     config = get_config(args)
 
     results = run(source_data, target_data, config, args.output,
-                  args.source, args.target)
+                  args.source, args.target,
+                  pruning_mode=args.pruning_mode)
     save_experiment_results(results, args.output,
                            'opig_blueprint_transfer',
                            f'{args.source}_to_{args.target}')
