@@ -264,6 +264,106 @@ DISTANCE_EVALUATORS = ['knn', 'ridge', 'rf', 'mlp', 'lightgbm', 'svm']
 # RF + XGBoost (tree ensembles), Ridge (linear probe), SVM (kernel), MLP (neural), LightGBM (boosting).
 DOWNSTREAM_MODELS = ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm']
 
+
+# Pruning modes — single source of truth for adaptive-pruning configuration.
+# Used by both tests/precompute_hybrids.py (precompute) and the experiment
+# helpers (run_all in complexity/similarity/noise).
+#
+# Each mode bundles:
+#   - schedule: global multi-stage schedule applied to every model.
+#   - model_overrides: per-model schedule overrides (or None).
+#   - min_samples_for_overrides: dataset n_samples threshold below which
+#     model_overrides are dropped. Mid-flight pruning on small datasets
+#     risks dropping the actual winner because fold-0 noise dominates;
+#     the gate prevents this.
+#
+# Calibration source: f16_multistage_pruning sweep on f15 data (2026-04-26).
+# For caco2, herg_ki, logd, buchwald_hartwig (n>=2000), td=0.5 at ckpt=[50]
+# preserves best_by_model[m] within 2% for SVM/MLP while saving ~48% of
+# those models' fold-evals. For flab_pk_jain_fcrnrt (n=132) and abagym_EGFR,
+# MLP/Ridge fail at td>=0.3 — hence the n_samples gate at 1000.
+PRUNING_MODES = {
+    'default_pruning': {
+        'description': (
+            'Existing single-stage strategy pruning (adaptive_pruning=0.15) '
+            'only. No mid-flight pruning on any model. Bit-identical to '
+            'pre-Phase-2 behaviour and to f15-validated default.'
+        ),
+        'schedule': {
+            'checkpoints': [],
+            'tail_drop_per_checkpoint': 0.0,
+            'final_strategy_threshold': 0.15,
+            'min_configs_per_model': 1,
+        },
+        'model_overrides': None,
+        'min_samples_for_overrides': 0,
+    },
+    'aggressive_pruning': {
+        'description': (
+            'Multi-stage tail-drop pruning at b=50 with td=0.5, applied '
+            'ONLY to expensive models (gp, svm, mlp) and ONLY when '
+            'n_samples >= 1000. Cheap models (rf, xgboost, ridge, '
+            'lightgbm) keep the existing single-stage prune. Small '
+            'datasets fall back to default_pruning behaviour. '
+            'Calibrated on f16 sweep, 2026-04-26.'
+        ),
+        'schedule': {
+            'checkpoints': [],
+            'tail_drop_per_checkpoint': 0.0,
+            'final_strategy_threshold': 0.15,
+            'min_configs_per_model': 1,
+        },
+        'model_overrides': {
+            'gp':  {'checkpoints': [50], 'tail_drop_per_checkpoint': 0.5},
+            'svm': {'checkpoints': [50], 'tail_drop_per_checkpoint': 0.5},
+            'mlp': {'checkpoints': [50], 'tail_drop_per_checkpoint': 0.5},
+        },
+        'min_samples_for_overrides': 1000,
+    },
+}
+
+
+def resolve_pruning_mode(mode_name, override_checkpoints=None,
+                         override_tail_drop=None, override_min_samples=None):
+    """Return (schedule, model_overrides_template, min_samples_gate).
+
+    `model_overrides_template` is the unconditional per-model dict; the
+    n_samples gate is applied by the caller once data is loaded.
+    """
+    if mode_name not in PRUNING_MODES:
+        raise ValueError(f"Unknown pruning mode '{mode_name}'. "
+                         f"Choose from {list(PRUNING_MODES.keys())}")
+    mode = PRUNING_MODES[mode_name]
+    schedule = dict(mode['schedule'])
+    model_overrides = (
+        {k: dict(v) for k, v in mode['model_overrides'].items()}
+        if mode['model_overrides'] else None
+    )
+    min_samples = int(mode['min_samples_for_overrides'])
+    if model_overrides is not None:
+        if override_checkpoints is not None:
+            for m in model_overrides:
+                model_overrides[m]['checkpoints'] = list(override_checkpoints)
+        if override_tail_drop is not None:
+            for m in model_overrides:
+                model_overrides[m]['tail_drop_per_checkpoint'] = float(
+                    override_tail_drop)
+    if override_min_samples is not None:
+        min_samples = int(override_min_samples)
+    return schedule, model_overrides, min_samples
+
+
+def apply_pruning_gate(model_overrides, n_samples, min_samples_gate):
+    """Return model_overrides if n_samples >= gate else None.
+
+    Centralized gate logic so precompute and experiment runners agree.
+    """
+    if model_overrides is None:
+        return None
+    if n_samples < min_samples_gate:
+        return None
+    return model_overrides
+
 # Probabilistic models for noise/uncertainty experiments (N09, N13, S11).
 DOWNSTREAM_MODELS_NOISE = ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm', 'ngboost']
 

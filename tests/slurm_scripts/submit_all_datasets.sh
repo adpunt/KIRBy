@@ -83,23 +83,28 @@ get_mem_override() {
     esac
 }
 
+# Default pruning mode for the bulk submission. Override at the env-var
+# level: PRUNING_MODE=default_pruning bash submit_all_datasets.sh complexity
+PRUNING_MODE="${PRUNING_MODE:-aggressive_pruning}"
+EXPORT_FLAG="--export=ALL,PRUNING_MODE=${PRUNING_MODE}"
+
 # ── Submit ──────────────────────────────────────────────────────────────
 COUNT=0
 for DS in $DATASETS; do
     MEM_OVERRIDE=$(get_mem_override $DS)
     if [ -n "$MEM_OVERRIDE" ]; then
-        CMD="sbatch --job-name=${PREFIX}_${DS} --mem=${MEM_OVERRIDE} ${SUBMIT_SCRIPT} ${CATEGORY} ${DS}"
+        CMD="sbatch ${EXPORT_FLAG} --job-name=${PREFIX}_${DS} --mem=${MEM_OVERRIDE} ${SUBMIT_SCRIPT} ${CATEGORY} ${DS}"
     else
-        CMD="sbatch --job-name=${PREFIX}_${DS} ${SUBMIT_SCRIPT} ${CATEGORY} ${DS}"
+        CMD="sbatch ${EXPORT_FLAG} --job-name=${PREFIX}_${DS} ${SUBMIT_SCRIPT} ${CATEGORY} ${DS}"
     fi
     if [ "$DRY_RUN" = true ]; then
         echo "[dry-run] $CMD"
     else
-        echo "Submitting: ${CATEGORY}/${DS}${MEM_OVERRIDE:+ (mem=${MEM_OVERRIDE})}"
+        echo "Submitting: ${CATEGORY}/${DS}${MEM_OVERRIDE:+ (mem=${MEM_OVERRIDE})}  pruning=${PRUNING_MODE}"
         $CMD
     fi
     COUNT=$((COUNT + 1))
 done
 
 echo ""
-echo "Total: ${COUNT} ${CATEGORY} jobs${DRY_RUN:+ (dry run)}"
+echo "Total: ${COUNT} ${CATEGORY} jobs${DRY_RUN:+ (dry run)}  pruning_mode=${PRUNING_MODE}"

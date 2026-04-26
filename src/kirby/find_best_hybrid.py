@@ -1542,7 +1542,7 @@ SPEED_TIERS = {
     # because it diverged the cache key from production runs and caused the
     # silent-cache-bypass regression in EXPERIMENT_TRACKER.md. Faster searches
     # now go through Phase 2 multi-stage adaptive_pruning_schedule (see
-    # SCHEDULE_PRESETS in precompute_hybrids.py) which keeps the cache key
+    # PRUNING_MODES in tests/precompute_hybrids.py) which keeps the cache key
     # identical to production.
     'full': {
         # 9 F12/F15-validated strategies. Pruned from 13: dropped 4 zero-best

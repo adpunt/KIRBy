@@ -70,6 +70,12 @@ def main():
     parser.add_argument(
         '--output', type=str, default=None,
         help='Output directory (default: per-category default)')
+    parser.add_argument(
+        '--pruning-mode', type=str, default='default_pruning',
+        help="Adaptive pruning mode (default: 'default_pruning' = current "
+             "single-stage 0.15 strategy prune). 'aggressive_pruning' adds "
+             "td=0.5 at b=50 mid-flight prune to gp/svm/mlp on datasets with "
+             "n_samples >= 1000. See PRUNING_MODES in tests/experiments/_shared.py.")
     args = parser.parse_args()
 
     cat_info = CATEGORIES[args.category]
@@ -95,10 +101,23 @@ def main():
             print(f"Valid: {valid}")
             sys.exit(1)
 
+    # Threading pruning_mode is opt-in per category. complexity has the param;
+    # the others currently inherit the default. Unknown kwarg raises a clear
+    # TypeError if a category helper hasn't adopted it yet.
+    import inspect
+    run_all_params = inspect.signature(helpers.run_all).parameters
+    extra_kwargs = {}
+    if 'pruning_mode' in run_all_params:
+        extra_kwargs['pruning_mode'] = args.pruning_mode
+    elif args.pruning_mode != 'default_pruning':
+        print(f"WARNING: --pruning-mode={args.pruning_mode} ignored: "
+              f"{args.category} run_all does not yet accept pruning_mode.")
+
     helpers.run_all(
         dataset_name=args.dataset,
         output_dir=output_dir,
         experiments=args.experiments,
+        **extra_kwargs,
     )
 
 
