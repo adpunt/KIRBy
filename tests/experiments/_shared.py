@@ -364,6 +364,41 @@ def apply_pruning_gate(model_overrides, n_samples, min_samples_gate):
         return None
     return model_overrides
 
+
+def resolve_pruning_kwargs(pruning_mode, n_samples, verbose=True,
+                           dataset_label=None):
+    """Convenience helper for scripts that call find_best_hybrid directly.
+
+    Resolves the pruning_mode, applies the n_samples gate, and returns the
+    kwargs dict ready to splat:
+
+        kwargs = resolve_pruning_kwargs('aggressive_pruning', len(labels))
+        result = find_best_hybrid(..., **kwargs)
+
+    Returns a dict with two keys:
+        adaptive_pruning_schedule: schedule dict
+        model_pruning_aggressiveness: per-model overrides (or None after gate)
+
+    When verbose=True, prints a single line indicating which mode is active
+    and whether the gate fired.
+    """
+    schedule, ovr_template, min_n = resolve_pruning_mode(pruning_mode)
+    overrides = apply_pruning_gate(ovr_template, n_samples, min_n)
+    if verbose:
+        prefix = f"  [{dataset_label}] " if dataset_label else "  "
+        if overrides is not None:
+            print(f"{prefix}pruning_mode={pruning_mode}, "
+                  f"overrides active for {sorted(overrides.keys())}")
+        elif ovr_template is not None:
+            print(f"{prefix}pruning_mode={pruning_mode}, "
+                  f"overrides gated off (n={n_samples} < {min_n})")
+        else:
+            print(f"{prefix}pruning_mode={pruning_mode} (no per-model overrides)")
+    return {
+        'adaptive_pruning_schedule': schedule,
+        'model_pruning_aggressiveness': overrides,
+    }
+
 # Probabilistic models for noise/uncertainty experiments (N09, N13, S11).
 DOWNSTREAM_MODELS_NOISE = ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm', 'ngboost']
 
