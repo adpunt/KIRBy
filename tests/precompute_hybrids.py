@@ -48,81 +48,103 @@ from experiments.complexity.complexity_helpers import DATASET_REPS
 from kirby.find_best_hybrid import find_best_hybrid, _cache_stats_summary, _reset_cache_stats
 
 
-# Named multi-stage adaptive-pruning schedules (Phase 2).
+# Pruning modes — single source of truth for adaptive-pruning configuration.
 #
-# IMPORTANT: 'baseline' is the only schedule below that has been validated.
-# It reproduces the current single-stage adaptive_pruning=0.15 behavior
-# bit-for-bit. The other entries (light/medium/aggressive/very_aggressive)
-# are CANDIDATE SCHEDULES that f16_multistage_pruning is designed to test
-# — their checkpoints + tail_drop_per_checkpoint values are illustrative
-# points in the calibration space, not validated production values.
-# DO NOT use them for production precompute runs until f16 has been run
-# against complete f15 data and `recommendation` in
-# tests/results/framework/f16_multistage_pruning/calibration_summary.json
-# explicitly endorses the chosen preset. Use via `--pruning-preset`.
-SCHEDULE_PRESETS = {
-    'baseline': {
-        'checkpoints': [],
-        'tail_drop_per_checkpoint': 0.0,
-        'final_strategy_threshold': 0.15,
-        'min_configs_per_model': 1,
+# Each mode bundles:
+#   - schedule: the global multi-stage schedule applied to every model.
+#   - model_overrides: per-model schedule overrides (or None).
+#   - min_samples_for_overrides: dataset n_samples threshold below which
+#     model_overrides are dropped (set to None at runtime). Mid-flight
+#     pruning on small datasets risks dropping the actual winner because
+#     fold-0 noise dominates; the gate prevents this.
+#
+# Anyone using the program can:
+#   - Pick a mode by name via --pruning-mode {default_pruning, aggressive_pruning}
+#   - Override individual fields via --pruning-checkpoints, --pruning-tail-drop,
+#     --pruning-min-samples-gate (see CLI definitions in main()).
+#
+# Calibration source: f16_multistage_pruning sweep on f15 data
+# (2026-04-26). For caco2, herg_ki, logd, buchwald_hartwig (n>=2000),
+# `td=0.5 at ckpt=[50]` preserves best_by_model[m] within 2% for every
+# expensive model (svm, mlp where tested). Saves ~48% of those models'
+# fold-evals. For flab_pk_jain_fcrnrt (n=132) and abagym_EGFR, MLP/Ridge
+# fail at td>=0.3 — hence the n_samples gate.
+PRUNING_MODES: dict = {
+    'default_pruning': {
+        'description': (
+            'Existing single-stage strategy pruning (adaptive_pruning=0.15) '
+            'only. No mid-flight pruning on any model. Bit-identical to '
+            'pre-Phase-2 behaviour and to f15-validated default.'
+        ),
+        'schedule': {
+            'checkpoints': [],
+            'tail_drop_per_checkpoint': 0.0,
+            'final_strategy_threshold': 0.15,
+            'min_configs_per_model': 1,
+        },
+        'model_overrides': None,
+        'min_samples_for_overrides': 0,
     },
-    'light': {
-        'checkpoints': [50],
-        'tail_drop_per_checkpoint': 0.25,
-        'final_strategy_threshold': 0.15,
-        'min_configs_per_model': 1,
-    },
-    'medium': {
-        'checkpoints': [25, 50],
-        'tail_drop_per_checkpoint': 0.50,
-        'final_strategy_threshold': 0.15,
-        'min_configs_per_model': 1,
-    },
-    'aggressive': {
-        'checkpoints': [25, 50, 100],
-        'tail_drop_per_checkpoint': 0.50,
-        'final_strategy_threshold': 0.15,
-        'min_configs_per_model': 1,
-    },
-    'very_aggressive': {
-        'checkpoints': [10, 25, 50],
-        'tail_drop_per_checkpoint': 0.75,
-        'final_strategy_threshold': 0.15,
-        'min_configs_per_model': 1,
+    'aggressive_pruning': {
+        'description': (
+            'Multi-stage tail-drop pruning at b=50 with td=0.5, applied '
+            'ONLY to expensive models (gp, svm, mlp) and ONLY when '
+            'n_samples >= 1000. Cheap models (rf, xgboost, ridge, '
+            'lightgbm) keep the existing single-stage prune. Small '
+            'datasets fall back to default_pruning behaviour. '
+            'Calibrated on f16 sweep, 2026-04-26.'
+        ),
+        'schedule': {
+            'checkpoints': [],
+            'tail_drop_per_checkpoint': 0.0,
+            'final_strategy_threshold': 0.15,
+            'min_configs_per_model': 1,
+        },
+        'model_overrides': {
+            'gp':  {'checkpoints': [50], 'tail_drop_per_checkpoint': 0.5},
+            'svm': {'checkpoints': [50], 'tail_drop_per_checkpoint': 0.5},
+            'mlp': {'checkpoints': [50], 'tail_drop_per_checkpoint': 0.5},
+        },
+        'min_samples_for_overrides': 1000,
     },
 }
 
 
-# Per-model schedule override presets (Phase 3).
-#
-# IMPORTANT: this dict is intentionally minimal. The named per-model presets
-# (gp_aggressive, svm_aggressive, expensive_models_aggressive, ...) that
-# previously lived here were UNCALIBRATED guesses written before f16 had real
-# data to set their thresholds. They have been removed to prevent accidental
-# use of made-up schedules in production precompute.
-#
-# To populate this dict with calibrated values:
-#   1. Run f15 to completion on the calibration datasets (caco2, herg_ki,
-#      flab_pk_jain_fcrnrt, abagym_EGFR, logd, buchwald_hartwig). At minimum
-#      the per-model split files {dataset}_{model}.json must be complete for
-#      every (dataset, model) pair that f16 needs.
-#   2. Run f16 (`tests/experiments/framework/f16_multistage_pruning.py`) on
-#      the server against complete f15 data. It writes
-#      `tests/results/framework/f16_multistage_pruning/calibration_summary.json`.
-#   3. Read the `recommendation` block + per-dataset `pct_evals_avoided` and
-#      `worst_relative_loss`. The most aggressive schedule that meets the
-#      acceptance criteria (max relative loss <= 2%, top-3 overlap >= 0.66)
-#      becomes the new `expensive_models_aggressive` entry below.
-#   4. Add the calibrated preset(s) to this dict and reference the f16 run
-#      that produced them in a comment.
-#
-# Until that calibration lands, the only acceptable preset is 'none' (i.e.
-# no per-model override). Use --pruning-preset baseline + no override
-# for production runs.
-MODEL_OVERRIDE_PRESETS = {
-    'none': {},
-}
+def _resolve_pruning_mode(mode_name, override_checkpoints=None,
+                          override_tail_drop=None, override_min_samples=None):
+    """Return a (schedule, model_overrides_template, min_samples) triple.
+
+    `model_overrides_template` is the per-model dict; the n_samples gate
+    is applied later in `precompute_dataset` once data is loaded.
+
+    Optional overrides modify the chosen mode's tunables:
+      - override_checkpoints: replace the [50] in expensive-model overrides
+      - override_tail_drop: replace the 0.5
+      - override_min_samples: replace the 1000 gate
+    """
+    if mode_name not in PRUNING_MODES:
+        raise ValueError(f"Unknown pruning mode '{mode_name}'. "
+                         f"Choose from {list(PRUNING_MODES.keys())}")
+    mode = PRUNING_MODES[mode_name]
+    schedule = dict(mode['schedule'])
+    model_overrides = (
+        {k: dict(v) for k, v in mode['model_overrides'].items()}
+        if mode['model_overrides'] else None
+    )
+    min_samples = int(mode['min_samples_for_overrides'])
+
+    if model_overrides is not None:
+        if override_checkpoints is not None:
+            for m in model_overrides:
+                model_overrides[m]['checkpoints'] = list(override_checkpoints)
+        if override_tail_drop is not None:
+            for m in model_overrides:
+                model_overrides[m]['tail_drop_per_checkpoint'] = float(
+                    override_tail_drop)
+    if override_min_samples is not None:
+        min_samples = int(override_min_samples)
+
+    return schedule, model_overrides, min_samples
 
 
 # =============================================================================
@@ -272,7 +294,8 @@ def _datasets_for_domain(domain):
 def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
                        models=None, condition_filter=None, distance=False,
                        adaptive_pruning=True, adaptive_pruning_schedule=None,
-                       model_pruning_aggressiveness=None):
+                       model_pruning_aggressiveness=None,
+                       min_samples_for_overrides=0):
     """Run all precompute conditions for one dataset.
 
     Args:
@@ -280,13 +303,19 @@ def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
             experiments that use DISTANCE_EVALUATORS + DISTANCE_BUDGETS).
         adaptive_pruning: Legacy single-stage threshold (True=0.15, float=custom).
             Used as fallback when adaptive_pruning_schedule is None.
-        adaptive_pruning_schedule: Multi-stage pruning schedule dict
-            (Phase 2). Overrides adaptive_pruning when set. Schema:
-                {'checkpoints': [int, ...],
-                 'tail_drop_per_checkpoint': float,
-                 'final_strategy_threshold': float,
-                 'min_configs_per_model': int}
-            See SCHEDULE_PRESETS in this module for named presets.
+        adaptive_pruning_schedule: Multi-stage pruning schedule dict.
+            Schema: {'checkpoints': [int, ...],
+                     'tail_drop_per_checkpoint': float,
+                     'final_strategy_threshold': float,
+                     'min_configs_per_model': int}
+        model_pruning_aggressiveness: Per-model schedule overrides.
+            Schema: {model_name: {schedule fields}}.
+        min_samples_for_overrides: If the loaded dataset has n_samples
+            below this threshold, model_pruning_aggressiveness is dropped
+            (set to None) for this dataset. Mid-flight pruning is unsafe
+            on small datasets where fold-0 noise dominates.
+
+        See PRUNING_MODES + _resolve_pruning_mode for named-mode entry point.
     """
     ds_config = DATASET_REPS.get(dataset_name)
     if ds_config is None:
@@ -329,6 +358,18 @@ def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
 
     print(f"  general={len(general_reps)}, top={len(top_reps)}, aug={len(aug_reps)}")
     print(f"  metric={metric}, task={task_type}, n={len(labels)}")
+
+    # Apply n_samples gate to per-model overrides. Mid-flight pruning on
+    # small datasets risks dropping the per-model best (fold-0 noise
+    # dominates). f16 calibration found this fails on n=132/720 antibody.
+    if (model_pruning_aggressiveness is not None
+            and len(labels) < min_samples_for_overrides):
+        print(f"  n_samples={len(labels)} < {min_samples_for_overrides} threshold "
+              f"— disabling per-model pruning overrides for this dataset.")
+        model_pruning_aggressiveness = None
+    elif model_pruning_aggressiveness is not None:
+        print(f"  per-model pruning overrides active for: "
+              f"{sorted(model_pruning_aggressiveness.keys())}")
 
     # NOTE: pass models=None so find_best_hybrid uses speed-tier defaults.
     # This matches how get_precomputed_search() calls find_best_hybrid,
@@ -498,17 +539,32 @@ def main():
                              'DISTANCE_BUDGETS) for similarity/noise experiments')
     parser.add_argument('--pruning', type=float, default=None,
                         help='Legacy single-stage adaptive pruning threshold '
-                             '(0.15=default, 0.25=aggressive). True if omitted.')
-    parser.add_argument('--pruning-preset', type=str, default=None,
-                        choices=list(SCHEDULE_PRESETS.keys()),
-                        help='Multi-stage adaptive pruning schedule preset '
-                             '(Phase 2). Overrides --pruning if set. '
-                             'See SCHEDULE_PRESETS for definitions.')
-    parser.add_argument('--model-override-preset', type=str, default=None,
-                        choices=list(MODEL_OVERRIDE_PRESETS.keys()),
-                        help='Per-model pruning override preset (Phase 3). '
-                             'Composes with --pruning-preset. See '
-                             'MODEL_OVERRIDE_PRESETS for definitions.')
+                             'override (0.15=default). Mostly superseded by '
+                             '--pruning-mode. True if omitted.')
+    parser.add_argument('--pruning-mode', type=str, default='default_pruning',
+                        choices=list(PRUNING_MODES.keys()),
+                        help="Adaptive-pruning mode. 'default_pruning' = "
+                             'existing single-stage 0.15 strategy prune only. '
+                             "'aggressive_pruning' = multi-stage tail-drop "
+                             '(td=0.5 at b=50) on expensive models (gp/svm/mlp), '
+                             'gated by n_samples >= 1000. Cheap models always '
+                             'use the existing default. See PRUNING_MODES for '
+                             'descriptions.')
+    parser.add_argument('--pruning-checkpoints', type=str, default=None,
+                        help='Comma-separated budgets at which to fire '
+                             'mid-flight tail-drop (e.g. "50" or "25,50,100"). '
+                             'Overrides the default checkpoints in the chosen '
+                             'pruning-mode. Applies to expensive-model overrides.')
+    parser.add_argument('--pruning-tail-drop', type=float, default=None,
+                        help='Bottom-fraction of (alloc, importance) pairs '
+                             'to drop at each checkpoint (e.g. 0.5). Overrides '
+                             "the default in the chosen pruning-mode's "
+                             'expensive-model overrides.')
+    parser.add_argument('--pruning-min-samples-gate', type=int, default=None,
+                        help='Override the dataset n_samples threshold below '
+                             'which per-model pruning overrides are dropped. '
+                             "default_pruning uses 0 (always off); "
+                             'aggressive_pruning uses 1000.')
 
     args = parser.parse_args()
 
@@ -526,24 +582,29 @@ def main():
     tiers = ('general', 'top') if args.tier == 'both' else (args.tier,)
     models = args.models.split(',') if args.models else None
     pruning = args.pruning if args.pruning is not None else True
-    pruning_schedule = (SCHEDULE_PRESETS[args.pruning_preset]
-                        if args.pruning_preset else None)
-    model_overrides = (MODEL_OVERRIDE_PRESETS[args.model_override_preset]
-                       if args.model_override_preset else None)
-    if model_overrides is not None and not model_overrides:
-        model_overrides = None  # 'none' preset = empty dict = effectively None
+    # Resolve pruning mode + apply individual-knob overrides
+    override_checkpoints = None
+    if args.pruning_checkpoints:
+        override_checkpoints = [int(b) for b in args.pruning_checkpoints.split(',')
+                                if b.strip()]
+    pruning_schedule, model_overrides, min_samples_gate = _resolve_pruning_mode(
+        args.pruning_mode,
+        override_checkpoints=override_checkpoints,
+        override_tail_drop=args.pruning_tail_drop,
+        override_min_samples=args.pruning_min_samples_gate,
+    )
 
     print(f"Precompute: {len(datasets)} datasets, tiers={tiers}, speed={args.speed}")
     if args.condition:
         print(f"Condition: {args.condition}")
     if args.distance:
         print(f"Mode: DISTANCE (evaluators={DISTANCE_EVALUATORS}, budgets={DISTANCE_BUDGETS})")
-    if pruning_schedule is not None:
-        print(f"Pruning preset: {args.pruning_preset} = {pruning_schedule}")
-    elif args.pruning is not None:
-        print(f"Pruning threshold (legacy): {args.pruning}")
-    if model_overrides is not None:
-        print(f"Model override preset: {args.model_override_preset} = {model_overrides}")
+    print(f"Pruning mode: {args.pruning_mode}")
+    print(f"  schedule = {pruning_schedule}")
+    print(f"  model_overrides = {model_overrides}")
+    print(f"  min_samples gate = {min_samples_gate}")
+    if args.pruning is not None:
+        print(f"  legacy --pruning override = {args.pruning}")
     print(f"Datasets: {datasets}")
 
     t_start = time.time()
@@ -552,7 +613,8 @@ def main():
                            condition_filter=args.condition, distance=args.distance,
                            adaptive_pruning=pruning,
                            adaptive_pruning_schedule=pruning_schedule,
-                           model_pruning_aggressiveness=model_overrides)
+                           model_pruning_aggressiveness=model_overrides,
+                           min_samples_for_overrides=min_samples_gate)
 
     total = time.time() - t_start
     print(f"\n{'='*70}")
