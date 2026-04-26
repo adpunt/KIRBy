@@ -884,7 +884,8 @@ def _import_experiment(exp_id: str):
 
 def run_all(dataset_name: str, output_dir: str,
             experiments: list = None, config: dict = None,
-            rep_names: list = None):
+            rep_names: list = None,
+            pruning_mode: str = 'default_pruning'):
     """Load data once and run all single-dataset complexity experiments.
 
     Args:
@@ -893,6 +894,10 @@ def run_all(dataset_name: str, output_dir: str,
         experiments: List of experiment IDs to run (default: SINGLE_DATASET_EXPERIMENTS).
         config: Config dict override (default: fast tier from SPEED_TIERS).
         rep_names: Explicit rep list override. If None, uses DATASET_REPS[dataset_name]['general'].
+        pruning_mode: One of PRUNING_MODES from _shared.py. Default 'default_pruning'
+            reproduces the legacy single-stage adaptive_pruning=0.15 behaviour.
+            'aggressive_pruning' applies td=0.5 at b=50 to gp/svm/mlp ONLY when
+            n_samples >= 1000 (gate applied automatically per dataset).
     """
     if config is None:
         from kirby.find_best_hybrid import SPEED_TIERS
@@ -968,6 +973,17 @@ def run_all(dataset_name: str, output_dir: str,
     else:
         data['augmentations'] = None
 
+    # ── Resolve pruning_mode and apply n_samples gate ──
+    from experiments._shared import resolve_pruning_mode, apply_pruning_gate
+    _sched, _model_ovr_template, _min_n = resolve_pruning_mode(pruning_mode)
+    _model_overrides = apply_pruning_gate(
+        _model_ovr_template, len(data['labels']), _min_n)
+    print(f"\n  Pruning mode: {pruning_mode}")
+    if _model_overrides is not None:
+        print(f"    overrides active for: {sorted(_model_overrides.keys())}")
+    elif _model_ovr_template is not None:
+        print(f"    overrides gated off (n={len(data['labels'])} < {_min_n})")
+
     # ── Precompute hybrid searches (general reps) ──
     if len(data['reps']) >= 2:
         from experiments._shared import precompute_hybrid_searches
@@ -982,6 +998,8 @@ def run_all(dataset_name: str, output_dir: str,
             task_type=_task_type,
             domain=data.get('domain', 'molecular'),
             dataset_name=dataset_name, tier='general',
+            adaptive_pruning_schedule=_sched,
+            model_pruning_aggressiveness=_model_overrides,
         )
         data['precomputed_searches'] = precompute_results
     else:
@@ -1002,6 +1020,8 @@ def run_all(dataset_name: str, output_dir: str,
             task_type=_task_type,
             domain=data.get('domain', 'molecular'),
             dataset_name=dataset_name, tier='top',
+            adaptive_pruning_schedule=_sched,
+            model_pruning_aggressiveness=_model_overrides,
         )
         data['precomputed_searches_top'] = precompute_top
     else:
