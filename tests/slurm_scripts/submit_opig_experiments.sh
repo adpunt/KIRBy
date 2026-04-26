@@ -32,23 +32,26 @@ submit() {
 }
 
 FILTER="${1:-all}"
-echo "OPIG Experiment Submission (filter: ${FILTER})"
+PRUNING_MODE="${PRUNING_MODE:-aggressive_pruning}"
+PM="--pruning-mode ${PRUNING_MODE}"
+
+echo "OPIG Experiment Submission (filter: ${FILTER}, pruning=${PRUNING_MODE})"
 echo "================================================"
 
 # --- Antibody experiments ---
 if [[ "$FILTER" == "all" || "$FILTER" == "antibody" || "$FILTER" == "humanness" ]]; then
     submit humanness 64G 11:59:00 short \
-        "python tests/experiments/opig_humanness.py --datasets humanness_species,humanness_therapeutic"
+        "python tests/experiments/opig_humanness.py ${PM} --datasets humanness_species,humanness_therapeutic"
 fi
 
 if [[ "$FILTER" == "all" || "$FILTER" == "antibody" || "$FILTER" == "trastuzumab" ]]; then
     submit trastuzumab 64G 11:59:00 short \
-        "python tests/experiments/opig_trastuzumab_enrichment.py"
+        "python tests/experiments/opig_trastuzumab_enrichment.py ${PM}"
 fi
 
 if [[ "$FILTER" == "all" || "$FILTER" == "antibody" || "$FILTER" == "ginkgo" ]]; then
     submit ginkgo 128G 23:59:00 long \
-        "python tests/experiments/opig_ginkgo_developability.py"
+        "python tests/experiments/opig_ginkgo_developability.py ${PM}"
 fi
 
 # CDR flexibility DROPPED — only ~116 unique CDR sequences across all types,
@@ -57,18 +60,18 @@ fi
 # --- DDG / Molecular experiments ---
 if [[ "$FILTER" == "all" || "$FILTER" == "molecular" || "$FILTER" == "graphinity" ]]; then
     submit graphinity 64G 11:59:00 short \
-        "python tests/experiments/opig_graphinity_ddg.py --max-samples 5000"
+        "python tests/experiments/opig_graphinity_ddg.py ${PM} --max-samples 5000"
 fi
 
 if [[ "$FILTER" == "all" || "$FILTER" == "molecular" || "$FILTER" == "qsar" ]]; then
     submit qsar 64G 11:59:00 short \
-        "python tests/experiments/opig_activity_cliff_qsar.py"
+        "python tests/experiments/opig_activity_cliff_qsar.py ${PM}"
 fi
 
 # --- Cross-dataset blueprint transfer (OPIG C5) ---
 if [[ "$FILTER" == "all" || "$FILTER" == "molecular" || "$FILTER" == "blueprint" ]]; then
     submit blueprint_transfer 64G 23:59:00 long \
-        "python tests/experiments/opig_blueprint_transfer.py --source logd --target herg_ki --mode full"
+        "python tests/experiments/opig_blueprint_transfer.py ${PM} --source logd --target herg_ki --mode full"
 fi
 
 echo ""
