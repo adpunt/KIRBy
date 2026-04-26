@@ -615,6 +615,60 @@ Submit script: `tests/slurm_scripts/submit_ft_precompute_adme.sh`.
 | 7528902 | ftpc_adme_rlm | **COMPLETED** (11m47s, 2026-04-22, ExitCode 0:0). 3 FT reps cached per fold. |
 | 7529104 / 7529105 | ftpc_adme_hlm/rlm (dup) | **CANCELLED** (instant, accidental resubmit). |
 
+### DTA baseline re-survey — importance-filter fix (2026-04-23)
+
+Re-runs davis/kiba/bindingdb_kd under commit 506e4bb (per-fold importance
+filter for reps with dim > 500, keep top 200 by LightGBM importance; also
+drops MLP from DTA protein-rep pool). Fix motivated by R² blowups like
+`drug_mordred+ridge R²=-40` and `drug_mordred+mlp R²=-2247` on bindingdb_kd.
+FT cache from the v2 precompute jobs (7521193/4/6) is reused — no refit.
+Submit script: `tests/slurm_scripts/submit_dta_baseline_resurvey.sh`.
+
+| Job ID | Name | Partition | Status |
+|--------|------|-----------|--------|
+| 7551136 | dtaresurvey_davis | long, 256G, 4d, GPU | **SUBMITTED 2026-04-22 evening** |
+| 7551137 | dtaresurvey_kiba | long, 256G, 4d, GPU | **SUBMITTED 2026-04-22 evening** |
+| 7551138 | dtaresurvey_bindingdb_kd | long, 256G, 4d, GPU | **SUBMITTED 2026-04-22 evening** |
+
+Expected runtime: 9–17h per dataset (similar to v2 timings). Outputs
+overwrite `tests/results/phase5_baselines/dta/{davis,kiba,bindingdb_kd}.json`.
+Pull all 3 JSONs when complete, then do DTA tier review.
+
+### C02 frozen vs frozen+FT comparison — full run (2026-04-23)
+
+Script: `tests/slurm_scripts/submit_c02_full.sh`. 12 jobs, all `--mode full
+--reps all`, one GPU per dataset. Bug test skipped; FT cache confirmed warm
+from the ftpc_* jobs above. Outputs
+`tests/results/complexity_c02/full/<dataset>_c02_complexity_matching_grid.json`.
+
+| Job ID | Dataset | Partition |
+|--------|---------|-----------|
+| 7548418 | c02_caco2 | long, 128G, 4d, GPU |
+| 7548419 | c02_logd | long, 128G, 4d, GPU |
+| 7548420 | c02_qm9 | long, 128G, 4d, GPU |
+| 7548421 | c02_herg_ki | long, 128G, 4d, GPU |
+| 7548422 | c02_adme_mdr1 | long, 128G, 4d, GPU |
+| 7548423 | c02_adme_hlm | long, 128G, 4d, GPU |
+| 7548424 | c02_adme_rlm | long, 128G, 4d, GPU |
+| 7548425 | c02_abcov_kd | long, 128G, 4d, GPU |
+| 7548426 | c02_flab_binding_phillips_h3 | long, 128G, 4d, GPU |
+| 7548427 | c02_abagym_Ang2 | long, 128G, 4d, GPU |
+| 7548428 | c02_abagym_EGFR | long, 128G, 4d, GPU |
+| 7548429 | c02_abagym_HER2 | long, 128G, 4d, GPU |
+
+### OPIG C7 — CGR vs SMILES comparison (2026-04-23)
+
+Script: `tests/slurm_scripts/submit_cgr_comparison.sh all`. CGR-SMILES
+checkpoint from job 7483446 (2026-04-15) is on disk; comparison tests
+whether CGR reps add unique signal beyond SMILES-based reps for reaction
+yield prediction. Outputs `tests/results/comparisons/opig_cgr_comparison_<ds>.json`.
+
+| Job ID | Name | Dataset | Partition |
+|--------|------|---------|-----------|
+| 7548433 | cgr_bh | buchwald_hartwig | long, 256G, 24h |
+| 7548434 | cgr_doyle | bh_doyle_plates | long, 256G, 24h |
+| 7548435 | cgr_suzuki | suzuki | long, 256G, 24h |
+
 ### CGR-SMILES pretraining (Phase 4)
 
 Single job: corpus generation (~1M USPTO → CGR-SMILES) + continued MLM pretraining (50K steps).
@@ -891,3 +945,99 @@ sacct -j 11825934-11825990 --format=State --noheader -X | sort | uniq -c
 sacct -j 11825934-11825990 --format=JobID,JobName%40,State,Elapsed,ExitCode -X \
   | grep -E "FAILED|TIMEOUT|OUT_OF_ME|CANCELLED"
 ```
+
+---
+
+## 2026-04-26 — Complexity experiment suite (40 jobs, aggressive_pruning)
+
+**NOTE: these are EXPERIMENT jobs, not precompute jobs.** Tracker re-used
+because the operational shape is the same. Pre-existing precompute pending
+jobs were cancelled before this submission. C02 + later complexity
+experiments will fill any precompute gaps on demand via the on-disk cache.
+
+**Submitted:** 2026-04-26 via
+`bash tests/slurm_scripts/submit_all_datasets.sh complexity`
+(prefix `cx_`, default `PRUNING_MODE=aggressive_pruning`).
+
+**Partition:** long | **Wall:** 7-00:00:00 | **CPUs:** 8 | **Mem:** 128G default,
+128G override on listed datasets per `get_mem_override` (no change from
+that table — ten datasets carry the override).
+
+**Pruning:** `aggressive_pruning` — single-stage 0.15 strategy prune globally;
+multi-stage `td=0.5 at ckpt=[50]` applied to gp/svm/mlp ONLY when
+n_samples >= 1000. Smaller datasets fall back to the existing
+single-stage default automatically.
+
+**ID range:** 12013701–12013740.
+
+| Job ID | Dataset | Mem |
+|--------|---------|-----|
+| 12013701 | herg_ki | 128G |
+| 12013702 | caco2 | 128G |
+| 12013703 | logd | 128G |
+| 12013704 | qm9 | 128G |
+| 12013705 | adme_hlm | 128G |
+| 12013706 | adme_rlm | 128G |
+| 12013707 | adme_mdr1 | 128G |
+| 12013708 | flab_thermo_tresanco | 128G |
+| 12013709 | flab_pk_jain_heprt | 128G |
+| 12013710 | flab_pk_jain_fcrnrt | 128G |
+| 12013711 | flab_polyreact_jain_cic | 128G |
+| 12013712 | flab_aggregation_jain_hicrt | 128G |
+| 12013713 | flab_thermo_jain | 128G |
+| 12013714 | abcov_kd | 128G |
+| 12013715 | flab_aggregation_jain | 128G |
+| 12013716 | flab_immunogenicity_marks | 128G |
+| 12013717 | flab_polyreact_jain_bvp | 128G |
+| 12013718 | ddg_combined | 128G |
+| 12013719 | flab_binding_koenig | 128G |
+| 12013720 | flab_expression_koenig | 128G |
+| 12013721 | flab_binding_adams | 128G |
+| 12013722 | flab_expression_adams | 128G |
+| 12013723 | flab_binding_phillips_h3 | 128G |
+| 12013724 | abagym_Ang2 | 128G |
+| 12013725 | abagym_EGFR | 128G |
+| 12013726 | abagym_HER2 | 128G |
+| 12013727 | abagym_lysozyme | 128G |
+| 12013728 | abagym_VEGF | 128G |
+| 12013729 | tz_her2_binary | 128G |
+| 12013730 | humanness_therapeutic | 128G |
+| 12013731 | ginkgo_acsins | 128G |
+| 12013732 | ginkgo_colloidal | 128G |
+| 12013733 | ginkgo_heparin | 128G |
+| 12013734 | ginkgo_hic | 128G |
+| 12013735 | ginkgo_pr_cho | 128G |
+| 12013736 | ginkgo_titer | 128G |
+| 12013737 | buchwald_hartwig | 128G |
+| 12013738 | bh_doyle_plates | 128G |
+| 12013739 | tcga_luad_vs_lusc | 128G |
+| 12013740 | tcga_brca_pam50 | 128G |
+
+### Status checks
+
+```bash
+sacct -j 12013701-12013740 --format=State --noheader -X | sort | uniq -c
+sacct -j 12013701-12013740 --format=JobID,JobName%30,State,Elapsed,ExitCode -X \
+  | grep -E "FAILED|TIMEOUT|OUT_OF_ME|CANCELLED"
+squeue -u $USER -o '%.10i %.8P %.30j %.2t %.10M %.10L' | grep cx_
+```
+
+### Per-dataset gate behaviour (expected)
+
+`aggressive_pruning` overrides apply when the dataset has `n_samples >= 1000`.
+Datasets where the gate kicks them off and they fall back to single-stage
+0.15 only:
+- flab_pk_jain_fcrnrt (n=132)
+- flab_thermo_jain (n=137)
+- flab_immunogenicity_marks (~250)
+- abcov_kd (~141)
+- ginkgo_* (n=94–242)
+- abagym_* (~120–300)
+- humanness_therapeutic (clf, small)
+- tz_her2_binary (~5K subsample, gate active → overrides applied)
+- caco2 (n=2158, gate active)
+- logd, herg_ki, qm9, adme_*, ddg_combined, buchwald_hartwig, tcga_* (gate active)
+
+Each per-dataset SLURM log prints a "Pruning mode: aggressive_pruning"
+line followed by either "overrides active for: [...]" or "overrides
+gated off (n=N < 1000)" so behaviour is auditable per-dataset.
