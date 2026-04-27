@@ -1041,3 +1041,98 @@ Datasets where the gate kicks them off and they fall back to single-stage
 Each per-dataset SLURM log prints a "Pruning mode: aggressive_pruning"
 line followed by either "overrides active for: [...]" or "overrides
 gated off (n=N < 1000)" so behaviour is auditable per-dataset.
+
+---
+
+## 2026-04-27 — Similarity experiment suite (40 jobs, aggressive_pruning + reverse order)
+
+**Submitted:** 2026-04-27 via
+`KIRBY_PRECOMPUTE_REVERSE_ORDER=1 PRUNING_MODE=aggressive_pruning bash tests/slurm_scripts/submit_all_datasets.sh similarity`
+(prefix `sim_`).
+
+Reverse condition order set so similarity precompute work staggers
+naturally against the still-running complexity wave (12013701–12013740)
+on overlapping datasets — one wave starts at general/none while the
+other starts at top/capped, hitting different cache files until the
+crossover point. Inner hybrid_eval cache helps reduce duplicate compute
+in the middle.
+
+**Partition:** long | **Wall:** 7-00:00:00 | **CPUs:** 8 | **Mem:** 128G default,
+128G override on listed datasets per `get_mem_override` (same table as
+complexity wave).
+
+**Pruning:** `aggressive_pruning` — single-stage 0.15 strategy prune
+globally; multi-stage `td=0.5 at ckpt=[50]` applied to gp/svm/mlp ONLY
+when n_samples >= 1000. Smaller datasets fall back to single-stage
+default automatically.
+
+**ID range:** 12014438–12014477.
+
+| Job ID | Dataset | Mem |
+|--------|---------|-----|
+| 12014438 | herg_ki | 128G |
+| 12014439 | caco2 | 128G |
+| 12014440 | logd | 128G |
+| 12014441 | qm9 | 128G |
+| 12014442 | adme_hlm | 128G |
+| 12014443 | adme_rlm | 128G |
+| 12014444 | adme_mdr1 | 128G |
+| 12014445 | flab_thermo_tresanco | 128G |
+| 12014446 | flab_pk_jain_heprt | 128G |
+| 12014447 | flab_pk_jain_fcrnrt | 128G |
+| 12014448 | flab_polyreact_jain_cic | 128G |
+| 12014449 | flab_aggregation_jain_hicrt | 128G |
+| 12014450 | flab_thermo_jain | 128G |
+| 12014451 | abcov_kd | 128G |
+| 12014452 | flab_aggregation_jain | 128G |
+| 12014453 | flab_immunogenicity_marks | 128G |
+| 12014454 | flab_polyreact_jain_bvp | 128G |
+| 12014455 | ddg_combined | 128G |
+| 12014456 | flab_binding_koenig | 128G |
+| 12014457 | flab_expression_koenig | 128G |
+| 12014458 | flab_binding_adams | 128G |
+| 12014459 | flab_expression_adams | 128G |
+| 12014460 | flab_binding_phillips_h3 | 128G |
+| 12014461 | abagym_Ang2 | 128G |
+| 12014462 | abagym_EGFR | 128G |
+| 12014463 | abagym_HER2 | 128G |
+| 12014464 | abagym_lysozyme | 128G |
+| 12014465 | abagym_VEGF | 128G |
+| 12014466 | tz_her2_binary | 128G |
+| 12014467 | humanness_therapeutic | 128G |
+| 12014468 | ginkgo_acsins | 128G |
+| 12014469 | ginkgo_colloidal | 128G |
+| 12014470 | ginkgo_heparin | 128G |
+| 12014471 | ginkgo_hic | 128G |
+| 12014472 | ginkgo_pr_cho | 128G |
+| 12014473 | ginkgo_titer | 128G |
+| 12014474 | buchwald_hartwig | 128G |
+| 12014475 | bh_doyle_plates | 128G |
+| 12014476 | tcga_luad_vs_lusc | 128G |
+| 12014477 | tcga_brca_pam50 | 128G |
+
+### Status checks
+
+```bash
+sacct -j 12014438-12014477 --format=State --noheader -X | sort | uniq -c
+sacct -j 12014438-12014477 --format=JobID,JobName%30,State,Elapsed,ExitCode -X \
+  | grep -E "FAILED|TIMEOUT|OUT_OF_ME|CANCELLED"
+squeue -u $USER -o '%.10i %.8P %.30j %.2t %.10M %.10L' | grep sim_
+```
+
+### Verification of reverse-order behaviour
+
+Each per-dataset SLURM log should show:
+```
+KIRBY_PRECOMPUTE_REVERSE_ORDER=1 → iterating aug_conditions in reverse: ['capped', 'uncapped', 'none']
+```
+
+Compare against any complexity job (12013701–12013740) log — those should
+show the default forward order (no such line printed).
+
+### Pending later (after precompute settles)
+
+Noise, federated, and OPIG submissions queued for after both complexity
+and similarity have populated their precompute caches. Those will run
+with default forward order (no env var) and benefit from cache hits
+across most conditions.
