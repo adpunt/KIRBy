@@ -2035,11 +2035,20 @@ def precompute_hybrid_searches(reps, labels, groups, config,
         labels, task_type=task_type, metric=metric, domain=domain,
         dataset_name=dataset_name)
 
-    # Precompute all aug conditions (none, uncapped, capped)
+    # Precompute all aug conditions (none, uncapped, capped).
+    # Setting KIRBY_PRECOMPUTE_REVERSE_ORDER=1 reverses the iteration order
+    # so two parallel jobs starting at the same time naturally work on
+    # different cache files (one starts at 'none', the other at 'capped').
+    # Useful for staggering a follow-up wave against a still-running one.
     aug_conditions = ['none']
     if augmentations is not None and len(augmentations) > 0:
         aug_conditions.append('uncapped')
         aug_conditions.append('capped')
+    if os.environ.get('KIRBY_PRECOMPUTE_REVERSE_ORDER') == '1':
+        aug_conditions = list(reversed(aug_conditions))
+        if verbose:
+            print(f"  KIRBY_PRECOMPUTE_REVERSE_ORDER=1 → "
+                  f"iterating aug_conditions in reverse: {aug_conditions}")
 
     results = {}
     t_start = time.time()
