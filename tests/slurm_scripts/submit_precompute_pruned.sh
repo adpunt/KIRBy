@@ -81,9 +81,10 @@ for ds in "${datasets[@]}"; do
     # Build the --export string. Only include override env vars when set so
     # we don't shadow the run-script defaults with empty values.
     export_parts=("DATASET=${ds}" "KIND=${k}" "PRUNING_MODE=${PRUNING_MODE}" "MEM=${mem}")
-    [[ -n "${PRUNING_CHECKPOINTS:-}" ]]      && export_parts+=("PRUNING_CHECKPOINTS=${PRUNING_CHECKPOINTS}")
-    [[ -n "${PRUNING_TAIL_DROP:-}" ]]        && export_parts+=("PRUNING_TAIL_DROP=${PRUNING_TAIL_DROP}")
-    [[ -n "${PRUNING_MIN_SAMPLES_GATE:-}" ]] && export_parts+=("PRUNING_MIN_SAMPLES_GATE=${PRUNING_MIN_SAMPLES_GATE}")
+    [[ -n "${PRUNING_CHECKPOINTS:-}" ]]              && export_parts+=("PRUNING_CHECKPOINTS=${PRUNING_CHECKPOINTS}")
+    [[ -n "${PRUNING_TAIL_DROP:-}" ]]                && export_parts+=("PRUNING_TAIL_DROP=${PRUNING_TAIL_DROP}")
+    [[ -n "${PRUNING_MIN_SAMPLES_GATE:-}" ]]         && export_parts+=("PRUNING_MIN_SAMPLES_GATE=${PRUNING_MIN_SAMPLES_GATE}")
+    [[ -n "${KIRBY_PRECOMPUTE_REVERSE_ORDER:-}" ]]   && export_parts+=("KIRBY_PRECOMPUTE_REVERSE_ORDER=${KIRBY_PRECOMPUTE_REVERSE_ORDER}")
 
     for k in "${kinds[@]}"; do
         # Per-iteration: replace the placeholder KIND in export_parts

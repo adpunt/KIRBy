@@ -348,6 +348,15 @@ def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
             conditions = [(t, r, a, s) for t, r, a, s in conditions
                           if t == want_tier and s == want_strat]
 
+    # Optional iteration-order flip for parallelization across overlapping
+    # waves. Setting KIRBY_PRECOMPUTE_REVERSE_ORDER=1 makes a second batch
+    # start at the END of the condition list (e.g. top/capped) while a
+    # still-running first batch is at the START (general/none) — so they
+    # naturally work on different cache files. Output identical either way.
+    if os.environ.get('KIRBY_PRECOMPUTE_REVERSE_ORDER') == '1':
+        conditions = list(reversed(conditions))
+        print(f"  KIRBY_PRECOMPUTE_REVERSE_ORDER=1 → reversed condition order")
+
     print(f"  {len(conditions)} conditions to precompute:")
     for tier, reps, augs, strat in conditions:
         aug_str = f"{len(augs)} aug reps" if augs else "no aug"
