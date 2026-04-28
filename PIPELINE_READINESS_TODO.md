@@ -304,7 +304,7 @@ For federated-eligible datasets: also add to federated experiment list per `FEDE
 |---|---------|--------|---------|--------|-------------|
 | 1 | caco2 | Molecular | 2,158 | DONE | Section 10 (new format) |
 | 2 | herg_ki | Molecular (regression) | 1,412 | DONE | Section 10 (new format) |
-| 2b | herg | Molecular (classification) | ~10K | **NEEDS SURVEY** | — |
+| 2b | herg | Molecular (classification, FLuID/Lhasa) | 7,772 | DONE (2026-04-28) | Section 10 (new format) |
 | 3 | logd | Molecular | 5,028 | DONE | Section 10 (new format) |
 | 4 | qm9 | Molecular | 9,978 | DONE | Section 10 (new format) |
 | 5 | adme_hlm | Molecular | 3,086 | DONE | Section 10 (new format) |
@@ -369,6 +369,21 @@ For federated-eligible datasets: also add to federated experiment list per `FEDE
 | Augmentation (5) | maccs, pharmacophore3d, coulomb_matrix, usr, usrcat |
 
 *Note: lora_molformer and contrastive_molformer excluded from herg_ki — both worse than frozen molformer on this dataset (-0.051 and -0.005 R² respectively). Frozen molformer stays.*
+
+**herg (7,772 samples, classification, FLuID/Lhasa):**
+| Tier | Reps |
+|------|------|
+| Top Tier (8) | mhg_gnn, mordred, avalon, ecfp4, grover, atom_pair, pdv, graph_kernel |
+| General (18) | mhg_gnn, mordred, avalon, ecfp4, grover, atom_pair, pdv, graph_kernel, mol2vec, top_torsion, maccs, smited, molformer, chembert, rdkfp, selformer, chemberta, graphmvp |
+| Augmentation (3) | usrcat, coulomb_matrix, molclr |
+| FT reps (1) | lora_molformer |
+| Dropped (3) | unimol_v2 (majority-class collapse, MCC=0), lora_chemberta (chemberta FT excluded by domain policy), ft_schnet (not competitive vs frozen on herg per tracker 455) |
+
+*Survey caveats (from `tests/results/schnet_e2e/herg.json`, job 7515601):*
+- *3-fold/3-model screening (ridge, rf, xgboost only). Precompute + experiments must run at full 5-fold/5-model.*
+- *graph_kernel kept on prior-evidence grounds (top-tier on herg_ki/caco2/etc); its herg score numerically came from a stale-merge survey bug (regression metrics merged from earlier failed run). Survey-bug list, separate fix; don't trust the numerical score for this dataset.*
+- *Survey loader: `load_herg(source='fluid')` → `hERG_lhasa_training.pkl` from `/data/stat-cadd/scat9264/lhasa_data/`.*
+- *Winner (best of screening): mhg_gnn+xgboost=0.7712 acc.*
 
 **logd (5,028 samples):**
 | Tier | Reps |
@@ -743,10 +758,26 @@ for the paper. If flat or worse → FT stays excluded from baseline reps
 (status quo). If mixed → per-dataset swap rules like the existing FT
 decisions in the Methodology Status table.
 
-**Status:** SCRIPTS WRITTEN, bug test not yet run. FT cache still warming
-(`7521194 kiba`, `7521196 bindingdb_kd` running; `7528901 adme_hlm`,
-`7528902 adme_rlm` queued). Do bug test first before full submission —
-failure there would waste ~100-300 GPU-hours on Stage 3.
+**Status:** FT cache fully warm (7521194 kiba, 7521196 bindingdb_kd,
+7528901 adme_hlm, 7528902 adme_rlm all COMPLETED 2026-04-22).
+Bug test skipped; full run submitted directly **2026-04-23** as 12 jobs
+`7548418`–`7548429`:
+- 7548418 c02_caco2
+- 7548419 c02_logd
+- 7548420 c02_qm9
+- 7548421 c02_herg_ki
+- 7548422 c02_adme_mdr1
+- 7548423 c02_adme_hlm
+- 7548424 c02_adme_rlm
+- 7548425 c02_abcov_kd
+- 7548426 c02_flab_binding_phillips_h3
+- 7548427 c02_abagym_Ang2
+- 7548428 c02_abagym_EGFR
+- 7548429 c02_abagym_HER2
+
+Each long, 128G, 4d, GPU. Pull `tests/results/complexity_c02/full/` when
+they land; inspect `conditions.frozen_plus_ft` vs `conditions.no_aug`
+per model.
 
 ---
 
@@ -921,10 +952,12 @@ Source: `antibody_ft_fill/*.json`. Comparing frozen ESM-2 (best ρ across ridge/
 |---|---------|---------|------|------|--------|--------|
 | 34 | tz_her2_binary | 5,000 | 37 | 5 | AUROC/F1w | DONE |
 | 35 | humanness_therapeutic | 564 | 16 | 4 | AUROC/F1w | DONE |
-| 36 | tz_her2_multiclass | 5,000 | 1 | 0 | F1w | BLOCKED — only 1 rep |
-| 37 | humanness_species | — | 0 | 0 | AUROC/F1w | BLOCKED — no file, just submitted |
+| 36 | tz_her2_multiclass | 5,000 | 32 | 12 (none helpful) | F1w | DONE (tier-reviewed 2026-04-16). Top 3 / General 16 / Aug 0 / Dropped 16. |
+| 37 | humanness_species | 5,000 | — | — | AUROC/F1w | **DROPPED (2026-04-19)** — germline V/J usage makes species trivially separable (most reps 0.99+ AUROC); paired-chain models (igbert, igbert_cls, mint, xtrimopglm) collapse to majority-class on VH-only input. Not informative. Survey completed job 7498632. |
 
-**Note:** tz_her2_multiclass has only structural rep. humanness_species has no file yet (just submitted 2026-03-24).
+**Note:** tz_her2_multiclass was originally blocked as "only 1 rep" — the
+2026-04-16 resubmission actually ran the full antibody rep set. Needs
+tier review before DATASET_REPS entry.
 
 ---
 
@@ -968,9 +1001,19 @@ Old Sections 10B/10C/12D/12E have writeups. Need new-format review.
 
 | # | Dataset | Samples | Reps | Augs | Status |
 |---|---------|---------|------|------|--------|
-| 50 | buchwald_hartwig | 3,955 | 14 | 6 | BLOCKED — re-survey needed with CGR reps (cgr_morgan, chytorch_graphormer ready; cgr_smiles_lm blocked on pretraining) |
-| 51 | suzuki | 5,760 | 14 | 4 | DROPPED — R²=0.453 ceiling, only 1 viable rep |
-| 52 | bh_doyle_plates | 4,312 | 35 | 24 | BLOCKED — re-survey needed with CGR reps (same as buchwald_hartwig) |
+| 50 | buchwald_hartwig | 3,955 | 14 | 6 | TODO — CGR-SMILES pretraining complete (checkpoint on disk). Re-survey script drafted `tests/slurm_scripts/submit_reaction_cgr_resurvey.sh`. Not yet submitted. Also running: C7 OPIG comparison `7548433 cgr_bh` (2026-04-23). |
+| 51 | suzuki | 5,760 | 14 | 4 | DROPPED — R²=0.453 ceiling, only 1 viable rep. C7 OPIG comparison still running (`7548435 cgr_suzuki`) to confirm CGR doesn't change the picture. |
+| 52 | bh_doyle_plates | 4,312 | 35 | 24 | TODO — same as buchwald_hartwig. C7 OPIG comparison running `7548434 cgr_doyle` (2026-04-23). |
+
+**Reaction re-survey (option b — unblock precompute):**
+`bash tests/slurm_scripts/submit_reaction_cgr_resurvey.sh` submits
+buchwald_hartwig + bh_doyle_plates on long/256G/GPU with
+`--reps all --skip-existing`. Only cgr_morgan, chytorch_graphormer,
+cgr_smiles_lm (plus any newly wired molecular variants) need to compute;
+all other reps reuse their cached `.npy` files. Decide whether to run
+this after C7 OPIG comparison lands — if CGR adds signal, re-survey and
+update tier tables; if not, existing tier tables stay and BLOCKED status
+can be cleared on doc grounds alone.
 
 **buchwald_hartwig (n=3,955, best R²=0.718, cutoff=0.50):**
 | Tier | Reps |
@@ -996,9 +1039,9 @@ Old Sections 10B/10C/12D/12E have writeups. Need new-format review.
 
 | # | Dataset | Samples | Reps | Augs | Status |
 |---|---------|---------|------|------|--------|
-| 53 | davis_frozen | — | 20 | — | TODO — old dta_survey/ data only |
-| 54 | kiba_frozen | — | 20 | — | TODO — old dta_survey/ data |
-| 55 | kiba_ft | — | 20 | — | TODO — old dta_survey/ data |
+| 53 | davis | — | ~29 | — | NEEDS REVIEW — phase5 survey landed 2026-04-21 (`tests/results/phase5_baselines/dta/davis.json`) |
+| 54 | kiba | — | ~29 | — | NEEDS REVIEW — phase5 survey landed 2026-04-18 (`tests/results/phase5_baselines/dta/kiba.json`) |
+| 55 | bindingdb_kd | ~30K pairs | ~29 | — | NEEDS REVIEW — phase5 survey completed on server 2026-04-21 (job 7520843). **Pull locally:** `scp gateway:/data/stat-cadd/scat9264/KIRBy/tests/results/phase5_baselines/dta/bindingdb_kd.json tests/results/phase5_baselines/dta/` |
 
 **DTA supplementary data:**
 - `dta_survey/`: 20 reps per dataset (older survey)
@@ -1009,7 +1052,7 @@ Old Sections 10B/10C/12D/12E have writeups. Need new-format review.
 
 ---
 
-## TODO — Nucleotide (19 datasets)
+## TODO — Nucleotide (22 datasets)
 
 **⚠️ 2026-04-15 DOWNGRADE:** All 5 datasets previously marked DONE
 (nt_H2AFZ, nt_H3K27ac, nt_H3K27me3, nt_H3K36me3, nt_H3K4me1) are
@@ -1043,6 +1086,9 @@ are reviewed. See PRECOMPUTE_JOB_TRACKER.md §Nucleotide gena_lm refix.
 | 72 | nt_splice_sites_acceptors | 33,000 | 14 | MCC | **DONE** — gena_lm corrected (gena_refix 7499340). Winner: nt_v2_250m+ridge=0.4933. dnabert2 dropped (65%). |
 | 73 | nt_splice_sites_all | 33,000 | 14 | MCC | **DROPPED** — only nt_v2_250m/500m reach MCC≥0.37; all other reps ≤0.28. Weak task, no diversity. |
 | 74 | nt_splice_sites_donors | 33,000 | 14 | MCC | **DONE** — gena_lm corrected (gena_refix 7499341). Winner: nt_v2_250m+ridge=0.5380. dnabert2 dropped (67%). |
+| 74a | gb_human_enhancers_cohn | 27,791 | 14 | MCC | **DONE** — tier table at line "gb_human_enhancers_cohn" below. Winner: grover_dna+ridge=0.4853. |
+| 74b | gb_demo_coding_vs_intergenomic_seqs | 100,000 | 14 | MCC | **DONE** — tier table below. Winner: nt_v2_250m+mlp=0.8392. |
+| 74c | gb_demo_human_or_worm | 100,000 | 14 | MCC | **DONE** (2026-04-23). Winner: tetranuc_freq+mlp=0.9135. Saturated task, classicals dominate. |
 
 **Root cause:** `DATASET_REGISTRY` in `run_baseline_survey.py` had default preset `'fast'` (6 classical reps only) for all nucleotide datasets. Survey was submitted without `--reps all` override, so FM reps never ran. **Fixed 2026-03-28** (commit a2a0d2d): default changed to `'all'` (26 reps: 14 FM + 11 classical + 1 factory).
 
@@ -1290,6 +1336,17 @@ Only 2 reps (nt_v2_250m, nt_v2_500m) reach MCC≥0.37; rest ≤0.28. Best winner
 
 *Winner: grover_dna+ridge=0.4853 MCC. Best aug: grover_dna+tnf_canonical=0.5035 (+0.0182). Top Tier threshold ≥97%.*
 
+**gb_demo_human_or_worm (100,000 samples, 5 groups, MCC) — 14/25 reps ran. REVIEWED 2026-04-23 (job 7496808):**
+
+| Tier | Reps |
+|------|------|
+| Top Tier (8) | tetranuc_freq, tnf_canonical, kmer4, kmer5, grover_dna, kmer3, nt_v2_500m, nt_v2_250m |
+| General (12) | tetranuc_freq, tnf_canonical, kmer4, kmer5, grover_dna, kmer3, nt_v2_500m, nt_v2_250m, mistral_dna, kmer6, hyenadna, codon_usage |
+| Augmentation (1, partial) | codon_usage (dinuc_freq, gc_content, complexity, dna_shape did not run — survey gap accepted) |
+| Dropped (2) | dnabert2 (91.5% of best — covered by other FM reps, pattern consistent with gb_demo_coding sibling), gena_lm (6% of best — confirmed near-random at 1024D) |
+
+*Winner: tetranuc_freq+mlp=0.9135 MCC. Saturated task (n=100K) — top 8 reps cluster within 98.7% of best. Classical k-mers dominate. MLP wins for 6 of 14 reps (nt_v2_*, mistral_dna, grover_dna, tetranuc_freq, dnabert2) — same large-n capacity pattern as gb_demo_coding sibling. Top Tier threshold ≥98.7%.*
+
 ---
 
 ## TODO — OPIG DDG (beyond what's in antibody inter-family)
@@ -1309,20 +1366,20 @@ Only 2 reps (nt_v2_250m, nt_v2_500m) reach MCC≥0.37; rest ≤0.28. Best winner
 | Domain | Total Datasets | DONE | IN PROGRESS | TODO | BLOCKED | DROPPED |
 |--------|---------------|------|-------------|------|---------|---------|
 | Molecular | 8 | 7 | 0 | 0 | 0 | 1 (adme_solubility) |
-| Molecular CLF | 1 | 0 | 0 | 0 | 1 (herg clf, HTC queue) | 0 |
+| Molecular CLF | 1 | 1 | 0 | 0 | 0 | 0 |
 | Ab Inter-Family | 14 | 11 | 0 | 0 | 0 | 3 (hutchinson, sas, ddg_combined_full) |
 | Ab DMS/Large | 5 | 5 | 0 | 0 | 0 | 0 |
 | AbAgym | 6 | 5 | 0 | 0 | 0 | 1 (abagym_all) |
-| Ab CLF | 4 | 2 | 0 | 0 | 2 (multiclass + species, HTC queue) | 0 |
+| Ab CLF | 4 | 3 | 0 | 0 | 0 | 1 (humanness_species — cut 2026-04-19) |
 | Ginkgo | 9 | 6 | 0 | 0 | 0 | 3 (aggregation, purity, tm2) |
 | TCGA | 3 | 2 | 0 | 0 | 0 | 1 (survival) |
-| Reaction | 3 | 0 | 0 | 0 | 2 (buchwald, doyle — CGR re-survey) | 1 (suzuki) |
-| DTA | 3 | 0 | 0 | 0 | 3 (davis, kiba, bindingdb_kd — HTC queue) | 0 |
-| Nucleotide | 22 | 0 | 0 | 0 | 22 (gena_lm refix 7485363-78 PD + 6 queued surveys) | 0 |
+| Reaction | 3 | 0 | 0 | 2 (buchwald, doyle — C7 CGR comparison running; optional re-survey via `submit_reaction_cgr_resurvey.sh`) | 0 | 1 (suzuki) |
+| DTA | 3 | 0 | 0 | 3 (davis, kiba, bindingdb_kd — surveys done, need tier review) | 0 | 0 |
+| Nucleotide | 22 | 21 | 0 | 0 | 0 | 1 (splice_sites_all) |
 | Graphinity DDG | 3 | 0 | 0 | 0 | 0 | 3 (rosetta, foldx, augmented) |
-| **TOTAL** | **81** | **38** | **0** | **0** | **30** | **13** |
+| **TOTAL** | **81** | **61** | **0** | **5** | **0** | **15** |
 
-*Note: Previous nucleotide DROP decisions (splice_all, H3K9me3) deferred — FM reps may change the picture. herg clf added as separate entry (was #2b).*
+*Note: All HTC-queue BLOCKED items cleared 2026-04-23 — the HTC queue is empty. Remaining work is tier review (8 datasets with survey JSONs ready) + C02 FT comparison in progress (jobs 7548418-7548429) + C7 CGR comparison in progress (jobs 7548433-7548435). herg clf added as separate entry (was #2b). Previous nucleotide DROP decision for nt_H3K9me3 reversed — retained per tier table at line 1179.*
 
 ---
 
