@@ -613,6 +613,63 @@ DATASET_REPS = {
             'reactant_avalon', 'diff_avalon', 'diff_mhg_gnn', 'diff_ecfp4',
             'reactant_grover', 'reactant_ecfp4'],
     },
+
+    # ── DTA (drug-target affinity, cold-protein splits) ───────────────
+    # Reviewed 2026-04-28 from phase5 baseline re-survey under commit 506e4bb
+    # (per-fold importance filter for high-dim reps; MLP dropped from
+    # protein_* candidate pool — every protein_*+mlp had severely negative
+    # R² before the fix).
+    #
+    # Universal drops across all DTA: drug_unimol_v2, protein_aido,
+    # protein_mint, protein_xtrimopglm — all collapsed to CI=0.5 (random).
+    # protein_esm2_lora kept in ft_reps for C02 even where FT doesn't beat
+    # frozen, so the frozen+FT condition has a candidate to test.
+    #
+    # davis: tier review PARKED pending davis_invest job 7568428 (drug-rep
+    # ceiling at CI=0.7567 may be per-drug-mean degeneracy; investigation
+    # tests this hypothesis on the same 5-fold splits).
+    'kiba': {  # n=30,000, 229 protein groups. Winner: drug_mordred+xgboost=0.6924 CI.
+        # Drug-side near-tied (spread 0.0006 across 9 reps) — partly degenerate
+        # under cold-protein with only 229 groups. Top tier limited to 2 drug
+        # + 1 protein. protein_aac dropped at 0.5496 (below 0.55 viability).
+        'general': [
+            # drug (9, near-tied)
+            'drug_mordred', 'drug_pdv', 'drug_mol2vec', 'drug_chemberta',
+            'drug_ecfp4', 'drug_molformer', 'drug_avalon', 'drug_maccs',
+            'drug_selformer',
+            # protein (7, real ranking)
+            'protein_saprot', 'protein_esm2_pocket', 'protein_esmc',
+            'protein_esm2_midlayers', 'protein_esm3', 'protein_esm2',
+            'protein_kmer'],
+        'augmentation': ['protein_usr_shape', 'protein_pocket', 'protein_contact_graph'],
+        'top_tier': ['drug_mordred', 'drug_pdv', 'protein_saprot'],
+        'ft_reps': {
+            'protein_esm2_lora': {'factory': 'dta_protein_lora', 'base_model': 'esm2'},
+        },
+    },
+    'bindingdb_kd': {  # n=30,000, 1,219 protein groups. Winner: drug_pdv+rf=0.7260 CI.
+        # Real drug-side ranking (spread 0.0125) — 1,219 protein groups gives
+        # enough diversity that per-drug-mean stops winning. Mixed-modality
+        # top tier of 4 (2 drug + 2 protein) so top-tier-only experiments can
+        # form genuine drug+protein hybrids.
+        'general': [
+            # drug (9, real ranking)
+            'drug_pdv', 'drug_mordred', 'drug_maccs', 'drug_chemberta',
+            'drug_avalon', 'drug_molformer', 'drug_selformer', 'drug_ecfp4',
+            'drug_mol2vec',
+            # protein (7, real ranking; usr_shape dropped as weakest non-broken)
+            'protein_esm2_midlayers', 'protein_esm3', 'protein_esm2',
+            'protein_esm2_pocket', 'protein_saprot', 'protein_esmc',
+            'protein_kmer'],
+        'augmentation': ['protein_aac', 'protein_pocket', 'protein_contact_graph'],
+        'top_tier': [
+            'drug_pdv', 'drug_mordred',
+            'protein_esm2_midlayers', 'protein_esm3'],
+        'ft_reps': {
+            'protein_esm2_lora': {'factory': 'dta_protein_lora', 'base_model': 'esm2'},
+        },
+    },
+
     # --- Nucleotide (NT Revised + Genomic Benchmarks, chromosome/natural groups) ---
     # Tier tables below come from the 2026-04-17 gena_refix survey round.
     # Across all nt_* and gb_*, gena_lm was corrected to 1024D hidden
@@ -692,6 +749,23 @@ DATASET_REPS = {
         'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
         'top_tier': ['hyenadna', 'mistral_dna', 'grover_dna'],
     },
+    'nt_enhancers': {  # 33,000 samples. Winner: grover_dna+ridge=0.4761 MCC. dnabert2 kept (84% of best).
+        'general': [
+            'grover_dna', 'mistral_dna', 'kmer6', 'hyenadna', 'nt_v2_500m',
+            'nt_v2_250m', 'kmer5', 'tetranuc_freq', 'kmer4', 'tnf_canonical',
+            'kmer3', 'dnabert2'],
+        'augmentation': ['dinuc_freq', 'gc_content', 'codon_usage', 'complexity'],
+        'top_tier': ['grover_dna', 'mistral_dna', 'kmer6', 'hyenadna', 'nt_v2_500m'],
+    },
+    'nt_enhancers_types': {  # 33,000 samples. Winner: mistral_dna+ridge=0.4368 MCC. dnabert2 kept.
+        # Survey gap: dinuc_freq, gc_content, complexity, dna_shape did not run.
+        'general': [
+            'mistral_dna', 'grover_dna', 'kmer6', 'hyenadna', 'nt_v2_500m',
+            'nt_v2_250m', 'kmer5', 'kmer4', 'tnf_canonical', 'tetranuc_freq',
+            'kmer3', 'dnabert2'],
+        'augmentation': ['codon_usage'],
+        'top_tier': ['mistral_dna', 'grover_dna', 'kmer6', 'hyenadna', 'nt_v2_500m'],
+    },
     'nt_promoter_all': {  # 31,584 samples. Winner: mistral_dna+ridge=0.7281 MCC. dnabert2 kept (saturated).
         'general': [
             'mistral_dna', 'hyenadna', 'grover_dna', 'nt_v2_250m', 'kmer6',
@@ -715,6 +789,22 @@ DATASET_REPS = {
         'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
         'top_tier': ['mistral_dna', 'hyenadna', 'grover_dna', 'nt_v2_500m'],
     },
+    'nt_splice_sites_acceptors': {  # 33,000 samples. Winner: nt_v2_250m+ridge=0.4933 MCC. dnabert2 dropped (65% of best).
+        # Survey gap: dinuc_freq, gc_content, complexity, dna_shape did not run.
+        'general': [
+            'nt_v2_250m', 'grover_dna', 'nt_v2_500m', 'mistral_dna', 'hyenadna',
+            'kmer6', 'kmer4', 'kmer3', 'kmer5', 'tetranuc_freq', 'tnf_canonical'],
+        'augmentation': ['codon_usage'],
+        'top_tier': ['nt_v2_250m', 'grover_dna', 'nt_v2_500m', 'mistral_dna'],
+    },
+    'nt_splice_sites_donors': {  # 33,000 samples. Winner: nt_v2_250m+ridge=0.5380 MCC. dnabert2 dropped (67% of best).
+        # Survey gap: dinuc_freq, gc_content, complexity, dna_shape did not run.
+        'general': [
+            'nt_v2_250m', 'nt_v2_500m', 'grover_dna', 'mistral_dna', 'hyenadna',
+            'kmer6', 'kmer5', 'kmer4', 'tetranuc_freq', 'kmer3', 'tnf_canonical'],
+        'augmentation': ['codon_usage'],
+        'top_tier': ['nt_v2_250m', 'nt_v2_500m'],
+    },
     # --- Genomic Benchmarks (different task layout, 5 natural groups) ---
     'gb_human_nontata_promoters': {  # 36,131 samples, 5 groups. Winner: kmer5+mlp=0.8917 MCC.
         # Classical k-mer dominance here — NT-v2 + hyenadna all underperform.
@@ -731,6 +821,16 @@ DATASET_REPS = {
             'hyenadna', 'nt_v2_250m', 'kmer4', 'nt_v2_500m', 'tetranuc_freq'],
         'augmentation': ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content'],
         'top_tier': ['grover_dna', 'kmer6', 'kmer5', 'mistral_dna'],
+    },
+    'gb_demo_coding_vs_intergenomic_seqs': {  # 100,000 samples, 5 groups. Winner: nt_v2_250m+mlp=0.8392 MCC.
+        # Saturated task — top 12 reps within 88% of best. dnabert2 dropped (88%).
+        # Survey gap: dinuc_freq, gc_content, complexity, dna_shape did not run.
+        'general': [
+            'nt_v2_250m', 'nt_v2_500m', 'kmer5', 'grover_dna', 'kmer6',
+            'mistral_dna', 'kmer4', 'tetranuc_freq', 'hyenadna', 'kmer3',
+            'tnf_canonical'],
+        'augmentation': ['codon_usage'],
+        'top_tier': ['nt_v2_250m', 'nt_v2_500m', 'kmer5', 'grover_dna', 'kmer6'],
     },
     'gb_demo_human_or_worm': {  # 100,000 samples, 5 groups. Winner: tetranuc_freq+mlp=0.9135 MCC.
         # Saturated task — top 8 reps within 98.7% of best. Classicals dominate.
