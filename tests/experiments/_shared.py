@@ -1313,6 +1313,8 @@ _ANTIBODY_PREFIXES = ('flab_', 'abcov_', 'sabdab_', 'abagym_', 'abbind', 'ddg_',
 _TCGA_PREFIXES = ('tcga_',)
 _NUCLEOTIDE_PREFIXES = ('nt_', 'gb_')
 _REACTION_DATASETS = ('buchwald_hartwig', 'suzuki', 'bh_doyle_plates')
+_DTA_DATASETS = ('davis', 'kiba', 'bindingdb_kd')
+_DTA_PREFIXES = ('pdbbind',)
 
 
 # =============================================================================
@@ -1399,6 +1401,11 @@ def _is_nucleotide_dataset(name: str) -> bool:
 
 def _is_reaction_dataset(name: str) -> bool:
     return name.lower() in _REACTION_DATASETS
+
+
+def _is_dta_dataset(name: str) -> bool:
+    n = name.lower()
+    return n in _DTA_DATASETS or any(n.startswith(p) for p in _DTA_PREFIXES)
 
 
 def _build_rep_factories(dataset_name, data):
@@ -1794,6 +1801,76 @@ def _load_data_impl(dataset_name: str, rep_preset: str = 'fast',
             'domain': 'reaction',
             'augmentations': None,
             'rep_factories': {},
+        }
+
+    elif _is_dta_dataset(dataset_name):
+        # Lazy import to avoid pulling DTA deps for non-DTA runs.
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from find_best_hybrid_dta import (
+            load_dataset as load_dta_dataset,
+            get_representations as get_dta_representations,
+        )
+        from kirby.datasets.dta import (
+            assign_cold_target_groups, assign_cold_drug_groups,
+        )
+
+        data = load_dta_dataset(dataset_name)
+        drug_smiles = data['drug_smiles']
+        protein_seqs = data['protein_seqs']
+        labels = np.asarray(data['labels'], dtype=np.float64)
+        metadata = data['metadata']
+
+        # Subsample to 30K pairs to match the DATASET_REPS comment
+        # ("n=30,000") and the dta_baseline_survey convention. Cold-protein
+        # split is the default — same as dta_baseline_survey.
+        DTA_MAX_PAIRS = 30_000
+        if len(labels) > DTA_MAX_PAIRS:
+            rng = np.random.RandomState(42)
+            idx = rng.choice(len(labels), size=DTA_MAX_PAIRS, replace=False)
+            idx.sort()
+            drug_smiles = [drug_smiles[i] for i in idx]
+            protein_seqs = [protein_seqs[i] for i in idx]
+            labels = labels[idx]
+            metadata['drug_ids'] = [metadata['drug_ids'][i] for i in idx]
+            metadata['protein_ids'] = [metadata['protein_ids'][i] for i in idx]
+            metadata['n_drugs'] = len(set(metadata['drug_ids']))
+            metadata['n_proteins'] = len(set(metadata['protein_ids']))
+            print(f"  Subsampled {dataset_name} to {DTA_MAX_PAIRS} pairs")
+
+        groups, n_groups = assign_cold_target_groups(metadata['protein_ids'])
+        print(f"  {dataset_name}: {len(labels)} pairs, "
+              f"{metadata['n_drugs']} drugs × {metadata['n_proteins']} proteins, "
+              f"{n_groups} cold-target groups")
+
+        # DTA reps: drug + protein. get_representations handles the dispatch.
+        if rep_names:
+            preset_or_list = ','.join(rep_names)
+        else:
+            preset_or_list = rep_preset
+        reps = get_dta_representations(
+            drug_smiles, protein_seqs, preset_or_list,
+            cache=True, protein_ids=metadata.get('protein_ids'))
+
+        if rep_names:
+            reps = {k: v for k, v in reps.items() if k in rep_names}
+
+        print(f"  {dataset_name}: {len(labels)} samples, {n_groups} groups, "
+              f"{len(reps)} reps "
+              f"({', '.join(f'{k}={v.shape[1]}' for k, v in reps.items())})")
+
+        return {
+            'drug_smiles': drug_smiles,
+            'protein_seqs': protein_seqs,
+            'labels': labels,
+            'reps': reps,
+            'groups': groups,
+            'n_groups': n_groups,
+            'n_scaffolds': n_groups,
+            'task_type': data.get('task_type', 'regression'),
+            'domain': 'dta',
+            'augmentations': None,
+            'rep_factories': {},
+            'metadata': metadata,
         }
 
     else:
