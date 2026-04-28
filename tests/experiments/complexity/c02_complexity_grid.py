@@ -241,9 +241,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'n_features': r['n_features'],
         })
 
-    # Best by model
+    # Best by model — restrict to configured downstream models. The library's
+    # search may include extra evaluators (e.g. knn, gp) via speed-tier
+    # defaults; baselines/heatmap/per-model loops below all iterate `models`,
+    # so keep this aligned to avoid KeyError downstream.
     best_by_model = {}
-    for model_name, r in search.best_by_model.items():
+    for model_name in models:
+        r = search.best_by_model.get(model_name)
+        if r is None:
+            continue
         best_by_model[model_name] = {
             'model': model_name,
             'allocation': r['allocation_method'],
@@ -415,7 +421,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if search_obj is None:
             return {}
         out = {}
-        for model_name, r in search_obj.best_by_model.items():
+        for model_name in models:
+            r = search_obj.best_by_model.get(model_name)
+            if r is None:
+                continue
             out[model_name] = {
                 'model': model_name,
                 'allocation': r['allocation_method'],
