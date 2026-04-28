@@ -68,7 +68,29 @@ _AB_GENERAL = [
     'esm3', 'saprot']
 
 DATASET_REPS = {
-    # ── Molecular (7 datasets) ──────────────────────────────────────────
+    # ── Molecular (8 datasets) — 7 regression + 1 classification ───────
+    'herg': {  # FLuID classification (Lhasa). n=7,772; 3-fold/3-model screening.
+        # Survey numbers from schnet_e2e/herg.json — pre-publication tier set.
+        # Caveats:
+        #   - graph_kernel kept on prior-evidence grounds (top-tier on
+        #     herg_ki/caco2/etc); its herg score is from a stale-merge survey
+        #     bug (regression metrics) so don't trust the exact value.
+        #   - unimol_v2 collapsed to majority class (acc=0.5330, MCC=0) — drop.
+        #   - lora_chemberta excluded per domain policy (chemberta FT excluded everywhere).
+        #   - ft_schnet not competitive vs frozen on herg (tracker line 455).
+        # Precompute + experiments must run at full 5-fold/5-model.
+        'general': [
+            'mhg_gnn', 'mordred', 'avalon', 'ecfp4', 'grover', 'atom_pair',
+            'pdv', 'graph_kernel', 'mol2vec', 'top_torsion', 'maccs', 'smited',
+            'molformer', 'chembert', 'rdkfp', 'selformer', 'chemberta', 'graphmvp'],
+        'augmentation': ['usrcat', 'coulomb_matrix', 'molclr'],
+        'top_tier': [
+            'mhg_gnn', 'mordred', 'avalon', 'ecfp4', 'grover', 'atom_pair',
+            'pdv', 'graph_kernel'],
+        'ft_reps': {
+            'lora_molformer': {'factory': 'molecular_lora', 'base_model': 'molformer'},
+        },
+    },
     'herg_ki': {
         'general': [
             'mhg_gnn', 'mordred', 'graph_kernel', 'avalon', 'grover', 'pdv',
