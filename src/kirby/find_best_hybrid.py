@@ -3961,6 +3961,18 @@ def find_best_hybrid(
         payload = _load_cache_with_meta(
             cache_path, expected_search_meta,
             kind='search', verbose=verbose)
+        # Empty payloads (best_by_model={} and all_results=[]) are not valid
+        # cache hits — they happen when every config in the search returns
+        # NaN (e.g., GP/KNN failing at top_rep_dim budgets). Serving them
+        # would block any future retry. Treat as miss → recompute.
+        if payload is not None:
+            _bbm = getattr(payload, 'best_by_model', None) or {}
+            _ar = getattr(payload, 'all_results', None) or []
+            if not _bbm and not _ar:
+                if verbose:
+                    print(f"  Cache {cache_path.name}: empty payload "
+                          f"(best_by_model={{}} all_results=[]) — will recompute.")
+                payload = None
         if payload is not None:
             if verbose:
                 print(f"  Loaded cached result from {cache_path}")
@@ -4245,16 +4257,27 @@ def find_best_hybrid(
 
     # --- Save to cache (atomic write + _cache_meta header) ---
     if cache and cache_path is not None and expected_search_meta is not None:
-        # Refresh code_timestamp so the stored file shows the write time.
-        expected_search_meta['code_timestamp'] = time.time()
-        ok = _save_cache_with_meta(cache_path, expected_search_meta, search_result)
-        if ok and verbose:
-            print(f"  Cached result to {cache_path}")
-        if ok and _ckpt_path is not None and _ckpt_path.exists():
-            try:
-                _ckpt_path.unlink()
-            except Exception:
-                pass
+        # Don't persist empty searches. They become permanent cache hits
+        # that block future retries (the load-side guard treats them as
+        # miss now too, but skipping the write avoids the disk footprint
+        # and the meta-drift false positive on subsequent runs).
+        _bbm = getattr(search_result, 'best_by_model', None) or {}
+        _ar = getattr(search_result, 'all_results', None) or []
+        if not _bbm and not _ar:
+            if verbose:
+                print(f"  Search returned no results "
+                      f"(best_by_model={{}} all_results=[]) — not caching {cache_path.name}")
+        else:
+            # Refresh code_timestamp so the stored file shows the write time.
+            expected_search_meta['code_timestamp'] = time.time()
+            ok = _save_cache_with_meta(cache_path, expected_search_meta, search_result)
+            if ok and verbose:
+                print(f"  Cached result to {cache_path}")
+            if ok and _ckpt_path is not None and _ckpt_path.exists():
+                try:
+                    _ckpt_path.unlink()
+                except Exception:
+                    pass
 
     # End-of-run cache observability. Always print — one line in SLURM logs
     # is worth the past months of invisible cache misses.
