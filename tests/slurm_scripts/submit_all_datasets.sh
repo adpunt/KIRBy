@@ -22,6 +22,7 @@ AB_CLF="tz_her2_binary humanness_therapeutic"
 GINKGO="ginkgo_acsins ginkgo_colloidal ginkgo_heparin ginkgo_hic ginkgo_pr_cho ginkgo_titer"
 REACTION="buchwald_hartwig bh_doyle_plates"
 TCGA="tcga_luad_vs_lusc tcga_brca_pam50"
+NUCLEOTIDE="nt_H2AFZ nt_H3K27ac nt_H3K27me3 nt_H3K36me3 nt_H3K4me1 nt_H3K4me2 nt_H3K4me3 nt_H3K9ac nt_H3K9me3 nt_H4K20me1 nt_promoter_all nt_promoter_no_tata nt_promoter_tata gb_demo_human_or_worm gb_human_enhancers_cohn gb_human_nontata_promoters"
 
 # Federated-eligible datasets (grows as fed02-fed05 add support)
 # lhasa_herg uses Lhasa's curated hERG data (binary classification).
@@ -44,7 +45,7 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --dry-run) DRY_RUN=true; shift ;;
         --domain)  DOMAIN=$2; shift 2 ;;
-        molecular|antibody|abagym|ab_clf|ginkgo|reaction|tcga) DOMAIN=$1; shift ;;
+        molecular|antibody|abagym|ab_clf|ginkgo|reaction|tcga|nucleotide) DOMAIN=$1; shift ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
@@ -61,7 +62,8 @@ else
         ginkgo)    DATASETS="$GINKGO" ;;
         reaction)  DATASETS="$REACTION" ;;
         tcga)      DATASETS="$TCGA" ;;
-        all)       DATASETS="$MOLECULAR $ANTIBODY $ABAGYM $AB_CLF $GINKGO $REACTION $TCGA" ;;
+        nucleotide) DATASETS="$NUCLEOTIDE" ;;
+        all)       DATASETS="$MOLECULAR $ANTIBODY $ABAGYM $AB_CLF $GINKGO $REACTION $TCGA $NUCLEOTIDE" ;;
         *)         echo "Unknown domain: $DOMAIN"; exit 1 ;;
     esac
 fi
@@ -78,6 +80,9 @@ get_mem_override() {
         flab_immunogenicity_marks)
             echo "128G" ;;
         tcga_luad_vs_lusc|tcga_brca_pam50)
+            echo "128G" ;;
+        # Nucleotide: n=30K (nt_*) to 100K (gb_demo_*), high-dim reps need RAM
+        nt_*|gb_*)
             echo "128G" ;;
         *) echo "" ;;
     esac
