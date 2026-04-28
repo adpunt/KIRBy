@@ -6,7 +6,7 @@ dataset in DATASET_REPS verifies that the expected condition files exist,
 load cleanly, carry a valid _cache_meta header, and contain non-empty
 best_by_model / all_results.
 
-Standard expected conditions:
+Standard expected conditions (drives the strict found/expected ratio):
     general__none,  general__uncapped,  general__capped
     top__none,      top__uncapped,      top__capped
 
@@ -14,8 +14,12 @@ Datasets without augmentation get the 'none' conditions only. The 'capped'
 conditions also require augmentations. Distance conditions are not checked
 by default — pass --distance to include them.
 
-This replaces the old registry-based status check, which only counted
-registry keys and could not detect empty / stale / corrupt cache files.
+Additionally reports c02 per-model top-rep-dim caches (additive, not part
+of the strict ratio since the expected count is dynamic per dataset):
+    {dataset}__{tier}__{aug}__full__top_rep_dim_{model}.pkl
+These are written by c02_complexity_grid.py via condition_suffix and survive
+across c02 re-runs. The 'top_rep_dim' column shows ok/total for whatever was
+found.
 
 Usage:
     python tests/check_precompute_status.py                # full report
@@ -23,6 +27,7 @@ Usage:
     python tests/check_precompute_status.py --done         # only DONE
     python tests/check_precompute_status.py --incomplete   # only not-DONE
     python tests/check_precompute_status.py --distance     # include distance
+    python tests/check_precompute_status.py --verbose      # per-condition + per-model top_rep_dim
 """
 import argparse
 import os
@@ -122,6 +127,31 @@ def _check_file(path: Path) -> tuple:
             f"metric={meta.get('metric_name', '?')}")
 
 
+def find_top_rep_dim_files(dataset, searches_dir):
+    """Find c02 per-model top-rep-dim cache files for a dataset.
+
+    These are written by c02_complexity_grid.py (per-model search at the
+    model's best baseline rep dim, condition_suffix='top_rep_dim_<model>').
+    Cache name: {dataset}__{tier}__{aug}__full__top_rep_dim_<model>.pkl
+
+    Returns list of (filename, model, status, detail) tuples.
+    """
+    pattern = f"{dataset}__*__full__top_rep_dim_*.pkl"
+    out = []
+    for path in sorted(searches_dir.glob(pattern)):
+        # Extract the model name from the suffix
+        stem = path.stem  # filename without .pkl
+        # Suffix is everything after '__top_rep_dim_'
+        marker = '__top_rep_dim_'
+        if marker in stem:
+            model = stem.split(marker, 1)[1]
+        else:
+            model = '?'
+        status, detail = _check_file(path)
+        out.append((path.name, model, status, detail))
+    return out
+
+
 def classify_dataset(dataset, cfg, searches_dir, include_distance):
     expected = expected_conditions(cfg, include_distance=include_distance)
     results = []
@@ -133,13 +163,17 @@ def classify_dataset(dataset, cfg, searches_dir, include_distance):
         results.append((tier, strat, status, detail))
         if status == 'ok':
             n_ok += 1
+    # c02 per-model top-rep-dim caches (additive — count separately, not
+    # part of the strict precompute denominator since their expected count
+    # is dynamic per dataset).
+    top_rep_dim_files = find_top_rep_dim_files(dataset, searches_dir)
     if n_ok == len(expected) and expected:
         overall = 'DONE'
     elif n_ok == 0:
         overall = 'missing'
     else:
         overall = 'partial'
-    return overall, n_ok, len(expected), results
+    return overall, n_ok, len(expected), results, top_rep_dim_files
 
 
 def main():
@@ -179,7 +213,7 @@ def main():
         rows = []
         for ds in by_domain[domain]:
             cfg = DATASET_REPS[ds]
-            overall, n_ok, n_exp, results = classify_dataset(
+            overall, n_ok, n_exp, results, top_rep_dim_files = classify_dataset(
                 ds, cfg, searches_dir, include_distance=args.distance)
             if n_exp == 0:
                 continue
@@ -188,26 +222,32 @@ def main():
                 continue
             if args.incomplete and overall == 'DONE':
                 continue
-            rows.append((ds, overall, n_ok, n_exp, results))
+            rows.append((ds, overall, n_ok, n_exp, results, top_rep_dim_files))
 
         if not rows:
             continue
 
         print(f"\n=== {domain.upper()} ===")
-        print(f"  {'dataset':<38} {'status':<8} {'found':<8} missing/bad")
-        print(f"  {'-'*38} {'-'*8} {'-'*8} {'-'*40}")
-        for ds, overall, n_ok, n_exp, results in rows:
+        print(f"  {'dataset':<38} {'status':<8} {'found':<8} {'top_rep_dim':<12} missing/bad")
+        print(f"  {'-'*38} {'-'*8} {'-'*8} {'-'*12} {'-'*40}")
+        for ds, overall, n_ok, n_exp, results, top_rep_dim_files in rows:
             bad = [
                 f"{tier}/{strat}={status}"
                 for tier, strat, status, _ in results
                 if status != 'ok'
             ]
+            n_trd_ok = sum(1 for _, _, st, _ in top_rep_dim_files if st == 'ok')
+            n_trd = len(top_rep_dim_files)
+            trd_str = f"{n_trd_ok}/{n_trd}" if n_trd else '-'
             bad_str = ', '.join(bad) if bad else ''
-            print(f"  {ds:<38} {overall:<8} {n_ok}/{n_exp:<6} {bad_str}")
+            print(f"  {ds:<38} {overall:<8} {n_ok}/{n_exp:<6} {trd_str:<12} {bad_str}")
             if args.verbose:
                 for tier, strat, status, detail in results:
                     mark = '✓' if status == 'ok' else 'X'
                     print(f"      {mark} {tier}/{strat}: {status} {detail}")
+                for fname, model, status, detail in top_rep_dim_files:
+                    mark = '✓' if status == 'ok' else 'X'
+                    print(f"      {mark} top_rep_dim/{model}: {status} {detail}")
 
     total = sum(totals.values())
     print(f"\n{'='*70}")
