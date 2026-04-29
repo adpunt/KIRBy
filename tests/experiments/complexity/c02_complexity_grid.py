@@ -292,8 +292,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # fold, model, aug) — re-runs hit cache.
     search_per_model_top_rep = {}  # model_name -> SearchResult
     skipped_already_tested = set(full_budgets) | {len(labels)}
+    # GP and KNN are numerically unreliable at top_rep_dim budgets (≥1280D
+    # ESM-style reps): GP's RBF kernel matrix degenerates and KNN hits curse
+    # of dim, both producing all-NaN configs. Their best_single_rep pick at
+    # that dim is itself noisy. Skip them entirely from this pass — the
+    # remaining models (rf/xgboost/ridge/svm/mlp/lightgbm) cover the policy
+    # question without false-positive empty caches.
+    _PER_MODEL_TOP_REP_SKIP = {'gp', 'knn'}
     print("\n  --- Per-model hybrid at top-baseline-rep dim ---")
     for _model_name in models:
+        if _model_name in _PER_MODEL_TOP_REP_SKIP:
+            print(f"    {_model_name}: skipped (unreliable at high-dim budgets)")
+            continue
         _info = baselines.get(_model_name)
         if not _info:
             continue
