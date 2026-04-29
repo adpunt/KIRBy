@@ -108,14 +108,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     conditions = ['unweighted', 'feature_weighted', 'sample_weighted',
                   'combined', 'importance_pruned']
 
-    # Two input spaces: raw concat and hybrid
+    # Single input space: hybrid (concat baseline removed per design
+    # directive — too many reps for full-concat to be a meaningful
+    # comparator).
     input_spaces = {}
 
-    # 1. Raw concat
-    X_concat = np.hstack([reps[n] for n in sorted(reps.keys())])
-    input_spaces['concat'] = X_concat
-
-    # 2. Hybrid
     augmentations = data.get('augmentations')
     try:
         X_hybrid, fi, _search = get_fitted_hybrid(

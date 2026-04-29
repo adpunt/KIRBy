@@ -34,6 +34,9 @@ from experiments._shared import (
     get_precomputed_search, build_fold_hybrid,
     extract_top3_base_reps, get_best_for_downstream,
 )
+from kirby.find_best_hybrid import (
+    _select_top_features_per_fold, HIGH_DIM_FILTER_THRESHOLD,
+)
 
 
 def _time_fit_predict(model_factory, X_train, y_train, X_val):
@@ -194,9 +197,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             for rep_name in rep_names:
                 X_rep = reps[rep_name]
+                X_train_raw = X_rep[train_idx]
+                X_val_raw = X_rep[val_idx]
+
+                # Apply same per-fold high-dim filter as the standalone
+                # baseline scoring (find_best_hybrid:_evaluate_single).
+                # Without it, esm2_per_region (17920D) and similar enter the
+                # ensemble at full dim and overfit catastrophically on small
+                # antibody datasets — biasing the ensemble vs hybrid
+                # comparison.
+                if X_train_raw.shape[1] > HIGH_DIM_FILTER_THRESHOLD:
+                    target_n = 500 if len(y_train) >= 1000 else 200
+                    if target_n < X_train_raw.shape[1]:
+                        _hd_task_type = ('classification'
+                                         if data['task_type'] == 'classification'
+                                         else 'regression')
+                        top_idx = _select_top_features_per_fold(
+                            X_train_raw, y_train, target_n, _hd_task_type)
+                        X_train_raw = X_train_raw[:, top_idx]
+                        X_val_raw = X_val_raw[:, top_idx]
+
                 scaler = StandardScaler()
-                X_train = scaler.fit_transform(X_rep[train_idx])
-                X_val = scaler.transform(X_rep[val_idx])
+                X_train = scaler.fit_transform(X_train_raw)
+                X_val = scaler.transform(X_val_raw)
 
                 preds, ft, pt = _time_fit_predict(model_factory, X_train, y_train, X_val)
                 all_preds.append(preds)
@@ -216,7 +239,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             ens_r2 = float(np.mean(fold_ensemble_scores))
             max_single_dim = max(v.shape[1] for v in reps.values())
             print(f"    Ensemble:    R2={ens_r2:.4f} "
-                  f"max_rep_dim={max_single_dim} ({n_reps} models)")
+                  f"max_rep_dim={max_single_dim} ({n_reps} models, hd-filtered)")
 
             results.append({
                 'model': model_name,
@@ -233,8 +256,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         # =====================================================================
         # 2b. PCA-matched: concat all reps, PCA-compress to budget dims, one model
-        # Isolates: is the hybrid advantage from intelligent selection or just
-        # dimensionality reduction?
+        # PCA-from-concat is allowed (per design directive: PCA reducing
+        # high-dim concat to budget dim is meaningful; full-concat as raw
+        # model input is not).
         # =====================================================================
         for budget in budgets:
             fold_pca_scores = []
@@ -245,7 +269,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                                labels, mode=mode):
                 y_train, y_val = labels[train_idx], labels[val_idx]
 
-                # Concat all reps
                 X_train_cat = np.hstack([v[train_idx] for v in reps.values()])
                 X_val_cat = np.hstack([v[val_idx] for v in reps.values()])
 

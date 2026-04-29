@@ -81,31 +81,46 @@ def _greedy_mrmr(X, y, budget, k_mi=5, max_features=None):
     selected.append(best_first)
     remaining.remove(best_first)
 
+    # Running redundancy total per remaining feature.
+    # When a feature s is added to `selected`, increment each remaining
+    # candidate j's running total by MI(X[:,j], X[:,s]). Score for j is
+    # then relevance[j] - (running_redundancy[j] / len(selected)).
+    # Avoids the O(budget² × n_remaining × MI_cost) re-summation that made
+    # large budgets effectively non-terminating.
+    running_redundancy = {}
+    for j in remaining:
+        try:
+            running_redundancy[j] = estimate_mutual_information_knn(
+                X[:, j:j+1], X[:, best_first], k=k_mi)
+        except Exception:
+            running_redundancy[j] = 0.0
+
     # Greedy selection
     for _ in range(budget - 1):
         if not remaining:
             break
+        n_sel = len(selected)
         best_score = -np.inf
         best_j = remaining[0]
 
         for j in remaining:
-            # Redundancy with already-selected features
-            redundancy = 0.0
-            for s in selected:
-                try:
-                    redundancy += estimate_mutual_information_knn(
-                        X[:, j:j+1], X[:, s], k=k_mi)
-                except Exception:
-                    pass
-            redundancy /= len(selected)
-
-            score = relevance[j] - redundancy
+            score = relevance[j] - running_redundancy[j] / n_sel
             if score > best_score:
                 best_score = score
                 best_j = j
 
         selected.append(best_j)
         remaining.remove(best_j)
+        running_redundancy.pop(best_j, None)
+
+        # Update running redundancy for the remaining candidates against
+        # the newly-selected feature.
+        for j in remaining:
+            try:
+                running_redundancy[j] += estimate_mutual_information_knn(
+                    X[:, j:j+1], X[:, best_j], k=k_mi)
+            except Exception:
+                pass
 
     # Map back to original feature indices if pre-filtered
     return [int(feature_indices[s]) for s in selected]
