@@ -3169,7 +3169,9 @@ def _run_search(
                     _save_checkpoint({
                         'fold0_done': False,
                         'fold0_results': fold0_results,
-                        'dropped_pairs': {list(k): [list(p) for p in v]
+                        # Keep tuple keys (pickle-safe, hashable). Load side
+                        # at line ~3063 accepts either tuple or list keys.
+                        'dropped_pairs': {k: list(v)
                                           for k, v in dropped_pairs.items()},
                     })
 
@@ -3205,7 +3207,9 @@ def _run_search(
                 'fold0_done': True,
                 'fold0_results': fold0_results,
                 'pruned_strategies': pruned_strategies,
-                'dropped_pairs': {list(k): [list(p) for p in v]
+                # Keep tuple keys (pickle-safe, hashable). Load side at
+                # line ~3063 accepts either tuple or list keys.
+                'dropped_pairs': {k: list(v)
                                   for k, v in dropped_pairs.items()},
                 'full_results': [],
                 'full_done_keys': set(),
