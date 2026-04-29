@@ -634,6 +634,28 @@ Expected runtime: 9–17h per dataset (similar to v2 timings). Outputs
 overwrite `tests/results/phase5_baselines/dta/{davis,kiba,bindingdb_kd}.json`.
 Pull all 3 JSONs when complete, then do DTA tier review.
 
+**Re-run** of 7551136-38 happened automatically (jobs 7542406-08 first, then
+7551136-38 second). All 3 latest runs **COMPLETED** 2026-04-25:
+- 7551136 davis: 1h49m
+- 7551137 kiba: 2h50m
+- 7551138 bindingdb_kd: 2h40m
+
+### Davis baseline investigation — drug-rep ceiling test (2026-04-28)
+
+Tests whether 9 drug reps tied at CI=0.7567 on davis are degenerate
+per-drug-mean fitting (every drug appears in train under cold-protein
+splits) vs real learning. Trivial drug-mean predictor + per-fold ridge
+predictions for {drug_avalon, drug_chemberta, drug_ecfp4, drug_maccs} +
+pairwise correlation. Script: `tests/scripts/davis_baseline_investigation.py`.
+
+| Job ID | Name | Partition | Status |
+|--------|------|-----------|--------|
+| 7568428 | davis_invest | short, 32G, 2h, no GPU | **SUBMITTED 2026-04-28** |
+
+Output: `tests/results/phase5_baselines/dta/davis_investigation.json`.
+Determines whether the 9 drug reps stay in the davis general tier or get
+downgraded to augmentation/dropped.
+
 ### C02 frozen vs frozen+FT comparison — full run (2026-04-23)
 
 Script: `tests/slurm_scripts/submit_c02_full.sh`. 12 jobs, all `--mode full
@@ -663,11 +685,13 @@ checkpoint from job 7483446 (2026-04-15) is on disk; comparison tests
 whether CGR reps add unique signal beyond SMILES-based reps for reaction
 yield prediction. Outputs `tests/results/comparisons/opig_cgr_comparison_<ds>.json`.
 
-| Job ID | Name | Dataset | Partition |
-|--------|------|---------|-----------|
-| 7548433 | cgr_bh | buchwald_hartwig | long, 256G, 24h |
-| 7548434 | cgr_doyle | bh_doyle_plates | long, 256G, 24h |
-| 7548435 | cgr_suzuki | suzuki | long, 256G, 24h |
+| Job ID | Name | Dataset | Partition | Status |
+|--------|------|---------|-----------|--------|
+| 7548433 | cgr_bh | buchwald_hartwig | long, 256G, 24h | **TIMEOUT** (24h wall, 2026-04-24). Superseded by 7568447. |
+| 7548434 | cgr_doyle | bh_doyle_plates | long, 256G, 24h | **TIMEOUT** (24h wall, 2026-04-24). Superseded by 7568448. |
+| 7548435 | cgr_suzuki | suzuki | long, 256G, 24h | **COMPLETED** (9h18m, 2026-04-23). |
+| 7568447 | cgr_bh | buchwald_hartwig | long, 256G, **4d** | **SUBMITTED 2026-04-28** (resubmit, 4d wall via `submit_cgr_comparison_resubmit.sh`). |
+| 7568448 | cgr_doyle | bh_doyle_plates | long, 256G, **4d** | **SUBMITTED 2026-04-28** (resubmit, 4d wall). |
 
 ### CGR-SMILES pretraining (Phase 4)
 
@@ -690,7 +714,9 @@ Existing reaction JSONs are from Mar 19-26 (pre-CGR). Need new submission script
 
 | Job ID | Name | Datasets | Status |
 |--------|------|----------|--------|
-| — | rxn_baselines | buchwald_hartwig, bh_doyle_plates, suzuki | **NOT YET SUBMITTED** — needs heredoc submit script with cgr_smiles_lm |
+| 7568449 | rxn_buchwald_hartwig | buchwald_hartwig | **SUBMITTED 2026-04-28** via `submit_reaction_cgr_resurvey.sh` (long, 256G, 24h, GPU; full 41 reps incl. cgr_smiles_lm; `--skip-existing` so cached `.npy` reps are reused). |
+| 7568450 | rxn_bh_doyle_plates | bh_doyle_plates | **SUBMITTED 2026-04-28** via `submit_reaction_cgr_resurvey.sh` (long, 256G, 24h, GPU). |
+| — | rxn_suzuki | suzuki | NOT submitted (suzuki dropped per pipeline doc, R²=0.453 ceiling). |
 
 ---
 
@@ -1136,3 +1162,71 @@ Noise, federated, and OPIG submissions queued for after both complexity
 and similarity have populated their precompute caches. Those will run
 with default forward order (no env var) and benefit from cache hits
 across most conditions.
+
+---
+
+## 2026-04-29 — Missing-nucleotide gap-fill wave (34 jobs)
+
+Reason: 16 nucleotide datasets had no submission in either the cx or sim
+waves; plus two stragglers (sim_gb_demo_coding waiting on cx race, and
+sim_herg_ki). Submitted alongside the 2026-04-27 waves still running.
+
+Cancellations done same day (wedged jobs with frozen logs, manually
+killed): 12013711, 12013716, 12013717, 12013726.
+
+### Complexity (forward order) — 12044245–12044260
+
+| JobID | Dataset | Mem |
+|-------|---------|-----|
+| 12044245 | gb_demo_human_or_worm | 128G |
+| 12044246 | gb_human_enhancers_cohn | 128G |
+| 12044247 | gb_human_nontata_promoters | 128G |
+| 12044248 | nt_H2AFZ | 128G |
+| 12044249 | nt_H3K27ac | 128G |
+| 12044250 | nt_H3K27me3 | 128G |
+| 12044251 | nt_H3K36me3 | 128G |
+| 12044252 | nt_H3K4me1 | 128G |
+| 12044253 | nt_H3K4me2 | 128G |
+| 12044254 | nt_H3K4me3 | 128G |
+| 12044255 | nt_H3K9ac | 128G |
+| 12044256 | nt_H3K9me3 | 128G |
+| 12044257 | nt_H4K20me1 | 128G |
+| 12044258 | nt_promoter_all | 128G |
+| 12044259 | nt_promoter_no_tata | 128G |
+| 12044260 | nt_promoter_tata | 128G |
+
+### Similarity (reverse order, KIRBY_PRECOMPUTE_REVERSE_ORDER=1) — 12044261–12044276
+
+| JobID | Dataset | Mem |
+|-------|---------|-----|
+| 12044261 | gb_demo_human_or_worm | 128G |
+| 12044262 | gb_human_enhancers_cohn | 128G |
+| 12044263 | gb_human_nontata_promoters | 128G |
+| 12044264 | nt_H2AFZ | 128G |
+| 12044265 | nt_H3K27ac | 128G |
+| 12044266 | nt_H3K27me3 | 128G |
+| 12044267 | nt_H3K36me3 | 128G |
+| 12044268 | nt_H3K4me1 | 128G |
+| 12044269 | nt_H3K4me2 | 128G |
+| 12044270 | nt_H3K4me3 | 128G |
+| 12044271 | nt_H3K9ac | 128G |
+| 12044272 | nt_H3K9me3 | 128G |
+| 12044273 | nt_H4K20me1 | 128G |
+| 12044274 | nt_promoter_all | 128G |
+| 12044275 | nt_promoter_no_tata | 128G |
+| 12044276 | nt_promoter_tata | 128G |
+
+### Stragglers (sim, reverse order)
+
+| JobID | Dataset | Mem |
+|-------|---------|-----|
+| 12044278 | gb_demo_coding_vs_intergenomic_seqs | 128G |
+| 12044279 | herg_ki | default |
+
+### Status checks
+
+```bash
+sacct -j 12044245-12044279 --format=State --noheader -X | sort | uniq -c
+sacct -j 12044245-12044279 --format=JobID,JobName%30,State,Elapsed,ExitCode -X \
+  | grep -E "FAILED|TIMEOUT|OUT_OF_ME|CANCELLED"
+```
