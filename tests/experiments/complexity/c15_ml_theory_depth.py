@@ -73,7 +73,7 @@ def _run_distance_concentration(data, budgets, dataset_name=None):
     task_type = data['task_type']
     n_samples = len(labels)
 
-    results = {'per_rep': {}, 'per_budget': {}, 'concat': {}}
+    results = {'per_rep': {}, 'per_budget': {}}
 
     # --- Per-rep analysis (raw representations) ---
     for rep_name, X in sorted(reps.items()):
@@ -88,18 +88,12 @@ def _run_distance_concentration(data, budgets, dataset_name=None):
               f"cv={metrics['distance_cv']:.4f}  "
               f"hubness={metrics['hubness_skewness']:.3f}")
 
-    # --- Concatenated baseline ---
+    # X_concat kept as internal feature pool for PCA baselines / budget
+    # sweeps below — NOT reported as a metric row (per design directive,
+    # full-concat statistics aren't a meaningful baseline given how many
+    # reps we have).
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
     X_concat_s = StandardScaler().fit_transform(X_concat)
-    metrics = _compute_concentration_metrics(X_concat_s, k=5)
-    results['concat'] = {
-        'dim': X_concat.shape[1],
-        **metrics,
-    }
-    print(f"    {'concat':<20} dim={X_concat.shape[1]:>5}  "
-          f"beyer={metrics['beyer_ratio']:.4f}  "
-          f"cv={metrics['distance_cv']:.4f}  "
-          f"hubness={metrics['hubness_skewness']:.3f}")
 
     # --- Per-budget analysis (hybrid at each budget) ---
     print(f"\n    Budget sweep (hybrid):")
@@ -152,9 +146,6 @@ def _run_distance_concentration(data, budgets, dataset_name=None):
                                key=lambda x: x[1]['dim']):
         print(f"    {rep_name:<20} {m['dim']:>5} {m['beyer_ratio']:>8.4f} "
               f"{m['distance_cv']:>8.4f} {m['hubness_skewness']:>8.3f}")
-    m = results['concat']
-    print(f"    {'concat':<20} {m['dim']:>5} {m['beyer_ratio']:>8.4f} "
-          f"{m['distance_cv']:>8.4f} {m['hubness_skewness']:>8.3f}")
     for budget in sorted(budgets):
         if budget in results['per_budget']:
             m = results['per_budget'][budget]
@@ -277,7 +268,7 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
         idx = np.arange(n_samples)
 
     n = len(sub_labels)
-    results = {'per_rep': {}, 'per_budget': {}, 'concat': {}}
+    results = {'per_rep': {}, 'per_budget': {}}
 
     # --- Per-rep kernel analysis ---
     for rep_name, X in sorted(sub_reps.items()):
@@ -289,15 +280,10 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
               f"k_cv={metrics['kernel_cv']:.4f}  "
               f"align={metrics['kernel_target_alignment']:.4f}")
 
-    # --- Concat ---
+    # X_concat kept only for the gamma sensitivity sweep below — not
+    # reported as its own metric row (per design directive).
     X_concat = np.hstack([sub_reps[k] for k in sorted(sub_reps.keys())])
     X_concat_s = StandardScaler().fit_transform(X_concat)
-    metrics = _compute_kernel_metrics(X_concat_s, sub_labels)
-    results['concat'] = {'dim': X_concat.shape[1], **metrics}
-    print(f"    {'concat':<20} dim={X_concat.shape[1]:>5}  "
-          f"cond={metrics['log_condition']:>7.1f}  "
-          f"k_cv={metrics['kernel_cv']:.4f}  "
-          f"align={metrics['kernel_target_alignment']:.4f}")
 
     # --- Per-budget hybrid ---
     print(f"\n    Budget sweep (hybrid kernel):")
@@ -335,7 +321,6 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
         highest_rep = max(results['per_rep'], key=lambda k: results['per_rep'][k]['dim'])
         sweep_spaces[highest_rep] = StandardScaler().fit_transform(
             sub_reps[highest_rep])
-    sweep_spaces['concat'] = X_concat_s
     if 50 in results['per_budget']:
         try:
             X_h50, _, _search = get_fitted_hybrid(
@@ -390,7 +375,6 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
           f"{'K_mean':>8} {'K_std':>8} {'Align':>8} {'EigRank':>8}")
     print(f"    {'-'*20} {'-'*5} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8} {'-'*8}")
     all_items = list(results['per_rep'].items())
-    all_items.append(('concat', results['concat']))
     for budget in sorted(budgets):
         if budget in results['per_budget']:
             all_items.append((f'hybrid_b{budget}', results['per_budget'][budget]))
