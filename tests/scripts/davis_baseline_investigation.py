@@ -44,15 +44,15 @@ N_FOLDS = 5
 
 def load_davis():
     """Returns (drug_smiles, protein_seqs, y, reps_dict, groups)."""
-    from kirby.datasets.dta import load_davis as _load
+    from kirby.datasets.dta import load_dataset
     from kirby.representations.molecular import (
         create_avalon, create_chemberta, create_ecfp, create_maccs,
     )
 
-    df = _load(max_pairs=30000)
-    drug_smiles = df["drug_smiles"].tolist()
-    protein_seqs = df["protein_seq"].tolist()
-    y = df["affinity"].to_numpy(dtype=np.float64)
+    data = load_dataset("davis")
+    drug_smiles = list(data["drug_smiles"])
+    protein_seqs = list(data["protein_seqs"])
+    y = np.asarray(data["labels"], dtype=np.float64)
 
     print(f"  davis: n={len(y)} pairs, "
           f"{len(set(drug_smiles))} unique drugs, "
