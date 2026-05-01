@@ -714,8 +714,9 @@ Existing reaction JSONs are from Mar 19-26 (pre-CGR). Need new submission script
 
 | Job ID | Name | Datasets | Status |
 |--------|------|----------|--------|
-| 7568449 | rxn_buchwald_hartwig | buchwald_hartwig | **SUBMITTED 2026-04-28** via `submit_reaction_cgr_resurvey.sh` (long, 256G, 24h, GPU; full 41 reps incl. cgr_smiles_lm; `--skip-existing` so cached `.npy` reps are reused). |
-| 7568450 | rxn_bh_doyle_plates | bh_doyle_plates | **SUBMITTED 2026-04-28** via `submit_reaction_cgr_resurvey.sh` (long, 256G, 24h, GPU). |
+| 7568449 | rxn_buchwald_hartwig | buchwald_hartwig | **COMPLETED 2026-04-28 BUT MISSED CGR REPS** — ran before chython/rxnmapper/chytorch were installed in venv; cgr_morgan/chytorch_graphormer/cgr_smiles_lm silently skipped. JSON has 35 reps, none CGR. |
+| 7568450 | rxn_bh_doyle_plates | bh_doyle_plates | **COMPLETED 2026-05-01** — 84min, all 3 CGR reps landed. cgr_morgan promoted to Top Tier (R²=0.590, RF, RMSE=16.67). chytorch_graphormer (R²=−0.09) and cgr_smiles_lm (R²=0.37) dropped. Tier in PIPELINE_READINESS_TODO §10 updated. |
+| 7589759 | rxn_buchwald_hartwig | buchwald_hartwig | **SUBMITTED 2026-05-02** via `submit_reaction_cgr_resurvey.sh bh` — re-run after CGR deps installed. `--skip-existing` so only the 3 CGR reps will compute. |
 | — | rxn_suzuki | suzuki | NOT submitted (suzuki dropped per pipeline doc, R²=0.453 ceiling). |
 
 ---
