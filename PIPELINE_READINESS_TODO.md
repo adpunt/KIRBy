@@ -1001,9 +1001,9 @@ Old Sections 10B/10C/12D/12E have writeups. Need new-format review.
 
 | # | Dataset | Samples | Reps | Augs | Status |
 |---|---------|---------|------|------|--------|
-| 50 | buchwald_hartwig | 3,955 | 14 | 6 | TODO — CGR-SMILES pretraining complete (checkpoint on disk). Re-survey script drafted `tests/slurm_scripts/submit_reaction_cgr_resurvey.sh`. Not yet submitted. Also running: C7 OPIG comparison `7548433 cgr_bh` (2026-04-23). |
+| 50 | buchwald_hartwig | 3,955 | 24 | 6 | TODO — re-survey 7568449 ran Apr 28 but CGR deps weren't installed yet, so cgr_morgan/chytorch_graphormer/cgr_smiles_lm silently skipped. Needs one more re-submit of `submit_reaction_cgr_resurvey.sh bh` now that chython/rxnmapper/chytorch are in the venv. |
 | 51 | suzuki | 5,760 | 14 | 4 | DROPPED — R²=0.453 ceiling, only 1 viable rep. C7 OPIG comparison still running (`7548435 cgr_suzuki`) to confirm CGR doesn't change the picture. |
-| 52 | bh_doyle_plates | 4,312 | 35 | 24 | TODO — same as buchwald_hartwig. C7 OPIG comparison running `7548434 cgr_doyle` (2026-04-23). |
+| 52 | bh_doyle_plates | 4,312 | 36 | 24 | **DONE (2026-05-02)** — CGR re-survey 7568450 landed. cgr_morgan promoted to Top Tier (now 7). chytorch_graphormer (R²=−0.09, broken) and cgr_smiles_lm (R²=0.37, below cutoff) dropped. |
 
 **Reaction re-survey (option b — unblock precompute):**
 `bash tests/slurm_scripts/submit_reaction_cgr_resurvey.sh` submits
@@ -1022,12 +1022,13 @@ can be cleared on doc grounds alone.
 | General (8) | all reps with R² > 0.50 (through rxnfp) |
 | Augmentation | none |
 
-**bh_doyle_plates (n=4,312, best R²=0.638, cutoff=0.50):**
+**bh_doyle_plates (n=4,312, best R²=0.638, cutoff=0.50, post-7568450 CGR re-survey):**
 | Tier | Reps |
 |------|------|
-| Top Tier (6) | reactant_avalon, diff_avalon, diff_mhg_gnn, diff_ecfp4, reactant_grover, reactant_ecfp4 |
-| General (17) | all reps with R² > 0.50 (through diff_mordred) |
+| Top Tier (7) | reactant_avalon, diff_avalon, diff_mhg_gnn, diff_ecfp4, reactant_grover, reactant_ecfp4, **cgr_morgan** (RMSE=16.67, R²=0.590) |
+| General (11) | reactant_mhg_gnn, diff_grover, drfp_2048, reactiont5, diff_mol2vec, onehot_components, reactant_mol2vec, rxnfp, diff_maccs, diff_mordred, reactant_mordred (all R² > 0.50) |
 | Augmentation (6) | product_maccs, reactant_maccs, onehot_components, diff_maccs, product_pharmacophore3d, reactant_pharmacophore3d |
+| Dropped (2) | chytorch_graphormer (R²=−0.09, broken — failed to learn signal), cgr_smiles_lm (R²=0.37, below 0.50 cutoff) |
 
 **Reaction supplementary data:**
 - `comparisons/reaction_rep_comparison.json`: rep comparison across all 3 datasets
@@ -1035,20 +1036,42 @@ can be cleared on doc grounds alone.
 
 ---
 
-## TODO — DTA (2-3 datasets)
+## TODO — DTA (3 datasets)
 
 | # | Dataset | Samples | Reps | Augs | Status |
 |---|---------|---------|------|------|--------|
-| 53 | davis | — | ~29 | — | NEEDS REVIEW — phase5 survey landed 2026-04-21 (`tests/results/phase5_baselines/dta/davis.json`) |
-| 54 | kiba | — | ~29 | — | NEEDS REVIEW — phase5 survey landed 2026-04-18 (`tests/results/phase5_baselines/dta/kiba.json`) |
-| 55 | bindingdb_kd | ~30K pairs | ~29 | — | NEEDS REVIEW — phase5 survey completed on server 2026-04-21 (job 7520843). **Pull locally:** `scp gateway:/data/stat-cadd/scat9264/KIRBy/tests/results/phase5_baselines/dta/bindingdb_kd.json tests/results/phase5_baselines/dta/` |
+| 53 | davis | 30,000 | 24+1 FT | — | **PARKED** — drug-rep ceiling at CI=0.7567 (9-way tie); investigation submitted as 7568428 (davis_invest). Tier when result lands. |
+| 54 | kiba | 30,000 | 24+1 FT | — | DONE (2026-04-28). Top 3 / General 16 / Aug 3 / FT 1 / Dropped 5. |
+| 55 | bindingdb_kd | 30,000 | 24+1 FT | — | DONE (2026-04-28). Top 4 / General 16 / Aug 3 / FT 1 / Dropped 5. |
+
+**kiba (n=30,000, 229 protein groups, CI primary, post-506e4bb importance-filter survey):**
+| Tier | Reps |
+|------|------|
+| Top Tier (3) | drug_mordred, drug_pdv, protein_saprot |
+| General (16) | drug: mordred, pdv, mol2vec, chemberta, ecfp4, molformer, avalon, maccs, selformer (9, near-tied 0.6918–0.6924). protein: saprot, esm2_pocket, esmc, esm2_midlayers, esm3, esm2, kmer (7) |
+| Augmentation (3) | protein_usr_shape, protein_pocket, protein_contact_graph (weak standalone, possible additive value) |
+| FT reps (1) | protein_esm2_lora — for C02 only; FT does not beat frozen here (0.5972 vs saprot 0.6014) |
+| Dropped (5) | drug_unimol_v2, protein_aido, protein_mint, protein_xtrimopglm (all CI=0.5, broken paired-chain pattern), protein_aac (CI=0.5496, below 0.55 viability threshold) |
+
+*Winner: drug_mordred+xgboost=0.6924 CI (drug-side near-tied, partly degenerate under cold-protein with only 229 groups). Best protein: saprot+lightgbm=0.6014. Top tier cap'd at 2 drug + 1 protein because drug-side ceiling is borderline.*
+
+**bindingdb_kd (n=30,000, 1,219 protein groups, CI primary, post-506e4bb importance-filter survey):**
+| Tier | Reps |
+|------|------|
+| Top Tier (4) | drug_pdv, drug_mordred, protein_esm2_midlayers, protein_esm3 |
+| General (16) | drug: pdv, mordred, maccs, chemberta, avalon, molformer, selformer, ecfp4, mol2vec (9, real ranking 0.7135–0.7260). protein: esm2_midlayers, esm3, esm2, esm2_pocket, saprot, esmc, kmer (7) |
+| Augmentation (3) | protein_aac (20D, low-dim rule), protein_pocket, protein_contact_graph (weak standalone) |
+| FT reps (1) | protein_esm2_lora — for C02 only; FT does not beat frozen here (0.6490 vs midlayers 0.6617) |
+| Dropped (5) | drug_unimol_v2, protein_aido, protein_mint, protein_xtrimopglm (all CI=0.5, broken paired-chain pattern), protein_usr_shape (CI=0.6116, weakest non-broken) |
+
+*Winner: drug_pdv+rf=0.7260 CI. Best protein: esm2_midlayers+rf=0.6617. With 1,219 protein groups, drug-side ranking is real (spread 0.0125) — per-drug-mean stops winning at this protein diversity. Top tier mixes 2 drug + 2 protein because DTA hybrids must blend modalities.*
 
 **DTA supplementary data:**
-- `dta_survey/`: 20 reps per dataset (older survey)
+- `dta_survey/`: 20 reps per dataset (older survey, superseded by phase5)
 - `comparisons/dta_e2e_comparison/`: E2E DTA models (davis, kiba)
-- `comparisons/dta_finetune_comparison/`: DTA FT comparison
+- `comparisons/dta_finetune_comparison/`: DTA FT comparison (pre-v2 OOM fix; superseded by current ft_reps decisions)
 - `structural_protein_survey/kiba.json`: cold-target with structural protein reps (6 reps)
-- Phase 5 DTA: PENDING (jobs in queue, no results yet)
+- davis_baseline_investigation.py (7568428) — pending, will determine final davis tiers
 
 ---
 
@@ -1374,10 +1397,10 @@ Only 2 reps (nt_v2_250m, nt_v2_500m) reach MCC≥0.37; rest ≤0.28. Best winner
 | Ginkgo | 9 | 6 | 0 | 0 | 0 | 3 (aggregation, purity, tm2) |
 | TCGA | 3 | 2 | 0 | 0 | 0 | 1 (survival) |
 | Reaction | 3 | 0 | 0 | 2 (buchwald, doyle — C7 CGR comparison running; optional re-survey via `submit_reaction_cgr_resurvey.sh`) | 0 | 1 (suzuki) |
-| DTA | 3 | 0 | 0 | 3 (davis, kiba, bindingdb_kd — surveys done, need tier review) | 0 | 0 |
+| DTA | 3 | 2 | 0 | 1 (davis — parked pending davis_invest job 7568428) | 0 | 0 |
 | Nucleotide | 22 | 21 | 0 | 0 | 0 | 1 (splice_sites_all) |
 | Graphinity DDG | 3 | 0 | 0 | 0 | 0 | 3 (rosetta, foldx, augmented) |
-| **TOTAL** | **81** | **61** | **0** | **5** | **0** | **15** |
+| **TOTAL** | **81** | **63** | **0** | **3** | **0** | **15** |
 
 *Note: All HTC-queue BLOCKED items cleared 2026-04-23 — the HTC queue is empty. Remaining work is tier review (8 datasets with survey JSONs ready) + C02 FT comparison in progress (jobs 7548418-7548429) + C7 CGR comparison in progress (jobs 7548433-7548435). herg clf added as separate entry (was #2b). Previous nucleotide DROP decision for nt_H3K9me3 reversed — retained per tier table at line 1179.*
 
