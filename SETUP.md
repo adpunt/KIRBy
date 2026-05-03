@@ -102,6 +102,9 @@ pip install --upgrade openpyxl
 # ChEMBL client — required for hERG/DRD2 loaders and Imrie TL pre-training
 pip install chembl_webresource_client
 
+# scikit-survival — required for ANNITIA MASLD experiment (Cox PH, RSF, C-index)
+pip install scikit-survival
+
 # Optuna HP tuning (optional)
 pip install optuna
 
