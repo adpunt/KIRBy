@@ -2,9 +2,9 @@
 #SBATCH --job-name=annitia
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=32G
-#SBATCH --time=04:00:00
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=48G
+#SBATCH --time=08:00:00
 #SBATCH --partition=medium
 #SBATCH --mail-user=adelaide.punt@stcatz.ox.ac.uk
 #SBATCH --mail-type=END,FAIL
@@ -35,7 +35,9 @@ ls -la $ANNITIA_DATA_DIR
 # 1. Hybrid search + refit per endpoint. Persists annitia_{hepatic,death}_model.pkl
 #    and per-condition C-index tables under tests/results/annitia/.
 python tests/experiments/annitia/run.py \
-    --models cox,coxnet,rsf \
+    --models cox,coxnet,rsf,gbsa \
+    --prune-levels none,50 \
+    --top-k-keep 3 \
     --endpoints hepatic,death \
     --n-folds 5 \
     --output-dir tests/results/annitia

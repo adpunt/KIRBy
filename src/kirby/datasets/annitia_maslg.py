@@ -107,14 +107,17 @@ def load_annitia(data_dir: Optional[str] = None,
     age_arr = df[age_cols].to_numpy(dtype=np.float64)  # (n, n_visits_age)
 
     longitudinal: Dict[str, List[List[Tuple[float, float]]]] = {}
+    wide: Dict[str, np.ndarray] = {'Age': age_arr}
     for var in LONGITUDINAL_VARS:
         if var == 'Age':
             continue
         v_cols = _visit_columns(df, var)
         if not v_cols:
             longitudinal[var] = [[] for _ in range(n)]
+            wide[var] = np.full((n, 1), np.nan)
             continue
         v_arr = df[v_cols].to_numpy(dtype=np.float64)  # (n, n_visits_var)
+        wide[var] = v_arr
         # Align var visits to ages by visit index. v1..v21 maps to Age_v1..Age_v21.
         var_records: List[List[Tuple[float, float]]] = []
         n_visits = v_arr.shape[1]
@@ -141,6 +144,7 @@ def load_annitia(data_dir: Optional[str] = None,
         'patient_ids': patient_ids,
         'static': static,
         'longitudinal': longitudinal,
+        'wide': wide,
         'baseline_age': baseline_age,
         'last_followup_age': last_followup_age,
         'hepatic': None,

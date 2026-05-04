@@ -87,6 +87,9 @@ def run(args):
 
         folds = get_cv_folds(data, endpoint=endpoint,
                              n_folds=args.n_folds, seed=args.seed)
+        prune_levels = tuple(
+            (None if p in (None, '', 'none') else int(p))
+            for p in args.prune_levels.split(','))
         t0 = time.time()
         result = search_survival_hybrid(
             views=views,
@@ -96,6 +99,8 @@ def run(args):
             endpoint=endpoint,
             model_names=model_names,
             max_subset_size=args.max_subset_size,
+            prune_levels=prune_levels,
+            top_k_keep=args.top_k_keep,
             verbose=True,
         )
         elapsed = time.time() - t0
@@ -131,9 +136,21 @@ def run(args):
                     'model': result.final_model,
                     'view_names': result.final_view_names,
                     'model_name': result.final_model_name,
+                    'prune': result.final_prune,
+                    'feature_indices': result.final_feature_indices,
                     'endpoint': endpoint,
                 }, f)
             print(f'  model saved:  {model_path}')
+
+        # Persist the top-K ensemble bundle
+        if result.top_k_models:
+            ens_path = output_dir / f'annitia_{endpoint}_topk.pkl'
+            with open(ens_path, 'wb') as f:
+                pickle.dump({
+                    'endpoint': endpoint,
+                    'top_k': result.top_k_models,
+                }, f)
+            print(f'  top-{len(result.top_k_models)} ensemble saved: {ens_path}')
 
         results[endpoint] = summary
 
@@ -152,8 +169,13 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--views', type=str, default=None,
                    help='Comma-separated view names (default: all 6)')
-    p.add_argument('--models', type=str, default='cox,coxnet,rsf',
-                   help='Comma-separated downstream models (default: cox,coxnet,rsf)')
+    p.add_argument('--models', type=str, default='cox,coxnet,rsf,gbsa',
+                   help='Comma-separated downstream models (default: cox,coxnet,rsf,gbsa)')
+    p.add_argument('--prune-levels', type=str, default='none,50',
+                   help='Comma-separated prune levels (e.g. "none,50,30"). '
+                        '"none" = use all features; integer = top-K by RSF importance.')
+    p.add_argument('--top-k-keep', type=int, default=3,
+                   help='Number of top configs to retain for rank-ensemble.')
     p.add_argument('--endpoints', type=str, default='hepatic,death',
                    help='Comma-separated endpoints (default: hepatic,death)')
     p.add_argument('--n-folds', type=int, default=5)

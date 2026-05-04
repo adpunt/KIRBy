@@ -166,6 +166,136 @@ def _missingness_view(data: Dict) -> Tuple[np.ndarray, List[str]]:
     return np.column_stack(cols), names
 
 
+def _leakage_view(data: Dict) -> Tuple[np.ndarray, List[str]]:
+    """Raw absolute timing features. The R1 leaderboard (CV 0.91 -> LB 0.89)
+    showed follow-up-span features generalise at least partly to the held-out
+    set, so we expose them as a dedicated view."""
+    n = len(data['patient_ids'])
+    baseline = np.asarray(data['baseline_age'])
+    last_fu = np.asarray(data['last_followup_age'])
+
+    cols, names = [], []
+    cols.append(np.where(np.isfinite(baseline), baseline, 0.0))
+    names.append('baseline_age_raw')
+    cols.append(np.where(np.isfinite(last_fu), last_fu, 0.0))
+    names.append('last_observed_age_raw')
+    span = np.where(np.isfinite(last_fu - baseline), last_fu - baseline, 0.0)
+    cols.append(span)
+    names.append('followup_span_raw')
+
+    total = np.zeros(n)
+    for var in _TRAJECTORY_VARS:
+        for i, series in enumerate(data['longitudinal'][var]):
+            total[i] += len(series)
+    cols.append(total)
+    names.append('total_observations')
+
+    age_arr = data['wide'].get('Age')
+    max_gap = np.zeros(n)
+    mean_gap = np.zeros(n)
+    if age_arr is not None:
+        for i in range(n):
+            ages = age_arr[i][np.isfinite(age_arr[i])]
+            if ages.size >= 2:
+                diffs = np.diff(np.sort(ages))
+                max_gap[i] = float(diffs.max())
+                mean_gap[i] = float(diffs.mean())
+    cols.append(max_gap)
+    names.append('max_visit_gap_years')
+    cols.append(mean_gap)
+    names.append('mean_visit_gap_years')
+
+    return np.column_stack(cols), names
+
+
+def _last_per_visit(arr: np.ndarray) -> np.ndarray:
+    n = arr.shape[0]
+    out = np.full(n, np.nan)
+    for i in range(n):
+        finite = arr[i][np.isfinite(arr[i])]
+        if finite.size:
+            out[i] = float(finite[-1])
+    return out
+
+
+def _slope_per_visit(arr: np.ndarray, age_arr: np.ndarray) -> np.ndarray:
+    n = arr.shape[0]
+    out = np.zeros(n)
+    for i in range(n):
+        mask = np.isfinite(arr[i]) & np.isfinite(age_arr[i])
+        if mask.sum() >= 2:
+            a = age_arr[i, mask]
+            v = arr[i, mask]
+            if a.std() > 1e-9:
+                out[i] = float(np.cov(a, v, bias=True)[0, 1] / (a.var() + 1e-12))
+    return out
+
+
+def _clinical_view(data: Dict) -> Tuple[np.ndarray, List[str]]:
+    """Validated MASLD/fibrosis clinical scores from cohort columns.
+
+    FIB-4  = (age * AST) / (PLT * sqrt(ALT))     — advanced-fibrosis screen (cutoffs 1.3, 2.67)
+    APRI   = (AST / 40) * 100 / PLT              — fibrosis screen (cutoff 0.5)
+    AAR    = AST / ALT                           — AST/ALT ratio (cutoff 0.8)
+    BARD   = (BMI>=28) + 2*(AAR>=0.8) + DM       — composite, range 0-4
+
+    NFS is excluded because it requires serum albumin which the cohort lacks.
+    """
+    n = len(data['patient_ids'])
+    age = data['wide']['Age']
+    ast = data['wide'].get('ast')
+    alt = data['wide'].get('alt')
+    plt_ = data['wide'].get('plt')
+    bmi = data['wide'].get('BMI')
+
+    min_v = min(a.shape[1] for a in (age, ast, alt, plt_, bmi) if a is not None)
+    age_a = age[:, :min_v]
+    ast_a = ast[:, :min_v]
+    alt_a = alt[:, :min_v]
+    plt_a = plt_[:, :min_v]
+    bmi_a = bmi[:, :min_v]
+
+    with np.errstate(divide='ignore', invalid='ignore'):
+        fib4 = (age_a * ast_a) / (plt_a * np.sqrt(np.maximum(alt_a, 1e-9)))
+        apri = (ast_a / 40.0) * 100.0 / plt_a
+        aar = ast_a / np.maximum(alt_a, 1e-9)
+
+    cols, names = [], []
+    for arr, label in ((fib4, 'fib4'), (apri, 'apri'), (aar, 'aar')):
+        last = _last_per_visit(arr)
+        slope = _slope_per_visit(arr, age_a)
+        with np.errstate(invalid='ignore'):
+            mn = np.nanmean(arr, axis=1)
+            mx = np.nanmax(arr, axis=1)
+        cols.extend([np.nan_to_num(last), slope,
+                     np.nan_to_num(mn), np.nan_to_num(mx)])
+        names.extend([f'{label}__last', f'{label}__slope',
+                      f'{label}__mean', f'{label}__max'])
+
+    fib4_last = _last_per_visit(fib4)
+    apri_last = _last_per_visit(apri)
+    aar_last = _last_per_visit(aar)
+    cols.append((np.nan_to_num(fib4_last) >= 1.3).astype(np.float64))
+    names.append('fib4_last_ge_1_3')
+    cols.append((np.nan_to_num(fib4_last) >= 2.67).astype(np.float64))
+    names.append('fib4_last_ge_2_67')
+    cols.append((np.nan_to_num(apri_last) >= 0.5).astype(np.float64))
+    names.append('apri_last_ge_0_5')
+    cols.append((np.nan_to_num(aar_last) >= 0.8).astype(np.float64))
+    names.append('aar_last_ge_0_8')
+
+    bmi_mean = np.nan_to_num(np.nanmean(bmi_a, axis=1))
+    dm = np.nan_to_num(np.asarray(data['static']['T2DM']))
+    aar_safe = np.nan_to_num(aar_last)
+    bard = (bmi_mean >= 28).astype(np.float64) \
+        + 2.0 * (aar_safe >= 0.8).astype(np.float64) \
+        + (dm == 1).astype(np.float64)
+    cols.append(bard)
+    names.append('bard_score')
+
+    return np.column_stack(cols), names
+
+
 def _nit_view(data: Dict) -> Tuple[np.ndarray, List[str]]:
     """Snapshot+slope+delta restricted to the three NITs (FibroScan, FibroTest,
     Aixplorer). Plus missingness flags for each. Required by the challenge:
@@ -203,6 +333,8 @@ VIEW_BUILDERS = {
     'delta': _delta_view,
     'missingness': _missingness_view,
     'nit': _nit_view,
+    'leakage': _leakage_view,
+    'clinical': _clinical_view,
 }
 
 

@@ -153,6 +153,46 @@ class SurvivalRSF:
                           dtype=np.float64)
 
 
+class SurvivalGBSA:
+    """Gradient Boosted Survival Analysis (sksurv.ensemble.GradientBoostingSurvivalAnalysis).
+
+    Loss = Cox partial likelihood. Often beats RSF on low-event tabular data
+    because it can capture non-linear effects with sparser splits.
+    """
+
+    def __init__(self, n_estimators: int = 200,
+                 learning_rate: float = 0.05,
+                 max_depth: int = 3,
+                 min_samples_leaf: int = 10,
+                 subsample: float = 0.8,
+                 random_state: int = 42):
+        self.n_estimators = n_estimators
+        self.learning_rate = learning_rate
+        self.max_depth = max_depth
+        self.min_samples_leaf = min_samples_leaf
+        self.subsample = subsample
+        self.random_state = random_state
+        self._model = None
+
+    def fit(self, X: np.ndarray, y_struct: np.ndarray):
+        from sksurv.ensemble import GradientBoostingSurvivalAnalysis
+        self._model = GradientBoostingSurvivalAnalysis(
+            loss='coxph',
+            n_estimators=self.n_estimators,
+            learning_rate=self.learning_rate,
+            max_depth=self.max_depth,
+            min_samples_leaf=self.min_samples_leaf,
+            subsample=self.subsample,
+            random_state=self.random_state,
+        )
+        self._model.fit(np.asarray(X, dtype=np.float64), y_struct)
+        return self
+
+    def predict_risk(self, X: np.ndarray) -> np.ndarray:
+        return np.asarray(self._model.predict(np.asarray(X, dtype=np.float64)),
+                          dtype=np.float64)
+
+
 def concordance(y_struct: np.ndarray, risk: np.ndarray) -> float:
     """Censored C-index. Returns NaN if no comparable pairs (e.g. 0 events)."""
     from sksurv.metrics import concordance_index_censored
@@ -170,4 +210,5 @@ SURVIVAL_MODELS = {
     'cox': SurvivalCoxPH,
     'coxnet': SurvivalCoxnet,
     'rsf': SurvivalRSF,
+    'gbsa': SurvivalGBSA,
 }
