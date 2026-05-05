@@ -69,6 +69,11 @@ def _rsf_importance_indices(X: np.ndarray, y_struct: np.ndarray,
     return np.argsort(imp)[::-1][:top_k]
 
 
+def _condition_key(subset: Tuple[str, ...], model: str,
+                   prune: Optional[int]) -> Tuple:
+    return (tuple(subset), model, prune)
+
+
 def search_survival_hybrid(views: Dict[str, Tuple[np.ndarray, list]],
                            y_struct: np.ndarray,
                            valid_mask: np.ndarray,
@@ -78,7 +83,10 @@ def search_survival_hybrid(views: Dict[str, Tuple[np.ndarray, list]],
                            max_subset_size: Optional[int] = None,
                            prune_levels: Tuple[Optional[int], ...] = (None,),
                            top_k_keep: int = 3,
-                           verbose: bool = True) -> SurvivalSearchResult:
+                           verbose: bool = True,
+                           checkpoint_callback=None,
+                           prior_results: Optional[List[Dict]] = None,
+                           ) -> SurvivalSearchResult:
     """Run the survival hybrid search.
 
     Args:
@@ -87,10 +95,23 @@ def search_survival_hybrid(views: Dict[str, Tuple[np.ndarray, list]],
             baseline. Pruning is skipped silently when n_features <= K.
         top_k_keep: number of top-scoring (subset, model, prune) configurations
             to retain (refitted on all valid rows) for ensemble at predict time.
+        checkpoint_callback: optional callable(results_list) invoked after each
+            condition's CV is complete. Used by run.py to write the JSON
+            incrementally so SLURM timeouts don't lose work.
+        prior_results: optional list of already-evaluated condition dicts
+            (e.g. loaded from a checkpoint JSON). Conditions matching a prior
+            (subset, model, prune) tuple are skipped — their entry is reused
+            verbatim.
     """
     view_names = list(views.keys())
     subsets = _enumerate_subsets(view_names, max_size=max_subset_size)
-    results: List[Dict] = []
+    results: List[Dict] = list(prior_results) if prior_results else []
+    completed_keys = {
+        _condition_key(tuple(r['views']), r['model'], r.get('prune'))
+        for r in results
+    }
+    if completed_keys and verbose:
+        print(f"   [{endpoint}] resuming with {len(completed_keys)} already-evaluated conditions")
 
     for subset in subsets:
         X_full = _concat_views(views, subset)
@@ -100,6 +121,8 @@ def search_survival_hybrid(views: Dict[str, Tuple[np.ndarray, list]],
                 if prune is not None and X_full.shape[1] <= prune:
                     # Equivalent to no-prune; skip duplicate.
                     continue
+                if _condition_key(subset, mname, prune) in completed_keys:
+                    continue  # already done in a prior run
                 fold_c = []
                 for k, (tr, va) in enumerate(folds):
                     Xtr, Xva = X_full[tr], X_full[va]
@@ -132,6 +155,12 @@ def search_survival_hybrid(views: Dict[str, Tuple[np.ndarray, list]],
                     'n_features': int(X_full.shape[1]),
                     'n_features_after_prune': int(prune if prune is not None else X_full.shape[1]),
                 })
+                if checkpoint_callback is not None:
+                    try:
+                        checkpoint_callback(results)
+                    except Exception as cb_exc:
+                        if verbose:
+                            print(f"   [{endpoint}] checkpoint callback error: {cb_exc}")
                 if verbose:
                     p_label = f'p{prune}' if prune else 'all'
                     print(f"   [{endpoint}] {'+'.join(subset):40s} "
