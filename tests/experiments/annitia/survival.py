@@ -206,9 +206,33 @@ def concordance(y_struct: np.ndarray, risk: np.ndarray) -> float:
         return float('nan')
 
 
+def _rsf_weighted_factory():
+    from experiments.annitia.weighted import SurvivalRSFWeighted
+    return SurvivalRSFWeighted()
+
+
+def _gbsa_weighted_factory():
+    from experiments.annitia.weighted import SurvivalGBSAWeighted
+    return SurvivalGBSAWeighted()
+
+
+def _rsf_invfreq_factory():
+    from experiments.annitia.weighted import SurvivalRSFInvFreq
+    return SurvivalRSFInvFreq()
+
+
+def _gbsa_invfreq_factory():
+    from experiments.annitia.weighted import SurvivalGBSAInvFreq
+    return SurvivalGBSAInvFreq()
+
+
 SURVIVAL_MODELS = {
     'cox': SurvivalCoxPH,
     'coxnet': SurvivalCoxnet,
     'rsf': SurvivalRSF,
     'gbsa': SurvivalGBSA,
+    'rsf_w': _rsf_weighted_factory,
+    'gbsa_w': _gbsa_weighted_factory,
+    'rsf_if': _rsf_invfreq_factory,
+    'gbsa_if': _gbsa_invfreq_factory,
 }
