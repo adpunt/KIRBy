@@ -35,6 +35,7 @@ python tests/experiments/annitia/run.py \
     --top-k-keep 3 \
     --endpoints hepatic,death \
     --n-folds 5 \
+    --resume \
     --output-dir $OUT
 
 python tests/experiments/annitia/submit.py \

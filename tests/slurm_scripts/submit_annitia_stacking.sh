@@ -34,6 +34,7 @@ python tests/experiments/annitia/run.py \
     --top-k-keep 3 \
     --endpoints hepatic,death \
     --n-folds 5 \
+    --resume \
     --max-subset-size 3 \
     --output-dir $OUT
 

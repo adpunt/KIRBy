@@ -40,6 +40,7 @@ python tests/experiments/annitia/run.py \
     --top-k-keep 3 \
     --endpoints hepatic,death \
     --n-folds 5 \
+    --resume \
     --output-dir tests/results/annitia
 
 # 2. Generate the Trustii submission CSV from the saved models.
