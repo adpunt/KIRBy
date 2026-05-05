@@ -206,9 +206,15 @@ def concordance(y_struct: np.ndarray, risk: np.ndarray) -> float:
         return float('nan')
 
 
+def _stacker_factory():
+    from experiments.annitia.stacking import SurvivalStacker
+    return SurvivalStacker()
+
+
 SURVIVAL_MODELS = {
     'cox': SurvivalCoxPH,
     'coxnet': SurvivalCoxnet,
     'rsf': SurvivalRSF,
     'gbsa': SurvivalGBSA,
+    'stack': _stacker_factory,
 }
