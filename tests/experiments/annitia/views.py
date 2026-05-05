@@ -326,6 +326,105 @@ def _nit_view(data: Dict) -> Tuple[np.ndarray, List[str]]:
     return np.column_stack(cols), names
 
 
+def _recent3_view(data: Dict) -> Tuple[np.ndarray, List[str]]:
+    """Per-lab statistics restricted to the LAST 3 observed visits.
+
+    Captures recent trajectory state, which can differ from cohort-mean
+    statistics when patients drift. For each lab variable computes the mean
+    and slope of the last <=3 (age, value) pairs.
+    """
+    n = len(data['patient_ids'])
+    cols, names = [], []
+    for var in _TRAJECTORY_VARS:
+        col_mean = np.zeros(n)
+        col_slope = np.zeros(n)
+        col_last = np.zeros(n)
+        for i, series in enumerate(data['longitudinal'][var]):
+            recent = series[-3:] if len(series) >= 1 else []
+            if recent:
+                v = np.array([p[1] for p in recent], dtype=np.float64)
+                a = np.array([p[0] for p in recent], dtype=np.float64)
+                col_mean[i] = float(v.mean())
+                col_last[i] = float(v[-1])
+                if len(recent) >= 2 and a.std() > 1e-9:
+                    col_slope[i] = float(np.cov(a, v, bias=True)[0, 1] / (a.var() + 1e-12))
+        cols.extend([col_mean, col_slope, col_last])
+        names.extend([f'{var}__recent3_mean', f'{var}__recent3_slope',
+                      f'{var}__recent3_last'])
+    return np.column_stack(cols), names
+
+
+def _interactions_view(data: Dict) -> Tuple[np.ndarray, List[str]]:
+    """Domain-motivated pairwise interactions.
+
+    MASLD progression is driven by metabolic + age + fibrosis interactions
+    that linear models can't recover from raw features alone. Tree models
+    can, but may miss them when a tighter interaction is more informative
+    than either marginal.
+    """
+    n = len(data['patient_ids'])
+    age_arr = data['wide']['Age']
+    bmi_arr = data['wide'].get('BMI')
+    nit_fibs = data['wide'].get('fibs_stiffness_med_BM_1')
+    nit_ftest = data['wide'].get('fibrotest_BM_2')
+    nit_aixp = data['wide'].get('aixp_aix_result_BM_3')
+    dm = np.nan_to_num(np.asarray(data['static']['T2DM']))
+    htn = np.nan_to_num(np.asarray(data['static']['Hypertension']))
+    dyslip = np.nan_to_num(np.asarray(data['static']['Dyslipidaemia']))
+
+    age_last = _last_per_visit(age_arr)
+    bmi_last = _last_per_visit(bmi_arr) if bmi_arr is not None else np.zeros(n)
+    fibs_last = _last_per_visit(nit_fibs) if nit_fibs is not None else np.zeros(n)
+    ftest_last = _last_per_visit(nit_ftest) if nit_ftest is not None else np.zeros(n)
+    aixp_last = _last_per_visit(nit_aixp) if nit_aixp is not None else np.zeros(n)
+
+    age_n = np.nan_to_num(age_last)
+    bmi_n = np.nan_to_num(bmi_last)
+    fibs_n = np.nan_to_num(fibs_last)
+    ftest_n = np.nan_to_num(ftest_last)
+    aixp_n = np.nan_to_num(aixp_last)
+
+    cols = [
+        age_n * fibs_n,                  # age x FibroScan
+        age_n * ftest_n,                 # age x FibroTest
+        age_n * aixp_n,                  # age x Aixplorer
+        bmi_n * fibs_n,                  # BMI x FibroScan
+        dm * fibs_n,                     # diabetes x FibroScan
+        dm * ftest_n,                    # diabetes x FibroTest
+        (dm + htn + dyslip),             # metabolic-syndrome count
+        (dm + htn + dyslip) * fibs_n,    # MetSyn x FibroScan
+        age_n * bmi_n,                   # age x BMI
+    ]
+    names = [
+        'age_x_fibs', 'age_x_ftest', 'age_x_aixp',
+        'bmi_x_fibs', 'dm_x_fibs', 'dm_x_ftest',
+        'metsyn_count', 'metsyn_x_fibs', 'age_x_bmi',
+    ]
+    return np.column_stack(cols), names
+
+
+def _gapflags_view(data: Dict) -> Tuple[np.ndarray, List[str]]:
+    """Per-visit-slot binary "did this visit happen" flags for each lab.
+
+    The wide-format CSV has 21-22 visit slots per variable; for each lab we
+    emit one binary feature per slot indicating whether that slot was filled.
+    Captures cohort-specific patterns of *which* visits happened (vs just the
+    aggregate count from the missingness view).
+    """
+    n = len(data['patient_ids'])
+    cols, names = [], []
+    for var in _TRAJECTORY_VARS:
+        arr = data['wide'].get(var)
+        if arr is None:
+            continue
+        # One column per visit slot
+        for j in range(arr.shape[1]):
+            col = np.isfinite(arr[:, j]).astype(np.float64)
+            cols.append(col)
+            names.append(f'{var}__has_v{j+1}')
+    return np.column_stack(cols), names
+
+
 VIEW_BUILDERS = {
     'snapshot': _snapshot_view,
     'slope': _slope_view,
@@ -335,6 +434,9 @@ VIEW_BUILDERS = {
     'nit': _nit_view,
     'leakage': _leakage_view,
     'clinical': _clinical_view,
+    'recent3': _recent3_view,
+    'interactions': _interactions_view,
+    'gap_flags': _gapflags_view,
 }
 
 
