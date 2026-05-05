@@ -90,6 +90,50 @@ def run(args):
         prune_levels = tuple(
             (None if p in (None, '', 'none') else int(p))
             for p in args.prune_levels.split(','))
+
+        json_path = output_dir / f'annitia_{endpoint}_search.json'
+
+        # Resume: try loading any existing search JSON for this endpoint
+        prior_results = None
+        if args.resume and json_path.exists():
+            try:
+                with open(json_path) as f:
+                    prior = json.load(f)
+                # JSON may have stored views as lists; convert to tuples for hashing
+                pr = []
+                for r in prior.get('per_condition', []):
+                    rr = dict(r)
+                    rr['views'] = tuple(rr['views'])
+                    pr.append(rr)
+                prior_results = pr
+                print(f'  RESUME: loaded {len(prior_results)} prior conditions from {json_path}')
+            except Exception as e:
+                print(f'  RESUME: failed to load {json_path} ({e}); starting fresh')
+                prior_results = None
+
+        # Checkpoint after each condition completes — overwrite the JSON each time
+        # so a SLURM timeout still leaves us with the latest progress.
+        def _checkpoint(results_list):
+            partial = {
+                'endpoint': endpoint,
+                'n_valid_patients': int(data[endpoint]['valid_mask'].sum()),
+                'n_events': int((data[endpoint]['event'] & data[endpoint]['valid_mask']).sum()),
+                'n_folds': args.n_folds,
+                'view_names': view_names,
+                'model_names': list(model_names),
+                'per_condition': results_list,
+                'best': max((r for r in results_list
+                             if isinstance(r.get('mean_cindex'), float)
+                             and r['mean_cindex'] == r['mean_cindex']),
+                            key=lambda r: r['mean_cindex'], default=None),
+                'elapsed_sec': time.time() - t0,
+                'in_progress': True,
+            }
+            tmp = json_path.with_suffix('.json.tmp')
+            with open(tmp, 'w') as f:
+                json.dump(_convert(partial), f)
+            os.replace(tmp, json_path)
+
         t0 = time.time()
         result = search_survival_hybrid(
             views=views,
@@ -102,6 +146,8 @@ def run(args):
             prune_levels=prune_levels,
             top_k_keep=args.top_k_keep,
             verbose=True,
+            checkpoint_callback=_checkpoint,
+            prior_results=prior_results,
         )
         elapsed = time.time() - t0
 
@@ -111,7 +157,7 @@ def run(args):
                   f'C={result.best["mean_cindex"]:.4f}±{result.best["std_cindex"]:.4f}')
         print(f'  ({elapsed:.1f}s)')
 
-        # Persist the search summary
+        # Persist the FINAL search summary (overwrites any in-progress checkpoint).
         summary = {
             'endpoint': endpoint,
             'n_valid_patients': int(data[endpoint]['valid_mask'].sum()),
@@ -122,8 +168,8 @@ def run(args):
             'per_condition': result.per_condition,
             'best': result.best,
             'elapsed_sec': elapsed,
+            'in_progress': False,
         }
-        json_path = output_dir / f'annitia_{endpoint}_search.json'
         with open(json_path, 'w') as f:
             json.dump(_convert(summary), f, indent=2)
         print(f'  search saved: {json_path}')
@@ -176,6 +222,11 @@ def main():
                         '"none" = use all features; integer = top-K by RSF importance.')
     p.add_argument('--top-k-keep', type=int, default=3,
                    help='Number of top configs to retain for rank-ensemble.')
+    p.add_argument('--resume', action='store_true',
+                   help='If a prior annitia_<endpoint>_search.json exists, load '
+                        'its per_condition list and skip already-evaluated '
+                        '(subset, model, prune) tuples. Lets you recover from '
+                        'SLURM timeouts.')
     p.add_argument('--endpoints', type=str, default='hepatic,death',
                    help='Comma-separated endpoints (default: hepatic,death)')
     p.add_argument('--n-folds', type=int, default=5)
