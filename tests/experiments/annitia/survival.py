@@ -206,9 +206,69 @@ def concordance(y_struct: np.ndarray, risk: np.ndarray) -> float:
         return float('nan')
 
 
+class SurvivalXGBCox:
+    """XGBoost with `survival:cox` objective.
+
+    Different gradient implementation than sksurv's GBSA: histogram-based
+    splits, native missing handling, and a Cox-loss head. Often gives a
+    different decision-boundary geometry on tabular survival data.
+
+    Predicts the natural-log of the hazard ratio (linear predictor); higher
+    means worse prognosis.
+    """
+
+    def __init__(self, n_estimators: int = 300,
+                 learning_rate: float = 0.05,
+                 max_depth: int = 4,
+                 min_child_weight: int = 5,
+                 subsample: float = 0.8,
+                 colsample_bytree: float = 0.8,
+                 reg_lambda: float = 1.0,
+                 random_state: int = 42):
+        self.n_estimators = n_estimators
+        self.learning_rate = learning_rate
+        self.max_depth = max_depth
+        self.min_child_weight = min_child_weight
+        self.subsample = subsample
+        self.colsample_bytree = colsample_bytree
+        self.reg_lambda = reg_lambda
+        self.random_state = random_state
+        self._model = None
+
+    def fit(self, X: np.ndarray, y_struct: np.ndarray):
+        import xgboost as xgb
+        # XGBoost survival:cox encodes labels as positive for events, negative
+        # for censored: y_label = time if event else -time.
+        time = y_struct['time'].astype(np.float64)
+        event = y_struct['event'].astype(bool)
+        y_xgb = np.where(event, time, -time)
+        dtrain = xgb.DMatrix(np.asarray(X, dtype=np.float64), label=y_xgb)
+        params = {
+            'objective': 'survival:cox',
+            'eval_metric': 'cox-nloglik',
+            'learning_rate': self.learning_rate,
+            'max_depth': self.max_depth,
+            'min_child_weight': self.min_child_weight,
+            'subsample': self.subsample,
+            'colsample_bytree': self.colsample_bytree,
+            'reg_lambda': self.reg_lambda,
+            'tree_method': 'hist',
+            'verbosity': 0,
+            'seed': self.random_state,
+        }
+        self._model = xgb.train(params, dtrain, num_boost_round=self.n_estimators)
+        return self
+
+    def predict_risk(self, X: np.ndarray) -> np.ndarray:
+        import xgboost as xgb
+        dpred = xgb.DMatrix(np.asarray(X, dtype=np.float64))
+        return np.asarray(self._model.predict(dpred), dtype=np.float64)
+
+
 SURVIVAL_MODELS = {
     'cox': SurvivalCoxPH,
     'coxnet': SurvivalCoxnet,
     'rsf': SurvivalRSF,
     'gbsa': SurvivalGBSA,
+    'xgbcox': SurvivalXGBCox,
 }
