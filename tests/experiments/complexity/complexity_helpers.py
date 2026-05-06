@@ -602,16 +602,17 @@ DATASET_REPS = {
     'bh_doyle_plates': {
         'general': [
             'reactant_avalon', 'diff_avalon', 'diff_mhg_gnn', 'diff_ecfp4',
-            'reactant_grover', 'reactant_ecfp4', 'reactant_mhg_gnn',
-            'diff_grover', 'drfp_2048', 'reactiont5', 'diff_mol2vec',
-            'onehot_components', 'reactant_mol2vec', 'rxnfp', 'diff_maccs',
-            'reactant_mordred', 'diff_mordred'],
+            'reactant_grover', 'reactant_ecfp4', 'cgr_morgan',
+            'reactant_mhg_gnn', 'diff_grover', 'drfp_2048', 'reactiont5',
+            'diff_mol2vec', 'onehot_components', 'reactant_mol2vec', 'rxnfp',
+            'diff_maccs', 'reactant_mordred', 'diff_mordred'],
         'augmentation': [
-            'product_maccs', 'reactant_maccs',
-            'product_pharmacophore3d', 'reactant_pharmacophore3d'],
+            'product_maccs', 'reactant_maccs', 'onehot_components',
+            'diff_maccs', 'product_pharmacophore3d',
+            'reactant_pharmacophore3d'],
         'top_tier': [
             'reactant_avalon', 'diff_avalon', 'diff_mhg_gnn', 'diff_ecfp4',
-            'reactant_grover', 'reactant_ecfp4'],
+            'reactant_grover', 'reactant_ecfp4', 'cgr_morgan'],
     },
 
     # ── DTA (drug-target affinity, cold-protein splits) ───────────────
@@ -1018,8 +1019,9 @@ def run_all(dataset_name: str, output_dir: str,
         rep_names: Explicit rep list override. If None, uses DATASET_REPS[dataset_name]['general'].
         pruning_mode: One of PRUNING_MODES from _shared.py. Default 'default_pruning'
             reproduces the legacy single-stage adaptive_pruning=0.15 behaviour.
-            'aggressive_pruning' applies td=0.5 at b=50 to gp/svm/mlp ONLY when
-            n_samples >= 1000 (gate applied automatically per dataset).
+            'aggressive_pruning' applies F16-validated multi-stage pruning
+            (checkpoints=[25,50,100], td=0.5) globally to all models with no
+            n_samples gate. F16 (caco2): ~58% fold-0 eval reduction at zero loss.
     """
     if config is None:
         from kirby.find_best_hybrid import SPEED_TIERS

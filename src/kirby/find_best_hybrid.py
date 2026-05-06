@@ -147,6 +147,16 @@ _CACHE_STATS = {
 }
 
 
+# Bump when augmentation default params or logic changes so old hybrid_eval
+# cache entries (which don't include aug_max_candidates / aug_patience in
+# their meta) get invalidated automatically. Old entries lack this key →
+# meta-mismatch → silently recomputed on demand. No deletion needed.
+#   v1: pre-2026-05-06 — augment_uncapped/augment_capped had patience=20,
+#       max_candidates=200.
+#   v2: 2026-05-06 — patience=10, max_candidates=50.
+AUG_LOGIC_VERSION = 2
+
+
 def _reset_cache_stats() -> None:
     for k in _CACHE_STATS:
         _CACHE_STATS[k] = 0
@@ -556,6 +566,7 @@ def _make_hybrid_eval_meta(
         'augmentation_threshold': (float(augmentation_threshold)
                                    if augmentation_threshold is not None else None),
         'augmentation_budget': int(augmentation_budget),
+        'aug_logic_version': AUG_LOGIC_VERSION,
         'metric_name': metric_name,
         'task_type': task_type,
         'code_timestamp': time.time(),
@@ -1123,8 +1134,8 @@ DEFAULT_MODELS = {
     'ridge': {
         'regressor': lambda: __import__('sklearn.linear_model', fromlist=['RidgeCV']).RidgeCV(
             alphas=np.logspace(-4, 4, 50)),
-        'classifier': lambda: __import__('sklearn.linear_model', fromlist=['LogisticRegressionCV']).LogisticRegressionCV(
-            Cs=10, random_state=42, max_iter=1000, n_jobs=-1),
+        'classifier': lambda: __import__('sklearn.linear_model', fromlist=['RidgeClassifierCV']).RidgeClassifierCV(
+            alphas=np.logspace(-4, 4, 50)),
         'tier': 'full',
     },
     'knn': {
@@ -1379,7 +1390,7 @@ _HP_SEARCH_SPACES = {
         'learning_rate': [0.01, 0.05, 0.1],
         'l2_leaf_reg': [1, 3, 5, 10],
     },
-    # ridge: skip — uses RidgeCV/LogisticRegressionCV internally
+    # ridge: skip — uses RidgeCV/RidgeClassifierCV internally
     # dnn: skip — too slow for RandomizedSearchCV
     # cnn: skip — too slow for RandomizedSearchCV
 }
@@ -1460,7 +1471,7 @@ def tune_models(
     tuned = {}
     for model_name, model in default_models.items():
         if model_name == 'ridge':
-            # RidgeCV/LogisticRegressionCV tunes internally
+            # RidgeCV/RidgeClassifierCV tunes internally
             tuned[model_name] = model
             print(f"  {model_name}: skip (uses internal CV)")
             continue
@@ -1566,14 +1577,17 @@ SPEED_TIERS = {
 # Per-model maximum budget. Models sensitive to high dimensionality
 # (curse of dimensionality, kernel explosion, parameter count) are capped.
 # Tree-based models handle high-d natively via feature splitting.
+# Slow-model caps tightened 2026-05-06: previously 2000-3000, now 1000.
+# F16 (caco2 n=2158) showed best slow-model budgets at b=50-250, never
+# above; b=2000 contributed dominant wall time without contributing wins.
 MODEL_MAX_BUDGET = {
-    'gp': 2000,
+    'gp': 1000,
     'knn': 2000,
-    'svm': 3000,
-    'mlp': 3000,
-    'bnn': 3000,
-    'dnn': 3000,
-    'cnn': 3000,
+    'svm': 1000,
+    'mlp': 1000,
+    'bnn': 1000,
+    'dnn': 1000,
+    'cnn': 1000,
     # No cap: rf, xgboost, lightgbm, catboost, ridge, ngboost
 }
 

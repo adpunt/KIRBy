@@ -73,9 +73,10 @@ def main():
     parser.add_argument(
         '--pruning-mode', type=str, default='default_pruning',
         help="Adaptive pruning mode (default: 'default_pruning' = current "
-             "single-stage 0.15 strategy prune). 'aggressive_pruning' adds "
-             "td=0.5 at b=50 mid-flight prune to gp/svm/mlp on datasets with "
-             "n_samples >= 1000. See PRUNING_MODES in tests/experiments/_shared.py.")
+             "single-stage 0.15 strategy prune). 'aggressive_pruning' = "
+             "F16-validated multi-stage pruning (checkpoints=[25,50,100], "
+             "td=0.5) applied globally to all models. See PRUNING_MODES in "
+             "tests/experiments/_shared.py.")
     args = parser.parse_args()
 
     cat_info = CATEGORIES[args.category]

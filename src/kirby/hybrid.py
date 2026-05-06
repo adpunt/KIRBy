@@ -1135,9 +1135,10 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             m.fit(X_train_scaled, y_train)
             y_pred = m.predict(X_val_scaled)
             score = metric_fn(y_val, y_pred)
-        except (np.linalg.LinAlgError, ValueError, FloatingPointError):
+        except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
             # Numerical failure (e.g. Ridge SVD non-convergence on pathological
-            # feature matrix). Treat this allocation as infeasible.
+            # feature matrix) or sklearn-internal TypeError from a broken model
+            # factory. Treat this allocation as infeasible.
             return (-np.inf, None) if return_predictions else -np.inf
         score = -score if lower_is_better else score
         return (score, y_pred) if return_predictions else score
@@ -1157,7 +1158,7 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             m = RidgeCV(alphas=[0.01, 0.1, 1.0, 10.0, 100.0])
         try:
             m.fit(X_train_scaled, y_train)
-        except (np.linalg.LinAlgError, ValueError, FloatingPointError):
+        except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
             return (-np.inf, None) if return_predictions else -np.inf
 
     elif internal_evaluator == 'rf':
@@ -1337,7 +1338,7 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             score = accuracy_score(y_val, y_pred)
         else:
             score = r2_score(y_val, y_pred)
-    except (np.linalg.LinAlgError, ValueError, FloatingPointError):
+    except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
         return (-np.inf, None) if return_predictions else -np.inf
     return (score, y_pred) if return_predictions else score
 
@@ -1954,8 +1955,8 @@ def augment_capped(
     lower_is_better,
     total_budget,
     candidate_ranking='rf_importance',
-    patience=20,
-    max_candidates=200,
+    patience=10,
+    max_candidates=50,
 ):
     """Capped augmentation: fill remaining budget slots, then replace worst base features.
 
@@ -2145,8 +2146,8 @@ def augment_uncapped(
     metric_fn,
     lower_is_better,
     candidate_ranking='rf_importance',
-    patience=20,
-    max_candidates=200,
+    patience=10,
+    max_candidates=50,
 ):
     """Uncapped augmentation: add features beyond the budget if they help.
 
@@ -3755,8 +3756,8 @@ def create_hybrid(base_reps, labels,
                 lower_is_better=lower_is_better,
                 total_budget=budget,
                 candidate_ranking=candidate_ranking,
-                patience=20,
-                max_candidates=kwargs.pop('aug_max_candidates', 200),
+                patience=10,
+                max_candidates=kwargs.pop('aug_max_candidates', 50),
             )
 
             feature_info['augmentation_info'] = aug_result['augmentation_info']
@@ -3789,8 +3790,8 @@ def create_hybrid(base_reps, labels,
                 metric_fn=metric_fn,
                 lower_is_better=lower_is_better,
                 candidate_ranking=candidate_ranking,
-                patience=20,
-                max_candidates=kwargs.pop('aug_max_candidates', 200),
+                patience=10,
+                max_candidates=kwargs.pop('aug_max_candidates', 50),
             )
 
             feature_info['augmentation_info'] = aug_result['augmentation_info']

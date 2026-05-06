@@ -609,8 +609,9 @@ def run_all(dataset_name: str, output_dir: str,
         config: Config dict override (default: fast tier + similarity extras).
         rep_names: Explicit rep list override. If None, uses DATASET_REPS[dataset_name]['general'].
         pruning_mode: One of PRUNING_MODES. 'default_pruning' = legacy
-            single-stage prune. 'aggressive_pruning' = td=0.5 at b=50 on
-            gp/svm/mlp when n_samples >= 1000.
+            single-stage prune. 'aggressive_pruning' = F16-validated multi-
+            stage pruning (checkpoints=[25,50,100], td=0.5) applied globally
+            to all models, no n_samples gate. F16: ~58% fold-0 eval reduction.
     """
     if config is None:
         from kirby.find_best_hybrid import SPEED_TIERS
