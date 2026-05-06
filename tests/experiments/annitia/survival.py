@@ -206,9 +206,81 @@ def concordance(y_struct: np.ndarray, risk: np.ndarray) -> float:
         return float('nan')
 
 
+def _stacker_factory():
+    from experiments.annitia.stacking import SurvivalStacker
+    return SurvivalStacker()
+
+
+def _stacker_l1_01():
+    from experiments.annitia.stacking import SurvivalStacker
+    return SurvivalStacker(outer_l1_ratio=0.1)
+
+
+def _stacker_l1_03():
+    from experiments.annitia.stacking import SurvivalStacker
+    return SurvivalStacker(outer_l1_ratio=0.3)
+
+
+def _stacker_l1_07():
+    from experiments.annitia.stacking import SurvivalStacker
+    return SurvivalStacker(outer_l1_ratio=0.7)
+
+
+def _stacker_l1_09():
+    from experiments.annitia.stacking import SurvivalStacker
+    return SurvivalStacker(outer_l1_ratio=0.9)
+
+
+def _stacker_inner10():
+    from experiments.annitia.stacking import SurvivalStacker
+    return SurvivalStacker(n_inner_folds=10)
+
+
+def _stacker_inner10_l1_03():
+    from experiments.annitia.stacking import SurvivalStacker
+    return SurvivalStacker(n_inner_folds=10, outer_l1_ratio=0.3)
+
+
+def _stacker_inner10_l1_07():
+    from experiments.annitia.stacking import SurvivalStacker
+    return SurvivalStacker(n_inner_folds=10, outer_l1_ratio=0.7)
+
+
+def _stacker_outer_rsf():
+    from experiments.annitia.stacking import SurvivalStacker
+    return SurvivalStacker(outer='rsf')
+
+
+def _stacker_outer_gbsa():
+    from experiments.annitia.stacking import SurvivalStacker
+    return SurvivalStacker(outer='gbsa')
+
+
+def _stacker_outer_rsf_k10():
+    from experiments.annitia.stacking import SurvivalStacker
+    return SurvivalStacker(outer='rsf', n_inner_folds=10)
+
+
+def _stacker_outer_gbsa_k10():
+    from experiments.annitia.stacking import SurvivalStacker
+    return SurvivalStacker(outer='gbsa', n_inner_folds=10)
+
+
 SURVIVAL_MODELS = {
     'cox': SurvivalCoxPH,
     'coxnet': SurvivalCoxnet,
     'rsf': SurvivalRSF,
     'gbsa': SurvivalGBSA,
+    'stack': _stacker_factory,                          # default: outer=coxnet, l1=0.5, k=5
+    'stack_l1_01': _stacker_l1_01,
+    'stack_l1_03': _stacker_l1_03,
+    'stack_l1_07': _stacker_l1_07,
+    'stack_l1_09': _stacker_l1_09,
+    'stack_k10': _stacker_inner10,
+    'stack_k10_l1_03': _stacker_inner10_l1_03,
+    'stack_k10_l1_07': _stacker_inner10_l1_07,
+    'stack_rsf': _stacker_outer_rsf,                    # outer=rsf
+    'stack_gbsa': _stacker_outer_gbsa,                  # outer=gbsa
+    'stack_rsf_k10': _stacker_outer_rsf_k10,
+    'stack_gbsa_k10': _stacker_outer_gbsa_k10,
 }
