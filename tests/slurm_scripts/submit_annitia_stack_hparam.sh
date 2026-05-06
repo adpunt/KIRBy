@@ -4,8 +4,8 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=48G
-#SBATCH --time=24:00:00
-#SBATCH --partition=medium
+#SBATCH --time=72:00:00
+#SBATCH --partition=long
 #SBATCH --mail-user=adelaide.punt@stcatz.ox.ac.uk
 #SBATCH --mail-type=END,FAIL
 
