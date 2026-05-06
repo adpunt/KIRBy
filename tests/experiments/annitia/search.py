@@ -11,15 +11,36 @@ feature_importances_ (importances are computed once per fold on the training fol
 
 The winner is refit on all valid patients to produce the final estimator.
 The top-K candidates per endpoint are also retained for ensemble at predict time.
+
+Phase X (2026-05-06): every condition is now stamped with the standard
+ConditionRecord schema (see `_schema.py`), and per-condition OOF risk vectors
+are written to <output_dir>/oof/<endpoint>/<config_id>.npy when an
+`output_dir` is provided. Backwards compatible: legacy field names
+(`views`, `model`, `prune`, `mean_cindex`, ...) are still emitted, so any
+older consumers (build_submission_zip, combine_branches, submit) keep working.
 """
 
+import time
 from dataclasses import dataclass, field
 from itertools import combinations
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
 from experiments.annitia.survival import SURVIVAL_MODELS, concordance
+from experiments.annitia._schema import (
+    SCHEMA_VERSION,
+    condition_key,
+    config_id as _config_id,
+    make_record,
+    upgrade_record,
+)
+from experiments.annitia._oof import (
+    fill_oof_fold,
+    init_oof_buffer,
+    save_oof,
+)
 
 
 @dataclass
@@ -69,11 +90,6 @@ def _rsf_importance_indices(X: np.ndarray, y_struct: np.ndarray,
     return np.argsort(imp)[::-1][:top_k]
 
 
-def _condition_key(subset: Tuple[str, ...], model: str,
-                   prune: Optional[int]) -> Tuple:
-    return (tuple(subset), model, prune)
-
-
 def search_survival_hybrid(views: Dict[str, Tuple[np.ndarray, list]],
                            y_struct: np.ndarray,
                            valid_mask: np.ndarray,
@@ -86,6 +102,9 @@ def search_survival_hybrid(views: Dict[str, Tuple[np.ndarray, list]],
                            verbose: bool = True,
                            checkpoint_callback=None,
                            prior_results: Optional[List[Dict]] = None,
+                           output_dir: Optional[str] = None,
+                           framing: str = 'cox',
+                           tricks: Optional[List[str]] = None,
                            ) -> SurvivalSearchResult:
     """Run the survival hybrid search.
 
@@ -100,18 +119,27 @@ def search_survival_hybrid(views: Dict[str, Tuple[np.ndarray, list]],
             incrementally so SLURM timeouts don't lose work.
         prior_results: optional list of already-evaluated condition dicts
             (e.g. loaded from a checkpoint JSON). Conditions matching a prior
-            (subset, model, prune) tuple are skipped — their entry is reused
-            verbatim.
+            (subset, model, prune, framing, tricks) tuple are skipped — their
+            entry is reused verbatim (with on-the-fly upgrade to the v1 schema).
+        output_dir: if provided, OOF risk vectors are written to
+            <output_dir>/oof/<endpoint>/<config_id>.npy and the path is stamped
+            on each condition record. Required by Layer 5 stack_meta.
+        framing: Layer 2 label (default 'cox'). Currently this search loop only
+            evaluates the Cox framing; later phases will pass other strings.
+        tricks: Layer 4 trick labels for this batch (default []).
     """
     view_names = list(views.keys())
     subsets = _enumerate_subsets(view_names, max_size=max_subset_size)
-    results: List[Dict] = list(prior_results) if prior_results else []
-    completed_keys = {
-        _condition_key(tuple(r['views']), r['model'], r.get('prune'))
-        for r in results
-    }
+
+    # Lift any prior (legacy or v1) records into the v1 schema before resume
+    raw_prior = list(prior_results) if prior_results else []
+    results: List[Dict] = [upgrade_record(r, endpoint=endpoint) for r in raw_prior]
+    completed_keys = {condition_key(r) for r in results}
     if completed_keys and verbose:
         print(f"   [{endpoint}] resuming with {len(completed_keys)} already-evaluated conditions")
+
+    n_total = len(valid_mask)
+    tricks = list(tricks or [])
 
     for subset in subsets:
         X_full = _concat_views(views, subset)
@@ -121,9 +149,15 @@ def search_survival_hybrid(views: Dict[str, Tuple[np.ndarray, list]],
                 if prune is not None and X_full.shape[1] <= prune:
                     # Equivalent to no-prune; skip duplicate.
                     continue
-                if _condition_key(subset, mname, prune) in completed_keys:
+                # Build the condition key on (subset, model, prune, framing, tricks)
+                cid = _config_id(subset, prune, framing, mname, tricks)
+                key = (tuple(subset), mname, prune, framing, tuple(sorted(tricks)))
+                if key in completed_keys:
                     continue  # already done in a prior run
+
+                t0 = time.time()
                 fold_c = []
+                oof_buf = init_oof_buffer(n_total) if output_dir else None
                 for k, (tr, va) in enumerate(folds):
                     Xtr, Xva = X_full[tr], X_full[va]
                     ytr, yva = y_struct[tr], y_struct[va]
@@ -136,6 +170,8 @@ def search_survival_hybrid(views: Dict[str, Tuple[np.ndarray, list]],
                         est.fit(Xtr, ytr)
                         risk = est.predict_risk(Xva)
                         c = concordance(yva, risk)
+                        if oof_buf is not None:
+                            fill_oof_fold(oof_buf, va, risk)
                     except Exception as exc:
                         if verbose:
                             err = repr(exc) if str(exc) == '' else str(exc)
@@ -143,18 +179,30 @@ def search_survival_hybrid(views: Dict[str, Tuple[np.ndarray, list]],
                                   f"{mname:6s} prune={prune} fold {k}: ERR {err}")
                         c = float('nan')
                     fold_c.append(c)
+
                 mean_c = float(np.nanmean(fold_c)) if any(np.isfinite(fold_c)) else float('nan')
                 std_c = float(np.nanstd(fold_c)) if any(np.isfinite(fold_c)) else float('nan')
-                results.append({
-                    'views': subset,
-                    'model': mname,
-                    'prune': prune,
-                    'fold_cindex': fold_c,
-                    'mean_cindex': mean_c,
-                    'std_cindex': std_c,
-                    'n_features': int(X_full.shape[1]),
-                    'n_features_after_prune': int(prune if prune is not None else X_full.shape[1]),
-                })
+                elapsed = time.time() - t0
+
+                oof_path: Optional[str] = None
+                if output_dir is not None and oof_buf is not None:
+                    oof_path = save_oof(oof_buf, output_dir, endpoint, cid)
+
+                rec = make_record(
+                    endpoint=endpoint,
+                    views=subset,
+                    model=mname,
+                    prune=prune,
+                    fold_cindex=fold_c,
+                    mean_cindex=mean_c,
+                    std_cindex=std_c,
+                    n_features=int(X_full.shape[1]),
+                    framing=framing,
+                    tricks=tricks,
+                    oof_path=oof_path,
+                    elapsed_sec=elapsed,
+                )
+                results.append(rec)
                 if checkpoint_callback is not None:
                     try:
                         checkpoint_callback(results)
@@ -177,7 +225,7 @@ def search_survival_hybrid(views: Dict[str, Tuple[np.ndarray, list]],
     y_valid = y_struct[valid_idx]
 
     def _refit(cfg: Dict):
-        X_full = _concat_views(views, cfg['views'])[valid_idx]
+        X_full = _concat_views(views, tuple(cfg['views']))[valid_idx]
         if cfg['prune'] is not None and X_full.shape[1] > cfg['prune']:
             keep = _rsf_importance_indices(X_full, y_valid, cfg['prune'])
         else:
@@ -194,12 +242,13 @@ def search_survival_hybrid(views: Dict[str, Tuple[np.ndarray, list]],
     for cfg in finite_sorted[:top_k_keep]:
         est, keep = _refit(cfg)
         top_k_models.append({
-            'views': cfg['views'],
+            'views': tuple(cfg['views']),
             'model_name': cfg['model'],
             'prune': cfg['prune'],
             'feature_indices': keep,
             'fitted_model': est,
             'mean_cindex': cfg['mean_cindex'],
+            'config_id': cfg.get('config_id'),
         })
 
     return SurvivalSearchResult(
@@ -207,7 +256,7 @@ def search_survival_hybrid(views: Dict[str, Tuple[np.ndarray, list]],
         per_condition=results,
         best=best,
         final_model=final_model,
-        final_view_names=best['views'],
+        final_view_names=tuple(best['views']),
         final_model_name=best['model'],
         final_prune=best['prune'],
         final_feature_indices=final_keep,

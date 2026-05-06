@@ -105,6 +105,26 @@ pip install chembl_webresource_client
 # scikit-survival — required for ANNITIA MASLD experiment (Cox PH, RSF, C-index)
 pip install scikit-survival
 
+# ANNITIA Phase B optional algorithm wrappers (all lazy-import — wrappers raise
+# an informative ImportError if you try to use a class whose backend isn't
+# installed, so it's fine to skip what you don't need):
+#   - catboost            for SurvivalCatBoostCox / Aft, RegressorCatBoost, ClassifierCatBoost
+#   - pycox + torchtuples for SurvivalPCHazard, SurvivalLogisticHazard, DeepHitMT
+#   - tabpfn              for TabPFNSurvivalLandmark
+#   - tabicl              for TabICLSurvivalLandmark
+#   - lifelines           for FineGrayCompetingRisks (already a hard dep elsewhere)
+#   - ngboost             for SurvivalNGBoost (already in [uncertainty])
+pip install catboost
+pip install pycox==0.3.0 torchtuples==0.2.2
+pip install tabpfn
+pip install tabicl
+
+# ANNITIA Phase C/D — no new optional deps. The new framings/tricks reuse the
+# existing Phase B backends (lightgbm, catboost, xgboost, torch, sksurv,
+# kirby.hybrid). XGBoostPairwiseRanker uses xgboost (already installed).
+# Importance methods reuse kirby.hybrid.compute_feature_importance (treeshap,
+# permutation, lightgbm_gain etc — see kirby/hybrid.py).
+
 # Optuna HP tuning (optional)
 pip install optuna
 

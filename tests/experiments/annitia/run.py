@@ -148,6 +148,9 @@ def run(args):
             verbose=True,
             checkpoint_callback=_checkpoint,
             prior_results=prior_results,
+            output_dir=str(output_dir) if not args.no_oof else None,
+            framing='cox',
+            tricks=[],
         )
         elapsed = time.time() - t0
 
@@ -238,6 +241,11 @@ def main():
     p.add_argument('--filename', type=str, default='train.csv')
     p.add_argument('--output-dir', type=str,
                    default='tests/results/annitia')
+    p.add_argument('--no-oof', action='store_true',
+                   help='Disable per-condition OOF risk .npy dumps. Default: '
+                        'OOFs are written under <output_dir>/oof/<endpoint>/. '
+                        'Required by Layer 5 stack_meta — only disable for '
+                        'cheap smoke tests.')
     args = p.parse_args()
     run(args)
 
