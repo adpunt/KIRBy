@@ -8,13 +8,13 @@
 # This script populates the per-fold .npz cache for the 3 successful FT reps
 # (lora_molformer, contrastive_molformer, gnn_graphmvp) on adme_hlm + adme_rlm.
 #
-# Usage (from /data/stat-cadd/scat9264/KIRBy on HTC login):
+# Usage (from /data/stat-ecr/scat9264/KIRBy on HTC login):
 #   bash tests/slurm_scripts/submit_ft_precompute_adme.sh
 
 set -euo pipefail
 
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
-WRAP_PREFIX="cd /data/stat-cadd/scat9264/KIRBy && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
+WRAP_PREFIX="cd /data/stat-ecr/scat9264/KIRBy && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
 
 submit_gpu() {
     local name=$1
@@ -41,5 +41,5 @@ submit_gpu "ftpc_adme_rlm" \
     "python tests/precompute_ft_reps.py adme_rlm --speed full"
 
 echo ""
-echo "Cache target: /data/stat-cadd/scat9264/.cache/kirby/finetuned_reps/"
+echo "Cache target: /data/stat-ecr/scat9264/.cache/kirby/finetuned_reps/"
 echo "Monitor: squeue -u \$USER"

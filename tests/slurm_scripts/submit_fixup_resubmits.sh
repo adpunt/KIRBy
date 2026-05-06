@@ -21,7 +21,7 @@ set -euo pipefail
 
 MODE=${1:-}
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
-KIRBY="/data/stat-cadd/scat9264/KIRBy"
+KIRBY="/data/stat-ecr/scat9264/KIRBy"
 
 ALL_AB_REPS="onehot,blosum,aac,paratope,esm2,esmc,ablang2,igbert,igbert_cls,antiberty,prot_t5,amplify,igt5,esm3,esm3_cdr,saprot,saprot_cdr,esm2_cdr,esmc_cdr,antiberty_cdr,prot_t5_cdr,amplify_cdr,esm2_midlayers,esm2_layer24,esm2_early,esm2_concat,esm2_cdr3,abroberta,abroberta_cdr,structural,mutation_features,esm2_mutsite,esm2_wt_delta,esm2_llr,esmc_llr,antiberty_llr,esm2_entropy_top20,esm2_per_cdr,esm2_per_region,mint,aido_protein,xtrimopglm"
 

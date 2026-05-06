@@ -35,7 +35,8 @@ def _find_data_dir() -> Optional[Path]:
         Path('/Volumes/seagate/kirby/pdbbind'),
         Path.home() / '.cache' / 'kirby' / 'pdbbind',
         Path.home() / 'data' / 'pdbbind',
-        Path('/data/stat-cadd/scat9264/KIRBy/data/pdbbind'),
+        Path('/data/stat-ecr/scat9264/KIRBy/data/pdbbind'),   # post-2026-05-07
+        Path('/data/stat-cadd/scat9264/KIRBy/data/pdbbind'),  # legacy
     ]
     for d in candidates:
         if d.exists():

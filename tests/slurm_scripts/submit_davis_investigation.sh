@@ -13,7 +13,7 @@
 #
 # CPU-only (small ridge fits + sklearn). ~1h expected.
 #
-# Usage (from /data/stat-cadd/scat9264/KIRBy on HTC login):
+# Usage (from /data/stat-ecr/scat9264/KIRBy on HTC login):
 #   bash tests/slurm_scripts/submit_davis_investigation.sh
 
 set -euo pipefail
@@ -33,7 +33,7 @@ JOB=$(sbatch <<EOF | awk '{print $4}'
 #SBATCH --mail-type=END,FAIL
 
 set -euo pipefail
-cd /data/stat-cadd/scat9264/KIRBy
+cd /data/stat-ecr/scat9264/KIRBy
 git pull --ff-only
 . ./setup.sh
 export PYTHONWARNINGS=ignore
@@ -48,4 +48,4 @@ echo ""
 echo "Output: tests/results/phase5_baselines/dta/davis_investigation.json"
 echo ""
 echo "When it lands, scp it down with:"
-echo "  scp scat9264@htc-login.arc.ox.ac.uk:/data/stat-cadd/scat9264/KIRBy/tests/results/phase5_baselines/dta/davis_investigation.json tests/results/phase5_baselines/dta/"
+echo "  scp scat9264@htc-login.arc.ox.ac.uk:/data/stat-ecr/scat9264/KIRBy/tests/results/phase5_baselines/dta/davis_investigation.json tests/results/phase5_baselines/dta/"

@@ -15,7 +15,7 @@
 # Usage:
 #   sbatch tests/slurm_scripts/imrie_eval.sh
 
-cd /data/stat-cadd/scat9264/KIRBy
+cd /data/stat-ecr/scat9264/KIRBy
 git pull 2>/dev/null
 . ./setup.sh
 export PYTHONWARNINGS=ignore
@@ -27,6 +27,6 @@ python tests/experiments/imrie_transfer_learning.py \
     --datasets logd,caco2,herg \
     --reps ecfp4,maccs,pdv,mol2vec,mordred,avalon \
     --n-folds 5 \
-    --pretrain-dir /data/stat-cadd/scat9264/kirby_data/chembl_pretrain/
+    --pretrain-dir /data/stat-ecr/scat9264/kirby_data/chembl_pretrain/
 
 echo "Done: $(date)"

@@ -3,7 +3,7 @@
 # the 24h wall in jobs 7548433/7548434. Bumped to 4-day wall (long partition max).
 # Suzuki (7548435) completed in 9h18m — do NOT resubmit it.
 #
-# Usage (from /data/stat-cadd/scat9264/KIRBy on HTC login):
+# Usage (from /data/stat-ecr/scat9264/KIRBy on HTC login):
 #   bash tests/slurm_scripts/submit_cgr_comparison_resubmit.sh           # both
 #   bash tests/slurm_scripts/submit_cgr_comparison_resubmit.sh bh        # BH only
 #   bash tests/slurm_scripts/submit_cgr_comparison_resubmit.sh doyle     # Doyle only
@@ -13,7 +13,7 @@ set -euo pipefail
 MODE=${1:-all}
 OUTPUT="tests/results/comparisons"
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
-WRAP_PREFIX="cd /data/stat-cadd/scat9264/KIRBy && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
+WRAP_PREFIX="cd /data/stat-ecr/scat9264/KIRBy && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
 
 submit() {
     local name=$1

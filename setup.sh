@@ -27,10 +27,15 @@ else
     echo "  Create venv: python3.11 -m venv $VENV_DIR"
 fi
 
+# 2026-05-07: stat-cadd group quota at 99.9%, repo migrated to stat-ecr.
+# READ-ONLY caches (HF, torch, pip, models) stay on stat-cadd — no writes
+# needed at job-time, just read from existing locations.
+# WRITES go to stat-ecr: KIRBY_CACHE_DIR (search/baseline/folds caches),
+# slurm logs (CWD-at-submit), tests/results/* (inside repo).
 export HF_HOME=/data/stat-cadd/scat9264/.cache/huggingface
 export TORCH_HOME=/data/stat-cadd/scat9264/.cache/torch
 export PIP_CACHE_DIR=/data/stat-cadd/scat9264/.cache/pip
-export KIRBY_CACHE_DIR=/data/stat-cadd/scat9264/.cache/kirby
+export KIRBY_CACHE_DIR=/data/stat-ecr/scat9264/.cache/kirby
 export KIRBY_MODELS_DIR=/data/stat-cadd/scat9264/kirby_models
 # PYTHONUSERBASE only matters outside venv — inside venv, pip installs to venv
 if [ -z "$VIRTUAL_ENV" ]; then

@@ -13,14 +13,14 @@
 # Skipped (already complete, do NOT resubmit):
 #   herg_ki, abcov_kd, abagym_EGFR, abagym_HER2
 #
-# Usage (from /data/stat-cadd/scat9264/KIRBy on HTC login):
+# Usage (from /data/stat-ecr/scat9264/KIRBy on HTC login):
 #   bash tests/slurm_scripts/submit_c02_resubmit.sh
 
 set -euo pipefail
 
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
 OUT_DIR="tests/results/complexity_c02/full"
-WRAP_PREFIX="cd /data/stat-cadd/scat9264/KIRBy && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error && mkdir -p ${OUT_DIR}"
+WRAP_PREFIX="cd /data/stat-ecr/scat9264/KIRBy && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error && mkdir -p ${OUT_DIR}"
 
 DATASETS=(
     # Molecular timeouts

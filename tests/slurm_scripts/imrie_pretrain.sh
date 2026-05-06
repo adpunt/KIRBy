@@ -16,7 +16,7 @@
 #   sbatch tests/slurm_scripts/imrie_pretrain.sh
 #   sbatch tests/slurm_scripts/imrie_pretrain.sh ecfp4   # single rep
 
-cd /data/stat-cadd/scat9264/KIRBy
+cd /data/stat-ecr/scat9264/KIRBy
 git pull 2>/dev/null
 . ./setup.sh
 export PYTHONWARNINGS=ignore
@@ -31,7 +31,7 @@ python -m kirby.models.pretrain_chembl_dnn \
     --n-compounds 500000 \
     --max-targets 200 \
     --hidden-sizes 256,128,64 \
-    --output-dir /data/stat-cadd/scat9264/kirby_data/chembl_pretrain/ \
+    --output-dir /data/stat-ecr/scat9264/kirby_data/chembl_pretrain/ \
     --data-dir /data/stat-cadd/scat9264/kirby_data/chembl/ \
     --epochs 200 \
     --patience 30

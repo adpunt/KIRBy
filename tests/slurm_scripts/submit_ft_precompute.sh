@@ -19,13 +19,13 @@
 #                  cache as side effect of FT factory call.
 #   - TCGA       → SKIPPED per user.
 #
-# Usage (from /data/stat-cadd/scat9264/KIRBy on HTC login):
+# Usage (from /data/stat-ecr/scat9264/KIRBy on HTC login):
 #   bash tests/slurm_scripts/submit_ft_precompute.sh
 
 set -euo pipefail
 
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
-WRAP_PREFIX="cd /data/stat-cadd/scat9264/KIRBy && git pull --ff-only && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
+WRAP_PREFIX="cd /data/stat-ecr/scat9264/KIRBy && git pull --ff-only && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
 DTA_OUT="tests/results/phase5_baselines/dta"
 
 submit_gpu() {
@@ -70,7 +70,7 @@ done
 
 echo ""
 echo "Total: 5 GPU jobs"
-echo "Cache target: \$KIRBY_CACHE_DIR/finetuned_reps/ (= /data/stat-cadd/scat9264/.cache/kirby/finetuned_reps/)"
+echo "Cache target: \$KIRBY_CACHE_DIR/finetuned_reps/ (= /data/stat-ecr/scat9264/.cache/kirby/finetuned_reps/)"
 echo "Monitor: squeue -u \$USER"
 echo ""
 echo "⚠️  bindingdb_kd: job 7516299 is already running the hybrid resubmit. The new"

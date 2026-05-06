@@ -17,7 +17,7 @@
 set -uo pipefail
 
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
-WRAP_PREFIX="cd /data/stat-cadd/scat9264/KIRBy && export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
+WRAP_PREFIX="cd /data/stat-ecr/scat9264/KIRBy && export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
 TIME_LIMIT="2-00:00:00"
 PARTITION="medium"
 REGISTRY_PATH="${KIRBY_CACHE_DIR:-$HOME/.cache/kirby}/hybrid_registry.json"

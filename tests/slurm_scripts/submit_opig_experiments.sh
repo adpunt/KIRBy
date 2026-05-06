@@ -10,7 +10,7 @@
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="/data/stat-cadd/scat9264/KIRBy"
+PROJECT_DIR="/data/stat-ecr/scat9264/KIRBy"
 
 submit() {
     local name=$1

@@ -190,7 +190,7 @@ def _sbatch_line(dataset: str, condition: str, plan: ResourcePlan,
     distance_flag = ' --distance' if distance else ''
     job_name = f'pc_{dataset}_{condition}'
     wrap = (
-        f'cd /data/stat-cadd/scat9264/KIRBy && '
+        f'cd /data/stat-ecr/scat9264/KIRBy && '
         f'export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh && '
         f'export PYTHONWARNINGS=ignore && '
         f'export TRANSFORMERS_VERBOSITY=error && '
@@ -225,7 +225,7 @@ def _sbatch_consolidated(dataset: str, plan: ResourcePlan,
     distance_flag = ' --distance' if distance else ''
     job_name = f'pc_{dataset}_all_{group}'
     wrap = (
-        f'cd /data/stat-cadd/scat9264/KIRBy && '
+        f'cd /data/stat-ecr/scat9264/KIRBy && '
         f'export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh && '
         f'export PYTHONWARNINGS=ignore && '
         f'export TRANSFORMERS_VERBOSITY=error && '

@@ -8,7 +8,7 @@
 set -euo pipefail
 
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
-WRAP="cd /data/stat-cadd/scat9264/KIRBy && export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
+WRAP="cd /data/stat-ecr/scat9264/KIRBy && export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
 
 echo "=== F15 Adaptive Pruning Validation ==="
 

@@ -21,7 +21,7 @@
 
 set -euo pipefail
 
-cd /data/stat-cadd/scat9264/KIRBy
+cd /data/stat-ecr/scat9264/KIRBy
 git pull
 . setup.sh
 

@@ -12,13 +12,13 @@
 # Output overwrites the JSONs at tests/results/phase5_baselines/dta/
 # (FT cache from the v2 jobs is reused — no re-fine-tuning needed).
 #
-# Usage (from /data/stat-cadd/scat9264/KIRBy on HTC login):
+# Usage (from /data/stat-ecr/scat9264/KIRBy on HTC login):
 #   bash tests/slurm_scripts/submit_dta_baseline_resurvey.sh
 
 set -euo pipefail
 
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
-WRAP_PREFIX="cd /data/stat-cadd/scat9264/KIRBy && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
+WRAP_PREFIX="cd /data/stat-ecr/scat9264/KIRBy && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
 DTA_OUT="tests/results/phase5_baselines/dta"
 
 submit_gpu() {
