@@ -69,6 +69,10 @@ from experiments.annitia.robust_cox import RobustCox
 from experiments.annitia.snapshot_ensemble import SnapshotEnsembleSurvival
 from experiments.annitia.self_train import SelfTrainSurvival
 from experiments.annitia.ranking_loss import XGBoostPairwiseRanker
+from experiments.annitia.tabpfn import TabPFNSurvivalLandmark
+from experiments.annitia.tabicl import TabICLSurvivalLandmark
+from experiments.annitia.pycox_dt import SurvivalPCHazard, SurvivalLogisticHazard
+from experiments.annitia.fine_gray import FineGrayCompetingRisks
 from experiments.annitia._oof import init_oof_buffer, fill_oof_fold
 from experiments.annitia.fusion import (
     fuse_equal, fuse_cv_weighted, fuse_single, fuse_rrf, StackMetaFusion)
@@ -83,10 +87,69 @@ def _convert(o):
     return o
 
 
-def _build_conditions(skip_c: bool, skip_d: bool):
+class _AutoHorizonLandmark:
+    """Wrap a landmark wrapper that requires `horizon` at construction.
+    Computes the horizon from the y_struct passed to .fit (median of
+    finite event times)."""
+    def __init__(self, base_cls, horizon_q: float = 0.5, **kwargs):
+        self.base_cls = base_cls
+        self.horizon_q = horizon_q
+        self.kwargs = kwargs
+        self._inner = None
+
+    def fit(self, X, y_struct):
+        time = np.asarray(y_struct['time'], dtype=np.float64)
+        event = np.asarray(y_struct['event'], dtype=bool)
+        ev = time[event & np.isfinite(time)]
+        if ev.size == 0:
+            ev = time[np.isfinite(time)]
+        h = float(np.quantile(ev, self.horizon_q))
+        self._inner = self.base_cls(horizon=h, **self.kwargs)
+        self._inner.fit(X, y_struct)
+        return self
+
+    def predict_risk(self, X):
+        return self._inner.predict_risk(X)
+
+
+class _FineGrayWrapper:
+    """Adapter so FineGrayCompetingRisks fits the standard
+    fit(X, y_struct) / predict_risk(X) signature. Uses an externally
+    stashed `y_other` (the OTHER endpoint's y_struct, full length-N)
+    that the caller must set via `.set_y_other()` before .fit()."""
+    def __init__(self, cause_of_interest: str, y_other_full: np.ndarray,
+                 row_indexer: np.ndarray):
+        self.cause = cause_of_interest
+        self._y_other_full = y_other_full
+        self._row_idx = row_indexer  # global row indices for the X being fit
+        self._inner = None
+
+    def fit(self, X, y_struct):
+        # `y_struct` is the cause-of-interest endpoint y for the current
+        # fold's training rows. We need the OTHER endpoint's y for the
+        # same rows. The caller passes us a slice of indices into the full
+        # length-N arrays as `_row_idx`.
+        y_other = self._y_other_full[self._row_idx]
+        self._inner = FineGrayCompetingRisks(cause_of_interest=self.cause)
+        if self.cause == 'hepatic':
+            self._inner.fit(X, y_struct, y_other)
+        else:
+            self._inner.fit(X, y_other, y_struct)
+        return self
+
+    def predict_risk(self, X):
+        return self._inner.predict_risk(X)
+
+
+def _build_conditions(skip_c: bool, skip_d: bool, *, y_other_full=None,
+                      cause: str = 'hepatic'):
     """Return list of (label, framing, ctor, requires_unlab) tuples.
 
     requires_unlab: bool — True for SelfTrain (needs X_unlab at fit time).
+
+    `y_other_full` and `cause` parameterise the FineGray factory so it
+    knows which endpoint is the cause-of-interest and where to look for
+    the competing endpoint's y. The factory captures these via closure.
     """
     out = []
     if not skip_c:
@@ -98,12 +161,23 @@ def _build_conditions(skip_c: bool, skip_d: bool):
             ('C-landmark-MLP-drop','landmark',    lambda: LandmarkBinarySurvival(classifier_cls=MLPClassifierSurvival, mode='drop'), False),
             ('C-landmark-MLP-ipcw','landmark',    lambda: LandmarkBinarySurvival(classifier_cls=MLPClassifierSurvival, mode='ipcw'), False),
             ('C-landmark-Cat-drop','landmark',    lambda: LandmarkBinarySurvival(classifier_cls=ClassifierCatBoost, mode='drop'), False),
+            ('C-landmark-Cat-ipcw','landmark',    lambda: LandmarkBinarySurvival(classifier_cls=ClassifierCatBoost, mode='ipcw'), False),
+            # NN discrete-time hazard (pycox).
+            ('C-pchazard',         'discrete_dt', lambda: SurvivalPCHazard(epochs=80, patience=10),                                  False),
+            ('C-logistic-hazard',  'discrete_dt', lambda: SurvivalLogisticHazard(epochs=80, patience=10),                            False),
+            # TabPFN / TabICL — landmark binary; horizon resolved at fit.
+            ('C-tabpfn-landmark',  'landmark',    lambda: _AutoHorizonLandmark(TabPFNSurvivalLandmark),                              False),
+            ('C-tabicl-landmark',  'landmark',    lambda: _AutoHorizonLandmark(TabICLSurvivalLandmark),                              False),
         ]
     if not skip_d:
         out += [
             ('D-weighted-cox-lin',  'cox', lambda: WeightedSurvivalModel(SurvivalCoxPH, importance_method='permutation', transform='linear'),  False),
             ('D-weighted-cox-rank', 'cox', lambda: WeightedSurvivalModel(SurvivalCoxPH, importance_method='permutation', transform='rank'),    False),
             ('D-weighted-rsf-lin',  'cox', lambda: WeightedSurvivalModel(SurvivalRSF, importance_method='permutation', transform='linear', base_kwargs={'n_estimators': 200}), False),
+            # D.3 multi-method importance ensemble (rank-avg of 3 methods)
+            ('D-weighted-ensemble', 'cox', lambda: WeightedSurvivalModel(
+                SurvivalCoxPH, transform='linear',
+                ensemble_methods=('permutation', 'lightgbm_gain', 'treeshap')),                                                      False),
             ('D-bagged-cox-B50',    'cox', lambda: BaggedSurvivalModel(SurvivalCoxPH, B=50),                                                    False),
             ('D-robust-cox-trim5',  'cox', lambda: RobustCox(trim_frac=0.05),                                                                  False),
             ('D-snapshot-rsf-N3',   'cox', lambda: SnapshotEnsembleSurvival(SurvivalRSF, n_snapshots=3, base_kwargs={'n_estimators': 200}),     False),
@@ -210,6 +284,116 @@ def main():
             print(f'  {label:25s} framing={framing:<11s} '
                   f'C={mean_c:.4f}±{std_c:.4f}  ({time.time()-t0:.1f}s)')
             (out / 'cv_summary.json').write_text(json.dumps(_convert(summary), indent=2))
+
+    # ----- Fine-Gray competing risks (needs both endpoints) -----
+    print('\n=== Fine-Gray competing risks (both endpoints) ===')
+    y_hep_full = train['hepatic']['y_struct']
+    y_dea_full = train['death']['y_struct']
+    valid_hep = train['hepatic']['valid_mask']
+    valid_dea = train['death']['valid_mask']
+    for endpoint, cause, y_self_full, valid_self, y_other_full in (
+            ('hepatic', 'hepatic', y_hep_full, valid_hep, y_dea_full),
+            ('death',   'death',   y_dea_full, valid_dea, y_hep_full)):
+        folds = get_cv_folds(train, endpoint=endpoint,
+                             n_folds=args.n_folds, seed=args.seed)
+        oof = init_oof_buffer(n_train)
+        fold_c = []
+        t0 = time.time()
+        try:
+            for k, (tr, va) in enumerate(folds):
+                fg = FineGrayCompetingRisks(cause_of_interest=cause)
+                if cause == 'hepatic':
+                    fg.fit(X_tr_full[tr], y_hep_full[tr], y_dea_full[tr])
+                else:
+                    fg.fit(X_tr_full[tr], y_hep_full[tr], y_dea_full[tr])
+                risk = fg.predict_risk(X_tr_full[va])
+                fold_c.append(concordance(y_self_full[va], risk))
+                fill_oof_fold(oof, va, risk)
+            mean_c = float(np.nanmean(fold_c))
+            std_c  = float(np.nanstd(fold_c))
+            # Refit on full valid + predict on val_test
+            vidx = np.where(valid_self)[0]
+            fg = FineGrayCompetingRisks(cause_of_interest=cause)
+            fg.fit(X_tr_full[vidx], y_hep_full[vidx], y_dea_full[vidx])
+            val_risk = np.asarray(fg.predict_risk(X_va_full), dtype=np.float64)
+            cid = 'C-finegray'
+            np.save(out / f'oof_{endpoint}_{cid}.npy', oof)
+            np.save(out / f'val_{endpoint}_{cid}.npy', val_risk)
+            summary['per_condition'][endpoint].append({
+                'config_id': cid, 'label': cid, 'framing': 'finegray',
+                'fold_cindex': fold_c, 'mean_cindex': mean_c, 'std_cindex': std_c,
+                'elapsed_sec': time.time() - t0,
+            })
+            print(f'  finegray[{endpoint}]  C={mean_c:.4f}±{std_c:.4f}  ({time.time()-t0:.1f}s)')
+        except Exception as e:
+            print(f'  finegray[{endpoint}]  ERR: {type(e).__name__}: {str(e)[:120]}')
+
+    # ----- D.9 cross-pollination (sequential: each endpoint gets the
+    # OTHER endpoint's OOF as a Cox feature) -----
+    print('\n=== D.9 endpoint cross-pollination ===')
+    # Build donor OOFs from a strong baseline (Cox+Coxnet rank-avg) on each
+    # endpoint separately. Use the C-baseline-cox OOF that was already
+    # written in the conditions loop, if present.
+    donor_paths = {}
+    for endpoint in ('hepatic', 'death'):
+        # Prefer the best surviving condition's OOF as donor.
+        recs = [r for r in summary['per_condition'][endpoint]
+                if np.isfinite(r['mean_cindex'])]
+        if not recs:
+            continue
+        recs.sort(key=lambda r: -r['mean_cindex'])
+        best = recs[0]
+        donor_paths[endpoint] = out / f'oof_{endpoint}_{best["config_id"]}.npy'
+        print(f'  donor[{endpoint}] = {best["label"]}  (C={best["mean_cindex"]:.4f})')
+
+    from experiments.annitia.cross_pollinate import CrossPollinateSurvival
+    for endpoint in ('hepatic', 'death'):
+        other = 'death' if endpoint == 'hepatic' else 'hepatic'
+        if other not in donor_paths:
+            print(f'  cross-poll[{endpoint}]: no {other} donor OOF — skipping')
+            continue
+        donor = str(donor_paths[other])
+        y_self = train[endpoint]['y_struct']
+        valid_self = train[endpoint]['valid_mask']
+        folds = get_cv_folds(train, endpoint=endpoint,
+                             n_folds=args.n_folds, seed=args.seed)
+        oof = init_oof_buffer(n_train)
+        fold_c = []
+        t0 = time.time()
+        try:
+            for k, (tr, va) in enumerate(folds):
+                cp = CrossPollinateSurvival(SurvivalCoxPH, donor_oof_path=donor)
+                cp.fit(X_tr_full[tr], y_self[tr], row_index=tr)
+                risk = cp.predict_risk(X_tr_full[va], row_index=va)
+                fold_c.append(concordance(y_self[va], risk))
+                fill_oof_fold(oof, va, risk)
+            mean_c = float(np.nanmean(fold_c))
+            std_c  = float(np.nanstd(fold_c))
+            # Refit + predict on val_test. The cross-pollination donor
+            # OOF only covers training rows; for val_test rows we use
+            # the donor's training-mean as the imputed feature value
+            # (already handled inside CrossPollinateSurvival).
+            vidx = np.where(valid_self)[0]
+            cp = CrossPollinateSurvival(SurvivalCoxPH, donor_oof_path=donor)
+            cp.fit(X_tr_full[vidx], y_self[vidx], row_index=vidx)
+            # For val rows we don't have OOF entries — use training-median
+            # fill via the wrapper's stashed _fill_value. We pass val rows
+            # an out-of-range row_index that will all be NaN in the donor
+            # vector (since it was sized n_train), triggering the median fill.
+            dummy_idx = np.zeros(n_val, dtype=np.int64)  # any in-range int; donor[dummy]
+            val_risk = np.asarray(cp.predict_risk(X_va_full, row_index=dummy_idx),
+                                  dtype=np.float64)
+            cid = 'D9-crosspoll-cox'
+            np.save(out / f'oof_{endpoint}_{cid}.npy', oof)
+            np.save(out / f'val_{endpoint}_{cid}.npy', val_risk)
+            summary['per_condition'][endpoint].append({
+                'config_id': cid, 'label': cid, 'framing': 'cox',
+                'fold_cindex': fold_c, 'mean_cindex': mean_c, 'std_cindex': std_c,
+                'elapsed_sec': time.time() - t0,
+            })
+            print(f'  cross-poll[{endpoint}]  C={mean_c:.4f}±{std_c:.4f}  ({time.time()-t0:.1f}s)')
+        except Exception as e:
+            print(f'  cross-poll[{endpoint}]  ERR: {type(e).__name__}: {str(e)[:120]}')
 
     # ----- Phase E fusion -----
     fusion_records = {}

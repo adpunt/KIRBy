@@ -89,7 +89,7 @@ def main():
                     default='/Volumes/seagate/kirby/annitia/val_test.csv',
                     help='Path to val_test.csv (Trustii test patients).')
     ap.add_argument('--models',
-                    default='cox,coxnet,rsf,gbsa,lgbm_aft,ngboost',
+                    default='cox,coxnet,rsf,gbsa,lgbm_aft,ngboost,catboost_cox,catboost_aft',
                     help='Comma-separated algorithm names.')
     ap.add_argument('--n-folds', type=int, default=5)
     ap.add_argument('--seed', type=int, default=42)
