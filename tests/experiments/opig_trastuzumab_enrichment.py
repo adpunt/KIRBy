@@ -454,8 +454,8 @@ def main():
     parser.add_argument(
         '--pruning-mode', type=str, default='default_pruning',
         help="Adaptive pruning mode (default 'default_pruning'). "
-             "'aggressive_pruning' = td=0.5 at b=50 mid-flight prune for "
-             "gp/svm/mlp on n>=1000 datasets.")
+             "'aggressive_pruning' = F16-validated multi-stage pruning "
+             "(checkpoints=[25,50,100], td=0.5) applied globally to all models.")
 
     args = parser.parse_args()
     rep_names = args.reps.split(',') if args.reps else DEFAULT_REPS

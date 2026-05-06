@@ -300,25 +300,23 @@ PRUNING_MODES = {
     },
     'aggressive_pruning': {
         'description': (
-            'Multi-stage tail-drop pruning at b=50 with td=0.5, applied '
-            'ONLY to expensive models (gp, svm, mlp) and ONLY when '
-            'n_samples >= 1000. Cheap models (rf, xgboost, ridge, '
-            'lightgbm) keep the existing single-stage prune. Small '
-            'datasets fall back to default_pruning behaviour. '
-            'Calibrated on f16 sweep, 2026-04-26.'
+            'F16-validated aggressive schedule applied globally to all '
+            'models with no n_samples gate: checkpoints=[25, 50, 100], '
+            'tail_drop=0.5. F16 calibration (caco2 n=2158, 2026-04-25): '
+            '58.0% eval reduction, top-3 overlap=1.0, worst per-model '
+            'relative loss=0%. Replaces prior conservative setting '
+            '(checkpoints=[50], gated at n>=1000 for gp/svm/mlp only) '
+            'because that gate produced zero pruning on antibody/small '
+            'datasets where it was most needed.'
         ),
         'schedule': {
-            'checkpoints': [],
-            'tail_drop_per_checkpoint': 0.0,
+            'checkpoints': [25, 50, 100],
+            'tail_drop_per_checkpoint': 0.5,
             'final_strategy_threshold': 0.15,
             'min_configs_per_model': 1,
         },
-        'model_overrides': {
-            'gp':  {'checkpoints': [50], 'tail_drop_per_checkpoint': 0.5},
-            'svm': {'checkpoints': [50], 'tail_drop_per_checkpoint': 0.5},
-            'mlp': {'checkpoints': [50], 'tail_drop_per_checkpoint': 0.5},
-        },
-        'min_samples_for_overrides': 1000,
+        'model_overrides': None,
+        'min_samples_for_overrides': 0,
     },
 }
 
