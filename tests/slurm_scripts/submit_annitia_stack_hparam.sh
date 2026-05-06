@@ -18,7 +18,7 @@
 # Total: ~12 candidates per endpoint x 5 folds x 2 endpoints = ~120 fits,
 # but stacker fits are expensive (~25s each) so plan ~1-2h wall.
 
-REPO=/data/stat-cadd/scat9264/KIRBy
+REPO=/data/stat-ecr/scat9264/KIRBy
 BRANCH=feat/stack-hparam
 LABEL=stack_hparam
 WORK=/tmp/kirby_${LABEL}_${SLURM_JOB_ID:-$$}

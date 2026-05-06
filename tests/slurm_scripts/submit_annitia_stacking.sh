@@ -13,7 +13,7 @@
 # Stacker is ~10x slower than other models (4 base fits x 5 inner OOF + 4 full
 # refits per fit). Subset enum capped at size 3 to keep runtime under 8h.
 
-REPO=/data/stat-cadd/scat9264/KIRBy
+REPO=/data/stat-ecr/scat9264/KIRBy
 BRANCH=feat/stacking
 LABEL=stack
 WORK=/tmp/kirby_${LABEL}_${SLURM_JOB_ID:-$$}

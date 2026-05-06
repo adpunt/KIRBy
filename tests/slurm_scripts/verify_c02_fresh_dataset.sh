@@ -18,7 +18,7 @@
 
 DATASET="${DATASET:-flab_aggregation_jain_hicrt}"
 
-cd /data/stat-cadd/scat9264/KIRBy
+cd /data/stat-ecr/scat9264/KIRBy
 git pull 2>/dev/null
 . ./setup.sh
 

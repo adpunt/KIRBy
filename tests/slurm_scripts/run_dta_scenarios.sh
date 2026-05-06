@@ -30,7 +30,7 @@ submit() {
         --mem="${mem}" \
         --mail-user="${EMAIL}" --mail-type=END,FAIL \
         ${gpu:+--gres=gpu:1} \
-        --wrap="cd /data/stat-cadd/scat9264/KIRBy && git pull 2>/dev/null; . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error && mkdir -p ${OUTPUT} && python tests/find_best_hybrid_dta.py ${dataset} --reps full --search fast --n-folds 5 --output ${OUTPUT}/${name}.json ${extra} 2> >(grep -v -e 'DEPRECATION WARNING' -e 'threadpoolctl' -e 'ctypes callback' -e 'NoneType.*split' >&2)" \
+        --wrap="cd /data/stat-ecr/scat9264/KIRBy && git pull 2>/dev/null; . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error && mkdir -p ${OUTPUT} && python tests/find_best_hybrid_dta.py ${dataset} --reps full --search fast --n-folds 5 --output ${OUTPUT}/${name}.json ${extra} 2> >(grep -v -e 'DEPRECATION WARNING' -e 'threadpoolctl' -e 'ctypes callback' -e 'NoneType.*split' >&2)" \
         | awk '{print $4}')
     echo "  $J  ${name}  (mem=${mem}, time=${wall}${gpu:+, GPU})"
 }

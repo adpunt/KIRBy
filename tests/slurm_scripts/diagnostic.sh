@@ -24,7 +24,7 @@ echo ""
 
 # --- Stage 1: cd to KIRBy ---
 echo "=== STAGE 1: cd to KIRBy ==="
-cd /data/stat-cadd/scat9264/KIRBy || { echo "FAILED: cd to KIRBy"; exit 1; }
+cd /data/stat-ecr/scat9264/KIRBy || { echo "FAILED: cd to KIRBy"; exit 1; }
 echo "[$(date +%H:%M:%S)] OK: in $(pwd)"
 echo ""
 

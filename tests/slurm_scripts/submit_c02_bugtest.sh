@@ -11,14 +11,14 @@
 #   - 7528902 ftpc_adme_rlm
 # (caco2's FT cache is from 7516559 — already warm, this script can run now.)
 #
-# Usage (from /data/stat-cadd/scat9264/KIRBy on HTC login):
+# Usage (from /data/stat-ecr/scat9264/KIRBy on HTC login):
 #   bash tests/slurm_scripts/submit_c02_bugtest.sh
 
 set -euo pipefail
 
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
 OUT_DIR="tests/results/complexity_c02/bugtest"
-WRAP_PREFIX="cd /data/stat-cadd/scat9264/KIRBy && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error && mkdir -p ${OUT_DIR}"
+WRAP_PREFIX="cd /data/stat-ecr/scat9264/KIRBy && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error && mkdir -p ${OUT_DIR}"
 
 JOB=$(sbatch --parsable \
     --job-name="c02_bugtest_caco2" \

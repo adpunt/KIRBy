@@ -2,7 +2,7 @@
 """Generate supervisor meeting presentation from hybrid search results.
 
 Run ON THE SERVER:
-    cd /data/stat-cadd/scat9264/KIRBy
+    cd /data/stat-ecr/scat9264/KIRBy
     python tests/supervisor_presentation.py | tee presentation_output.txt
 
 Data sources (in priority order):

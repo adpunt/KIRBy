@@ -30,7 +30,7 @@ set -euo pipefail
 : "${KIND:?KIND env var required (standard|distance)}"
 PRUNING_MODE="${PRUNING_MODE:-default_pruning}"
 
-cd /data/stat-cadd/scat9264/KIRBy
+cd /data/stat-ecr/scat9264/KIRBy
 export KIRBY_SKIP_INSTALLS=1
 . ./setup.sh
 export PYTHONWARNINGS=ignore

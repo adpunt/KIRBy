@@ -12,7 +12,7 @@
 # ANNITIA branch: feat/xgbcox — adds XGBoost survival:cox as 5th model.
 # Uses git worktree so concurrent branch jobs don't collide.
 
-REPO=/data/stat-cadd/scat9264/KIRBy
+REPO=/data/stat-ecr/scat9264/KIRBy
 BRANCH=feat/xgbcox
 LABEL=xgbcox
 WORK=/tmp/kirby_${LABEL}_${SLURM_JOB_ID:-$$}

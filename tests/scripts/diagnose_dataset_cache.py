@@ -25,9 +25,10 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "tests"))
 
 # Cache location — allow KIRBY_CACHE_DIR override, else server default.
+# Default flipped to stat-ecr 2026-05-07 (stat-cadd group quota at 99.9%).
 import os
 CACHE_ROOT = Path(os.environ.get(
-    "KIRBY_CACHE_DIR", "/data/stat-cadd/scat9264/.cache/kirby"
+    "KIRBY_CACHE_DIR", "/data/stat-ecr/scat9264/.cache/kirby"
 ))
 
 

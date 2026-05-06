@@ -38,7 +38,8 @@ STATIC_NUMERIC = ['gender', 'T2DM', 'Hypertension', 'Dyslipidaemia',
 
 CANDIDATE_PATHS = (
     '/Volumes/seagate/kirby/annitia',
-    '/data/stat-cadd/scat9264/KIRBy/data/annitia',
+    '/data/stat-ecr/scat9264/KIRBy/data/annitia',   # post-2026-05-07 repo location
+    '/data/stat-cadd/scat9264/KIRBy/data/annitia',  # legacy repo location
     'data/annitia',
 )
 

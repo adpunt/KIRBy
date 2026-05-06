@@ -15,7 +15,7 @@
 #   - Existing .npy cached reps from prior surveys remain valid; only the
 #     3 new CGR reps need to be computed fresh
 #
-# Usage (from /data/stat-cadd/scat9264/KIRBy on HTC login):
+# Usage (from /data/stat-ecr/scat9264/KIRBy on HTC login):
 #   bash tests/slurm_scripts/submit_reaction_cgr_resurvey.sh          # both datasets
 #   bash tests/slurm_scripts/submit_reaction_cgr_resurvey.sh bh       # buchwald_hartwig only
 #   bash tests/slurm_scripts/submit_reaction_cgr_resurvey.sh doyle    # bh_doyle_plates only
@@ -44,7 +44,7 @@ submit_ds() {
 #SBATCH --mail-type=END,FAIL
 
 set -euo pipefail
-cd /data/stat-cadd/scat9264/KIRBy
+cd /data/stat-ecr/scat9264/KIRBy
 git pull --ff-only
 . ./setup.sh
 export PYTHONWARNINGS=ignore

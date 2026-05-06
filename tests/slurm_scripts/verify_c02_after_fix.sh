@@ -27,7 +27,7 @@ set -euo pipefail
 DATASET=ginkgo_heparin
 EXPERIMENT=c02
 
-cd /data/stat-cadd/scat9264/KIRBy
+cd /data/stat-ecr/scat9264/KIRBy
 git pull
 . setup.sh
 

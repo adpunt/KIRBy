@@ -14,7 +14,7 @@
 # adapted from tests/experiments/noise/n02) and rsf_if/gbsa_if (inverse-
 # frequency event weighting). 8 model registry entries total.
 
-REPO=/data/stat-cadd/scat9264/KIRBy
+REPO=/data/stat-ecr/scat9264/KIRBy
 BRANCH=feat/weighted
 LABEL=weighted
 WORK=/tmp/kirby_${LABEL}_${SLURM_JOB_ID:-$$}

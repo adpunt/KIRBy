@@ -15,7 +15,7 @@ set -euo pipefail
 
 MODE=${1:-all}
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
-WRAP_PREFIX="cd /data/stat-cadd/scat9264/KIRBy && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
+WRAP_PREFIX="cd /data/stat-ecr/scat9264/KIRBy && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
 COUNT=0
 
 submit() {

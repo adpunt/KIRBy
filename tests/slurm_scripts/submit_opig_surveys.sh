@@ -15,7 +15,7 @@ set -euo pipefail
 MODE=${1:-all}
 OUTPUT="tests/results/opig"
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
-WRAP_PREFIX="cd /data/stat-cadd/scat9264/KIRBy && git pull 2>/dev/null; . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
+WRAP_PREFIX="cd /data/stat-ecr/scat9264/KIRBy && git pull 2>/dev/null; . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
 STDERR_FILTER="2> >(grep -v -e 'DEPRECATION WARNING' -e 'threadpoolctl' -e 'ctypes callback' -e 'NoneType.*split' >&2)"
 
 # All antibody reps — one list, no splitting
@@ -99,7 +99,7 @@ run_imrie() {
     echo "--- C4: Imrie Transfer Learning ---"
 
     submit imrie_pretrain \
-        "python -m kirby.models.pretrain_chembl_dnn --rep ecfp4,maccs,pdv,mol2vec,mordred,avalon --n-compounds 500000 --max-targets 200 --hidden-sizes 256,128,64 --output-dir /data/stat-cadd/scat9264/kirby_data/chembl_pretrain/ --data-dir /data/stat-cadd/scat9264/kirby_data/chembl/ --epochs 200 --patience 30" \
+        "python -m kirby.models.pretrain_chembl_dnn --rep ecfp4,maccs,pdv,mol2vec,mordred,avalon --n-compounds 500000 --max-targets 200 --hidden-sizes 256,128,64 --output-dir /data/stat-ecr/scat9264/kirby_data/chembl_pretrain/ --data-dir /data/stat-cadd/scat9264/kirby_data/chembl/ --epochs 200 --patience 30" \
         256G
 
     echo ""

@@ -21,11 +21,11 @@
 # Usage:
 #   sbatch tests/slurm_scripts/submit_annitia.sh
 
-cd /data/stat-cadd/scat9264/KIRBy
+cd /data/stat-ecr/scat9264/KIRBy
 git pull 2>/dev/null
 . ./setup.sh
 export PYTHONWARNINGS=ignore
-export ANNITIA_DATA_DIR=/data/stat-cadd/scat9264/KIRBy/data/annitia
+export ANNITIA_DATA_DIR=/data/stat-ecr/scat9264/KIRBy/data/annitia
 
 echo "ANNITIA MASLD experiment"
 echo "Start: $(date)"

@@ -7,7 +7,7 @@
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="/data/stat-cadd/scat9264/KIRBy"
+PROJECT_DIR="/data/stat-ecr/scat9264/KIRBy"
 
 DRY_RUN=false
 [[ "${1:-}" == "--dry-run" ]] && DRY_RUN=true

@@ -15,7 +15,7 @@
 #
 # Usage:
 #   srun --gres=gpu:1 --mem=32G --time=01:00:00 --pty bash
-#   cd /data/stat-cadd/scat9264/KIRBy
+#   cd /data/stat-ecr/scat9264/KIRBy
 #   . setup.sh   # sets up env vars, CONSTRAINTS, etc.
 #   bash fix_pyg.sh
 

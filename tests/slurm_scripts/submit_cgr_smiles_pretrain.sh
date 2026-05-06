@@ -5,7 +5,7 @@
 #   1. Corpus: Download USPTO-STEREO, convert ~1M reactions to CGR-SMILES (~30 min, CPU)
 #   2. Pretrain: Continue MLM pretraining of ChemBERTa on CGR-SMILES (~2-4 hours, GPU)
 #
-# Output: /data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain/
+# Output: /data/stat-ecr/scat9264/kirby_data/cgr_smiles_pretrain/
 #   corpus.txt        — CGR-SMILES lines (~600K-800K)
 #   corpus_stats.json — conversion statistics
 #   checkpoint/       — pretrained model + extended tokenizer
@@ -17,9 +17,9 @@
 #   bash tests/slurm_scripts/submit_cgr_smiles_pretrain.sh pretrain_htc  # pretrain only (HTC, GPU — recommended)
 
 STAGE=${1:-all}
-OUTPUT_DIR="/data/stat-cadd/scat9264/kirby_data/cgr_smiles_pretrain"
+OUTPUT_DIR="/data/stat-ecr/scat9264/kirby_data/cgr_smiles_pretrain"
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
-WRAP_PREFIX="cd /data/stat-cadd/scat9264/KIRBy && git pull 2>/dev/null; . ./setup.sh && export PYTHONWARNINGS=ignore"
+WRAP_PREFIX="cd /data/stat-ecr/scat9264/KIRBy && git pull 2>/dev/null; . ./setup.sh && export PYTHONWARNINGS=ignore"
 STDERR_FILTER="2> >(grep -v -e 'DEPRECATION WARNING' -e 'threadpoolctl' >&2)"
 
 case "$STAGE" in

@@ -7,12 +7,12 @@
 #
 # 12 sbatch calls total (2 per dataset: standard + distance).
 #
-# Usage (from /data/stat-cadd/scat9264/KIRBy on the ARC login node):
+# Usage (from /data/stat-ecr/scat9264/KIRBy on the ARC login node):
 #   bash tests/slurm_scripts/submit_precompute_new_nucleotide.sh
 
 set -euo pipefail
 
-WRAP_PREFIX="cd /data/stat-cadd/scat9264/KIRBy && export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
+WRAP_PREFIX="cd /data/stat-ecr/scat9264/KIRBy && export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
 
 # Datasets at standard nucleotide scale (n=33K, default 6 models)
 NT_DATASETS=(

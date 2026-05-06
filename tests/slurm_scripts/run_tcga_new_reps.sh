@@ -25,7 +25,7 @@
 # Each JSON contains a "baselines" section with per-rep individual scores
 # (best model, accuracy) that maps directly to the BILL_OF_MATERIALS.md table.
 
-cd /data/stat-cadd/scat9264/KIRBy
+cd /data/stat-ecr/scat9264/KIRBy
 . setup.sh
 
 OUTPUT="tests/results/tcga_new_reps"

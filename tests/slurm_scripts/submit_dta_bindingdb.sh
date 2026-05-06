@@ -5,7 +5,7 @@
 # All other reps are already cached as .npy on disk from prior runs;
 # only contact_graph + 4 cheap structure reps need to be computed.
 #
-# Usage (from /data/stat-cadd/scat9264/KIRBy):
+# Usage (from /data/stat-ecr/scat9264/KIRBy):
 #   bash tests/slurm_scripts/submit_dta_bindingdb.sh
 
 set -euo pipefail
@@ -29,7 +29,7 @@ JOB=$(sbatch <<EOF | awk '{print $4}'
 #SBATCH --mail-type=END,FAIL
 
 set -euo pipefail
-cd /data/stat-cadd/scat9264/KIRBy
+cd /data/stat-ecr/scat9264/KIRBy
 git pull --ff-only
 . ./setup.sh
 export PYTHONWARNINGS=ignore

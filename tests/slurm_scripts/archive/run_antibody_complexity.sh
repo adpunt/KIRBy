@@ -8,7 +8,7 @@
 #SBATCH --mem=64G
 #SBATCH --mail-user=adelaide.punt@stcatz.ox.ac.uk
 
-cd /data/stat-cadd/scat9264/KIRBy
+cd /data/stat-ecr/scat9264/KIRBy
 . setup.sh
 
 # Antibody Complexity Theory Experiments (FLAb datasets)

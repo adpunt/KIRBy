@@ -10,7 +10,7 @@
 
 DATASET=${1:?Usage: sbatch submit_f12.sh DATASET}
 
-cd /data/stat-cadd/scat9264/KIRBy
+cd /data/stat-ecr/scat9264/KIRBy
 git fetch origin 2>/dev/null
 git checkout f12-speedup 2>/dev/null
 git reset --hard origin/f12-speedup 2>/dev/null

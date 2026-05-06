@@ -13,7 +13,7 @@ J=$(sbatch \
     --time=23:59:00 --partition=long \
     --mem=64G \
     --mail-user="${EMAIL}" --mail-type=END,FAIL \
-    --wrap="cd /data/stat-cadd/scat9264/KIRBy && . ./setup.sh && mkdir -p ${OUTPUT} && python tests/alternative_data_noise_robustness.py --reps PDV --results-root ${OUTPUT}" \
+    --wrap="cd /data/stat-ecr/scat9264/KIRBy && . ./setup.sh && mkdir -p ${OUTPUT} && python tests/alternative_data_noise_robustness.py --reps PDV --results-root ${OUTPUT}" \
     | awk '{print $4}')
 echo "Submitted job ${J}: PDV rerun (3 datasets × all models × 6 strategies × 5 folds)"
 echo "Monitor: squeue -u \$USER"

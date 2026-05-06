@@ -21,7 +21,7 @@
 #   sbatch run_precache_molecular.sh logd chemberta,molformer  # specific reps
 # =============================================================================
 
-cd /data/stat-cadd/scat9264/KIRBy
+cd /data/stat-ecr/scat9264/KIRBy
 . setup.sh
 
 DATASET=${1:-}

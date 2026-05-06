@@ -13,7 +13,7 @@
 # 11 views total. Subset enumeration capped at size 4 to keep runtime tractable
 # (C(11,1..4) = 561 vs 2047 full).
 
-REPO=/data/stat-cadd/scat9264/KIRBy
+REPO=/data/stat-ecr/scat9264/KIRBy
 BRANCH=feat/extra-views
 LABEL=views
 WORK=/tmp/kirby_${LABEL}_${SLURM_JOB_ID:-$$}
