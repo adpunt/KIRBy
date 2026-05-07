@@ -32,6 +32,15 @@ from experiments.annitia._cache import cached_call, hash_data
 from experiments.annitia._fpca import fpca_features_for_var
 from experiments.annitia._gp_smooth import gp_features_for_var
 
+try:
+    from kirby.datasets.nhanes_liver import (
+        NHANES_FEATURE_SCHEMA,
+        project_annitia_to_nhanes,
+    )
+except Exception:
+    project_annitia_to_nhanes = None
+    NHANES_FEATURE_SCHEMA = ()
+
 _TRAJECTORY_VARS = [v for v in LONGITUDINAL_VARS if v != 'Age']
 
 
@@ -766,6 +775,22 @@ def _gp_smooth_view(data: Dict, n_grid: int = 5,
     return np.concatenate(cols, axis=1), names
 
 
+def _nhanes_proj_view(data: Dict) -> Tuple[np.ndarray, List[str]]:
+    """ANNITIA features projected onto the NHANES feature schema.
+
+    Pure feature shaping — used as the input view for the
+    `pretrained_mlp` model so the trunk receives data in exactly the
+    schema it was trained on. Other models can also consume this view
+    for an apples-to-apples comparison.
+    """
+    if project_annitia_to_nhanes is None:
+        raise ImportError(
+            'kirby.datasets.nhanes_liver is unavailable; cannot build '
+            'nhanes_proj view.')
+    X, names = project_annitia_to_nhanes(data)
+    return X, [f'nhanes__{n}' for n in names]
+
+
 VIEW_BUILDERS = {
     'snapshot': _snapshot_view,
     'slope': _slope_view,
@@ -781,6 +806,7 @@ VIEW_BUILDERS = {
     'visit_density': _visit_density_view,
     'fpca': _fpca_view,
     'gp_smooth': _gp_smooth_view,
+    'nhanes_proj': _nhanes_proj_view,
 }
 
 

@@ -636,6 +636,12 @@ class MLPClassifierSurvival:
         return np.asarray(self._model.predict_proba(Xs), dtype=np.float64)
 
 
+try:
+    from experiments.annitia.pretrained_mlp import SurvivalPretrainedMLP
+except Exception:
+    SurvivalPretrainedMLP = None
+
+
 SURVIVAL_MODELS = {
     'cox': SurvivalCoxPH,
     'coxnet': SurvivalCoxnet,
@@ -647,6 +653,8 @@ SURVIVAL_MODELS = {
     'lgbm_aft': SurvivalLightGBMAft,
     'ngboost': SurvivalNGBoost,
 }
+if SurvivalPretrainedMLP is not None:
+    SURVIVAL_MODELS['pretrained_mlp'] = SurvivalPretrainedMLP
 
 REGRESSORS = {
     'lgbm': RegressorLightGBM,
