@@ -76,12 +76,21 @@ class DiscretisedSurvival:
                 clf.fit(X[mask], yk)
                 self._models.append(clf)
                 self._active_bins.append(k)
+            except ImportError:
+                # Backend genuinely missing — don't waste compute on the
+                # remaining bins; bubble up so the runner skips this whole
+                # condition with a clean SKIP message instead of producing
+                # a confusing 'No bins had enough data' downstream.
+                raise
             except Exception as e:  # noqa: BLE001
                 self._models.append(None)
                 # Don't propagate per-bin failures — degrade gracefully.
                 _ = e
         if not self._active_bins:
-            raise RuntimeError('No bins had enough data to fit a classifier')
+            raise RuntimeError('No bins had enough data to fit a classifier '
+                               '(check that the per-bin classifier backend '
+                               'is actually available; per-bin Exceptions '
+                               'were swallowed)')
         return self
 
     def _predict_p(self, clf, X) -> np.ndarray:

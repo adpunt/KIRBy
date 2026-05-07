@@ -61,16 +61,30 @@ class MitraClassifier:
         try:
             self._predictor.fit(
                 df,
-                hyperparameters={'MITRA': {'n_estimators': self.n_estimators,
-                                            'fine_tune': self.fine_tune,
-                                            'random_state': self.seed}},
+                hyperparameters={'MITRA': {
+                    'n_estimators': self.n_estimators,
+                    'fine_tune': self.fine_tune,
+                    'random_state': self.seed,
+                    # MITRA needs more headroom than autogluon's default 1.0
+                    # — without this it short-circuits with "ag_args_fit:
+                    # ag.max_memory_usage_ratio < 1.62". Setting 2.0 lets it
+                    # actually attempt fitting.
+                    'ag_args_fit': {'ag.max_memory_usage_ratio': 2.0},
+                }},
                 fit_weighted_ensemble=False,
                 presets=None,
-                verbosity=0)
+                verbosity=0,
+                raise_on_no_models_fitted=False)
         except Exception as e:  # noqa: BLE001
             # Surface as ImportError so the runner skips MITRA cleanly if
             # weights aren't available for download.
             raise ImportError(f'MITRA fit failed: {e}') from e
+        # If autogluon didn't actually train any model (e.g. still OOM,
+        # weights download failed silently, …) raise so the runner skips.
+        if not self._predictor.model_names():
+            raise ImportError(
+                'MITRA fit produced no models; check autogluon log + '
+                'memory headroom (ag.max_memory_usage_ratio).')
         return self
 
     def predict_proba(self, X) -> np.ndarray:
