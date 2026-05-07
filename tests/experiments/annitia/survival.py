@@ -640,6 +640,10 @@ try:
     from experiments.annitia.dsm import SurvivalDSM
 except Exception:  # torch / auton-survival missing on this host
     SurvivalDSM = None
+try:
+    from experiments.annitia.pretrained_mlp import SurvivalPretrainedMLP
+except Exception:
+    SurvivalPretrainedMLP = None
 
 
 SURVIVAL_MODELS = {
@@ -653,9 +657,11 @@ SURVIVAL_MODELS = {
     'lgbm_aft': SurvivalLightGBMAft,
     'ngboost': SurvivalNGBoost,
 }
-# DSM is registered conditionally — only if dsm.py imports cleanly (torch installed).
+# Optional models registered only if their backend deps imported cleanly.
 if SurvivalDSM is not None:
     SURVIVAL_MODELS['dsm'] = SurvivalDSM
+if SurvivalPretrainedMLP is not None:
+    SURVIVAL_MODELS['pretrained_mlp'] = SurvivalPretrainedMLP
 
 REGRESSORS = {
     'lgbm': RegressorLightGBM,

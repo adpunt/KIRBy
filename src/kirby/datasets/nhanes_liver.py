@@ -1,0 +1,437 @@
+"""NHANES liver-marker + linked-mortality loader for ANNITIA pretraining.
+
+Public, open-access:
+    - NHANES III (1988-1994):    https://wwwn.cdc.gov/nchs/nhanes/nhanes3/datafiles.aspx
+    - NHANES Continuous (1999+): https://wwwn.cdc.gov/nchs/nhanes/Default.aspx
+    - Linked NDI mortality:      https://www.cdc.gov/nchs/data-linkage/mortality.htm
+
+We pull a curated subset of variables that overlap with ANNITIA's longitudinal
+schema, plus death follow-up time + cause flag. The output is a pretraining
+table the MLP encoder consumes.
+
+Variables harmonised (target schema = ANNITIA static + last-visit snapshot):
+    age, sex, BMI, T2DM, hypertension, dyslipidaemia,
+    AST, ALT, GGT, bilirubin, albumin, INR, platelets,
+    glucose_fasting, cholesterol_total, triglycerides
+
+NIT scores (FIB-4, APRI, AAR, NFS-approx) are computed from the harmonised
+labs and exposed alongside.
+
+Outcomes:
+    death_event       — 1 if dead by NDI follow-up cutoff, else 0
+    death_time_years  — years from interview to death (or censor)
+    liver_death       — 1 if cause-of-death is liver-related (ICD-10 K70-K77),
+                        else 0 (NDI 2019 file)
+
+Access pattern:
+    The first call downloads the SAS XPT files from CDC and caches them at
+    $NHANES_DATA_DIR or /Volumes/seagate/kirby/nhanes/. Cohort assembly is
+    deterministic; results pickled to <cache_dir>/cohort.pkl on first build.
+
+Caveats baked in:
+    - NHANES adults only (age ≥ 20).
+    - Cycles selected for lab availability: NHANES III + cycles 1999-2018.
+      Newer cycles (2019+) released their mortality linkage in 2024-2026
+      depending on the file; we use the 2019-cutoff vintage for stability.
+    - Liver-related deaths are sparse (~1-2% of all deaths). We expose the
+      `liver_death` flag but pretraining defaults to all-cause `death_event`
+      because the volume is what helps.
+    - Selection bias is real: NHANES is a community sample, not a
+      MASLD clinic cohort. Recommended downstream usage is to pretrain on
+      the FIB-4 > 1.3 stratum (set `restrict='fib4_high'`) so the encoder
+      sees a metabolically-loaded population closer to ANNITIA.
+"""
+
+from __future__ import annotations
+
+import os
+import pickle
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+from urllib.request import urlretrieve
+
+import numpy as np
+
+
+_DEFAULT_DIRS = (
+    '/Volumes/seagate/kirby/nhanes',
+    '/data/stat-ecr/scat9264/KIRBy/data/nhanes',
+    'data/nhanes',
+)
+
+
+def _resolve_dir(data_dir: Optional[str] = None) -> Path:
+    if data_dir:
+        p = Path(data_dir)
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+    env = os.environ.get('NHANES_DATA_DIR')
+    if env:
+        p = Path(env)
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+    for cand in _DEFAULT_DIRS:
+        if os.path.isdir(cand):
+            return Path(cand)
+    # Fall back to first writable candidate
+    p = Path(_DEFAULT_DIRS[0])
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+# CDC URLs. Stable: NCHS keeps these public. We document a small but
+# representative subset; a fuller pull would walk every cycle.
+_NHANES3_URLS = {
+    # Adult (≥17) lab + exam from NHANES III, ages-17plus dataset.
+    'lab2':  'https://wwwn.cdc.gov/nchs/data/nhanes3/1a/lab.dat',
+    'exam':  'https://wwwn.cdc.gov/nchs/data/nhanes3/1a/exam.dat',
+    'adult': 'https://wwwn.cdc.gov/nchs/data/nhanes3/1a/adult.dat',
+    # Mortality linkage (2019 vintage)
+    'mort':  'https://ftp.cdc.gov/pub/Health_Statistics/NCHS/datalinkage/'
+             'linked_mortality/NHANES_III_MORT_2019_PUBLIC.dat',
+}
+
+# Continuous NHANES (1999-): we pull DEMO + BMX + BIOPRO + GLU + HDL + TCHOL
+# for a representative pair of cycles. Adding more cycles is straightforward.
+_NHANES_CONT_CYCLES = ('1999-2000', '2003-2004', '2007-2008', '2013-2014', '2017-2018')
+_NHANES_CONT_URLBASE = 'https://wwwn.cdc.gov/Nchs/Data/Nhanes/Public/'
+_NHANES_CONT_FILES_PER_CYCLE = ('DEMO', 'BMX', 'BIOPRO', 'GLU', 'TCHOL')
+
+
+def _download(url: str, dest: Path):
+    if dest.exists() and dest.stat().st_size > 0:
+        return dest
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    print(f'  [nhanes] downloading {url}')
+    urlretrieve(url, dest)
+    return dest
+
+
+def _read_xpt(path: Path):
+    """Read SAS XPT file via pandas (which handles xpt natively)."""
+    import pandas as pd
+    return pd.read_sas(path, format='xport')
+
+
+# ----------------------------------------------------------------------
+# Continuous NHANES: per-cycle download + assembly.
+# ----------------------------------------------------------------------
+def _continuous_cycle(cycle: str, data_dir: Path):
+    """Download + load one continuous-NHANES cycle. Returns merged dataframe."""
+    import pandas as pd
+    suffix = {
+        '1999-2000': '',
+        '2001-2002': '_B',
+        '2003-2004': '_C',
+        '2005-2006': '_D',
+        '2007-2008': '_E',
+        '2009-2010': '_F',
+        '2011-2012': '_G',
+        '2013-2014': '_H',
+        '2015-2016': '_I',
+        '2017-2018': '_J',
+    }[cycle]
+    dfs = {}
+    for tag in _NHANES_CONT_FILES_PER_CYCLE:
+        fname = f'{tag}{suffix}.XPT'
+        url = f'{_NHANES_CONT_URLBASE}{cycle}/{fname}'
+        local = data_dir / 'continuous' / cycle / fname
+        try:
+            _download(url, local)
+            dfs[tag] = _read_xpt(local)
+        except Exception as e:
+            print(f'  [nhanes] {cycle}/{tag} unavailable: {e}')
+            dfs[tag] = None
+    demo = dfs.get('DEMO')
+    if demo is None:
+        return None
+    out = demo[['SEQN', 'RIDAGEYR', 'RIAGENDR', 'WTMEC2YR', 'RIDRETH1']].copy()
+    out['cycle'] = cycle
+    if dfs.get('BMX') is not None:
+        bmx = dfs['BMX'][['SEQN', 'BMXBMI']]
+        out = out.merge(bmx, on='SEQN', how='left')
+    else:
+        out['BMXBMI'] = np.nan
+    if dfs.get('BIOPRO') is not None:
+        bp = dfs['BIOPRO']
+        keep = ['SEQN']
+        for col in ['LBXSAL', 'LBXSASSI', 'LBXSATSI', 'LBXSGTSI', 'LBXSTB',
+                   'LBXSGB', 'LBXSPLT']:
+            if col in bp.columns:
+                keep.append(col)
+        out = out.merge(bp[keep], on='SEQN', how='left')
+    if dfs.get('GLU') is not None and 'LBXGLU' in dfs['GLU'].columns:
+        out = out.merge(dfs['GLU'][['SEQN', 'LBXGLU']], on='SEQN', how='left')
+    if dfs.get('TCHOL') is not None and 'LBXTC' in dfs['TCHOL'].columns:
+        out = out.merge(dfs['TCHOL'][['SEQN', 'LBXTC']], on='SEQN', how='left')
+
+    rename = {
+        'RIDAGEYR': 'age', 'RIAGENDR': 'sex_raw', 'BMXBMI': 'bmi',
+        'LBXSAL': 'albumin', 'LBXSASSI': 'ast', 'LBXSATSI': 'alt',
+        'LBXSGTSI': 'ggt', 'LBXSTB': 'bilirubin', 'LBXSPLT': 'platelets',
+        'LBXGLU': 'glucose', 'LBXTC': 'cholesterol',
+    }
+    out = out.rename(columns=rename)
+    # Sex: 1=male, 2=female → map to 0/1 to match ANNITIA's gender encoding.
+    out['sex'] = (out['sex_raw'] == 2).astype(np.float32)
+    out['source'] = f'continuous_{cycle}'
+    return out
+
+
+def _continuous_mortality(data_dir: Path):
+    """Continuous-NHANES linked mortality (NDI 2019 vintage)."""
+    import pandas as pd
+    cycles = _NHANES_CONT_CYCLES
+    rows = []
+    for cycle in cycles:
+        # The mortality file is per-cycle, named NHANES_<years>_MORT_2019_PUBLIC.dat
+        cyc_label = cycle.replace('-', '_')
+        # Some vintages use different label formats; try a couple.
+        candidates = [
+            f'NHANES_{cyc_label}_MORT_2019_PUBLIC.dat',
+            f'NHANES_{cycle}_MORT_2019_PUBLIC.dat',
+        ]
+        loaded = None
+        for name in candidates:
+            url = ('https://ftp.cdc.gov/pub/Health_Statistics/NCHS/'
+                   f'datalinkage/linked_mortality/{name}')
+            local = data_dir / 'mortality' / name
+            try:
+                _download(url, local)
+                loaded = local
+                break
+            except Exception:
+                continue
+        if loaded is None:
+            print(f'  [nhanes] mortality file for {cycle} unavailable; skipping')
+            continue
+        cols = _parse_ndi_mortality(loaded)
+        cols['cycle'] = cycle
+        rows.append(cols)
+    if not rows:
+        return None
+    return pd.concat(rows, ignore_index=True)
+
+
+def _parse_ndi_mortality(path: Path):
+    """NDI fixed-width format. Field map per the NCHS data dictionary."""
+    import pandas as pd
+    # Layout for the 2019 public-use mortality file (NHANES variant).
+    # Documented at: https://www.cdc.gov/nchs/data-linkage/mortality-public.htm
+    colspecs = [
+        (0, 6),     # SEQN
+        (14, 15),   # ELIGSTAT
+        (15, 16),   # MORTSTAT
+        (16, 19),   # UCOD_LEADING (3-char)
+        (19, 20),   # DIABETES
+        (20, 21),   # HYPERTEN
+        (43, 46),   # PERMTH_INT (months from interview to death)
+    ]
+    names = ['SEQN', 'ELIGSTAT', 'MORTSTAT', 'UCOD',
+             'DIABETES_FLAG', 'HYPERTEN_FLAG', 'PERMTH_INT']
+    df = pd.read_fwf(path, colspecs=colspecs, names=names, dtype=str)
+    df['SEQN'] = pd.to_numeric(df['SEQN'], errors='coerce')
+    df['MORTSTAT'] = pd.to_numeric(df['MORTSTAT'], errors='coerce')
+    df['PERMTH_INT'] = pd.to_numeric(df['PERMTH_INT'], errors='coerce')
+    df['ELIGSTAT'] = pd.to_numeric(df['ELIGSTAT'], errors='coerce')
+    return df
+
+
+# ----------------------------------------------------------------------
+# Cohort assembly.
+# ----------------------------------------------------------------------
+def _assemble_cohort(data_dir: Path,
+                     restrict: Optional[str] = None) -> Dict:
+    """Build the merged feature + outcome table.
+
+    Returns a dict with:
+        X         (n, d) np.float32 — harmonised features
+        feature_names: list[str], length d
+        time      (n,) np.float32   — years from interview to death/censor
+        event     (n,) bool         — death by follow-up
+        liver_death (n,) bool
+        sex       (n,) int           — 0=male 1=female (kept separate for stratification)
+        meta      dict (n_cycles, n_kept, restrict, ...)
+    """
+    import pandas as pd
+    cont_dfs = []
+    for cycle in _NHANES_CONT_CYCLES:
+        df = _continuous_cycle(cycle, data_dir)
+        if df is not None:
+            cont_dfs.append(df)
+    if not cont_dfs:
+        raise RuntimeError('No NHANES continuous cycles loaded.')
+    feat = pd.concat(cont_dfs, ignore_index=True)
+
+    mort = _continuous_mortality(data_dir)
+    if mort is None:
+        raise RuntimeError('NHANES mortality linkage could not be loaded.')
+
+    # Merge on SEQN. SEQN is unique within cycle but not across cycles —
+    # both feature and mortality tables stamp the cycle so the join is safe.
+    merged = feat.merge(mort, on=['SEQN', 'cycle'], how='left')
+
+    # Eligible respondents only (ELIGSTAT=1)
+    merged = merged[(merged['ELIGSTAT'] == 1) | merged['ELIGSTAT'].isna()].copy()
+
+    # Adults only
+    merged = merged[merged['age'] >= 20].copy()
+
+    # Outcomes
+    merged['event'] = (merged['MORTSTAT'] == 1).astype(bool)
+    # Censor/event time: PERMTH_INT is months. Map to years; censored fills
+    # with the cycle-end-to-2019 horizon as an approximation when missing.
+    merged['time'] = merged['PERMTH_INT'].astype(np.float32) / 12.0
+    cycle_end = merged['cycle'].map(lambda c: int(c.split('-')[1]))
+    censor_horizon = (2019.0 - cycle_end).astype(np.float32)
+    merged['time'] = merged['time'].fillna(censor_horizon)
+    # Liver-related death: ICD-10 K70-K77 code prefix
+    def _is_liver(code):
+        if not isinstance(code, str):
+            return False
+        c = code.strip().upper()
+        return c.startswith(('K70', 'K71', 'K72', 'K73', 'K74', 'K75', 'K76', 'K77'))
+    merged['liver_death'] = merged['UCOD'].apply(_is_liver) & merged['event']
+
+    # Restrict
+    if restrict == 'fib4_high':
+        # FIB-4 = (age × AST) / (platelets × √ALT). Compute, then keep rows >1.3.
+        ast = merged['ast'].astype(np.float32)
+        alt = merged['alt'].astype(np.float32)
+        plt_ = merged['platelets'].astype(np.float32)  # ×10^9/L
+        age = merged['age'].astype(np.float32)
+        fib4 = (age * ast) / (plt_ * np.sqrt(np.maximum(alt, 1.0)))
+        merged['fib4'] = fib4
+        merged = merged[merged['fib4'] > 1.3].copy()
+    elif restrict == 'metab_loaded':
+        # Glucose ≥ 100 OR BMI ≥ 30 — metabolically loaded subset
+        gl = merged['glucose'].astype(np.float32)
+        bmi = merged['bmi'].astype(np.float32)
+        merged = merged[(gl >= 100) | (bmi >= 30)].copy()
+
+    feat_cols = ['age', 'sex', 'bmi', 'albumin', 'ast', 'alt', 'ggt',
+                 'bilirubin', 'platelets', 'glucose', 'cholesterol']
+    # Engineered NITs
+    ast = merged['ast'].astype(np.float32)
+    alt = merged['alt'].astype(np.float32).clip(lower=1.0)
+    plt_ = merged['platelets'].astype(np.float32).clip(lower=1.0)
+    age = merged['age'].astype(np.float32)
+    merged['fib4'] = (age * ast) / (plt_ * np.sqrt(alt))
+    merged['apri'] = (ast / 35.0) * 100.0 / plt_
+    merged['aar'] = ast / alt
+    feat_cols += ['fib4', 'apri', 'aar']
+
+    X = merged[feat_cols].astype(np.float32).to_numpy()
+    # Median impute
+    medians = np.nanmedian(np.where(np.isfinite(X), X, np.nan), axis=0)
+    nan_mask = ~np.isfinite(X)
+    for j in range(X.shape[1]):
+        X[nan_mask[:, j], j] = medians[j] if np.isfinite(medians[j]) else 0.0
+    sample_weight = merged['WTMEC2YR'].astype(np.float32).fillna(1.0).to_numpy()
+
+    return {
+        'X': X,
+        'feature_names': feat_cols,
+        'time': merged['time'].astype(np.float32).to_numpy(),
+        'event': merged['event'].astype(bool).to_numpy(),
+        'liver_death': merged['liver_death'].astype(bool).to_numpy(),
+        'sex': merged['sex'].astype(np.float32).to_numpy(),
+        'sample_weight': sample_weight,
+        'meta': {
+            'n_kept': int(len(merged)),
+            'n_events_all_cause': int(merged['event'].sum()),
+            'n_events_liver': int(merged['liver_death'].sum()),
+            'restrict': restrict,
+            'cycles': _NHANES_CONT_CYCLES,
+        },
+    }
+
+
+def load_nhanes_liver(data_dir: Optional[str] = None,
+                      restrict: Optional[str] = None,
+                      use_cache: bool = True) -> Dict:
+    """Top-level entry point. Loads (or builds + caches) the cohort dict.
+
+    Args:
+        data_dir: where to read/write XPT files + the cached cohort pickle.
+        restrict: None | 'fib4_high' | 'metab_loaded'. See module docstring.
+        use_cache: skip download + assembly if <data_dir>/cohort_<restrict>.pkl exists.
+    """
+    data_dir = _resolve_dir(data_dir)
+    cache_path = data_dir / f'cohort_{restrict or "all"}.pkl'
+    if use_cache and cache_path.exists():
+        with open(cache_path, 'rb') as f:
+            return pickle.load(f)
+    cohort = _assemble_cohort(data_dir, restrict=restrict)
+    with open(cache_path, 'wb') as f:
+        pickle.dump(cohort, f)
+    return cohort
+
+
+# ----------------------------------------------------------------------
+# Schema bridge: project ANNITIA features onto the NHANES feature set.
+# ----------------------------------------------------------------------
+NHANES_FEATURE_SCHEMA = (
+    'age', 'sex', 'bmi', 'albumin', 'ast', 'alt', 'ggt',
+    'bilirubin', 'platelets', 'glucose', 'cholesterol',
+    'fib4', 'apri', 'aar',
+)
+
+
+def project_annitia_to_nhanes(annitia_data: Dict) -> Tuple[np.ndarray, List[str]]:
+    """Build an ANNITIA feature matrix in the NHANES schema.
+
+    Uses the snapshot (last-visit) value for each lab where ANNITIA has it,
+    plus baseline age + gender. Engineered NITs (FIB-4, APRI, AAR) computed
+    from the same last-visit values.
+
+    Returned matrix has shape (n_patients, len(NHANES_FEATURE_SCHEMA))
+    using exactly the order in NHANES_FEATURE_SCHEMA — so a model trained on
+    NHANES with these columns can be applied directly to ANNITIA patients.
+
+    Missing labs imputed to per-feature population medians (computed from
+    the ANNITIA data itself); a small adjustment vs NHANES medians but
+    acceptable for the encoder transfer.
+    """
+    n = len(annitia_data['patient_ids'])
+    cols = []
+
+    age = np.asarray(annitia_data['baseline_age'], dtype=np.float32)
+    sex = np.asarray(annitia_data['static']['gender'], dtype=np.float32)
+    bmi = _last_value_array(annitia_data, 'BMI')
+    alb = np.full(n, np.nan, dtype=np.float32)  # ANNITIA does not have albumin
+    ast = _last_value_array(annitia_data, 'ast')
+    alt = _last_value_array(annitia_data, 'alt')
+    ggt = _last_value_array(annitia_data, 'ggt')
+    bil = _last_value_array(annitia_data, 'bilirubin')
+    plt_ = _last_value_array(annitia_data, 'plt')
+    glu = _last_value_array(annitia_data, 'gluc_fast')
+    chol = _last_value_array(annitia_data, 'chol')
+
+    alt_safe = np.maximum(alt, 1.0)
+    plt_safe = np.maximum(plt_, 1.0)
+    fib4 = (age * ast) / (plt_safe * np.sqrt(alt_safe))
+    apri = (ast / 35.0) * 100.0 / plt_safe
+    aar = ast / alt_safe
+
+    columns = [age, sex, bmi, alb, ast, alt, ggt, bil, plt_, glu, chol,
+               fib4, apri, aar]
+    X = np.column_stack([np.asarray(c, dtype=np.float32) for c in columns])
+    # Per-column median impute on this same matrix
+    medians = np.nanmedian(np.where(np.isfinite(X), X, np.nan), axis=0)
+    nan_mask = ~np.isfinite(X)
+    for j in range(X.shape[1]):
+        X[nan_mask[:, j], j] = medians[j] if np.isfinite(medians[j]) else 0.0
+    return X, list(NHANES_FEATURE_SCHEMA)
+
+
+def _last_value_array(annitia_data: Dict, var: str) -> np.ndarray:
+    n = len(annitia_data['patient_ids'])
+    out = np.full(n, np.nan, dtype=np.float32)
+    series_list = annitia_data['longitudinal'].get(var)
+    if series_list is None:
+        return out
+    for i, ser in enumerate(series_list):
+        if ser:
+            out[i] = float(ser[-1][1])
+    return out

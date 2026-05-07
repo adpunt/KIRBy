@@ -126,10 +126,23 @@ def main():
         if m not in SURVIVAL_MODELS:
             sys.exit(f'unknown model: {m}')
 
+    # Resume: load existing cv_summary.json so we can skip already-evaluated
+    # conditions whose OOF + val .npy files are still on disk.
+    summary_path = out / 'cv_summary.json'
     summary = {'view_sets': [list(s) for s in VIEW_SETS],
                'models': list(models),
                'per_condition': {'hepatic': [], 'death': []},
                'n_folds': args.n_folds}
+    if summary_path.exists():
+        try:
+            existing = json.loads(summary_path.read_text())
+            for ep in ('hepatic', 'death'):
+                summary['per_condition'][ep] = existing.get('per_condition', {}).get(ep, [])
+            n_resume = sum(len(summary['per_condition'][e]) for e in ('hepatic','death'))
+            if n_resume:
+                print(f'  RESUME: loaded {n_resume} prior conditions from {summary_path}')
+        except Exception as e:
+            print(f'  RESUME: failed to load {summary_path} ({e}); starting fresh')
 
     # Per-endpoint training loop
     for endpoint in ('hepatic', 'death'):
@@ -140,11 +153,25 @@ def main():
         print(f'\n=== ENDPOINT: {endpoint} '
               f'(valid={int(valid.sum())}, events={int((y["event"] & valid).sum())}) ===')
 
+        # Build a cid→record index over existing rows for O(1) hit check.
+        done_cids = {r['config_id']: r for r in summary['per_condition'][endpoint]
+                     if 'config_id' in r}
+
         for vs in VIEW_SETS:
             X_tr = np.concatenate([views_train[v][0] for v in vs], axis=1)
             X_va = np.concatenate([views_val[v][0]   for v in vs], axis=1)
             for mname in models:
                 cls = SURVIVAL_MODELS[mname]
+                cid = f'{"+".join(vs)}__{mname}'
+                oof_path = out / f'oof_{endpoint}_{cid}.npy'
+                val_path = out / f'val_{endpoint}_{cid}.npy'
+                if (cid in done_cids and oof_path.exists() and val_path.exists()
+                        and np.isfinite(done_cids[cid].get('mean_cindex', float('nan')))):
+                    rec = done_cids[cid]
+                    print(f'  {"+".join(vs):44s} {mname:12s} CACHED  '
+                          f'C={rec["mean_cindex"]:.4f}±{rec["std_cindex"]:.4f}')
+                    continue
+
                 t0 = time.time()
                 fold_c = []
                 oof = init_oof_buffer(n_train)
@@ -170,22 +197,28 @@ def main():
                     val_risk = np.asarray(refit.predict_risk(X_va), dtype=np.float64)
                 except Exception as e:
                     val_risk = np.full(n_val, np.nan)
-                cid = f'{"+".join(vs)}__{mname}'
-                # save OOF
-                np.save(out / f'oof_{endpoint}_{cid}.npy', oof)
-                np.save(out / f'val_{endpoint}_{cid}.npy', val_risk)
+                np.save(oof_path, oof)
+                np.save(val_path, val_risk)
                 rec = {
                     'config_id': cid, 'views': list(vs), 'model': mname,
                     'fold_cindex': fold_c, 'mean_cindex': mean_c, 'std_cindex': std_c,
                     'n_features': int(X_tr.shape[1]),
                     'elapsed_sec': time.time() - t0,
                 }
+                # If this cid already had a stale entry, replace it; otherwise append.
+                summary['per_condition'][endpoint] = [
+                    r for r in summary['per_condition'][endpoint]
+                    if r.get('config_id') != cid
+                ]
                 summary['per_condition'][endpoint].append(rec)
+                done_cids[cid] = rec
                 print(f'  {"+".join(vs):44s} {mname:12s} d={X_tr.shape[1]:4d} '
                       f'C={mean_c:.4f}±{std_c:.4f}  ({time.time()-t0:.1f}s)')
+                # Checkpoint after EACH condition so kills don't cost cycles.
+                summary_path.write_text(json.dumps(_convert(summary), indent=2))
 
         # Save partial after each endpoint so a Ctrl+C still has progress
-        (out / 'cv_summary.json').write_text(json.dumps(_convert(summary), indent=2))
+        summary_path.write_text(json.dumps(_convert(summary), indent=2))
 
     # ----- Phase E fusion across top-K per endpoint -----
     final_subs = pd.DataFrame({'trustii_id': val['trustii_id']})

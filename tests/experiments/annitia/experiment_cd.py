@@ -229,10 +229,21 @@ def main():
     conditions = _build_conditions(args.skip_c, args.skip_d)
     print(f'  conditions: {len(conditions)}')
 
+    summary_path = out / 'cv_summary.json'
     summary = {'view_set': list(view_names),
                'n_features': X_tr_full.shape[1],
                'per_condition': {'hepatic': [], 'death': []},
                'n_folds': args.n_folds}
+    if summary_path.exists():
+        try:
+            existing = json.loads(summary_path.read_text())
+            for ep in ('hepatic', 'death'):
+                summary['per_condition'][ep] = existing.get('per_condition', {}).get(ep, [])
+            n_resume = sum(len(summary['per_condition'][e]) for e in ('hepatic','death'))
+            if n_resume:
+                print(f'  RESUME: loaded {n_resume} prior conditions from {summary_path}')
+        except Exception as e:
+            print(f'  RESUME: failed to load {summary_path} ({e}); starting fresh')
 
     for endpoint in ('hepatic', 'death'):
         y = train[endpoint]['y_struct']
@@ -242,7 +253,19 @@ def main():
         n_ev = int((y['event'] & valid).sum())
         print(f'\n=== ENDPOINT: {endpoint} (valid={int(valid.sum())}, events={n_ev}) ===')
 
+        done_cids = {r['config_id']: r for r in summary['per_condition'][endpoint]
+                     if 'config_id' in r}
+
         for label, framing, ctor, needs_unlab in conditions:
+            cid = label
+            oof_path = out / f'oof_{endpoint}_{cid}.npy'
+            val_path = out / f'val_{endpoint}_{cid}.npy'
+            if (cid in done_cids and oof_path.exists() and val_path.exists()
+                    and np.isfinite(done_cids[cid].get('mean_cindex', float('nan')))):
+                rec = done_cids[cid]
+                print(f'  {label:25s} CACHED  C={rec["mean_cindex"]:.4f}±{rec["std_cindex"]:.4f}')
+                continue
+
             t0 = time.time()
             fold_c = []
             oof = init_oof_buffer(n_train)
@@ -267,23 +290,27 @@ def main():
                     refit.fit(X_tr_full[valid_idx], y[valid_idx])
                 val_risk = np.asarray(refit.predict_risk(X_va_full), dtype=np.float64)
             except ImportError as e:
-                # Optional dep missing; record graceful skip and move on.
                 print(f'  {label:25s} SKIP: {str(e)[:60]}')
                 continue
             except Exception as e:
                 print(f'  {label:25s} ERR: {type(e).__name__}: {str(e)[:80]}')
                 continue
-            cid = label
-            np.save(out / f'oof_{endpoint}_{cid}.npy', oof)
-            np.save(out / f'val_{endpoint}_{cid}.npy', val_risk)
-            summary['per_condition'][endpoint].append({
+            np.save(oof_path, oof)
+            np.save(val_path, val_risk)
+            rec = {
                 'config_id': cid, 'label': label, 'framing': framing,
                 'fold_cindex': fold_c, 'mean_cindex': mean_c, 'std_cindex': std_c,
                 'elapsed_sec': time.time() - t0,
-            })
+            }
+            summary['per_condition'][endpoint] = [
+                r for r in summary['per_condition'][endpoint]
+                if r.get('config_id') != cid
+            ]
+            summary['per_condition'][endpoint].append(rec)
+            done_cids[cid] = rec
             print(f'  {label:25s} framing={framing:<11s} '
                   f'C={mean_c:.4f}±{std_c:.4f}  ({time.time()-t0:.1f}s)')
-            (out / 'cv_summary.json').write_text(json.dumps(_convert(summary), indent=2))
+            summary_path.write_text(json.dumps(_convert(summary), indent=2))
 
     # ----- Fine-Gray competing risks (needs both endpoints) -----
     print('\n=== Fine-Gray competing risks (both endpoints) ===')
@@ -294,6 +321,15 @@ def main():
     for endpoint, cause, y_self_full, valid_self, y_other_full in (
             ('hepatic', 'hepatic', y_hep_full, valid_hep, y_dea_full),
             ('death',   'death',   y_dea_full, valid_dea, y_hep_full)):
+        cid = 'C-finegray'
+        oof_path = out / f'oof_{endpoint}_{cid}.npy'
+        val_path = out / f'val_{endpoint}_{cid}.npy'
+        existing = next((r for r in summary['per_condition'][endpoint]
+                         if r.get('config_id') == cid), None)
+        if (existing is not None and oof_path.exists() and val_path.exists()
+                and np.isfinite(existing.get('mean_cindex', float('nan')))):
+            print(f'  finegray[{endpoint}]  CACHED  C={existing["mean_cindex"]:.4f}')
+            continue
         folds = get_cv_folds(train, endpoint=endpoint,
                              n_folds=args.n_folds, seed=args.seed)
         oof = init_oof_buffer(n_train)
@@ -351,6 +387,15 @@ def main():
         other = 'death' if endpoint == 'hepatic' else 'hepatic'
         if other not in donor_paths:
             print(f'  cross-poll[{endpoint}]: no {other} donor OOF — skipping')
+            continue
+        cid = 'D9-crosspoll-cox'
+        oof_path = out / f'oof_{endpoint}_{cid}.npy'
+        val_path = out / f'val_{endpoint}_{cid}.npy'
+        existing = next((r for r in summary['per_condition'][endpoint]
+                         if r.get('config_id') == cid), None)
+        if (existing is not None and oof_path.exists() and val_path.exists()
+                and np.isfinite(existing.get('mean_cindex', float('nan')))):
+            print(f'  cross-poll[{endpoint}]  CACHED  C={existing["mean_cindex"]:.4f}')
             continue
         donor = str(donor_paths[other])
         y_self = train[endpoint]['y_struct']
