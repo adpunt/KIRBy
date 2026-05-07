@@ -319,6 +319,23 @@ def _assemble_cohort(data_dir: Path,
         bmi = merged['bmi'].astype(np.float32)
         merged = merged[(gl >= 100) | (bmi >= 30)].copy()
 
+    if t2dm_only:
+        # Self-report not available in this loader vintage; use HbA1c proxy
+        # via fasting glucose ≥ 126 mg/dL OR DIABETES_FLAG (mortality file).
+        gl = merged['glucose'].astype(np.float32)
+        diab = pd.to_numeric(merged.get('DIABETES_FLAG'), errors='coerce')
+        keep_t2dm = (gl >= 126) | (diab == 1)
+        merged = merged[keep_t2dm].copy()
+
+    if exclude_viral_hep:
+        # ICD-10 B15-B19 (viral hepatitis) underlying cause of death.
+        def _is_viral(code):
+            if not isinstance(code, str): return False
+            c = code.strip().upper()
+            return c.startswith(('B15', 'B16', 'B17', 'B18', 'B19'))
+        viral = merged['UCOD'].apply(_is_viral) & merged['event']
+        merged = merged[~viral].copy()
+
     feat_cols = ['age', 'sex', 'bmi', 'albumin', 'ast', 'alt', 'ggt',
                  'bilirubin', 'platelets', 'glucose', 'cholesterol']
     # Engineered NITs
@@ -359,20 +376,37 @@ def _assemble_cohort(data_dir: Path,
 
 def load_nhanes_liver(data_dir: Optional[str] = None,
                       restrict: Optional[str] = None,
+                      cycle_range: Optional[Tuple[int, int]] = None,
+                      t2dm_only: bool = False,
+                      exclude_viral_hep: bool = False,
                       use_cache: bool = True) -> Dict:
     """Top-level entry point. Loads (or builds + caches) the cohort dict.
 
     Args:
         data_dir: where to read/write XPT files + the cached cohort pickle.
         restrict: None | 'fib4_high' | 'metab_loaded'. See module docstring.
-        use_cache: skip download + assembly if <data_dir>/cohort_<restrict>.pkl exists.
+        cycle_range: (year_lo, year_hi) inclusive — keep only cycles whose
+            window falls within. e.g. (2007, 2018) → cycles 2007-08 .. 17-18.
+        t2dm_only: subset to T2DM proxy (fasting glucose ≥ 126 OR
+            DIABETES_FLAG=1 from mortality file).
+        exclude_viral_hep: drop patients with ICD-10 B15-B19 underlying
+            cause of death (viral hepatitis) for cleaner MASLD signal.
+        use_cache: skip download + assembly if <data_dir>/cohort_<key>.pkl exists.
     """
     data_dir = _resolve_dir(data_dir)
-    cache_path = data_dir / f'cohort_{restrict or "all"}.pkl'
+    key_parts = [restrict or 'all']
+    if cycle_range is not None:
+        key_parts.append(f'cyc{cycle_range[0]}-{cycle_range[1]}')
+    if t2dm_only: key_parts.append('t2dm')
+    if exclude_viral_hep: key_parts.append('noviral')
+    cache_path = data_dir / f'cohort_{"_".join(key_parts)}.pkl'
     if use_cache and cache_path.exists():
         with open(cache_path, 'rb') as f:
             return pickle.load(f)
-    cohort = _assemble_cohort(data_dir, restrict=restrict)
+    cohort = _assemble_cohort(data_dir, restrict=restrict,
+                              cycle_range=cycle_range,
+                              t2dm_only=t2dm_only,
+                              exclude_viral_hep=exclude_viral_hep)
     with open(cache_path, 'wb') as f:
         pickle.dump(cohort, f)
     return cohort

@@ -50,8 +50,10 @@ from experiments.annitia.views import build_views
 from experiments.annitia.survival import (
     SurvivalCoxPH, SurvivalCoxnet, SurvivalRSF, SurvivalGBSA,
     SurvivalLightGBMAft, SurvivalNGBoost, SURVIVAL_MODELS, concordance)
-from experiments.annitia.tabpfn import TabPFNSurvivalLandmark
+from experiments.annitia.tabpfn import TabPFNSurvivalLandmark, TabPFN25Classifier
 from experiments.annitia._oof import init_oof_buffer, fill_oof_fold
+from experiments.annitia.discretised_survival import DiscretisedSurvival
+from experiments.annitia.synthetic_aug import SyntheticAugmentedSurvival
 
 
 def _convert(o):
@@ -130,6 +132,29 @@ def main():
     ap.add_argument('--skip-nhanes', action='store_true')
     ap.add_argument('--skip-tsfm', action='store_true')
     ap.add_argument('--skip-tabpfn', action='store_true')
+    # Roadmap T1.x / T2.x additions:
+    ap.add_argument('--skip-mitra', action='store_true',
+                    help='Skip MITRA discretised-classifier survival (T1.1).')
+    ap.add_argument('--skip-tabpfn25-disc', action='store_true',
+                    help='Skip TabPFN-2.5 discretised-classifier survival (T1.1).')
+    ap.add_argument('--skip-tabsurv', action='store_true',
+                    help='Skip TabSurv FT-Transformer survival head (T1.3).')
+    ap.add_argument('--skip-synthetic-aug', action='store_true',
+                    help='Skip synthetic-positive augmentation conditions (T1.4).')
+    ap.add_argument('--skip-survtrace', action='store_true',
+                    help='Skip SurvTRACE competing-risk branch (T1.5).')
+    ap.add_argument('--skip-nhanes-transfer', action='store_true',
+                    help='Skip NHANES->ANNITIA transfer recipes a-f (T2.2). '
+                         'NOTE: T2.x lives in experiment_external.py; this '
+                         'flag is kept for backward-compat but the section '
+                         'is no-op here.')
+    ap.add_argument('--skip-tabtune', action='store_true',
+                    help='Skip TabTune PEFT fine-tune (T1.2).')
+    ap.add_argument('--K-disc', type=int, default=10,
+                    help='Number of bins for discretised-classifier reductions.')
+    ap.add_argument('--n-synth', type=str, default='100',
+                    help='Synthetic positives per fold for T1.4. Comma-list '
+                         'allowed (e.g. "50,100,200,500" sweeps all four).')
     ap.add_argument('--tsfm-backend', default='auto',
                     help='auto|timesfm|chronos|fft (auto tries timesfm, falls back).')
     args = ap.parse_args()
@@ -293,6 +318,234 @@ def main():
             _run('tabpfn-landmark',
                  lambda: _AutoHorizonLandmark(TabPFNSurvivalLandmark),
                  X_tr, X_va, endpoint, primary)
+
+    # ---------- 5. T1.1 — MITRA discretised classifier (per-bin) ----------
+    if not args.skip_mitra:
+        print(f'\n=== T1.1 MITRA discretised-survival (K={args.K_disc}) ===')
+        try:
+            from experiments.annitia.mitra_survival import MitraClassifier
+        except ImportError as e:
+            print(f'  mitra import failed: {e}; skipping')
+            MitraClassifier = None
+        if MitraClassifier is not None:
+            primary = _read_be_top_view_sets(Path(args.be_dir), 'hepatic', k=1)[0]
+            views_train = build_views(train, view_names=primary)
+            views_val = build_views(val,   view_names=primary)
+            X_tr = np.concatenate([views_train[v][0] for v in primary], axis=1)
+            X_va = np.concatenate([views_val[v][0]   for v in primary], axis=1)
+            for endpoint in ('hepatic', 'death'):
+                K = args.K_disc if endpoint == 'hepatic' else max(args.K_disc, 20)
+                _run(f'mitra-disc-K{K}',
+                     lambda K=K: DiscretisedSurvival(
+                         classifier_factory=lambda: MitraClassifier(),
+                         K=K, strategy='equal_event'),
+                     X_tr, X_va, endpoint, primary)
+
+    # ---------- 6. T1.1 — TabPFN-2.5 discretised classifier ----------
+    if not args.skip_tabpfn25_disc:
+        print(f'\n=== T1.1 TabPFN-2.5 discretised-survival (K={args.K_disc}) ===')
+        primary = _read_be_top_view_sets(Path(args.be_dir), 'hepatic', k=1)[0]
+        views_train = build_views(train, view_names=primary)
+        views_val = build_views(val,   view_names=primary)
+        X_tr = np.concatenate([views_train[v][0] for v in primary], axis=1)
+        X_va = np.concatenate([views_val[v][0]   for v in primary], axis=1)
+        for endpoint in ('hepatic', 'death'):
+            K = args.K_disc if endpoint == 'hepatic' else max(args.K_disc, 20)
+            _run(f'tabpfn25-disc-K{K}',
+                 lambda K=K: DiscretisedSurvival(
+                     classifier_factory=lambda: TabPFN25Classifier(max_features=100),
+                     K=K, strategy='equal_event'),
+                 X_tr, X_va, endpoint, primary)
+
+    # ---------- 7. T1.3 — TabSurv FT-Transformer ----------
+    if not args.skip_tabsurv:
+        print('\n=== T1.3 TabSurv (FT-Transformer survival head) ===')
+        try:
+            from experiments.annitia.tabsurv import TabSurv
+            primary = _read_be_top_view_sets(Path(args.be_dir), 'hepatic', k=1)[0]
+            views_train = build_views(train, view_names=primary)
+            views_val = build_views(val,   view_names=primary)
+            X_tr = np.concatenate([views_train[v][0] for v in primary], axis=1)
+            X_va = np.concatenate([views_val[v][0]   for v in primary], axis=1)
+            for endpoint in ('hepatic', 'death'):
+                K = args.K_disc if endpoint == 'hepatic' else max(args.K_disc, 15)
+                _run(f'tabsurv-K{K}',
+                     lambda K=K: TabSurv(K=K, epochs=60, batch_size=64,
+                                          n_layers=2, d_emb=64),
+                     X_tr, X_va, endpoint, primary)
+        except ImportError as e:
+            print(f'  tabsurv unavailable (torch missing?): {e}')
+
+    # ---------- 8. T1.4 — Synthetic-positive augmentation (hep-focused) ----------
+    if not args.skip_synthetic_aug:
+        n_synth_list = [int(x) for x in str(args.n_synth).split(',') if x.strip()]
+        print(f'\n=== T1.4 Synthetic-positive augmentation '
+              f'(hep, n_synth sweep={n_synth_list}) ===')
+        primary = _read_be_top_view_sets(Path(args.be_dir), 'hepatic', k=1)[0]
+        views_train = build_views(train, view_names=primary)
+        views_val = build_views(val,   view_names=primary)
+        X_tr = np.concatenate([views_train[v][0] for v in primary], axis=1)
+        X_va = np.concatenate([views_val[v][0]   for v in primary], axis=1)
+        # base_ctor: zero-arg callable that returns a fresh survival model.
+        base_ctors = (
+            ('cox',     lambda: SurvivalCoxPH()),
+            ('rsf-500', lambda: SurvivalRSF(n_estimators=500)),
+        )
+        # Run the no-aug baseline once per base ctor so calibration regression
+        # against augmented variants is visible. Tagged as synaug-none so it
+        # still lands in cv_summary alongside the augmented runs.
+        for base_label, base_ctor in base_ctors:
+            _run(f'synaug-none-{base_label}-n0',
+                 lambda c=base_ctor: c(),
+                 X_tr, X_va, 'hepatic', primary)
+        for backend in ('gmm', 'tabddpm', 'tabsyn', 'tabebm'):
+            for n_synth in n_synth_list:
+                for base_label, base_ctor in base_ctors:
+                    _run(f'synaug-{backend}-{base_label}-n{n_synth}',
+                         lambda b=backend, c=base_ctor, n=n_synth:
+                             SyntheticAugmentedSurvival(
+                                 base_ctor=c, backend=b, n_synth=n,
+                                 safe_fallback=True),
+                         X_tr, X_va, 'hepatic', primary)
+
+        # ---- T1.4 post-pass: Brier OOF + calibration regression vs no-aug ----
+        from experiments.annitia.synthetic_aug import brier_score_at_horizon
+        y_hep = train['hepatic']['y_struct']
+        valid_hep = train['hepatic']['valid_mask']
+        # Median event time as the calibration horizon
+        ev_t = y_hep['time'][y_hep['event'] & valid_hep & np.isfinite(y_hep['time'])]
+        horizon = float(np.median(ev_t)) if ev_t.size else float('nan')
+        baselines = {}  # base_label -> brier
+        for r in summary['per_condition']['hepatic']:
+            cid = r.get('config_id', '')
+            if not cid.startswith('synaug-'):
+                continue
+            oof_p = out / f'oof_hepatic_{cid}.npy'
+            if not oof_p.exists():
+                continue
+            oof = np.load(oof_p)
+            r['brier_oof'] = brier_score_at_horizon(
+                y_hep, y_hep, oof, horizon)
+            r['brier_horizon'] = horizon
+            # Tag base_label for regression check
+            for bl in ('cox', 'rsf-500'):
+                if f'-{bl}-' in cid:
+                    r['base_label'] = bl
+                    if cid.startswith('synaug-none-'):
+                        baselines[bl] = r['brier_oof']
+                    break
+        # Calibration regression flag: aug Brier > baseline + 10%
+        for r in summary['per_condition']['hepatic']:
+            if not r.get('config_id', '').startswith('synaug-'):
+                continue
+            bl = r.get('base_label')
+            if bl in baselines and np.isfinite(baselines[bl]) and np.isfinite(r.get('brier_oof', float('nan'))):
+                r['brier_regression_pct'] = float(
+                    100.0 * (r['brier_oof'] - baselines[bl]) / max(baselines[bl], 1e-9))
+                r['calibration_abort'] = bool(r['brier_regression_pct'] > 10.0)
+        summary_path.write_text(json.dumps(_convert(summary), indent=2))
+        print(f'\n  T1.4 calibration: horizon={horizon:.2f}; '
+              f'baselines={baselines}; '
+              f'aborted={[r["config_id"] for r in summary["per_condition"]["hepatic"] if r.get("calibration_abort")]}')
+
+    # ---------- 9. T1.5 — SurvTRACE competing risks (own fold loop) ----------
+    if not args.skip_survtrace:
+        print('\n=== T1.5 SurvTRACE competing-risk joint hep+death ===')
+        try:
+            from experiments.annitia.survtrace_branch import SurvTRACEBranch
+        except ImportError as e:
+            print(f'  survtrace unavailable: {e}')
+            SurvTRACEBranch = None
+        if SurvTRACEBranch is not None:
+            primary = _read_be_top_view_sets(Path(args.be_dir), 'hepatic', k=1)[0]
+            views_train = build_views(train, view_names=primary)
+            views_val = build_views(val,   view_names=primary)
+            X_tr_full = np.concatenate([views_train[v][0] for v in primary], axis=1)
+            X_va_full = np.concatenate([views_val[v][0]   for v in primary], axis=1)
+            y_hep_full = train['hepatic']['y_struct']
+            y_dea_full = train['death']['y_struct']
+            for endpoint in ('hepatic', 'death'):
+                cid = f'survtrace-{endpoint}__{"+".join(primary)}'
+                oof_path = out / f'oof_{endpoint}_{cid}.npy'
+                val_path_npy = out / f'val_{endpoint}_{cid}.npy'
+                existing = done[endpoint].get(cid)
+                if (existing is not None and oof_path.exists() and val_path_npy.exists()
+                        and np.isfinite(existing.get('mean_cindex', float('nan')))):
+                    print(f'  survtrace-{endpoint:7s}  CACHED  C={existing["mean_cindex"]:.4f}')
+                    continue
+                y_self_full = train[endpoint]['y_struct']
+                valid_self = train[endpoint]['valid_mask']
+                folds = get_cv_folds(train, endpoint=endpoint,
+                                     n_folds=args.n_folds, seed=args.seed)
+                t0 = time.time()
+                oof = init_oof_buffer(n_train); fold_c = []
+                try:
+                    for k, (tr, va) in enumerate(folds):
+                        m = SurvTRACEBranch(cause_of_interest=endpoint, epochs=30)
+                        if endpoint == 'hepatic':
+                            m.fit(X_tr_full[tr], y_hep_full[tr], y_dea_full[tr])
+                        else:
+                            m.fit(X_tr_full[tr], y_hep_full[tr], y_dea_full[tr])
+                        risk = m.predict_risk(X_tr_full[va])
+                        fold_c.append(concordance(y_self_full[va], risk))
+                        fill_oof_fold(oof, va, risk)
+                    mean_c = float(np.nanmean(fold_c))
+                    std_c  = float(np.nanstd(fold_c))
+                    vidx = np.where(valid_self)[0]
+                    refit = SurvTRACEBranch(cause_of_interest=endpoint, epochs=30)
+                    refit.fit(X_tr_full[vidx], y_hep_full[vidx], y_dea_full[vidx])
+                    val_risk = np.asarray(refit.predict_risk(X_va_full), dtype=np.float64)
+                except ImportError as e:
+                    print(f'  survtrace-{endpoint}  SKIP: {str(e)[:80]}')
+                    continue
+                except Exception as e:
+                    print(f'  survtrace-{endpoint}  ERR: {type(e).__name__}: {str(e)[:120]}')
+                    continue
+                np.save(oof_path, oof); np.save(val_path_npy, val_risk)
+                rec = {'config_id': cid, 'label': f'survtrace-{endpoint}',
+                       'view_set': primary,
+                       'fold_cindex': fold_c, 'mean_cindex': mean_c, 'std_cindex': std_c,
+                       'elapsed_sec': time.time() - t0}
+                summary['per_condition'][endpoint] = [
+                    r for r in summary['per_condition'][endpoint]
+                    if r.get('config_id') != cid]
+                summary['per_condition'][endpoint].append(rec)
+                done[endpoint][cid] = rec
+                summary_path.write_text(json.dumps(_convert(summary), indent=2))
+                print(f'  survtrace-{endpoint:7s}  C={mean_c:.4f}±{std_c:.4f}  ({time.time()-t0:.1f}s)')
+
+    # ---------- 10. T1.2 — TabTune PEFT fine-tune ----------
+    if not args.skip_tabtune:
+        print('\n=== T1.2 TabTune PEFT fine-tune (TabPFN-v2.6 + MITRA) ===')
+        try:
+            from experiments.annitia.tabtune_survival import (
+                TabTuneTabPFN, TabTuneMITRA)
+            from experiments.annitia.discretised_survival import DiscretisedSurvival
+            primary = _read_be_top_view_sets(Path(args.be_dir), 'hepatic', k=1)[0]
+            views_train = build_views(train, view_names=primary)
+            views_val = build_views(val,   view_names=primary)
+            X_tr = np.concatenate([views_train[v][0] for v in primary], axis=1)
+            X_va = np.concatenate([views_val[v][0]   for v in primary], axis=1)
+            tabtune_models = [
+                ('tabtune-tabpfn26-peft', TabTuneTabPFN, 'peft'),
+                ('tabtune-mitra-peft',    TabTuneMITRA,  'peft'),
+            ]
+            for label, cls, strategy in tabtune_models:
+                for endpoint in ('hepatic', 'death'):
+                    K = args.K_disc if endpoint == 'hepatic' else max(args.K_disc, 20)
+                    _run(f'{label}-K{K}',
+                         lambda C=cls, s=strategy, K=K: DiscretisedSurvival(
+                             classifier_factory=lambda C=C, s=s: C(
+                                 strategy=s, epochs=8),
+                             K=K, strategy='equal_event'),
+                         X_tr, X_va, endpoint, primary)
+        except ImportError as e:
+            print(f'  tabtune unavailable: {e}')
+
+    # ---------- (T2.x lives in experiment_external.py; nothing to do here) ----------
+    if not args.skip_nhanes_transfer:
+        print('\n=== T2.x has moved to experiment_external.py — '
+              'run that for the external-data layer. ===')
 
     summary['elapsed_sec'] = time.time() - t_start
     summary_path.write_text(json.dumps(_convert(summary), indent=2))

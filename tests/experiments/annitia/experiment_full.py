@@ -58,10 +58,10 @@ def _run(script, extra_args):
         print(f'WARNING: {script} returned {r.returncode}; continuing')
 
 
-def _collect_runs(be_dir: Path, cd_dir: Path):
-    """Collate per-condition records + OOF/val .npy paths from both runs."""
+def _collect_runs(*pool_dirs: Path):
+    """Collate per-condition records + OOF/val .npy paths across all stage dirs."""
     runs = {'hepatic': [], 'death': []}
-    for d in (be_dir, cd_dir):
+    for d in pool_dirs:
         cv_path = d / 'cv_summary.json'
         if not cv_path.exists():
             print(f'  (skipping missing {cv_path})')
@@ -99,11 +99,17 @@ def main():
                     help='Skip the experiment_be.py invocation (use existing outputs).')
     ap.add_argument('--skip-cd', action='store_true',
                     help='Skip the experiment_cd.py invocation.')
+    ap.add_argument('--extra-pools', default='hep_boost,branches,external',
+                    help='Comma-separated subdirs under tests/results/annitia/ '
+                         'to also pool into the final fusion '
+                         '(default: hep_boost,branches,external).')
     args = ap.parse_args()
 
     out = Path(args.output_dir); out.mkdir(parents=True, exist_ok=True)
-    be_dir = _REPO / 'tests' / 'results' / 'annitia' / 'be'
-    cd_dir = _REPO / 'tests' / 'results' / 'annitia' / 'cd'
+    annitia_results = _REPO / 'tests' / 'results' / 'annitia'
+    be_dir = annitia_results / 'be'
+    cd_dir = annitia_results / 'cd'
+    extra_pools = [annitia_results / p.strip() for p in args.extra_pools.split(',') if p.strip()]
     t_start = time.time()
 
     val_arg = ['--validation-csv', args.validation_csv]
@@ -112,8 +118,9 @@ def main():
     if not args.skip_cd:
         _run('experiment_cd.py', val_arg + (args.cd_args.split() if args.cd_args else []))
 
-    print('\n=== POOLING runs from BE + CD ===')
-    runs = _collect_runs(be_dir, cd_dir)
+    pool_dirs = [be_dir, cd_dir] + [d for d in extra_pools if d.exists()]
+    print(f'\n=== POOLING runs from {[d.name for d in pool_dirs]} ===')
+    runs = _collect_runs(*pool_dirs)
     for endpoint in ('hepatic', 'death'):
         print(f'  {endpoint}: {len(runs[endpoint])} pooled conditions')
 
@@ -196,7 +203,7 @@ def main():
     master_path = out / 'sub_master.csv'
     master.to_csv(master_path, index=False)
     summary = {
-        'be_dir': str(be_dir), 'cd_dir': str(cd_dir),
+        'pool_dirs': [str(d) for d in pool_dirs],
         'fusion': fusion, 'elapsed_sec': time.time() - t_start,
         'master': str(master_path),
     }

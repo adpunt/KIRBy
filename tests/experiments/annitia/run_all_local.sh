@@ -12,8 +12,11 @@
 #   BE        — 6 view-sets × 8 algos × 2 endpoints × 5-fold     (~25 min)
 #   CD        — Phase C framings + Phase D tricks + finegray + D.9 (~30 min)
 #   HB        — RSF-1000, CatBoost, weighted/bagged/snapshot tricks (hep only) (~30 min)
-#   BRANCHES  — DSM, NHANES-pretrained-MLP, tsfm view, TabPFN landmark (~60-90 min)
-#   FUSION    — final cross-pool fusion across all four pools          (~5 min)
+#   BRANCHES  — DSM, TabPFN landmark, tsfm view, MITRA + TabPFN-2.5 discretised,
+#               TabSurv, TabTune PEFT, synthetic-aug sweep, SurvTRACE     (~2-3 h)
+#   EXTERNAL  — NHANES pretrain (T2.0) + zero-shot gate (T2.1) + transfer
+#               recipes a-f (T2.2) + subset ablation (T2.3 5×6×2)           (~2-4 h)
+#   FUSION    — final cross-pool fusion across all five pools                 (~5 min)
 #
 # Usage:
 #   bash tests/experiments/annitia/run_all_local.sh
@@ -65,15 +68,40 @@ run_stage cd tests/experiments/annitia/experiment_cd.py \
 run_stage hep_boost tests/experiments/annitia/experiment_hep_boost.py \
     --validation-csv "$VAL_TEST"
 
-# 4. BRANCHES (DSM, NHANES-pretrained MLP, TSFM view, TabPFN landmark)
-TABPFN_FLAG=""
-if [ "${ANNITIA_SKIP_TABPFN:-0}" = "1" ]; then TABPFN_FLAG="--skip-tabpfn"; fi
+# 4. BRANCHES (DSM, NHANES-pretrained MLP, TSFM view, TabPFN landmark,
+#              MITRA + TabPFN-2.5 discretised, TabSurv, synthetic-aug,
+#              SurvTRACE, NHANES transfer recipes a-f)
+EXTRA_FLAGS=""
+[ "${ANNITIA_SKIP_TABPFN:-0}"          = "1" ] && EXTRA_FLAGS="$EXTRA_FLAGS --skip-tabpfn"
+[ "${ANNITIA_SKIP_MITRA:-0}"           = "1" ] && EXTRA_FLAGS="$EXTRA_FLAGS --skip-mitra"
+[ "${ANNITIA_SKIP_TABPFN25_DISC:-0}"   = "1" ] && EXTRA_FLAGS="$EXTRA_FLAGS --skip-tabpfn25-disc"
+[ "${ANNITIA_SKIP_TABSURV:-0}"         = "1" ] && EXTRA_FLAGS="$EXTRA_FLAGS --skip-tabsurv"
+[ "${ANNITIA_SKIP_SYNTHETIC:-0}"       = "1" ] && EXTRA_FLAGS="$EXTRA_FLAGS --skip-synthetic-aug"
+[ "${ANNITIA_SKIP_SURVTRACE:-0}"       = "1" ] && EXTRA_FLAGS="$EXTRA_FLAGS --skip-survtrace"
+[ "${ANNITIA_SKIP_NHANES_TRANSFER:-0}" = "1" ] && EXTRA_FLAGS="$EXTRA_FLAGS --skip-nhanes-transfer"
+[ "${ANNITIA_SKIP_TABTUNE:-0}"         = "1" ] && EXTRA_FLAGS="$EXTRA_FLAGS --skip-tabtune"
+K_DISC=${ANNITIA_K_DISC:-10}
+N_SYNTH=${ANNITIA_N_SYNTH:-100}
 run_stage branches tests/experiments/annitia/experiment_branches.py \
     --validation-csv "$VAL_TEST" \
     --tsfm-backend "$TSFM_BACKEND" \
-    $TABPFN_FLAG
+    --K-disc "$K_DISC" \
+    --n-synth "$N_SYNTH" \
+    $EXTRA_FLAGS
 
-# 5. FUSION (cross-pool: pools BE + CD + HB + BRANCHES)
+# 5. EXTERNAL (NHANES pretrain + T2.1 zero-shot + T2.2 recipes + T2.3 ablation)
+EXT_FLAGS=""
+[ "${ANNITIA_SKIP_T21:-0}"          = "1" ] && EXT_FLAGS="$EXT_FLAGS --skip-t21"
+[ "${ANNITIA_SKIP_T22:-0}"          = "1" ] && EXT_FLAGS="$EXT_FLAGS --skip-t22"
+[ "${ANNITIA_SKIP_T23:-0}"          = "1" ] && EXT_FLAGS="$EXT_FLAGS --skip-t23"
+[ "${ANNITIA_IGNORE_T21_GATE:-0}"   = "1" ] && EXT_FLAGS="$EXT_FLAGS --ignore-t21-gate"
+T23_SUBSETS=${ANNITIA_T23_SUBSETS:-fib4_high,fib4_high_2007,fib4_high_2017,t2dm_only,no_viral}
+run_stage external tests/experiments/annitia/experiment_external.py \
+    --validation-csv "$VAL_TEST" \
+    --t23-subsets "$T23_SUBSETS" \
+    $EXT_FLAGS
+
+# 6. FUSION (cross-pool: pools BE + CD + HB + BRANCHES + EXTERNAL)
 run_stage fusion tests/experiments/annitia/experiment_full.py \
     --validation-csv "$VAL_TEST" \
     --skip-be --skip-cd

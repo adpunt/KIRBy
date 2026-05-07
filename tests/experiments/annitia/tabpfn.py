@@ -122,3 +122,13 @@ class TabPFNSurvivalLandmark:
     def predict_risk(self, X: np.ndarray) -> np.ndarray:
         proba = self._cls.predict_proba(X)
         return proba[:, 1].astype(np.float64)
+
+
+# ---- TabPFN-2.5 alias --------------------------------------------------
+# The `tabpfn` pip package serves whichever version is installed
+# (v2 or v2.5 from priorlabs). The wrapper above already adapts to either
+# via try/except on construction kwargs. This alias is the import name
+# used by `discretised_survival.py` for the per-bin classifier reduction
+# (T1.1 in ANNITIA_TRANSFER_ROADMAP.md).
+TabPFN25Classifier = TabPFNClassifierWrapper
+
