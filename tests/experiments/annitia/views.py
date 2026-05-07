@@ -31,6 +31,7 @@ from kirby.datasets.annitia_maslg import (
 from experiments.annitia._cache import cached_call, hash_data
 from experiments.annitia._fpca import fpca_features_for_var
 from experiments.annitia._gp_smooth import gp_features_for_var
+from experiments.annitia._tsfm import tsfm_features_for_var
 
 _TRAJECTORY_VARS = [v for v in LONGITUDINAL_VARS if v != 'Age']
 
@@ -766,6 +767,45 @@ def _gp_smooth_view(data: Dict, n_grid: int = 5,
     return np.concatenate(cols, axis=1), names
 
 
+def _tsfm_view(data: Dict, ctx_len: int = 64,
+               backend: str = 'auto', device: str = 'cpu',
+               use_cache: bool = True) -> Tuple[np.ndarray, List[str]]:
+    """Per-lab time-series-foundation-model embeddings concatenated across vars.
+
+    Each variable contributes (E + 2) columns: E embedding dims +
+    coverage + n_obs. Embeddings come from TimesFM, then Chronos, falling
+    back to a deterministic FFT-based signature if neither library is
+    installed (the fallback keeps the view shape stable).
+
+    The embedding model itself is a foundation model (Apache-2.0): TimesFM
+    (google-research) or Chronos (amazon-science). Per-lab inference is
+    O(n_patients) and is disk-cached on a content hash so subsequent runs
+    don't re-pay the cost.
+    """
+    cols, names = [], []
+    cache_key_data = hash_data(data['wide']['Age'])
+    for var in _TRAJECTORY_VARS:
+        recs = data['longitudinal'][var]
+        var_hash_inputs = [(p[0], p[1]) for ri in recs for p in ri]
+        if use_cache:
+            X, fnames, _ = cached_call(
+                key={'kind': 'tsfm_view', 'var': var,
+                     'data': cache_key_data,
+                     'n_records': len(var_hash_inputs),
+                     'n_patients': len(recs),
+                     'ctx_len': ctx_len, 'backend': backend},
+                fn=lambda: tsfm_features_for_var(
+                    recs, ctx_len=ctx_len, backend=backend, device=device),
+                version=1,
+            )
+        else:
+            X, fnames, _ = tsfm_features_for_var(
+                recs, ctx_len=ctx_len, backend=backend, device=device)
+        cols.append(X)
+        names.extend([f'{var}__{n}' for n in fnames])
+    return np.concatenate(cols, axis=1), names
+
+
 VIEW_BUILDERS = {
     'snapshot': _snapshot_view,
     'slope': _slope_view,
@@ -781,6 +821,7 @@ VIEW_BUILDERS = {
     'visit_density': _visit_density_view,
     'fpca': _fpca_view,
     'gp_smooth': _gp_smooth_view,
+    'tsfm': _tsfm_view,
 }
 
 
