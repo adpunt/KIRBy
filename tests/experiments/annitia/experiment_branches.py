@@ -520,7 +520,6 @@ def main():
         try:
             from experiments.annitia.tabtune_survival import (
                 TabTuneTabPFN, TabTuneMITRA)
-            from experiments.annitia.discretised_survival import DiscretisedSurvival
             primary = _read_be_top_view_sets(Path(args.be_dir), 'hepatic', k=1)[0]
             views_train = build_views(train, view_names=primary)
             views_val = build_views(val,   view_names=primary)

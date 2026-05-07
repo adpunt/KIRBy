@@ -94,7 +94,12 @@ _NHANES3_URLS = {
 # Continuous NHANES (1999-): we pull DEMO + BMX + BIOPRO + GLU + HDL + TCHOL
 # for a representative pair of cycles. Adding more cycles is straightforward.
 _NHANES_CONT_CYCLES = ('1999-2000', '2003-2004', '2007-2008', '2013-2014', '2017-2018')
-_NHANES_CONT_URLBASE = 'https://wwwn.cdc.gov/Nchs/Nhanes/'
+# CDC moved the continuous-NHANES file tree in 2025: the legacy URL
+# `wwwn.cdc.gov/Nchs/Nhanes/{cycle}/{file}.XPT` now returns the landing
+# HTML page. The new canonical location is
+# `wwwn.cdc.gov/Nchs/Data/Nhanes/Public/{year_start}/Datafiles/{file}.xpt`
+# (lowercase `.xpt`, year_start = first year of the cycle, e.g. 1999).
+_NHANES_CONT_URLBASE = 'https://wwwn.cdc.gov/Nchs/Data/Nhanes/Public/'
 _NHANES_CONT_FILES_PER_CYCLE = ('DEMO', 'BMX', 'BIOPRO', 'GLU', 'TCHOL')
 
 
@@ -131,13 +136,26 @@ def _continuous_cycle(cycle: str, data_dir: Path):
         '2015-2016': '_I',
         '2017-2018': '_J',
     }[cycle]
+    year_start = cycle.split('-')[0]
     dfs = {}
     for tag in _NHANES_CONT_FILES_PER_CYCLE:
-        fname = f'{tag}{suffix}.XPT'
-        url = f'{_NHANES_CONT_URLBASE}{cycle}/{fname}'
+        # 2025 CDC URL layout uses lowercase `.xpt`.
+        fname = f'{tag}{suffix}.xpt'
+        url = f'{_NHANES_CONT_URLBASE}{year_start}/Datafiles/{fname}'
         local = data_dir / 'continuous' / cycle / fname
         try:
             _download(url, local)
+            # Sanity check: CDC sometimes returns the HTML 404 page with a
+            # 200 status. XPT files always start with the ASCII header
+            # "HEADER RECORD*******LIBRARY" — bail if the cached file
+            # doesn't look like XPT.
+            with open(local, 'rb') as fh:
+                head = fh.read(64)
+            if not head.startswith(b'HEADER RECORD'):
+                local.unlink(missing_ok=True)
+                raise RuntimeError(
+                    'downloaded file is not XPT (CDC returned HTML — '
+                    'file likely not published for this cycle)')
             dfs[tag] = _read_xpt(local)
         except Exception as e:
             print(f'  [nhanes] {cycle}/{tag} unavailable: {e}')

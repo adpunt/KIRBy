@@ -26,6 +26,34 @@ from typing import Optional
 import numpy as np
 
 
+def _import_upstream_tabpfn_classifier():
+    """Resolve the pip-installed `tabpfn.TabPFNClassifier`, bypassing the
+    local `tests/experiments/annitia/tabpfn.py` shadowing on sys.path."""
+    import importlib
+    import os
+    import sys
+    here = os.path.dirname(os.path.abspath(__file__))
+    saved_path = sys.path[:]
+    saved_mod = sys.modules.pop('tabpfn', None)
+    try:
+        sys.path = [p for p in sys.path
+                    if os.path.abspath(p) != here]
+        mod = importlib.import_module('tabpfn')
+        if not hasattr(mod, 'TabPFNClassifier'):
+            raise ImportError(
+                f'tabpfn package found at {getattr(mod, "__file__", "?")} '
+                f'has no TabPFNClassifier — wrong package?')
+        return mod.TabPFNClassifier
+    except ImportError as e:
+        raise ImportError(
+            f'tabpfn not installed — `pip install tabpfn` '
+            f'(missing on this host: {e})')
+    finally:
+        sys.path = saved_path
+        if saved_mod is not None:
+            sys.modules['tabpfn'] = saved_mod
+
+
 class TabPFNClassifierWrapper:
     """Thin wrapper around `tabpfn.TabPFNClassifier`.
 
@@ -60,12 +88,7 @@ class TabPFNClassifierWrapper:
         return X[:, self._keep]
 
     def fit(self, X: np.ndarray, y: np.ndarray):
-        try:
-            from tabpfn import TabPFNClassifier
-        except ImportError as e:
-            raise ImportError(
-                'tabpfn not installed — `pip install tabpfn` '
-                f'(missing on this host: {e})')
+        TabPFNClassifier = _import_upstream_tabpfn_classifier()
         X = np.nan_to_num(np.asarray(X, dtype=np.float64),
                           nan=0.0, posinf=0.0, neginf=0.0)
         Xs = self._select_features(X)

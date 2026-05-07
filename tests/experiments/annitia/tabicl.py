@@ -22,6 +22,34 @@ from typing import Optional
 import numpy as np
 
 
+def _import_upstream_tabicl_classifier():
+    """Resolve the pip-installed `tabicl.TabICLClassifier`, bypassing the
+    local `tests/experiments/annitia/tabicl.py` shadowing on sys.path."""
+    import importlib
+    import os
+    import sys
+    here = os.path.dirname(os.path.abspath(__file__))
+    saved_path = sys.path[:]
+    saved_mod = sys.modules.pop('tabicl', None)
+    try:
+        sys.path = [p for p in sys.path
+                    if os.path.abspath(p) != here]
+        mod = importlib.import_module('tabicl')
+        if not hasattr(mod, 'TabICLClassifier'):
+            raise ImportError(
+                f'tabicl package found at {getattr(mod, "__file__", "?")} '
+                f'has no TabICLClassifier — wrong package?')
+        return mod.TabICLClassifier
+    except ImportError as e:
+        raise ImportError(
+            f'tabicl not installed — `pip install tabicl` '
+            f'(missing on this host: {e})')
+    finally:
+        sys.path = saved_path
+        if saved_mod is not None:
+            sys.modules['tabicl'] = saved_mod
+
+
 class TabICLClassifierWrapper:
     """Thin wrapper around `tabicl.TabICLClassifier` (or the version-specific
     factory). Falls back to a clear ImportError if the package is missing."""
@@ -45,12 +73,7 @@ class TabICLClassifierWrapper:
         return X[:, self._keep]
 
     def fit(self, X: np.ndarray, y: np.ndarray):
-        try:
-            from tabicl import TabICLClassifier
-        except ImportError as e:
-            raise ImportError(
-                'tabicl not installed — `pip install tabicl` '
-                f'(missing on this host: {e})')
+        TabICLClassifier = _import_upstream_tabicl_classifier()
         X = np.nan_to_num(np.asarray(X, dtype=np.float64),
                           nan=0.0, posinf=0.0, neginf=0.0)
         Xs = self._select_features(X)

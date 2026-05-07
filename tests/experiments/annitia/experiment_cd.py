@@ -290,10 +290,10 @@ def main():
                     refit.fit(X_tr_full[valid_idx], y[valid_idx])
                 val_risk = np.asarray(refit.predict_risk(X_va_full), dtype=np.float64)
             except ImportError as e:
-                print(f'  {label:25s} SKIP: {str(e)[:60]}')
+                print(f'  {label:25s} SKIP: {type(e).__name__}: {e}')
                 continue
             except Exception as e:
-                print(f'  {label:25s} ERR: {type(e).__name__}: {str(e)[:80]}')
+                print(f'  {label:25s} ERR: {type(e).__name__}: {e}')
                 continue
             np.save(oof_path, oof)
             np.save(val_path, val_risk)

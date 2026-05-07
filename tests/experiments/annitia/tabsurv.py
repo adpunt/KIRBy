@@ -125,6 +125,9 @@ class TabSurv:
         Mt = torch.tensor(mask, dtype=torch.float32, device=self.device)
         n = Xs.shape[0]; idx = np.arange(n)
         best, bad, best_state = float('inf'), 0, None
+        import sys as _sys, time as _time
+        _t0 = _time.time()
+        print(f'    [tabsurv] n={n} d={Xs.shape[1]} K={n_bins} epochs={self.epochs}', flush=True)
         for ep in range(self.epochs):
             np.random.RandomState(self.seed + ep).shuffle(idx)
             net.train()
@@ -146,7 +149,10 @@ class TabSurv:
             else:
                 bad += 1
                 if bad >= self.patience:
+                    print(f'    [tabsurv] early stop ep={ep+1} best={best:.4f}', flush=True)
                     break
+            if (ep + 1) % 5 == 0 or ep == self.epochs - 1:
+                print(f'    [tabsurv] ep={ep+1}/{self.epochs} loss={ml:.4f} elapsed={_time.time()-_t0:.1f}s', flush=True)
         if best_state is not None:
             net.load_state_dict(best_state)
         net.eval()
