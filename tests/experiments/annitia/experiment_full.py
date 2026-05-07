@@ -130,75 +130,141 @@ def main():
                        filename=Path(args.validation_csv).name,
                        has_outcomes=False)
 
-    # Final fusion
+    # ------------------------------------------------------------------
+    # Final fusion: sweep top-K x mode, with cross-endpoint stacking.
+    # ------------------------------------------------------------------
+    K_SWEEP = [3, 5, 10, 20, 40, 'all']
+    MODES_NO_STACK = ('top1', 'equal', 'cv_weighted', 'single', 'rrf')
+    # Pre-collect per-endpoint sorted records so we can build cross-endpoint
+    # features.
+    sorted_recs = {}
+    for endpoint in ('hepatic', 'death'):
+        rs = [r for r in runs[endpoint] if np.isfinite(r['mean_cindex'])]
+        rs.sort(key=lambda r: -r['mean_cindex'])
+        sorted_recs[endpoint] = rs
+
+    def _select(recs, k):
+        if k == 'all':
+            return recs
+        return recs[:k]
+
     fusion = {}
     master = pd.DataFrame({'trustii_id': val['trustii_id']})
     for endpoint, col in (('hepatic', 'risk_hepatic_event'),
                           ('death',   'risk_death')):
-        recs = runs[endpoint]
-        recs = [r for r in recs if np.isfinite(r['mean_cindex'])]
-        recs.sort(key=lambda r: -r['mean_cindex'])
-        recs = recs[:args.top_k]
-        if not recs:
+        other = 'death' if endpoint == 'hepatic' else 'hepatic'
+        own_all = sorted_recs[endpoint]
+        other_all = sorted_recs[other]
+        if not own_all:
             print(f'  {endpoint}: no usable conditions, filling zeros')
             master[col] = 0.0
             continue
-        print(f'\n  --- {endpoint} top-{len(recs)} ---')
-        for r in recs:
-            print(f'    {r["label"]:35s} C={r["mean_cindex"]:.4f}  ({r["source"]})')
-        oof_list = [np.load(r['oof_path']) for r in recs]
-        val_list = [np.load(r['val_path']) for r in recs]
-        cv_list  = [r['mean_cindex'] for r in recs]
-        weights = np.maximum(np.asarray(cv_list) - 0.5, 0.0)
-        if weights.sum() == 0: weights = np.ones(len(recs))
+        print(f'\n  === {endpoint}: pool of {len(own_all)} conditions, '
+              f'cross-pool ({other}) of {len(other_all)} ===')
 
         y = train[endpoint]['y_struct']
         valid = train[endpoint]['valid_mask']
-        modes = {
-            'top1':        val_list[int(np.argmax(cv_list))],
-            'equal':       fuse_equal(val_list),
-            'cv_weighted': fuse_cv_weighted(val_list, weights),
-            'single':      fuse_single(val_list, cv_list),
-            'rrf':         fuse_rrf(val_list, k=60.0),
-        }
-        sm_obj = None
-        try:
-            sm_obj = StackMetaFusion(l1_ratio=0.5)
-            sm_obj.fit(oof_list, y, valid_mask=valid)
-            modes['stack_meta'] = sm_obj.transform(val_list)
-        except Exception as e:
-            print(f'  stack_meta failed: {e}')
 
-        # Score modes by OOF train C-index, pick best
-        best_mode, best_c = None, -np.inf
-        for mode in modes:
+        # Trials we'll score: list of (K_self, K_cross, mode, oof_vec, val_vec)
+        trials = []   # results
+        per_mode_save = {}  # mode_label -> val vec (for sub_*.csv)
+
+        for K in K_SWEEP:
+            recs_self = _select(own_all, K)
+            if not recs_self:
+                continue
+            oof_list = [np.load(r['oof_path']) for r in recs_self]
+            val_list = [np.load(r['val_path']) for r in recs_self]
+            cv_list  = [r['mean_cindex'] for r in recs_self]
+            weights = np.maximum(np.asarray(cv_list) - 0.5, 0.0)
+            if weights.sum() == 0: weights = np.ones(len(recs_self))
+            n_self = len(recs_self)
+
+            # 5 simple non-stacking modes (no meta-learner) + stack_meta + xe
+            mode_vals_oof = {
+                'top1':        oof_list[int(np.argmax(cv_list))],
+                'equal':       fuse_equal(oof_list),
+                'cv_weighted': fuse_cv_weighted(oof_list, weights),
+                'single':      fuse_single(oof_list, cv_list),
+                'rrf':         fuse_rrf(oof_list, k=60.0),
+            }
+            mode_vals_val = {
+                'top1':        val_list[int(np.argmax(cv_list))],
+                'equal':       fuse_equal(val_list),
+                'cv_weighted': fuse_cv_weighted(val_list, weights),
+                'single':      fuse_single(val_list, cv_list),
+                'rrf':         fuse_rrf(val_list, k=60.0),
+            }
+
+            # stack_meta (self only)
             try:
-                if mode == 'top1':
-                    ov = oof_list[int(np.argmax(cv_list))]
-                elif mode == 'equal':
-                    ov = fuse_equal(oof_list)
-                elif mode == 'cv_weighted':
-                    ov = fuse_cv_weighted(oof_list, weights)
-                elif mode == 'single':
-                    ov = fuse_single(oof_list, cv_list)
-                elif mode == 'rrf':
-                    ov = fuse_rrf(oof_list, k=60.0)
-                elif mode == 'stack_meta':
-                    ov = sm_obj.transform(oof_list)
-                c = concordance(y[valid], ov[valid])
-            except Exception:
-                c = float('nan')
-            print(f'    mode={mode:12s} OOF-train C={c:.4f}')
-            if np.isfinite(c) and c > best_c:
-                best_c, best_mode = c, mode
-        print(f'    → picked {best_mode} (C={best_c:.4f})')
-        master[col] = modes[best_mode]
-        fusion[endpoint] = {'best_mode': best_mode, 'best_c': float(best_c),
-                            'top_k': [r['label'] for r in recs]}
-        # Save per-mode submissions for inspection
-        for mode, vec in modes.items():
+                sm = StackMetaFusion(l1_ratio=0.5)
+                sm.fit(oof_list, y, valid_mask=valid)
+                mode_vals_oof['stack_meta'] = sm.transform(oof_list)
+                mode_vals_val['stack_meta'] = sm.transform(val_list)
+            except Exception as e:
+                print(f'    K={K} stack_meta failed: {e}')
+
+            # stack_meta_xe — append the OTHER endpoint's top-K branches as
+            # extra features so death-info informs hep and vice versa.
+            for K_cross in (K,) if other_all else ():
+                recs_cross = _select(other_all, K_cross)
+                if not recs_cross:
+                    continue
+                oof_xe = oof_list + [np.load(r['oof_path']) for r in recs_cross]
+                val_xe = val_list + [np.load(r['val_path']) for r in recs_cross]
+                try:
+                    sm_xe = StackMetaFusion(l1_ratio=0.5)
+                    sm_xe.fit(oof_xe, y, valid_mask=valid)
+                    mode_vals_oof['stack_meta_xe'] = sm_xe.transform(oof_xe)
+                    mode_vals_val['stack_meta_xe'] = sm_xe.transform(val_xe)
+                except Exception as e:
+                    print(f'    K={K} stack_meta_xe failed: {e}')
+
+            for mode, ov in mode_vals_oof.items():
+                vv = mode_vals_val[mode]
+                try:
+                    c = concordance(y[valid], ov[valid])
+                except Exception:
+                    c = float('nan')
+                trials.append({'K': K, 'mode': mode, 'oof_c': float(c),
+                               'val': vv, 'n_branches': n_self})
+                tag = f'K{K}_{mode}'
+                per_mode_save[tag] = vv
+                print(f'    K={str(K):>3} mode={mode:14s} OOF-train C={c:.4f}')
+
+        # Pick best overall by OOF C
+        finite_trials = [t for t in trials if np.isfinite(t['oof_c'])]
+        if not finite_trials:
+            print(f'  {endpoint}: every trial NaN, falling back to zeros')
+            master[col] = 0.0
+            continue
+        best = max(finite_trials, key=lambda t: t['oof_c'])
+        # Also report the best NON-stacking trial so user sees the no-stack answer
+        no_stack_trials = [t for t in finite_trials if t['mode'] in MODES_NO_STACK]
+        best_no_stack = max(no_stack_trials, key=lambda t: t['oof_c']) if no_stack_trials else None
+        print(f'\n    BEST overall : K={best["K"]} mode={best["mode"]} OOF-C={best["oof_c"]:.4f}')
+        if best_no_stack is not None:
+            print(f'    BEST non-stack: K={best_no_stack["K"]} '
+                  f'mode={best_no_stack["mode"]} OOF-C={best_no_stack["oof_c"]:.4f}')
+
+        master[col] = best['val']
+        fusion[endpoint] = {
+            'best': {'K': best['K'], 'mode': best['mode'],
+                     'oof_c': best['oof_c'], 'n_branches': best['n_branches']},
+            'best_no_stack': (
+                None if best_no_stack is None else
+                {'K': best_no_stack['K'], 'mode': best_no_stack['mode'],
+                 'oof_c': best_no_stack['oof_c']}),
+            'pool_size': len(own_all),
+            'cross_pool_size': len(other_all),
+            'all_trials': [{'K': t['K'], 'mode': t['mode'], 'oof_c': t['oof_c']}
+                           for t in trials],
+        }
+        # Save per-(K, mode) submissions for inspection
+        for tag, vec in per_mode_save.items():
             pd.DataFrame({'trustii_id': val['trustii_id'], col: vec}).to_csv(
-                out / f'sub_{mode}_{endpoint}.csv', index=False)
+                out / f'sub_{tag}_{endpoint}.csv', index=False)
 
     master_path = out / 'sub_master.csv'
     master.to_csv(master_path, index=False)
