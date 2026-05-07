@@ -636,6 +636,12 @@ class MLPClassifierSurvival:
         return np.asarray(self._model.predict_proba(Xs), dtype=np.float64)
 
 
+try:
+    from experiments.annitia.dsm import SurvivalDSM
+except Exception:  # torch / auton-survival missing on this host
+    SurvivalDSM = None
+
+
 SURVIVAL_MODELS = {
     'cox': SurvivalCoxPH,
     'coxnet': SurvivalCoxnet,
@@ -647,6 +653,9 @@ SURVIVAL_MODELS = {
     'lgbm_aft': SurvivalLightGBMAft,
     'ngboost': SurvivalNGBoost,
 }
+# DSM is registered conditionally — only if dsm.py imports cleanly (torch installed).
+if SurvivalDSM is not None:
+    SURVIVAL_MODELS['dsm'] = SurvivalDSM
 
 REGRESSORS = {
     'lgbm': RegressorLightGBM,
