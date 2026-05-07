@@ -196,12 +196,39 @@ def main():
                 'rrf':         fuse_rrf(val_list, k=60.0),
             }
 
-            # stack_meta (self only)
+            # ---- Learned-weight modes need NESTED CV evaluation ----
+            # Otherwise the meta-learner is fit on training rows AND
+            # evaluated on the same rows (in-sample) — this caused
+            # Round 3's hep OOF-C of 0.98 to balloon vs 0.72 test.
+            # Stack_meta predictions for OOF C are now produced by an
+            # outer 5-fold CV; the val_test prediction uses a refit on
+            # the full training set (unchanged).
+            from sklearn.model_selection import StratifiedKFold
+
+            def _nested_oof(oof_block_list):
+                """Outer-CV OOF prediction matching len(oof_block_list[0])."""
+                R = np.stack(oof_block_list, axis=1)
+                finite = np.all(np.isfinite(R), axis=1) & np.isfinite(y['time']) & valid
+                if finite.sum() < R.shape[1] + 10:
+                    return np.full(R.shape[0], np.nan)
+                idx = np.where(finite)[0]
+                R_k = R[idx]; y_k = y[idx]
+                skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+                pred = np.full(R.shape[0], np.nan)
+                for tr_loc, va_loc in skf.split(idx, y_k['event'].astype(int)):
+                    sm_inner = StackMetaFusion(l1_ratio=0.5)
+                    sm_inner.fit([R_k[tr_loc, j] for j in range(R_k.shape[1])],
+                                 y_k[tr_loc])
+                    pred[idx[va_loc]] = sm_inner.transform(
+                        [R_k[va_loc, j] for j in range(R_k.shape[1])])
+                return pred
+
             try:
-                sm = StackMetaFusion(l1_ratio=0.5)
-                sm.fit(oof_list, y, valid_mask=valid)
-                mode_vals_oof['stack_meta'] = sm.transform(oof_list)
-                mode_vals_val['stack_meta'] = sm.transform(val_list)
+                # Honest OOF via outer CV; refit-best on full for val.
+                mode_vals_oof['stack_meta'] = _nested_oof(oof_list)
+                sm_full = StackMetaFusion(l1_ratio=0.5)
+                sm_full.fit(oof_list, y, valid_mask=valid)
+                mode_vals_val['stack_meta'] = sm_full.transform(val_list)
             except Exception as e:
                 print(f'    K={K} stack_meta failed: {e}')
 
@@ -214,10 +241,10 @@ def main():
                 oof_xe = oof_list + [np.load(r['oof_path']) for r in recs_cross]
                 val_xe = val_list + [np.load(r['val_path']) for r in recs_cross]
                 try:
-                    sm_xe = StackMetaFusion(l1_ratio=0.5)
-                    sm_xe.fit(oof_xe, y, valid_mask=valid)
-                    mode_vals_oof['stack_meta_xe'] = sm_xe.transform(oof_xe)
-                    mode_vals_val['stack_meta_xe'] = sm_xe.transform(val_xe)
+                    mode_vals_oof['stack_meta_xe'] = _nested_oof(oof_xe)
+                    sm_xe_full = StackMetaFusion(l1_ratio=0.5)
+                    sm_xe_full.fit(oof_xe, y, valid_mask=valid)
+                    mode_vals_val['stack_meta_xe'] = sm_xe_full.transform(val_xe)
                 except Exception as e:
                     print(f'    K={K} stack_meta_xe failed: {e}')
 
