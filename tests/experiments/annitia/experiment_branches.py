@@ -235,7 +235,7 @@ def main():
                     views_val = build_views(val,   view_names=vs)
                     X_tr = np.concatenate([views_train[v][0] for v in vs], axis=1)
                     X_va = np.concatenate([views_val[v][0]   for v in vs], axis=1)
-                    _run('dsm-K4', lambda: SurvivalDSM(n_components=4, epochs=80),
+                    _run('dsm-K4', lambda: SurvivalDSM(k=4, epochs=80),
                          X_tr, X_va, endpoint, vs)
 
     # ---------- 2. NHANES-pretrained MLP on nhanes_proj view ----------

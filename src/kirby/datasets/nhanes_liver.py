@@ -94,7 +94,7 @@ _NHANES3_URLS = {
 # Continuous NHANES (1999-): we pull DEMO + BMX + BIOPRO + GLU + HDL + TCHOL
 # for a representative pair of cycles. Adding more cycles is straightforward.
 _NHANES_CONT_CYCLES = ('1999-2000', '2003-2004', '2007-2008', '2013-2014', '2017-2018')
-_NHANES_CONT_URLBASE = 'https://wwwn.cdc.gov/Nchs/Data/Nhanes/Public/'
+_NHANES_CONT_URLBASE = 'https://wwwn.cdc.gov/Nchs/Nhanes/'
 _NHANES_CONT_FILES_PER_CYCLE = ('DEMO', 'BMX', 'BIOPRO', 'GLU', 'TCHOL')
 
 
@@ -241,7 +241,10 @@ def _parse_ndi_mortality(path: Path):
 # Cohort assembly.
 # ----------------------------------------------------------------------
 def _assemble_cohort(data_dir: Path,
-                     restrict: Optional[str] = None) -> Dict:
+                     restrict: Optional[str] = None,
+                     cycle_range: Optional[Tuple[int, int]] = None,
+                     t2dm_only: bool = False,
+                     exclude_viral_hep: bool = False) -> Dict:
     """Build the merged feature + outcome table.
 
     Returns a dict with:
@@ -254,8 +257,15 @@ def _assemble_cohort(data_dir: Path,
         meta      dict (n_cycles, n_kept, restrict, ...)
     """
     import pandas as pd
+    cycles_to_load = list(_NHANES_CONT_CYCLES)
+    if cycle_range is not None:
+        lo, hi = int(cycle_range[0]), int(cycle_range[1])
+        cycles_to_load = [c for c in cycles_to_load
+                          if int(c.split('-')[0]) >= lo and int(c.split('-')[1]) <= hi]
+        if not cycles_to_load:
+            raise ValueError(f'cycle_range {cycle_range} matched no NHANES cycles')
     cont_dfs = []
-    for cycle in _NHANES_CONT_CYCLES:
+    for cycle in cycles_to_load:
         df = _continuous_cycle(cycle, data_dir)
         if df is not None:
             cont_dfs.append(df)
