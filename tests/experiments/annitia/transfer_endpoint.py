@@ -170,20 +170,27 @@ class TabSurvTransferEndpoint:
         src_disc = SurvivalDiscretiser(K=self.K, strategy='equal_event').fit(
             self.source_y['time'], self.source_y['event'])
         Y_src = src_disc.labels(self.source_y['time'], self.source_y['event']).astype(np.float32)
-        M_src = (~np.isnan(Y_src)).astype(np.float32)
-        Y_src0 = np.nan_to_num(Y_src, nan=0.0)
-        keep_src = self.source_valid & np.isfinite(self.source_y['time'])
-        Xs_src = Xs[keep_src]; Y_src0 = Y_src0[keep_src]; M_src = M_src[keep_src]
-
         # Target labels
         time_t = np.asarray(y_target['time'], dtype=np.float64)
         event_t = np.asarray(y_target['event'], dtype=bool)
         self._target_disc = SurvivalDiscretiser(K=self.K, strategy='equal_event').fit(time_t, event_t)
         Y_tgt = self._target_disc.labels(time_t, event_t).astype(np.float32)
+
+        # SurvivalDiscretiser may collapse to fewer than K bins on small folds
+        # (equal_event with few events). The head needs to fit BOTH endpoints,
+        # so use the minimum of the two bin counts and truncate both label
+        # matrices to that width.
+        n_bins = min(Y_src.shape[1], Y_tgt.shape[1])
+        Y_src = Y_src[:, :n_bins]
+        Y_tgt = Y_tgt[:, :n_bins]
+        M_src = (~np.isnan(Y_src)).astype(np.float32)
+        Y_src0 = np.nan_to_num(Y_src, nan=0.0)
+        keep_src = self.source_valid & np.isfinite(self.source_y['time'])
+        Xs_src = Xs[keep_src]; Y_src0 = Y_src0[keep_src]; M_src = M_src[keep_src]
         M_tgt = (~np.isnan(Y_tgt)).astype(np.float32)
         Y_tgt0 = np.nan_to_num(Y_tgt, nan=0.0)
 
-        d_in = Xs.shape[1]; n_bins = src_disc.n_bins
+        d_in = Xs.shape[1]
         net = self._build(d_in, n_bins).to(self.device)
 
         # ---- Phase 1: pretrain on source (death) ----
@@ -422,17 +429,21 @@ class MLPTransferEndpoint:
         src_disc = SurvivalDiscretiser(K=self.K, strategy='equal_event').fit(
             self.source_y['time'], self.source_y['event'])
         Y_src = src_disc.labels(self.source_y['time'], self.source_y['event']).astype(np.float32)
-        M_src = (~np.isnan(Y_src)).astype(np.float32); Y_src0 = np.nan_to_num(Y_src, nan=0.0)
-        keep_src = self.source_valid & np.isfinite(self.source_y['time'])
-        Xs_src = Xs[keep_src]; Y_src0 = Y_src0[keep_src]; M_src = M_src[keep_src]
-
         time_t = np.asarray(y_target['time'], dtype=np.float64)
         event_t = np.asarray(y_target['event'], dtype=bool)
         self._target_disc = SurvivalDiscretiser(K=self.K, strategy='equal_event').fit(time_t, event_t)
         Y_tgt = self._target_disc.labels(time_t, event_t).astype(np.float32)
+
+        # Source/target may collapse to fewer than K bins on small folds.
+        # Take the min and truncate so the shared head dim is consistent.
+        n_bins = min(Y_src.shape[1], Y_tgt.shape[1])
+        Y_src = Y_src[:, :n_bins]
+        Y_tgt = Y_tgt[:, :n_bins]
+        M_src = (~np.isnan(Y_src)).astype(np.float32); Y_src0 = np.nan_to_num(Y_src, nan=0.0)
+        keep_src = self.source_valid & np.isfinite(self.source_y['time'])
+        Xs_src = Xs[keep_src]; Y_src0 = Y_src0[keep_src]; M_src = M_src[keep_src]
         M_tgt = (~np.isnan(Y_tgt)).astype(np.float32); Y_tgt0 = np.nan_to_num(Y_tgt, nan=0.0)
 
-        n_bins = src_disc.n_bins
         net = self._build(Xs.shape[1], n_bins).to(self.device)
 
         # Phase 1
