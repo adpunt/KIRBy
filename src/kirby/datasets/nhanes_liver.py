@@ -100,7 +100,7 @@ _NHANES_CONT_CYCLES = ('1999-2000', '2003-2004', '2007-2008', '2013-2014', '2017
 # `wwwn.cdc.gov/Nchs/Data/Nhanes/Public/{year_start}/Datafiles/{file}.xpt`
 # (lowercase `.xpt`, year_start = first year of the cycle, e.g. 1999).
 _NHANES_CONT_URLBASE = 'https://wwwn.cdc.gov/Nchs/Data/Nhanes/Public/'
-_NHANES_CONT_FILES_PER_CYCLE = ('DEMO', 'BMX', 'BIOPRO', 'GLU', 'TCHOL')
+_NHANES_CONT_FILES_PER_CYCLE = ('DEMO', 'BMX', 'BIOPRO', 'CBC', 'GLU', 'TCHOL')
 
 
 def _download(url: str, dest: Path, expect_magic: Optional[bytes] = None):
@@ -160,22 +160,47 @@ def _continuous_cycle(cycle: str, data_dir: Path):
         '2015-2016': '_I',
         '2017-2018': '_J',
     }[cycle]
+    # Older cycles (1999-2006) used historical filenames for the biochem,
+    # glucose and total-cholesterol files (LAB18 / LAB10AM / LAB13 etc).
+    # Standard `BIOPRO{suffix}` / `GLU{suffix}` / `TCHOL{suffix}` only
+    # exist from 2007 (suffix `_E`) onward. Provide per-cycle overrides
+    # so older cycles still resolve.
+    legacy_overrides = {
+        '1999-2000': {'BIOPRO': 'LAB18', 'CBC': 'LAB25',
+                      'GLU': 'LAB10AM', 'TCHOL': 'LAB13'},
+        '2001-2002': {'BIOPRO': 'L40_B', 'CBC': 'L25_B',
+                      'GLU': 'L10AM_B', 'TCHOL': 'L13_B'},
+        '2003-2004': {'BIOPRO': 'L40_C', 'CBC': 'L25_C',
+                      'GLU': 'L10AM_C', 'TCHOL': 'L13_C'},
+        '2005-2006': {'BIOPRO': 'BIOPRO_D', 'CBC': 'CBC_D',
+                      'GLU': 'GLU_D', 'TCHOL': 'TCHOL_D'},
+    }
     year_start = cycle.split('-')[0]
     dfs = {}
     for tag in _NHANES_CONT_FILES_PER_CYCLE:
-        # 2025 CDC URL layout uses lowercase `.xpt`.
-        fname = f'{tag}{suffix}.xpt'
-        url = f'{_NHANES_CONT_URLBASE}{year_start}/Datafiles/{fname}'
-        local = data_dir / 'continuous' / cycle / fname
-        try:
-            # XPT files always start with ASCII "HEADER RECORD" — _download
-            # will refetch a stale cached file (e.g. HTML from a prior
-            # broken URL) that doesn't match this magic.
-            _download(url, local, expect_magic=b'HEADER RECORD')
-            dfs[tag] = _read_xpt(local)
-        except Exception as e:
-            print(f'  [nhanes] {cycle}/{tag} unavailable: {e}')
+        # Try the standard CDC URL layout first; fall back to legacy
+        # filenames for the older cycles where the names differ.
+        candidate_basenames = [f'{tag}{suffix}']
+        if cycle in legacy_overrides and tag in legacy_overrides[cycle]:
+            candidate_basenames.insert(0, legacy_overrides[cycle][tag])
+        last_err: Exception | None = None
+        loaded = None
+        for base in candidate_basenames:
+            fname = f'{base}.xpt'
+            url = f'{_NHANES_CONT_URLBASE}{year_start}/Datafiles/{fname}'
+            local = data_dir / 'continuous' / cycle / fname
+            try:
+                _download(url, local, expect_magic=b'HEADER RECORD')
+                loaded = _read_xpt(local)
+                break
+            except Exception as e:
+                last_err = e
+                continue
+        if loaded is None:
+            print(f'  [nhanes] {cycle}/{tag} unavailable: {last_err}')
             dfs[tag] = None
+        else:
+            dfs[tag] = loaded
     demo = dfs.get('DEMO')
     if demo is None:
         return None
@@ -189,11 +214,20 @@ def _continuous_cycle(cycle: str, data_dir: Path):
     if dfs.get('BIOPRO') is not None:
         bp = dfs['BIOPRO']
         keep = ['SEQN']
-        for col in ['LBXSAL', 'LBXSASSI', 'LBXSATSI', 'LBXSGTSI', 'LBXSTB',
-                   'LBXSGB', 'LBXSPLT']:
+        # Note: platelets are NOT in the biochem profile — they live in the
+        # CBC file under LBXPLTSI (handled below). LBXSGB doesn't exist
+        # either in standard NHANES (it was a typo in earlier code paths).
+        for col in ['LBXSAL', 'LBXSASSI', 'LBXSATSI', 'LBXSGTSI', 'LBXSTB']:
             if col in bp.columns:
                 keep.append(col)
         out = out.merge(bp[keep], on='SEQN', how='left')
+    if dfs.get('CBC') is not None:
+        cbc = dfs['CBC']
+        keep = ['SEQN']
+        for col in ['LBXPLTSI']:
+            if col in cbc.columns:
+                keep.append(col)
+        out = out.merge(cbc[keep], on='SEQN', how='left')
     if dfs.get('GLU') is not None and 'LBXGLU' in dfs['GLU'].columns:
         out = out.merge(dfs['GLU'][['SEQN', 'LBXGLU']], on='SEQN', how='left')
     if dfs.get('TCHOL') is not None and 'LBXTC' in dfs['TCHOL'].columns:
@@ -202,7 +236,7 @@ def _continuous_cycle(cycle: str, data_dir: Path):
     rename = {
         'RIDAGEYR': 'age', 'RIAGENDR': 'sex_raw', 'BMXBMI': 'bmi',
         'LBXSAL': 'albumin', 'LBXSASSI': 'ast', 'LBXSATSI': 'alt',
-        'LBXSGTSI': 'ggt', 'LBXSTB': 'bilirubin', 'LBXSPLT': 'platelets',
+        'LBXSGTSI': 'ggt', 'LBXSTB': 'bilirubin', 'LBXPLTSI': 'platelets',
         'LBXGLU': 'glucose', 'LBXTC': 'cholesterol',
     }
     out = out.rename(columns=rename)
@@ -340,6 +374,21 @@ def _assemble_cohort(data_dir: Path,
     # Restrict
     if restrict == 'fib4_high':
         # FIB-4 = (age × AST) / (platelets × √ALT). Compute, then keep rows >1.3.
+        # Bail clearly if the biomarkers required are missing entirely
+        # (e.g. cycle range only covers cycles whose BIOPRO XPT 404'd).
+        required = ['ast', 'alt', 'platelets']
+        missing = [c for c in required if c not in merged.columns]
+        if missing:
+            raise RuntimeError(
+                f'fib4_high restriction requires {missing} but those columns '
+                f'are not present — likely all cycles in this range are '
+                f'missing biomarker XPT files.')
+        # Drop rows where any FIB-4 input is NaN before computing.
+        merged = merged.dropna(subset=required).copy()
+        if merged.empty:
+            raise RuntimeError(
+                'fib4_high: 0 rows have non-NaN ast/alt/platelets in this '
+                'cycle range.')
         ast = merged['ast'].astype(np.float32)
         alt = merged['alt'].astype(np.float32)
         plt_ = merged['platelets'].astype(np.float32)  # ×10^9/L
@@ -370,17 +419,26 @@ def _assemble_cohort(data_dir: Path,
         viral = merged['UCOD'].apply(_is_viral) & merged['event']
         merged = merged[~viral].copy()
 
-    feat_cols = ['age', 'sex', 'bmi', 'albumin', 'ast', 'alt', 'ggt',
-                 'bilirubin', 'platelets', 'glucose', 'cholesterol']
-    # Engineered NITs
-    ast = merged['ast'].astype(np.float32)
-    alt = merged['alt'].astype(np.float32).clip(lower=1.0)
-    plt_ = merged['platelets'].astype(np.float32).clip(lower=1.0)
-    age = merged['age'].astype(np.float32)
-    merged['fib4'] = (age * ast) / (plt_ * np.sqrt(alt))
-    merged['apri'] = (ast / 35.0) * 100.0 / plt_
-    merged['aar'] = ast / alt
-    feat_cols += ['fib4', 'apri', 'aar']
+    full_feat_cols = ['age', 'sex', 'bmi', 'albumin', 'ast', 'alt', 'ggt',
+                      'bilirubin', 'platelets', 'glucose', 'cholesterol']
+    # Keep only feature columns that actually exist (some cycle ranges
+    # don't have every biomarker file). Fill the missing ones with NaN
+    # so downstream feature-vector construction doesn't crash.
+    feat_cols = [c for c in full_feat_cols if c in merged.columns]
+    for c in full_feat_cols:
+        if c not in merged.columns:
+            merged[c] = np.nan
+    # Engineered NITs — only computable when ast/alt/platelets are all present.
+    if all(c in merged.columns for c in ('ast', 'alt', 'platelets')) \
+            and not merged[['ast', 'alt', 'platelets']].isna().all().any():
+        ast = merged['ast'].astype(np.float32)
+        alt = merged['alt'].astype(np.float32).clip(lower=1.0)
+        plt_ = merged['platelets'].astype(np.float32).clip(lower=1.0)
+        age = merged['age'].astype(np.float32)
+        merged['fib4'] = (age * ast) / (plt_ * np.sqrt(alt))
+        merged['apri'] = (ast / 35.0) * 100.0 / plt_
+        merged['aar'] = ast / alt
+        feat_cols += ['fib4', 'apri', 'aar']
 
     X = merged[feat_cols].astype(np.float32).to_numpy()
     # Median impute
