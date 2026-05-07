@@ -103,12 +103,36 @@ _NHANES_CONT_URLBASE = 'https://wwwn.cdc.gov/Nchs/Data/Nhanes/Public/'
 _NHANES_CONT_FILES_PER_CYCLE = ('DEMO', 'BMX', 'BIOPRO', 'GLU', 'TCHOL')
 
 
-def _download(url: str, dest: Path):
-    if dest.exists() and dest.stat().st_size > 0:
+def _download(url: str, dest: Path, expect_magic: Optional[bytes] = None):
+    """Download `url` to `dest`. If `expect_magic` is set and the cached
+    file does NOT start with those bytes, the cache is invalidated and
+    re-downloaded once. This guards against stale cache poisoning by an
+    earlier broken URL that returned HTML with HTTP 200."""
+    def _looks_ok(p: Path) -> bool:
+        if not p.exists() or p.stat().st_size == 0:
+            return False
+        if expect_magic is None:
+            return True
+        try:
+            with open(p, 'rb') as fh:
+                return fh.read(len(expect_magic)) == expect_magic
+        except OSError:
+            return False
+    if _looks_ok(dest):
         return dest
+    # Either missing or stale-cached.
+    if dest.exists():
+        dest.unlink(missing_ok=True)
     dest.parent.mkdir(parents=True, exist_ok=True)
     print(f'  [nhanes] downloading {url}')
     urlretrieve(url, dest)
+    if expect_magic is not None and not _looks_ok(dest):
+        # Newly-downloaded file doesn't match expected magic — delete so the
+        # next run can retry, and surface a clear error.
+        dest.unlink(missing_ok=True)
+        raise RuntimeError(f'downloaded {url} but content does not match '
+                           f'magic {expect_magic!r} — likely the URL has '
+                           f'changed again or this resource is unavailable.')
     return dest
 
 
@@ -144,18 +168,10 @@ def _continuous_cycle(cycle: str, data_dir: Path):
         url = f'{_NHANES_CONT_URLBASE}{year_start}/Datafiles/{fname}'
         local = data_dir / 'continuous' / cycle / fname
         try:
-            _download(url, local)
-            # Sanity check: CDC sometimes returns the HTML 404 page with a
-            # 200 status. XPT files always start with the ASCII header
-            # "HEADER RECORD*******LIBRARY" — bail if the cached file
-            # doesn't look like XPT.
-            with open(local, 'rb') as fh:
-                head = fh.read(64)
-            if not head.startswith(b'HEADER RECORD'):
-                local.unlink(missing_ok=True)
-                raise RuntimeError(
-                    'downloaded file is not XPT (CDC returned HTML — '
-                    'file likely not published for this cycle)')
+            # XPT files always start with ASCII "HEADER RECORD" — _download
+            # will refetch a stale cached file (e.g. HTML from a prior
+            # broken URL) that doesn't match this magic.
+            _download(url, local, expect_magic=b'HEADER RECORD')
             dfs[tag] = _read_xpt(local)
         except Exception as e:
             print(f'  [nhanes] {cycle}/{tag} unavailable: {e}')
