@@ -150,6 +150,9 @@ def main():
                          'is no-op here.')
     ap.add_argument('--skip-tabtune', action='store_true',
                     help='Skip TabTune PEFT fine-tune (T1.2).')
+    ap.add_argument('--skip-xfer', action='store_true',
+                    help='Skip cross-endpoint transfer learning (D->H, H->D) '
+                         'via TabSurv / CatBoost / MLP encoders.')
     ap.add_argument('--K-disc', type=int, default=10,
                     help='Number of bins for discretised-classifier reductions.')
     ap.add_argument('--n-synth', type=str, default='100',
@@ -540,6 +543,94 @@ def main():
                          X_tr, X_va, endpoint, primary)
         except ImportError as e:
             print(f'  tabtune unavailable: {e}')
+
+    # ---------- 11. Cross-endpoint transfer (D→H, H→D) ----------
+    if not getattr(args, 'skip_xfer', False):
+        print('\n=== Cross-endpoint transfer (pretrain on one, fine-tune on other) ===')
+        try:
+            from experiments.annitia.transfer_endpoint import (
+                TabSurvTransferEndpoint,
+                CatBoostAFTTransferEndpoint,
+                MLPTransferEndpoint,
+            )
+        except ImportError as e:
+            print(f'  transfer_endpoint unavailable: {e}')
+            TabSurvTransferEndpoint = CatBoostAFTTransferEndpoint = MLPTransferEndpoint = None
+
+        if TabSurvTransferEndpoint is not None:
+            primary = _read_be_top_view_sets(Path(args.be_dir), 'hepatic', k=1)[0]
+            views_train = build_views(train, view_names=primary)
+            views_val = build_views(val, view_names=primary)
+            X_tr_full = np.concatenate([views_train[v][0] for v in primary], axis=1)
+            X_va_full = np.concatenate([views_val[v][0]   for v in primary], axis=1)
+            n_train_local = X_tr_full.shape[0]
+
+            xfer_specs = [
+                ('tabsurv-D2H',   'hepatic', 'death',   TabSurvTransferEndpoint, dict(K=10)),
+                ('tabsurv-H2D',   'death',   'hepatic', TabSurvTransferEndpoint, dict(K=10)),
+                ('catboost-D2H',  'hepatic', 'death',   CatBoostAFTTransferEndpoint,
+                                  dict(pretrain_iters=400, finetune_iters=200)),
+                ('catboost-H2D',  'death',   'hepatic', CatBoostAFTTransferEndpoint,
+                                  dict(pretrain_iters=400, finetune_iters=200)),
+                ('mlp-D2H',       'hepatic', 'death',   MLPTransferEndpoint, dict(K=10)),
+                ('mlp-H2D',       'death',   'hepatic', MLPTransferEndpoint, dict(K=10)),
+            ]
+            for label, target_ep, source_ep, cls, extra_kw in xfer_specs:
+                cid = f'{label}__{"+".join(primary)}'
+                oof_path = out / f'oof_{target_ep}_{cid}.npy'
+                val_path = out / f'val_{target_ep}_{cid}.npy'
+                existing = done[target_ep].get(cid)
+                if (existing is not None and oof_path.exists() and val_path.exists()
+                        and np.isfinite(existing.get('mean_cindex', float('nan')))):
+                    print(f'  {label:20s} CACHED  C={existing["mean_cindex"]:.4f}')
+                    continue
+                src_y_full = train[source_ep]['y_struct']
+                src_valid_full = train[source_ep]['valid_mask']
+                tgt_y_full = train[target_ep]['y_struct']
+                tgt_valid_full = train[target_ep]['valid_mask']
+                folds_x = get_cv_folds(train, endpoint=target_ep,
+                                       n_folds=args.n_folds, seed=args.seed)
+                t0 = time.time()
+                fold_c = []
+                oof = init_oof_buffer(n_train_local)
+                try:
+                    for k, (tr, va) in enumerate(folds_x):
+                        est = cls(source_y=src_y_full[tr],
+                                  source_valid=src_valid_full[tr],
+                                  **extra_kw)
+                        est.fit(X_tr_full[tr], tgt_y_full[tr])
+                        risk = est.predict_risk(X_tr_full[va])
+                        fold_c.append(concordance(tgt_y_full[va], risk))
+                        fill_oof_fold(oof, va, risk)
+                    mean_c = float(np.nanmean(fold_c))
+                    std_c  = float(np.nanstd(fold_c))
+                    vidx = np.where(tgt_valid_full)[0]
+                    refit = cls(source_y=src_y_full[vidx],
+                                source_valid=src_valid_full[vidx],
+                                **extra_kw)
+                    refit.fit(X_tr_full[vidx], tgt_y_full[vidx])
+                    val_risk = np.asarray(refit.predict_risk(X_va_full),
+                                          dtype=np.float64)
+                except ImportError as e:
+                    print(f'  {label:20s} SKIP: {e}')
+                    continue
+                except Exception as e:
+                    print(f'  {label:20s} ERR: {type(e).__name__}: {str(e)[:140]}')
+                    continue
+                np.save(oof_path, oof); np.save(val_path, val_risk)
+                rec = {'config_id': cid, 'label': label,
+                       'view_set': primary,
+                       'source_endpoint': source_ep,
+                       'target_endpoint': target_ep,
+                       'fold_cindex': fold_c, 'mean_cindex': mean_c,
+                       'std_cindex': std_c, 'elapsed_sec': time.time() - t0}
+                summary['per_condition'][target_ep] = [
+                    r for r in summary['per_condition'][target_ep]
+                    if r.get('config_id') != cid]
+                summary['per_condition'][target_ep].append(rec)
+                done[target_ep][cid] = rec
+                summary_path.write_text(json.dumps(_convert(summary), indent=2))
+                print(f'  {label:20s} C={mean_c:.4f}±{std_c:.4f}  ({time.time()-t0:.1f}s)')
 
     # ---------- (T2.x lives in experiment_external.py; nothing to do here) ----------
     if not args.skip_nhanes_transfer:
