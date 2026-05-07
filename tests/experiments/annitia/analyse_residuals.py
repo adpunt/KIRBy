@@ -241,6 +241,61 @@ def write_error_corr(res, endpoint, out_dir):
     df_orth.to_csv(out_dir / f'error_orth_pairs_{endpoint}.csv', index=False)
 
 
+def write_uncertainty_corr(res, endpoint, out_dir):
+    """Per-patient ensemble uncertainty = std of rank-transformed OOF
+    risks across all models. Patients where models DISAGREE are
+    high-uncertainty; if they're also the ones the ensemble gets wrong,
+    uncertainty is a useful auxiliary fusion feature.
+
+    Saves a per-patient uncertainty vector + correlation report.
+    """
+    from scipy.stats import rankdata, pearsonr, spearmanr
+    runs = res['runs']; miss = res['miss']; keep = res['keep']
+    if len(runs) < 3:
+        print('  too few models for uncertainty')
+        return
+    # Build rank matrix (n, M) so std is scale-free across models.
+    # rankdata propagates NaN; many model OOFs have NaN in different rows
+    # so nearly every row has SOME NaN. Use nanstd with a min-finite guard.
+    R_cols = []
+    for r in runs:
+        v = r['oof'].astype(np.float64).copy()
+        ranks = np.full_like(v, np.nan)
+        finite = np.isfinite(v)
+        if finite.any():
+            ranks[finite] = rankdata(v[finite])
+            ranks[finite] /= finite.sum()
+        R_cols.append(ranks)
+    R = np.stack(R_cols, axis=1)
+    n_finite = np.sum(np.isfinite(R), axis=1)
+    with np.errstate(invalid='ignore', divide='ignore'):
+        unc = np.nanstd(R, axis=1)
+    # Require at least 10 finite model predictions per patient before
+    # we trust the std as an "ensemble uncertainty" estimate.
+    unc[n_finite < 10] = np.nan
+    np.save(out_dir / f'ensemble_uncertainty_{endpoint}.npy', unc)
+    with np.errstate(invalid='ignore'):
+        mean_d = np.nanmean(miss, axis=1)
+    keep_finite = keep & np.isfinite(mean_d) & np.isfinite(unc)
+    if keep_finite.sum() < 5:
+        print('  too few rows for uncertainty corr')
+        return
+    rp, pp = pearsonr(unc[keep_finite], mean_d[keep_finite])
+    rs, ps = spearmanr(unc[keep_finite], mean_d[keep_finite])
+    df = pd.DataFrame([{
+        'metric': 'ensemble_rank_std_vs_mean_disc',
+        'pearson_r': rp, 'pearson_p': pp,
+        'spearman_r': rs, 'spearman_p': ps,
+        'n': int(keep_finite.sum()),
+        'unc_min': float(np.min(unc[keep_finite])),
+        'unc_max': float(np.max(unc[keep_finite])),
+        'unc_median': float(np.median(unc[keep_finite])),
+    }])
+    p = out_dir / f'uncertainty_corr_{endpoint}.csv'
+    df.to_csv(p, index=False)
+    print(f'  wrote {p}: ensemble-disagreement vs miss-rate r={rp:.3f} (p={pp:.1e})')
+
+
 def write_anomaly_corr(res, train, endpoint, out_dir):
     """Train IsolationForest + LocalOutlierFactor on raw clinical+snapshot
     features, correlate score with mean per-patient discordance.
@@ -344,6 +399,7 @@ def main():
         write_per_patient(res, train, ep, out)
         write_per_model(res, ep, out)
         write_error_corr(res, ep, out)
+        write_uncertainty_corr(res, ep, out)
         write_anomaly_corr(res, train, ep, out)
         write_router(res, train, ep, out)
     print(f'\nDONE. Inspect CSVs under {out}')
