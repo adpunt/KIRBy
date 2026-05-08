@@ -12,8 +12,6 @@
 #SBATCH --partition=short
 #SBATCH --mem=64G
 #SBATCH --mail-user=adelaide.punt@stcatz.ox.ac.uk --mail-type=FAIL
-#SBATCH --output=mitra_hep_%j.out
-#SBATCH --error=mitra_hep_%j.err
 
 set -euo pipefail
 cd /data/stat-ecr/scat9264/KIRBy
