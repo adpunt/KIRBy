@@ -586,13 +586,12 @@ def main():
             'all_variants': [{'name': r['name'], 'oof_c': r['oof_c'],
                               'size': r['size']} for r in endpoint_results],
         }
-        # Save each variant's val predictions
+        # Save each variant's val predictions + OOF arrays for downstream stats.
         for r in endpoint_results:
             csv_p = out / f'sub_master_{r["name"]}.csv'
             df = pd.DataFrame({'trustii_id': val['trustii_id']})
             df[col] = r['val']
             if csv_p.exists():
-                # Merge into existing (the other endpoint may already be written)
                 prev = pd.read_csv(csv_p)
                 if col in prev.columns:
                     prev[col] = r['val']
@@ -601,6 +600,21 @@ def main():
                 prev.to_csv(csv_p, index=False)
             else:
                 df.to_csv(csv_p, index=False)
+            # Save the per-variant OOF for dig_deeper / bootstrap-CI stats.
+            oof_arr = r.get('oof')
+            if oof_arr is not None and isinstance(oof_arr, np.ndarray):
+                # The OOF array from refuse_variants is the rank-mean / median /
+                # bucket-routed prediction restricted to valid+nonnan rows. Pad
+                # to full-train length with NaN so downstream alignment is easy.
+                full = np.full(len(y_full := train[endpoint]['y_struct']), np.nan)
+                valid_mask = train[endpoint]['valid_mask']
+                # If oof_arr is the size of valid_mask, copy directly; otherwise
+                # try the size of valid only.
+                if oof_arr.size == valid_mask.size:
+                    full = oof_arr
+                elif oof_arr.size == int(valid_mask.sum()):
+                    full[valid_mask] = oof_arr
+                np.save(out / f'oof_{endpoint}_{r["name"]}.npy', full)
 
     # Combined "best per endpoint" submission
     combined = pd.DataFrame({'trustii_id': val['trustii_id']})

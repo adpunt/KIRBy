@@ -284,6 +284,7 @@ def main():
             bucket_val[vm] = _rank01(var_val[vbest][ek])[vm]
         endpoint_results['anomaly_router_meta'] = {
             'oof_c': _c(y, valid, bucket_oof),
+            'oof': bucket_oof,
             'val': bucket_val, 'meta': chosen_per_bucket,
         }
 
@@ -306,6 +307,7 @@ def main():
                 d_val[vm] = _rank01(var_val[vbest][ek])[vm]
             endpoint_results['disagreement_router_meta'] = {
                 'oof_c': _c(y, valid, d_oof),
+                'oof': d_oof,
                 'val': d_val, 'meta': chosen_d,
             }
 
@@ -326,6 +328,7 @@ def main():
             c_val[cl_val == c] = _rank01(var_val[vbest][ek])[cl_val == c]
         endpoint_results['cluster_router_meta'] = {
             'oof_c': _c(y, valid, c_oof),
+            'oof': c_oof,
             'val': c_val, 'meta': chosen_c,
         }
 
@@ -341,6 +344,7 @@ def main():
         ab_val = (1 - w_v) * _rank01(var_val[v_low][ek]) + w_v * _rank01(var_val[v_high][ek])
         endpoint_results['anomaly_blend_meta'] = {
             'oof_c': _c(y, valid, ab_oof),
+            'oof': ab_oof,
             'val': ab_val, 'meta': [v_low, v_high],
         }
 
@@ -438,6 +442,7 @@ def main():
             wp_val[vm] = mix_v[vm]
         endpoint_results['weighted_anomaly_per_patient'] = {
             'oof_c': _c(y, valid, wp_oof),
+            'oof': wp_oof,
             'val': wp_val,
             'meta': {'bucket_weights': [w.tolist() for w in bucket_weights]},
         }
@@ -458,6 +463,9 @@ def main():
             else:
                 pd.DataFrame({'trustii_id': val['patient_ids'],
                               col: r['val']}).to_csv(csv_p, index=False)
+            # Save OOF for downstream stats (bootstrap CI, pairwise tests).
+            if 'oof' in r and isinstance(r['oof'], np.ndarray):
+                np.save(full_dir / f'oof_{endpoint}_{name}.npy', r['oof'])
         summary_out[endpoint] = {
             name: {'oof_c': r['oof_c'], 'meta': r.get('meta', None)}
             for name, r in endpoint_results.items()
