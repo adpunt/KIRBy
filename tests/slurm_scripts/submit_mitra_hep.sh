@@ -13,7 +13,7 @@
 #SBATCH --mem=64G
 #SBATCH --mail-user=adelaide.punt@stcatz.ox.ac.uk --mail-type=FAIL
 
-set -euo pipefail
+set -uo pipefail   # NOT -e: we want to keep going if individual installs fail
 cd /data/stat-ecr/scat9264/KIRBy
 . ./setup.sh
 export PYTHONWARNINGS=ignore
@@ -21,9 +21,19 @@ export TRANSFORMERS_VERBOSITY=error
 export TOKENIZERS_PARALLELISM=false
 export ANNITIA_VAL_TEST=/data/stat-ecr/scat9264/KIRBy/data/annitia/val_test.csv
 
-# autogluon torch<2.3 compat shim (idempotent — skip if already patched).
+# Install autogluon[mitra] if missing (slurm-7631111 silently failed at this).
+python -c "import autogluon" 2>/dev/null || {
+    echo "[install] autogluon.tabular[mitra] missing, installing..."
+    pip install --quiet "autogluon.tabular[mitra]" 2>&1 | tail -5
+    python -c "import autogluon" 2>/dev/null && echo "[install] autogluon OK" || echo "[install] FAILED — MITRA disabled"
+}
+
+# autogluon torch<2.3 compat shim (idempotent — skip if already patched, no-op if autogluon missing).
 python -c "
-import autogluon.tabular.models.mitra._internal.core.get_optimizer as g
+try:
+    import autogluon.tabular.models.mitra._internal.core.get_optimizer as g
+except ImportError:
+    print('autogluon not installed — skipping shim'); raise SystemExit(0)
 import pathlib
 src = pathlib.Path(g.__file__)
 text = src.read_text()
@@ -43,6 +53,7 @@ class GradScaler(torch.amp.GradScaler):'''
     print('autogluon MITRA PATCHED')
 "
 
+echo "[run] starting experiment_branches.py with MITRA-only flags at $(date)"
 python -u tests/experiments/annitia/experiment_branches.py \
     --skip-tsfm --skip-tabpfn --skip-dsm --skip-nhanes \
     --skip-tabpfn25-disc --skip-tabsurv --skip-synthetic-aug \

@@ -21,7 +21,7 @@
 #SBATCH --mem=64G
 #SBATCH --mail-user=adelaide.punt@stcatz.ox.ac.uk --mail-type=FAIL
 
-set -euo pipefail
+set -uo pipefail   # NOT -e: keep going if individual installs fail
 cd /data/stat-ecr/scat9264/KIRBy
 . ./setup.sh
 export PYTHONWARNINGS=ignore
@@ -29,9 +29,38 @@ export TRANSFORMERS_VERBOSITY=error
 export TOKENIZERS_PARALLELISM=false
 export ANNITIA_VAL_TEST=/data/stat-ecr/scat9264/KIRBy/data/annitia/val_test.csv
 
-# 1. autogluon torch<2.3 GradScaler shim (idempotent).
+# 0. Ensure foundation packages exist; install if missing. slurm-7631175
+# silently failed because autogluon was absent in the server venv.
+echo "[install] checking foundation packages..."
+python -c "import autogluon" 2>/dev/null || {
+    echo "[install] autogluon missing, installing..."
+    pip install --quiet "autogluon.tabular[mitra]" 2>&1 | tail -5
+    python -c "import autogluon" 2>/dev/null && echo "[install] autogluon OK" || echo "[install] autogluon FAIL — MITRA branch will be skipped"
+}
+python -c "import tabpfn" 2>/dev/null || {
+    pip install --quiet tabpfn 2>&1 | tail -3
+    python -c "import tabpfn" 2>/dev/null && echo "[install] tabpfn OK" || echo "[install] tabpfn FAIL — TabPFN branches skipped"
+}
+python -c "import synthcity" 2>/dev/null || {
+    pip install --quiet synthcity 2>&1 | tail -3
+    python -c "import synthcity" 2>/dev/null && echo "[install] synthcity OK" || echo "[install] synthcity FAIL — synaug TabDDPM/TabSyn fall back to GMM"
+}
+python -c "import tab_ebm" 2>/dev/null || {
+    pip install --quiet tab-ebm 2>&1 | tail -3
+    python -c "import tab_ebm" 2>/dev/null && echo "[install] tab-ebm OK" || echo "[install] tab-ebm FAIL"
+}
+python -c "import survtrace" 2>/dev/null || {
+    pip install --quiet survtrace 2>&1 | tail -3 || \
+    pip install --quiet "git+https://github.com/RyanWangZf/SurvTRACE.git" 2>&1 | tail -3
+    python -c "import survtrace" 2>/dev/null && echo "[install] survtrace OK" || echo "[install] survtrace FAIL — T1.5 skipped"
+}
+
+# 1. autogluon torch<2.3 GradScaler shim (only if autogluon imported).
 python -c "
-import autogluon.tabular.models.mitra._internal.core.get_optimizer as g
+try:
+    import autogluon.tabular.models.mitra._internal.core.get_optimizer as g
+except ImportError:
+    print('autogluon not installed — skipping shim'); raise SystemExit(0)
 import pathlib
 src = pathlib.Path(g.__file__)
 text = src.read_text()
@@ -51,15 +80,8 @@ class GradScaler(torch.amp.GradScaler):'''
     print('autogluon MITRA PATCHED')
 "
 
-# 2. Best-effort install of survtrace (T1.5) and synthcity (T1.4) from PyPI.
-#    Failures silently skipped — corresponding branches will fall back.
-pip install --quiet survtrace 2>/dev/null || \
-    pip install --quiet "git+https://github.com/RyanWangZf/SurvTRACE.git" 2>/dev/null || \
-    echo "survtrace install skipped"
-pip install --quiet synthcity 2>/dev/null || echo "synthcity install skipped"
-pip install --quiet tab-ebm 2>/dev/null || echo "tab-ebm install skipped"
-
-# 3. Run all foundation-model branches (no skips). Resume-friendly per-condition.
+# 2. Run all foundation-model branches (no skips). Resume-friendly per-condition.
+echo "[run] starting experiment_branches.py at $(date)"
 python -u tests/experiments/annitia/experiment_branches.py \
     --K-disc 10
 
