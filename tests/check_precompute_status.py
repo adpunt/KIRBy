@@ -33,6 +33,7 @@ import argparse
 import os
 import pickle
 import sys
+from datetime import datetime
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -101,30 +102,38 @@ def expected_conditions(cfg, include_distance=False):
 
 
 def _check_file(path: Path) -> tuple:
-    """Return ('ok'|'missing'|'corrupt'|'empty'|'stale', detail_str)."""
+    """Return ('ok'|'missing'|'corrupt'|'empty'|'stale', detail_str, extras_dict)."""
     if not path.exists():
-        return ('missing', '')
+        return ('missing', '', {})
     try:
         wrapper = pickle.loads(path.read_bytes())
     except Exception as e:
-        return ('corrupt', f'{type(e).__name__}: {e}')
+        return ('corrupt', f'{type(e).__name__}: {e}', {})
     if not isinstance(wrapper, dict):
-        return ('stale', 'pre-redesign SearchResult (no wrapper)')
+        return ('stale', 'pre-redesign SearchResult (no wrapper)', {})
     if '_cache_meta' not in wrapper or 'payload' not in wrapper:
-        return ('stale', 'missing _cache_meta header')
+        return ('stale', 'missing _cache_meta header', {})
     meta = wrapper.get('_cache_meta') or {}
     payload = wrapper.get('payload')
-    # Validate structural fields of payload
     best = getattr(payload, 'best_by_model', None)
     all_r = getattr(payload, 'all_results', None)
     if not best or not all_r:
         return ('empty',
                 f"best_by_model={len(best) if best else 0} "
-                f"all_results={len(all_r) if all_r else 0}")
+                f"all_results={len(all_r) if all_r else 0}",
+                {})
+    extras = {
+        'n_results': len(all_r),
+        'wall_seconds': float(sum(
+            (r.get('time_seconds') or 0.0) for r in all_r if isinstance(r, dict))),
+        'code_timestamp': meta.get('code_timestamp'),
+        'mtime': path.stat().st_mtime,
+    }
     return ('ok',
             f"n_results={len(all_r)} "
             f"models={sorted(best.keys())} "
-            f"metric={meta.get('metric_name', '?')}")
+            f"metric={meta.get('metric_name', '?')}",
+            extras)
 
 
 def find_top_rep_dim_files(dataset, searches_dir):
@@ -147,8 +156,8 @@ def find_top_rep_dim_files(dataset, searches_dir):
             model = stem.split(marker, 1)[1]
         else:
             model = '?'
-        status, detail = _check_file(path)
-        out.append((path.name, model, status, detail))
+        status, detail, extras = _check_file(path)
+        out.append((path.name, model, status, detail, extras))
     return out
 
 
@@ -159,8 +168,8 @@ def classify_dataset(dataset, cfg, searches_dir, include_distance):
     for tier, strat in expected:
         fname = f"{dataset}__{tier}__{strat}__full.pkl"
         path = searches_dir / fname
-        status, detail = _check_file(path)
-        results.append((tier, strat, status, detail))
+        status, detail, extras = _check_file(path)
+        results.append((tier, strat, status, detail, extras))
         if status == 'ok':
             n_ok += 1
     # c02 per-model top-rep-dim caches (additive — count separately, not
@@ -186,6 +195,9 @@ def main():
                     help='also check distance conditions')
     ap.add_argument('--verbose', action='store_true',
                     help='print per-condition status')
+    ap.add_argument('--timing', action='store_true',
+                    help='print wall time + write date per ok condition '
+                         '(uses time_seconds + mtime already in cache files)')
     args = ap.parse_args()
 
     searches_dir = _searches_dir()
@@ -233,21 +245,44 @@ def main():
         for ds, overall, n_ok, n_exp, results, top_rep_dim_files in rows:
             bad = [
                 f"{tier}/{strat}={status}"
-                for tier, strat, status, _ in results
+                for tier, strat, status, _, _ in results
                 if status != 'ok'
             ]
-            n_trd_ok = sum(1 for _, _, st, _ in top_rep_dim_files if st == 'ok')
+            n_trd_ok = sum(1 for _, _, st, _, _ in top_rep_dim_files if st == 'ok')
             n_trd = len(top_rep_dim_files)
             trd_str = f"{n_trd_ok}/{n_trd}" if n_trd else '-'
             bad_str = ', '.join(bad) if bad else ''
             print(f"  {ds:<38} {overall:<8} {n_ok}/{n_exp:<6} {trd_str:<12} {bad_str}")
             if args.verbose:
-                for tier, strat, status, detail in results:
+                for tier, strat, status, detail, _ in results:
                     mark = '✓' if status == 'ok' else 'X'
                     print(f"      {mark} {tier}/{strat}: {status} {detail}")
-                for fname, model, status, detail in top_rep_dim_files:
+                for fname, model, status, detail, _ in top_rep_dim_files:
                     mark = '✓' if status == 'ok' else 'X'
                     print(f"      {mark} top_rep_dim/{model}: {status} {detail}")
+            if args.timing:
+                for tier, strat, status, _, extras in results:
+                    if status != 'ok':
+                        continue
+                    ws = extras.get('wall_seconds') or 0.0
+                    nr = extras.get('n_results') or 0
+                    mt = extras.get('mtime')
+                    when = (datetime.fromtimestamp(mt).strftime('%Y-%m-%d %H:%M')
+                            if mt else '?')
+                    print(f"      [time] {tier}/{strat}: "
+                          f"{ws/3600:.2f}h ({ws:.0f}s)  "
+                          f"n_configs={nr}  written={when}")
+                for fname, model, status, _, extras in top_rep_dim_files:
+                    if status != 'ok':
+                        continue
+                    ws = extras.get('wall_seconds') or 0.0
+                    nr = extras.get('n_results') or 0
+                    mt = extras.get('mtime')
+                    when = (datetime.fromtimestamp(mt).strftime('%Y-%m-%d %H:%M')
+                            if mt else '?')
+                    print(f"      [time] top_rep_dim/{model}: "
+                          f"{ws/3600:.2f}h ({ws:.0f}s)  "
+                          f"n_configs={nr}  written={when}")
 
     total = sum(totals.values())
     print(f"\n{'='*70}")
