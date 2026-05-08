@@ -123,7 +123,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--validation-csv',
-                    default='/Volumes/seagate/kirby/annitia/val_test.csv')
+                    default=os.environ.get(
+                        'ANNITIA_VAL_TEST',
+                        '/Volumes/seagate/kirby/annitia/val_test.csv'))
     ap.add_argument('--be-dir', default='tests/results/annitia/be')
     ap.add_argument('--output-dir', default='tests/results/annitia/branches')
     ap.add_argument('--n-folds', type=int, default=5)

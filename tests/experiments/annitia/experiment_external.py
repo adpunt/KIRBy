@@ -111,6 +111,13 @@ def _ensure_nhanes_encoder(out_dir: Path, subset_tag: str):
            '--restrict',
            os.environ.get('ANNITIA_NHANES_RESTRICT', 'fib4_high'),
            '--output', str(encoder_path)]
+    cyc = os.environ.get('ANNITIA_NHANES_CYCLE_RANGE')
+    if cyc:
+        cmd += ['--cycle-range', cyc]
+    if os.environ.get('ANNITIA_NHANES_T2DM') == '1':
+        cmd += ['--t2dm-only']
+    if os.environ.get('ANNITIA_NHANES_NOVIRAL') == '1':
+        cmd += ['--no-viral']
     print(f'  >>> {" ".join(cmd)}')
     r = subprocess.run(cmd)
     if r.returncode != 0 or not encoder_path.exists():
@@ -140,10 +147,12 @@ def _zeroshot_eval(train, val, encoder_path: str):
                                        freeze_trunk=True, epochs=0)
             # epochs=0 → use the pretrained head directly. We approximate
             # zero-shot by skipping ANNITIA training entirely.
-            m._mean = None  # forces _load_encoder
-            m._load_encoder(X.shape[1])
+            trunk, head = m._load_encoder(X.shape[1])
+            m._trunk = trunk
+            m._head = head
             # Predict using pretrained trunk + a constant head (zero-shot)
             import torch
+            m._trunk.eval()
             with torch.no_grad():
                 Xs = ((X - m._mean) / m._std).astype(np.float32)
                 Xt = torch.tensor(Xs, dtype=torch.float32, device=m.device)
@@ -165,7 +174,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--validation-csv',
-                    default='/Volumes/seagate/kirby/annitia/val_test.csv')
+                    default=os.environ.get(
+                        'ANNITIA_VAL_TEST',
+                        '/Volumes/seagate/kirby/annitia/val_test.csv'))
     ap.add_argument('--output-dir', default='tests/results/annitia/external')
     ap.add_argument('--n-folds', type=int, default=5)
     ap.add_argument('--seed', type=int, default=42)
