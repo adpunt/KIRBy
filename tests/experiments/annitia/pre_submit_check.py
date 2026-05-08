@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
 
-REPO = Path(__file__).resolve().parents[2]
+REPO = Path(__file__).resolve().parents[3]
 FULL_DIR = REPO / 'tests/results/annitia/full'
 EXPECTED_COLS = ['trustii_id', 'risk_hepatic_event', 'risk_death']
 ANCHOR_DEFAULT = 'sub_master_meta_avg_aware_weighted'
