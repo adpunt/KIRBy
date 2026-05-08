@@ -1,0 +1,16 @@
+{
+  "hepatic": {
+    "n_contested_analysed": 50,
+    "pct_with_fn_neighbour": 0.0,
+    "pct_with_fp_neighbour": 0.38,
+    "pct_with_hard_neighbour": 0.06,
+    "pct_with_any_failure_neighbour": 0.38
+  },
+  "death": {
+    "n_contested_analysed": 50,
+    "pct_with_fn_neighbour": 0.04,
+    "pct_with_fp_neighbour": 0.3,
+    "pct_with_hard_neighbour": 0.18,
+    "pct_with_any_failure_neighbour": 0.36
+  }
+}
