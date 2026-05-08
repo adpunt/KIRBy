@@ -56,7 +56,7 @@ from experiments.annitia.fusion import (                                   # noq
 )
 
 
-SOURCE_NAMES = ('be', 'cd', 'hep_boost', 'branches', 'external', 'hparam')
+SOURCE_NAMES = ('be', 'cd', 'hep_boost', 'branches', 'external', 'hparam', 'research', 'research_v2')
 
 
 def _rank01(x):
@@ -284,7 +284,7 @@ def main():
 
         # ---- LAYER 1.5: subjective gate on pretraining sources ----
         # Drop epic fails, boost overwhelming wins
-        for pretrain_src in ('external', 'hparam'):
+        for pretrain_src in ('external', 'hparam', 'research', 'research_v2'):
             outcome = _gate_pretraining_source(super_models, pretrain_src)
             if outcome == 'boosted':
                 # Mark for boost (handled below)

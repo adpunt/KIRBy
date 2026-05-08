@@ -278,7 +278,7 @@ def main():
 
     res_root = _REPO / 'tests' / 'results' / 'annitia'
     pool_dirs = [res_root / p for p in
-                 ('be', 'cd', 'hep_boost', 'branches', 'external')
+                 ('be', 'cd', 'hep_boost', 'branches', 'external', 'hparam', 'research', 'research_v2')
                  if (res_root / p).exists()]
     print(f'Pooling from: {[d.name for d in pool_dirs]}')
 

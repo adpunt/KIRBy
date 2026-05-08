@@ -81,6 +81,56 @@
 
 ---
 
+### P5 — Claude Research findings (2026-05-08)
+
+**Key claim from research**: hep gap is dominated by post-event lab leakage
+in trajectory features, not by base-model quality. Audit verified.
+
+- [x] **Bug 2 audit** — 19/39 hep events have strictly post-event labs
+  (mean 14.5 leaked obs/pt, max 119; corr(max_visit_age, event_age)=0.998).
+  Death clean (0/76). Confirms research's #2 hypothesis.
+- [x] Bug 1 (left truncation) **NOT** present — annitia_maslg.py uses
+  `time = event_age - baseline_age`, everyone enters at t=0.
+- [x] Bug 3 (CR censoring) is mild — non-hep deaths censored at
+  last_followup_age (≤ death_age in practice) which is conservative.
+
+- [x] **No-leak view experiment V1** (`experiment_research.py`):
+  hep RSF-300 with summary view jumps **0.8683 → 0.9574** at delta=0.25,
+  with biomarker view 0.8331 → 0.8983, both views combined 0.8656 → 0.9559.
+  ⚠️ **CAVEAT**: truncation removes ~19 obs/event-patient but 0 obs/censored,
+  introducing visit-count leak. The +0.09 lift is partially artifact.
+
+- [ ] **Sanitization V2** (`experiment_research_v2.py`, RUNNING):
+  - ASYM: fit on truncated, predict OOF on UNTRUNCATED features. If lift
+    survives, signal is real.
+  - LANDMARK: uniform truncation at baseline + tau, drop pre-tau events,
+    predict events after tau. The rigorous causal-survival setup.
+
+- [ ] **KM/NA target XGB** (`km_target_xgb.py`, RUNNING): CIBMTR-Equity
+  1st-place trick — train regression on KM-survival-prob + NA-cumhaz +
+  AFT + Cox heads, rank-average.
+
+- [ ] **MASLD biomarker view** (built, in `experiment_research.py`):
+  AGILE 3+, modified aMAP, FIB-4 trajectory (max/slope/AUC/time-above-2.67/
+  low-to-high transition), LSM trajectory (Δ%/progressor/Baveno-VII/AUC),
+  TyG, TyG-BMI, APRI, BARD-equivalent. 26 continuous features.
+
+### Server-side fixes pushed (commit 153ce24)
+- `experiment_branches.py` + `experiment_external.py` now read
+  `ANNITIA_VAL_TEST` env var. Server foundations job 7631243 silently
+  exited because `/Volumes/seagate/...` doesn't exist on ARC. After
+  user re-pulls and resubmits, foundations + NHANES T2.x runs.
+
+### NOT doing (per-research recommendations)
+- **Sub-event hep modeling** (per-HCC/per-decompensation/per-transplant max-rank):
+  not feasible — train.csv has only the binary `evenements_hepatiques_majeurs`
+  composite, no sub-event metadata.
+- **MOTOR-T-Base fine-tune**: gating (CITI cert) + OMOP overhead too tight
+  for today.
+- **TrajSurv / MENSA / Dynamic-DeepHit**: 4-8h each. Deferred unless
+  V2/landmark ASYM confirms a real lift first — base-model improvements
+  are dominated by the leakage fix if leakage is real.
+
 ## Won't do (out of time)
 - Real Sanyal 2023 AGILE coefficients (need paper access; current proxies are good enough)
 - XGBoost-survival wrapper + RepeatedStratifiedKFold (~3h, marginal expected lift)

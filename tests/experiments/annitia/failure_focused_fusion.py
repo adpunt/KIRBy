@@ -42,7 +42,7 @@ def r01(x): return rankdata(x) / len(x)
 
 def load_pool(endpoint, kind):  # kind = 'oof' | 'val'
     pool = {}
-    for d in ('branches', 'be', 'cd', 'hep_boost', 'external', 'hparam'):
+    for d in ('branches', 'be', 'cd', 'hep_boost', 'external', 'hparam', 'research', 'research_v2'):
         dp = RES / d
         if not dp.exists(): continue
         for f in sorted(dp.glob(f'{kind}_{endpoint}_*.npy')):
