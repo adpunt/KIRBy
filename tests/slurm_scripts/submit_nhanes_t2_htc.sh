@@ -20,13 +20,20 @@
 #SBATCH --mem=128G
 #SBATCH --mail-user=adelaide.punt@stcatz.ox.ac.uk --mail-type=FAIL
 
-set -euo pipefail
+set -uo pipefail   # NOT -e: keep going on individual install failures
 cd /data/stat-ecr/scat9264/KIRBy
 . ./setup.sh
 export PYTHONWARNINGS=ignore
 export TRANSFORMERS_VERBOSITY=error
 export TOKENIZERS_PARALLELISM=false
 export ANNITIA_VAL_TEST=/data/stat-ecr/scat9264/KIRBy/data/annitia/val_test.csv
+
+# NHANES T2.x doesn't strictly need autogluon, but T2.2d uses TabPFN PEFT
+# which needs tabpfn. Install if missing so that recipe doesn't fall through.
+python -c "import tabpfn" 2>/dev/null || {
+    echo "[install] tabpfn missing, installing..."
+    pip install --quiet tabpfn 2>&1 | tail -3
+}
 
 # Clean stale dummies if present (per A17 audit recommendation)
 if [ -f tests/results/annitia/external/zeroshot.json ]; then
