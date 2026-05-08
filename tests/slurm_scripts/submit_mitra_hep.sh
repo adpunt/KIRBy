@@ -28,33 +28,47 @@ python -c "import autogluon" 2>/dev/null || {
     python -c "import autogluon" 2>/dev/null && echo "[install] autogluon OK" || echo "[install] FAILED — MITRA disabled"
 }
 
-# autogluon torch<2.3 compat shim (idempotent — skip if already patched, no-op if autogluon missing).
-python -c "
-try:
-    import autogluon.tabular.models.mitra._internal.core.get_optimizer as g
-except ImportError:
-    print('autogluon not installed — skipping shim'); raise SystemExit(0)
+# autogluon torch<2.3 compat shim. CANNOT import autogluon (triggers the very
+# class def we're patching). Use `find` to locate get_optimizer.py instead.
+GETFILE=$(find $(python -c "import site; print(site.getsitepackages()[0])") \
+    -path '*autogluon/tabular/models/mitra/_internal/core/get_optimizer.py' \
+    2>/dev/null | head -1)
+if [ -z "$GETFILE" ]; then
+    GETFILE=$(find /data/stat-cadd/scat9264/py311-kirby/lib -path '*mitra/_internal/core/get_optimizer.py' 2>/dev/null | head -1)
+fi
+if [ -n "$GETFILE" ] && [ -f "$GETFILE" ]; then
+    if grep -q 'torch<2.3 compat shim' "$GETFILE"; then
+        echo "[shim] autogluon MITRA already patched at $GETFILE"
+    else
+        echo "[shim] patching autogluon MITRA at $GETFILE"
+        python -c "
 import pathlib
-src = pathlib.Path(g.__file__)
-text = src.read_text()
-if 'torch<2.3 compat shim' in text:
-    print('autogluon MITRA already patched')
-else:
-    new_block = '''if not hasattr(torch.amp, \"GradScaler\"):
+p = pathlib.Path('$GETFILE')
+t = p.read_text()
+shim = '''if not hasattr(torch.amp, \"GradScaler\"):
     _OldGradScaler = torch.cuda.amp.GradScaler
     class _CompatGradScaler(_OldGradScaler):
         def __init__(self, *args, device=None, **kwargs):
             super().__init__(*args, **kwargs)
     torch.amp.GradScaler = _CompatGradScaler  # torch<2.3 compat shim
-import inspect as _inspect
-_GS_PARAMS = set(_inspect.signature(torch.amp.GradScaler.__init__).parameters)
-class GradScaler(torch.amp.GradScaler):'''
-    src.write_text(text.replace('class GradScaler(torch.amp.GradScaler):', new_block))
-    print('autogluon MITRA PATCHED')
+'''
+needle = 'class GradScaler(torch.amp.GradScaler):'
+if needle in t and 'torch<2.3 compat shim' not in t:
+    t = t.replace(needle, shim + needle)
+    p.write_text(t)
+    print('[shim] PATCHED')
+else:
+    print('[shim] needle not found or already patched')
 "
+    fi
+else
+    echo "[shim] WARNING: autogluon get_optimizer.py not found — MITRA may crash"
+fi
 
 echo "[run] starting experiment_branches.py with MITRA-only flags at $(date)"
+echo "[run] using val_test = $ANNITIA_VAL_TEST"
 python -u tests/experiments/annitia/experiment_branches.py \
+    --validation-csv "$ANNITIA_VAL_TEST" \
     --skip-tsfm --skip-tabpfn --skip-dsm --skip-nhanes \
     --skip-tabpfn25-disc --skip-tabsurv --skip-synthetic-aug \
     --skip-survtrace --skip-nhanes-transfer --skip-tabtune --skip-xfer \
