@@ -64,7 +64,7 @@ class MitraClassifier:
                 hyperparameters={'MITRA': {
                     'n_estimators': self.n_estimators,
                     'fine_tune': self.fine_tune,
-                    'random_state': self.seed,
+                    'seed': self.seed,
                     # MITRA needs more headroom than autogluon's default 1.0
                     # — without this it short-circuits with "ag_args_fit:
                     # ag.max_memory_usage_ratio < 1.62". Setting 2.0 lets it

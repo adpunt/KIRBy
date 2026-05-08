@@ -70,6 +70,13 @@ VIEW_SETS = [
     ('snapshot', 'clinical_pro', 'meld_na', 'visit_density'),
     ('snapshot', 'clinical_pro', 'fpca', 'gp_smooth'),
     ('snapshot', 'clinical_pro', 'fpca', 'visit_density', 'clinical_slope'),
+    # Added 2026-05-08: summary view captures max/min/mean per lab — fibroscan_MAX
+    # alone gives C_hep=0.815 vs fibroscan_last 0.764. Pipeline never trained on
+    # summary or nit views; this fills that gap.
+    ('snapshot', 'summary'),
+    ('snapshot', 'clinical_pro', 'summary'),
+    ('snapshot', 'clinical_pro', 'fpca', 'gp_smooth', 'summary'),
+    ('snapshot', 'clinical_pro', 'summary', 'nit'),
 ]
 
 
