@@ -46,6 +46,19 @@ class MitraClassifier:
         return TabularPredictor
 
     def fit(self, X, y):
+        # If the compute node lacks libcudnn (cudnn9), force CPU before any
+        # autogluon/torch import so MITRA doesn't crash during init.
+        # Detect by trying to load the library; if it fails, hide CUDA.
+        import os, ctypes
+        if 'CUDA_VISIBLE_DEVICES' not in os.environ:
+            try:
+                ctypes.CDLL('libcudnn.so.9')
+            except OSError:
+                # Try cudnn 8 fallback before giving up
+                try:
+                    ctypes.CDLL('libcudnn.so.8')
+                except OSError:
+                    os.environ['CUDA_VISIBLE_DEVICES'] = ''
         TabularPredictor = self._import()
         import pandas as pd
         X = np.asarray(X, dtype=np.float64)
@@ -58,6 +71,12 @@ class MitraClassifier:
         path = tempfile.mkdtemp(prefix='mitra_')
         self._predictor = TabularPredictor(
             label='__y', problem_type='binary', path=path, verbosity=0)
+        # If CUDA was disabled above, also tell autogluon to use 0 GPUs so
+        # MITRA's import doesn't try to allocate cuda memory.
+        force_cpu = os.environ.get('CUDA_VISIBLE_DEVICES', None) == ''
+        ag_args = {'ag.max_memory_usage_ratio': 2.0}
+        if force_cpu:
+            ag_args['num_gpus'] = 0
         try:
             self._predictor.fit(
                 df,
@@ -65,11 +84,7 @@ class MitraClassifier:
                     'n_estimators': self.n_estimators,
                     'fine_tune': self.fine_tune,
                     'seed': self.seed,
-                    # MITRA needs more headroom than autogluon's default 1.0
-                    # — without this it short-circuits with "ag_args_fit:
-                    # ag.max_memory_usage_ratio < 1.62". Setting 2.0 lets it
-                    # actually attempt fitting.
-                    'ag_args_fit': {'ag.max_memory_usage_ratio': 2.0},
+                    'ag_args_fit': ag_args,
                 }},
                 fit_weighted_ensemble=False,
                 presets=None,

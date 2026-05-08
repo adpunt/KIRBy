@@ -19,6 +19,13 @@ cd /data/stat-ecr/scat9264/KIRBy
 export PYTHONWARNINGS=ignore
 export TRANSFORMERS_VERBOSITY=error
 export TOKENIZERS_PARALLELISM=false
+
+# Force CPU if libcudnn.so.9 is missing on this compute node.
+if ! ldconfig -p 2>/dev/null | grep -q libcudnn.so.9 && \
+   ! find /usr/lib /usr/local/lib /usr/local/cuda -name 'libcudnn.so.9' 2>/dev/null | grep -q .; then
+    echo "[cuda] libcudnn.so.9 not found; forcing CPU mode for MITRA"
+    export CUDA_VISIBLE_DEVICES=""
+fi
 for cand in \
     /data/stat-ecr/scat9264/KIRBy/data/annitia/val_test.csv \
     /data/stat-cadd/scat9264/KIRBy/data/annitia/val_test.csv \
