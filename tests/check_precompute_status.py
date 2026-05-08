@@ -122,12 +122,28 @@ def _check_file(path: Path) -> tuple:
                 f"best_by_model={len(best) if best else 0} "
                 f"all_results={len(all_r) if all_r else 0}",
                 {})
+    # Per-model breakdown: sum time_seconds and count configs grouped by model.
+    # Each entry in all_results is a dict with 'model' and 'time_seconds'.
+    per_model: dict = {}
+    for r in all_r:
+        if not isinstance(r, dict):
+            continue
+        mdl = r.get('model') or '?'
+        t = r.get('time_seconds') or 0.0
+        if mdl not in per_model:
+            per_model[mdl] = {'wall_seconds': 0.0, 'n_configs': 0}
+        per_model[mdl]['wall_seconds'] += float(t)
+        per_model[mdl]['n_configs'] += 1
+    # Try to grab dataset n and rep dim from meta if present (best-effort)
+    n_samples = meta.get('n_samples')
     extras = {
         'n_results': len(all_r),
         'wall_seconds': float(sum(
             (r.get('time_seconds') or 0.0) for r in all_r if isinstance(r, dict))),
         'code_timestamp': meta.get('code_timestamp'),
         'mtime': path.stat().st_mtime,
+        'per_model': per_model,
+        'n_samples': n_samples,
     }
     return ('ok',
             f"n_results={len(all_r)} "
@@ -267,11 +283,26 @@ def main():
                     ws = extras.get('wall_seconds') or 0.0
                     nr = extras.get('n_results') or 0
                     mt = extras.get('mtime')
+                    ns = extras.get('n_samples')
                     when = (datetime.fromtimestamp(mt).strftime('%Y-%m-%d %H:%M')
                             if mt else '?')
-                    print(f"      [time] {tier}/{strat}: "
+                    n_str = f" n={ns}" if ns else ""
+                    print(f"      [time] {tier}/{strat}:{n_str} "
                           f"{ws/3600:.2f}h ({ws:.0f}s)  "
                           f"n_configs={nr}  written={when}")
+                    pm = extras.get('per_model') or {}
+                    # Sort by wall_seconds desc so slow models surface first
+                    for mdl, d in sorted(pm.items(),
+                                         key=lambda kv: -kv[1]['wall_seconds']):
+                        mw = d['wall_seconds']
+                        mn = d['n_configs']
+                        per_cfg = (mw / mn) if mn else 0.0
+                        share = (mw / ws * 100) if ws else 0.0
+                        print(f"          {mdl:<10s} "
+                              f"{mw/3600:6.2f}h ({mw:7.0f}s)  "
+                              f"n_cfg={mn:<5d} "
+                              f"per_cfg={per_cfg:6.2f}s  "
+                              f"share={share:5.1f}%")
                 for fname, model, status, _, extras in top_rep_dim_files:
                     if status != 'ok':
                         continue
