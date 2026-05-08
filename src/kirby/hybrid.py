@@ -1170,37 +1170,46 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             from sklearn.ensemble import RandomForestRegressor
             m = RandomForestRegressor(n_estimators=50, max_depth=10,
                                       random_state=42, n_jobs=-1)
-        m.fit(X_train_scaled, y_train)
+        try:
+            m.fit(X_train_scaled, y_train)
+        except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
+            return (-np.inf, None) if return_predictions else -np.inf
 
     elif internal_evaluator == 'xgboost':
         try:
             from xgboost import XGBRegressor, XGBClassifier
-            if is_classification:
-                m = XGBClassifier(n_estimators=50, max_depth=4,
-                                  random_state=42, verbosity=0, n_jobs=-1)
-            else:
-                m = XGBRegressor(n_estimators=50, max_depth=4,
-                                 random_state=42, verbosity=0, n_jobs=-1)
-            m.fit(X_train_scaled, y_train)
         except ImportError:
             return _evaluate_allocation(X_train, X_val, y_train, y_val,
                                         internal_evaluator='ridge',
                                         return_predictions=return_predictions)
+        if is_classification:
+            m = XGBClassifier(n_estimators=50, max_depth=4,
+                              random_state=42, verbosity=0, n_jobs=-1)
+        else:
+            m = XGBRegressor(n_estimators=50, max_depth=4,
+                             random_state=42, verbosity=0, n_jobs=-1)
+        try:
+            m.fit(X_train_scaled, y_train)
+        except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
+            return (-np.inf, None) if return_predictions else -np.inf
 
     elif internal_evaluator == 'lightgbm':
         try:
             from lightgbm import LGBMRegressor, LGBMClassifier
-            if is_classification:
-                m = LGBMClassifier(n_estimators=50, max_depth=4,
-                                   random_state=42, verbosity=-1, n_jobs=-1)
-            else:
-                m = LGBMRegressor(n_estimators=50, max_depth=4,
-                                  random_state=42, verbosity=-1, n_jobs=-1)
-            m.fit(X_train_scaled, y_train)
         except ImportError:
             return _evaluate_allocation(X_train, X_val, y_train, y_val,
                                         internal_evaluator='xgboost',
                                         return_predictions=return_predictions)
+        if is_classification:
+            m = LGBMClassifier(n_estimators=50, max_depth=4,
+                               random_state=42, verbosity=-1, n_jobs=-1)
+        else:
+            m = LGBMRegressor(n_estimators=50, max_depth=4,
+                              random_state=42, verbosity=-1, n_jobs=-1)
+        try:
+            m.fit(X_train_scaled, y_train)
+        except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
+            return (-np.inf, None) if return_predictions else -np.inf
 
     elif internal_evaluator == 'mlp':
         from sklearn.neural_network import MLPRegressor, MLPClassifier
@@ -1210,7 +1219,10 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
         else:
             m = MLPRegressor(hidden_layer_sizes=(64, 32), max_iter=200,
                              random_state=42, early_stopping=True)
-        m.fit(X_train_scaled, y_train)
+        try:
+            m.fit(X_train_scaled, y_train)
+        except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
+            return (-np.inf, None) if return_predictions else -np.inf
 
     elif internal_evaluator == 'svm':
         from sklearn.svm import SVR, SVC
@@ -1218,7 +1230,10 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             m = SVC(kernel='rbf', C=1.0, random_state=42)
         else:
             m = SVR(kernel='rbf', C=1.0)
-        m.fit(X_train_scaled, y_train)
+        try:
+            m.fit(X_train_scaled, y_train)
+        except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
+            return (-np.inf, None) if return_predictions else -np.inf
 
     elif internal_evaluator == 'gp':
         from sklearn.gaussian_process import GaussianProcessRegressor, GaussianProcessClassifier
@@ -1234,9 +1249,13 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
         if X_train_scaled.shape[0] > max_gp_samples:
             rng = np.random.RandomState(42)
             idx = rng.choice(X_train_scaled.shape[0], max_gp_samples, replace=False)
-            m.fit(X_train_scaled[idx], y_train[idx])
+            X_fit, y_fit = X_train_scaled[idx], y_train[idx]
         else:
-            m.fit(X_train_scaled, y_train)
+            X_fit, y_fit = X_train_scaled, y_train
+        try:
+            m.fit(X_fit, y_fit)
+        except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
+            return (-np.inf, None) if return_predictions else -np.inf
 
     elif internal_evaluator == 'knn':
         from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
@@ -1248,22 +1267,28 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
             m = KNeighborsClassifier(n_neighbors=k, n_jobs=-1)
         else:
             m = KNeighborsRegressor(n_neighbors=k, n_jobs=-1)
-        m.fit(X_train_scaled, y_train)
+        try:
+            m.fit(X_train_scaled, y_train)
+        except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
+            return (-np.inf, None) if return_predictions else -np.inf
 
     elif internal_evaluator == 'catboost':
         try:
             from catboost import CatBoostRegressor, CatBoostClassifier
-            if is_classification:
-                m = CatBoostClassifier(iterations=50, depth=4, verbose=0,
-                                       random_seed=42)
-            else:
-                m = CatBoostRegressor(iterations=50, depth=4, verbose=0,
-                                      random_seed=42)
-            m.fit(X_train_scaled, y_train)
         except ImportError:
             return _evaluate_allocation(X_train, X_val, y_train, y_val,
                                         internal_evaluator='lightgbm',
                                         return_predictions=return_predictions)
+        if is_classification:
+            m = CatBoostClassifier(iterations=50, depth=4, verbose=0,
+                                   random_seed=42)
+        else:
+            m = CatBoostRegressor(iterations=50, depth=4, verbose=0,
+                                  random_seed=42)
+        try:
+            m.fit(X_train_scaled, y_train)
+        except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
+            return (-np.inf, None) if return_predictions else -np.inf
 
     elif internal_evaluator == 'dnn':
         try:
@@ -1295,17 +1320,20 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
         try:
             from ngboost import NGBRegressor, NGBClassifier
             from ngboost.distns import Normal, Bernoulli
-            if is_classification:
-                m = NGBClassifier(Dist=Bernoulli, n_estimators=50,
-                                  learning_rate=0.05, random_state=42, verbose=False)
-            else:
-                m = NGBRegressor(Dist=Normal, n_estimators=50,
-                                 learning_rate=0.05, random_state=42, verbose=False)
-            m.fit(X_train_scaled, y_train)
         except ImportError:
             return _evaluate_allocation(X_train, X_val, y_train, y_val,
                                         internal_evaluator='lightgbm',
                                         return_predictions=return_predictions)
+        if is_classification:
+            m = NGBClassifier(Dist=Bernoulli, n_estimators=50,
+                              learning_rate=0.05, random_state=42, verbose=False)
+        else:
+            m = NGBRegressor(Dist=Normal, n_estimators=50,
+                             learning_rate=0.05, random_state=42, verbose=False)
+        try:
+            m.fit(X_train_scaled, y_train)
+        except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
+            return (-np.inf, None) if return_predictions else -np.inf
 
     elif internal_evaluator == 'bnn':
         try:
@@ -1322,7 +1350,10 @@ def _evaluate_allocation(X_train, X_val, y_train, y_val,
 
     elif callable(internal_evaluator):
         m = internal_evaluator()
-        m.fit(X_train_scaled, y_train)
+        try:
+            m.fit(X_train_scaled, y_train)
+        except (np.linalg.LinAlgError, ValueError, FloatingPointError, TypeError):
+            return (-np.inf, None) if return_predictions else -np.inf
 
     else:
         raise ValueError(f"Unknown internal_evaluator: {internal_evaluator}. "
