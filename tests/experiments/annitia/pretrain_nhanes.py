@@ -22,11 +22,62 @@ Usage:
 """
 
 import argparse
+import ctypes
 import json
+import os
 import pickle
 import sys
 import time
 from pathlib import Path
+
+# cuDNN guard: torch may try to load libcudnn.so.9 at import time even on CPU.
+# Detect missing cudnn9 and try escalating fallbacks before crashing.
+if 'CUDA_VISIBLE_DEVICES' not in os.environ:
+    try:
+        ctypes.CDLL('libcudnn.so.9')
+        _has_cudnn9 = True
+    except OSError:
+        _has_cudnn9 = False
+        os.environ['CUDA_VISIBLE_DEVICES'] = ''
+        # Try cudnn8 → cudnn9 symlink in $TMPDIR, then prepend to LD_LIBRARY_PATH.
+        try:
+            cudnn8 = ctypes.CDLL('libcudnn.so.8')
+            tmpdir = os.environ.get('TMPDIR', '/tmp')
+            shim_dir = os.path.join(tmpdir, f'cudnn_shim_{os.getpid()}')
+            os.makedirs(shim_dir, exist_ok=True)
+            # Find the actual libcudnn.so.8 path
+            import subprocess
+            try:
+                ldconfig = subprocess.run(['ldconfig', '-p'], capture_output=True,
+                                          text=True, timeout=5).stdout
+                cudnn8_path = None
+                for line in ldconfig.splitlines():
+                    if 'libcudnn.so.8' in line and '=>' in line:
+                        cudnn8_path = line.split('=>')[1].strip()
+                        break
+                if cudnn8_path and os.path.exists(cudnn8_path):
+                    shim_target = os.path.join(shim_dir, 'libcudnn.so.9')
+                    if not os.path.exists(shim_target):
+                        os.symlink(cudnn8_path, shim_target)
+                    os.environ['LD_LIBRARY_PATH'] = (
+                        shim_dir + ':' + os.environ.get('LD_LIBRARY_PATH', ''))
+                    print(f'[cudnn] symlinked {cudnn8_path} → {shim_target}')
+            except Exception as e:
+                print(f'[cudnn] symlink fallback failed: {e}')
+        except OSError:
+            print('[cudnn] no libcudnn at all; torch import will likely fail')
+
+# Try torch import with the shim; if still missing, exit gracefully so the
+# foundations runner can skip the NHANES branch instead of crashing.
+try:
+    import torch  # noqa: E402,F401
+except ImportError as e:
+    if 'libcudnn' in str(e):
+        print(f'[FATAL] torch unable to import due to missing cuDNN: {e}')
+        print('[FATAL] NHANES pretraining unavailable. Foundations runner '
+              'should skip pretrained_mlp branch.')
+        sys.exit(2)
+    raise
 
 import numpy as np
 
@@ -86,22 +137,40 @@ def main():
     p.add_argument('--device', type=str, default='cpu')
     p.add_argument('--output', type=str,
                    default='tests/results/annitia_nhanes/encoder.pt')
+    p.add_argument('--cycle-range', type=str, default=None,
+                   help='lo,hi inclusive, e.g. 2007,2018')
+    p.add_argument('--t2dm-only', action='store_true')
+    p.add_argument('--no-viral', action='store_true')
     args = p.parse_args()
 
     import torch
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
+    cyc = None
+    if args.cycle_range:
+        try:
+            lo, hi = [int(x) for x in args.cycle_range.split(',')]
+            cyc = (lo, hi)
+        except Exception:
+            sys.exit(f'bad --cycle-range: {args.cycle_range}')
+
     print('=' * 70)
     print('NHANES pretraining for ANNITIA encoder transfer')
-    print(f'  restrict: {args.restrict}')
-    print(f'  target:   {args.target}')
-    print(f'  hidden:   {args.hidden}')
+    print(f'  restrict:    {args.restrict}')
+    print(f'  cycle_range: {cyc}')
+    print(f'  t2dm_only:   {args.t2dm_only}')
+    print(f'  no_viral:    {args.no_viral}')
+    print(f'  target:      {args.target}')
+    print(f'  hidden:      {args.hidden}')
     print('=' * 70)
 
     cohort = load_nhanes_liver(
         data_dir=args.data_dir,
-        restrict=None if args.restrict == 'none' else args.restrict)
+        restrict=None if args.restrict == 'none' else args.restrict,
+        cycle_range=cyc,
+        t2dm_only=args.t2dm_only,
+        exclude_viral_hep=args.no_viral)
     X = cohort['X']
     if args.target == 'liver':
         event = cohort['liver_death']
