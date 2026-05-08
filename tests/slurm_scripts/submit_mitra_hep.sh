@@ -1,24 +1,32 @@
 #!/bin/bash
-# MITRA hep+death disc-survival — Oxford ARC htc partition with V100 GPU.
-# K=10 hep / K=20 death. ~100h on Mac CPU; <30 min on V100.
+# MITRA hep+death disc-survival on HTC. K=10 hep / K=20 death.
+# Estimated <1h on a single GPU; short partition safe.
+#
+# Usage:
+#   bash tests/slurm_scripts/submit_mitra_hep.sh
+#
 #SBATCH --job-name=mitra_hep
-#SBATCH --partition=htc
-#SBATCH --clusters=htc
-#SBATCH --gres=gpu:v100:1
-#SBATCH --time=04:00:00
-#SBATCH --mem=32G
-#SBATCH --cpus-per-task=4
+#SBATCH --nodes=1 --ntasks=1 --cpus-per-task=4
+#SBATCH --gres=gpu:1
+#SBATCH --time=11:59:00
+#SBATCH --partition=short
+#SBATCH --mem=64G
+#SBATCH --mail-user=adelaide.punt@stcatz.ox.ac.uk --mail-type=FAIL
 #SBATCH --output=mitra_hep_%j.out
 #SBATCH --error=mitra_hep_%j.err
 
 set -euo pipefail
-cd /data/stat-ecr/scat9264/KIRBy   # update if your storage path differs
-source setup.sh
+cd /data/stat-ecr/scat9264/KIRBy
+. ./setup.sh
+export PYTHONWARNINGS=ignore
+export TRANSFORMERS_VERBOSITY=error
+export TOKENIZERS_PARALLELISM=false
+export ANNITIA_VAL_TEST=/data/stat-ecr/scat9264/KIRBy/data/annitia/val_test.csv
 
-# torch<2.3 compat shim for autogluon MITRA (idempotent — skips if already done).
+# autogluon torch<2.3 compat shim (idempotent — skip if already patched).
 python -c "
 import autogluon.tabular.models.mitra._internal.core.get_optimizer as g
-import pathlib, torch
+import pathlib
 src = pathlib.Path(g.__file__)
 text = src.read_text()
 if 'torch<2.3 compat shim' in text:
@@ -37,11 +45,6 @@ class GradScaler(torch.amp.GradScaler):'''
     print('autogluon MITRA PATCHED')
 "
 
-export ANNITIA_VAL_TEST=/data/stat-ecr/scat9264/KIRBy/data/annitia/val_test.csv
-export OMP_NUM_THREADS=4
-export TOKENIZERS_PARALLELISM=false
-
-# MITRA only — skip everything else; resumes if oof files already exist.
 python -u tests/experiments/annitia/experiment_branches.py \
     --skip-tsfm --skip-tabpfn --skip-dsm --skip-nhanes \
     --skip-tabpfn25-disc --skip-tabsurv --skip-synthetic-aug \
