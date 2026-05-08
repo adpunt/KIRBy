@@ -1,120 +1,175 @@
-# Morning briefing — 2026-05-08
+# Morning briefing — 2026-05-08 (REVISED 03:55 after sanity sweep)
 
-## What happened overnight
+## TL;DR — Go/No-Go table
 
-**Round 4 finished at 03:11.** Auto_chain advanced — but bash slurped the
-script at startup, so my edits to add sanity gates, refuse_hierarchical, and
-the 4 new fusion variants did NOT execute. Recovery script ran the missed
-steps at 03:15. **All variants and recipes are now built.**
+```
+Order Recipe                              Tier     Verdict
+   1. meta_avg_aware_weighted_v2          Tier 1   WARN (ρ≈1.00 to anchor — confirmation)
+   2. HIER                                Tier 2   PASS
+   3. isotonic_avg                        Tier 2   PASS
+   4. meta_avg_grand_all_v2               Tier 2   PASS
+   5. meta_avg_new_variants_only          Tier 3   PASS
+   6. bootstrap_dropout                   Tier 3   WARN (ρ≈1.00 — variance reduction)
+   7. meta_avg_aware_weighted_no_nnls     Tier 4   WARN (ρ≈1.00 — no-nnls)
+   8. holdout_pick                        Tier 4   PASS
 
-## Key finding: Round 4 added almost nothing
+DO NOT SUBMIT (would tank macro, despite looking "novel"):
+   ❌ subgroup_routed     OOF hep 0.76 / death 0.71
+   ❌ subgroup_hep_only   expected macro ~0.88
+   ❌ subgroup_blend      expected macro ~0.89-0.90
+   ❌ nnls_stack          death OOF C 0.85
+```
 
-Post-Round-4 OOF C (38 base models) vs pre-Round-4 OOF C (33 base models):
+WARN means "very high correlation to known-good anchor" — informational
+only; safe to ship. FAIL would block submission. None of the candidates
+fail.
 
-| Endpoint | Pre Round 4 best | Post Round 4 best | Δ |
-|---|---|---|---|
-| hepatic | 0.8976 | 0.8980 | +0.0004 |
-| death | 0.9736 | 0.9736 | 0.0000 |
-| meta-aware hep | 0.9013 | 0.9017 | +0.0004 |
-| meta-aware death | 0.9722 | 0.9723 | +0.0001 |
+## Pre-submit hard checks (run for every CSV)
 
-The TabSurv-D2H/H2D + MLP-D2H/H2D cross-endpoint branches don't add
-information. This validates the contention map finding that variants are
-already 95% identical.
+A pre_submit_check sweep on all 50 sub_master_*.csv files caught **7 broken
+submissions** that would have wasted submissions if shipped:
 
-## Variant differentiation vs the 0.9302 anchor (Spearman ρ)
+- `sub_master_subgroup_routed.csv` had GUIDs in the trustii_id column
+  (would map every prediction to the wrong patient → catastrophic).
+  **FIXED** + ZIP rebuilt.
+- 6 older variants with the same GUID-leak (`anomaly_blend_meta`,
+  `anomaly_router_meta`, `cluster_router_meta`,
+  `coxnet_stack_with_uncertainty`, `disagreement_router_meta`,
+  `weighted_anomaly_per_patient`). **FIXED**. None are in the recommended
+  plan but they were in the contention pool — re-run any analysis that
+  joined on trustii_id.
 
-| Variant | hep ρ | death ρ | Verdict |
-|---|---|---|---|
-| **meta_avg_aware_weighted_v2** | 0.9855 | 0.9992 | Anchor-like (~0.93 ± 0.005) |
-| **meta_avg_grand_all_v2** | 0.9852 | 0.9979 | Anchor-like |
-| **meta_avg_aware_weighted_no_nnls** | 0.9859 | 0.9995 | Anchor-like |
-| **bootstrap_dropout** | 0.9867 | 0.9996 | Anchor-like |
-| **holdout_pick** | 0.9858 | 0.9989 | Anchor-like |
-| **isotonic_avg** | 0.9712 | 0.9826 | **Mild probe** |
-| **meta_avg_new_variants_only** | 0.9738 | 0.9573 | **Mild probe** |
-| **HIER** | 0.8713 | 0.8803 | **Strong probe** |
-| ❌ nnls_stack | 0.8462 | 0.3335 | BROKEN — death OOF C only 0.85 |
-| **subgroup_routed** | 0.5374 | 0.3531 | **HIGH-VARIANCE PROBE** — totally new signal but death is risky |
-| **subgroup_hep_only** | 0.5374 | 1.0000 | **HEP-ONLY PROBE** — keeps anchor death, novel hep |
-| **subgroup_blend** | 0.8737 | 1.0000 | **Soft hep probe** — 50/50 mix, anchor death |
+After fix: all 50 CSVs pass structural audit. All 12 candidate ZIPs match
+their latest CSVs (md5 checked).
 
-Anything with ρ > 0.99 to anchor is essentially the same submission.
+## ⚠️ Reality check on the subgroup variants
 
-## Recommended 8-submission plan
+Last night's brief overstated subgroup_blend / subgroup_hep_only /
+subgroup_routed. Real OOF C of the cluster-routed Cox (snapshot +
+clinical_pro features, GMM k=6, per-cluster Cox PH):
 
-### Tier 1: Confirm where we actually are (2 submits)
-1. **`meta_avg_aware_weighted_v2`** — the proven recipe with the expanded pool. If it scores ≥ 0.9302 we know the new variants helped. If < 0.93 we know they hurt.
-2. **`subgroup_blend`** — soft hep probe (ρ=0.87 hep, ρ=1.00 death). Tests subgroup-routed signal SAFELY. Death is the anchor so worst case = 0.93 - tiny amount; best case = 0.93+ if subgroup helps hep.
+| | hep OOF-C | death OOF-C |
+|---|---|---|
+| subgroup_routed (raw) | **0.7638** | **0.7150** |
+| Global Cox same features | 0.8401 | 0.7439 |
+| Existing ensemble pool best | 0.8980 | 0.9736 |
 
-### Tier 2: Probe further (3 submits)
-3. **`subgroup_hep_only`** — only submit if Tier 1 #2 (`subgroup_blend`) showed positive. Pure hep subgroup signal with anchor death; a stronger probe in the same direction.
-4. **`HIER`** — most different recipe in the variant pool. Resolves the hierarchical-fusion question.
-5. **`isotonic_avg`** — calibration probe.
+The "novel signal" is just **lower-quality predictions** that look
+different from the anchor because they're worse, not because they carry
+new information. Submitting any subgroup variant raw is expected-negative.
 
-### Tier 3: Hedges (3 submits)
-6. **`meta_avg_new_variants_only`** — pure new-variants test.
-7. **`bootstrap_dropout`** — variance reduction.
-8. **Reserved** — based on Tier 1+2 results. If subgroup_hep_only scored higher, try `subgroup_routed` (full subgroup) as a swing-for-the-fences. Otherwise `meta_avg_grand_all_v2`.
+The journal files for `subgroup_blend` and `subgroup_hep_only` claim OOF
+0.8980/0.9736 — **those are the anchor's numbers, auto-generated
+boilerplate**. Do not trust journal text on these three submissions.
 
-### Do NOT submit
-- `nnls_stack` — death OOF C is 0.85, will tank LB.
-- `tier1_fallback` — same as `meta_avg_aware_weighted` (0.9302 anchor) — already submitted.
+## Recommended 8-submission plan (revised)
+
+### Tier 1: Anchor sanity (1 submit)
+1. **`meta_avg_aware_weighted_v2`** — proven recipe rebuilt with the
+   expanded post-Round-4 pool. ρ=0.99 to anchor, expected ~0.9302 ± noise.
+   Pure confirmation; reveals whether the new variants helped.
+
+### Tier 2: Architecture probes (3 submits)
+2. **`HIER`** — hierarchical fusion. Most-different recipe in the
+   *quality-controlled* pool (ρ=0.87 hep / 0.88 death to anchor). Real
+   recipe shift, NOT a downgraded prediction.
+3. **`isotonic_avg`** — calibration probe (ρ=0.97 / 0.98).
+4. **`meta_avg_grand_all_v2`** — broad-pool average. Fully passes
+   pre_submit_check, ρ=0.99 to anchor — incremental.
+
+### Tier 3: New-variant test + variance reduction (2 submits)
+5. **`meta_avg_new_variants_only`** — pure post-Round-4 variants (ρ=0.97
+   hep / 0.96 death). If positive, post-Round-4 work added value.
+6. **`bootstrap_dropout`** — variance reduction via random subset
+   averaging. ρ=0.99 to anchor.
+
+### Tier 4: Reserved (2 submits)
+7. **`meta_avg_aware_weighted_no_nnls`** — no-nnls variant (ρ=0.99/1.00).
+8. **`holdout_pick`** — stability-based picker (passes all checks).
+
+### DO NOT SUBMIT (revised)
+- ❌ **`subgroup_routed`** — raw cluster-routed Cox; OOF hep 0.76,
+  death 0.71. Expected LB collapse.
+- ❌ **`subgroup_hep_only`** — anchor death + raw routed hep. Expected hep
+  LB ~0.83, drops macro ~0.05 below 0.9302.
+- ❌ **`subgroup_blend`** — 50/50 anchor+routed rank mean. Best estimate
+  macro ~0.89-0.90; below 0.9302 floor. Skip unless you accept negative EV.
+- ❌ `nnls_stack` — death OOF C only 0.85.
+- ❌ `tier1_fallback` — identical to `meta_avg_aware_weighted` (already
+  used as anchor for the 0.9302 LB).
+
+If you want the subgroup work to count for something, treat it as **a
+diagnostic**, not a submission: 5 val patients are beyond train
+Mahalanobis p99, and cluster 2 (97 train / 1 val) is a real distribution-
+shift signal.
 
 ## Decision flow at submit time
 
 ```
-After submit #1 (v2 vs original anchor):
-├── v2 ≥ 0.9302   → expansion helped. Continue with HIER, then Tier 2.
-├── v2 < 0.9302   → expansion hurt. Skip Tier 2 v2 variants. Fall back to original.
-└── v2 ≈ 0.9302   → null result. Tier 2 still informative.
+After submit #1 (meta_avg_aware_weighted_v2):
+├── ≥ 0.9302   → expanded pool helped. Continue Tier 2.
+├── < 0.9302   → expanded pool noisy. Consider re-anchoring on
+│                meta_avg_aware_weighted (the proven 0.9302 recipe).
+└── ≈ 0.9302   → null. Tier 2 still informative.
 
 After submit #2 (HIER):
-├── HIER ≥ 0.93   → hierarchical works! Submit hier-based recipes.
-├── HIER ~ 0.85-0.92 → hierarchical loses signal. Don't submit hier-based again.
-└── HIER < 0.85   → hierarchical broken. Don't pursue.
+├── ≥ 0.93     → hierarchical adds. Submit hier-flavoured recipes if any.
+├── 0.85–0.92  → moderate signal loss. Don't escalate hier.
+└── < 0.85     → hier broken. Don't pursue.
+
+If 4 of 6 Tier 1-3 submissions land below 0.9302:
+→ Stop probing. Submit `meta_avg_aware_weighted` exactly (proven 0.9302).
+  Better to repeat than to bleed.
 ```
 
-## Files for tomorrow
+## Files
 
 All recipes ready in `tests/results/annitia/submissions/`:
+
 - `sub_master_meta_avg_aware_weighted_v2_submission.zip` ← Tier 1 #1
-- `sub_master_HIER_submission.zip` ← Tier 1 #2
+- `sub_master_HIER_submission.zip` ← Tier 2 #2
 - `sub_master_isotonic_avg_submission.zip` ← Tier 2 #3
-- `sub_master_meta_avg_new_variants_only_submission.zip` ← Tier 2 #4
-- `sub_master_bootstrap_dropout_submission.zip` ← Tier 2 #5
-- `sub_master_meta_avg_grand_all_v2_submission.zip` ← Tier 3 #6
-- `sub_master_meta_avg_aware_weighted_no_nnls_submission.zip` ← Tier 3 #7
+- `sub_master_meta_avg_grand_all_v2_submission.zip` ← Tier 2 #4
+- `sub_master_meta_avg_new_variants_only_submission.zip` ← Tier 3 #5
+- `sub_master_bootstrap_dropout_submission.zip` ← Tier 3 #6
+- `sub_master_meta_avg_aware_weighted_no_nnls_submission.zip` ← Tier 4 #7
+- `sub_master_holdout_pick_submission.zip` ← Tier 4 #8
 
-Each has a paired `_journal.md` with the recipe definition.
+Each has a paired `_journal.md` — note that the journals are
+auto-generated from a shared template; trust the CSV + this briefing
+over the journal narrative.
 
-## Per-submission pre-flight check
+## Per-submission pre-flight (REQUIRED)
 
 ```
 python tests/experiments/annitia/pre_submit_check.py \
     tests/results/annitia/full/sub_master_<recipe>.csv
 ```
 
-Will warn if:
-- ρ > 0.999 to anchor (wasted submission — too similar to already-submitted)
-- ρ < 0.40 to anchor (suspicious — verify intentional)
-- NaN, constant predictions, row count mismatch
+Will exit non-zero if: column names wrong, NaN, trustii_id ordering off
+(THIS would have caught last night's GUID bug), constant predictions,
+inf, or row count mismatch with the proven 0.9302 anchor.
+
+## What we learned overnight
+
+1. **0.9302 is near the noise ceiling** for the current model class. SE_C
+   ≈ 0.025 with 47 hep events.
+2. **Hep (47 events) has no HIGH-trust single model.** Death (76 events)
+   has 2 (`tabpfn-landmark` CI[0.906,0.956], `tabpfn25-disc-K20`
+   CI[0.857,0.923]).
+3. **Most variants are 95% identical** — the LB battle is over the 21
+   contested hep patients (5%) and 1 contested death.
+4. **38% of contested val_test patients have a near-neighbour in the
+   training failure set** — same failure modes.
+5. **Round 4 cross-endpoint pretraining added basically nothing** —
+   variants are informationally redundant with the existing pool.
+6. **Subgroup-routed Cox is worse, not different** — diagnostic value only;
+   not a submission. (Corrected, 03:55.)
+7. **7 CSVs had a silent GUID-vs-int trustii_id bug** — caught by
+   pre_submit_check before submission. ALWAYS run the check.
 
 ## Round 5 hparam tuning skipped
 
-`experiment_hparam.py` crashed in 3s with `top view set = []` — there's a bug
-in how it reads the CV summary. Not worth debugging today; diagnostics show
-hparam tuning won't break the 0.93 ceiling.
-
-## What we learned tonight (compactable)
-
-1. **0.9302 is near the noise ceiling** for our current model class on this
-   dataset. Half-width of 95% CI ≈ 0.04.
-2. **Hep (47 events) has no HIGH-trust single model.** Death (76 events) has 2
-   (tabpfn-landmark, tabpfn25-disc-K20).
-3. **Most variants are 95% identical** — the LB battle is over the 21 contested
-   hep patients (5% of val_test) and 1 contested death.
-4. **38% of contested val_test patients have a near-neighbour in the training
-   FAILURE set** — the LB gap is the same failure modes we see in training.
-5. **Round 4 added basically nothing.** Cross-endpoint pretraining (TabSurv-
-   D2H/H2D) is informationally redundant with the existing pool.
+`experiment_hparam.py` crashed in 3s with `top view set = []`. Bug in CV
+summary read. Not worth debugging today — diagnostics show hparam tuning
+won't break the 0.93 ceiling.

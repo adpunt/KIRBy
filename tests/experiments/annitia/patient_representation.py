@@ -217,8 +217,12 @@ def main():
         'iso_score': iso_train,
         'ood_composite': ood_train,
     })
+    val_meta_repr = pd.read_csv(val_path)[['trustii_id', 'patient_id_anon']]
+    _g2i = dict(zip(val_meta_repr['patient_id_anon'].astype(str),
+                    val_meta_repr['trustii_id'].astype(int)))
+    _val_int_ids = np.array([_g2i[str(g)] for g in val['patient_ids']])
     val_repr = pd.DataFrame({
-        'trustii_id': val['patient_ids'],
+        'trustii_id': _val_int_ids,
         'cluster': cluster_val,
         'mahalanobis': mah_val,
         'iso_score': iso_val,
@@ -278,13 +282,18 @@ def main():
     g_d_c = float(concordance(train['death']['y_struct'][g_d_finite], g_d_oof[g_d_finite])) if g_d_finite.sum() >= 5 else float('nan')
     print(f'  vs GLOBAL Cox OOF C: hep={g_h_c:.4f}, death={g_d_c:.4f}')
 
-    # Build submission CSV from cluster-routed predictions
-    trustii_id = val['patient_ids']
+    # Build submission CSV from cluster-routed predictions.
+    # Trustii expects integer trustii_id (1..423), NOT the GUID patient_id.
+    val_meta = pd.read_csv(val_path)[['trustii_id', 'patient_id_anon']]
+    guid_to_int = dict(zip(val_meta['patient_id_anon'].astype(str),
+                           val_meta['trustii_id'].astype(int)))
+    int_ids = np.array([guid_to_int[str(g)] for g in val['patient_ids']])
+    assert set(int_ids) == set(range(1, len(int_ids) + 1)), 'incomplete trustii_id map'
     out = pd.DataFrame({
-        'trustii_id': trustii_id,
+        'trustii_id': int_ids,
         'risk_hepatic_event': h_pred,
         'risk_death': d_pred,
-    })
+    }).sort_values('trustii_id').reset_index(drop=True)
     dest = FULL / 'sub_master_subgroup_routed.csv'
     out.to_csv(dest, index=False)
     print(f'\nwrote {dest}')
