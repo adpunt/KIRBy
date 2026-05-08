@@ -20,6 +20,18 @@ export PYTHONWARNINGS=ignore
 export TRANSFORMERS_VERBOSITY=error
 export TOKENIZERS_PARALLELISM=false
 
+# Bus error mitigation (job 7632171 SIGBUSed at 60 conditions). MITRA on CPU
+# can over-thread MKL/OpenMP causing memory races + torch multiprocessing
+# defaults to /dev/shm which compute nodes have very little of.
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+# Force file-system sharing for torch dataloaders (avoids /dev/shm bus errors).
+export PYTORCH_SHARING_STRATEGY=file_system
+ulimit -v unlimited 2>/dev/null || true
+ulimit -m unlimited 2>/dev/null || true
+
 # Force CPU if libcudnn.so.9 is missing on this compute node.
 if ! ldconfig -p 2>/dev/null | grep -q libcudnn.so.9 && \
    ! find /usr/lib /usr/local/lib /usr/local/cuda -name 'libcudnn.so.9' 2>/dev/null | grep -q .; then
