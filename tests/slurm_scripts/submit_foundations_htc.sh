@@ -28,6 +28,17 @@ export PYTHONWARNINGS=ignore
 export TRANSFORMERS_VERBOSITY=error
 export TOKENIZERS_PARALLELISM=false
 
+# Bus error mitigation (job 7632171 SIGBUSed at 60 conditions on MITRA branch).
+# MITRA on CPU can over-thread MKL/OpenMP causing memory races + torch defaults
+# to /dev/shm which compute nodes have very little of.
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export PYTORCH_SHARING_STRATEGY=file_system
+ulimit -v unlimited 2>/dev/null || true
+ulimit -m unlimited 2>/dev/null || true
+
 # If the compute node lacks libcudnn.so.9 (which autogluon[mitra] requires for
 # its torch GPU init), fall back to CPU. Without this, MITRA crashes with
 # "libcudnn.so.9: cannot open shared object file" — observed on 7631558.
