@@ -26,7 +26,18 @@ cd /data/stat-ecr/scat9264/KIRBy
 export PYTHONWARNINGS=ignore
 export TRANSFORMERS_VERBOSITY=error
 export TOKENIZERS_PARALLELISM=false
-export ANNITIA_VAL_TEST=/data/stat-ecr/scat9264/KIRBy/data/annitia/val_test.csv
+for cand in \
+    /data/stat-ecr/scat9264/KIRBy/data/annitia/val_test.csv \
+    /data/stat-cadd/scat9264/KIRBy/data/annitia/val_test.csv \
+    $TMPDIR/val_test.csv \
+    /tmp/val_test.csv; do
+    if [ -f "$cand" ]; then
+        export ANNITIA_VAL_TEST="$cand"; echo "[run] val_test found: $cand"; break
+    fi
+done
+if [ -z "${ANNITIA_VAL_TEST:-}" ] || [ ! -f "$ANNITIA_VAL_TEST" ]; then
+    echo "[FATAL] val_test.csv not found in any candidate path"; exit 1
+fi
 
 # NHANES T2.x doesn't strictly need autogluon, but T2.2d uses TabPFN PEFT
 # which needs tabpfn. Install if missing so that recipe doesn't fall through.
