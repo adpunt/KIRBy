@@ -27,7 +27,22 @@ cd /data/stat-ecr/scat9264/KIRBy
 export PYTHONWARNINGS=ignore
 export TRANSFORMERS_VERBOSITY=error
 export TOKENIZERS_PARALLELISM=false
-export ANNITIA_VAL_TEST=/data/stat-ecr/scat9264/KIRBy/data/annitia/val_test.csv
+# Pick whichever val_test.csv path is actually visible on this compute node.
+# stat-ecr is the canonical post-2026-05-07 location but may not be mounted
+# on all htc compute nodes; stat-cadd is the legacy location and is broadly
+# mounted. Falls through to /tmp if a job-local copy was placed there.
+for cand in \
+    /data/stat-ecr/scat9264/KIRBy/data/annitia/val_test.csv \
+    /data/stat-cadd/scat9264/KIRBy/data/annitia/val_test.csv \
+    $TMPDIR/val_test.csv \
+    /tmp/val_test.csv; do
+    if [ -f "$cand" ]; then
+        export ANNITIA_VAL_TEST="$cand"; echo "[run] val_test found: $cand"; break
+    fi
+done
+if [ -z "${ANNITIA_VAL_TEST:-}" ] || [ ! -f "$ANNITIA_VAL_TEST" ]; then
+    echo "[FATAL] val_test.csv not found in any candidate path"; exit 1
+fi
 
 # 0. Ensure foundation packages exist; install if missing. slurm-7631175
 # silently failed because autogluon was absent in the server venv.
