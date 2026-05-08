@@ -55,34 +55,55 @@ python -c "import survtrace" 2>/dev/null || {
     python -c "import survtrace" 2>/dev/null && echo "[install] survtrace OK" || echo "[install] survtrace FAIL — T1.5 skipped"
 }
 
-# 1. autogluon torch<2.3 GradScaler shim (only if autogluon imported).
-python -c "
-try:
-    import autogluon.tabular.models.mitra._internal.core.get_optimizer as g
-except ImportError:
-    print('autogluon not installed — skipping shim'); raise SystemExit(0)
+# 1. autogluon torch<2.3 GradScaler shim. CANNOT import autogluon to find the
+# file path — that triggers the very class definition we're patching, causing
+# AttributeError at line 65. Use `find` to locate get_optimizer.py instead.
+GETFILE=$(find $(python -c "import site; print(site.getsitepackages()[0])") \
+    -path '*autogluon/tabular/models/mitra/_internal/core/get_optimizer.py' \
+    2>/dev/null | head -1)
+if [ -z "$GETFILE" ]; then
+    GETFILE=$(find $HOME/.local/lib -path '*mitra/_internal/core/get_optimizer.py' 2>/dev/null | head -1)
+fi
+if [ -z "$GETFILE" ]; then
+    GETFILE=$(find /data/stat-cadd/scat9264/py311-kirby/lib -path '*mitra/_internal/core/get_optimizer.py' 2>/dev/null | head -1)
+fi
+if [ -n "$GETFILE" ] && [ -f "$GETFILE" ]; then
+    if grep -q 'torch<2.3 compat shim' "$GETFILE"; then
+        echo "[shim] autogluon MITRA already patched at $GETFILE"
+    else
+        echo "[shim] patching autogluon MITRA at $GETFILE"
+        python -c "
 import pathlib
-src = pathlib.Path(g.__file__)
-text = src.read_text()
-if 'torch<2.3 compat shim' in text:
-    print('autogluon MITRA already patched')
-else:
-    new_block = '''if not hasattr(torch.amp, \"GradScaler\"):
+p = pathlib.Path('$GETFILE')
+t = p.read_text()
+shim = '''if not hasattr(torch.amp, \"GradScaler\"):
     _OldGradScaler = torch.cuda.amp.GradScaler
     class _CompatGradScaler(_OldGradScaler):
         def __init__(self, *args, device=None, **kwargs):
             super().__init__(*args, **kwargs)
     torch.amp.GradScaler = _CompatGradScaler  # torch<2.3 compat shim
-import inspect as _inspect
-_GS_PARAMS = set(_inspect.signature(torch.amp.GradScaler.__init__).parameters)
-class GradScaler(torch.amp.GradScaler):'''
-    src.write_text(text.replace('class GradScaler(torch.amp.GradScaler):', new_block))
-    print('autogluon MITRA PATCHED')
+'''
+needle = 'class GradScaler(torch.amp.GradScaler):'
+if needle in t and 'torch<2.3 compat shim' not in t:
+    t = t.replace(needle, shim + needle)
+    p.write_text(t)
+    print('[shim] PATCHED')
+else:
+    print('[shim] needle not found or already patched')
 "
+    fi
+else
+    echo "[shim] WARNING: autogluon get_optimizer.py not found — MITRA may crash"
+fi
 
 # 2. Run all foundation-model branches (no skips). Resume-friendly per-condition.
+# Pass val-test path explicitly so it survives even if experiment_branches.py
+# is at an older revision that didn't read ANNITIA_VAL_TEST.
+VAL_CSV="${ANNITIA_VAL_TEST}"
+echo "[run] using val_test = $VAL_CSV"
 echo "[run] starting experiment_branches.py at $(date)"
 python -u tests/experiments/annitia/experiment_branches.py \
+    --validation-csv "$VAL_CSV" \
     --K-disc 10
 
 echo "DONE foundations at $(date)"

@@ -48,6 +48,10 @@ export ANNITIA_T23_SUBSETS="fib4_high,fib4_high_2007,fib4_high_2017,t2dm_only,no
 # get the complete grid for the writeup.
 export ANNITIA_IGNORE_T21_GATE=1
 
-python -u tests/experiments/annitia/experiment_external.py
+# Pass val-test path explicitly so it survives even if experiment_external.py
+# is at an older revision that didn't read ANNITIA_VAL_TEST.
+echo "[run] using val_test = $ANNITIA_VAL_TEST"
+python -u tests/experiments/annitia/experiment_external.py \
+    --validation-csv "$ANNITIA_VAL_TEST"
 
 echo "DONE NHANES T2.x at $(date)"
