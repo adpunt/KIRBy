@@ -27,6 +27,15 @@ cd /data/stat-ecr/scat9264/KIRBy
 export PYTHONWARNINGS=ignore
 export TRANSFORMERS_VERBOSITY=error
 export TOKENIZERS_PARALLELISM=false
+
+# If the compute node lacks libcudnn.so.9 (which autogluon[mitra] requires for
+# its torch GPU init), fall back to CPU. Without this, MITRA crashes with
+# "libcudnn.so.9: cannot open shared object file" — observed on 7631558.
+if ! ldconfig -p 2>/dev/null | grep -q libcudnn.so.9 && \
+   ! find /usr/lib /usr/local/lib /usr/local/cuda -name 'libcudnn.so.9' 2>/dev/null | grep -q .; then
+    echo "[cuda] libcudnn.so.9 not found; forcing CPU mode for MITRA"
+    export CUDA_VISIBLE_DEVICES=""
+fi
 # Pick whichever val_test.csv path is actually visible on this compute node.
 # stat-ecr is the canonical post-2026-05-07 location but may not be mounted
 # on all htc compute nodes; stat-cadd is the legacy location and is broadly
