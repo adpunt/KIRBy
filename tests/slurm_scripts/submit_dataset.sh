@@ -50,5 +50,10 @@ else
     python tests/experiments/run_dataset.py ${CATEGORY} ${DATASET} \
         --pruning-mode "${PRUNING_MODE}"
 fi
+RC=$?
 
-echo "Done:   $(date)"
+echo "Done:   $(date)  (exit=${RC})"
+# Propagate the python exit code so SLURM reports FAILED, not COMPLETED, on
+# bus errors / signals (the previous masking of $? made sacct say
+# COMPLETED 0:0 for the entire Wave 1 bus-error batch).
+exit ${RC}

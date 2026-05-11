@@ -1214,9 +1214,18 @@ def compute_effective_rank(X: np.ndarray) -> float:
         svd.fit(X_scaled)
         s = svd.singular_values_
     else:
-        _, s, _ = np.linalg.svd(X_scaled, full_matrices=False)
+        try:
+            s = np.linalg.svd(X_scaled, full_matrices=False, compute_uv=False)
+        except np.linalg.LinAlgError:
+            # gesdd LAPACK driver fails on some near-singular reps (observed
+            # on abagym_Ang2). gesvd is slower but more robust.
+            from scipy.linalg import svd as scipy_svd
+            s = scipy_svd(X_scaled, full_matrices=False, compute_uv=False,
+                          lapack_driver='gesvd')
 
     s = s[s > 1e-10]
+    if len(s) == 0:
+        return 0.0
     p = s / s.sum()
     return float(np.exp(-np.sum(p * np.log(p))))
 
