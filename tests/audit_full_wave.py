@@ -139,6 +139,7 @@ def classify_log(log_path: Path):
     last_exp_done = ''
     last_fold = ''
     last_stage = ''
+    last_config = ''
     for line in tail_lines:
         s = line.strip()
         if s.startswith('[saved '):
@@ -149,6 +150,11 @@ def classify_log(log_path: Path):
         m3 = re.search(r'fold \d+:\s*(\d+/\d+)', s)
         if m3:
             last_fold = m3.group(0)
+        # Second precompute stage: per-config eval lines like
+        # "[2435/2980] mlp/entropy_2.0/treeshap/b=100/ev=mlp: score=..."
+        m_cfg = re.match(r'^\[(\d+)/(\d+)\]\s+\w+/', s)
+        if m_cfg:
+            last_config = f'config {m_cfg.group(1)}/{m_cfg.group(2)}'
         if 'Precomputing hybrid searches' in s:
             last_stage = 'precompute'
         if 'Pre-computing importance' in s:
@@ -164,6 +170,8 @@ def classify_log(log_path: Path):
         bits.append(f'last_done={last_exp_done}')
     if last_fold:
         bits.append(last_fold)
+    if last_config:
+        bits.append(last_config)
     if last_stage:
         bits.append(last_stage)
     if saved_files:

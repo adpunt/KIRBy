@@ -1,284 +1,273 @@
-# Per-Dataset Experiment Status — 2026-05-11 (afternoon)
+# Per-Dataset Experiment Status — 2026-05-11 (evening, post-diagnosis)
 
-Single source of truth, built from a fresh `audit_full_wave.py
---include-running` (commit 280166e). Every row below is grounded in the
-audit output you pasted; no projections from older data.
+Now grounded in (a) `audit_full_wave.py --include-running` output, plus
+(b) verified slurm log tails for the suspicious cases. Three concrete
+findings replaced earlier guesses.
 
-## How to read this
+## Verified findings (replacing earlier guesses)
 
-- **OK** = all expected JSONs fresh, no errors. (4 datasets total.)
-- **EFFECTIVELY OK** = sim antibody with `errored=s12` (no_cliffs_found is
-  a methodological no-data, not a job failure). 11/12 fresh, the 1 missing
-  is s12. Confirmed by the audit `errored=s12` column.
-- **PARTIAL (resubmittable)** = COMPLETED job with some fresh files; specific
-  missing/errored experiment IDs listed.
-- **EMPTY** = COMPLETED job with zero fresh files (Wave 1 bus errors).
-- **RUNNING — IN_PROGRESS** = currently RUNNING with a known progress
-  marker. Includes which fold/checkpoint it's at. **No verdict yet.**
-- **RUNNING — UNKNOWN** = currently RUNNING but the log tail has no
-  progress markers. Could be stuck. Worth a closer look.
+### 1. The "no progress markers" jobs are NOT stuck
 
-## Audit headline
+Audit said 14 Wave 1 jobs (e.g. 12103594, all 6 ginkgo cx, etc.) had no
+progress markers in tail-200. They're actually all in a **second
+precompute stage** that my classifier didn't recognize:
+
+```
+[2435/2980] mlp/entropy_2.0/treeshap/b=100/ev=mlp: score=0.2015+/-0.150
+```
+
+That's the per-config eval loop after fold 0 pruning. Range observed:
+~50–95% through these loops. **All 14 are alive and progressing.** Log
+mtimes are recent (today).
+
+Updated `audit_full_wave.py` (next commit) recognizes this stage. Re-run
+to see the actual progress on these jobs.
+
+### 2. `sim/abagym_Ang2` missing s03 — real numerical bug
+
+```
+s03 FAILED: SVD did not converge
+File "tests/experiments/../experiments/similarity/s03_feature_concentration.py", line 86
+```
+
+Dataset-specific `scipy.linalg.svd` non-convergence. Not a wave problem;
+a real bug in `s03_feature_concentration.py:86`. Fix: switch to
+`linalg.svd(..., lapack_driver='gesvd')` or wrap with NaN-handling.
+**Don't resubmit Ang2 alone — fix s03 first.**
+
+### 3. The 3 four-minute sim/gb_* failures are a CACHE RACE
+
+```
+FileNotFoundError: '16748.txt'
+shutil.rmtree(str(dest_path))
+```
+
+The `genomic_benchmarks` library tries to `rmtree` the cache dir while
+another concurrent job is reading from it. Classic concurrent-download
+race. Affects:
+- 12115453 sim/gb_demo_human_or_worm
+- 12115455 sim/gb_human_enhancers_cohn
+- 12115457 sim/gb_human_nontata_promoters
+
+The cx_gb_* Wave 3 jobs (12115451/2/4/6) are still RUNNING — they got
+luckier with timing, OR the cache was already built by the W2 cx_gb_*
+jobs (12111839–42) which started earlier.
+
+**Fix before any gb_* resubmit:** either (a) pre-build the
+genomic_benchmarks cache once, then submit, OR (b) submit gb_* jobs
+sequentially (one at a time) so they don't race.
+
+---
+
+## Top-line counts (from this audit)
 
 ```
 Verdict counts: OK = 4, PARTIAL = 21, EMPTY = 55, RUNNING = 129
 ```
 
-Of the 21 PARTIAL: 8 are sim/antibody with the `errored=s12` pattern
-(effectively OK); 13 are real losses needing targeted resubmits.
+- **OK (4)**: sim/flab_immunogenicity_marks (W1 + W3), sim/humanness_therapeutic (W2 + W3)
+- **Effectively OK (sim antibody, errored=s12 only)**: 8 rows — abagym_EGFR/HER2/VEGF, abcov_kd, flab_polyreact_jain_bvp/cic (plus W1 duplicates of some). All confirmed `errored=s12` only.
+- **PARTIAL real losses (cx)**: 7 datasets need targeted resubmits.
+- **EMPTY (55)**: Wave 1 bus errors, mostly in precompute fold 0.
+- **RUNNING (129)**: All in some precompute stage. None have written a per-experiment JSON yet, **except**:
+  - cx/abagym_Ang2 (12103609): last_done=c15, fresh=10
+  - cx/abagym_EGFR (12103610): last_done=c11, fresh=9
+  - cx/abagym_VEGF W3 (12115431): fresh=9 (precompute reused from cache)
+  - cx/humanness_therapeutic W3 (12115464): last_done=c11, fresh=9
+  - sim/ginkgo_heparin W3 (12115459): last_done=s04, fresh=4
 
-Of the 129 RUNNING: **every single one is still in `fold 0` of
-`precompute_hybrid_searches`.** Not one has reached the per-experiment
-loop yet. That means none of them have written any per-experiment JSON.
-Some are very close to fold 0 completion (>90%), others just past 10%.
+So 5 RUNNING jobs are actually past precompute and running per-experiment.
 
 ---
 
-## Genuinely complete (OK)
+## Per-dataset status
 
-| Dataset | Category | Job ID(s) |
+### A. Molecular regression — all SIM EMPTY, all CX RUNNING in precompute stage 2
+
+| Dataset | Sim | Cx |
 |---|---|---|
-| flab_immunogenicity_marks | similarity | W1 12103666 + W3 12115446 (redundant) |
-| humanness_therapeutic | similarity | W2 12111867 + W3 12115465 (redundant) |
+| caco2 | W1 12103649 **EMPTY** (bus); no resubmit running | W1 12103584 RUNNING (fold 0: 2000/7425) |
+| logd | W1 12103650 **EMPTY** (bus); no resubmit running | W1 12103585 RUNNING (precompute) |
+| qm9 | W1 12103651 **EMPTY** (bus); no resubmit running | W1 12103586 RUNNING (fold 0: 1800/6480) |
+| adme_hlm | W1 12103652 **EMPTY** (bus); no resubmit running | W1 12103587 RUNNING (fold 0: 2000/7425) |
+| adme_rlm | W1 12103653 **EMPTY** (bus); no resubmit running | W1 12103588 RUNNING (fold 0: 2000/7425) |
+| adme_mdr1 | W1 12103654 **EMPTY** (bus); no resubmit running | W1 12103589 RUNNING (fold 0: 1800/7425) |
 
-That's the entire "done" list.
+### B. Molecular classification
 
----
-
-## Effectively complete (sim antibody, errored=s12 only)
-
-These finished cleanly, with `s12_cross_domain_cliffs` self-reporting
-`no_cliffs_found` because antibody embeddings don't form chemistry-style
-cliffs. The audit calls them PARTIAL 11/12 but they don't need resubmit
-unless you change the s12 method.
-
-| Dataset | Best Job |
-|---|---|
-| sim/abagym_EGFR | W3 12115429 |
-| sim/abagym_HER2 | W3 12115430 |
-| sim/abagym_VEGF | W3 12115432 |
-| sim/abcov_kd | W3 12115433 |
-| sim/flab_polyreact_jain_bvp | W3 12115447 |
-| sim/flab_polyreact_jain_cic | W3 12115448 |
-
-Note: there are also W1 copies of these same 6 with the same 11/12 pattern.
-Redundant.
-
----
-
-## PARTIAL — COMPLETED, real losses, ready to resubmit
-
-All these are complexity (none of these jobs got far enough; sim partials
-above are all s12-only).
-
-| Dataset | Best Job | Fresh | Errored | Missing (resubmit these) |
-|---|---|---|---|---|
-| cx/abcov_kd | W1 12103599 | 17/20 | c10 (noiseInject) | c23, c24 |
-| cx/abagym_HER2 | W1 12103611 | 17/20 | c10 | c23, c24 |
-| cx/flab_polyreact_jain_cic | W1 12103596 | 17/20 | c10 | c23, c24 |
-| cx/flab_polyreact_jain_bvp | W1 12103602 | 17/20 | c10 | c23, c24 |
-| cx/flab_immunogenicity_marks | W1 12103601 | 12/20 | c10 | c17, c18, c19, c21, c22, c23, c24 |
-| cx/abagym_VEGF | W1 12103613 | 9/20 | c10 | c13, c15, c16, c17, c18, c19, c21, c22, c23, c24 |
-| cx/humanness_therapeutic | W2 12111862 | 9/20 | c10 | c13, c15, c16, c17, c18, c19, c21, c22, c23, c24 |
-
-(Note: W3 12115431 cx/abagym_VEGF and W3 12115464 cx/humanness_therapeutic
-are RUNNING and at 9 fresh / last_done=c11 — same progress as the
-COMPLETED partials. If they finish without bus-erroring, they'll cover
-these gaps. But based on Wave 1 evidence, the bus error tends to hit at
-c22→c23. Wait and see.)
-
-### sim/abagym_Ang2 — odd one out
-
-| Dataset | Best Job | Fresh | Pattern |
-|---|---|---|---|
-| sim/abagym_Ang2 | W1 12103674 (finished_then_bus) | 11/12 | missing=**s03** (not s12!) |
-
-This is different from the rest. The job finished all 12, bus-errored on
-teardown, but `s03_feature_concentration` didn't write its JSON.
-**Investigate before resubmitting** — see "Things to investigate" below.
-
----
-
-## EMPTY — COMPLETED jobs with zero output (Wave 1 bus errors)
-
-These are pure losses. All bus_mid_run in precompute / fold 0 pruning.
-
-**Complexity (8 datasets):**
-- cx/herg_ki (12103583)
-- cx/ddg_combined (12103603)
-- cx/flab_binding_koenig (12103604)
-- cx/flab_expression_koenig (12103605)
-- cx/flab_binding_adams (12103606)
-- cx/flab_expression_adams (12103607)
-- cx/flab_binding_phillips_h3 (12103608)
-- cx/abagym_lysozyme (12103612)
-- cx/tz_her2_multiclass (W2 12111861)
-
-**Similarity (38 datasets):**
-- All molecular regression: herg_ki, caco2, logd, qm9, adme_hlm, adme_rlm, adme_mdr1
-- All molecular clf: herg
-- All DTA: kiba, bindingdb_kd
-- Reaction: buchwald_hartwig
-- DDG: (W1 12103668 still RUNNING — not in this EMPTY list)
-- Antibody flab regression: flab_thermo_tresanco, flab_thermo_jain,
-  flab_aggregation_jain_hicrt, flab_binding_koenig, flab_binding_adams,
-  flab_expression_adams
-- Ginkgo: ginkgo_acsins, ginkgo_hic, ginkgo_titer; partial:
-  ginkgo_heparin (4/12, see below)
-- TCGA: tcga_luad_vs_lusc, tcga_brca_pam50
-- All 17 nucleotide (nt_*)
-- All 4 gb_* genomic benchmarks
-- Ab clf: tz_her2_multiclass
-
-**Also EMPTY but a different cause — 3 sim Wave 3 jobs `python_error` in 4:38:**
-- sim/gb_demo_human_or_worm (12115453)
-- sim/gb_human_enhancers_cohn (12115455)
-- sim/gb_human_nontata_promoters (12115457)
-
-These crashed immediately — investigate before resubmitting (see below).
-
-### sim/ginkgo_heparin (partial EMPTY)
-
-`12103684` ran 7:34, got fresh=4, missing=s05…s13. Bus-errored after
-s04_activity_cliffs. Wave 3 resubmit 12115459 is RUNNING and at 4 fresh
-again with last_done=s04 — about to enter the same danger zone. Watch
-this one.
-
----
-
-## RUNNING — every job's actual progress
-
-All RUNNING jobs are in fold 0 of `precompute_hybrid_searches`. No
-per-experiment JSONs written yet. Progress markers below are from the
-audit `prog:` column.
-
-### Wave 1 RUNNING (3+ days elapsed each, in fold 0)
-
-Progress varies; some close to fold 0 done, some only ~30% in:
-
-| Dataset (W1 cx) | Progress |
-|---|---|
-| caco2 (12103584) | fold 0: 2000/7425 |
-| logd (12103585) | pruning, no fold marker |
-| qm9 (12103586) | fold 0: 1800/6480 |
-| adme_hlm (12103587) | fold 0: 2000/7425 |
-| adme_rlm (12103588) | fold 0: 2000/7425 |
-| adme_mdr1 (12103589) | fold 0: 1800/7425 |
-| herg (12103590) | fold 0: 3000/6480 |
-| kiba (12103591) | pruning |
-| bindingdb_kd (12103592) | pruning |
-| flab_thermo_tresanco (12103593) | fold 0: 5000/6804 (~73%) |
-| flab_pk_jain_heprt (12103594) | **no progress markers — possibly stuck** |
-| flab_pk_jain_fcrnrt (12103595) | fold 0: 2600/3240 (~80%) |
-| flab_aggregation_jain_hicrt (12103597) | **no progress markers** |
-| flab_thermo_jain (12103598) | **no progress markers** |
-| flab_aggregation_jain (12103600) | fold 0: 3600/3780 (~95%) |
-| abagym_Ang2 (12103609) | last_done=c15, fresh=10 ✓ already past precompute! |
-| abagym_EGFR (12103610) | last_done=c11, fresh=9 ✓ already past precompute! |
-| ginkgo_acsins/colloidal/heparin/hic/pr_cho/titer (12103617–22) | **no progress markers** |
-| buchwald_hartwig (12103623) | **no progress markers** |
-| bh_doyle_plates (12103624) | pruning |
-
-| Dataset (W1 sim) | Progress |
-|---|---|
-| flab_pk_jain_heprt (12103659) | **no progress markers** |
-| flab_pk_jain_fcrnrt (12103660) | fold 0: 2600/3240 (~80%) |
-| flab_aggregation_jain (12103665) | fold 0: 3600/3780 (~95%) |
-| ddg_combined (12103668) | **no progress markers** |
-| flab_expression_koenig (12103670) | fold 0: 1000/7425 |
-| flab_binding_phillips_h3 (12103673) | fold 0: 1000/7425 |
-| abagym_lysozyme (12103677) | fold 0: 4200/5292 (~79%) |
-| ginkgo_colloidal (12103683) | **no progress markers** |
-| ginkgo_pr_cho (12103686) | **no progress markers** |
-| bh_doyle_plates (12103689) | pruning |
-| nt_promoter_tata (12103706) | pruning |
-
-**The "no progress markers" rows are concerning.** The classifier looks at
-the last ~200 lines of the log and finds nothing matching a known stage
-marker. Could be stuck, could be slow IO, could be a log buffer issue.
-Worth tailing one to check.
-
-### Wave 2 RUNNING (~2.5–3 days elapsed; complexity-only batch)
-
-Wave 2 is the manual resubmit of the W1-cancelled datasets. All in
-fold 0: NNN/5724 (smaller search). Progress ranges from 600 to 5600 out
-of 5724:
-
-| W2 progress band | Count | Examples |
+| Dataset | Sim | Cx |
 |---|---|---|
-| fold 0 ≥ 5000/5724 (~88%+) | 4 | gb_human_enhancers_cohn 5200, nt_promoter_no_tata 5000, nt_H3K4me3 5600, nt_enhancers 5200 |
-| fold 0 3000–5000 | 8 | various nt_*, gb_* |
-| fold 0 < 3000 | 6 | nt_H3K4me1 1000, nt_enhancers_types 600, nt_splice_sites_acceptors 1200, nt_splice_sites_donors 2600, gb_demo_coding 1000, nt_H3K27me3 2200, nt_H3K36me3 2400 |
-| unknown / no markers | 4 | nt_promoter_tata, tz_her2_binary, tz_her2_multiclass (W2 12111861 actually COMPLETED bus_mid), tcga_brca_pam50 |
-| COMPLETED in W2 | 4 | tz_her2_multiclass (bus, empty), humanness_therapeutic (bus, partial 9/20), sim/tz_her2_multiclass (bus, empty), sim/humanness_therapeutic (clean_finish OK) |
+| herg | W1 12103655 **EMPTY** (bus); no resubmit running | W1 12103590 RUNNING (fold 0: 3000/6480) |
+| herg_ki | W1 12103648 **EMPTY**; W3 12115463 RUNNING (fold 0: 4800/7425) | W1 12103583 **EMPTY** (bus); W3 12115462 RUNNING (fold 0: 4800/7425) |
 
-### Wave 3 RUNNING (~2 days elapsed; mix of cx + sim resubmits)
+### C. DTA
 
-Same fold 0: NNN/5724 (and a few different search sizes for non-nt
-datasets). Notable rows:
+| Dataset | Sim | Cx |
+|---|---|---|
+| kiba | W1 12103656 **EMPTY**; W3 12115466 RUNNING | W1 12103591 RUNNING (pruning) |
+| bindingdb_kd | W1 12103657 **EMPTY**; W3 12115434 RUNNING | W1 12103592 RUNNING (pruning) |
 
-| Dataset | Job | Progress | Notes |
-|---|---|---|---|
-| cx/abagym_VEGF | 12115431 | unknown markers, fresh=9 | already past precompute (uses prev cache?) |
-| cx/humanness_therapeutic | 12115464 | last_done=c11, fresh=9 | already running experiments |
-| sim/ginkgo_heparin | 12115459 | last_done=s04, fresh=4 | identical to W1 partial — about to hit same bus error region |
-| sim/nt_H3K4me3 | 12115484 | fold 0: 5600/5724 (~98%) | very close to fold 0 done |
-| sim/tz_her2_multiclass | 12115507 | fold 0: 6800/7425 (~92%) | very close |
-| cx/tz_her2_multiclass | 12115506 | fold 0: 6800/7425 (~92%) | very close |
-| sim/nt_promoter_all | 12115492 | fold 0: 5000/5724 | close |
-| Several | fold 0 in 4000-5000 range | mid-late | watch |
-| Several | fold 0 < 2000 | early | many days from finishing fold 0 |
+### D. Reaction
+
+| Dataset | Sim | Cx |
+|---|---|---|
+| buchwald_hartwig | W1 12103688 **EMPTY**; W3 12115435 RUNNING | W1 12103623 RUNNING (config 2133/5022) |
+| bh_doyle_plates | W1 12103689 RUNNING (pruning) | W1 12103624 RUNNING (pruning) |
+
+### E. DDG
+
+| Dataset | Sim | Cx |
+|---|---|---|
+| ddg_combined | W1 12103668 RUNNING (config 810/3852) | W1 12103603 **EMPTY** (bus); W3 12115436 RUNNING |
+
+### F. Antibody — flab regressions
+
+| Dataset | Sim | Cx |
+|---|---|---|
+| flab_thermo_tresanco | W1 12103658 **EMPTY**; W3 12115450 RUNNING | W1 12103593 RUNNING (fold 0: 5000/6804) |
+| flab_thermo_jain | W1 12103663 **EMPTY**; W3 12115449 RUNNING | W1 12103598 RUNNING (config 2433/3290) |
+| flab_pk_jain_heprt | W1 12103659 RUNNING (config 2424/2980) | W1 12103594 RUNNING (config 2437/2980) |
+| flab_pk_jain_fcrnrt | W1 12103660 RUNNING (fold 0: 2600/3240) | W1 12103595 RUNNING (fold 0: 2600/3240) |
+| flab_polyreact_jain_cic | W1 12103661 **EFFECTIVELY OK** errored=s12; W3 12115448 same | W1 12103596 **PARTIAL 17/20**, errored=c10 missing=c23,c24 |
+| flab_polyreact_jain_bvp | W1 12103667 **EFFECTIVELY OK** errored=s12; W3 12115447 same | W1 12103602 **PARTIAL 17/20**, errored=c10 missing=c23,c24 |
+| flab_aggregation_jain | W1 12103665 RUNNING (fold 0: 3600/3780, ~95%) | W1 12103600 RUNNING (fold 0: 3600/3780) |
+| flab_aggregation_jain_hicrt | W1 12103662 **EMPTY**; W3 12115437 RUNNING | W1 12103597 RUNNING (config 2784/3305) |
+| flab_immunogenicity_marks | W1 12103666 **OK 12/12**; W3 12115446 OK redundant | W1 12103601 **PARTIAL 12/20**, errored=c10 missing=c17–c24 |
+| flab_binding_koenig | W1 12103669 **EMPTY**; W3 12115441 RUNNING | W1 12103604 **EMPTY** (bus); W3 12115440 RUNNING |
+| flab_binding_adams | W1 12103671 **EMPTY**; W3 12115439 RUNNING (fold 0: 5800/7425) | W1 12103606 **EMPTY**; W3 12115438 RUNNING (fold 0: 5800/7425) |
+| flab_binding_phillips_h3 | W1 12103673 RUNNING (fold 0: 1000/7425) | W1 12103608 **EMPTY**; W3 12115442 RUNNING |
+| flab_expression_koenig | W1 12103670 RUNNING (fold 0: 1000/7425) | W1 12103605 **EMPTY**; W3 12115445 RUNNING |
+| flab_expression_adams | W1 12103672 **EMPTY**; W3 12115444 RUNNING | W1 12103607 **EMPTY**; W3 12115443 RUNNING (fold 0: 5600/7425) |
+
+### G. Antibody — other
+
+| Dataset | Sim | Cx |
+|---|---|---|
+| abcov_kd | W1 12103664 **EFFECTIVELY OK** errored=s12; W3 12115433 same | W1 12103599 **PARTIAL 17/20**, errored=c10 missing=c23,c24 |
+
+### H. Abagym
+
+| Dataset | Sim | Cx |
+|---|---|---|
+| abagym_Ang2 | W1 12103674 PARTIAL 11/12, **missing=s03** ← s03 SVD bug | W1 12103609 RUNNING — already past precompute, last_done=c15, fresh=10 |
+| abagym_EGFR | W1 12103675 errored=s12; W3 12115429 **EFFECTIVELY OK** errored=s12 | W1 12103610 RUNNING — already past precompute, last_done=c11, fresh=9 |
+| abagym_HER2 | W1 12103676 **EFFECTIVELY OK**; W3 12115430 same | W1 12103611 **PARTIAL 17/20**, errored=c10 missing=c23,c24 |
+| abagym_VEGF | W1 12103678 errored=s12; W3 12115432 **EFFECTIVELY OK** | W1 12103613 PARTIAL 9/20 (bus early); W3 12115431 RUNNING fresh=9 missing=c13–c24 |
+| abagym_lysozyme | W1 12103677 RUNNING (fold 0: 4200/5292) | W1 12103612 **EMPTY** (bus); **no resubmit running** |
+
+### I. Antibody classification
+
+| Dataset | Sim | Cx |
+|---|---|---|
+| tz_her2_binary | W1 cancelled; W2 12111865 RUNNING; W3 12115505 RUNNING (DUPLICATE) | W1 cancelled; W2 12111860 RUNNING; W3 12115504 RUNNING (DUPLICATE) |
+| tz_her2_multiclass | W1 cancelled; W2 12111866 **EMPTY** (bus); W3 12115507 RUNNING (fold 0: 6800/7425) | W1 cancelled; W2 12111861 **EMPTY** (bus); W3 12115506 RUNNING (fold 0: 6800/7425) |
+| humanness_therapeutic | W1 cancelled; W2 12111867 **OK 12/12**; W3 12115465 OK redundant | W1 cancelled; W2 12111862 **PARTIAL 9/20** missing=c13–c24; W3 12115464 RUNNING last_done=c11 fresh=9 |
+
+### J. Ginkgo
+
+| Dataset | Sim | Cx |
+|---|---|---|
+| ginkgo_acsins | W1 12103682 **EMPTY**; W3 12115458 RUNNING | W1 12103617 RUNNING (config 2264/2400, ~94%) |
+| ginkgo_colloidal | W1 12103683 RUNNING (config 1640/3325) | W1 12103618 RUNNING (config 1660/3330) |
+| ginkgo_heparin | W1 12103684 PARTIAL 4/12 missing=s05–s13 (bus); W3 12115459 RUNNING last_done=s04 fresh=4 (about to hit same point) | W1 12103619 RUNNING (config 2396/2608, ~92%) |
+| ginkgo_hic | W1 12103685 **EMPTY** (bus); W3 12115460 RUNNING | W1 12103620 RUNNING (config 1703/3350) |
+| ginkgo_pr_cho | W1 12103686 RUNNING (config 1736/3600) | W1 12103621 RUNNING (config 1733/3600) |
+| ginkgo_titer | W1 12103687 **EMPTY** (bus); W3 12115461 RUNNING | W1 12103622 RUNNING (config 1509/3095) |
+
+### K. TCGA
+
+| Dataset | Sim | Cx |
+|---|---|---|
+| tcga_luad_vs_lusc | W1 12103690 **EMPTY** (bus); W3 12115503 RUNNING (fold 0: 4600/7425) | W1 cancelled; W2 12111863 RUNNING; W3 12115502 RUNNING (DUPLICATE) |
+| tcga_brca_pam50 | W1 12103691 **EMPTY** (bus); W3 12115501 RUNNING | W1 cancelled; W2 12111864 RUNNING; W3 12115500 RUNNING (DUPLICATE) |
+
+### L. Nucleotide (17 datasets — all DUPLICATE complexity jobs running)
+
+All sim W1 jobs **EMPTY** (bus in precompute_importance — they died very
+early). All sim W3 jobs RUNNING (fold 0 progress varies). All cx W2 +
+W3 jobs RUNNING in parallel.
+
+Sim progress sample (W3): nt_H3K4me3 fold 0: 5600/5724 (~98%);
+nt_promoter_all fold 0: 5000/5724; nt_promoter_no_tata fold 0: 5000/5724.
+Many in 2000–5000 range.
+
+| Dataset | Sim status | Cx duplicates |
+|---|---|---|
+| nt_H2AFZ | W1 EMPTY; W3 12115472 RUNNING fold 0: 2400/5724 | W2 12111850 + W3 12115471 |
+| nt_H3K27ac | W1 EMPTY; W3 12115474 RUNNING fold 0: 4200/5724 | W2 12111851 + W3 12115473 |
+| nt_H3K27me3 | W1 EMPTY; W3 12115476 RUNNING fold 0: 2200/5724 | W2 12111852 + W3 12115475 |
+| nt_H3K36me3 | W1 EMPTY; W3 12115478 RUNNING fold 0: 2400/5724 | W2 12111853 + W3 12115477 |
+| nt_H3K4me1 | W1 EMPTY; W3 12115480 RUNNING precompute_importance | W2 12111854 + W3 12115479 |
+| nt_H3K4me2 | W1 EMPTY; W3 12115482 RUNNING fold 0: 3000/5724 | W2 12111855 + W3 12115481 |
+| nt_H3K4me3 | W1 EMPTY; W3 12115484 RUNNING fold 0: 5600/5724 (~98%) | W2 12111856 + W3 12115483 |
+| nt_H3K9ac | W1 EMPTY; W3 12115486 RUNNING fold 0: 4600/5724 | W2 12111857 + W3 12115485 |
+| nt_H3K9me3 | W1 EMPTY; W3 12115488 RUNNING fold 0: 4400/5724 | W2 12111858 + W3 12115487 |
+| nt_H4K20me1 | W1 EMPTY; W3 12115490 RUNNING fold 0: 3200/5724 | W2 12111859 + W3 12115489 |
+| nt_enhancers | W1 EMPTY; W3 12115468 RUNNING fold 0: 3671/5724 | W2 12111848 + W3 12115467 |
+| nt_enhancers_types | W1 EMPTY; W3 12115470 RUNNING fold 0: 600/5724 | W2 12111849 + W3 12115469 |
+| nt_promoter_all | W1 EMPTY; W3 12115492 RUNNING fold 0: 5000/5724 | W2 12111843 + W3 12115491 |
+| nt_promoter_no_tata | W1 EMPTY; W3 12115494 RUNNING fold 0: 5000/5724 | W2 12111844 + W3 12115493 |
+| nt_promoter_tata | W1 12103706 RUNNING (pruning) — **no sim W3 resubmit** | W2 12111845 + W3 12115495 |
+| nt_splice_sites_acceptors | W1 EMPTY; W3 12115497 RUNNING fold 0: 1200/5724 | W2 12111846 + W3 12115496 |
+| nt_splice_sites_donors | W1 EMPTY; W3 12115499 RUNNING fold 0: 2600/5724 | W2 12111847 + W3 12115498 |
+
+### M. Genomic Benchmarks (cache race condition territory)
+
+| Dataset | Sim | Cx |
+|---|---|---|
+| gb_demo_coding_vs_intergenomic_seqs | W1 12103709 **EMPTY** (bus); **no resubmit** | W2 12111841 RUNNING fold 0: 1000/5724; W3 12115451 RUNNING precompute_importance (DUPLICATE) |
+| gb_demo_human_or_worm | W1 12103710 **EMPTY** (bus); W3 12115453 **python_error: cache race** (4:38) | W2 12111842 RUNNING fold 0: 4400/5724; W3 12115452 RUNNING (DUPLICATE) |
+| gb_human_enhancers_cohn | W1 12103711 **EMPTY** (bus); W3 12115455 **python_error: cache race** | W2 12111839 RUNNING fold 0: 5200/5724; W3 12115454 RUNNING (DUPLICATE) |
+| gb_human_nontata_promoters | W1 12103712 **EMPTY** (bus); W3 12115457 **python_error: cache race** | W2 12111840 RUNNING fold 0: 4600/5724; W3 12115456 RUNNING (DUPLICATE) |
 
 ---
 
-## Things to investigate (before more resubmits)
+## Action list (revised, in priority order)
 
-### 1. The 3 four-minute Wave 3 python_error sim jobs
+### A. Investigations done — no further investigation needed
 
+The 3 things I asked you to investigate now have root causes:
+- "Stuck" jobs → not stuck, in stage 2 of precompute
+- abagym_Ang2 s03 → SVD non-convergence bug in s03_feature_concentration.py:86
+- 3 four-minute gb_* deaths → cache race in genomic_benchmarks library
+
+### B. Fix the s03 bug, then resubmit Ang2
+
+**Code fix needed in `tests/experiments/similarity/s03_feature_concentration.py` line 86.** The SVD call needs to fall back to `gesvd` driver or catch `LinAlgError`. Skip this code change and the resubmit is pointless.
+
+After fix:
 ```
-head -50 slurm-12115453.out slurm-12115455.out slurm-12115457.out | less
-grep -E "Traceback|Error|raise|ImportError" slurm-12115453.out
-```
-
-All three died in identical 4:38 elapsed — same root cause almost
-certainly. Fix once, resubmit all 3.
-
-### 2. sim/abagym_Ang2 missing s03 (not s12)
-
-Different from the s12 pattern. Job ID 12103674.
-
-```
-grep -E "s03|feature_concentration|FAILED" slurm-12103674.out | head -40
+sbatch --job-name=sim_abagym_Ang2_p tests/slurm_scripts/submit_dataset.sh similarity abagym_Ang2 "s03"
 ```
 
-If s03 has a real bug for this dataset, fix it before any resubmits.
+### C. Fix the gb_* cache race before any gb_* resubmit
 
-### 3. Wave 1 RUNNING jobs with no progress markers
-
-These have been "RUNNING" for 3+ days but the audit's tail scan finds no
-fold/stage signal. Could be stuck (deadlock, swapping), could be very
-slow IO. Worth peeking at one:
-
+Either pre-warm the cache:
 ```
-JOB=12103594  # cx_flab_pk_jain_heprt
-tail -100 slurm-${JOB}.out
-ls -la slurm-${JOB}.out                 # check mtime; if recent → still writing
-sstat -j ${JOB} --format=AveRSS,MaxRSS,CPUTimeRAW 2>/dev/null  # memory usage
+# Run once on a login node or in a small interactive job
+python -c "
+from genomic_benchmarks.loc2seq import download_dataset
+for ds in ['demo_human_or_worm','human_enhancers_cohn','human_nontata_promoters','demo_coding_vs_intergenomic_seqs']:
+    download_dataset(ds, version=0)
+"
 ```
 
-If the log mtime is hours old, the job is hung — scancel + resubmit.
+Or submit gb_* sim jobs serially (one at a time) so they don't fight over the cache:
+```
+sbatch --job-name=sim_gb_demo_coding_vs_intergenomic_seqs tests/slurm_scripts/submit_dataset.sh similarity gb_demo_coding_vs_intergenomic_seqs
+# wait for it to complete before submitting the next one
+```
 
-If you see the same on the ginkgo_*  W1 RUNNING jobs (12103617–22) too —
-those have no markers either — that's 6 jobs probably stuck.
+After cache is built (or one job is confirmed past the download stage):
+```
+sbatch --job-name=sim_gb_demo_human_or_worm tests/slurm_scripts/submit_dataset.sh similarity gb_demo_human_or_worm
+sbatch --job-name=sim_gb_human_enhancers_cohn tests/slurm_scripts/submit_dataset.sh similarity gb_human_enhancers_cohn
+sbatch --job-name=sim_gb_human_nontata_promoters tests/slurm_scripts/submit_dataset.sh similarity gb_human_nontata_promoters
+```
 
----
+### D. Resubmit the cx PARTIALs (5 datasets, missing 2-10 experiments each)
 
-## What to resubmit RIGHT NOW
-
-### Targeted complexity resubmits (PARTIAL → fill in missing)
-
-Submit_dataset.sh accepts a 3rd arg = space-separated experiment IDs.
-**Per your scancel rule, paste these one at a time and verify.**
+These are safe — no in-flight job covers them.
 
 ```
 sbatch --job-name=cx_abcov_kd_p tests/slurm_scripts/submit_dataset.sh complexity abcov_kd "c23 c24"
@@ -288,26 +277,16 @@ sbatch --job-name=cx_flab_polyreact_jain_bvp_p tests/slurm_scripts/submit_datase
 sbatch --job-name=cx_flab_immunogenicity_marks_p tests/slurm_scripts/submit_dataset.sh complexity flab_immunogenicity_marks "c17 c18 c19 c21 c22 c23 c24"
 ```
 
-**Do not resubmit** cx/abagym_VEGF or cx/humanness_therapeutic (partials).
-Their Wave 3 resubmits (12115431, 12115464) are already running and at
-the same progress point — wait for those.
+Skip: cx/abagym_VEGF and cx/humanness_therapeutic — W3 resubmits are
+already in-flight past precompute and saving experiments.
 
-### Full complexity resubmits (EMPTY, no resubmit running)
+### E. Resubmit the cx full EMPTY (1 dataset, no in-flight)
 
 ```
 sbatch --job-name=cx_abagym_lysozyme tests/slurm_scripts/submit_dataset.sh complexity abagym_lysozyme
 ```
 
-cx/abagym_lysozyme is the only cx EMPTY with no resubmit in flight.
-
-(All other cx EMPTY datasets — herg_ki, ddg_combined, flab_binding_*,
-flab_expression_*, flab_binding_phillips_h3 — already have W3 jobs
-running. Don't double up.)
-
-### Full similarity resubmits (EMPTY, no resubmit running)
-
-Check before submitting: every dataset below should have NO RUNNING sim
-job for it. Verify with `squeue -u $USER --name=sim_<dataset>`.
+### F. Resubmit the sim full EMPTY without in-flight resubmits (8 datasets)
 
 ```
 sbatch --job-name=sim_caco2 tests/slurm_scripts/submit_dataset.sh similarity caco2
@@ -317,45 +296,31 @@ sbatch --job-name=sim_adme_hlm tests/slurm_scripts/submit_dataset.sh similarity 
 sbatch --job-name=sim_adme_rlm tests/slurm_scripts/submit_dataset.sh similarity adme_rlm
 sbatch --job-name=sim_adme_mdr1 tests/slurm_scripts/submit_dataset.sh similarity adme_mdr1
 sbatch --job-name=sim_herg tests/slurm_scripts/submit_dataset.sh similarity herg
-sbatch --job-name=sim_gb_demo_coding_vs_intergenomic_seqs tests/slurm_scripts/submit_dataset.sh similarity gb_demo_coding_vs_intergenomic_seqs
+# sim_gb_demo_coding_vs_intergenomic_seqs — see section C above (cache race)
 ```
 
-(All other sim EMPTY datasets already have W3 resubmits running.)
+### G. Duplicate complexity jobs (W2 + W3 both running) — optional cleanup
 
-### Don't resubmit yet
+25 cx datasets have a Wave 2 RUNNING + Wave 3 RUNNING duplicate. They'll
+both produce the same output; the second writer wins. If compute is
+tight, cancel the W3 of each pair (newer, less progress) one-by-one. If
+compute is fine, leave them — redundancy is harmless.
 
-The 3 four-minute python_error sims (gb_demo_human_or_worm,
-gb_human_enhancers_cohn, gb_human_nontata_promoters) — investigate root
-cause first, then resubmit.
-
-sim/abagym_Ang2 — investigate s03 first.
+Newer Wave 3 cx IDs to consider cancelling (paste **one at a time**,
+verify with `squeue -j <pair>`): 12115471, 12115473, 12115475, 12115477,
+12115479, 12115481, 12115483, 12115485, 12115487, 12115489, 12115467,
+12115469, 12115491, 12115493, 12115495, 12115496, 12115498, 12115500,
+12115502, 12115504, 12115506, 12115451, 12115452, 12115454, 12115456.
 
 ---
 
-## How to check progress later
+## Known bugs (sticky)
 
-```bash
-cd /data/stat-ecr/scat9264/KIRBy
-git pull
-python tests/audit_full_wave.py --include-running | tee /tmp/audit_$(date +%H%M).txt
-diff /tmp/audit_HHMM_old.txt /tmp/audit_HHMM_new.txt | less   # spot what moved
-```
-
-**Things to watch for next:**
-- Has any RUNNING job logged `[saved` for the first time? (= precompute
-  finally finished, per-experiment loop started)
-- Have any RUNNING jobs flipped to bus_mid_run? (= we lose them)
-- Have the "no progress markers" W1 jobs gained any? (= they're alive)
-
----
-
-## Open known bugs
-
-| Bug | Where | Action |
-|---|---|---|
-| Bus error in precompute | Affects every Wave 1 cx + sim. ~50 jobs lost. | User says fixed for new submissions. Wave 1 jobs still vulnerable as they're long-lived. |
-| `noiseInject not installed` | c10 self-errors on every complexity dataset (1 errored slot in every PARTIAL/OK cx row). | `pip install noiseInject` if you want c10 results. |
-| `s12 no_cliffs_found` | Methodological — antibody data has no chem-style cliffs. Counts as errored, not failed. | None unless you change s12 method. |
-| `submit_dataset.sh` masks failures | sacct shows COMPLETED 0:0 for bus errors because bash doesn't propagate `$?`. | Add `set -e` or `exit $?` after the python call. |
-| python_error in ~4 min for 3 W3 sim gb_* jobs | New failure mode, root cause unknown | Investigate slurm-12115453/5/7.out before resubmitting |
-| sim/abagym_Ang2 missing s03 | Single-experiment crash, not the s12 pattern | Investigate slurm-12103674.out |
+| Bug | Action |
+|---|---|
+| Bus error in Wave 1 precompute | User says fixed; Wave 1 long-runners may still hit it |
+| noiseInject not installed → c10 always errors | `pip install noiseInject` |
+| s12 no_cliffs_found on antibody | Methodological, not a bug |
+| submit_dataset.sh masks failures (exit 0 on bus) | Add `set -e` or `exit $?` |
+| s03 SVD non-convergence on abagym_Ang2 | Fix `s03_feature_concentration.py:86` |
+| genomic_benchmarks cache race | Pre-warm cache or serialize submits |
