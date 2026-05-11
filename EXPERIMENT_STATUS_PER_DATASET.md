@@ -1,182 +1,314 @@
-# Per-Dataset Experiment Status — 2026-05-11
+# Per-Dataset Experiment Status — 2026-05-11 (afternoon)
 
-Single source of truth across the 2026-05-08 submission and all subsequent
-resubmits (Wave 1 = 12103xxx, Wave 2 = 12111xxx, Wave 3 = 12115xxx).
+Single source of truth, built from a fresh `audit_full_wave.py
+--include-running` (commit 280166e). Every row below is grounded in the
+audit output you pasted; no projections from older data.
 
-Data sources:
-- `sacct -u $USER -S 2026-05-08`
-- `python tests/audit_full_wave.py` (log + fresh-file audit; mtime ≥ job start)
-- `squeue -u $USER` for in-flight state
+## How to read this
 
-## Verdict legend
+- **OK** = all expected JSONs fresh, no errors. (4 datasets total.)
+- **EFFECTIVELY OK** = sim antibody with `errored=s12` (no_cliffs_found is
+  a methodological no-data, not a job failure). 11/12 fresh, the 1 missing
+  is s12. Confirmed by the audit `errored=s12` column.
+- **PARTIAL (resubmittable)** = COMPLETED job with some fresh files; specific
+  missing/errored experiment IDs listed.
+- **EMPTY** = COMPLETED job with zero fresh files (Wave 1 bus errors).
+- **RUNNING — IN_PROGRESS** = currently RUNNING with a known progress
+  marker. Includes which fold/checkpoint it's at. **No verdict yet.**
+- **RUNNING — UNKNOWN** = currently RUNNING but the log tail has no
+  progress markers. Could be stuck. Worth a closer look.
 
-- **OK** — every expected experiment has a fresh JSON without an `error` key.
-- **EFFECTIVELY OK** — `clean_finish` log, 11/12 sim or 19/20 cx fresh, the
-  remaining 1 is a self-reported methodological no-data (e.g. s12
-  `no_cliffs_found` on antibody, c10 `noiseInject not installed`). Not a
-  job failure. Don't resubmit unless you install the missing dep.
-- **PARTIAL** — some fresh JSONs, not all; reason given.
-- **EMPTY** — zero fresh JSONs from any wave.
-- **RUNNING** — a job for this (category, dataset) is in flight; status
-  unknown until it finishes.
-- **WAVE-3 RUNNING (over W1 RUNNING)** — duplicate parallel jobs. One is
-  redundant.
+## Audit headline
 
-## Top-line stats
+```
+Verdict counts: OK = 4, PARTIAL = 21, EMPTY = 55, RUNNING = 129
+```
 
-- COMPLETED jobs audited: 79
-- Verdicts: OK = 4, PARTIAL = 19 (most are "effectively OK"), EMPTY = 56
-- Datasets with zero OK across all waves and no resubmit running: **14**
-- Datasets with parallel duplicate cx_ jobs running: **25** (Wave 2 + Wave 3)
-- Wave 3 jobs that died in <5 minutes (python_error): **3** (gb_demo_human_or_worm, gb_human_enhancers_cohn, gb_human_nontata_promoters — similarity only)
+Of the 21 PARTIAL: 8 are sim/antibody with the `errored=s12` pattern
+(effectively OK); 13 are real losses needing targeted resubmits.
+
+Of the 129 RUNNING: **every single one is still in `fold 0` of
+`precompute_hybrid_searches`.** Not one has reached the per-experiment
+loop yet. That means none of them have written any per-experiment JSON.
+Some are very close to fold 0 completion (>90%), others just past 10%.
 
 ---
 
-## A. Molecular regression (n=6)
+## Genuinely complete (OK)
 
-| Dataset | Similarity | Complexity | Action |
-|---|---|---|---|
-| caco2 | W1 12103649 EMPTY (bus); no resubmit | W1 12103584 RUNNING | sim: resubmit. cx: wait for W1. |
-| logd | W1 12103650 EMPTY (bus); no resubmit | W1 12103585 RUNNING | sim: resubmit. cx: wait for W1. |
-| qm9 | W1 12103651 EMPTY (bus); no resubmit | W1 12103586 RUNNING | sim: resubmit. cx: wait for W1. |
-| adme_hlm | W1 12103652 EMPTY (bus); no resubmit | W1 12103587 RUNNING | sim: resubmit. cx: wait for W1. |
-| adme_rlm | W1 12103653 EMPTY (bus); no resubmit | W1 12103588 RUNNING | sim: resubmit. cx: wait for W1. |
-| adme_mdr1 | W1 12103654 EMPTY (bus); no resubmit | W1 12103589 RUNNING | sim: resubmit. cx: wait for W1. |
+| Dataset | Category | Job ID(s) |
+|---|---|---|
+| flab_immunogenicity_marks | similarity | W1 12103666 + W3 12115446 (redundant) |
+| humanness_therapeutic | similarity | W2 12111867 + W3 12115465 (redundant) |
 
-## B. Molecular classification (n=2)
-
-| Dataset | Similarity | Complexity | Action |
-|---|---|---|---|
-| herg | W1 12103655 EMPTY (bus); no resubmit | W1 12103590 RUNNING | sim: resubmit. cx: wait for W1. |
-| herg_ki | W1 12103648 EMPTY (bus); W3 12115463 RUNNING | W1 12103583 EMPTY (bus); W3 12115462 RUNNING | Wait for W3. |
-
-## C. DTA (n=2)
-
-| Dataset | Similarity | Complexity | Action |
-|---|---|---|---|
-| kiba | W1 12103656 EMPTY (bus); W3 12115466 RUNNING | W1 12103591 RUNNING | Wait. |
-| bindingdb_kd | W1 12103657 EMPTY (bus); W3 12115434 RUNNING | W1 12103592 RUNNING | Wait. |
-
-## D. Reaction (n=2)
-
-| Dataset | Similarity | Complexity | Action |
-|---|---|---|---|
-| buchwald_hartwig | W1 12103688 EMPTY (bus); W3 12115435 RUNNING | W1 12103623 RUNNING | Wait. |
-| bh_doyle_plates | W1 12103689 RUNNING | W1 12103624 RUNNING | Wait for W1. |
-
-## E. DDG (n=1)
-
-| Dataset | Similarity | Complexity | Action |
-|---|---|---|---|
-| ddg_combined | W1 12103668 RUNNING | W1 12103603 EMPTY (bus); W3 12115436 RUNNING | Wait. |
-
-## F. Antibody — flab regressions (n=14)
-
-| Dataset | Similarity | Complexity | Action |
-|---|---|---|---|
-| flab_thermo_tresanco | W1 12103658 EMPTY (bus); W3 12115450 RUNNING | W1 12103593 RUNNING | Wait. |
-| flab_thermo_jain | W1 12103663 EMPTY (bus); W3 12115449 RUNNING | W1 12103598 RUNNING | Wait. |
-| flab_pk_jain_heprt | W1 12103659 RUNNING | W1 12103594 RUNNING | Wait for W1. |
-| flab_pk_jain_fcrnrt | W1 12103660 RUNNING | W1 12103595 RUNNING | Wait for W1. |
-| flab_polyreact_jain_cic | W1 12103661 EFFECTIVELY OK (11/12, s12 no-cliffs); W3 12115448 redundant 11/12 | W1 12103596 PARTIAL 17/20 (bus); no resubmit | sim: ✅ done. cx: **resubmit** for missing c23/c24 (c10 needs noiseInject). |
-| flab_polyreact_jain_bvp | W1 12103667 EFFECTIVELY OK (11/12); W3 12115447 redundant 11/12 | W1 12103602 PARTIAL 17/20 (bus); no resubmit | sim: ✅ done. cx: **resubmit** for c23/c24. |
-| flab_aggregation_jain | W1 12103665 RUNNING | W1 12103600 RUNNING | Wait. |
-| flab_aggregation_jain_hicrt | W1 12103662 EMPTY (bus); W3 12115437 RUNNING | W1 12103597 RUNNING | Wait. |
-| flab_immunogenicity_marks | W1 12103666 **OK 12/12**; W3 12115446 OK redundant | W1 12103601 PARTIAL 12/20 (bus); no resubmit | sim: ✅ done. cx: **resubmit** for c13+c15-c24. |
-| flab_binding_koenig | W1 12103669 EMPTY (bus); W3 12115441 RUNNING | W1 12103604 EMPTY (bus); W3 12115440 RUNNING | Wait. |
-| flab_binding_adams | W1 12103671 EMPTY (bus); W3 12115439 RUNNING | W1 12103606 EMPTY (bus); W3 12115438 RUNNING | Wait. |
-| flab_binding_phillips_h3 | W1 12103673 RUNNING | W1 12103608 EMPTY (bus); W3 12115442 RUNNING | Wait. |
-| flab_expression_koenig | W1 12103670 RUNNING | W1 12103605 EMPTY (bus); W3 12115445 RUNNING | Wait. |
-| flab_expression_adams | W1 12103672 EMPTY (bus); W3 12115444 RUNNING | W1 12103607 EMPTY (bus); W3 12115443 RUNNING | Wait. |
-
-## G. Antibody — other (n=1)
-
-| Dataset | Similarity | Complexity | Action |
-|---|---|---|---|
-| abcov_kd | W1 12103664 EFFECTIVELY OK (11/12); W3 12115433 redundant 11/12 | W1 12103599 RUNNING | sim: ✅ done. cx: wait for W1. |
-
-## H. Abagym (n=5)
-
-| Dataset | Similarity | Complexity | Action |
-|---|---|---|---|
-| abagym_Ang2 | W1 12103674 EFFECTIVELY OK (finished_then_bus, 11/12) | W1 12103609 RUNNING | sim: ✅ done. cx: wait. |
-| abagym_EGFR | W1 12103675 PARTIAL 11/12 (bus_mid); W3 12115429 EFFECTIVELY OK (11/12) | W1 12103610 RUNNING | sim: ✅ done. cx: wait. |
-| abagym_HER2 | W1 12103676 EFFECTIVELY OK (11/12); W3 12115430 redundant 11/12 | W1 12103611 PARTIAL 17/20 (bus); no resubmit | sim: ✅ done. cx: **resubmit** for c23/c24. |
-| abagym_VEGF | W1 12103678 PARTIAL 11/12 (bus_mid); W3 12115432 EFFECTIVELY OK (11/12) | W1 12103613 PARTIAL 9/20 (bus, short); W3 12115431 RUNNING | sim: ✅ done. cx: wait for W3. |
-| abagym_lysozyme | W1 12103677 RUNNING | W1 12103612 EMPTY (bus); **no resubmit** | sim: wait. cx: **resubmit**. |
-
-## I. Antibody classification (n=3)
-
-| Dataset | Similarity | Complexity | Action |
-|---|---|---|---|
-| tz_her2_binary | W1 cancelled; W2 12111865 RUNNING; W3 12115505 RUNNING (duplicate) | W1 cancelled; W2 12111860 RUNNING; W3 12115504 RUNNING (duplicate) | Wait. **Cancel one duplicate** per pair. |
-| tz_her2_multiclass | W1 cancelled; W2 12111866 EMPTY (bus); W3 12115507 RUNNING | W1 cancelled; W2 12111861 EMPTY (bus); W3 12115506 RUNNING | Wait for W3. |
-| humanness_therapeutic | W1 cancelled; W2 12111867 **OK 12/12**; W3 12115465 OK redundant | W1 cancelled; W2 12111862 PARTIAL 9/20 (bus); W3 12115464 RUNNING | sim: ✅ done. cx: wait for W3. |
-
-## J. Ginkgo (n=6)
-
-| Dataset | Similarity | Complexity | Action |
-|---|---|---|---|
-| ginkgo_acsins | W1 12103682 EMPTY (bus); W3 12115458 RUNNING | W1 12103617 RUNNING | Wait. |
-| ginkgo_colloidal | W1 12103683 RUNNING | W1 12103618 RUNNING | Wait for W1. |
-| ginkgo_heparin | W1 12103684 EMPTY (bus); W3 12115459 RUNNING | W1 12103619 RUNNING | Wait. |
-| ginkgo_hic | W1 12103685 EMPTY (bus); W3 12115460 RUNNING | W1 12103620 RUNNING | Wait. |
-| ginkgo_pr_cho | W1 12103686 RUNNING | W1 12103621 RUNNING | Wait for W1. |
-| ginkgo_titer | W1 12103687 EMPTY (bus); W3 12115461 RUNNING | W1 12103622 RUNNING | Wait. |
-
-## K. TCGA (n=2)
-
-| Dataset | Similarity | Complexity | Action |
-|---|---|---|---|
-| tcga_luad_vs_lusc | W1 12103690 EMPTY (bus); W3 12115503 RUNNING | W1 cancelled; W2 12111863 RUNNING; W3 12115502 RUNNING (duplicate) | Wait. **Cancel one cx duplicate**. |
-| tcga_brca_pam50 | W1 12103691 EMPTY (bus); W3 12115501 RUNNING | W1 cancelled; W2 12111864 RUNNING; W3 12115500 RUNNING (duplicate) | Wait. **Cancel one cx duplicate**. |
-
-## L. Nucleotide (n=17)
-
-Pattern is uniform: W1 sim EMPTY (bus), W1 cx cancelled, W2 cx RUNNING, W3 sim+cx RUNNING. All 17 cx datasets have **parallel duplicate** Wave-2 + Wave-3 jobs.
-
-| Dataset | Similarity | Complexity (DUPLICATE jobs running) | Action |
-|---|---|---|---|
-| nt_H2AFZ | W1 12103692 EMPTY; W3 12115472 RUNNING | W2 12111850 + W3 12115471 | Wait. **Cancel cx W3 (12115471)**. |
-| nt_H3K27ac | W1 12103693 EMPTY; W3 12115474 RUNNING | W2 12111851 + W3 12115473 | Cancel cx W3 (12115473). |
-| nt_H3K27me3 | W1 12103694 EMPTY; W3 12115476 RUNNING | W2 12111852 + W3 12115475 | Cancel cx W3 (12115475). |
-| nt_H3K36me3 | W1 12103695 EMPTY; W3 12115478 RUNNING | W2 12111853 + W3 12115477 | Cancel cx W3 (12115477). |
-| nt_H3K4me1 | W1 12103696 EMPTY; W3 12115480 RUNNING | W2 12111854 + W3 12115479 | Cancel cx W3 (12115479). |
-| nt_H3K4me2 | W1 12103697 EMPTY; W3 12115482 RUNNING | W2 12111855 + W3 12115481 | Cancel cx W3 (12115481). |
-| nt_H3K4me3 | W1 12103698 EMPTY; W3 12115484 RUNNING | W2 12111856 + W3 12115483 | Cancel cx W3 (12115483). |
-| nt_H3K9ac | W1 12103699 EMPTY; W3 12115486 RUNNING | W2 12111857 + W3 12115485 | Cancel cx W3 (12115485). |
-| nt_H3K9me3 | W1 12103700 EMPTY; W3 12115488 RUNNING | W2 12111858 + W3 12115487 | Cancel cx W3 (12115487). |
-| nt_H4K20me1 | W1 12103701 EMPTY; W3 12115490 RUNNING | W2 12111859 + W3 12115489 | Cancel cx W3 (12115489). |
-| nt_enhancers | W1 12103702 EMPTY; W3 12115468 RUNNING | W2 12111848 + W3 12115467 | Cancel cx W3 (12115467). |
-| nt_enhancers_types | W1 12103703 EMPTY; W3 12115470 RUNNING | W2 12111849 + W3 12115469 | Cancel cx W3 (12115469). |
-| nt_promoter_all | W1 12103704 EMPTY; W3 12115492 RUNNING | W2 12111843 + W3 12115491 | Cancel cx W3 (12115491). |
-| nt_promoter_no_tata | W1 12103705 EMPTY; W3 12115494 RUNNING | W2 12111844 + W3 12115493 | Cancel cx W3 (12115493). |
-| nt_promoter_tata | W1 12103706 RUNNING (W1 sim still going); **no W3 sim** | W2 12111845 + W3 12115495 | sim: wait for W1. cx: cancel W3 (12115495). |
-| nt_splice_sites_acceptors | W1 12103707 EMPTY; W3 12115497 RUNNING | W2 12111846 + W3 12115496 | Cancel cx W3 (12115496). |
-| nt_splice_sites_donors | W1 12103708 EMPTY; W3 12115499 RUNNING | W2 12111847 + W3 12115498 | Cancel cx W3 (12115498). |
-
-## M. Genomic Benchmarks (n=4)
-
-| Dataset | Similarity | Complexity | Action |
-|---|---|---|---|
-| gb_demo_coding_vs_intergenomic_seqs | W1 12103709 EMPTY (bus); **no sim resubmit** | W1 cancelled; W2 12111841 RUNNING; W3 12115451 RUNNING (duplicate) | sim: **resubmit**. cx: cancel W3 duplicate (12115451). |
-| gb_demo_human_or_worm | W1 12103710 EMPTY (bus, 13 min — quick fail); W3 12115453 **python_error** (4:38) | W1 cancelled; W2 12111842 RUNNING; W3 12115452 RUNNING (duplicate) | sim: **investigate slurm-12115453.out, then resubmit**. cx: cancel W3 (12115452). |
-| gb_human_enhancers_cohn | W1 12103711 EMPTY (bus); W3 12115455 **python_error** (4:38) | W1 cancelled; W2 12111839 RUNNING; W3 12115454 RUNNING (duplicate) | sim: **investigate slurm-12115455.out**. cx: cancel W3 (12115454). |
-| gb_human_nontata_promoters | W1 12103712 EMPTY (bus); W3 12115457 **python_error** (4:38) | W1 cancelled; W2 12111840 RUNNING; W3 12115456 RUNNING (duplicate) | sim: **investigate slurm-12115457.out**. cx: cancel W3 (12115456). |
+That's the entire "done" list.
 
 ---
 
-## Consolidated action list
+## Effectively complete (sim antibody, errored=s12 only)
 
-### Investigate first (3 fast-failing sim jobs, same 4:38 elapsed)
+These finished cleanly, with `s12_cross_domain_cliffs` self-reporting
+`no_cliffs_found` because antibody embeddings don't form chemistry-style
+cliffs. The audit calls them PARTIAL 11/12 but they don't need resubmit
+unless you change the s12 method.
+
+| Dataset | Best Job |
+|---|---|
+| sim/abagym_EGFR | W3 12115429 |
+| sim/abagym_HER2 | W3 12115430 |
+| sim/abagym_VEGF | W3 12115432 |
+| sim/abcov_kd | W3 12115433 |
+| sim/flab_polyreact_jain_bvp | W3 12115447 |
+| sim/flab_polyreact_jain_cic | W3 12115448 |
+
+Note: there are also W1 copies of these same 6 with the same 11/12 pattern.
+Redundant.
+
+---
+
+## PARTIAL — COMPLETED, real losses, ready to resubmit
+
+All these are complexity (none of these jobs got far enough; sim partials
+above are all s12-only).
+
+| Dataset | Best Job | Fresh | Errored | Missing (resubmit these) |
+|---|---|---|---|---|
+| cx/abcov_kd | W1 12103599 | 17/20 | c10 (noiseInject) | c23, c24 |
+| cx/abagym_HER2 | W1 12103611 | 17/20 | c10 | c23, c24 |
+| cx/flab_polyreact_jain_cic | W1 12103596 | 17/20 | c10 | c23, c24 |
+| cx/flab_polyreact_jain_bvp | W1 12103602 | 17/20 | c10 | c23, c24 |
+| cx/flab_immunogenicity_marks | W1 12103601 | 12/20 | c10 | c17, c18, c19, c21, c22, c23, c24 |
+| cx/abagym_VEGF | W1 12103613 | 9/20 | c10 | c13, c15, c16, c17, c18, c19, c21, c22, c23, c24 |
+| cx/humanness_therapeutic | W2 12111862 | 9/20 | c10 | c13, c15, c16, c17, c18, c19, c21, c22, c23, c24 |
+
+(Note: W3 12115431 cx/abagym_VEGF and W3 12115464 cx/humanness_therapeutic
+are RUNNING and at 9 fresh / last_done=c11 — same progress as the
+COMPLETED partials. If they finish without bus-erroring, they'll cover
+these gaps. But based on Wave 1 evidence, the bus error tends to hit at
+c22→c23. Wait and see.)
+
+### sim/abagym_Ang2 — odd one out
+
+| Dataset | Best Job | Fresh | Pattern |
+|---|---|---|---|
+| sim/abagym_Ang2 | W1 12103674 (finished_then_bus) | 11/12 | missing=**s03** (not s12!) |
+
+This is different from the rest. The job finished all 12, bus-errored on
+teardown, but `s03_feature_concentration` didn't write its JSON.
+**Investigate before resubmitting** — see "Things to investigate" below.
+
+---
+
+## EMPTY — COMPLETED jobs with zero output (Wave 1 bus errors)
+
+These are pure losses. All bus_mid_run in precompute / fold 0 pruning.
+
+**Complexity (8 datasets):**
+- cx/herg_ki (12103583)
+- cx/ddg_combined (12103603)
+- cx/flab_binding_koenig (12103604)
+- cx/flab_expression_koenig (12103605)
+- cx/flab_binding_adams (12103606)
+- cx/flab_expression_adams (12103607)
+- cx/flab_binding_phillips_h3 (12103608)
+- cx/abagym_lysozyme (12103612)
+- cx/tz_her2_multiclass (W2 12111861)
+
+**Similarity (38 datasets):**
+- All molecular regression: herg_ki, caco2, logd, qm9, adme_hlm, adme_rlm, adme_mdr1
+- All molecular clf: herg
+- All DTA: kiba, bindingdb_kd
+- Reaction: buchwald_hartwig
+- DDG: (W1 12103668 still RUNNING — not in this EMPTY list)
+- Antibody flab regression: flab_thermo_tresanco, flab_thermo_jain,
+  flab_aggregation_jain_hicrt, flab_binding_koenig, flab_binding_adams,
+  flab_expression_adams
+- Ginkgo: ginkgo_acsins, ginkgo_hic, ginkgo_titer; partial:
+  ginkgo_heparin (4/12, see below)
+- TCGA: tcga_luad_vs_lusc, tcga_brca_pam50
+- All 17 nucleotide (nt_*)
+- All 4 gb_* genomic benchmarks
+- Ab clf: tz_her2_multiclass
+
+**Also EMPTY but a different cause — 3 sim Wave 3 jobs `python_error` in 4:38:**
+- sim/gb_demo_human_or_worm (12115453)
+- sim/gb_human_enhancers_cohn (12115455)
+- sim/gb_human_nontata_promoters (12115457)
+
+These crashed immediately — investigate before resubmitting (see below).
+
+### sim/ginkgo_heparin (partial EMPTY)
+
+`12103684` ran 7:34, got fresh=4, missing=s05…s13. Bus-errored after
+s04_activity_cliffs. Wave 3 resubmit 12115459 is RUNNING and at 4 fresh
+again with last_done=s04 — about to enter the same danger zone. Watch
+this one.
+
+---
+
+## RUNNING — every job's actual progress
+
+All RUNNING jobs are in fold 0 of `precompute_hybrid_searches`. No
+per-experiment JSONs written yet. Progress markers below are from the
+audit `prog:` column.
+
+### Wave 1 RUNNING (3+ days elapsed each, in fold 0)
+
+Progress varies; some close to fold 0 done, some only ~30% in:
+
+| Dataset (W1 cx) | Progress |
+|---|---|
+| caco2 (12103584) | fold 0: 2000/7425 |
+| logd (12103585) | pruning, no fold marker |
+| qm9 (12103586) | fold 0: 1800/6480 |
+| adme_hlm (12103587) | fold 0: 2000/7425 |
+| adme_rlm (12103588) | fold 0: 2000/7425 |
+| adme_mdr1 (12103589) | fold 0: 1800/7425 |
+| herg (12103590) | fold 0: 3000/6480 |
+| kiba (12103591) | pruning |
+| bindingdb_kd (12103592) | pruning |
+| flab_thermo_tresanco (12103593) | fold 0: 5000/6804 (~73%) |
+| flab_pk_jain_heprt (12103594) | **no progress markers — possibly stuck** |
+| flab_pk_jain_fcrnrt (12103595) | fold 0: 2600/3240 (~80%) |
+| flab_aggregation_jain_hicrt (12103597) | **no progress markers** |
+| flab_thermo_jain (12103598) | **no progress markers** |
+| flab_aggregation_jain (12103600) | fold 0: 3600/3780 (~95%) |
+| abagym_Ang2 (12103609) | last_done=c15, fresh=10 ✓ already past precompute! |
+| abagym_EGFR (12103610) | last_done=c11, fresh=9 ✓ already past precompute! |
+| ginkgo_acsins/colloidal/heparin/hic/pr_cho/titer (12103617–22) | **no progress markers** |
+| buchwald_hartwig (12103623) | **no progress markers** |
+| bh_doyle_plates (12103624) | pruning |
+
+| Dataset (W1 sim) | Progress |
+|---|---|
+| flab_pk_jain_heprt (12103659) | **no progress markers** |
+| flab_pk_jain_fcrnrt (12103660) | fold 0: 2600/3240 (~80%) |
+| flab_aggregation_jain (12103665) | fold 0: 3600/3780 (~95%) |
+| ddg_combined (12103668) | **no progress markers** |
+| flab_expression_koenig (12103670) | fold 0: 1000/7425 |
+| flab_binding_phillips_h3 (12103673) | fold 0: 1000/7425 |
+| abagym_lysozyme (12103677) | fold 0: 4200/5292 (~79%) |
+| ginkgo_colloidal (12103683) | **no progress markers** |
+| ginkgo_pr_cho (12103686) | **no progress markers** |
+| bh_doyle_plates (12103689) | pruning |
+| nt_promoter_tata (12103706) | pruning |
+
+**The "no progress markers" rows are concerning.** The classifier looks at
+the last ~200 lines of the log and finds nothing matching a known stage
+marker. Could be stuck, could be slow IO, could be a log buffer issue.
+Worth tailing one to check.
+
+### Wave 2 RUNNING (~2.5–3 days elapsed; complexity-only batch)
+
+Wave 2 is the manual resubmit of the W1-cancelled datasets. All in
+fold 0: NNN/5724 (smaller search). Progress ranges from 600 to 5600 out
+of 5724:
+
+| W2 progress band | Count | Examples |
+|---|---|---|
+| fold 0 ≥ 5000/5724 (~88%+) | 4 | gb_human_enhancers_cohn 5200, nt_promoter_no_tata 5000, nt_H3K4me3 5600, nt_enhancers 5200 |
+| fold 0 3000–5000 | 8 | various nt_*, gb_* |
+| fold 0 < 3000 | 6 | nt_H3K4me1 1000, nt_enhancers_types 600, nt_splice_sites_acceptors 1200, nt_splice_sites_donors 2600, gb_demo_coding 1000, nt_H3K27me3 2200, nt_H3K36me3 2400 |
+| unknown / no markers | 4 | nt_promoter_tata, tz_her2_binary, tz_her2_multiclass (W2 12111861 actually COMPLETED bus_mid), tcga_brca_pam50 |
+| COMPLETED in W2 | 4 | tz_her2_multiclass (bus, empty), humanness_therapeutic (bus, partial 9/20), sim/tz_her2_multiclass (bus, empty), sim/humanness_therapeutic (clean_finish OK) |
+
+### Wave 3 RUNNING (~2 days elapsed; mix of cx + sim resubmits)
+
+Same fold 0: NNN/5724 (and a few different search sizes for non-nt
+datasets). Notable rows:
+
+| Dataset | Job | Progress | Notes |
+|---|---|---|---|
+| cx/abagym_VEGF | 12115431 | unknown markers, fresh=9 | already past precompute (uses prev cache?) |
+| cx/humanness_therapeutic | 12115464 | last_done=c11, fresh=9 | already running experiments |
+| sim/ginkgo_heparin | 12115459 | last_done=s04, fresh=4 | identical to W1 partial — about to hit same bus error region |
+| sim/nt_H3K4me3 | 12115484 | fold 0: 5600/5724 (~98%) | very close to fold 0 done |
+| sim/tz_her2_multiclass | 12115507 | fold 0: 6800/7425 (~92%) | very close |
+| cx/tz_her2_multiclass | 12115506 | fold 0: 6800/7425 (~92%) | very close |
+| sim/nt_promoter_all | 12115492 | fold 0: 5000/5724 | close |
+| Several | fold 0 in 4000-5000 range | mid-late | watch |
+| Several | fold 0 < 2000 | early | many days from finishing fold 0 |
+
+---
+
+## Things to investigate (before more resubmits)
+
+### 1. The 3 four-minute Wave 3 python_error sim jobs
+
 ```
-head -50 slurm-12115453.out slurm-12115455.out slurm-12115457.out
-grep -E "Traceback|Error|raise" slurm-12115453.out
+head -50 slurm-12115453.out slurm-12115455.out slurm-12115457.out | less
+grep -E "Traceback|Error|raise|ImportError" slurm-12115453.out
 ```
 
-### Resubmit (no job currently in flight)
+All three died in identical 4:38 elapsed — same root cause almost
+certainly. Fix once, resubmit all 3.
 
-**Similarity — fresh full submits (7 datasets):**
+### 2. sim/abagym_Ang2 missing s03 (not s12)
+
+Different from the s12 pattern. Job ID 12103674.
+
+```
+grep -E "s03|feature_concentration|FAILED" slurm-12103674.out | head -40
+```
+
+If s03 has a real bug for this dataset, fix it before any resubmits.
+
+### 3. Wave 1 RUNNING jobs with no progress markers
+
+These have been "RUNNING" for 3+ days but the audit's tail scan finds no
+fold/stage signal. Could be stuck (deadlock, swapping), could be very
+slow IO. Worth peeking at one:
+
+```
+JOB=12103594  # cx_flab_pk_jain_heprt
+tail -100 slurm-${JOB}.out
+ls -la slurm-${JOB}.out                 # check mtime; if recent → still writing
+sstat -j ${JOB} --format=AveRSS,MaxRSS,CPUTimeRAW 2>/dev/null  # memory usage
+```
+
+If the log mtime is hours old, the job is hung — scancel + resubmit.
+
+If you see the same on the ginkgo_*  W1 RUNNING jobs (12103617–22) too —
+those have no markers either — that's 6 jobs probably stuck.
+
+---
+
+## What to resubmit RIGHT NOW
+
+### Targeted complexity resubmits (PARTIAL → fill in missing)
+
+Submit_dataset.sh accepts a 3rd arg = space-separated experiment IDs.
+**Per your scancel rule, paste these one at a time and verify.**
+
+```
+sbatch --job-name=cx_abcov_kd_p tests/slurm_scripts/submit_dataset.sh complexity abcov_kd "c23 c24"
+sbatch --job-name=cx_abagym_HER2_p tests/slurm_scripts/submit_dataset.sh complexity abagym_HER2 "c23 c24"
+sbatch --job-name=cx_flab_polyreact_jain_cic_p tests/slurm_scripts/submit_dataset.sh complexity flab_polyreact_jain_cic "c23 c24"
+sbatch --job-name=cx_flab_polyreact_jain_bvp_p tests/slurm_scripts/submit_dataset.sh complexity flab_polyreact_jain_bvp "c23 c24"
+sbatch --job-name=cx_flab_immunogenicity_marks_p tests/slurm_scripts/submit_dataset.sh complexity flab_immunogenicity_marks "c17 c18 c19 c21 c22 c23 c24"
+```
+
+**Do not resubmit** cx/abagym_VEGF or cx/humanness_therapeutic (partials).
+Their Wave 3 resubmits (12115431, 12115464) are already running and at
+the same progress point — wait for those.
+
+### Full complexity resubmits (EMPTY, no resubmit running)
+
+```
+sbatch --job-name=cx_abagym_lysozyme tests/slurm_scripts/submit_dataset.sh complexity abagym_lysozyme
+```
+
+cx/abagym_lysozyme is the only cx EMPTY with no resubmit in flight.
+
+(All other cx EMPTY datasets — herg_ki, ddg_combined, flab_binding_*,
+flab_expression_*, flab_binding_phillips_h3 — already have W3 jobs
+running. Don't double up.)
+
+### Full similarity resubmits (EMPTY, no resubmit running)
+
+Check before submitting: every dataset below should have NO RUNNING sim
+job for it. Verify with `squeue -u $USER --name=sim_<dataset>`.
+
 ```
 sbatch --job-name=sim_caco2 tests/slurm_scripts/submit_dataset.sh similarity caco2
 sbatch --job-name=sim_logd tests/slurm_scripts/submit_dataset.sh similarity logd
@@ -188,45 +320,42 @@ sbatch --job-name=sim_herg tests/slurm_scripts/submit_dataset.sh similarity herg
 sbatch --job-name=sim_gb_demo_coding_vs_intergenomic_seqs tests/slurm_scripts/submit_dataset.sh similarity gb_demo_coding_vs_intergenomic_seqs
 ```
 
-**Complexity — partial resubmits (4 datasets, need c23/c24 plus c10 if noiseInject is installed):**
-```
-sbatch --job-name=cx_flab_polyreact_jain_cic_p tests/slurm_scripts/submit_dataset.sh complexity flab_polyreact_jain_cic "c23 c24"
-sbatch --job-name=cx_flab_polyreact_jain_bvp_p tests/slurm_scripts/submit_dataset.sh complexity flab_polyreact_jain_bvp "c23 c24"
-sbatch --job-name=cx_abagym_HER2_p tests/slurm_scripts/submit_dataset.sh complexity abagym_HER2 "c23 c24"
-sbatch --job-name=cx_flab_immunogenicity_marks_p tests/slurm_scripts/submit_dataset.sh complexity flab_immunogenicity_marks "c13 c15 c16 c17 c18 c19 c21 c22 c23 c24"
-```
+(All other sim EMPTY datasets already have W3 resubmits running.)
 
-**Complexity — full resubmit (1 dataset):**
-```
-sbatch --job-name=cx_abagym_lysozyme tests/slurm_scripts/submit_dataset.sh complexity abagym_lysozyme
-```
+### Don't resubmit yet
 
-### Cancel duplicate complexity jobs (one per pair, 25 total — VERIFY EACH BEFORE CANCELLING)
+The 3 four-minute python_error sims (gb_demo_human_or_worm,
+gb_human_enhancers_cohn, gb_human_nontata_promoters) — investigate root
+cause first, then resubmit.
 
-Per the no-bulk-scancel rule, **do not** paste these as a block. Cancel one
-at a time, confirming with `squeue -j <pair>` first. The Wave 3 ID is the
-newer redundant one in each case.
-
-cx duplicates to cancel (newer = W3): 12115471, 12115473, 12115475, 12115477,
-12115479, 12115481, 12115483, 12115485, 12115487, 12115489, 12115467,
-12115469, 12115491, 12115493, 12115495, 12115496, 12115498, 12115502,
-12115500, 12115504, 12115506, 12115451, 12115452, 12115454, 12115456.
-
-### Wait
-
-Everything else is either in flight from Wave 1 (for orig RUNNING) or in
-flight from Wave 3. Re-run `python tests/audit_full_wave.py
---include-running` later to track convergence.
+sim/abagym_Ang2 — investigate s03 first.
 
 ---
 
-## Open known bugs (separate from the wave)
+## How to check progress later
 
-- **noiseInject not installed** — `c10_noise_robustness` self-fails on every
-  complexity job. Install: `pip install noiseInject`.
-- **s12 `no_cliffs_found`** — methodological; expected on antibody / non-chem
-  datasets. Counts as "errored" in the audit but is a real result, not a
-  failure.
-- **`submit_dataset.sh` masks failures** — bus errors/python crashes return
-  exit 0 because the script doesn't propagate `$?`. Add `set -e` or check
-  `${PIPESTATUS}` so sacct reflects the truth.
+```bash
+cd /data/stat-ecr/scat9264/KIRBy
+git pull
+python tests/audit_full_wave.py --include-running | tee /tmp/audit_$(date +%H%M).txt
+diff /tmp/audit_HHMM_old.txt /tmp/audit_HHMM_new.txt | less   # spot what moved
+```
+
+**Things to watch for next:**
+- Has any RUNNING job logged `[saved` for the first time? (= precompute
+  finally finished, per-experiment loop started)
+- Have any RUNNING jobs flipped to bus_mid_run? (= we lose them)
+- Have the "no progress markers" W1 jobs gained any? (= they're alive)
+
+---
+
+## Open known bugs
+
+| Bug | Where | Action |
+|---|---|---|
+| Bus error in precompute | Affects every Wave 1 cx + sim. ~50 jobs lost. | User says fixed for new submissions. Wave 1 jobs still vulnerable as they're long-lived. |
+| `noiseInject not installed` | c10 self-errors on every complexity dataset (1 errored slot in every PARTIAL/OK cx row). | `pip install noiseInject` if you want c10 results. |
+| `s12 no_cliffs_found` | Methodological — antibody data has no chem-style cliffs. Counts as errored, not failed. | None unless you change s12 method. |
+| `submit_dataset.sh` masks failures | sacct shows COMPLETED 0:0 for bus errors because bash doesn't propagate `$?`. | Add `set -e` or `exit $?` after the python call. |
+| python_error in ~4 min for 3 W3 sim gb_* jobs | New failure mode, root cause unknown | Investigate slurm-12115453/5/7.out before resubmitting |
+| sim/abagym_Ang2 missing s03 | Single-experiment crash, not the s12 pattern | Investigate slurm-12103674.out |
