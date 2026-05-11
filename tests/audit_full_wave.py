@@ -110,30 +110,79 @@ PREFIX2CAT = {'cx': 'complexity', 'sim': 'similarity',
 
 
 def classify_log(log_path: Path):
-    """Return (status, n_done_from_banner)."""
+    """Return (status, n_done_from_banner, progress_marker)."""
     if not log_path.exists():
-        return 'no_log', None
+        return 'no_log', None, ''
     try:
         txt = log_path.read_text(errors='ignore')
     except Exception:
-        return 'unreadable_log', None
+        return 'unreadable_log', None, ''
     has_done = 'ALL DONE' in txt
     has_bus = 'Bus error' in txt
     has_oom = bool(re.search(r'OOMKilled|MemoryError|Out of memory', txt, re.IGNORECASE))
     has_trace = 'Traceback (most recent call last)' in txt
     m = re.search(r'ALL DONE:\s+\S+\s+[—-]\s+(\d+)\s+experiments', txt)
     n_done = int(m.group(1)) if m else None
+
+    # Progress marker: the last meaningful stage line in the log.
+    # Useful for RUNNING jobs that aren't yet COMPLETED.
+    progress = ''
+    # Iterate over last ~200 lines, looking for the latest progress signal
+    tail_lines = txt.splitlines()[-200:]
+    # Look for, in order of specificity:
+    # - "ALL DONE" — finished
+    # - " done in " — per-experiment done line (e.g. "  c05 done in 1234.5s")
+    # - "Loading data" / "Precomputing hybrid searches" / "Importance pre-computed"
+    # - "fold 0: NNN/MMMM" — adaptive pruning progress
+    # - "[saved tests/results/.../xxx.json]"
+    saved_files = []
+    last_exp_done = ''
+    last_fold = ''
+    last_stage = ''
+    for line in tail_lines:
+        s = line.strip()
+        if s.startswith('[saved '):
+            saved_files.append(s)
+        m2 = re.match(r'^(c\d{2}|s\d{2}|n\d{2}|fed\d{2}) done in', s)
+        if m2:
+            last_exp_done = m2.group(1)
+        m3 = re.search(r'fold \d+:\s*(\d+/\d+)', s)
+        if m3:
+            last_fold = m3.group(0)
+        if 'Precomputing hybrid searches' in s:
+            last_stage = 'precompute'
+        if 'Pre-computing importance' in s:
+            last_stage = 'precompute_importance'
+        if 'Allocation scores pre-computed' in s:
+            last_stage = 'alloc_done'
+        if 'Adaptive pruning' in s:
+            last_stage = 'pruning'
+        if 'Loading' in s and 'reps' in s:
+            last_stage = 'loading'
+    bits = []
+    if last_exp_done:
+        bits.append(f'last_done={last_exp_done}')
+    if last_fold:
+        bits.append(last_fold)
+    if last_stage:
+        bits.append(last_stage)
+    if saved_files:
+        bits.append(f'+{len(saved_files)}saves')
+    progress = ' | '.join(bits)
+
     if has_done and not has_bus:
-        return 'clean_finish', n_done
+        return 'clean_finish', n_done, progress
     if has_done and has_bus:
-        return 'finished_then_bus', n_done
+        return 'finished_then_bus', n_done, progress
     if has_bus:
-        return 'bus_mid_run', n_done
+        return 'bus_mid_run', n_done, progress
     if has_oom:
-        return 'oom', n_done
+        return 'oom', n_done, progress
     if has_trace:
-        return 'python_error', n_done
-    return 'unknown', n_done
+        return 'python_error', n_done, progress
+    if not progress:
+        return 'unknown', n_done, progress
+    return 'in_progress', n_done, progress
 
 
 def get_job_meta(jobid: str):
@@ -203,9 +252,9 @@ def main():
 
     rows = []
     print(f'{"JOBID":>10}  {"WAVE":4}  {"CAT":4}  {"DATASET":35}  '
-          f'{"LOG_STATUS":18}  {"N_DONE":>6}  {"FRESH":>5}  {"EXP":>3}  '
-          f'{"ELAPSED":>11}  verdict')
-    print('-' * 130)
+          f'{"STATE":10}  {"LOG_STATUS":18}  {"FRESH":>5}  {"ERR":>3}  '
+          f'{"MISS":>4}  {"EXP":>3}  {"ELAPSED":>11}  verdict | progress')
+    print('-' * 180)
     summary = {}
     for jid, name, state, cat, ds in sorted(jobs, key=lambda x: int(x[0])):
         meta = get_job_meta(jid)
@@ -213,28 +262,30 @@ def main():
             start_ts = datetime.fromisoformat(meta['start']).timestamp()
         except Exception:
             start_ts = 0
-        log_status, n_done = classify_log(ROOT / f'slurm-{jid}.out')
+        log_status, n_done, progress = classify_log(ROOT / f'slurm-{jid}.out')
         expected = [e for e in EXPECTED[cat]
                     if not (cat == 'complexity' and e == 'c12'
                             and not ds.startswith('tcga_'))]
-        fresh, errored, stale, missing = 0, 0, 0, 0
+        fresh_ids, errored_ids, stale_ids, missing_ids = [], [], [], []
         for exp_id in expected:
             d = DIR_MAP[cat][exp_id]
             p = ROOT / 'tests' / 'results' / cat / d / f'{ds}.json'
             if not p.exists():
-                missing += 1
+                missing_ids.append(exp_id)
                 continue
             if p.stat().st_mtime < start_ts:
-                stale += 1
+                stale_ids.append(exp_id)
                 continue
             try:
                 obj = json.loads(p.read_text())
             except Exception:
                 continue
             if isinstance(obj, dict) and 'error' in obj:
-                errored += 1
+                errored_ids.append(exp_id)
             else:
-                fresh += 1
+                fresh_ids.append(exp_id)
+        fresh, errored, stale, missing = (len(fresh_ids), len(errored_ids),
+                                          len(stale_ids), len(missing_ids))
         total = len(expected)
         if state == 'RUNNING':
             verdict = 'RUNNING'
@@ -250,12 +301,23 @@ def main():
                '3' if jid.startswith('12115') else '?'
         summary[verdict] = summary.get(verdict, 0) + 1
         elapsed = meta.get('elapsed', '')
+        # Build detail string showing exactly which experiments errored/missing
+        detail = []
+        if errored_ids:
+            detail.append(f'errored={",".join(errored_ids)}')
+        if missing_ids and verdict != 'EMPTY':
+            detail.append(f'missing={",".join(missing_ids)}')
+        suffix = (' || ' + ' '.join(detail)) if detail else ''
+        prog_suffix = f' || prog: {progress}' if progress else ''
         print(f'{jid:>10}  W{wave:3}  {cat[:4]:4}  {ds:35}  '
-              f'{log_status:18}  {str(n_done or "-"):>6}  {fresh:>5}  '
-              f'{total:>3}  {elapsed:>11}  {verdict}')
+              f'{state:10}  {log_status:18}  {fresh:>5}  {errored:>3}  '
+              f'{missing:>4}  {total:>3}  {elapsed:>11}  {verdict}'
+              f'{prog_suffix}{suffix}')
         rows.append({
             'jobid': jid, 'wave': wave, 'jobname': name, 'state': state,
             'category': cat, 'dataset': ds, 'log_status': log_status,
+            'progress': progress, 'errored_ids': ','.join(errored_ids),
+            'missing_ids': ','.join(missing_ids),
             'n_done_banner': n_done, 'fresh_files': fresh,
             'errored_files': errored, 'stale_files': stale,
             'missing_files': missing, 'expected_files': total,
@@ -268,7 +330,8 @@ def main():
     out_tsv = ROOT / 'tests' / 'results' / '_audit_full_wave.tsv'
     out_tsv.parent.mkdir(parents=True, exist_ok=True)
     cols = ['jobid', 'wave', 'jobname', 'state', 'category', 'dataset',
-            'log_status', 'n_done_banner', 'fresh_files', 'errored_files',
+            'log_status', 'progress', 'errored_ids', 'missing_ids',
+            'n_done_banner', 'fresh_files', 'errored_files',
             'stale_files', 'missing_files', 'expected_files', 'elapsed',
             'verdict']
     with out_tsv.open('w') as f:
