@@ -21,12 +21,19 @@ Output:
     - List of (category, dataset, [missing exps]) for partial resubmits
     - Writes audit JSON to tests/results/_run_audit_2026_05_11.json
 """
+import argparse
+import datetime
 import json
 import sys
 from pathlib import Path
 from collections import defaultdict
 
 ROOT = Path(__file__).resolve().parent.parent
+
+# Default cutoff: files older than this are treated as STALE (from a prior
+# wave), not as evidence the current run succeeded. The 2026-05-08 wave
+# (sbatch ID range 12103xxx) started submitting at ~2026-05-08 11:00 UTC.
+DEFAULT_SINCE = '2026-05-08 00:00'
 
 # ── Expected experiments per category (from *_helpers.py SINGLE_DATASET_EXPERIMENTS) ──
 
@@ -156,34 +163,39 @@ JOB_STATE = {
 }
 
 
-def audit_job(category: str, dataset: str, expected_exps: dict, results_root: Path):
-    """Return per-job audit: which expected JSONs are present, errored, missing."""
+def audit_job(category: str, dataset: str, expected_exps: dict,
+              results_root: Path, since_ts: float):
+    """Return per-job audit: which expected JSONs are present, errored, missing, stale."""
     cat_dir = results_root / category
     record = {
         'category': category,
         'dataset': dataset,
         'expected': len(expected_exps),
         'ok': [],
-        'errored': [],          # JSON exists but has {'error': ...}
+        'errored': [],          # JSON fresh + has {'error': ...}
         'missing': [],          # JSON expected but not on disk → silent crash
+        'stale': [],             # JSON exists but mtime < since_ts (old wave leftover)
         'unreadable': [],       # JSON exists but parse failed
         'error_messages': {},   # exp_id -> error string
     }
     for short_id, dir_name in expected_exps.items():
-        # Special-case: c12 (modality ablation) is TCGA-only — only expected
-        # for tcga_* datasets. Skip for everything else.
+        # c12 (modality ablation) is TCGA-only — only expected for tcga_*.
         if category == 'complexity' and short_id == 'c12' and not dataset.startswith('tcga_'):
             continue
-        # n06 (BindingDB ground-truth) is run separately, not per-dataset.
         path = cat_dir / dir_name / f'{dataset}.json'
         if not path.exists():
             record['missing'].append(short_id)
             continue
+        mtime = path.stat().st_mtime
+        is_fresh = mtime >= since_ts
         try:
             d = json.loads(path.read_text())
         except Exception as e:
             record['unreadable'].append(short_id)
             record['error_messages'][short_id] = f'JSON parse: {e}'
+            continue
+        if not is_fresh:
+            record['stale'].append(short_id)
             continue
         if isinstance(d, dict) and 'error' in d:
             record['errored'].append(short_id)
@@ -191,12 +203,27 @@ def audit_job(category: str, dataset: str, expected_exps: dict, results_root: Pa
         else:
             record['ok'].append(short_id)
     record['ok_count'] = len(record['ok'])
-    record['bad_count'] = len(record['errored']) + len(record['missing']) + len(record['unreadable'])
+    record['bad_count'] = (len(record['errored']) + len(record['missing'])
+                           + len(record['unreadable']) + len(record['stale']))
     return record
 
 
 def main():
-    results_root = ROOT / 'tests' / 'results'
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--since', default=DEFAULT_SINCE,
+                        help=f"Cutoff for 'fresh' files (default: {DEFAULT_SINCE}). "
+                             "Files with mtime older than this are reported as STALE, "
+                             "not as evidence of current-wave success.")
+    parser.add_argument('--results-root', default=str(ROOT / 'tests' / 'results'),
+                        help='Path to tests/results (default: repo-relative)')
+    args = parser.parse_args()
+
+    since_dt = datetime.datetime.strptime(args.since, '%Y-%m-%d %H:%M')
+    since_ts = since_dt.timestamp()
+    print(f"Fresh-file cutoff: {args.since} (epoch {since_ts:.0f})")
+
+    results_root = Path(args.results_root)
     audit_rows = []
 
     for category in ('complexity', 'similarity'):
@@ -204,28 +231,40 @@ def main():
         expected_exps = EXPERIMENTS[category]
         for state in ('COMPLETED', 'RUNNING', 'CANCELLED'):
             for ds in states.get(state, []):
-                rec = audit_job(category, ds, expected_exps, results_root)
+                rec = audit_job(category, ds, expected_exps, results_root, since_ts)
                 rec['job_state'] = state
                 audit_rows.append(rec)
 
     # ── Summary ──
-    print(f"\n{'=' * 100}")
-    print(f"{'CATEGORY':12} {'DATASET':35} {'STATE':10} {'OK':>4} {'ERR':>4} {'MISS':>5} {'TOTAL':>6}  status")
-    print('=' * 100)
-    fully_bad = []           # nothing on disk → full resubmit
-    partial_bad = []         # some files → partial resubmit
+    print(f"\n{'=' * 110}")
+    print(f"{'CATEGORY':12} {'DATASET':35} {'STATE':10} {'OK':>4} {'ERR':>4} {'MISS':>5} {'STALE':>5} {'TOT':>4}  status")
+    print('=' * 110)
+    fully_bad = []           # nothing fresh on disk → full resubmit
+    partial_bad = []         # some fresh files → partial resubmit
     fully_good = []
     for r in audit_rows:
         total = r['expected']
-        ok, err, miss = len(r['ok']), len(r['errored']), len(r['missing'])
-        status = 'FULL_OK' if ok == total else 'EMPTY' if ok == 0 else 'PARTIAL'
+        ok = len(r['ok'])
+        err = len(r['errored'])
+        miss = len(r['missing'])
+        stale = len(r['stale'])
+        # FULL_OK requires ok == total (stale doesn't count as success).
+        # EMPTY = no fresh output at all (everything either missing or stale).
+        # PARTIAL = some fresh ok but not all.
+        if ok == total:
+            status = 'FULL_OK'
+        elif ok == 0:
+            status = 'EMPTY_STALE' if stale > 0 else 'EMPTY'
+        else:
+            status = 'PARTIAL'
         print(f"{r['category']:12} {r['dataset']:35} {r['job_state']:10} "
-              f"{ok:>4} {err:>4} {miss:>5} {total:>6}  {status}")
-        if status == 'EMPTY':
+              f"{ok:>4} {err:>4} {miss:>5} {stale:>5} {total:>4}  {status}")
+        if status in ('EMPTY', 'EMPTY_STALE'):
             fully_bad.append((r['category'], r['dataset'], r['job_state']))
         elif status == 'PARTIAL':
+            # Missing + errored + stale all need re-run for THIS wave
             partial_bad.append((r['category'], r['dataset'], r['job_state'],
-                                r['missing'] + r['errored']))
+                                r['missing'] + r['errored'] + r['stale']))
         else:
             fully_good.append((r['category'], r['dataset']))
 
