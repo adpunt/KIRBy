@@ -110,13 +110,23 @@ PREFIX2CAT = {'cx': 'complexity', 'sim': 'similarity',
 
 
 def classify_log(log_path: Path):
-    """Return (status, n_done_from_banner, progress_marker)."""
+    """Return (status, n_done_from_banner, progress_marker, position_dict).
+
+    position_dict has numeric snapshots useful for ETA: {
+        'fold_pos': int, 'fold_total': int,
+        'config_pos': int, 'config_total': int,
+        'last_exp_done': str,   # e.g. 'c15'
+        'saves': int,           # count of "[saved ...]" lines in tail
+        'imports_secs': float,  # time for 'Importance pre-computed in X.Ys' if found
+        'alloc_secs': float,    # time for 'Allocation scores pre-computed in X.Ys' if found
+    }
+    """
     if not log_path.exists():
-        return 'no_log', None, ''
+        return 'no_log', None, '', {}
     try:
         txt = log_path.read_text(errors='ignore')
     except Exception:
-        return 'unreadable_log', None, ''
+        return 'unreadable_log', None, '', {}
     has_done = 'ALL DONE' in txt
     has_bus = 'Bus error' in txt
     has_oom = bool(re.search(r'OOMKilled|MemoryError|Out of memory', txt, re.IGNORECASE))
@@ -140,6 +150,19 @@ def classify_log(log_path: Path):
     last_fold = ''
     last_stage = ''
     last_config = ''
+    fold_pos = fold_total = 0
+    config_pos = config_total = 0
+    # Scan the ENTIRE log for timing markers, not just the tail, so we can
+    # extract intra-job stage durations like "Importance pre-computed in 387.2s"
+    imports_secs = alloc_secs = 0.0
+    for line in txt.splitlines():
+        s = line.strip()
+        m_imp = re.search(r'Importance pre-computed in\s+([\d.]+)s', s)
+        if m_imp:
+            imports_secs = float(m_imp.group(1))
+        m_alloc = re.search(r'Allocation scores pre-computed in\s+([\d.]+)s', s)
+        if m_alloc:
+            alloc_secs = float(m_alloc.group(1))
     for line in tail_lines:
         s = line.strip()
         if s.startswith('[saved '):
@@ -147,14 +170,16 @@ def classify_log(log_path: Path):
         m2 = re.match(r'^(c\d{2}|s\d{2}|n\d{2}|fed\d{2}) done in', s)
         if m2:
             last_exp_done = m2.group(1)
-        m3 = re.search(r'fold \d+:\s*(\d+/\d+)', s)
+        m3 = re.search(r'fold \d+:\s*(\d+)/(\d+)', s)
         if m3:
             last_fold = m3.group(0)
+            fold_pos, fold_total = int(m3.group(1)), int(m3.group(2))
         # Second precompute stage: per-config eval lines like
         # "[2435/2980] mlp/entropy_2.0/treeshap/b=100/ev=mlp: score=..."
         m_cfg = re.match(r'^\[(\d+)/(\d+)\]\s+\w+/', s)
         if m_cfg:
             last_config = f'config {m_cfg.group(1)}/{m_cfg.group(2)}'
+            config_pos, config_total = int(m_cfg.group(1)), int(m_cfg.group(2))
         if 'Precomputing hybrid searches' in s:
             last_stage = 'precompute'
         if 'Pre-computing importance' in s:
@@ -178,19 +203,26 @@ def classify_log(log_path: Path):
         bits.append(f'+{len(saved_files)}saves')
     progress = ' | '.join(bits)
 
+    positions = {
+        'fold_pos': fold_pos, 'fold_total': fold_total,
+        'config_pos': config_pos, 'config_total': config_total,
+        'last_exp_done': last_exp_done, 'saves': len(saved_files),
+        'imports_secs': imports_secs, 'alloc_secs': alloc_secs,
+    }
+
     if has_done and not has_bus:
-        return 'clean_finish', n_done, progress
+        return 'clean_finish', n_done, progress, positions
     if has_done and has_bus:
-        return 'finished_then_bus', n_done, progress
+        return 'finished_then_bus', n_done, progress, positions
     if has_bus:
-        return 'bus_mid_run', n_done, progress
+        return 'bus_mid_run', n_done, progress, positions
     if has_oom:
-        return 'oom', n_done, progress
+        return 'oom', n_done, progress, positions
     if has_trace:
-        return 'python_error', n_done, progress
+        return 'python_error', n_done, progress, positions
     if not progress:
-        return 'unknown', n_done, progress
-    return 'in_progress', n_done, progress
+        return 'unknown', n_done, progress, positions
+    return 'in_progress', n_done, progress, positions
 
 
 def get_job_meta(jobid: str):
@@ -218,6 +250,132 @@ def parse_exp_banner(log_path: Path):
     return None, None
 
 
+SLURM_WALL_HOURS = 7 * 24  # submit_dataset.sh uses --time=7-00:00:00
+
+
+def _h(seconds: float) -> str:
+    """Format seconds as 'Xd Yh' or 'Yh Zm'."""
+    if seconds < 0:
+        return f'-{_h(-seconds)}'
+    h = seconds / 3600
+    if h >= 24:
+        d = int(h // 24); rh = int(h - d * 24)
+        return f'{d}d{rh}h'
+    if h >= 1:
+        m = int((h - int(h)) * 60)
+        return f'{int(h)}h{m}m'
+    return f'{int(seconds / 60)}m'
+
+
+def estimate_eta(elapsed_secs: float, positions: dict, log_status: str,
+                 n_expected: int):
+    """Estimate time to per-experiment loop start and overall wall risk.
+
+    Returns dict with:
+        stage:          best guess at current stage
+        precompute_eta: seconds to finish precompute (None if can't estimate)
+        wall_eta:       seconds until SLURM wall (7d limit)
+        verdict:        ON_TRACK / SLOW / WILL_HIT_WALL / DONE_PRECOMPUTE / N/A
+        note:           short text reason
+    """
+    wall_eta = SLURM_WALL_HOURS * 3600 - elapsed_secs
+    out = {'stage': '?', 'precompute_eta': None,
+           'wall_eta': wall_eta, 'verdict': 'N/A', 'note': ''}
+
+    # Already done with precompute (experiments are saving)
+    if positions.get('saves', 0) > 0 or positions.get('last_exp_done'):
+        out['stage'] = 'experiments'
+        # Estimate from saves so far if any
+        saves = positions['saves'] or 0
+        if saves > 0:
+            per_exp = elapsed_secs / saves   # rough — includes precompute time
+            remaining_exp = max(0, n_expected - saves)
+            remaining_secs = remaining_exp * per_exp * 0.5  # post-precompute is faster
+            out['precompute_eta'] = 0
+            if remaining_secs > wall_eta:
+                out['verdict'] = 'WILL_HIT_WALL'
+                out['note'] = f'{saves} saved, ~{_h(per_exp/2)}/exp expected, {remaining_exp} left'
+            else:
+                out['verdict'] = 'ON_TRACK'
+                out['note'] = f'{saves}/{n_expected} saved, ~{_h(remaining_secs)} left'
+        else:
+            out['verdict'] = 'ON_TRACK'
+            out['note'] = 'in experiments loop'
+        return out
+
+    # In second-stage config eval
+    config_pos = positions.get('config_pos', 0)
+    config_total = positions.get('config_total', 0)
+    fold_pos = positions.get('fold_pos', 0)
+    fold_total = positions.get('fold_total', 0)
+
+    if config_pos > 0 and config_total > 0:
+        out['stage'] = f'config_eval {config_pos}/{config_total}'
+        frac = config_pos / config_total
+        if frac > 0.02:  # need at least 2% to extrapolate
+            # ASSUMPTION: this config phase took roughly all elapsed_secs minus
+            # importance+alloc precompute. That's an upper bound.
+            precomp_overhead = (positions.get('imports_secs', 0)
+                                + positions.get('alloc_secs', 0))
+            config_elapsed = max(elapsed_secs - precomp_overhead, elapsed_secs * 0.7)
+            rate = config_pos / config_elapsed   # configs/sec
+            remaining_configs = config_total - config_pos
+            remaining_secs = remaining_configs / rate if rate > 0 else float('inf')
+            # Then we'll need experiment time — estimate from precompute cost
+            # (per_exp ≈ 1-3h based on observed completed jobs)
+            est_exp_secs = n_expected * 1800  # 30 min/exp lower bound
+            total_remaining = remaining_secs + est_exp_secs
+            out['precompute_eta'] = int(remaining_secs)
+            if total_remaining > wall_eta:
+                margin = wall_eta - total_remaining
+                out['verdict'] = 'WILL_HIT_WALL'
+                out['note'] = (f'rate={rate*3600:.1f} cfg/h, '
+                               f'~{_h(remaining_secs)} cfg + '
+                               f'~{_h(est_exp_secs)} exps; over wall by {_h(-margin)}')
+            elif total_remaining > wall_eta * 0.7:
+                out['verdict'] = 'SLOW'
+                out['note'] = (f'~{_h(remaining_secs)} cfg + '
+                               f'~{_h(est_exp_secs)} exps; '
+                               f'tight (wall left: {_h(wall_eta)})')
+            else:
+                out['verdict'] = 'ON_TRACK'
+                out['note'] = f'~{_h(remaining_secs)} cfg + ~{_h(est_exp_secs)} exps'
+        return out
+
+    if fold_pos > 0 and fold_total > 0:
+        out['stage'] = f'fold0_pruning {fold_pos}/{fold_total}'
+        frac = fold_pos / fold_total
+        if frac > 0.02:
+            rate = fold_pos / elapsed_secs  # configs/sec for fold-0 sweep
+            remaining_in_fold = fold_total - fold_pos
+            secs_to_finish_fold = remaining_in_fold / rate
+            # After fold 0 there's still config-eval phase (~similar size)
+            # plus per-experiment loop. Total: ~3x fold-0 time as rough upper bound.
+            total_remaining = secs_to_finish_fold * 3
+            out['precompute_eta'] = int(secs_to_finish_fold)
+            if total_remaining > wall_eta:
+                margin = wall_eta - total_remaining
+                out['verdict'] = 'WILL_HIT_WALL'
+                out['note'] = (f'fold-0 rate={rate*3600:.0f} cfg/h, '
+                               f'fold-0 ETA {_h(secs_to_finish_fold)}, '
+                               f'projected total {_h(total_remaining)}; '
+                               f'over wall by {_h(-margin)}')
+            elif total_remaining > wall_eta * 0.7:
+                out['verdict'] = 'SLOW'
+                out['note'] = (f'fold-0 ETA {_h(secs_to_finish_fold)}, '
+                               f'projected total {_h(total_remaining)}, '
+                               f'wall left {_h(wall_eta)}')
+            else:
+                out['verdict'] = 'ON_TRACK'
+                out['note'] = f'fold-0 ETA {_h(secs_to_finish_fold)}'
+        return out
+
+    # No quantitative signal — can only report stage
+    out['stage'] = 'precompute (no quant signal)'
+    out['note'] = 'no fold/config position; cannot estimate'
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -225,6 +383,9 @@ def main():
                     help='sacct --starttime (default: 2026-05-08)')
     ap.add_argument('--include-running', action='store_true',
                     help='Also include RUNNING jobs in the audit (cannot have OK yet)')
+    ap.add_argument('--eta', action='store_true',
+                    help='For RUNNING jobs, estimate time to finish based on '
+                         'progress rate; flag WILL_HIT_WALL / SLOW / ON_TRACK')
     args = ap.parse_args()
 
     # Pull all jobs matching prefixes since SINCE
@@ -270,7 +431,8 @@ def main():
             start_ts = datetime.fromisoformat(meta['start']).timestamp()
         except Exception:
             start_ts = 0
-        log_status, n_done, progress = classify_log(ROOT / f'slurm-{jid}.out')
+        log_status, n_done, progress, positions = classify_log(
+            ROOT / f'slurm-{jid}.out')
         expected = [e for e in EXPECTED[cat]
                     if not (cat == 'complexity' and e == 'c12'
                             and not ds.startswith('tcga_'))]
@@ -321,6 +483,17 @@ def main():
               f'{state:10}  {log_status:18}  {fresh:>5}  {errored:>3}  '
               f'{missing:>4}  {total:>3}  {elapsed:>11}  {verdict}'
               f'{prog_suffix}{suffix}')
+        # ── ETA analysis (only meaningful for RUNNING jobs) ──
+        eta = {'verdict': 'N/A', 'stage': '', 'note': '',
+               'precompute_eta': None, 'wall_eta': None}
+        if state == 'RUNNING':
+            try:
+                start_dt = datetime.fromisoformat(meta['start'])
+                elapsed_secs = (datetime.now() - start_dt).total_seconds()
+            except Exception:
+                elapsed_secs = 0
+            eta = estimate_eta(elapsed_secs, positions, log_status, total)
+
         rows.append({
             'jobid': jid, 'wave': wave, 'jobname': name, 'state': state,
             'category': cat, 'dataset': ds, 'log_status': log_status,
@@ -330,6 +503,10 @@ def main():
             'errored_files': errored, 'stale_files': stale,
             'missing_files': missing, 'expected_files': total,
             'elapsed': elapsed, 'verdict': verdict,
+            'eta_verdict': eta['verdict'], 'eta_stage': eta['stage'],
+            'eta_note': eta['note'],
+            'eta_precompute_secs': eta['precompute_eta'],
+            'eta_wall_secs': eta['wall_eta'],
         })
     print()
     print('Verdict counts:', summary)
@@ -341,7 +518,8 @@ def main():
             'log_status', 'progress', 'errored_ids', 'missing_ids',
             'n_done_banner', 'fresh_files', 'errored_files',
             'stale_files', 'missing_files', 'expected_files', 'elapsed',
-            'verdict']
+            'verdict', 'eta_verdict', 'eta_stage', 'eta_note',
+            'eta_precompute_secs', 'eta_wall_secs']
     with out_tsv.open('w') as f:
         f.write('\t'.join(cols) + '\n')
         for r in rows:
@@ -364,6 +542,27 @@ def main():
         print('\n=== Datasets with NO fully-OK completion across all waves ===')
         for (cat, ds), best, total in no_ok:
             print(f'  {cat}/{ds}: best fresh = {best}/{total}')
+
+    # ── ETA report ──
+    if args.eta:
+        running_rows = [r for r in rows if r['state'] == 'RUNNING']
+        print(f'\n=== ETA analysis ({len(running_rows)} RUNNING jobs) ===')
+        print('Wall = 7 days. Estimate is rough (assumes current rate continues, '
+              'adds margin for per-experiment loop).')
+        print()
+        by_verdict = {}
+        for r in running_rows:
+            by_verdict.setdefault(r['eta_verdict'], []).append(r)
+        for verdict in ['WILL_HIT_WALL', 'SLOW', 'ON_TRACK', 'N/A']:
+            rows_v = by_verdict.get(verdict, [])
+            if not rows_v: continue
+            print(f'─── {verdict} ({len(rows_v)}) ───')
+            for r in sorted(rows_v, key=lambda x: (x['category'], x['dataset'])):
+                wall_secs = r['eta_wall_secs'] or 0
+                print(f"  {r['jobid']:>10}  W{r['wave']}  {r['category'][:4]:4}  "
+                      f"{r['dataset']:35}  wall_left={_h(wall_secs):>7}  "
+                      f"{r['eta_stage']:30}  {r['eta_note']}")
+            print()
 
 
 if __name__ == '__main__':
