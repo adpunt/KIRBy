@@ -131,19 +131,21 @@ def _evaluate_cell(reps, labels, groups, model_factory, budget, n_folds, mode,
         train_augs = {k: v[train_idx] for k, v in augs_full.items()} if augs_full else None
         val_augs = {k: v[val_idx] for k, v in augs_full.items()} if augs_full else None
 
-        if budget is not None and budget < sum(v.shape[1] for v in reps.values()):
-            if blueprint is None:
-                continue
-            try:
-                X_train, X_val, fi = build_fold_hybrid(
-                    train_reps, val_reps, y_train, blueprint,
-                    augmentations_train=train_augs, augmentations_val=val_augs)
-            except Exception:
-                continue
-        else:
-            # Full dimensionality — just concat
-            X_train = np.hstack([v[train_idx] for v in reps.values()])
-            X_val = np.hstack([v[val_idx] for v in reps.values()])
+        # Hybrid blueprint is the ONLY path for getting X_train/X_val here.
+        # The previous else-branch concatenated every rep at full dim and
+        # trained on it — that's a concat-train baseline, removed 2026-05-12
+        # per user directive (no concat-all baselines). Cells where the
+        # blueprint is missing OR budget >= total_dim are now skipped.
+        if blueprint is None:
+            continue
+        if budget is None or budget >= sum(v.shape[1] for v in reps.values()):
+            continue
+        try:
+            X_train, X_val, fi = build_fold_hybrid(
+                train_reps, val_reps, y_train, blueprint,
+                augmentations_train=train_augs, augmentations_val=val_augs)
+        except Exception:
+            continue
 
         scaler = StandardScaler()
         X_tr_s = scaler.fit_transform(X_train)
