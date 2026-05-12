@@ -182,83 +182,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         })
 
         # =====================================================================
-        # 2. Ensemble: one model per base rep, average predictions
-        # =====================================================================
-        fold_ensemble_scores = []
-        fold_ensemble_fit_times = []
-        fold_ensemble_pred_times = []
-
-        for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
-                                           labels, mode=mode):
-            y_train, y_val = labels[train_idx], labels[val_idx]
-            all_preds = []
-            total_fit = 0.0
-            total_pred = 0.0
-
-            for rep_name in rep_names:
-                X_rep = reps[rep_name]
-                X_train_raw = X_rep[train_idx]
-                X_val_raw = X_rep[val_idx]
-
-                # Apply same per-fold high-dim filter as the standalone
-                # baseline scoring (find_best_hybrid:_evaluate_single).
-                # Without it, esm2_per_region (17920D) and similar enter the
-                # ensemble at full dim and overfit catastrophically on small
-                # antibody datasets — biasing the ensemble vs hybrid
-                # comparison.
-                if X_train_raw.shape[1] > HIGH_DIM_FILTER_THRESHOLD:
-                    target_n = 500 if len(y_train) >= 1000 else 200
-                    if target_n < X_train_raw.shape[1]:
-                        _hd_task_type = ('classification'
-                                         if data['task_type'] == 'classification'
-                                         else 'regression')
-                        top_idx = _select_top_features_per_fold(
-                            X_train_raw, y_train, target_n, _hd_task_type)
-                        X_train_raw = X_train_raw[:, top_idx]
-                        X_val_raw = X_val_raw[:, top_idx]
-
-                scaler = StandardScaler()
-                X_train = scaler.fit_transform(X_train_raw)
-                X_val = scaler.transform(X_val_raw)
-
-                preds, ft, pt = _time_fit_predict(model_factory, X_train, y_train, X_val)
-                all_preds.append(preds)
-                total_fit += ft
-                total_pred += pt
-
-            if not all_preds:
-                continue
-            ensemble_preds = np.mean(all_preds, axis=0)
-            fold_ensemble_scores.append(metric_fn(y_val, ensemble_preds))
-            fold_ensemble_fit_times.append(total_fit)
-            fold_ensemble_pred_times.append(total_pred)
-
-        if not fold_ensemble_scores:
-            print(f"    Ensemble:    FAILED (no valid folds)")
-        else:
-            ens_r2 = float(np.mean(fold_ensemble_scores))
-            max_single_dim = max(v.shape[1] for v in reps.values())
-            print(f"    Ensemble:    R2={ens_r2:.4f} "
-                  f"max_rep_dim={max_single_dim} ({n_reps} models, hd-filtered)")
-
-            results.append({
-                'model': model_name,
-                'method': 'ensemble',
-                'augmented': False,
-                'score_mean': ens_r2,
-                'score_std': float(np.std(fold_ensemble_scores)),
-                'total_dim': total_dim,
-                'max_single_dim': max_single_dim,
-                'n_models_trained': n_reps,
-                'total_fit_time_s': float(np.mean(fold_ensemble_fit_times)),
-                'total_predict_time_s': float(np.mean(fold_ensemble_pred_times)),
-            })
-
-        # =====================================================================
-        # 2b. PCA-matched: concat all reps, PCA-compress to budget dims, one model
+        # 2. PCA-matched: concat all reps, PCA-compress to budget dims, one model
         # PCA-from-concat is allowed (per design directive: PCA reducing
         # high-dim concat to budget dim is meaningful; full-concat as raw
         # model input is not).
+        #
+        # The previous "ensemble" method (predict-then-average across 26
+        # per-rep models) was removed 2026-05-12 per user directive: averaged
+        # baselines are not a valid comparator; report individual reps only.
         # =====================================================================
         for budget in budgets:
             fold_pca_scores = []
@@ -409,31 +340,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"{r['total_dim']:>6} {r['n_models_trained']:>7} "
                   f"{r['total_fit_time_s']:>8.3f} {r['total_predict_time_s']:>8.4f}")
 
-    # Efficiency summary: hybrid vs ensemble
-    print(f"\n  EFFICIENCY COMPARISON (best hybrid vs ensemble per model):")
-    print(f"    {'Model':<12} {'Ens R2':>8} {'Hyb R2':>8} {'Delta':>8} "
-          f"{'Ens #M':>7} {'Hyb Dim':>8} "
-          f"{'Ens Fit':>8} {'Hyb Fit':>8} {'Speedup':>8}")
+    # Efficiency summary: hybrid vs PCA-matched (same-budget, all-reps PCA reduction)
+    print(f"\n  EFFICIENCY COMPARISON (best hybrid vs best PCA-matched per model):")
+    print(f"    {'Model':<12} {'PCA R2':>8} {'Hyb R2':>8} {'Delta':>8} "
+          f"{'PCA Dim':>8} {'Hyb Dim':>8} "
+          f"{'PCA Fit':>8} {'Hyb Fit':>8} {'Speedup':>8}")
     print("    " + "-" * 82)
 
     for model_name in models:
-        ens = [r for r in results if r['model'] == model_name
-               and r['method'] == 'ensemble' and not r['augmented']]
+        pcas = [r for r in results if r['model'] == model_name
+                and r['method'] == 'pca_matched' and not r['augmented']]
         hybs = [r for r in results if r['model'] == model_name
                 and r['method'] == 'hybrid' and not r['augmented']]
 
-        if not ens or not hybs:
+        if not pcas or not hybs:
             continue
 
-        ens_r = ens[0]
-        best_hyb = (min if lower_is_better else max)(hybs, key=lambda x: x['score_mean'])
+        _best = min if lower_is_better else max
+        best_pca = _best(pcas, key=lambda x: x['score_mean'])
+        best_hyb = _best(hybs, key=lambda x: x['score_mean'])
 
-        delta = best_hyb['score_mean'] - ens_r['score_mean']
-        speedup = ens_r['total_fit_time_s'] / best_hyb['total_fit_time_s'] if best_hyb['total_fit_time_s'] > 0 else 0
+        delta = best_hyb['score_mean'] - best_pca['score_mean']
+        speedup = (best_pca['total_fit_time_s'] / best_hyb['total_fit_time_s']
+                   if best_hyb['total_fit_time_s'] > 0 else 0)
 
-        print(f"    {model_name:<12} {ens_r['score_mean']:>8.4f} {best_hyb['score_mean']:>8.4f} "
-              f"{delta:>+8.4f} {ens_r['n_models_trained']:>7} {best_hyb['total_dim']:>8} "
-              f"{ens_r['total_fit_time_s']:>8.3f} "
+        print(f"    {model_name:<12} {best_pca['score_mean']:>8.4f} {best_hyb['score_mean']:>8.4f} "
+              f"{delta:>+8.4f} {best_pca['total_dim']:>8} {best_hyb['total_dim']:>8} "
+              f"{best_pca['total_fit_time_s']:>8.3f} "
               f"{best_hyb['total_fit_time_s']:>8.3f} {speedup:>7.1f}x")
 
     top3 = extract_top3_base_reps(search) if search is not None else []
