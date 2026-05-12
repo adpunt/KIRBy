@@ -1170,7 +1170,7 @@ DEFAULT_MODELS = {
         'regressor': _get_gp_regressor,
         'classifier': _get_gp_classifier,
         'tier': 'full',
-        '_max_samples': 6000,
+        '_max_samples': 1000,
     },
     'catboost': {
         'regressor': _get_catboost_regressor,
@@ -1207,8 +1207,52 @@ DEFAULT_MODELS = {
 _TIER_ORDER = {'full': 1, 'extra': 2}
 
 
+# Empirical model skips (2026-05-11). Datasets/conditions where a model is
+# verified unfinishable under the 7d SLURM wall via check_precompute_status.
+# Filenames are unchanged; cache metadata reflects the reduced list, so old
+# caches built with the skipped model present will be invalidated and rebuilt.
+_DOMAIN_MODEL_SKIPS = {
+    # Ridge at n=20k-33k × wide rep × 1080 configs runs 22-37h per condition
+    # on nucleotide. Tree/MLP models cover the linear-baseline role adequately.
+    'nucleotide': ['ridge'],
+}
+
+_DATASET_STRATEGY_SKIPS = {
+    # Augmentation reps blow these up under 7d wall. See timing table in
+    # EXPERIMENT_STATUS_PER_DATASET.md (post-2026-05-11 timing audit).
+    ('flab_thermo_tresanco', 'uncapped'): ['gp', 'mlp'],
+    ('tcga_luad_vs_lusc',    'uncapped'): ['gp'],
+    ('ddg_combined',         'uncapped'): ['gp'],
+}
+
+
+def _domain_for_skip(dataset_name: Optional[str]) -> Optional[str]:
+    """Cheap inline copy of precompute_hybrids._get_domain for skip lookups."""
+    if not dataset_name:
+        return None
+    if dataset_name.startswith(('nt_', 'gb_')):
+        return 'nucleotide'
+    return None  # other domains have no current skips
+
+
+def _applied_skips(dataset_name: Optional[str],
+                   strategy: Optional[str]) -> set:
+    """Set of model names to skip for this (dataset, strategy) combo."""
+    skip: set = set()
+    domain = _domain_for_skip(dataset_name)
+    if domain and domain in _DOMAIN_MODEL_SKIPS:
+        skip.update(_DOMAIN_MODEL_SKIPS[domain])
+    if dataset_name and strategy:
+        key = (dataset_name, strategy)
+        if key in _DATASET_STRATEGY_SKIPS:
+            skip.update(_DATASET_STRATEGY_SKIPS[key])
+    return skip
+
+
 def _resolve_models(models, task_type: str, speed: str,
-                     n_samples: Optional[int] = None) -> Dict[str, Any]:
+                     n_samples: Optional[int] = None,
+                     dataset_name: Optional[str] = None,
+                     strategy: Optional[str] = None) -> Dict[str, Any]:
     """Resolve model spec to dict of {name: sklearn_model_instance}.
 
     models can be:
@@ -1221,6 +1265,7 @@ def _resolve_models(models, task_type: str, speed: str,
     """
     key = 'classifier' if task_type == 'classification' else 'regressor'
     max_tier = _TIER_ORDER.get(speed, 1)
+    skip_set = _applied_skips(dataset_name, strategy)
 
     def _check_max_samples(name, spec):
         max_s = spec.get('_max_samples')
@@ -1229,11 +1274,18 @@ def _resolve_models(models, task_type: str, speed: str,
             return False
         return True
 
+    def _check_skip(name):
+        if name in skip_set:
+            print(f"  Skipping {name}: empirical skip for "
+                  f"dataset={dataset_name!r} strategy={strategy!r}")
+            return False
+        return True
+
     if models is None:
         resolved = {}
         for name, spec in DEFAULT_MODELS.items():
             if _TIER_ORDER.get(spec['tier'], 0) <= max_tier:
-                if _check_max_samples(name, spec):
+                if _check_max_samples(name, spec) and _check_skip(name):
                     resolved[name] = spec[key]()
         return resolved
 
@@ -1245,7 +1297,7 @@ def _resolve_models(models, task_type: str, speed: str,
                     f"Unknown model '{name}'. "
                     f"Available: {list(DEFAULT_MODELS.keys())}"
                 )
-            if _check_max_samples(name, DEFAULT_MODELS[name]):
+            if _check_max_samples(name, DEFAULT_MODELS[name]) and _check_skip(name):
                 resolved[name] = DEFAULT_MODELS[name][key]()
         return resolved
 
@@ -3854,17 +3906,35 @@ def find_best_hybrid(
     _norm_eval = internal_evaluators if internal_evaluators is not None else _tier['internal_evaluators']
     _norm_folds = n_folds if n_folds is not None else _tier['n_folds']
 
-    # Normalize models to sorted list of names
+    # Normalize models to sorted list of names. Apply the same _max_samples
+    # and empirical skips that _resolve_models uses, so cached metadata
+    # matches the actual model list this run will produce.
+    _skip_set = _applied_skips(dataset_name, augmentation_strategy)
+
+    def _passes_max_samples(name, spec):
+        max_s = spec.get('_max_samples')
+        return not (max_s is not None and n_samples is not None
+                    and n_samples > max_s)
+
     if models is None:
         _max_tier = _TIER_ORDER.get(speed, 1)
         _norm_models = sorted(
             name for name, spec in DEFAULT_MODELS.items()
             if _TIER_ORDER.get(spec['tier'], 0) <= _max_tier
+            and _passes_max_samples(name, spec)
+            and name not in _skip_set
         )
     elif isinstance(models, dict):
-        _norm_models = sorted(models.keys())
+        _norm_models = sorted(
+            n for n in models.keys() if n not in _skip_set
+        )
     elif isinstance(models, list):
-        _norm_models = sorted(models)
+        _norm_models = sorted(
+            n for n in models
+            if n in DEFAULT_MODELS
+            and _passes_max_samples(n, DEFAULT_MODELS[n])
+            and n not in _skip_set
+        )
     else:
         _norm_models = None  # single model instance
 
@@ -4039,7 +4109,9 @@ def find_best_hybrid(
 
     # --- Resolve models ---
     resolved_models = _resolve_models(models, task_type, speed,
-                                       n_samples=n_samples)
+                                       n_samples=n_samples,
+                                       dataset_name=dataset_name,
+                                       strategy=augmentation_strategy)
     if verbose:
         print(f"Models: {list(resolved_models.keys())}")
         print(f"Representations: {list(base_reps.keys())} "
