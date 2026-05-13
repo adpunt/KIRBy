@@ -13,6 +13,14 @@ import os
 import numpy as np
 import torch
 import os.path as osp
+from pathlib import Path
+
+
+def _default_qm9_dir() -> str:
+    """QM9 cache under $KIRBY_CACHE_DIR (falls back to ~/.cache/kirby)."""
+    root = Path(os.environ.get(
+        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
+    return str(root / 'QM9')
 
 
 def _patch_torch_load_for_pyg():
@@ -41,7 +49,7 @@ def _load_smiles_from_sdf(data_dir):
     return smiles
 
 
-def load_qm9(n_samples=5000, property_idx=4, data_dir='data/QM9', random_seed=42):
+def load_qm9(n_samples=5000, property_idx=4, data_dir=None, random_seed=42):
     """
     Load QM9 dataset and extract SMILES + labels.
 
@@ -75,6 +83,8 @@ def load_qm9(n_samples=5000, property_idx=4, data_dir='data/QM9', random_seed=42
     # Fix PyTorch 2.6+ weights_only compatibility
     _patch_torch_load_for_pyg()
 
+    if data_dir is None:
+        data_dir = _default_qm9_dir()
     print(f"Loading QM9 (property: {property_names[property_idx]})...")
 
     try:
@@ -158,7 +168,7 @@ def load_qm9(n_samples=5000, property_idx=4, data_dir='data/QM9', random_seed=42
     }
 
 
-def load_qm9_with_3d(n_samples=None, property_idx=4, data_dir='data/QM9',
+def load_qm9_with_3d(n_samples=None, property_idx=4, data_dir=None,
                       random_seed=42):
     """Load QM9 with 3D coordinates for end-to-end 3D models (SchNet, DimeNet++).
 
@@ -190,6 +200,8 @@ def load_qm9_with_3d(n_samples=None, property_idx=4, data_dir='data/QM9',
 
     _patch_torch_load_for_pyg()
 
+    if data_dir is None:
+        data_dir = _default_qm9_dir()
     print(f"Loading QM9 with 3D coords (property: {property_names[property_idx]})...")
     try:
         qm9 = QM9(root=data_dir)
@@ -380,7 +392,7 @@ def get_qm9_splits(data, splitter='scaffold', train_ratio=0.8, val_ratio=0.1, ra
     }
 
 
-def load_qm9_homo_lumo(n_samples=1000, data_dir='data/QM9', random_seed=42):
+def load_qm9_homo_lumo(n_samples=1000, data_dir=None, random_seed=42):
     """
     Load QM9 for HOMO-LUMO gap prediction (most common task).
     

@@ -194,7 +194,8 @@ def _download_openadmet() -> pd.DataFrame:
     """Download or load cached OpenADMET-ExpansionRx data."""
     import requests
 
-    cache_dir = Path.home() / '.cache' / 'kirby'
+    cache_dir = Path(os.environ.get(
+        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
     cache_dir.mkdir(parents=True, exist_ok=True)
     cached = cache_dir / 'openadmet_train.csv'
 
@@ -247,7 +248,8 @@ def _fetch_chembl_herg_ki() -> Tuple[List[str], np.ndarray]:
     import requests
     import time as _time
 
-    cache_dir = Path.home() / '.cache' / 'kirby'
+    cache_dir = Path(os.environ.get(
+        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
     cache_dir.mkdir(parents=True, exist_ok=True)
     cached = cache_dir / 'chembl_herg_ki.csv'
 
@@ -338,7 +340,8 @@ def _load_polaris_adme(target_key: str):
 
     col_name, description = POLARIS_ADME_TARGETS[target_key]
 
-    cache_dir = Path.home() / '.cache' / 'kirby'
+    cache_dir = Path(os.environ.get(
+        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
     cache_dir.mkdir(parents=True, exist_ok=True)
     cached = cache_dir / 'polaris_adme_fang.csv'
 

@@ -16,6 +16,7 @@ Reference:
   https://github.com/lewis-chinery/Tz_her2_affinity_and_beyond
 """
 
+import os
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -45,7 +46,9 @@ def _cache_dir() -> Path:
     if seagate.parent.parent.exists():
         seagate.mkdir(parents=True, exist_ok=True)
         return seagate
-    cache = Path.home() / '.cache' / 'kirby' / 'trastuzumab'
+    cache_root = Path(os.environ.get(
+        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
+    cache = cache_root / 'trastuzumab'
     cache.mkdir(parents=True, exist_ok=True)
     return cache
 

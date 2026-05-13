@@ -31,9 +31,11 @@ def _find_data_dir() -> Optional[Path]:
         if d.exists():
             return d
 
+    _cache_root = Path(os.environ.get(
+        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
     candidates = [
         Path('/Volumes/seagate/kirby/pdbbind'),
-        Path.home() / '.cache' / 'kirby' / 'pdbbind',
+        _cache_root / 'pdbbind',
         Path.home() / 'data' / 'pdbbind',
         Path('/data/stat-ecr/scat9264/KIRBy/data/pdbbind'),   # post-2026-05-07
         Path('/data/stat-cadd/scat9264/KIRBy/data/pdbbind'),  # legacy
@@ -339,7 +341,9 @@ def assign_lp_groups(protein_seqs: List[str],
         (''.join(unique_seqs) + str(threshold)).encode()
     ).hexdigest()[:16]
 
-    cache_dir = Path.home() / '.cache' / 'kirby' / 'lp_pdbbind'
+    _cache_root = Path(os.environ.get(
+        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
+    cache_dir = _cache_root / 'lp_pdbbind'
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_file = cache_dir / f'lp_groups_{cache_key}.npz'
 

@@ -16,6 +16,7 @@ Dependencies:
 - ANARCI (optional): CDR extraction for paratope
 """
 
+import os
 import hashlib
 import warnings
 import numpy as np
@@ -35,7 +36,9 @@ def _structure_cache_dir() -> Path:
     if seagate.parent.parent.exists():
         seagate.mkdir(parents=True, exist_ok=True)
         return seagate
-    fallback = Path.home() / '.cache' / 'kirby' / 'structures'
+    cache_root = Path(os.environ.get(
+        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
+    fallback = cache_root / 'structures'
     fallback.mkdir(parents=True, exist_ok=True)
     return fallback
 

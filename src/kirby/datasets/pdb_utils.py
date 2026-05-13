@@ -5,6 +5,7 @@ Downloads PDB files from RCSB, extracts chain sequences using BioPython,
 and applies single-site mutations.
 """
 
+import os
 import warnings
 from pathlib import Path
 from typing import Dict, Optional
@@ -21,7 +22,9 @@ def _pdb_cache_dir(cache_dir: Optional[Path] = None) -> Path:
     if seagate.parent.parent.exists():
         seagate.mkdir(parents=True, exist_ok=True)
         return seagate
-    fallback = Path.home() / '.cache' / 'kirby' / 'pdb'
+    cache_root = Path(os.environ.get(
+        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
+    fallback = cache_root / 'pdb'
     fallback.mkdir(parents=True, exist_ok=True)
     return fallback
 
