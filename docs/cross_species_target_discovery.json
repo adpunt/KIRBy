@@ -1,0 +1,321 @@
+{
+  "dog": {
+    "organism": "Canis familiaris",
+    "mode": "strict",
+    "n_targets_total": 10,
+    "n_activities_total": 1055,
+    "top": [
+      {
+        "target_chembl_id": "CHEMBL1667665",
+        "activity_count": 1032,
+        "pref_name": "Transient receptor potential M8 protein",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": null
+      },
+      {
+        "target_chembl_id": "CHEMBL3341581",
+        "activity_count": 8,
+        "pref_name": "Prostaglandin E synthase",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL5658"
+      },
+      {
+        "target_chembl_id": "CHEMBL2046265",
+        "activity_count": 5,
+        "pref_name": "Hepatocyte growth factor receptor",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL3717"
+      },
+      {
+        "target_chembl_id": "CHEMBL1649060",
+        "activity_count": 2,
+        "pref_name": "Uncharacterized protein",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": null
+      },
+      {
+        "target_chembl_id": "CHEMBL1907981",
+        "activity_count": 2,
+        "pref_name": "Cytochrome P450 2B11",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": null
+      },
+      {
+        "target_chembl_id": "CHEMBL2069160",
+        "activity_count": 2,
+        "pref_name": "Cathepsin K",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL268"
+      },
+      {
+        "target_chembl_id": "CHEMBL1932900",
+        "activity_count": 1,
+        "pref_name": "Matrix metalloproteinase-12",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": null
+      },
+      {
+        "target_chembl_id": "CHEMBL2176848",
+        "activity_count": 1,
+        "pref_name": "O-acyltransferase",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": null
+      },
+      {
+        "target_chembl_id": "CHEMBL3085616",
+        "activity_count": 1,
+        "pref_name": "Voltage-gated inwardly rectifying potassium channel KCNH2",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL240"
+      },
+      {
+        "target_chembl_id": "CHEMBL3334417",
+        "activity_count": 1,
+        "pref_name": "Chemokine (C-C motif) receptor 1",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": null
+      }
+    ]
+  },
+  "cat": {
+    "organism": "Felis catus",
+    "mode": "strict",
+    "n_targets_total": 2,
+    "n_activities_total": 59,
+    "top": [
+      {
+        "target_chembl_id": "CHEMBL612670",
+        "activity_count": 50,
+        "pref_name": "Felis catus",
+        "target_type": "ORGANISM",
+        "human_counterpart": null
+      },
+      {
+        "target_chembl_id": "CHEMBL5226",
+        "activity_count": 9,
+        "pref_name": "Urotensin II receptor",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": null
+      }
+    ]
+  },
+  "cow": {
+    "organism": "Bos taurus",
+    "mode": "strict",
+    "n_targets_total": 173,
+    "n_activities_total": 18958,
+    "top": [
+      {
+        "target_chembl_id": "CHEMBL281",
+        "activity_count": 1541,
+        "pref_name": "Carbonic anhydrase 4",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL3729"
+      },
+      {
+        "target_chembl_id": "CHEMBL3649",
+        "activity_count": 1359,
+        "pref_name": "Xanthine dehydrogenase/oxidase",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL1929"
+      },
+      {
+        "target_chembl_id": "CHEMBL4471",
+        "activity_count": 1153,
+        "pref_name": "Prothrombin",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL204"
+      },
+      {
+        "target_chembl_id": "CHEMBL3769",
+        "activity_count": 867,
+        "pref_name": "Serine protease 1",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL209"
+      },
+      {
+        "target_chembl_id": "CHEMBL4975",
+        "activity_count": 807,
+        "pref_name": "Adenosine receptor A1",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL226"
+      },
+      {
+        "target_chembl_id": "CHEMBL2094134",
+        "activity_count": 790,
+        "pref_name": "Tubulin",
+        "target_type": "PROTEIN FAMILY",
+        "human_counterpart": "CHEMBL2095182"
+      },
+      {
+        "target_chembl_id": "CHEMBL4768",
+        "activity_count": 609,
+        "pref_name": "Acetylcholinesterase",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL220"
+      },
+      {
+        "target_chembl_id": "CHEMBL2331",
+        "activity_count": 524,
+        "pref_name": "Phenylethanolamine N-methyltransferase",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL4617"
+      },
+      {
+        "target_chembl_id": "CHEMBL4802",
+        "activity_count": 511,
+        "pref_name": "Nitric oxide synthase 3",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL4803"
+      },
+      {
+        "target_chembl_id": "CHEMBL2095178",
+        "activity_count": 467,
+        "pref_name": "Protein farnesyltransferase",
+        "target_type": "PROTEIN COMPLEX",
+        "human_counterpart": "CHEMBL2094108"
+      },
+      {
+        "target_chembl_id": "CHEMBL3998",
+        "activity_count": 406,
+        "pref_name": "D(2) dopamine receptor",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL217"
+      },
+      {
+        "target_chembl_id": "CHEMBL2756",
+        "activity_count": 401,
+        "pref_name": "Amine oxidase [flavin-containing] B",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL2039"
+      },
+      {
+        "target_chembl_id": "CHEMBL3081",
+        "activity_count": 395,
+        "pref_name": "Aldo-keto reductase family 1 member B1",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL1900"
+      },
+      {
+        "target_chembl_id": "CHEMBL3374",
+        "activity_count": 350,
+        "pref_name": "Type-1 angiotensin II receptor",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL227"
+      },
+      {
+        "target_chembl_id": "CHEMBL3254",
+        "activity_count": 338,
+        "pref_name": "Amine oxidase [flavin-containing] A",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL1951"
+      },
+      {
+        "target_chembl_id": "CHEMBL2094107",
+        "activity_count": 338,
+        "pref_name": "GABA-A receptor; anion channel",
+        "target_type": "PROTEIN COMPLEX GROUP",
+        "human_counterpart": "CHEMBL2093872"
+      },
+      {
+        "target_chembl_id": "CHEMBL2966",
+        "activity_count": 324,
+        "pref_name": "Adenosine deaminase",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL1910"
+      },
+      {
+        "target_chembl_id": "CHEMBL2967",
+        "activity_count": 302,
+        "pref_name": "D(1A) dopamine receptor",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL2056"
+      },
+      {
+        "target_chembl_id": "CHEMBL3314",
+        "activity_count": 280,
+        "pref_name": "Chymotrypsinogen A",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": null
+      },
+      {
+        "target_chembl_id": "CHEMBL4892",
+        "activity_count": 272,
+        "pref_name": "Alpha-1A adrenergic receptor",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL229"
+      },
+      {
+        "target_chembl_id": "CHEMBL1075051",
+        "activity_count": 261,
+        "pref_name": "Dihydrofolate reductase",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL202"
+      },
+      {
+        "target_chembl_id": "CHEMBL3478",
+        "activity_count": 252,
+        "pref_name": "cGMP-specific 3',5'-cyclic phosphodiesterase",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL1827"
+      },
+      {
+        "target_chembl_id": "CHEMBL4106",
+        "activity_count": 218,
+        "pref_name": "Cathepsin D",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL2581"
+      },
+      {
+        "target_chembl_id": "CHEMBL2935",
+        "activity_count": 215,
+        "pref_name": "Purine nucleoside phosphorylase",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL4338"
+      },
+      {
+        "target_chembl_id": "CHEMBL3394",
+        "activity_count": 210,
+        "pref_name": "Tubulin beta chain",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": null
+      }
+    ]
+  },
+  "horse": {
+    "organism": "Equus caballus",
+    "mode": "strict",
+    "n_targets_total": 4,
+    "n_activities_total": 6306,
+    "top": [
+      {
+        "target_chembl_id": "CHEMBL5763",
+        "activity_count": 5609,
+        "pref_name": "Cholinesterase",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": "CHEMBL1914"
+      },
+      {
+        "target_chembl_id": "CHEMBL5077",
+        "activity_count": 583,
+        "pref_name": "Butyrylcholinesterase",
+        "target_type": "SINGLE PROTEIN",
+        "human_counterpart": null
+      },
+      {
+        "target_chembl_id": "CHEMBL2111372",
+        "activity_count": 112,
+        "pref_name": "Alcohol dehydrogenase",
+        "target_type": "PROTEIN FAMILY",
+        "human_counterpart": "CHEMBL2096668"
+      },
+      {
+        "target_chembl_id": "CHEMBL613115",
+        "activity_count": 2,
+        "pref_name": "Equus caballus",
+        "target_type": "ORGANISM",
+        "human_counterpart": null
+      }
+    ]
+  }
+}

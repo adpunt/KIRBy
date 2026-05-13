@@ -1,0 +1,367 @@
+{
+  "KCNH2": {
+    "human": {
+      "organism": "Homo sapiens",
+      "tax_id": 9606,
+      "targets": [
+        {
+          "target_chembl_id": "CHEMBL240",
+          "pref_name": "Voltage-gated inwardly rectifying potassium channel KCNH2",
+          "target_type": "SINGLE PROTEIN",
+          "organism": "Homo sapiens",
+          "matched_synonym": "KCNH2"
+        },
+        {
+          "target_chembl_id": "CHEMBL2362996",
+          "pref_name": "Voltage-gated potassium channel",
+          "target_type": "PROTEIN FAMILY",
+          "organism": "Homo sapiens",
+          "matched_synonym": "KCNH2"
+        },
+        {
+          "target_chembl_id": "CHEMBL4106188",
+          "pref_name": "Melanin-concentrating hormone receptor 2/HERG",
+          "target_type": "SELECTIVITY GROUP",
+          "organism": "Homo sapiens",
+          "matched_synonym": "KCNH2"
+        }
+      ],
+      "best": "CHEMBL240",
+      "activities": {
+        "IC50": 11712,
+        "Ki": 1811
+      },
+      "total": 13523,
+      "flag": "ok"
+    },
+    "dog": {
+      "organism": "Canis familiaris",
+      "tax_id": 9615,
+      "targets": [
+        {
+          "target_chembl_id": "CHEMBL3085616",
+          "pref_name": "Voltage-gated inwardly rectifying potassium channel KCNH2",
+          "target_type": "SINGLE PROTEIN",
+          "organism": "Canis familiaris",
+          "matched_synonym": "KCNH2"
+        }
+      ],
+      "best": "CHEMBL3085616",
+      "activities": {
+        "IC50": 1,
+        "Ki": 0
+      },
+      "total": 1,
+      "flag": "skip"
+    },
+    "cat": {
+      "organism": "Felis catus",
+      "tax_id": 9685,
+      "targets": [],
+      "best": null,
+      "activities": null,
+      "flag": "none"
+    },
+    "cow": {
+      "organism": "Bos taurus",
+      "tax_id": 9913,
+      "targets": [],
+      "best": null,
+      "activities": null,
+      "flag": "none"
+    },
+    "horse": {
+      "organism": "Equus caballus",
+      "tax_id": 9796,
+      "targets": [],
+      "best": null,
+      "activities": null,
+      "flag": "none"
+    }
+  },
+  "PTGS2": {
+    "human": {
+      "organism": "Homo sapiens",
+      "tax_id": 9606,
+      "targets": [
+        {
+          "target_chembl_id": "CHEMBL230",
+          "pref_name": "Prostaglandin G/H synthase 2",
+          "target_type": "SINGLE PROTEIN",
+          "organism": "Homo sapiens",
+          "matched_synonym": "PTGS2"
+        },
+        {
+          "target_chembl_id": "CHEMBL6174",
+          "pref_name": "Cytochrome c oxidase subunit 2",
+          "target_type": "SINGLE PROTEIN",
+          "organism": "Homo sapiens",
+          "matched_synonym": "COX2"
+        },
+        {
+          "target_chembl_id": "CHEMBL2094253",
+          "pref_name": "Cyclooxygenase",
+          "target_type": "PROTEIN FAMILY",
+          "organism": "Homo sapiens",
+          "matched_synonym": "PTGS2"
+        },
+        {
+          "target_chembl_id": "CHEMBL3885623",
+          "pref_name": "Prostaglandin E synthase/G/H synthase 2",
+          "target_type": "PROTEIN FAMILY",
+          "organism": "Homo sapiens",
+          "matched_synonym": "PTGS2"
+        },
+        {
+          "target_chembl_id": "CHEMBL4523964",
+          "pref_name": "COX-1/COX-2",
+          "target_type": "SELECTIVITY GROUP",
+          "organism": "Homo sapiens",
+          "matched_synonym": "PTGS2"
+        }
+      ],
+      "best": "CHEMBL230",
+      "activities": {
+        "IC50": 6284,
+        "Ki": 26
+      },
+      "total": 6310,
+      "flag": "ok"
+    },
+    "dog": {
+      "organism": "Canis familiaris",
+      "tax_id": 9615,
+      "targets": [
+        {
+          "target_chembl_id": "CHEMBL4033",
+          "pref_name": "Cyclooxygenase-2",
+          "target_type": "SINGLE PROTEIN",
+          "organism": "Canis lupus familiaris",
+          "matched_synonym": "PTGS2"
+        }
+      ],
+      "best": "CHEMBL4033",
+      "activities": {
+        "IC50": 110,
+        "Ki": 0
+      },
+      "total": 110,
+      "flag": "ok"
+    },
+    "cat": {
+      "organism": "Felis catus",
+      "tax_id": 9685,
+      "targets": [
+        {
+          "target_chembl_id": "CHEMBL5303558",
+          "pref_name": "Cyclooxygenase 2",
+          "target_type": "SINGLE PROTEIN",
+          "organism": "Felis catus",
+          "matched_synonym": "cyclooxygenase-2"
+        }
+      ],
+      "best": "CHEMBL5303558",
+      "activities": {
+        "IC50": 0,
+        "Ki": 0
+      },
+      "total": 0,
+      "flag": "none"
+    },
+    "cow": {
+      "organism": "Bos taurus",
+      "tax_id": 9913,
+      "targets": [
+        {
+          "target_chembl_id": "CHEMBL3331",
+          "pref_name": "Prostaglandin G/H synthase 2",
+          "target_type": "SINGLE PROTEIN",
+          "organism": "Bos taurus",
+          "matched_synonym": "PTGS2"
+        },
+        {
+          "target_chembl_id": "CHEMBL2096674",
+          "pref_name": "Cyclooxygenase",
+          "target_type": "PROTEIN FAMILY",
+          "organism": "Bos taurus",
+          "matched_synonym": "PTGS2"
+        }
+      ],
+      "best": "CHEMBL3331",
+      "activities": {
+        "IC50": 28,
+        "Ki": 0
+      },
+      "total": 28,
+      "flag": "cv3"
+    },
+    "horse": {
+      "organism": "Equus caballus",
+      "tax_id": 9796,
+      "targets": [
+        {
+          "target_chembl_id": "CHEMBL5303566",
+          "pref_name": "Prostaglandin G/H synthase 2",
+          "target_type": "SINGLE PROTEIN",
+          "organism": "Equus caballus",
+          "matched_synonym": "PTGS2"
+        }
+      ],
+      "best": "CHEMBL5303566",
+      "activities": {
+        "IC50": 0,
+        "Ki": 0
+      },
+      "total": 0,
+      "flag": "none"
+    }
+  },
+  "DRD2": {
+    "human": {
+      "organism": "Homo sapiens",
+      "tax_id": 9606,
+      "targets": [
+        {
+          "target_chembl_id": "CHEMBL217",
+          "pref_name": "D(2) dopamine receptor",
+          "target_type": "SINGLE PROTEIN",
+          "organism": "Homo sapiens",
+          "matched_synonym": "DRD2"
+        },
+        {
+          "target_chembl_id": "CHEMBL2095169",
+          "pref_name": "Dopamine receptors; D2 & D3",
+          "target_type": "SELECTIVITY GROUP",
+          "organism": "Homo sapiens",
+          "matched_synonym": "DRD2"
+        },
+        {
+          "target_chembl_id": "CHEMBL2095396",
+          "pref_name": "Dopamine receptors; D2 & D4",
+          "target_type": "SELECTIVITY GROUP",
+          "organism": "Homo sapiens",
+          "matched_synonym": "DRD2"
+        },
+        {
+          "target_chembl_id": "CHEMBL2096905",
+          "pref_name": "Dopamine receptor",
+          "target_type": "PROTEIN FAMILY",
+          "organism": "Homo sapiens",
+          "matched_synonym": "DRD2"
+        },
+        {
+          "target_chembl_id": "CHEMBL2111341",
+          "pref_name": "Dopamine D1 and D2 receptor",
+          "target_type": "SELECTIVITY GROUP",
+          "organism": "Homo sapiens",
+          "matched_synonym": "DRD2"
+        },
+        {
+          "target_chembl_id": "CHEMBL2111460",
+          "pref_name": "Dopamine D2 receptor and serotonin 1a receptor",
+          "target_type": "SELECTIVITY GROUP",
+          "organism": "Homo sapiens",
+          "matched_synonym": "DRD2"
+        },
+        {
+          "target_chembl_id": "CHEMBL2111468",
+          "pref_name": "Dopamine D2 receptor and serotonin 2a receptor",
+          "target_type": "SELECTIVITY GROUP",
+          "organism": "Homo sapiens",
+          "matched_synonym": "DRD2"
+        },
+        {
+          "target_chembl_id": "CHEMBL2331075",
+          "pref_name": "D2-like dopamine receptor",
+          "target_type": "PROTEIN FAMILY",
+          "organism": "Homo sapiens",
+          "matched_synonym": "DRD2"
+        },
+        {
+          "target_chembl_id": "CHEMBL3038478",
+          "pref_name": "Dopamine receptor D2L/neurotensin receptor NTS1",
+          "target_type": "PROTEIN COMPLEX",
+          "organism": "Homo sapiens",
+          "matched_synonym": "DRD2"
+        },
+        {
+          "target_chembl_id": "CHEMBL4296096",
+          "pref_name": "D(2) dopamine receptor/Metabotropic glutamate receptor 5",
+          "target_type": "PROTEIN COMPLEX",
+          "organism": "Homo sapiens",
+          "matched_synonym": "DRD2"
+        }
+      ],
+      "best": "CHEMBL217",
+      "activities": {
+        "IC50": 1100,
+        "Ki": 11961
+      },
+      "total": 13061,
+      "flag": "ok"
+    },
+    "dog": {
+      "organism": "Canis familiaris",
+      "tax_id": 9615,
+      "targets": [
+        {
+          "target_chembl_id": "CHEMBL2703",
+          "pref_name": "D(2) dopamine receptor",
+          "target_type": "SINGLE PROTEIN",
+          "organism": "Canis lupus familiaris",
+          "matched_synonym": "DRD2"
+        }
+      ],
+      "best": "CHEMBL2703",
+      "activities": {
+        "IC50": 1,
+        "Ki": 0
+      },
+      "total": 1,
+      "flag": "skip"
+    },
+    "cat": {
+      "organism": "Felis catus",
+      "tax_id": 9685,
+      "targets": [],
+      "best": null,
+      "activities": null,
+      "flag": "none"
+    },
+    "cow": {
+      "organism": "Bos taurus",
+      "tax_id": 9913,
+      "targets": [
+        {
+          "target_chembl_id": "CHEMBL3998",
+          "pref_name": "D(2) dopamine receptor",
+          "target_type": "SINGLE PROTEIN",
+          "organism": "Bos taurus",
+          "matched_synonym": "DRD2"
+        },
+        {
+          "target_chembl_id": "CHEMBL2096970",
+          "pref_name": "Dopamine receptor",
+          "target_type": "PROTEIN FAMILY",
+          "organism": "Bos taurus",
+          "matched_synonym": "DRD2"
+        }
+      ],
+      "best": "CHEMBL3998",
+      "activities": {
+        "IC50": 160,
+        "Ki": 246
+      },
+      "total": 406,
+      "flag": "ok"
+    },
+    "horse": {
+      "organism": "Equus caballus",
+      "tax_id": 9796,
+      "targets": [],
+      "best": null,
+      "activities": null,
+      "flag": "none"
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "_comment": "Canonical (species, target) IDs for cross-species pretraining eval. Source: scripts/lookup_vet_target_ids.py + docs/cross_species_target_discovery.json. Each entry is the ChEMBL target_chembl_id and the strict-filter (IC50/Ki, nM, =) activity count.",
+  "_last_resolved": "2026-05-13",
+  "cow_CA4": {
+    "species": "cow",
+    "organism": "Bos taurus",
+    "gene": "CA4",
+    "pref_name": "Carbonic anhydrase 4",
+    "target_chembl_id": "CHEMBL281",
+    "activity_count_strict": 1541,
+    "resolved_via": "discovery_top25"
+  },
+  "cow_DRD2": {
+    "species": "cow",
+    "organism": "Bos taurus",
+    "gene": "DRD2",
+    "pref_name": "D(2) dopamine receptor",
+    "target_chembl_id": "CHEMBL3998",
+    "activity_count_strict": 406,
+    "resolved_via": "discovery_top25"
+  },
+  "cow_PTGS2": {
+    "species": "cow",
+    "organism": "Bos taurus",
+    "gene": "PTGS2",
+    "pref_name": "Prostaglandin G/H synthase 2",
+    "target_chembl_id": "CHEMBL3331",
+    "activity_count_strict": 28,
+    "resolved_via": "pref_name_icontains_prostaglandin"
+  },
+  "dog_PTGS2": {
+    "species": "dog",
+    "organism": "Canis lupus familiaris",
+    "gene": "PTGS2",
+    "pref_name": "Cyclooxygenase-2",
+    "target_chembl_id": "CHEMBL4033",
+    "activity_count_strict": 110,
+    "resolved_via": "pref_name_iexact_cyclooxygenase2"
+  }
+}
