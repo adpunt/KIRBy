@@ -13,10 +13,11 @@
 # targets (cow_CA4, cow_DRD2, dog_PTGS2, cow_PTGS2).
 #
 # Usage:
-#   sbatch tests/slurm_scripts/submit_foundation_hybrid_vet.sh           # general preset (18 reps)
+#   sbatch tests/slurm_scripts/submit_foundation_hybrid_vet.sh           # full preset (18 reps)
+#   sbatch tests/slurm_scripts/submit_foundation_hybrid_vet.sh mid       # mid preset (11 reps)
 #   sbatch tests/slurm_scripts/submit_foundation_hybrid_vet.sh minimal   # minimal preset (4 reps)
 
-PRESET="${1:-general}"
+PRESET="${1:-full}"
 
 cd /data/stat-ecr/scat9264/KIRBy
 git pull 2>/dev/null
