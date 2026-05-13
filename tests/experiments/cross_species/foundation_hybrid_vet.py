@@ -12,11 +12,12 @@ only need to clear it.
 
 Per-target evaluation:
   - 5-fold scaffold GroupKFold (3-fold fallback for n < 150)
-  - find_best_hybrid on one of two rep presets:
-      --preset minimal  -> REPS_TOP_TIER_UNIVERSAL (4 reps: mhg_gnn, mordred,
-                            pdv, grover; Top Tier in every surveyed molecular
-                            dataset per PIPELINE_READINESS_TODO.md)
-      --preset general  -> REPS_GENERAL_TIER (18 reps, union of General Tier)
+  - find_best_hybrid on one of three rep presets:
+      --preset minimal -> REPS_TOP_TIER_UNIVERSAL (4 reps: mhg_gnn, mordred,
+                           pdv, grover; Top Tier in every surveyed molecular
+                           dataset per PIPELINE_READINESS_TODO.md)
+      --preset mid     -> REPS_TOP_TIER_ANY (11 reps; Top Tier on ≥1 dataset)
+      --preset full    -> REPS_GENERAL_TIER (18 reps; union of General Tier)
   - Baselines per (rep × target): ridge (RidgeCV) and dnn_scratch
 
 Datasets (locked in docs/cross_species_vet_eval_targets.json):
@@ -26,9 +27,13 @@ Datasets (locked in docs/cross_species_vet_eval_targets.json):
   - cow_PTGS2 (CHEMBL3331, n≈28)    - bovine Prostaglandin G/H synthase 2
 
 Usage:
-    # Minimal preset (4 reps, fast sanity-check across all 4 vet targets)
+    # Minimal preset (4 reps, fastest sanity-check pass)
     python tests/experiments/cross_species/foundation_hybrid_vet.py \\
         --preset minimal
+
+    # Mid preset (11 reps, Top Tier ≥1 dataset)
+    python tests/experiments/cross_species/foundation_hybrid_vet.py \\
+        --preset mid
 
     # Full preset (18 reps, default — main experiment)
     python tests/experiments/cross_species/foundation_hybrid_vet.py
@@ -66,13 +71,25 @@ from experiments.cross_species.vet_eval_data import (
 
 
 # Audit-grounded molecular rep sets, sourced from PIPELINE_READINESS_TODO.md
-# tier tables across the 7 surveyed molecular datasets (caco2, herg_ki, herg,
+# tier tables across the 8 surveyed molecular datasets (caco2, herg_ki, herg,
 # logd, qm9, adme_hlm, adme_rlm, adme_mdr1).
 #
-# REPS_TOP_TIER_UNIVERSAL: appears in Top Tier of ALL 8 surveyed datasets.
-# This is the minimal high-confidence set — fast sanity-check pass.
+# REPS_TOP_TIER_UNIVERSAL: Top Tier in ALL 8 surveyed datasets.
+# Fastest sanity-check pass.
 REPS_TOP_TIER_UNIVERSAL = [
     'mhg_gnn', 'mordred', 'pdv', 'grover',
+]
+
+# REPS_TOP_TIER_ANY: Top Tier on at least one surveyed dataset.
+# Drops the 7 reps that were General-Tier-consistent but never Top
+# (chemberta, chembert, selformer, graphmvp, top_torsion, rdkfp, maccs).
+REPS_TOP_TIER_ANY = [
+    'mhg_gnn', 'mordred', 'pdv', 'grover',          # 8/8 (universal)
+    'avalon',                                        # 6/8
+    'ecfp4',                                         # 5/8
+    'mol2vec',                                       # 4/8
+    'smited', 'molformer', 'graph_kernel',           # 3/8
+    'atom_pair',                                     # 1/8
 ]
 
 # REPS_GENERAL_TIER: union of General Tier across all 7 surveyed datasets.
@@ -94,7 +111,8 @@ REPS_GENERAL_TIER = [
 
 REP_PRESETS = {
     'minimal': REPS_TOP_TIER_UNIVERSAL,  # 4 reps — Top Tier in every dataset
-    'general': REPS_GENERAL_TIER,        # 18 reps — full audit-grounded set
+    'mid':     REPS_TOP_TIER_ANY,        # 11 reps — Top Tier on ≥1 dataset
+    'full':    REPS_GENERAL_TIER,        # 18 reps — full audit-grounded set
 }
 
 # Small-n datasets get fewer folds so each fold has enough rows
@@ -264,12 +282,13 @@ def main():
                          '(default: all in cross_species_vet_eval_targets.json)')
     ap.add_argument('--reps', type=str, default=None,
                     help='Comma-separated rep names. Overrides --preset.')
-    ap.add_argument('--preset', type=str, default='general',
+    ap.add_argument('--preset', type=str, default='full',
                     choices=sorted(REP_PRESETS),
                     help='Named rep preset: '
-                         '"minimal" (4 reps, Top Tier in every surveyed dataset) '
-                         'or "general" (18 reps, union of General Tier). '
-                         'Default: general.')
+                         '"minimal" (4 reps, Top Tier in every surveyed dataset), '
+                         '"mid" (11 reps, Top Tier on ≥1 dataset), '
+                         'or "full" (18 reps, General-Tier union). '
+                         'Default: full.')
     ap.add_argument('--n-folds', type=int, default=DEFAULT_N_FOLDS)
     ap.add_argument('--vet-cache-dir', type=str, default=VET_DEFAULT_CACHE_DIR,
                     help=f'ChEMBL activity CSV cache dir for vet targets '
