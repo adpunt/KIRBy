@@ -625,17 +625,13 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
             experiments.append(('LightGBM', rname,
                 lambda: LGBMRegressor(n_estimators=100, random_state=42, verbose=-1,
                                       n_jobs=-1), None))
-        # SVM (tuned hyperparameters per representation)
+        # SVM — match QM9 defaults exactly: fixed RBF, C=1.0, gamma='scale',
+        # for every representation. No per-rep kernel switching, no Optuna
+        # tuning, so SVM is the same model on QM9 and on the validation
+        # datasets and is free of the kernel--representation confound.
         if HAS_SVM:
-            _svm_tuned = {
-                'ECFP4': {'C': 1.4217, 'gamma': 'scale', 'kernel': 'rbf'},
-                'PDV': {'C': 2.0420, 'gamma': 'scale', 'kernel': 'poly', 'degree': 2, 'coef0': 1.9113},
-                'SNS': {'C': 1.0838, 'gamma': 'scale', 'kernel': 'poly', 'degree': 2, 'coef0': 2.7126},
-            }
-            _sp = _svm_tuned.get(rname, {'C': 1.0, 'gamma': 'scale', 'kernel': 'rbf'})
-            _sp_copy = dict(_sp)  # capture for lambda
             experiments.append(('SVM', rname,
-                lambda _p=_sp_copy: SVR(**_p), None))
+                lambda: SVR(C=1.0, gamma='scale', kernel='rbf'), None))
         # GP (PDV only)
         if HAS_GP and rname == 'PDV':
             experiments.append(('GP', rname,
