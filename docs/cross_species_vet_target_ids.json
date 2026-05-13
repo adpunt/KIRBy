@@ -1,0 +1,93 @@
+{
+  "cow_PTGS2": {
+    "species": "cow",
+    "gene": "PTGS2",
+    "organism": "Bos taurus",
+    "candidates": [
+      {
+        "target_chembl_id": "CHEMBL2096674",
+        "pref_name": "Cyclooxygenase",
+        "organism": "Bos taurus",
+        "matched_via": "Bos taurus|pref_name_icontains_cyclooxygenase",
+        "activity_count_strict": 160
+      },
+      {
+        "target_chembl_id": "CHEMBL2502",
+        "pref_name": "Prostaglandin E synthase",
+        "organism": "Bos taurus",
+        "matched_via": "Bos taurus|pref_name_icontains_prostaglandin",
+        "activity_count_strict": 0
+      },
+      {
+        "target_chembl_id": "CHEMBL4820",
+        "pref_name": "Prostaglandin F2-alpha receptor",
+        "organism": "Bos taurus",
+        "matched_via": "Bos taurus|pref_name_icontains_prostaglandin",
+        "activity_count_strict": 34
+      },
+      {
+        "target_chembl_id": "CHEMBL3331",
+        "pref_name": "Prostaglandin G/H synthase 2",
+        "organism": "Bos taurus",
+        "matched_via": "Bos taurus|pref_name_icontains_prostaglandin",
+        "activity_count_strict": 28
+      },
+      {
+        "target_chembl_id": "CHEMBL2860",
+        "pref_name": "Prostaglandin G/H synthase 1",
+        "organism": "Bos taurus",
+        "matched_via": "Bos taurus|pref_name_icontains_prostaglandin",
+        "activity_count_strict": 85
+      },
+      {
+        "target_chembl_id": "CHEMBL4651",
+        "pref_name": "Prostaglandin-H2 D-isomerase",
+        "organism": "Bos taurus",
+        "matched_via": "Bos taurus|pref_name_icontains_prostaglandin",
+        "activity_count_strict": 2
+      }
+    ]
+  },
+  "dog_PTGS2": {
+    "species": "dog",
+    "gene": "PTGS2",
+    "organism": "Canis lupus",
+    "candidates": [
+      {
+        "target_chembl_id": "CHEMBL3341581",
+        "pref_name": "Prostaglandin E synthase",
+        "organism": "Canis familiaris",
+        "matched_via": "Canis familiaris|pref_name_icontains_prostaglandin",
+        "activity_count_strict": 8
+      },
+      {
+        "target_chembl_id": "CHEMBL4033",
+        "pref_name": "Cyclooxygenase-2",
+        "organism": "Canis lupus familiaris",
+        "matched_via": "Canis lupus familiaris|pref_name_iexact_cyclooxygenase2",
+        "activity_count_strict": 110
+      },
+      {
+        "target_chembl_id": "CHEMBL4133",
+        "pref_name": "Prostaglandin G/H synthase 1",
+        "organism": "Canis lupus familiaris",
+        "matched_via": "Canis lupus familiaris|pref_name_icontains_prostaglandin",
+        "activity_count_strict": 87
+      },
+      {
+        "target_chembl_id": "CHEMBL4105910",
+        "pref_name": "Prostaglandin E receptor 4",
+        "organism": "Canis lupus familiaris",
+        "matched_via": "Canis lupus familiaris|pref_name_icontains_prostaglandin",
+        "activity_count_strict": 2
+      },
+      {
+        "target_chembl_id": "CHEMBL6067580",
+        "pref_name": "Prostaglandin E2 receptor EP2 subtype",
+        "organism": "Canis lupus familiaris",
+        "matched_via": "Canis lupus familiaris|pref_name_icontains_prostaglandin",
+        "activity_count_strict": 0
+      }
+    ]
+  }
+}
