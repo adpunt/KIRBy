@@ -144,7 +144,9 @@ def _rep_cache_path(sequences: List[str], rep_name: str) -> Path:
         if 0 <= idx < n:
             key_parts.append(sequences[idx][:200])
     h = hashlib.md5('|'.join(key_parts).encode()).hexdigest()[:12]
-    cache_dir = Path.home() / '.cache' / 'kirby' / 'reps' / f'nuc_{h}'
+    cache_root = Path(os.environ.get(
+        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
+    cache_dir = cache_root / 'reps' / f'nuc_{h}'
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / f'{rep_name}.npy'
 

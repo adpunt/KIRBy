@@ -36,14 +36,22 @@ References:
 import numpy as np
 import pandas as pd
 import os
+from pathlib import Path
 from typing import Optional, Dict
+
+
+def _default_data_dir(subdir: str) -> str:
+    """Default cache subdir under $KIRBY_CACHE_DIR (falls back to ~/.cache/kirby)."""
+    root = Path(os.environ.get(
+        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
+    return str(root / subdir)
 
 
 # DRD2 target ID in ChEMBL
 DRD2_CHEMBL_ID = 'CHEMBL217'
 
 
-def load_drd2_chembl(data_dir: str = 'data/DRD2',
+def load_drd2_chembl(data_dir: Optional[str] = None,
                      random_seed: int = 42,
                      max_spread_log_units: float = 1.0,
                      min_measurements: int = 1) -> Dict:
@@ -73,7 +81,9 @@ def load_drd2_chembl(data_dir: str = 'data/DRD2',
         raise ImportError(
             "ChEMBL client required: pip install chembl_webresource_client"
         )
-    
+
+    if data_dir is None:
+        data_dir = _default_data_dir('DRD2')
     os.makedirs(data_dir, exist_ok=True)
     cache_file = os.path.join(data_dir, 'drd2_ki_chembl_raw.csv')
     
@@ -304,7 +314,7 @@ def get_drd2_splits(data: Dict,
 
 
 def load_drd2(splitter: str = 'scaffold',
-              data_dir: str = 'data/DRD2',
+              data_dir: Optional[str] = None,
               random_seed: int = 42) -> Dict:
     """Load DRD2 Ki data with train/val/test splits."""
     data = load_drd2_chembl(data_dir=data_dir, random_seed=random_seed)

@@ -26,12 +26,20 @@ References:
 import numpy as np
 import pandas as pd
 import os
+from pathlib import Path
 from typing import Optional, Dict, List
+
+
+def _default_data_dir(subdir: str) -> str:
+    """Default cache subdir under $KIRBY_CACHE_DIR (falls back to ~/.cache/kirby)."""
+    root = Path(os.environ.get(
+        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
+    return str(root / subdir)
 
 
 def load_herg_chembl(n_samples: Optional[int] = None,
                      ic50_threshold: float = 10.0,
-                     data_dir: str = 'data/hERG',
+                     data_dir: Optional[str] = None,
                      random_seed: int = 42) -> Dict:
     """
     Load hERG bioactivity data from ChEMBL.
@@ -56,7 +64,9 @@ def load_herg_chembl(n_samples: Optional[int] = None,
         from chembl_webresource_client.new_client import new_client
     except ImportError:
         raise ImportError("ChEMBL client required: pip install chembl_webresource_client")
-    
+
+    if data_dir is None:
+        data_dir = _default_data_dir('hERG')
     os.makedirs(data_dir, exist_ok=True)
     cache_file = os.path.join(data_dir, 'herg_chembl_cache.csv')
     
@@ -123,7 +133,7 @@ def load_herg_chembl(n_samples: Optional[int] = None,
 
 
 def load_herg_tdc(n_samples: Optional[int] = None,
-                  data_dir: str = 'data/hERG',
+                  data_dir: Optional[str] = None,
                   random_seed: int = 42) -> Dict:
     """
     Load hERG data from Therapeutics Data Commons (TDC).
@@ -233,7 +243,7 @@ def load_herg_fluid(data_dir: Optional[str] = None,
 def load_herg(source: str = 'fluid',
               n_samples: Optional[int] = None,
               ic50_threshold: float = 10.0,
-              data_dir: str = 'data',
+              data_dir: Optional[str] = None,
               random_seed: int = 42,
               use_test: bool = False) -> Dict:
     """
@@ -254,6 +264,8 @@ def load_herg(source: str = 'fluid',
             'source': Source name
         }
     """
+    if data_dir is None:
+        data_dir = _default_data_dir('')  # cache root; sub-dirs appended below
     if source == 'tdc':
         return load_herg_tdc(n_samples=n_samples, data_dir=os.path.join(data_dir, 'hERG'), random_seed=random_seed)
     elif source == 'chembl':

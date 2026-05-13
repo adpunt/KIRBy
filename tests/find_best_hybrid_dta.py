@@ -185,7 +185,9 @@ def _rep_cache_path(drug_smiles: List[str], protein_seqs: List[str],
     if seagate.parent.parent.exists():
         seagate.mkdir(parents=True, exist_ok=True)
         return seagate / f'{rep_name}.npy'
-    cache_dir = Path.home() / '.cache' / 'kirby' / 'reps' / f'dta_{data_hash}'
+    cache_root = Path(os.environ.get(
+        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
+    cache_dir = cache_root / 'reps' / f'dta_{data_hash}'
     cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir / f'{rep_name}.npy'
 

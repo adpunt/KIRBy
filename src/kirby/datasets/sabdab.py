@@ -14,6 +14,7 @@ References:
 - https://opig.stats.ox.ac.uk/webapps/sabdab-sabpred/sabdab
 """
 
+import os
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -21,7 +22,14 @@ import requests
 import warnings
 
 
-def download_sabdab(data_dir='data/SabDab', force=False):
+def _default_sabdab_dir() -> str:
+    """SabDab cache under $KIRBY_CACHE_DIR (falls back to ~/.cache/kirby)."""
+    root = Path(os.environ.get(
+        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
+    return str(root / 'SabDab')
+
+
+def download_sabdab(data_dir=None, force=False):
     """
     Download SabDab summary data and sequences.
     
@@ -32,9 +40,11 @@ def download_sabdab(data_dir='data/SabDab', force=False):
     Returns:
         Path to downloaded data directory
     """
+    if data_dir is None:
+        data_dir = _default_sabdab_dir()
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Download summary
     summary_path = data_dir / 'sabdab_summary_all.tsv'
     if not summary_path.exists() or force:
@@ -214,7 +224,7 @@ def parse_sabdab_summary(csv_path):
     return df
 
 
-def load_sabdab_affinity(data_dir='data/SabDab', source='skempi'):
+def load_sabdab_affinity(data_dir=None, source='skempi'):
     """
     Load SabDab sequences with binding affinity data.
     
@@ -243,13 +253,15 @@ def load_sabdab_affinity(data_dir='data/SabDab', source='skempi'):
         raise ValueError(f"Unknown affinity source: {source}")
 
 
-def _load_skempi_affinity(data_dir='data/SabDab'):
+def _load_skempi_affinity(data_dir=None):
     """
     Load affinity data from SKEMPI 2.0 database.
-    
+
     SKEMPI 2.0: https://life.bsc.es/pid/skempi2
     Contains mutation effects on protein-protein interactions including antibodies.
     """
+    if data_dir is None:
+        data_dir = _default_sabdab_dir()
     data_dir = Path(data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
     
@@ -371,7 +383,7 @@ def _load_skempi_affinity(data_dir='data/SabDab'):
 
 
 def load_sabdab_sequences(
-    data_dir='data/SabDab',
+    data_dir=None,
     task='structure',
     n_samples=1000,
     paired_only=True,

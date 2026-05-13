@@ -20,6 +20,7 @@ Reference:
   Zenodo: https://zenodo.org/records/15032263
 """
 
+import os
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -50,7 +51,9 @@ def _cache_dir() -> Path:
     if seagate.parent.parent.exists():
         seagate.mkdir(parents=True, exist_ok=True)
         return seagate
-    cache = Path.home() / '.cache' / 'kirby' / 'itsflexible'
+    cache_root = Path(os.environ.get(
+        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
+    cache = cache_root / 'itsflexible'
     cache.mkdir(parents=True, exist_ok=True)
     return cache
 

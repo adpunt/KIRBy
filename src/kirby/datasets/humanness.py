@@ -17,6 +17,7 @@ References:
   Prihoda et al., "BioPhi: A platform for antibody design, humanization" (2022)
 """
 
+import os
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -43,7 +44,9 @@ def _cache_dir() -> Path:
     if seagate.parent.parent.exists():
         seagate.mkdir(parents=True, exist_ok=True)
         return seagate
-    cache = Path.home() / '.cache' / 'kirby' / 'humanness'
+    cache_root = Path(os.environ.get(
+        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
+    cache = cache_root / 'humanness'
     cache.mkdir(parents=True, exist_ok=True)
     return cache
 

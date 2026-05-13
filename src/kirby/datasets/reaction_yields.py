@@ -14,6 +14,7 @@ ELN Buchwald-Hartwig: Stub — Saebi et al. (JCIM 2023) used proprietary pharma 
                       data that is not publicly available. Function raises NotAvailableError.
 """
 
+import os
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -24,7 +25,9 @@ def _cache_dir() -> Path:
     seagate = Path('/Volumes/seagate/kirby/reaction_yields')
     if seagate.parent.parent.exists():
         return seagate
-    return Path.home() / '.cache' / 'kirby' / 'reaction_yields'
+    cache_root = Path(os.environ.get(
+        'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
+    return cache_root / 'reaction_yields'
 
 
 def _download_file(url: str, dest: Path) -> None:
