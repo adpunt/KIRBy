@@ -429,6 +429,55 @@ def test_harness():
 
 
 # =============================================================================
+def test_model_transfer():
+    print("\n[model transfer]")
+    try:
+        import torch  # noqa: F401
+    except ImportError as e:
+        print(f"  SKIP  model transfer (torch unavailable: {e})")
+        return
+    from experiments.pretrain_rep.pretrain_rep_model_transfer import (
+        pretrain_dnn_on_matrix)
+    from kirby.models.dnn_pretrained import PretrainedDNNRegressor
+
+    rng = np.random.RandomState(0)
+    hs = (8, 4)
+    X_pt = rng.normal(size=(40, 6)).astype(np.float32)
+    y_pt = rng.normal(size=40).astype(np.float32)
+
+    with tempfile.TemporaryDirectory() as td:
+        ckpt = os.path.join(td, 'pt.pt')
+        pretrain_dnn_on_matrix(X_pt, y_pt, ckpt, hidden_sizes=hs,
+                               epochs=3, batch_size=16, patience=2,
+                               verbose=False)
+        check('pretrain writes checkpoint', os.path.exists(ckpt))
+        cp = torch.load(ckpt, map_location='cpu', weights_only=True)
+        check('checkpoint has the keys PretrainedDNNRegressor needs',
+              {'state_dict', 'input_dim', 'feat_mean', 'feat_scale',
+               'y_mean', 'y_std'} <= set(cp.keys()))
+        check('checkpoint input_dim matches', cp['input_dim'] == 6)
+
+        # fine-tune the pretrained net on a fresh tiny FT set
+        X_ft = rng.normal(size=(20, 6)).astype(np.float32)
+        y_ft = rng.normal(size=20).astype(np.float32)
+        m = PretrainedDNNRegressor(hidden_sizes=hs, pretrained_path=ckpt,
+                                   epochs=3, patience=2)
+        m.fit(X_ft, y_ft)
+        pred = m.predict(X_ft)
+        check('pretrained DNN fine-tunes + predicts', len(pred) == 20)
+
+        # dim-mismatch must be rejected (wrong input_dim)
+        try:
+            bad = PretrainedDNNRegressor(hidden_sizes=hs, pretrained_path=ckpt,
+                                         epochs=2)
+            bad.fit(rng.normal(size=(10, 9)).astype(np.float32),
+                    rng.normal(size=10).astype(np.float32))
+            check('checkpoint dim-mismatch rejected', False)
+        except ValueError:
+            check('checkpoint dim-mismatch rejected', True)
+
+
+# =============================================================================
 def main():
     print("=" * 60)
     print("PT-Rep Phase 0 — smoke tests")
@@ -438,6 +487,7 @@ def main():
     test_leakage()
     test_reps()
     test_harness()
+    test_model_transfer()
     print("\n" + "=" * 60)
     print(f"  {PASS} passed, {FAIL} failed")
     print("=" * 60)
