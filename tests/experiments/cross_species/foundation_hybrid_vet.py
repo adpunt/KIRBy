@@ -185,7 +185,8 @@ def build_baseline_models(n_samples: int, task_type: str = 'regression'):
 
 
 def evaluate_target(key: str, rep_names, n_folds_requested: int,
-                    vet_cache_dir: str = VET_DEFAULT_CACHE_DIR):
+                    vet_cache_dir: str = VET_DEFAULT_CACHE_DIR,
+                    baseline_only: bool = False):
     print(f"\n{'='*70}")
     print(f"Vet target: {key}")
     print('='*70)
@@ -237,6 +238,9 @@ def evaluate_target(key: str, rep_names, n_folds_requested: int,
             rep_block['conditions'][cond_name] = res
         ds_results['baselines_per_rep'][rep_name] = rep_block
 
+    if baseline_only:
+        return ds_results
+
     # --- KIRBy hybrid search ---
     print(f"\n  --- find_best_hybrid (General-Tier rep set) ---")
     try:
@@ -284,6 +288,40 @@ def evaluate_target(key: str, rep_names, n_folds_requested: int,
     return ds_results
 
 
+def print_rep_ranking(key: str, target_results: dict):
+    """Per-rep best-model RMSE for one target, sorted ascending (best first).
+
+    Format mirrors PIPELINE_READINESS_TODO.md tier tables so the user can
+    hand-assign Top / General tiers off the printed table.
+    """
+    per_rep = target_results.get('baselines_per_rep', {})
+    if not per_rep:
+        return
+
+    rows = []
+    for rep_name, block in per_rep.items():
+        conds = block.get('conditions', {})
+        best_rmse, best_rho, best_model = float('inf'), float('nan'), None
+        for model_name, res in conds.items():
+            rmse = res.get('mean', {}).get('rmse', float('inf'))
+            if rmse < best_rmse:
+                best_rmse = rmse
+                best_rho = res.get('mean', {}).get('spearman', float('nan'))
+                best_model = model_name
+        if best_model is not None:
+            rows.append((rep_name, best_model, best_rmse, best_rho,
+                         block.get('dim', '?')))
+    rows.sort(key=lambda r: r[2])
+
+    print(f"\n  --- {key}: per-rep ranking (best model per rep) ---")
+    print(f"  {'rep':14s}  {'best_model':10s}  {'dim':>5s}  "
+          f"{'RMSE':>8s}  {'ρ':>7s}")
+    print(f"  {'-'*14}  {'-'*10}  {'-'*5}  {'-'*8}  {'-'*7}")
+    for rep_name, model, rmse, rho, dim in rows:
+        print(f"  {rep_name:14s}  {model:10s}  {dim:>5}  "
+              f"{rmse:>8.4f}  {rho:>7.4f}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--keys', type=str, default=None,
@@ -299,6 +337,10 @@ def main():
                          'or "full" (18 reps, General-Tier union). '
                          'Default: full.')
     ap.add_argument('--n-folds', type=int, default=DEFAULT_N_FOLDS)
+    ap.add_argument('--baseline-only', action='store_true',
+                    help='Skip find_best_hybrid; just run the per-rep baseline '
+                         'survey and print a per-target ranking. Use this '
+                         'first to assign Top / General rep tiers.')
     ap.add_argument('--vet-cache-dir', type=str, default=VET_DEFAULT_CACHE_DIR,
                     help=f'ChEMBL activity CSV cache dir for vet targets '
                          f'(default: {VET_DEFAULT_CACHE_DIR}). '
@@ -316,8 +358,9 @@ def main():
         reps = REP_PRESETS[args.preset]
         preset_label = args.preset
 
+    suffix = '_baseline' if args.baseline_only else ''
     out_default = (f'tests/results/cross_species/'
-                   f'foundation_hybrid_vet_{preset_label}.json')
+                   f'foundation_hybrid_vet_{preset_label}{suffix}.json')
 
     print("=" * 70)
     print("foundation_hybrid_vet  (T-PT.2)")
@@ -333,7 +376,9 @@ def main():
         try:
             results[key] = evaluate_target(
                 key, reps, args.n_folds, vet_cache_dir=args.vet_cache_dir,
+                baseline_only=args.baseline_only,
             )
+            print_rep_ranking(key, results[key])
         except Exception as e:
             print(f"  FAILED on {key}: {e}")
             import traceback
