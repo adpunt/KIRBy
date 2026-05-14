@@ -326,7 +326,16 @@ Tasks sized for single bounded sessions, with explicit acceptance criteria. **Tr
 
 *Acceptance:* compare against PT-α; quantify "evolutionary closeness" lift (design doc §4: ≥0.03 RMSE lift on ≥3 of 4 vet eval combos).
 
-**T-PT.5** PT-β experiment script (multi-species + species token). *Acceptance:* species token has measurable effect (toggle on/off, ≥0.03 RMSE delta).
+**T-PT.5** PT-β experiment script (multi-species + species token). **IMPLEMENTED 2026-05-14** — `src/kirby/models/species_token_dnn.py` (`SpeciesTokenDNNRegressor` extending `PretrainedDNNRegressor`: learned 16-D species embedding + N-D target one-hot concatenated to the molecular rep before the first linear layer; sklearn-compat — the per-row species/target indices ride as the last two columns of X; also holds the pretraining function + a `python -m` CLI that trains on the `multispecies_chembl` corpus, one checkpoint set per N), `tests/experiments/cross_species/species_token_multispecies.py` (fine-tune experiment: sweeps target-token vocab size N ∈ {10,50,200}, conditions `pt_finetune`/`pt_zero_shot` each scored with the real-species token AND the human token; baselines `dnn_scratch`/`rf`/`kirby_hybrid`; reuses `same_target_transfer.evaluate_condition`/`_build_kirby_hybrid`/`_resolve_folds`). The corpus is leakage-filtered against the human downstream benchmarks AND the vet eval targets, same as T-PT.3/T-PT.4. SLURM: `pretrain_species_token.sh` (loops N=10,50,200) + `submit_species_token_multispecies.sh`.
+
+> **⚠️ SUBMIT DEPENDENCY** — same shape as T-PT.3/T-PT.4. `pretrain_species_token.sh` (pretrains the species-token DNN on `multispecies_chembl` for all three N → `chembl_pretrain/species_token/N{10,50,200}/`) MUST finish before `submit_species_token_multispecies.sh`. Chained:
+> ```bash
+> cd /data/stat-ecr/scat9264/KIRBy && git pull
+> PT=$(sbatch --parsable tests/slurm_scripts/pretrain_species_token.sh)
+> sbatch --dependency=afterok:$PT tests/slurm_scripts/submit_species_token_multispecies.sh
+> ```
+
+*Acceptance:* species token has measurable effect (toggle on/off, ≥0.03 RMSE delta on the `pt_finetune` real-vs-human toggle).
 
 **T-PT.6** PT-δ experiment script (microsomal stability transfer). *Gated on X-Data.5 (DLM) + X-Data.6 (FLM) loaders.*
 
