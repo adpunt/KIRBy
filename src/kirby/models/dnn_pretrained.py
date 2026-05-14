@@ -33,12 +33,17 @@ class PretrainedDNNRegressor(BaseEstimator, RegressorMixin):
         batch_size: Mini-batch size.
         patience: Early stopping patience.
         random_state: Random seed.
+        zero_shot: If True, no fine-tuning at all — load pretrained weights and
+            the pretrain feature scaler from the checkpoint, then predict
+            directly. Requires a checkpoint carrying 'feat_mean'/'feat_scale'
+            (pretrain_chembl_dnn.py >= 2026-05-14). Ignores epochs/finetune_lr/
+            freeze_layers. Used as the zero-shot transfer baseline.
     """
 
     def __init__(self, hidden_sizes=(256, 128, 64), dropout=0.2,
                  pretrained_path=None, finetune_lr=0.0001,
                  freeze_layers=0, epochs=200, batch_size=256,
-                 patience=20, random_state=42):
+                 patience=20, random_state=42, zero_shot=False):
         self.hidden_sizes = hidden_sizes
         self.dropout = dropout
         self.pretrained_path = pretrained_path
@@ -48,6 +53,7 @@ class PretrainedDNNRegressor(BaseEstimator, RegressorMixin):
         self.batch_size = batch_size
         self.patience = patience
         self.random_state = random_state
+        self.zero_shot = zero_shot
 
     def _build_net(self, input_dim):
         import torch.nn as nn
@@ -62,7 +68,12 @@ class PretrainedDNNRegressor(BaseEstimator, RegressorMixin):
         return nn.Sequential(*layers)
 
     def _load_pretrained(self, net, input_dim):
-        """Load pre-trained weights from disk. Validates input_dim match."""
+        """Load pre-trained weights from disk. Validates input_dim match.
+
+        Returns the checkpoint dict (or None if the file was a bare
+        state_dict) so callers can read extra fields, e.g. the pretrain
+        feature scaler for zero-shot transfer.
+        """
         import torch
 
         checkpoint = torch.load(self.pretrained_path, map_location='cpu',
@@ -76,10 +87,46 @@ class PretrainedDNNRegressor(BaseEstimator, RegressorMixin):
                     f"but got {input_dim}. Rep mismatch?")
         else:
             state_dict = checkpoint
+            checkpoint = None
 
         # Load all weights (hidden + output) — output dim is (64→1) for both
         # pre-training (pIC50 regression) and downstream (regression)
         net.load_state_dict(state_dict)
+        return checkpoint
+
+    def _fit_zero_shot(self, X):
+        """Zero-shot transfer: pretrained weights + pretrain scaler, no training.
+
+        The net's weights only make sense on input scaled by the SAME
+        StandardScaler fit on the pretraining corpus — so we load that scaler
+        from the checkpoint rather than re-fitting on the (vet) downstream set,
+        and un-normalize predictions with the pretrain y-stats. Faithful
+        zero-shot: nothing about the downstream labels touches the model.
+        """
+        net = self._build_net(X.shape[1])
+        checkpoint = self._load_pretrained(net, X.shape[1])
+
+        if not isinstance(checkpoint, dict) or 'feat_mean' not in checkpoint:
+            raise ValueError(
+                f"Checkpoint '{self.pretrained_path}' has no 'feat_mean'/"
+                f"'feat_scale' — it predates the zero-shot scaler fix. "
+                f"Re-run pretrain_chembl_dnn.py to regenerate it.")
+
+        from sklearn.preprocessing import StandardScaler
+        sc = StandardScaler()
+        sc.mean_ = np.asarray(checkpoint['feat_mean'], dtype=np.float64)
+        sc.scale_ = np.asarray(checkpoint['feat_scale'], dtype=np.float64)
+        sc.var_ = sc.scale_ ** 2
+        sc.n_features_in_ = sc.mean_.shape[0]
+        self.feat_scaler_ = sc
+
+        self.y_mean_ = float(checkpoint.get('y_mean', 0.0))
+        self.y_std_ = float(checkpoint.get('y_std', 1.0))
+
+        net.eval()
+        self.model_ = net
+        self.input_dim_ = X.shape[1]
+        return self
 
     def _freeze_layers(self, net):
         """Freeze hidden layers based on freeze_layers setting."""
@@ -113,6 +160,9 @@ class PretrainedDNNRegressor(BaseEstimator, RegressorMixin):
 
         X = np.asarray(X, dtype=np.float32)
         y = np.asarray(y, dtype=np.float32).ravel()
+
+        if self.zero_shot:
+            return self._fit_zero_shot(X)
 
         # Z-normalize features to match pre-training (pretrain_chembl_dnn.py
         # applies StandardScaler before training — weights expect scaled input)

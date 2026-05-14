@@ -211,6 +211,13 @@ def pretrain_one_rep(
         'y_mean': y_mean,
         'y_std': y_std,
         'rep_name': rep_name,
+        # Pretrain feature scaler (mean_/scale_ as plain lists so the
+        # checkpoint stays loadable under torch.load(weights_only=True)).
+        # Required for faithful zero-shot transfer: the net's weights only
+        # make sense on input scaled by THIS scaler, not one re-fit on the
+        # downstream set. Consumed by PretrainedDNNRegressor(zero_shot=True).
+        'feat_mean': feat_scaler.mean_.tolist(),
+        'feat_scale': feat_scaler.scale_.tolist(),
     }
     torch.save(checkpoint, save_path)
     print(f"  Saved: {save_path}")
