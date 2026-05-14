@@ -33,8 +33,9 @@ Split: 5-fold scaffold CV (Murcko scaffolds)
 
 Model-Representation Matrix:
   Representations: ECFP4, PDV, SNS, MHG-GNN-pretrained (4 total)
-  Models: RF, QRF, XGBoost, GP(PDV only), DNN, Full-BNN, LastLayer-BNN, Var-BNN (8 total)
-  Total: 4 reps × 8 models × 6 strategies × 3 datasets × 5 folds
+  Models: RF, QRF, XGBoost, NGBoost, LightGBM, SVM, GP(PDV only), DNN, BNN-Full,
+          VBLL-Full (10 total; BNN-Last implemented but not run by default)
+  Total: 4 reps × 10 models × 6 strategies × 3 datasets × 5 folds
 
 Noise Strategies (regression): legacy, outlier, quantile, hetero, threshold, valprop (6)
 Sigma levels: 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0 (11)
@@ -48,8 +49,10 @@ Usage:
 import argparse
 import numpy as np
 import pandas as pd
+import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import TensorDataset, DataLoader
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import GroupKFold
@@ -83,7 +86,11 @@ CACHE_DIR = Path('data_cache')
 
 try:
     import torchbnn as bnn
-    from bayesian_torch.models.dnn_to_bnn import transform_model, transform_layer
+    # Use torchhk (same library as qsar_qm_models/models/models.py:28) so the
+    # BayesLinear conversion is byte-for-byte identical between QM9 and
+    # validation pipelines. bayesian_torch has a different transform_model
+    # signature and was producing divergent BNN-α rows.
+    from torchhk import transform_model, transform_layer
     HAS_BAYESIAN_TORCH = True
 except ImportError:
     print("WARNING: torchbnn or bayesian-torch not installed, BNN experiments will be skipped")
@@ -346,18 +353,23 @@ def load_chembl_herg():
 # ═══════════════════════════════════════════════════════════════════════════
 
 class DeterministicRegressor(nn.Module):
-    def __init__(self, input_dim, hidden_dim=256):
+    """DNN matching the qsar_qm_models BNN-Full / VBLL-Full base architecture.
+
+    Hidden sizes [128, 64], ReLU, Dropout(0.2), NO BatchNorm — mirrors
+    qsar_qm_models/scripts/investigate_pdv.py DEFAULT_PARAMS['dnn'] and the
+    DNNModel class in that file. Required for QM9 and validation BNN-α /
+    VBLL-α rows to be directly comparable.
+    """
+    def __init__(self, input_dim, hidden_size1=128, hidden_size2=64):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.BatchNorm1d(hidden_dim),
+            nn.Linear(input_dim, hidden_size1),
             nn.ReLU(),
             nn.Dropout(0.2),
-            nn.Linear(hidden_dim, hidden_dim // 2),
-            nn.BatchNorm1d(hidden_dim // 2),
+            nn.Linear(hidden_size1, hidden_size2),
             nn.ReLU(),
             nn.Dropout(0.2),
-            nn.Linear(hidden_dim // 2, 1)
+            nn.Linear(hidden_size2, 1),
         )
 
     def forward(self, x):
@@ -366,6 +378,10 @@ class DeterministicRegressor(nn.Module):
 
 if HAS_BAYESIAN_TORCH:
     def apply_bayesian_transformation(model):
+        """Full BNN: replace every nn.Linear with torchbnn BayesLinear.
+
+        Mirrors qsar_qm_models/models/models.py:1046 apply_bayesian_transformation.
+        """
         transform_model(
             model, nn.Linear, bnn.BayesLinear,
             args={"prior_mu": 0, "prior_sigma": 0.1,
@@ -375,6 +391,11 @@ if HAS_BAYESIAN_TORCH:
         return model
 
     def apply_bayesian_transformation_last_layer(model):
+        """Last-layer BNN: replace only the final nn.Linear with BayesLinear.
+
+        Kept for completeness; not used by default (see model dispatch below).
+        Mirrors qsar_qm_models/models/models.py:1076.
+        """
         last_name, last_mod = None, None
         for name, mod in reversed(list(model.named_modules())):
             if isinstance(mod, nn.Linear):
@@ -398,7 +419,112 @@ if HAS_BAYESIAN_TORCH:
         _set(model, last_name, bl)
         return model
 
-    apply_bayesian_transformation_variational = apply_bayesian_transformation_last_layer
+
+# ─── Variational Bayesian Last Layer (full-network variant) ───────────────────
+# Mirrors qsar_qm_models/models/models.py:1131-1349 verbatim — VBLLLayer,
+# VBLLLoss, and the full-network transformation. NOT wrapped in HAS_BAYESIAN_TORCH
+# because VBLL is a pure PyTorch implementation and has no torchbnn dependency.
+
+class VBLLLayer(nn.Module):
+    """Variational Bayesian Last Layer (Harrison 2024).
+
+    Mean-field variational posterior q(W) = N(weight_mu, diag(exp(weight_log_sigma)^2))
+    over the weight matrix, standard normal prior p(W) = N(0, I), trained via the
+    reparameterization trick.
+    """
+    def __init__(self, in_features, out_features, prior_mu=0.0, prior_sigma=1.0):
+        super().__init__()
+        self.in_features = in_features
+        self.out_features = out_features
+        self.prior_mu = prior_mu
+        self.prior_sigma = prior_sigma
+
+        self.weight_mu = nn.Parameter(torch.zeros(out_features, in_features))
+        self.weight_log_sigma = nn.Parameter(torch.full((out_features, in_features), -3.0))
+        self.bias_mu = nn.Parameter(torch.zeros(out_features))
+        self.bias_log_sigma = nn.Parameter(torch.full((out_features,), -3.0))
+
+        # Learned observation noise (aleatoric)
+        self.log_noise_var = nn.Parameter(torch.tensor(-2.0))
+
+        nn.init.kaiming_uniform_(self.weight_mu, a=math.sqrt(5))
+        bound = 1.0 / math.sqrt(in_features)
+        nn.init.uniform_(self.bias_mu, -bound, bound)
+
+    @property
+    def noise_var(self):
+        return torch.exp(self.log_noise_var)
+
+    def kl_divergence(self):
+        prior_var = self.prior_sigma ** 2
+        w_var = torch.exp(2.0 * self.weight_log_sigma)
+        kl_w = 0.5 * torch.sum(
+            w_var / prior_var
+            + ((self.prior_mu - self.weight_mu) ** 2) / prior_var
+            - 1.0
+            + math.log(prior_var) - 2.0 * self.weight_log_sigma
+        )
+        b_var = torch.exp(2.0 * self.bias_log_sigma)
+        kl_b = 0.5 * torch.sum(
+            b_var / prior_var
+            + ((self.prior_mu - self.bias_mu) ** 2) / prior_var
+            - 1.0
+            + math.log(prior_var) - 2.0 * self.bias_log_sigma
+        )
+        return kl_w + kl_b
+
+    def forward(self, x):
+        weight_sigma = torch.exp(self.weight_log_sigma)
+        weight = self.weight_mu + weight_sigma * torch.randn_like(self.weight_mu)
+        bias_sigma = torch.exp(self.bias_log_sigma)
+        bias = self.bias_mu + bias_sigma * torch.randn_like(self.bias_mu)
+        return F.linear(x, weight, bias)
+
+
+class VBLLLoss(nn.Module):
+    """ELBO loss for VBLL: Gaussian NLL (learned noise) + sum(KL) / n_data."""
+    def __init__(self, model, n_data):
+        super().__init__()
+        self.model = model
+        self.n_data = n_data
+        self.vbll_layers = [m for m in model.modules() if isinstance(m, VBLLLayer)]
+        self.output_layer = self.vbll_layers[-1] if self.vbll_layers else None
+
+    def forward(self, pred, target):
+        if self.output_layer is None:
+            return nn.MSELoss()(pred, target)
+        noise_var = self.output_layer.noise_var
+        nll = 0.5 * torch.log(noise_var) + 0.5 * ((pred - target) ** 2) / noise_var
+        nll = nll.mean()
+        kl = sum(layer.kl_divergence() for layer in self.vbll_layers)
+        return nll + kl / self.n_data
+
+
+def apply_bayesian_transformation_full_variational(model):
+    """Replace ALL nn.Linear layers with VBLLLayer. Initializes each VBLLLayer
+    weight_mu from the corresponding pretrained Linear weights.
+
+    Mirrors qsar_qm_models/models/models.py:1295.
+    """
+    linear_layers = []
+    for name, mod in model.named_modules():
+        if isinstance(mod, nn.Linear):
+            linear_layers.append((name, mod))
+
+    def _set(obj, path, val):
+        parts = path.split(".")
+        for p in parts[:-1]:
+            obj = getattr(obj, p)
+        setattr(obj, parts[-1], val)
+
+    for name, lin in linear_layers:
+        vbll = VBLLLayer(lin.in_features, lin.out_features)
+        with torch.no_grad():
+            vbll.weight_mu.copy_(lin.weight.data)
+            if lin.bias is not None:
+                vbll.bias_mu.copy_(lin.bias.data)
+        _set(model, name, vbll)
+    return model
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -418,17 +544,24 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
 
     model = DeterministicRegressor(X_train.shape[1]).to(device)
 
-    if HAS_BAYESIAN_TORCH and model_type != 'deterministic':
-        if model_type == 'full-bnn':
-            model = apply_bayesian_transformation(model)
-        elif model_type == 'last-layer-bnn':
-            model = apply_bayesian_transformation_last_layer(model)
-        elif model_type == 'var-bnn':
-            model = apply_bayesian_transformation_variational(model)
+    if model_type == 'full-bnn':
+        if not HAS_BAYESIAN_TORCH:
+            raise RuntimeError("Full BNN requested but torchbnn not available")
+        model = apply_bayesian_transformation(model)
+    elif model_type == 'last-layer-bnn':
+        if not HAS_BAYESIAN_TORCH:
+            raise RuntimeError("Last-layer BNN requested but torchbnn not available")
+        model = apply_bayesian_transformation_last_layer(model)
+    elif model_type == 'full-vbll':
+        model = apply_bayesian_transformation_full_variational(model).to(device)
 
     is_bayesian = model_type != 'deterministic'
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    criterion = nn.MSELoss()
+    # VBLL uses its own ELBO loss; everything else uses MSE.
+    if model_type == 'full-vbll':
+        criterion = VBLLLoss(model, n_data=len(X_train))
+    else:
+        criterion = nn.MSELoss()
     loader = DataLoader(TensorDataset(X_tr, y_tr), batch_size=64, shuffle=True)
 
     best_val, patience_ctr, patience = float('inf'), 0, 10
@@ -638,11 +771,14 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                 lambda: GaussianProcessRegressor(
                     kernel=ConstantKernel(1.0) * RBF(1.0) + WhiteKernel(noise_level=1.0),
                     alpha=1e-10, random_state=42, n_restarts_optimizer=5), None))
-        # Neural models
+        # Neural models. Display names match the val_model_map in
+        # qsar_qm_models/scripts/generate_paper_figures.py:_normalize_validation_names
+        # so rows merge into the canonical QM9 model namespace (dnn, dnn_bnn_full,
+        # dnn_vbll). BNN-Last is omitted by default — keep the implementation but
+        # don't run it (user directive).
         for mtype, mname in [('deterministic', 'DNN'),
-                              ('full-bnn', 'Full-BNN'),
-                              ('last-layer-bnn', 'LastLayer-BNN'),
-                              ('var-bnn', 'Var-BNN')]:
+                              ('full-bnn', 'BNN-Full'),
+                              ('full-vbll', 'VBLL-Full')]:
             if mtype != 'deterministic' and not HAS_BAYESIAN_TORCH:
                 continue
             experiments.append((mname, rname, None, mtype))
@@ -906,9 +1042,9 @@ def main():
     print(f"  Representations: {rep_list}")
     print(f"  Noise strategies: {STRATEGIES}")
     print(f"  Sigma levels: {SIGMA_LEVELS}")
-    model_list = "RF, QRF, XGBoost, NGBoost, LightGBM, SVM, GP(PDV), DNN"
+    model_list = "RF, QRF, XGBoost, NGBoost, LightGBM, SVM, GP(PDV), DNN, VBLL-Full"
     if HAS_BAYESIAN_TORCH:
-        model_list += ", Full-BNN, LastLayer-BNN, Var-BNN"
+        model_list += ", BNN-Full"
     if args.models:
         model_list = ", ".join(args.models)
     print(f"  Models: {model_list}")
