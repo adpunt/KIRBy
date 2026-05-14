@@ -208,6 +208,16 @@ class SpeciesTokenDNNRegressor(PretrainedDNNRegressor):
         if saved_nt is not None and saved_nt != self.n_targets:
             raise ValueError(
                 f"checkpoint n_targets={saved_nt} != {self.n_targets}")
+        saved_emb = ckpt.get('species_emb_dim')
+        if saved_emb is not None and saved_emb != self.species_emb_dim:
+            raise ValueError(
+                f"checkpoint species_emb_dim={saved_emb} != "
+                f"{self.species_emb_dim}")
+        saved_hs = ckpt.get('hidden_sizes')
+        if saved_hs is not None and tuple(saved_hs) != tuple(self.hidden_sizes):
+            raise ValueError(
+                f"checkpoint hidden_sizes={tuple(saved_hs)} != "
+                f"{tuple(self.hidden_sizes)}")
         net.load_state_dict(ckpt['state_dict'])
         return ckpt
 
