@@ -75,20 +75,60 @@ Fit one hybrid on the union of PT + FT, with task-aware sample weighting or mult
 **Pros:** Maximally simple. Tests whether *more data per se* > task alignment.
 **Cons:** PT labels may dominate; FT signal may be drowned. Needs careful weighting.
 
-### P4. PT-then-FT (warm-start hybrid)
-Fit hybrid on PT (P1-style). Then re-run `find_best_hybrid` on FT initialised from PT's solution (warm-start allocations, importance scores).
+### P4. PT-shortlist (PT-curated candidate set)
+Run the PT search once. Pull the top-N best-performing blueprints out of its
+`SearchResult` (the `best_by_model_budget` winners are a natural pool — sort by
+score, dedup, take N). Evaluate those N blueprints on the FT set with normal CV
+(`build_fold_hybrid` per fold — recipe transfer) and let FT pick the winner.
 
-**Pros:** Classical PT+FT semantics. Best of both worlds in principle.
-**Cons:** Requires `find_best_hybrid` to accept a warm start. Implementation cost.
+The `find_best_hybrid` search is a **grid search**, not an iterative optimiser,
+so there is no "solution to warm-start from". P4 instead lets PT *narrow the
+search space* — from 9×3×5×budgets down to N curated candidates — and FT chooses
+among them.
+
+**Pros:** Zero core-pipeline change — all existing machinery (`get_best_for_downstream`,
+`build_fold_hybrid`, `Blueprint`). PT does the expensive search once.
+**Cons:** FT can only pick from PT's shortlist; if the right recipe for FT isn't
+in the top-N, P4 can't find it.
+
+**Distinction from P1:** P1 freezes PT's *single* best transformation. P4 hands FT
+PT's *top-N* and lets FT choose. P1 asks "does the best PT recipe transfer?"; P4
+asks "does FT do better choosing from a PT-curated shortlist?"
 
 ---
 
 ## 5. Phase plan
 
 ### Phase 0 — Scaffolding (1 session)
-- [ ] Decide on PT dataset registry: a single Python module that exposes `get_pt_dataset(domain, source, task)` returning (X_pt, y_pt, groups_pt).
-- [ ] Audit which existing `find_best_hybrid` internals expose enough state for P1 freezing (allocation, indices, evaluator). Likely needs a `dump_blueprint()` / `apply_blueprint()` pair — check whether C5 (`opig_blueprint_transfer.py`) already wrote these and reuse if so.
-- [ ] Decide whether P4 warm-start is in v1 or deferred (most expensive to implement).
+
+Code lives in `tests/experiments/pretrain_rep/` (standalone experiment package).
+
+- [x] **PT dataset registry** — `pt_registry.py`. `get_pt_dataset(domain, source, task, max_samples, exclude_keys)` returns a `PTDataset` (raw entities + labels + groups + dedup keys; `.as_tuple()` gives the `(X_pt, y_pt, groups_pt)` form). `X_pt` is raw entities, not a feature matrix — base-rep computation is a separate heavy step the Phase 1 harness owns. 8 real sources (5 molecular via `pretrain_corpora`, 3 antibody: `oas_species`, `ginkgo_gdpa1`, `sabdab`) + 2 offline `synthetic_*` sources for bug-catching.
+- [x] **PT corpus quality pipeline** — `pt_quality.py`. Both layers mandatory; per-corpus criteria written down in `QUALITY_CRITERIA` (publication-facing) and emitted as a JSON `QualityReport`:
+  - [x] Basic dedup hygiene — exact-duplicate removal (antibody: exact sequence; molecular: exact `(InChIKey, group, label)` row, so the same compound across targets and divergent measurements both survive to Layer 2), empty/invalid strings, alphabet check.
+  - [x] Explicit quality filter — label-range sanity window, contradictory-measurement removal (drop `(compound, target)` clusters whose label spread exceeds a tolerance), sequence-length window, ambiguous-residue rejection.
+- [x] **PT/FT leakage dedup** — `pt_leakage.py`. Molecular: InChIKey exact match (`inchikey_leakage_filter`). Antibody: `sequence_leakage_filter` — exact-sequence match is the default safe floor (`identity_threshold=1.0`); sub-1.0 thresholds are supported but emit a warning and are flagged `threshold_validated=False`, because the cutoff itself is still TBD (§9 research prompt Q6).
+- [x] **PT base-rep computation bridge** — `pt_reps.py`. `compute_pt_reps(pt_ds, rep_names)` runs the *same* rep functions the FT pipeline uses (`ANTIBODY_REPS` for antibody, `get_molecular_representations` for molecular — confirmed by reading `_shared.load_data`: rep functions take raw entity lists, only the cache folder is dataset-named). Reuses `_shared`'s `_cache_rep` / `_cache_rep_dict` for an identical cache format. `pt_cache_key()` encodes source + task + a content hash of the ordered dedup keys, so any cap / quality / leakage change yields a fresh key (no stale-cache reuse). A `rep_fns` injection hook makes the orchestration offline-testable; the real foundation-model reps run on the server exactly as for FT.
+- [x] **`find_best_hybrid` blueprint dump/apply audit** — DONE, findings below. P1 (freeze transformation) AND P4 (PT-shortlist) both need **no new core code** — the C5 path already covers them.
+
+#### Phase 0 audit findings — blueprint dump/apply & P4
+
+`find_best_hybrid.py` already exposes everything P1 needs:
+- `Blueprint` dataclass with `to_dict()` / `from_dict()` — JSON round-trippable recipe (reps, allocation, importance, evaluator, budget, step_size, `rep_scores`).
+- `apply_blueprint(base_reps, blueprint, labels)` — the product entry point; rebuilds a hybrid from a blueprint with no search.
+- `get_precomputed_search(...)` → `get_best_for_downstream(search, model)['blueprint']` extracts a per-model `Blueprint` from a (cached) search.
+- `build_fold_hybrid(train_reps, val_reps, y_train, blueprint)` (in `_shared.py`) applies a blueprint per CV fold — recipe-style transfer.
+- `apply_feature_selection(base_reps, feature_info)` (in `hybrid.py`) applies exact feature indices — frozen-index transfer.
+- **C5's `opig_blueprint_transfer.py` already chains all of these** for recipe and full-index transfer. **P1 reuses this directly — no core change.**
+
+P4 (PT-shortlist): the search is a grid search (`SPEED_TIERS['full']` enumerates
+9 allocation × 3 importance × 5 evaluator × budgets), not an iterative optimiser
+— there is no solution state to "warm-start". Internally it has a two-stage
+shape: Stage 1 scores each base rep on the dataset's internal CV folds
+(`alloc_cache`) — the noisy small-n step — then Stage 2 grid-searches over
+configs. P4 sidesteps both: PT runs the full search, the top-N `best_by_model_budget`
+winners become a candidate shortlist, and FT evaluates that shortlist with
+`build_fold_hybrid`. **No core change** — same machinery as P1.
 
 ### Phase 1 — Antibody pilot
 **FT targets (small-n where hybrid hurts most):**
@@ -109,11 +149,18 @@ Fit hybrid on PT (P1-style). Then re-run `find_best_hybrid` on FT initialised fr
 | C | P2 base-rep PT, autoencoder variant |
 | D | P2 base-rep PT, supervised-projection variant (if PT has labels) |
 | E | P3 joint PT+FT hybrid |
-| F | P4 warm-start hybrid (if Phase 0 ships it) |
+| F | P4 PT-shortlist (FT picks from PT's top-N blueprints) |
 | G | PT-only sanity (apply PT hybrid to FT *without any FT signal*) |
 | H | Best single base rep on FT (rep-baseline reference) |
 
-5-fold scaffold/cluster splits. Standard DOWNSTREAM_MODELS. Metrics by domain (R² + Spearman ρ for Ab regression, accuracy/F1w/AUROC for Ab classification).
+**Splits:** 5-fold scaffold/cluster splits — group-aware, non-random, same convention as the rest of the codebase. Rows shuffled before the group split runs (removes ordering artifacts; the split itself stays non-random). No random splits anywhere.
+**Downstream models:** `rf, lightgbm, svm, mlp` — fixed for this experiment. These are standalone experiments, deliberately not bound to the codebase's auto-selection / size guardrails; this set was chosen on performance + runtime from molecular results.
+**Job structure:** one SLURM job per FT target dataset. The expensive PT-side searches (P1 frozen hybrid, P3 joint hybrid) are computed once per PT source and reused across targets, so cost does not multiply by target count.
+**Metrics:** R² + Spearman ρ for Ab regression; accuracy / F1w / AUROC for Ab classification.
+
+**B vs G — the two ways to transfer a PT hybrid to FT (user asked to test both, 2026-05-14):** a hybrid run produces two things — a configuration (allocation method, importance method, budget) and the concrete selected feature indices that configuration produced on the data. **B** transfers the configuration and re-runs feature selection on the FT training data, so FT produces its own selected indices. **G** transfers PT's concrete selected feature indices and applies them to FT with no re-selection. The user was undecided which is better, so both are run as separate conditions.
+
+**Harness:** `tests/experiments/pretrain_rep/pretrain_rep_experiment.py` — built and import/unit-tested. Implements conditions **A, B, F, G, H**; C, D, E (P2/P3) are deferred and explicitly not in the harness. `run(ft_data, pt_source, pt_task, ...)` does: prep PT corpus (quality → leakage → `compute_pt_reps`) → cached PT + FT hybrid searches → per-model per-fold evaluation of each condition. B uses `build_fold_hybrid` with the PT configuration; G uses `apply_feature_selection` with PT's exact indices (built once on the full PT corpus); F runs PT's top-N configurations B-style and picks the best on FT CV mean. `run()` itself is a server workload; the pure helpers are offline-tested in `smoke_test.py` (73 assertions, all passing).
 
 ### Phase 2 — Molecular replication
 Same matrix on:
@@ -132,24 +179,60 @@ Does molecular ChEMBL PT help Ab targets? (Probably no, but cheap to check given
 
 ---
 
-## 6. Open design questions (need user decision before Phase 1 runs)
+## 6. Design decisions
 
-1. **PT task-label requirement.** P1/P3/P4 need *labels* on PT. Antibody PT corpora are mostly unlabelled (OAS) or structural (SAbDab). Options: (a) restrict P1/P3/P4 to GDPa1-as-PT for Ginkgo-subset-as-FT; (b) use proxy labels (e.g., germline distance, length); (c) use only P2c (unsupervised contrastive) for unlabelled PT.
-2. **PT dataset size cap.** ChEMBL bulk has 943K rows (per C4 work). Capping at e.g. 50K keeps compute tractable but throws away the main argument for PT (more data). Sweep across sizes?
-3. **Holdout discipline.** PT and FT may share molecules / antibodies. Need an explicit dedup step (InChIKey for molecular, sequence identity threshold for Ab — what threshold?).
-4. **P4 warm-start scope.** Implementing in v1 forces `find_best_hybrid` API changes. Defer to v2?
-5. **Compute budget.** Phase 1 alone is ~6 FT targets × ~3 PT sources × 8 conditions × 5 folds × 7 models. Survey-scale (per [survey scope feedback]). May need to cut to "best single PT source per FT target" after a pilot.
-6. **Cross-species track integration (added 2026-05-14).** The cross-species pretraining track (`CROSS_SPECIES_ROADMAP.md` §X-PT, tasks T-PT.1 through T-PT.8) is an instance of PT-Rep — but it was designed before this roadmap and doesn't commit to a P-flavor. Concretely:
-    - `tests/experiments/cross_species/foundation_hybrid_vet.py` currently runs `find_best_hybrid` *only on the FT data* (vet ChEMBL targets, 27–1541 compounds). That's the **no-PT baseline** in PT-Rep terms, not a PT experiment. Its job in the cross-species track is "cheap anchor" — the cheapest thing the heavier T-PT.3/4/5/6/7 variants must beat.
-    - `same_target_transfer` (T-PT.3), `rodent_to_vet` (T-PT.4), `species_token_multispecies` (T-PT.5), `microsome_transfer` (T-PT.6), `joint_multitask` (T-PT.7) each need to declare which P-flavor they instantiate before they're built. Mapping at first glance:
-      - `same_target_transfer` ≈ **P1** (fit hybrid on human ChEMBL for same target, freeze, apply to vet).
-      - `rodent_to_vet` ≈ **P1** with a different PT corpus (mouse/rat ChEMBL).
-      - `species_token_multispecies` ≈ **P3** (joint hybrid on multi-species pool with species token as augmentation).
-      - `microsome_transfer` ≈ **P1** (fit on human DLM/FLM, apply to vet microsome FT) — gated on X-Data.5/6 loaders.
-      - `joint_multitask` ≈ **P3** strongest form (pooled molecular-only).
-      - No T-PT.* maps cleanly to **P2** (learned base rep) or **P4** (warm-start) yet.
-    - **Action:** before T-PT.3 starts, pick the P-flavor mapping explicitly. Either (a) confirm the mapping above and proceed with implementations that share PT-Rep utilities (blueprint dump/apply, dedup helpers), or (b) decide cross-species is its own thing and skip the shared scaffolding.
-    - **Cross-link:** when the cross-species track gets there, `CROSS_SPECIES_ROADMAP.md` §X-PT entries should reference the chosen P-flavor explicitly and point back to this roadmap §4. The shared infrastructure (blueprint dump/apply, dedup helpers) lives here, not in the cross-species tree.
+§6.1–6.5 resolved with the user 2026-05-14. §6.6 (cross-species integration) descoped from v1.
+
+### 6.1 PT data labels — RESOLVED
+
+P1, P3, P4 pre-train by predicting a property, so the PT dataset needs a measured label. The largest antibody corpora (OAS, SAbDab) don't have one.
+
+**Decision:** test all three approaches and compare — (a) GDPa1-only labelled PT, (b) stand-in labels from the sequence itself (germline distance, length), (c) contrastive-only (P2c) for unlabelled corpora. The pilot shows which are worth keeping.
+
+### 6.2 PT data size — RESOLVED
+
+The premise of PT is "more data," but the biggest corpora are slow and quality-suspect.
+
+**Decision:** use fixed caps for v1, but test **several cap sizes** (not a single 50K) so we can see how the benefit scales with data volume. A full fine-grained sweep is deferred to a later version. The quality concern about large corpora is exactly why both quality layers in §6.3 are mandatory.
+
+### 6.3 Leakage dedup + data quality — RESOLVED
+
+If the same molecule/antibody is in both PT and FT sets, results are inflated. Separately, public PT corpora (ChEMBL etc.) aggregate noisy measurements from thousands of papers.
+
+**Decision:** both quality layers are mandatory and the criteria must be **written down per corpus** (publication-facing):
+- **Basic dedup hygiene** — remove exact-duplicate compounds/sequences and obvious junk.
+- **Explicit quality filter** — keep only high-confidence assay flags, drop compounds with contradictory measured values, sanity-check value ranges/units.
+
+PT/FT leakage removal: InChIKey match for molecular. Antibody sequence-identity cutoff still **TBD** — see §9 research prompt Q6.
+
+### 6.4 P4 mechanism — RESOLVED (revised 2026-05-14)
+
+Original plan was a "warm-start" API on `find_best_hybrid`. The Phase 0 audit
+showed the search is a grid search, not an iterative optimiser — there is
+nothing to warm-start. Revised to the **PT-shortlist** design (§4 P4): PT
+produces a top-N blueprint shortlist, FT evaluates and picks among them.
+
+**Decision:** build P4 as PT-shortlist in v1. Needs **no core-pipeline change** —
+uses existing `get_best_for_downstream` / `build_fold_hybrid` / `Blueprint`.
+Recipe transfer (re-select features on FT) is the default; frozen-index transfer
+is a cheap optional second pass once the N blueprints are extracted.
+
+### 6.5 Phase 1 scale — RESOLVED
+
+The grid (~6 targets × 3 PT sources × 8 conditions × 5 folds × models) looked survey-sized as one monolith, but it isn't run that way.
+
+**Decision:** run the full grid, **split into one SLURM job per FT target dataset** (normal practice here). Downstream models cut to `rf, lightgbm, svm, mlp` (§5 Phase 1). PT-side searches amortize — computed once per PT source, reused across targets. A 1–2 dataset pilot still runs first, purely to catch bugs before fanning out — not for compute safety.
+
+### 6.6 How does the cross-species work fit in? — DESCOPED (2026-05-14)
+
+Cross-species integration is **out of scope for PT-Rep v1**. An earlier draft of
+this section proposed a P-flavor mapping for the cross-species T-PT.* tasks, but
+that mapping was inferred from task *names* without reading
+`CROSS_SPECIES_ROADMAP.md` — it is not reliable and has been removed to avoid
+misrepresenting that experiment. The cross-species PT track stays on its own
+roadmap. If sharing scaffolding ever makes sense, it needs a proper read of the
+cross-species roadmap and a deliberate decision with the user first — not an
+inferred mapping.
 
 ---
 
@@ -185,7 +268,7 @@ Failure mode to avoid: running all 4 flavors × all PT sources without a hypothe
 >
 > Hybrids underperform on small datasets (n < 200) because the internal validation split is too noisy to drive feature selection reliably. I want to test whether *pre-training the hybrid representation* on a larger related dataset can recover performance — analogous to how foundation models pre-train, but applied to the feature-combination stage rather than to an encoder.
 >
-> I have four candidate "flavors" of PT-Rep already mapped out: (P1) freeze the hybrid transformation trained on PT data and apply to FT, (P2) learn a new base rep on PT and add it to the FT hybrid pool, (P3) train a single hybrid on pooled PT+FT data, (P4) warm-start the FT hybrid search from a PT solution.
+> I have four candidate "flavors" of PT-Rep already mapped out: (P1) freeze the hybrid transformation trained on PT data and apply to FT, (P2) learn a new base rep on PT and add it to the FT hybrid pool, (P3) train a single hybrid on pooled PT+FT data, (P4) run the search on PT, take the top-N best configs as a shortlist, and let FT pick among them.
 >
 > Please research and report on the following, with citations:
 >
@@ -212,12 +295,12 @@ Failure mode to avoid: running all 4 flavors × all PT sources without a hypothe
 ## 10. Status checklist
 
 - [x] Roadmap drafted (this doc)
-- [ ] User review of §6 open design questions
+- [x] User review of §6 design decisions (§6.1–6.5 resolved; §6.6 descoped from v1)
 - [ ] Claude research prompt (§9) run and digested
-- [ ] Phase 0 scaffolding
-- [ ] Phase 1 antibody pilot
+- [x] Phase 0 scaffolding — registry + quality pipeline + leakage dedup + blueprint audit all done; P4 confirmed as PT-shortlist, no core change needed
+- [~] Phase 1 antibody pilot — harness built + offline-tested (`pretrain_rep_experiment.py`, conditions A/B/F/G/H); not yet run on real data (needs server: PT rep precompute + hybrid searches)
 - [ ] Phase 2 molecular replication
 - [ ] Phase 3 analysis
 - [ ] OPIG_COLLAB_ROADMAP.md cross-link entry
 - [ ] Memory entry in MEMORY.md
-- [ ] Cross-species T-PT.* ↔ P-flavor mapping confirmed (§6 Q6); CROSS_SPECIES_ROADMAP.md updated to reference P-flavors
+- [x] Cross-species integration — descoped from v1 (§6.6); not pursued without a proper read of CROSS_SPECIES_ROADMAP.md
