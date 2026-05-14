@@ -222,6 +222,16 @@ that could enhance KIRBy's downstream evaluation or reveal new insights about re
 | **Key questions** | (1) Does full_transfer beat base_best? → Publishable blueprints. (2) Does recipe_transfer match native? → Recipe generalises. (3) Does full_transfer match native? → Publish exact feature lists. |
 | **Notes** | Complements C24 (cross-fold blueprint stability within a dataset) and C03 (config transfer across datasets). C24 shows blueprints don't overfit to training folds; C5 shows they generalise across datasets entirely. Together they support the "pretrained hybrid" thesis claim. |
 
+### C7. Pre-trained Representations (adjacent, not strictly OPIG)
+
+| | |
+|---|---|
+| **What it is** | Pre-train the hybrid representation itself (not the downstream model, not just the recipe) on a larger related dataset, then apply to small FT targets. Four flavors in scope: (P1) freeze the hybrid transformation, (P2) learn a new base rep on PT and add it to the FT hybrid pool, (P3) joint PT+FT hybrid, (P4) warm-start FT hybrid search from a PT solution. |
+| **KIRBy relevance** | Addresses small-dataset hybrid failure (n < 200, F10 finding) by giving the feature-selection stage more samples upstream. Distinct from C4 (PT'd downstream DNN, fixed reps) and C5 (recipe transfer, not feature transfer). |
+| **Scope** | Large — needs PT dataset registry, possibly `find_best_hybrid` warm-start API for P4, sequence-identity dedup for Ab. Antibody-priority pilot first (small-n pain is sharpest there), molecular replication second. |
+| **Status** | **ROADMAP DRAFT** (2026-05-14). See `PRETRAIN_REP_ROADMAP.md`. Awaiting user review of open design questions (§6) and a research pass on PT corpora / transfer-prediction literature (§9 Claude research prompt). |
+| **Notes** | User flagged this as "not quite OPIG" — listed here for thesis-narrative continuity with C4/C5, but lives in its own roadmap. |
+
 ---
 
 ## Implementation Priority & Dependencies
@@ -245,6 +255,7 @@ that could enhance KIRBy's downstream evaluation or reveal new insights about re
 10. ~~**C3 (AEV-PLIG / FEP)**~~ — **DONE** (2026-03-15). PDBBind metadata fix + LP-PDBBind splits. AEV rep deferred (3D structure requirement).
 11. ~~**C4 (Imrie TL)**~~ — **DONE** (2026-03-15). Self-contained experiment: 5 conditions × 6 reps × 3 datasets.
 12. ~~**C5 (Blueprint transfer)**~~ — **DONE** (2026-04-06). Cross-dataset blueprint transfer: logd → herg_ki default pair.
+13. **C7 (PT-Rep)** — **ROADMAP DRAFT** (2026-05-14). Pre-train hybrid representation itself. See `PRETRAIN_REP_ROADMAP.md`.
 
 ### Deferred (user decision)
 - **Activity cliffs (#30, Dablander)** — central to research but held for later experiments
