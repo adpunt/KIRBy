@@ -33,9 +33,11 @@ Split: 5-fold scaffold CV (Murcko scaffolds)
 
 Model-Representation Matrix:
   Representations: ECFP4, PDV, SNS, MHG-GNN-pretrained (4 total)
-  Models: RF, QRF, XGBoost, NGBoost, LightGBM, SVM, GP(PDV only), DNN, BNN-Full,
-          VBLL-Full (10 total; BNN-Last implemented but not run by default)
-  Total: 4 reps × 10 models × 6 strategies × 3 datasets × 5 folds
+  Models: RF, QRF, XGBoost, NGBoost, LightGBM, SVM, GP(PDV only),
+          DNN, BNN-Full, VBLL-Full,                    (NN-α family — DNN base)
+          MLP, MLP-BNN-Full, MLP-VBLL-Full             (NN-β family — MLP base)
+          (13 total; BNN-Last implemented but not run by default)
+  Total: 4 reps × 13 models × 6 strategies × 3 datasets × 5 folds
 
 Noise Strategies (regression): legacy, outlier, quantile, hetero, threshold, valprop (6)
 Sigma levels: 0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0 (11)
@@ -376,6 +378,31 @@ class DeterministicRegressor(nn.Module):
         return self.net(x).squeeze()
 
 
+class MLPRegressor(nn.Module):
+    """MLP matching qsar_qm_models/models/models.py:483-502 MLPRegressor (NN-β base).
+
+    Linear(input→32) → ReLU → Linear(32→32) → ReLU → Dropout(0.2) → Linear(32→1).
+    Used as the base for BNN-β (`mlp_bnn_full`) and VBLL-β (`mlp_vbll`) in the
+    paper Wilcoxon comparisons.
+    """
+    def __init__(self, input_dim, hidden_size=32, num_hidden_layers=2, dropout_rate=0.2):
+        super().__init__()
+        self.input_layer = nn.Linear(input_dim, hidden_size)
+        self.hidden_layers = nn.ModuleList(
+            [nn.Linear(hidden_size, hidden_size) for _ in range(num_hidden_layers - 1)]
+        )
+        self.output_layer = nn.Linear(hidden_size, 1)
+        self.dropout = nn.Dropout(dropout_rate)
+        self.relu = nn.ReLU()
+
+    def forward(self, x):
+        x = self.relu(self.input_layer(x))
+        for layer in self.hidden_layers:
+            x = self.relu(layer(x))
+        x = self.dropout(x)
+        return self.output_layer(x).squeeze()
+
+
 if HAS_BAYESIAN_TORCH:
     def apply_bayesian_transformation(model):
         """Full BNN: replace every nn.Linear with torchbnn BayesLinear.
@@ -542,23 +569,32 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
     y_v = torch.FloatTensor(y_val).to(device)
     X_te = torch.FloatTensor(X_test).to(device)
 
-    model = DeterministicRegressor(X_train.shape[1]).to(device)
+    # arch: 'dnn' (DNN, NN-α: [128, 64]) or 'mlp' (MLP, NN-β: [32, 32]).
+    # Model types prefixed with 'mlp-' use the MLP base; others use DNN.
+    if model_type.startswith('mlp-'):
+        arch = 'mlp'
+        subtype = model_type[len('mlp-'):]   # 'deterministic' | 'full-bnn' | 'full-vbll'
+        model = MLPRegressor(X_train.shape[1]).to(device)
+    else:
+        arch = 'dnn'
+        subtype = model_type
+        model = DeterministicRegressor(X_train.shape[1]).to(device)
 
-    if model_type == 'full-bnn':
+    if subtype == 'full-bnn':
         if not HAS_BAYESIAN_TORCH:
-            raise RuntimeError("Full BNN requested but torchbnn not available")
+            raise RuntimeError(f"Full BNN ({arch}) requested but torchbnn not available")
         model = apply_bayesian_transformation(model)
-    elif model_type == 'last-layer-bnn':
+    elif subtype == 'last-layer-bnn':
         if not HAS_BAYESIAN_TORCH:
-            raise RuntimeError("Last-layer BNN requested but torchbnn not available")
+            raise RuntimeError(f"Last-layer BNN ({arch}) requested but torchbnn not available")
         model = apply_bayesian_transformation_last_layer(model)
-    elif model_type == 'full-vbll':
+    elif subtype == 'full-vbll':
         model = apply_bayesian_transformation_full_variational(model).to(device)
 
-    is_bayesian = model_type != 'deterministic'
+    is_bayesian = subtype != 'deterministic'
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     # VBLL uses its own ELBO loss; everything else uses MSE.
-    if model_type == 'full-vbll':
+    if subtype == 'full-vbll':
         criterion = VBLLLoss(model, n_data=len(X_train))
     else:
         criterion = nn.MSELoss()
@@ -773,12 +809,20 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
                     alpha=1e-10, random_state=42, n_restarts_optimizer=5), None))
         # Neural models. Display names match the val_model_map in
         # qsar_qm_models/scripts/generate_paper_figures.py:_normalize_validation_names
-        # so rows merge into the canonical QM9 model namespace (dnn, dnn_bnn_full,
-        # dnn_vbll). BNN-Last is omitted by default — keep the implementation but
-        # don't run it (user directive).
+        # so rows merge into the canonical QM9 model namespace:
+        #   DNN              -> dnn          (NN-α deterministic)
+        #   BNN-Full         -> dnn_bnn_full (BNN-α, full BNN on DNN base)
+        #   VBLL-Full        -> dnn_vbll     (VBLL-α, full VBLL on DNN base)
+        #   MLP              -> mlp          (NN-β deterministic)
+        #   MLP-BNN-Full     -> mlp_bnn_full (BNN-β, full BNN on MLP base)
+        #   MLP-VBLL-Full    -> mlp_vbll     (VBLL-β, full VBLL on MLP base)
+        # BNN-Last is implemented but not run by default (user directive).
         for mtype, mname in [('deterministic', 'DNN'),
                               ('full-bnn', 'BNN-Full'),
-                              ('full-vbll', 'VBLL-Full')]:
+                              ('full-vbll', 'VBLL-Full'),
+                              ('mlp-deterministic', 'MLP'),
+                              ('mlp-full-bnn', 'MLP-BNN-Full'),
+                              ('mlp-full-vbll', 'MLP-VBLL-Full')]:
             if mtype != 'deterministic' and not HAS_BAYESIAN_TORCH:
                 continue
             experiments.append((mname, rname, None, mtype))
@@ -1042,9 +1086,10 @@ def main():
     print(f"  Representations: {rep_list}")
     print(f"  Noise strategies: {STRATEGIES}")
     print(f"  Sigma levels: {SIGMA_LEVELS}")
-    model_list = "RF, QRF, XGBoost, NGBoost, LightGBM, SVM, GP(PDV), DNN, VBLL-Full"
+    model_list = ("RF, QRF, XGBoost, NGBoost, LightGBM, SVM, GP(PDV), "
+                  "DNN, VBLL-Full, MLP, MLP-VBLL-Full")
     if HAS_BAYESIAN_TORCH:
-        model_list += ", BNN-Full"
+        model_list += ", BNN-Full, MLP-BNN-Full"
     if args.models:
         model_list = ", ".join(args.models)
     print(f"  Models: {model_list}")
