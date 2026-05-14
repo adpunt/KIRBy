@@ -365,7 +365,7 @@ Tasks sized for single bounded sessions, with explicit acceptance criteria. **Tr
 
 ### Cross-cutting
 
-**T-UQ.1** `src/kirby/uq/conformal.py` — MAPIE wrapper. *Acceptance:* unit tests on synthetic regression + clf show nominal coverage on held-out.
+**T-UQ.1** `src/kirby/uq/conformal.py` — MAPIE wrapper. **IMPLEMENTED 2026-05-15** — `src/kirby/uq/conformal.py` (`ConformalRegressor` + `ConformalClassifier` over the MAPIE 1.x API; three calibration modes — `fit` cross-conformal honoring a group-aware `cv` splitter + `groups`, `fit_split` for the §4 fold-out policy, `fit_prefit` for the §4 within-fold policy; `RegressionInterval`/`ClassificationSet` result tuples; coverage/width/set-size metrics in plain numpy, version-proof; MAPIE imported lazily), `src/kirby/uq/__init__.py`, `tests/test_conformal.py` (13 tests — near-nominal coverage on synthetic regression + clf across all three modes, group forwarding, metric + validation guards; all pass). `mapie>=1.0` added to the `uncertainty` extra in `setup.py` + noted in `SETUP.md`. *Acceptance:* unit tests on synthetic regression + clf show nominal coverage on held-out — **met**.
 
 **T-UQ.2** `conformal_chem.py` — scaffold-aware variant. *Acceptance:* unit test on a small scaffold-split molecular fixture shows nominal coverage.
 

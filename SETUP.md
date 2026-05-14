@@ -74,7 +74,8 @@ pip install -e ".[antibody]"
 # TCGA genomics/histopathology (scanpy, gseapy, decoupler, pyComBat)
 pip install -e ".[tcga]"
 
-# Uncertainty quantification (NGBoost, quantile forests, BNNs)
+# Uncertainty quantification (NGBoost, quantile forests, BNNs, MAPIE conformal)
+# MAPIE >= 1.0 backs kirby.uq.conformal (conformal prediction intervals/sets).
 pip install -e ".[uncertainty]"
 
 # Everything
