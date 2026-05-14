@@ -313,7 +313,18 @@ Tasks sized for single bounded sessions, with explicit acceptance criteria. **Tr
 
 *Acceptance:* dry-run passes; pretrained model on dog COX-2 beats from-scratch dog COX-2 by ≥0.05 RMSE, or fails fast with documented "no transfer signal."
 
-**T-PT.4** PT-γ experiment script (rodent → vet). *Acceptance:* compare against PT-α; quantify "evolutionary closeness" lift.
+**T-PT.4** PT-γ experiment script (rodent → vet). **IMPLEMENTED 2026-05-14** — `tests/experiments/cross_species/rodent_to_vet.py` (thin wrapper reusing `same_target_transfer.evaluate_target`/`print_analysis`), `pretrain_chembl_dnn.py` now takes `--corpus <name>` (wired to `pretrain_corpora.compose`; legacy no-`--corpus` path byte-identical so the in-flight T-PT.3 pretrain job is unaffected), `vet_eval_data.collect_vet_eval_inchikeys()` added for leakage filtering. SLURM: `pretrain_rodent.sh` + `submit_rodent_to_vet.sh`.
+
+> **⚠️ SUBMIT DEPENDENCY** — same shape as T-PT.3. `pretrain_rodent.sh` (pretrains on the rat+mouse `rodent_chembl` corpus → `chembl_pretrain/rodent_chembl/`) MUST finish before `submit_rodent_to_vet.sh`. Chained:
+> ```bash
+> cd /data/stat-ecr/scat9264/KIRBy && git pull
+> PT=$(sbatch --parsable tests/slurm_scripts/pretrain_rodent.sh)
+> sbatch --dependency=afterok:$PT tests/slurm_scripts/submit_rodent_to_vet.sh
+> ```
+>
+> **⚠️ KNOWN LEAKAGE GAP (pre-existing, NOT introduced by T-PT.4):** the *legacy* human pretraining path (`imrie_pretrain.sh`, no `--corpus`) filters the corpus against the human downstream benchmarks only — NOT the vet eval targets. T-PT.3 fine-tunes on those vet targets, so a compound assayed at both the human and bovine ortholog of a target can sit in both the human pretrain corpus and a vet test fold. The new `--corpus` path DOES exclude vet eval InChIKeys (via `collect_vet_eval_inchikeys`), so rodent_to_vet is clean — but same_target_transfer's human corpus is not. Fixing it means adding the vet filter to the legacy path + re-running the human pretrain. **Deferred — needs user decision (changes an already-queued job's behaviour).**
+
+*Acceptance:* compare against PT-α; quantify "evolutionary closeness" lift (design doc §4: ≥0.03 RMSE lift on ≥3 of 4 vet eval combos).
 
 **T-PT.5** PT-β experiment script (multi-species + species token). *Acceptance:* species token has measurable effect (toggle on/off, ≥0.03 RMSE delta).
 

@@ -11,6 +11,19 @@ Usage:
     # Smoke test (fast, small data)
     python -m kirby.models.pretrain_chembl_dnn --rep ecfp4 --n-compounds 10000
 
+    # Named cross-species corpus (T-PT.4+): pretrain on a kirby.datasets
+    # .pretrain_corpora corpus instead of the legacy human bulk-ChEMBL path.
+    python -m kirby.models.pretrain_chembl_dnn --rep ecfp4 --corpus rodent_chembl
+
+Corpus modes:
+    --corpus not set  -> legacy: download_chembl_bioactivity (human bulk
+                         ChEMBL), checkpoints written to {output_dir}/{rep}_{hs}.pt.
+                         Unchanged behaviour.
+    --corpus <name>   -> pretrain_corpora.compose(<name>); checkpoints written
+                         to {output_dir}/{name}/{rep}_{hs}.pt. The corpus is
+                         leakage-filtered against both the human downstream
+                         benchmarks AND the vet eval targets.
+
 Reference:
     Imrie et al. (2018). JCIM 58(11):2319-2330.
 """
@@ -251,11 +264,22 @@ def main():
     parser.add_argument(
         '--output-dir', type=str,
         default='/Volumes/seagate/kirby/chembl_pretrain',
-        help='Directory to save pre-trained weights')
+        help='Directory to save pre-trained weights. With --corpus, weights '
+             'go in the {output_dir}/{corpus}/ subdirectory.')
     parser.add_argument(
         '--data-dir', type=str,
         default='/Volumes/seagate/kirby/chembl',
         help='Directory for cached ChEMBL data')
+    parser.add_argument(
+        '--corpus', type=str, default=None,
+        help='Named pretraining corpus from kirby.datasets.pretrain_corpora '
+             '(e.g. rodent_chembl, mammalian_chembl). If omitted, the legacy '
+             'human bulk-ChEMBL path is used (unchanged behaviour).')
+    parser.add_argument(
+        '--vet-cache-dir', type=str, default=None,
+        help='Vet eval ChEMBL CSV cache dir, used only with --corpus to '
+             'leakage-filter the corpus against the vet eval targets. '
+             'Defaults to vet_eval_data.DEFAULT_CACHE_DIR.')
     parser.add_argument(
         '--epochs', type=int, default=200,
         help='Max training epochs (default: 200)')
@@ -274,12 +298,20 @@ def main():
     rep_names = [r.strip() for r in args.rep.split(',')]
     hidden_sizes = tuple(int(h) for h in args.hidden_sizes.split(','))
 
+    # Validate --corpus up front, before any expensive data loading.
+    if args.corpus is not None:
+        from kirby.datasets.pretrain_corpora import list_corpora
+        if args.corpus not in list_corpora():
+            parser.error(f"Unknown --corpus '{args.corpus}'. "
+                         f"Known: {', '.join(list_corpora())}")
+
     print("=" * 70)
     print("ChEMBL DNN Pre-Training (Imrie Transfer Learning)")
     print(f"  Reps: {rep_names}")
     print(f"  Hidden sizes: {hidden_sizes}")
     print(f"  Max compounds: {args.n_compounds}")
     print(f"  Max targets: {args.max_targets}")
+    print(f"  Corpus: {args.corpus or 'human (legacy)'}")
     print(f"  Output: {args.output_dir}")
     print("=" * 70)
 
@@ -291,15 +323,47 @@ def main():
     print("\nCollecting downstream InChIKeys for leakage prevention...")
     exclude_keys = collect_downstream_inchikeys()
 
-    # Download/load ChEMBL data
-    print("\nLoading ChEMBL bioactivity data...")
-    df = download_chembl_bioactivity(
-        data_dir=args.data_dir,
-        max_targets=args.max_targets,
-        max_compounds=args.n_compounds,
-        exclude_inchikeys=exclude_keys,
-        random_seed=args.seed,
-    )
+    if args.corpus is None:
+        # Legacy path: human bulk ChEMBL, flat output dir. Unchanged behaviour.
+        output_dir = args.output_dir
+        print("\nLoading ChEMBL bioactivity data (legacy human corpus)...")
+        df = download_chembl_bioactivity(
+            data_dir=args.data_dir,
+            max_targets=args.max_targets,
+            max_compounds=args.n_compounds,
+            exclude_inchikeys=exclude_keys,
+            random_seed=args.seed,
+        )
+    else:
+        # Named corpus path (T-PT.4+): pretrain_corpora.compose, additionally
+        # leakage-filtered against the vet eval targets. (--corpus name was
+        # already validated up front.)
+        from kirby.datasets.pretrain_corpora import compose
+        try:
+            from experiments.cross_species.vet_eval_data import (
+                collect_vet_eval_inchikeys,
+                DEFAULT_CACHE_DIR as VET_DEFAULT_CACHE_DIR,
+            )
+            vet_dir = args.vet_cache_dir or VET_DEFAULT_CACHE_DIR
+            print(f"\nCollecting vet eval InChIKeys for leakage prevention "
+                  f"(cache: {vet_dir})...")
+            exclude_keys = exclude_keys | collect_vet_eval_inchikeys(vet_dir)
+        except Exception as e:
+            print(f"  WARNING: could not collect vet eval InChIKeys: {e}")
+            print(f"  Corpus filtered against human downstream benchmarks only.")
+        print(f"\nComposing corpus '{args.corpus}'...")
+        df = compose(
+            name=args.corpus,
+            exclude_inchikeys=exclude_keys,
+            max_compounds_per_species=args.n_compounds,
+            max_targets=args.max_targets,
+            data_dir=args.data_dir,
+        )
+        output_dir = os.path.join(args.output_dir, args.corpus)
+
+    if len(df) == 0:
+        print("ERROR: corpus is empty after assembly/filtering. Aborting.")
+        return
 
     smiles = df['smiles'].tolist()
     pactivities = df['pActivity'].values
@@ -308,7 +372,7 @@ def main():
     results = []
     for rep_name in rep_names:
         result = pretrain_one_rep(
-            smiles, pactivities, rep_name, hidden_sizes, args.output_dir,
+            smiles, pactivities, rep_name, hidden_sizes, output_dir,
             epochs=args.epochs, batch_size=1024, lr=args.lr,
             patience=args.patience, seed=args.seed,
         )
@@ -325,7 +389,7 @@ def main():
         print(f"  {r['rep_name']:12s}  {r['input_dim']:6d}  "
               f"{r['n_compounds']:8d}  {r['holdout_rmse']:8.3f}  "
               f"{r['train_time']:7.1f}s")
-    print(f"\nWeights saved to: {args.output_dir}/")
+    print(f"\nWeights saved to: {output_dir}/")
 
 
 if __name__ == '__main__':
