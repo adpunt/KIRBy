@@ -58,16 +58,38 @@ Apply the frozen transformation to FT molecules → get FT hybrid features. Trai
 **Pros:** Hybrid sees orders of magnitude more samples for feature selection. Clean separation of PT (rep) and FT (downstream).
 **Cons:** Hybrid optimises PT task, may not align with FT task.
 
-### P2. Base-rep PT (learn a new base rep on PT)
-Pre-train a learned representation on PT molecules:
-- option (a) autoencoder over concat of existing base reps
-- option (b) supervised projection (linear/MLP head trained on PT labels, return penultimate layer)
-- option (c) contrastive (SimCLR-style) on molecules alone, no labels needed
+### P2. Base-rep PT — DROPPED (2026-05-15)
 
-Apply the trained encoder to FT molecules → new base rep. Add it to the FT hybrid search alongside ECFP/MACCS/etc.
+Originally: pre-train a learned encoder on PT data and add its output as a new
+base rep. **Dropped.** An embedding from a pre-trained model is just a base
+representation — exactly what KIRBy already consumes (every GNN / FT-model
+embedding in the existing `*_finetune_comparison.py` experiments). Building one
+would add a base rep and *compete with* KIRBy rather than test it. The
+experiment is about whether KIRBy's hybrid works with pre-training, not about
+generating more input representations.
 
-**Pros:** Doesn't constrain hybrid structure; the hybrid gets to decide if the PT'd rep is useful. Closest to standard PT.
-**Cons:** New training infrastructure. Most exploratory.
+### P5. Model transfer on a pre-trained hybrid representation (added 2026-05-15)
+
+Classical transfer learning, with the KIRBy hybrid as the fixed representation:
+1. Build the KIRBy hybrid on the PT (large) dataset — this is the representation.
+2. Train a model (a DNN) on the PT dataset using that hybrid.
+3. Apply the *same* hybrid (same selected features) to the FT (small) dataset.
+4. Continue training (fine-tune) that same model on the FT dataset.
+5. Compare against the same DNN trained from scratch on the same FT hybrid.
+
+This carries over a **trained model**, not just the representation choice — the
+other roadmap conditions (B/F/G) carry over the representation and never touch
+model weights. The question P5 answers: is model transfer more effective when
+the representation it runs on is a good KIRBy hybrid?
+
+**Constraint:** PT and FT must share the same kind of target (both regression),
+because the model's output and the continued training have to be consistent
+across the two datasets.
+
+**Reuses existing machinery:** `kirby.models.dnn_pretrained.PretrainedDNNRegressor`
+(loads pre-trained weights, fine-tunes) and the checkpoint format from
+`kirby.models.pretrain_chembl_dnn` — same as the Imrie C4 experiment, but the
+representation is a KIRBy hybrid instead of a fixed fingerprint.
 
 ### P3. Joint PT+FT hybrid (pooled-data hybrid)
 Fit one hybrid on the union of PT + FT, with task-aware sample weighting or multi-task labels.
@@ -159,6 +181,30 @@ winners become a candidate shortlist, and FT evaluates that shortlist with
 **Metrics:** R² + Spearman ρ for Ab regression; accuracy / F1w / AUROC for Ab classification.
 
 **B vs G — the two ways to transfer a PT hybrid to FT (user asked to test both, 2026-05-14):** a hybrid run produces two things — a configuration (allocation method, importance method, budget) and the concrete selected feature indices that configuration produced on the data. **B** transfers the configuration and re-runs feature selection on the FT training data, so FT produces its own selected indices. **G** transfers PT's concrete selected feature indices and applies them to FT with no re-selection. The user was undecided which is better, so both are run as separate conditions.
+
+**Pilot pair list (pinned 2026-05-14 — what is actually runnable now):**
+Conditions B/F/G need a labelled PT corpus that does not overlap the FT target.
+Of the built antibody PT sources: `oas_species` (labelled, no overlap with
+Ginkgo) works for all 9 Ginkgo targets; `ginkgo_gdpa1` IS the Ginkgo antibodies
+so leakage removal empties it against any Ginkgo target (usable only vs
+non-Ginkgo targets); `sabdab` is unlabelled so only A/H run. So the runnable
+v1 pilot is `oas_species` × the 9 GDPa1 developability targets:
+
+| PT source | FT target |
+|---|---|
+| oas_species | ginkgo_hic |
+| oas_species | ginkgo_tm2 |
+| oas_species | ginkgo_titer |
+| oas_species | ginkgo_pr_cho |
+| oas_species | ginkgo_acsins |
+| oas_species | ginkgo_purity |
+| oas_species | ginkgo_aggregation |
+| oas_species | ginkgo_colloidal |
+| oas_species | ginkgo_heparin |
+
+One SLURM job per target via `submit_pretrain_rep.sh`. More PT sources require
+the deferred conditions (P2c contrastive for unlabelled `sabdab`) or non-Ginkgo
+FT targets (so `ginkgo_gdpa1` can be used without total leakage).
 
 **Harness:** `tests/experiments/pretrain_rep/pretrain_rep_experiment.py` — built and import/unit-tested. Implements conditions **A, B, F, G, H**; C, D, E (P2/P3) are deferred and explicitly not in the harness. `run(ft_data, pt_source, pt_task, ...)` does: prep PT corpus (quality → leakage → `compute_pt_reps`) → cached PT + FT hybrid searches → per-model per-fold evaluation of each condition. B uses `build_fold_hybrid` with the PT configuration; G uses `apply_feature_selection` with PT's exact indices (built once on the full PT corpus); F runs PT's top-N configurations B-style and picks the best on FT CV mean. `run()` itself is a server workload; the pure helpers are offline-tested in `smoke_test.py` (73 assertions, all passing).
 
