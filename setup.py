@@ -126,6 +126,7 @@ setup(
             "quantile-forest>=1.2.0",
             "ngboost>=0.4.0",
             "torchbnn>=1.0.0",
+            "mapie>=1.0",  # conformal prediction — backs kirby.uq.conformal
         ],
 
         # Feature importance / interpretability
