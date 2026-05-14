@@ -560,13 +560,30 @@ def apply_bayesian_transformation_full_variational(model):
 
 def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
                             model_type='deterministic', epochs=100, lr=1e-3):
-    """Train regression neural network. Returns (predictions, uncertainties)."""
+    """Train regression neural network. Returns (predictions, uncertainties).
+
+    Targets are z-score normalized for training (fit on the training labels
+    only) and predictions/uncertainties are inverse-transformed back to the
+    raw label scale before returning. Without this, MSE on raw-scale labels
+    diverges for wide-range datasets (e.g. hERG) and high-dim reps (e.g.
+    MHG-GNN-pretrained). Mirrors qsar_qm_models, which trains NNs on
+    normalized targets (process_and_train.py --normalize, models.py:2854).
+    Tree models are scale-invariant in y and do not need this.
+    """
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    # Normalize targets — fit on TRAIN ONLY, no leakage from val/test.
+    y_scaler = StandardScaler()
+    y_train_norm = y_scaler.fit_transform(
+        np.asarray(y_train, dtype=float).reshape(-1, 1)).ravel()
+    y_val_norm = y_scaler.transform(
+        np.asarray(y_val, dtype=float).reshape(-1, 1)).ravel()
+    y_scale = float(y_scaler.scale_[0])  # std used to rescale predicted uncertainty
+
     X_tr = torch.FloatTensor(X_train).to(device)
-    y_tr = torch.FloatTensor(y_train).to(device)
+    y_tr = torch.FloatTensor(y_train_norm).to(device)
     X_v = torch.FloatTensor(X_val).to(device)
-    y_v = torch.FloatTensor(y_val).to(device)
+    y_v = torch.FloatTensor(y_val_norm).to(device)
     X_te = torch.FloatTensor(X_test).to(device)
 
     # arch: 'dnn' (DNN, NN-α: [128, 64]) or 'mlp' (MLP, NN-β: [32, 32]).
@@ -625,11 +642,20 @@ def train_neural_regression(X_train, y_train, X_val, y_val, X_test,
     model.load_state_dict(best_state)
     model.eval()
 
+    # Predictions are on the normalized scale — inverse-transform back to raw
+    # label units so metrics line up with the tree-model R²/RMSE.
+    def _to_raw(arr):
+        return y_scaler.inverse_transform(
+            np.asarray(arr, dtype=float).reshape(-1, 1)).ravel()
+
     if is_bayesian:
-        preds = np.array([model(X_te).detach().cpu().numpy() for _ in range(30)])
-        return preds.mean(0), preds.std(0)
+        preds_norm = np.array([model(X_te).detach().cpu().numpy() for _ in range(30)])
+        mean_raw = _to_raw(preds_norm.mean(0))
+        # std scales by the label std only (mean-shift cancels in a std).
+        std_raw = preds_norm.std(0) * y_scale
+        return mean_raw, std_raw
     with torch.no_grad():
-        return model(X_te).cpu().numpy(), None
+        return _to_raw(model(X_te).cpu().numpy()), None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
