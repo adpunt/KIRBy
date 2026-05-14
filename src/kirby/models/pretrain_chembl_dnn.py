@@ -323,8 +323,25 @@ def main():
     print("\nCollecting downstream InChIKeys for leakage prevention...")
     exclude_keys = collect_downstream_inchikeys()
 
+    # Vet eval targets are fine-tune/test sets for every X-PT experiment, so
+    # their compounds must be excluded from EVERY pretraining corpus — the
+    # legacy human path included (same_target_transfer fine-tunes on them).
+    # Pretraining design doc §4.
+    try:
+        from experiments.cross_species.vet_eval_data import (
+            collect_vet_eval_inchikeys,
+            DEFAULT_CACHE_DIR as VET_DEFAULT_CACHE_DIR,
+        )
+        vet_dir = args.vet_cache_dir or VET_DEFAULT_CACHE_DIR
+        print(f"\nCollecting vet eval InChIKeys for leakage prevention "
+              f"(cache: {vet_dir})...")
+        exclude_keys = exclude_keys | collect_vet_eval_inchikeys(vet_dir)
+    except Exception as e:
+        print(f"  WARNING: could not collect vet eval InChIKeys: {e}")
+        print(f"  Corpus filtered against human downstream benchmarks only.")
+
     if args.corpus is None:
-        # Legacy path: human bulk ChEMBL, flat output dir. Unchanged behaviour.
+        # Legacy path: human bulk ChEMBL, flat output dir.
         output_dir = args.output_dir
         print("\nLoading ChEMBL bioactivity data (legacy human corpus)...")
         df = download_chembl_bioactivity(
@@ -335,22 +352,9 @@ def main():
             random_seed=args.seed,
         )
     else:
-        # Named corpus path (T-PT.4+): pretrain_corpora.compose, additionally
-        # leakage-filtered against the vet eval targets. (--corpus name was
-        # already validated up front.)
+        # Named corpus path (T-PT.4+): pretrain_corpora.compose.
+        # (--corpus name was already validated up front.)
         from kirby.datasets.pretrain_corpora import compose
-        try:
-            from experiments.cross_species.vet_eval_data import (
-                collect_vet_eval_inchikeys,
-                DEFAULT_CACHE_DIR as VET_DEFAULT_CACHE_DIR,
-            )
-            vet_dir = args.vet_cache_dir or VET_DEFAULT_CACHE_DIR
-            print(f"\nCollecting vet eval InChIKeys for leakage prevention "
-                  f"(cache: {vet_dir})...")
-            exclude_keys = exclude_keys | collect_vet_eval_inchikeys(vet_dir)
-        except Exception as e:
-            print(f"  WARNING: could not collect vet eval InChIKeys: {e}")
-            print(f"  Corpus filtered against human downstream benchmarks only.")
         print(f"\nComposing corpus '{args.corpus}'...")
         df = compose(
             name=args.corpus,

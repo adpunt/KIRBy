@@ -322,7 +322,7 @@ Tasks sized for single bounded sessions, with explicit acceptance criteria. **Tr
 > sbatch --dependency=afterok:$PT tests/slurm_scripts/submit_rodent_to_vet.sh
 > ```
 >
-> **⚠️ KNOWN LEAKAGE GAP (pre-existing, NOT introduced by T-PT.4):** the *legacy* human pretraining path (`imrie_pretrain.sh`, no `--corpus`) filters the corpus against the human downstream benchmarks only — NOT the vet eval targets. T-PT.3 fine-tunes on those vet targets, so a compound assayed at both the human and bovine ortholog of a target can sit in both the human pretrain corpus and a vet test fold. The new `--corpus` path DOES exclude vet eval InChIKeys (via `collect_vet_eval_inchikeys`), so rodent_to_vet is clean — but same_target_transfer's human corpus is not. Fixing it means adding the vet filter to the legacy path + re-running the human pretrain. **Deferred — needs user decision (changes an already-queued job's behaviour).**
+> **Leakage fix (2026-05-14):** `pretrain_chembl_dnn.py` now excludes vet eval InChIKeys from EVERY pretraining corpus — the legacy human path included, not just `--corpus` runs. Previously the human path filtered against human downstream benchmarks only, so a compound assayed at both the human and bovine ortholog of a target could sit in both the human pretrain corpus and a vet test fold (T-PT.3 fine-tunes on those vet targets). Consequence: the T-PT.3 job queued before this fix (12148304 + its pretrain dependency) ran on the un-fixed corpus and should be re-submitted once the fix is pulled.
 
 *Acceptance:* compare against PT-α; quantify "evolutionary closeness" lift (design doc §4: ≥0.03 RMSE lift on ≥3 of 4 vet eval combos).
 
