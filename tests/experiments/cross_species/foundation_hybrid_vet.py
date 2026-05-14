@@ -18,7 +18,10 @@ Per-target evaluation:
                            dataset per PIPELINE_READINESS_TODO.md)
       --preset mid     -> REPS_TOP_TIER_ANY (11 reps; Top Tier on ≥1 dataset)
       --preset full    -> REPS_GENERAL_TIER (18 reps; union of General Tier)
-  - Baselines per (rep × target): ridge (RidgeCV) and dnn_scratch
+  - Baselines per (rep × target): rf, xgboost, lightgbm, mlp
+    (the standard kirby survey subset, sourced via
+    kirby.find_best_hybrid.get_model so model defs match the rest of the
+    pipeline. Ridge intentionally excluded — see feedback_no_ridge.)
 
 Datasets (locked in docs/cross_species_vet_eval_targets.json):
   - cow_CA4   (CHEMBL281,  n≈1,541) - bovine Carbonic anhydrase 4
@@ -161,18 +164,24 @@ def evaluate_one_rep_model(X, y, groups, model, n_folds):
     }
 
 
-def build_baseline_models():
-    """Two baselines per (rep × target): RidgeCV and from-scratch DNN."""
-    from sklearn.linear_model import RidgeCV
-    from kirby.models.dnn import DNNRegressor
+BASELINE_MODELS = ['rf', 'xgboost', 'lightgbm', 'mlp']
 
-    return {
-        'ridge': RidgeCV(alphas=np.logspace(-4, 4, 50)),
-        'dnn_scratch': DNNRegressor(
-            hidden_sizes=(256, 128, 64), dropout=0.2, lr=0.001,
-            epochs=200, batch_size=256, patience=20, random_state=42,
-        ),
-    }
+
+def build_baseline_models(n_samples: int, task_type: str = 'regression'):
+    """Standard kirby survey subset (Ridge excluded — see feedback_no_ridge).
+
+    Returns a dict of {name: fresh model instance} via the canonical
+    `kirby.find_best_hybrid.get_model` factory so defs stay in sync with
+    the rest of the pipeline. Skips any model whose _max_samples guard
+    excludes this dataset.
+    """
+    from kirby.find_best_hybrid import get_model
+    out = {}
+    for name in BASELINE_MODELS:
+        m = get_model(name, task_type=task_type, n_samples=n_samples)
+        if m is not None:
+            out[name] = m
+    return out
 
 
 def evaluate_target(key: str, rep_names, n_folds_requested: int,
@@ -204,8 +213,8 @@ def evaluate_target(key: str, rep_names, n_folds_requested: int,
         'hybrid': {},
     }
 
-    # --- Per-rep ridge + dnn_scratch baselines ---
-    baselines = build_baseline_models()
+    # --- Per-rep survey baselines (rf, xgboost, lightgbm, mlp) ---
+    baselines = build_baseline_models(n_samples=n, task_type=task_type)
     for rep_name in rep_names:
         if rep_name not in reps:
             print(f"  {rep_name}: SKIPPED (rep failed to build)")
