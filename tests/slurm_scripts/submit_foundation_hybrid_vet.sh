@@ -13,11 +13,19 @@
 # targets (cow_CA4, cow_DRD2, dog_PTGS2, cow_PTGS2).
 #
 # Usage:
-#   sbatch tests/slurm_scripts/submit_foundation_hybrid_vet.sh           # full preset (18 reps)
-#   sbatch tests/slurm_scripts/submit_foundation_hybrid_vet.sh mid       # mid preset (11 reps)
-#   sbatch tests/slurm_scripts/submit_foundation_hybrid_vet.sh minimal   # minimal preset (4 reps)
+#   sbatch tests/slurm_scripts/submit_foundation_hybrid_vet.sh                   # full preset, baseline+hybrid
+#   sbatch tests/slurm_scripts/submit_foundation_hybrid_vet.sh full baseline     # full preset, baseline-only (survey)
+#   sbatch tests/slurm_scripts/submit_foundation_hybrid_vet.sh mid               # mid preset (11 reps), baseline+hybrid
+#   sbatch tests/slurm_scripts/submit_foundation_hybrid_vet.sh minimal           # minimal preset (4 reps), baseline+hybrid
+#
+# Pass arg 2 = "baseline" to skip find_best_hybrid (rep-tier survey only).
 
 PRESET="${1:-full}"
+MODE="${2:-full_pipeline}"
+BASELINE_FLAG=""
+if [ "$MODE" = "baseline" ]; then
+    BASELINE_FLAG="--baseline-only"
+fi
 
 cd /data/stat-ecr/scat9264/KIRBy
 git pull 2>/dev/null
@@ -26,11 +34,13 @@ export PYTHONWARNINGS=ignore
 
 echo "foundation_hybrid_vet (T-PT.2)"
 echo "Preset: $PRESET"
+echo "Mode:   $MODE"
 echo "Start:  $(date)"
 
 python tests/experiments/cross_species/foundation_hybrid_vet.py \
     --preset "$PRESET" \
     --n-folds 5 \
-    --vet-cache-dir /data/stat-ecr/scat9264/kirby_data/cross_species/vet_eval
+    --vet-cache-dir /data/stat-ecr/scat9264/kirby_data/cross_species/vet_eval \
+    $BASELINE_FLAG
 
 echo "Done: $(date)"
