@@ -158,6 +158,26 @@ def list_vet_keys() -> List[str]:
     return sorted(load_vet_targets().keys())
 
 
+def collect_vet_eval_inchikeys(cache_dir: str = DEFAULT_CACHE_DIR) -> set:
+    """InChIKeys of every compound in all 4 vet eval datasets.
+
+    For leakage prevention: pass the return value as `exclude_inchikeys` when
+    assembling a pretraining corpus so vet eval compounds never appear in
+    pretraining. Reads the per-(species,target) cached CSVs; fetches any that
+    are not cached yet (same path `load_vet_dataset` uses).
+    """
+    keys: set = set()
+    targets = load_vet_targets()
+    for key, entry in targets.items():
+        tid = entry['target_chembl_id']
+        cache_csv = Path(cache_dir) / f"{key}_{tid}.csv"
+        df = _fetch_chembl_activities(tid, cache_csv)
+        if 'inchikey' in df.columns:
+            keys.update(str(k) for k in df['inchikey'].dropna())
+    print(f"  [collect_vet_eval_inchikeys] {len(keys)} unique vet eval InChIKeys")
+    return keys
+
+
 if __name__ == '__main__':
     import argparse
     ap = argparse.ArgumentParser(description=__doc__)

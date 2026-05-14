@@ -255,11 +255,15 @@ def evaluate_target(key, rep_names, n_folds_requested, pretrain_dir,
     return ds_results
 
 
-def print_analysis(all_results):
-    """Per-target condition table + transfer verdict (T-PT.3 §4 decision rule:
-    transfer 'works' ⇔ dnn_tl_full beats dnn_scratch by ≥0.05 RMSE)."""
+def print_analysis(all_results, title="SAME-TARGET TRANSFER ANALYSIS"):
+    """Per-target condition table + transfer verdict (§4 decision rule:
+    transfer 'works' ⇔ dnn_tl_full beats dnn_scratch by ≥0.05 RMSE).
+
+    Shared by same_target_transfer (T-PT.3) and rodent_to_vet (T-PT.4) — the
+    table shape is identical, only the pretraining corpus differs.
+    """
     print(f"\n{'='*80}")
-    print("SAME-TARGET TRANSFER ANALYSIS")
+    print(title)
     print(f"{'='*80}")
 
     for key, ds in all_results.items():
