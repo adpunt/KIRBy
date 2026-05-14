@@ -161,6 +161,27 @@ rf.fit(hybrid_train, train_labels)
 predictions = rf.predict(hybrid_test)
 ```
 
+## Pre-screen representations before combining them
+
+When working with a new dataset, the representations that worked well elsewhere may not transfer. Combining low-performing reps just dilutes the hybrid with noise. Use `kirby.screen` to test each rep individually first and trim the list before running `find_best_hybrid`.
+
+```python
+from kirby.screen import screen_reps, print_screen_table, top_n_reps
+from kirby.find_best_hybrid import find_best_hybrid
+
+# Quick per-rep CV (default: 3-fold, ridge + RF, takes a few minutes)
+rows = screen_reps(reps, labels, groups, task_type='regression')
+print_screen_table(rows, title='Per-rep screen', metric_label='rho')
+
+# Trim before the hybrid search
+kept = top_n_reps(rows, n=8, threshold=0.1)  # top 8 above ρ=0.1
+reps_to_search = {k: reps[k] for k in kept}
+
+result = find_best_hybrid(base_reps=reps_to_search, labels=labels, groups=groups, ...)
+```
+
+`screen_reps` returns a ranked list of `{rep, dim, score, best_model, per_model}` dicts. `top_n_reps` accepts `n=` (top-N by score), `threshold=` (minimum score), or both. See `notebooks/kirby_quickstart.ipynb` for the full workflow.
+
 ## Running Tests
 
 ```bash
