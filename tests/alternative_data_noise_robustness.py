@@ -106,11 +106,20 @@ except ImportError:
     HAS_XGBOOST = False
 
 try:
-    from sklearn.gaussian_process import GaussianProcessRegressor
-    from sklearn.gaussian_process.kernels import RBF, ConstantKernel, WhiteKernel
+    # GP on PDV is implemented with gauche/gpytorch so the model exactly matches
+    # qsar_qm_models/models/models.py:504 (the canonical Gauche ExactGP class).
+    # This makes the validation 'GP' rows directly comparable to QM9 gauche_rbf
+    # rows. Previously KIRBy used sklearn.GaussianProcessRegressor — functionally
+    # equivalent (scaled RBF + learned observation noise) but a different library.
+    import gpytorch
+    import gauche  # noqa: F401  (verifies the gauche package is importable)
+    try:
+        from botorch.fit import fit_gpytorch_mll as _fit_gpytorch
+    except ImportError:
+        from botorch import fit_gpytorch_model as _fit_gpytorch
     HAS_GP = True
-except ImportError:
-    print("WARNING: sklearn.gaussian_process not available, GP experiments will be skipped")
+except ImportError as _e:
+    print(f"WARNING: gauche/gpytorch/botorch not available ({_e}); GP experiments will be skipped")
     HAS_GP = False
 
 try:
@@ -555,6 +564,81 @@ def apply_bayesian_transformation_full_variational(model):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# GAUSSIAN PROCESS (gauche / gpytorch — mirrors qsar models.py:504)
+# ═══════════════════════════════════════════════════════════════════════════
+
+if HAS_GP:
+    class _GaucheExactGP(gpytorch.models.ExactGP):
+        """ExactGP with a ScaleKernel wrapper. Mirrors qsar_qm_models
+        models.py:504 'Gauche' class verbatim — same mean/cov structure so
+        the validation GP rows are directly comparable to QM9 gauche_rbf rows.
+        """
+        def __init__(self, train_x, train_y, likelihood, kernel_class):
+            super().__init__(train_x, train_y, likelihood)
+            self.mean_module = gpytorch.means.ConstantMean()
+            self.covar_module = gpytorch.kernels.ScaleKernel(kernel_class())
+
+        def forward(self, x):
+            return gpytorch.distributions.MultivariateNormal(
+                self.mean_module(x), self.covar_module(x))
+
+
+    class GaussianProcessGauche:
+        """sklearn-compatible wrapper around the gauche/gpytorch ExactGP so the
+        existing run_tree_experiment GP path works unchanged. Default kernel is
+        RBF (matches qsar's gauche_rbf — PDV-only in this pipeline).
+
+        Name intentionally contains 'GaussianProcess' so the dispatch substring
+        check in run_tree_experiment (`'GaussianProcess' in str(type(mdl))`)
+        keeps routing predictions through the (mean, std) branch.
+        """
+        def __init__(self, kernel='rbf', init_noise=1e-3,
+                     init_outputscale=1.0, max_fit_iter=None):
+            self.kernel_name = kernel
+            self.init_noise = init_noise
+            self.init_outputscale = init_outputscale
+            self.max_fit_iter = max_fit_iter
+            self.model_ = None
+            self.likelihood_ = None
+
+        def _kernel_class(self):
+            if self.kernel_name == 'rbf':
+                return gpytorch.kernels.RBFKernel
+            if self.kernel_name == 'tanimoto':
+                # Lazy import — only needed if caller switches to Tanimoto.
+                from gauche.kernels.fingerprint_kernels.tanimoto_kernel \
+                    import TanimotoKernel
+                return TanimotoKernel
+            raise ValueError(f"unknown kernel {self.kernel_name!r}")
+
+        def fit(self, X, y):
+            Xt = torch.from_numpy(np.asarray(X, dtype=np.float64))
+            yt = torch.from_numpy(np.asarray(y, dtype=np.float64))
+            self.likelihood_ = gpytorch.likelihoods.GaussianLikelihood(
+                noise=self.init_noise)
+            self.model_ = _GaucheExactGP(Xt, yt, self.likelihood_,
+                                         self._kernel_class())
+            # Match qsar's init: scale-kernel outputscale starts at 1.0
+            self.model_.covar_module.outputscale = self.init_outputscale
+            mll = gpytorch.mlls.ExactMarginalLogLikelihood(
+                self.likelihood_, self.model_)
+            _fit_gpytorch(mll)
+            return self
+
+        def predict(self, X, return_std=False):
+            self.model_.eval()
+            self.likelihood_.eval()
+            Xt = torch.from_numpy(np.asarray(X, dtype=np.float64))
+            with torch.no_grad():
+                preds = self.model_(Xt)
+                mean = preds.mean.detach().cpu().numpy()
+                var = preds.variance.detach().cpu().numpy()
+            if return_std:
+                return mean, np.sqrt(np.clip(var, 1e-12, None))
+            return mean
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # TRAINING FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -827,12 +911,14 @@ def run_dataset(dataset_name, smiles, labels, results_dir, model_filter=None, re
         if HAS_SVM:
             experiments.append(('SVM', rname,
                 lambda: SVR(C=1.0, gamma='scale', kernel='rbf'), None))
-        # GP (PDV only)
+        # GP (PDV only) — gauche/gpytorch ExactGP with RBF kernel + learned
+        # GaussianLikelihood noise, mirroring qsar_qm_models/models/models.py:504.
+        # Display name 'GP' maps to 'gauche_rbf' in generate_paper_figures.py
+        # val_model_map, keeping these rows directly comparable to QM9 gauche_rbf.
         if HAS_GP and rname == 'PDV':
             experiments.append(('GP', rname,
-                lambda: GaussianProcessRegressor(
-                    kernel=ConstantKernel(1.0) * RBF(1.0) + WhiteKernel(noise_level=1.0),
-                    alpha=1e-10, random_state=42, n_restarts_optimizer=5), None))
+                lambda: GaussianProcessGauche(
+                    kernel='rbf', init_noise=1e-3, init_outputscale=1.0), None))
         # Neural models. Display names match the val_model_map in
         # qsar_qm_models/scripts/generate_paper_figures.py:_normalize_validation_names
         # so rows merge into the canonical QM9 model namespace:
