@@ -1214,7 +1214,11 @@ _TIER_ORDER = {'full': 1, 'extra': 2}
 _DOMAIN_MODEL_SKIPS = {
     # Ridge at n=20k-33k × wide rep × 1080 configs runs 22-37h per condition
     # on nucleotide. Tree/MLP models cover the linear-baseline role adequately.
-    'nucleotide': ['ridge'],
+    # knn dropped: 13% of time per condition, weakest contributor to nucleotide
+    # hybrids in prior surveys. xgboost dropped: near-redundant with lightgbm
+    # (both gradient-boosted trees); keeping lightgbm as the faster of the two.
+    # Combined cut ≈ 38% wall reduction on n>20k nucleotide.
+    'nucleotide': ['ridge', 'knn', 'xgboost'],
 }
 
 _DATASET_STRATEGY_SKIPS = {
@@ -1223,6 +1227,12 @@ _DATASET_STRATEGY_SKIPS = {
     ('flab_thermo_tresanco', 'uncapped'): ['gp', 'mlp'],
     ('tcga_luad_vs_lusc',    'uncapped'): ['gp'],
     ('ddg_combined',         'uncapped'): ['gp'],
+    # tcga_brca_pam50 n=821 sits under the n>1000 GP cap, but GP still
+    # dominated 72% of general/uncapped (44h of 60h) on the 2026-05-08 run.
+    # Skip across all strategies to make capped fit the 7d wall.
+    ('tcga_brca_pam50',      'none'):     ['gp'],
+    ('tcga_brca_pam50',      'uncapped'): ['gp'],
+    ('tcga_brca_pam50',      'capped'):   ['gp'],
 }
 
 

@@ -35,6 +35,13 @@ COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
 . setup.sh
 
+# Bypass HF datasets FileLock on shared NFS cache. With cache pre-warmed,
+# load_dataset reads directly without acquiring the lock — fixes the
+# OSError [Errno 116] thundering-herd seen on the 2026-05-17 wave.
+# Override with HF_DATASETS_OFFLINE=0 only when a brand-new dataset
+# needs to be downloaded for the first time.
+export HF_DATASETS_OFFLINE=${HF_DATASETS_OFFLINE:-1}
+
 echo "=== ${CATEGORY} experiments: ${DATASET} ==="
 echo "Branch: ${BRANCH} (${COMMIT})"
 echo "Job ID: ${SLURM_JOB_ID}"
