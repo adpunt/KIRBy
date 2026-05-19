@@ -52,20 +52,38 @@ def _default_data_dir(subdir: str) -> str:
 
 COX2_CHEMBL_ID = 'CHEMBL230'
 
+# Per-organism ChEMBL target IDs for the COX-2 gene (PTGS2). Resolved
+# 2026-05-13 by scripts/resolve_chembl_targets.py; full provenance in
+# docs/cross_species_targets_resolved.json. Only species with a resolved
+# target ID *and* non-zero activity counts are listed (design doc §5.2):
+# cat (CHEMBL5303558) and horse (CHEMBL5303566) have target records but
+# zero activities, so they are intentionally excluded.
+COX2_TARGET_IDS = {
+    'human': 'CHEMBL230',    # 6,310 activities
+    'dog':   'CHEMBL4033',   # 110 activities
+    'cow':   'CHEMBL3331',   # 28 activities (3-fold CV territory)
+}
+
 
 def load_cox2_chembl(data_dir: Optional[str] = None,
                      random_seed: int = 42,
                      max_spread_log_units: float = 1.0,
-                     min_measurements: int = 1) -> Dict:
+                     min_measurements: int = 1,
+                     organism: str = 'human') -> Dict:
     """
     Load COX-2 IC50 data from ChEMBL.
-    
+
     Args:
         data_dir: Directory to cache data
         random_seed: Random seed for reproducibility
         max_spread_log_units: Maximum allowed spread in pIC50 for duplicates
         min_measurements: Minimum measurements required per compound
-        
+        organism: One of 'human', 'dog', 'cow'. Selects the species-specific
+            COX-2 ChEMBL target ID (different gene orthologue = different
+            ChEMBL ID, not the same ID with an organism filter). Default
+            'human' preserves prior behaviour. cat/horse have no COX-2
+            activity data in ChEMBL and raise ValueError.
+
     Returns:
         dict: {
             'smiles': List of SMILES strings,
@@ -73,6 +91,7 @@ def load_cox2_chembl(data_dir: Optional[str] = None,
             'ic50_nM': IC50 values in nM,
             'n_measurements': Number of measurements per compound,
             'spread': Spread in pIC50 across measurements,
+            'organism': the resolved organism (scalar, applies to all rows),
             'source': 'chembl_cox2_ic50'
         }
     """
@@ -83,16 +102,36 @@ def load_cox2_chembl(data_dir: Optional[str] = None,
             "ChEMBL client required: pip install chembl_webresource_client"
         )
 
+    organism = organism.lower()
+    if organism not in COX2_TARGET_IDS:
+        raise ValueError(
+            f"No COX-2 ChEMBL target with activity data for organism="
+            f"'{organism}'. Supported: {sorted(COX2_TARGET_IDS)}. "
+            f"See docs/cross_species_targets_resolved.json for the full "
+            f"resolution (cat/horse have target records but zero activities)."
+        )
+    target_id = COX2_TARGET_IDS[organism]
+
     if data_dir is None:
         data_dir = _default_data_dir('COX2')
     os.makedirs(data_dir, exist_ok=True)
-    cache_file = os.path.join(data_dir, 'cox2_ic50_chembl_raw.csv')
-    
+    cache_file = os.path.join(
+        data_dir, f'cox2_ic50_chembl_raw_{organism}.csv')
+    # Legacy alias: pre-cross-species runs cached human data to the
+    # unsuffixed filename. Honor it only for organism='human'.
+    legacy_cache = os.path.join(data_dir, 'cox2_ic50_chembl_raw.csv')
+    if (organism == 'human'
+            and not os.path.exists(cache_file)
+            and os.path.exists(legacy_cache)):
+        print(f"  Using legacy unsuffixed cache: {legacy_cache}")
+        cache_file = legacy_cache
+
     if os.path.exists(cache_file):
         print(f"Loading cached raw ChEMBL COX-2 IC50 data from {cache_file}...")
         df_raw = pd.read_csv(cache_file)
     else:
-        print("Downloading COX-2 IC50 data from ChEMBL...")
+        print(f"Downloading COX-2 IC50 data from ChEMBL "
+              f"(organism='{organism}', target={target_id})...")
         print("(This may take a few minutes)")
         print()
         print("Quality filters:")
@@ -105,7 +144,7 @@ def load_cox2_chembl(data_dir: Optional[str] = None,
         activity = new_client.activity
         
         activities = activity.filter(
-            target_chembl_id=COX2_CHEMBL_ID,
+            target_chembl_id=target_id,
             standard_type='IC50',
             standard_units='nM',
             standard_relation='=',
@@ -212,8 +251,16 @@ def load_cox2_chembl(data_dir: Optional[str] = None,
     if n_removed > 0:
         print(f"  Removed {n_removed} compounds with pIC50 spread > {max_spread_log_units}")
     
-    print(f"\nFinal curated dataset: {len(df_agg)} compounds")
-    
+    print(f"\nFinal curated dataset: {len(df_agg)} compounds "
+          f"(organism='{organism}')")
+    if len(df_agg) < 20:
+        print(f"  WARNING: only {len(df_agg)} compounds for organism="
+              f"'{organism}' — data sparse, below the 20-row inclusion "
+              f"threshold (design doc §13). Skip for experiments.")
+    elif len(df_agg) < 50:
+        print(f"  NOTE: {len(df_agg)} compounds for organism='{organism}' "
+              f"— below 50, use 3-fold CV not 5-fold (design doc §13).")
+
     print(f"\npIC50 range: [{df_agg['pIC50'].min():.2f}, {df_agg['pIC50'].max():.2f}]")
     print(f"pIC50 mean: {df_agg['pIC50'].mean():.2f} ± {df_agg['pIC50'].std():.2f}")
     print(f"IC50 range: [{df_agg['ic50_nM'].min():.2f}, {df_agg['ic50_nM'].max():.1f}] nM")
@@ -234,6 +281,7 @@ def load_cox2_chembl(data_dir: Optional[str] = None,
         'ic50_nM': df_agg['ic50_nM'].values,
         'n_measurements': df_agg['n_measurements'].values,
         'spread': df_agg['spread'].values,
+        'organism': organism,
         'source': 'chembl_cox2_ic50'
     }
 
@@ -318,9 +366,11 @@ def get_cox2_splits(data: Dict,
 
 def load_cox2(splitter: str = 'scaffold',
               data_dir: Optional[str] = None,
-              random_seed: int = 42) -> Dict:
+              random_seed: int = 42,
+              organism: str = 'human') -> Dict:
     """Load COX-2 IC50 data with train/val/test splits."""
-    data = load_cox2_chembl(data_dir=data_dir, random_seed=random_seed)
+    data = load_cox2_chembl(data_dir=data_dir, random_seed=random_seed,
+                            organism=organism)
     return get_cox2_splits(data, splitter=splitter, random_seed=random_seed)
 
 

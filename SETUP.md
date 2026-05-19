@@ -415,6 +415,56 @@ pip install peft
 | `saprot` | 2560 | Structure-aware LM | transformers | SaProt 650M + ProstT5 for 3Di. H+L concat |
 | `saprot_cdr` | 2560 | CDR-pooled LM | transformers + anarci | SaProt, CDR residues only |
 
+### 4d. Cross-species antibody-ness (X-Ab) extras
+
+T-Ab.* (`docs/cross_species_ness_design.md`) adds five non-Python binaries
+on top of the standard antibody setup (ANARCI is already installed above).
+These are NOT pip packages — they're standalone Linux binaries — so they
+follow the same one-time install precedent as MINT / MolE / CLAMP further
+down in this doc: install once into `$REPO/bin/`, `setup.sh` picks them up.
+No conda, no extra `module load`.
+
+```bash
+# Run once per machine (laptop or ARC). Idempotent — skips anything
+# already installed. Downloads static x86-64 Linux tarballs from NCBI
+# (sra-tools, igblast, entrez-direct) and GitHub (vsearch, seqkit).
+bash scripts/install_bcr_binaries.sh
+```
+
+What each tool does:
+
+| Tool | Used for | T-Ab.* stage |
+|---|---|---|
+| `sra-tools` (`prefetch`, `fasterq-dump`) | Pull PRJNA690660 / PRJNA790470 FASTQs from NCBI SRA | T-Ab.2 step 2 |
+| `vsearch` | Paired-end merge of Illumina 2×300 bp reads | T-Ab.2 step 3 |
+| `igblast` (`igblastn`, `makeblastdb`) | V/D/J calling + productive flag on merged reads | T-Ab.2 step 5 |
+| `entrez-direct` (`esearch`, `efetch`) | Resolve the SRR run list from a BioProject ID | T-Ab.2 step 1 |
+| `seqkit` | Quick FASTA / FASTQ stats during debug | helper |
+
+`setup.sh` does the wiring automatically: if `$REPO/bin/` exists it is
+prepended to `PATH`, and if `$REPO/bin/.igdata` exists (dropped by the
+installer) it is exported as `IGDATA` so `igblastn` finds its
+`internal_data/` and `optional_file/` at runtime.
+
+Per-species IgBLAST germline databases (bovine `bos_taurus_imgt_{V,D,J}`,
+canine `canis_lupus_familiaris_imgt_{V,D,J}`) auto-download into
+`$KIRBY_CROSS_SPECIES_DIR/<species>_antibodies/germlines/<organism>/` on
+first run of the relevant SLURM script.
+
+Two canine VH paths, loader-selected automatically:
+
+- **DoggifAI (preferred, ~430K seqs)** — Zenodo 15125375 is access-restricted.
+  Submit a one-time access request, download the 5.4 GB archive, unpack to
+  `$KIRBY_CROSS_SPECIES_DIR/canine_antibodies/heavy.fasta`.
+- **SRA preliminary (zero-auth, low thousands)** — `sbatch
+  tests/slurm_scripts/submit_canine_sra_assembly.sh` runs the same FASTQ→VH
+  pipeline as bovine on NCBI BioProject PRJNA790470 (43 dogs, Friedrichs
+  2022). Writes `canine_antibodies/canine_vh.fasta`. Use this for
+  preliminary results while DoggifAI access is pending; the loader swaps to
+  DoggifAI automatically once `heavy.fasta` is in the same directory.
+
+See `docs/cross_species_data_inventory.md` §2.1.
+
 ---
 
 ## 5. Pretrained Model Downloads

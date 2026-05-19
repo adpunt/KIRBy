@@ -50,21 +50,37 @@ def _default_data_dir(subdir: str) -> str:
 # DRD2 target ID in ChEMBL
 DRD2_CHEMBL_ID = 'CHEMBL217'
 
+# Per-organism ChEMBL target IDs for the DRD2 gene. Resolved 2026-05-13 by
+# scripts/resolve_chembl_targets.py; full provenance in
+# docs/cross_species_targets_resolved.json. Only species with enough Ki
+# activity to be usable are listed (design doc §5.3): dog (CHEMBL2703) has
+# a target record but a single IC50 activity and zero Ki, so it is
+# intentionally excluded; cat/horse have no DRD2 target at all.
+DRD2_TARGET_IDS = {
+    'human': 'CHEMBL217',    # 13,061 activities (Ki-rich)
+    'cow':   'CHEMBL3998',   # 406 activities (246 Ki)
+}
+
 
 def load_drd2_chembl(data_dir: Optional[str] = None,
                      random_seed: int = 42,
                      max_spread_log_units: float = 1.0,
-                     min_measurements: int = 1) -> Dict:
+                     min_measurements: int = 1,
+                     organism: str = 'human') -> Dict:
     """
     Load DRD2 Ki data from ChEMBL following Landrum's curation protocol.
-    
+
     Args:
         data_dir: Directory to cache data
         random_seed: Random seed for reproducibility
         max_spread_log_units: Maximum allowed spread in pKi for duplicate
                               measurements (default: 1.0)
         min_measurements: Minimum measurements required per compound
-        
+        organism: One of 'human', 'cow'. Selects the species-specific DRD2
+            ChEMBL target ID (different gene orthologue = different ChEMBL
+            ID). Default 'human' preserves prior behaviour. dog/cat/horse
+            have no usable DRD2 Ki data in ChEMBL and raise ValueError.
+
     Returns:
         dict: {
             'smiles': List of SMILES strings,
@@ -72,6 +88,7 @@ def load_drd2_chembl(data_dir: Optional[str] = None,
             'ki_nM': Ki values in nM,
             'n_measurements': Number of measurements per compound,
             'spread': Spread in pKi across measurements,
+            'organism': the resolved organism (scalar, applies to all rows),
             'source': 'chembl_drd2_ki'
         }
     """
@@ -82,16 +99,36 @@ def load_drd2_chembl(data_dir: Optional[str] = None,
             "ChEMBL client required: pip install chembl_webresource_client"
         )
 
+    organism = organism.lower()
+    if organism not in DRD2_TARGET_IDS:
+        raise ValueError(
+            f"No DRD2 ChEMBL target with usable Ki data for organism="
+            f"'{organism}'. Supported: {sorted(DRD2_TARGET_IDS)}. "
+            f"See docs/cross_species_targets_resolved.json (dog has a "
+            f"target record but only 1 IC50 activity; cat/horse have none)."
+        )
+    target_id = DRD2_TARGET_IDS[organism]
+
     if data_dir is None:
         data_dir = _default_data_dir('DRD2')
     os.makedirs(data_dir, exist_ok=True)
-    cache_file = os.path.join(data_dir, 'drd2_ki_chembl_raw.csv')
-    
+    cache_file = os.path.join(
+        data_dir, f'drd2_ki_chembl_raw_{organism}.csv')
+    # Legacy alias: pre-cross-species runs cached human data to the
+    # unsuffixed filename. Honor it only for organism='human'.
+    legacy_cache = os.path.join(data_dir, 'drd2_ki_chembl_raw.csv')
+    if (organism == 'human'
+            and not os.path.exists(cache_file)
+            and os.path.exists(legacy_cache)):
+        print(f"  Using legacy unsuffixed cache: {legacy_cache}")
+        cache_file = legacy_cache
+
     if os.path.exists(cache_file):
         print(f"Loading cached raw ChEMBL DRD2 Ki data from {cache_file}...")
         df_raw = pd.read_csv(cache_file)
     else:
-        print("Downloading DRD2 Ki data from ChEMBL...")
+        print(f"Downloading DRD2 Ki data from ChEMBL "
+              f"(organism='{organism}', target={target_id})...")
         print("(This may take a few minutes)")
         print()
         print("Applying Landrum's quality filters:")
@@ -104,7 +141,7 @@ def load_drd2_chembl(data_dir: Optional[str] = None,
         activity = new_client.activity
         
         activities = activity.filter(
-            target_chembl_id=DRD2_CHEMBL_ID,
+            target_chembl_id=target_id,
             standard_type='Ki',
             standard_units='nM',
             standard_relation='=',
@@ -211,8 +248,16 @@ def load_drd2_chembl(data_dir: Optional[str] = None,
     if n_removed > 0:
         print(f"  Removed {n_removed} compounds with pKi spread > {max_spread_log_units}")
     
-    print(f"\nFinal curated dataset: {len(df_agg)} compounds")
-    
+    print(f"\nFinal curated dataset: {len(df_agg)} compounds "
+          f"(organism='{organism}')")
+    if len(df_agg) < 20:
+        print(f"  WARNING: only {len(df_agg)} compounds for organism="
+              f"'{organism}' — data sparse, below the 20-row inclusion "
+              f"threshold (design doc §13). Skip for experiments.")
+    elif len(df_agg) < 50:
+        print(f"  NOTE: {len(df_agg)} compounds for organism='{organism}' "
+              f"— below 50, use 3-fold CV not 5-fold (design doc §13).")
+
     print(f"\npKi range: [{df_agg['pKi'].min():.2f}, {df_agg['pKi'].max():.2f}]")
     print(f"pKi mean: {df_agg['pKi'].mean():.2f} ± {df_agg['pKi'].std():.2f}")
     print(f"Ki range: [{df_agg['ki_nM'].min():.2f}, {df_agg['ki_nM'].max():.1f}] nM")
@@ -229,6 +274,7 @@ def load_drd2_chembl(data_dir: Optional[str] = None,
         'ki_nM': df_agg['ki_nM'].values,
         'n_measurements': df_agg['n_measurements'].values,
         'spread': df_agg['spread'].values,
+        'organism': organism,
         'source': 'chembl_drd2_ki'
     }
 
@@ -315,9 +361,11 @@ def get_drd2_splits(data: Dict,
 
 def load_drd2(splitter: str = 'scaffold',
               data_dir: Optional[str] = None,
-              random_seed: int = 42) -> Dict:
+              random_seed: int = 42,
+              organism: str = 'human') -> Dict:
     """Load DRD2 Ki data with train/val/test splits."""
-    data = load_drd2_chembl(data_dir=data_dir, random_seed=random_seed)
+    data = load_drd2_chembl(data_dir=data_dir, random_seed=random_seed,
+                            organism=organism)
     return get_drd2_splits(data, splitter=splitter, random_seed=random_seed)
 
 

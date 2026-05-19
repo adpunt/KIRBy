@@ -140,6 +140,11 @@ Cargo.lock
 # External model repos (cloned, not committed)
 src/clamp/
 
+# BCR-seq assembly binaries installed by scripts/install_bcr_binaries.sh
+# (sra-tools, igblast, vsearch, seqkit, entrez-direct). Static Linux x86-64
+# tarballs — not committed to keep the repo small.
+bin/
+
 # Allow these specific files even if they match patterns above
 !.gitignore
 !.gitattributes*.md

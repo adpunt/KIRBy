@@ -47,6 +47,21 @@ fi
 # caught by Python's warnings module or RDLogger.DisableLog.
 export KIRBY_STDERR_FILTER="grep -v -e 'DEPRECATION WARNING' -e 'threadpoolctl' -e 'ctypes callback' -e 'AttributeError.*split'"
 
+# ---------------------------------------------------------------
+# Non-pip binaries for the BCR-seq assembly pipelines (T-Ab.2):
+# sra-tools, igblast, vsearch, seqkit, entrez-direct. Installed
+# one-time via `scripts/install_bcr_binaries.sh` (matches the
+# MolE / MINT precedent below — not run per-job). When $REPO/bin
+# is absent the rest of the pipeline is unaffected.
+# ---------------------------------------------------------------
+if [ -d "$SCRIPT_DIR/bin" ]; then
+    export PATH="$SCRIPT_DIR/bin:$PATH"
+    if [ -f "$SCRIPT_DIR/bin/.igdata" ]; then
+        IGDATA_PATH="$(cat "$SCRIPT_DIR/bin/.igdata")"
+        [ -d "$IGDATA_PATH" ] && export IGDATA="$IGDATA_PATH"
+    fi
+fi
+
 # Ensure user packages override system Anaconda packages (only outside venv)
 if [ -z "$VIRTUAL_ENV" ]; then
     USER_SITE=$(python -c "import site; print(site.getusersitepackages())" 2>/dev/null)
