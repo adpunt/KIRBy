@@ -2124,10 +2124,17 @@ def precompute_hybrid_searches(reps, labels, groups, config,
     # so two parallel jobs starting at the same time naturally work on
     # different cache files (one starts at 'none', the other at 'capped').
     # Useful for staggering a follow-up wave against a still-running one.
+    # Setting KIRBY_SKIP_CAPPED=1 drops 'capped' entirely — used for large-n
+    # datasets (caco2, qm9, herg, logd, DTA, nucleotide) where capped takes
+    # 100-500h and won't finish before the 7-day SLURM wall. Other conditions
+    # plus all downstream experiments still run.
     aug_conditions = ['none']
     if augmentations is not None and len(augmentations) > 0:
         aug_conditions.append('uncapped')
-        aug_conditions.append('capped')
+        if os.environ.get('KIRBY_SKIP_CAPPED') != '1':
+            aug_conditions.append('capped')
+        elif verbose:
+            print("  KIRBY_SKIP_CAPPED=1 → skipping 'capped' condition")
     if os.environ.get('KIRBY_PRECOMPUTE_REVERSE_ORDER') == '1':
         aug_conditions = list(reversed(aug_conditions))
         if verbose:
