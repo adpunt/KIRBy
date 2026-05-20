@@ -1221,6 +1221,18 @@ _DOMAIN_MODEL_SKIPS = {
     'nucleotide': ['ridge', 'knn', 'xgboost'],
 }
 
+# Per (domain, strategy) extra skips, applied on top of _DOMAIN_MODEL_SKIPS.
+# Use this when the same model-pruning rule applies to every dataset in a
+# domain for a specific augmentation strategy (avoids enumerating 20+ rows
+# in _DATASET_STRATEGY_SKIPS).
+_DOMAIN_STRATEGY_SKIPS = {
+    # Nucleotide capped at n=20k-100k blew the 7d wall on the May 14 wave.
+    # Domain already skips ridge/knn/xgboost. svm auto-skipped at n>10000.
+    # Dropping mlp leaves [rf, lightgbm] — both tree-based, hybrid stays
+    # methodologically defensible while capped becomes feasible (~40% cut).
+    ('nucleotide', 'capped'): ['mlp'],
+}
+
 _DATASET_STRATEGY_SKIPS = {
     # Augmentation reps blow these up under 7d wall. See timing table in
     # EXPERIMENT_STATUS_PER_DATASET.md (post-2026-05-11 timing audit).
@@ -1233,6 +1245,33 @@ _DATASET_STRATEGY_SKIPS = {
     ('tcga_brca_pam50',      'none'):     ['gp'],
     ('tcga_brca_pam50',      'uncapped'): ['gp'],
     ('tcga_brca_pam50',      'capped'):   ['gp'],
+
+    # ─── Capped restrictions for large-n datasets (added 2026-05-20) ───
+    # Capped at n>=2k did not finish under 168h wall on May 14/17 waves.
+    # Per-model timing on adme_hlm general/capped (May 8 run, 7 models):
+    #   rf 30-50%, xgboost 16-25%, lightgbm 17%, mlp 15%, svm 12%, knn 13%.
+    # Dropping mlp/svm/knn keeps tree-based ensemble + ridge baseline.
+    # Both precompute and experiment-time find_best_hybrid calls route
+    # through _applied_skips so cache keys match — no on-the-fly recompute.
+    # Direct create_hybrid(..., 'capped', ...) callers use a single model
+    # for augmentation selection (default RF), so they are unaffected.
+
+    # n=2k–5k molecular/reaction: skip [mlp, svm, knn]
+    ('adme_hlm',          'capped'): ['mlp', 'svm', 'knn'],
+    ('adme_mdr1',         'capped'): ['mlp', 'svm', 'knn'],
+    ('adme_rlm',          'capped'): ['mlp', 'svm', 'knn'],
+    ('caco2',             'capped'): ['mlp', 'svm', 'knn'],
+    ('logd',              'capped'): ['mlp', 'svm', 'knn'],
+    ('bh_doyle_plates',   'capped'): ['mlp', 'svm', 'knn'],
+
+    # n=5k–10k molecular: also skip rf (slowest per config at this scale)
+    ('herg',              'capped'): ['mlp', 'svm', 'knn', 'rf'],
+    ('qm9',               'capped'): ['mlp', 'svm', 'knn', 'rf'],
+
+    # DTA n>50k: svm auto-skipped at n>10000 by _max_samples.
+    # Keep gradient boosters + ridge only.
+    ('bindingdb_kd',      'capped'): ['mlp', 'rf', 'knn'],
+    ('kiba',              'capped'): ['mlp', 'rf', 'knn'],
 }
 
 
@@ -1252,6 +1291,10 @@ def _applied_skips(dataset_name: Optional[str],
     domain = _domain_for_skip(dataset_name)
     if domain and domain in _DOMAIN_MODEL_SKIPS:
         skip.update(_DOMAIN_MODEL_SKIPS[domain])
+    if domain and strategy:
+        ds_key = (domain, strategy)
+        if ds_key in _DOMAIN_STRATEGY_SKIPS:
+            skip.update(_DOMAIN_STRATEGY_SKIPS[ds_key])
     if dataset_name and strategy:
         key = (dataset_name, strategy)
         if key in _DATASET_STRATEGY_SKIPS:
