@@ -126,15 +126,33 @@ while read -r SRR; do
 done < "$SRR_LIST_FILE"
 
 # -----------------------------------------------------------------------------
-# 4. Fetch canine IgBLAST germline DBs (one-time)
+# 4. Fetch canine IgBLAST germline DBs from IMGT GENE-DB.
+# NCBI ships pre-built germlines for human/mouse/rat/rabbit/rhesus only —
+# bovine and canine need a custom pull from IMGT's combined reference set.
 # -----------------------------------------------------------------------------
-echo "[4/6] Canine IGH germline databases"
-GERMLINE_URL="https://ftp.ncbi.nih.gov/blast/executables/igblast/release/database"
+echo "[4/6] Canine IGH germline databases (IMGT GENE-DB)"
+IMGT_COMBINED="$GERM_DIR/IMGTGENEDB-ReferenceSequences.fasta"
+if [ ! -s "$IMGT_COMBINED" ]; then
+    wget -q -O "$IMGT_COMBINED" \
+        "https://www.imgt.org/download/GENE-DB/IMGTGENEDB-ReferenceSequences.fasta-nt-WithGaps-F+ORF+inframeP" \
+        || { echo "    FAILED to fetch IMGT combined reference"; exit 1; }
+fi
+
+# Per-segment FASTAs (V/D/J)
+if [ ! -s "$GERM_DIR/canis_lupus_familiaris_imgt_V.fasta" ]; then
+    python scripts/filter_imgt_germlines.py \
+        --input "$IMGT_COMBINED" \
+        --species "Canis lupus familiaris" \
+        --locus IGH \
+        --out-dir "$GERM_DIR" \
+        --out-prefix canis_lupus_familiaris_imgt \
+        || { echo "    FAILED to filter canine germlines"; exit 1; }
+fi
+
+# BLAST DBs
 for SEG in V D J; do
     DBNAME="canis_lupus_familiaris_imgt_${SEG}"
-    if [ ! -s "$GERM_DIR/${DBNAME}.fasta" ]; then
-        wget -q "$GERMLINE_URL/${DBNAME}.fasta" -O "$GERM_DIR/${DBNAME}.fasta" \
-            || { echo "    FAILED to fetch ${DBNAME}.fasta"; exit 1; }
+    if [ ! -s "$GERM_DIR/${DBNAME}.nhr" ]; then
         makeblastdb -parse_seqids -dbtype nucl \
             -in "$GERM_DIR/${DBNAME}.fasta" \
             -out "$GERM_DIR/${DBNAME}"
@@ -165,13 +183,19 @@ while read -r SRR; do
         echo "    $SRR merged FASTA missing, skipping"
         continue
     fi
+    # IgBLAST has no built-in 'canis_lupus_familiaris' organism — its
+    # internal_data only covers human/mouse/rat/rabbit/rhesus_monkey. We use
+    # the custom canine V/D/J databases built in step 4 and pass -organism
+    # mouse purely so IgBLAST has SOME annotation table available; V-D-J
+    # calling + productive flag come from our custom DBs. CDR boundary
+    # annotation drifts (mouse FW positions on canine sequences) but our
+    # parser only consumes `productive` + `sequence_alignment_aa`.
     igblastn \
         -germline_db_V "$GERM_DIR/canis_lupus_familiaris_imgt_V" \
         -germline_db_D "$GERM_DIR/canis_lupus_familiaris_imgt_D" \
         -germline_db_J "$GERM_DIR/canis_lupus_familiaris_imgt_J" \
-        -organism canis_lupus_familiaris \
+        -organism mouse \
         -ig_seqtype Ig \
-        -domain_system imgt \
         -outfmt 19 \
         -query "$MERGED" \
         -out "$AIRR" \
