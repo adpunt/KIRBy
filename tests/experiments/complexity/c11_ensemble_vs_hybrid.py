@@ -88,12 +88,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     blueprints = {}
     search = None
     try:
+        # 2026-05-22: switched general→top for capped (general/capped
+        # precompute dropped; cache-hits the top/capped file instead).
         search = get_precomputed_search(
             reps, labels, groups,
             aug_condition='capped', augmentations=augmentations,
             speed=config.get('search_speed', 'full'),
-            precomputed=data.get('precomputed_searches'),
-            dataset_name=dataset_name, tier='general', task_type=task_type)
+            precomputed=data.get('precomputed_searches_top'),
+            dataset_name=dataset_name, tier='top', task_type=task_type)
         for budget in budgets:
             best = get_best_for_downstream(search, 'rf', budget=budget)
             if best and 'blueprint' in best:

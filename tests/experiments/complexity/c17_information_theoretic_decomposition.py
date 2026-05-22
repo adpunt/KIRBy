@@ -239,13 +239,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             try:
                 if strategy == 'hybrid':
                     augmentations = data.get('augmentations')
+                    # 2026-05-22: switched general→top for capped
+                    # (general/capped precompute dropped).
                     X_h, fi, _search = get_fitted_hybrid(
                         reps, labels, groups,
                         aug_condition='capped', augmentations=augmentations,
                         speed=config.get('search_speed', 'full'),
-                        precomputed=data.get('precomputed_searches'),
+                        precomputed=data.get('precomputed_searches_top'),
                         downstream_model='rf',
-                        dataset_name=dataset_name, tier='general',
+                        dataset_name=dataset_name, tier='top',
                     task_type=task_type)
                     X_selected = X_h
 

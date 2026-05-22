@@ -95,17 +95,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # Dimension is the study variable — use 'capped' so total
             # feature count equals `budget` exactly (augs displace base
             # features instead of extending beyond budget).
+            # 2026-05-22: switched precomputed dict + tier from general
+            # to top. general/capped precompute dropped; cache-hits the
+            # top/capped file instead. (Pre-existing: the 'general_distance'
+            # label here never matched any precomputed cache key because
+            # distance precompute only emits uncapped — the fast path
+            # served from precomputed_searches['capped'] regardless. We're
+            # now consistent: tier='top' + precomputed_searches_top.)
             X_hybrid, fi, search = get_fitted_hybrid(
                 reps, labels, groups,
                 aug_condition='capped' if data.get('augmentations') else 'none',
                 augmentations=data.get('augmentations'),
                 speed=search_speed,
-                precomputed=data.get('precomputed_searches'),
+                precomputed=data.get('precomputed_searches_top'),
                 internal_evaluators=DISTANCE_EVALUATORS,
                 budgets=[budget],
                 metric=metric_name, task_type=task_type, domain=domain,
                 downstream_model='knn',
-                dataset_name=dataset_name, tier='general_distance')
+                dataset_name=dataset_name, tier='top')
             weights_flat = flatten_fold_weights(fi) if fi else np.ones(X_hybrid.shape[1])
             if not _top3_reported:
                 top3 = extract_top3_base_reps(search)

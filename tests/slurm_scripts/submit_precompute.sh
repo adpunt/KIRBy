@@ -1,10 +1,9 @@
 #!/bin/bash
 # Precompute hybrid searches — one SLURM job per (dataset × condition).
 #
-# Standard conditions (6 per dataset):
+# Standard conditions (5 per dataset; general/capped dropped 2026-05-22):
 #   general_none       — general reps, no augmentation
 #   general_uncapped   — general reps, uncapped augmentation
-#   general_capped     — general reps, capped augmentation
 #   top_none           — top_tier reps, no augmentation
 #   top_uncapped       — top_tier reps, uncapped augmentation
 #   top_capped         — top_tier reps, capped augmentation
@@ -86,10 +85,10 @@ submit_dataset() {
         submit "${ds}_top_uncapped" \
             "python tests/precompute_hybrids.py ${ds} --condition top_uncapped --speed full" \
             "${mem}" "" "${partition}"
-        # Capped — more aggressive pruning (0.25 threshold)
-        submit "${ds}_general_capped" \
-            "python tests/precompute_hybrids.py ${ds} --condition general_capped --speed full --pruning 0.25" \
-            "${mem}" "" "${partition}"
+        # Capped — top tier only (general/capped dropped 2026-05-22; the
+        # iterative growth loop was ~9× more expensive than uncapped on the
+        # large general-rep pool, and all consumers were redirected to
+        # top/capped). More aggressive pruning (0.25 threshold).
         submit "${ds}_top_capped" \
             "python tests/precompute_hybrids.py ${ds} --condition top_capped --speed full --pruning 0.25" \
             "${mem}" "" "${partition}"

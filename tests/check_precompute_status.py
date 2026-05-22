@@ -76,7 +76,8 @@ def expected_conditions(cfg, include_distance=False):
         expected.append(('general', 'none'))
         if aug:
             expected.append(('general', 'uncapped'))
-            expected.append(('general', 'capped'))
+            # general/capped dropped 2026-05-22: 9x cost vs uncapped on the
+            # large general-rep pool; all consumers now read top/capped.
     elif len(general) == 1 and aug:
         expected.append(('general', 'uncapped'))
 

@@ -291,11 +291,24 @@ def _run_information_retention(data, budgets, search_speed='full', dataset_name=
     sample_X = next(iter(reps.values()))
     from sklearn.linear_model import Ridge as _Ridge
 
+    # 2026-05-22: switched general→top for capped (general/capped
+    # precompute dropped; cache-hits top/capped instead). Blueprint
+    # references only top-tier rep names; downstream create_hybrid still
+    # receives the full reps dict but only the named ones are used.
+    from experiments.complexity.complexity_helpers import DATASET_REPS
+    _top_names = DATASET_REPS.get(dataset_name, {}).get('top_tier', [])
+    top_reps = {k: v for k, v in reps.items() if k in _top_names}
+    if len(top_reps) < 2:
+        top_reps = reps  # fallback: tiny datasets without a top_tier config
+        _top_tier_arg = 'general'
+    else:
+        _top_tier_arg = 'top'
+
     for budget in sorted(budgets):
         # Find best hybrid at this budget (proper CV search)
         try:
             search = find_best_hybrid(
-                reps, labels, groups=groups,
+                top_reps, labels, groups=groups,
                 speed=search_speed, budgets=[budget],
                 augmentations=augs,
                 augmentation_strategy='capped',
@@ -305,7 +318,7 @@ def _run_information_retention(data, budgets, search_speed='full', dataset_name=
                 verbose=False,
                 cache=True,
                 dataset_name=dataset_name,
-                tier='general',
+                tier=_top_tier_arg,
             )
             # Pick the best result across all models (for blueprint)
             best = None
@@ -423,13 +436,23 @@ def _run_effective_rank_analysis(data, budgets, search_speed='full', dataset_nam
     sample_X = next(iter(reps.values()))
     from experiments._shared import cv_split as _cv_split_9c
 
+    # 2026-05-22: switched general→top for capped (see 9b note).
+    from experiments.complexity.complexity_helpers import DATASET_REPS
+    _top_names = DATASET_REPS.get(dataset_name, {}).get('top_tier', [])
+    top_reps = {k: v for k, v in reps.items() if k in _top_names}
+    if len(top_reps) < 2:
+        top_reps = reps
+        _top_tier_arg = 'general'
+    else:
+        _top_tier_arg = 'top'
+
     for budget in sorted(budgets):
         n_feat = min(budget, X_concat.shape[1], X_concat.shape[0] - 1)
 
         # Find best hybrid config at this budget (proper CV)
         try:
             search = find_best_hybrid(
-                reps, labels, groups=groups,
+                top_reps, labels, groups=groups,
                 speed=search_speed, budgets=[budget],
                 augmentations=augs,
                 augmentation_strategy='capped',
@@ -439,7 +462,7 @@ def _run_effective_rank_analysis(data, budgets, search_speed='full', dataset_nam
                 verbose=False,
                 cache=True,
                 dataset_name=dataset_name,
-                tier='general',
+                tier=_top_tier_arg,
             )
             # Pick the best result across all models (for blueprint)
             best = None
@@ -556,11 +579,22 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
     print("    Computing bias-variance from scratch (using find_best_hybrid per budget)")
     augs = data.get('augmentations')
     model_names = list(models.keys())
+
+    # 2026-05-22: switched general→top for capped (see 9b note).
+    from experiments.complexity.complexity_helpers import DATASET_REPS
+    _top_names = DATASET_REPS.get(dataset_name, {}).get('top_tier', [])
+    top_reps = {k: v for k, v in reps.items() if k in _top_names}
+    if len(top_reps) < 2:
+        top_reps = reps
+        _top_tier_arg = 'general'
+    else:
+        _top_tier_arg = 'top'
+
     for budget in budgets:
         # Find best config at this budget
         try:
             search = find_best_hybrid(
-                reps, labels, groups=groups,
+                top_reps, labels, groups=groups,
                 models=None,
                 speed=search_speed,
                 budgets=[budget],
@@ -572,7 +606,7 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                 verbose=False,
                 cache=True,
                 dataset_name=dataset_name,
-                tier='general',
+                tier=_top_tier_arg,
             )
         except Exception as e:
             print(f"    b={budget}: find_best_hybrid failed - {e}")
