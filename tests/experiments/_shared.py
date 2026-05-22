@@ -397,8 +397,20 @@ def resolve_pruning_kwargs(pruning_mode, n_samples, verbose=True,
         'model_pruning_aggressiveness': overrides,
     }
 
-# Probabilistic models for noise/uncertainty experiments (N09, N13, S11).
-DOWNSTREAM_MODELS_NOISE = ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm', 'ngboost']
+# Downstream models for noise experiments. Mirrors DOWNSTREAM_MODELS — no
+# tier='extra' additions, so iteration cache-hits the precompute model set.
+#
+# 2026-05-22: ngboost removed. It is tier='extra' and not in precompute's
+# default model list, so including it here caused ngboost to be trained from
+# scratch on every (rep × LNL method × noise type) combo during noise
+# experiments — burning hours per dataset across the 23-dataset done set.
+# n08 (estimation survey), n11 (estimation×remediation grid) and n13
+# (alt distributions) still use ngboost as an *estimator* (literature
+# methods, not through find_best_hybrid); n13 already gates via
+# get_noise_estimator import (line 47-48). s11 uses ngboost only as a BO
+# surrogate when explicitly requested. None of these were affected by this
+# change — only the implicit downstream iteration was killed.
+DOWNSTREAM_MODELS_NOISE = list(DOWNSTREAM_MODELS)
 
 # Generic internal evaluators for hybrid construction.
 # 'match' resolves to the downstream model type; the rest test robustness
