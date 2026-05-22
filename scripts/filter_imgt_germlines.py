@@ -51,6 +51,11 @@ def main(argv=None) -> int:
     }
     out_files = {seg: p.open('w') for seg, p in out_paths.items()}
     counts = {seg: 0 for seg in ('V', 'D', 'J')}
+    # Track gene_alleles already written per segment so duplicates from IMGT
+    # (same allele reported from multiple accessions, or a generic "IGHD*03"
+    # entry appearing more than once) don't trip `makeblastdb -parse_seqids`.
+    seen = {seg: set() for seg in ('V', 'D', 'J')}
+    duplicates = {seg: 0 for seg in ('V', 'D', 'J')}
 
     gene_re = re.compile(rf'^{re.escape(args.locus)}([VDJ])')
 
@@ -61,13 +66,17 @@ def main(argv=None) -> int:
     def flush():
         nonlocal current_seg, current_header, current_seq
         if current_seg is not None and current_header is not None:
-            seq = ''.join(current_seq).replace('.', '').upper()
-            if seq:
-                fh = out_files[current_seg]
-                fh.write(f">{current_header}\n")
-                for i in range(0, len(seq), 60):
-                    fh.write(seq[i:i + 60] + '\n')
-                counts[current_seg] += 1
+            if current_header in seen[current_seg]:
+                duplicates[current_seg] += 1
+            else:
+                seq = ''.join(current_seq).replace('.', '').upper()
+                if seq:
+                    fh = out_files[current_seg]
+                    fh.write(f">{current_header}\n")
+                    for i in range(0, len(seq), 60):
+                        fh.write(seq[i:i + 60] + '\n')
+                    counts[current_seg] += 1
+                    seen[current_seg].add(current_header)
         current_seg = None
         current_header = None
         current_seq = []
@@ -99,9 +108,13 @@ def main(argv=None) -> int:
         fh.close()
 
     total = sum(counts.values())
-    print(f"Filtered {args.species} ({args.locus}) → {total} sequences:")
+    dup_total = sum(duplicates.values())
+    print(f"Filtered {args.species} ({args.locus}) → {total} unique sequences"
+          + (f" ({dup_total} duplicate alleles dropped)" if dup_total else "")
+          + ":")
     for seg in ('V', 'D', 'J'):
-        print(f"  {out_paths[seg].name}: {counts[seg]}")
+        suffix = f" ({duplicates[seg]} dup)" if duplicates[seg] else ""
+        print(f"  {out_paths[seg].name}: {counts[seg]}{suffix}")
 
     # Sanity: V should have ≥10 sequences for any real species.
     if counts['V'] < 5:
