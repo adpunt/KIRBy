@@ -4,10 +4,13 @@
 For each dataset in DATASET_REPS, runs find_best_hybrid with cache=True for:
   1. general reps + no aug
   2. general reps + uncapped aug
-  3. general reps + capped aug
-  4. top_tier reps + no aug
-  5. top_tier reps + uncapped aug
-  6. top_tier reps + capped aug
+  3. top_tier reps + no aug
+  4. top_tier reps + uncapped aug
+  5. top_tier reps + capped aug
+
+(general/capped dropped 2026-05-22 — the iterative growth loop was ~9× more
+expensive than uncapped on the large general-rep pool; consumers redirected
+to top/capped which still provides capped semantics on the curated subset.)
 
 Results are cached to ~/.cache/kirby/searches/{dataset}__{tier}__{aug}__{speed}.pkl
 (or under $KIRBY_CACHE_DIR). Per-rep baselines are deduped under
@@ -301,12 +304,13 @@ def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
             if aug_reps:
                 conditions.append(('top_distance', top_reps, aug_reps, 'uncapped'))
     else:
-        # Standard conditions
+        # Standard conditions. General tier emits {none, uncapped} —
+        # capped dropped 2026-05-22 (cost vs. consumer benefit; consumers
+        # redirected to top/capped). Top tier still emits capped below.
         if 'general' in tiers and len(general_reps) >= 2:
             conditions.append(('general', general_reps, None, 'none'))
             if aug_reps:
                 conditions.append(('general', general_reps, aug_reps, 'uncapped'))
-                conditions.append(('general', general_reps, aug_reps, 'capped'))
         elif 'general' in tiers and len(general_reps) == 1 and aug_reps:
             # Single general rep — use augmentation mode
             conditions.append(('general', general_reps, aug_reps, 'uncapped'))

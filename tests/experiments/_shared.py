@@ -2131,23 +2131,16 @@ def precompute_hybrid_searches(reps, labels, groups, config,
         labels, task_type=task_type, metric=metric, domain=domain,
         dataset_name=dataset_name)
 
-    # Precompute all aug conditions (none, uncapped, capped).
-    # Setting KIRBY_PRECOMPUTE_REVERSE_ORDER=1 reverses the iteration order
-    # so two parallel jobs starting at the same time naturally work on
-    # different cache files (one starts at 'none', the other at 'capped').
-    # Useful for staggering a follow-up wave against a still-running one.
-    #
-    # NOTE 2026-05-20: Reverted the prior KIRBY_SKIP_CAPPED env var.
-    # Skipping capped at precompute caused downstream experiment scripts
-    # (c02/c05/c06/c07/c09) to cache-miss and burn 60-300h recomputing
-    # capped inside the experiment job — defeating the purpose. The
-    # correct fix is to restrict the *model set* used for capped on
-    # large-n datasets via _DATASET_STRATEGY_SKIPS in find_best_hybrid.py;
-    # cache keys still match between precompute and experiment-time calls.
+    # Precompute aug conditions. Top tier emits {none, uncapped, capped};
+    # general tier emits {none, uncapped} only (capped dropped 2026-05-22
+    # because the iterative growth loop is ~9× more expensive on the
+    # large general-rep pool and no experiment now requires it — all
+    # capped consumers were redirected to top/capped).
     aug_conditions = ['none']
     if augmentations is not None and len(augmentations) > 0:
         aug_conditions.append('uncapped')
-        aug_conditions.append('capped')
+        if tier == 'top':
+            aug_conditions.append('capped')
     if os.environ.get('KIRBY_PRECOMPUTE_REVERSE_ORDER') == '1':
         aug_conditions = list(reversed(aug_conditions))
         if verbose:

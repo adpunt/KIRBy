@@ -151,12 +151,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             tier='general',
         )
 
-    # --- All reps, capped augmentation ---
+    # --- Top-tier reps, capped augmentation ---
+    # 2026-05-22: switched from general/capped to top/capped. The
+    # general/capped precompute was dropped (9× cost vs uncapped on the
+    # large general-rep pool); capped semantics preserved on the top
+    # rep subset.
     search_capped = None
-    if augs:
-        print(f"\n  --- Capped augmentation ({len(augs)} aug reps) ---")
+    if augs and len(top_tier_reps) >= 2:
+        print(f"\n  --- Capped augmentation, top-tier reps "
+              f"({len(top_tier_reps)} reps, {len(augs)} aug reps) ---")
         search_capped = find_best_hybrid(
-            base_reps=reps,
+            base_reps=top_tier_reps,
             labels=labels,
             groups=groups,
             models=None,
@@ -172,7 +177,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             verbose=True,
             cache=True,
             dataset_name=dataset_name,
-            tier='general',
+            tier='top',
         )
 
     # --- Frozen + FT comparison (fifth search pass) ---

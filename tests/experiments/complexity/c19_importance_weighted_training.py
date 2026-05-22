@@ -115,13 +115,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     augmentations = data.get('augmentations')
     try:
+        # 2026-05-22: switched general→top for capped (general/capped
+        # precompute dropped; cache-hits the top/capped file instead).
         X_hybrid, fi, _search = get_fitted_hybrid(
             reps, labels, groups, downstream_model='rf',
             budget=budget,
             aug_condition='capped', augmentations=augmentations,
             speed=config.get('search_speed', 'full'),
-            precomputed=data.get('precomputed_searches'),
-            dataset_name=dataset_name, tier='general',
+            precomputed=data.get('precomputed_searches_top'),
+            dataset_name=dataset_name, tier='top',
         task_type=task_type)
         input_spaces['hybrid'] = X_hybrid
     except Exception as e:
