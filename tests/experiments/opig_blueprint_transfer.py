@@ -45,7 +45,7 @@ from experiments._shared import (
     load_data, get_config, save_experiment_results, convert_numpy,
     get_model_factories, _cv_split, build_fold_hybrid,
     get_domain_metric,
-    get_precomputed_search, get_best_for_downstream, get_best_search_for_downstream,
+    get_best_for_downstream,
     DOWNSTREAM_MODELS,
     FULL_BUDGETS, INTERNAL_EVALUATORS,
 )

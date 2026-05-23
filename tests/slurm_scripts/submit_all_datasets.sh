@@ -6,12 +6,22 @@
 #   bash tests/slurm_scripts/submit_all_datasets.sh complexity
 #   bash tests/slurm_scripts/submit_all_datasets.sh noise --dry-run
 #   bash tests/slurm_scripts/submit_all_datasets.sh similarity --domain molecular
+#   bash tests/slurm_scripts/submit_all_datasets.sh similarity --reverse
+#   bash tests/slurm_scripts/submit_all_datasets.sh complexity --datasets "qm9 caco2 logd"
+#   bash tests/slurm_scripts/submit_all_datasets.sh similarity --reverse --skip "abagym_Ang2 abagym_HER2"
 #   bash tests/slurm_scripts/submit_all_datasets.sh federated
+#
+# Flags:
+#   --domain DOMAIN     Limit to a domain (default 'all'). See list below.
+#   --datasets "A B C"  Explicit dataset list (overrides --domain).
+#   --skip "A B C"      Drop these dataset names from the final list (after --datasets/--domain).
+#   --reverse           Iterate the resulting dataset list in reverse order.
+#   --dry-run           Print sbatch commands without submitting.
 #
 # Domains: molecular, molecular_clf, dta, antibody, abagym, ab_clf,
 #          ginkgo, reaction, tcga, nucleotide, all (default)
 
-CATEGORY=${1:?Usage: bash submit_all_datasets.sh CATEGORY [--dry-run] [--domain DOMAIN]}
+CATEGORY=${1:?Usage: bash submit_all_datasets.sh CATEGORY [--dry-run] [--domain DOMAIN] [--datasets "A B C"] [--skip "A B C"] [--reverse]}
 shift
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -45,18 +55,27 @@ esac
 # ── Parse args ──────────────────────────────────────────────────────────
 DRY_RUN=false
 DOMAIN="all"
+REVERSE=false
+EXPLICIT_DATASETS=""
+SKIP_DATASETS=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --dry-run) DRY_RUN=true; shift ;;
-        --domain)  DOMAIN=$2; shift 2 ;;
+        --dry-run)  DRY_RUN=true; shift ;;
+        --domain)   DOMAIN=$2; shift 2 ;;
+        --datasets) EXPLICIT_DATASETS=$2; shift 2 ;;
+        --skip)     SKIP_DATASETS=$2; shift 2 ;;
+        --reverse)  REVERSE=true; shift ;;
         molecular|molecular_clf|dta|antibody|abagym|ab_clf|ginkgo|reaction|tcga|nucleotide) DOMAIN=$1; shift ;;
         *) echo "Unknown argument: $1"; exit 1 ;;
     esac
 done
 
 # ── Build dataset list ──────────────────────────────────────────────────
-if [ "$CATEGORY" = "federated" ]; then
+# Precedence: --datasets (explicit) > federated (special) > --domain (default 'all').
+if [ -n "$EXPLICIT_DATASETS" ]; then
+    DATASETS="$EXPLICIT_DATASETS"
+elif [ "$CATEGORY" = "federated" ]; then
     DATASETS="$FEDERATED_DATASETS"
 else
     case $DOMAIN in
@@ -73,6 +92,25 @@ else
         all)           DATASETS="$MOLECULAR $MOLECULAR_CLF $DTA $ANTIBODY $ABAGYM $AB_CLF $GINKGO $REACTION $TCGA $NUCLEOTIDE" ;;
         *)             echo "Unknown domain: $DOMAIN"; exit 1 ;;
     esac
+fi
+
+# Apply --skip filter (drop named datasets from the list).
+if [ -n "$SKIP_DATASETS" ]; then
+    FILTERED=""
+    for D in $DATASETS; do
+        DROP=false
+        for S in $SKIP_DATASETS; do
+            if [ "$D" = "$S" ]; then DROP=true; break; fi
+        done
+        if [ "$DROP" = false ]; then FILTERED="$FILTERED $D"; fi
+    done
+    DATASETS=$(echo "$FILTERED" | xargs)  # trim whitespace
+fi
+
+# Apply --reverse (iterate the list back-to-front). Uses awk for portability
+# — tac is GNU-only, tail -r is BSD-only; awk works on both macOS and Linux.
+if [ "$REVERSE" = true ]; then
+    DATASETS=$(echo "$DATASETS" | awk '{for(i=NF;i>=1;i--) printf "%s ", $i}')
 fi
 
 # ── Per-dataset resource overrides ─────────────────────────────────────
