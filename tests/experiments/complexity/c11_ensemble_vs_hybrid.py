@@ -33,6 +33,7 @@ from experiments._shared import (
     get_domain_metric, cap_dimensions,
     get_precomputed_search, build_fold_hybrid,
     extract_top3_base_reps, get_best_for_downstream,
+    get_best_search_for_downstream,
 )
 from kirby.find_best_hybrid import (
     _select_top_features_per_fold, HIGH_DIM_FILTER_THRESHOLD,
@@ -82,30 +83,31 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     budgets = [b for b in [50, 100, 200, 500, 1024] if b <= total_dim]
 
     # Precompute hybrid blueprints ONCE (cached) for all budgets
-    # NOTE: get_precomputed_search returns results across ALL budgets (budget
-    # param is deprecated). Use get_best_for_downstream to select per-budget.
+    # Pool helper picks the best (tier, aug_condition) cache file for
+    # downstream_model='rf' at each budget separately; different budgets can
+    # come from different files.
     augmentations = data.get('augmentations')
     blueprints = {}
-    search = None
+    last_search = None
     try:
-        # 2026-05-22: switched general→top for capped (general/capped
-        # precompute dropped; cache-hits the top/capped file instead).
-        search = get_precomputed_search(
-            reps, labels, groups,
-            aug_condition='capped', augmentations=augmentations,
-            speed=config.get('search_speed', 'full'),
-            precomputed=data.get('precomputed_searches_top'),
-            dataset_name=dataset_name, tier='top', task_type=task_type)
         for budget in budgets:
-            best = get_best_for_downstream(search, 'rf', budget=budget)
-            if best and 'blueprint' in best:
-                blueprints[budget] = best['blueprint']
+            search, meta = get_best_search_for_downstream(
+                reps, labels, groups,
+                downstream_model='rf', budget=budget,
+                augmentations=augmentations,
+                speed=config.get('search_speed', 'full'),
+                dataset_name=dataset_name, task_type=task_type,
+                data=data,
+            )
+            if meta:
+                blueprints[budget] = meta['best_config']['blueprint']
+                last_search = search
     except Exception as e:
         print(f"  Blueprint search failed: {e}")
     print(f"  Blueprints: {sorted(blueprints.keys())}")
 
-    if search is not None:
-        top3 = extract_top3_base_reps(search)
+    if last_search is not None:
+        top3 = extract_top3_base_reps(last_search)
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
 

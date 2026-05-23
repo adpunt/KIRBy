@@ -22,7 +22,7 @@ from sklearn.preprocessing import StandardScaler
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results, convert_numpy,
-    get_fitted_hybrid, flatten_fold_weights, extract_top3_base_reps,
+    get_fitted_hybrid, get_fitted_pool_hybrid, flatten_fold_weights, extract_top3_base_reps,
     get_domain_metric,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
@@ -120,16 +120,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # ── Step 2: Get hybrid ──
     augmentations = data.get('augmentations')
     try:
-        X_hybrid, fi, search = get_fitted_hybrid(
+        X_hybrid, fi, search, _meta = get_fitted_pool_hybrid(
             reps, labels, groups,
-            aug_condition='uncapped' if augmentations else 'none', augmentations=augmentations,
+            downstream_model='knn', budget=None,
+            augmentations=augmentations,
             speed=search_speed,
-            precomputed=data.get('precomputed_searches'),
-            internal_evaluators=DISTANCE_EVALUATORS,
-            budgets=DISTANCE_BUDGETS,
             metric=metric_name, task_type=task_type, domain=domain,
-            downstream_model='knn',
-            dataset_name=dataset_name, tier='general_distance')
+            dataset_name=dataset_name, distance=True)
         weights_flat = flatten_fold_weights(fi) if fi else np.ones(X_hybrid.shape[1])
         if len(weights_flat) != X_hybrid.shape[1]:
             weights_flat = np.ones(X_hybrid.shape[1])

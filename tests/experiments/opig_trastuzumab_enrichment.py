@@ -274,27 +274,28 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
     # Augmentation config matches tz_her2_binary in DATASET_REPS:
     # augmentation = [] (no augmentation reps for antibody classification)
     try:
-        from kirby.find_best_hybrid import find_best_hybrid
         from kirby.hybrid import apply_feature_selection
-        from experiments._shared import resolve_pruning_kwargs
+        from experiments._shared import (resolve_pruning_kwargs,
+                                          get_best_search_for_downstream)
         _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
                                        dataset_label='tz_her2_binary')
-        search = find_best_hybrid(
-            base_reps=reps,
-            labels=labels, groups=groups,
+        search, _meta = get_best_search_for_downstream(
+            reps, labels, groups,
+            downstream_model='rf', budget=None,
+            augmentations=None,
+            speed='full',
             metric='auc',
             task_type='classification',
-            budgets=FULL_BUDGETS,
-            augmentation_strategy='none',
-            internal_evaluators=INTERNAL_EVALUATORS,
-            speed='full', return_fitted=True, verbose=False, cache=True,
-            dataset_name='tz_her2_binary', tier='general',
+            dataset_name='tz_her2_binary',
+            return_fitted=True,
             adaptive_pruning=0.25,
-            **_pkw)
-        top3 = extract_top3_base_reps(search)
-        if top3:
-            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-        fitted = search.fitted_results.get('rf')
+            **_pkw,
+        )
+        if search is not None:
+            top3 = extract_top3_base_reps(search)
+            if top3:
+                print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+        fitted = search.fitted_results.get('rf') if search is not None else None
         if fitted is not None:
             fi = {r: {'selected_indices': idx}
                   for r, idx in fitted.selected_indices.items()}

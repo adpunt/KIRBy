@@ -48,6 +48,7 @@ from experiments._shared import (
     compute_effective_rank,
     get_fitted_hybrid, get_precomputed_search, build_fold_hybrid,
     get_best_for_downstream,
+    get_best_search_for_downstream, get_fitted_pool_hybrid,
 )
 
 
@@ -287,15 +288,13 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
 
     # --- Per-budget hybrid ---
     print(f"\n    Budget sweep (hybrid kernel):")
-    _precomp = data.get('precomputed_searches')
     for budget in sorted(budgets):
         try:
-            X_hybrid, _, _search = get_fitted_hybrid(
+            X_hybrid, _, _search, _meta = get_fitted_pool_hybrid(
                 reps, labels, groups, downstream_model='rf',
-                budget=budget,
-                aug_condition='none', speed='full',
-                precomputed=_precomp,
-                dataset_name=dataset_name, tier='general', task_type=task_type)
+                budget=budget, augmentations=data.get('augmentations'),
+                speed='full', data=data,
+                dataset_name=dataset_name, task_type=task_type)
             # Subsample to match
             X_hybrid_sub = X_hybrid[idx] if n_samples > max_n else X_hybrid
             X_hybrid_s = StandardScaler().fit_transform(X_hybrid_sub)
@@ -323,12 +322,11 @@ def _run_kernel_analysis(data, budgets, dataset_name=None):
             sub_reps[highest_rep])
     if 50 in results['per_budget']:
         try:
-            X_h50, _, _search = get_fitted_hybrid(
+            X_h50, _, _search, _meta = get_fitted_pool_hybrid(
                 reps, labels, groups, downstream_model='rf',
-                budget=50,
-                aug_condition='none', speed='full',
-                precomputed=_precomp,
-                dataset_name=dataset_name, tier='general', task_type=task_type)
+                budget=50, augmentations=data.get('augmentations'),
+                speed='full', data=data,
+                dataset_name=dataset_name, task_type=task_type)
             X_h50_sub = X_h50[idx] if n_samples > max_n else X_h50
             sweep_spaces['hybrid_b50'] = StandardScaler().fit_transform(X_h50_sub)
         except Exception:
@@ -516,11 +514,10 @@ def _run_double_descent(data, config, dataset_name=None):
         n_feat = min(budget, total_dim, n_samples - 1)
 
         # --- Hybrid ---
-        _precomp = data.get('precomputed_searches')
         hybrid_score = _eval_at_budget(
             reps, labels, groups, n_folds, mode, metric_fn,
             budget=budget, method='hybrid',
-            precomputed=_precomp,
+            data=data,
             dataset_name=dataset_name, task_type=task_type,
         )
 
@@ -540,7 +537,7 @@ def _run_double_descent(data, config, dataset_name=None):
         ridge_hybrid = _eval_at_budget(
             reps, labels, groups, n_folds, mode, metric_fn,
             budget=budget, method='hybrid', model_name='ridge',
-            precomputed=_precomp,
+            data=data,
             dataset_name=dataset_name, task_type=task_type,
         )
         ridge_pca = _eval_at_budget_pca(
@@ -596,7 +593,7 @@ def _run_double_descent(data, config, dataset_name=None):
 
 def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
                     budget, method='hybrid', model_name='rf',
-                    precomputed=None, dataset_name=None, task_type=None):
+                    data=None, dataset_name=None, task_type=None):
     """Evaluate a hybrid at a given budget with a given model."""
     from sklearn.ensemble import RandomForestRegressor
     from sklearn.linear_model import Ridge
@@ -607,16 +604,25 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
         make_model = lambda: RandomForestRegressor(
             n_estimators=100, max_depth=None, random_state=42, n_jobs=-1)
 
-    # Get blueprint from cached search — budget-specific via get_best_for_downstream
-    search = get_precomputed_search(reps, labels, groups,
-                                    aug_condition='none', speed='full',
-                                    precomputed=precomputed,
-                                    dataset_name=dataset_name, tier='general', task_type=task_type)
-    best = get_best_for_downstream(search, model_name, budget=budget)
-    if best is None:
-        best = get_best_for_downstream(search, 'rf', budget=budget)
-    if best is None:
+    # Pool helper: pick best (tier, aug_cond) cache file for this (model, budget).
+    # Falls back to 'rf' if the requested model isn't in any pool candidate.
+    augs = data.get('augmentations') if data is not None else None
+    _search, meta = get_best_search_for_downstream(
+        reps, labels, groups,
+        downstream_model=model_name, budget=budget,
+        augmentations=augs, speed='full', data=data,
+        dataset_name=dataset_name, task_type=task_type,
+    )
+    if meta is None:
+        _search, meta = get_best_search_for_downstream(
+            reps, labels, groups,
+            downstream_model='rf', budget=budget,
+            augmentations=augs, speed='full', data=data,
+            dataset_name=dataset_name, task_type=task_type,
+        )
+    if meta is None:
         raise RuntimeError(f"No best config found for model={model_name} at budget={budget}")
+    best = meta['best_config']
     bp = best['blueprint']
 
     scores = []
@@ -771,7 +777,6 @@ def _run_approximation_theory(data, budgets, config, dataset_name=None):
           f"Rademacher={full_rademacher:.4f}, real_{metric_name}={full_real:.4f}")
 
     # --- Per-budget ---
-    _precomp = data.get('precomputed_searches')
     for budget in sorted(budgets):
         n_feat = min(budget, X_concat.shape[1], n_samples - 1)
 
@@ -779,12 +784,12 @@ def _run_approximation_theory(data, budgets, config, dataset_name=None):
         # Rademacher: estimate on per-fold hybrid features (no leakage)
         rad_hybrid = _estimate_rademacher_hybrid(
             reps, labels, groups, n_folds, mode, n_random_trials,
-            np.random.RandomState(42), budget, precomputed=_precomp,
+            np.random.RandomState(42), budget, data=data,
             task_type=task_type, dataset_name=dataset_name)
         real_hybrid = _eval_at_budget(
             reps, labels, groups, n_folds, mode, metric_fn,
             budget=budget, method='hybrid', model_name='ridge',
-            precomputed=_precomp, dataset_name=dataset_name,
+            data=data, dataset_name=dataset_name,
             task_type=task_type)
 
         # PCA — fresh RNG per budget for fair comparison
@@ -866,24 +871,32 @@ def _estimate_rademacher(X, y, groups, n_folds, mode, n_trials, rng,
 
 
 def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
-                                budget, precomputed=None, task_type='regression',
+                                budget, data=None, task_type='regression',
                                 dataset_name=None):
     """Estimate Rademacher complexity of hybrid features WITHOUT label leakage.
 
     Creates the hybrid per-fold on training data only, then measures how well
     a linear model can fit random labels on those features.
     """
-    # Get blueprint from cached search using REAL labels — budget-specific
-    search = get_precomputed_search(reps, y, groups,
-                                    aug_condition='none', speed='full',
-                                    precomputed=precomputed,
-                                    dataset_name=dataset_name, tier='general', task_type=task_type)
-    best = get_best_for_downstream(search, 'ridge', budget=budget)
-    if best is None:
-        best = get_best_for_downstream(search, 'rf', budget=budget)
-    if best is None:
+    # Pool helper: best (tier, aug_cond) cache file for (ridge, budget),
+    # falling back to rf if no ridge entry exists.
+    augs = data.get('augmentations') if data is not None else None
+    _search, meta = get_best_search_for_downstream(
+        reps, y, groups,
+        downstream_model='ridge', budget=budget,
+        augmentations=augs, speed='full', data=data,
+        dataset_name=dataset_name, task_type=task_type,
+    )
+    if meta is None:
+        _search, meta = get_best_search_for_downstream(
+            reps, y, groups,
+            downstream_model='rf', budget=budget,
+            augmentations=augs, speed='full', data=data,
+            dataset_name=dataset_name, task_type=task_type,
+        )
+    if meta is None:
         return float('nan')
-    bp = best['blueprint']
+    bp = meta['best_config']['blueprint']
 
     sample_X = next(iter(reps.values()))
     folds = list(cv_split(groups, n_folds, sample_X, y, mode=mode))

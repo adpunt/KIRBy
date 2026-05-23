@@ -21,7 +21,7 @@ from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
-    save_experiment_results, get_fitted_hybrid, get_best_for_downstream,
+    save_experiment_results, get_fitted_hybrid, get_fitted_pool_hybrid, get_best_for_downstream,
     flatten_weights, make_cv_splitter,
     get_domain_metric, build_fold_hybrid, extract_top3_base_reps,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
@@ -64,17 +64,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     try:
         # We only need the SearchResult, not the full-data hybrid matrix.
         # Per-budget blueprints are used with build_fold_hybrid in the CV loop.
-        _X_unused, _fi_unused, search = get_fitted_hybrid(
+        _X_unused, _fi_unused, search, _meta = get_fitted_pool_hybrid(
             reps, labels, groups,
-            aug_condition='uncapped' if augmentations else 'none', augmentations=augmentations,
+            downstream_model='knn', budget=None,
+            augmentations=augmentations,
             speed=search_speed,
-            precomputed=data.get('precomputed_searches'),
-            internal_evaluators=DISTANCE_EVALUATORS,
-            budgets=budgets,
             metric=metric_name, task_type=task_type,
             domain=data.get('domain', 'molecular'),
-            downstream_model='knn',
-            dataset_name=dataset_name, tier='general_distance')
+            dataset_name=dataset_name, distance=True)
 
         # Report which evaluator won
         best_knn = get_best_for_downstream(search, 'knn')

@@ -252,17 +252,12 @@ def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruni
     # Augmentation config matches ginkgo_* in DATASET_REPS:
     # augmentation = ['paratope', 'structural']
     try:
-        from kirby.find_best_hybrid import find_best_hybrid
         from kirby.hybrid import apply_feature_selection
         grp = groups if groups is not None else np.arange(n)
         AUG_REPS = {'paratope', 'structural'}
         base = {k: v for k, v in reps.items() if k not in AUG_REPS}
         aug_dict = {k: v for k, v in reps.items() if k in AUG_REPS}
 
-        # Pass pre-computed hierarchical cluster folds to find_best_hybrid
-        # so hybrid search uses the same splits as downstream evaluation.
-        # The splitter identity lives in cv_splitter_id so cache metadata
-        # captures it — different fold assignments produce different ids.
         cv_kw = {}
         if fold_assignments is not None:
             cv_kw['cv_splitter'] = _PrecomputedFoldSplitter(
@@ -271,25 +266,26 @@ def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruni
                 f'ginkgo_hierarchical_{n_folds}fold_'
                 f'h{abs(hash(fold_assignments.tobytes())) % (10**12):012d}')
 
-        from experiments._shared import resolve_pruning_kwargs
+        from experiments._shared import (resolve_pruning_kwargs,
+                                          get_best_search_for_downstream)
         _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
                                        dataset_label=f"ginkgo_{prop_name}")
-        search = find_best_hybrid(
-            base_reps=base if base else reps,
-            labels=labels, groups=grp,
+        search, _meta = get_best_search_for_downstream(
+            base if base else reps, labels, grp,
+            downstream_model='rf', budget=None,
+            augmentations=aug_dict if aug_dict else None,
+            speed='full',
             metric='spearman',
             task_type='regression',
-            budgets=FULL_BUDGETS,
-            augmentations=aug_dict if aug_dict else None,
-            augmentation_strategy='uncapped' if aug_dict else 'none',
-            internal_evaluators=INTERNAL_EVALUATORS,
-            speed='full', return_fitted=True, verbose=False, cache=True,
-            dataset_name=f"ginkgo_{prop_name}", tier='general',
-            adaptive_pruning=0.25, **cv_kw, **_pkw)
-        top3 = extract_top3_base_reps(search)
-        if top3:
-            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-        fitted = search.fitted_results.get('rf')
+            dataset_name=f"ginkgo_{prop_name}",
+            return_fitted=True,
+            adaptive_pruning=0.25, **cv_kw, **_pkw,
+        )
+        if search is not None:
+            top3 = extract_top3_base_reps(search)
+            if top3:
+                print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+        fitted = search.fitted_results.get('rf') if search is not None else None
         if fitted is not None:
             all_reps = {**reps, **(aug_dict or {})}
             fi = {r: {'selected_indices': idx}

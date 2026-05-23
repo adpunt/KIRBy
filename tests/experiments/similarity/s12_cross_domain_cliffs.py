@@ -27,6 +27,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories, get_precomputed_search,
+    get_best_search_for_downstream,
     build_fold_hybrid, extract_top3_base_reps, DOWNSTREAM_MODELS,
 )
 from kirby.hybrid import create_hybrid
@@ -152,20 +153,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if not cliff_indices:
         return {'error': 'no_cliffs_found', 'cliff_info': cliff_info}
 
-    # Get hybrid blueprint
+    # Get hybrid blueprint via pool helper
     budget = kwargs.get('budget', 100)
     try:
-        search = get_precomputed_search(
+        search, meta = get_best_search_for_downstream(
             reps, labels, groups,
-            aug_condition='uncapped' if data.get('augmentations') else 'none',
+            downstream_model='rf', budget=budget,
             augmentations=data.get('augmentations'),
             speed=search_speed,
-            precomputed=data.get('precomputed_searches'),
-            dataset_name=dataset_name, tier='general', task_type=task_type)
-        bp = search.best_by_model['rf']['blueprint'] if search.best_by_model.get('rf') else None
-        top3 = extract_top3_base_reps(search)
-        if top3:
-            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+            dataset_name=dataset_name, task_type=task_type,
+            data=data,
+        )
+        bp = meta['best_config']['blueprint'] if meta else None
+        if search is not None:
+            top3 = extract_top3_base_reps(search)
+            if top3:
+                print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     except Exception as e:
         print(f"  Hybrid search failed: {e}")
         return {'error': str(e), 'cliff_info': cliff_info}

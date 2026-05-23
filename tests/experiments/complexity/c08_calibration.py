@@ -19,6 +19,7 @@ from experiments._shared import (
     get_model_factories, _cv_split,
     create_hybrid, apply_feature_selection,
     find_best_hybrid, get_domain_metric,
+    get_best_search_for_downstream,
     extract_top3_base_reps,
     INTERNAL_EVALUATORS, SCREENING_BUDGETS, FULL_BUDGETS,
 )
@@ -89,30 +90,42 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                         f"[{optimal_imp}/{optimal_alloc}] (from Exp 2)")
         print(f"  Using Exp 2 optimal: {optimal_desc}")
     else:
-        # Run find_best_hybrid to discover optimal
-        print(f"  Running find_best_hybrid(speed={search_speed}) to find optimal...")
+        # Pool helper picks the best (tier, aug_condition) cache file per
+        # downstream model. We try across all common models and pick the
+        # overall winner (preserves the prior "best across all models" semantics).
+        print(f"  Using pool helper to find optimal (speed={search_speed})...")
         try:
-            search = find_best_hybrid(
-                reps, labels, groups=groups,
-                speed=search_speed,
-                budgets=FULL_BUDGETS,
-                augmentations=augs,
-                augmentation_strategy='uncapped' if augs else 'none',
-                internal_evaluators=INTERNAL_EVALUATORS,
-                metric=metric_name,
-                task_type=data['task_type'],
-                verbose=False,
-                cache=True,
-                dataset_name=dataset_name,
-                tier='general',
-            )
-            # Pick the best result across all models
             best = None
             best_model = None
-            for m_name, m_best in search.best_by_model.items():
-                if best is None or (m_best['score_mean'] < best['score_mean'] if lower_is_better else m_best['score_mean'] > best['score_mean']):
-                    best = m_best
-                    best_model = m_name
+            best_search = None
+            best_meta = None
+            for candidate_model in ['rf', 'svm', 'lightgbm', 'mlp', 'knn']:
+                try:
+                    s, m = get_best_search_for_downstream(
+                        reps, labels, groups,
+                        downstream_model=candidate_model, budget=None,
+                        augmentations=augs,
+                        speed=search_speed,
+                        dataset_name=dataset_name,
+                        task_type=data['task_type'],
+                        data=data,
+                    )
+                except Exception:
+                    continue
+                if not m:
+                    continue
+                bc = m['best_config']
+                score = bc.get('score_mean')
+                if score is None:
+                    continue
+                is_better = (best is None) or (
+                    score < best['score_mean'] if lower_is_better
+                    else score > best['score_mean'])
+                if is_better:
+                    best = bc
+                    best_model = candidate_model
+                    best_search = s
+                    best_meta = m
             if best:
                 optimal_budget = best['blueprint'].budget
                 optimal_alloc = best['blueprint'].allocation_method
@@ -124,13 +137,14 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                     [best_model], task_type=data['task_type'],
                     n_samples=len(data['labels'])).get(best_model)
                 optimal_desc = (f"{best_model} at budget={optimal_budget} "
-                                f"[{optimal_imp}/{optimal_alloc}] (from find_best_hybrid)")
+                                f"[{optimal_imp}/{optimal_alloc}] "
+                                f"(pool {best_meta['tier']}/{best_meta['aug_condition']})")
                 print(f"  Discovered optimal: {optimal_desc}")
-                top3 = extract_top3_base_reps(search)
+                top3 = extract_top3_base_reps(best_search)
                 if top3:
                     print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
         except Exception as e:
-            print(f"  find_best_hybrid failed ({e}), using RF/budget=100 default")
+            print(f"  pool helper failed ({e}), using RF/budget=100 default")
 
     if optimal_model_factory is None:
         if is_classification:

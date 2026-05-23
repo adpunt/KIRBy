@@ -45,7 +45,7 @@ from experiments._shared import (
     load_data, get_config, save_experiment_results, convert_numpy,
     get_model_factories, _cv_split, build_fold_hybrid,
     get_domain_metric,
-    get_precomputed_search, get_best_for_downstream,
+    get_precomputed_search, get_best_for_downstream, get_best_search_for_downstream,
     DOWNSTREAM_MODELS,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection
@@ -107,30 +107,8 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
     _tgt_pkw = resolve_pruning_kwargs(pruning_mode, len(target_labels),
                                        dataset_label=target_name)
 
-    # ── Step 1: Hybrid search on source (cached) ───────────────────────
-    print(f"\n  Step 1: Hybrid search on source ({source_name})")
-    source_search = get_precomputed_search(
-        src, source_labels, source_groups,
-        aug_condition='none', speed=config['search_speed'],
-        metric=metric_name, task_type=task_type,
-        domain=source_data.get('domain', 'molecular'),
-        dataset_name=source_name, tier='general',
-        **_src_pkw,
-    )
-
-    # ── Step 2: Hybrid search on target (cached) ───────────────────────
-    print(f"\n  Step 2: Hybrid search on target ({target_name})")
-    target_search = get_precomputed_search(
-        tgt, target_labels, target_groups,
-        aug_condition='none', speed=config['search_speed'],
-        metric=metric_name, task_type=task_type,
-        domain=target_data.get('domain', 'molecular'),
-        dataset_name=target_name, tier='general',
-        **_tgt_pkw,
-    )
-
-    # ── Step 3: Per-model evaluation ────────────────────────────────────
-    print(f"\n  Step 3: Per-model evaluation ({n_folds}-fold CV)")
+    # ── Step 1+2: Per-model pool-best search on source and target ─────
+    print(f"\n  Step 1+2: Pool-best hybrid search on source/target")
 
     model_names = config.get('models', DOWNSTREAM_MODELS)
     model_factories_tgt = get_model_factories(
@@ -151,8 +129,29 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
         if model_name not in model_factories_tgt or model_name not in model_factories_src:
             continue
 
-        source_best = get_best_for_downstream(source_search, model_name)
-        target_best = get_best_for_downstream(target_search, model_name)
+        _src_search, _src_meta = get_best_search_for_downstream(
+            src, source_labels, source_groups,
+            downstream_model=model_name, budget=None,
+            augmentations=None, speed=config['search_speed'],
+            metric=metric_name, task_type=task_type,
+            domain=source_data.get('domain', 'molecular'),
+            dataset_name=source_name,
+            **_src_pkw,
+        )
+        _tgt_search, _tgt_meta = get_best_search_for_downstream(
+            tgt, target_labels, target_groups,
+            downstream_model=model_name, budget=None,
+            augmentations=None, speed=config['search_speed'],
+            metric=metric_name, task_type=task_type,
+            domain=target_data.get('domain', 'molecular'),
+            dataset_name=target_name,
+            **_tgt_pkw,
+        )
+        source_best = _src_meta['best_config'] if _src_meta else None
+        target_best = _tgt_meta['best_config'] if _tgt_meta else None
+        # Aliases used later in this function
+        source_search = _src_search
+        target_search = _tgt_search
 
         if source_best is None or target_best is None:
             print(f"\n    {model_name}: skipped (missing search config)")

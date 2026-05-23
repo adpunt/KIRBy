@@ -304,32 +304,31 @@ def evaluate_split(dataset_name, data, split_key, n_folds, pruning_mode='default
     aug_dict = {k: v for k, v in reps.items() if k in aug_reps}
 
     try:
-        from kirby.find_best_hybrid import find_best_hybrid
         from kirby.hybrid import apply_feature_selection
-        from experiments._shared import resolve_pruning_kwargs
+        from experiments._shared import (resolve_pruning_kwargs,
+                                          get_best_search_for_downstream)
 
         _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
                                        dataset_label=f'{dataset_name}/loo_{split_key}')
-        search = find_best_hybrid(
-            base_reps=base_reps if base_reps else reps,
-            labels=labels, groups=groups,
+        search, _meta = get_best_search_for_downstream(
+            base_reps if base_reps else reps, labels, groups,
+            downstream_model='rf', budget=None,
+            augmentations=aug_dict if aug_dict else None,
+            speed='full',
             metric='rmse',
             task_type='regression',
-            budgets=FULL_BUDGETS,
-            augmentations=aug_dict if aug_dict else None,
-            augmentation_strategy='uncapped' if aug_dict else 'none',
-            internal_evaluators=INTERNAL_EVALUATORS,
-            speed='full', return_fitted=True, verbose=False, cache=True,
-            dataset_name=dataset_name, tier='general',
+            dataset_name=dataset_name,
+            return_fitted=True,
             condition_suffix=f'loo_{split_key}',
             adaptive_pruning=0.25,
-            **_pkw)
+            **_pkw,
+        )
 
-        top3 = extract_top3_base_reps(search)
+        top3 = extract_top3_base_reps(search) if search is not None else None
         if top3:
             print(f"  Top-3 base reps: {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
 
-        fitted = search.fitted_results.get('rf')
+        fitted = search.fitted_results.get('rf') if search is not None else None
         if fitted is not None:
             all_reps = {**reps}
             fi = {r: {'selected_indices': idx}

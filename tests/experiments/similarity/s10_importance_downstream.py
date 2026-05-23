@@ -32,6 +32,7 @@ from experiments._shared import (
     cv_split, get_domain_metric, get_model_factories, convert_numpy,
     compute_feature_importance, build_fold_hybrid,
     get_precomputed_search, get_best_for_downstream, extract_top3_base_reps,
+    get_best_search_for_downstream,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 
@@ -691,19 +692,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     search_speed = config.get('search_speed', 'full')
 
     try:
-        search = get_precomputed_search(
+        search, meta = get_best_search_for_downstream(
             reps, labels, groups,
-            aug_condition='uncapped' if data.get('augmentations') else 'none',
+            downstream_model='knn', budget=budget,
             augmentations=data.get('augmentations'),
             speed=search_speed,
-            precomputed=None,  # bypass tree-only precomputed; use disk cache
-            internal_evaluators=DISTANCE_EVALUATORS,
-            budgets=DISTANCE_BUDGETS,
-            dataset_name=dataset_name, tier='general_distance', task_type=task_type)
-        # Select kNN-optimized blueprint (primary downstream model in S10)
-        best_config = get_best_for_downstream(search, 'knn')
-        if best_config and 'blueprint' in best_config:
-            hybrid_blueprint = best_config['blueprint']
+            dataset_name=dataset_name, task_type=task_type,
+            distance=True,
+        )
+        if meta:
+            hybrid_blueprint = meta['best_config']['blueprint']
         if hybrid_blueprint:
             print(f"  Hybrid blueprint: alloc={hybrid_blueprint.allocation_method}, "
                   f"budget={hybrid_blueprint.budget}, "

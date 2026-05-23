@@ -27,7 +27,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy, cv_split, _cv_split,
     compute_dataset_complexity, get_domain_metric,
     find_best_hybrid, create_hybrid, apply_feature_selection,
-    get_best_for_downstream,
+    get_best_for_downstream, get_best_search_for_downstream,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 from kirby.hybrid import apply_augmentation_selection
@@ -82,30 +82,29 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                 'elasticnet': ElasticNet(alpha=0.1, l1_ratio=0.5, random_state=42),
             }
 
-            search_result = find_best_hybrid(
-                base_reps=data['reps'],
-                labels=data['labels'],
-                groups=data['groups'],
-                speed='full',
+            # Distance-tier pool helper: picks best across
+            # (general_distance, top_distance) x (none, uncapped) for SVM (the
+            # eval that best matches the SVR downstream); falls back to RF.
+            search_result, meta = get_best_search_for_downstream(
+                data['reps'], data['labels'], data['groups'],
+                downstream_model='svm', budget=None,
                 augmentations=data.get('augmentations'),
-                augmentation_strategy='uncapped' if data.get('augmentations') else 'none',
-                verbose=False,
-                cache=True,
+                speed='full',
                 dataset_name=ds_name,
-                tier='general_distance',
-                internal_evaluators=DISTANCE_EVALUATORS,
-                budgets=DISTANCE_BUDGETS,
-                metric=metric_name_ds,
-                task_type=data['task_type'],
+                task_type=data['task_type'], metric=metric_name_ds,
+                distance=True,
             )
-
-            # Prefer SVM-evaluated config for SVR downstream, fall back to RF
-            best = get_best_for_downstream(search_result, 'svm')
-            if best is None or 'blueprint' not in best:
-                best = search_result.best_by_model.get('rf') or (
-                    next(iter(search_result.best_by_model.values()), None)
-                    if search_result.best_by_model else None
+            if meta is None:
+                search_result, meta = get_best_search_for_downstream(
+                    data['reps'], data['labels'], data['groups'],
+                    downstream_model='rf', budget=None,
+                    augmentations=data.get('augmentations'),
+                    speed='full',
+                    dataset_name=ds_name,
+                    task_type=data['task_type'], metric=metric_name_ds,
+                    distance=True,
                 )
+            best = meta['best_config'] if meta else None
             metric_name, metric_fn, _ = get_domain_metric(data)
             augs = data.get('augmentations')
             if best:

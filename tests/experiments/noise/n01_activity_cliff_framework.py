@@ -37,7 +37,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, make_structured_output, convert_numpy,
     get_model_factories, get_domain_metric, cv_split, make_cv_splitter,
-    get_fitted_hybrid, flatten_fold_weights, build_fold_hybrid,
+    get_fitted_hybrid, get_fitted_pool_hybrid, flatten_fold_weights, build_fold_hybrid,
     get_best_for_downstream, extract_top3_base_reps,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
@@ -593,19 +593,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     X_hybrid = None
 
     try:
-        X_hybrid, fi_hybrid, search = get_fitted_hybrid(
+        X_hybrid, fi_hybrid, search, meta = get_fitted_pool_hybrid(
             reps, labels, groups,
-            aug_condition='uncapped' if augmentations else 'none',
+            downstream_model='knn', budget=None,
             augmentations=augmentations,
-            speed=search_speed,
-            precomputed=data.get('precomputed_searches'),
-            internal_evaluators=DISTANCE_EVALUATORS,
-            budgets=DISTANCE_BUDGETS,
-            downstream_model='knn',
-            dataset_name=dataset_name, tier='general', task_type=task_type)
-        best_config = get_best_for_downstream(search, 'knn')
-        if best_config and 'blueprint' in best_config:
-            hybrid_blueprint = best_config['blueprint']
+            speed=search_speed, data=data,
+            dataset_name=dataset_name, task_type=task_type)
+        if meta:
+            hybrid_blueprint = meta['best_config']['blueprint']
         print(f"  Hybrid: dim={X_hybrid.shape[1]}")
         top3 = extract_top3_base_reps(search)
         if top3:

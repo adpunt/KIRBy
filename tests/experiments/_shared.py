@@ -2384,6 +2384,215 @@ def get_best_precomputed_search(reps, labels, groups, augmentations=None,
     return (s_none, 'none') if none_score >= unc_score else (s_uncapped, 'uncapped')
 
 
+def get_best_search_for_downstream(
+    reps, labels, groups, *, downstream_model, budget,
+    augmentations=None, speed='full',
+    metric='auto', task_type=None, domain=None,
+    dataset_name=None, distance=False,
+    data=None, return_fitted=False, weight_method=None,
+    **kwargs,
+):
+    """Pick the best precomputed SearchResult from the (tier x aug_condition) pool.
+
+    Selection is per-(downstream_model, budget). For each candidate SearchResult
+    in the pool, looks up the best config for (downstream_model, budget) via
+    get_best_for_downstream and compares by score_mean (respecting
+    search.lower_is_better). Returns the winning SearchResult and metadata about
+    which (tier, aug_condition) won.
+
+    Main pool (distance=False):
+      tier='general'  x aug=['none', 'uncapped']
+      tier='top'      x aug=['none', 'uncapped', 'capped']
+      (general/capped intentionally absent -- dropped 2026-05-22)
+
+    Distance pool (distance=True):
+      tier='general_distance' x aug=['none', 'uncapped']
+      tier='top_distance'     x aug=['none', 'uncapped']
+      (DISTANCE_EVALUATORS + DISTANCE_BUDGETS lineage; no capped)
+
+    Args:
+        reps: Base representations {name: array}.
+        labels: Target values.
+        groups: Group labels for CV (or None).
+        downstream_model: Model name to optimise for (e.g. 'rf', 'svm', 'knn').
+        budget: Specific budget the caller cares about (used for selection).
+            Pass None to compare across all budgets for the model.
+        augmentations: {aug_name: array} or None. Determines which aug
+            conditions are eligible; with no augs, only 'none' is considered.
+        speed: 'fast' or 'full'.
+        metric: Metric name ('auto' = resolve from domain/task_type).
+        task_type: 'classification' or 'regression' (required by underlying
+            get_precomputed_search).
+        domain: Domain hint for metric resolution.
+        dataset_name: REQUIRED. Cache files are dataset-keyed.
+        distance: If True, iterate the distance-tier cache lineage instead
+            of the main pool. Auto-passes internal_evaluators=DISTANCE_EVALUATORS
+            and budgets=DISTANCE_BUDGETS to the underlying loaders.
+        data: Optional. If provided, prefers data['precomputed_searches'] /
+            ['precomputed_searches_top'] dicts (in-memory hit). Falls back to
+            disk-cached find_best_hybrid when missing.
+        return_fitted: If True, request fitted=True from underlying searches.
+        weight_method: Importance method for fitted results.
+        **kwargs: Extra kwargs forwarded to get_precomputed_search.
+
+    Returns:
+        (search, metadata) where metadata is either:
+            {
+                'tier': str,
+                'aug_condition': str,
+                'score_mean': float,
+                'model': str,
+                'budget': int or None,
+                'best_config': dict,  # from get_best_for_downstream
+            }
+        or (None, None) if no candidate had a valid result for the requested
+        (downstream_model, budget).
+    """
+    if dataset_name is None:
+        raise ValueError(
+            "get_best_search_for_downstream requires dataset_name= "
+            "(cache files are dataset-keyed)"
+        )
+
+    has_augs = bool(augmentations)
+
+    if distance:
+        pool = [
+            ('general_distance', 'none', None),
+            ('top_distance', 'none', None),
+        ]
+        if has_augs:
+            pool.append(('general_distance', 'uncapped', augmentations))
+            pool.append(('top_distance', 'uncapped', augmentations))
+        # Distance lineage uses its own evaluators/budgets.
+        extra = dict(kwargs)
+        extra.setdefault('internal_evaluators', DISTANCE_EVALUATORS)
+        extra.setdefault('budgets', DISTANCE_BUDGETS)
+    else:
+        pool = [
+            ('general', 'none', None),
+            ('top', 'none', None),
+        ]
+        if has_augs:
+            pool.append(('general', 'uncapped', augmentations))
+            pool.append(('top', 'uncapped', augmentations))
+            pool.append(('top', 'capped', augmentations))
+        extra = dict(kwargs)
+
+    # Resolve in-memory precomputed dicts if data was passed.
+    main_dict = top_dict = None
+    if data is not None and not distance:
+        main_dict = data.get('precomputed_searches')
+        top_dict = data.get('precomputed_searches_top')
+
+    candidates = []  # list of (tier, aug_cond, search, best_config)
+    for tier, aug_cond, augs in pool:
+        precomputed = main_dict if tier == 'general' else top_dict if tier == 'top' else None
+        try:
+            search = get_precomputed_search(
+                reps, labels, groups,
+                aug_condition=aug_cond, augmentations=augs,
+                speed=speed, return_fitted=return_fitted,
+                weight_method=weight_method, precomputed=precomputed,
+                metric=metric, task_type=task_type, domain=domain,
+                dataset_name=dataset_name, tier=tier,
+                **extra,
+            )
+        except Exception:
+            continue
+        if search is None or not search.best_by_model:
+            continue
+        best = get_best_for_downstream(search, downstream_model, budget=budget)
+        if not best:
+            continue
+        score = best.get('score_mean')
+        if score is None or not np.isfinite(score):
+            continue
+        candidates.append((tier, aug_cond, search, best))
+
+    if not candidates:
+        return None, None
+
+    # Sort: best score first (respecting lower_is_better), then by tie-break
+    # preference: none > uncapped > capped, general > top (simpler/cheaper).
+    aug_pref = {'none': 0, 'uncapped': 1, 'capped': 2}
+    tier_pref = {
+        'general': 0, 'top': 1,
+        'general_distance': 0, 'top_distance': 1,
+    }
+    lower_is_better = candidates[0][2].lower_is_better
+
+    def _key(item):
+        tier, aug_cond, search, best = item
+        s = best['score_mean']
+        primary = s if lower_is_better else -s
+        return (primary, aug_pref.get(aug_cond, 99), tier_pref.get(tier, 99))
+
+    candidates.sort(key=_key)
+    tier, aug_cond, search, best = candidates[0]
+
+    metadata = {
+        'tier': tier,
+        'aug_condition': aug_cond,
+        'score_mean': best['score_mean'],
+        'model': downstream_model,
+        'budget': budget,
+        'best_config': best,
+    }
+    return search, metadata
+
+
+def get_fitted_pool_hybrid(
+    reps, labels, groups, *, downstream_model, budget,
+    augmentations=None, data=None, speed='full',
+    metric='auto', task_type=None, domain=None,
+    dataset_name=None, distance=False, **kwargs,
+):
+    """Pool-best variant of get_fitted_hybrid.
+
+    Picks the best precomputed SearchResult from the pool for
+    (downstream_model, budget) via get_best_search_for_downstream, then
+    builds X_hybrid on full data using the winning blueprint.
+
+    Returns:
+        (X_hybrid, feature_info, search, metadata) where metadata is the
+        dict returned by get_best_search_for_downstream (tier/aug_condition
+        of the winner). Raises RuntimeError if no candidate produced a
+        usable result.
+    """
+    from kirby.hybrid import create_hybrid
+
+    search, meta = get_best_search_for_downstream(
+        reps, labels, groups,
+        downstream_model=downstream_model, budget=budget,
+        augmentations=augmentations,
+        speed=speed, metric=metric, task_type=task_type, domain=domain,
+        dataset_name=dataset_name, distance=distance,
+        data=data, return_fitted=True, **kwargs,
+    )
+    if not meta:
+        raise RuntimeError(
+            f"get_fitted_pool_hybrid: no pool candidate produced a result for "
+            f"model={downstream_model} budget={budget} dataset={dataset_name}"
+        )
+
+    bp = meta['best_config']['blueprint']
+    aug_strat = meta['aug_condition']
+    augs = augmentations if aug_strat != 'none' else None
+
+    X_hybrid, fi = create_hybrid(
+        reps, labels,
+        allocation_method=bp.allocation_method,
+        budget=bp.budget,
+        step_size=getattr(bp, 'step_size', 5),
+        importance_method=bp.importance_method,
+        internal_evaluator=bp.internal_evaluator,
+        augmentations=augs,
+        augmentation_strategy=getattr(bp, 'augmentation_strategy', aug_strat),
+    )
+    return X_hybrid, fi, search, meta
+
+
 def get_fitted_hybrid(reps, labels, groups, *, downstream_model,
                       budget=None, aug_condition='uncapped',
                       augmentations=None, speed='full', precomputed=None,

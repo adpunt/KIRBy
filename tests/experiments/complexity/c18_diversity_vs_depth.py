@@ -30,6 +30,7 @@ from experiments._shared import (
     cv_split, get_domain_metric,
     compute_feature_importance,
     build_fold_hybrid, get_precomputed_search, get_best_for_downstream,
+    get_best_search_for_downstream,
 )
 
 
@@ -140,23 +141,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'per_budget': {},
     }
 
-    # Precompute search for the "natural" condition
+    # Per-budget blueprint discovery via pool helper (best (tier, aug_cond)
+    # for downstream_model='rf' at each budget; may differ across budgets).
     augmentations = data.get('augmentations')
-    search = None
-    try:
-        # 2026-05-22: switched general→top for capped (general/capped
-        # precompute dropped; cache-hits the top/capped file instead).
-        search = get_precomputed_search(
-            reps, labels, groups,
-            aug_condition='capped', augmentations=augmentations,
-            speed=config.get('search_speed', 'full'),
-            precomputed=data.get('precomputed_searches_top'),
-            dataset_name=dataset_name, tier='top', task_type=task_type)
-    except Exception as e:
-        print(f"  WARNING: search failed: {e}")
 
     for budget in budgets:
         print(f"\n  Budget={budget}:")
+        try:
+            search, meta = get_best_search_for_downstream(
+                reps, labels, groups,
+                downstream_model='rf', budget=budget,
+                augmentations=augmentations,
+                speed=config.get('search_speed', 'full'),
+                dataset_name=dataset_name, task_type=task_type,
+                data=data,
+            )
+        except Exception as e:
+            print(f"  WARNING: pool search failed: {e}")
+            search, meta = None, None
         fold_scores = {}  # {condition_name: [per_fold_scores]}
 
         for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
@@ -199,11 +201,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     _score_prediction(rf, X_va_s, y_val, metric_fn, task_type))
 
             # Natural hybrid (per-fold via search blueprint)
-            if search is not None:
+            if meta is not None:
                 try:
-                    best_config = get_best_for_downstream(
-                        search, 'rf', budget=budget)
-                    if best_config and 'blueprint' in best_config:
+                    best_config = meta['best_config']
+                    if 'blueprint' in best_config:
                         bp = best_config['blueprint']
                         train_augs = (
                             {n: A[train_idx] for n, A in augmentations.items()}
