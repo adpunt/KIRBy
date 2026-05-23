@@ -88,23 +88,15 @@ def build_models(rep_name, pretrain_dir, rep_dim=None):
     pt_path = os.path.join(pretrain_dir, f'{rep_name}_{hs_str}.pt')
     has_pretrained = os.path.exists(pt_path)
 
+    # GP previously enabled only for rep_dim <= 500 — that produced an
+    # asymmetric model set across reps (ECFP4/mordred skipped GP) and
+    # muddied the cross-rep model comparison. Dropped entirely (P1-2).
     models = {
         'dnn_scratch': DNNRegressor(
             hidden_sizes=HIDDEN_SIZES, dropout=0.2, lr=0.001,
             epochs=200, batch_size=256, patience=20, random_state=42),
         'ridge': RidgeCV(alphas=np.logspace(-4, 4, 50)),
     }
-
-    # GP is O(n^3) with full kernel matrix — impractical for high-dim reps
-    # (e.g. ECFP4=2048D, mordred=1613D with n>3000 takes hours per fold)
-    if rep_dim is not None and rep_dim <= 500:
-        from sklearn.gaussian_process import GaussianProcessRegressor
-        from sklearn.gaussian_process.kernels import RBF, ConstantKernel
-        models['gp'] = GaussianProcessRegressor(
-            kernel=ConstantKernel() * RBF(),
-            n_restarts_optimizer=3, random_state=42)
-    elif rep_dim is not None:
-        print(f"    (skipping GP: dim={rep_dim} > 500)")
 
     if has_pretrained:
         models['dnn_tl_full'] = PretrainedDNNRegressor(
@@ -187,19 +179,22 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pretrain_dir):
 
     # Build hybrid and add as another "rep" (evaluated with non-TL models only)
     try:
-        from kirby.find_best_hybrid import find_best_hybrid
         from kirby.hybrid import apply_feature_selection
-        from experiments._shared import FULL_BUDGETS
-        # No shared precompute for these datasets. Hardcode (general, none)
-        # — no augmentations in this transfer-learning experiment.
-        search = find_best_hybrid(
-            base_reps=reps, labels=labels, groups=groups,
-            budgets=FULL_BUDGETS,
-            speed='full', return_fitted=True, verbose=False, cache=True,
-            dataset_name=dataset_name, tier='general',
-            metric='rmse', task_type=task_type,
-            augmentation_strategy='none', adaptive_pruning=0.25)
-        fitted = search.fitted_results.get('rf')
+        from experiments._shared import (
+            get_best_search_for_downstream)
+        # Use the pool helper so we benefit from any precomputed (tier, aug)
+        # cache that already exists for logd/caco2 (no augs for transfer
+        # learning, so only 'none' aug condition is eligible).
+        search, _meta = get_best_search_for_downstream(
+            reps, labels, groups,
+            downstream_model='rf', budget=None,
+            augmentations=None, augmentation_strategy='none',
+            speed='full', metric='rmse', task_type=task_type,
+            dataset_name=dataset_name,
+            return_fitted=True, adaptive_pruning=0.25,
+        )
+        fitted = (search.fitted_results.get('rf')
+                  if search is not None else None)
         if fitted is not None:
             fi = {r: {'selected_indices': idx}
                   for r, idx in fitted.selected_indices.items()}

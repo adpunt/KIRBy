@@ -289,16 +289,22 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
 
     _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
                                    dataset_label=f"{dataset_name}/{pool_name}")
+    # Sanitize condition_suffix: pool_name contains spaces / '+' which can
+    # produce ambiguous cache filenames (P1-6).
+    safe_suffix = pool_name.lower().replace('+', '_plus_').replace(' ', '_').replace('-', '_')
     search, _meta = get_best_search_for_downstream(
         pool_reps, labels, groups,
         downstream_model='rf', budget=None,
         augmentations=None,
+        # Explicit 'none' avoids cache-key collision with real
+        # uncapped-augmentation runs (project_cache_collision_fix).
+        augmentation_strategy='none',
         speed='full',
         metric='rmse',
         task_type='regression',
         dataset_name=dataset_name,
         return_fitted=True,
-        condition_suffix=pool_name,
+        condition_suffix=safe_suffix,
         adaptive_pruning=0.25,
         **_pkw,
     )

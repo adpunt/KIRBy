@@ -253,7 +253,14 @@ def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruni
     # augmentation = ['paratope', 'structural']
     try:
         from kirby.hybrid import apply_feature_selection
-        grp = groups if groups is not None else np.arange(n)
+        # Prefer the hierarchical fold assignments as the group label so the
+        # internal evaluator's CV does not degenerate to LeaveOneOut (P1-3).
+        if groups is not None:
+            grp = groups
+        elif fold_assignments is not None:
+            grp = np.asarray(fold_assignments)
+        else:
+            grp = np.arange(n)
         AUG_REPS = {'paratope', 'structural'}
         base = {k: v for k, v in reps.items() if k not in AUG_REPS}
         aug_dict = {k: v for k, v in reps.items() if k in AUG_REPS}

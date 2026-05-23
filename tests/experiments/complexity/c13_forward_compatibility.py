@@ -224,6 +224,7 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
 
     scores = []
     allocation_dicts = []
+    last_feature_info = None
     sample_X = next(iter(reps.values()))
 
     for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, mode=mode):
@@ -243,6 +244,7 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
         # Extract allocation from feature_info
         alloc = feature_info.get('allocation', {})
         allocation_dicts.append(alloc)
+        last_feature_info = feature_info
 
         scaler = StandardScaler()
         X_train_s = scaler.fit_transform(X_train)
@@ -266,6 +268,7 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
         'baselines': convert_numpy(search.baselines),
         'allocation': avg_alloc,
         'n_features': best.get('n_features', sum(avg_alloc.values()) if avg_alloc else 0),
+        'feature_info': last_feature_info or {},  # consumed by modality_novelty
         'blueprint': {
             'allocation_method': blueprint.allocation_method,
             'importance_method': blueprint.importance_method,

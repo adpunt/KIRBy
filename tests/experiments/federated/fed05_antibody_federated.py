@@ -33,7 +33,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import time
 import warnings
 import numpy as np
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 from scipy.stats import zscore
 
 from experiments._shared import (
@@ -41,13 +41,13 @@ from experiments._shared import (
     cap_dimensions, get_domain_metric, FULL_BUDGETS,
 )
 from experiments.federated.federated_helpers import (
-    compute_reg_metrics, inject_noise_per_silo,
+    compute_reg_metrics, compute_clf_metrics, inject_noise_per_silo,
     federated_feature_selection, importance_profile_transfer,
     extract_importance_profile, compare_importance_profiles,
     cluster_antibody_silos,
     predict_fluid_quality_ensemble_regression,
 )
-from kirby.hybrid import create_hybrid, apply_feature_selection
+from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
 from kirby.find_best_hybrid import find_best_hybrid
 
 
@@ -93,7 +93,12 @@ def _split_silo(sd, seed=42):
 def _silo_baseline(sd, shared_reps, seed=42,
                    alloc='performance_weighted', imp='treeshap',
                    int_eval='match'):
-    """Train create_hybrid on one silo and evaluate. Returns metrics + fi."""
+    """Train create_hybrid on one silo and evaluate. Returns metrics + fi.
+
+    Routes the downstream model + metric on the silo's task_type — P1-4
+    fix: prior hardcoded RandomForestRegressor silently mis-handled clf
+    silos.
+    """
     reps_s = {r: sd['reps'][r] for r in shared_reps if r in sd['reps']}
     if len(reps_s) < 2:
         reps_s = sd['reps']
@@ -103,17 +108,40 @@ def _silo_baseline(sd, shared_reps, seed=42,
     rep_te = {r: arr[te] for r, arr in reps_s.items()}
     y_tr, y_te = sd['labels'][tr], sd['labels'][te]
 
+    s_augs = sd.get('augmentations')
+    s_aug_cond = 'uncapped' if s_augs else 'none'
+    tr_augs = ({k: v[tr] for k, v in s_augs.items()} if s_augs else None)
+    te_augs = ({k: v[te] for k, v in s_augs.items()} if s_augs else None)
+
     X_h, fi = create_hybrid(
         rep_tr, y_tr,
         allocation_method=alloc,
         importance_method=imp,
-        internal_evaluator=int_eval)
+        internal_evaluator=int_eval,
+        augmentations=tr_augs,
+        augmentation_strategy=s_aug_cond)
     X_h_te = apply_feature_selection(rep_te, fi)
+    _aug_info_b = fi.get('augmentation_info') if isinstance(fi, dict) else None
+    if _aug_info_b and te_augs:
+        _X_te_aug_b = apply_augmentation_selection(te_augs, _aug_info_b)
+        if _X_te_aug_b is not None:
+            X_h_te = np.hstack([X_h_te, _X_te_aug_b])
 
-    reg = RandomForestRegressor(n_estimators=150, max_depth=15, random_state=0)
-    reg.fit(X_h, y_tr)
-    y_pred = reg.predict(X_h_te)
-    metrics = compute_reg_metrics(y_te, y_pred)
+    if sd.get('task_type') == 'classification':
+        clf = RandomForestClassifier(
+            n_estimators=150, max_depth=15,
+            class_weight='balanced', random_state=0)
+        clf.fit(X_h, y_tr)
+        y_pred = clf.predict(X_h_te)
+        y_prob = (clf.predict_proba(X_h_te)
+                  if hasattr(clf, 'predict_proba') else None)
+        metrics = compute_clf_metrics(y_te, y_pred, y_prob)
+    else:
+        reg = RandomForestRegressor(
+            n_estimators=150, max_depth=15, random_state=0)
+        reg.fit(X_h, y_tr)
+        y_pred = reg.predict(X_h_te)
+        metrics = compute_reg_metrics(y_te, y_pred)
     metrics['n_features'] = int(X_h.shape[1])
     return metrics, fi, (tr, te)
 
@@ -192,8 +220,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             independent[sname] = metrics
             silo_fis[sname] = fi
             silo_splits[sname] = split
-            print(f"RMSE={metrics['rmse']:.4f}  "
-                  f"rho={metrics['spearman_rho']:.4f}")
+            if 'rmse' in metrics:
+                print(f"RMSE={metrics['rmse']:.4f}  "
+                      f"rho={metrics['spearman_rho']:.4f}")
+            else:
+                print(f"MCC={metrics.get('mcc', float('nan')):.4f}  "
+                      f"BAC={metrics.get('bac', float('nan')):.4f}")
         except Exception as e:
             independent[sname] = {'error': str(e)}
             print(f"FAILED: {e}")
@@ -272,6 +304,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             y_tr = sd['labels'][tr]
             rep_tr = {r: arr[tr] for r, arr in silo_reps.items()}
             rep_te = {r: arr[te] for r, arr in silo_reps.items()}
+            s_augs = sd.get('augmentations')
+            s_aug_cond = 'uncapped' if s_augs else 'none'
+            aug_tr = ({k: v[tr] for k, v in s_augs.items()} if s_augs else None)
 
             # Cluster on TRAIN data only (no test leakage into clusters)
             sub_silo_indices = cluster_antibody_silos(
@@ -295,6 +330,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             for c_id, c_idx in train_sub_indices.items():
                 c_reps = {r: arr[c_idx] for r, arr in rep_tr.items()}
                 c_labels = y_tr[c_idx]
+                c_augs = ({k: v[c_idx] for k, v in aug_tr.items()}
+                          if aug_tr else None)
                 c_budget = min(30, len(c_idx) // 3)  # conservative for small clusters
                 if c_budget < 5:
                     continue
@@ -303,7 +340,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         c_reps, c_labels,
                         allocation_method=_alloc,
                         importance_method=_imp,
-                        internal_evaluator=_int_eval)
+                        internal_evaluator=_int_eval,
+                        augmentations=c_augs,
+                        augmentation_strategy=s_aug_cond)
                     profiles[c_id] = extract_importance_profile(fi_c)
                 except Exception:
                     pass
@@ -478,11 +517,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 rep_tr = {r: arr[p_tr] for r, arr in pool_valid_reps.items()}
                 rep_te = {r: arr[p_te] for r, arr in pool_valid_reps.items()}
 
+                # Augmentations would require cross-silo concatenation —
+                # same shape contract as labels. Skip with explicit 'none'.
                 X_h, fi = create_hybrid(
                     rep_tr, pool_labels[p_tr],
                     allocation_method=_alloc,
                     importance_method=_imp,
-                    internal_evaluator=_int_eval)
+                    internal_evaluator=_int_eval,
+                    augmentation_strategy='none')
                 X_h_te = apply_feature_selection(rep_te, fi)
 
                 reg = RandomForestRegressor(
@@ -583,13 +625,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 for r in div_silos[dname]:
                     all_div_reps_tr[r] = sd_lead['reps'][r][tr]
                     all_div_reps_te[r] = sd_lead['reps'][r][te]
+            lead_augs = sd_lead.get('augmentations')
+            lead_aug_cond = 'uncapped' if lead_augs else 'none'
+            lead_tr_augs = ({k: v[tr] for k, v in lead_augs.items()}
+                            if lead_augs else None)
+            lead_te_augs = ({k: v[te] for k, v in lead_augs.items()}
+                            if lead_augs else None)
 
             X_h, fi_h = create_hybrid(
                 all_div_reps_tr, y_tr,
                 allocation_method=_alloc,
                 importance_method=_imp,
-                internal_evaluator=_int_eval)
+                internal_evaluator=_int_eval,
+                augmentations=lead_tr_augs,
+                augmentation_strategy=lead_aug_cond)
             X_h_te = apply_feature_selection(all_div_reps_te, fi_h)
+            _aug_info_h = fi_h.get('augmentation_info') if isinstance(fi_h, dict) else None
+            if _aug_info_h and lead_te_augs:
+                _X_te_aug_h = apply_augmentation_selection(lead_te_augs, _aug_info_h)
+                if _X_te_aug_h is not None:
+                    X_h_te = np.hstack([X_h_te, _X_te_aug_h])
 
             reg_h = RandomForestRegressor(
                 n_estimators=150, max_depth=15, random_state=0)
@@ -666,14 +721,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 except Exception:
                     weights[sname] = 1.0
 
-            # Weighted average prediction
-            w_arr = np.array([weights[s] for s in preds])
+            # Weighted average prediction.
+            # Freeze silo order in one list so weights and preds can't drift
+            # apart if anything iterates `preds` later (P1-13).
+            silo_order = list(preds)
+            w_arr = np.array([weights[s] for s in silo_order])
             w_arr /= w_arr.sum()
             ensemble_pred = sum(
-                w * preds[s] for s, w in zip(preds, w_arr))
+                w * preds[s] for s, w in zip(silo_order, w_arr))
             c7_m = compute_reg_metrics(y_te, ensemble_pred)
             c7_m['weights'] = convert_numpy(
-                {s: float(w) for s, w in zip(preds, w_arr)})
+                {s: float(w) for s, w in zip(silo_order, w_arr)})
             c7_per_silo[target_name] = c7_m
             print(f"    {target_name}: RMSE={c7_m['rmse']:.4f}  "
                   f"rho={c7_m['spearman_rho']:.4f}")

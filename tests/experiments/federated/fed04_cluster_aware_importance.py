@@ -46,7 +46,8 @@ def _compute_cluster_importance(train_reps, train_labels, silo_indices, k,
                                 budget=BUDGET,
                                 alloc='performance_weighted',
                                 imp='treeshap',
-                                int_eval='match'):
+                                int_eval='match',
+                                augs=None, aug_cond='none'):
     """Run create_hybrid per cluster and extract importance profiles.
 
     Returns:
@@ -70,6 +71,8 @@ def _compute_cluster_importance(train_reps, train_labels, silo_indices, k,
 
         cluster_reps = {r: arr[idx] for r, arr in train_reps.items()}
         cluster_labels = train_labels[idx]
+        cluster_augs = ({k: v[idx] for k, v in augs.items()}
+                        if augs else None)
 
         try:
             _, fi = create_hybrid(
@@ -78,6 +81,8 @@ def _compute_cluster_importance(train_reps, train_labels, silo_indices, k,
                 importance_method=imp,
                 budget=budget,
                 internal_evaluator=int_eval,
+                augmentations=cluster_augs,
+                augmentation_strategy=aug_cond,
             )
             feature_infos[s] = fi
             profile = extract_importance_profile(fi)
@@ -173,6 +178,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     train_reps = {r: arr[train_idx] for r, arr in reps.items()}
     test_reps = {r: arr[test_idx] for r, arr in reps.items()}
+    train_augs = ({k: v[train_idx] for k, v in augs.items()}
+                  if augs else None)
 
     # CLUSTER TRAINING DATA ONLY — matching FLuID's pattern
     t0 = time.time()
@@ -197,7 +204,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     profiles, feature_infos, cluster_stats = _compute_cluster_importance(
         train_reps, y_train, train_silo_indices, K,
-        alloc=_alloc, imp=_imp, int_eval=_int_eval)
+        alloc=_alloc, imp=_imp, int_eval=_int_eval,
+        augs=train_augs, aug_cond=aug_cond)
 
     # Global baseline (full training set)
     print("  Global (all clusters)...")
@@ -206,7 +214,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         allocation_method=_alloc,
         importance_method=_imp,
         budget=BUDGET,
-        internal_evaluator=_int_eval)
+        internal_evaluator=_int_eval,
+        augmentations=train_augs,
+        augmentation_strategy=aug_cond)
     global_profile = extract_importance_profile(fi_global)
     global_top = max(global_profile, key=global_profile.get) if global_profile else 'none'
 

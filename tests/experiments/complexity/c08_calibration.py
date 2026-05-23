@@ -239,9 +239,24 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 # Conformal classification: nonconformity = 1 - P(true class)
                 if hasattr(model_conf, 'predict_proba'):
                     cal_probs = model_conf.predict_proba(X_cal)
-                    cal_scores = np.array([1 - cal_probs[i, int(y_cal[i])]
-                                           for i in range(len(y_cal))
-                                           if int(y_cal[i]) < cal_probs.shape[1]])
+                    # Map y_cal labels to column indices in model_conf.classes_.
+                    # Calibration points whose true label was never seen in proper-train
+                    # are reported and assigned worst-case nonconformity (1.0) rather
+                    # than silently dropped (which would bias coverage).
+                    class_to_col = {c: j for j, c in enumerate(model_conf.classes_)}
+                    cal_scores = np.empty(len(y_cal), dtype=float)
+                    n_unseen = 0
+                    for i in range(len(y_cal)):
+                        col = class_to_col.get(int(y_cal[i]))
+                        if col is None:
+                            cal_scores[i] = 1.0
+                            n_unseen += 1
+                        else:
+                            cal_scores[i] = 1 - cal_probs[i, col]
+                    if n_unseen:
+                        print(f"    fold {fold_i}: {n_unseen}/{len(y_cal)} "
+                              f"calibration points have classes unseen in proper-train "
+                              f"(assigned worst-case nonconformity 1.0)")
                     if len(cal_scores) == 0:
                         print(f"    fold {fold_i}: no valid calibration scores")
                         continue

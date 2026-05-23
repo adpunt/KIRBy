@@ -961,6 +961,13 @@ def run(data, config, output_dir, dataset_name, sub_analyses=None, **kwargs):
     print("EXPERIMENT C15: ML THEORY DEPTH")
     print("=" * 70)
 
+    task_type = data.get('task_type')
+    if task_type != 'regression':
+        # Sub-analyses 15c (_eval_at_budget*) and 15d hardcode RandomForestRegressor + Ridge.
+        # Mirroring c04: gate the whole experiment to regression.
+        print(f"  Skipping: c15 is regression-only (task_type={task_type}).")
+        return {'error': 'regression_only', 'task_type': task_type}
+
     budgets = config['budgets']
     all_subs = sub_analyses or ['15a', '15b', '15c', '15d']
     results = {}

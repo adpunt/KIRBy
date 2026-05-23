@@ -31,12 +31,8 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     get_model_factories, cv_split,
     get_domain_metric, cap_dimensions,
-    get_precomputed_search, build_fold_hybrid,
-    extract_top3_base_reps, get_best_for_downstream,
+    build_fold_hybrid, extract_top3_base_reps,
     get_best_search_for_downstream,
-)
-from kirby.find_best_hybrid import (
-    _select_top_features_per_fold, HIGH_DIM_FILTER_THRESHOLD,
 )
 
 
@@ -373,7 +369,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"{best_pca['total_fit_time_s']:>8.3f} "
               f"{best_hyb['total_fit_time_s']:>8.3f} {speedup:>7.1f}x")
 
-    top3 = extract_top3_base_reps(search) if search is not None else []
+    top3 = extract_top3_base_reps(last_search) if last_search is not None else []
     return {
         'results': results,
         'n_reps': n_reps,

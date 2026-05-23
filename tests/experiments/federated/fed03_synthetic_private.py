@@ -409,11 +409,15 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
         single_reps = {ecfp4_key: combined_reps[ecfp4_key]}
         train_single = {ecfp4_key: single_reps[ecfp4_key][train_idx]}
         test_single = {ecfp4_key: single_reps[ecfp4_key][test_idx]}
+        # Part A pools ChEMBL + Lhasa molecules, but Lhasa-only augmentations
+        # don't align with the combined row count. Explicit 'none' avoids
+        # the cache-key collision (project_cache_collision_fix.md).
         X_h_c6, fi_c6 = create_hybrid(
             train_single, y_train,
             allocation_method=_alloc,
             importance_method=_imp,
-            internal_evaluator=_int_eval)
+            internal_evaluator=_int_eval,
+            augmentation_strategy='none')
         X_h_c6_test = apply_feature_selection(test_single, fi_c6)
         clf_c6 = RandomForestClassifier(
             n_estimators=150, max_depth=15,
@@ -525,7 +529,7 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
     Silo B (physicochemical): mordred, pdv
     Silo C (learned): molformer, chemberta
     """
-    from kirby.hybrid import create_hybrid, apply_feature_selection
+    from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
 
     print("\n" + "=" * 70)
     print("FED03 PART B: ASYMMETRIC REP SILOS (Strategy 4)")
@@ -631,13 +635,24 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
             for r in silo_reps[sname]:
                 all_silo_reps_tr[r] = train_reps[r]
                 all_silo_reps_te[r] = test_reps[r]
+        train_augs_c2 = ({k: v[train_idx] for k, v in augs.items()}
+                         if augs else None)
+        test_augs_c2 = ({k: v[test_idx] for k, v in augs.items()}
+                        if augs else None)
 
         X_h_tr, fi = create_hybrid(
             all_silo_reps_tr, y_train,
             allocation_method=_alloc,
             importance_method=_imp,
-            internal_evaluator=_int_eval)
+            internal_evaluator=_int_eval,
+            augmentations=train_augs_c2,
+            augmentation_strategy=aug_cond)
         X_h_te = apply_feature_selection(all_silo_reps_te, fi)
+        _aug_info = fi.get('augmentation_info') if isinstance(fi, dict) else None
+        if _aug_info and test_augs_c2:
+            _X_te_aug = apply_augmentation_selection(test_augs_c2, _aug_info)
+            if _X_te_aug is not None:
+                X_h_te = np.hstack([X_h_te, _X_te_aug])
 
         if is_clf:
             model = RandomForestClassifier(
@@ -664,16 +679,17 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
     # C3: Federated feature selection (privacy-preserving)
     print("  C3: Federated FS (per-silo importance)...")
     try:
-        # Each silo gets ALL training samples but only its OWN reps
-        silo_indices_all = {}  # all silos see all molecules
-        for i, sname in enumerate(silo_names, 1):
-            silo_indices_all[i] = np.arange(len(y_train))
+        # Each silo sees ALL training rows but only its OWN reps. We don't
+        # actually need a {silo:indices} dict because the per-silo loop below
+        # restricts reps directly; the loop iterates over silo_names.
+        # (Removed dead silo_indices_all that misleadingly implied federation.)
 
-        # But restrict rep_dict per silo during federated FS
-        # We run create_hybrid per silo with only that silo's reps
         from kirby.hybrid import create_hybrid as _ch
-        from sklearn.linear_model import RidgeCV, RidgeClassifierCV
-        from sklearn.model_selection import ShuffleSplit as _SS
+        from sklearn.model_selection import GroupShuffleSplit as _GSS, ShuffleSplit as _SS
+        from experiments._shared import get_model_factories
+
+        silo_task_type = 'classification' if is_clf else 'regression'
+        train_groups = groups[train_idx] if groups is not None else None
 
         silo_fis = {}
         silo_scores = {}
@@ -687,13 +703,27 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
                     importance_method=_imp,
                     internal_evaluator=_int_eval)
                 silo_fis[i] = fi_s
-                # Quick validation score
-                ss = _SS(n_splits=1, test_size=0.2, random_state=42 + i)
-                tr, va = next(ss.split(X_s))
-                evaluator = (RidgeClassifierCV() if is_clf else RidgeCV())
-                evaluator.fit(X_s[tr], y_train[tr])
-                silo_scores[i] = max(0.0, float(
-                    evaluator.score(X_s[va], y_train[va])))
+                # Group-aware internal val split + matched-model evaluator
+                # (P0-3 + P0-5).
+                if train_groups is not None and len(np.unique(train_groups)) >= 2:
+                    splitter = _GSS(
+                        n_splits=1, test_size=0.2, random_state=42 + i)
+                    tr, va = next(splitter.split(
+                        X_s, y_train, groups=train_groups))
+                else:
+                    splitter = _SS(
+                        n_splits=1, test_size=0.2, random_state=42 + i)
+                    tr, va = next(splitter.split(X_s))
+                eval_factory = get_model_factories(
+                    [_int_eval], task_type=silo_task_type,
+                    n_samples=len(tr)).get(_int_eval)
+                if eval_factory is None:
+                    silo_scores[i] = 0.0
+                else:
+                    evaluator = eval_factory()
+                    evaluator.fit(X_s[tr], y_train[tr])
+                    silo_scores[i] = max(0.0, float(
+                        evaluator.score(X_s[va], y_train[va])))
             except Exception:
                 silo_fis[i] = None
                 silo_scores[i] = 0.0
@@ -876,24 +906,52 @@ def _run_antibody_federated(data, config, output_dir, dataset_name):
             s_alloc = sbp.allocation_method if sbp else _alloc
             s_imp = sbp.importance_method if sbp else _imp
             s_int_eval = sbp.internal_evaluator if sbp else _int_eval
+            silo_task_type = sd.get('task_type', 'regression')
+            silo_is_clf = (silo_task_type == 'classification')
+            s_augs = sd.get('augmentations')
+            s_aug_cond = 'uncapped' if s_augs else 'none'
+            tr_augs = ({k: v[tr] for k, v in s_augs.items()} if s_augs else None)
+            te_augs = ({k: v[te] for k, v in s_augs.items()} if s_augs else None)
             X_h, fi = create_hybrid(
                 rep_tr, y_tr,
                 allocation_method=s_alloc,
                 importance_method=s_imp,
-                internal_evaluator=s_int_eval)
+                internal_evaluator=s_int_eval,
+                augmentations=tr_augs,
+                augmentation_strategy=s_aug_cond)
             X_h_te = apply_feature_selection(rep_te, fi)
+            _aug_info_c = fi.get('augmentation_info') if isinstance(fi, dict) else None
+            if _aug_info_c and te_augs:
+                _X_te_aug_c = apply_augmentation_selection(te_augs, _aug_info_c)
+                if _X_te_aug_c is not None:
+                    X_h_te = np.hstack([X_h_te, _X_te_aug_c])
             silo_fis[silo_name] = fi
 
-            reg = RandomForestRegressor(
-                n_estimators=150, max_depth=15, random_state=0)
-            reg.fit(X_h, y_tr)
-            y_pred = reg.predict(X_h_te)
-            metrics = compute_reg_metrics(y_te, y_pred)
-            metrics['n_features'] = int(X_h.shape[1])
-            metrics['allocation'] = convert_numpy(fi.get('allocation', {}))
-            independent[silo_name] = metrics
-            print(f"    {silo_name}: RMSE={metrics['rmse']:.4f}  "
-                  f"rho={metrics['spearman_rho']:.4f}")
+            if silo_is_clf:
+                model = RandomForestClassifier(
+                    n_estimators=150, max_depth=15,
+                    class_weight='balanced', random_state=0)
+                model.fit(X_h, y_tr)
+                y_pred = model.predict(X_h_te)
+                y_prob = (model.predict_proba(X_h_te)
+                          if hasattr(model, 'predict_proba') else None)
+                metrics = compute_clf_metrics(y_te, y_pred, y_prob)
+                metrics['n_features'] = int(X_h.shape[1])
+                metrics['allocation'] = convert_numpy(fi.get('allocation', {}))
+                independent[silo_name] = metrics
+                print(f"    {silo_name}: MCC={metrics['mcc']:.4f}  "
+                      f"BAC={metrics['bac']:.4f}")
+            else:
+                reg = RandomForestRegressor(
+                    n_estimators=150, max_depth=15, random_state=0)
+                reg.fit(X_h, y_tr)
+                y_pred = reg.predict(X_h_te)
+                metrics = compute_reg_metrics(y_te, y_pred)
+                metrics['n_features'] = int(X_h.shape[1])
+                metrics['allocation'] = convert_numpy(fi.get('allocation', {}))
+                independent[silo_name] = metrics
+                print(f"    {silo_name}: RMSE={metrics['rmse']:.4f}  "
+                      f"rho={metrics['spearman_rho']:.4f}")
         except Exception as e:
             independent[silo_name] = {'error': str(e)}
             print(f"    {silo_name}: FAILED: {e}")
@@ -946,11 +1004,15 @@ def _run_antibody_federated(data, config, output_dir, dataset_name):
             rep_tr = {r: arr[tr] for r, arr in pooled_reps.items()}
             rep_te = {r: arr[te] for r, arr in pooled_reps.items()}
 
+            # Pooled DDG augmentations would require concatenating per-silo
+            # arrays the same way labels/reps are pooled. Skip for safety —
+            # passing 'none' explicitly avoids the cache-key collision.
             X_h, fi = create_hybrid(
                 rep_tr, pooled_labels[tr],
                 allocation_method=_alloc,
                 importance_method=_imp,
-                internal_evaluator=_int_eval)
+                internal_evaluator=_int_eval,
+                augmentation_strategy='none')
             X_h_te = apply_feature_selection(rep_te, fi)
 
             reg = RandomForestRegressor(

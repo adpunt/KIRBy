@@ -309,7 +309,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 imp_scores = imp['hybrid']
 
                 sample_weights = compute_reliability_scores(
-                    X_train_s, y_train, imp_scores, k=k_neighbors)
+                    X_train_s, y_train, imp_scores, k=k_neighbors,
+                    is_clf=is_clf)
 
                 reliability_stats.append({
                     'mean': float(np.mean(sample_weights)),

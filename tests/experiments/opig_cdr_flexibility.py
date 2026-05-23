@@ -210,33 +210,29 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
     # Build hybrid
     # No augmentation reps for CDR flexibility classification
     try:
-        from kirby.find_best_hybrid import find_best_hybrid
         from kirby.hybrid import apply_feature_selection
-        from experiments._shared import resolve_pruning_kwargs
-        # Per-condition_suffix cache key means precompute doesn't exist for
-        # this dataset. Hardcode single (tier=general, aug=none) — matches
-        # the empirical "general/none wins ~3x more often" trend in the
-        # main pool (precompute_registry.json). No augs for this experiment.
+        from experiments._shared import (
+            resolve_pruning_kwargs, get_best_search_for_downstream)
         _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
                                        dataset_label=f"cdr_flex/{'_'.join(cdr_types)}")
-        search = find_best_hybrid(
-            base_reps=reps,
-            labels=labels, groups=groups,
-            metric='auc',
+        search, _meta = get_best_search_for_downstream(
+            reps, labels, groups,
+            downstream_model='rf', budget=None,
+            augmentations=None, augmentation_strategy='none',
+            speed='full', metric='auc',
             task_type='classification',
-            budgets=FULL_BUDGETS,
-            augmentation_strategy='none',
-            internal_evaluators=INTERNAL_EVALUATORS,
-            speed='full', return_fitted=True, verbose=False, cache=True,
             dataset_name='cdr_flexibility',
-            tier='general',
+            return_fitted=True,
+            internal_evaluators=INTERNAL_EVALUATORS,
             condition_suffix='_'.join(cdr_types),
             adaptive_pruning=0.25,
-            **_pkw)
-        top3 = extract_top3_base_reps(search)
+            **_pkw,
+        )
+        top3 = extract_top3_base_reps(search) if search is not None else None
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-        fitted = search.fitted_results.get('rf')
+        fitted = (search.fitted_results.get('rf')
+                  if search is not None else None)
         if fitted is not None:
             fi = {r: {'selected_indices': idx}
                   for r, idx in fitted.selected_indices.items()}

@@ -155,6 +155,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Get hybrid blueprint via pool helper
     budget = kwargs.get('budget', 100)
+    top3 = None  # ensure defined even if the search exits early
     try:
         search, meta = get_best_search_for_downstream(
             reps, labels, groups,

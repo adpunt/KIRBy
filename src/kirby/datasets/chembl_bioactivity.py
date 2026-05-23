@@ -325,7 +325,10 @@ def collect_downstream_inchikeys(datasets=None) -> Set[str]:
     sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / 'tests'))
 
     if datasets is None:
-        datasets = ['logd', 'caco2', 'herg', 'qm9',
+        # 'herg_ki' is ChEMBL hERG (Ki) used by Imrie transfer-learning eval.
+        # Listing both keeps the leakage filter correct whether downstream
+        # uses 'herg' (fluidigm) or 'herg_ki' (ChEMBL).
+        datasets = ['logd', 'caco2', 'herg', 'herg_ki', 'qm9',
                     'adme_hlm', 'adme_rlm', 'adme_mdr1', 'adme_solubility']
 
     all_keys = set()

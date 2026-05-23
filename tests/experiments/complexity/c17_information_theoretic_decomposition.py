@@ -189,13 +189,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("EXPERIMENT C17: INFORMATION-THEORETIC DECOMPOSITION")
     print("=" * 70)
 
+    task_type = data['task_type']
+    if task_type != 'regression':
+        # _rfe_select / _evaluate_strategy hardcode RandomForestRegressor.
+        # Mirroring c04: gate the whole experiment to regression.
+        print(f"  Skipping: c17 is regression-only (task_type={task_type}).")
+        return {'error': 'regression_only', 'task_type': task_type}
+
     reps = data['reps']
     labels = data['labels']
     groups = data['groups']
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
     metric_name, metric_fn, _ = get_domain_metric(data)
-    task_type = data['task_type']
 
     # Concatenate all reps
     X_concat = np.hstack([v for v in reps.values()])

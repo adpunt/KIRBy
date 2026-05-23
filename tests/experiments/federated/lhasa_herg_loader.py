@@ -17,10 +17,14 @@ import numpy as np
 import pandas as pd
 
 _local_default = '/Users/apunt/repos/dphil/data'
-_server_default = '/data/stat-cadd/scat9264/lhasa_data'
+_server_candidates = [
+    '/data/stat-ecr/scat9264/lhasa_data',   # current ARC host
+    '/data/stat-cadd/scat9264/lhasa_data',  # legacy
+]
+_server_resolved = next((p for p in _server_candidates if os.path.isdir(p)), None)
 _DEFAULT_DATA_DIR = os.environ.get(
     'LHASA_DATA_DIR',
-    _server_default if os.path.isdir(_server_default) else _local_default,
+    _server_resolved if _server_resolved else _local_default,
 )
 
 

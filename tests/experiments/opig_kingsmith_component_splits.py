@@ -205,16 +205,38 @@ def assign_component_groups(components, split_key):
     Returns:
         (groups, n_groups, group_names) tuple.
     """
-    values = []
+    # Collect raw values + their lowercased forms in parallel.
+    raw_values = []
+    norm_values = []
     for comp in components:
         val = comp.get(split_key, '')
-        # Normalize: strip whitespace, lowercase
-        val = str(val).strip().lower() if val else ''
-        values.append(val)
+        raw = str(val).strip() if val else ''
+        raw_values.append(raw)
+        norm_values.append(raw.lower())
 
-    unique_vals = sorted(set(values))
+    # P1-12 warning: case-insensitive grouping merges entries that differed
+    # only in capitalisation. If your BH CSV uses case to distinguish two
+    # distinct compounds this will silently collapse them.
+    raw_unique = set(raw_values)
+    norm_unique = set(norm_values)
+    if len(raw_unique) != len(norm_unique):
+        # Find the names that collapsed.
+        from collections import defaultdict
+        per_norm = defaultdict(set)
+        for raw, norm in zip(raw_values, norm_values):
+            per_norm[norm].add(raw)
+        collisions = {n: sorted(r) for n, r in per_norm.items() if len(r) > 1}
+        warnings.warn(
+            f"assign_component_groups[{split_key}]: case-insensitive grouping "
+            f"merged {len(raw_unique)} raw names into {len(norm_unique)} "
+            f"groups. Collisions: {collisions}. If these names refer to "
+            f"distinct compounds, drop the .lower() step.",
+            RuntimeWarning, stacklevel=2,
+        )
+
+    unique_vals = sorted(norm_unique)
     val_to_id = {v: i for i, v in enumerate(unique_vals)}
-    groups = np.array([val_to_id[v] for v in values])
+    groups = np.array([val_to_id[v] for v in norm_values])
     return groups, len(unique_vals), unique_vals
 
 
@@ -304,35 +326,37 @@ def evaluate_split(dataset_name, data, split_key, n_folds, pruning_mode='default
     aug_dict = {k: v for k, v in reps.items() if k in aug_reps}
 
     try:
-        from kirby.find_best_hybrid import find_best_hybrid
         from kirby.hybrid import apply_feature_selection
-        from experiments._shared import resolve_pruning_kwargs
+        from experiments._shared import (
+            resolve_pruning_kwargs, get_best_search_for_downstream)
 
-        # Per-loo-split cache key means no shared precompute. Hardcode
-        # (general, uncapped if aug else none) — uncapped is the empirical
-        # winner when augmentations exist (per registry analysis).
+        # Pool helper iterates (tier, aug_condition) cache files for the
+        # given condition_suffix — picks whichever scores best for 'rf'.
+        # Falls through to find_best_hybrid + cache when no precompute hit.
         _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
                                        dataset_label=f'{dataset_name}/loo_{split_key}')
-        search = find_best_hybrid(
-            base_reps=base_reps if base_reps else reps,
-            labels=labels, groups=groups,
-            metric='rmse',
-            task_type='regression',
-            budgets=FULL_BUDGETS,
+        aug_cond = 'uncapped' if aug_dict else 'none'
+        search, _meta = get_best_search_for_downstream(
+            base_reps if base_reps else reps, labels, groups,
+            downstream_model='rf', budget=None,
             augmentations=aug_dict if aug_dict else None,
-            augmentation_strategy='uncapped' if aug_dict else 'none',
+            augmentation_strategy=aug_cond,
+            speed='full', metric='rmse',
+            task_type='regression',
+            dataset_name=dataset_name,
+            return_fitted=True,
             internal_evaluators=INTERNAL_EVALUATORS,
-            speed='full', return_fitted=True, verbose=False, cache=True,
-            dataset_name=dataset_name, tier='general',
             condition_suffix=f'loo_{split_key}',
             adaptive_pruning=0.25,
-            **_pkw)
+            **_pkw,
+        )
 
-        top3 = extract_top3_base_reps(search)
+        top3 = extract_top3_base_reps(search) if search is not None else None
         if top3:
             print(f"  Top-3 base reps: {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
 
-        fitted = search.fitted_results.get('rf')
+        fitted = (search.fitted_results.get('rf')
+                  if search is not None else None)
         if fitted is not None:
             all_reps = {**reps}
             fi = {r: {'selected_indices': idx}
