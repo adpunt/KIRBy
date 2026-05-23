@@ -52,52 +52,51 @@ Commit `8550761` dropped `general/capped` precompute and redirected consumers to
 - `get_best_for_downstream(search, model, budget)` at `_shared.py:2499` — 5-level lookup chain that picks best config for (model, budget) from one SearchResult.
 - `get_precomputed_search` at `_shared.py:2235` — fetches one (tier, aug_cond) SearchResult from in-memory dict or disk cache.
 
-### New helpers
+### The helper (single function)
 
 ```python
-def get_best_blueprint_for_downstream(
-    data, downstream_model, budget,
-    *, dataset_name=None, task_type=None, domain=None, metric='auto',
-    speed='full', extra_aug_pool=None,
-):
-    """Pick the best blueprint across the full pool of available
-    (tier × aug_condition) precomputed SearchResults.
-
-    Pool considered:
-      - data['precomputed_searches']      keyed by ['none', 'uncapped']  (general tier)
-      - data['precomputed_searches_top']  keyed by ['none', 'uncapped', 'capped']  (top tier)
-      - (general/capped intentionally excluded — dropped 2026-05-22)
-
-    For each available SearchResult, look up the best (allocation, importance,
-    internal_evaluator) config for (downstream_model, budget) via
-    get_best_for_downstream. Compare all candidates by score, respecting
-    lower_is_better. Return the winner.
-
-    Returns:
-        (blueprint, metadata) where metadata = {
-            'tier': 'general' | 'top',
-            'aug_condition': 'none' | 'uncapped' | 'capped',
-            'score_mean': float,
-            'score_std': float,
-            'n_features': int,
-            'model': str,
-        }
-        Returns (None, None) if no candidates exist.
-    """
-
 def get_best_search_for_downstream(
     data, downstream_model, budget,
     *, dataset_name=None, task_type=None, domain=None, metric='auto',
-    speed='full',
+    speed='full', distance=False,
 ):
-    """Same selection logic but returns the winning SearchResult itself
-    (for callers that need search.baselines, search.fitted_results,
-    extract_top3_base_reps, etc).
+    """Pick the best precomputed SearchResult from the available pool of
+    (tier × aug_condition) combinations, for a given (downstream_model, budget).
+
+    Main pool (distance=False):
+      data['precomputed_searches']      keyed by ['none', 'uncapped']  (general tier)
+      data['precomputed_searches_top']  keyed by ['none', 'uncapped', 'capped']  (top tier)
+      (general/capped intentionally excluded — dropped 2026-05-22)
+
+    Distance pool (distance=True):
+      data['precomputed_searches_distance']      keyed by ['none', 'uncapped']
+      data['precomputed_searches_top_distance']  keyed by ['none', 'uncapped']
+      (no capped in either)
+
+    For each available SearchResult, look up the best config for
+    (downstream_model, budget) via get_best_for_downstream. Compare all
+    candidates by score (respecting search.lower_is_better). Return the winner.
 
     Returns:
-        (search, metadata)
+        (search, metadata) where metadata = {
+            'tier': 'general' | 'top' | 'general_distance' | 'top_distance',
+            'aug_condition': 'none' | 'uncapped' | 'capped',
+            'score_mean': float,
+            'model': str,
+            'budget': int,
+        }
+        Returns (None, None) if no candidates in the pool.
+
+    Callers who want just the blueprint pull it from the returned search:
+        search, meta = get_best_search_for_downstream(...)
+        bp = search.best_by_model_budget[downstream_model][budget]['blueprint']
+
+    Callers who want baselines / fitted_results / top-3 access them directly
+    on the returned search object.
     """
 ```
+
+**Why one function, not two:** the SearchResult contains the blueprint, so a caller wanting just the blueprint pulls it off the result. No information lost by returning the full SearchResult. Previous version of this roadmap had two functions — that was overdesign.
 
 ### Edge cases the helper must handle
 
