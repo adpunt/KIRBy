@@ -98,15 +98,13 @@ def _run_distance_concentration(data, budgets, dataset_name=None):
 
     # --- Per-budget analysis (hybrid at each budget) ---
     print(f"\n    Budget sweep (hybrid):")
-    _precomp = data.get('precomputed_searches')
     for budget in sorted(budgets):
         try:
-            X_hybrid, _, _search = get_fitted_hybrid(
+            X_hybrid, _, _search, _meta = get_fitted_pool_hybrid(
                 reps, labels, groups, downstream_model='rf',
-                budget=budget,
-                aug_condition='none', speed='full',
-                precomputed=_precomp,
-                dataset_name=dataset_name, tier='general', task_type=task_type)
+                budget=budget, augmentations=data.get('augmentations'),
+                speed='full', data=data,
+                dataset_name=dataset_name, task_type=task_type)
             X_hybrid_s = StandardScaler().fit_transform(X_hybrid)
             metrics = _compute_concentration_metrics(X_hybrid_s, k=5)
             results['per_budget'][budget] = {
