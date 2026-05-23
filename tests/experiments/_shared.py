@@ -512,6 +512,14 @@ def cv_split(groups, n_splits, X, labels, seed=42, mode='intermediary'):
                     pass
             yield from GroupKFold(n_splits=n_splits).split(X, labels, groups=groups)
         else:
+            n_groups_seen = 0 if groups is None else len(np.unique(groups))
+            warnings.warn(
+                f"cv_split: falling back to KFold(shuffle=True) — "
+                f"groups={'None' if groups is None else f'{n_groups_seen} unique'}, "
+                f"n_splits={n_splits}. Per project rule (feedback_no_random_splits.md) "
+                "this is forbidden for any production result; investigate the caller.",
+                RuntimeWarning, stacklevel=2,
+            )
             yield from KFold(n_splits=n_splits, shuffle=True, random_state=seed).split(X, labels)
 
 
@@ -1936,8 +1944,20 @@ def get_hybrid_features_and_weights(
     budget: Optional[int] = None,
     augmentations: Optional[Dict[str, np.ndarray]] = None,
     metric: str = 'rmse',
+    dataset_name: Optional[str] = None,
+    tier: str = 'general',
+    task_type: Optional[str] = None,
+    augmentation_strategy: Optional[str] = None,
 ) -> Tuple[np.ndarray, np.ndarray, SearchResult]:
-    """Run find_best_hybrid and return hybrid features + flat importance weights."""
+    """Run find_best_hybrid and return hybrid features + flat importance weights.
+
+    `dataset_name`/`tier` are forwarded so `find_best_hybrid(cache=True)` can
+    locate its cache file. Required (the cache layer raises ValueError without
+    them); pass `dataset_name=None` only if the caller can tolerate raising.
+    `augmentation_strategy` should be set explicitly when `augmentations` is
+    None to avoid the cache-key collision documented in
+    `project_cache_collision_fix.md`.
+    """
     kwargs = dict(
         base_reps=reps,
         labels=labels,
@@ -1948,11 +1968,21 @@ def get_hybrid_features_and_weights(
         verbose=False,
         cache=True,
         metric=metric,
+        dataset_name=dataset_name,
+        tier=tier,
     )
+    if task_type is not None:
+        kwargs['task_type'] = task_type
     if budget is not None:
         kwargs['budgets'] = [budget]
     if augmentations is not None:
         kwargs['augmentations'] = augmentations
+    if augmentation_strategy is not None:
+        kwargs['augmentation_strategy'] = augmentation_strategy
+    elif augmentations is None:
+        # Explicit 'none' avoids colliding with real uncapped-augmentation
+        # cache files when augmentations are absent.
+        kwargs['augmentation_strategy'] = 'none'
 
     search = find_best_hybrid(**kwargs)
     # Use RF as default downstream model for weight extraction

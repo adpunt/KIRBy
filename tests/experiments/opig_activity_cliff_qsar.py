@@ -293,36 +293,34 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
     # Augmentation config matches molecular datasets (caco2, logd) in DATASET_REPS:
     # augmentation = ['maccs', 'pharmacophore3d']
     try:
-        from kirby.find_best_hybrid import find_best_hybrid
         from kirby.hybrid import apply_feature_selection
-        from experiments._shared import resolve_pruning_kwargs
-        # Per-target cache key (200+ targets in chembl_qsar) means no
-        # shared precompute. Hardcode single (tier=general,
-        # aug=uncapped if aug else none) — when augs are present, uncapped
-        # is the empirical winner; when not, none is the only choice.
+        from experiments._shared import (
+            resolve_pruning_kwargs, get_best_search_for_downstream)
         AUG_REPS = {'maccs', 'pharmacophore3d'}
         base = {k: v for k, v in reps.items() if k not in AUG_REPS}
         aug_dict = {k: v for k, v in reps.items() if k in AUG_REPS}
         _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
                                        dataset_label=f'chembl_qsar/{target}')
-        search = find_best_hybrid(
-            base_reps=base if base else reps,
-            labels=labels, groups=groups,
-            metric='mae',
-            task_type='regression',
-            budgets=FULL_BUDGETS,
+        aug_cond = 'uncapped' if aug_dict else 'none'
+        search, _meta = get_best_search_for_downstream(
+            base if base else reps, labels, groups,
+            downstream_model='rf', budget=None,
             augmentations=aug_dict if aug_dict else None,
-            augmentation_strategy='uncapped' if aug_dict else 'none',
+            augmentation_strategy=aug_cond,
+            speed='full', metric='mae',
+            task_type='regression',
+            dataset_name='chembl_qsar',
+            return_fitted=True,
             internal_evaluators=INTERNAL_EVALUATORS,
-            speed='full', return_fitted=True, verbose=False, cache=True,
-            dataset_name='chembl_qsar', tier='general',
             condition_suffix=target,
             adaptive_pruning=0.25,
-            **_pkw)
-        top3 = extract_top3_base_reps(search)
+            **_pkw,
+        )
+        top3 = extract_top3_base_reps(search) if search is not None else None
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-        fitted = search.fitted_results.get('rf')
+        fitted = (search.fitted_results.get('rf')
+                  if search is not None else None)
         if fitted is not None:
             all_reps = {**reps, **(aug_dict or {})}
             fi = {r: {'selected_indices': idx}

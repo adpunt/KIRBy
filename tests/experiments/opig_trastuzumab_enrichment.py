@@ -248,14 +248,21 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
     print(f"  {n} samples, {n_binders} binders ({100*n_binders/n:.1f}%), "
           f"{n - n_binders} non-binders ({100*(n-n_binders)/n:.1f}%)")
 
-    # Groups by unique sequence identity
-    unique_seqs = {}
-    group_ids = np.zeros(n, dtype=int)
-    for i, s in enumerate(heavy_seqs):
-        if s not in unique_seqs:
-            unique_seqs[s] = len(unique_seqs)
-        group_ids[i] = unique_seqs[s]
-    groups = group_ids
+    # Use registry-provided groups (edit-distance buckets per
+    # DATASET_REGISTRY['tz_her2_binary']). Earlier code rebuilt groups by
+    # sequence identity, which collapsed Trastuzumab CDRH3 variants into
+    # ~N singletons and degenerated StratifiedGroupKFold to stratified
+    # random (P0-2 fix).
+    groups = data.get('groups')
+    if groups is None:
+        # Fall back to identity groups only when registry didn't supply them.
+        unique_seqs = {}
+        group_ids = np.zeros(n, dtype=int)
+        for i, s in enumerate(heavy_seqs):
+            if s not in unique_seqs:
+                unique_seqs[s] = len(unique_seqs)
+            group_ids[i] = unique_seqs[s]
+        groups = group_ids
 
     # Generate representations (with disk caching for expensive LM reps)
     from experiments.rep_cache import compute_or_load_reps
@@ -264,6 +271,7 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
         heavy_seqs=heavy_seqs,
         light_seqs=light_seqs,
         dataset_tag='tz_her2_binary',
+        mutations=data.get('mutations'),
     )
 
     if not reps:
@@ -283,6 +291,9 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
             reps, labels, groups,
             downstream_model='rf', budget=None,
             augmentations=None,
+            # Explicit 'none' avoids cache-key collision with real
+            # uncapped-augmentation runs (project_cache_collision_fix).
+            augmentation_strategy='none',
             speed='full',
             metric='auc',
             task_type='classification',
@@ -460,6 +471,15 @@ def main():
 
     args = parser.parse_args()
     rep_names = args.reps.split(',') if args.reps else DEFAULT_REPS
+    # Validate rep names against the registries so a typo doesn't silently
+    # drop a rep (P1-8 fix).
+    from kirby.representations.antibody import ANTIBODY_REPS
+    from kirby.representations.mutation import MUTATION_REPS
+    _known = set(ANTIBODY_REPS) | set(MUTATION_REPS)
+    _unknown = [r for r in rep_names if r not in _known]
+    if _unknown:
+        print(f"  WARNING: unknown rep name(s) {sorted(_unknown)} — "
+              f"will be silently skipped by compute_or_load_reps")
 
     print("=" * 70)
     print("TRASTUZUMAB BINDER ENRICHMENT EXPERIMENT (OPIG B1)")

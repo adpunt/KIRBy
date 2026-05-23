@@ -36,6 +36,14 @@ def run(data, config, output_dir, dataset_name, families=None):
     print("EXPERIMENT 6: WITHIN-FAMILY MODEL COMPLEXITY GRADIENT")
     print("=" * 70)
 
+    task_type = data.get('task_type')
+    if task_type != 'regression':
+        # get_model_family_variants() hardcodes regressor variants (RandomForestRegressor,
+        # Ridge, KNeighborsRegressor, MLPRegressor, XGBRegressor, SVR, GP).
+        # Mirroring c04: gate the whole experiment to regression.
+        print(f"  Skipping: c06 is regression-only (task_type={task_type}).")
+        return {'error': 'regression_only', 'task_type': task_type}
+
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     reps = data['reps']

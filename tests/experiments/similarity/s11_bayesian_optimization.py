@@ -66,7 +66,7 @@ from experiments._shared import (
 )
 
 from sklearn.gaussian_process.kernels import Kernel
-from kirby.hybrid import apply_feature_selection
+from kirby.hybrid import apply_feature_selection, apply_augmentation_selection
 from kirby.hybrid import create_hybrid
 
 
@@ -546,12 +546,18 @@ def build_pca_features(reps, seed_idx, pool_idx, n_components=50):
     return X_seed_pca, X_pool_pca, n_comp
 
 
-def build_hybrid_features(reps, labels, seed_idx, pool_idx, budget=50, bp=None):
+def build_hybrid_features(reps, labels, seed_idx, pool_idx, budget=50, bp=None,
+                          augmentations=None):
     """Build KIRBy hybrid on seed set and transform pool.
 
     Args:
         bp: Blueprint from search. If provided, uses blueprint params instead
-            of hardcoded defaults.
+            of hardcoded defaults. The caller's `budget` arg is always honoured
+            (so a hybrid_50d condition stays at 50 even if the blueprint was
+            discovered at a different budget).
+        augmentations: optional dict[name, array] of full-dataset augmentation
+            features. Subsetting is done here so create_hybrid sees only seed
+            rows.
 
     Returns (X_seed, X_pool, actual_dim, feature_info, scaler).
     """
@@ -562,16 +568,28 @@ def build_hybrid_features(reps, labels, seed_idx, pool_idx, budget=50, bp=None):
     alloc = bp.allocation_method if bp else 'entropy_1.0'
     imp = bp.importance_method if bp else 'lightgbm_gain'
     int_eval = bp.internal_evaluator if bp else 'ridge'
-    bgt = bp.budget if bp else budget
+    aug_strategy = bp.augmentation_strategy if bp else 'none'
+
+    seed_augs = ({k: v[seed_idx] for k, v in augmentations.items()}
+                 if augmentations else None)
+    pool_augs = ({k: v[pool_idx] for k, v in augmentations.items()}
+                 if augmentations else None)
 
     X_seed, feature_info = create_hybrid(
         seed_reps, y_seed,
         allocation_method=alloc,
         importance_method=imp,
         internal_evaluator=int_eval,
-        budget=bgt,
+        budget=budget,
+        augmentations=seed_augs,
+        augmentation_strategy=aug_strategy,
     )
     X_pool = apply_feature_selection(pool_reps, feature_info)
+    aug_info = feature_info.get('augmentation_info') if isinstance(feature_info, dict) else None
+    if aug_info and pool_augs:
+        X_pool_aug = apply_augmentation_selection(pool_augs, aug_info)
+        if X_pool_aug is not None:
+            X_pool = np.hstack([X_pool, X_pool_aug])
 
     scaler = StandardScaler()
     X_seed_s = scaler.fit_transform(X_seed)
@@ -706,11 +724,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         return {'error': 'dataset_too_small', 'n_samples': n_samples}
 
     # Get blueprint from pool helper (used by hybrid conditions)
+    augmentations = data.get('augmentations')
     try:
         search, meta = get_best_search_for_downstream(
             reps, labels, groups,
             downstream_model='rf', budget=None,
-            augmentations=data.get('augmentations'),
+            augmentations=augmentations,
             speed=config.get('search_speed', 'full'),
             dataset_name=dataset_name, task_type=task_type,
             data=data,
@@ -909,7 +928,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     else:
                         X_seed, X_pool, dim, _, _ = build_hybrid_features(
                             reps, y_bo, seed_idx, pool_idx,
-                            budget=hybrid_budget, bp=bp)
+                            budget=hybrid_budget, bp=bp,
+                            augmentations=augmentations)
 
                 elif condition == 'hybrid_50d_refit':
                     # Always rebuild hybrid every 25 iterations
@@ -939,7 +959,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 elif condition == 'multi_obj_hybrid':
                     X_seed, X_pool, dim, _, _ = build_hybrid_features(
                         reps, y_cond, seed_idx, pool_idx,
-                        budget=hybrid_budget, bp=bp)
+                        budget=hybrid_budget, bp=bp,
+                        augmentations=augmentations)
 
                 elif condition == 'multi_obj_random':
                     curve = run_random_loop(y_seed, y_pool, max_iterations, rng)
@@ -964,7 +985,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # Surrogate model variant on hybrid features
                     X_seed, X_pool, dim, _, _ = build_hybrid_features(
                         reps, y_bo, seed_idx, pool_idx,
-                        budget=hybrid_budget, bp=bp)
+                        budget=hybrid_budget, bp=bp,
+                        augmentations=augmentations)
 
                 else:
                     print(f"      Unknown condition: {condition}")
@@ -1104,9 +1126,9 @@ def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
     alloc = bp.allocation_method if bp else 'entropy_1.0'
     imp = bp.importance_method if bp else 'lightgbm_gain'
     int_eval = bp.internal_evaluator if bp else 'ridge'
-    bgt = bp.budget if bp else hybrid_budget
 
-    # Initial hybrid build
+    # Initial hybrid build — honour caller's hybrid_budget; blueprint may have
+    # been discovered at a different budget but the BO condition fixes one.
     seed_reps = {k: v[seed_idx] for k, v in reps.items()}
     pool_reps_all = {k: v[pool_idx] for k, v in reps.items()}
 
@@ -1115,7 +1137,7 @@ def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
         allocation_method=alloc,
         importance_method=imp,
         internal_evaluator=int_eval,
-        budget=bgt,
+        budget=hybrid_budget,
     )
     X_pool_all = apply_feature_selection(pool_reps_all, feature_info)
 

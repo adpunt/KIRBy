@@ -86,8 +86,10 @@ def _parse_complex_column(complex_str: str) -> Dict:
     mut_str = parts[-1]  # Last segment is always the mutation
 
     # Parse mutation string: {wt_aa}{chain}{resi}{mut_aa}
-    # wt_aa = index 0, chain = index 1, resi = [2:-1], mut_aa = index -1
-    m = re.match(r'^([A-Z])([A-Za-z])(\d+)([A-Z])$', mut_str)
+    # Chain may be multi-character (e.g. 'AA') in some Graphinity entries —
+    # P1-4 fix widens the regex. Mutation rows that don't match this shape
+    # still fail loudly via the ValueError below.
+    m = re.match(r'^([A-Z])([A-Za-z0-9]+)(\d+)([A-Z])$', mut_str)
     if m:
         return {
             'pdb': pdb,
@@ -97,6 +99,45 @@ def _parse_complex_column(complex_str: str) -> Dict:
             'mut_aa': m.group(4),
         }
     raise ValueError(f"Cannot parse complex column: {complex_str}")
+
+
+def _classify_chain_anarci(sequence: str) -> Optional[str]:
+    """Return 'H', 'L', or None for an antibody V-domain.
+
+    K and L (kappa/lambda) collapse to 'L' (light). Returns None when ANARCI
+    can't number the sequence (non-antibody fragment, too short, etc.).
+    """
+    try:
+        from anarci import anarci as run_anarci
+    except ImportError:
+        return None
+    try:
+        results = run_anarci([('q', sequence)], scheme='imgt')
+    except Exception:
+        return None
+    details = results[1]
+    if not details or not details[0]:
+        return None
+    chain_type = details[0][0].get('chain_type')
+    if chain_type == 'H':
+        return 'H'
+    if chain_type in ('K', 'L'):
+        return 'L'
+    return None
+
+
+def _type_ab_chains(seqs: Dict[str, str]) -> Optional[Tuple[str, str]]:
+    """Classify a pair of chain sequences as (heavy_seq, light_seq) via ANARCI.
+
+    Returns None when ANARCI can't unambiguously call exactly one H and one L
+    (caller falls back to length heuristic).
+    """
+    types = {cid: _classify_chain_anarci(seq) for cid, seq in seqs.items()}
+    h_chains = [cid for cid, t in types.items() if t == 'H']
+    l_chains = [cid for cid, t in types.items() if t == 'L']
+    if len(h_chains) == 1 and len(l_chains) == 1:
+        return seqs[h_chains[0]], seqs[l_chains[0]]
+    return None
 
 
 def _extract_sequences_cached(
@@ -147,11 +188,18 @@ def _extract_sequences_cached(
                         continue
 
                 if len(seqs) == 2:
-                    # Longer chain = heavy, shorter = light
-                    sorted_chains = sorted(seqs.items(), key=lambda x: len(x[1]),
-                                           reverse=True)
-                    heavy_seq = sorted_chains[0][1]
-                    light_seq = sorted_chains[1][1]
+                    # Type each chain via ANARCI (IMGT V-domain signature).
+                    # Falls back to length heuristic if ANARCI unavailable or
+                    # both chains fail to number (P1-5 fix).
+                    typed = _type_ab_chains(seqs)
+                    if typed is not None:
+                        heavy_seq, light_seq = typed
+                    else:
+                        sorted_chains = sorted(seqs.items(),
+                                               key=lambda x: len(x[1]),
+                                               reverse=True)
+                        heavy_seq = sorted_chains[0][1]
+                        light_seq = sorted_chains[1][1]
                 elif len(seqs) == 1:
                     heavy_seq = list(seqs.values())[0]
                     light_seq = ''

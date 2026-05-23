@@ -177,6 +177,33 @@ def evaluate_transfer(rep_names, n_folds, max_samples=5000):
         if d['light_seqs'] is None:
             d['light_seqs'] = [''] * len(d['heavy_seqs'])
 
+    # PDB-level leakage filter (P0-5): FoldX synthetic is built from the same
+    # SAbDab PDBs SKEMPI uses. Drop synthetic rows whose PDB also appears
+    # in the experimental test set; otherwise sequences leak verbatim into
+    # `pearson_global` and overstate transfer.
+    test_pdbs = set()
+    for key in ('pdb_ids', 'pdb'):
+        if key in test_data and test_data[key] is not None:
+            test_pdbs.update(map(str, test_data[key]))
+    if test_pdbs:
+        train_pdb_col = train_data.get('pdb_ids', train_data.get('pdb'))
+        if train_pdb_col is not None:
+            train_pdb_arr = np.asarray([str(p) for p in train_pdb_col])
+            keep_mask = ~np.isin(train_pdb_arr, list(test_pdbs))
+            n_removed = int((~keep_mask).sum())
+            if n_removed:
+                for fld in ('heavy_seqs', 'light_seqs', 'labels',
+                            'mutations', 'pdb_ids', 'pdb', 'groups'):
+                    if fld in train_data and train_data[fld] is not None:
+                        col = train_data[fld]
+                        if hasattr(col, '__len__') and len(col) == len(keep_mask):
+                            if isinstance(col, np.ndarray):
+                                train_data[fld] = col[keep_mask]
+                            else:
+                                train_data[fld] = [v for v, k in zip(col, keep_mask) if k]
+                print(f"  PDB leakage filter: removed {n_removed} synthetic rows "
+                      f"whose PDB is in the experimental test set")
+
     n_train = len(train_data['labels'])
     n_test = len(test_data['labels'])
     print(f"  Train: {n_train} synthetic FoldX samples")
@@ -229,10 +256,13 @@ def evaluate_transfer(rep_names, n_folds, max_samples=5000):
                 r_p, _ = pearsonr(y_test, preds)
                 r_s, _ = spearmanr(y_test, preds)
                 rmse = float(np.sqrt(np.mean((y_test - preds) ** 2)))
+                # Single train/test pair — no fold variance to report.
+                # Use flat values; consumers below handle both shapes via
+                # `_metric_value()` (P1-11 fix).
                 rep_results[model_name] = {
-                    'pearson': {'mean': float(r_p), 'std': 0.0},
-                    'spearman': {'mean': float(r_s), 'std': 0.0},
-                    'rmse': {'mean': rmse, 'std': 0.0},
+                    'pearson': float(r_p),
+                    'spearman': float(r_s),
+                    'rmse': rmse,
                     'pearson_global': float(r_p),
                 }
                 print(f"    {rep_name:25s} {model_name:8s}  "
@@ -307,7 +337,6 @@ def evaluate_condition(condition, rep_names, n_folds, max_samples=5000,
 
     # Build hybrid with aac as augmentation rep (matches DDG domain config)
     try:
-        from kirby.find_best_hybrid import find_best_hybrid
         from kirby.hybrid import apply_feature_selection
         grp = groups if groups is not None else np.arange(n)
         AUG_REPS = {'aac'}
@@ -316,30 +345,30 @@ def evaluate_condition(condition, rep_names, n_folds, max_samples=5000,
         if not aug_dict:
             print(f"  WARNING: augmentation reps {AUG_REPS} not found in loaded reps, "
                   f"proceeding without augmentation")
-        from experiments._shared import resolve_pruning_kwargs
-        # Per-condition cache key (n{N} varies) means no shared precompute.
-        # Hardcode (general, uncapped) — aac is an augmentation rep so the
-        # uncapped strategy applies.
+        from experiments._shared import (
+            resolve_pruning_kwargs, get_best_search_for_downstream)
         _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
                                        dataset_label=f"{ds_name}/n{n}")
-        search = find_best_hybrid(
-            base_reps=base if base else reps,
-            labels=labels, groups=grp,
-            metric='pearson',
-            task_type='regression',
-            budgets=FULL_BUDGETS,
+        aug_cond = 'uncapped' if aug_dict else 'none'
+        search, _meta = get_best_search_for_downstream(
+            base if base else reps, labels, grp,
+            downstream_model='rf', budget=None,
             augmentations=aug_dict if aug_dict else None,
-            augmentation_strategy='uncapped' if aug_dict else 'none',
+            augmentation_strategy=aug_cond,
+            speed='full', metric='pearson',
+            task_type='regression',
+            dataset_name=ds_name,
+            return_fitted=True,
             internal_evaluators=INTERNAL_EVALUATORS,
-            speed='full', return_fitted=True, verbose=False, cache=True,
-            dataset_name=ds_name, tier='general',
             condition_suffix=f'n{n}',
             adaptive_pruning=0.25,
-            **_pkw)
-        top3 = extract_top3_base_reps(search)
+            **_pkw,
+        )
+        top3 = extract_top3_base_reps(search) if search is not None else None
         if top3:
-            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-        fitted = search.fitted_results.get('rf')
+            print(f"  Top-3 base reps (by RF): {', '.join(f'{nm}={s:.4f}' for nm, s in top3)}")
+        fitted = (search.fitted_results.get('rf')
+                  if search is not None else None)
         if fitted is not None:
             all_reps = {**reps, **(aug_dict or {})}
             fi = {r: {'selected_indices': idx}
@@ -384,6 +413,18 @@ def evaluate_condition(condition, rep_names, n_folds, max_samples=5000,
 # ANALYSIS
 # =============================================================================
 
+def _metric_value(metrics, key):
+    """Return the mean of a metric whether it's stored as a flat float or
+    as {'mean': float, 'std': float}. Lets transfer_foldx (single train/test,
+    no std) coexist with k-fold conditions (mean+std) without lying about
+    a `std=0.0` for the former (P1-11).
+    """
+    v = metrics.get(key)
+    if isinstance(v, dict):
+        return v.get('mean', float('nan'))
+    return float('nan') if v is None else float(v)
+
+
 def print_analysis(all_results):
     """Print cross-condition comparison table."""
     print(f"\n{'=' * 100}")
@@ -415,7 +456,7 @@ def print_analysis(all_results):
 
         for rep_name, rep_data in results.items():
             for model_name, metrics in rep_data['models'].items():
-                r_p = metrics['pearson']['mean']
+                r_p = _metric_value(metrics, 'pearson')
                 if rep_name == 'kirby_hybrid':
                     if np.isnan(hybrid_pearson) or r_p > hybrid_pearson:
                         hybrid_pearson = r_p
@@ -428,7 +469,8 @@ def print_analysis(all_results):
         # Also get spearman for best individual
         best_spearman = float('nan')
         if best_indiv_name and best_model_name:
-            best_spearman = results[best_indiv_name]['models'][best_model_name]['spearman']['mean']
+            best_spearman = _metric_value(
+                results[best_indiv_name]['models'][best_model_name], 'spearman')
 
         delta = hybrid_pearson - best_pearson if not np.isnan(hybrid_pearson) else float('nan')
         h_s = f"{hybrid_pearson:.4f}" if not np.isnan(hybrid_pearson) else "—"
@@ -446,7 +488,7 @@ def print_analysis(all_results):
             continue
         results = all_results[cond]['results']
         best_r = max(
-            (m['pearson']['mean']
+            (_metric_value(m, 'pearson')
              for rd in results.values() for m in rd['models'].values()),
             default=0
         )

@@ -107,6 +107,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     conditions = ['unweighted', 'feature_weighted', 'sample_weighted',
                   'combined', 'importance_pruned']
+    # `_compute_reliability_scores` uses `y_range = max - min` and
+    # `abs(y_i - mean(nbr_y))` — nominal-on-ordinal arithmetic. Meaningless
+    # for multi-class clf (k>=3). Drop the conditions that depend on it.
+    is_multiclass = (task_type == 'classification'
+                     and len(np.unique(labels)) > 2)
+    if is_multiclass:
+        dropped = {'sample_weighted', 'combined'}
+        conditions = [c for c in conditions if c not in dropped]
+        print(f"  Multi-class clf detected: dropping {sorted(dropped)} "
+              f"(reliability score not well-defined on nominal labels)")
 
     # Single input space: hybrid (concat baseline removed per design
     # directive — too many reps for full-concat to be a meaningful

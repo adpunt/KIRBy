@@ -46,9 +46,14 @@ _original_display = getattr(builtins, 'display', None)
 builtins.display = lambda *a, **kw: None
 
 _fluid_default = '/Users/apunt/repos/lhasa/FLuID_POC/preprocessing'
-_fluid_server = '/data/stat-cadd/scat9264/FLuID_POC/preprocessing'
-if os.path.isdir(_fluid_server):
-    _fluid_default = _fluid_server
+_fluid_server_candidates = [
+    '/data/stat-ecr/scat9264/FLuID_POC/preprocessing',  # current ARC host
+    '/data/stat-cadd/scat9264/FLuID_POC/preprocessing',  # legacy
+]
+for _candidate in _fluid_server_candidates:
+    if os.path.isdir(_candidate):
+        _fluid_default = _candidate
+        break
 _fluid_path = os.environ.get('FLUID_PATH', _fluid_default)
 sys.path.insert(0, _fluid_path)
 
@@ -62,9 +67,15 @@ except ImportError:
     _FLUID_AVAILABLE = False
     warnings.warn("FLuID not available — federated experiments will fail.")
 
-# Restore display if it existed before
+# Restore display if it existed before; otherwise remove the placeholder so
+# we don't leave a no-op shim bound globally.
 if _original_display is not None:
     builtins.display = _original_display
+elif hasattr(builtins, 'display') and getattr(builtins, 'display') is not _original_display:
+    try:
+        delattr(builtins, 'display')
+    except AttributeError:
+        pass
 
 
 # ── Lhasa hERG loader (returns data in load_data format) ─────────────────────
@@ -541,7 +552,8 @@ def predict_fluid_quality_ensemble(teacher_models, cluster_data_train,
             continue
         try:
             y_pred_cv = cross_val_predict(
-                clf, X_t, y_t, cv=KFold(n_splits=n_cv, shuffle=False))
+                clf, X_t, y_t,
+                cv=KFold(n_splits=n_cv, shuffle=True, random_state=42))
             mccs[t] = max(0.0, matthews_corrcoef(y_t, y_pred_cv))
         except Exception:
             mccs[t] = 0.0
@@ -694,10 +706,12 @@ def federate_labels_and_train_student(teacher_models, cluster_data, fluid_df,
     student_fps = pool_fps[selected]
     student_classes = fed_classes[selected]
 
-    # ── Step 3: Train student on federated pseudo-labels
+    # ── Step 3: Train student on federated pseudo-labels.
+    # Use the caller-supplied seed for reproducibility (P1-9 fix —
+    # prior hardcoded random_state=0 ignored `seed`).
     student = RandomForestClassifier(
         n_estimators=150, max_depth=15, class_weight='balanced',
-        random_state=0)
+        random_state=seed)
     student.fit(student_fps, student_classes)
 
     # Predict on test set
@@ -715,7 +729,8 @@ def federate_labels_and_train_student(teacher_models, cluster_data, fluid_df,
 def federated_feature_selection(rep_dict, labels, silo_indices, k,
                                 budget=100, allocation_method='performance_weighted',
                                 importance_method='treeshap',
-                                internal_evaluator='rf', seed=42):
+                                internal_evaluator='rf', seed=42,
+                                groups=None, task_type=None):
     """Privacy-preserving federated feature selection.
 
     Protocol:
@@ -742,11 +757,21 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
         (X_hybrid, silo_budgets, silo_scores, silo_feature_infos)
     """
     from kirby.hybrid import create_hybrid, apply_feature_selection
+    from sklearn.model_selection import GroupShuffleSplit, ShuffleSplit
+    from experiments._shared import get_model_factories
 
-    from sklearn.linear_model import RidgeClassifierCV, RidgeCV
-    from sklearn.model_selection import ShuffleSplit
-
-    is_classification = len(np.unique(labels)) <= 10
+    # Caller-provided task_type wins; cardinality heuristic only as last resort.
+    if task_type is None:
+        warnings.warn(
+            "federated_feature_selection: task_type not provided; falling back to "
+            "cardinality heuristic (<=10 unique labels = classification). "
+            "Pass task_type explicitly to avoid mis-routing regression silos.",
+            RuntimeWarning, stacklevel=2,
+        )
+        is_classification = len(np.unique(labels)) <= 10
+    else:
+        is_classification = (task_type == 'classification')
+    silo_task_type = 'classification' if is_classification else 'regression'
 
     silo_scores = {}
     silo_feature_infos = {}
@@ -777,16 +802,31 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
             silo_feature_infos[s] = fi
 
             # Silo shares its validation score (one scalar).
-            # Quick internal eval: Ridge on 80/20 split of silo data.
+            # Group-aware 80/20 within the silo when scaffold groups are
+            # available — otherwise neighbours can sit on both sides of the
+            # internal val split and inflate the silo score.
+            # Evaluator matches the downstream model family the user passed
+            # in (no Ridge sensitivity check, per feedback_no_ridge.md).
             if len(idx) >= 30:
-                ss = ShuffleSplit(n_splits=1, test_size=0.2,
-                                 random_state=seed + s)
-                tr, va = next(ss.split(X_silo))
-                evaluator = (RidgeClassifierCV() if is_classification
-                             else RidgeCV())
-                evaluator.fit(X_silo[tr], silo_labels[tr])
-                silo_scores[s] = max(0.0, float(
-                    evaluator.score(X_silo[va], silo_labels[va])))
+                silo_groups = groups[idx] if groups is not None else None
+                if silo_groups is not None and len(np.unique(silo_groups)) >= 2:
+                    gss = GroupShuffleSplit(
+                        n_splits=1, test_size=0.2, random_state=seed + s)
+                    tr, va = next(gss.split(X_silo, silo_labels, groups=silo_groups))
+                else:
+                    ss = ShuffleSplit(
+                        n_splits=1, test_size=0.2, random_state=seed + s)
+                    tr, va = next(ss.split(X_silo))
+                eval_factory = get_model_factories(
+                    [internal_evaluator], task_type=silo_task_type,
+                    n_samples=len(tr)).get(internal_evaluator)
+                evaluator = eval_factory() if eval_factory else None
+                if evaluator is None:
+                    silo_scores[s] = 0.0
+                else:
+                    evaluator.fit(X_silo[tr], silo_labels[tr])
+                    silo_scores[s] = max(0.0, float(
+                        evaluator.score(X_silo[va], silo_labels[va])))
             else:
                 silo_scores[s] = 0.5  # default for tiny silos
 
@@ -994,16 +1034,29 @@ def federated_noise_detection(rep_dict, labels, silo_indices, noise_mask_true,
 def compute_clf_metrics(y_true, y_pred, y_prob=None):
     """Compute classification metrics for federated experiment evaluation.
 
-    Returns dict with MCC, BAC, AUROC, F1.
+    Returns dict with MCC, BAC, AUROC, F1 (binary and macro-F1 for multiclass).
+    `y_prob` may be a 1-D positive-class probability (binary) or the full
+    (n, n_classes) probability matrix (multiclass).
     """
+    n_classes = len(np.unique(y_true))
+    f1_avg = 'binary' if n_classes == 2 else 'macro'
     metrics = {
         'mcc': float(matthews_corrcoef(y_true, y_pred)),
         'bac': float(balanced_accuracy_score(y_true, y_pred)),
-        'f1': float(f1_score(y_true, y_pred, zero_division=0)),
+        'f1': float(f1_score(y_true, y_pred, average=f1_avg, zero_division=0)),
     }
-    if y_prob is not None and len(np.unique(y_true)) == 2:
+    if y_prob is not None:
         try:
-            metrics['auroc'] = float(roc_auc_score(y_true, y_prob))
+            y_prob_arr = np.asarray(y_prob)
+            if n_classes == 2:
+                if y_prob_arr.ndim == 2 and y_prob_arr.shape[1] == 2:
+                    y_prob_arr = y_prob_arr[:, 1]
+                metrics['auroc'] = float(roc_auc_score(y_true, y_prob_arr))
+            elif y_prob_arr.ndim == 2 and y_prob_arr.shape[1] == n_classes:
+                metrics['auroc'] = float(roc_auc_score(
+                    y_true, y_prob_arr, multi_class='ovr', average='macro'))
+            else:
+                metrics['auroc'] = float('nan')
         except ValueError:
             metrics['auroc'] = float('nan')
     return metrics
@@ -1169,7 +1222,7 @@ def predict_fluid_quality_ensemble_regression(teacher_models,
         try:
             y_cv = cross_val_predict(
                 reg, X_train_t, y_train_t,
-                cv=KFold(n_splits=n_cv, shuffle=False))
+                cv=KFold(n_splits=n_cv, shuffle=True, random_state=42))
             rmses[t] = float(np.sqrt(mean_squared_error(y_train_t, y_cv)))
         except Exception:
             rmses[t] = float('inf')
@@ -1319,7 +1372,7 @@ def predict_fluid_quality_ensemble_classification(
         try:
             y_cv = cross_val_predict(
                 clf, X_train_t, y_train_t,
-                cv=KFold(n_splits=n_cv, shuffle=False))
+                cv=KFold(n_splits=n_cv, shuffle=True, random_state=42))
             mccs[t] = max(0.0, float(matthews_corrcoef(y_train_t, y_cv)))
         except Exception:
             mccs[t] = 0.0
@@ -1352,7 +1405,8 @@ def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,
                               k_intra=3, budget=100, seed=42,
                               allocation_method='performance_weighted',
                               importance_method='treeshap',
-                              internal_evaluator='rf'):
+                              internal_evaluator='rf',
+                              groups=None, task_type=None):
     """Condition 6: FLuID clustering within each silo, KIRBy across silos.
 
     For each representation (silo):
@@ -1378,7 +1432,7 @@ def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,
     from sklearn.cluster import KMeans
     from sklearn.decomposition import PCA
     from sklearn.preprocessing import StandardScaler
-    from kirby.hybrid import apply_feature_selection
+    from kirby.hybrid import apply_feature_selection, create_hybrid
 
     virtual_silo_indices = {}
     metadata = {}
@@ -1415,8 +1469,15 @@ def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,
 
     # Run per-silo feature selection, restricting each silo to its parent rep.
     # This enforces the privacy boundary: silo from rep A cannot select from rep B.
-    from sklearn.linear_model import RidgeCV
-    from sklearn.model_selection import ShuffleSplit as _SS
+    from sklearn.model_selection import GroupShuffleSplit as _GSS, ShuffleSplit as _SS
+    from experiments._shared import get_model_factories
+
+    # task_type wins; cardinality heuristic only as last resort (P0-6).
+    if task_type is None:
+        is_classification = len(np.unique(labels)) <= 10
+    else:
+        is_classification = (task_type == 'classification')
+    silo_task_type = 'classification' if is_classification else 'regression'
 
     silo_fis = {}
     silo_scores = {}
@@ -1441,14 +1502,25 @@ def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,
                 internal_evaluator=internal_evaluator)
             silo_fis[s] = fi
 
-            # Validation score
+            # Validation score — group-aware within silo, matched-model evaluator.
             if len(idx) >= 30:
-                ss = _SS(n_splits=1, test_size=0.2, random_state=seed + s)
-                tr_v, va_v = next(ss.split(X_s))
-                ev = RidgeCV()
-                ev.fit(X_s[tr_v], silo_labels[tr_v])
-                silo_scores[s] = max(0.0, float(
-                    ev.score(X_s[va_v], silo_labels[va_v])))
+                silo_groups = groups[idx] if groups is not None else None
+                if silo_groups is not None and len(np.unique(silo_groups)) >= 2:
+                    splitter = _GSS(n_splits=1, test_size=0.2, random_state=seed + s)
+                    tr_v, va_v = next(splitter.split(X_s, silo_labels, groups=silo_groups))
+                else:
+                    splitter = _SS(n_splits=1, test_size=0.2, random_state=seed + s)
+                    tr_v, va_v = next(splitter.split(X_s))
+                eval_factory = get_model_factories(
+                    [internal_evaluator], task_type=silo_task_type,
+                    n_samples=len(tr_v)).get(internal_evaluator)
+                if eval_factory is None:
+                    silo_scores[s] = 0.5
+                else:
+                    ev = eval_factory()
+                    ev.fit(X_s[tr_v], silo_labels[tr_v])
+                    silo_scores[s] = max(0.0, float(
+                        ev.score(X_s[va_v], silo_labels[va_v])))
             else:
                 silo_scores[s] = 0.5
         except Exception:

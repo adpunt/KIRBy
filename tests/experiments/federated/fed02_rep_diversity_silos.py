@@ -277,7 +277,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # ── Phase 4: KIRBy hybrid (C4, C5) ───────────────────────────────────
     print("\n--- Phase 4: KIRBy hybrid conditions ---")
-    from kirby.hybrid import create_hybrid, apply_feature_selection
+    from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
+
+    # Augmentation subsets for create_hybrid (P0-2). Must be supplied to the
+    # downstream hybrid build, not just blueprint discovery.
+    train_augs = ({k: v[train_idx] for k, v in augs.items()} if augs else None)
+    test_augs = ({k: v[test_idx] for k, v in augs.items()} if augs else None)
+
+    def _append_test_augs(X_test, feature_info):
+        if not test_augs:
+            return X_test
+        aug_info = feature_info.get('augmentation_info') if isinstance(feature_info, dict) else None
+        if not aug_info:
+            return X_test
+        X_aug = apply_augmentation_selection(test_augs, aug_info)
+        return np.hstack([X_test, X_aug]) if X_aug is not None else X_test
 
     # Build silo-only rep dicts
     kirby_train = {silo_reps[s]: train_reps[silo_reps[s]]
@@ -288,13 +302,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Condition 4: KIRBy hybrid (all K reps)
     print("  C4: KIRBy hybrid (all)...", end=' ')
     try:
+        kirby_train_augs = ({k: v[train_idx] for k, v in augs.items()}
+                            if augs else None)
         X_h_train, fi_c4 = create_hybrid(
             kirby_train, y_train,
             allocation_method=_alloc,
             importance_method=_imp,
             budget=BUDGET,
-            internal_evaluator=_int_eval)
-        X_h_test = apply_feature_selection(kirby_test, fi_c4)
+            internal_evaluator=_int_eval,
+            augmentations=kirby_train_augs,
+            augmentation_strategy=aug_cond)
+        X_h_test = _append_test_augs(
+            apply_feature_selection(kirby_test, fi_c4), fi_c4)
 
         mdl_c4 = _make_model()
         mdl_c4.fit(X_h_train, y_train)
@@ -330,13 +349,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         kirby_top3_test = {silo_reps[s]: test_reps[silo_reps[s]]
                            for s in top_3_silos}
 
+        kirby_top3_train_augs = ({k: v[train_idx] for k, v in augs.items()}
+                                  if augs else None)
         X_t3_train, fi_c5 = create_hybrid(
             kirby_top3_train, y_train,
             allocation_method=_alloc,
             importance_method=_imp,
             budget=BUDGET,
-            internal_evaluator=_int_eval)
-        X_t3_test = apply_feature_selection(kirby_top3_test, fi_c5)
+            internal_evaluator=_int_eval,
+            augmentations=kirby_top3_train_augs,
+            augmentation_strategy=aug_cond)
+        X_t3_test = _append_test_augs(
+            apply_feature_selection(kirby_top3_test, fi_c5), fi_c5)
 
         mdl_c5 = _make_model()
         mdl_c5.fit(X_t3_train, y_train)
@@ -363,12 +387,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("\n--- Phase 5: FLuID-within-KIRBy-across pipeline (C6) ---")
     print("  C6: FLuID→KIRBy...", end=' ')
     try:
+        train_groups_c6 = (groups[train_idx]
+                           if groups is not None else None)
         X_c6_train, X_c6_test, budgets_c6, scores_c6, meta_c6 = \
             fluid_within_kirby_across(
                 kirby_train, kirby_test, y_train,
                 k_intra=K_INTRA,
                 allocation_method=_alloc, importance_method=_imp,
-                internal_evaluator=_int_eval)
+                internal_evaluator=_int_eval,
+                groups=train_groups_c6,
+                task_type=task_type)
 
         mdl_c6 = _make_model()
         mdl_c6.fit(X_c6_train, y_train)

@@ -135,7 +135,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
             results['top3_base_reps'] = [(n, s) for n, s in top3]
     except Exception as e:
-        print(f"  Hybrid search failed: {e}")
+        import traceback
+        print(f"  Hybrid search failed: {type(e).__name__}: {e}")
+        traceback.print_exc()
         X_hybrid = None
         weights_flat = None
 

@@ -95,10 +95,9 @@ MODELS_LIST = DOWNSTREAM_MODELS
 # NO train/test split. Numbers from notebook 03_oasis_humanness.ipynb Cell 49.
 # Note: BioPhi uses VH+VL averaged. KIRBy uses VH-only.
 PAPER_BASELINES = {
-    'species': {
-        # No BioPhi baselines for OAS species-level (trivially high).
-        # Marks 2021 reports near-perfect on OAS but does not publish AUROCs.
-    },
+    # No 'species' entry — Marks 2021 reports near-perfect AUROC on OAS
+    # species-level but doesn't publish numbers, and BioPhi doesn't either.
+    # Comparison block is skipped when this key is missing.
     'therapeutic': {
         # Human vs non-human therapeutics (BioPhi Cell 49, VH+VL averaged)
         'Hu-mAb (Marks)':      {'auroc': 0.977, 'accuracy': 0.933},
@@ -222,6 +221,7 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
         heavy_seqs=heavy_seqs,
         light_seqs=light_seqs,
         dataset_tag=dataset_name,
+        mutations=data.get('mutations'),
     )
 
     if not reps:
@@ -241,6 +241,9 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
             reps, labels, groups,
             downstream_model='rf', budget=None,
             augmentations=None,
+            # Explicit 'none' avoids cache-key collision with real
+            # uncapped-augmentation runs (project_cache_collision_fix).
+            augmentation_strategy='none',
             speed='full',
             metric='auc',
             task_type='classification',

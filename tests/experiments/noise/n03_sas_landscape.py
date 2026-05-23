@@ -546,13 +546,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # --- Build hybrid for sub-analyses 2-3 ---
     augmentations = data.get('augmentations')
+    metric_name, _metric_fn, _lib = get_domain_metric(data)
     X_hybrid = None
     search = None
     top3 = None
     try:
         X_hybrid_full, _, search = get_hybrid_features_and_weights(
             reps, labels, groups, search_speed, 'lightgbm_gain',
-            augmentations=augmentations)
+            augmentations=augmentations,
+            dataset_name=dataset_name, tier='general',
+            task_type=task_type,
+            metric=metric_name)
         X_hybrid = X_hybrid_full[sub_idx] if len(sub_idx) < n else X_hybrid_full
         print(f"  Hybrid: dim={X_hybrid.shape[1]}")
         top3 = extract_top3_base_reps(search)

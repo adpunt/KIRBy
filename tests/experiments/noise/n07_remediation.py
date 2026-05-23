@@ -266,7 +266,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                 fold_score = _evaluate_fold(
                     X_tr_s, X_va_s, y_train_clean, y_val, strategy,
-                    noise_fraction, model_factory, metric_fn)
+                    noise_fraction, model_factory, metric_fn, is_clf=is_clf)
                 if fold_score is not None:
                     fold_scores.append(fold_score)
 

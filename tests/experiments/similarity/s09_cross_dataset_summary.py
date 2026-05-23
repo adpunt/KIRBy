@@ -125,24 +125,38 @@ def run(all_dataset_results):
                 _label = _exp5_metric or 'score'
                 print(f"    kNN delta {_label} (vs best rep): {delta_knn:+.4f}")
 
-        # Exp 6: AD correlation (hybrid_weighted vs concat baseline)
+        # Exp 6: AD correlation (hybrid_weighted vs concat baseline).
+        # Average across all k_keys instead of picking whichever happens to
+        # come first in dict-insertion order (silently mixed across datasets).
         exp6 = ds_results.get('s06_applicability_domain')
         if exp6 and 'distance_error_correlation' in exp6:
+            per_k_deltas = []
+            per_k_hw = []
+            per_k_baseline = []
+            baseline_label = None
             for k_key, corrs in exp6['distance_error_correlation'].items():
                 hw = corrs.get('hybrid_weighted')
-                # Compare against concat baseline (the main narrative claim)
                 baseline = corrs.get('concat', corrs.get('hybrid'))
-                baseline_label = 'concat' if 'concat' in corrs else 'hybrid_uw'
+                this_baseline_label = 'concat' if 'concat' in corrs else 'hybrid_uw'
+                if baseline_label is None:
+                    baseline_label = this_baseline_label
                 if hw is not None and baseline is not None:
-                    delta_ad = hw - baseline
-                    ds_summary['ad_corr_delta'] = delta_ad
-                    ds_summary['ad_corr_weighted'] = hw
-                    ds_summary['ad_corr_baseline'] = baseline
-                    ad_deltas.append(delta_ad)
-                    print(f"    AD corr: hybrid_weighted={hw:.4f}, "
-                          f"{baseline_label}={baseline:.4f} "
-                          f"(delta={delta_ad:+.4f})")
-                    break
+                    per_k_deltas.append(hw - baseline)
+                    per_k_hw.append(hw)
+                    per_k_baseline.append(baseline)
+            if per_k_deltas:
+                delta_ad = float(np.mean(per_k_deltas))
+                hw_mean = float(np.mean(per_k_hw))
+                base_mean = float(np.mean(per_k_baseline))
+                ds_summary['ad_corr_delta'] = delta_ad
+                ds_summary['ad_corr_weighted'] = hw_mean
+                ds_summary['ad_corr_baseline'] = base_mean
+                ds_summary['ad_corr_n_k'] = len(per_k_deltas)
+                ad_deltas.append(delta_ad)
+                print(f"    AD corr (mean over {len(per_k_deltas)} k): "
+                      f"hybrid_weighted={hw_mean:.4f}, "
+                      f"{baseline_label}={base_mean:.4f} "
+                      f"(delta={delta_ad:+.4f})")
 
         # Exp 7: noise FP reduction (computed from S07 summary + hybrid results)
         exp7 = ds_results.get('s07_noise_bridge')

@@ -41,7 +41,7 @@ from experiments.federated.federated_helpers import (
     federated_feature_selection, federated_noise_detection,
     compute_clf_metrics,
 )
-from kirby.hybrid import create_hybrid, apply_feature_selection
+from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
 
 
 # ── Constants ────────────────────────────────────────────────────────────────
@@ -195,16 +195,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         sigma_results = {'n_flipped': n_flipped}
 
-        # Rebuild training cluster_data with noisy labels
-        # cluster_data is already training-only (split-first pattern)
+        # Rebuild training cluster_data with noisy labels.
+        # FLuID's cluster_data[1..K] are smoothed views (k-NN bleed across
+        # clusters when smooth_factor>0). Re-slicing by CLUSTER would drop
+        # those smoothed rows — instead, copy each existing view and overwrite
+        # CLASS/ACTIVITY for the rows whose index appears in our noise table
+        # (P1-8 fix).
         train_df_noisy = cluster_data[0].copy()
         train_df_noisy['CLASS'] = train_labels_noisy
         train_df_noisy['ACTIVITY'] = np.where(
             train_labels_noisy == 1, 'Active', 'Inactive')
         cluster_data_noisy = [train_df_noisy]
+        noisy_lookup = train_df_noisy[['CLASS', 'ACTIVITY']]
         for s in range(1, K + 1):
-            cluster_data_noisy.append(
-                train_df_noisy[train_df_noisy['CLUSTER'] == s])
+            smoothed_view = cluster_data[s].copy()
+            shared = smoothed_view.index.intersection(noisy_lookup.index)
+            if len(shared) > 0:
+                smoothed_view.loc[shared, 'CLASS'] = noisy_lookup.loc[shared, 'CLASS']
+                smoothed_view.loc[shared, 'ACTIVITY'] = noisy_lookup.loc[shared, 'ACTIVITY']
+            cluster_data_noisy.append(smoothed_view)
 
         # Train FLuID teachers on training data per cluster
         # Matches FLuID's build_teacher_models: one RF per cluster, balance=False
@@ -230,17 +239,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             if t > 0:
                 cluster_data_train.append(cd)
 
-        # -- Condition 0: Centralized KIRBy hybrid (upper bound) --
-        print("    C0: Centralized KIRBy...", end=' ')
+        # -- Condition 0: Centralized KIRBy hybrid trained on NOISY labels --
+        # (i.e. matched to the federated conditions; this is NOT a clean-label
+        # oracle. Renamed in summary to clarify upper-bound semantics — P1-6.)
+        print("    C0: Centralized KIRBy (noisy labels)...", end=' ')
         try:
             train_reps_all = {r: arr[train_idx] for r, arr in reps.items()}
+            train_augs = ({k: v[train_idx] for k, v in augs.items()}
+                          if augs else None)
+            test_augs = ({k: v[test_idx] for k, v in augs.items()}
+                         if augs else None)
             X_h_train, fi_central = create_hybrid(
                 train_reps_all, train_labels_noisy,
                 allocation_method=_alloc,
                 importance_method=_imp,
-                internal_evaluator=_int_eval)
+                internal_evaluator=_int_eval,
+                augmentations=train_augs,
+                augmentation_strategy=aug_cond)
             X_h_test = apply_feature_selection(
                 {r: arr[test_idx] for r, arr in reps.items()}, fi_central)
+            _aug_info = fi_central.get('augmentation_info') if isinstance(fi_central, dict) else None
+            if _aug_info and test_augs:
+                _X_test_aug = apply_augmentation_selection(test_augs, _aug_info)
+                if _X_test_aug is not None:
+                    X_h_test = np.hstack([X_h_test, _X_test_aug])
             clf_c0 = RandomForestClassifier(
                 n_estimators=150, max_depth=15,
                 class_weight='balanced', random_state=0)
@@ -317,12 +339,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             train_reps = {r: arr[train_idx] for r, arr in reps.items()}
             test_reps = {r: arr[test_idx] for r, arr in reps.items()}
 
+            train_groups_c5 = (groups[train_idx]
+                               if groups is not None else None)
             X_hybrid_train, silo_budgets, silo_scores, silo_fis = \
                 federated_feature_selection(
                     train_reps, train_labels_noisy, train_silo_indices,
                     K,
                     allocation_method=_alloc, importance_method=_imp,
-                    internal_evaluator=_int_eval)
+                    internal_evaluator=_int_eval,
+                    groups=train_groups_c5,
+                    task_type=data.get('task_type'))
 
             # Reconstruct hybrid on test set using same feature selections
             from kirby.hybrid import apply_feature_selection
@@ -413,21 +439,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             clean_idx = np.where(cleaned_train_mask)[0]
 
             if len(clean_idx) > 20:
-                # Reuse C5's hybrid if available, else fall back to FPs
+                # C5's blueprint was selected on dirty labels; here we
+                # rebuild the hybrid on the cleaned subset of training data.
                 if 'c5_kirby_federated' in sigma_results and 'error' not in sigma_results['c5_kirby_federated']:
-                    # Rebuild hybrid on cleaned training data
                     try:
                         clean_reps = {r: arr[train_idx][clean_idx]
                                       for r, arr in reps.items()}
+                        clean_augs = ({k: v[train_idx][clean_idx]
+                                       for k, v in augs.items()}
+                                      if augs else None)
+                        test_augs_c6 = ({k: v[test_idx] for k, v in augs.items()}
+                                        if augs else None)
                         X_c6_tr, fi_c6 = create_hybrid(
                             clean_reps,
                             train_labels_noisy[clean_idx],
                             allocation_method=_alloc,
                             importance_method=_imp,
-                            internal_evaluator=_int_eval)
+                            internal_evaluator=_int_eval,
+                            augmentations=clean_augs,
+                            augmentation_strategy=aug_cond)
                         X_c6_te = apply_feature_selection(
                             {r: arr[test_idx] for r, arr in reps.items()},
                             fi_c6)
+                        _aug_info = fi_c6.get('augmentation_info') if isinstance(fi_c6, dict) else None
+                        if _aug_info and test_augs_c6:
+                            _X_c6_te_aug = apply_augmentation_selection(test_augs_c6, _aug_info)
+                            if _X_c6_te_aug is not None:
+                                X_c6_te = np.hstack([X_c6_te, _X_c6_te_aug])
                         clf = RandomForestClassifier(
                             n_estimators=150, max_depth=15,
                             class_weight='balanced', random_state=0)
@@ -567,15 +605,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 labels_binary[train_idx], train_silo_sf,
                 noise_levels_sf, noise_type='label_flip')
 
-            # Rebuild training cluster_data with noisy labels
+            # Rebuild training cluster_data with noisy labels.
+            # Preserve smoothed views as in P1-8 fix above.
             train_df_sf = cd_sf[0].copy()
             train_df_sf['CLASS'] = tl_noisy
             train_df_sf['ACTIVITY'] = np.where(
                 tl_noisy == 1, 'Active', 'Inactive')
             cd_sf_noisy = [train_df_sf]
+            noisy_lookup_sf = train_df_sf[['CLASS', 'ACTIVITY']]
             for s in range(1, K + 1):
-                cd_sf_noisy.append(
-                    train_df_sf[train_df_sf['CLUSTER'] == s])
+                smoothed_view_sf = cd_sf[s].copy()
+                shared_sf = smoothed_view_sf.index.intersection(noisy_lookup_sf.index)
+                if len(shared_sf) > 0:
+                    smoothed_view_sf.loc[shared_sf, 'CLASS'] = (
+                        noisy_lookup_sf.loc[shared_sf, 'CLASS'])
+                    smoothed_view_sf.loc[shared_sf, 'ACTIVITY'] = (
+                        noisy_lookup_sf.loc[shared_sf, 'ACTIVITY'])
+                cd_sf_noisy.append(smoothed_view_sf)
 
             # Train teachers (already training-only)
             from sklearn.ensemble import RandomForestClassifier as RFC
@@ -606,10 +652,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # C5: KIRBy federated FS
             train_reps_sf = {r: arr[train_idx] for r, arr in reps.items()}
             test_reps_sf = {r: arr[test_idx] for r, arr in reps.items()}
+            train_groups_sf = (groups[train_idx]
+                               if groups is not None else None)
             X_h_train, sb, ss, sfis = federated_feature_selection(
                 train_reps_sf, tl_noisy, train_silo_sf, K,
                 allocation_method=_alloc, importance_method=_imp,
-                internal_evaluator=_int_eval)
+                internal_evaluator=_int_eval,
+                groups=train_groups_sf,
+                task_type=data.get('task_type'))
             h_test_parts = []
             for s in range(1, K + 1):
                 fi = sfis.get(s)

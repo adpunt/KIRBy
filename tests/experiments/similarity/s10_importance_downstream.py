@@ -681,6 +681,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = data['labels']
     groups = data['groups']
     n_samples = len(labels)
+    task_type = data['task_type']
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     print(f"  Metric: {metric_name} (lower_is_better={lower_is_better})")
@@ -720,7 +721,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['top3_base_reps'] = [(n, s) for n, s in top3]
 
     augmentations = data.get('augmentations')
-    task_type = data['task_type']
     is_clf = task_type == 'classification'
 
     # Task 1: Weighted kNN

@@ -41,7 +41,7 @@ from experiments._shared import (
     get_model_factories, _cv_split,
     apply_feature_selection, get_domain_metric,
     get_precomputed_search, get_best_for_downstream,
-    INTERNAL_EVALUATORS, SCREENING_BUDGETS,
+    INTERNAL_EVALUATORS, SCREENING_BUDGETS, FULL_BUDGETS,
 )
 from kirby.hybrid import create_hybrid, apply_augmentation_selection
 from kirby.find_best_hybrid import find_best_hybrid
@@ -140,6 +140,7 @@ def run(data, config, output_dir, dataset_name):
 
     folds = list(_cv_split(groups, n_folds, sample_X, labels))
     fold_blueprints = {}  # fold_idx -> blueprint
+    fold_best_models = {}  # fold_idx -> best downstream model name for that fold
     fold_feature_sets = {}  # fold_idx -> set of (rep, idx) tuples
     own_fold_scores = {}  # fold_idx -> score on own test data
 
@@ -183,6 +184,7 @@ def run(data, config, output_dir, dataset_name):
 
         bp = best['blueprint']
         fold_blueprints[fold_i] = bp
+        fold_best_models[fold_i] = best_model
         print(f"    Fold {fold_i}: {best_model}, budget={bp.budget}, "
               f"alloc={bp.allocation_method}, imp={bp.importance_method}")
 
@@ -271,12 +273,14 @@ def run(data, config, output_dir, dataset_name):
                 X_tr = scaler.fit_transform(X_train)
                 X_va = scaler.transform(X_val)
 
-                # Use the SAME model type as the source blueprint's best model
-                best_model_src = None
-                for m_name, m_best in fold_blueprints.items():
-                    pass  # We need to know the model — store it
-                # Fallback: use RF (universal)
-                if task_type == 'classification':
+                # Use the SAME model type as the source fold's best model.
+                best_model_src = fold_best_models.get(src_fold)
+                if best_model_src is not None:
+                    factories = get_model_factories(
+                        [best_model_src], task_type=task_type,
+                        n_samples=len(y_train_tgt))
+                    model = factories[best_model_src]()
+                elif task_type == 'classification':
                     model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
                 else:
                     model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)

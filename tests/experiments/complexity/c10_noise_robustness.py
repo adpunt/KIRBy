@@ -18,7 +18,6 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     get_model_factories, _cv_split,
     apply_feature_selection, get_domain_metric,
-    get_precomputed_search, get_best_for_downstream,
     get_best_search_for_downstream,
 )
 from kirby.hybrid import create_hybrid, apply_augmentation_selection
@@ -104,8 +103,13 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
         print("  NoiseInject not installed, skipping. Install: pip install noiseInject")
         return {'error': 'noiseInject not installed'}
 
-    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     task_type = data['task_type']
+    if task_type != 'regression':
+        print(f"  Skipping: c10 is regression-only "
+              f"(task_type={task_type}). Noise injection mangles class labels.")
+        return {'error': 'regression_only', 'task_type': task_type}
+
+    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     reps = data['reps']
     labels = data['labels']
