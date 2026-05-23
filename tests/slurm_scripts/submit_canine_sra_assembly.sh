@@ -211,7 +211,8 @@ python scripts/parse_igblast_airr.py \
     --out-fasta "$FINAL_FASTA" \
     --out-report "$REPORT" \
     --min-vh-length 90 \
-    --max-vh-length 250
+    --max-vh-length 250 \
+    --id-prefix canine_vh
 
 echo "Done: $(date)"
 echo "Final FASTA: $FINAL_FASTA"
