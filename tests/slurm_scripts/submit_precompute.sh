@@ -19,11 +19,36 @@
 #   bash tests/slurm_scripts/submit_precompute.sh molecular     # one domain
 #   bash tests/slurm_scripts/submit_precompute.sh distance      # all distance
 #   bash tests/slurm_scripts/submit_precompute.sh distance molecular  # distance + domain
+#   bash tests/slurm_scripts/submit_precompute.sh --datasets "qm9 caco2 logd"  # explicit list
+#   bash tests/slurm_scripts/submit_precompute.sh distance --datasets "kiba"   # distance + list
+#
+# Flags (must come AFTER positional args):
+#   --datasets "A B C"  Submit only these datasets (overrides domain). Each is
+#                       matched against the known dataset names; aug/no-aug is
+#                       auto-detected from membership in the *_NOAUG/_AUG lists.
 
 set -euo pipefail
 
-MODE=${1:-all}
-DOMAIN=${2:-all}
+MODE="all"
+DOMAIN="all"
+EXPLICIT_DATASETS=""
+
+# First positional: MODE (or domain shortcut if not 'distance'/'all')
+if [[ $# -gt 0 && "$1" != --* ]]; then
+    MODE="$1"; shift
+fi
+# Second positional: DOMAIN (only if MODE was 'distance' or similar)
+if [[ $# -gt 0 && "$1" != --* ]]; then
+    DOMAIN="$1"; shift
+fi
+
+# Then parse remaining flags.
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --datasets) EXPLICIT_DATASETS="$2"; shift 2 ;;
+        *) echo "Unknown argument: $1"; exit 1 ;;
+    esac
+done
 EMAIL="adelaide.punt@stcatz.ox.ac.uk"
 WRAP_PREFIX="cd /data/stat-ecr/scat9264/KIRBy && export KIRBY_SKIP_INSTALLS=1 && . ./setup.sh && export PYTHONWARNINGS=ignore && export TRANSFORMERS_VERBOSITY=error"
 COUNT=0
@@ -251,6 +276,60 @@ run_distance() {
 
 PARTITION=${3:-long}
 
+# Auto-detect (has_aug, mem) for one dataset name by checking the known lists.
+# Returns "<has_aug> <mem>" — e.g. "yes 64G", "no 128G".
+# Falls back to "yes 64G" with a warning for unknown datasets.
+_lookup_dataset_meta() {
+    local ds=$1
+    local has_aug="yes"
+    local mem="64G"
+    # Has-aug membership
+    local NOAUG_LIST="${ANTIBODY_IF_NOAUG} ${ABAGYM} ${ANTIBODY_CLF} ${REACTION_NOAUG}"
+    for n in ${NOAUG_LIST}; do
+        if [[ "$ds" == "$n" ]]; then has_aug="no"; break; fi
+    done
+    # Memory tier (matches the 128G overrides in submit_all_datasets.sh)
+    case "$ds" in
+        qm9|flab_binding_adams|flab_expression_adams|flab_binding_phillips_h3|\
+        tz_her2_binary|tz_her2_multiclass|bh_doyle_plates|flab_binding_koenig|\
+        flab_expression_koenig|flab_immunogenicity_marks|tcga_luad_vs_lusc|\
+        tcga_brca_pam50|kiba|bindingdb_kd) mem="128G" ;;
+        nt_*|gb_*) mem="128G" ;;
+    esac
+    echo "${has_aug} ${mem}"
+}
+
+# Dispatch an explicit dataset list (overrides MODE-driven enumeration).
+# Args: $1 = "standard" or "distance"
+run_explicit_datasets() {
+    local kind=$1
+    if [[ -z "${EXPLICIT_DATASETS}" ]]; then return; fi
+    echo "--- Explicit datasets (${kind}): ${EXPLICIT_DATASETS} ---"
+    for ds in ${EXPLICIT_DATASETS}; do
+        read has_aug mem <<< "$(_lookup_dataset_meta "$ds")"
+        if [[ "$kind" == "distance" ]]; then
+            submit_dataset_distance "$ds" "$has_aug" "$mem" "$PARTITION"
+        else
+            submit_dataset "$ds" "$has_aug" "$mem" "$PARTITION"
+        fi
+    done
+}
+
+# When --datasets is provided, it short-circuits the MODE-based enumeration.
+if [[ -n "${EXPLICIT_DATASETS}" ]]; then
+    case "$MODE" in
+        distance)       run_explicit_datasets distance ;;
+        all+distance)   run_explicit_datasets standard
+                        run_explicit_datasets distance ;;
+        *)              run_explicit_datasets standard ;;
+    esac
+    echo ""
+    echo "Total: ${COUNT} SLURM jobs submitted (explicit dataset list)"
+    echo "Monitor: squeue -u \$USER | grep pc_"
+    echo "Status:  python tests/check_precompute_status.py"
+    exit 0
+fi
+
 case "$MODE" in
     molecular|antibody|tcga|reaction|nucleotide)
         run_standard "$MODE" "$PARTITION"
@@ -279,7 +358,7 @@ case "$MODE" in
         echo "============================================"
         ;;
     *)
-        echo "Usage: bash submit_precompute.sh <mode> [domain] [partition]"
+        echo "Usage: bash submit_precompute.sh <mode> [domain] [partition] [--datasets \"A B C\"]"
         echo ""
         echo "Modes:"
         echo "  all            Standard conditions, all domains except nucleotide"
