@@ -42,12 +42,25 @@ def _iter_airr_rows(path: Path) -> Iterable[Dict[str, str]]:
                 yield row
 
 
-def _is_productive_igh(row: Dict[str, str]) -> bool:
-    """AIRR 'productive' = T / TRUE / true and locus = IGH."""
+def _is_valid_igh(row: Dict[str, str], aa: str) -> bool:
+    """Accept any IGH row whose V-region translation lacks a stop codon.
+
+    IgBLAST cannot compute the AIRR `productive` flag when -organism is
+    mismatched to the input (we use `-organism mouse` as a structural
+    fallback for bovine/canine since IgBLAST ships only human / mouse /
+    rat / rabbit / rhesus internal-data tables). On bovine the productive
+    column came back ~81% blank, ~8% explicit F, 0% T. We get the same
+    information by checking `sequence_alignment_aa` directly: a valid
+    rearranged VH translates without an internal stop codon. v_call must
+    be non-empty so we know IgBLAST actually called a V-gene.
+    """
     if (row.get('locus') or '').upper() != 'IGH':
         return False
-    prod = (row.get('productive') or '').strip().upper()
-    return prod in ('T', 'TRUE', '1', 'YES')
+    if not (row.get('v_call') or '').strip():
+        return False
+    if not aa:
+        return False
+    return '*' not in aa
 
 
 def parse_airr_dir(
@@ -83,10 +96,10 @@ def parse_airr_dir(
         sample = path.stem.replace('.airr', '')
         for row in _iter_airr_rows(path):
             per_sample_raw[sample] += 1
-            if not _is_productive_igh(row):
+            aa = _canonicalise(row.get('sequence_alignment_aa') or '')
+            if not _is_valid_igh(row, aa):
                 continue
             per_sample_productive[sample] += 1
-            aa = _canonicalise(row.get('sequence_alignment_aa') or '')
             if len(aa) < min_vh_length:
                 dropped_short += 1
                 continue
@@ -115,14 +128,14 @@ def parse_airr_dir(
 
 def write_fasta(unique_vh: List[str],
                 first_v_gene: Dict[str, str],
-                out_path: Path) -> None:
+                out_path: Path,
+                id_prefix: str = 'vh') -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open('w') as f:
         for i, aa in enumerate(unique_vh):
             vgene = first_v_gene.get(aa, '')
-            header = f">bovine_vh_{i:06d} v_call={vgene}"
+            header = f">{id_prefix}_{i:06d} v_call={vgene}"
             f.write(header + '\n')
-            # 60-char wrap for FASTA compatibility
             for j in range(0, len(aa), 60):
                 f.write(aa[j:j + 60] + '\n')
 
@@ -146,12 +159,15 @@ def main(argv=None) -> int:
                     help='Drop AA sequences shorter than this (default 90).')
     ap.add_argument('--max-vh-length', type=int, default=250,
                     help='Drop AA sequences longer than this (default 250).')
+    ap.add_argument('--id-prefix', default='vh',
+                    help='Prefix for FASTA record IDs (default: vh).')
     args = ap.parse_args(argv)
 
     stats = parse_airr_dir(args.airr_dir,
                            min_vh_length=args.min_vh_length,
                            max_vh_length=args.max_vh_length)
-    write_fasta(stats['unique_vh'], stats['first_v_gene'], args.out_fasta)  # type: ignore[arg-type]
+    write_fasta(stats['unique_vh'], stats['first_v_gene'], args.out_fasta,  # type: ignore[arg-type]
+                id_prefix=args.id_prefix)
     write_report(stats, args.out_report)
     print(f"  wrote {len(stats['unique_vh'])} unique VH to {args.out_fasta}")  # type: ignore[arg-type]
     print(f"  report: {args.out_report}")
