@@ -32,7 +32,7 @@ from sklearn.ensemble import RandomForestClassifier
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy, cv_split,
-    get_precomputed_search, get_domain_metric,
+    get_precomputed_search, get_best_search_for_downstream, get_domain_metric,
 )
 from experiments.federated.federated_helpers import (
     smiles_to_fluid_df, cluster_training_only, inject_noise_per_silo,
@@ -128,18 +128,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     aug_cond = 'uncapped' if augs else 'none'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     try:
-        search = get_precomputed_search(
+        search, meta = get_best_search_for_downstream(
             reps, labels, groups,
-            budget=100, aug_condition=aug_cond,
+            downstream_model='rf', budget=100,
             augmentations=augs,
             speed=config.get('search_speed', 'full'),
-            precomputed=data.get('precomputed_searches'),
             metric=metric_name,
             task_type=data['task_type'],
             domain=data.get('domain', 'molecular'),
-            dataset_name=dataset_name, tier='general')
-        bp_entry = search.best_by_model.get('rf')
-        bp = bp_entry['blueprint'] if bp_entry else None
+            dataset_name=dataset_name,
+            data=data,
+        )
+        bp = meta['best_config']['blueprint'] if meta else None
     except Exception:
         bp = None
     _alloc = bp.allocation_method if bp else 'performance_weighted'

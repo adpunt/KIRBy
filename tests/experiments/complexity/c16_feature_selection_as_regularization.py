@@ -32,7 +32,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric,
     get_precomputed_search, build_fold_hybrid,
-    get_best_for_downstream,
+    get_best_for_downstream, get_best_search_for_downstream,
 )
 
 
@@ -195,23 +195,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     augmentations = data.get('augmentations')
 
-    # Pre-compute search blueprints per budget (cached)
-    # NOTE: get_precomputed_search returns results across ALL budgets (budget
-    # param is deprecated). Use get_best_for_downstream to select per-budget.
+    # Pre-compute search blueprints per budget — pool helper picks the best
+    # (tier, aug_condition) cache file per budget for downstream_model='rf'.
     blueprints = {}
     try:
-        # 2026-05-22: switched general→top for capped (general/capped
-        # precompute dropped; cache-hits the top/capped file instead).
-        search = get_precomputed_search(
-            reps, labels, groups,
-            aug_condition='capped', augmentations=augmentations,
-            speed=config.get('search_speed', 'full'),
-            precomputed=data.get('precomputed_searches_top'),
-            dataset_name=dataset_name, tier='top', task_type=task_type)
         for budget in budgets:
-            best = get_best_for_downstream(search, 'rf', budget=budget)
-            if best and 'blueprint' in best:
-                blueprints[budget] = best['blueprint']
+            search, meta = get_best_search_for_downstream(
+                reps, labels, groups,
+                downstream_model='rf', budget=budget,
+                augmentations=augmentations,
+                speed=config.get('search_speed', 'full'),
+                dataset_name=dataset_name, task_type=task_type,
+                data=data,
+            )
+            if meta:
+                blueprints[budget] = meta['best_config']['blueprint']
     except Exception:
         pass  # will skip all budgets
 

@@ -26,7 +26,7 @@ from experiments._shared import (
     estimate_mutual_information_knn, compute_effective_rank,
     cv_split, get_domain_metric,
 )
-from experiments._shared import get_fitted_hybrid
+from experiments._shared import get_fitted_hybrid, get_fitted_pool_hybrid
 
 
 # =========================================================================
@@ -239,16 +239,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             try:
                 if strategy == 'hybrid':
                     augmentations = data.get('augmentations')
-                    # 2026-05-22: switched general→top for capped
-                    # (general/capped precompute dropped).
-                    X_h, fi, _search = get_fitted_hybrid(
+                    # Pool helper picks best (tier, aug_condition) per budget
+                    # for downstream_model='rf'.
+                    X_h, fi, _search, _meta = get_fitted_pool_hybrid(
                         reps, labels, groups,
-                        aug_condition='capped', augmentations=augmentations,
+                        downstream_model='rf', budget=budget,
+                        augmentations=augmentations,
                         speed=config.get('search_speed', 'full'),
-                        precomputed=data.get('precomputed_searches_top'),
-                        downstream_model='rf',
-                        dataset_name=dataset_name, tier='top',
-                    task_type=task_type)
+                        data=data,
+                        dataset_name=dataset_name,
+                        task_type=task_type,
+                    )
                     X_selected = X_h
 
                 elif strategy == 'pca':

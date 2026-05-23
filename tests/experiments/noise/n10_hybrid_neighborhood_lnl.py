@@ -32,7 +32,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories,
-    get_precomputed_search, build_fold_hybrid,
+    get_precomputed_search, get_best_search_for_downstream, build_fold_hybrid,
     extract_top3_base_reps, cap_dimensions,
 )
 from kirby.hybrid import create_hybrid, compute_feature_importance
@@ -415,15 +415,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     search_for_top3 = None
     for b in hybrid_budgets:
         try:
-            search = get_precomputed_search(
+            search, meta = get_best_search_for_downstream(
                 reps, labels, groups,
-                aug_condition='uncapped' if augmentations else 'none', augmentations=augmentations,
+                downstream_model='rf', budget=b,
+                augmentations=augmentations,
                 speed=config.get('search_speed', 'full'),
-                precomputed=data.get('precomputed_searches'),
-                dataset_name=dataset_name, tier='general', task_type=task_type)
-            best_rf = search.best_by_model.get('rf')
-            if best_rf:
-                blueprints[b] = best_rf['blueprint']
+                dataset_name=dataset_name, task_type=task_type,
+                data=data,
+            )
+            if meta:
+                blueprints[b] = meta['best_config']['blueprint']
             if b == 100:
                 search_for_top3 = search
         except Exception as e:

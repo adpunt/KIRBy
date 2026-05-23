@@ -23,7 +23,9 @@ from experiments._shared import (
     find_best_hybrid, get_domain_metric,
     extract_top3_base_reps,
     INTERNAL_EVALUATORS,
+    get_best_search_for_downstream, build_fold_hybrid, cv_split,
 )
+from sklearn.preprocessing import StandardScaler
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -68,7 +70,39 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['models'][model_name] = {
             'hybrid': [], 'best_single': [],
             'best_configs': [],
+            # Second pass: full-data pool-best blueprint applied at each n.
+            # Compares "best AT each n" vs "full-data optimal at each n".
+            'hybrid_fulldata_bp': [],
+            'fulldata_bp_meta': [],
         }
+
+    # Pre-compute the full-data pool-best blueprint per model (once). At each
+    # subsample, this blueprint is *re-fit* on the subsample only (no leakage)
+    # using build_fold_hybrid — the BLUEPRINT (alloc/imp/eval/budget/strategy)
+    # is fixed, the feature selection runs on subsample data.
+    fulldata_blueprints = {}
+    fulldata_meta = {}
+    full_augs_top = data.get('augmentations')
+    for model_name in model_names:
+        try:
+            _s_fd, _m_fd = get_best_search_for_downstream(
+                reps, labels, groups,
+                downstream_model=model_name, budget=None,
+                augmentations=full_augs_top, speed=search_speed,
+                dataset_name=dataset_name,
+                task_type=data['task_type'], metric=metric_name,
+                data=data,
+            )
+            if _m_fd:
+                fulldata_blueprints[model_name] = _m_fd['best_config']['blueprint']
+                fulldata_meta[model_name] = {
+                    'tier': _m_fd['tier'], 'aug_condition': _m_fd['aug_condition'],
+                    'budget': _m_fd['best_config']['blueprint'].budget,
+                }
+                print(f"  Full-data BP for {model_name}: tier={_m_fd['tier']} "
+                      f"aug={_m_fd['aug_condition']} budget={_m_fd['best_config']['blueprint'].budget}")
+        except Exception as e:
+            print(f"  Full-data BP for {model_name}: pool helper failed ({e})")
 
     for n_sub in sample_sizes:
         print(f"\n  n={n_sub}:")
@@ -76,6 +110,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         hybrid_by_model = {m: [] for m in model_names}
         single_by_model = {m: [] for m in model_names}
         configs_by_model = {m: [] for m in model_names}
+        # Second pass: full-data blueprint re-fit on subsample.
+        hybrid_fd_by_model = {m: [] for m in model_names}
 
         last_search = None
         full_augs = data.get('augmentations')
@@ -148,6 +184,47 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if best_single != (np.inf if lower_is_better else -np.inf):
                     single_by_model[model_name].append(best_single)
 
+            # Second pass: re-fit the full-data pool-best blueprint on
+            # subsample. Blueprint (alloc/imp/eval/budget/strategy) is fixed
+            # per model from the full-data pool helper above; we just
+            # reapply it. CV evaluation on the subsample using build_fold_hybrid.
+            for model_name, model_factory in models.items():
+                bp_fd = fulldata_blueprints.get(model_name)
+                if bp_fd is None:
+                    continue
+                bp_fd_budget = bp_fd.budget
+                if bp_fd_budget is not None and bp_fd_budget > n_sub:
+                    # Blueprint budget exceeds subsample — skip this n.
+                    continue
+                try:
+                    fold_scores = []
+                    sample_sub_X = next(iter(sub_reps.values()))
+                    for tr_i, va_i in cv_split(sub_groups, sub_folds,
+                                                sample_sub_X, sub_labels,
+                                                mode='intermediary' if sub_folds == 1 else 'full'):
+                        train_reps_fold = {k: v[tr_i] for k, v in sub_reps.items()}
+                        val_reps_fold = {k: v[va_i] for k, v in sub_reps.items()}
+                        train_augs_fold = ({k: v[tr_i] for k, v in sub_augs.items()}
+                                           if sub_augs else None)
+                        val_augs_fold = ({k: v[va_i] for k, v in sub_augs.items()}
+                                         if sub_augs else None)
+                        X_tr, X_va, _fi = build_fold_hybrid(
+                            train_reps_fold, val_reps_fold,
+                            sub_labels[tr_i], bp_fd,
+                            augmentations_train=train_augs_fold,
+                            augmentations_val=val_augs_fold,
+                        )
+                        scaler = StandardScaler()
+                        X_tr_s = scaler.fit_transform(X_tr)
+                        X_va_s = scaler.transform(X_va)
+                        mdl = model_factory()
+                        mdl.fit(X_tr_s, sub_labels[tr_i])
+                        fold_scores.append(metric_fn(sub_labels[va_i], mdl.predict(X_va_s)))
+                    if fold_scores:
+                        hybrid_fd_by_model[model_name].append(float(np.mean(fold_scores)))
+                except Exception:
+                    pass
+
         if last_search is not None:
             top3 = extract_top3_base_reps(last_search)
             if top3:
@@ -160,13 +237,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             s = (float(np.mean(single_by_model[model_name]))
                  if single_by_model[model_name] else float('nan'))
 
+            h_fd = (float(np.mean(hybrid_fd_by_model[model_name]))
+                    if hybrid_fd_by_model[model_name] else float('nan'))
             results['models'][model_name]['hybrid'].append(h)
             results['models'][model_name]['best_single'].append(s)
             results['models'][model_name]['best_configs'].append(
                 configs_by_model[model_name] if configs_by_model[model_name] else None)
+            results['models'][model_name]['hybrid_fulldata_bp'].append(h_fd)
+            results['models'][model_name]['fulldata_bp_meta'].append(
+                fulldata_meta.get(model_name))
 
             delta = (s - h if lower_is_better else h - s) if not (np.isnan(h) or np.isnan(s)) else float('nan')
-            print(f"    {model_name}: hybrid={h:.4f}, best_single={s:.4f}, delta={delta:+.4f}")
+            print(f"    {model_name}: hybrid={h:.4f}, hybrid_fd_bp={h_fd:.4f}, "
+                  f"best_single={s:.4f}, delta={delta:+.4f}")
 
     # Top-3 from the last (full-data) subsample search
     top3_full = extract_top3_base_reps(last_search) if last_search is not None else []

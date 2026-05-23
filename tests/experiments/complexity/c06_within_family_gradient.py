@@ -19,6 +19,7 @@ from experiments._shared import (
     get_model_family_variants, evaluate_cv_with_train,
     find_best_hybrid, get_domain_metric,
     extract_top3_base_reps,
+    get_best_search_for_downstream,
     INTERNAL_EVALUATORS,
 )
 
@@ -68,86 +69,75 @@ def run(data, config, output_dir, dataset_name, families=None):
             print(f"\n    Variant: {var_name} (capacity={capacity_idx})")
             fam_result['heatmap'][var_name] = {}
 
-            # Run find_best_hybrid with this variant as the sole model
+            # Pool helper: for each budget, pick the best (tier, aug_cond)
+            # blueprint discovered with a SHARED proxy evaluator (rf), then
+            # evaluate THIS variant under that blueprint. Variants are
+            # custom models not in INTERNAL_EVALUATORS, so the shared
+            # blueprint pool is the right reference.
             augs = data.get('augmentations')
-            try:
-                search = find_best_hybrid(
-                    reps, labels, groups=groups,
-                    models={var_name: var_factory()},
-                    speed=search_speed,
-                    budgets=budgets,
-                    augmentations=augs,
-                    augmentation_strategy='capped',
-                    internal_evaluators=INTERNAL_EVALUATORS,
-                    metric=metric_name,
-                    task_type=data['task_type'],
-                    verbose=False,
-                    cache=True,
-                    dataset_name=f"{dataset_name}_{var_name}",
-                    tier='general',
-                )
-            except Exception as e:
-                print(f"      find_best_hybrid failed: {e}")
-                fam_result['optimal_budget'][var_name] = {
-                    'budget': None, 'r2': float('nan'), 'capacity_index': capacity_idx,
-                }
-                continue
+            per_budget_val = {}
 
-            top3 = extract_top3_base_reps(search, model=var_name)
-            if top3:
-                print(f"      Top-3 base reps (by {var_name}): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-
-            # Extract best score at each budget from all_results
+            # Extract best score at each budget via the pool helper
             for budget in budgets:
-                budget_results = [r for r in search.all_results
-                                  if r['budget'] == budget and not np.isnan(r['score_mean'])]
-                if budget_results:
-                    best_at_budget = (min if lower_is_better else max)(budget_results, key=lambda r: r['score_mean'])
-                    bp = best_at_budget['blueprint']
+                try:
+                    _s, _meta = get_best_search_for_downstream(
+                        reps, labels, groups,
+                        downstream_model='rf', budget=budget,
+                        augmentations=augs, speed=search_speed,
+                        dataset_name=dataset_name,
+                        task_type=data['task_type'], metric=metric_name,
+                    )
+                except Exception as e:
+                    print(f"      pool helper b={budget} failed: {e}")
+                    _meta = None
+                if not _meta:
+                    continue
+                best_at_budget = _meta['best_config']
+                bp = best_at_budget['blueprint']
+                try:
+                    val_r2, val_std, train_r2, train_std, n_feat = evaluate_cv_with_train(
+                        reps, labels, groups, var_factory, n_folds,
+                        allocation_method=bp.allocation_method,
+                        importance_method=bp.importance_method,
+                        budget=budget,
+                        mode=mode,
+                        metric_fn=metric_fn,
+                    )
+                except Exception:
+                    val_r2 = best_at_budget['score_mean']
+                    val_std = best_at_budget['score_std']
+                    train_r2, train_std = float('nan'), float('nan')
+                    n_feat = best_at_budget.get('n_features', 0)
 
-                    # Get train R² for bias-variance analysis
-                    try:
-                        val_r2, val_std, train_r2, train_std, n_feat = evaluate_cv_with_train(
-                            reps, labels, groups, var_factory, n_folds,
-                            allocation_method=bp.allocation_method,
-                            importance_method=bp.importance_method,
-                            budget=budget,
-                            mode=mode,
-                            metric_fn=metric_fn,
-                        )
-                    except Exception:
-                        val_r2 = best_at_budget['score_mean']
-                        val_std = best_at_budget['score_std']
-                        train_r2, train_std = float('nan'), float('nan')
-                        n_feat = best_at_budget.get('n_features', 0)
-
-                    fam_result['heatmap'][var_name][budget] = {
-                        'val_r2': val_r2, 'val_std': val_std,
-                        'train_r2': train_r2, 'train_std': train_std,
-                        'n_features': n_feat,
-                        'importance': bp.importance_method,
-                        'allocation': bp.allocation_method,
-                    }
-                    gap = train_r2 - val_r2 if not np.isnan(train_r2) else float('nan')
-                    fam_result['train_val_gap'][f"{var_name}_b{budget}"] = gap
-
-                    print(f"      b={budget}: {metric_name}={val_r2:.4f}±{val_std:.3f}, "
-                          f"train_{metric_name}={train_r2:.4f}, gap={gap:.3f} "
-                          f"[{bp.importance_method}/{bp.allocation_method}]")
-
-            # Optimal budget comes from find_best_hybrid's own search
-            # Single-model search: var_name is the only model
-            best = search.best_by_model.get(var_name)
-            if best:
-                fam_result['optimal_budget'][var_name] = {
-                    'budget': best['blueprint'].budget,
-                    'r2': best['score_mean'],
-                    'capacity_index': capacity_idx,
-                    'importance': best['blueprint'].importance_method,
-                    'allocation': best['blueprint'].allocation_method,
+                fam_result['heatmap'][var_name][budget] = {
+                    'val_r2': val_r2, 'val_std': val_std,
+                    'train_r2': train_r2, 'train_std': train_std,
+                    'n_features': n_feat,
+                    'importance': bp.importance_method,
+                    'allocation': bp.allocation_method,
                 }
-                print(f"      >> optimal: b={best['blueprint'].budget}, {metric_name}={best['score_mean']:.4f} "
-                      f"[{best['blueprint'].importance_method}/{best['blueprint'].allocation_method}]")
+                per_budget_val[budget] = (val_r2, bp)
+                gap = train_r2 - val_r2 if not np.isnan(train_r2) else float('nan')
+                fam_result['train_val_gap'][f"{var_name}_b{budget}"] = gap
+
+                print(f"      b={budget}: {metric_name}={val_r2:.4f}±{val_std:.3f}, "
+                      f"train_{metric_name}={train_r2:.4f}, gap={gap:.3f} "
+                      f"[{bp.importance_method}/{bp.allocation_method}]")
+
+            # Optimal budget = best per-budget val score for this variant.
+            if per_budget_val:
+                cmp_fn = min if lower_is_better else max
+                opt_budget, (opt_val, opt_bp) = cmp_fn(
+                    per_budget_val.items(), key=lambda kv: kv[1][0])
+                fam_result['optimal_budget'][var_name] = {
+                    'budget': opt_budget,
+                    'r2': opt_val,
+                    'capacity_index': capacity_idx,
+                    'importance': opt_bp.importance_method,
+                    'allocation': opt_bp.allocation_method,
+                }
+                print(f"      >> optimal: b={opt_budget}, {metric_name}={opt_val:.4f} "
+                      f"[{opt_bp.importance_method}/{opt_bp.allocation_method}]")
             else:
                 fam_result['optimal_budget'][var_name] = {
                     'budget': None, 'r2': float('nan'), 'capacity_index': capacity_idx,

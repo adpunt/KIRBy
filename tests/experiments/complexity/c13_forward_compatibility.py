@@ -55,6 +55,7 @@ from experiments._shared import (
     create_hybrid, apply_feature_selection,
     evaluate_single_rep_cv, build_fold_hybrid,
     INTERNAL_EVALUATORS, SCREENING_BUDGETS, FULL_BUDGETS,
+    get_best_search_for_downstream,
 )
 from kirby.find_best_hybrid import find_best_hybrid
 
@@ -180,39 +181,46 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
             'n_features': X.shape[1],
         }
 
-    try:
-        search = find_best_hybrid(
-            base_reps=reps,
-            labels=labels,
-            groups=groups,
-            speed=search_speed,
-            budgets=FULL_BUDGETS,
-            augmentations=augmentations,
-            augmentation_strategy='uncapped' if augmentations else 'none',
-            return_fitted=True,
-            internal_evaluators=INTERNAL_EVALUATORS,
-            metric=metric_name,
-            task_type=task_type,
-            verbose=False,
-            cache=True,
-            dataset_name=dataset_name,
-            tier='general',
-        )
-    except Exception as e:
-        print(f"      find_best_hybrid failed: {e}")
-        return [], {'error': str(e)}
-
-    # Extract the best blueprint: pick highest-scoring model from best_by_model
-    if not search.best_by_model:
-        return [], {'error': 'no best_by_model found'}
-
-    _lib = search.lower_is_better
-    best = (min if _lib else max)(
-        search.best_by_model.values(), key=lambda r: r['score_mean'])
+    # Try every common downstream model via the pool helper; keep the overall
+    # winner. The pool helper picks the best (tier, aug_cond) cache file per
+    # candidate model.
+    best = None
+    best_search = None
+    best_meta = None
+    for candidate_model in ['rf', 'svm', 'lightgbm', 'mlp', 'knn']:
+        try:
+            s, m = get_best_search_for_downstream(
+                reps, labels, groups,
+                downstream_model=candidate_model, budget=None,
+                augmentations=augmentations,
+                speed=search_speed,
+                dataset_name=dataset_name,
+                task_type=task_type, metric=metric_name,
+                return_fitted=True,
+            )
+        except Exception:
+            continue
+        if not m:
+            continue
+        bc = m['best_config']
+        score = bc.get('score_mean')
+        if score is None:
+            continue
+        lib = s.lower_is_better
+        is_better = (best is None) or (
+            score < best['score_mean'] if lib else score > best['score_mean'])
+        if is_better:
+            best = bc
+            best_search = s
+            best_meta = m
+    if best is None or best_search is None:
+        print(f"      pool helper found no usable blueprint")
+        return [], {'error': 'no blueprint found via pool'}
+    search = best_search
 
     blueprint = best.get('blueprint')
     if blueprint is None:
-        return [], {'error': 'no blueprint in best_by_model'}
+        return [], {'error': 'no blueprint in best_config'}
 
     scores = []
     allocation_dicts = []

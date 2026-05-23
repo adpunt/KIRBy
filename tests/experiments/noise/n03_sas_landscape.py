@@ -53,7 +53,7 @@ from experiments._shared import (
     save_experiment_results, make_structured_output, convert_numpy,
     compute_effective_rank, estimate_mutual_information_knn,
     get_domain_metric, get_hybrid_features_and_weights,
-    get_fitted_hybrid, extract_top3_base_reps,
+    get_fitted_hybrid, get_fitted_pool_hybrid, extract_top3_base_reps,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 
@@ -347,7 +347,7 @@ def _run_landscape_comparison(reps, labels, per_rep_results):
 
 def _run_sas_bo_bridge(reps, labels, groups, struct_t, act_t,
                        augmentations=None, augmentation_strategy='uncapped',
-                       search_speed='full', precomputed=None, is_clf=False,
+                       search_speed='full', data=None, is_clf=False,
                        dataset_name=None):
     """Zone I fraction predicts GP quality -- explains why compact spaces help BO.
 
@@ -411,14 +411,13 @@ def _run_sas_bo_bridge(reps, labels, groups, struct_t, act_t,
     # 3. KIRBy hybrid 50D
     try:
         aug_cond = 'uncapped' if augmentations else 'none'
-        X_h, _, _search = get_fitted_hybrid(
+        X_h, _, _search, _meta = get_fitted_pool_hybrid(
             reps, labels, groups,
-            aug_condition=aug_cond, augmentations=augmentations,
-            speed=search_speed, precomputed=precomputed,
-            internal_evaluators=DISTANCE_EVALUATORS,
-            budgets=DISTANCE_BUDGETS,
-            downstream_model='gp',
-            dataset_name=dataset_name, tier='general', task_type=task_type)
+            downstream_model='gp', budget=50,
+            augmentations=augmentations,
+            speed=search_speed, data=data,
+            dataset_name=dataset_name,
+            task_type='classification' if is_clf else 'regression')
         conditions['hybrid_50d'] = StandardScaler().fit_transform(X_h)
     except Exception as e:
         print(f"    WARNING: hybrid build failed ({e})")
@@ -595,7 +594,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         augmentations=augmentations,
         augmentation_strategy=augmentation_strategy,
         search_speed=search_speed,
-        precomputed=data.get('precomputed_searches'),
+        data=data,
         is_clf=is_clf,
         dataset_name=dataset_name)
 

@@ -20,7 +20,7 @@ from sklearn.preprocessing import StandardScaler
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results,
-    get_fitted_hybrid, flatten_weights,
+    get_fitted_hybrid, get_fitted_pool_hybrid, flatten_weights,
     estimate_mutual_information_knn, compute_effective_rank,
 )
 
@@ -52,13 +52,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     budget = kwargs.get('budget', 100)
     augmentations = data.get('augmentations')
     try:
-        X_hybrid, fi, search = get_fitted_hybrid(
+        X_hybrid, fi, search, _meta = get_fitted_pool_hybrid(
             reps, labels, groups,
-            aug_condition='uncapped' if augmentations else 'none', augmentations=augmentations,
-            speed=search_speed,
-            precomputed=data.get('precomputed_searches'),
-            downstream_model='rf',
-            dataset_name=dataset_name, tier='general', task_type=task_type)
+            downstream_model='rf', budget=budget,
+            augmentations=augmentations,
+            speed=search_speed, data=data,
+            dataset_name=dataset_name, task_type=task_type)
         fitted = search.fitted_results.get('rf')
         weights_flat = flatten_weights(fitted) if fitted else np.ones(X_hybrid.shape[1])
     except Exception as e:

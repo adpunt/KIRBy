@@ -307,7 +307,6 @@ def evaluate_condition(condition, rep_names, n_folds, max_samples=5000,
 
     # Build hybrid with aac as augmentation rep (matches DDG domain config)
     try:
-        from kirby.find_best_hybrid import find_best_hybrid
         from kirby.hybrid import apply_feature_selection
         grp = groups if groups is not None else np.arange(n)
         AUG_REPS = {'aac'}
@@ -316,27 +315,28 @@ def evaluate_condition(condition, rep_names, n_folds, max_samples=5000,
         if not aug_dict:
             print(f"  WARNING: augmentation reps {AUG_REPS} not found in loaded reps, "
                   f"proceeding without augmentation")
-        from experiments._shared import resolve_pruning_kwargs
+        from experiments._shared import (resolve_pruning_kwargs,
+                                          get_best_search_for_downstream)
         _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
                                        dataset_label=f"{ds_name}/n{n}")
-        search = find_best_hybrid(
-            base_reps=base if base else reps,
-            labels=labels, groups=grp,
+        search, _meta = get_best_search_for_downstream(
+            base if base else reps, labels, grp,
+            downstream_model='rf', budget=None,
+            augmentations=aug_dict if aug_dict else None,
+            speed='full',
             metric='pearson',
             task_type='regression',
-            budgets=FULL_BUDGETS,
-            augmentations=aug_dict if aug_dict else None,
-            augmentation_strategy='uncapped' if aug_dict else 'none',
-            internal_evaluators=INTERNAL_EVALUATORS,
-            speed='full', return_fitted=True, verbose=False, cache=True,
-            dataset_name=ds_name, tier='general',
+            dataset_name=ds_name,
+            return_fitted=True,
             condition_suffix=f'n{n}',
             adaptive_pruning=0.25,
-            **_pkw)
-        top3 = extract_top3_base_reps(search)
-        if top3:
-            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-        fitted = search.fitted_results.get('rf')
+            **_pkw,
+        )
+        if search is not None:
+            top3 = extract_top3_base_reps(search)
+            if top3:
+                print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+        fitted = search.fitted_results.get('rf') if search is not None else None
         if fitted is not None:
             all_reps = {**reps, **(aug_dict or {})}
             fi = {r: {'selected_indices': idx}

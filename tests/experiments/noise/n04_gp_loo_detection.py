@@ -41,7 +41,7 @@ from sklearn.model_selection import cross_val_predict
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    get_domain_metric, get_fitted_hybrid, extract_top3_base_reps,
+    get_domain_metric, get_fitted_hybrid, get_fitted_pool_hybrid, extract_top3_base_reps,
     cap_dimensions,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
@@ -183,16 +183,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # 1. Hybrid
     _search = None
     try:
-        X_hybrid, fi, _search = get_fitted_hybrid(
+        X_hybrid, fi, _search, _meta = get_fitted_pool_hybrid(
             reps, labels, groups,
-            aug_condition='uncapped' if augmentations else 'none', augmentations=augmentations,
+            downstream_model='gp', budget=budget,
+            augmentations=augmentations,
             speed=config.get('search_speed', 'full'),
-            precomputed=data.get('precomputed_searches'),
-            internal_evaluators=DISTANCE_EVALUATORS,
-            budgets=DISTANCE_BUDGETS,
-            downstream_model='gp',
-            dataset_name=dataset_name, tier='general',
-        task_type=task_type)
+            data=data,
+            dataset_name=dataset_name,
+            task_type=task_type)
         spaces['hybrid'] = X_hybrid
         top3 = extract_top3_base_reps(_search)
         if top3:

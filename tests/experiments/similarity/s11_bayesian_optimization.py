@@ -62,7 +62,7 @@ from sklearn.model_selection import GroupShuffleSplit, ShuffleSplit
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy, get_domain_metric,
-    make_structured_output, get_precomputed_search,
+    make_structured_output, get_precomputed_search, get_best_search_for_downstream,
 )
 
 from sklearn.gaussian_process.kernels import Kernel
@@ -705,14 +705,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  Skipping S11: n={n_samples} < 200 (BO seed set too small for greedy allocation)")
         return {'error': 'dataset_too_small', 'n_samples': n_samples}
 
-    # Get blueprint from cached search (used by hybrid conditions)
+    # Get blueprint from pool helper (used by hybrid conditions)
     try:
-        search = get_precomputed_search(
+        search, meta = get_best_search_for_downstream(
             reps, labels, groups,
-            aug_condition='none', speed=config.get('search_speed', 'full'),
-            precomputed=data.get('precomputed_searches'),
-            dataset_name=dataset_name, tier='general', task_type=task_type)
-        bp = search.best_by_model['rf']['blueprint'] if search.best_by_model.get('rf') else None
+            downstream_model='rf', budget=None,
+            augmentations=data.get('augmentations'),
+            speed=config.get('search_speed', 'full'),
+            dataset_name=dataset_name, task_type=task_type,
+            data=data,
+        )
+        bp = meta['best_config']['blueprint'] if meta else None
     except Exception:
         bp = None
 

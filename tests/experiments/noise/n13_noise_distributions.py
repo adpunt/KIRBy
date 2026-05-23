@@ -29,7 +29,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories,
     DOWNSTREAM_MODELS_NOISE,
-    get_precomputed_search, extract_top3_base_reps,
+    get_precomputed_search, get_best_search_for_downstream, extract_top3_base_reps,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
 from kirby.utils.lnl_methods import get_lnl_method, _standard_dnn_train_predict
@@ -207,17 +207,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Estimators: {estimators}")
     print(f"  Folds: {n_folds}")
 
-    # Get blueprint ONCE from cached search (uses clean labels)
-    search = get_precomputed_search(
-        reps, labels, groups, aug_condition='uncapped' if augmentations else 'none',
-        augmentations=augmentations, speed=config.get('search_speed', 'full'),
-        precomputed=data.get('precomputed_searches'),
-        dataset_name=dataset_name, tier='general', task_type=task_type)
-    top3 = extract_top3_base_reps(search)
-    if top3:
-        print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-    best_rf = search.best_by_model.get('rf')
-    bp = best_rf['blueprint'] if best_rf else None
+    # Get blueprint ONCE from pool helper (uses clean labels)
+    search, meta = get_best_search_for_downstream(
+        reps, labels, groups,
+        downstream_model='rf', budget=None,
+        augmentations=augmentations,
+        speed=config.get('search_speed', 'full'),
+        dataset_name=dataset_name, task_type=task_type,
+        data=data,
+    )
+    if search is not None:
+        top3 = extract_top3_base_reps(search)
+        if top3:
+            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+    bp = meta['best_config']['blueprint'] if meta else None
     if bp is None:
         print("  WARNING: No blueprint found, skipping")
         return {'error': 'no_blueprint', 'metric': metric_name}

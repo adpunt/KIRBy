@@ -281,40 +281,34 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
         Dict with search results, hybrid evaluation, top3 base reps,
         and selected rep info.
     """
-    from kirby.find_best_hybrid import find_best_hybrid
     from kirby.hybrid import apply_feature_selection
-    from experiments._shared import resolve_pruning_kwargs
+    from experiments._shared import (resolve_pruning_kwargs,
+                                      get_best_search_for_downstream)
 
     print(f"\n  Building hybrid ({pool_name}, {len(pool_reps)} reps)...")
 
     _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
                                    dataset_label=f"{dataset_name}/{pool_name}")
-    search = find_best_hybrid(
-        base_reps=pool_reps,
-        labels=labels,
-        groups=groups,
+    search, _meta = get_best_search_for_downstream(
+        pool_reps, labels, groups,
+        downstream_model='rf', budget=None,
+        augmentations=None,
+        speed='full',
         metric='rmse',
         task_type='regression',
-        budgets=FULL_BUDGETS,
-        internal_evaluators=INTERNAL_EVALUATORS,
-        speed='full',
-        return_fitted=True,
-        verbose=False,
-        cache=True,
         dataset_name=dataset_name,
-        tier='general',
+        return_fitted=True,
         condition_suffix=pool_name,
         adaptive_pruning=0.25,
-        augmentation_strategy='none',
         **_pkw,
     )
 
-    top3 = extract_top3_base_reps(search, model='rf')
+    top3 = extract_top3_base_reps(search, model='rf') if search is not None else None
     if top3:
         print(f"    Top-3 base: {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
 
     # Extract hybrid features from RF fitted result
-    fitted = (search.fitted_results or {}).get('rf')
+    fitted = (search.fitted_results or {}).get('rf') if search is not None else None
     hybrid_eval = {}
     selected_reps = {}
 

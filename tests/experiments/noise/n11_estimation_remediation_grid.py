@@ -26,7 +26,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories,
-    get_precomputed_search, cap_dimensions,
+    get_precomputed_search, get_best_search_for_downstream, cap_dimensions,
 )
 from kirby.hybrid import create_hybrid
 from kirby.utils.noise_estimation import (
@@ -274,14 +274,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Sigmas: {sigmas}")
     print(f"  Folds: {n_folds}")
 
-    # Get blueprint ONCE from cached search (uses clean labels)
-    search = get_precomputed_search(
-        reps, labels, groups, aug_condition='uncapped' if augmentations else 'none',
-        augmentations=augmentations, speed=config.get('search_speed', 'full'),
-        precomputed=data.get('precomputed_searches'),
-        dataset_name=dataset_name, tier='general', task_type=task_type)
-    best_rf = search.best_by_model.get('rf')
-    bp = best_rf['blueprint'] if best_rf else None
+    # Get blueprint ONCE from pool helper (uses clean labels)
+    search, meta = get_best_search_for_downstream(
+        reps, labels, groups,
+        downstream_model='rf', budget=None,
+        augmentations=augmentations,
+        speed=config.get('search_speed', 'full'),
+        dataset_name=dataset_name, task_type=task_type,
+        data=data,
+    )
+    bp = meta['best_config']['blueprint'] if meta else None
     if bp is None:
         print("  WARNING: No blueprint found, skipping")
         return {'error': 'no_blueprint', 'metric': metric_name}

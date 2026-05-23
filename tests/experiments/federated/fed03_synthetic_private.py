@@ -30,7 +30,7 @@ from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy, cv_split,
-    get_precomputed_search, get_domain_metric,
+    get_precomputed_search, get_best_search_for_downstream, get_domain_metric,
 )
 from experiments.federated.federated_helpers import (
     compute_clf_metrics, compute_reg_metrics,
@@ -90,18 +90,18 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
     aug_cond = 'uncapped' if augs else 'none'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     try:
-        _search = get_precomputed_search(
+        _search, _meta = get_best_search_for_downstream(
             reps_chembl, labels_chembl, data.get('groups'),
-            budget=100, aug_condition=aug_cond,
+            downstream_model='rf', budget=100,
             augmentations=augs,
             speed=config.get('search_speed', 'full'),
-            precomputed=data.get('precomputed_searches'),
             metric=metric_name,
             task_type=data['task_type'],
             domain=data.get('domain', 'molecular'),
-            dataset_name=dataset_name, tier='general')
-        _bp_entry = _search.best_by_model.get('rf')
-        _bp = _bp_entry['blueprint'] if _bp_entry else None
+            dataset_name=dataset_name,
+            data=data,
+        )
+        _bp = _meta['best_config']['blueprint'] if _meta else None
     except Exception:
         _bp = None
     _alloc = _bp.allocation_method if _bp else 'performance_weighted'
@@ -540,18 +540,18 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
     aug_cond = 'uncapped' if augs else 'none'
     metric_name_b, metric_fn_b, lower_is_better_b = get_domain_metric(data)
     try:
-        _search = get_precomputed_search(
+        _search, _meta = get_best_search_for_downstream(
             reps, labels, groups,
-            budget=100, aug_condition=aug_cond,
+            downstream_model='rf', budget=100,
             augmentations=augs,
             speed=config.get('search_speed', 'full'),
-            precomputed=data.get('precomputed_searches'),
             metric=metric_name_b,
             task_type=data['task_type'],
             domain=data.get('domain', 'molecular'),
-            dataset_name=dataset_name, tier='general')
-        _bp_entry = _search.best_by_model.get('rf')
-        _bp = _bp_entry['blueprint'] if _bp_entry else None
+            dataset_name=dataset_name,
+            data=data,
+        )
+        _bp = _meta['best_config']['blueprint'] if _meta else None
     except Exception:
         _bp = None
     _alloc = _bp.allocation_method if _bp else 'performance_weighted'

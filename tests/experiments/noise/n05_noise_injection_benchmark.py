@@ -23,7 +23,7 @@ from sklearn.metrics import r2_score
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    get_domain_metric, get_fitted_hybrid, extract_top3_base_reps,
+    get_domain_metric, get_fitted_hybrid, get_fitted_pool_hybrid, extract_top3_base_reps,
     cap_dimensions,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
@@ -99,16 +99,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     _search = None
     groups = data.get('groups')
     try:
-        X_hybrid, fi, _search = get_fitted_hybrid(
+        X_hybrid, fi, _search, _meta = get_fitted_pool_hybrid(
             reps, labels, groups,
-            aug_condition='uncapped' if augmentations else 'none', augmentations=augmentations,
+            downstream_model='knn', budget=None,
+            augmentations=augmentations,
             speed=config.get('search_speed', 'full'),
-            precomputed=data.get('precomputed_searches'),
-            internal_evaluators=DISTANCE_EVALUATORS,
-            budgets=DISTANCE_BUDGETS,
-            downstream_model='knn',
-            dataset_name=dataset_name, tier='general',
-        task_type=task_type)
+            data=data,
+            dataset_name=dataset_name,
+            task_type=task_type)
         D_hybrid = compute_distance_matrix(X_hybrid, standardize=True)
         print(f"  Hybrid distance matrix: {X_hybrid.shape[1]}D")
         top3 = extract_top3_base_reps(_search)

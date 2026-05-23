@@ -25,7 +25,7 @@ from sklearn.model_selection import GroupShuffleSplit
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results, convert_numpy,
-    get_fitted_hybrid, flatten_weights, flatten_fold_weights, make_cv_splitter,
+    get_fitted_hybrid, get_fitted_pool_hybrid, flatten_weights, flatten_fold_weights, make_cv_splitter,
     apply_feature_selection, compute_feature_importance,
     get_domain_metric, get_model_factories, build_fold_hybrid,
     get_best_for_downstream, extract_top3_base_reps,
@@ -63,16 +63,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     try:
         budget = kwargs.get('budget', 100)
         augmentations_search = data.get('augmentations')
-        X_hybrid, fi, search = get_fitted_hybrid(
+        X_hybrid, fi, search, _meta = get_fitted_pool_hybrid(
             reps, labels, groups,
-            aug_condition='uncapped' if augmentations_search else 'none', augmentations=augmentations_search,
+            downstream_model='knn', budget=budget,
+            augmentations=augmentations_search,
             speed=config.get('search_speed', 'full'),
-            precomputed=data.get('precomputed_searches'),
-            internal_evaluators=DISTANCE_EVALUATORS,
-            budgets=DISTANCE_BUDGETS,
             metric=metric_name, task_type=task_type, domain=domain,
-            downstream_model='knn',
-            dataset_name=dataset_name, tier='general_distance')
+            dataset_name=dataset_name, distance=True)
         weights_flat = flatten_fold_weights(fi) if fi else np.ones(X_hybrid.shape[1])
         best_config = get_best_for_downstream(search, 'knn')
         bp = best_config['blueprint'] if best_config and 'blueprint' in best_config else None

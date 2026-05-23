@@ -31,7 +31,7 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric,
-    get_precomputed_search, build_fold_hybrid,
+    get_precomputed_search, get_best_search_for_downstream, build_fold_hybrid,
     extract_top3_base_reps,
 )
 from kirby.utils.lnl_methods import (
@@ -101,17 +101,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     sample_X = next(iter(reps.values()))
 
-    # Get hybrid blueprint ONCE (shared across all sigmas/folds)
-    search = get_precomputed_search(
-        reps, labels, groups, aug_condition='uncapped' if augmentations else 'none',
-        augmentations=augmentations, speed=config.get('search_speed', 'full'),
-        precomputed=data.get('precomputed_searches'),
-        dataset_name=dataset_name, tier='general', task_type=task_type)
-    top3 = extract_top3_base_reps(search)
-    if top3:
-        print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-    best_dnn = search.best_by_model.get('dnn') or search.best_by_model.get('rf')
-    bp = best_dnn['blueprint'] if best_dnn else None
+    # Get hybrid blueprint ONCE via pool helper. Prefer dnn-best blueprint;
+    # fall back to rf if dnn isn't in the pool.
+    search, meta = get_best_search_for_downstream(
+        reps, labels, groups,
+        downstream_model='dnn', budget=None,
+        augmentations=augmentations,
+        speed=config.get('search_speed', 'full'),
+        dataset_name=dataset_name, task_type=task_type,
+        data=data,
+    )
+    if meta is None:
+        search, meta = get_best_search_for_downstream(
+            reps, labels, groups,
+            downstream_model='rf', budget=None,
+            augmentations=augmentations,
+            speed=config.get('search_speed', 'full'),
+            dataset_name=dataset_name, task_type=task_type,
+            data=data,
+        )
+    if search is not None:
+        top3 = extract_top3_base_reps(search)
+        if top3:
+            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+    bp = meta['best_config']['blueprint'] if meta else None
     if bp is None:
         print("  WARNING: No blueprint found, skipping")
         return {'error': 'no_blueprint', 'metric': metric_name}

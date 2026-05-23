@@ -28,7 +28,7 @@ from sklearn.metrics import silhouette_score
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    get_fitted_hybrid, extract_top3_base_reps,
+    get_fitted_hybrid, get_fitted_pool_hybrid, extract_top3_base_reps,
     compute_feature_importance, get_domain_metric,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
@@ -193,15 +193,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # baselines (PCA, raw reps). Results should be interpreted as "how well does
     # the hybrid space organise labels" not "will this generalise to unseen data".
     try:
-        X_hybrid, fi, search = get_fitted_hybrid(
+        X_hybrid, fi, search, _meta = get_fitted_pool_hybrid(
             reps, labels, groups,
-            aug_condition='none', speed=config.get('search_speed', 'full'),
-            precomputed=data.get('precomputed_searches'),
-            internal_evaluators=DISTANCE_EVALUATORS,
-            budgets=DISTANCE_BUDGETS,
+            downstream_model='knn', budget=None,
+            augmentations=data.get('augmentations'),
+            speed=config.get('search_speed', 'full'),
             metric=metric_name, task_type=task_type, domain=domain,
-            downstream_model='knn',
-            dataset_name=dataset_name, tier='general_distance')
+            dataset_name=dataset_name, distance=True)
         spaces['hybrid'] = X_hybrid
         top3 = extract_top3_base_reps(search)
         if top3:

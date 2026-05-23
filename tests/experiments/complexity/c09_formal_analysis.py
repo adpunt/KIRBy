@@ -23,6 +23,7 @@ from experiments._shared import (
     estimate_mutual_information_knn, compute_effective_rank,
     apply_feature_selection,
     find_best_hybrid, get_domain_metric,
+    get_best_search_for_downstream,
     INTERNAL_EVALUATORS,
 )
 from kirby.hybrid import create_hybrid
@@ -291,50 +292,38 @@ def _run_information_retention(data, budgets, search_speed='full', dataset_name=
     sample_X = next(iter(reps.values()))
     from sklearn.linear_model import Ridge as _Ridge
 
-    # 2026-05-22: switched general→top for capped (general/capped
-    # precompute dropped; cache-hits top/capped instead). Blueprint
-    # references only top-tier rep names; downstream create_hybrid still
-    # receives the full reps dict but only the named ones are used.
-    from experiments.complexity.complexity_helpers import DATASET_REPS
-    _top_names = DATASET_REPS.get(dataset_name, {}).get('top_tier', [])
-    top_reps = {k: v for k, v in reps.items() if k in _top_names}
-    if len(top_reps) < 2:
-        top_reps = reps  # fallback: tiny datasets without a top_tier config
-        _top_tier_arg = 'general'
-    else:
-        _top_tier_arg = 'top'
-
     for budget in sorted(budgets):
-        # Find best hybrid at this budget (proper CV search)
-        try:
-            search = find_best_hybrid(
-                top_reps, labels, groups=groups,
-                speed=search_speed, budgets=[budget],
-                augmentations=augs,
-                augmentation_strategy='capped',
-                internal_evaluators=INTERNAL_EVALUATORS,
-                metric=metric_name_9b,
-                task_type=data['task_type'],
-                verbose=False,
-                cache=True,
-                dataset_name=dataset_name,
-                tier=_top_tier_arg,
-            )
-            # Pick the best result across all models (for blueprint)
-            best = None
-            for m_best in search.best_by_model.values():
-                if best is None or (m_best['score_mean'] < best['score_mean'] if lower_is_better_9b else m_best['score_mean'] > best['score_mean']):
-                    best = m_best
-            if best:
-                bp = best['blueprint']
-            else:
-                bp = None
-        except Exception:
-            bp = None
+        # Pool helper across (general, top) x (none, uncapped, capped) cache
+        # files; pick winner across common downstream models for this budget.
+        bp = None
+        best_score = None
+        for cand_model in ['rf', 'svm', 'lightgbm', 'mlp']:
+            try:
+                _s, _m = get_best_search_for_downstream(
+                    reps, labels, groups,
+                    downstream_model=cand_model, budget=budget,
+                    augmentations=augs, speed=search_speed,
+                    dataset_name=dataset_name,
+                    task_type=data['task_type'], metric=metric_name_9b,
+                )
+            except Exception:
+                continue
+            if not _m:
+                continue
+            score = _m['best_config'].get('score_mean')
+            if score is None:
+                continue
+            is_better = (best_score is None) or (
+                score < best_score if lower_is_better_9b
+                else score > best_score)
+            if is_better:
+                best_score = score
+                bp = _m['best_config']['blueprint']
 
         alloc = bp.allocation_method if bp else 'greedy'
         imp = bp.importance_method if bp else 'treeshap'
         int_eval = bp.internal_evaluator if bp else 'ridge'
+        aug_strat = bp.augmentation_strategy if bp else ('uncapped' if augs else 'none')
         results['best_configs'].append({'budget': budget, 'importance': imp, 'allocation': alloc})
 
         # Per-fold hybrid creation to avoid label leakage in MI measurement
@@ -353,7 +342,7 @@ def _run_information_retention(data, budgets, search_speed='full', dataset_name=
                     budget=budget,
                     internal_evaluator=int_eval,
                     augmentations=train_augs,
-                    augmentation_strategy='capped',
+                    augmentation_strategy=aug_strat,
                 )
             except Exception:
                 continue
@@ -436,46 +425,39 @@ def _run_effective_rank_analysis(data, budgets, search_speed='full', dataset_nam
     sample_X = next(iter(reps.values()))
     from experiments._shared import cv_split as _cv_split_9c
 
-    # 2026-05-22: switched general→top for capped (see 9b note).
-    from experiments.complexity.complexity_helpers import DATASET_REPS
-    _top_names = DATASET_REPS.get(dataset_name, {}).get('top_tier', [])
-    top_reps = {k: v for k, v in reps.items() if k in _top_names}
-    if len(top_reps) < 2:
-        top_reps = reps
-        _top_tier_arg = 'general'
-    else:
-        _top_tier_arg = 'top'
-
     for budget in sorted(budgets):
         n_feat = min(budget, X_concat.shape[1], X_concat.shape[0] - 1)
 
-        # Find best hybrid config at this budget (proper CV)
-        try:
-            search = find_best_hybrid(
-                top_reps, labels, groups=groups,
-                speed=search_speed, budgets=[budget],
-                augmentations=augs,
-                augmentation_strategy='capped',
-                internal_evaluators=INTERNAL_EVALUATORS,
-                metric=metric_name_9c,
-                task_type=data['task_type'],
-                verbose=False,
-                cache=True,
-                dataset_name=dataset_name,
-                tier=_top_tier_arg,
-            )
-            # Pick the best result across all models (for blueprint)
-            best = None
-            for m_best in search.best_by_model.values():
-                if best is None or (m_best['score_mean'] < best['score_mean'] if lower_is_better_9c else m_best['score_mean'] > best['score_mean']):
-                    best = m_best
-            bp = best['blueprint'] if best else None
-        except Exception:
-            bp = None
+        # Pool helper picks best (tier, aug_cond) across common models for this budget.
+        bp = None
+        best_score = None
+        for cand_model in ['rf', 'svm', 'lightgbm', 'mlp']:
+            try:
+                _s, _m = get_best_search_for_downstream(
+                    reps, labels, groups,
+                    downstream_model=cand_model, budget=budget,
+                    augmentations=augs, speed=search_speed,
+                    dataset_name=dataset_name,
+                    task_type=data['task_type'], metric=metric_name_9c,
+                )
+            except Exception:
+                continue
+            if not _m:
+                continue
+            score = _m['best_config'].get('score_mean')
+            if score is None:
+                continue
+            is_better = (best_score is None) or (
+                score < best_score if lower_is_better_9c
+                else score > best_score)
+            if is_better:
+                best_score = score
+                bp = _m['best_config']['blueprint']
 
         alloc = bp.allocation_method if bp else 'greedy'
         imp = bp.importance_method if bp else 'treeshap'
         int_eval = bp.internal_evaluator if bp else 'ridge'
+        aug_strat = bp.augmentation_strategy if bp else ('uncapped' if augs else 'none')
 
         # Per-fold hybrid creation to avoid label leakage in rank measurement
         fold_ranks = []
@@ -490,7 +472,7 @@ def _run_effective_rank_analysis(data, budgets, search_speed='full', dataset_nam
                     budget=budget,
                     internal_evaluator=int_eval,
                     augmentations=train_augs,
-                    augmentation_strategy='capped',
+                    augmentation_strategy=aug_strat,
                 )
                 fold_ranks.append(compute_effective_rank(X_hybrid))
             except Exception:
@@ -574,53 +556,35 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                     print(f"      {key}: gap={vals['gap']:.3f}, bias={vals['bias_proxy']:.3f}")
             return results
 
-    # Fallback: discover best config at each budget via find_best_hybrid, then
-    # measure train-val gap with that config
-    print("    Computing bias-variance from scratch (using find_best_hybrid per budget)")
+    # Fallback: discover best config per model at each budget via the pool
+    # helper (best across (tier, aug_cond) for each model), then measure
+    # train-val gap with that config.
+    print("    Computing bias-variance from scratch (using pool helper per budget)")
     augs = data.get('augmentations')
     model_names = list(models.keys())
 
-    # 2026-05-22: switched general→top for capped (see 9b note).
-    from experiments.complexity.complexity_helpers import DATASET_REPS
-    _top_names = DATASET_REPS.get(dataset_name, {}).get('top_tier', [])
-    top_reps = {k: v for k, v in reps.items() if k in _top_names}
-    if len(top_reps) < 2:
-        top_reps = reps
-        _top_tier_arg = 'general'
-    else:
-        _top_tier_arg = 'top'
-
     for budget in budgets:
-        # Find best config at this budget
-        try:
-            search = find_best_hybrid(
-                top_reps, labels, groups=groups,
-                models=None,
-                speed=search_speed,
-                budgets=[budget],
-                augmentations=augs,
-                augmentation_strategy='capped',
-                internal_evaluators=INTERNAL_EVALUATORS,
-                metric=metric_name,
-                task_type=data['task_type'],
-                verbose=False,
-                cache=True,
-                dataset_name=dataset_name,
-                tier=_top_tier_arg,
-            )
-        except Exception as e:
-            print(f"    b={budget}: find_best_hybrid failed - {e}")
-            continue
-
         for model_name, model_factory in models.items():
-            # Get best config for this model at this budget
-            if model_name in search.best_by_model:
-                bp = search.best_by_model[model_name]['blueprint']
+            try:
+                _s, _m = get_best_search_for_downstream(
+                    reps, labels, groups,
+                    downstream_model=model_name, budget=budget,
+                    augmentations=augs, speed=search_speed,
+                    dataset_name=dataset_name,
+                    task_type=data['task_type'], metric=metric_name,
+                )
+            except Exception as e:
+                print(f"    {model_name}/b={budget}: pool helper failed - {e}")
+                _s, _m = None, None
+            if _m:
+                bp = _m['best_config']['blueprint']
                 alloc = bp.allocation_method
                 imp = bp.importance_method
                 int_eval = bp.internal_evaluator
+                aug_strat = bp.augmentation_strategy
             else:
                 alloc, imp, int_eval = 'greedy', 'treeshap', 'ridge'
+                aug_strat = 'uncapped' if augs else 'none'
 
             try:
                 val_r2, val_std, train_r2, train_std, n_feat = evaluate_cv_with_train(
@@ -632,7 +596,7 @@ def _run_bias_variance_analysis(data, models, budgets, n_folds, exp6_results=Non
                     metric_fn=metric_fn,
                     internal_evaluator=int_eval,
                     augmentations=augs,
-                    augmentation_strategy='capped',
+                    augmentation_strategy=aug_strat,
                 )
                 if model_name not in results['models']:
                     results['models'][model_name] = {}

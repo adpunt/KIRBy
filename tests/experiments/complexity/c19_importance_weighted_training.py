@@ -31,7 +31,7 @@ from experiments._shared import (
     cv_split, get_domain_metric, get_model_factories,
     compute_feature_importance,
 )
-from experiments._shared import get_fitted_hybrid, cap_dimensions
+from experiments._shared import get_fitted_hybrid, get_fitted_pool_hybrid, cap_dimensions
 
 
 # =========================================================================
@@ -115,16 +115,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     augmentations = data.get('augmentations')
     try:
-        # 2026-05-22: switched general→top for capped (general/capped
-        # precompute dropped; cache-hits the top/capped file instead).
-        X_hybrid, fi, _search = get_fitted_hybrid(
-            reps, labels, groups, downstream_model='rf',
-            budget=budget,
-            aug_condition='capped', augmentations=augmentations,
+        # Pool helper picks best (tier, aug_condition) cache file for
+        # downstream_model='rf' at this budget.
+        X_hybrid, fi, _search, _meta = get_fitted_pool_hybrid(
+            reps, labels, groups, downstream_model='rf', budget=budget,
+            augmentations=augmentations,
             speed=config.get('search_speed', 'full'),
-            precomputed=data.get('precomputed_searches_top'),
-            dataset_name=dataset_name, tier='top',
-        task_type=task_type)
+            data=data,
+            dataset_name=dataset_name,
+            task_type=task_type,
+        )
         input_spaces['hybrid'] = X_hybrid
     except Exception as e:
         print(f"  Hybrid creation failed: {e}")

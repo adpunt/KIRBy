@@ -24,7 +24,7 @@ from sklearn.metrics import r2_score
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    cv_split, get_domain_metric, get_fitted_hybrid,
+    cv_split, get_domain_metric, get_fitted_hybrid, get_fitted_pool_hybrid,
     cap_dimensions,
 )
 from kirby.utils.noise_estimation import get_noise_estimator
@@ -85,14 +85,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     spaces = {'concat': X_concat_s}
     try:
-        X_hybrid, fi, _search = get_fitted_hybrid(
+        X_hybrid, fi, _search, _meta = get_fitted_pool_hybrid(
             reps, labels, groups,
-            aug_condition='uncapped' if augmentations else 'none', augmentations=augmentations,
+            downstream_model='rf', budget=None,
+            augmentations=augmentations,
             speed=config.get('search_speed', 'full'),
-            precomputed=data.get('precomputed_searches'),
-            downstream_model='rf',
-            dataset_name=dataset_name, tier='general',
-        task_type=task_type)
+            data=data,
+            dataset_name=dataset_name,
+            task_type=task_type)
         spaces['hybrid'] = StandardScaler().fit_transform(X_hybrid)
     except Exception as e:
         print(f"  Hybrid failed: {e}")

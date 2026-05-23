@@ -39,7 +39,8 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     find_best_hybrid, get_config,
     extract_top3_base_reps,
-    INTERNAL_EVALUATORS, SCREENING_BUDGETS,
+    INTERNAL_EVALUATORS, SCREENING_BUDGETS, FULL_BUDGETS,
+    get_best_search_for_downstream,
 )
 from experiments.complexity.complexity_helpers import DATASET_REPS
 
@@ -173,43 +174,47 @@ def _evaluate_task(task_name, rep_preset, config):
           f"= {best_single_score:.4f}")
 
     # -----------------------------------------------------------------
-    # 2. Run find_best_hybrid
+    # 2. Best hybrid via pool helper (best across all common models)
     # -----------------------------------------------------------------
-    print(f"    Running find_best_hybrid...")
+    print(f"    Picking best hybrid via pool helper...")
 
     speed = config.get('search_speed', 'full')
-    fbh_kwargs = dict(
-        base_reps=reps,
-        labels=labels,
-        groups=groups,
-        metric=metric_name,
-        task_type=task_type,
-        budgets=FULL_BUDGETS,
-        speed=speed,
-        n_folds=n_folds,
-        internal_evaluators=INTERNAL_EVALUATORS,
-        verbose=False,
-        seed=42,
-        cache=True,
-    )
-    if aug_dict:
-        fbh_kwargs['augmentations'] = aug_dict
-        fbh_kwargs['augmentation_strategy'] = 'uncapped'
-    else:
-        fbh_kwargs['augmentation_strategy'] = 'none'
-    search = find_best_hybrid(**fbh_kwargs)
+    best_entry = None
+    best_model_name = None
+    search = None
+    for candidate_model in ['rf', 'svm', 'lightgbm', 'mlp', 'knn']:
+        try:
+            s, m = get_best_search_for_downstream(
+                reps, labels, groups,
+                downstream_model=candidate_model, budget=None,
+                augmentations=aug_dict if aug_dict else None,
+                speed=speed,
+                dataset_name=task_name,
+                task_type=task_type, metric=metric_name,
+            )
+        except Exception:
+            continue
+        if not m:
+            continue
+        bc = m['best_config']
+        score = bc.get('score_mean')
+        if score is None:
+            continue
+        is_better = (best_entry is None) or (
+            score < best_entry['score_mean'] if lower_is_better
+            else score > best_entry['score_mean'])
+        if is_better:
+            best_entry = bc
+            best_model_name = candidate_model
+            search = s
+
+    if search is None or best_entry is None:
+        print(f"    WARNING: pool helper returned no result for {task_name}")
+        return None
 
     top3 = extract_top3_base_reps(search)
     if top3:
         print(f"    Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-
-    if not search.best_by_model:
-        print(f"    WARNING: find_best_hybrid returned no result for {task_name}")
-        return None
-
-    # Pick the best result across all models (respecting metric direction)
-    best_entry = (min if lower_is_better else max)(
-        search.best_by_model.values(), key=lambda r: r['score_mean'])
     hybrid_score = best_entry['score_mean']
     hybrid_fold_scores = best_entry.get('fold_scores', [])
 

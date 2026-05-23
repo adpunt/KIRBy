@@ -36,6 +36,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     get_model_factories, cv_split, get_domain_metric,
     get_precomputed_search, build_fold_hybrid,
+    get_best_search_for_downstream,
 )
 from kirby.hybrid import create_hybrid, compute_feature_importance
 from kirby.importance.hybrid import (
@@ -66,23 +67,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                  n_samples=n_samples)
     print(f"  Models: {list(models.keys())}")
 
-    # ── Get best hybrid from precomputed search ──
-    aug_cond = 'uncapped' if augmentations else 'none'
-    search = get_precomputed_search(
-        reps, labels, groups, aug_condition=aug_cond,
+    # ── Get best hybrid via pool helper (rf at budget=None = best across budgets) ──
+    search, meta = get_best_search_for_downstream(
+        reps, labels, groups,
+        downstream_model='rf', budget=None,
         augmentations=augmentations,
         speed=config.get('search_speed', 'full'),
-        precomputed=data.get('precomputed_searches'),
-        dataset_name=dataset_name, tier='general', task_type=task_type)
-
-    best = search.best_by_model.get('rf') or (
-        next(iter(search.best_by_model.values()), None)
-        if search is not None and search.best_by_model else None)
-    if search is None or best is None:
+        dataset_name=dataset_name, task_type=task_type,
+        data=data,
+    )
+    if not meta:
         print("  No hybrid search result available — skipping C22")
         return {'error': 'no_search_result'}
 
+    best = meta['best_config']
     bp = best['blueprint']
+    print(f"  Pool winner: tier={meta['tier']} aug={meta['aug_condition']}")
     search_score = best.get('score_mean', 0)
     print(f"  Blueprint: alloc={bp.allocation_method}, imp={bp.importance_method}, "
           f"eval={bp.internal_evaluator}, budget={bp.budget}")

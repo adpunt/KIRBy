@@ -23,6 +23,7 @@ from experiments._shared import (
     find_best_hybrid,
     extract_top3_base_reps,
     INTERNAL_EVALUATORS,
+    get_best_search_for_downstream,
 )
 
 
@@ -48,6 +49,35 @@ def run(data, config, output_dir, dataset_name, partitions=None):
 
     all_partitions = partitions or ['scaffold_frequency', 'molecular_complexity', 'target_variance']
     results = {'partitions': {}, 'search_speed': search_speed}
+
+    # Second-pass scaffolding (per user 2026-05-23): in addition to per-partition
+    # find_best_hybrid (the experiment's main signal), record what the
+    # FULL-DATA pool-best blueprint scores when re-fit on each partition. Shows
+    # how much partition-specific tuning matters beyond global tuning.
+    fulldata_blueprints = {}
+    full_augs_all = data.get('augmentations')
+    for cand_model in ['rf', 'svm', 'lightgbm', 'mlp']:
+        try:
+            _s_fd, _m_fd = get_best_search_for_downstream(
+                reps, labels, groups,
+                downstream_model=cand_model, budget=None,
+                augmentations=full_augs_all, speed=search_speed,
+                dataset_name=dataset_name,
+                task_type=data['task_type'], metric=metric_name,
+                data=data,
+            )
+            if _m_fd:
+                fulldata_blueprints[cand_model] = (
+                    _m_fd['best_config']['blueprint'],
+                    _m_fd['tier'], _m_fd['aug_condition'],
+                )
+        except Exception:
+            pass
+    results['fulldata_blueprints_meta'] = {
+        m: {'tier': t, 'aug_condition': a, 'budget': bp.budget,
+            'allocation': bp.allocation_method, 'importance': bp.importance_method}
+        for m, (bp, t, a) in fulldata_blueprints.items()
+    }
 
     for partition_name in all_partitions:
         print(f"\n  Partition: {partition_name}")
@@ -191,12 +221,59 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 best_config = None
                 best_by_model = {}
 
+            # Second pass: apply the full-data pool-best blueprint per model
+            # to this subpopulation (re-fit on subpop data only) and record.
+            fulldata_bp_scores = {}
+            from sklearn.model_selection import KFold as _KF
+            from sklearn.preprocessing import StandardScaler as _SS
+            from experiments._shared import cv_split as _cv_sp7, get_model_factories as _gmf
+            n_folds = config.get('n_splits', 5)
+            sub_folds = min(n_folds, n_unique_groups)
+            sub_sample_X = next(iter(sub_reps.values()))
+            for cand_model, (bp_fd, _t, _a) in fulldata_blueprints.items():
+                if bp_fd.budget is not None and bp_fd.budget > len(sub_labels):
+                    continue
+                try:
+                    factory = _gmf([cand_model], task_type=data['task_type'],
+                                   n_samples=len(sub_labels)).get(cand_model)
+                    if factory is None:
+                        continue
+                    fold_scores = []
+                    for tr_i, va_i in _cv_sp7(sub_groups, sub_folds,
+                                              sub_sample_X, sub_labels,
+                                              mode='intermediary' if sub_folds == 1 else 'full'):
+                        tr_reps_f = {k: v[tr_i] for k, v in sub_reps.items()}
+                        va_reps_f = {k: v[va_i] for k, v in sub_reps.items()}
+                        tr_augs_f = ({k: v[tr_i] for k, v in sub_augs.items()}
+                                     if sub_augs else None)
+                        va_augs_f = ({k: v[va_i] for k, v in sub_augs.items()}
+                                     if sub_augs else None)
+                        from experiments._shared import build_fold_hybrid as _bfh
+                        X_tr, X_va, _fi = _bfh(
+                            tr_reps_f, va_reps_f, sub_labels[tr_i], bp_fd,
+                            augmentations_train=tr_augs_f,
+                            augmentations_val=va_augs_f,
+                        )
+                        sc = _SS()
+                        X_tr_s = sc.fit_transform(X_tr)
+                        X_va_s = sc.transform(X_va)
+                        mdl = factory()
+                        mdl.fit(X_tr_s, sub_labels[tr_i])
+                        from experiments._shared import get_domain_metric as _gdm
+                        _, metric_fn_part, _ = _gdm(data)
+                        fold_scores.append(metric_fn_part(sub_labels[va_i], mdl.predict(X_va_s)))
+                    if fold_scores:
+                        fulldata_bp_scores[cand_model] = float(np.mean(fold_scores))
+                except Exception:
+                    pass
+
             part_result[subpop_name] = {
                 'metrics': metrics,
                 'best': best_config,
                 'best_by_model': best_by_model,
                 'baselines': search.baselines if best_config else {},
                 'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
+                'fulldata_bp_scores': fulldata_bp_scores,
             }
             if best_config:
                 print(f"    {subpop_name} best: {best_config['model']}/b={best_config['budget']} "

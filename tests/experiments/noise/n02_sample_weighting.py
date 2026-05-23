@@ -41,7 +41,7 @@ from experiments._shared import (
     save_experiment_results, make_structured_output, convert_numpy,
     get_model_factories, get_domain_metric, cv_split,
     compute_feature_importance,
-    get_precomputed_search, build_fold_hybrid,
+    get_precomputed_search, get_best_search_for_downstream, build_fold_hybrid,
     extract_top3_base_reps,
 )
 
@@ -240,16 +240,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # =========================================================================
     # CONDITIONS 3-5: Get hybrid blueprint ONCE (shared across all fold loops)
     # =========================================================================
-    search = get_precomputed_search(
-        reps, labels, groups, aug_condition='uncapped' if augmentations else 'none',
-        augmentations=augmentations, speed=config.get('search_speed', 'full'),
-        precomputed=data.get('precomputed_searches'),
-        dataset_name=dataset_name, tier='general', task_type=task_type)
-    top3 = extract_top3_base_reps(search)
-    if top3:
-        print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-    best_rf = search.best_by_model.get('rf')
-    bp = best_rf['blueprint'] if best_rf else None
+    search, meta = get_best_search_for_downstream(
+        reps, labels, groups,
+        downstream_model='rf', budget=None,
+        augmentations=augmentations,
+        speed=config.get('search_speed', 'full'),
+        dataset_name=dataset_name, task_type=task_type,
+        data=data,
+    )
+    if search is not None:
+        top3 = extract_top3_base_reps(search)
+        if top3:
+            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+    bp = meta['best_config']['blueprint'] if meta else None
     if bp is None:
         print("  WARNING: No blueprint found, skipping hybrid conditions")
         return {'error': 'no_blueprint', 'metric': metric_name}
