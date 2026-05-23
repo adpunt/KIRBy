@@ -187,19 +187,19 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pretrain_dir):
 
     # Build hybrid and add as another "rep" (evaluated with non-TL models only)
     try:
+        from kirby.find_best_hybrid import find_best_hybrid
         from kirby.hybrid import apply_feature_selection
-        from experiments._shared import get_best_search_for_downstream
-        search, _meta = get_best_search_for_downstream(
-            reps, labels, groups,
-            downstream_model='rf', budget=None,
-            augmentations=None,
-            speed='full',
+        from experiments._shared import FULL_BUDGETS
+        # No shared precompute for these datasets. Hardcode (general, none)
+        # — no augmentations in this transfer-learning experiment.
+        search = find_best_hybrid(
+            base_reps=reps, labels=labels, groups=groups,
+            budgets=FULL_BUDGETS,
+            speed='full', return_fitted=True, verbose=False, cache=True,
+            dataset_name=dataset_name, tier='general',
             metric='rmse', task_type=task_type,
-            dataset_name=dataset_name,
-            return_fitted=True,
-            adaptive_pruning=0.25,
-        )
-        fitted = search.fitted_results.get('rf') if search is not None else None
+            augmentation_strategy='none', adaptive_pruning=0.25)
+        fitted = search.fitted_results.get('rf')
         if fitted is not None:
             fi = {r: {'selected_indices': idx}
                   for r, idx in fitted.selected_indices.items()}
