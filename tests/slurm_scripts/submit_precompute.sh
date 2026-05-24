@@ -1,18 +1,18 @@
 #!/bin/bash
-# Precompute hybrid searches — one SLURM job per (dataset × condition).
+# Precompute hybrid searches — ONE SLURM job per dataset (bundled).
 #
-# Standard conditions (5 per dataset; general/capped dropped 2026-05-22):
-#   general_none       — general reps, no augmentation
-#   general_uncapped   — general reps, uncapped augmentation
-#   top_none           — top_tier reps, no augmentation
-#   top_uncapped       — top_tier reps, uncapped augmentation
-#   top_capped         — top_tier reps, capped augmentation
+# Each job runs every applicable condition in a single Python process so
+# representations (incl. expensive ESM3/SaProt/IGT5/AntiBERTy stacks) are
+# loaded ONCE per dataset. Previously each (dataset × condition) pair was
+# its own job, paying the load cost 5-7 times per dataset.
 #
-# Distance conditions (4 per dataset, for similarity/noise experiments):
-#   general_distance_none     — DISTANCE_EVALUATORS + DISTANCE_BUDGETS
-#   general_distance_uncapped
-#   top_distance_none
-#   top_distance_uncapped
+# Standard conditions run per job (auto-selected by precompute_hybrids.py):
+#   general_none, general_uncapped, top_none, top_uncapped, top_capped
+#   (general/capped dropped 2026-05-22; top_capped uses default pruning here.)
+#
+# Distance conditions run per job (with --distance):
+#   general_distance_none, general_distance_uncapped,
+#   top_distance_none, top_distance_uncapped
 #
 # Usage:
 #   bash tests/slurm_scripts/submit_precompute.sh              # all standard
@@ -86,56 +86,32 @@ submit() {
     COUNT=$((COUNT + 1))
 }
 
-# Submit standard + capped conditions for one dataset.
-# has_aug: pass "yes" if dataset has augmentation reps, "no" to skip aug conditions.
+# Submit ONE job that runs all standard conditions for one dataset
+# (reps load once, conditions iterated inside the Python process).
+# has_aug is kept in the signature for backwards-compat with callers; the
+# Python script auto-selects which conditions to run based on dataset_reps
+# (datasets without augmentation reps simply skip the aug conditions).
 submit_dataset() {
     local ds=$1
-    local has_aug=${2:-yes}
+    local has_aug=${2:-yes}   # unused — Python decides aug applicability
     local mem=${3:-256G}
     local partition=${4:-long}
 
-    # Always: general_none + top_none
-    submit "${ds}_general_none" \
-        "python tests/precompute_hybrids.py ${ds} --condition general_none --speed full" \
+    submit "${ds}_standard" \
+        "python tests/precompute_hybrids.py ${ds} --speed full" \
         "${mem}" "" "${partition}"
-    submit "${ds}_top_none" \
-        "python tests/precompute_hybrids.py ${ds} --condition top_none --speed full" \
-        "${mem}" "" "${partition}"
-
-    # Only if dataset has augmentation reps
-    if [[ "$has_aug" == "yes" ]]; then
-        submit "${ds}_general_uncapped" \
-            "python tests/precompute_hybrids.py ${ds} --condition general_uncapped --speed full" \
-            "${mem}" "" "${partition}"
-        submit "${ds}_top_uncapped" \
-            "python tests/precompute_hybrids.py ${ds} --condition top_uncapped --speed full" \
-            "${mem}" "" "${partition}"
-        # Capped — top tier only (general/capped dropped 2026-05-22; the
-        # iterative growth loop was ~9× more expensive than uncapped on the
-        # large general-rep pool, and all consumers were redirected to
-        # top/capped). More aggressive pruning (0.25 threshold).
-        submit "${ds}_top_capped" \
-            "python tests/precompute_hybrids.py ${ds} --condition top_capped --speed full --pruning 0.25" \
-            "${mem}" "" "${partition}"
-    fi
 }
 
-# Distance conditions — general only (no experiment uses top-tier distance search).
+# Submit ONE job that runs all distance conditions for one dataset.
 submit_dataset_distance() {
     local ds=$1
-    local has_aug=${2:-yes}
+    local has_aug=${2:-yes}   # unused — Python decides aug applicability
     local mem=${3:-256G}
     local partition=${4:-long}
 
-    submit "${ds}_general_distance_none" \
-        "python tests/precompute_hybrids.py ${ds} --condition general_distance_none --speed full --distance" \
+    submit "${ds}_distance" \
+        "python tests/precompute_hybrids.py ${ds} --speed full --distance" \
         "${mem}" "" "${partition}"
-
-    if [[ "$has_aug" == "yes" ]]; then
-        submit "${ds}_general_distance_uncapped" \
-            "python tests/precompute_hybrids.py ${ds} --condition general_distance_uncapped --speed full --distance" \
-            "${mem}" "" "${partition}"
-    fi
 }
 
 # --- Dataset lists (has_aug flag: yes/no based on DATASET_REPS) ---

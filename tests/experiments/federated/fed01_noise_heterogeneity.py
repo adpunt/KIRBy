@@ -125,7 +125,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # ── Get optimal hybrid config from precomputed search ──
     augs = data.get('augmentations')
-    aug_cond = 'uncapped' if augs else 'none'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     try:
         search, meta = get_best_search_for_downstream(
@@ -142,6 +141,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         bp = meta['best_config']['blueprint'] if meta else None
     except Exception:
         bp = None
+    # Trust the blueprint's actual augmentation_strategy — the pool picked
+    # whichever (none/uncapped/capped) won, so any downstream create_hybrid
+    # call MUST match that choice. Previously this was hardcoded to
+    # 'uncapped' which silently mismatched the search recipe when pool
+    # picked 'none' or 'capped'.
+    aug_cond = bp.augmentation_strategy if bp else ('uncapped' if augs else 'none')
     _alloc = bp.allocation_method if bp else 'performance_weighted'
     _imp = bp.importance_method if bp else 'treeshap'
     _int_eval = bp.internal_evaluator if bp else 'match'

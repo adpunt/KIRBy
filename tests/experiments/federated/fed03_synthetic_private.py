@@ -87,7 +87,6 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
 
     # Get optimal hybrid config from precomputed search
     augs = data.get('augmentations')
-    aug_cond = 'uncapped' if augs else 'none'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     try:
         _search, _meta = get_best_search_for_downstream(
@@ -104,6 +103,9 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
         _bp = _meta['best_config']['blueprint'] if _meta else None
     except Exception:
         _bp = None
+    # Trust pool's actual aug_condition (was hardcoded to 'uncapped' →
+    # silent recipe mismatch when pool picked 'none' or 'capped').
+    aug_cond = _bp.augmentation_strategy if _bp else ('uncapped' if augs else 'none')
     _alloc = _bp.allocation_method if _bp else 'performance_weighted'
     _imp = _bp.importance_method if _bp else 'treeshap'
     _int_eval = _bp.internal_evaluator if _bp else 'match'
@@ -541,7 +543,6 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
 
     # Get optimal hybrid config from precomputed search
     augs = data.get('augmentations')
-    aug_cond = 'uncapped' if augs else 'none'
     metric_name_b, metric_fn_b, lower_is_better_b = get_domain_metric(data)
     try:
         _search, _meta = get_best_search_for_downstream(
@@ -558,6 +559,7 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
         _bp = _meta['best_config']['blueprint'] if _meta else None
     except Exception:
         _bp = None
+    aug_cond = _bp.augmentation_strategy if _bp else ('uncapped' if augs else 'none')
     _alloc = _bp.allocation_method if _bp else 'performance_weighted'
     _imp = _bp.importance_method if _bp else 'treeshap'
     _int_eval = _bp.internal_evaluator if _bp else 'match'

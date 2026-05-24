@@ -625,14 +625,24 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
 
     scores = []
     sample_X = next(iter(reps.values()))
+    # Slice augmentations per-fold if present so build_fold_hybrid rebuilds
+    # the same recipe the blueprint was scored under. Dropping augs here
+    # would silently mismatch the score from the pool search.
+    augs_data = data.get('augmentations') if data is not None else None
     for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, mode=mode):
         train_reps = {k: v[train_idx] for k, v in reps.items()}
         val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
         y_train, y_val = labels[train_idx], labels[val_idx]
+        train_augs = ({k: v[train_idx] for k, v in augs_data.items()}
+                      if augs_data else None)
+        val_augs = ({k: v[val_idx] for k, v in augs_data.items()}
+                    if augs_data else None)
 
         try:
             X_train, X_val, feat_info = build_fold_hybrid(
-                train_reps, val_reps_fold, y_train, bp)
+                train_reps, val_reps_fold, y_train, bp,
+                augmentations_train=train_augs,
+                augmentations_val=val_augs)
 
             scaler = StandardScaler()
             X_train_s = scaler.fit_transform(X_train)
@@ -898,6 +908,7 @@ def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
 
     sample_X = next(iter(reps.values()))
     folds = list(cv_split(groups, n_folds, sample_X, y, mode=mode))
+    augs_rdm = data.get('augmentations') if data is not None else None
 
     random_scores = []
     for t in range(n_trials):
@@ -906,10 +917,15 @@ def _estimate_rademacher_hybrid(reps, y, groups, n_folds, mode, n_trials, rng,
         for train_idx, val_idx in folds:
             try:
                 train_reps = {k: v[train_idx] for k, v in reps.items()}
+                train_augs = ({k: v[train_idx] for k, v in augs_rdm.items()}
+                              if augs_rdm else None)
                 # Build hybrid using REAL train labels (supervised selection)
-                # but evaluate memorization on RANDOM labels
+                # but evaluate memorization on RANDOM labels. Augs sliced
+                # per fold so the rebuild matches the scored blueprint.
                 X_train_hyb, _, _fi = build_fold_hybrid(
-                    train_reps, train_reps, y[train_idx], bp)
+                    train_reps, train_reps, y[train_idx], bp,
+                    augmentations_train=train_augs,
+                    augmentations_val=train_augs)
                 scaler = StandardScaler()
                 X_train_s = scaler.fit_transform(X_train_hyb)
                 cap = _fit_random_label_capacity(

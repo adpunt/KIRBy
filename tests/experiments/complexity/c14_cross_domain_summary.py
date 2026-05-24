@@ -250,10 +250,11 @@ def _evaluate_task(task_name, rep_preset, config):
         'hybrid_config': {
             'model': best_model_name or '',
             'n_features': best_entry.get('n_features', 0),
-            'allocation_method': best_entry.get('blueprint', {}).get('allocation_method', ''),
-            'importance_method': best_entry.get('blueprint', {}).get('importance_method', ''),
-            'budget': best_entry.get('blueprint', {}).get('budget'),
-            'internal_evaluator': best_entry.get('blueprint', {}).get('internal_evaluator', ''),
+            # blueprint is a Blueprint dataclass, NOT a dict — use attribute access.
+            'allocation_method': getattr(best_entry.get('blueprint'), 'allocation_method', ''),
+            'importance_method': getattr(best_entry.get('blueprint'), 'importance_method', ''),
+            'budget': getattr(best_entry.get('blueprint'), 'budget', None),
+            'internal_evaluator': getattr(best_entry.get('blueprint'), 'internal_evaluator', ''),
         },
         'delta': delta,
         'pct_improvement': pct,

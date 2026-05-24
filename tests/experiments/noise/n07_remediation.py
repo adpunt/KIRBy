@@ -168,7 +168,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = data['labels']
     groups = data['groups']
     augmentations = data.get('augmentations')
-    augmentation_strategy = 'uncapped'
+    # Dead variable removed (was 'uncapped'); downstream build_fold_hybrid
+    # uses bp.augmentation_strategy from the pool helper instead.
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)

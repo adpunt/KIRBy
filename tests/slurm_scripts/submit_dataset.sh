@@ -43,17 +43,25 @@ IFS=',' read -ra _CATEGORIES <<< "$CATEGORY"
 
 cd /data/stat-ecr/scat9264/KIRBy
 
+# Pull the latest main before recording branch/commit. Without this, queued
+# jobs run whatever was on disk at job-start time — which silently diverges
+# from what the user just pushed. Use --ff-only so a non-fast-forward state
+# fails loudly instead of merging surprise commits.
+git pull --ff-only origin main 2>&1 || echo "WARNING: git pull failed; running with on-disk code"
+
 BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
 . setup.sh
 
-# Bypass HF datasets FileLock on shared NFS cache. With cache pre-warmed,
-# load_dataset reads directly without acquiring the lock — fixes the
-# OSError [Errno 116] thundering-herd seen on the 2026-05-17 wave.
-# Override with HF_DATASETS_OFFLINE=0 only when a brand-new dataset
-# needs to be downloaded for the first time.
-export HF_DATASETS_OFFLINE=${HF_DATASETS_OFFLINE:-1}
+# HF datasets offline mode. Was set to 1 unconditionally to avoid NFS
+# FileLock contention on the 2026-05-17 wave; but for NOT-DONE datasets
+# the HF cache may not yet contain the dataset, leading to silent
+# load_dataset failures. Default to 0 (online) — the FileLock contention
+# was a different bug, and we now pre-stagger job starts with sleep
+# random. Override to 1 only when explicitly running on the same dataset
+# in many parallel jobs (e.g. precompute fan-out).
+export HF_DATASETS_OFFLINE=${HF_DATASETS_OFFLINE:-0}
 
 echo "=== ${CATEGORY} experiments: ${DATASET} ==="
 echo "Branch: ${BRANCH} (${COMMIT})"
@@ -63,8 +71,9 @@ echo "Pruning mode: ${PRUNING_MODE}"
 echo "Start:  $(date)"
 
 # Loop the requested categories sequentially within this single SLURM job.
-# Captures the first non-zero exit code but keeps running the rest so a
-# noise failure doesn't skip similarity, etc. SLURM reports the worst RC.
+# Tracks the highest exit code across categories so SLURM reports FAILED
+# on the most-diagnostic signal (e.g. SIGBUS=135 > generic Python err=1).
+# Keeps running after a failure so a noise crash doesn't skip similarity.
 WORST_RC=0
 for CAT in "${_CATEGORIES[@]}"; do
     echo ""
@@ -78,7 +87,9 @@ for CAT in "${_CATEGORIES[@]}"; do
             --pruning-mode "${PRUNING_MODE}"
     fi
     RC=$?
-    if [ ${RC} -ne 0 ] && [ ${WORST_RC} -eq 0 ]; then
+    # Track the WORST (highest) exit code so signal-killed children (RC 128+sig)
+    # surface in sacct instead of being masked by a later generic Python failure.
+    if [ ${RC} -gt ${WORST_RC} ]; then
         WORST_RC=${RC}
     fi
     echo "--- ${CAT} done (exit=${RC}) ---"
@@ -86,7 +97,6 @@ done
 
 echo ""
 echo "Done:   $(date)  (worst exit=${WORST_RC})"
-# Propagate the worst python exit code so SLURM reports FAILED, not COMPLETED,
-# on bus errors / signals (the previous masking of $? made sacct say
-# COMPLETED 0:0 for the entire Wave 1 bus-error batch).
+# Propagate so SLURM reports FAILED, not COMPLETED 0:0 (the masking bug
+# from the Wave 1 bus-error batch).
 exit ${WORST_RC}
