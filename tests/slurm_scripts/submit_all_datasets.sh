@@ -45,11 +45,13 @@ FEDERATED_DATASETS="lhasa_herg caco2 logd"
 
 # ── Job name prefix ────────────────────────────────────────────────────
 case $CATEGORY in
-    complexity) PREFIX="cx" ;;
-    similarity) PREFIX="sim" ;;
-    noise)      PREFIX="nz" ;;
-    federated)  PREFIX="fed" ;;
-    *)          PREFIX="exp" ;;
+    complexity)                       PREFIX="cx" ;;
+    similarity)                       PREFIX="sim" ;;
+    noise)                            PREFIX="nz" ;;
+    federated)                        PREFIX="fed" ;;
+    all|complexity,similarity,noise)  PREFIX="all" ;;
+    *,*)                              PREFIX="bundle" ;;
+    *)                                PREFIX="exp" ;;
 esac
 
 # ── Parse args ──────────────────────────────────────────────────────────
