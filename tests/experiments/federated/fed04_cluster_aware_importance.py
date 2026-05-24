@@ -147,7 +147,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # ── Get optimal hybrid config from precomputed search ──
     augs = data.get('augmentations')
-    aug_cond = 'uncapped' if augs else 'none'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     try:
         _search, _meta = get_best_search_for_downstream(
@@ -164,6 +163,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         _bp = _meta['best_config']['blueprint'] if _meta else None
     except Exception:
         _bp = None
+    aug_cond = _bp.augmentation_strategy if _bp else ('uncapped' if augs else 'none')
     _alloc = _bp.allocation_method if _bp else 'performance_weighted'
     _imp = _bp.importance_method if _bp else 'treeshap'
     _int_eval = _bp.internal_evaluator if _bp else 'match'

@@ -738,6 +738,59 @@ def run_all(dataset_name: str, output_dir: str,
     else:
         data['precomputed_searches_top'] = {}
 
+    # ── Precompute distance-tier searches (for s04/s05/s06/s07/s10/s13) ──
+    # Uses DISTANCE_EVALUATORS + DISTANCE_BUDGETS — a separate cache lineage.
+    # Pool helper now consumes data['precomputed_searches_distance'] /
+    # ['precomputed_searches_top_distance'] when distance=True, avoiding
+    # per-call disk reads on every distance-using experiment.
+    from experiments._shared import DISTANCE_EVALUATORS, DISTANCE_BUDGETS
+    _dist_cfg = {**config, 'budgets': DISTANCE_BUDGETS}
+    if len(reps_data) >= 2:
+        print(f"\n  Precomputing distance-tier (general_distance, {len(reps_data)} reps)...")
+        try:
+            data['precomputed_searches_distance'] = precompute_hybrid_searches(
+                reps=reps_data,
+                labels=data['labels'],
+                groups=data.get('groups'),
+                config=_dist_cfg,
+                augmentations=data.get('augmentations'),
+                task_type=_task_type,
+                domain=data.get('domain', 'molecular'),
+                dataset_name=dataset_name, tier='general_distance',
+                internal_evaluators=DISTANCE_EVALUATORS,
+                budgets=DISTANCE_BUDGETS,
+                adaptive_pruning_schedule=_sched,
+                model_pruning_aggressiveness=_model_overrides,
+            )
+        except Exception as e:
+            print(f"  general_distance precompute failed: {e}")
+            data['precomputed_searches_distance'] = {}
+    else:
+        data['precomputed_searches_distance'] = {}
+
+    if len(top_tier_reps) >= 2:
+        print(f"\n  Precomputing distance-tier (top_distance, {len(top_tier_reps)} reps)...")
+        try:
+            data['precomputed_searches_top_distance'] = precompute_hybrid_searches(
+                reps=top_tier_reps,
+                labels=data['labels'],
+                groups=data.get('groups'),
+                config=_dist_cfg,
+                augmentations=data.get('augmentations'),
+                task_type=_task_type,
+                domain=data.get('domain', 'molecular'),
+                dataset_name=dataset_name, tier='top_distance',
+                internal_evaluators=DISTANCE_EVALUATORS,
+                budgets=DISTANCE_BUDGETS,
+                adaptive_pruning_schedule=_sched,
+                model_pruning_aggressiveness=_model_overrides,
+            )
+        except Exception as e:
+            print(f"  top_distance precompute failed: {e}")
+            data['precomputed_searches_top_distance'] = {}
+    else:
+        data['precomputed_searches_top_distance'] = {}
+
     # ── Run experiments in order ──
     results = {}
     for exp_id in experiments:

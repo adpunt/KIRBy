@@ -191,6 +191,11 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
                 budget=source_bp.budget,
                 importance_method=source_bp.importance_method,
                 internal_evaluator=source_bp.internal_evaluator,
+                # Explicit: this experiment has no augmentations. Default of
+                # 'uncapped' would silently mismatch the search recipe if
+                # any future caller introduces augs without updating here.
+                augmentations=None,
+                augmentation_strategy='none',
             )
         except Exception as e:
             print(f"      Source hybrid build failed: {e}")

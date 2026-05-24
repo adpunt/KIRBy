@@ -2116,7 +2116,9 @@ def precompute_hybrid_searches(reps, labels, groups, config,
                                domain=None,
                                dataset_name=None, tier='general',
                                adaptive_pruning_schedule=None,
-                               model_pruning_aggressiveness=None):
+                               model_pruning_aggressiveness=None,
+                               internal_evaluators=None,
+                               budgets=None):
     """Find the best hybrid across all budgets for each augmentation condition.
 
     ONE find_best_hybrid call per aug_condition with ALL budgets. Baselines
@@ -2133,7 +2135,14 @@ def precompute_hybrid_searches(reps, labels, groups, config,
         dataset_name: REQUIRED. Used as part of the cache filename
             (e.g. '{dataset_name}__general__uncapped__full.pkl').
         tier: Rep tier label for the cache filename. 'general' (default) or
-            'top' (experiments using the top_tier subset).
+            'top' (experiments using the top_tier subset). For distance
+            lineage pass 'general_distance' or 'top_distance' (must be
+            combined with internal_evaluators=DISTANCE_EVALUATORS and
+            budgets=DISTANCE_BUDGETS to populate the correct cache key).
+        internal_evaluators: Override evaluator list. Pass DISTANCE_EVALUATORS
+            for distance lineage. None = find_best_hybrid uses speed-tier defaults.
+        budgets: Override budget list. Pass DISTANCE_BUDGETS for distance lineage.
+            None = use FULL_BUDGETS.
 
     Returns:
         Dict mapping aug_cond -> SearchResult. Keys: 'none', and 'uncapped'
@@ -2148,11 +2157,13 @@ def precompute_hybrid_searches(reps, labels, groups, config,
             "(used as part of the cache filename)"
         )
 
-    # Always use speed='full' + FULL_BUDGETS + models=None for precompute.
+    # Always use speed='full' + FULL_BUDGETS + models=None for precompute
+    # unless overridden (distance lineage uses DISTANCE_BUDGETS+EVALUATORS).
     # This matches the SLURM precompute cache key regardless of the
     # experiment's own --mode setting. When SLURM cache exists on disk,
     # these calls hit it instantly (no compute).
-    budgets = FULL_BUDGETS
+    if budgets is None:
+        budgets = FULL_BUDGETS
     speed = 'full'
     models = None
 
@@ -2169,6 +2180,9 @@ def precompute_hybrid_searches(reps, labels, groups, config,
     aug_conditions = ['none']
     if augmentations is not None and len(augmentations) > 0:
         aug_conditions.append('uncapped')
+        # Capped lives on the top tier only, and only for the standard
+        # (non-distance) lineage. Distance precompute doesn't emit capped
+        # because no consumer needs it.
         if tier == 'top':
             aug_conditions.append('capped')
     if os.environ.get('KIRBY_PRECOMPUTE_REVERSE_ORDER') == '1':
@@ -2193,7 +2207,7 @@ def precompute_hybrid_searches(reps, labels, groups, config,
 
         t0 = time.time()
         try:
-            search = find_best_hybrid(
+            _fbh_kwargs = dict(
                 base_reps=reps,
                 labels=labels,
                 groups=groups,
@@ -2211,6 +2225,9 @@ def precompute_hybrid_searches(reps, labels, groups, config,
                 adaptive_pruning_schedule=adaptive_pruning_schedule,
                 model_pruning_aggressiveness=model_pruning_aggressiveness,
             )
+            if internal_evaluators is not None:
+                _fbh_kwargs['internal_evaluators'] = internal_evaluators
+            search = find_best_hybrid(**_fbh_kwargs)
             results[aug_cond] = search
             elapsed = time.time() - t0
 
@@ -2239,6 +2256,128 @@ def precompute_hybrid_searches(reps, labels, groups, config,
               f"searches in {total_time:.0f}s")
 
     return results
+
+
+def populate_precompute_dicts(data, dataset_name, *, domain=None,
+                              task_type=None, metric='auto',
+                              top_reps=None, verbose=True,
+                              adaptive_pruning_schedule=None,
+                              model_pruning_aggressiveness=None,
+                              include_distance=True):
+    """Populate all four precompute dicts on `data` for the pool helper.
+
+    Replaces the boilerplate that each category helper (complexity, similarity,
+    noise, federated) was duplicating. After this call, data has keys:
+      data['precomputed_searches']            (general tier, main pool)
+      data['precomputed_searches_top']        (top tier, main pool)
+      data['precomputed_searches_distance']   (general_distance tier)
+      data['precomputed_searches_top_distance'] (top_distance tier)
+
+    The pool helper looks for exactly these keys, so categories that call
+    this get cache-hit performance on distance-pool consumers (s04/s05/s06/
+    s07/s10/s13/c03) without paying disk-load per pool query.
+
+    Args:
+        data: dict with 'reps', 'labels', 'groups' (modified in place).
+        dataset_name: cache file key.
+        top_reps: optional precomputed top-tier rep subset; if None, looks
+            up DATASET_REPS[dataset_name]['top_tier'].
+        include_distance: set False if no distance-pool experiment will run
+            (saves the distance precompute pass).
+    """
+    reps = data['reps']
+    labels = data['labels']
+    groups = data.get('groups')
+    augs = data.get('augmentations')
+
+    # General + top main-pool precompute (existing behavior).
+    if len(reps) >= 2:
+        if verbose:
+            print(f"  Precomputing main-pool (general, {len(reps)} reps)...")
+        data['precomputed_searches'] = precompute_hybrid_searches(
+            reps=reps, labels=labels, groups=groups,
+            config={'budgets': FULL_BUDGETS, 'search_speed': 'full'},
+            augmentations=augs, verbose=verbose,
+            task_type=task_type, metric=metric, domain=domain,
+            dataset_name=dataset_name, tier='general',
+            adaptive_pruning_schedule=adaptive_pruning_schedule,
+            model_pruning_aggressiveness=model_pruning_aggressiveness,
+        )
+    else:
+        data['precomputed_searches'] = {}
+
+    if top_reps is None:
+        from experiments.complexity.complexity_helpers import DATASET_REPS
+        top_names = DATASET_REPS.get(dataset_name, {}).get('top_tier', [])
+        top_reps = {k: v for k, v in reps.items() if k in top_names}
+
+    if len(top_reps) >= 2:
+        if verbose:
+            print(f"  Precomputing main-pool (top, {len(top_reps)} reps)...")
+        data['precomputed_searches_top'] = precompute_hybrid_searches(
+            reps=top_reps, labels=labels, groups=groups,
+            config={'budgets': FULL_BUDGETS, 'search_speed': 'full'},
+            augmentations=augs, verbose=verbose,
+            task_type=task_type, metric=metric, domain=domain,
+            dataset_name=dataset_name, tier='top',
+            adaptive_pruning_schedule=adaptive_pruning_schedule,
+            model_pruning_aggressiveness=model_pruning_aggressiveness,
+        )
+    else:
+        data['precomputed_searches_top'] = {}
+
+    # Distance-tier precompute (new). Populates the dicts the pool helper now
+    # consumes when distance=True. Uses DISTANCE_EVALUATORS + DISTANCE_BUDGETS.
+    if not include_distance:
+        data['precomputed_searches_distance'] = {}
+        data['precomputed_searches_top_distance'] = {}
+        return data
+
+    if len(reps) >= 2:
+        if verbose:
+            print(f"  Precomputing distance-pool (general_distance)...")
+        try:
+            data['precomputed_searches_distance'] = precompute_hybrid_searches(
+                reps=reps, labels=labels, groups=groups,
+                config={'budgets': DISTANCE_BUDGETS, 'search_speed': 'full'},
+                augmentations=augs, verbose=verbose,
+                task_type=task_type, metric=metric, domain=domain,
+                dataset_name=dataset_name, tier='general_distance',
+                internal_evaluators=DISTANCE_EVALUATORS,
+                budgets=DISTANCE_BUDGETS,
+                adaptive_pruning_schedule=adaptive_pruning_schedule,
+                model_pruning_aggressiveness=model_pruning_aggressiveness,
+            )
+        except Exception as e:
+            if verbose:
+                print(f"  general_distance precompute failed: {e}")
+            data['precomputed_searches_distance'] = {}
+    else:
+        data['precomputed_searches_distance'] = {}
+
+    if len(top_reps) >= 2:
+        if verbose:
+            print(f"  Precomputing distance-pool (top_distance)...")
+        try:
+            data['precomputed_searches_top_distance'] = precompute_hybrid_searches(
+                reps=top_reps, labels=labels, groups=groups,
+                config={'budgets': DISTANCE_BUDGETS, 'search_speed': 'full'},
+                augmentations=augs, verbose=verbose,
+                task_type=task_type, metric=metric, domain=domain,
+                dataset_name=dataset_name, tier='top_distance',
+                internal_evaluators=DISTANCE_EVALUATORS,
+                budgets=DISTANCE_BUDGETS,
+                adaptive_pruning_schedule=adaptive_pruning_schedule,
+                model_pruning_aggressiveness=model_pruning_aggressiveness,
+            )
+        except Exception as e:
+            if verbose:
+                print(f"  top_distance precompute failed: {e}")
+            data['precomputed_searches_top_distance'] = {}
+    else:
+        data['precomputed_searches_top_distance'] = {}
+
+    return data
 
 
 def _resolve_search_metric(labels, task_type, metric='auto', domain=None,
@@ -2510,14 +2649,29 @@ def get_best_search_for_downstream(
         extra = dict(kwargs)
 
     # Resolve in-memory precomputed dicts if data was passed.
+    # Distance lineage now ALSO uses in-memory dicts (precomputed_searches_distance
+    # and precomputed_searches_top_distance) when populated by category helpers.
     main_dict = top_dict = None
-    if data is not None and not distance:
-        main_dict = data.get('precomputed_searches')
-        top_dict = data.get('precomputed_searches_top')
+    if data is not None:
+        if distance:
+            main_dict = data.get('precomputed_searches_distance')
+            top_dict = data.get('precomputed_searches_top_distance')
+        else:
+            main_dict = data.get('precomputed_searches')
+            top_dict = data.get('precomputed_searches_top')
+
+    _verbose_pool = os.environ.get('KIRBY_POOL_VERBOSE') == '1'
 
     candidates = []  # list of (tier, aug_cond, search, best_config)
     for tier, aug_cond, augs in pool:
-        precomputed = main_dict if tier == 'general' else top_dict if tier == 'top' else None
+        # Pick the right in-memory dict: 'general*' tiers use main_dict;
+        # 'top*' tiers use top_dict. Anything else → disk fallback (None).
+        if tier in ('general', 'general_distance'):
+            precomputed = main_dict
+        elif tier in ('top', 'top_distance'):
+            precomputed = top_dict
+        else:
+            precomputed = None
         try:
             search = get_precomputed_search(
                 reps, labels, groups,
@@ -2528,9 +2682,27 @@ def get_best_search_for_downstream(
                 dataset_name=dataset_name, tier=tier,
                 **extra,
             )
-        except Exception:
+        except Exception as e:
+            if _verbose_pool:
+                print(f"[pool] {tier}/{aug_cond} failed: {e}")
             continue
+        # Memoize: if we have an in-memory dict and just computed/loaded a result,
+        # write it back so subsequent pool calls in this process hit memory
+        # instead of paying disk-load (or worse, retriggering find_best_hybrid).
+        if precomputed is not None and search is not None and aug_cond not in precomputed:
+            precomputed[aug_cond] = search
         if search is None or not search.best_by_model:
+            continue
+        # Reject cross-model fallback. get_best_for_downstream's level-5
+        # fallback returns the "best blueprint from any model" with that
+        # model's score — comparing those scores across pool candidates
+        # would let the pool pick whichever (tier, aug) has the highest
+        # score in ANY model, not the best for downstream_model. Require
+        # downstream_model is actually represented in this search.
+        if (downstream_model not in (search.best_by_model_budget or {})
+                and downstream_model not in (search.best_by_model or {})):
+            if _verbose_pool:
+                print(f"[pool] {tier}/{aug_cond}: model={downstream_model} absent, skipping")
             continue
         best = get_best_for_downstream(search, downstream_model, budget=budget)
         if not best:
@@ -2543,6 +2715,16 @@ def get_best_search_for_downstream(
     if not candidates:
         return None, None
 
+    # All pool members for one (dataset, metric) should agree on lower_is_better.
+    # If they don't, the same dataset was searched under different metrics —
+    # that's a bug elsewhere, but to avoid silent score-direction confusion
+    # we drop any candidate that disagrees with the first.
+    ref_lib = candidates[0][2].lower_is_better
+    candidates = [c for c in candidates if c[2].lower_is_better == ref_lib]
+    if not candidates:
+        return None, None
+    lower_is_better = ref_lib
+
     # Sort: best score first (respecting lower_is_better), then by tie-break
     # preference: none > uncapped > capped, general > top (simpler/cheaper).
     aug_pref = {'none': 0, 'uncapped': 1, 'capped': 2}
@@ -2550,7 +2732,6 @@ def get_best_search_for_downstream(
         'general': 0, 'top': 1,
         'general_distance': 0, 'top_distance': 1,
     }
-    lower_is_better = candidates[0][2].lower_is_better
 
     def _key(item):
         tier, aug_cond, search, best = item
@@ -2618,7 +2799,10 @@ def get_fitted_pool_hybrid(
         importance_method=bp.importance_method,
         internal_evaluator=bp.internal_evaluator,
         augmentations=augs,
-        augmentation_strategy=getattr(bp, 'augmentation_strategy', aug_strat),
+        # Trust meta['aug_condition'] (the actual condition that loaded this
+        # SearchResult), not blueprint's stored augmentation_strategy. The
+        # blueprint can be stale due to the 2026-04-21 cache-collision bug.
+        augmentation_strategy=aug_strat,
     )
     return X_hybrid, fi, search, meta
 
@@ -2753,34 +2937,50 @@ def get_best_for_downstream(search, downstream_model, budget=None):
     Returns:
         best_config dict with 'blueprint', 'score_mean', etc. or None.
     """
+    # Filter entries to those with valid (finite, non-None) score_mean.
+    # Previously the key= used `r.get('score_mean', 0)` which silently
+    # treated missing scores as 0 — for lower-is-better metrics (RMSE etc.)
+    # 0 is always the min, so a broken/missing entry would win. That's the
+    # 8-week silent-wrong-result bug.
+    def _valid(entries):
+        return [r for r in entries
+                if r.get('score_mean') is not None
+                and np.isfinite(r['score_mean'])]
+
     # Try model-specific budget lookup
     if search.best_by_model_budget and downstream_model in search.best_by_model_budget:
         model_budgets = search.best_by_model_budget[downstream_model]
         if budget is not None and budget in model_budgets:
-            return model_budgets[budget]
+            entry = model_budgets[budget]
+            if entry.get('score_mean') is not None and np.isfinite(entry['score_mean']):
+                return entry
+            # Fall through to "best across budgets" if the requested one is broken.
         # Best across all budgets for this model
-        if model_budgets:
+        valid = _valid(model_budgets.values())
+        if valid:
             lower = getattr(search, 'lower_is_better', False)
-            return (min if lower else max)(
-                model_budgets.values(),
-                key=lambda r: r.get('score_mean', 0))
+            return (min if lower else max)(valid, key=lambda r: r['score_mean'])
 
     # Fallback: budget-specific (model-agnostic)
     if budget is not None and search.best_by_budget and budget in search.best_by_budget:
-        return search.best_by_budget[budget]
+        entry = search.best_by_budget[budget]
+        if entry.get('score_mean') is not None and np.isfinite(entry['score_mean']):
+            return entry
 
     # Fallback: model-specific (budget-agnostic)
     if search.best_by_model and downstream_model in search.best_by_model:
-        return search.best_by_model[downstream_model]
+        entry = search.best_by_model[downstream_model]
+        if entry.get('score_mean') is not None and np.isfinite(entry['score_mean']):
+            return entry
 
     # Cross-model fallback: use overall best blueprint from any model.
     # The blueprint (allocation/importance/budget) is largely model-agnostic —
     # create_hybrid builds the same hybrid regardless of downstream model.
     if search.best_by_model:
-        lower = getattr(search, 'lower_is_better', False)
-        all_bests = list(search.best_by_model.values())
-        return (min if lower else max)(
-            all_bests, key=lambda r: r.get('score_mean', 0))
+        valid = _valid(search.best_by_model.values())
+        if valid:
+            lower = getattr(search, 'lower_is_better', False)
+            return (min if lower else max)(valid, key=lambda r: r['score_mean'])
 
     return None
 
