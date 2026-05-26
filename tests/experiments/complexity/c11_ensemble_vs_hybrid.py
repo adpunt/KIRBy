@@ -348,8 +348,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Efficiency summary: hybrid vs PCA-matched (same-budget, all-reps PCA reduction)
     print(f"\n  EFFICIENCY COMPARISON (best hybrid vs best PCA-matched per model):")
-    print(f"    {'Model':<12} {'PCA R2':>8} {'Hyb R2':>8} {'Delta':>8} "
-          f"{'PCA Dim':>8} {'Hyb Dim':>8} "
+    print(f"    {'Model':<12} {'PCA ' + metric_name:>8} {'Hyb ' + metric_name:>8} "
+          f"{'Delta':>8} {'PCA Dim':>8} {'Hyb Dim':>8} "
           f"{'PCA Fit':>8} {'Hyb Fit':>8} {'Speedup':>8}")
     print("    " + "-" * 82)
 

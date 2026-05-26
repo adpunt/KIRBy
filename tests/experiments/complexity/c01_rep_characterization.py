@@ -54,7 +54,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Intrinsic dimensionality
         dim_info = compute_intrinsic_dimensionality(X)
         rep_result['intrinsic_dim'] = dim_info
-        if dim_info.get('mle'):
+        if dim_info.get('mle') is not None:
             print(f"    PCA95={dim_info.get('pca_95', '?')}, MLE={dim_info.get('mle', '?'):.1f}")
         else:
             print(f"    PCA95={dim_info.get('pca_95', '?')}")
@@ -99,7 +99,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     for rep_name, r in results.items():
         dim_info = r['intrinsic_dim']
         mi_str = f"{r['mutual_info']:.4f}" if r['mutual_info'] is not None else "N/A"
-        mle_str = f"{dim_info['mle']:.1f}" if dim_info.get('mle') else "N/A"
+        mle_str = f"{dim_info['mle']:.1f}" if dim_info.get('mle') is not None else "N/A"
         row = (f"  {rep_name:<20} {dim_info['nominal_dim']:>5} "
                f"{dim_info.get('pca_95', 'N/A'):>6} {mle_str:>6} {mi_str:>8} "
                f"{r['effective_rank']:>7.1f}")

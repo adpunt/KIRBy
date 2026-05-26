@@ -224,13 +224,16 @@ def _evaluate_task(task_name, rep_preset, config):
     hybrid_score = best_entry['score_mean']
     hybrid_fold_scores = best_entry.get('fold_scores', [])
 
-    # Compute delta and pct improvement
+    # Compute delta and pct improvement. Floor the denominator so near-zero
+    # baselines (e.g. MCC ≈ 0.02 on hard genomic tasks) don't inflate pct to
+    # hundreds of percent for tiny absolute improvements.
+    _denom = max(abs(best_single_score), 0.05)
     if lower_is_better:
         delta = best_single_score - hybrid_score  # positive = hybrid better
-        pct = (delta / abs(best_single_score) * 100) if best_single_score != 0 else 0.0
+        pct = (delta / _denom * 100) if best_single_score != 0 else 0.0
     else:
         delta = hybrid_score - best_single_score  # positive = hybrid better
-        pct = (delta / abs(best_single_score) * 100) if best_single_score != 0 else 0.0
+        pct = (delta / _denom * 100) if best_single_score != 0 else 0.0
 
     hybrid_wins = delta > 0
 

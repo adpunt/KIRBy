@@ -99,11 +99,21 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             try:
                 from rdkit import Chem
                 from rdkit.Chem import Descriptors
-                hac = np.array([Descriptors.HeavyAtomCount(Chem.MolFromSmiles(s))
-                                if Chem.MolFromSmiles(s) else 0 for s in smiles])
-                median_hac = np.median(hac[hac > 0])
-                mask_easy = hac <= median_hac
-                mask_hard = hac > median_hac
+                # Parse once per SMILES, track valid_mask so failed parses
+                # don't silently land in "easy" via hac=0 below median.
+                hac = np.full(len(smiles), -1, dtype=int)
+                valid_mask = np.zeros(len(smiles), dtype=bool)
+                for i, s in enumerate(smiles):
+                    mol = Chem.MolFromSmiles(s)
+                    if mol is not None:
+                        hac[i] = Descriptors.HeavyAtomCount(mol)
+                        valid_mask[i] = True
+                if not valid_mask.any():
+                    print("    No valid SMILES, skipping molecular_complexity")
+                    continue
+                median_hac = np.median(hac[valid_mask])
+                mask_easy = valid_mask & (hac <= median_hac)
+                mask_hard = valid_mask & (hac > median_hac)
             except ImportError:
                 print("    RDKit not available, skipping molecular_complexity")
                 continue
@@ -188,13 +198,18 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 if top3:
                     print(f"    {subpop_name} Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
 
-                # Pick the best result across all models
+                # Pick the best result across all models. Skip NaN-scored
+                # models (otherwise NaN can "win" by accident when iterated
+                # first — NaN comparisons are always False).
                 best = None
                 best_model_name = None
                 for m_name, m_best in search.best_by_model.items():
+                    _sc = m_best.get('score_mean', float('nan'))
+                    if np.isnan(_sc):
+                        continue
                     if best is None or \
-                       (lower_is_better and m_best['score_mean'] < best['score_mean']) or \
-                       (not lower_is_better and m_best['score_mean'] > best['score_mean']):
+                       (lower_is_better and _sc < best['score_mean']) or \
+                       (not lower_is_better and _sc > best['score_mean']):
                         best = m_best
                         best_model_name = m_name
                 best_config = {
@@ -224,7 +239,6 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             # Second pass: apply the full-data pool-best blueprint per model
             # to this subpopulation (re-fit on subpop data only) and record.
             fulldata_bp_scores = {}
-            from sklearn.model_selection import KFold as _KF
             from sklearn.preprocessing import StandardScaler as _SS
             from experiments._shared import cv_split as _cv_sp7, get_model_factories as _gmf
             n_folds = config.get('n_splits', 5)

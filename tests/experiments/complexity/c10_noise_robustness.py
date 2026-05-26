@@ -414,11 +414,17 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
             results['feature_stability']['nogueira_phi'] = nogueira_phi
             results['feature_stability']['nogueira_se'] = nogueira_se
             if not np.isnan(nogueira_phi):
-                ci_lo = nogueira_phi - 1.96 * nogueira_se
-                ci_hi = nogueira_phi + 1.96 * nogueira_se
-                results['feature_stability']['nogueira_ci_95'] = [ci_lo, ci_hi]
-                print(f"    Nogueira stability (sigma=0): phi={nogueira_phi:.3f} "
-                      f"(95% CI: [{ci_lo:.3f}, {ci_hi:.3f}])")
+                # SE can be NaN when M<=2 folds (Nogueira formula needs M>2);
+                # writing NaN to JSON is not a valid value, so skip the CI.
+                if not np.isnan(nogueira_se):
+                    ci_lo = nogueira_phi - 1.96 * nogueira_se
+                    ci_hi = nogueira_phi + 1.96 * nogueira_se
+                    results['feature_stability']['nogueira_ci_95'] = [ci_lo, ci_hi]
+                    print(f"    Nogueira stability (sigma=0): phi={nogueira_phi:.3f} "
+                          f"(95% CI: [{ci_lo:.3f}, {ci_hi:.3f}])")
+                else:
+                    print(f"    Nogueira stability (sigma=0): phi={nogueira_phi:.3f} "
+                          f"(CI undefined: requires M>2 folds)")
 
         # Feature stability across noise levels (compare sigma=0 features to each sigma)
         if features_by_sigma.get(0.0):

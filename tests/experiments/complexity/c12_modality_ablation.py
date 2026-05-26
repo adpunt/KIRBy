@@ -217,9 +217,11 @@ def get_clf_model_factories(model_names):
     }
     try:
         from xgboost import XGBClassifier
+        # `use_label_encoder` was removed in xgboost >= 1.6; passing it raises
+        # TypeError which the ImportError except below would not catch.
         catalog['xgboost'] = lambda: XGBClassifier(n_estimators=100, colsample_bytree=0.5,
                                                     random_state=42, n_jobs=-1, verbosity=0,
-                                                    eval_metric='logloss', use_label_encoder=False)
+                                                    eval_metric='logloss')
     except ImportError:
         pass
     try:
