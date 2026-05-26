@@ -647,6 +647,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     augmentations = data.get('augmentations')
     hybrid_blueprint = None
     X_hybrid = None
+    meta = None
+    search = None
+    top3 = None
 
     try:
         # Matched-evaluator rule. Sub-analyses 1-3 use the hybrid only as a
@@ -669,8 +672,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"{', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     except Exception as e:
         print(f"  WARNING: Hybrid search failed ({e}), hybrid comparisons skipped")
-        search = None
-        top3 = None
+        # All four (X_hybrid, hybrid_blueprint, meta, search, top3) stay
+        # None — they were initialized to None above the try.
 
     # Pre-fetch per-model blueprints for sub-analysis 4. Each call is cached
     # so re-fetching is cheap when the pool already has the entry. RF is

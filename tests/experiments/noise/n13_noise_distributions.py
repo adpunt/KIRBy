@@ -68,7 +68,8 @@ def _inject_noise(y, noise_type, strength, seed=42, partial_fraction=0.3,
         strength: Noise magnitude (sigma for Gaussian, width for uniform, etc.).
         seed: Random seed.
         partial_fraction: Fraction of samples to corrupt (for 'partial' type).
-        is_clf: If True, use label flipping (strength = flip fraction).
+        is_clf: If True, use the DivideMix-style label flipping models
+            described below — strength now has a meaning for classification.
 
     Returns:
         y_noisy: Noisy labels (same shape as y).
@@ -78,19 +79,54 @@ def _inject_noise(y, noise_type, strength, seed=42, partial_fraction=0.3,
     n = len(y)
 
     if is_clf:
-        # Classification: all noise types → label flipping at varying rates
-        flip_frac = strength
-        if noise_type == 'partial':
-            flip_frac = strength * partial_fraction
-        n_flip = max(1, int(n * flip_frac))
-        y_noisy = y.copy()
-        flip_idx = rng.choice(n, n_flip, replace=False)
+        # DivideMix-style label-noise models (Li et al. 2020). Each noise
+        # distribution maps onto a different per-sample flip probability and
+        # destination-class distribution:
+        #   gaussian / uniform: symmetric noise — flip with prob `strength`,
+        #       destination is a uniformly random OTHER class.
+        #   multiplicative: same symmetric model — kept for backwards
+        #       compatibility with the regression naming.
+        #   heavy_tailed: pair-flip / asymmetric noise — flip with prob
+        #       `strength`, destination is the class numerically adjacent
+        #       (class i → class (i + 1) mod n_classes). This is DivideMix's
+        #       'asymmetric' setting and represents systematic confusion
+        #       between similar classes.
+        #   partial: flip a `partial_fraction` subset of samples with
+        #       per-sample probability `strength`. Models "only some samples
+        #       are corrupted but those corruptions are confident."
+        # Strength controls the off-diagonal mass of the implied confusion
+        # matrix; the previous version silently ignored strength for clf
+        # and uniformly flipped a fixed fraction of labels.
         classes = np.unique(y)
-        for i in flip_idx:
-            other = classes[classes != y[i]]
-            if len(other) > 0:
-                y_noisy[i] = rng.choice(other)
-        return y_noisy.astype(np.float32)
+        n_classes = len(classes)
+        class_to_idx = {c: i for i, c in enumerate(classes)}
+        y_idx = np.array([class_to_idx[c] for c in y], dtype=np.int64)
+        y_noisy_idx = y_idx.copy()
+
+        if noise_type == 'partial':
+            # Pick the corrupted subset; flip each with prob `strength`
+            subset_size = max(1, int(n * partial_fraction))
+            subset = rng.choice(n, subset_size, replace=False)
+            for i in subset:
+                if rng.random() < strength:
+                    if n_classes > 1:
+                        # Pick a different class uniformly
+                        choices = [c for c in range(n_classes) if c != y_idx[i]]
+                        y_noisy_idx[i] = rng.choice(choices)
+        elif noise_type == 'heavy_tailed':
+            # Pair-flip / asymmetric: i -> (i + 1) mod n_classes
+            flip_mask = rng.random(n) < strength
+            y_noisy_idx[flip_mask] = (y_idx[flip_mask] + 1) % n_classes
+        else:
+            # gaussian / uniform / multiplicative: symmetric uniform-other
+            flip_mask = rng.random(n) < strength
+            for i in np.where(flip_mask)[0]:
+                if n_classes > 1:
+                    choices = [c for c in range(n_classes) if c != y_idx[i]]
+                    y_noisy_idx[i] = rng.choice(choices)
+
+        y_noisy = classes[y_noisy_idx]
+        return y_noisy.astype(y.dtype if y.dtype != np.float64 else np.float32)
 
     y_range = float(np.max(y) - np.min(y))
 

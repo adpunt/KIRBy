@@ -421,6 +421,11 @@ def _run_sas_bo_bridge(reps, labels, groups, struct_t, act_t,
             reps, labels, groups,
             downstream_model='rf', budget=50,
             augmentations=augmentations,
+            # Forward augmentation_strategy explicitly to avoid the
+            # 2026-04-21 cache-collision pattern where the default
+            # 'uncapped' silently collides with real uncapped cache files
+            # when augmentations=None.
+            augmentation_strategy=augmentation_strategy,
             speed=search_speed, data=data,
             dataset_name=dataset_name,
             task_type='classification' if is_clf else 'regression')

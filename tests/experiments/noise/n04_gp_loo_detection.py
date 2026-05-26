@@ -179,9 +179,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = data['labels']
     groups = data['groups']
     augmentations = data.get('augmentations')
-    # metric_name is used in summary print/return paths; metric_fn/lower_is_better
-    # aren't (this experiment reports precision/recall/cliff_FP, not the domain
-    # metric). Keep the name for surface area; drop the unused values.
+    # Get the domain metric NAME for the results header; the fn/direction
+    # aren't used here (this experiment reports precision/recall/cliff_FP,
+    # not the domain metric). Expose metric_name in the returned summary
+    # so downstream readers know which dataset metric the run targeted.
     metric_name, _metric_fn, _lower_is_better = get_domain_metric(data)
 
     noise_fractions = kwargs.get('noise_fractions', [0.05, 0.1, 0.2])
@@ -245,6 +246,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     top3 = extract_top3_base_reps(_search) if _search is not None else None
     results = {
+        'metric': metric_name,
         'n_samples': len(labels),
         'n_subsampled': len(y_sub),
         'n_cliffs': n_cliffs,
@@ -352,10 +354,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     cv_pe = GroupKFold(n_splits=5)
                     y_pred_cv = cross_val_predict(rf, X_cs, y_noisy_sub,
                                                   groups=groups_sub, cv=cv_pe)
-                else:
-                    cv_pe = GroupKFold(n_splits=max(2, n_groups))
+                elif n_groups >= 2:
+                    cv_pe = GroupKFold(n_splits=n_groups)
                     y_pred_cv = cross_val_predict(rf, X_cs, y_noisy_sub,
                                                   groups=groups_sub, cv=cv_pe)
+                else:
+                    # n_groups < 2 — GroupKFold can't split a single group.
+                    # Fall back to plain KFold (no shuffle for reproducibility)
+                    # and surface a warning.
+                    print("      WARNING: only 1 distinct group in subsample; "
+                          "GroupKFold cannot split — falling back to plain 5-fold KFold")
+                    y_pred_cv = cross_val_predict(
+                        rf, X_cs, y_noisy_sub,
+                        cv=KFold(n_splits=5, shuffle=False))
             else:
                 print("      WARNING: no groups available; using plain 5-fold KFold")
                 y_pred_cv = cross_val_predict(rf, X_cs, y_noisy_sub,

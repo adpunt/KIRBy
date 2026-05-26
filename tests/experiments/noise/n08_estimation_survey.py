@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""N08: Noise Estimation Survey — benchmark all 15 estimators from noise_estimation.py.
+"""N08: Noise Estimation Survey — benchmark estimators from noise_estimation.py.
 
 Paper: Noise
-Exercises the entire dormant noise_estimation library. For each estimator:
-score distributions, cross-estimator correlations, downstream impact via
-sample weighting, and cliff discrimination.
+Exercises the noise_estimation library. For each estimator: score
+distributions, cross-estimator correlations, and cliff discrimination
+(noise scores should be roughly independent of cliff status — both strong
+positive and strong negative correlation are failure modes).
+
+Note: the file's earlier "downstream impact via sample weighting" claim
+was never implemented and has been removed from the docstring. Only
+cliff discrimination + cross-estimator correlations + score statistics
+are reported. The number of estimators varies based on which optional
+dependencies (ngboost, torch) are present.
 
 Usage:
     python n08_estimation_survey.py --dataset logd --mode intermediary
@@ -102,28 +109,53 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     for rep_name, X_rep in reps.items():
         spaces[rep_name] = cap_dimensions(StandardScaler().fit_transform(X_rep))[0]
 
-    # Subsample for GP-based estimators
+    # GP-only subsample. Most estimators run cheaply on the full dataset;
+    # GP-based ones (`gaussian_process`, `bayesian_rf`, `conformal`) are
+    # O(n²)-O(n³) in memory/time and need a smaller subset. Previously a
+    # single `sub_idx` was applied to every estimator, throwing away 97% of
+    # data even for cheap methods on a 30K-sample dataset. Now each
+    # estimator pulls its own X/y subset based on whether it's GP-class.
+    GP_ESTIMATORS = {'gaussian_process', 'bayesian_rf', 'conformal'}
     if n_samples > GP_MAX:
         rng = np.random.RandomState(42)
-        sub_idx = rng.choice(n_samples, GP_MAX, replace=False)
+        gp_sub_idx = rng.choice(n_samples, GP_MAX, replace=False)
     else:
-        sub_idx = np.arange(n_samples)
+        gp_sub_idx = np.arange(n_samples)
+    full_idx = np.arange(n_samples)
+    # The downstream loop uses `sub_idx` for the cliff-mask / printing; that
+    # subset corresponds to whatever the estimator actually ran on, so we
+    # set it per-estimator below. For now define it as the GP subset for
+    # compatibility with the rest of the function — cliff_mask_sub is
+    # computed from sub_idx and is shared across estimators.
+    sub_idx = gp_sub_idx
 
-    # Identify cliff compounds for cliff discrimination test
-    D = compute_distance_matrix(X_concat, standardize=True)
+    # Identify cliff compounds for cliff discrimination test. The pairwise
+    # distance matrix is O(n²) memory — on 30K samples that's ~7GB. Cap the
+    # cliff computation to the GP subsample (≤GP_MAX) and use that mask for
+    # all estimators. Estimators that ran on the full data will have their
+    # cliff_correlation computed against the subset rather than the full N.
+    X_for_cliffs = X_concat[gp_sub_idx]
+    labels_for_cliffs = labels[gp_sub_idx]
+    D = compute_distance_matrix(X_for_cliffs, standardize=True)
     sim = 1.0 / (1.0 + D)
     np.fill_diagonal(sim, 0.0)
     if is_clf:
-        delta_y = (labels[:, None] != labels[None, :]).astype(float)
-        cliff_mask = ((sim >= 0.55) & (delta_y > 0.5)).any(axis=1)
+        delta_y = (labels_for_cliffs[:, None] != labels_for_cliffs[None, :]).astype(float)
+        cliff_mask_subset = ((sim >= 0.55) & (delta_y > 0.5)).any(axis=1)
     else:
-        mad_y = float(np.median(np.abs(labels - np.median(labels))))
-        delta_y = np.abs(labels[:, None] - labels[None, :])
-        cliff_mask = ((sim >= 0.55) & (delta_y > 2.0 * mad_y)).any(axis=1)
-    # Subsample cliff mask
+        mad_y = float(np.median(np.abs(labels_for_cliffs - np.median(labels_for_cliffs))))
+        delta_y = np.abs(labels_for_cliffs[:, None] - labels_for_cliffs[None, :])
+        cliff_mask_subset = ((sim >= 0.55) & (delta_y > 2.0 * mad_y)).any(axis=1)
+    # Project the subset-cliff-mask back onto the full-index space: False
+    # everywhere except at gp_sub_idx positions. Per-estimator code below
+    # subsets this with cliff_mask[est_idx]; for full-index estimators we
+    # only have cliff information for the gp_sub_idx ⊂ full_idx samples.
+    cliff_mask = np.zeros(n_samples, dtype=bool)
+    cliff_mask[gp_sub_idx] = cliff_mask_subset
+    # Backwards-compat alias for code that still references cliff_mask_sub.
     cliff_mask_sub = cliff_mask[sub_idx]
     n_cliffs = int(cliff_mask_sub.sum())
-    print(f"  Cliffs: {n_cliffs}/{len(sub_idx)}")
+    print(f"  Cliffs: {n_cliffs}/{len(sub_idx)} (computed on GP subsample of size {len(gp_sub_idx)})")
 
     # Determine which estimators to test
     all_estimators = list(ESTIMATORS)
@@ -154,14 +186,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     for space_name, X_full in spaces.items():
         print(f"\n  === Space: {space_name} (dim={X_full.shape[1]}) ===")
-        X_sub = X_full[sub_idx]
-        y_sub = labels[sub_idx]
         space_results = {}
         space_scores = {}
 
         for est_name in all_estimators:
             print(f"    {est_name}...", end='', flush=True)
             t0 = time.time()
+
+            # Per-estimator subsample: GP-class estimators use the small
+            # subset; everything else sees the full data. Cross-estimator
+            # correlations below will only compare estimators that ran on
+            # the same indices (i.e. same length scores arrays).
+            est_idx = gp_sub_idx if est_name in GP_ESTIMATORS else full_idx
+            X_sub = X_full[est_idx]
+            y_sub = labels[est_idx]
 
             try:
                 estimator = get_noise_estimator(est_name)
@@ -184,12 +222,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # Both strong positive correlation (rates cliffs as noisy) AND
                 # strong negative correlation (rates cliffs as the cleanest
                 # samples) are failure modes; we want |rho| ≈ 0.
-                if n_cliffs >= 5:
-                    rho_cliff, p_cliff = spearmanr(scores, cliff_mask_sub.astype(float))
+                # Per-estimator subset of the cliff mask (estimators may now
+                # have ran on different index subsets).
+                cliff_mask_est = cliff_mask[est_idx]
+                if int(cliff_mask_est.sum()) >= 5:
+                    rho_cliff, p_cliff = spearmanr(scores, cliff_mask_est.astype(float))
                     entry['cliff_correlation'] = float(rho_cliff)
                     entry['cliff_abs_correlation'] = float(abs(rho_cliff))
                     entry['cliff_p'] = float(p_cliff)
                     entry['cliff_discriminates'] = abs(rho_cliff) < 0.1
+                    entry['cliff_n_used'] = int(cliff_mask_est.sum())
 
                 # Sample weights
                 try:
@@ -201,7 +243,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                 space_scores[est_name] = scores
                 space_results[est_name] = entry
-                cliff_str = f", cliff_rho={entry.get('cliff_correlation', '?'):.3f}" if 'cliff_correlation' in entry else ""
+                _cliff_rho = entry.get('cliff_correlation')
+                cliff_str = (f", cliff_rho={_cliff_rho:.3f}"
+                             if _cliff_rho is not None else "")
                 print(f" {elapsed:.1f}s, mean={entry['score_mean']:.4f}{cliff_str}")
 
             except Exception as e:
@@ -223,6 +267,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             corr_pairs = {}
             for i, e1 in enumerate(est_names_ok):
                 for e2 in est_names_ok[i+1:]:
+                    # Only correlate estimators that ran on the same number
+                    # of samples (i.e. either both GP-class on the small
+                    # subset or both non-GP on the full data). Mismatched
+                    # lengths would raise; previously this was impossible
+                    # because every estimator used the same subset.
+                    if len(space_scores[e1]) != len(space_scores[e2]):
+                        continue
                     rho, _ = spearmanr(space_scores[e1], space_scores[e2])
                     corr_matrix[f'{e1}_vs_{e2}'] = float(rho)
                     corr_pairs[(e1, e2)] = float(rho)

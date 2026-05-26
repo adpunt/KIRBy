@@ -117,7 +117,9 @@ def compute_reliability_scores(X, y, importance_scores, k=10, is_clf=False):
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
-    """Evaluate importance-weighted sample weighting across 4 conditions."""
+    """Evaluate importance-weighted sample weighting across 5 conditions
+    (base_unweighted, base_weighted, hybrid_unweighted, hybrid_weighted,
+    hybrid_cliff_aware)."""
     print("\n" + "=" * 70)
     print("EXPERIMENT N02: IMPORTANCE-WEIGHTED SAMPLE WEIGHTING")
     print("=" * 70)
@@ -154,7 +156,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = data['labels']
     groups = data['groups']
     augmentations = data.get('augmentations')
-    augmentation_strategy = 'uncapped'
+    # (Dead `augmentation_strategy = 'uncapped'` removed — was never read.
+    # Per-model aug_condition is fetched from the pool below.)
     sample_X = next(iter(reps.values()))
 
     print(f"  Dataset: {dataset_name} ({domain}, {n_samples} samples)")
@@ -540,6 +543,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'conditions': [
                 'base_unweighted', 'base_weighted',
                 'hybrid_unweighted', 'hybrid_weighted',
+                'hybrid_cliff_aware',
             ],
         },
         results=results,

@@ -87,22 +87,10 @@ def _clf_pred_from_logits(logits_np, classes_):
     return classes_[idx]
 
 
-def _per_sample_loss_torch(net_or_pred, y_target, is_clf):
-    """Compute per-sample loss as a torch tensor.
-
-    net_or_pred: either raw model output (regression: shape (n,); clf: shape
-    (n, n_classes)) or a torch tensor of squared errors already computed.
-    Use the convention: pass model output and y_target, get a per-sample
-    loss vector back.
-    """
-    import torch
-    import torch.nn as nn
-    if is_clf:
-        # net_or_pred is (n, n_classes) logits; y_target is long (n,)
-        return nn.functional.cross_entropy(net_or_pred, y_target,
-                                           reduction='none')
-    # Regression: net_or_pred is (n,) prediction; y_target is (n,) float
-    return (net_or_pred - y_target) ** 2
+# (Module-level _per_sample_loss_torch was removed — each method writes its
+# own inline _per_sample / _val_loss closures that hold a reference to
+# self.is_clf, which is cleaner than a free function call. The classification
+# rewrite for each LNL method follows this pattern.)
 
 
 def _standard_dnn_train_predict(X_train, y_train, X_val,
@@ -490,23 +478,6 @@ class LNLMethod(ABC):
             return torch.from_numpy(y_int), classes_
         y_norm, y_mean, y_std = _z_normalize(y_train)
         return torch.from_numpy(y_norm), (y_mean, y_std)
-
-    def _build_net(self, input_dim, y_train_or_classes=None):
-        """Build a regression or clf head DNN with the configured architecture.
-
-        Pass `y_train_or_classes` so we can size the output layer to n_classes
-        in clf mode. In regression mode this argument is ignored.
-        """
-        if self.is_clf:
-            if y_train_or_classes is None:
-                raise ValueError("clf mode requires y_train or classes_ to size output")
-            classes_ = (self._resolve_classes(y_train_or_classes)
-                        if not isinstance(y_train_or_classes, np.ndarray) or
-                        y_train_or_classes.dtype != object
-                        else self._resolve_classes(y_train_or_classes))
-            return _build_dnn(input_dim, self.hidden_sizes, self.dropout,
-                              output_dim=len(classes_))
-        return _build_dnn(input_dim, self.hidden_sizes, self.dropout, output_dim=1)
 
 
 # ============================================================================

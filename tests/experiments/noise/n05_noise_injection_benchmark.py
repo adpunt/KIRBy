@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""N05: Noise Injection Benchmark — all 15 binary detectors × noise levels × distance spaces.
+"""N05: Noise Injection Benchmark — all 16 binary detectors × noise levels × distance spaces.
 
 Paper: Noise
 Systematically evaluates every noise detection method in noise_mitigation_methods.py

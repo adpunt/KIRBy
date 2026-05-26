@@ -416,10 +416,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 grid_acc[space_name][est_key] = {}
 
                             if '_error' in grid_result:
+                                # Persist the per-(space, est) error so it's
+                                # not silently dropped.
+                                grid_acc[space_name][est_key].setdefault(
+                                    '_errors', []).append(grid_result['_error'])
                                 continue
 
                             for remed_key, score in grid_result.items():
                                 if remed_key.startswith('_'):
+                                    # Carry markers like `_failures` and
+                                    # `_smoothing_skipped_clf` through to
+                                    # the saved results so downstream
+                                    # consumers can tell "skipped/failed"
+                                    # apart from "no positive recoveries".
+                                    if remed_key == '_failures':
+                                        merged = grid_acc[space_name][est_key].setdefault(
+                                            '_failures', {})
+                                        merged.update(score)
+                                    else:
+                                        grid_acc[space_name][est_key][remed_key] = score
                                     continue
                                 if remed_key not in grid_acc[space_name][est_key]:
                                     grid_acc[space_name][est_key][remed_key] = []
@@ -442,18 +457,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             for est_key in sorted(grid_acc[space_name].keys()):
                 est_agg = {}
                 for remed_key, score_list in grid_acc[space_name][est_key].items():
+                    # Skip marker fields (carried through for diagnostics);
+                    # forward them as-is rather than treating them like
+                    # score lists.
+                    if remed_key.startswith('_'):
+                        est_agg[remed_key] = score_list
+                        continue
                     if score_list:
                         denoised = float(np.mean(score_list))
                         if abs(gap) > 1e-10:
                             recovery = float((denoised - noisy_mean) / gap * 100)
                         else:
                             recovery = float('nan')
-                        # Tag the metric direction alongside each entry so
-                        # downstream tooling sorting by `denoised_score`
-                        # alone doesn't accidentally sort RMSE backwards.
-                        # `recovery` is direction-agnostic by construction
-                        # (positive = improvement); `denoised_score` is the
-                        # raw metric value.
                         est_agg[remed_key] = {
                             'denoised_score': denoised,
                             'lower_is_better': bool(lower_is_better),
@@ -473,6 +488,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for space_name, space_data in sigma_result['per_space'].items():
             for est_key, est_data in space_data.items():
                 for rk, rv in est_data.items():
+                    # Skip diagnostic markers (`_failures`, `_errors`,
+                    # `_smoothing_skipped_clf`) so they don't inflate counts
+                    # or trip the recovery-comparison logic.
+                    if rk.startswith('_') or not isinstance(rv, dict):
+                        continue
                     n_total += 1
                     r = rv.get('recovery', float('nan'))
                     if not np.isnan(r) and r > 0:
