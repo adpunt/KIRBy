@@ -11,6 +11,9 @@ import numpy as np
 from sklearn.base import BaseEstimator, RegressorMixin, ClassifierMixin
 
 
+_GROUPS_WARNED = False
+
+
 class DNNRegressor(BaseEstimator, RegressorMixin):
     """PyTorch DNN regressor with sklearn interface.
 
@@ -41,7 +44,7 @@ class DNNRegressor(BaseEstimator, RegressorMixin):
         layers.append(nn.Linear(prev, 1))
         return nn.Sequential(*layers)
 
-    def fit(self, X, y):
+    def fit(self, X, y, groups=None):
         import torch
         import torch.nn as nn
 
@@ -56,11 +59,31 @@ class DNNRegressor(BaseEstimator, RegressorMixin):
         self.y_std_ = float(y.std()) if y.std() > 1e-8 else 1.0
         y_norm = (y - self.y_mean_) / self.y_std_
 
-        # 80/20 holdout for early stopping
+        # 80/20 holdout for early stopping. Use group-aware split when groups
+        # are provided so the internal ES holdout does not leak scaffolds from
+        # the outer CV's train fold into its ES validation.
         n = len(y)
-        idx = rng.permutation(n)
-        split = int(0.8 * n)
-        train_idx, ho_idx = idx[:split], idx[split:]
+        if groups is not None:
+            from sklearn.model_selection import GroupShuffleSplit
+            groups_arr = np.asarray(groups)
+            if len(groups_arr) != n:
+                raise ValueError(
+                    f"groups length {len(groups_arr)} != X length {n}")
+            gss = GroupShuffleSplit(n_splits=1, test_size=0.2,
+                                    random_state=42)
+            train_idx, ho_idx = next(gss.split(X, y_norm, groups=groups_arr))
+        else:
+            global _GROUPS_WARNED
+            if not _GROUPS_WARNED:
+                import warnings as _warnings
+                _warnings.warn(
+                    "DNNRegressor.fit called without groups — internal early-"
+                    "stopping split is random and may leak scaffolds.",
+                    stacklevel=2)
+                _GROUPS_WARNED = True
+            idx = rng.permutation(n)
+            split = int(0.8 * n)
+            train_idx, ho_idx = idx[:split], idx[split:]
 
         X_train = torch.from_numpy(X[train_idx])
         y_train = torch.from_numpy(y_norm[train_idx])

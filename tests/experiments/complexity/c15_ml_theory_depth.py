@@ -478,19 +478,51 @@ def _run_double_descent(data, config, dataset_name=None):
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
     total_dim = X_concat.shape[1]
 
-    # Fine-grained budget sweep: focus around n_samples
-    # Include budgets well below and above n for context
-    base_budgets = [10, 25, 50, 75, 100, 150, 200, 300, 500, 750, 1000]
-    # Add budgets near n_samples for double descent detection
-    n_region = [int(n_samples * f) for f in [0.5, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 2.0]]
+    # Narrow band around n for double-descent detection.
+    # Each budget gets its own fast find_best_hybrid search (precompute
+    # only stored canonical FULL_BUDGETS values — pool lookup at 0.8n etc.
+    # would silently return nothing, breaking the sweep).
     all_budgets = sorted(set(
-        b for b in base_budgets + n_region
-        if 5 <= b <= min(total_dim, n_samples * 3)
+        int(n_samples * f) for f in [0.8, 0.9, 1.0, 1.1, 1.2]
     ))
+    all_budgets = [b for b in all_budgets
+                   if 5 <= b <= min(total_dim, n_samples * 3, 2048)]
 
     print(f"    n_samples={n_samples}, total_dim={total_dim}")
     print(f"    Budgets: {all_budgets}")
     print(f"    Metric: {metric_name} ({'lower is better' if lower_is_better else 'higher is better'})")
+
+    # Pre-fetch one fast search per budget. Both 'rf' and 'ridge' are
+    # passed as downstream models so importance_cache is built once per
+    # budget and reused across both models. Ridge stays here per
+    # double-descent literature (Bartlett/Belkin) — see _eval_at_budget callers.
+    from kirby.find_best_hybrid import find_best_hybrid as _fbh
+    from sklearn.ensemble import RandomForestRegressor as _RF15
+    from sklearn.linear_model import Ridge as _Ridge15
+    _augs = data.get('augmentations')
+    _aug_strat = 'uncapped' if _augs else 'none'
+    _searches_per_budget = {}
+    for _b in all_budgets:
+        try:
+            _searches_per_budget[_b] = _fbh(
+                base_reps=reps, labels=labels, groups=groups,
+                models={
+                    'rf': _RF15(n_estimators=100, max_depth=None,
+                                random_state=42, n_jobs=-1),
+                    'ridge': _Ridge15(alpha=1.0),
+                },
+                budgets=[_b],
+                task_type='regression', metric=metric_name,
+                speed='fast', seed=42, n_folds=n_folds,
+                cache=True,
+                dataset_name=f"{dataset_name}__c15c_b{_b}",
+                tier='c15c_fast',
+                augmentations=_augs,
+                augmentation_strategy=_aug_strat,
+                verbose=False,
+            )
+        except Exception as _e:
+            print(f"    c15c fast search at b={_b} failed: {_e}")
 
     results = {
         'n_samples': n_samples,
@@ -517,6 +549,7 @@ def _run_double_descent(data, config, dataset_name=None):
             budget=budget, method='hybrid',
             data=data,
             dataset_name=dataset_name, task_type=task_type,
+            prefetched_search=_searches_per_budget.get(budget),
         )
 
         # --- PCA ---
@@ -537,6 +570,7 @@ def _run_double_descent(data, config, dataset_name=None):
             budget=budget, method='hybrid', model_name='ridge',
             data=data,
             dataset_name=dataset_name, task_type=task_type,
+            prefetched_search=_searches_per_budget.get(budget),
         )
         ridge_pca = _eval_at_budget_pca(
             X_concat, labels, groups, n_folds, mode, metric_fn,
@@ -591,8 +625,14 @@ def _run_double_descent(data, config, dataset_name=None):
 
 def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
                     budget, method='hybrid', model_name='rf',
-                    data=None, dataset_name=None, task_type=None):
-    """Evaluate a hybrid at a given budget with a given model."""
+                    data=None, dataset_name=None, task_type=None,
+                    prefetched_search=None):
+    """Evaluate a hybrid at a given budget with a given model.
+
+    If `prefetched_search` is provided, pull blueprint for `model_name`
+    from that result (c15c fast-search path). Otherwise fall back to the
+    pool helper (c15a/c15b/c15d use this path).
+    """
     from sklearn.ensemble import RandomForestRegressor
     from sklearn.linear_model import Ridge
 
@@ -602,26 +642,36 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
         make_model = lambda: RandomForestRegressor(
             n_estimators=100, max_depth=None, random_state=42, n_jobs=-1)
 
-    # Pool helper: pick best (tier, aug_cond) cache file for this (model, budget).
-    # Falls back to 'rf' if the requested model isn't in any pool candidate.
-    augs = data.get('augmentations') if data is not None else None
-    _search, meta = get_best_search_for_downstream(
-        reps, labels, groups,
-        downstream_model=model_name, budget=budget,
-        augmentations=augs, speed='full', data=data,
-        dataset_name=dataset_name, task_type=task_type,
-    )
-    if meta is None:
+    if prefetched_search is not None:
+        # c15c fast-search path: blueprint comes from the per-budget fast search.
+        _best_by_model = getattr(prefetched_search, 'best_by_model', {}) or {}
+        best = _best_by_model.get(model_name)
+        if best is None:
+            raise RuntimeError(
+                f"prefetched_search has no entry for model={model_name} "
+                f"at budget={budget}")
+        bp = best['blueprint']
+    else:
+        # Pool helper: pick best (tier, aug_cond) cache file for this (model, budget).
+        # Falls back to 'rf' if the requested model isn't in any pool candidate.
+        augs = data.get('augmentations') if data is not None else None
         _search, meta = get_best_search_for_downstream(
             reps, labels, groups,
-            downstream_model='rf', budget=budget,
+            downstream_model=model_name, budget=budget,
             augmentations=augs, speed='full', data=data,
             dataset_name=dataset_name, task_type=task_type,
         )
-    if meta is None:
-        raise RuntimeError(f"No best config found for model={model_name} at budget={budget}")
-    best = meta['best_config']
-    bp = best['blueprint']
+        if meta is None:
+            _search, meta = get_best_search_for_downstream(
+                reps, labels, groups,
+                downstream_model='rf', budget=budget,
+                augmentations=augs, speed='full', data=data,
+                dataset_name=dataset_name, task_type=task_type,
+            )
+        if meta is None:
+            raise RuntimeError(f"No best config found for model={model_name} at budget={budget}")
+        best = meta['best_config']
+        bp = best['blueprint']
 
     scores = []
     sample_X = next(iter(reps.values()))

@@ -52,7 +52,7 @@ from sklearn.neighbors import NearestNeighbors
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
 from kirby.hybrid import create_hybrid, apply_feature_selection, compute_feature_importance
-from kirby.find_best_hybrid import find_best_hybrid, SearchResult
+from kirby.find_best_hybrid import find_best_hybrid, SearchResult, _resolve_models
 
 try:
     from noiseInject import NoiseInjectorRegression
@@ -818,7 +818,20 @@ def run_cross_context_analysis(
             if first_model_best:
                 bp = first_model_best['blueprint']
                 novel_results = {}
+                _n_samples_here = len(data['labels'])
                 for novel_name, novel_model in novel_models.items():
+                    # Canonical gate: SVR has _max_samples=10000 in DEFAULT_MODELS.
+                    # _resolve_models with list form looks up DEFAULT_MODELS[name]
+                    # and drops the entry when n_samples exceeds the cap.
+                    if novel_name == 'svr':
+                        _resolved = _resolve_models(
+                            ['svm'], task_type='regression', speed='full',
+                            n_samples=_n_samples_here,
+                            dataset_name=data.get('dataset_name', ds_name))
+                        if not _resolved:
+                            print(f"    {novel_name} on {ds_name}: skipped "
+                                  f"(n_samples={_n_samples_here} > svm _max_samples)")
+                            continue
                     try:
                         sample_X = next(iter(data['reps'].values()))
                         novel_scores = []

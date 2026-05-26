@@ -76,7 +76,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Reps: {', '.join(f'{k}({v.shape[1]})' for k, v in sorted(reps.items()))}\n")
 
     sample_X = next(iter(reps.values()))
-    budgets = [b for b in [50, 100, 200, 500, 1024] if b <= total_dim]
+    n_samples = len(labels)
+    # Canonical budget list (matches FULL_BUDGETS used by precompute).
+    # Hardcoded [50, 100, 200, 500, 1024] was divergent — 200 and 1024 were never
+    # searched by precompute, so blueprint lookups at those budgets returned None
+    # and the loop silently skipped them.
+    from experiments._shared import FULL_BUDGETS
+    budgets = [b for b in FULL_BUDGETS if b <= total_dim and b <= n_samples]
 
     # Precompute hybrid blueprints ONCE (cached) for all budgets
     # Pool helper picks the best (tier, aug_condition) cache file for

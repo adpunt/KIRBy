@@ -2,9 +2,20 @@
 """N07: Noise Remediation Strategies — what to do after detecting noise.
 
 Paper: Noise
-Compares 6 remediation strategies after noise detection: remove, relabel (GP mean),
-downweight, label smooth, robust loss, kNN-smooth. Evaluated in both hybrid space
-and each individual base rep space for proper baseline comparison.
+Compares 5 remediation strategies after noise detection: remove, downweight,
+label_smooth, knn_smooth, robust_loss (Huber). Two baselines (no_noise,
+noisy_baseline) anchor recovery. Earlier docstring said "6 strategies"; the
+actual count is 5 (the supposed "relabel-GP-mean" was never implemented).
+
+Evaluated across DOWNSTREAM_MODELS_NOISE (rf, xgboost, ridge, svm, mlp,
+lightgbm) for the hybrid feature space — each model uses its own matched-
+evaluator blueprint. The per-rep block is RF-only (diagnostic; expanding it
+to 6 × n_reps × 5 strategies would balloon runtime without adding to the
+core remediation claim). Note: robust_loss is HuberRegressor and ignores
+the per-iteration model_factory entirely — its "recovery" number is
+comparing Huber to the RF clean/noisy denominators, so it isn't on the
+same footing as the other 4 strategies; treat it as a parallel data point
+rather than a head-to-head row.
 
 Usage:
     python n07_remediation.py --dataset logd --mode intermediary
@@ -23,11 +34,16 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric, get_model_factories,
     get_precomputed_search, get_best_search_for_downstream, build_fold_hybrid,
-    extract_top3_base_reps,
+    extract_top3_base_reps, DOWNSTREAM_MODELS_NOISE,
 )
 from kirby.utils.noise_estimation import (
     ActivityCliffAwareEstimator, smooth_by_scores, weights_from_scores,
 )
+
+
+# Multi-seed noise averaging. Each fold runs noise injection at multiple
+# seeds and aggregates — reduces dependence on a single noise realization.
+NOISE_SEEDS = [0, 1, 2]
 
 
 def _inject_noise(y, fraction=0.1, seed=42, is_clf=False):
@@ -51,34 +67,79 @@ def _inject_noise(y, fraction=0.1, seed=42, is_clf=False):
     return y_noisy, noise_mask
 
 
+def _predict_for_metric(model, X, metric_name):
+    """Return predictions in the format the given metric expects.
+
+    AUROC needs continuous scores in [0, 1]; class labels make it a
+    degenerate balanced-accuracy approximation. All other metrics in
+    BUILTIN_METRICS take either class labels (f1/accuracy/mcc) or raw
+    floats (rmse/r2/spearman/ci/pearson), which is what predict() returns.
+    """
+    if metric_name == 'auc' and hasattr(model, 'predict_proba'):
+        proba = model.predict_proba(X)
+        if getattr(proba, 'ndim', 1) == 2 and proba.shape[1] == 2:
+            return proba[:, 1]
+        return proba
+    return model.predict(X)
+
+
+def _compute_noise_scores(X_tr_s, y_tr):
+    """Fit ActivityCliffAwareEstimator on (X_tr_s, y_tr) and return noise_scores_.
+
+    Hoisted out of _evaluate_fold so the caller can compute once per (fold,
+    noise_seed) and reuse across the 4 strategies that need it (remove,
+    downweight, label_smooth, knn_smooth). Previously each strategy refit
+    the same estimator on the same data — ~4× wasted work per fold.
+    Returns None if the estimator fit fails.
+    """
+    try:
+        est = ActivityCliffAwareEstimator(k=10, metric='cosine')
+        est.fit(X_tr_s, y_tr)
+        return est.noise_scores_
+    except Exception as exc:
+        print(f"      noise_scores estimator failed: "
+              f"{type(exc).__name__}: {exc}")
+        return None
+
+
 def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
-                   model_factory, metric_fn, is_clf=False):
+                   model_factory, metric_fn, is_clf=False, metric_name=None,
+                   noise_seed=42, precomputed_y_tr=None, noise_scores=None):
     """Evaluate a single remediation strategy on one fold.
+
+    noise_seed: forwarded to `_inject_noise` so the caller can average across
+    multiple noise realizations. Default 42 preserves single-seed behavior.
+    precomputed_y_tr / noise_scores: optional caller-supplied y_tr and
+    noise_scores. When provided, the per-strategy call doesn't reinject
+    noise or refit the estimator — the caller is expected to do that once
+    per (fold, noise_seed) and pass them in. This is the recommended path;
+    the no-cache path is kept for callers that haven't migrated.
 
     Returns the fold score (float) or None if the fold failed.
     """
-    # Inject noise (except for clean baseline)
+    # Inject noise (except for clean baseline) — if caller didn't precompute.
     if strategy == 'no_noise':
         y_tr = y_train.copy()
+    elif precomputed_y_tr is not None:
+        y_tr = precomputed_y_tr
     else:
-        y_tr, _noise_mask = _inject_noise(y_train, noise_fraction, is_clf=is_clf)
+        y_tr, _noise_mask = _inject_noise(y_train, noise_fraction,
+                                          seed=noise_seed, is_clf=is_clf)
 
-    # Detect noise (for strategies that need it)
-    noise_scores = None
+    # If caller supplied noise_scores, use them; otherwise compute. Returns
+    # None when the strategy needs scores and they're unavailable (loud).
     if strategy in ('remove', 'downweight', 'label_smooth', 'knn_smooth'):
-        try:
-            estimator = ActivityCliffAwareEstimator(k=10, metric='cosine')
-            estimator.fit(X_tr_s, y_tr)
-            noise_scores = estimator.noise_scores_
-        except Exception:
-            noise_scores = np.zeros(len(y_tr))
+        if noise_scores is None:
+            noise_scores = _compute_noise_scores(X_tr_s, y_tr)
+        if noise_scores is None:
+            return None
 
     # Apply strategy
     try:
         if strategy in ('no_noise', 'noisy_baseline'):
             m = model_factory()
             m.fit(X_tr_s, y_tr)
-            return metric_fn(y_val, m.predict(X_va_s))
+            return metric_fn(y_val, _predict_for_metric(m, X_va_s, metric_name))
 
         elif strategy == 'remove':
             threshold = np.percentile(noise_scores, 80)
@@ -86,13 +147,13 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
             if keep.sum() >= 10:
                 m = model_factory()
                 m.fit(X_tr_s[keep], y_tr[keep])
-                return metric_fn(y_val, m.predict(X_va_s))
+                return metric_fn(y_val, _predict_for_metric(m, X_va_s, metric_name))
 
         elif strategy == 'downweight':
             weights = weights_from_scores(noise_scores, strength=1.0)
             m = model_factory()
             m.fit(X_tr_s, y_tr, sample_weight=weights)
-            return metric_fn(y_val, m.predict(X_va_s))
+            return metric_fn(y_val, _predict_for_metric(m, X_va_s, metric_name))
 
         elif strategy == 'label_smooth':
             if is_clf:
@@ -108,7 +169,7 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
                 y_smoothed[noise_scores >= threshold] = nbr_modes[noise_scores >= threshold]
                 m = model_factory()
                 m.fit(X_tr_s, y_smoothed)
-                return metric_fn(y_val, m.predict(X_va_s))
+                return metric_fn(y_val, _predict_for_metric(m, X_va_s, metric_name))
             else:
                 nn = NearestNeighbors(n_neighbors=min(10, len(y_tr) - 1))
                 nn.fit(X_tr_s)
@@ -118,14 +179,14 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
                                               alpha=0.5, method='proportional')
                 m = model_factory()
                 m.fit(X_tr_s, y_smoothed)
-                return metric_fn(y_val, m.predict(X_va_s))
+                return metric_fn(y_val, _predict_for_metric(m, X_va_s, metric_name))
 
         elif strategy == 'robust_loss':
             if is_clf:
                 return None  # HuberRegressor is regression-only
             huber = HuberRegressor(epsilon=1.35, max_iter=500)
             huber.fit(X_tr_s, y_tr)
-            return metric_fn(y_val, huber.predict(X_va_s))
+            return metric_fn(y_val, _predict_for_metric(huber, X_va_s, metric_name))
 
         elif strategy == 'knn_smooth':
             threshold = np.percentile(noise_scores, 80)
@@ -144,7 +205,7 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
                 y_corrected[flagged] = nbr_means[flagged]
             m = model_factory()
             m.fit(X_tr_s, y_corrected)
-            return metric_fn(y_val, m.predict(X_va_s))
+            return metric_fn(y_val, _predict_for_metric(m, X_va_s, metric_name))
 
     except Exception:
         return None
@@ -160,16 +221,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     task_type = data['task_type']
     is_clf = task_type == 'classification'
-    model_factory = get_model_factories(
-        ['rf'], task_type=task_type,
-        n_samples=len(data['labels']))['rf']
+    # Per noise convention, evaluate remediation across DOWNSTREAM_MODELS_NOISE
+    # (rf, xgboost, ridge, svm, mlp, lightgbm) instead of just RF. The audit
+    # called the RF-only setup a P1 because remediation behaviour is highly
+    # model-dependent (e.g. label_smooth tends to help linear/MLP more than
+    # tree ensembles). Each model gets a matched-evaluator blueprint via the
+    # cached pool helper below.
+    model_factories = get_model_factories(
+        DOWNSTREAM_MODELS_NOISE, task_type=task_type,
+        n_samples=len(data['labels']))
 
     reps = data['reps']
     labels = data['labels']
     groups = data['groups']
     augmentations = data.get('augmentations')
-    # Dead variable removed (was 'uncapped'); downstream build_fold_hybrid
-    # uses bp.augmentation_strategy from the pool helper instead.
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
@@ -178,23 +243,67 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     sample_X = next(iter(reps.values()))
 
-    # Get hybrid blueprint ONCE (shared across all strategies/folds)
-    search, meta = get_best_search_for_downstream(
-        reps, labels, groups,
-        downstream_model='rf', budget=budget,
-        augmentations=augmentations,
-        speed=config.get('search_speed', 'full'),
-        dataset_name=dataset_name, task_type=task_type,
-        data=data,
-    )
-    if search is not None:
-        top3 = extract_top3_base_reps(search)
-        if top3:
-            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-    bp = meta['best_config']['blueprint'] if meta else None
-    if bp is None:
-        print("  WARNING: No blueprint found, skipping")
+    # Per-model blueprint fetch (matched evaluator). Each call is cached.
+    # rf is the canonical "top-3 base reps" reference, so fetch it first
+    # both for that print and as a fallback if the pool lacks a model's
+    # blueprint entry.
+    bp_by_model = {}
+    aug_by_model = {}
+    rf_search = None
+    rf_meta = None
+    for _mname in list(model_factories.keys()):
+        try:
+            _search, _meta = get_best_search_for_downstream(
+                reps, labels, groups,
+                downstream_model=_mname, budget=budget,
+                augmentations=augmentations,
+                speed=config.get('search_speed', 'full'),
+                dataset_name=dataset_name, task_type=task_type,
+                data=data,
+            )
+            if _mname == 'rf':
+                rf_search, rf_meta = _search, _meta
+            if _meta is None:
+                continue
+            _bp = _meta['best_config']['blueprint']
+            _aug_cond = _meta.get('aug_condition', 'uncapped')
+            if getattr(_bp, 'augmentation_strategy', None) != _aug_cond:
+                try:
+                    _bp.augmentation_strategy = _aug_cond
+                except Exception:
+                    pass
+            bp_by_model[_mname] = _bp
+            aug_by_model[_mname] = _aug_cond
+        except Exception as _exc:
+            print(f"  WARNING: blueprint fetch failed for {_mname} ({_exc})")
+
+    if not bp_by_model:
+        print("  WARNING: No blueprint found for any model, skipping")
         return {'error': 'no_blueprint', 'metric': metric_name}
+
+    # If RF specifically is missing, fall back to any model whose blueprint
+    # we did get so we can still print the top-3 base reps and populate
+    # the legacy top3_base_reps field.
+    top3 = None
+    if rf_search is not None:
+        top3 = extract_top3_base_reps(rf_search)
+    else:
+        _any_name = next(iter(bp_by_model))
+        try:
+            _any_search, _ = get_best_search_for_downstream(
+                reps, labels, groups,
+                downstream_model=_any_name, budget=budget,
+                augmentations=augmentations,
+                speed=config.get('search_speed', 'full'),
+                dataset_name=dataset_name, task_type=task_type,
+                data=data,
+            )
+            top3 = extract_top3_base_reps(_any_search) if _any_search else None
+        except Exception:
+            top3 = None
+    if top3:
+        print(f"  Top-3 base reps (ranked by RF baseline): "
+              f"{', '.join(f'{n}={s:.4f}' for n, s in top3)}")
 
     strategies = [
         'no_noise',         # clean baseline (no injection)
@@ -211,27 +320,42 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'lower_is_better': lower_is_better,
         'noise_fraction': noise_fraction,
         'strategies': strategies,
+        'models': list(bp_by_model.keys()),
         'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
+        # Legacy single-model section kept for backwards compatibility;
+        # populated from RF if available, else first available model.
         'per_strategy': {},
+        # Canonical per-model results — every reader should prefer this.
+        'per_model_per_strategy': {m: {} for m in bp_by_model},
     }
 
-    # --- Hybrid conditions ---
-    for strategy in strategies:
-        print(f"\n  hybrid/{strategy}...", end='', flush=True)
-        fold_scores = []
+    # --- Hybrid conditions: per-model ---
+    # Loop order is (model × fold × seed × strategy) so the per-(fold, seed)
+    # noise injection + estimator fit are computed ONCE and reused across
+    # all 7 strategies. The previous (model × strategy × fold) order
+    # recomputed those 4× per (fold, seed) — once per strategy that needed
+    # noise_scores. The audit P1 perf-recompute fix.
+    for model_name, model_factory in model_factories.items():
+        if model_name not in bp_by_model:
+            continue
+        model_bp = bp_by_model[model_name]
+        model_aug_cond = aug_by_model[model_name]
+        model_augs = augmentations if model_aug_cond != 'none' else None
 
-        for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, mode=mode):
+        per_strategy_scores = {s: [] for s in strategies}
+
+        for fold_i, (train_idx, val_idx) in enumerate(
+                cv_split(groups, n_folds, sample_X, labels, mode=mode)):
             y_train_clean = labels[train_idx]
             y_val = labels[val_idx]
 
-            # Build hybrid features from blueprint
             train_reps_fold = {k: v[train_idx] for k, v in reps.items()}
             val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
             try:
-                train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
-                val_augs = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
+                train_augs = {k: v[train_idx] for k, v in model_augs.items()} if model_augs else None
+                val_augs = {k: v[val_idx] for k, v in model_augs.items()} if model_augs else None
                 X_train_h, X_val_h, fi = build_fold_hybrid(
-                    train_reps_fold, val_reps_fold, y_train_clean, bp,
+                    train_reps_fold, val_reps_fold, y_train_clean, model_bp,
                     augmentations_train=train_augs, augmentations_val=val_augs)
             except Exception:
                 continue
@@ -240,24 +364,80 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             X_tr_s = scaler.fit_transform(X_train_h)
             X_va_s = scaler.transform(X_val_h)
 
-            fold_score = _evaluate_fold(
-                X_tr_s, X_va_s, y_train_clean, y_val, strategy,
-                noise_fraction, model_factory, metric_fn, is_clf=is_clf)
-            if fold_score is not None:
-                fold_scores.append(fold_score)
+            # no_noise: noise-independent, run once per fold (not per seed)
+            no_noise_score = _evaluate_fold(
+                X_tr_s, X_va_s, y_train_clean, y_val, 'no_noise',
+                noise_fraction, model_factory, metric_fn,
+                is_clf=is_clf, metric_name=metric_name)
+            if no_noise_score is not None:
+                per_strategy_scores['no_noise'].append(no_noise_score)
 
-        score = float(np.mean(fold_scores)) if fold_scores else float('nan')
-        results['per_strategy'][strategy] = {'score': score, 'n_folds': len(fold_scores)}
-        print(f" {metric_name}={score:.4f}")
+            # Noise-dependent strategies: average across NOISE_SEEDS
+            for noise_seed in NOISE_SEEDS:
+                actual_seed = 42 + fold_i * 1000 + noise_seed
+                # Compute the noisy y and noise_scores ONCE per (fold, seed);
+                # all 6 noise-dependent strategies reuse them.
+                y_tr_noisy, _ = _inject_noise(
+                    y_train_clean, noise_fraction,
+                    seed=actual_seed, is_clf=is_clf)
+                noise_scores_cache = _compute_noise_scores(X_tr_s, y_tr_noisy)
 
-    # --- Per-rep conditions ---
+                for strategy in strategies:
+                    if strategy == 'no_noise':
+                        continue
+                    needs_scores = strategy in (
+                        'remove', 'downweight', 'label_smooth', 'knn_smooth')
+                    fold_score = _evaluate_fold(
+                        X_tr_s, X_va_s, y_train_clean, y_val, strategy,
+                        noise_fraction, model_factory, metric_fn,
+                        is_clf=is_clf, metric_name=metric_name,
+                        noise_seed=actual_seed,
+                        precomputed_y_tr=y_tr_noisy,
+                        noise_scores=(noise_scores_cache if needs_scores else None))
+                    if fold_score is not None:
+                        per_strategy_scores[strategy].append(fold_score)
+
+        # Aggregate per strategy
+        print(f"\n  {model_name}/hybrid:")
+        for strategy in strategies:
+            fold_scores = per_strategy_scores[strategy]
+            score = float(np.mean(fold_scores)) if fold_scores else float('nan')
+            entry = {'score': score, 'n_folds': len(fold_scores)}
+            if strategy == 'robust_loss':
+                entry['model_used'] = 'HuberRegressor'
+                entry['model_used_note'] = (
+                    'robust_loss replaces the iteration model with Huber, '
+                    'so this row is not comparable to other strategies in '
+                    'the same model column. Treat as parallel data.')
+            else:
+                entry['model_used'] = model_name
+            results['per_model_per_strategy'][model_name][strategy] = entry
+            print(f"    {strategy:<18} {metric_name}={score:.4f} (n={len(fold_scores)})")
+
+    # Populate legacy per_strategy from RF (or first available model)
+    _legacy_model = 'rf' if 'rf' in bp_by_model else next(iter(bp_by_model))
+    for strategy in strategies:
+        results['per_strategy'][strategy] = (
+            results['per_model_per_strategy'][_legacy_model].get(strategy,
+                {'score': float('nan'), 'n_folds': 0}))
+
+    # --- Per-rep conditions (RF only, diagnostic). The headline claim is the
+    # per-model hybrid recovery above; the per-rep section serves as a
+    # baseline reference and would balloon to 6 × n_reps × 7 strategies if
+    # iterated across DOWNSTREAM_MODELS_NOISE. Tag with the fixed model name
+    # so downstream consumers don't misread these as multi-model.
+    rep_model_factory = model_factories.get(
+        'rf', next(iter(model_factories.values())))
+    results['per_rep_model'] = 'rf' if 'rf' in model_factories else \
+        next(iter(model_factories))
     for rep_name, X_rep in reps.items():
         for strategy in strategies:
             key = f"{rep_name}/{strategy}"
             print(f"\n  {key}...", end='', flush=True)
             fold_scores = []
 
-            for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, mode=mode):
+            for fold_i, (train_idx, val_idx) in enumerate(
+                    cv_split(groups, n_folds, sample_X, labels, mode=mode)):
                 y_train_clean = labels[train_idx]
                 y_val = labels[val_idx]
 
@@ -265,11 +445,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 X_tr_s = scaler.fit_transform(X_rep[train_idx])
                 X_va_s = scaler.transform(X_rep[val_idx])
 
-                fold_score = _evaluate_fold(
-                    X_tr_s, X_va_s, y_train_clean, y_val, strategy,
-                    noise_fraction, model_factory, metric_fn, is_clf=is_clf)
-                if fold_score is not None:
-                    fold_scores.append(fold_score)
+                seeds_to_run = (NOISE_SEEDS if strategy != 'no_noise' else [0])
+                for noise_seed in seeds_to_run:
+                    fold_score = _evaluate_fold(
+                        X_tr_s, X_va_s, y_train_clean, y_val, strategy,
+                        noise_fraction, rep_model_factory, metric_fn,
+                        is_clf=is_clf, metric_name=metric_name,
+                        noise_seed=42 + fold_i * 1000 + noise_seed)
+                    if fold_score is not None:
+                        fold_scores.append(fold_score)
 
             score = float(np.mean(fold_scores)) if fold_scores else float('nan')
             results['per_strategy'][key] = {'score': score, 'n_folds': len(fold_scores)}
@@ -303,13 +487,63 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         else:
             recovery[key] = float('nan')
 
+    # Best strategy must be reported within a single denominator class —
+    # hybrid recoveries use the hybrid (clean, noisy) baseline while per-rep
+    # recoveries use their own per-rep baselines. Picking a global max across
+    # both was meaningless: a per-rep 200% (tiny denominator) silently beat a
+    # stable hybrid 60%. Report per-class winners instead.
+    def _arg_max_finite(d):
+        finite = {k: v for k, v in d.items() if v is not None and not np.isnan(v)}
+        if not finite:
+            return None
+        return max(finite, key=finite.get)
+
+    hybrid_recovery_only = {k: v for k, v in recovery.items() if '/' not in k}
+    per_rep_recovery = {}
+    for k, v in recovery.items():
+        if '/' in k:
+            rep_name = k.split('/', 1)[0]
+            per_rep_recovery.setdefault(rep_name, {})[k.split('/', 1)[1]] = v
+
+    best_strategy_per_rep = {
+        rep: _arg_max_finite(rep_recoveries)
+        for rep, rep_recoveries in per_rep_recovery.items()
+    }
+
+    # Per-model recovery: each model has its own (no_noise, noisy_baseline)
+    # reference, computed against the same model. This is what the audit
+    # actually wanted — "do these strategies recover lost performance" can
+    # only be answered model-by-model.
+    per_model_recovery = {}
+    per_model_best = {}
+    for m_name, m_strats in results['per_model_per_strategy'].items():
+        m_clean = m_strats.get('no_noise', {}).get('score', float('nan'))
+        m_noisy = m_strats.get('noisy_baseline', {}).get('score', float('nan'))
+        m_gap = (m_clean - m_noisy
+                 if not (np.isnan(m_clean) or np.isnan(m_noisy))
+                 else float('nan'))
+        m_recovery = {}
+        for strat in remediation_strategies:
+            s = m_strats.get(strat, {}).get('score', float('nan'))
+            if (not np.isnan(s) and not np.isnan(m_gap)
+                    and abs(m_gap) > 1e-10):
+                m_recovery[strat] = float((s - m_noisy) / m_gap * 100)
+            else:
+                m_recovery[strat] = float('nan')
+        per_model_recovery[m_name] = m_recovery
+        per_model_best[m_name] = _arg_max_finite(m_recovery)
+
     results['summary'] = {
         'clean_score': clean,
         'noisy_score': noisy,
         'noise_gap': float(gap) if not np.isnan(gap) else None,
         'recovery_pct': recovery,
-        'best_strategy': max(recovery, key=lambda k: recovery[k]
-                             if not np.isnan(recovery[k]) else -1e10) if recovery else None,
+        # Hybrid (RF) and per-rep have different reference gaps; report separately.
+        'best_hybrid_strategy': _arg_max_finite(hybrid_recovery_only),
+        'best_strategy_per_rep': best_strategy_per_rep,
+        # Canonical multi-model view: per-model recovery + per-model winners.
+        'per_model_recovery_pct': per_model_recovery,
+        'best_strategy_per_model': per_model_best,
     }
     print(f"\n  Clean: {clean:.4f}, Noisy: {noisy:.4f}, Gap: {gap:.4f}")
     hybrid_recovery = {k: round(v, 1) for k, v in recovery.items() if '/' not in k}

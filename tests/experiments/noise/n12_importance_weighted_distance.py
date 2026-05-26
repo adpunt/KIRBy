@@ -72,54 +72,66 @@ def _inject_noise(y, sigma_frac, seed=42, is_clf=False):
     return y + rng.normal(0, sigma_frac * y_range, len(y))
 
 
-def _weight_features(X, importance):
-    """Apply sqrt(importance) weighting to features."""
-    w = np.sqrt(np.maximum(importance, 0))
-    w = w / (w.sum() + 1e-10)
-    return X * w
+def _weight_features(X_standardized, importance):
+    """Apply sqrt(importance) weighting to features that are ALREADY z-scored.
 
+    CRITICAL: caller must pass a standardized X. The previous version of this
+    helper applied the weight first and the caller standardized after, which
+    is a mathematical no-op (per-column StandardScaler exactly cancels a
+    per-column scalar multiply) — the entire importance-weighting ablation
+    silently produced identical Euclidean geometry across weighted and
+    unweighted conditions.
 
-def _build_conditions(train_reps, y_train, augmentations, bp,
-                       imp_method, base_rep_name):
-    """Build all 5 conditions for one importance method.
-
-    Args:
-        train_reps: {rep_name: X_train} already sliced to fold.
-        y_train: Training labels for this fold.
-        augmentations: {aug_name: X_train} already sliced, or None.
-        bp: Blueprint from get_precomputed_search.
-        imp_method: Importance method name for weighting ablation.
-        base_rep_name: Name of base representation.
-
-    Returns {condition_name: X_standardized}.
+    Returns X * sqrt(w_normalized) where w_normalized has positive entries
+    summing to len(importance) (mean ≈ 1) — chosen so the weighting expands
+    or contracts the per-feature dimension relative to the unit-variance
+    z-scored input rather than crushing every column toward zero.
     """
-    conditions = {}
+    w = np.sqrt(np.maximum(importance, 0))
+    s = w.sum()
+    if s < 1e-10:
+        # All-zero importance → no signal to weight by; return X_standardized
+        # unchanged so downstream Euclidean distances are well-defined.
+        return X_standardized
+    # Normalize to mean ≈ 1 (not sum ≈ 1) so unit-variance columns are
+    # rescaled around their original magnitude rather than crushed to ~1/d.
+    w = w * (len(w) / s)
+    return X_standardized * w
+
+
+def _build_fold_shared(train_reps, y_train, augmentations, bp, base_rep_name):
+    """Build the pieces that don't depend on imp_method, ONCE per fold.
+
+    Returns dict with:
+      'X_base_std': standardized base rep
+      'X_hyb_std' or None: standardized hybrid (or None if hybrid build failed)
+      'imp_hybrid_via_blueprint' or None: importance of hybrid features under
+            the blueprint's own importance method (used for hybrid_imp_base)
+    """
+    shared = {}
     X_base = train_reps[base_rep_name]
+    sc_base = StandardScaler()
+    shared['X_base_std'] = sc_base.fit_transform(X_base)
 
-    # Condition 1: base unweighted
-    sc1 = StandardScaler()
-    conditions['base_unweighted'] = sc1.fit_transform(X_base)
+    # Subset to the rep pool the blueprint actually scored. Passing ALL
+    # train_reps lets the allocation rank in reps the pool never considered,
+    # so the per-fold hybrid would have a different rep mix than the
+    # published blueprint. (Audit P1 finding.)
+    bp_reps = getattr(bp, 'reps', None)
+    if bp_reps:
+        train_reps_for_bp = {r: train_reps[r]
+                             for r in bp_reps if r in train_reps}
+        if not train_reps_for_bp:
+            # bp.reps not in this fold's rep pool — fall back rather than
+            # silently produce an empty hybrid.
+            train_reps_for_bp = train_reps
+    else:
+        train_reps_for_bp = train_reps
 
-    # Compute base rep importance
-    try:
-        imp_base = compute_feature_importance(
-            {base_rep_name: X_base}, y_train, method=imp_method
-        )[base_rep_name]
-    except Exception as e:
-        print(f"      {imp_method} importance failed on base: {e}")
-        imp_base = None
-
-    # Condition 2: base importance-weighted
-    if imp_base is not None:
-        X_weighted = _weight_features(X_base, imp_base)
-        sc2 = StandardScaler()
-        conditions['base_imp_weighted'] = sc2.fit_transform(X_weighted)
-
-    # Build hybrid via blueprint
     X_hybrid = None
     try:
         X_hybrid, fi = create_hybrid(
-            train_reps, y_train,
+            train_reps_for_bp, y_train,
             allocation_method=bp.allocation_method,
             importance_method=bp.importance_method,
             internal_evaluator=bp.internal_evaluator,
@@ -131,35 +143,90 @@ def _build_conditions(train_reps, y_train, augmentations, bp,
         print(f"      hybrid creation failed: {e}")
 
     if X_hybrid is not None:
+        sc_hyb = StandardScaler()
+        shared['X_hyb_std'] = sc_hyb.fit_transform(X_hybrid)
+        shared['X_hybrid_raw'] = X_hybrid
+        try:
+            shared['imp_hybrid_via_blueprint'] = compute_feature_importance(
+                {'hybrid': X_hybrid}, y_train, method=bp.importance_method
+            )['hybrid']
+        except Exception as e:
+            print(f"      imp_hybrid_via_blueprint failed: {e}")
+            shared['imp_hybrid_via_blueprint'] = None
+    else:
+        shared['X_hyb_std'] = None
+        shared['X_hybrid_raw'] = None
+        shared['imp_hybrid_via_blueprint'] = None
+    return shared
+
+
+def _build_conditions(train_reps, y_train, augmentations, bp,
+                       imp_method, base_rep_name, shared=None):
+    """Build all 5 conditions for one importance method.
+
+    Args:
+        train_reps: {rep_name: X_train} already sliced to fold.
+        y_train: Training labels for this fold.
+        augmentations: {aug_name: X_train} already sliced, or None.
+        bp: Blueprint from get_precomputed_search.
+        imp_method: Importance method name for weighting ablation.
+        base_rep_name: Name of base representation.
+        shared: Optional output of _build_fold_shared. If provided we reuse
+            the cached hybrid + via_blueprint importance instead of
+            recomputing them once per imp_method — the same hybrid was
+            previously rebuilt 3× per (sigma, fold) on the inner imp_method
+            loop, and the via_blueprint importance was recomputed at the
+            same rate even though it's imp_method-independent.
+
+    Returns {condition_name: X_standardized}.
+    """
+    conditions = {}
+    X_base = train_reps[base_rep_name]
+
+    if shared is None:
+        shared = _build_fold_shared(train_reps, y_train, augmentations, bp,
+                                    base_rep_name)
+
+    X_base_std = shared['X_base_std']
+    X_hyb_std = shared['X_hyb_std']
+    X_hybrid_raw = shared['X_hybrid_raw']
+    imp_hybrid_via_blueprint = shared['imp_hybrid_via_blueprint']
+
+    # Condition 1: base unweighted
+    conditions['base_unweighted'] = X_base_std
+
+    # Compute base rep importance (imp_method-dependent)
+    try:
+        imp_base = compute_feature_importance(
+            {base_rep_name: X_base}, y_train, method=imp_method
+        )[base_rep_name]
+    except Exception as e:
+        print(f"      {imp_method} importance failed on base: {e}")
+        imp_base = None
+
+    # Condition 2: base importance-weighted (standardize-first, then weight).
+    if imp_base is not None:
+        conditions['base_imp_weighted'] = _weight_features(X_base_std, imp_base)
+
+    if X_hyb_std is not None:
         # Condition 3: hybrid unweighted
-        sc3 = StandardScaler()
-        conditions['hybrid_unweighted'] = sc3.fit_transform(X_hybrid)
+        conditions['hybrid_unweighted'] = X_hyb_std
 
-        # Condition 4: hybrid weighted by blueprint's importance method
-        # The blueprint discovered its own importance method during search;
-        # use that to weight hybrid features (may differ from imp_method).
-        if imp_base is not None:
-            try:
-                imp_hybrid_via_blueprint = compute_feature_importance(
-                    {'hybrid': X_hybrid}, y_train, method=bp.importance_method
-                )['hybrid']
-                X_h_weighted = _weight_features(X_hybrid, imp_hybrid_via_blueprint)
-                sc4 = StandardScaler()
-                conditions['hybrid_imp_base'] = sc4.fit_transform(X_h_weighted)
-            except Exception as e:
-                print(f"      hybrid_imp_base failed: {e}")
+        # Condition 4: hybrid weighted by blueprint's importance method.
+        # imp_method-INDEPENDENT — pulled from `shared` so we don't recompute
+        # it on every inner-loop iteration.
+        if imp_base is not None and imp_hybrid_via_blueprint is not None:
+            conditions['hybrid_imp_base'] = _weight_features(
+                X_hyb_std, imp_hybrid_via_blueprint)
 
-        # Condition 5: hybrid weighted by base rep's importance method
-        # Uses the same imp_method as conditions 1-2 (e.g. lightgbm_gain)
-        # applied to hybrid features — tests whether re-weighting an
-        # already-curated hybrid with an external method adds anything.
+        # Condition 5: hybrid weighted by the sweep's imp_method (the only
+        # imp_method-dependent hybrid weighting).
         try:
             imp_hybrid_own = compute_feature_importance(
-                {'hybrid': X_hybrid}, y_train, method=imp_method
+                {'hybrid': X_hybrid_raw}, y_train, method=imp_method
             )['hybrid']
-            X_h_own_weighted = _weight_features(X_hybrid, imp_hybrid_own)
-            sc5 = StandardScaler()
-            conditions['hybrid_imp_own'] = sc5.fit_transform(X_h_own_weighted)
+            conditions['hybrid_imp_own'] = _weight_features(
+                X_hyb_std, imp_hybrid_own)
         except Exception as e:
             print(f"      hybrid_imp_own failed: {e}")
 
@@ -296,13 +363,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             train_reps_fold = {k: v[train_idx] for k, v in reps.items()}
             train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
 
+            # Build the imp-method-independent pieces (hybrid + via_blueprint
+            # importance) ONCE per (sigma, fold); the inner imp_method loop
+            # then only recomputes the truly imp-method-dependent pieces.
+            fold_shared = _build_fold_shared(
+                train_reps_fold, y_noisy, train_augs, bp, base_rep_name)
+
             for imp_method in IMPORTANCE_METHODS:
                 if imp_method not in grid_acc:
                     grid_acc[imp_method] = {}
 
                 conditions = _build_conditions(
                     train_reps_fold, y_noisy, train_augs, bp,
-                    imp_method, base_rep_name,
+                    imp_method, base_rep_name, shared=fold_shared,
                 )
 
                 for cond_name, X_space in conditions.items():

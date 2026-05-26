@@ -62,7 +62,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     print(f"  Metric: {metric_name} (lower_is_better={lower_is_better})")
 
-    model_names = ['rf', 'ridge', 'xgboost']
+    model_names = ['rf', 'knn', 'xgboost']
     models = get_model_factories(model_names, task_type=task_type, n_samples=n_samples)
     print(f"  Models: {list(models.keys())}")
 
@@ -117,10 +117,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # ── Evaluate each base rep × augmentation condition ──
     rep_results = []
 
+    n_samples = len(labels)
     for base_name in base_reps_available:
         X_base = reps[base_name]
         base_dim = X_base.shape[1]
         print(f"\n  {base_name} ({base_dim}D)")
+        if base_dim > n_samples:
+            print(f"    skipping {base_name}: base_dim={base_dim} > n_samples={n_samples} "
+                  f"(find_best_single_rep_augmented default budget=base_dim would be silently dropped)")
+            continue
 
         # Full augmentation pool (exclude self)
         full_aug = {rn: reps[rn] for rn in aug_reps_available if rn != base_name}

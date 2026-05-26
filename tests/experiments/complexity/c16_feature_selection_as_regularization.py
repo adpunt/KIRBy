@@ -34,6 +34,7 @@ from experiments._shared import (
     get_precomputed_search, build_fold_hybrid,
     get_best_for_downstream, get_best_search_for_downstream,
 )
+from kirby.find_best_hybrid import _resolve_models, DEFAULT_MODELS
 
 
 # =========================================================================
@@ -180,26 +181,56 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     task_type = data['task_type']
     total_dim = sum(v.shape[1] for v in reps.values())
-    # Cap full_dim at 2048 to prevent MLP/SVM blowup on large concat spaces
-    capped_full = min(total_dim, 2048)
-    budgets = [b for b in [25, 50, 100, 200, 500, 1024, capped_full] if b <= total_dim]
-    budgets = sorted(set(budgets))  # deduplicate
+    n_samples = len(labels)
+    # capped_full = "full-dim baseline" budget. Bounded by 2n to keep MLP/SVM
+    # tractable, plus a 2048 hard cap on top of that. Searched via fast
+    # find_best_hybrid (not the pool helper — precompute never searched at
+    # this non-canonical value, so a pool lookup would silently return None).
+    capped_full = min(total_dim, 2 * n_samples, 2048)
+    # Canonical pool budgets: FULL_BUDGETS filtered by both total_dim and
+    # n_samples (matches find_best_hybrid's internal filter).
+    from experiments._shared import FULL_BUDGETS
+    pool_budgets = sorted(set(
+        b for b in FULL_BUDGETS
+        if b <= total_dim and b <= n_samples
+    ))
+    # capped_full is treated separately (fast search), so add it to the
+    # full budget list but track it as a non-pool entry.
+    budgets = sorted(set(pool_budgets + [capped_full]))
 
     families = _get_regularization_families(task_type=task_type)
-    n_samples = len(labels)
 
-    # SVM is slow on large datasets
-    if n_samples > 5000 and 'SVM' in families:
-        print(f"  Skipping SVM: n_samples={n_samples} > 5000")
-        del families['SVM']
+    # Apply canonical model-size gate via _resolve_models (list form triggers
+    # _max_samples and _DOMAIN_MODEL_SKIPS / _DATASET_STRATEGY_SKIPS lookups).
+    _family_to_canonical = {'Ridge': 'ridge', 'LogReg': 'logreg',
+                            'RF': 'rf', 'SVM': 'svm'}
+    # c16 evaluates on a fixed blueprint pulled via aug-aware pool helper;
+    # 'uncapped' when augs present, 'none' otherwise.
+    _c16_strategy = 'uncapped' if augmentations else 'none'
+    for fam_name in list(families.keys()):
+        canonical = _family_to_canonical.get(fam_name)
+        if canonical is None or canonical not in DEFAULT_MODELS:
+            continue  # no canonical entry → library has no opinion, keep family
+        resolved = _resolve_models(
+            [canonical], task_type=task_type, speed='full',
+            n_samples=n_samples, dataset_name=dataset_name,
+            strategy=_c16_strategy)
+        if not resolved:
+            print(f"  Skipping {fam_name}: gated by _resolve_models "
+                  f"(canonical={canonical}, n_samples={n_samples}, "
+                  f"strategy={_c16_strategy})")
+            del families[fam_name]
 
     augmentations = data.get('augmentations')
 
-    # Pre-compute search blueprints per budget — pool helper picks the best
-    # (tier, aug_condition) cache file per budget for downstream_model='rf'.
+    # Pre-compute search blueprints per budget.
+    # - pool_budgets: precompute has results, use the pool helper (free).
+    # - capped_full: precompute didn't search this value, run a fast
+    #   find_best_hybrid with rf as downstream model and cache it under
+    #   a dedicated tier so it doesn't collide with general/top precompute.
     blueprints = {}
     try:
-        for budget in budgets:
+        for budget in pool_budgets:
             search, meta = get_best_search_for_downstream(
                 reps, labels, groups,
                 downstream_model='rf', budget=budget,
@@ -211,7 +242,38 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             if meta:
                 blueprints[budget] = meta['best_config']['blueprint']
     except Exception:
-        pass  # will skip all budgets
+        pass  # will skip pool-side budgets
+
+    # Fast search for the capped_full slot (not in FULL_BUDGETS).
+    if capped_full not in blueprints:
+        try:
+            from kirby.find_best_hybrid import find_best_hybrid as _fbh16
+            from sklearn.ensemble import RandomForestRegressor as _RF16
+            from sklearn.ensemble import RandomForestClassifier as _RFC16
+            _aug_strat_c16 = 'uncapped' if augmentations else 'none'
+            _model_for_search = (_RFC16(n_estimators=100, random_state=42, n_jobs=-1)
+                                 if task_type == 'classification'
+                                 else _RF16(n_estimators=100, max_depth=None,
+                                            random_state=42, n_jobs=-1))
+            cf_search = _fbh16(
+                base_reps=reps, labels=labels, groups=groups,
+                models={'rf': _model_for_search},
+                budgets=[capped_full],
+                task_type=task_type, metric=metric_name,
+                speed='fast', seed=42, n_folds=n_folds,
+                cache=True,
+                dataset_name=f"{dataset_name}__c16_capped{capped_full}",
+                tier='c16_fast',
+                augmentations=augmentations,
+                augmentation_strategy=_aug_strat_c16,
+                verbose=False,
+            )
+            cf_best = (cf_search.best_by_model_budget.get('rf', {}).get(capped_full)
+                       or cf_search.best_by_model.get('rf'))
+            if cf_best:
+                blueprints[capped_full] = cf_best['blueprint']
+        except Exception as e:
+            print(f"  c16 fast search at capped_full={capped_full} failed: {e}")
 
     results = {
         'metric': metric_name,

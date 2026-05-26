@@ -38,12 +38,6 @@ from experiments._shared import (
 # 13a: CLUSTERING QUALITY
 # =========================================================================
 
-def _is_classification(y):
-    """Heuristic: classification if <=20 unique values and integer-like."""
-    unique = np.unique(y)
-    return len(unique) <= 20 and np.allclose(y, np.round(y))
-
-
 def _cluster_label_coherence(X, y, n_clusters_list=(3, 5, 10), is_clf=False):
     """Cluster in X-space, measure label coherence.
 
@@ -63,11 +57,13 @@ def _cluster_label_coherence(X, y, n_clusters_list=(3, 5, 10), is_clf=False):
     for n_clusters in n_clusters_list:
         if n_clusters >= len(y):
             continue
-        km = KMeans(n_clusters=n_clusters, random_state=42, n_init=5)
+        km = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
         cluster_labels = km.fit_predict(X_s)
 
         if is_clf:
             # Classification: mean purity (majority class fraction per cluster)
+            if (y < 0).any():
+                return {}
             purities = []
             for c in range(n_clusters):
                 mask = cluster_labels == c
@@ -89,7 +85,8 @@ def _cluster_label_coherence(X, y, n_clusters_list=(3, 5, 10), is_clf=False):
         # Silhouette (geometric quality)
         try:
             sil = silhouette_score(X_s, cluster_labels,
-                                   sample_size=min(2000, len(y)))
+                                   sample_size=min(2000, len(y)),
+                                   random_state=42)
         except Exception:
             sil = float('nan')
 
@@ -172,6 +169,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     n_clusters_list = kwargs.get('n_clusters_list', [3, 5, 10])
 
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
+    augmentations = data.get('augmentations')
+    if augmentations:
+        X_concat = np.hstack([X_concat] + [augmentations[k] for k in sorted(augmentations.keys())])
     total_dim = X_concat.shape[1]
 
     # Build spaces to compare
@@ -196,7 +196,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         X_hybrid, fi, search, _meta = get_fitted_pool_hybrid(
             reps, labels, groups,
             downstream_model='knn', budget=None,
-            augmentations=data.get('augmentations'),
+            augmentations=augmentations,
             speed=config.get('search_speed', 'full'),
             metric=metric_name, task_type=task_type, domain=domain,
             dataset_name=dataset_name, distance=True)
@@ -256,7 +256,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         },
     }
     if top3:
-        results['top3_base_reps'] = [(n, s) for n, s in top3]
+        results['top3_base_reps'] = list(top3)
 
     # Summary: hybrid vs top-3 per-rep baselines
     # Top-3 by retrieval (lower mean_delta_y = better)

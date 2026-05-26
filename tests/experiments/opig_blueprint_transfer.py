@@ -27,7 +27,10 @@ Design:
     Key questions:
         1. full_transfer > base_best?   -> Blueprints have direct transfer value.
         2. recipe_transfer ~ native?    -> Recipe generalises; no search needed.
-        3. full_transfer ~ native?      -> Publish exact feature lists!
+        3. full_transfer ~ native?      -> Source feature indices reproduce the
+                                            native blueprint. The downstream
+                                            model is still trained fresh on the
+                                            target's training fold.
 
 Usage:
     python opig_blueprint_transfer.py --source logd --target herg_ki --mode full
@@ -53,6 +56,24 @@ from kirby.find_best_hybrid import find_best_hybrid
 from kirby.hybrid import create_hybrid, apply_feature_selection
 
 
+def _predict_for_metric(m, X, task_type, metric_name):
+    """Return predictions appropriate for the metric.
+
+    Classification metrics that need scores (auc/auroc/auprc) get
+    predict_proba (binary -> positive column, multi-class -> full matrix),
+    falling back to decision_function for models without predict_proba
+    (e.g., SVC without probability=True, RidgeClassifierCV).
+    All other cases use predict.
+    """
+    if task_type == 'classification' and metric_name in ('auc', 'auroc', 'auprc'):
+        if hasattr(m, 'predict_proba'):
+            p = m.predict_proba(X)
+            return p[:, 1] if p.shape[1] == 2 else p
+        if hasattr(m, 'decision_function'):
+            return m.decision_function(X)
+    return m.predict(X)
+
+
 def run(source_data, target_data, config, output_dir, source_name, target_name,
         pruning_mode='default_pruning'):
     """OPIG C5: Cross-dataset blueprint transfer."""
@@ -76,7 +97,12 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
     n_folds = config['n_splits']
     task_type = target_data['task_type']
 
-    # ── Domain consistency check ───────────────────────────────────────
+    # ── Task / domain consistency check ────────────────────────────────
+    if source_data['task_type'] != target_data['task_type']:
+        raise ValueError(
+            f"Source task_type ({source_data['task_type']}) != "
+            f"target ({target_data['task_type']})"
+        )
     src_domain = source_data.get('domain', 'molecular')
     tgt_domain = target_data.get('domain', 'molecular')
     if src_domain != tgt_domain:
@@ -123,7 +149,6 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
         metric=metric_name, task_type=task_type,
         verbose=False, cache=True,
         dataset_name=source_name, tier='general',
-        adaptive_pruning=0.25,
         **_src_pkw,
     )
 
@@ -137,7 +162,6 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
         metric=metric_name, task_type=task_type,
         verbose=False, cache=True,
         dataset_name=target_name, tier='general',
-        adaptive_pruning=0.25,
         **_tgt_pkw,
     )
 
@@ -145,6 +169,16 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
     print(f"\n  Step 3: Per-model evaluation ({n_folds}-fold CV)")
 
     model_names = config.get('models', DOWNSTREAM_MODELS)
+
+    def _search_models(sr):
+        if hasattr(sr, 'best_by_model_budget') and sr.best_by_model_budget:
+            return set(sr.best_by_model_budget.keys())
+        return set(getattr(sr, 'best_by_model', {}).keys())
+
+    available = _search_models(source_search) & _search_models(target_search)
+    model_names = [m for m in model_names if m in available]
+    print(f"  Models available from search: {model_names}")
+
     model_factories_tgt = get_model_factories(
         model_names, task_type=task_type, n_samples=len(target_labels))
     model_factories_src = get_model_factories(
@@ -261,8 +295,8 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
             X_va = sc.transform(va[best_tgt_rep])
             m = mk()
             m.fit(X_tr, y_tr)
-            tgt_fold_scores['base_best'].append(
-                float(metric_fn(y_va, m.predict(X_va))))
+            tgt_fold_scores['base_best'].append(float(metric_fn(
+                y_va, _predict_for_metric(m, X_va, task_type, metric_name))))
 
             # B: Native hybrid
             try:
@@ -272,8 +306,8 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
                 X_va_h = sc.transform(X_va_h)
                 m = mk()
                 m.fit(X_tr_h, y_tr)
-                tgt_fold_scores['native'].append(
-                    float(metric_fn(y_va, m.predict(X_va_h))))
+                tgt_fold_scores['native'].append(float(metric_fn(
+                    y_va, _predict_for_metric(m, X_va_h, task_type, metric_name))))
             except Exception as e:
                 print(f"        Fold {fold_i} native failed: {e}")
                 tgt_fold_scores['native'].append(float('nan'))
@@ -286,8 +320,8 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
                 X_va_h = sc.transform(X_va_h)
                 m = mk()
                 m.fit(X_tr_h, y_tr)
-                tgt_fold_scores['recipe_transfer'].append(
-                    float(metric_fn(y_va, m.predict(X_va_h))))
+                tgt_fold_scores['recipe_transfer'].append(float(metric_fn(
+                    y_va, _predict_for_metric(m, X_va_h, task_type, metric_name))))
             except Exception as e:
                 print(f"        Fold {fold_i} recipe failed: {e}")
                 tgt_fold_scores['recipe_transfer'].append(float('nan'))
@@ -301,8 +335,8 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
                 X_va_f = sc.transform(X_va_f)
                 m = mk()
                 m.fit(X_tr_f, y_tr)
-                tgt_fold_scores['full_transfer'].append(
-                    float(metric_fn(y_va, m.predict(X_va_f))))
+                tgt_fold_scores['full_transfer'].append(float(metric_fn(
+                    y_va, _predict_for_metric(m, X_va_f, task_type, metric_name))))
             except Exception as e:
                 print(f"        Fold {fold_i} full failed: {e}")
                 tgt_fold_scores['full_transfer'].append(float('nan'))
@@ -329,8 +363,8 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
             X_va = sc.transform(va[best_src_rep])
             m = mk()
             m.fit(X_tr, y_tr)
-            src_fold_scores['base_best'].append(
-                float(metric_fn(y_va, m.predict(X_va))))
+            src_fold_scores['base_best'].append(float(metric_fn(
+                y_va, _predict_for_metric(m, X_va, task_type, metric_name))))
 
             # Hybrid
             try:
@@ -340,8 +374,8 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
                 X_va_h = sc.transform(X_va_h)
                 m = mk()
                 m.fit(X_tr_h, y_tr)
-                src_fold_scores['hybrid'].append(
-                    float(metric_fn(y_va, m.predict(X_va_h))))
+                src_fold_scores['hybrid'].append(float(metric_fn(
+                    y_va, _predict_for_metric(m, X_va_h, task_type, metric_name))))
             except Exception as e:
                 print(f"        Fold {fold_i} source hybrid failed: {e}")
                 src_fold_scores['hybrid'].append(float('nan'))
@@ -486,8 +520,8 @@ if __name__ == '__main__':
     parser.add_argument('--target', type=str, default='herg_ki',
                         help='Target (small) dataset name (default: herg_ki)')
     parser.add_argument('--mode', choices=['intermediary', 'full'],
-                        default='intermediary',
-                        help='intermediary (1 split) or full (5-fold CV)')
+                        default='full',
+                        help='full (5-fold CV, default) or intermediary (single 80/20 split)')
     parser.add_argument('--reps', type=str, default=None,
                         help='Comma-separated rep list (default: intersection of DATASET_REPS)')
     parser.add_argument('--output', type=str, default='tests/results',
@@ -498,8 +532,6 @@ if __name__ == '__main__':
                         help='Comma-separated budget list')
     parser.add_argument('--max-folds', type=int, default=None,
                         help='Max folds to evaluate (stops early)')
-    parser.add_argument('--augment', action='store_true',
-                        help='Include augmentation reps')
     parser.add_argument('--pruning-mode', type=str, default='default_pruning',
                         help="Adaptive pruning mode (default 'default_pruning'). "
                              "'aggressive_pruning' = F16-validated multi-stage pruning "
@@ -525,11 +557,12 @@ if __name__ == '__main__':
         except ImportError:
             shared_rep_names = None
 
-    # Load both datasets with the shared rep set
+    # Load both datasets with the shared rep set (no augmentation reps —
+    # this experiment evaluates blueprint transfer on base reps only).
     source_data = load_data(args.source, rep_names=shared_rep_names,
-                            augment=args.augment)
+                            augment=False)
     target_data = load_data(args.target, rep_names=shared_rep_names,
-                            augment=args.augment)
+                            augment=False)
 
     config = get_config(args)
 

@@ -283,7 +283,7 @@ def load_graphinity_dataset(
     print(f"  Graphinity ({label}): {len(df)} total mutations")
 
     # Subsample if needed — stratified by PDB to preserve complex diversity
-    if len(df) > max_samples:
+    if max_samples is not None and len(df) > max_samples:
         rng = np.random.RandomState(42)
         # Sample proportionally from each PDB
         sampled = df.groupby('pdb', group_keys=False).apply(

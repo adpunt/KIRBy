@@ -408,12 +408,18 @@ def _run_sas_bo_bridge(reps, labels, groups, struct_t, act_t,
     pca = PCA(n_components=n_comp, random_state=42)
     conditions['pca_50d'] = pca.fit_transform(X_concat_s)
 
-    # 3. KIRBy hybrid 50D
+    # 3. KIRBy hybrid 50D.
+    # Previously requested downstream_model='gp', but GP has _max_samples=1000
+    # and is also not in the noise precompute pool (DOWNSTREAM_MODELS_NOISE
+    # excludes it), so on every dataset above ~1k samples the pool returned
+    # no candidate and the hybrid_50d condition was silently dropped — exactly
+    # the regime that motivates the GP-cliff comparison. GP-LOO is applied
+    # downstream of the feature space here, so an RF-optimised hybrid is the
+    # correct feature space to score against GP smoothness.
     try:
-        aug_cond = 'uncapped' if augmentations else 'none'
         X_h, _, _search, _meta = get_fitted_pool_hybrid(
             reps, labels, groups,
-            downstream_model='gp', budget=50,
+            downstream_model='rf', budget=50,
             augmentations=augmentations,
             speed=search_speed, data=data,
             dataset_name=dataset_name,
@@ -424,18 +430,61 @@ def _run_sas_bo_bridge(reps, labels, groups, struct_t, act_t,
 
     # 4. Random projection 50D
     d = X_concat.shape[1]
-    proj = np.random.RandomState(42).randn(d, min(50, d)) / np.sqrt(50)
+    # Random Gaussian projection: scale by 1/sqrt(k) where k is the OUTPUT
+    # dimension (Johnson-Lindenstrauss). Previously divided by sqrt(50)
+    # unconditionally, which under-scales when d<50 (rare but produces
+    # mathematically wrong projections on tiny rep sets).
+    _k_proj = min(50, d)
+    proj = np.random.RandomState(42).randn(d, _k_proj) / np.sqrt(_k_proj)
     conditions['random_50d'] = X_concat_s @ proj
 
     # ---- Evaluate each condition ----
     act_sim_sub = compute_activity_similarity(labels[gp_idx], is_clf=is_clf)
+
+    # For each condition's GP fit, refit the transformation on train-only
+    # rather than re-using the full-data fit (which leaks val info into the
+    # learned projection). SAS zones below still use the full-data
+    # transformation — that's descriptive geometry, not a predictive task.
+    def _retrain_transform_train_val(cond_name, tr, va):
+        """Return (X_tr, X_va) for the condition, refitting any data-dependent
+        transformation on train rows only."""
+        if cond_name.endswith('_raw'):
+            # Per-rep standardization. Refit StandardScaler on train.
+            rep_name = cond_name.removesuffix('_raw')
+            X_rep = reps.get(rep_name)
+            if X_rep is None:
+                # Fallback to whatever the condition was built from.
+                return conditions[cond_name][tr], conditions[cond_name][va]
+            sc = StandardScaler()
+            return sc.fit_transform(X_rep[tr]), sc.transform(X_rep[va])
+        if cond_name == 'pca_50d':
+            # Refit StandardScaler + PCA on train rows only.
+            sc = StandardScaler()
+            X_concat_tr_s = sc.fit_transform(X_concat[tr])
+            X_concat_va_s = sc.transform(X_concat[va])
+            _n_comp = min(50, len(tr) - 1, X_concat_tr_s.shape[1])
+            pca_train = PCA(n_components=_n_comp, random_state=42)
+            return pca_train.fit_transform(X_concat_tr_s), pca_train.transform(X_concat_va_s)
+        if cond_name == 'random_50d':
+            # Random Gaussian projection is data-independent; only the
+            # standardization is data-dependent.
+            sc = StandardScaler()
+            X_concat_tr_s = sc.fit_transform(X_concat[tr])
+            X_concat_va_s = sc.transform(X_concat[va])
+            return X_concat_tr_s @ proj, X_concat_va_s @ proj
+        # hybrid_50d: was built via the pool helper which uses CV internally.
+        # Refitting per-fold would duplicate the pool search and is much more
+        # expensive than the other conditions, so we fall back to the full-X
+        # version. This is a known residual leakage (audit-flagged P2);
+        # surfaced via `gp_leakage_notes` in the returned results.
+        return conditions[cond_name][tr], conditions[cond_name][va]
 
     results = {}
     for cond_name, X_full in conditions.items():
         X_sub = X_full[gp_idx]
         dim = X_sub.shape[1]
 
-        # SAS zones
+        # SAS zones — descriptive geometry; full-data transformation is fine.
         struct_sim = compute_cosine_sim(X_sub)
         zones = compute_sas_zones(struct_sim, act_sim_sub, struct_t, act_t)
 
@@ -446,7 +495,11 @@ def _run_sas_bo_bridge(reps, labels, groups, struct_t, act_t,
             gp_log_ml = float('nan')
             gp_success = False
         else:
-            X_tr, X_va = X_full[train_idx], X_full[val_idx]
+            try:
+                X_tr, X_va = _retrain_transform_train_val(
+                    cond_name, train_idx, val_idx)
+            except Exception:
+                X_tr, X_va = X_full[train_idx], X_full[val_idx]
             kernel = ConstantKernel(1.0) * RBF(1.0) + WhiteKernel(0.1)
             gp = GaussianProcessRegressor(
                 kernel=kernel, n_restarts_optimizer=2,
@@ -495,7 +548,8 @@ def _run_sas_bo_bridge(reps, labels, groups, struct_t, act_t,
 
     # ---- Correlation: Zone I vs GP R2 ----
     successful = {k: v for k, v in results.items()
-                  if v['gp_success'] and not k.startswith('_')}
+                  if isinstance(v, dict) and v.get('gp_success', False)
+                  and not k.startswith('_')}
     if len(successful) >= 3:
         zone_Is = [v['zones']['pct_I'] for v in successful.values()]
         gp_r2s = [v['gp_r2'] for v in successful.values()]

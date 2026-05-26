@@ -31,7 +31,9 @@ from experiments._shared import (
     get_best_for_downstream, extract_top3_base_reps,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
-from kirby.hybrid import create_hybrid
+# Default kNN budget for AD hybrid search (kept modest; AD is a diagnostic, not
+# a tuned downstream model).
+_DEFAULT_AD_BUDGET = 100
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -61,7 +63,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Get hybrid + blueprint for per-fold CV
     try:
-        budget = kwargs.get('budget', 100)
+        budget = kwargs.get('budget', _DEFAULT_AD_BUDGET)
         augmentations_search = data.get('augmentations')
         X_hybrid, fi, search, _meta = get_fitted_pool_hybrid(
             reps, labels, groups,
@@ -70,9 +72,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             speed=config.get('search_speed', 'full'),
             metric=metric_name, task_type=task_type, domain=domain,
             dataset_name=dataset_name, distance=True)
-        weights_flat = flatten_fold_weights(fi) if fi else np.ones(X_hybrid.shape[1])
         best_config = get_best_for_downstream(search, 'knn')
         bp = best_config['blueprint'] if best_config and 'blueprint' in best_config else None
+        # Pool helper overrides blueprint.augmentation_strategy to dodge the
+        # 2026-04-21 cache-collision bug; mirror that override before per-fold
+        # rebuilds so they match the pooled meta.
+        if bp is not None and _meta and 'aug_condition' in _meta:
+            bp.augmentation_strategy = _meta['aug_condition']
         top3 = extract_top3_base_reps(search)
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
@@ -108,21 +114,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     train_reps_h, val_reps_h, y_train, bp,
                     augmentations_train=aug_tr, augmentations_val=aug_va)
 
-                # Importance weights for this fold
+                # Importance weights for this fold (also drives concat weighting)
                 imp = compute_feature_importance(
                     train_reps_h, y_train, method='lightgbm_gain')
-                w_parts = []
-                for rname in feat_info:
-                    if not isinstance(feat_info[rname], dict):
-                        continue
-                    if 'selected_indices' not in feat_info[rname]:
-                        continue
-                    idx = feat_info[rname]['selected_indices']
-                    if rname in imp:
-                        w_parts.append(imp[rname][idx])
-                    else:
-                        w_parts.append(np.ones(len(idx)))
-                w = np.sqrt(np.maximum(np.concatenate(w_parts), 0))
+                # Use the shared helper: handles the augmentation tail so the
+                # weight vector matches X_tr_h/X_va_h column count exactly.
+                # NaN-guard: importance helpers can emit NaN for constant
+                # features; np.maximum(NaN, 0) is NaN which would corrupt the
+                # weighted kNN distance.
+                w = np.nan_to_num(flatten_fold_weights(feat_info), nan=0.0)
+                w = np.sqrt(np.maximum(w, 0))
             except Exception:
                 continue
 
@@ -140,28 +141,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 errors = np.abs(y_val - y_pred)
 
             # Neutral model: RF on concat (removes tautology — errors are
-            # independent of hybrid space, so hybrid distance advantage is genuine)
+            # independent of hybrid space, so hybrid distance advantage is genuine).
+            # Single scaler fit per fold; reused below for kNN concat distances.
             scaler_c = StandardScaler()
-            X_tr_c = scaler_c.fit_transform(X_concat[train_idx])
-            X_va_c = scaler_c.transform(X_concat[val_idx])
+            Xtr_c = scaler_c.fit_transform(X_concat[train_idx])
+            Xva_c = scaler_c.transform(X_concat[val_idx])
             rf_neutral = _rf_factory()
-            rf_neutral.fit(X_tr_c, y_train)
-            y_pred_neutral = rf_neutral.predict(X_va_c)
+            rf_neutral.fit(Xtr_c, y_train)
+            y_pred_neutral = rf_neutral.predict(Xva_c)
             if task_type == 'classification':
                 errors_neutral = (y_val != y_pred_neutral).astype(float)
             else:
                 errors_neutral = np.abs(y_val - y_pred_neutral)
 
-            # Concat weights for this fold
-            w_concat = np.concatenate([imp[name] for name in sorted(reps.keys())
-                                       if name in imp])
-            w_concat = np.sqrt(np.maximum(w_concat, 0))
+            # Concat weights for this fold. Must align column-for-column with
+            # X_concat = np.hstack([reps[k] for k in sorted(reps.keys())]),
+            # so fill missing reps with ones rather than skipping them.
+            w_concat = np.concatenate([
+                imp[name] if name in imp else np.ones(reps[name].shape[1])
+                for name in sorted(reps.keys())
+            ])
+            w_concat = np.sqrt(np.maximum(np.nan_to_num(w_concat, nan=0.0), 0))
 
             # Distance to k-NN in training set for each val molecule
             # Concat space (unweighted)
-            scaler_c = StandardScaler()
-            Xtr_c = scaler_c.fit_transform(X_concat[train_idx])
-            Xva_c = scaler_c.transform(X_concat[val_idx])
             nn_c = NearestNeighbors(n_neighbors=min(k, len(y_train) - 1))
             nn_c.fit(Xtr_c)
             dists_c, _ = nn_c.kneighbors(Xva_c)

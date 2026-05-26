@@ -79,6 +79,8 @@ DEFAULT_REPS = [
 ]
 
 ENRICHMENT_FRACTIONS = [0.01, 0.05, 0.10]  # top-1%, top-5%, top-10%
+# Note: at n_val ~= 1000 (5-fold on ~5K), top-1% = ~10 samples — high
+# variance. Reported but interpret with care; E@5% and E@10% are more stable.
 
 MODELS_LIST = DOWNSTREAM_MODELS
 
@@ -125,8 +127,11 @@ def compute_enrichment(y_true, y_score, fractions=None):
     n = len(y_true)
     base_rate = y_true.mean()
 
-    # Rank by score descending
-    order = np.argsort(-y_score)
+    # Rank by score descending. Use kind='stable' so that ties are broken
+    # deterministically by input order (not by quicksort's data-dependent
+    # tie-breaking, which can leak label information when scores are coarse
+    # — e.g. binary reps or LLR sums collapsing to a handful of values).
+    order = np.argsort(-y_score, kind='stable')
     y_sorted = y_true[order]
 
     result = {'base_rate': float(base_rate)}
@@ -172,6 +177,8 @@ def evaluate_rep_enrichment(X, labels, groups, model, n_folds):
     fold_enrichments = []
     auroc_scores = []
     acc_scores = []
+    n_folds_attempted = len(splits)
+    n_folds_completed = 0
 
     for train_idx, val_idx in splits:
         X_train, X_val = X[train_idx], X[val_idx]
@@ -185,8 +192,13 @@ def evaluate_rep_enrichment(X, labels, groups, model, n_folds):
         try:
             m = clone(model)
             m.fit(X_train, y_train)
-        except Exception:
+        except Exception as _fit_err:
+            print(
+                f"[WARN] Fold fit failed (skipping fold): {_fit_err!r}",
+                flush=True,
+            )
             continue
+        n_folds_completed += 1
 
         # Get prediction scores for ranking
         if hasattr(m, 'decision_function'):
@@ -210,9 +222,18 @@ def evaluate_rep_enrichment(X, labels, groups, model, n_folds):
     if not fold_enrichments:
         return None
 
+    if n_folds_completed < n_folds_attempted:
+        print(
+            f"[WARN] Only {n_folds_completed}/{n_folds_attempted} folds completed "
+            f"(fit failures dropped silently before P1-fix); results may be biased.",
+            flush=True,
+        )
+
     # Aggregate across folds
     result = {
         'accuracy': {'mean': np.mean(acc_scores), 'std': np.std(acc_scores)},
+        'n_folds_completed': int(n_folds_completed),
+        'n_folds_attempted': int(n_folds_attempted),
     }
     if auroc_scores:
         result['auroc'] = {'mean': np.mean(auroc_scores), 'std': np.std(auroc_scores)}
@@ -278,11 +299,18 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
         print("  No reps, aborting")
         return None
 
-    # Build hybrid
+    # Hybrid search (report search CV score only — do NOT materialise the
+    # hybrid for the supervised loop). The previous flow ran the search on
+    # the full label vector and then re-evaluated `kirby_hybrid` under the
+    # same StratifiedGroupKFold, which leaks the per-rep `selected_indices`
+    # across folds (P0 fix). It was also RF-only but scored against 6
+    # downstream models (P1 asymmetry). Dropping the supervised re-eval
+    # resolves both. The search's CV score (`hybrid_cv_score`) is the
+    # honest hybrid metric to report.
     # Augmentation config matches tz_her2_binary in DATASET_REPS:
     # augmentation = [] (no augmentation reps for antibody classification)
+    hybrid_search_meta = None
     try:
-        from kirby.hybrid import apply_feature_selection
         from experiments._shared import (resolve_pruning_kwargs,
                                           get_best_search_for_downstream)
         _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
@@ -291,9 +319,6 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
             reps, labels, groups,
             downstream_model='rf', budget=None,
             augmentations=None,
-            # Explicit 'none' avoids cache-key collision with real
-            # uncapped-augmentation runs (project_cache_collision_fix).
-            augmentation_strategy='none',
             speed='full',
             metric='auc',
             task_type='classification',
@@ -306,12 +331,22 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
             top3 = extract_top3_base_reps(search)
             if top3:
                 print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-        fitted = search.fitted_results.get('rf') if search is not None else None
-        if fitted is not None:
-            fi = {r: {'selected_indices': idx}
-                  for r, idx in fitted.selected_indices.items()}
-            reps['kirby_hybrid'] = apply_feature_selection(reps, fi)
-            print(f"  kirby_hybrid: {reps['kirby_hybrid'].shape[1]}D (hybrid)")
+        if _meta is not None and _meta.get('score_mean') is not None:
+            hybrid_search_meta = {
+                'rf_cv_auc': float(_meta['score_mean']),
+                'tier': _meta.get('tier'),
+                'aug_condition': _meta.get('aug_condition'),
+                'note': (
+                    'Hybrid CV score from the find_best_hybrid search '
+                    '(RF, internal CV). The supervised kirby_hybrid '
+                    'evaluation was removed because feature selection '
+                    'used the full label vector then re-tested under the '
+                    'same StratifiedGroupKFold — that leaks selected '
+                    'features across folds (P0 fix, 2026-05-25).'
+                ),
+            }
+            print(f"  kirby_hybrid CV AUC (RF, search-internal): "
+                  f"{hybrid_search_meta['rf_cv_auc']:.4f}")
     except Exception as e:
         print(f"  Hybrid build failed: {e}")
 
@@ -323,8 +358,15 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
     for rep_name in sorted(reps.keys()):
         X = reps[rep_name]
         if rep_name in LLR_REPS and X.shape[1] <= 3:
-            # LLR reps produce low-dim scores — use mean as ranking score
-            scores = X.mean(axis=1)
+            # LLR reps return [sum_llr, mean_llr, min_llr] per sequence
+            # (see src/kirby/representations/mutation.py, around lines
+            # 551-553 / 581 for ESM-C / AntiBERTy respectively). Averaging
+            # across the 3 columns was a P0 bug: sum_llr scales with the
+            # number of mutations, dominates the mean, and effectively
+            # ranks sequences by mutation count rather than per-residue
+            # binder plausibility. Use column 1 (mean_llr) — length-
+            # invariant and matches the paper's per-residue protocol.
+            scores = X[:, 1]
             enrichment = compute_enrichment(labels, scores)
             try:
                 auroc_val = roc_auc_score(labels, scores)
@@ -338,7 +380,11 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
             print(f"    {rep_name:25s} zero-shot  "
                   f"E@1%={e1:.4f}  AUROC={auroc_val:.4f}")
 
-    # Supervised evaluation (KIRBy's extension beyond paper)
+    # Supervised evaluation (KIRBy's extension beyond paper).
+    # NOTE: this is a second pass over `reps` after the zero-shot loop
+    # above. The two passes are kept separate because the zero-shot pass
+    # has no model factory and the supervised pass runs |models| inner
+    # iterations per rep; merging them is mechanical but not minimal-diff.
     models = get_model_factories(MODELS_LIST, 'classification', n_samples=n)
     print(f"\n  Supervised evaluation ({len(reps)} reps × {len(models)} models × {n_folds}-fold CV)...")
     results = {}
@@ -368,6 +414,7 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
         'base_rate': n_binders / n,
         'zero_shot': zero_shot_results,  # paper's protocol (no training)
         'supervised': results,            # KIRBy's extension (trained classifiers)
+        'hybrid_search': hybrid_search_meta,  # search CV score; not supervised-eval'd
     }
 
 
@@ -431,18 +478,23 @@ def print_analysis(ds_results):
 
     # Summary
     best_indiv = [r for r in rows if r[0] != 'kirby_hybrid']
-    best_hybrid = [r for r in rows if r[0] == 'kirby_hybrid']
 
     print(f"\n  Summary (Enrichment @ top-1%):")
     if best_indiv:
         bi = best_indiv[0]
         print(f"    Best individual: {bi[0]} ({bi[1]}) E@1% = {bi[2]:.4f}")
-    if best_hybrid:
-        bh = best_hybrid[0]
-        print(f"    Hybrid:          {bh[0]} ({bh[1]}) E@1% = {bh[2]:.4f}")
-        if best_indiv:
-            delta = bh[2] - bi[2]
-            print(f"    Delta:           {delta:+.4f}")
+
+    # Hybrid metric now comes from the find_best_hybrid search CV score
+    # (RF, internal CV), not from a supervised eval on the same labels
+    # (P0 leakage fix). Different metric (CV AUC vs E@1%), so reported
+    # separately rather than ranked alongside individual reps.
+    hyb_meta = ds_results.get('hybrid_search')
+    if hyb_meta and hyb_meta.get('rf_cv_auc') is not None:
+        print(f"    Hybrid (RF search CV AUC): {hyb_meta['rf_cv_auc']:.4f}  "
+              f"(tier={hyb_meta.get('tier')}, "
+              f"aug={hyb_meta.get('aug_condition')})")
+        print(f"    NOTE: hybrid is NOT supervised-eval'd; see "
+              f"hybrid_search.note in JSON output.")
 
 
 # =============================================================================

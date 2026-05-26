@@ -14,10 +14,13 @@ Scientific questions:
   4. How far are simple rep→model approaches from the structure-based EGNN?
 
 Conditions:
-  - within_foldx:   Train/eval on FoldX synthetic DDG (GroupKFold by complex)
-  - within_rosetta:  Train/eval on Rosetta Flex ddG (GroupKFold by complex)
-  - transfer_foldx:  Train on ALL FoldX synthetic, eval on ALL experimental SKEMPI
-  - experimental:    Train/eval on experimental SKEMPI only (baseline)
+  - within_foldx:   Train/eval on FoldX synthetic DDG (GroupKFold by complex,
+                     subsampled to --max-foldx rows; default 5000 of ~943K).
+  - within_rosetta:  Train/eval on Rosetta Flex ddG (GroupKFold by complex,
+                     full ~21K rows by default; cap via --max-rosetta).
+  - transfer_foldx:  Train on FoldX synthetic (--max-foldx rows, default 5000),
+                     evaluate on ALL experimental SKEMPI.
+  - experimental:    Train/eval on experimental SKEMPI only (baseline).
 
 Paper baselines (Hummer et al. 2025, Nature Computational Science):
   Graphinity EGNN (structure-based):  Pearson r ~0.87 on experimental test
@@ -55,7 +58,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 warnings.filterwarnings('ignore')
 
 from antibody_baseline_survey import load_dataset, DATASET_REGISTRY
-from run_baseline_survey import evaluate_rep as _evaluate_rep
 from experiments._shared import (
     convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
     extract_top3_base_reps, FULL_BUDGETS,
@@ -115,35 +117,49 @@ PAPER_BASELINES = {
 def evaluate_rep_ddg(X, labels, groups, model, n_folds):
     """Evaluate one (rep, model) for DDG regression via GroupKFold.
 
-    Delegates to run_baseline_survey.evaluate_rep for per-fold metrics.
-    Also computes global-concatenation Pearson r (paper's method: concatenate
-    all held-out predictions, compute single Pearson r on full array).
+    Single-pass CV: runs folds once, collecting per-fold metrics AND the
+    held-out predictions, then computes global-concatenation Pearson r
+    (paper's method: concatenate all held-out predictions, compute a single
+    Pearson r on the full array). This guarantees per-fold-mean Pearson and
+    pearson_global use the SAME feature space (incl. _filter_high_dim_per_fold).
 
     Returns dict with pearson, spearman, r2, rmse as {metric: {mean, std}},
     plus pearson_global (single value, comparable to paper's reported numbers).
     """
     from scipy.stats import pearsonr
     from sklearn.base import clone
-    from run_baseline_survey import _make_cv, _maybe_scale
+    from run_baseline_survey import (
+        _make_cv, _maybe_scale, _filter_high_dim_per_fold, _score,
+    )
 
-    mean_m, std_m = _evaluate_rep(X, labels, groups, model, n_folds, 'regression')
-    if not mean_m:
-        return None
-    result = {k: {'mean': mean_m[k], 'std': std_m.get(k, 0.0)} for k in mean_m}
-
-    # Global-concatenation Pearson r (matches Graphinity's epoch_metrics)
     X = np.asarray(X, dtype=np.float64)
     labels = np.asarray(labels, dtype=np.float64)
     cv, cv_kwargs = _make_cv(groups, n_folds, labels)
+
+    fold_metrics = []
     all_preds = np.full_like(labels, np.nan)
     for train_idx, val_idx in cv.split(X, labels, **cv_kwargs):
-        X_tr, X_va = _maybe_scale(X[train_idx], X[val_idx])
+        X_tr, X_va = X[train_idx], X[val_idx]
+        X_tr, X_va, _ = _filter_high_dim_per_fold(
+            X_tr, X_va, labels[train_idx], 'regression')
+        X_tr, X_va = _maybe_scale(X_tr, X_va)
         try:
             m = clone(model)
             m.fit(X_tr, labels[train_idx])
-            all_preds[val_idx] = m.predict(X_va)
+            preds = m.predict(X_va)
+            all_preds[val_idx] = preds
+            fold_metrics.append(_score(labels[val_idx], preds, 'regression'))
         except Exception:
-            pass
+            continue
+
+    if not fold_metrics:
+        return None
+    all_keys = fold_metrics[0].keys()
+    result = {}
+    for k in all_keys:
+        vals = [f[k] for f in fold_metrics if k in f]
+        result[k] = {'mean': float(np.mean(vals)), 'std': float(np.std(vals))}
+
     valid = ~np.isnan(all_preds)
     if valid.sum() > 2:
         r_global, _ = pearsonr(labels[valid], all_preds[valid])
@@ -154,22 +170,22 @@ def evaluate_rep_ddg(X, labels, groups, model, n_folds):
     return result
 
 
-def evaluate_transfer(rep_names, n_folds, max_samples=5000):
+def evaluate_transfer(rep_names, n_folds, max_foldx=5000):
     """Transfer learning: train on FoldX synthetic, evaluate on experimental.
 
-    No cross-validation — train on ALL synthetic data, test on ALL experimental.
+    Train on (optionally subsampled) FoldX synthetic, test on ALL experimental.
     Groups experimental by PDB complex for reporting variance.
     """
     from scipy.stats import pearsonr, spearmanr
     from sklearn.base import clone
-    from run_baseline_survey import _maybe_scale
+    from run_baseline_survey import _maybe_scale, _filter_high_dim_per_fold
 
     print(f"\n{'=' * 60}")
     print(f"Condition: transfer_foldx (train=synthetic, test=experimental)")
     print(f"{'=' * 60}")
 
     from kirby.datasets.graphinity import load_graphinity_dataset
-    train_data = load_graphinity_dataset(preset='foldx', max_samples=max_samples)
+    train_data = load_graphinity_dataset(preset='foldx', max_samples=max_foldx)
     test_data = load_dataset('ddg_combined')
 
     # Guard: unpaired sequences → empty strings
@@ -246,10 +262,16 @@ def evaluate_transfer(rep_names, n_folds, max_samples=5000):
     for rep_name in sorted(reps_train.keys()):
         X_tr = reps_train[rep_name]
         X_te = reps_test[rep_name]
+        # Match within-CV: filter high-dim reps before scaling so transfer
+        # and within_* conditions use the same feature space.
+        X_tr_f, X_te_f, _ = _filter_high_dim_per_fold(
+            X_tr, X_te, y_train, 'regression'
+        )
+        # Hoist scaling out of inner model loop — same scaler for every model.
+        X_tr_s, X_te_s = _maybe_scale(X_tr_f, X_te_f)
         rep_results = {}
         for model_name, factory in models.items():
             try:
-                X_tr_s, X_te_s = _maybe_scale(X_tr, X_te)
                 m = factory()
                 m.fit(X_tr_s, y_train)
                 preds = m.predict(X_te_s)
@@ -281,14 +303,14 @@ def evaluate_transfer(rep_names, n_folds, max_samples=5000):
     }
 
 
-def evaluate_condition(condition, rep_names, n_folds, max_samples=5000,
-                       pruning_mode='default_pruning'):
+def evaluate_condition(condition, rep_names, n_folds, max_foldx=5000,
+                       max_rosetta=None, pruning_mode='default_pruning'):
     """Evaluate one condition: load data, generate reps, evaluate all.
 
     Returns dict with per-rep results.
     """
     if condition == 'transfer_foldx':
-        return evaluate_transfer(rep_names, n_folds, max_samples=max_samples)
+        return evaluate_transfer(rep_names, n_folds, max_foldx=max_foldx)
 
     ds_name = CONDITION_DATASETS[condition]
 
@@ -299,7 +321,10 @@ def evaluate_condition(condition, rep_names, n_folds, max_samples=5000,
     # For graphinity presets, load directly with max_samples control
     if ds_name in ('graphinity_foldx', 'graphinity_rosetta'):
         from kirby.datasets.graphinity import load_graphinity_dataset
-        preset = 'foldx' if ds_name == 'graphinity_foldx' else 'rosetta'
+        if ds_name == 'graphinity_foldx':
+            preset, max_samples = 'foldx', max_foldx
+        else:
+            preset, max_samples = 'rosetta', max_rosetta
         data = load_graphinity_dataset(preset=preset, max_samples=max_samples)
     else:
         data = load_dataset(ds_name)
@@ -337,8 +362,16 @@ def evaluate_condition(condition, rep_names, n_folds, max_samples=5000,
 
     # Build hybrid with aac as augmentation rep (matches DDG domain config)
     try:
-        from kirby.hybrid import apply_feature_selection
-        grp = groups if groups is not None else np.arange(n)
+        from kirby.hybrid import apply_feature_selection, apply_augmentation_selection
+        if groups is None:
+            # GroupKFold without real groups silently degenerates to KFold,
+            # which violates the lab-group prohibition on random splits.
+            raise ValueError(
+                f"evaluate_condition({condition}): groups is None for "
+                f"{ds_name}; refusing to fall back to np.arange(n) "
+                "(would degenerate GroupKFold to KFold = random split)."
+            )
+        grp = groups
         AUG_REPS = {'aac'}
         base = {k: v for k, v in reps.items() if k not in AUG_REPS}
         aug_dict = {k: v for k, v in reps.items() if k in AUG_REPS}
@@ -349,12 +382,10 @@ def evaluate_condition(condition, rep_names, n_folds, max_samples=5000,
             resolve_pruning_kwargs, get_best_search_for_downstream)
         _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
                                        dataset_label=f"{ds_name}/n{n}")
-        aug_cond = 'uncapped' if aug_dict else 'none'
         search, _meta = get_best_search_for_downstream(
             base if base else reps, labels, grp,
             downstream_model='rf', budget=None,
             augmentations=aug_dict if aug_dict else None,
-            augmentation_strategy=aug_cond,
             speed='full', metric='pearson',
             task_type='regression',
             dataset_name=ds_name,
@@ -370,10 +401,14 @@ def evaluate_condition(condition, rep_names, n_folds, max_samples=5000,
         fitted = (search.fitted_results.get('rf')
                   if search is not None else None)
         if fitted is not None:
-            all_reps = {**reps, **(aug_dict or {})}
             fi = {r: {'selected_indices': idx}
                   for r, idx in fitted.selected_indices.items()}
-            reps['kirby_hybrid'] = apply_feature_selection(all_reps, fi)
+            X_hybrid = apply_feature_selection(reps, fi)
+            if fitted.augmentation_info and aug_dict:
+                X_aug = apply_augmentation_selection(aug_dict, fitted.augmentation_info)
+                if X_aug is not None:
+                    X_hybrid = np.hstack([X_hybrid, X_aug])
+            reps['kirby_hybrid'] = X_hybrid
             print(f"  kirby_hybrid: {reps['kirby_hybrid'].shape[1]}D (hybrid)")
     except Exception as e:
         print(f"  Hybrid build failed: {e}")
@@ -481,6 +516,11 @@ def print_analysis(all_results):
               f"{best_pearson:10.4f} {best_spearman:10.4f} {h_s:>10s} {d_s:>8s}")
 
     # Gap analysis — compare to EGNN at cutoff_100 (closest to KIRBy's GroupKFold by PDB)
+    # The paper reports global-concatenation Pearson (single r over concatenated
+    # held-out predictions), so compare apples-to-apples via 'pearson_global'
+    # rather than per-fold-mean Pearson. Also: exclude kirby_hybrid from the
+    # best_r aggregation — we want the best INDIVIDUAL rep vs. the paper's
+    # structure-based model; the hybrid is reported separately above.
     egnn_r = PAPER_BASELINES['Graphinity EGNN experimental (cutoff_100)']['pearson']
     print(f"\n  Structure-based EGNN reference (cutoff_100): Pearson r = {egnn_r:.3f}")
     for cond in ALL_CONDITIONS:
@@ -488,12 +528,13 @@ def print_analysis(all_results):
             continue
         results = all_results[cond]['results']
         best_r = max(
-            (_metric_value(m, 'pearson')
-             for rd in results.values() for m in rd['models'].values()),
-            default=0
+            (v for rep_name, rd in results.items() if rep_name != 'kirby_hybrid'
+             for m in rd['models'].values()
+             for v in (_metric_value(m, 'pearson_global'),) if not np.isnan(v)),
+            default=float('nan'),
         )
         gap = egnn_r - best_r
-        print(f"    {cond}: best Pearson r = {best_r:.4f}, "
+        print(f"    {cond}: best individual Pearson r_g = {best_r:.4f}, "
               f"gap to EGNN = {gap:.4f}")
 
 
@@ -516,8 +557,13 @@ def main():
         '--n-folds', type=int, default=5,
         help='Number of GroupKFold folds (default: 5)')
     parser.add_argument(
-        '--max-samples', type=int, default=5000,
-        help='Max samples for FoldX synthetic dataset (default: 5000, was 50000)')
+        '--max-foldx', type=int, default=5000,
+        help='Max samples for FoldX synthetic preset (default: 5000). '
+             'FoldX raw size is ~943K rows; subsampling is essential.')
+    parser.add_argument(
+        '--max-rosetta', type=int, default=None,
+        help='Max samples for Rosetta synthetic preset (default: None = use '
+             'all ~21K rows; Rosetta is small enough to load fully).')
     parser.add_argument(
         '--output', type=str, default=None,
         help='Output JSON path '
@@ -534,7 +580,8 @@ def main():
                   else ALL_CONDITIONS)
     rep_names = (args.reps.split(',') if args.reps else DEFAULT_REPS)
 
-    max_samples = args.max_samples
+    max_foldx = args.max_foldx
+    max_rosetta = args.max_rosetta
 
     print("=" * 70)
     print("GRAPHINITY DDG EXPERIMENT (OPIG B2)")
@@ -543,7 +590,8 @@ def main():
     print(f"  Reps: {rep_names}")
     print(f"  Models: {MODELS_LIST}")
     print(f"  Folds: {args.n_folds}")
-    print(f"  Max samples (FoldX): {max_samples}")
+    print(f"  Max samples (FoldX): {max_foldx}")
+    print(f"  Max samples (Rosetta): {max_rosetta}")
     print("=" * 70)
 
     all_results = {}
@@ -558,7 +606,8 @@ def main():
             continue
         try:
             cond_results = evaluate_condition(
-                cond, rep_names, args.n_folds, max_samples=max_samples,
+                cond, rep_names, args.n_folds,
+                max_foldx=max_foldx, max_rosetta=max_rosetta,
                 pruning_mode=args.pruning_mode)
             if cond_results is not None:
                 all_results[cond] = cond_results

@@ -14,18 +14,14 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-import time
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import r2_score
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_domain_metric, get_fitted_hybrid, get_fitted_pool_hybrid, extract_top3_base_reps,
     cap_dimensions,
-    DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 from kirby.utils.noise_mitigation_methods import (
     get_mitigation_method, compute_distance_matrix,
@@ -33,7 +29,8 @@ from kirby.utils.noise_mitigation_methods import (
 )
 
 
-# All 15 registered method names
+# All 16 registered method names. Note: docstring previously said "15"; the
+# actual list (zscore + prediction_error included) is 16.
 ALL_METHODS = [
     'knn_k5', 'knn_k10', 'knn_k20',
     'lof', 'lof_k10', 'lof_k20',
@@ -42,6 +39,13 @@ ALL_METHODS = [
     'co_teaching', 'dividemix',
     'zscore', 'prediction_error',
 ]
+
+# Methods whose detection signal depends ONLY on y (not on X), so running
+# them per-rep produces identical F1 across reps — reporting them in the
+# per-rep loop misleadingly suggests rep dependence and makes the
+# "best per-rep space" tiebreaker arbitrary. Restrict them to the global
+# (non-per-rep) evaluation.
+Y_ONLY_METHODS = {'zscore'}
 
 
 def _inject_noise(y, sigma_frac, seed=42, is_clf=False):
@@ -83,7 +87,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     augmentations = data.get('augmentations')
     task_type = data['task_type']
     is_clf = task_type == 'classification'
-    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    # metric_name surfaces in results; metric_fn/lower_is_better unused —
+    # this experiment reports F1 of noise detection, not the domain metric.
+    metric_name, _metric_fn, _lower_is_better = get_domain_metric(data)
 
     sigmas = kwargs.get('sigmas', [0.05, 0.1, 0.2, 0.3])
     budget = kwargs.get('budget', 100)
@@ -109,9 +115,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             task_type=task_type)
         D_hybrid = compute_distance_matrix(X_hybrid, standardize=True)
         print(f"  Hybrid distance matrix: {X_hybrid.shape[1]}D")
-        top3 = extract_top3_base_reps(_search)
-        if top3:
-            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     except Exception as e:
         print(f"  Hybrid failed: {e} — distance-aware methods will use concat only")
 
@@ -126,7 +129,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Sigmas: {sigmas}")
     print(f"  Methods: {len(ALL_METHODS)}")
 
+    # Single top-3 fetch (was computed twice — once inside the try-block for
+    # logging and again here for results; the logging copy has been removed).
     top3 = extract_top3_base_reps(_search) if _search is not None else None
+    if top3:
+        print(f"  Top-3 base reps (ranked by RF baseline): "
+              f"{', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     results = {
         'metric': metric_name,
         'sigmas': sigmas,
@@ -202,32 +210,39 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 except Exception as e:
                     entry['hybrid'] = {'error': str(e)}
 
-            # Run with per-rep distance matrices
-            for rep_name in per_rep_D:
-                try:
-                    kwargs_r = {}
-                    if is_distance_aware:
-                        kwargs_r['precomputed_distances'] = per_rep_D[rep_name]
+            # Run with per-rep distance matrices. y-only methods (zscore) are
+            # rep-independent — running them per-rep produces identical F1
+            # values and would arbitrarily tie-break the "best per-rep space"
+            # summary. Skip them and mark the entry so downstream readers
+            # know it isn't a per-rep result.
+            if method_name in Y_ONLY_METHODS:
+                entry['_per_rep_skipped_reason'] = 'method depends only on y, not X'
+            else:
+                for rep_name in per_rep_D:
+                    try:
+                        kwargs_r = {}
+                        if is_distance_aware:
+                            kwargs_r['precomputed_distances'] = per_rep_D[rep_name]
 
-                    detector_r = get_mitigation_method(method_name, **kwargs_r)
-                    flagged_r = detector_r.identify_noise(per_rep_Xs[rep_name], y_noisy)
-                    flagged_r_mask = np.zeros(len(labels), dtype=bool)
-                    flagged_r_mask[flagged_r] = True
+                        detector_r = get_mitigation_method(method_name, **kwargs_r)
+                        flagged_r = detector_r.identify_noise(per_rep_Xs[rep_name], y_noisy)
+                        flagged_r_mask = np.zeros(len(labels), dtype=bool)
+                        flagged_r_mask[flagged_r] = True
 
-                    tp_r = int((flagged_r_mask & noise_mask).sum())
-                    n_flagged_r = int(flagged_r_mask.sum())
-                    precision_r = tp_r / max(n_flagged_r, 1)
-                    recall_r = tp_r / max(n_noisy, 1)
-                    f1_r = 2 * precision_r * recall_r / max(precision_r + recall_r, 1e-10)
+                        tp_r = int((flagged_r_mask & noise_mask).sum())
+                        n_flagged_r = int(flagged_r_mask.sum())
+                        precision_r = tp_r / max(n_flagged_r, 1)
+                        recall_r = tp_r / max(n_noisy, 1)
+                        f1_r = 2 * precision_r * recall_r / max(precision_r + recall_r, 1e-10)
 
-                    entry[rep_name] = {
-                        'n_flagged': n_flagged_r,
-                        'precision': float(precision_r),
-                        'recall': float(recall_r),
-                        'f1': float(f1_r),
-                    }
-                except Exception as e:
-                    entry[rep_name] = {'error': str(e)}
+                        entry[rep_name] = {
+                            'n_flagged': n_flagged_r,
+                            'precision': float(precision_r),
+                            'recall': float(recall_r),
+                            'f1': float(f1_r),
+                        }
+                    except Exception as e:
+                        entry[rep_name] = {'error': str(e)}
 
             sigma_results[method_name] = entry
 
@@ -247,19 +262,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         results['per_sigma'][str(sigma)] = convert_numpy(sigma_results)
 
-    # Summary: best method per distance space (including per-rep spaces)
+    # Summary: best method per distance space (including per-rep spaces).
+    # Records best_sigma alongside best_method so the noise-regime context
+    # isn't lost — previously the summary collapsed across sigmas, letting
+    # a method peaking at σ=0.05 (easy noise) beat a method peaking at σ=0.3
+    # (hard noise) without flagging that asymmetry.
     all_spaces = ['concat', 'hybrid'] + list(per_rep_D.keys())
     summary = {}
     for space in all_spaces:
-        best_f1 = -1
+        best_f1 = -1.0
         best_method = None
+        best_sigma = None
         for sigma_key, sigma_res in results['per_sigma'].items():
             for method_name in ALL_METHODS:
+                # Per-rep spaces don't carry y-only-method entries; skip.
+                if (space in per_rep_D
+                        and method_name in Y_ONLY_METHODS):
+                    continue
                 f1 = sigma_res.get(method_name, {}).get(space, {}).get('f1', -1)
                 if f1 > best_f1:
                     best_f1 = f1
                     best_method = method_name
-        summary[space] = {'best_method': best_method, 'best_f1': float(best_f1)}
+                    best_sigma = sigma_key
+        summary[space] = {
+            'best_method': best_method,
+            'best_sigma': best_sigma,
+            'best_f1': float(best_f1),
+        }
 
     results['summary'] = summary
     print(f"\n  Best: concat={summary['concat']}, hybrid={summary.get('hybrid', 'N/A')}")

@@ -23,7 +23,7 @@ from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, load_experiment_results,
-    get_fitted_hybrid, get_fitted_pool_hybrid, flatten_weights, flatten_fold_weights, make_cv_splitter,
+    get_fitted_pool_hybrid, flatten_fold_weights, make_cv_splitter,
     get_domain_metric, get_model_factories, build_fold_hybrid,
     get_best_for_downstream, extract_top3_base_reps,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
@@ -31,7 +31,6 @@ from experiments._shared import (
 from experiments.similarity.similarity_helpers import identify_cliff_compounds
 
 from kirby.hybrid import apply_feature_selection, compute_feature_importance
-from kirby.hybrid import create_hybrid
 
 
 # =============================================================================
@@ -45,7 +44,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
       - ECFP4 Tanimoto >= tanimoto_threshold
       - |delta_y| > activity_k * MAD(y)
 
-    Reports RMSE_cliff, R2_cliff, RMSE_noncliff, R2_noncliff for:
+    Reports RMSE_cliff, RMSE_noncliff for:
       - Per-rep kNN baselines
       - Hybrid kNN (unweighted and weighted)
       - RF baseline
@@ -114,17 +113,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # --- Get hybrid blueprint for per-fold hybrid construction ---
     hybrid_blueprint = None
+    search = None
     try:
         budget = kwargs.get('budget', 100)
         augmentations = data.get('augmentations')
-        X_hybrid, fi, search, _meta = get_fitted_pool_hybrid(
+        _X_hybrid, _fi, search, _meta = get_fitted_pool_hybrid(
             reps, labels, groups,
             downstream_model='knn', budget=budget,
             augmentations=augmentations,
             speed=config.get('search_speed', 'full'),
             metric=metric_name, task_type=task_type, domain=domain,
-            dataset_name=dataset_name, distance=True)
-        weights_flat = flatten_fold_weights(fi) if fi else np.ones(X_hybrid.shape[1])
+            dataset_name=dataset_name, distance=True,
+            data=data)
         best_knn = get_best_for_downstream(search, 'knn')
         if best_knn and 'blueprint' in best_knn:
             hybrid_blueprint = best_knn['blueprint']
@@ -134,8 +134,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             results['top3_base_reps'] = [(n, s) for n, s in top3]
     except Exception as e:
         print(f"  Hybrid search failed: {e}")
-        X_hybrid = None
-        weights_flat = None
+        search = None
 
     # --- CV evaluation of prediction on cliff vs non-cliff ---
     splitter, use_groups = make_cv_splitter(n_folds, groups)
@@ -206,6 +205,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             out['rmse_noncliff'] = float(np.mean(fold_rmse_noncliff)) if fold_rmse_noncliff else float('nan')
         return out
 
+    # --- Precompute per-fold feature importance per rep (hoisted from lambda) ---
+    # Cache fold train indices so we compute importance once per (fold, rep).
+    fold_splits = list(
+        splitter.split(sample_X, labels, groups=groups) if use_groups
+        else splitter.split(sample_X, labels)
+    )
+    def _fold_key(tr):
+        return (int(tr[0]), int(tr[-1]), int(len(tr)))
+    fold_importance = {}  # {rep_name: {fold_key: imp_array}}
+    for rep_name, X_rep in reps.items():
+        fold_importance[rep_name] = {}
+        for tr, _va in fold_splits:
+            try:
+                imp = compute_feature_importance(
+                    {rep_name: X_rep[tr]}, labels[tr], method='lightgbm_gain')
+                fold_importance[rep_name][_fold_key(tr)] = imp[rep_name]
+            except Exception:
+                fold_importance[rep_name][_fold_key(tr)] = None
+
     # --- Per-rep kNN baselines (unweighted + weighted) ---
     print(f"\n  Per-rep kNN baselines (k=5, metric={metric_name}):")
     for rep_name, X_rep in reps.items():
@@ -216,10 +234,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if res:
             results['per_rep'][rep_name] = res
 
-            # Weighted: importance-weighted distance on this rep
+            # Weighted: importance-weighted distance on this rep (precomputed per fold)
             def _get_rep_w(tr, va, yt, _X=X_rep, _rname=rep_name):
-                imp = compute_feature_importance({_rname: _X[tr]}, yt, method='lightgbm_gain')
-                w = np.sqrt(np.maximum(imp[_rname], 0))
+                imp_arr = fold_importance[_rname].get(_fold_key(tr))
+                if imp_arr is None:
+                    return None, None
+                w = np.sqrt(np.maximum(imp_arr, 0))
                 scaler = StandardScaler()
                 return scaler.fit_transform(_X[tr]) * w, scaler.transform(_X[va]) * w
             res_w = _evaluate_condition(_get_rep_w, pre_scaled=True)
@@ -298,11 +318,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"{metric_name}_cliff={res['score_cliff']:.4f}{rmse_part}  "
                   f"{metric_name}_noncliff={res['score_noncliff']:.4f}")
 
-    # --- RF baseline (on best individual rep) ---
-    print("\n  RF baseline (per-rep, best rep):")
-    best_rep_name = (min if lower_is_better else max)(
-        results['per_rep'], key=lambda r: results['per_rep'][r]['score_all']
-    ) if results['per_rep'] else None
+    # --- RF baseline (on best individual rep for RF, from cached search) ---
+    print("\n  RF baseline (per-rep, best rep for RF):")
+    best_rep_name = None
+    if search is not None:
+        rf_top = extract_top3_base_reps(search, model='rf')
+        if rf_top:
+            best_rep_name = rf_top[0][0]
+    # Fallback: if no cached RF ranking available, use best-kNN rep from per_rep.
+    if best_rep_name is None and results['per_rep']:
+        best_rep_name = (min if lower_is_better else max)(
+            results['per_rep'], key=lambda r: results['per_rep'][r]['score_all']
+        )
     if best_rep_name:
         X_best = reps[best_rep_name]
         rf_factory = get_model_factories(['rf'], task_type=task_type,
@@ -361,7 +388,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         rv = results['rf_baseline']
         all_methods.append((f"RF({rv['rep']})", rv.get('score_cliff', float('nan'))))
 
-    all_methods.sort(key=lambda x: x[1] if not np.isnan(x[1]) else 999,
+    _nan_sentinel = np.inf if lower_is_better else -np.inf
+    all_methods.sort(key=lambda x: x[1] if not np.isnan(x[1]) else _nan_sentinel,
                      reverse=not lower_is_better)
     print(f"  {'Method':<25} {metric_name + '_cliff':<12}")
     print("  " + "-" * 37)

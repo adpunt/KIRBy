@@ -22,7 +22,7 @@ from sklearn.neighbors import KNeighborsRegressor, KNeighborsClassifier
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, get_fitted_hybrid, get_fitted_pool_hybrid, get_best_for_downstream,
-    flatten_weights, make_cv_splitter,
+    flatten_weights, flatten_fold_weights, make_cv_splitter,
     get_domain_metric, build_fold_hybrid, extract_top3_base_reps,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
@@ -106,6 +106,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 continue
 
             blueprint = best_at_budget['blueprint']
+            # Override blueprint augmentation_strategy with the pool-helper's
+            # aug_condition (2026-04-21 cache-collision fix). Set BEFORE the
+            # fold loop so build_fold_hybrid sees the correct strategy.
+            if _meta is not None and 'aug_condition' in _meta:
+                blueprint.augmentation_strategy = _meta['aug_condition']
             print(f"\n  Budget={budget} (ev={blueprint.internal_evaluator}, "
                   f"alloc={blueprint.allocation_method}):")
 
@@ -139,34 +144,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 train_reps, val_reps, y_train, blueprint,
                                 augmentations_train=aug_tr,
                                 augmentations_val=aug_va)
-                        except Exception:
+                        except Exception as e:
+                            fold_i = len(fold_scores)
+                            print(f"  [warn] fold {fold_i} failed: "
+                                  f"{type(e).__name__}: {str(e)[:80]}")
                             continue
 
                         scaler = StandardScaler()
                         X_tr = scaler.fit_transform(X_tr_h)
                         X_va = scaler.transform(X_va_h)
 
-                        # Importance weighting for weighted condition
+                        # Importance weighting for weighted condition.
+                        # Use flatten_fold_weights to handle augmentation tail
+                        # correctly (manual concat dropped aug columns and
+                        # shape-failed silently under bare except).
                         if condition == 'hybrid_weighted':
                             try:
-                                imp = compute_feature_importance(
-                                    train_reps, y_train,
-                                    method='lightgbm_gain')
-                                w_parts = []
-                                for rname in feat_info:
-                                    if not isinstance(feat_info[rname], dict):
-                                        continue
-                                    if 'selected_indices' not in feat_info[rname]:
-                                        continue
-                                    idx = feat_info[rname]['selected_indices']
-                                    if rname in imp:
-                                        w_parts.append(imp[rname][idx])
-                                    else:
-                                        w_parts.append(np.ones(len(idx)))
-                                w = np.sqrt(np.maximum(np.concatenate(w_parts), 0))
+                                w_raw = flatten_fold_weights(feat_info)
+                                w = np.sqrt(np.maximum(w_raw, 0))
+                                assert w.shape[0] == X_tr.shape[1], (
+                                    f"weight/feature mismatch: "
+                                    f"w={w.shape[0]} vs X={X_tr.shape[1]}")
                                 X_tr = X_tr * w
                                 X_va = X_va * w
-                            except Exception:
+                            except Exception as e:
+                                fold_i = len(fold_scores)
+                                print(f"  [warn] fold {fold_i} failed: "
+                                      f"{type(e).__name__}: {str(e)[:80]}")
                                 continue
 
                         model = _make_knn(k, len(y_train))
@@ -198,6 +202,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # ── Per-rep kNN baselines (individual representations) ──
     # Try all k values and pick the best per metric direction.
     print(f"\n  Individual representation kNN baselines (metric={metric_name}):")
+    # Precompute per-fold importance (k-independent) once per rep.
+    splitter_b2, use_groups_b2 = make_cv_splitter(n_folds, groups)
+    folds_baseline = list(
+        splitter_b2.split(sample_X, labels, groups=groups)
+        if use_groups_b2
+        else splitter_b2.split(sample_X, labels)
+    )
+
     for rep_name, X_rep in reps.items():
         best_k_score = None
         best_k_used = k_values[0]
@@ -206,15 +218,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         best_k_std = 0.0
         best_k_w_mean = float('nan')
 
+        # Per-fold importance computed ONCE per rep (independent of k).
+        fold_importance = []
+        for train_idx, _val_idx in folds_baseline:
+            try:
+                imp = compute_feature_importance(
+                    {rep_name: X_rep[train_idx]}, labels[train_idx],
+                    method='lightgbm_gain')
+                fold_importance.append(
+                    np.sqrt(np.maximum(imp[rep_name], 0)))
+            except Exception:
+                fold_importance.append(None)
+
         for k_candidate in k_values:
-            splitter2, use_groups2 = make_cv_splitter(n_folds, groups)
             fold_scores_uw = []
             fold_scores_w = []
-            for train_idx, val_idx in (
-                splitter2.split(sample_X, labels, groups=groups)
-                if use_groups2
-                else splitter2.split(sample_X, labels)
-            ):
+            for fold_i, (train_idx, val_idx) in enumerate(folds_baseline):
                 scaler = StandardScaler()
                 X_tr = scaler.fit_transform(X_rep[train_idx])
                 X_va = scaler.transform(X_rep[val_idx])
@@ -224,20 +243,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 model.fit(X_tr, labels[train_idx])
                 fold_scores_uw.append(metric_fn(labels[val_idx], model.predict(X_va)))
 
-                # Weighted by importance
-                try:
-                    imp = compute_feature_importance(
-                        {rep_name: X_rep[train_idx]}, labels[train_idx],
-                        method='lightgbm_gain')
-                    w = np.sqrt(np.maximum(imp[rep_name], 0))
-                    X_tr_w = X_tr * w
-                    X_va_w = X_va * w
-                    model_w = _make_knn(k_candidate, len(train_idx))
-                    model_w.fit(X_tr_w, labels[train_idx])
-                    fold_scores_w.append(metric_fn(labels[val_idx],
-                                                   model_w.predict(X_va_w)))
-                except Exception:
+                # Weighted by importance (reuses pre-computed weights)
+                w = fold_importance[fold_i]
+                if w is None:
                     fold_scores_w.append(float('nan'))
+                else:
+                    try:
+                        X_tr_w = X_tr * w
+                        X_va_w = X_va * w
+                        model_w = _make_knn(k_candidate, len(train_idx))
+                        model_w.fit(X_tr_w, labels[train_idx])
+                        fold_scores_w.append(metric_fn(labels[val_idx],
+                                                       model_w.predict(X_va_w)))
+                    except Exception:
+                        fold_scores_w.append(float('nan'))
 
             if not fold_scores_uw:
                 continue
@@ -258,11 +277,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'metric': metric_name,
             'k': best_k_used, 'dim': X_rep.shape[1],
         }
-        delta = sc_w_mean - sc_mean
+        # Sign-correct delta: positive = improvement regardless of metric
+        # direction (negated for lower-is-better metrics like RMSE).
+        sign = -1 if lower_is_better else 1
+        delta = sign * (sc_w_mean - sc_mean)
         print(f"    {rep_name} (dim={X_rep.shape[1]}, k={best_k_used}): "
               f"kNN {metric_name}={sc_mean:.4f}+/-{sc_std:.3f}, "
               f"weighted {metric_name}={sc_w_mean:.4f} "
-              f"(delta={delta:+.4f})")
+              f"(delta={delta:+.4f}, positive=improvement)")
 
     # ── Summary ──
     print(f"\n  Summary (best per budget):")
@@ -292,11 +314,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         if all_hybrid_scores:
             best_hybrid = (min if lower_is_better else max)(
                 all_hybrid_scores, key=lambda v: v['score_mean'])
-            delta = best_hybrid['score_mean'] - best_rep_score
+            # Sign-correct delta: positive = improvement
+            sign = -1 if lower_is_better else 1
+            delta = sign * (best_hybrid['score_mean'] - best_rep_score)
             print(f"  Best hybrid kNN: budget={best_hybrid['budget']}, "
                   f"{best_hybrid['condition']} k={best_hybrid['k']}, "
                   f"{metric_name}={best_hybrid['score_mean']:.4f} "
-                  f"(delta vs {best_rep}: {delta:+.4f})")
+                  f"(delta vs {best_rep}: {delta:+.4f}, positive=improvement)")
 
     return results
 

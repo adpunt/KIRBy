@@ -208,7 +208,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     total_dim = X_concat.shape[1]
     X_concat_scaled = StandardScaler().fit_transform(X_concat)
 
-    budgets = [b for b in [25, 50, 100, 200] if b < total_dim]
+    n_samples = len(labels)
+    # Canonical budget list (matches FULL_BUDGETS used by precompute).
+    # Hardcoded [25, 50, 100, 200] was divergent — 200 was never searched by
+    # precompute, so blueprint lookups at b=200 returned None and the loop
+    # silently skipped that column.
+    from experiments._shared import FULL_BUDGETS
+    budgets = [b for b in FULL_BUDGETS if b < total_dim and b <= n_samples]
     # mRMR is O(budget * n_features * n_samples). For large feature sets,
     # pre-filter to top 2000 features by univariate MI before greedy selection.
     mrmr_prefilter = 2000

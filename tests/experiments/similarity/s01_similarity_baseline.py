@@ -9,7 +9,6 @@ For each representation, compute distance matrix and measure:
 - Similarity-Activity Correlation (SAC): Spearman(distance, |delta_y|)
 - Violation rate: fraction of k-NN with large |delta_y|
 - SALI: Structure-Activity Landscape Index
-Also computes concatenated representation baseline.
 """
 import sys
 import os
@@ -27,7 +26,6 @@ from experiments.similarity.similarity_helpers import (
     run_antibody_cliff_analysis,
 )
 
-from kirby.hybrid import compute_feature_importance
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
 
 
@@ -54,15 +52,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     results = {}
 
-    # Compute importance weights for weighted baselines
-    print("  Computing feature importance (lgbm_gain)...")
-    try:
-        importance = compute_feature_importance(reps, labels, method='lightgbm_gain')
-    except Exception as e:
-        print(f"  WARNING: importance computation failed ({e}), weighted baselines unavailable")
-        importance = None
-
-    # Per-rep analysis (unweighted + weighted)
+    # Per-rep analysis
     for rep_name, X in reps.items():
         print(f"\n  {rep_name} (dim={X.shape[1]}):")
         D = compute_distance_matrix(X, standardize=True)
@@ -79,7 +69,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             perm_rho, _ = similarity_activity_correlation(D, y_perm, n_sample, is_clf=is_classification)
             perm_sacs.append(perm_rho)
         perm_sacs = np.array(perm_sacs)
-        sac_perm_p = float(np.mean(perm_sacs >= sac_rho))
+        sac_perm_p = float(np.mean(np.abs(perm_sacs) >= abs(sac_rho)))
 
         rep_result = {
             'dim': X.shape[1],
@@ -93,42 +83,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'sali_std': sali['std'],
         }
 
-        # Weighted version: importance-weighted distance on this rep
-        if importance is not None and rep_name in importance:
-            D_w = compute_distance_matrix(X, feature_weights=importance[rep_name],
-                                          standardize=True)
-            sac_w, sac_w_p = similarity_activity_correlation(D_w, labels, n_sample, is_clf=is_classification)
-            viol_w = violation_rate(D_w, labels, k=5, is_clf=is_classification)
-            sali_w = compute_sali(D_w, labels, is_clf=is_classification)
-            rep_result['sac_rho_weighted'] = sac_w
-            rep_result['sac_p_weighted'] = sac_w_p
-            rep_result['violation_rate_weighted'] = viol_w
-            rep_result['sali_mean_weighted'] = sali_w['mean']
-            print(f"    SAC rho={sac_rho:.4f}, weighted={sac_w:.4f}, "
-                  f"viol={viol:.3f}/{viol_w:.3f}, SALI={sali['mean']:.3f}/{sali_w['mean']:.3f}")
-        else:
-            print(f"    SAC rho={sac_rho:.4f} (p={sac_p:.2e}), "
-                  f"violation_rate={viol:.3f}, SALI_mean={sali['mean']:.3f}")
+        print(f"    SAC rho={sac_rho:.4f} (p={sac_p:.2e}), "
+              f"violation_rate={viol:.3f}, SALI_mean={sali['mean']:.3f}")
 
         results[rep_name] = rep_result
 
     # Summary table
     print("\n  Summary:")
-    has_weighted = any('sac_rho_weighted' in r for r in results.values())
-    if has_weighted:
-        print(f"  {'Rep':<15} {'Dim':>5} {'SAC':>9} {'SAC_w':>9} {'Viol%':>7} {'Viol_w%':>7}")
-        print(f"  {'-'*15} {'-'*5} {'-'*9} {'-'*9} {'-'*7} {'-'*7}")
-        for name, r in results.items():
-            sac_w = r.get('sac_rho_weighted', float('nan'))
-            viol_w = r.get('violation_rate_weighted', float('nan'))
-            print(f"  {name:<15} {r['dim']:>5} {r['sac_rho']:>9.4f} "
-                  f"{sac_w:>9.4f} {r['violation_rate']:>7.3f} {viol_w:>7.3f}")
-    else:
-        print(f"  {'Rep':<15} {'Dim':>5} {'SAC rho':>9} {'Viol%':>7} {'SALI':>8}")
-        print(f"  {'-'*15} {'-'*5} {'-'*9} {'-'*7} {'-'*8}")
-        for name, r in results.items():
-            print(f"  {name:<15} {r['dim']:>5} {r['sac_rho']:>9.4f} "
-                  f"{r['violation_rate']:>7.3f} {r['sali_mean']:>8.3f}")
+    print(f"  {'Rep':<15} {'Dim':>5} {'SAC rho':>9} {'Viol%':>7} {'SALI':>8}")
+    print(f"  {'-'*15} {'-'*5} {'-'*9} {'-'*7} {'-'*8}")
+    for name, r in results.items():
+        print(f"  {name:<15} {r['dim']:>5} {r['sac_rho']:>9.4f} "
+              f"{r['violation_rate']:>7.3f} {r['sali_mean']:>8.3f}")
 
     # Sequence-based cliff sweep (antibody datasets + nucleotide) — independent
     # of any representation choice. Tests whether close pairs in sequence space
@@ -144,7 +110,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
 if __name__ == '__main__':
     parser = create_experiment_parser('S01: Similarity-Activity Correlation Baseline',
-                                     has_delta=True, has_augment=True)
+                                     has_delta=True)
     args = parser.parse_args()
     config = get_config(args)
 

@@ -726,11 +726,37 @@ def federate_labels_and_train_student(teacher_models, cluster_data, fluid_df,
 # KIRBY FEDERATED FEATURE SELECTION (CONDITION 5)
 # =============================================================================
 
+# Mirrors the canonical 'match' → concrete-evaluator resolution in
+# src/kirby/hybrid.py:3331-3355. Used to prevent silent degradation to
+# equal-budget when 'match' is forwarded into get_model_factories (which
+# doesn't know 'match'), and to prevent create_hybrid's no-model branch from
+# resolving 'match' to 'ridge' (forbidden — feedback_no_ridge.md).
+_MATCH_RESOLVABLE_MODELS = (
+    'rf', 'xgboost', 'lightgbm', 'catboost', 'mlp', 'svm',
+    'ridge', 'knn', 'gp', 'cnn', 'dnn', 'bnn', 'ngboost',
+)
+
+
+def _resolve_match(internal_evaluator, downstream_model_name=None):
+    """Resolve 'match' to a concrete evaluator name.
+
+    If a downstream model name is provided and recognised, use it (same family
+    as the downstream model). Otherwise default to 'rf' as a safe fallback
+    (NOT 'ridge' — see feedback_no_ridge.md).
+    """
+    if internal_evaluator != 'match':
+        return internal_evaluator
+    if downstream_model_name in _MATCH_RESOLVABLE_MODELS:
+        return downstream_model_name
+    return 'rf'
+
+
 def federated_feature_selection(rep_dict, labels, silo_indices, k,
                                 budget=100, allocation_method='performance_weighted',
                                 importance_method='treeshap',
                                 internal_evaluator='rf', seed=42,
-                                groups=None, task_type=None):
+                                groups=None, task_type=None,
+                                downstream_model=None):
     """Privacy-preserving federated feature selection.
 
     Protocol:
@@ -776,6 +802,26 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
     silo_scores = {}
     silo_feature_infos = {}
 
+    # Resolve 'match' to a concrete evaluator name BEFORE calling
+    # get_model_factories (which doesn't know 'match' → would return {} → None
+    # factory → silo_scores=0 → equal-budget fallback). See feedback_no_ridge.md
+    # for why we default to 'rf' (not 'ridge') when no downstream is given.
+    resolved_evaluator = _resolve_match(internal_evaluator, downstream_model)
+
+    # Instantiate a concrete downstream-model instance (when possible) so that
+    # create_hybrid's internal 'match' branch can resolve to the same family —
+    # otherwise it silently degrades to 'ridge' (hybrid.py:3354-3355).
+    downstream_model_instance = None
+    if downstream_model is not None:
+        try:
+            _ds_factory = get_model_factories(
+                [downstream_model], task_type=silo_task_type,
+                n_samples=len(labels)).get(downstream_model)
+            if _ds_factory is not None:
+                downstream_model_instance = _ds_factory()
+        except Exception:
+            downstream_model_instance = None
+
     # Phase 1: Each silo computes importance locally and shares validation score
     for s in range(1, k + 1):
         idx = silo_indices[s]
@@ -798,6 +844,7 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
                 importance_method=importance_method,
                 budget=per_silo_budget,
                 internal_evaluator=internal_evaluator,
+                model=downstream_model_instance,
             )
             silo_feature_infos[s] = fi
 
@@ -818,8 +865,8 @@ def federated_feature_selection(rep_dict, labels, silo_indices, k,
                         n_splits=1, test_size=0.2, random_state=seed + s)
                     tr, va = next(ss.split(X_silo))
                 eval_factory = get_model_factories(
-                    [internal_evaluator], task_type=silo_task_type,
-                    n_samples=len(tr)).get(internal_evaluator)
+                    [resolved_evaluator], task_type=silo_task_type,
+                    n_samples=len(tr)).get(resolved_evaluator)
                 evaluator = eval_factory() if eval_factory else None
                 if evaluator is None:
                     silo_scores[s] = 0.0
@@ -1406,7 +1453,8 @@ def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,
                               allocation_method='performance_weighted',
                               importance_method='treeshap',
                               internal_evaluator='rf',
-                              groups=None, task_type=None):
+                              groups=None, task_type=None,
+                              downstream_model=None):
     """Condition 6: FLuID clustering within each silo, KIRBy across silos.
 
     For each representation (silo):
@@ -1479,6 +1527,26 @@ def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,
         is_classification = (task_type == 'classification')
     silo_task_type = 'classification' if is_classification else 'regression'
 
+    # Resolve 'match' → concrete evaluator name BEFORE get_model_factories
+    # (it doesn't recognise 'match' and would silently fall back to equal
+    # budget). Default to 'rf' when no downstream supplied (NOT 'ridge', per
+    # feedback_no_ridge.md).
+    resolved_evaluator = _resolve_match(internal_evaluator, downstream_model)
+
+    # Instantiate the downstream model (if provided) so that create_hybrid's
+    # internal 'match' branch resolves to the matching family instead of
+    # silently degrading to 'ridge' (hybrid.py:3354-3355).
+    downstream_model_instance = None
+    if downstream_model is not None:
+        try:
+            _ds_factory = get_model_factories(
+                [downstream_model], task_type=silo_task_type,
+                n_samples=len(labels)).get(downstream_model)
+            if _ds_factory is not None:
+                downstream_model_instance = _ds_factory()
+        except Exception:
+            downstream_model_instance = None
+
     silo_fis = {}
     silo_scores = {}
     silo_budgets_raw = {}
@@ -1499,7 +1567,8 @@ def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,
                 allocation_method=allocation_method,
                 importance_method=importance_method,
                 budget=per_silo_budget,
-                internal_evaluator=internal_evaluator)
+                internal_evaluator=internal_evaluator,
+                model=downstream_model_instance)
             silo_fis[s] = fi
 
             # Validation score — group-aware within silo, matched-model evaluator.
@@ -1512,8 +1581,8 @@ def fluid_within_kirby_across(rep_dict_train, rep_dict_test, labels,
                     splitter = _SS(n_splits=1, test_size=0.2, random_state=seed + s)
                     tr_v, va_v = next(splitter.split(X_s))
                 eval_factory = get_model_factories(
-                    [internal_evaluator], task_type=silo_task_type,
-                    n_samples=len(tr_v)).get(internal_evaluator)
+                    [resolved_evaluator], task_type=silo_task_type,
+                    n_samples=len(tr_v)).get(resolved_evaluator)
                 if eval_factory is None:
                     silo_scores[s] = 0.5
                 else:

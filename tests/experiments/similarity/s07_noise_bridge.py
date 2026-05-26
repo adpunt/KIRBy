@@ -39,21 +39,26 @@ from experiments.similarity.similarity_helpers import (
 )
 
 
-def _knn_noise_fp_rate(X, labels, ground_truth_cliffs, k=5, standardize=True):
-    """Compute kNN noise detection FP rate against ground-truth cliffs.
+def _knn_noise_fp_rate(X, labels, ground_truth_cliffs, k=5, standardize=True, **kwargs):
+    """Compute kNN noise detection cliff-contamination rate against ground-truth cliffs.
 
     Returns:
-        dict with n_noise_flagged, n_fp (cliffs flagged as noise), fp_rate.
+        dict with n_noise_flagged, n_fp_cliff_in_noise, cliff_contamination_rate.
+        Note: cliff_contamination_rate = |cliffs flagged as noise| / |noise flagged|,
+        i.e. the precision of cliff-as-noise (NOT a classical FPR which would divide
+        by |ground-truth cliffs|).
     """
+    k = kwargs.get('k', k)
+    standardize = kwargs.get('standardize', standardize)
     D = compute_distance_matrix(X, standardize=standardize)
     knn_filter = KNNConsistencyFilter(k=k, precomputed_distances=D)
     noise_flagged = set(knn_filter.identify_noise(X, labels).tolist())
     fp = noise_flagged & ground_truth_cliffs
-    fp_rate = len(fp) / len(noise_flagged) if noise_flagged else 0.0
+    cliff_contamination_rate = len(fp) / len(noise_flagged) if noise_flagged else 0.0
     return {
         'n_noise_flagged': len(noise_flagged),
         'n_fp_cliff_in_noise': len(fp),
-        'fp_rate': fp_rate,
+        'cliff_contamination_rate': cliff_contamination_rate,
     }
 
 
@@ -115,6 +120,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     if not ground_truth_cliffs:
         print("  No ground-truth cliffs found. Skipping FP analysis.")
+        results.setdefault('summary', {
+            'n_ground_truth_cliffs': 0,
+            'best_rep': None,
+            'best_rep_cliff_contamination_rate': float('nan'),
+            'top3_reps': [],
+            'delta_vs_best_rep': float('nan'),
+        })
+        results.setdefault('per_rep_baselines', {})
+        results.setdefault('hybrid_unweighted', {})
+        results.setdefault('hybrid_weighted', {'skipped': 'no_ground_truth_cliffs'})
         return results
 
     # ── Step 2: Get hybrid ──
@@ -127,9 +142,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             speed=search_speed,
             metric=metric_name, task_type=task_type, domain=domain,
             dataset_name=dataset_name, distance=True)
-        weights_flat = flatten_fold_weights(fi) if fi else np.ones(X_hybrid.shape[1])
-        if len(weights_flat) != X_hybrid.shape[1]:
-            weights_flat = np.ones(X_hybrid.shape[1])
+        if fi:
+            weights_flat = flatten_fold_weights(fi)
+            if len(weights_flat) != X_hybrid.shape[1]:
+                weights_flat = None
+        else:
+            weights_flat = None
         top3 = extract_top3_base_reps(search)
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
@@ -147,31 +165,47 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         hybrid_uw = _knn_noise_fp_rate(X_hybrid, labels, ground_truth_cliffs)
         results['hybrid_unweighted'] = hybrid_uw
         print(f"\n  Hybrid (unweighted): "
-              f"FP rate={hybrid_uw['fp_rate']:.3f} "
+              f"cliff contamination={hybrid_uw['cliff_contamination_rate']:.3f} "
               f"({hybrid_uw['n_fp_cliff_in_noise']}/{hybrid_uw['n_noise_flagged']})")
 
-        # Hybrid weighted — standardize first, then apply weights.
-        # Pass standardize=False to avoid re-standardizing after weighting.
-        X_hybrid_w = StandardScaler().fit_transform(X_hybrid) * np.sqrt(
-            np.maximum(weights_flat, 0))
-        hybrid_w = _knn_noise_fp_rate(X_hybrid_w, labels, ground_truth_cliffs,
-                                      standardize=False)
-        results['hybrid_weighted'] = hybrid_w
-        print(f"  Hybrid (weighted):   "
-              f"FP rate={hybrid_w['fp_rate']:.3f} "
-              f"({hybrid_w['n_fp_cliff_in_noise']}/{hybrid_w['n_noise_flagged']})")
+        # Hybrid weighted — only if importance weights are available.
+        # Standardize first, then apply weights; pass standardize=False to avoid
+        # re-standardizing after weighting.
+        if weights_flat is None:
+            results['hybrid_weighted'] = {'skipped': 'no_importance_available'}
+            hybrid_w = None
+            print("  Hybrid (weighted):   skipped (no importance weights available)")
+        else:
+            w_clean = np.nan_to_num(weights_flat, nan=0.0)
+            n_nan = int(np.isnan(weights_flat).sum())
+            n_neg = int((w_clean < 0).sum())
+            if n_nan or n_neg:
+                print(f"  WARN: weights had {n_nan} NaN and {n_neg} negative entries; "
+                      f"clamped to 0.")
+            w_clean = np.maximum(w_clean, 0)
+            X_hybrid_w = StandardScaler().fit_transform(X_hybrid) * np.sqrt(w_clean)
+            hybrid_w = _knn_noise_fp_rate(X_hybrid_w, labels, ground_truth_cliffs,
+                                          standardize=False)
+            results['hybrid_weighted'] = hybrid_w
+            print(f"  Hybrid (weighted):   "
+                  f"cliff contamination={hybrid_w['cliff_contamination_rate']:.3f} "
+                  f"({hybrid_w['n_fp_cliff_in_noise']}/{hybrid_w['n_noise_flagged']})")
+    else:
+        hybrid_uw = None
+        hybrid_w = None
 
-    # ── Step 4: Per-rep baselines — top 3 by lowest FP rate ──
-    print(f"\n  Per-rep baselines (kNN noise FP rate vs ground-truth cliffs):")
+    # ── Step 4: Per-rep baselines — top 3 by lowest cliff contamination rate ──
+    print(f"\n  Per-rep baselines (kNN cliff-as-noise contamination vs ground-truth cliffs):")
     per_rep_results = {}
     for rep_name, X_rep in reps.items():
         rep_fp = _knn_noise_fp_rate(X_rep, labels, ground_truth_cliffs)
         per_rep_results[rep_name] = rep_fp
 
-    # Sort by FP rate (lower is better)
-    sorted_reps = sorted(per_rep_results.items(), key=lambda x: x[1]['fp_rate'])
+    # Sort by cliff contamination rate (lower is better)
+    sorted_reps = sorted(per_rep_results.items(),
+                         key=lambda x: x[1]['cliff_contamination_rate'])
     for rep_name, rep_fp in sorted_reps[:5]:
-        print(f"    {rep_name}: FP rate={rep_fp['fp_rate']:.3f} "
+        print(f"    {rep_name}: cliff contamination={rep_fp['cliff_contamination_rate']:.3f} "
               f"({rep_fp['n_fp_cliff_in_noise']}/{rep_fp['n_noise_flagged']})")
     if len(sorted_reps) > 5:
         print(f"    ... ({len(sorted_reps) - 5} more)")
@@ -184,17 +218,29 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"\n  Summary:")
     print(f"    Ground-truth cliffs: {len(ground_truth_cliffs)}")
     print(f"    Best individual rep: {best_rep_name} "
-          f"(FP rate={best_rep_fp['fp_rate']:.3f})")
+          f"(cliff contamination={best_rep_fp['cliff_contamination_rate']:.3f})")
+    delta_uw = None
+    delta_w = None
     if X_hybrid is not None:
-        delta_uw = hybrid_uw['fp_rate'] - best_rep_fp['fp_rate']
-        print(f"    Hybrid unweighted:  FP rate={hybrid_uw['fp_rate']:.3f} "
+        delta_uw = (hybrid_uw['cliff_contamination_rate']
+                    - best_rep_fp['cliff_contamination_rate'])
+        print(f"    Hybrid unweighted:  cliff contamination="
+              f"{hybrid_uw['cliff_contamination_rate']:.3f} "
               f"(delta vs {best_rep_name}: {delta_uw:+.3f})")
+        if hybrid_w is not None:
+            delta_w = (hybrid_w['cliff_contamination_rate']
+                       - best_rep_fp['cliff_contamination_rate'])
+            print(f"    Hybrid weighted:    cliff contamination="
+                  f"{hybrid_w['cliff_contamination_rate']:.3f} "
+                  f"(delta vs {best_rep_name}: {delta_w:+.3f})")
 
     results['summary'] = {
         'n_ground_truth_cliffs': len(ground_truth_cliffs),
         'best_rep': best_rep_name,
-        'best_rep_fp_rate': best_rep_fp['fp_rate'],
-        'top3_reps': [(name, r['fp_rate']) for name, r in top3],
+        'best_rep_cliff_contamination_rate': best_rep_fp['cliff_contamination_rate'],
+        'top3_reps': [(name, r['cliff_contamination_rate']) for name, r in top3],
+        'delta_vs_best_rep': delta_uw if delta_uw is not None else float('nan'),
+        'delta_vs_best_rep_weighted': delta_w if delta_w is not None else float('nan'),
     }
 
     return results

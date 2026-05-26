@@ -146,7 +146,7 @@ def evaluate_qsar(X, labels, groups, model, n_folds):
 
         ss_res = np.sum((y_val - preds) ** 2)
         ss_tot = np.sum((y_val - y_val.mean()) ** 2)
-        r2_scores.append(1 - ss_res / ss_tot if ss_tot > 0 else 0.0)
+        r2_scores.append(1 - ss_res / ss_tot if ss_tot > 0 else np.nan)
         rmse_scores.append(np.sqrt(np.mean((y_val - preds) ** 2)))
         mae_scores.append(mean_absolute_error(y_val, preds))
 
@@ -160,7 +160,8 @@ def evaluate_qsar(X, labels, groups, model, n_folds):
     return {
         'rmse': {'mean': np.mean(rmse_scores), 'std': np.std(rmse_scores)},
         'mae': {'mean': np.mean(mae_scores), 'std': np.std(mae_scores)},
-        'r2': {'mean': np.mean(r2_scores), 'std': np.std(r2_scores)},
+        'r2': {'mean': np.nanmean(r2_scores) if r2_scores else float('nan'),
+               'std': np.nanstd(r2_scores) if r2_scores else float('nan')},
         'spearman': {'mean': np.mean(spearman_scores), 'std': np.std(spearman_scores)},
         'predictions': all_preds,
     }
@@ -293,7 +294,7 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
     # Augmentation config matches molecular datasets (caco2, logd) in DATASET_REPS:
     # augmentation = ['maccs', 'pharmacophore3d']
     try:
-        from kirby.hybrid import apply_feature_selection
+        from kirby.hybrid import apply_feature_selection, apply_augmentation_selection
         from experiments._shared import (
             resolve_pruning_kwargs, get_best_search_for_downstream)
         AUG_REPS = {'maccs', 'pharmacophore3d'}
@@ -301,12 +302,10 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
         aug_dict = {k: v for k, v in reps.items() if k in AUG_REPS}
         _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
                                        dataset_label=f'chembl_qsar/{target}')
-        aug_cond = 'uncapped' if aug_dict else 'none'
         search, _meta = get_best_search_for_downstream(
             base if base else reps, labels, groups,
             downstream_model='rf', budget=None,
             augmentations=aug_dict if aug_dict else None,
-            augmentation_strategy=aug_cond,
             speed='full', metric='mae',
             task_type='regression',
             dataset_name='chembl_qsar',
@@ -322,10 +321,14 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
         fitted = (search.fitted_results.get('rf')
                   if search is not None else None)
         if fitted is not None:
-            all_reps = {**reps, **(aug_dict or {})}
             fi = {r: {'selected_indices': idx}
                   for r, idx in fitted.selected_indices.items()}
-            reps['kirby_hybrid'] = apply_feature_selection(all_reps, fi)
+            X_hybrid = apply_feature_selection(reps, fi)
+            if fitted.augmentation_info and aug_dict:
+                X_aug = apply_augmentation_selection(aug_dict, fitted.augmentation_info)
+                if X_aug is not None:
+                    X_hybrid = np.hstack([X_hybrid, X_aug])
+            reps['kirby_hybrid'] = X_hybrid
             print(f"  kirby_hybrid: {reps['kirby_hybrid'].shape[1]}D (hybrid)")
     except Exception as e:
         print(f"  Hybrid build failed: {e}")
@@ -461,12 +464,13 @@ def print_analysis(all_results):
                         best_mae = mae
                         best_indiv = rep_name
 
-        # Best AC-MCC for any method
-        best_mcc = max(
-            (m.get('ac', {}).get('ac_mcc', 0)
-             for rd in results.values() for m in rd['models'].values()),
-            default=0
-        )
+        # Best AC-MCC for any method (MCC range [-1, 1]; ignore NaN entries)
+        _mccs = [
+            m.get('ac', {}).get('ac_mcc', float('nan'))
+            for rd in results.values() for m in rd['models'].values()
+        ]
+        _mccs = [v for v in _mccs if not (isinstance(v, float) and np.isnan(v))]
+        best_mcc = max(_mccs) if _mccs else float('nan')
 
         delta = hybrid_mae - best_mae if not np.isnan(hybrid_mae) else float('nan')
         h_s = f"{hybrid_mae:.4f}" if not np.isnan(hybrid_mae) else "—"

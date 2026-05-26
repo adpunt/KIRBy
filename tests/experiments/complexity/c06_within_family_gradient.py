@@ -4,6 +4,15 @@
 Paper: Complexity
 Conclusion: Within-family capacity gradient confirms complexity matching.
 Dependencies: None (standalone).
+
+For each variant, runs find_best_hybrid() with that variant as the sole
+downstream model. The library searches importance methods, allocation methods,
+and budgets to find the variant-optimal hybrid recipe. Optimal budget per
+variant is the budget where val score peaks. Spearman correlation between
+capacity index and optimal budget tests whether capacity and budget are coupled.
+
+Train scores / bias-variance gap are not collected here (find_best_hybrid does
+not return train scores). Moved to a dedicated experiment if/when needed.
 """
 import sys
 import os
@@ -16,31 +25,31 @@ from scipy.stats import spearmanr
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    get_model_family_variants, evaluate_cv_with_train,
+    get_model_family_variants,
     find_best_hybrid, get_domain_metric,
-    extract_top3_base_reps,
-    get_best_search_for_downstream,
     INTERNAL_EVALUATORS,
 )
+from kirby.find_best_hybrid import _resolve_models
+
+
+# Map c06 family labels to canonical names in DEFAULT_MODELS. List-form
+# _resolve_models is the only way to trigger _max_samples + _DOMAIN_MODEL_SKIPS
+# + _DATASET_STRATEGY_SKIPS; the dict form is a passthrough.
+_FAMILY_TO_CANONICAL = {
+    'RF': 'rf', 'Ridge': 'ridge', 'kNN': 'knn', 'MLP': 'mlp',
+    'XGBoost': 'xgboost', 'SVM': 'svm', 'GP': 'gp',
+}
 
 
 def run(data, config, output_dir, dataset_name, families=None):
-    """Exp 6: Vary complexity within each model family to show optimal budget shifts.
-
-    For each model variant, runs find_best_hybrid() with that variant as the
-    sole model. The library searches importance methods, allocation methods, and
-    budgets to find the true best hybrid for that specific model capacity.
-    Then we also collect train R² for bias-variance analysis (Exp 9d).
-    """
+    """Exp 6: vary complexity within each model family."""
     print("\n" + "=" * 70)
     print("EXPERIMENT 6: WITHIN-FAMILY MODEL COMPLEXITY GRADIENT")
     print("=" * 70)
 
     task_type = data.get('task_type')
     if task_type != 'regression':
-        # get_model_family_variants() hardcodes regressor variants (RandomForestRegressor,
-        # Ridge, KNeighborsRegressor, MLPRegressor, XGBRegressor, SVR, GP).
-        # Mirroring c04: gate the whole experiment to regression.
+        # get_model_family_variants() hardcodes regressor variants.
         print(f"  Skipping: c06 is regression-only (task_type={task_type}).")
         return {'error': 'regression_only', 'task_type': task_type}
 
@@ -52,87 +61,132 @@ def run(data, config, output_dir, dataset_name, families=None):
     budgets = config['budgets']
     search_speed = config['search_speed']
     n_folds = config['n_splits']
-    mode = 'intermediary' if config['n_splits'] == 1 else 'full'
+    n_samples = len(labels)
+
+    # Canonical budget filter (matches find_best_hybrid.py:3934).
+    eff_budgets = sorted(b for b in budgets if b <= n_samples)
+    dropped = sorted(set(budgets) - set(eff_budgets))
+    if dropped:
+        print(f"  Dropped budgets > n_samples={n_samples}: {dropped}")
 
     all_families = get_model_family_variants()
     if families:
         all_families = {k: v for k, v in all_families.items() if k in families}
 
-    n_samples = len(labels)
+    # Compute aug_strategy first so we can pass it to the family gate
+    # (matches the strategy each per-variant find_best_hybrid call will use).
+    augs = data.get('augmentations')
+    aug_strategy = 'uncapped' if augs else 'none'
 
-    # Size guards for expensive model families
-    _FAMILY_MAX_SAMPLES = {'GP': 2000, 'SVM': 10000}
-    for fam_name, max_n in _FAMILY_MAX_SAMPLES.items():
-        if fam_name in all_families and n_samples > max_n:
-            print(f"  Skipping {fam_name}: n_samples={n_samples} > {max_n}")
+    # Family-level canonical gate via _resolve_models (LIST form).
+    # Replaces the old hardcoded `_FAMILY_MAX_SAMPLES = {'GP': 2000, 'SVM': 10000}`
+    # which diverged from DEFAULT_MODELS (gp: 1000, svm: 10000) and didn't
+    # inherit domain/dataset skips.
+    for fam_name in list(all_families.keys()):
+        canonical = _FAMILY_TO_CANONICAL.get(fam_name)
+        if canonical is None:
+            continue  # unknown family, leave alone
+        # Pass strategy so _DATASET_STRATEGY_SKIPS / _DOMAIN_STRATEGY_SKIPS
+        # are applied (e.g., 'gp' skipped for flab_thermo_tresanco/uncapped).
+        resolved = _resolve_models(
+            [canonical], task_type='regression', speed=search_speed,
+            n_samples=n_samples, dataset_name=dataset_name,
+            strategy=aug_strategy)
+        if not resolved:
+            print(f"  Skipping {fam_name}: gated by _resolve_models "
+                  f"(canonical={canonical}, n_samples={n_samples}, "
+                  f"strategy={aug_strategy})")
             del all_families[fam_name]
+
+    # Fetch precompute's importance_cache once for the dataset and reuse
+    # across all per-variant find_best_hybrid calls. Skips the per-fold
+    # importance rebuild (lightgbm_gain × n_reps × n_folds) inside each
+    # variant search. Splits align because c06 passes seed=42 + same
+    # n_folds + same task_type as precompute. If precompute SearchResult
+    # is missing/empty, falls back to building importance from scratch
+    # (find_best_hybrid handles `importance_cache=None` as the no-op default).
+    _precompute_importance = None
+    try:
+        from experiments._shared import get_precomputed_search
+        _pc_search = get_precomputed_search(
+            reps, labels, groups,
+            aug_condition='none', augmentations=None,
+            speed=search_speed,
+            task_type='regression', metric=metric_name,
+            dataset_name=dataset_name, tier='general',
+        )
+        _pc_imp = getattr(_pc_search, 'importance_cache', None) or {}
+        if _pc_imp:
+            _precompute_importance = _pc_imp
+            print(f"  Reusing precompute importance_cache: "
+                  f"{len(_precompute_importance)} (fold, method) entries")
+    except Exception as _e:
+        print(f"  Could not load precompute importance_cache: {_e}")
 
     results = {'families': {}, 'search_speed': search_speed}
 
     for fam_name, variants in all_families.items():
-        print(f"\n  Family: {fam_name} ({len(variants)} variants, search_speed={search_speed})")
-        fam_result = {'heatmap': {}, 'optimal_budget': {}, 'train_val_gap': {}}
+        print(f"\n  Family: {fam_name} ({len(variants)} variants, "
+              f"search_speed={search_speed})")
+        fam_result = {'heatmap': {}, 'optimal_budget': {}}
 
         for var_name, var_factory, capacity_idx in variants:
             print(f"\n    Variant: {var_name} (capacity={capacity_idx})")
             fam_result['heatmap'][var_name] = {}
 
-            # Pool helper: for each budget, pick the best (tier, aug_cond)
-            # blueprint discovered with a SHARED proxy evaluator (rf), then
-            # evaluate THIS variant under that blueprint. Variants are
-            # custom models not in INTERNAL_EVALUATORS, so the shared
-            # blueprint pool is the right reference.
-            augs = data.get('augmentations')
+            # Per-variant search: this variant is the SOLE downstream model.
+            # find_best_hybrid searches its full grid (alloc × imp × budget)
+            # against this specific capacity. seed=42 matches precompute so
+            # CV splits align with any reused cache state.
+            try:
+                search = find_best_hybrid(
+                    base_reps=reps,
+                    labels=labels,
+                    groups=groups,
+                    models={var_name: var_factory()},
+                    budgets=eff_budgets,
+                    task_type='regression',
+                    metric=metric_name,
+                    speed=search_speed,
+                    seed=42,
+                    n_folds=n_folds,
+                    cache=True,
+                    dataset_name=f"{dataset_name}__c06_{fam_name}_{var_name}",
+                    tier='c06_variant',
+                    augmentations=augs,
+                    augmentation_strategy=aug_strategy,
+                    verbose=False,
+                    importance_cache=_precompute_importance,
+                )
+            except Exception as e:
+                print(f"      search failed: {e}")
+                fam_result['optimal_budget'][var_name] = {
+                    'budget': None, 'r2': float('nan'),
+                    'capacity_index': capacity_idx,
+                }
+                continue
+
+            per_budget = search.best_by_model_budget.get(var_name, {})
             per_budget_val = {}
-
-            # Extract best score at each budget via the pool helper
-            for budget in budgets:
-                try:
-                    _s, _meta = get_best_search_for_downstream(
-                        reps, labels, groups,
-                        downstream_model='rf', budget=budget,
-                        augmentations=augs, speed=search_speed,
-                        dataset_name=dataset_name,
-                        task_type=data['task_type'], metric=metric_name,
-                    )
-                except Exception as e:
-                    print(f"      pool helper b={budget} failed: {e}")
-                    _meta = None
-                if not _meta:
+            for budget in eff_budgets:
+                best = per_budget.get(budget)
+                if best is None:
                     continue
-                best_at_budget = _meta['best_config']
-                bp = best_at_budget['blueprint']
-                try:
-                    val_r2, val_std, train_r2, train_std, n_feat = evaluate_cv_with_train(
-                        reps, labels, groups, var_factory, n_folds,
-                        allocation_method=bp.allocation_method,
-                        importance_method=bp.importance_method,
-                        budget=budget,
-                        mode=mode,
-                        metric_fn=metric_fn,
-                    )
-                except Exception:
-                    val_r2 = best_at_budget['score_mean']
-                    val_std = best_at_budget['score_std']
-                    train_r2, train_std = float('nan'), float('nan')
-                    n_feat = best_at_budget.get('n_features', 0)
-
+                bp = best['blueprint']
+                val_score = best['score_mean']
+                val_std = best.get('score_std', float('nan'))
+                n_feat = best.get('n_features', 0)
                 fam_result['heatmap'][var_name][budget] = {
-                    'val_r2': val_r2, 'val_std': val_std,
-                    'train_r2': train_r2, 'train_std': train_std,
+                    'val_r2': val_score,
+                    'val_std': val_std,
                     'n_features': n_feat,
                     'importance': bp.importance_method,
                     'allocation': bp.allocation_method,
                 }
-                per_budget_val[budget] = (val_r2, bp)
-                gap = train_r2 - val_r2 if not np.isnan(train_r2) else float('nan')
-                fam_result['train_val_gap'][f"{var_name}_b{budget}"] = gap
-
-                print(f"      b={budget}: {metric_name}={val_r2:.4f}±{val_std:.3f}, "
-                      f"train_{metric_name}={train_r2:.4f}, gap={gap:.3f} "
+                per_budget_val[budget] = (val_score, bp)
+                print(f"      b={budget}: {metric_name}={val_score:.4f}±{val_std:.3f} "
                       f"[{bp.importance_method}/{bp.allocation_method}]")
 
-            # Optimal budget = best per-budget val score for this variant.
             if per_budget_val:
                 cmp_fn = min if lower_is_better else max
                 opt_budget, (opt_val, opt_bp) = cmp_fn(
@@ -148,10 +202,11 @@ def run(data, config, output_dir, dataset_name, families=None):
                       f"[{opt_bp.importance_method}/{opt_bp.allocation_method}]")
             else:
                 fam_result['optimal_budget'][var_name] = {
-                    'budget': None, 'r2': float('nan'), 'capacity_index': capacity_idx,
+                    'budget': None, 'r2': float('nan'),
+                    'capacity_index': capacity_idx,
                 }
 
-        # Correlation: capacity_index vs optimal_budget
+        # Correlation: capacity_index vs optimal_budget within family.
         capacities = []
         opt_budgets = []
         for var_name, info in fam_result['optimal_budget'].items():
@@ -161,21 +216,25 @@ def run(data, config, output_dir, dataset_name, families=None):
 
         if len(capacities) >= 3:
             rho, pval = spearmanr(capacities, opt_budgets)
-            fam_result['capacity_budget_correlation'] = {'rho': float(rho), 'p': float(pval)}
-            print(f"\n  >> {fam_name}: capacity vs optimal_budget: rho={rho:.3f}, p={pval:.3f}")
+            fam_result['capacity_budget_correlation'] = {
+                'rho': float(rho), 'p': float(pval),
+            }
+            print(f"\n  >> {fam_name}: capacity vs optimal_budget: "
+                  f"rho={rho:.3f}, p={pval:.3f}")
         else:
             fam_result['capacity_budget_correlation'] = None
 
         results['families'][fam_name] = fam_result
 
-    # Summary across all families
+    # Summary across all families.
     print("\n  SUMMARY: optimal budget by variant")
     for fam_name, fam_result in results['families'].items():
         for var_name, info in fam_result['optimal_budget'].items():
             b = info.get('budget', '?')
             r2 = info.get('r2', float('nan'))
             imp = info.get('importance', '?')
-            print(f"    {fam_name}/{var_name}: optimal_budget={b}, {metric_name}={r2:.4f} [{imp}]")
+            print(f"    {fam_name}/{var_name}: optimal_budget={b}, "
+                  f"{metric_name}={r2:.4f} [{imp}]")
 
     return results
 
@@ -184,7 +243,7 @@ if __name__ == '__main__':
     parser = create_experiment_parser('C06: Within-Family Complexity Gradient',
                                      has_delta=True, has_augment=True)
     parser.add_argument('--families', type=str, nargs='+', default=None,
-                        help='Model families to test (RF, Ridge, kNN, MLP, XGBoost)')
+                        help='Model families to test (RF, Ridge, kNN, MLP, XGBoost, SVM, GP)')
     args = parser.parse_args()
     config = get_config(args)
     data = load_data(args.dataset, args.reps,

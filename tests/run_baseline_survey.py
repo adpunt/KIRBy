@@ -621,14 +621,21 @@ def _filter_high_dim_per_fold(X_train, X_val, y_train, task_type):
 
 
 def evaluate_rep(X, labels, groups, model, n_folds, task_type,
-                 prebuilt_splits=None):
-    """Evaluate one (rep, model) pair via CV. Returns (mean_metrics, std_metrics)."""
+                 prebuilt_splits=None, also_return_predictions=False):
+    """Evaluate one (rep, model) pair via CV. Returns (mean_metrics, std_metrics).
+
+    If ``also_return_predictions=True``, returns
+    (mean_metrics, std_metrics, fold_predictions) where ``fold_predictions``
+    is a list of (val_idx, y_true, y_pred) per fold (in split order). Lets
+    callers compute extra metrics (e.g. top-K recall) without retraining.
+    """
     if prebuilt_splits is not None:
         splits = prebuilt_splits
     else:
         cv, cv_kwargs = _make_cv(groups, n_folds, labels)
         splits = list(cv.split(X, labels, **cv_kwargs))
     fold_metrics = []
+    fold_predictions = []
 
     for train_idx, val_idx in splits:
         X_train, X_val = X[train_idx], X[val_idx]
@@ -639,19 +646,26 @@ def evaluate_rep(X, labels, groups, model, n_folds, task_type,
         try:
             m = clone(model)
             m.fit(X_train, labels[train_idx])
-            fold_metrics.append(
-                _score(labels[val_idx], m.predict(X_val), task_type))
+            preds = m.predict(X_val)
+            fold_metrics.append(_score(labels[val_idx], preds, task_type))
+            if also_return_predictions:
+                fold_predictions.append(
+                    (np.asarray(val_idx),
+                     np.asarray(labels[val_idx]),
+                     np.asarray(preds)))
         except Exception:
             continue
 
     if not fold_metrics:
-        return {}, {}
+        return ({}, {}, []) if also_return_predictions else ({}, {})
     # Aggregate across folds: mean and std for each metric key
     all_keys = fold_metrics[0].keys()
     mean_m = {k: float(np.mean([f[k] for f in fold_metrics if k in f]))
               for k in all_keys}
     std_m = {k: float(np.std([f[k] for f in fold_metrics if k in f]))
              for k in all_keys}
+    if also_return_predictions:
+        return mean_m, std_m, fold_predictions
     return mean_m, std_m
 
 

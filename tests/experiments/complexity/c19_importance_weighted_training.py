@@ -75,7 +75,7 @@ def _compute_reliability_scores(X, y, importance_weights, k=10):
 # MODELS THAT SUPPORT SAMPLE WEIGHT
 # =========================================================================
 
-WEIGHTED_MODELS = {'rf', 'lightgbm', 'ridge', 'xgboost'}
+WEIGHTED_MODELS = {'rf', 'lightgbm', 'xgboost'}
 
 
 # =========================================================================
@@ -99,7 +99,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     model_names = [m for m in config['models'] if m in WEIGHTED_MODELS]
     if not model_names:
-        model_names = ['rf', 'ridge']
+        model_names = ['rf']
     models = get_model_factories(model_names, task_type=task_type,
                                  n_samples=n_samples)
 
