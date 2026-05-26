@@ -25,7 +25,7 @@ from experiments._shared import (
     save_experiment_results, convert_numpy,
     get_model_factories, evaluate_single_rep_cv,
     compute_intrinsic_dimensionality, estimate_mutual_information_knn,
-    compute_effective_rank, get_domain_metric,
+    compute_effective_rank, get_domain_metric, parse_rep_args,
 )
 
 
@@ -121,7 +121,8 @@ if __name__ == '__main__':
     print(f"Dataset: {args.dataset}")
     print(f"Reps: {args.reps}")
 
-    data = load_data(args.dataset, args.reps,
+    rep_preset, rep_names = parse_rep_args(args)
+    data = load_data(args.dataset, rep_preset, rep_names=rep_names,
                      delta=getattr(args, 'delta', False),
                      augment=getattr(args, 'augment', False))
     results = run(data, config, args.output, args.dataset)

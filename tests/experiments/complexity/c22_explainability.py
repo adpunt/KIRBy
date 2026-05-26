@@ -122,6 +122,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         best_model_name = None
         best_score = -np.inf if not lower_is_better else np.inf
 
+        best_model_obj = None
         for model_name, model_factory in models.items():
             m = model_factory()
             m.fit(X_train_s, y_train)
@@ -133,13 +134,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             if is_better:
                 best_score = score
                 best_model_name = model_name
+                best_model_obj = m  # retain the FITTED model for SHAP
 
         # SHAP on the best model for this fold
         shap_info = None
         try:
             import shap
-            best_model = models[best_model_name]()  # Re-train best model type
-            best_model.fit(X_train_s, y_train)
+            # Use the same fitted instance the score was selected from
+            # (re-training a fresh factory would discard the scored model and
+            # introduce stochastic drift between scored model and explanation).
+            best_model = best_model_obj
 
             # Use TreeExplainer for tree models, KernelExplainer otherwise
             if best_model_name in ('rf', 'xgboost', 'lightgbm', 'catboost'):
@@ -190,9 +194,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Average SHAP values across folds (if available)
     avg_shap = None
     if all_shap_values:
-        # All folds should have same n_features; take element-wise mean
-        min_len = min(len(sv) for sv in all_shap_values)
-        avg_shap = np.mean([sv[:min_len] for sv in all_shap_values], axis=0)
+        # All folds should have same n_features. If they diverge, warn loudly
+        # and skip rather than silently truncating (which would misalign SHAP
+        # values with the last fold's feature indices).
+        feature_counts = {len(sv) for sv in all_shap_values}
+        if len(feature_counts) == 1:
+            avg_shap = np.mean(all_shap_values, axis=0)
+        else:
+            print(f"  WARNING: SHAP arrays have differing lengths "
+                  f"{sorted(feature_counts)} across folds — skipping aggregation "
+                  f"to avoid misaligned feature indices.")
+            avg_shap = None
+        # If feature_info has an augmentation_info block, warn that the by-rep
+        # SHAP breakdown does not currently account for augmentation features.
+        if feature_info.get('augmentation_info'):
+            print("  WARNING: feature_info contains augmentation_info — "
+                  "aggregate_importance_by_rep / explain_hybrid ignore these "
+                  "columns, so the per-rep SHAP breakdown is incomplete.")
 
     # ── Run explain_hybrid ──
     smiles = data.get('smiles')

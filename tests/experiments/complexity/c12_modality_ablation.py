@@ -75,6 +75,9 @@ MODALITY_GROUPS = {
         'gene_chromosome_arm',
         # Foundation model embeddings
         'gene_geneformer',
+        'gene_geneformer_v2',  # added 2026-05-25 — was silently absent from
+                                # the ablation despite being the top expression
+                                # rep on tcga_luad_vs_lusc / tcga_brca_pam50.
         'gene_bulkrnabert',
         'gene_scfoundation',
         'gene_scgpt',

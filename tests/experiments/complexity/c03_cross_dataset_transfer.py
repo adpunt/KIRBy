@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
-"""C03: Blueprint transfer across datasets.
+"""C03: Cross-dataset comparison of optimal hybrid configurations.
 
 Paper: Complexity
-Conclusion: Optimal configs transfer across datasets (context-dependent).
+Conclusion: Optimal allocation/importance/budget choices CO-VARY across
+datasets in interpretable ways (correlations with complexity metrics).
+This does NOT directly demonstrate transfer — see c24 for true source→target
+blueprint transfer.  c03 finds the native-optimal configuration on each
+dataset and analyses cross-dataset similarities (which configs cluster
+together; which complexity dimensions predict optimal budget).
+
 Dependencies: c02 (reads JSON from multiple datasets, or runs own searches).
 
 Loads multiple datasets, computes complexity profiles (Lorena et al. 2018),
-runs find_best_hybrid on each, and compares optimal configurations.
-Includes novel model transfer (SVR, ElasticNet), budget variance decomposition,
-and correlation of complexity metrics with optimal budget.
+runs find_best_hybrid on each, and compares optimal configurations.  Also
+evaluates a small set of novel regression models (SVR, ElasticNet) on the
+native-optimal hybrid for regression datasets only (skipped for classification
+— SVR/ElasticNet produce meaningless AUC otherwise).  Includes budget
+variance decomposition and complexity↔budget correlation.
 """
 import sys
 import os
@@ -109,32 +117,53 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
             augs = data.get('augmentations')
             if best:
                 bp = best['blueprint']
-                novel_results = {}
-                for novel_name, novel_model in novel_models.items():
+                # Guard: novel models (SVR, ElasticNet) are regressors only;
+                # silently fitting them on classification labels produces
+                # meaningless AUC scores or hard crashes that the exception
+                # handler used to swallow. Skip novel-model eval for clf tasks.
+                if data['task_type'] == 'classification':
+                    novel_results = {'_skipped': 'classification task; novel models are regressors'}
+                    bp_eval = None
+                else:
+                    novel_results = {}
+                    bp_eval = bp
+                # Trust meta['aug_condition'] (the actual pool-winning condition)
+                # not bp.augmentation_strategy (can be stale per the 2026-04-21
+                # cache-collision bug).
+                aug_strat = meta.get('aug_condition', 'none') if meta else 'none'
+                for novel_name, novel_model in (novel_results.items() if False else novel_models.items()):
+                    if bp_eval is None:
+                        break
                     try:
                         sample_X = next(iter(data['reps'].values()))
                         novel_scores = []
 
                         for train_idx, val_idx in cv_split(
                                 data['groups'], n_folds, sample_X, data['labels'], mode=mode):
-                            train_reps = {k: v[train_idx] for k, v in data['reps'].items()}
-                            val_reps = {k: v[val_idx] for k, v in data['reps'].items()}
+                            # Restrict to the reps the blueprint actually
+                            # selected — create_hybrid otherwise re-scores all
+                            # reps and may not pick bp.reps for top_k alloc.
+                            _bp_reps = set(getattr(bp_eval, 'reps', []) or data['reps'].keys())
+                            train_reps = {k: v[train_idx] for k, v in data['reps'].items() if k in _bp_reps}
+                            val_reps = {k: v[val_idx] for k, v in data['reps'].items() if k in _bp_reps}
                             y_train = data['labels'][train_idx]
                             y_val = data['labels'][val_idx]
 
-                            train_augs = {k: v[train_idx] for k, v in augs.items()} if augs else None
+                            train_augs = (
+                                {k: v[train_idx] for k, v in augs.items()}
+                                if augs and aug_strat != 'none' else None)
                             X_train, fi = create_hybrid(
                                 train_reps, y_train,
-                                allocation_method=bp.allocation_method,
-                                budget=bp.budget,
-                                importance_method=bp.importance_method,
-                                internal_evaluator=bp.internal_evaluator,
+                                allocation_method=bp_eval.allocation_method,
+                                budget=bp_eval.budget,
+                                importance_method=bp_eval.importance_method,
+                                internal_evaluator=bp_eval.internal_evaluator,
                                 augmentations=train_augs,
-                                augmentation_strategy=bp.augmentation_strategy,
+                                augmentation_strategy=aug_strat,
                             )
                             X_val = apply_feature_selection(val_reps, fi)
                             aug_info = fi.get('augmentation_info')
-                            if aug_info and augs:
+                            if aug_info and augs and aug_strat != 'none':
                                 val_augs = {k: v[val_idx] for k, v in augs.items()}
                                 X_aug_val = apply_augmentation_selection(val_augs, aug_info)
                                 if X_aug_val is not None:

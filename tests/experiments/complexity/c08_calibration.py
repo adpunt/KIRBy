@@ -24,6 +24,7 @@ from experiments._shared import (
     INTERNAL_EVALUATORS, SCREENING_BUDGETS, FULL_BUDGETS,
 )
 from kirby.hybrid import apply_augmentation_selection
+from kirby.find_best_hybrid import _predict_for_metric
 
 
 def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir=None):
@@ -66,14 +67,18 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
             print(f"  No Exp 2 results found at {c02_results_dir}")
 
     # Discover optimal config via find_best_hybrid or Exp 2 results
+    augs = data.get('augmentations')
     optimal_model_factory = None
     optimal_budget = 100
     optimal_alloc = 'greedy'
     optimal_imp = 'treeshap'
-    optimal_internal_eval = 'ridge'
-    optimal_aug_strategy = 'uncapped'
+    # 'match' is the canonical Blueprint default (downstream==evaluator);
+    # 'ridge' would force ridge as internal evaluator regardless of task and
+    # would not match precomputed cache keys.
+    optimal_internal_eval = 'match'
+    # Match the actual augmentation presence (collision-safe default).
+    optimal_aug_strategy = 'uncapped' if augs else 'none'
     optimal_desc = 'RF at budget=100 (default)'
-    augs = data.get('augmentations')
 
     if exp2_results and exp2_results.get('best_by_model'):
         # Use best config from Exp 2
@@ -162,11 +167,15 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
         mismatched_factory = lambda: Ridge(alpha=0.01)
         mismatched_desc = 'Ridge at full dim (low-capacity model, high-dim input)'
 
+    # Underfit budget scales with total_dim so tiny rep sets aren't compared
+    # to an "underfit" condition that happens to be essentially the same as
+    # "overfit" (e.g. total_dim=40 → budget=25 is not really an underfit).
+    underfit_budget = min(25, max(5, total_dim // 4))
     condition_specs = {
         'optimal': (optimal_model_factory, optimal_budget, optimal_alloc, optimal_imp,
                     optimal_desc),
-        'underfit': (optimal_model_factory, 25, optimal_alloc, optimal_imp,
-                     f'Same model at budget=25 (too compressed)'),
+        'underfit': (optimal_model_factory, underfit_budget, optimal_alloc, optimal_imp,
+                     f'Same model at budget={underfit_budget} (too compressed)'),
         'overfit': (optimal_model_factory, total_dim, optimal_alloc, optimal_imp,
                     f'Same model at full dim={total_dim} (too many features)'),
         'mismatched': (mismatched_factory, total_dim, 'greedy', 'treeshap',
@@ -220,9 +229,6 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
             model.fit(X_train_s, y_train)
 
             if is_classification:
-                # Classification calibration via Platt scaling / prediction sets
-                val_score = metric_fn(y_val, model.predict(X_val_s))
-
                 # Conformal classification: split train into proper-train + cal
                 n_train = len(y_train)
                 n_cal = max(20, int(n_train * 0.2))
@@ -235,6 +241,13 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
 
                 model_conf = model_factory()
                 model_conf.fit(X_ptrain, y_ptrain)
+
+                # Compute val_score from model_conf so the performance number
+                # and the calibration metrics come from the SAME model (was a
+                # full-train vs proper-train mismatch).  For AUC metrics, use
+                # predict_proba (hard labels would give a meaningless AUROC).
+                _from_kfh = _predict_for_metric(model_conf, X_val_s, metric_fn)
+                val_score = float(metric_fn(y_val, _from_kfh))
 
                 # Conformal classification: nonconformity = 1 - P(true class)
                 if hasattr(model_conf, 'predict_proba'):
@@ -279,7 +292,8 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                     picp = float(np.mean(covered))
                     avg_set_size = float(np.mean([len(ps) for ps in pred_sets]))
                     n_classes = len(classes)
-                    # Sharpness: avg set size / n_classes (1/n_classes = trivial, 1 = perfect)
+                    # Sharpness: avg set size / n_classes (≈ 1/n_classes ⇒ sharp/decisive;
+                    # 1 ⇒ trivial full-prediction-set). LOWER is better.
                     sharpness_ratio = avg_set_size / n_classes if n_classes > 0 else float('nan')
                     cal_error = abs(picp - (1 - alpha))
 

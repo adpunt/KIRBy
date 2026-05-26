@@ -172,7 +172,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         best_single = single_rep_results[best_single_rep]
         print(f"    Best single: {best_single_rep} "
-              f"R2={best_single['score_mean']:.4f} dim={best_single['dim']}")
+              f"{metric_name}={best_single['score_mean']:.4f} dim={best_single['dim']}")
 
         results.append({
             'model': model_name,
@@ -299,7 +299,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             hyb_r2 = float(np.mean(fold_hybrid_scores))
             budget_label = 'full' if budget == total_dim else str(budget)
-            print(f"    Hybrid b={budget_label:<5}: R2={hyb_r2:.4f} "
+            print(f"    Hybrid b={budget_label:<5}: {metric_name}={hyb_r2:.4f} "
                   f"dim={last_n_features}")
 
             results.append({
@@ -328,7 +328,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             continue
 
         print(f"\n  {model_name}:")
-        header = (f"    {'Method':<22} {'R2':>8} {'Dim':>6} "
+        header = (f"    {'Method':<22} {metric_name:>8} {'Dim':>6} "
                   f"{'Models':>7} {'Fit(s)':>8} {'Pred(s)':>8}")
         print(header)
         print("    " + "-" * 62)

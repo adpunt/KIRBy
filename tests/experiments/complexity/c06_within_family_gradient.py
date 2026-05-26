@@ -110,7 +110,10 @@ def run(data, config, output_dir, dataset_name, families=None):
         from experiments._shared import get_precomputed_search
         _pc_search = get_precomputed_search(
             reps, labels, groups,
-            aug_condition='none', augmentations=None,
+            # Fetch the cache that matches the actual augmentation condition
+            # we'll be using (otherwise we may fall through to a from-scratch
+            # find_best_hybrid run when the 'none' cache doesn't exist).
+            aug_condition=aug_strategy, augmentations=augs,
             speed=search_speed,
             task_type='regression', metric=metric_name,
             dataset_name=dataset_name, tier='general',
@@ -151,10 +154,15 @@ def run(data, config, output_dir, dataset_name, families=None):
                     seed=42,
                     n_folds=n_folds,
                     cache=True,
-                    dataset_name=f"{dataset_name}__c06_{fam_name}_{var_name}",
+                    # Use real dataset_name + condition_suffix so the
+                    # _DATASET_STRATEGY_SKIPS lookup still matches (the
+                    # mangled dataset_name would never hit those entries).
+                    dataset_name=dataset_name,
+                    condition_suffix=f"c06_{fam_name}_{var_name}",
                     tier='c06_variant',
                     augmentations=augs,
                     augmentation_strategy=aug_strategy,
+                    internal_evaluators=INTERNAL_EVALUATORS,
                     verbose=False,
                     importance_cache=_precompute_importance,
                 )
@@ -168,7 +176,9 @@ def run(data, config, output_dir, dataset_name, families=None):
 
             per_budget = search.best_by_model_budget.get(var_name, {})
             per_budget_val = {}
-            for budget in eff_budgets:
+            # Iterate keys actually present (find_best_hybrid may append n_samples
+            # as an at-n boundary point even when it wasn't in eff_budgets).
+            for budget in sorted(per_budget.keys()):
                 best = per_budget.get(budget)
                 if best is None:
                     continue

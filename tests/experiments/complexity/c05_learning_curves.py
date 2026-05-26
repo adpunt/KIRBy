@@ -118,9 +118,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         last_search = None
         full_augs = data.get('augmentations')
+        # Pre-compute group-level pool so subsampling preserves scaffold
+        # integrity (subsampling individual rows shatters scaffold groups
+        # across train/val of the same fold).
+        _unique_groups = np.unique(groups)
+        _group_to_idx = {g: np.where(groups == g)[0] for g in _unique_groups}
         for seed in range(n_repeats):
-            np.random.seed(seed)
-            idx = np.random.choice(n_total, n_sub, replace=False)
+            rng = np.random.RandomState(seed)
+            # Draw whole scaffold groups until we hit ~n_sub samples (the
+            # exact size is approximate; group sizes vary).
+            shuffled_groups = rng.permutation(_unique_groups)
+            picked, picked_count = [], 0
+            for g in shuffled_groups:
+                gi = _group_to_idx[g]
+                if picked_count + len(gi) > n_sub and picked:
+                    break
+                picked.extend(gi.tolist())
+                picked_count += len(gi)
+                if picked_count >= n_sub:
+                    break
+            idx = np.array(sorted(picked))
             sub_reps = {k: v[idx] for k, v in reps.items()}
             sub_labels = labels[idx]
             sub_groups = groups[idx]
@@ -129,6 +146,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             if n_unique_groups < 2:
                 continue
+
+            # Re-resolve model factories at this subsample size so the
+            # _max_samples gate fires consistently — SVM is excluded forever
+            # if we use the full-N factory dict on every subsample.
+            sub_models = get_model_factories(
+                config['models'], task_type=data['task_type'],
+                n_samples=len(idx))
 
             sub_folds = min(n_folds, n_unique_groups)
 
@@ -167,8 +191,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             except Exception as e:
                 print(f"    seed={seed}: find_best_hybrid failed - {e}")
 
-            # Baselines per model
-            for model_name, model_factory in models.items():
+            # Baselines per model (use sub-sample resolved factories so SVM/GP
+            # gates apply consistently with the hybrid search's n_samples=n_sub).
+            for model_name, model_factory in sub_models.items():
                 # Best single rep
                 best_single = np.inf if lower_is_better else -np.inf
                 for rep_name, X in sub_reps.items():

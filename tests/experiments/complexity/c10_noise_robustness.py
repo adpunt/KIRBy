@@ -122,6 +122,7 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
     # the pool helper picks the best (tier, aug_condition) cache file for
     # downstream_model='rf', so different budgets can come from different files.
     blueprints = {}
+    aug_conditions = {}
     try:
         for budget in budgets:
             search, meta = get_best_search_for_downstream(
@@ -134,6 +135,14 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
             )
             if meta:
                 blueprints[budget] = meta['best_config']['blueprint']
+                # Track the actual aug_condition that produced this blueprint
+                # (the blueprint's own augmentation_strategy field can be stale
+                # due to the 2026-04-21 cache-collision bug).
+                aug_conditions[budget] = meta.get('aug_condition', 'none')
+                bp_model = meta.get('best_config', {}).get('model')
+                if bp_model and bp_model != 'rf':
+                    print(f"  WARNING: budget={budget} blueprint came from "
+                          f"cross-model fallback ({bp_model}, not rf)")
                 print(f"  Blueprint for budget={budget} "
                       f"(pool winner: {meta['tier']}/{meta['aug_condition']}): "
                       f"{blueprints[budget].allocation_method}, "
@@ -167,17 +176,23 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
         rep_results = {}
 
         for strategy in strategies:
-            noise_injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
             sigma_scores = {}
 
             for sigma in sigmas:
                 fold_scores = []
-                for train_idx, val_idx in _cv_split(groups, n_folds, sample_X, labels):
+                for fold_idx, (train_idx, val_idx) in enumerate(
+                        _cv_split(groups, n_folds, sample_X, labels)):
                     y_train = labels[train_idx].copy()
                     y_val = labels[val_idx]
 
-                    # Inject noise into training labels only
+                    # Inject noise into training labels only. Re-instantiate
+                    # the injector per (sigma, fold) with a deterministic seed
+                    # so the noise realization is i.i.d. across folds and
+                    # repeatable across reps.
                     if sigma > 0:
+                        _seed = 42 + fold_idx * 100 + int(sigma * 1000)
+                        noise_injector = NoiseInjectorRegression(
+                            strategy=strategy, random_state=_seed)
                         y_train = noise_injector.inject(y_train, sigma=sigma)
 
                     scaler = StandardScaler()
@@ -231,16 +246,19 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
         budget_results = {}
 
         for strategy in strategies:
-            noise_injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
             sigma_scores = {}
 
             for sigma in sigmas:
                 fold_scores = []
-                for train_idx, val_idx in _cv_split(groups, n_folds, sample_X, labels):
+                for fold_idx, (train_idx, val_idx) in enumerate(
+                        _cv_split(groups, n_folds, sample_X, labels)):
                     y_train = labels[train_idx].copy()
                     y_val = labels[val_idx]
 
                     if sigma > 0:
+                        _seed = 42 + fold_idx * 100 + int(sigma * 1000)
+                        noise_injector = NoiseInjectorRegression(
+                            strategy=strategy, random_state=_seed)
                         y_train = noise_injector.inject(y_train, sigma=sigma)
 
                     train_reps = {k: v[train_idx] for k, v in reps.items()}
@@ -250,14 +268,15 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
                     val_augs = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
                     try:
                         bp = blueprints[budget]
+                        _aug_strat = aug_conditions.get(budget, bp.augmentation_strategy)
                         X_train, fi = create_hybrid(
                             train_reps, y_train,
                             allocation_method=bp.allocation_method,
-                            budget=bp.budget,
+                            budget=budget,  # pin to sweep axis (not bp.budget)
                             importance_method=bp.importance_method,
                             internal_evaluator=bp.internal_evaluator,
                             augmentations=train_augs,
-                            augmentation_strategy=bp.augmentation_strategy,
+                            augmentation_strategy=_aug_strat,
                         )
                         X_val = apply_feature_selection(val_reps, fi)
                         aug_info = fi.get('augmentation_info', {})
@@ -337,28 +356,33 @@ def run(data, config, output_dir, dataset_name, sigmas=None, strategies=None):
     print(f"    Using budget={budget_for_stability}")
 
     for strategy in strategies[:1]:  # just legacy for feature stability (expensive)
-        noise_injector = NoiseInjectorRegression(strategy=strategy, random_state=42)
         features_by_sigma = {}
 
         for sigma in sigmas:
             fold_features = []
-            for train_idx, val_idx in _cv_split(groups, n_folds, sample_X, labels):
+            for fold_idx, (train_idx, val_idx) in enumerate(
+                    _cv_split(groups, n_folds, sample_X, labels)):
                 y_train = labels[train_idx].copy()
                 if sigma > 0:
+                    _seed = 42 + fold_idx * 100 + int(sigma * 1000)
+                    noise_injector = NoiseInjectorRegression(
+                        strategy=strategy, random_state=_seed)
                     y_train = noise_injector.inject(y_train, sigma=sigma)
 
                 train_reps = {k: v[train_idx] for k, v in reps.items()}
                 train_augs_stab = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
                 try:
                     bp_stab = blueprints[budget_for_stability]
+                    _aug_strat_stab = aug_conditions.get(
+                        budget_for_stability, bp_stab.augmentation_strategy)
                     _, fi = create_hybrid(
                         train_reps, y_train,
                         allocation_method=bp_stab.allocation_method,
-                        budget=bp_stab.budget,
+                        budget=budget_for_stability,
                         importance_method=bp_stab.importance_method,
                         internal_evaluator=bp_stab.internal_evaluator,
                         augmentations=train_augs_stab,
-                        augmentation_strategy=bp_stab.augmentation_strategy,
+                        augmentation_strategy=_aug_strat_stab,
                     )
                     # Collect selected feature identifiers: (rep_name, feature_idx) tuples
                     selected = set()

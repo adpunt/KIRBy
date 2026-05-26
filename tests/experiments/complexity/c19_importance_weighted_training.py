@@ -39,11 +39,18 @@ from experiments._shared import get_fitted_hybrid, get_fitted_pool_hybrid, cap_d
 # =========================================================================
 
 def _compute_importance_weights(X, y, method='lightgbm_gain'):
-    """Compute normalised sqrt-importance weights for features."""
+    """Compute normalised sqrt-importance weights for features.
+
+    Normalised to MEAN ≈ 1 (not sum=1) so that multiplying StandardScaler
+    columns by w differentially rescales high-importance features instead of
+    uniformly crushing the whole feature space toward zero.  The sum=1
+    normalisation was the same no-op bug we already fixed in n12.
+    """
     imp_dict = compute_feature_importance({'_features': X}, y, method=method)
     imp = imp_dict['_features']
     w = np.sqrt(np.maximum(imp, 0))
     w = w / (w.sum() + 1e-10)
+    w = w * len(w)  # mean-1 normalisation
     return w
 
 
@@ -191,11 +198,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         fit_kwargs['sample_weight'] = reliability
 
                     elif cond == 'combined':
-                        X_tr_s = X_tr_s * imp_weights
-                        X_va_s = X_va_s * imp_weights
+                        # Compute reliability on the unweighted (standardized)
+                        # space FIRST — otherwise we'd pass already-weighted X
+                        # to _compute_reliability_scores which would multiply
+                        # by imp_weights a second time (kNN in X*w^2 space).
                         reliability = _compute_reliability_scores(
                             X_tr_s, y_train, imp_weights, k=10)
                         fit_kwargs['sample_weight'] = reliability
+                        X_tr_s = X_tr_s * imp_weights
+                        X_va_s = X_va_s * imp_weights
 
                     elif cond == 'importance_pruned':
                         mask = imp_weights >= np.median(imp_weights)
@@ -208,17 +219,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         model = model_factory()
                         model.fit(X_tr_s, y_train, **fit_kwargs)
                         fold_scores.append(metric_fn(y_val, model.predict(X_va_s)))
-                    except Exception:
-                        # Some models don't support sample_weight
+                    except TypeError:
+                        # Model doesn't accept sample_weight kwarg.  Only fall
+                        # back for this specific case — broader except would
+                        # silently mask real bugs (numerical instability, etc.).
                         if 'sample_weight' in fit_kwargs:
-                            try:
-                                model = model_factory()
-                                model.fit(X_tr_s, y_train)
-                                fold_scores.append(metric_fn(y_val, model.predict(X_va_s)))
-                            except Exception:
-                                continue
+                            model = model_factory()
+                            model.fit(X_tr_s, y_train)
+                            fold_scores.append(metric_fn(y_val, model.predict(X_va_s)))
                         else:
-                            continue
+                            raise
 
                 score = float(np.mean(fold_scores)) if fold_scores else float('nan')
                 model_results[cond] = score
