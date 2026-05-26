@@ -2066,7 +2066,8 @@ def flatten_fold_weights(feat_info) -> np.ndarray:
 
 
 def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
-                      augmentations_train=None, augmentations_val=None):
+                      augmentations_train=None, augmentations_val=None,
+                      budget_override=None):
     """Per-fold hybrid construction using a search blueprint.
 
     Properly passes internal_evaluator and augmentations from the blueprint,
@@ -2079,16 +2080,22 @@ def build_fold_hybrid(train_reps, val_reps, y_train, blueprint,
         blueprint: Blueprint from search result (e.g. best_by_model[model]['blueprint']).
         augmentations_train: {aug_name: X_train} sliced augmentation reps, or None.
         augmentations_val: {aug_name: X_val} sliced augmentation reps, or None.
+        budget_override: If set, apply the blueprint's recipe at this budget
+            instead of `blueprint.budget`. Used by c15's fine-grained sweep
+            (double-descent detection at non-canonical budgets like 75, 150,
+            300, 750, etc.) where a single fixed recipe is applied across
+            many budgets to isolate budget as the only variable.
 
     Returns:
         (X_tr_h, X_va_h, feat_info)
     """
     from kirby.hybrid import apply_augmentation_selection
 
+    _budget = budget_override if budget_override is not None else blueprint.budget
     X_tr_h, feat_info = create_hybrid(
         train_reps, y_train,
         allocation_method=blueprint.allocation_method,
-        budget=blueprint.budget,
+        budget=_budget,
         importance_method=blueprint.importance_method,
         internal_evaluator=blueprint.internal_evaluator,
         augmentations=augmentations_train,
@@ -2436,6 +2443,18 @@ def get_precomputed_search(reps, labels, groups,
     Returns:
         SearchResult from find_best_hybrid.
     """
+    # Guard against kwargs leakage: aug_condition drives augmentation_strategy
+    # per pool iteration. If a caller forwards augmentation_strategy via
+    # **kwargs, it would silently override the per-iteration value below.
+    if 'augmentation_strategy' in kwargs:
+        import warnings as _warnings
+        _warnings.warn(
+            "augmentation_strategy passed via kwargs is ignored; "
+            "get_precomputed_search sets it per aug_condition iteration",
+            stacklevel=2,
+        )
+        kwargs = {k: v for k, v in kwargs.items() if k != 'augmentation_strategy'}
+
     # Fast path: return from in-memory precomputed results
     if precomputed is not None:
         result = precomputed.get(aug_condition)
@@ -2622,6 +2641,18 @@ def get_best_search_for_downstream(
             "get_best_search_for_downstream requires dataset_name= "
             "(cache files are dataset-keyed)"
         )
+
+    # Guard against kwargs leakage (same as get_precomputed_search): the pool
+    # below iterates aug conditions and we must not let a caller-supplied
+    # augmentation_strategy override the per-iteration value via **extra.
+    if 'augmentation_strategy' in kwargs:
+        import warnings as _warnings
+        _warnings.warn(
+            "augmentation_strategy passed via kwargs is ignored; "
+            "get_best_search_for_downstream sets it per pool iteration",
+            stacklevel=2,
+        )
+        kwargs = {k: v for k, v in kwargs.items() if k != 'augmentation_strategy'}
 
     has_augs = bool(augmentations)
 

@@ -40,6 +40,12 @@ NOISE_TYPES = ['gaussian', 'uniform', 'multiplicative', 'heavy_tailed', 'partial
 STRENGTHS = [0.1, 0.3, 0.6]
 PARTIAL_FRACTIONS = [0.1, 0.3, 0.5]  # for partial noise type
 
+# Multi-seed noise injection: aggregate scores across NOISE_SEEDS to reduce
+# dependence on a single noise realization. Per-fold injection still uses
+# distinct seeds (combined with fold index below) so each (fold, seed) draw
+# is unique.
+NOISE_SEEDS = [0, 1, 2]
+
 LNL_METHODS = ['dividemix', 'small_loss', 'uncertainty_curriculum', 'heteroscedastic_gp']
 ESTIMATORS = ['local_variance_ratio', 'gaussian_process']
 # ngboost is optional
@@ -182,6 +188,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         DOWNSTREAM_MODELS_NOISE, task_type=task_type,
         n_samples=len(labels))
     print(f"  Models: {list(model_factories.keys())}")
+    # SVM internally caps training data at _max_samples=10000. On big
+    # datasets (e.g. qm9 at 10K, kiba at 30K+) this triggers SVM-only and
+    # silently makes the SVM column an apples-to-oranges comparison against
+    # the other models that see the full data. Surface the situation
+    # explicitly when SVM is in the set and the dataset is at risk.
+    if 'svm' in model_factories and len(labels) > 10000:
+        print(f"  WARNING: dataset has {len(labels)} samples — SVM will "
+              f"internally cap training data to 10000, so SVM rows below "
+              f"are NOT comparable head-to-head with the other models. "
+              f"Consider dropping 'svm' from DOWNSTREAM_MODELS_NOISE for "
+              f"this dataset.")
 
     sample_X = next(iter(reps.values()))
 
@@ -197,7 +214,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Dataset: {dataset_name} ({len(labels)} samples)")
     print(f"  Metric: {metric_name}")
     # Filter out regression-only methods for classification
-    REGRESSION_ONLY_LNL = {'heteroscedastic_gp'}
+    # Canonical regression-only set lives in lnl_methods.py; mirroring it
+    # locally previously missed evidential_kernel and would silently crash on
+    # clf datasets (NIG distribution is regression-only).
+    from kirby.utils.lnl_methods import REGRESSION_ONLY_LNL
     lnl_methods = [m for m in LNL_METHODS if not (is_clf and m in REGRESSION_ONLY_LNL)]
     estimators = [e for e in ESTIMATORS if not (is_clf and e == 'gaussian_process')]
 
@@ -216,14 +236,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         dataset_name=dataset_name, task_type=task_type,
         data=data,
     )
+    # Always define `top3` up front so the results dict below never trips a
+    # NameError when search is None (the old code only set it inside the
+    # success branch).
+    top3 = None
     if search is not None:
         top3 = extract_top3_base_reps(search)
         if top3:
-            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+            print(f"  Top-3 base reps (ranked by RF baseline): "
+                  f"{', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     bp = meta['best_config']['blueprint'] if meta else None
     if bp is None:
         print("  WARNING: No blueprint found, skipping")
         return {'error': 'no_blueprint', 'metric': metric_name}
+
+    # Align the blueprint's stored aug_strategy with the pool slot it actually
+    # came from (cache-collision guard, see project_cache_collision_fix). Gate
+    # the augmentations passed downstream so 'none' really means no aug cols.
+    aug_condition = meta.get('aug_condition', 'uncapped') if meta else 'uncapped'
+    if getattr(bp, 'augmentation_strategy', None) != aug_condition:
+        try:
+            bp.augmentation_strategy = aug_condition
+        except Exception:
+            pass
+    use_augmentations = augmentations if aug_condition != 'none' else None
 
     results = {
         'metric': metric_name,
@@ -238,6 +274,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # ── Cache fold splits and label-independent eval features ──
     clean_scores_by_model = {}
+    # Track A is DNN-based (all LNL methods use _standard_dnn_train_predict
+    # internally). Use a dedicated DNN clean baseline for Track A retention
+    # so we're comparing DNN-with-LNL vs DNN-without-LNL, not against the
+    # RF baseline used by Track B and noisy-baseline reporting.
+    clean_scores_dnn = []
     fold_data = []
 
     for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
@@ -255,7 +296,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         X_eval_train_s = sc_eval.fit_transform(X_eval_train)
         X_eval_val_s = sc_eval.transform(X_eval_val)
 
-        # Clean baseline per model
+        # Clean baseline per model (RF/xgboost/etc — for Track B reference)
         for mname, mfactory in model_factories.items():
             if mname not in clean_scores_by_model:
                 clean_scores_by_model[mname] = []
@@ -267,7 +308,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             except Exception:
                 pass
 
-        train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
+        # DNN clean baseline (matched-evaluator anchor for Track A)
+        try:
+            dnn_pred = _standard_dnn_train_predict(
+                X_eval_train_s, y_train_clean, X_eval_val_s,
+                epochs=LNL_EPOCHS, patience=10, random_state=42)
+            clean_scores_dnn.append(float(metric_fn(y_val, dnn_pred)))
+        except Exception:
+            pass
+
+        # Slice augmentations through the aug-condition-aware shim so 'none'
+        # pool slots really propagate no aug columns.
+        train_augs = {k: v[train_idx] for k, v in use_augmentations.items()} if use_augmentations else None
+        # val_augs was missing — the Track A hybrid path below tries to read
+        # fd.get('val_augs'), couldn't find it, dropped the augmentation
+        # columns from the val feature matrix, and scaler_h.transform then
+        # failed silently (column-count mismatch). Hybrid Track A was thus
+        # skipped on every augmentation dataset.
+        val_augs = {k: v[val_idx] for k, v in use_augmentations.items()} if use_augmentations else None
 
         fold_data.append({
             'train_idx': train_idx,
@@ -277,14 +335,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'train_reps_fold': train_reps_fold,
             'val_reps_fold': val_reps_fold,
             'train_augs': train_augs,
+            'val_augs': val_augs,
             'X_eval_train_s': X_eval_train_s,
             'X_eval_val_s': X_eval_val_s,
         })
 
     clean_mean_by_model = {mn: float(np.mean(s)) if s else float('nan')
                            for mn, s in clean_scores_by_model.items()}
-    # Primary clean score for retention calculation (use RF)
+    # Primary clean score for top-level reporting still uses RF; Track A
+    # uses the DNN-specific clean baseline below for matched-evaluator
+    # retention math.
     clean_mean = clean_mean_by_model.get('rf', float('nan'))
+    clean_mean_dnn = float(np.mean(clean_scores_dnn)) if clean_scores_dnn else float('nan')
 
     # ── Main loop: noise type × strength ──
     for noise_type in NOISE_TYPES:
@@ -308,143 +370,169 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             track_b_acc = {}
 
             for fi, fd in enumerate(fold_data):
-                # Inject noise
                 kw = {}
                 if noise_type == 'partial' and partial_frac is not None:
                     kw['partial_fraction'] = partial_frac
-                y_noisy = _inject_noise(fd['y_train_clean'], noise_type,
-                                         strength, seed=42 + fi,
-                                         is_clf=is_clf, **kw)
 
-                # Noisy baseline per model
-                for mname, mfactory in model_factories.items():
-                    try:
-                        m = mfactory()
-                        m.fit(fd['X_eval_train_s'], y_noisy)
-                        noisy_baseline_by_model[mname].append(
-                            float(metric_fn(fd['y_val'], m.predict(fd['X_eval_val_s']))))
-                    except Exception:
-                        pass
+                for noise_seed in NOISE_SEEDS:
+                    # Per-(fold, seed) noise realization
+                    _seed_combined = 42 + fi * 1000 + noise_seed
+                    y_noisy = _inject_noise(fd['y_train_clean'], noise_type,
+                                             strength, seed=_seed_combined,
+                                             is_clf=is_clf, **kw)
 
-                # Build spaces from NOISY labels (realistic — no oracle leak)
-                spaces, feature_info, scaler_h = _build_spaces(
-                    fd['train_reps_fold'], y_noisy, fd['train_augs'],
-                    bp, base_rep_name)
-
-                # Build hybrid val features using feature_info (no second create_hybrid)
-                hybrid_val_s = None
-                if 'hybrid' in spaces and feature_info is not None and scaler_h is not None:
-                    try:
-                        X_h_val = apply_feature_selection(fd['val_reps_fold'], feature_info)
-                        aug_info = feature_info.get('augmentation_info')
-                        if aug_info and fd.get('val_augs'):
-                            X_aug_val = apply_augmentation_selection(fd['val_augs'], aug_info)
-                            if X_aug_val is not None:
-                                X_h_val = np.hstack([X_h_val, X_aug_val])
-                        hybrid_val_s = scaler_h.transform(X_h_val)
-                    except Exception:
-                        pass
-
-                # ── Track A: LNL methods ──
-                for space_name in [base_rep_name, 'hybrid']:
-                    if space_name not in spaces:
-                        continue
-                    X_train_s = spaces[space_name]
-
-                    if space_name == 'hybrid' and hybrid_val_s is not None:
-                        X_val_s = hybrid_val_s
-                    elif space_name == base_rep_name:
-                        X_val_s = fd['X_eval_val_s']
-                    else:
-                        continue
-
-                    if space_name not in track_a_acc:
-                        track_a_acc[space_name] = {}
-
-                    for method_name in lnl_methods:
-                        if method_name not in track_a_acc[space_name]:
-                            track_a_acc[space_name][method_name] = []
+                    # Noisy baseline per model
+                    for mname, mfactory in model_factories.items():
                         try:
-                            m = get_lnl_method(method_name, epochs=LNL_EPOCHS,
-                                               patience=10, random_state=42 + fi)
-                            res = m.train_and_predict(X_train_s, y_noisy,
-                                                      X_val_s, fd['y_val'])
-                            score = float(metric_fn(fd['y_val'], res['y_pred']))
-                            track_a_acc[space_name][method_name].append(score)
+                            m = mfactory()
+                            m.fit(fd['X_eval_train_s'], y_noisy)
+                            noisy_baseline_by_model[mname].append(
+                                float(metric_fn(fd['y_val'], m.predict(fd['X_eval_val_s']))))
                         except Exception:
                             pass
 
-                # ── Track B: Estimation + remediation ──
-                for space_name in [base_rep_name, 'hybrid']:
-                    if space_name not in spaces:
-                        continue
-                    X_space = spaces[space_name]
+                    # Build spaces from NOISY labels (realistic — no oracle leak)
+                    spaces, feature_info, scaler_h = _build_spaces(
+                        fd['train_reps_fold'], y_noisy, fd['train_augs'],
+                        bp, base_rep_name)
 
-                    if space_name not in track_b_acc:
-                        track_b_acc[space_name] = {}
-
-                    for est_name in estimators:
-                        if est_name not in track_b_acc[space_name]:
-                            track_b_acc[space_name][est_name] = {}
+                    # Build hybrid val features using feature_info (no second create_hybrid)
+                    hybrid_val_s = None
+                    if 'hybrid' in spaces and feature_info is not None and scaler_h is not None:
                         try:
-                            est = get_noise_estimator(est_name)
-                            noise_scores = est.estimate(X_space, y_noisy)
-                            weights = weights_from_scores(noise_scores, strength=0.1,
-                                                          method='exponential')
-                            for mname, mfactory in model_factories.items():
-                                if mname not in track_b_acc[space_name][est_name]:
-                                    track_b_acc[space_name][est_name][mname] = []
-                                try:
-                                    m = mfactory()
-                                    # Try sample_weight; skip if unsupported
+                            X_h_val = apply_feature_selection(fd['val_reps_fold'], feature_info)
+                            aug_info = feature_info.get('augmentation_info')
+                            if aug_info and fd.get('val_augs'):
+                                X_aug_val = apply_augmentation_selection(fd['val_augs'], aug_info)
+                                if X_aug_val is not None:
+                                    X_h_val = np.hstack([X_h_val, X_aug_val])
+                            hybrid_val_s = scaler_h.transform(X_h_val)
+                        except Exception:
+                            pass
+
+                    # ── Track A: LNL methods ──
+                    for space_name in [base_rep_name, 'hybrid']:
+                        if space_name not in spaces:
+                            continue
+                        X_train_s = spaces[space_name]
+
+                        if space_name == 'hybrid' and hybrid_val_s is not None:
+                            X_val_s = hybrid_val_s
+                        elif space_name == base_rep_name:
+                            X_val_s = fd['X_eval_val_s']
+                        else:
+                            continue
+
+                        if space_name not in track_a_acc:
+                            track_a_acc[space_name] = {}
+
+                        for method_name in lnl_methods:
+                            if method_name not in track_a_acc[space_name]:
+                                track_a_acc[space_name][method_name] = []
+                            try:
+                                m = get_lnl_method(
+                                    method_name, epochs=LNL_EPOCHS,
+                                    patience=10, random_state=_seed_combined,
+                                    is_clf=is_clf,
+                                    classes_=(np.unique(labels) if is_clf else None))
+                                res = m.train_and_predict(X_train_s, y_noisy,
+                                                          X_val_s, fd['y_val'])
+                                score = float(metric_fn(fd['y_val'], res['y_pred']))
+                                track_a_acc[space_name][method_name].append(score)
+                            except Exception:
+                                pass
+
+                    # ── Track B: Estimation + remediation ──
+                    # Asymmetry by design: the noise-detection step iterates
+                    # over both base and hybrid spaces (so the estimator sees
+                    # different geometry), but the model that consumes the
+                    # resulting sample weights ALWAYS trains on the base rep
+                    # `fd['X_eval_train_s']`. That makes Track B specifically
+                    # ask "does hybrid-derived noise detection improve base-
+                    # rep training?", distinct from Track A's "does hybrid
+                    # feature space help LNL methods that train on hybrid?".
+                    # Recovery denominator (clean/noisy baselines) is also
+                    # base-rep, so the comparison is apples-to-apples.
+                    for space_name in [base_rep_name, 'hybrid']:
+                        if space_name not in spaces:
+                            continue
+                        X_space = spaces[space_name]
+
+                        if space_name not in track_b_acc:
+                            track_b_acc[space_name] = {}
+
+                        for est_name in estimators:
+                            if est_name not in track_b_acc[space_name]:
+                                track_b_acc[space_name][est_name] = {}
+                            try:
+                                est = get_noise_estimator(est_name)
+                                noise_scores = est.estimate(X_space, y_noisy)
+                                weights = weights_from_scores(noise_scores, strength=0.1,
+                                                              method='exponential')
+                                for mname, mfactory in model_factories.items():
+                                    if mname not in track_b_acc[space_name][est_name]:
+                                        track_b_acc[space_name][est_name][mname] = []
                                     try:
-                                        m.fit(fd['X_eval_train_s'], y_noisy,
-                                              sample_weight=weights)
-                                    except TypeError:
-                                        m.fit(fd['X_eval_train_s'], y_noisy)
-                                    score = float(metric_fn(fd['y_val'],
-                                                             m.predict(fd['X_eval_val_s'])))
-                                    track_b_acc[space_name][est_name][mname].append(score)
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
+                                        m = mfactory()
+                                        try:
+                                            m.fit(fd['X_eval_train_s'], y_noisy,
+                                                  sample_weight=weights)
+                                        except TypeError:
+                                            m.fit(fd['X_eval_train_s'], y_noisy)
+                                        score = float(metric_fn(fd['y_val'],
+                                                                 m.predict(fd['X_eval_val_s'])))
+                                        track_b_acc[space_name][est_name][mname].append(score)
+                                    except Exception:
+                                        pass
+                            except Exception:
+                                pass
 
             # Aggregate per model
             noisy_mean_by_model = {mn: float(np.mean(s)) if s else float('nan')
                                    for mn, s in noisy_baseline_by_model.items()}
             noisy_mean = noisy_mean_by_model.get('rf', float('nan'))
-            gap = clean_mean - noisy_mean
+            # Top-level gap is RF-anchored (Track B uses per-model gaps below;
+            # Track A uses the DNN-specific gap). Kept here for the JSON
+            # output's headline 'noise_gap' field.
+            noise_gap_rf = clean_mean - noisy_mean
 
             strength_result = {
                 'noisy_score_by_model': noisy_mean_by_model,
                 'clean_score_by_model': clean_mean_by_model,
                 'noisy_score': noisy_mean,
                 'clean_score': clean_mean,
+                'noise_gap_rf': noise_gap_rf,
                 'track_a': {},
                 'track_b': {},
             }
 
-            # Track A aggregation (DNN-specific, no model loop)
+            # Track A aggregation (DNN-specific — retention is anchored to the
+            # DNN clean baseline so it's a matched-evaluator number, not an
+            # RF-anchored mismatch as it was previously).
             for space_name, methods in track_a_acc.items():
                 space_a = {}
                 for method_name, score_list in methods.items():
                     if score_list:
                         mean_s = float(np.mean(score_list))
-                        # For lower-is-better: retention = clean/noisy (higher noisy = worse)
-                        # For higher-is-better: retention = noisy/clean
-                        if abs(clean_mean) > 1e-10 and abs(mean_s) > 1e-10:
+                        # retention_pct only when both sides have the same sign
+                        # and the denominator is bounded away from zero; same
+                        # robustness guard as n09 (R² can be negative).
+                        if (not np.isnan(clean_mean_dnn)
+                                and clean_mean_dnn > 1e-10 and mean_s > 1e-10):
                             if lower_is_better:
-                                retention = float(clean_mean / mean_s * 100)
+                                retention = float(clean_mean_dnn / mean_s * 100)
                             else:
-                                retention = float(mean_s / clean_mean * 100)
+                                retention = float(mean_s / clean_mean_dnn * 100)
                         else:
                             retention = float('nan')
                         space_a[method_name] = {
                             'score': mean_s,
                             'retention': retention,
+                            'delta_from_clean_dnn': float(mean_s - clean_mean_dnn)
+                                if not np.isnan(clean_mean_dnn) else float('nan'),
                         }
                 strength_result['track_a'][space_name] = space_a
+            strength_result['clean_score_dnn'] = clean_mean_dnn
 
             # Track B aggregation (per estimator × per model)
             for space_name, est_dict in track_b_acc.items():
@@ -504,13 +592,22 @@ def _compute_summary(results):
     """Compute summary: does Gaussian ranking transfer? Does hybrid help across distributions?"""
     # Collect best Track A method per (noise_type, space)
     best_per_dist = {}  # noise_type -> best method name
-    hybrid_wins = 0
-    hybrid_total = 0
+    # Hybrid advantage tally: count by NOISE TYPE, not by (noise_type ×
+    # strength). The previous tally was per-strength, so noise types like
+    # 'partial' (which expands into PARTIAL_FRACTIONS strength variants)
+    # contributed 3-5 entries while gaussian/uniform/etc contributed only
+    # len(STRENGTHS) = 3. That inflation made 'partial' over-represented
+    # in the win-rate. Now we tally one vote per (noise_type, strength)
+    # but report results normalized per noise_type as well.
+    hybrid_wins_by_type = {}
+    hybrid_total_by_type = {}
 
     for nt, nt_data in results.get('per_noise_type', {}).items():
         best_method = None
         best_score = float('-inf')
         lower = results.get('lower_is_better', False)
+        hybrid_wins_by_type[nt] = 0
+        hybrid_total_by_type[nt] = 0
 
         for sk, sd in nt_data.get('per_strength', {}).items():
             for space_name, space_data in sd.get('track_a', {}).items():
@@ -527,10 +624,9 @@ def _compute_summary(results):
                             best_score = s
                             best_method = mn
 
-            # Check hybrid advantage (Track A)
+            # Check hybrid advantage (Track A) at this (noise_type, strength)
             base_scores = []
             hybrid_scores = []
-            base_key = results.get('base_rep', 'ecfp4')
             for space_name, space_data in sd.get('track_a', {}).items():
                 for mv in space_data.values():
                     s = mv.get('score', float('nan'))
@@ -540,14 +636,30 @@ def _compute_summary(results):
                         else:
                             base_scores.append(s)
             if base_scores and hybrid_scores:
-                hybrid_total += 1
+                hybrid_total_by_type[nt] += 1
                 b_avg = np.mean(base_scores)
                 h_avg = np.mean(hybrid_scores)
                 if (not lower and h_avg > b_avg) or (lower and h_avg < b_avg):
-                    hybrid_wins += 1
+                    hybrid_wins_by_type[nt] += 1
 
         if best_method:
             best_per_dist[nt] = best_method
+
+    # Aggregate two ways:
+    #   - "raw" totals (sum of every (noise_type, strength) cell) — kept for
+    #     backwards compat with downstream readers.
+    #   - "per_type" win rate (mean of within-type win rates) — the
+    #     inflation-resistant headline. Each noise type contributes equally
+    #     regardless of how many strength variants it has.
+    hybrid_wins = sum(hybrid_wins_by_type.values())
+    hybrid_total = sum(hybrid_total_by_type.values())
+    per_type_rates = {
+        nt: (hybrid_wins_by_type[nt] / hybrid_total_by_type[nt])
+        for nt in hybrid_total_by_type
+        if hybrid_total_by_type[nt] > 0
+    }
+    persists_by_type = (np.mean(list(per_type_rates.values())) > 0.5
+                       if per_type_rates else None)
 
     # Does Gaussian winner transfer?
     gaussian_best = best_per_dist.get('gaussian')
@@ -560,9 +672,18 @@ def _compute_summary(results):
     return convert_numpy({
         'best_method_per_distribution': best_per_dist,
         'gaussian_rank_transfers': transfers,
-        'hybrid_advantage_persists': hybrid_wins > hybrid_total / 2 if hybrid_total > 0 else None,
+        # Headline flag: hybrid wins more than half of noise types on average.
+        # Anti-inflation: 'partial' has multiple strength variants but only
+        # counts as ONE type here.
+        'hybrid_advantage_persists': persists_by_type,
+        # Legacy raw totals (still per-(type, strength), for backwards
+        # compatibility with readers that consumed the old fields).
         'hybrid_wins': hybrid_wins,
         'hybrid_total': hybrid_total,
+        # Per-type breakdown — the supplementary view.
+        'hybrid_wins_by_noise_type': hybrid_wins_by_type,
+        'hybrid_total_by_noise_type': hybrid_total_by_type,
+        'hybrid_win_rate_by_noise_type': per_type_rates,
     })
 
 

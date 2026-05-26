@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""S02: Hybrid Property-Aware Similarity -- the fix via find_best_hybrid + weighting.
+"""S02: Hybrid Property-Aware Similarity -- the fix via precomputed pool best + weighting.
 
 Paper: Similarity
 Conclusion: Hybrid distance improves SAC by 100%+.
 Dependencies: None.
 
-Computes per-rep SAC baselines, finds best individual rep, runs find_best_hybrid,
-then for each weight method computes importance-weighted distance matrix and
-compares SAC: hybrid weighted vs best individual rep.
+Computes per-rep SAC baselines, finds best individual rep, retrieves the
+precomputed pool best hybrid via get_fitted_pool_hybrid, then for each weight
+method computes importance-weighted distance matrix and compares SAC: hybrid
+weighted vs best individual rep.
 Saves blueprint and search details for downstream experiments (S03, S04, S05).
 """
 import sys
@@ -20,8 +21,8 @@ import numpy as np
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
-    save_experiment_results, get_fitted_hybrid, get_fitted_pool_hybrid, flatten_weights,
-    extract_top3_base_reps,
+    save_experiment_results, get_fitted_hybrid, get_fitted_pool_hybrid,
+    flatten_fold_weights, extract_top3_base_reps,
 )
 from experiments.similarity.similarity_helpers import (
     similarity_activity_correlation, compute_sali, violation_rate,
@@ -63,9 +64,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         importance = None
 
     # Best individual rep baseline (the real-world comparison)
-    best_rep_sac = -1  # SAC > 0 is good; we want highest
+    best_rep_sac = -np.inf  # SAC > 0 is good; we want highest
     best_rep_name = None
-    best_rep_sac_weighted = -1
+    best_rep_sac_weighted = -np.inf
     best_rep_name_weighted = None
     for rep_name, X in reps.items():
         D_rep = compute_distance_matrix(X, standardize=True)
@@ -152,7 +153,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             augmentations=augmentations,
             speed=search_speed, data=data,
             dataset_name=dataset_name, task_type=task_type)
-        fitted = search.fitted_results.get('knn')
     except Exception as e:
         print(f"    Search FAILED: {e}")
         results['best_weight_method'] = best_method
@@ -179,17 +179,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     for wm in weight_methods:
         print(f"\n  Weight method: {wm}")
 
-        # Compute importance with this weight method, apply to selected features
+        # Compute importance with this weight method, apply to selected features.
+        # Use `fi` (feature_info dict from get_fitted_pool_hybrid) as the column
+        # layout source — it matches X_hybrid exactly. Override per-rep
+        # importance_scores with the current weight method's scores.
         try:
-            importance = compute_feature_importance(reps, labels, method=wm)
-            w_parts = []
-            for rep_name in fitted.selected_indices:
-                idx = fitted.selected_indices[rep_name]
-                if rep_name in importance:
-                    w_parts.append(importance[rep_name][idx])
-                else:
-                    w_parts.append(np.ones(len(idx)))
-            weights_flat = np.concatenate(w_parts)
+            if wm == 'lightgbm_gain' and importance is not None:
+                wm_importance = importance
+            else:
+                wm_importance = compute_feature_importance(reps, labels, method=wm)
+            feat_info = {}
+            for rep_name, info in fi.items():
+                if rep_name == 'augmentation_info' or not isinstance(info, dict):
+                    continue
+                idx = info.get('selected_indices')
+                if idx is None:
+                    continue
+                entry = {'selected_indices': idx,
+                         'n_features': info.get('n_features', len(idx))}
+                if rep_name in wm_importance:
+                    entry['importance_scores'] = wm_importance[rep_name][idx]
+                feat_info[rep_name] = entry
+            if fi.get('augmentation_info'):
+                feat_info['augmentation_info'] = fi['augmentation_info']
+            weights_flat = flatten_fold_weights(feat_info)
+            assert len(weights_flat) == X_hybrid.shape[1], (
+                f"weights_flat length {len(weights_flat)} != X_hybrid columns {X_hybrid.shape[1]}"
+            )
         except Exception as e:
             print(f"    Weight computation failed: {e}")
             results['weight_methods'][wm] = {'error': str(e)}

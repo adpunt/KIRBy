@@ -13,11 +13,13 @@ Key question: Do importance-weighted sample weights help MORE with base reps
     - If base reps benefit more  -> hybrids already handle noise implicitly
     - If both benefit equally    -> effects are complementary
 
-4 conditions:
-    1. base_unweighted   — individual rep, no sample weights (baseline)
-    2. base_weighted     — individual rep, importance-weighted sample weights
-    3. hybrid_unweighted — hybrid rep, no sample weights
-    4. hybrid_weighted   — hybrid rep, importance-weighted sample weights
+5 conditions:
+    1. base_unweighted    — individual rep, no sample weights (baseline)
+    2. base_weighted      — individual rep, importance-weighted sample weights
+    3. hybrid_unweighted  — hybrid rep, no sample weights
+    4. hybrid_weighted    — hybrid rep, importance-weighted sample weights
+    5. hybrid_cliff_aware — hybrid rep, cliff-aware weights
+                            (ActivityCliffAwareEstimator)
 
 Usage:
     python n02_sample_weighting.py --dataset logd --reps fast --mode intermediary
@@ -49,7 +51,7 @@ from kirby.utils.noise_estimation import ActivityCliffAwareEstimator
 
 
 # Models that support sample_weight in .fit()
-WEIGHTED_MODELS = ['rf', 'xgboost', 'lightgbm', 'ridge']
+WEIGHTED_MODELS = ['rf', 'xgboost', 'lightgbm']
 
 
 def compute_cliff_aware_weights(X, y, k=10, strength=1.0):
@@ -128,6 +130,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     is_clf = task_type == 'classification'
     domain = data.get('domain', 'molecular')
 
+    # AUROC ('auc') expects continuous scores; passing hard 0/1 class labels
+    # produces a degenerate score equivalent to balanced accuracy under
+    # thresholding 0.5, not the true ranking-based AUROC. Use predict_proba
+    # for binary AUROC; for everything else fall back to predict (class
+    # labels for F1/accuracy/MCC, raw floats for regression metrics).
+    def _predict_for_metric(model, X):
+        if metric_name == 'auc' and hasattr(model, 'predict_proba'):
+            proba = model.predict_proba(X)
+            if getattr(proba, 'ndim', 1) == 2 and proba.shape[1] == 2:
+                return proba[:, 1]
+            return proba
+        return model.predict(X)
+
     # Only use models that support sample_weight
     model_factories = get_model_factories(
         WEIGHTED_MODELS, task_type=task_type, n_samples=n_samples)
@@ -181,15 +196,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     model_uw = model_factory()
                     model_uw.fit(X_train, y_train)
                     unweighted_scores.append(
-                        metric_fn(y_val, model_uw.predict(X_val)))
+                        metric_fn(y_val, _predict_for_metric(model_uw, X_val)))
                 except Exception:
                     continue
 
                 # Condition 2: importance-weighted sample weights
                 try:
-                    # Compute feature importance on training data
+                    # Compute feature importance on the SAME (scaled) matrix
+                    # the reliability scorer will consume. Previously
+                    # importance was computed on raw X_rep[train_idx] while
+                    # reliability ran on scaled X_train — fine for tree-based
+                    # importance (scale-invariant) but breaks the moment
+                    # `method` switches to a scale-sensitive one (permutation,
+                    # treeshap on continuous features).
                     imp = compute_feature_importance(
-                        {rep_name: X_rep[train_idx]}, y_train,
+                        {rep_name: X_train}, y_train,
                         method='lightgbm_gain')
                     imp_scores = imp[rep_name]
 
@@ -209,7 +230,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     model_w = model_factory()
                     model_w.fit(X_train, y_train, sample_weight=sample_weights)
                     weighted_scores.append(
-                        metric_fn(y_val, model_w.predict(X_val)))
+                        metric_fn(y_val, _predict_for_metric(model_w, X_val)))
                 except Exception as e:
                     weighted_scores.append(float('nan'))
 
@@ -257,6 +278,46 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print("  WARNING: No blueprint found, skipping hybrid conditions")
         return {'error': 'no_blueprint', 'metric': metric_name}
 
+    # Matched evaluator: fetch a per-model blueprint instead of reusing the
+    # RF one for xgboost/lightgbm/ridge. Per project_model_matching the
+    # downstream model used to evaluate a hybrid must match the model the
+    # search optimised against. Each call is cached, so the extra fetches
+    # cost ~nothing when the pool already has the entry. Also align each
+    # per-model bp's aug_strategy with its own meta['aug_condition'] to
+    # avoid the 2026-04-21 cache-collision pattern.
+    bp_by_model = {}
+    aug_by_model = {}
+    for _mname in model_factories:
+        try:
+            _search, _meta = get_best_search_for_downstream(
+                reps, labels, groups,
+                downstream_model=_mname, budget=None,
+                augmentations=augmentations,
+                speed=config.get('search_speed', 'full'),
+                dataset_name=dataset_name, task_type=task_type,
+                data=data,
+            )
+            if _meta is not None:
+                _bp = _meta['best_config']['blueprint']
+                _aug_cond = _meta.get('aug_condition', 'uncapped')
+                if getattr(_bp, 'augmentation_strategy', None) != _aug_cond:
+                    try:
+                        _bp.augmentation_strategy = _aug_cond
+                    except Exception:
+                        pass
+                bp_by_model[_mname] = _bp
+                aug_by_model[_mname] = _aug_cond
+            else:
+                # Fall back to the RF blueprint so the model still gets a
+                # hybrid (better than dropping it from the comparison).
+                bp_by_model[_mname] = bp
+                aug_by_model[_mname] = meta.get('aug_condition', 'uncapped')
+        except Exception as _exc:
+            print(f"  WARNING: blueprint fetch failed for {_mname} "
+                  f"({_exc}); using RF blueprint as fallback.")
+            bp_by_model[_mname] = bp
+            aug_by_model[_mname] = meta.get('aug_condition', 'uncapped')
+
     # =========================================================================
     # CONDITIONS 3-4: Hybrid (hybrid_unweighted, hybrid_weighted)
     # =========================================================================
@@ -264,6 +325,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     hybrid_results = {}
     for model_name, model_factory in model_factories.items():
+        model_bp = bp_by_model[model_name]
+        model_aug_cond = aug_by_model[model_name]
+        model_augs = augmentations if model_aug_cond != 'none' else None
         unweighted_scores = []
         weighted_scores = []
         reliability_stats = []
@@ -275,12 +339,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             val_reps = {k: v[val_idx] for k, v in reps.items()}
             y_train, y_val = labels[train_idx], labels[val_idx]
 
-            # Create hybrid per fold from blueprint
+            # Create hybrid per fold from THIS MODEL'S blueprint
             try:
-                train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
-                val_augs = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
+                train_augs = {k: v[train_idx] for k, v in model_augs.items()} if model_augs else None
+                val_augs = {k: v[val_idx] for k, v in model_augs.items()} if model_augs else None
                 X_train_h, X_val_h, feature_info = build_fold_hybrid(
-                    train_reps, val_reps, y_train, bp,
+                    train_reps, val_reps, y_train, model_bp,
                     augmentations_train=train_augs, augmentations_val=val_augs)
             except Exception as e:
                 print(f"    {model_name}: hybrid creation failed - {e}")
@@ -296,16 +360,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 model_uw = model_factory()
                 model_uw.fit(X_train_s, y_train)
                 unweighted_scores.append(
-                    metric_fn(y_val, model_uw.predict(X_val_s)))
+                    metric_fn(y_val, _predict_for_metric(model_uw, X_val_s)))
             except Exception:
                 continue
 
             # Condition 4: hybrid + importance-weighted sample weights
             try:
-                # Recompute importance on hybrid features for reliability
-                # Use the hybrid feature matrix directly as a single "rep"
+                # Compute importance on the SAME (scaled) hybrid matrix the
+                # reliability scorer consumes — same alignment fix as the
+                # base-rep block above. The raw X_train_h was previously
+                # passed to compute_feature_importance while X_train_s (the
+                # scaled version) was passed to compute_reliability_scores.
                 imp = compute_feature_importance(
-                    {'hybrid': X_train_h}, y_train, method='lightgbm_gain')
+                    {'hybrid': X_train_s}, y_train, method='lightgbm_gain')
                 imp_scores = imp['hybrid']
 
                 sample_weights = compute_reliability_scores(
@@ -323,7 +390,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 model_w = model_factory()
                 model_w.fit(X_train_s, y_train, sample_weight=sample_weights)
                 weighted_scores.append(
-                    metric_fn(y_val, model_w.predict(X_val_s)))
+                    metric_fn(y_val, _predict_for_metric(model_w, X_val_s)))
             except Exception as e:
                 weighted_scores.append(float('nan'))
 
@@ -360,6 +427,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"\n  --- Condition 5: Hybrid + cliff-aware weights ---")
     cliff_aware_results = {}
     for model_name, model_factory in model_factories.items():
+        model_bp = bp_by_model[model_name]
+        model_aug_cond = aug_by_model[model_name]
+        model_augs = augmentations if model_aug_cond != 'none' else None
         ca_scores = []
         for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
                                             labels, mode=mode):
@@ -367,10 +437,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             val_reps_fold = {k: v[val_idx] for k, v in reps.items()}
             y_train, y_val = labels[train_idx], labels[val_idx]
             try:
-                train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
-                val_augs = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
+                train_augs = {k: v[train_idx] for k, v in model_augs.items()} if model_augs else None
+                val_augs = {k: v[val_idx] for k, v in model_augs.items()} if model_augs else None
                 X_train_h, X_val_h, fi = build_fold_hybrid(
-                    train_reps_fold, val_reps_fold, y_train, bp,
+                    train_reps_fold, val_reps_fold, y_train, model_bp,
                     augmentations_train=train_augs, augmentations_val=val_augs)
                 scaler = StandardScaler()
                 X_tr_s = scaler.fit_transform(X_train_h)
@@ -378,7 +448,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 ca_weights = compute_cliff_aware_weights(X_tr_s, y_train, k=k_neighbors)
                 model = model_factory()
                 model.fit(X_tr_s, y_train, sample_weight=ca_weights)
-                ca_scores.append(metric_fn(y_val, model.predict(X_va_s)))
+                ca_scores.append(metric_fn(y_val, _predict_for_metric(model, X_va_s)))
             except Exception:
                 continue
         if ca_scores:
@@ -445,7 +515,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"    {'HYBRID':<20} uw={model_hybrid_uw:.4f}, w={model_hybrid_w:.4f} "
               f"(delta={model_hybrid_delta:+.4f})")
 
-    results['top3_base_reps'] = [(n, uw) for n, uw, _w, _d in top3] if top3 else []
+    # `top3` inside the loop above held whichever model iterated last (ridge,
+    # since model_factories is insertion-ordered ['rf','xgboost','lightgbm',
+    # 'ridge']). Save the canonical RF-baseline ranking from the search pool
+    # — it's what was already printed at the top of the run and is consistent
+    # with the rest of the suite. Per-model rankings remain in
+    # results['per_model_top3'].
+    search_top3 = []
+    if search is not None:
+        try:
+            search_top3 = [(n, float(s)) for n, s in extract_top3_base_reps(search)]
+        except Exception:
+            search_top3 = []
+    results['top3_base_reps'] = search_top3
 
     return make_structured_output(
         experiment_id='n02',

@@ -34,11 +34,10 @@ from experiments._shared import (
     get_precomputed_search, get_best_for_downstream, extract_top3_base_reps,
     get_best_search_for_downstream,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
+    flatten_fold_weights,
 )
 
 from kirby.hybrid import apply_feature_selection
-from kirby.hybrid import create_hybrid
-# TODO: create_hybrid API not finalised — revisit after framework experiments.
 
 
 # =============================================================================
@@ -47,7 +46,6 @@ from kirby.hybrid import create_hybrid
 
 _GP_MAX_SAMPLES = 5000
 _SVR_MAX_SAMPLES = 10000
-
 
 # =============================================================================
 # LOCAL HELPERS
@@ -67,24 +65,18 @@ def _compute_importance_for_reps(train_reps, y_train, method='lightgbm_gain'):
     return _importance_weights(imp_concat)
 
 
-def _compute_importance_for_hybrid(train_reps, y_train, feat_info,
-                                   method='lightgbm_gain'):
-    """Compute importance weights for hybrid-selected features."""
-    imp_dict = compute_feature_importance(train_reps, y_train, method=method)
-    w_parts = []
-    for rname in feat_info.keys():  # preserve insertion order from create_hybrid
-        info = feat_info[rname]
-        if not isinstance(info, dict) or 'selected_indices' not in info:
-            continue
-        idx = info['selected_indices']
-        if rname in imp_dict:
-            w_parts.append(imp_dict[rname][idx])
-        else:
-            w_parts.append(np.ones(len(idx)))
-    return _importance_weights(np.concatenate(w_parts))
+def _compute_importance_for_hybrid(feat_info):
+    """Compute importance weights for hybrid-selected features.
+
+    Uses flatten_fold_weights so the returned vector matches the hybrid
+    matrix shape exactly (including augmentation columns appended by
+    build_fold_hybrid).
+    """
+    raw = flatten_fold_weights(feat_info)
+    return _importance_weights(raw)
 
 
-def _compute_sim_descriptors(X_train, y_train, X_query, k=10):
+def _compute_sim_descriptors(X_train, y_train, X_query, k=10, is_self=False):
     """Compute q-RASAR-style similarity descriptors for each query sample.
 
     For each query sample, finds k nearest neighbors in X_train and computes:
@@ -93,12 +85,13 @@ def _compute_sim_descriptors(X_train, y_train, X_query, k=10):
       - min_distance: distance to nearest neighbor
       - mean_distance: mean distance to k neighbors
 
+    Args:
+        is_self: Pass True when X_query is X_train (training-fold descriptors)
+            so the self-match (distance=0) is excluded from neighbors.
+
     Returns (n_query, 4) array.
     """
-    # When X_query IS X_train, add +1 to exclude self-match
-    is_self_query = X_query is X_train or (
-        X_query.shape == X_train.shape and np.allclose(X_query, X_train))
-    k_nn = min(k + (1 if is_self_query else 0), len(y_train) - 1)
+    k_nn = min(k + (1 if is_self else 0), len(y_train) - 1)
     if k_nn < 1:
         return np.zeros((X_query.shape[0], 4))
 
@@ -106,7 +99,7 @@ def _compute_sim_descriptors(X_train, y_train, X_query, k=10):
     nn.fit(X_train)
     dists, indices = nn.kneighbors(X_query)
 
-    if is_self_query:
+    if is_self:
         # Drop the first column (self-match with distance=0)
         dists = dists[:, 1:]
         indices = indices[:, 1:]
@@ -126,14 +119,17 @@ def _compute_sim_descriptors(X_train, y_train, X_query, k=10):
 
 def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
                       metric_fn, metric_name, lower_is_better=False,
-                      augmentations=None, task_type='regression'):
-    """Weighted kNN: per-rep and hybrid, weighted vs unweighted."""
+                      augmentations=None, task_type='regression',
+                      fold_splits=None, fold_importance=None):
+    """Weighted kNN: per-rep and hybrid, weighted vs unweighted.
+
+    fold_splits: list of (train_idx, val_idx) tuples, shared across all tasks.
+    fold_importance: dict {fold_i: {rep_name: importance_array}}, precomputed.
+    """
     is_clf = task_type == 'classification'
     print(f"\n  --- Task 1: Weighted kNN {'Classification' if is_clf else 'Regression'} ---")
 
     k_values = [5, 10, 20]
-    n_folds = config['n_splits']
-    mode = 'intermediary' if n_folds == 1 else 'full'
     results = {'per_rep': {}, 'hybrid': {}}
 
     # Per-rep evaluation
@@ -144,8 +140,7 @@ def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
         for k in k_values:
             uw_scores, w_scores = [], []
 
-            for train_idx, val_idx in cv_split(groups, n_folds, X_rep, labels,
-                                               mode=mode):
+            for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
                 y_train, y_val = labels[train_idx], labels[val_idx]
                 scaler = StandardScaler()
                 X_tr = scaler.fit_transform(X_rep[train_idx])
@@ -158,12 +153,12 @@ def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
                 model.fit(X_tr, y_train)
                 uw_scores.append(metric_fn(y_val, model.predict(X_va)))
 
-                # Weighted
+                # Weighted (use precomputed importance)
                 try:
-                    imp = compute_feature_importance(
-                        {rep_name: X_rep[train_idx]}, y_train,
-                        method='lightgbm_gain')
-                    w = _importance_weights(imp[rep_name])
+                    imp_arr = fold_importance.get(fold_i, {}).get(rep_name)
+                    if imp_arr is None:
+                        raise RuntimeError(f"missing precomputed importance for fold={fold_i} rep={rep_name}")
+                    w = _importance_weights(imp_arr)
                     model_w = KNN(n_neighbors=k_eff)
                     model_w.fit(X_tr * w, y_train)
                     w_scores.append(metric_fn(y_val, model_w.predict(X_va * w)))
@@ -190,9 +185,7 @@ def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
         for k in k_values:
             uw_scores, w_scores = [], []
 
-            for train_idx, val_idx in cv_split(groups, n_folds,
-                                               next(iter(reps.values())),
-                                               labels, mode=mode):
+            for train_idx, val_idx in fold_splits:
                 train_reps = {n: r[train_idx] for n, r in reps.items()}
                 val_reps = {n: r[val_idx] for n, r in reps.items()}
                 y_train, y_val = labels[train_idx], labels[val_idx]
@@ -219,8 +212,9 @@ def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
 
                 # Weighted
                 try:
-                    w = _compute_importance_for_hybrid(
-                        train_reps, y_train, feat_info)
+                    w = _compute_importance_for_hybrid(feat_info)
+                    assert w.shape[0] == X_tr.shape[1], (
+                        f"weight shape {w.shape} != X_tr cols {X_tr.shape[1]}")
                     model_w = KNN(n_neighbors=k_eff)
                     model_w.fit(X_tr * w, y_train)
                     w_scores.append(metric_fn(y_val, model_w.predict(X_va * w)))
@@ -247,7 +241,8 @@ def _run_weighted_knn(reps, labels, groups, config, hybrid_blueprint,
 
 def _run_weighted_gp(reps, labels, groups, config, hybrid_blueprint,
                      metric_fn, metric_name, n_samples,
-                     augmentations=None):
+                     augmentations=None,
+                     fold_splits=None, fold_importance=None):
     """GP with importance-weighted RBF kernel."""
     print("\n  --- Task 2: GP with Importance-Weighted RBF ---")
 
@@ -255,8 +250,6 @@ def _run_weighted_gp(reps, labels, groups, config, hybrid_blueprint,
         print(f"    SKIPPED: n_samples={n_samples} > {_GP_MAX_SAMPLES}")
         return {'skipped': True, 'reason': f'n_samples={n_samples} > {_GP_MAX_SAMPLES}'}
 
-    n_folds = config['n_splits']
-    mode = 'intermediary' if n_folds == 1 else 'full'
     results = {'per_rep': {}, 'hybrid': {}}
 
     def _make_gp():
@@ -271,8 +264,7 @@ def _run_weighted_gp(reps, labels, groups, config, hybrid_blueprint,
         X_rep = reps[rep_name]
         std_scores, w_scores = [], []
 
-        for train_idx, val_idx in cv_split(groups, n_folds, X_rep, labels,
-                                           mode=mode):
+        for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
             y_train, y_val = labels[train_idx], labels[val_idx]
             scaler = StandardScaler()
             X_tr = scaler.fit_transform(X_rep[train_idx])
@@ -288,10 +280,10 @@ def _run_weighted_gp(reps, labels, groups, config, hybrid_blueprint,
 
             # Importance-weighted GP (pre-transform: X * sqrt(w))
             try:
-                imp = compute_feature_importance(
-                    {rep_name: X_rep[train_idx]}, y_train,
-                    method='lightgbm_gain')
-                w = _importance_weights(imp[rep_name])
+                imp_arr = fold_importance.get(fold_i, {}).get(rep_name)
+                if imp_arr is None:
+                    raise RuntimeError(f"missing precomputed importance for fold={fold_i} rep={rep_name}")
+                w = _importance_weights(imp_arr)
                 gp_w = _make_gp()
                 gp_w.fit(X_tr * w, y_train)
                 w_scores.append(metric_fn(y_val, gp_w.predict(X_va * w)))
@@ -312,9 +304,7 @@ def _run_weighted_gp(reps, labels, groups, config, hybrid_blueprint,
     if hybrid_blueprint is not None:
         std_scores, w_scores = [], []
 
-        for train_idx, val_idx in cv_split(groups, n_folds,
-                                           next(iter(reps.values())),
-                                           labels, mode=mode):
+        for train_idx, val_idx in fold_splits:
             train_reps = {n: r[train_idx] for n, r in reps.items()}
             val_reps = {n: r[val_idx] for n, r in reps.items()}
             y_train, y_val = labels[train_idx], labels[val_idx]
@@ -342,8 +332,9 @@ def _run_weighted_gp(reps, labels, groups, config, hybrid_blueprint,
 
             # Weighted GP
             try:
-                w = _compute_importance_for_hybrid(
-                    train_reps, y_train, feat_info)
+                w = _compute_importance_for_hybrid(feat_info)
+                assert w.shape[0] == X_tr.shape[1], (
+                    f"weight shape {w.shape} != X_tr cols {X_tr.shape[1]}")
                 gp_w = _make_gp()
                 gp_w.fit(X_tr * w, y_train)
                 w_scores.append(metric_fn(y_val, gp_w.predict(X_va * w)))
@@ -370,7 +361,8 @@ def _run_weighted_gp(reps, labels, groups, config, hybrid_blueprint,
 
 def _run_weighted_svr(reps, labels, groups, config, hybrid_blueprint,
                       metric_fn, metric_name, n_samples,
-                      augmentations=None):
+                      augmentations=None,
+                      fold_splits=None, fold_importance=None):
     """SVR with importance-weighted RBF kernel."""
     print("\n  --- Task 3: SVR with Importance-Weighted RBF ---")
 
@@ -378,8 +370,6 @@ def _run_weighted_svr(reps, labels, groups, config, hybrid_blueprint,
         print(f"    SKIPPED: n_samples={n_samples} > {_SVR_MAX_SAMPLES}")
         return {'skipped': True, 'reason': f'n_samples={n_samples} > {_SVR_MAX_SAMPLES}'}
 
-    n_folds = config['n_splits']
-    mode = 'intermediary' if n_folds == 1 else 'full'
     results = {'per_rep': {}, 'hybrid': {}}
 
     def _make_svr():
@@ -390,8 +380,7 @@ def _run_weighted_svr(reps, labels, groups, config, hybrid_blueprint,
         X_rep = reps[rep_name]
         std_scores, w_scores = [], []
 
-        for train_idx, val_idx in cv_split(groups, n_folds, X_rep, labels,
-                                           mode=mode):
+        for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
             y_train, y_val = labels[train_idx], labels[val_idx]
             scaler = StandardScaler()
             X_tr = scaler.fit_transform(X_rep[train_idx])
@@ -407,10 +396,10 @@ def _run_weighted_svr(reps, labels, groups, config, hybrid_blueprint,
 
             # Importance-weighted SVR
             try:
-                imp = compute_feature_importance(
-                    {rep_name: X_rep[train_idx]}, y_train,
-                    method='lightgbm_gain')
-                w = _importance_weights(imp[rep_name])
+                imp_arr = fold_importance.get(fold_i, {}).get(rep_name)
+                if imp_arr is None:
+                    raise RuntimeError(f"missing precomputed importance for fold={fold_i} rep={rep_name}")
+                w = _importance_weights(imp_arr)
                 svr_w = _make_svr()
                 svr_w.fit(X_tr * w, y_train)
                 w_scores.append(metric_fn(y_val, svr_w.predict(X_va * w)))
@@ -431,9 +420,7 @@ def _run_weighted_svr(reps, labels, groups, config, hybrid_blueprint,
     if hybrid_blueprint is not None:
         std_scores, w_scores = [], []
 
-        for train_idx, val_idx in cv_split(groups, n_folds,
-                                           next(iter(reps.values())),
-                                           labels, mode=mode):
+        for train_idx, val_idx in fold_splits:
             train_reps = {n: r[train_idx] for n, r in reps.items()}
             val_reps = {n: r[val_idx] for n, r in reps.items()}
             y_train, y_val = labels[train_idx], labels[val_idx]
@@ -461,8 +448,9 @@ def _run_weighted_svr(reps, labels, groups, config, hybrid_blueprint,
 
             # Weighted SVR
             try:
-                w = _compute_importance_for_hybrid(
-                    train_reps, y_train, feat_info)
+                w = _compute_importance_for_hybrid(feat_info)
+                assert w.shape[0] == X_tr.shape[1], (
+                    f"weight shape {w.shape} != X_tr cols {X_tr.shape[1]}")
                 svr_w = _make_svr()
                 svr_w.fit(X_tr * w, y_train)
                 w_scores.append(metric_fn(y_val, svr_w.predict(X_va * w)))
@@ -489,7 +477,8 @@ def _run_weighted_svr(reps, labels, groups, config, hybrid_blueprint,
 
 def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
                 metric_fn, metric_name, task_type='regression',
-                augmentations=None):
+                augmentations=None,
+                fold_splits=None, fold_importance=None):
     """q-RASAR-style similarity-augmented features.
 
     For each sample, find k nearest neighbors and compute similarity
@@ -504,8 +493,6 @@ def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
     """
     print("\n  --- Task 4: Similarity-Augmented Features (q-RASAR style) ---")
 
-    n_folds = config['n_splits']
-    mode = 'intermediary' if n_folds == 1 else 'full'
     k_neighbors = 10
     results = {'per_rep': {}, 'hybrid': {}}
 
@@ -519,8 +506,7 @@ def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
         X_rep = reps[rep_name]
         base_scores, uw_sim_scores, w_sim_scores = [], [], []
 
-        for train_idx, val_idx in cv_split(groups, n_folds, X_rep, labels,
-                                           mode=mode):
+        for fold_i, (train_idx, val_idx) in enumerate(fold_splits):
             y_train, y_val = labels[train_idx], labels[val_idx]
             scaler = StandardScaler()
             X_tr = scaler.fit_transform(X_rep[train_idx])
@@ -537,9 +523,9 @@ def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
             # Base + unweighted sim descriptors
             try:
                 sim_tr = _compute_sim_descriptors(X_tr, y_train, X_tr,
-                                                  k=k_neighbors)
+                                                  k=k_neighbors, is_self=True)
                 sim_va = _compute_sim_descriptors(X_tr, y_train, X_va,
-                                                  k=k_neighbors)
+                                                  k=k_neighbors, is_self=False)
                 X_tr_aug = np.hstack([X_tr, sim_tr])
                 X_va_aug = np.hstack([X_va, sim_va])
                 rf_aug = _make_rf()
@@ -550,18 +536,18 @@ def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
 
             # Base + importance-weighted sim descriptors
             try:
-                imp = compute_feature_importance(
-                    {rep_name: X_rep[train_idx]}, y_train,
-                    method='lightgbm_gain')
-                w = _importance_weights(imp[rep_name])
+                imp_arr = fold_importance.get(fold_i, {}).get(rep_name)
+                if imp_arr is None:
+                    raise RuntimeError(f"missing precomputed importance for fold={fold_i} rep={rep_name}")
+                w = _importance_weights(imp_arr)
                 X_tr_w = X_tr * w
                 X_va_w = X_va * w
                 sim_tr_w = _compute_sim_descriptors(X_tr_w, y_train, X_tr_w,
-                                                    k=k_neighbors)
+                                                    k=k_neighbors, is_self=True)
                 sim_va_w = _compute_sim_descriptors(X_tr_w, y_train, X_va_w,
-                                                    k=k_neighbors)
-                X_tr_aug_w = np.hstack([X_tr, sim_tr_w])
-                X_va_aug_w = np.hstack([X_va, sim_va_w])
+                                                    k=k_neighbors, is_self=False)
+                X_tr_aug_w = np.hstack([X_tr_w, sim_tr_w])
+                X_va_aug_w = np.hstack([X_va_w, sim_va_w])
                 rf_aug_w = _make_rf()
                 rf_aug_w.fit(X_tr_aug_w, y_train)
                 w_sim_scores.append(metric_fn(y_val, rf_aug_w.predict(X_va_aug_w)))
@@ -587,9 +573,7 @@ def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
     if hybrid_blueprint is not None:
         base_scores, uw_sim_scores, w_sim_scores = [], [], []
 
-        for train_idx, val_idx in cv_split(groups, n_folds,
-                                           next(iter(reps.values())),
-                                           labels, mode=mode):
+        for train_idx, val_idx in fold_splits:
             train_reps = {n: r[train_idx] for n, r in reps.items()}
             val_reps = {n: r[val_idx] for n, r in reps.items()}
             y_train, y_val = labels[train_idx], labels[val_idx]
@@ -618,9 +602,9 @@ def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
             # Unweighted sim descriptors
             try:
                 sim_tr = _compute_sim_descriptors(X_tr, y_train, X_tr,
-                                                  k=k_neighbors)
+                                                  k=k_neighbors, is_self=True)
                 sim_va = _compute_sim_descriptors(X_tr, y_train, X_va,
-                                                  k=k_neighbors)
+                                                  k=k_neighbors, is_self=False)
                 X_tr_aug = np.hstack([X_tr, sim_tr])
                 X_va_aug = np.hstack([X_va, sim_va])
                 rf_aug = _make_rf()
@@ -631,16 +615,17 @@ def _run_qrasar(reps, labels, groups, config, hybrid_blueprint,
 
             # Weighted sim descriptors
             try:
-                w = _compute_importance_for_hybrid(
-                    train_reps, y_train, feat_info)
+                w = _compute_importance_for_hybrid(feat_info)
+                assert w.shape[0] == X_tr.shape[1], (
+                    f"weight shape {w.shape} != X_tr cols {X_tr.shape[1]}")
                 X_tr_w = X_tr * w
                 X_va_w = X_va * w
                 sim_tr_w = _compute_sim_descriptors(X_tr_w, y_train, X_tr_w,
-                                                    k=k_neighbors)
+                                                    k=k_neighbors, is_self=True)
                 sim_va_w = _compute_sim_descriptors(X_tr_w, y_train, X_va_w,
-                                                    k=k_neighbors)
-                X_tr_aug_w = np.hstack([X_tr, sim_tr_w])
-                X_va_aug_w = np.hstack([X_va, sim_va_w])
+                                                    k=k_neighbors, is_self=False)
+                X_tr_aug_w = np.hstack([X_tr_w, sim_tr_w])
+                X_va_aug_w = np.hstack([X_va_w, sim_va_w])
                 rf_aug_w = _make_rf()
                 rf_aug_w.fit(X_tr_aug_w, y_train)
                 w_sim_scores.append(metric_fn(y_val, rf_aug_w.predict(X_va_aug_w)))
@@ -723,12 +708,43 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     augmentations = data.get('augmentations')
     is_clf = task_type == 'classification'
 
+    # -------------------------------------------------------------------------
+    # Shared precompute: materialize fold splits ONCE and compute per-(fold, rep)
+    # importance ONCE so all four downstream tasks reuse the same numbers.
+    # Previously each task recomputed importance per (fold, rep), 4x duplicated
+    # work. Splits must come from the same reference X for every task so fold
+    # iteration order is identical across tasks.
+    # -------------------------------------------------------------------------
+    n_folds = config['n_splits']
+    mode = 'intermediary' if n_folds == 1 else 'full'
+    # Reference X for splitting — use first rep (sorted) for determinism. Folds
+    # only depend on `groups`/`labels`/`X.shape[0]`, so any rep works as long as
+    # it's used consistently across all tasks.
+    _ref_rep_name = sorted(reps.keys())[0]
+    _ref_X = reps[_ref_rep_name]
+    fold_splits = list(cv_split(groups, n_folds, _ref_X, labels, mode=mode))
+
+    t_imp = time.time()
+    fold_importance = {}
+    for fold_i, (train_idx, _val_idx) in enumerate(fold_splits):
+        train_reps = {n: r[train_idx] for n, r in reps.items()}
+        try:
+            imp_dict = compute_feature_importance(
+                train_reps, labels[train_idx], method='lightgbm_gain')
+            fold_importance[fold_i] = imp_dict
+        except Exception as e:
+            print(f"  WARN: precompute importance failed at fold={fold_i}: {e}")
+            fold_importance[fold_i] = {}
+    print(f"  [Precomputed fold importance for {len(fold_splits)} folds x "
+          f"{len(reps)} reps in {time.time() - t_imp:.1f}s]")
+
     # Task 1: Weighted kNN
     t0 = time.time()
     results['weighted_knn'] = _run_weighted_knn(
         reps, labels, groups, config, hybrid_blueprint,
         metric_fn, metric_name, lower_is_better,
-        augmentations=augmentations, task_type=task_type)
+        augmentations=augmentations, task_type=task_type,
+        fold_splits=fold_splits, fold_importance=fold_importance)
     print(f"  [Task 1 elapsed: {time.time() - t0:.1f}s]")
 
     # Task 2: GP with importance-weighted RBF (regression only)
@@ -740,7 +756,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['weighted_gp'] = _run_weighted_gp(
             reps, labels, groups, config, hybrid_blueprint,
             metric_fn, metric_name, n_samples,
-            augmentations=augmentations)
+            augmentations=augmentations,
+            fold_splits=fold_splits, fold_importance=fold_importance)
         print(f"  [Task 2 elapsed: {time.time() - t0:.1f}s]")
 
     # Task 3: SVR with importance-weighted RBF (regression only)
@@ -752,7 +769,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         results['weighted_svr'] = _run_weighted_svr(
             reps, labels, groups, config, hybrid_blueprint,
             metric_fn, metric_name, n_samples,
-            augmentations=augmentations)
+            augmentations=augmentations,
+            fold_splits=fold_splits, fold_importance=fold_importance)
         print(f"  [Task 3 elapsed: {time.time() - t0:.1f}s]")
 
     # Task 4: q-RASAR similarity-augmented features
@@ -760,7 +778,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results['qrasar'] = _run_qrasar(
         reps, labels, groups, config, hybrid_blueprint,
         metric_fn, metric_name, task_type=task_type,
-        augmentations=augmentations)
+        augmentations=augmentations,
+        fold_splits=fold_splits, fold_importance=fold_importance)
     print(f"  [Task 4 elapsed: {time.time() - t0:.1f}s]")
 
     # Summary

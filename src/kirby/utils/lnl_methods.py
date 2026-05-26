@@ -24,8 +24,12 @@ from typing import Dict, Tuple, Optional
 # SHARED HELPERS
 # ============================================================================
 
-def _build_dnn(input_dim, hidden_sizes=(256, 128, 64), dropout=0.2):
-    """Build DNN matching DNNRegressor._build_net() exactly."""
+def _build_dnn(input_dim, hidden_sizes=(256, 128, 64), dropout=0.2, output_dim=1):
+    """Build DNN matching DNNRegressor._build_net() exactly.
+
+    For classification pass output_dim=n_classes; the final layer outputs
+    logits (no softmax — pair with nn.CrossEntropyLoss).
+    """
     import torch.nn as nn
     layers = []
     prev = input_dim
@@ -34,7 +38,7 @@ def _build_dnn(input_dim, hidden_sizes=(256, 128, 64), dropout=0.2):
         layers.append(nn.ReLU())
         layers.append(nn.Dropout(dropout))
         prev = h
-    layers.append(nn.Linear(prev, 1))
+    layers.append(nn.Linear(prev, output_dim))
     return nn.Sequential(*layers)
 
 
@@ -44,6 +48,61 @@ def _z_normalize(y):
     mean = float(y.mean())
     std = float(y.std()) if y.std() > 1e-8 else 1.0
     return (y - mean) / std, mean, std
+
+
+def _prep_clf_labels(y_train, y_val=None):
+    """Map class labels to contiguous 0..n_classes-1 ints.
+
+    Returns (y_train_int, classes_, y_val_int_or_None). The training labels
+    define the class set; val labels are mapped through the same dict, and
+    any val class missing from training is left at -1 (caller decides what
+    to do — usually train-class predictions just won't match those rows).
+    """
+    y_train = np.asarray(y_train).ravel()
+    classes_ = np.unique(y_train)
+    label_map = {c: i for i, c in enumerate(classes_)}
+    y_train_int = np.array([label_map[c] for c in y_train], dtype=np.int64)
+    if y_val is None:
+        return y_train_int, classes_, None
+    y_val = np.asarray(y_val).ravel()
+    y_val_int = np.array([label_map.get(c, -1) for c in y_val], dtype=np.int64)
+    return y_train_int, classes_, y_val_int
+
+
+def _clf_pred_from_logits(logits_np, classes_):
+    """Convert raw logits (np.ndarray, shape (n, n_classes)) to y_pred.
+
+    Returns P(class=positive) for binary classification (1-D float array),
+    or argmax class labels for multi-class. This matches the convention
+    expected by BUILTIN_METRICS: 'auc' wants probabilities for binary,
+    'f1_weighted'/'accuracy'/'mcc' want class labels for multi-class.
+    """
+    import scipy.special
+    proba = scipy.special.softmax(logits_np, axis=1)
+    if proba.shape[1] == 2:
+        # Binary — return P(y = positive class) so AUROC sees probabilities.
+        return proba[:, 1]
+    # Multi-class — return predicted class labels (caller maps via classes_).
+    idx = np.argmax(proba, axis=1)
+    return classes_[idx]
+
+
+def _per_sample_loss_torch(net_or_pred, y_target, is_clf):
+    """Compute per-sample loss as a torch tensor.
+
+    net_or_pred: either raw model output (regression: shape (n,); clf: shape
+    (n, n_classes)) or a torch tensor of squared errors already computed.
+    Use the convention: pass model output and y_target, get a per-sample
+    loss vector back.
+    """
+    import torch
+    import torch.nn as nn
+    if is_clf:
+        # net_or_pred is (n, n_classes) logits; y_target is long (n,)
+        return nn.functional.cross_entropy(net_or_pred, y_target,
+                                           reduction='none')
+    # Regression: net_or_pred is (n,) prediction; y_target is (n,) float
+    return (net_or_pred - y_target) ** 2
 
 
 def _standard_dnn_train_predict(X_train, y_train, X_val,
@@ -143,15 +202,213 @@ def _standard_dnn_train_predict(X_train, y_train, X_val,
     return y_pred_norm * y_std + y_mean
 
 
+def _standard_dnn_train_predict_clf(X_train, y_train, X_val,
+                                    epochs=200, hidden_sizes=(256, 128, 64),
+                                    dropout=0.2, lr=0.001, batch_size=256,
+                                    patience=20, random_state=42,
+                                    sample_weights=None,
+                                    classes_=None):
+    """Standard DNN classifier — clf mirror of _standard_dnn_train_predict.
+
+    Cross-entropy loss, softmax output. Returns predictions in the format
+    the noise-experiment metrics expect: P(y=positive) for binary, argmax
+    class labels for multi-class. Optionally accepts per-sample weights
+    for weighted cross-entropy.
+
+    classes_: if provided, override the auto-detected class set (useful
+    when y_train is a subsample that may not contain all classes — caller
+    can pass the full class set so the network still has n_classes outputs).
+    """
+    import torch
+    import torch.nn as nn
+
+    rng = np.random.RandomState(random_state)
+    torch.manual_seed(random_state)
+
+    X_train = np.asarray(X_train, dtype=np.float32)
+    X_val = np.asarray(X_val, dtype=np.float32)
+
+    if classes_ is None:
+        y_train_int, classes_, _ = _prep_clf_labels(y_train)
+    else:
+        label_map = {c: i for i, c in enumerate(classes_)}
+        y_train_int = np.array([label_map[c] for c in np.asarray(y_train).ravel()],
+                               dtype=np.int64)
+    n_classes = len(classes_)
+
+    n = len(y_train_int)
+    idx = rng.permutation(n)
+    split = int(0.8 * n)
+    tr_idx, ho_idx = idx[:split], idx[split:]
+
+    X_tr = torch.from_numpy(X_train[tr_idx])
+    y_tr = torch.from_numpy(y_train_int[tr_idx])
+    X_ho = torch.from_numpy(X_train[ho_idx])
+    y_ho = torch.from_numpy(y_train_int[ho_idx])
+
+    w_tr = None
+    if sample_weights is not None:
+        w_all = np.asarray(sample_weights, dtype=np.float32)
+        w_tr = torch.from_numpy(w_all[tr_idx])
+
+    device = torch.device('cpu')
+    net = _build_dnn(X_train.shape[1], hidden_sizes, dropout,
+                     output_dim=n_classes).to(device)
+    optimizer = torch.optim.Adam(net.parameters(), lr=lr)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, patience=5, factor=0.5)
+
+    best_ho_loss = float('inf')
+    best_state = None
+    patience_counter = 0
+
+    for epoch in range(epochs):
+        net.train()
+        perm = torch.randperm(len(X_tr))
+
+        for start in range(0, len(X_tr), batch_size):
+            batch_idx = perm[start:start + batch_size]
+            xb = X_tr[batch_idx].to(device)
+            yb = y_tr[batch_idx].to(device)
+
+            optimizer.zero_grad()
+            logits = net(xb)
+
+            if w_tr is not None:
+                wb = w_tr[batch_idx].to(device)
+                per_sample = nn.functional.cross_entropy(logits, yb,
+                                                        reduction='none')
+                loss = (wb * per_sample).mean()
+            else:
+                loss = nn.functional.cross_entropy(logits, yb)
+
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
+            optimizer.step()
+
+        net.eval()
+        with torch.no_grad():
+            ho_logits = net(X_ho.to(device))
+            ho_loss = nn.functional.cross_entropy(
+                ho_logits, y_ho.to(device)).item()
+
+        scheduler.step(ho_loss)
+        if ho_loss < best_ho_loss:
+            best_ho_loss = ho_loss
+            best_state = {k: v.cpu().clone() for k, v in net.state_dict().items()}
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                break
+
+    if best_state is not None:
+        net.load_state_dict(best_state)
+
+    net.eval()
+    with torch.no_grad():
+        X_val_t = torch.from_numpy(X_val).to(device)
+        val_logits = net(X_val_t).cpu().numpy()
+
+    return _clf_pred_from_logits(val_logits, classes_)
+
+
+def _train_clf_dnn_return_proba(X_train, y_train_int, X_predict, n_classes,
+                                epochs=200, hidden_sizes=(256, 128, 64),
+                                dropout=0.2, lr=0.001, batch_size=256,
+                                patience=20, random_state=42):
+    """Train a clf DNN and return the full (n_predict, n_classes) proba matrix.
+
+    Internal helper for ensemble/disagreement methods that need per-class
+    probabilities rather than the user-facing 1D format from
+    _standard_dnn_train_predict_clf. y_train_int must already be mapped to
+    contiguous 0..n_classes-1 ints (use _prep_clf_labels).
+    """
+    import torch
+    import torch.nn as nn
+    import scipy.special
+
+    rng = np.random.RandomState(random_state)
+    torch.manual_seed(random_state)
+
+    X_train = np.asarray(X_train, dtype=np.float32)
+    X_predict = np.asarray(X_predict, dtype=np.float32)
+
+    n = len(y_train_int)
+    idx = rng.permutation(n)
+    split = int(0.8 * n)
+    tr_idx, ho_idx = idx[:split], idx[split:]
+
+    X_tr = torch.from_numpy(X_train[tr_idx])
+    y_tr = torch.from_numpy(y_train_int[tr_idx])
+    X_ho = torch.from_numpy(X_train[ho_idx])
+    y_ho = torch.from_numpy(y_train_int[ho_idx])
+
+    device = torch.device('cpu')
+    net = _build_dnn(X_train.shape[1], hidden_sizes, dropout,
+                     output_dim=n_classes).to(device)
+    optimizer = torch.optim.Adam(net.parameters(), lr=lr)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, patience=5, factor=0.5)
+
+    best_ho_loss = float('inf')
+    best_state = None
+    patience_counter = 0
+
+    for epoch in range(epochs):
+        net.train()
+        perm = torch.randperm(len(X_tr))
+        for start in range(0, len(X_tr), batch_size):
+            batch_idx = perm[start:start + batch_size]
+            xb = X_tr[batch_idx].to(device)
+            yb = y_tr[batch_idx].to(device)
+            optimizer.zero_grad()
+            logits = net(xb)
+            loss = nn.functional.cross_entropy(logits, yb)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
+            optimizer.step()
+        net.eval()
+        with torch.no_grad():
+            ho_logits = net(X_ho.to(device))
+            ho_loss = nn.functional.cross_entropy(
+                ho_logits, y_ho.to(device)).item()
+        scheduler.step(ho_loss)
+        if ho_loss < best_ho_loss:
+            best_ho_loss = ho_loss
+            best_state = {k: v.cpu().clone() for k, v in net.state_dict().items()}
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                break
+
+    if best_state is not None:
+        net.load_state_dict(best_state)
+
+    net.eval()
+    with torch.no_grad():
+        logits = net(torch.from_numpy(X_predict).to(device)).cpu().numpy()
+    return scipy.special.softmax(logits, axis=1)
+
+
 # ============================================================================
 # BASE CLASS
 # ============================================================================
 
 class LNLMethod(ABC):
-    """Base class for Learning with Noisy Labels methods."""
+    """Base class for Learning with Noisy Labels methods.
+
+    Set `is_clf=True` and `classes_=<full class set>` at construction to run
+    the classification path. The 2 GP/evidential methods (HeteroscedasticGP,
+    EvidentialKernel) raise NotImplementedError on is_clf=True — their
+    underlying math (continuous noise variance, NIG distribution) does not
+    have a loss-swap classification analog.
+    """
 
     def __init__(self, random_state=42, epochs=200, hidden_sizes=(256, 128, 64),
-                 dropout=0.2, lr=0.001, batch_size=256, patience=20):
+                 dropout=0.2, lr=0.001, batch_size=256, patience=20,
+                 is_clf=False, classes_=None):
         self.random_state = random_state
         self.epochs = epochs
         self.hidden_sizes = hidden_sizes
@@ -159,6 +416,11 @@ class LNLMethod(ABC):
         self.lr = lr
         self.batch_size = batch_size
         self.patience = patience
+        self.is_clf = is_clf
+        # classes_ is the *full* class set the experiment cares about,
+        # passed in so per-fold y_train subsets that happen to miss a class
+        # still build a network with the right number of output units.
+        self.classes_ = (np.asarray(classes_) if classes_ is not None else None)
 
     @property
     @abstractmethod
@@ -180,16 +442,71 @@ class LNLMethod(ABC):
             {'y_pred': np.ndarray, 'metadata': dict}
         """
 
+    # ---- helpers shared across methods ----
+
+    def _resolve_classes(self, y_train):
+        """Return the class set: explicit self.classes_ if set, else y_train uniques."""
+        if self.classes_ is not None:
+            return self.classes_
+        return np.unique(np.asarray(y_train).ravel())
+
     def _default_predict(self, X_train, y_train, X_val, sample_weights=None):
-        """Convenience: standard DNN train+predict with current hyperparams."""
-        y_pred = _standard_dnn_train_predict(
+        """Convenience: standard DNN train+predict with current hyperparams.
+
+        Routes to the clf trainer when self.is_clf=True.
+        """
+        if self.is_clf:
+            return _standard_dnn_train_predict_clf(
+                X_train, y_train, X_val,
+                epochs=self.epochs, hidden_sizes=self.hidden_sizes,
+                dropout=self.dropout, lr=self.lr, batch_size=self.batch_size,
+                patience=self.patience, random_state=self.random_state,
+                sample_weights=sample_weights,
+                classes_=self._resolve_classes(y_train),
+            )
+        return _standard_dnn_train_predict(
             X_train, y_train, X_val,
             epochs=self.epochs, hidden_sizes=self.hidden_sizes,
             dropout=self.dropout, lr=self.lr, batch_size=self.batch_size,
             patience=self.patience, random_state=self.random_state,
             sample_weights=sample_weights,
         )
-        return y_pred
+
+    def _prep_y_for_torch(self, y_train):
+        """Return (y_tensor, prep_meta) ready to feed into a torch loop.
+
+        Regression: (y_norm_tensor[float32], (y_mean, y_std)) — caller
+        de-normalizes outputs with `pred * y_std + y_mean`.
+
+        Classification: (y_int_tensor[long], classes_) — caller predicts
+        class probabilities/labels with _clf_pred_from_logits.
+        """
+        import torch
+        if self.is_clf:
+            classes_ = self._resolve_classes(y_train)
+            label_map = {c: i for i, c in enumerate(classes_)}
+            y_int = np.array([label_map[c] for c in np.asarray(y_train).ravel()],
+                             dtype=np.int64)
+            return torch.from_numpy(y_int), classes_
+        y_norm, y_mean, y_std = _z_normalize(y_train)
+        return torch.from_numpy(y_norm), (y_mean, y_std)
+
+    def _build_net(self, input_dim, y_train_or_classes=None):
+        """Build a regression or clf head DNN with the configured architecture.
+
+        Pass `y_train_or_classes` so we can size the output layer to n_classes
+        in clf mode. In regression mode this argument is ignored.
+        """
+        if self.is_clf:
+            if y_train_or_classes is None:
+                raise ValueError("clf mode requires y_train or classes_ to size output")
+            classes_ = (self._resolve_classes(y_train_or_classes)
+                        if not isinstance(y_train_or_classes, np.ndarray) or
+                        y_train_or_classes.dtype != object
+                        else self._resolve_classes(y_train_or_classes))
+            return _build_dnn(input_dim, self.hidden_sizes, self.dropout,
+                              output_dim=len(classes_))
+        return _build_dnn(input_dim, self.hidden_sizes, self.dropout, output_dim=1)
 
 
 # ============================================================================
@@ -218,38 +535,57 @@ class SmallLossSelection(LNLMethod):
 
         torch.manual_seed(self.random_state)
         X_t = np.asarray(X_train, dtype=np.float32)
-        y_norm, y_mean, y_std = _z_normalize(y_train)
+        device = torch.device('cpu')
+        X_tensor = torch.from_numpy(X_t)
+
+        if self.is_clf:
+            classes_ = self._resolve_classes(y_train)
+            label_map = {c: i for i, c in enumerate(classes_)}
+            y_int = np.array([label_map[c] for c in np.asarray(y_train).ravel()],
+                             dtype=np.int64)
+            y_tensor = torch.from_numpy(y_int)
+            net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout,
+                             output_dim=len(classes_)).to(device)
+        else:
+            y_norm, y_mean, y_std = _z_normalize(y_train)
+            y_tensor = torch.from_numpy(y_norm)
+            net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
+
+        optimizer = torch.optim.Adam(net.parameters(), lr=self.lr)
 
         # Warmup: train DNN for warmup_epochs on all data
-        device = torch.device('cpu')
-        net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
-        optimizer = torch.optim.Adam(net.parameters(), lr=self.lr)
-        X_tensor = torch.from_numpy(X_t)
-        y_tensor = torch.from_numpy(y_norm)
-
         for epoch in range(self.warmup_epochs):
             net.train()
             perm = torch.randperm(len(X_t))
             for start in range(0, len(X_t), self.batch_size):
                 batch_idx = perm[start:start + self.batch_size]
-                pred = net(X_tensor[batch_idx].to(device)).squeeze(-1)
-                loss = nn.functional.mse_loss(pred, y_tensor[batch_idx].to(device))
+                out = net(X_tensor[batch_idx].to(device))
+                yb = y_tensor[batch_idx].to(device)
+                if self.is_clf:
+                    loss = nn.functional.cross_entropy(out, yb)
+                else:
+                    loss = nn.functional.mse_loss(out.squeeze(-1), yb)
                 optimizer.zero_grad()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
                 optimizer.step()
 
-        # Compute per-sample loss
+        # Per-sample loss
         net.eval()
         with torch.no_grad():
-            preds = net(X_tensor.to(device)).squeeze(-1).cpu().numpy()
-        per_sample_loss = (preds - y_norm) ** 2
+            out = net(X_tensor.to(device))
+            if self.is_clf:
+                per_sample_loss = nn.functional.cross_entropy(
+                    out, y_tensor.to(device), reduction='none').cpu().numpy()
+            else:
+                preds = out.squeeze(-1).cpu().numpy()
+                per_sample_loss = (preds - y_norm) ** 2
 
         # Keep smallest-loss samples
         n_keep = max(10, int(len(y_train) * self.selection_rate))
         keep_idx = np.argsort(per_sample_loss)[:n_keep]
 
-        # Retrain on filtered data
+        # Retrain on filtered data (routes to clf or reg trainer via _default_predict)
         y_pred = self._default_predict(X_t[keep_idx], y_train[keep_idx], X_val)
 
         return {
@@ -283,23 +619,47 @@ class ConfidentLearning(LNLMethod):
     def train_and_predict(self, X_train, y_train, X_val, y_val):
         X_t = np.asarray(X_train, dtype=np.float32)
 
-        # Train ensemble of DNNs
-        predictions = []
-        for i in range(self.n_ensemble):
-            y_pred_i = _standard_dnn_train_predict(
-                X_t, y_train, X_t,  # predict on train
-                epochs=min(self.epochs, 100), hidden_sizes=self.hidden_sizes,
-                dropout=self.dropout, lr=self.lr, batch_size=self.batch_size,
-                patience=self.patience, random_state=self.random_state + i,
-            )
-            predictions.append(y_pred_i)
+        if self.is_clf:
+            classes_ = self._resolve_classes(y_train)
+            label_map = {c: i for i, c in enumerate(classes_)}
+            y_int = np.array([label_map[c] for c in np.asarray(y_train).ravel()],
+                             dtype=np.int64)
+            n_classes = len(classes_)
+            # Ensemble of clf DNNs; collect (n_ensemble, n_samples, n_classes)
+            proba_list = []
+            for i in range(self.n_ensemble):
+                proba_i = _train_clf_dnn_return_proba(
+                    X_t, y_int, X_t, n_classes,
+                    epochs=min(self.epochs, 100), hidden_sizes=self.hidden_sizes,
+                    dropout=self.dropout, lr=self.lr, batch_size=self.batch_size,
+                    patience=self.patience, random_state=self.random_state + i,
+                )
+                proba_list.append(proba_i)
+            probs = np.array(proba_list)  # (E, n, K)
+            mean_proba = probs.mean(axis=0)  # (n, K)
+            # Per-sample error = 1 - P(true class) averaged across ensemble
+            true_class_proba = mean_proba[np.arange(len(y_int)), y_int]
+            errors = 1.0 - true_class_proba
+            # Uncertainty = mean across classes of stddev across ensemble
+            std_per_class = probs.std(axis=0)  # (n, K)
+            std_pred = std_per_class.mean(axis=1)
+        else:
+            # Train ensemble of regression DNNs
+            predictions = []
+            for i in range(self.n_ensemble):
+                y_pred_i = _standard_dnn_train_predict(
+                    X_t, y_train, X_t,
+                    epochs=min(self.epochs, 100), hidden_sizes=self.hidden_sizes,
+                    dropout=self.dropout, lr=self.lr, batch_size=self.batch_size,
+                    patience=self.patience, random_state=self.random_state + i,
+                )
+                predictions.append(y_pred_i)
+            preds = np.array(predictions)  # (E, n)
+            mean_pred = preds.mean(axis=0)
+            std_pred = preds.std(axis=0)
+            errors = np.abs(y_train - mean_pred)
 
-        preds = np.array(predictions)  # (n_ensemble, n_samples)
-        mean_pred = preds.mean(axis=0)
-        std_pred = preds.std(axis=0)
-
-        # Flag: high error AND low uncertainty
-        errors = np.abs(y_train - mean_pred)
+        # Flag: high error AND low uncertainty (model confidently disagrees)
         error_threshold = np.percentile(errors, self.error_pct)
         uncertainty_threshold = np.percentile(std_pred, self.uncertainty_pct)
 
@@ -309,7 +669,7 @@ class ConfidentLearning(LNLMethod):
         if keep_mask.sum() < 10:
             keep_mask = np.ones(len(y_train), dtype=bool)
 
-        # Retrain on clean subset
+        # Retrain on clean subset (routes to clf or reg trainer)
         y_pred = self._default_predict(X_t[keep_mask], y_train[keep_mask], X_val)
 
         return {
@@ -340,24 +700,29 @@ class DistanceBasedSelection(LNLMethod):
 
     def train_and_predict(self, X_train, y_train, X_val, y_val):
         from sklearn.neighbors import NearestNeighbors
+        from sklearn.preprocessing import StandardScaler
 
         X_t = np.asarray(X_train, dtype=np.float32)
-        from sklearn.preprocessing import StandardScaler
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X_t)
 
-        # kNN label disagreement
+        # kNN structure
         k_actual = min(self.k, len(y_train) - 1)
-        nn = NearestNeighbors(n_neighbors=k_actual + 1)
-        nn.fit(X_scaled)
-        _, indices = nn.kneighbors(X_scaled)
+        nn_model = NearestNeighbors(n_neighbors=k_actual + 1)
+        nn_model.fit(X_scaled)
+        _, indices = nn_model.kneighbors(X_scaled)
         neighbor_idx = indices[:, 1:]  # exclude self
 
-        neighbor_means = np.mean(y_train[neighbor_idx], axis=1)
-        neighbor_stds = np.std(y_train[neighbor_idx], axis=1) + 1e-10
-
-        # Disagreement: how much does sample deviate from neighbors
-        disagreement = np.abs(y_train - neighbor_means) / neighbor_stds
+        y_arr = np.asarray(y_train).ravel()
+        if self.is_clf:
+            # Disagreement = fraction of neighbors with a different class label.
+            # Symmetric, scale-free, and meaningful for binary AND multi-class.
+            neighbor_labels = y_arr[neighbor_idx]  # (n, k)
+            disagreement = (neighbor_labels != y_arr[:, None]).mean(axis=1)
+        else:
+            neighbor_means = np.mean(y_arr[neighbor_idx], axis=1)
+            neighbor_stds = np.std(y_arr[neighbor_idx], axis=1) + 1e-10
+            disagreement = np.abs(y_arr - neighbor_means) / neighbor_stds
 
         # Flag outliers
         threshold = np.percentile(disagreement, self.threshold_pct)
@@ -405,20 +770,44 @@ class MultistageCleaning(LNLMethod):
         current_idx = np.arange(len(y_train))
         stage_info = []
 
+        if self.is_clf:
+            classes_ = self._resolve_classes(y_train)
+            label_map = {c: i for i, c in enumerate(classes_)}
+            y_int_full = np.array(
+                [label_map[c] for c in np.asarray(y_train).ravel()],
+                dtype=np.int64,
+            )
+            n_classes = len(classes_)
+
         for stage in range(self.n_stages):
             X_stage = X_t[current_idx]
             y_stage = y_train[current_idx]
 
-            # Train and compute per-sample loss
-            y_pred_train = _standard_dnn_train_predict(
-                X_stage, y_stage, X_stage,
-                epochs=min(self.epochs, 100),
-                hidden_sizes=self.hidden_sizes, dropout=self.dropout,
-                lr=self.lr, batch_size=self.batch_size,
-                patience=self.patience,
-                random_state=self.random_state + stage,
-            )
-            losses = (y_pred_train - y_stage) ** 2
+            if self.is_clf:
+                y_stage_int = y_int_full[current_idx]
+                # Train clf, then compute per-sample CE on training data.
+                proba = _train_clf_dnn_return_proba(
+                    X_stage, y_stage_int, X_stage, n_classes,
+                    epochs=min(self.epochs, 100),
+                    hidden_sizes=self.hidden_sizes, dropout=self.dropout,
+                    lr=self.lr, batch_size=self.batch_size,
+                    patience=self.patience,
+                    random_state=self.random_state + stage,
+                )
+                # -log P(true class), shape (n_stage,)
+                losses = -np.log(np.clip(
+                    proba[np.arange(len(y_stage_int)), y_stage_int],
+                    1e-10, 1.0))
+            else:
+                y_pred_train = _standard_dnn_train_predict(
+                    X_stage, y_stage, X_stage,
+                    epochs=min(self.epochs, 100),
+                    hidden_sizes=self.hidden_sizes, dropout=self.dropout,
+                    lr=self.lr, batch_size=self.batch_size,
+                    patience=self.patience,
+                    random_state=self.random_state + stage,
+                )
+                losses = (y_pred_train - y_stage) ** 2
 
             # Remove top removal_rate% by loss
             n_remove = max(1, int(len(y_stage) * self.removal_rate))
@@ -435,7 +824,7 @@ class MultistageCleaning(LNLMethod):
             if len(current_idx) < 10:
                 break
 
-        # Final training on cleaned data
+        # Final training on cleaned data (routes through _default_predict)
         y_pred = self._default_predict(X_t[current_idx], y_train[current_idx], X_val)
 
         return {
@@ -471,24 +860,36 @@ class EarlyLearning(LNLMethod):
         torch.manual_seed(self.random_state)
         X_t = np.asarray(X_train, dtype=np.float32)
         X_v = np.asarray(X_val, dtype=np.float32)
-        y_norm, y_mean, y_std = _z_normalize(y_train)
-
         device = torch.device('cpu')
-        net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
+
+        if self.is_clf:
+            classes_ = self._resolve_classes(y_train)
+            label_map = {c: i for i, c in enumerate(classes_)}
+            y_int = np.array([label_map[c] for c in np.asarray(y_train).ravel()],
+                             dtype=np.int64)
+            y_val_int = np.array(
+                [label_map.get(c, 0) for c in np.asarray(y_val).ravel()],
+                dtype=np.int64)
+            y_tensor = torch.from_numpy(y_int)
+            y_val_tensor = torch.from_numpy(y_val_int)
+            net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout,
+                             output_dim=len(classes_)).to(device)
+        else:
+            y_norm, y_mean, y_std = _z_normalize(y_train)
+            y_val_norm = (np.asarray(y_val, dtype=np.float32) - y_mean) / y_std
+            y_tensor = torch.from_numpy(y_norm)
+            y_val_tensor = torch.from_numpy(y_val_norm)
+            net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
+
         optimizer = torch.optim.Adam(net.parameters(), lr=self.lr)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, patience=5, factor=0.5)
 
         X_tensor = torch.from_numpy(X_t)
-        y_tensor = torch.from_numpy(y_norm)
+        X_val_tensor = torch.from_numpy(X_v)
 
         # Per-sample weights
         weights = np.ones(len(y_train), dtype=np.float32)
-
-        # Use y_val for early stopping
-        y_val_norm = (np.asarray(y_val, dtype=np.float32) - y_mean) / y_std
-        X_val_tensor = torch.from_numpy(X_v)
-        y_val_tensor = torch.from_numpy(y_val_norm)
 
         best_val_loss = float('inf')
         best_state = None
@@ -506,8 +907,13 @@ class EarlyLearning(LNLMethod):
                 wb = w_tensor[batch_idx].to(device)
 
                 optimizer.zero_grad()
-                pred = net(xb).squeeze(-1)
-                loss = (wb * (pred - yb) ** 2).mean()
+                out = net(xb)
+                if self.is_clf:
+                    per = nn.functional.cross_entropy(out, yb, reduction='none')
+                    loss = (wb * per).mean()
+                else:
+                    pred = out.squeeze(-1)
+                    loss = (wb * (pred - yb) ** 2).mean()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
                 optimizer.step()
@@ -515,21 +921,31 @@ class EarlyLearning(LNLMethod):
             # Compute per-sample loss and update weights
             net.eval()
             with torch.no_grad():
-                all_pred = net(X_tensor.to(device)).squeeze(-1).cpu().numpy()
-            per_sample_loss = (all_pred - y_norm) ** 2
+                out_all = net(X_tensor.to(device))
+                if self.is_clf:
+                    per_sample_loss = nn.functional.cross_entropy(
+                        out_all, y_tensor.to(device),
+                        reduction='none').cpu().numpy()
+                else:
+                    all_pred = out_all.squeeze(-1).cpu().numpy()
+                    per_sample_loss = (all_pred - y_norm) ** 2
             median_loss = np.median(per_sample_loss)
 
-            # Geometric decay for high-loss samples
             high_loss_mask = per_sample_loss > median_loss
             weights[high_loss_mask] *= self.gamma
             weights = np.clip(weights, 0.01, 1.0)
-            # Normalize to mean 1
             weights = weights / weights.mean()
 
             # Val early stopping
             with torch.no_grad():
-                val_pred = net(X_val_tensor.to(device)).squeeze(-1)
-                val_loss = nn.functional.mse_loss(val_pred, y_val_tensor.to(device)).item()
+                val_out = net(X_val_tensor.to(device))
+                if self.is_clf:
+                    val_loss = nn.functional.cross_entropy(
+                        val_out, y_val_tensor.to(device)).item()
+                else:
+                    val_pred = val_out.squeeze(-1)
+                    val_loss = nn.functional.mse_loss(
+                        val_pred, y_val_tensor.to(device)).item()
 
             scheduler.step(val_loss)
             if val_loss < best_val_loss:
@@ -546,10 +962,14 @@ class EarlyLearning(LNLMethod):
 
         net.eval()
         with torch.no_grad():
-            y_pred = net(X_val_tensor.to(device)).squeeze(-1).cpu().numpy()
+            out = net(X_val_tensor.to(device))
+            if self.is_clf:
+                y_pred = _clf_pred_from_logits(out.cpu().numpy(), classes_)
+            else:
+                y_pred = out.squeeze(-1).cpu().numpy() * y_std + y_mean
 
         return {
-            'y_pred': y_pred * y_std + y_mean,
+            'y_pred': y_pred,
             'metadata': {
                 'final_epoch': epoch + 1,
                 'weight_mean': float(weights.mean()),
@@ -582,21 +1002,34 @@ class UncertaintyCurriculum(LNLMethod):
         torch.manual_seed(self.random_state)
         X_t = np.asarray(X_train, dtype=np.float32)
         X_v = np.asarray(X_val, dtype=np.float32)
-        y_norm, y_mean, y_std = _z_normalize(y_train)
         n = len(y_train)
-
         device = torch.device('cpu')
-        net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
+
+        if self.is_clf:
+            classes_ = self._resolve_classes(y_train)
+            label_map = {c: i for i, c in enumerate(classes_)}
+            y_int = np.array([label_map[c] for c in np.asarray(y_train).ravel()],
+                             dtype=np.int64)
+            y_val_int = np.array(
+                [label_map.get(c, 0) for c in np.asarray(y_val).ravel()],
+                dtype=np.int64)
+            y_tensor = torch.from_numpy(y_int)
+            y_val_tensor = torch.from_numpy(y_val_int)
+            net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout,
+                             output_dim=len(classes_)).to(device)
+        else:
+            y_norm, y_mean, y_std = _z_normalize(y_train)
+            y_val_norm = (np.asarray(y_val, dtype=np.float32) - y_mean) / y_std
+            y_tensor = torch.from_numpy(y_norm)
+            y_val_tensor = torch.from_numpy(y_val_norm)
+            net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
+
         optimizer = torch.optim.Adam(net.parameters(), lr=self.lr)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, patience=5, factor=0.5)
 
         X_tensor = torch.from_numpy(X_t)
-        y_tensor = torch.from_numpy(y_norm)
-
-        y_val_norm = (np.asarray(y_val, dtype=np.float32) - y_mean) / y_std
         X_val_tensor = torch.from_numpy(X_v)
-        y_val_tensor = torch.from_numpy(y_val_norm)
 
         # Compute stage epoch boundaries
         remaining = self.epochs - self.warmup_epochs
@@ -606,12 +1039,10 @@ class UncertaintyCurriculum(LNLMethod):
         best_state = None
         patience_counter = 0
 
-        current_inclusion = np.ones(n, dtype=bool)  # start with all during warmup
+        current_inclusion = np.ones(n, dtype=bool)
 
         for epoch in range(self.epochs):
-            # Determine stage and inclusion
             if epoch < self.warmup_epochs:
-                # Warmup: use all data
                 current_inclusion = np.ones(n, dtype=bool)
             else:
                 stage_idx = min(
@@ -620,17 +1051,21 @@ class UncertaintyCurriculum(LNLMethod):
                 )
                 fraction = self.stages[stage_idx]
 
-                # Rank by confidence (inverse per-sample loss)
                 net.eval()
                 with torch.no_grad():
-                    all_pred = net(X_tensor.to(device)).squeeze(-1).cpu().numpy()
-                per_sample_loss = (all_pred - y_norm) ** 2
+                    out_all = net(X_tensor.to(device))
+                    if self.is_clf:
+                        per_sample_loss = nn.functional.cross_entropy(
+                            out_all, y_tensor.to(device),
+                            reduction='none').cpu().numpy()
+                    else:
+                        all_pred = out_all.squeeze(-1).cpu().numpy()
+                        per_sample_loss = (all_pred - y_norm) ** 2
                 n_include = max(10, int(n * fraction))
                 include_idx = np.argsort(per_sample_loss)[:n_include]
                 current_inclusion = np.zeros(n, dtype=bool)
                 current_inclusion[include_idx] = True
 
-            # Train on included samples
             idx_active = np.where(current_inclusion)[0]
             if len(idx_active) < 2:
                 continue
@@ -646,8 +1081,11 @@ class UncertaintyCurriculum(LNLMethod):
                 yb = y_tensor[batch_global].to(device)
 
                 optimizer.zero_grad()
-                pred = net(xb).squeeze(-1)
-                loss = nn.functional.mse_loss(pred, yb)
+                out = net(xb)
+                if self.is_clf:
+                    loss = nn.functional.cross_entropy(out, yb)
+                else:
+                    loss = nn.functional.mse_loss(out.squeeze(-1), yb)
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
                 optimizer.step()
@@ -655,8 +1093,14 @@ class UncertaintyCurriculum(LNLMethod):
             # Val early stopping
             net.eval()
             with torch.no_grad():
-                val_pred = net(X_val_tensor.to(device)).squeeze(-1)
-                val_loss = nn.functional.mse_loss(val_pred, y_val_tensor.to(device)).item()
+                val_out = net(X_val_tensor.to(device))
+                if self.is_clf:
+                    val_loss = nn.functional.cross_entropy(
+                        val_out, y_val_tensor.to(device)).item()
+                else:
+                    val_pred = val_out.squeeze(-1)
+                    val_loss = nn.functional.mse_loss(
+                        val_pred, y_val_tensor.to(device)).item()
 
             scheduler.step(val_loss)
             if val_loss < best_val_loss:
@@ -673,10 +1117,14 @@ class UncertaintyCurriculum(LNLMethod):
 
         net.eval()
         with torch.no_grad():
-            y_pred = net(X_val_tensor.to(device)).squeeze(-1).cpu().numpy()
+            out = net(X_val_tensor.to(device))
+            if self.is_clf:
+                y_pred = _clf_pred_from_logits(out.cpu().numpy(), classes_)
+            else:
+                y_pred = out.squeeze(-1).cpu().numpy() * y_std + y_mean
 
         return {
-            'y_pred': y_pred * y_std + y_mean,
+            'y_pred': y_pred,
             'metadata': {
                 'final_epoch': epoch + 1,
                 'final_inclusion_pct': float(current_inclusion.mean() * 100),
@@ -706,72 +1154,105 @@ class DivideMixReg(LNLMethod):
     def train_and_predict(self, X_train, y_train, X_val, y_val):
         import torch
         import torch.nn as nn
+        import scipy.special
         from sklearn.mixture import GaussianMixture
 
         torch.manual_seed(self.random_state)
         X_t = np.asarray(X_train, dtype=np.float32)
         X_v = np.asarray(X_val, dtype=np.float32)
-        y_norm, y_mean, y_std = _z_normalize(y_train)
         n = len(y_train)
-
         device = torch.device('cpu')
-        net_a = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
-        net_b = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
+
+        if self.is_clf:
+            classes_ = self._resolve_classes(y_train)
+            label_map = {c: i for i, c in enumerate(classes_)}
+            y_int = np.array([label_map[c] for c in np.asarray(y_train).ravel()],
+                             dtype=np.int64)
+            y_val_int = np.array(
+                [label_map.get(c, 0) for c in np.asarray(y_val).ravel()],
+                dtype=np.int64)
+            n_classes = len(classes_)
+            y_tensor = torch.from_numpy(y_int)
+            y_val_tensor = torch.from_numpy(y_val_int)
+            net_a = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout,
+                               output_dim=n_classes).to(device)
+            net_b = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout,
+                               output_dim=n_classes).to(device)
+        else:
+            y_norm, y_mean, y_std = _z_normalize(y_train)
+            y_val_norm = (np.asarray(y_val, dtype=np.float32) - y_mean) / y_std
+            y_tensor = torch.from_numpy(y_norm)
+            y_val_tensor = torch.from_numpy(y_val_norm)
+            net_a = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
+            net_b = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
+
         opt_a = torch.optim.Adam(net_a.parameters(), lr=self.lr)
         opt_b = torch.optim.Adam(net_b.parameters(), lr=self.lr)
 
         X_tensor = torch.from_numpy(X_t)
-        y_tensor = torch.from_numpy(y_norm)
-
-        y_val_norm = (np.asarray(y_val, dtype=np.float32) - y_mean) / y_std
         X_val_tensor = torch.from_numpy(X_v)
-        y_val_tensor = torch.from_numpy(y_val_norm)
+
+        def _train_step(net, opt, idx_subset):
+            """One epoch over idx_subset for either reg or clf."""
+            net.train()
+            if len(idx_subset) < 2:
+                return
+            perm = torch.from_numpy(
+                np.random.RandomState(self.random_state + epoch).permutation(len(idx_subset))
+            )
+            for start in range(0, len(idx_subset), self.batch_size):
+                batch_local = perm[start:start + self.batch_size]
+                batch_global = torch.from_numpy(idx_subset)[batch_local]
+                out = net(X_tensor[batch_global].to(device))
+                yb = y_tensor[batch_global].to(device)
+                if self.is_clf:
+                    loss = nn.functional.cross_entropy(out, yb)
+                else:
+                    loss = nn.functional.mse_loss(out.squeeze(-1), yb)
+                opt.zero_grad()
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
+                opt.step()
+
+        def _per_sample_loss_np(net):
+            """Per-sample loss across all training samples (numpy 1D)."""
+            net.eval()
+            with torch.no_grad():
+                out = net(X_tensor.to(device))
+                if self.is_clf:
+                    return nn.functional.cross_entropy(
+                        out, y_tensor.to(device), reduction='none').cpu().numpy()
+                pred = out.squeeze(-1).cpu().numpy()
+                return (pred - y_norm) ** 2
 
         best_val_loss = float('inf')
         best_state = None
         patience_counter = 0
         gmm_labels = None
+        clean_mask_a = clean_mask_b = np.ones(n, dtype=bool)
 
         for epoch in range(self.epochs):
-            # --- Warmup: standard training for both nets ---
+            # Warmup: full-data training for both nets
             if epoch < self.warmup_epochs:
-                for net, opt in [(net_a, opt_a), (net_b, opt_b)]:
-                    net.train()
-                    perm = torch.randperm(n)
-                    for start in range(0, n, self.batch_size):
-                        idx = perm[start:start + self.batch_size]
-                        pred = net(X_tensor[idx].to(device)).squeeze(-1)
-                        loss = nn.functional.mse_loss(pred, y_tensor[idx].to(device))
-                        opt.zero_grad()
-                        loss.backward()
-                        torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
-                        opt.step()
+                _train_step(net_a, opt_a, np.arange(n))
+                _train_step(net_b, opt_b, np.arange(n))
                 continue
 
-            # --- GMM separation on losses from net_a ---
-            net_a.eval()
-            with torch.no_grad():
-                pred_a = net_a(X_tensor.to(device)).squeeze(-1).cpu().numpy()
-            losses_a = (pred_a - y_norm) ** 2
+            # GMM separation on per-sample losses from net_a
+            losses_a = _per_sample_loss_np(net_a)
             log_losses = np.log(losses_a + 1e-10).reshape(-1, 1)
-
             try:
                 gmm = GaussianMixture(n_components=2, random_state=self.random_state)
                 gmm.fit(log_losses)
                 gmm_labels = gmm.predict(log_losses)
-                # Clean component = lower mean loss
                 clean_comp = 0 if gmm.means_[0] < gmm.means_[1] else 1
                 clean_mask_a = (gmm_labels == clean_comp)
             except Exception:
                 clean_mask_a = np.ones(n, dtype=bool)
 
-            # --- GMM separation on losses from net_b ---
-            net_b.eval()
-            with torch.no_grad():
-                pred_b = net_b(X_tensor.to(device)).squeeze(-1).cpu().numpy()
-            losses_b = (pred_b - y_norm) ** 2
+            # GMM separation on per-sample losses from net_b
+            losses_b = _per_sample_loss_np(net_b)
             log_losses_b = np.log(losses_b + 1e-10).reshape(-1, 1)
-
             try:
                 gmm_b = GaussianMixture(n_components=2, random_state=self.random_state)
                 gmm_b.fit(log_losses_b)
@@ -781,34 +1262,27 @@ class DivideMixReg(LNLMethod):
             except Exception:
                 clean_mask_b = np.ones(n, dtype=bool)
 
-            # --- Cross-train: net_a on clean samples from net_b, vice versa ---
-            for net, opt, clean_mask in [(net_a, opt_a, clean_mask_b),
-                                          (net_b, opt_b, clean_mask_a)]:
-                clean_idx = np.where(clean_mask)[0]
-                if len(clean_idx) < 2:
-                    continue
-                net.train()
-                perm = torch.from_numpy(
-                    np.random.RandomState(self.random_state + epoch).permutation(len(clean_idx))
-                )
-                for start in range(0, len(clean_idx), self.batch_size):
-                    batch_local = perm[start:start + self.batch_size]
-                    batch_global = torch.from_numpy(clean_idx)[batch_local]
-                    pred = net(X_tensor[batch_global].to(device)).squeeze(-1)
-                    loss = nn.functional.mse_loss(pred, y_tensor[batch_global].to(device))
-                    opt.zero_grad()
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
-                    opt.step()
+            # Cross-train each net on the other's clean set
+            _train_step(net_a, opt_a, np.where(clean_mask_b)[0])
+            _train_step(net_b, opt_b, np.where(clean_mask_a)[0])
 
-            # Val early stopping (average of both nets)
+            # Val early stopping (average loss across the two nets)
             net_a.eval()
             net_b.eval()
             with torch.no_grad():
-                pred_va = net_a(X_val_tensor.to(device)).squeeze(-1)
-                pred_vb = net_b(X_val_tensor.to(device)).squeeze(-1)
-                avg_pred = (pred_va + pred_vb) / 2
-                val_loss = nn.functional.mse_loss(avg_pred, y_val_tensor.to(device)).item()
+                out_a = net_a(X_val_tensor.to(device))
+                out_b = net_b(X_val_tensor.to(device))
+                if self.is_clf:
+                    val_loss = 0.5 * (
+                        nn.functional.cross_entropy(out_a, y_val_tensor.to(device)).item() +
+                        nn.functional.cross_entropy(out_b, y_val_tensor.to(device)).item()
+                    )
+                else:
+                    pred_va = out_a.squeeze(-1)
+                    pred_vb = out_b.squeeze(-1)
+                    avg_pred = (pred_va + pred_vb) / 2
+                    val_loss = nn.functional.mse_loss(
+                        avg_pred, y_val_tensor.to(device)).item()
 
             if val_loss < best_val_loss:
                 best_val_loss = val_loss
@@ -829,10 +1303,19 @@ class DivideMixReg(LNLMethod):
         net_a.eval()
         net_b.eval()
         with torch.no_grad():
-            pred_a = net_a(X_val_tensor.to(device)).squeeze(-1).cpu().numpy()
-            pred_b = net_b(X_val_tensor.to(device)).squeeze(-1).cpu().numpy()
+            out_a = net_a(X_val_tensor.to(device)).cpu().numpy()
+            out_b = net_b(X_val_tensor.to(device)).cpu().numpy()
 
-        y_pred = (pred_a + pred_b) / 2 * y_std + y_mean
+        if self.is_clf:
+            # Average softmax probabilities, then format for the metric
+            proba = 0.5 * (scipy.special.softmax(out_a, axis=1) +
+                           scipy.special.softmax(out_b, axis=1))
+            if n_classes == 2:
+                y_pred = proba[:, 1]
+            else:
+                y_pred = classes_[np.argmax(proba, axis=1)]
+        else:
+            y_pred = (out_a.squeeze(-1) + out_b.squeeze(-1)) / 2 * y_std + y_mean
 
         return {
             'y_pred': y_pred,
@@ -871,16 +1354,34 @@ class MetaWeightNet(LNLMethod):
         torch.manual_seed(self.random_state)
         X_t = np.asarray(X_train, dtype=np.float32)
         X_v = np.asarray(X_val, dtype=np.float32)
-        y_norm, y_mean, y_std = _z_normalize(y_train)
-        y_val_norm = (np.asarray(y_val, dtype=np.float32) - y_mean) / y_std
-
         device = torch.device('cpu')
-        net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
+
+        if self.is_clf:
+            classes_ = self._resolve_classes(y_train)
+            label_map = {c: i for i, c in enumerate(classes_)}
+            y_int = np.array([label_map[c] for c in np.asarray(y_train).ravel()],
+                             dtype=np.int64)
+            y_val_int = np.array(
+                [label_map.get(c, 0) for c in np.asarray(y_val).ravel()],
+                dtype=np.int64)
+            y_tensor = torch.from_numpy(y_int)
+            y_val_tensor = torch.from_numpy(y_val_int)
+            net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout,
+                             output_dim=len(classes_)).to(device)
+        else:
+            y_norm, y_mean, y_std = _z_normalize(y_train)
+            y_val_norm = (np.asarray(y_val, dtype=np.float32) - y_mean) / y_std
+            y_tensor = torch.from_numpy(y_norm)
+            y_val_tensor = torch.from_numpy(y_val_norm)
+            net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
+
         optimizer = torch.optim.Adam(net.parameters(), lr=self.lr)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, patience=5, factor=0.5)
 
-        # Meta-network: loss -> weight (small 2-layer MLP)
+        # Meta-network: per-sample loss (scalar) -> weight in (0, 1).
+        # Input shape and semantics are identical for reg and clf — the loss
+        # value is just MSE vs CE; the meta-net only sees the scalar magnitude.
         meta_net = nn.Sequential(
             nn.Linear(1, 32), nn.ReLU(),
             nn.Linear(32, 1), nn.Sigmoid(),
@@ -888,62 +1389,58 @@ class MetaWeightNet(LNLMethod):
         meta_optimizer = torch.optim.Adam(meta_net.parameters(), lr=self.meta_lr)
 
         X_tensor = torch.from_numpy(X_t)
-        y_tensor = torch.from_numpy(y_norm)
         X_val_tensor = torch.from_numpy(X_v)
-        y_val_tensor = torch.from_numpy(y_val_norm)
+
+        def _per_sample(net_out, y_target):
+            if self.is_clf:
+                return nn.functional.cross_entropy(net_out, y_target, reduction='none')
+            return (net_out.squeeze(-1) - y_target) ** 2
+
+        def _val_loss(net_out, y_target):
+            if self.is_clf:
+                return nn.functional.cross_entropy(net_out, y_target)
+            return nn.functional.mse_loss(net_out.squeeze(-1), y_target)
 
         best_val_loss = float('inf')
         best_state = None
         patience_counter = 0
 
         for epoch in range(self.epochs):
-            # --- Meta-update every meta_interval epochs ---
+            # Meta-update every meta_interval epochs
             if epoch > 0 and epoch % self.meta_interval == 0 and len(X_v) > 0:
                 net.eval()
-                # Compute per-sample loss on training data
                 with torch.no_grad():
-                    train_pred = net(X_tensor.to(device)).squeeze(-1)
-                    per_loss = ((train_pred - y_tensor.to(device)) ** 2).unsqueeze(-1)
+                    out = net(X_tensor.to(device))
+                    per_loss = _per_sample(out, y_tensor.to(device)).unsqueeze(-1)
 
-                # Get meta-weights
                 meta_weights = meta_net(per_loss.detach()).squeeze(-1)
 
-                # First-order meta-gradient: train one step with meta-weights,
-                # evaluate on val, update meta-net
+                # Inner train step with meta-weights
                 net.train()
-                train_pred_2 = net(X_tensor.to(device)).squeeze(-1)
-                weighted_loss = (meta_weights.detach() *
-                                 (train_pred_2 - y_tensor.to(device)) ** 2).mean()
+                out_2 = net(X_tensor.to(device))
+                per_2 = _per_sample(out_2, y_tensor.to(device))
+                weighted_loss = (meta_weights.detach() * per_2).mean()
                 optimizer.zero_grad()
                 weighted_loss.backward()
                 torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
                 optimizer.step()
 
-                # Val loss for meta-gradient
+                # Val loss for meta-gradient (first-order approx)
                 net.eval()
-                val_pred = net(X_val_tensor.to(device)).squeeze(-1)
-                meta_loss = nn.functional.mse_loss(val_pred, y_val_tensor.to(device))
+                val_out = net(X_val_tensor.to(device))
+                meta_loss = _val_loss(val_out, y_val_tensor.to(device))
 
-                # Update meta-net
-                # Recompute with grad for meta-net
-                net.train()
-                train_pred_3 = net(X_tensor.to(device)).squeeze(-1)
-                per_loss_3 = ((train_pred_3 - y_tensor.to(device)) ** 2).unsqueeze(-1)
-                meta_weights_3 = meta_net(per_loss_3.detach()).squeeze(-1)
-
-                # Approximate: use val loss directly
                 meta_optimizer.zero_grad()
                 meta_loss.backward()
                 meta_optimizer.step()
 
-            # --- Standard weighted training step ---
+            # Standard weighted training
             net.train()
             perm = torch.randperm(len(X_t))
 
-            # Get current weights from meta-net
             with torch.no_grad():
-                all_pred = net(X_tensor.to(device)).squeeze(-1)
-                all_loss = ((all_pred - y_tensor.to(device)) ** 2).unsqueeze(-1)
+                out_all = net(X_tensor.to(device))
+                all_loss = _per_sample(out_all, y_tensor.to(device)).unsqueeze(-1)
                 meta_w = meta_net(all_loss).squeeze(-1).cpu()
 
             for start in range(0, len(X_t), self.batch_size):
@@ -953,8 +1450,9 @@ class MetaWeightNet(LNLMethod):
                 wb = meta_w[batch_idx].to(device)
 
                 optimizer.zero_grad()
-                pred = net(xb).squeeze(-1)
-                loss = (wb * (pred - yb) ** 2).mean()
+                out = net(xb)
+                per = _per_sample(out, yb)
+                loss = (wb * per).mean()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
                 optimizer.step()
@@ -962,8 +1460,8 @@ class MetaWeightNet(LNLMethod):
             # Val early stopping
             net.eval()
             with torch.no_grad():
-                val_pred = net(X_val_tensor.to(device)).squeeze(-1)
-                val_loss = nn.functional.mse_loss(val_pred, y_val_tensor.to(device)).item()
+                val_out = net(X_val_tensor.to(device))
+                val_loss = _val_loss(val_out, y_val_tensor.to(device)).item()
 
             scheduler.step(val_loss)
             if val_loss < best_val_loss:
@@ -980,10 +1478,14 @@ class MetaWeightNet(LNLMethod):
 
         net.eval()
         with torch.no_grad():
-            y_pred = net(X_val_tensor.to(device)).squeeze(-1).cpu().numpy()
+            out = net(X_val_tensor.to(device))
+            if self.is_clf:
+                y_pred = _clf_pred_from_logits(out.cpu().numpy(), classes_)
+            else:
+                y_pred = out.squeeze(-1).cpu().numpy() * y_std + y_mean
 
         return {
-            'y_pred': y_pred * y_std + y_mean,
+            'y_pred': y_pred,
             'metadata': {
                 'final_epoch': epoch + 1,
                 'meta_weight_mean': float(meta_w.mean()),
@@ -1019,26 +1521,45 @@ class MentorNet(LNLMethod):
         torch.manual_seed(self.random_state)
         X_t = np.asarray(X_train, dtype=np.float32)
         X_v = np.asarray(X_val, dtype=np.float32)
-        y_norm, y_mean, y_std = _z_normalize(y_train)
         n = len(y_train)
+        device = torch.device('cpu')
 
-        # Pre-compute kNN distances
+        if self.is_clf:
+            classes_ = self._resolve_classes(y_train)
+            label_map = {c: i for i, c in enumerate(classes_)}
+            y_int = np.array([label_map[c] for c in np.asarray(y_train).ravel()],
+                             dtype=np.int64)
+            y_val_int = np.array(
+                [label_map.get(c, 0) for c in np.asarray(y_val).ravel()],
+                dtype=np.int64)
+            y_tensor = torch.from_numpy(y_int)
+            y_val_tensor = torch.from_numpy(y_val_int)
+            net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout,
+                             output_dim=len(classes_)).to(device)
+        else:
+            y_norm, y_mean, y_std = _z_normalize(y_train)
+            y_val_norm = (np.asarray(y_val, dtype=np.float32) - y_mean) / y_std
+            y_tensor = torch.from_numpy(y_norm)
+            y_val_tensor = torch.from_numpy(y_val_norm)
+            net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
+
+        # Pre-compute kNN distances (feature-based, label-agnostic)
         scaler = StandardScaler()
         X_scaled = scaler.fit_transform(X_t)
         k_actual = min(self.k_neighbors, n - 1)
         nn_model = NearestNeighbors(n_neighbors=k_actual + 1)
         nn_model.fit(X_scaled)
         distances, _ = nn_model.kneighbors(X_scaled)
-        knn_dist = distances[:, 1:].mean(axis=1)  # mean distance to k neighbors
+        knn_dist = distances[:, 1:].mean(axis=1)
         knn_dist = (knn_dist - knn_dist.mean()) / (knn_dist.std() + 1e-10)
 
-        device = torch.device('cpu')
-        net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
         optimizer = torch.optim.Adam(net.parameters(), lr=self.lr)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, patience=5, factor=0.5)
 
-        # Mentor network: 7D -> 1 (weight)
+        # Mentor: 7D -> 1 (weight). Same architecture for reg and clf — the
+        # mentor only consumes loss scalars + kNN distance, both of which are
+        # well-defined regardless of task.
         mentor = nn.Sequential(
             nn.Linear(7, 32), nn.ReLU(),
             nn.Linear(32, 1), nn.Sigmoid(),
@@ -1046,32 +1567,35 @@ class MentorNet(LNLMethod):
         mentor_opt = torch.optim.Adam(mentor.parameters(), lr=self.lr * 0.1)
 
         X_tensor = torch.from_numpy(X_t)
-        y_tensor = torch.from_numpy(y_norm)
-        knn_tensor = torch.from_numpy(knn_dist.astype(np.float32))
-
-        y_val_norm = (np.asarray(y_val, dtype=np.float32) - y_mean) / y_std
         X_val_tensor = torch.from_numpy(X_v)
-        y_val_tensor = torch.from_numpy(y_val_norm)
 
-        # Loss history buffer (5 epochs)
+        def _per_sample(net_out, y_target):
+            if self.is_clf:
+                return nn.functional.cross_entropy(net_out, y_target, reduction='none')
+            return (net_out.squeeze(-1) - y_target) ** 2
+
+        def _val_loss(net_out, y_target):
+            if self.is_clf:
+                return nn.functional.cross_entropy(net_out, y_target)
+            return nn.functional.mse_loss(net_out.squeeze(-1), y_target)
+
         loss_history = np.zeros((n, 5), dtype=np.float32)
 
         best_val_loss = float('inf')
         best_state = None
         patience_counter = 0
+        mentor_weights = None
 
         for epoch in range(self.epochs):
-            # Compute current per-sample loss
+            # Current per-sample loss
             net.eval()
             with torch.no_grad():
-                all_pred = net(X_tensor.to(device)).squeeze(-1).cpu().numpy()
-            current_loss = (all_pred - y_norm) ** 2
+                out_all = net(X_tensor.to(device))
+                current_loss = _per_sample(out_all, y_tensor.to(device)).cpu().numpy()
 
-            # Update loss history (shift left, add current)
             loss_history[:, :-1] = loss_history[:, 1:]
             loss_history[:, -1] = current_loss
 
-            # Build 7D mentor features: [current_loss, history(5), knn_dist]
             mentor_features = np.column_stack([
                 current_loss,
                 loss_history,
@@ -1079,12 +1603,11 @@ class MentorNet(LNLMethod):
             ]).astype(np.float32)
             mentor_tensor = torch.from_numpy(mentor_features)
 
-            # Get mentor weights
             mentor.eval()
             with torch.no_grad():
                 mentor_weights = mentor(mentor_tensor.to(device)).squeeze(-1).cpu()
 
-            # Train main net with mentor weights
+            # Weighted train step
             net.train()
             perm = torch.randperm(n)
             for start in range(0, n, self.batch_size):
@@ -1094,34 +1617,30 @@ class MentorNet(LNLMethod):
                 wb = mentor_weights[batch_idx].to(device)
 
                 optimizer.zero_grad()
-                pred = net(xb).squeeze(-1)
-                loss = (wb * (pred - yb) ** 2).mean()
+                out = net(xb)
+                per = _per_sample(out, yb)
+                loss = (wb * per).mean()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
                 optimizer.step()
 
-            # Update mentor using validation loss
-            net.eval()
-            val_pred_t = net(X_val_tensor.to(device)).squeeze(-1)
-            val_loss = nn.functional.mse_loss(val_pred_t, y_val_tensor.to(device))
-
-            mentor_opt.zero_grad()
-            # Approximate: update mentor to reduce val loss
-            # Recompute with grad
+            # Mentor update via val-loss approximation
             mentor.train()
             mf = mentor_tensor.to(device)
             mw = mentor(mf).squeeze(-1)
             net.train()
-            train_pred = net(X_tensor.to(device)).squeeze(-1)
-            weighted_train_loss = (mw * (train_pred.detach() - y_tensor.to(device)) ** 2).mean()
+            out_train = net(X_tensor.to(device))
+            per_train = _per_sample(out_train.detach(), y_tensor.to(device))
+            weighted_train_loss = (mw * per_train).mean()
+            mentor_opt.zero_grad()
             weighted_train_loss.backward()
             mentor_opt.step()
 
             # Val early stopping
             net.eval()
             with torch.no_grad():
-                v_pred = net(X_val_tensor.to(device)).squeeze(-1)
-                v_loss = nn.functional.mse_loss(v_pred, y_val_tensor.to(device)).item()
+                val_out = net(X_val_tensor.to(device))
+                v_loss = _val_loss(val_out, y_val_tensor.to(device)).item()
 
             scheduler.step(v_loss)
             if v_loss < best_val_loss:
@@ -1138,13 +1657,17 @@ class MentorNet(LNLMethod):
 
         net.eval()
         with torch.no_grad():
-            y_pred = net(X_val_tensor.to(device)).squeeze(-1).cpu().numpy()
+            out = net(X_val_tensor.to(device))
+            if self.is_clf:
+                y_pred = _clf_pred_from_logits(out.cpu().numpy(), classes_)
+            else:
+                y_pred = out.squeeze(-1).cpu().numpy() * y_std + y_mean
 
         return {
-            'y_pred': y_pred * y_std + y_mean,
+            'y_pred': y_pred,
             'metadata': {
                 'final_epoch': epoch + 1,
-                'mentor_weight_mean': float(mentor_weights.mean()),
+                'mentor_weight_mean': float(mentor_weights.mean()) if mentor_weights is not None else None,
             },
         }
 
@@ -1176,53 +1699,86 @@ class ContrastToDivide(LNLMethod):
         torch.manual_seed(self.random_state)
         X_t = np.asarray(X_train, dtype=np.float32)
         X_v = np.asarray(X_val, dtype=np.float32)
-        y_norm, y_mean, y_std = _z_normalize(y_train)
         n = len(y_train)
-
         device = torch.device('cpu')
-        net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
+
+        if self.is_clf:
+            classes_ = self._resolve_classes(y_train)
+            label_map = {c: i for i, c in enumerate(classes_)}
+            y_int = np.array([label_map[c] for c in np.asarray(y_train).ravel()],
+                             dtype=np.int64)
+            y_val_int = np.array(
+                [label_map.get(c, 0) for c in np.asarray(y_val).ravel()],
+                dtype=np.int64)
+            y_tensor = torch.from_numpy(y_int)
+            y_val_tensor = torch.from_numpy(y_val_int)
+            n_classes = len(classes_)
+            net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout,
+                             output_dim=n_classes).to(device)
+        else:
+            y_norm, y_mean, y_std = _z_normalize(y_train)
+            y_val_norm = (np.asarray(y_val, dtype=np.float32) - y_mean) / y_std
+            y_tensor = torch.from_numpy(y_norm)
+            y_val_tensor = torch.from_numpy(y_val_norm)
+            net = _build_dnn(X_t.shape[1], self.hidden_sizes, self.dropout).to(device)
+
         optimizer = torch.optim.Adam(net.parameters(), lr=self.lr)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, patience=5, factor=0.5)
 
         X_tensor = torch.from_numpy(X_t)
-        y_tensor = torch.from_numpy(y_norm)
-
-        y_val_norm = (np.asarray(y_val, dtype=np.float32) - y_mean) / y_std
         X_val_tensor = torch.from_numpy(X_v)
-        y_val_tensor = torch.from_numpy(y_val_norm)
+
+        def _per_sample(net_out, y_target):
+            if self.is_clf:
+                return nn.functional.cross_entropy(net_out, y_target, reduction='none')
+            return (net_out.squeeze(-1) - y_target) ** 2
+
+        def _val_loss(net_out, y_target):
+            if self.is_clf:
+                return nn.functional.cross_entropy(net_out, y_target)
+            return nn.functional.mse_loss(net_out.squeeze(-1), y_target)
 
         best_val_loss = float('inf')
         best_state = None
         patience_counter = 0
+        w_tensor = torch.ones(n, dtype=torch.float32)
+        weights = np.ones(n, dtype=np.float32)
 
         for epoch in range(self.epochs):
-            # Compute consistency scores every 5 epochs (expensive)
+            # Consistency scores every 5 epochs
             if epoch % 5 == 0:
                 net.eval()
                 with torch.no_grad():
-                    # Base prediction
-                    base_pred = net(X_tensor.to(device)).squeeze(-1).cpu().numpy()
-                    per_sample_loss = (base_pred - y_norm) ** 2
+                    base_out = net(X_tensor.to(device))
+                    per_sample_loss = _per_sample(
+                        base_out, y_tensor.to(device)).cpu().numpy()
 
-                    # Perturbed predictions
-                    perturbed_preds = []
+                    # For consistency, measure prediction variance under
+                    # perturbation. For reg: variance of scalar prediction.
+                    # For clf: variance of P(true class) across perturbations.
                     rng = np.random.RandomState(self.random_state + epoch)
+                    perturbed_signal = []
                     for _ in range(self.n_perturbations):
                         noise = rng.normal(0, self.perturbation_sigma,
                                            X_t.shape).astype(np.float32)
                         X_pert = torch.from_numpy(X_t + noise)
-                        p = net(X_pert.to(device)).squeeze(-1).cpu().numpy()
-                        perturbed_preds.append(p)
+                        out_p = net(X_pert.to(device))
+                        if self.is_clf:
+                            proba = nn.functional.softmax(out_p, dim=1)
+                            # P(true class) per sample, shape (n,)
+                            true_idx = y_tensor.to(device)
+                            sig = proba.gather(1, true_idx.unsqueeze(1)).squeeze(1)
+                            perturbed_signal.append(sig.cpu().numpy())
+                        else:
+                            perturbed_signal.append(
+                                out_p.squeeze(-1).cpu().numpy())
 
-                    pred_variance = np.var(perturbed_preds, axis=0)
+                    pred_variance = np.var(perturbed_signal, axis=0)
 
-                # Consistency signal: high loss + low variance = noise
-                # Weight: downweight noise (high loss, low variance)
+                # Noise score: high loss rank + low variance rank
                 loss_rank = np.argsort(np.argsort(per_sample_loss)) / n
                 var_rank = np.argsort(np.argsort(pred_variance)) / n
-
-                # Noise score: high loss rank, low variance rank
                 noise_score = loss_rank * (1 - var_rank)
                 weights = 1.0 / (1.0 + 3.0 * noise_score)
                 weights = (weights / weights.mean()).astype(np.float32)
@@ -1238,8 +1794,9 @@ class ContrastToDivide(LNLMethod):
                 wb = w_tensor[batch_idx].to(device)
 
                 optimizer.zero_grad()
-                pred = net(xb).squeeze(-1)
-                loss = (wb * (pred - yb) ** 2).mean()
+                out = net(xb)
+                per = _per_sample(out, yb)
+                loss = (wb * per).mean()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
                 optimizer.step()
@@ -1247,8 +1804,8 @@ class ContrastToDivide(LNLMethod):
             # Val early stopping
             net.eval()
             with torch.no_grad():
-                val_pred = net(X_val_tensor.to(device)).squeeze(-1)
-                val_loss = nn.functional.mse_loss(val_pred, y_val_tensor.to(device)).item()
+                val_out = net(X_val_tensor.to(device))
+                val_loss = _val_loss(val_out, y_val_tensor.to(device)).item()
 
             scheduler.step(val_loss)
             if val_loss < best_val_loss:
@@ -1265,10 +1822,14 @@ class ContrastToDivide(LNLMethod):
 
         net.eval()
         with torch.no_grad():
-            y_pred = net(X_val_tensor.to(device)).squeeze(-1).cpu().numpy()
+            out = net(X_val_tensor.to(device))
+            if self.is_clf:
+                y_pred = _clf_pred_from_logits(out.cpu().numpy(), classes_)
+            else:
+                y_pred = out.squeeze(-1).cpu().numpy() * y_std + y_mean
 
         return {
-            'y_pred': y_pred * y_std + y_mean,
+            'y_pred': y_pred,
             'metadata': {
                 'final_epoch': epoch + 1,
                 'weight_mean': float(weights.mean()),
@@ -1303,6 +1864,13 @@ class HeteroscedasticGP(LNLMethod):
         return 'training_loop'
 
     def train_and_predict(self, X_train, y_train, X_val, y_val):
+        if self.is_clf:
+            raise NotImplementedError(
+                "HeteroscedasticGP models continuous per-sample noise variance "
+                "and has no loss-swap classification analog. The clf equivalent "
+                "is a class-confusion / transition-matrix formulation, which is "
+                "a different method entirely. n09 must gate this method to "
+                "regression-only datasets (see REGRESSION_ONLY_LNL).")
         import torch
         import torch.nn as nn
         from sklearn.gaussian_process import GaussianProcessRegressor
@@ -1415,6 +1983,14 @@ class EvidentialKernel(LNLMethod):
         return 'training_loop'
 
     def train_and_predict(self, X_train, y_train, X_val, y_val):
+        if self.is_clf:
+            raise NotImplementedError(
+                "EvidentialKernel uses Normal-Inverse-Gamma loss, which only "
+                "makes sense for continuous targets. The classification analog "
+                "is evidential classification (Sensoy et al. 2018, Dirichlet "
+                "parameterization) — a different method entirely. n09 must "
+                "gate this method to regression-only datasets (see "
+                "REGRESSION_ONLY_LNL).")
         import torch
         import torch.nn as nn
 
@@ -1563,6 +2139,10 @@ LNL_REGISTRY = {
 
 DATA_LEVEL_METHODS = {'small_loss', 'confident_learning', 'distance_selection'}
 TRAINING_LOOP_METHODS = set(LNL_REGISTRY.keys()) - DATA_LEVEL_METHODS
+
+# Methods that have no classification analog and will raise NotImplementedError
+# on is_clf=True. The 10 other methods all support clf via MSE→CE swap.
+REGRESSION_ONLY_LNL = {'heteroscedastic_gp', 'evidential_kernel'}
 
 
 def get_lnl_method(name: str, **kwargs) -> LNLMethod:

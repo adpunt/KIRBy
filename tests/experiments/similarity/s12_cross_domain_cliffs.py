@@ -95,6 +95,8 @@ def identify_cliff_pairs_euclidean(X_concat, y, sim_threshold=0.55, activity_k=2
         'n_cliff_compounds': n_cliff_compounds,
         'pct_cliff_compounds': float(100.0 * n_cliff_compounds / len(y_sub)),
         'n_analyzed': len(y_sub),
+        'n_unanalyzed': max(0, n - max_compounds),
+        'max_compounds_cap': max_compounds,
         'similarity_type': 'euclidean',
     }
 
@@ -133,6 +135,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Domain: {domain}, n={len(labels)}, dim={X_concat.shape[1]}")
 
     # Identify cliffs
+    # NOTE: cliff identity uses full-dataset labels — accepted leakage for cliff
+    # partitioning, per N01 precedent.
     cliff_indices, cliff_info = identify_cliff_pairs_euclidean(
         X_concat, labels, sim_threshold, activity_k, is_clf=is_clf)
     print(f"  Cliffs: {cliff_info['n_cliff_compounds']}/{cliff_info['n_analyzed']} "
@@ -146,6 +150,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             cliff_indices, cliff_info = identify_cliff_pairs_euclidean(
                 X_concat, labels, t, activity_k, is_clf=is_clf)
             if cliff_info['pct_cliff_compounds'] >= 5:
+                cliff_info['threshold_was_relaxed'] = True
+                cliff_info['final_threshold'] = t
                 print(f"  Auto-threshold {t}: {cliff_info['n_cliff_compounds']} cliffs "
                       f"({cliff_info['pct_cliff_compounds']:.1f}%)")
                 break
@@ -153,26 +159,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if not cliff_indices:
         return {'error': 'no_cliffs_found', 'cliff_info': cliff_info}
 
-    # Get hybrid blueprint via pool helper
+    # Get hybrid blueprint via pool helper — per downstream model
     budget = kwargs.get('budget', 100)
     top3 = None  # ensure defined even if the search exits early
-    try:
-        search, meta = get_best_search_for_downstream(
-            reps, labels, groups,
-            downstream_model='rf', budget=budget,
-            augmentations=data.get('augmentations'),
-            speed=search_speed,
-            dataset_name=dataset_name, task_type=task_type,
-            data=data,
-        )
-        bp = meta['best_config']['blueprint'] if meta else None
-        if search is not None:
-            top3 = extract_top3_base_reps(search)
-            if top3:
-                print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-    except Exception as e:
-        print(f"  Hybrid search failed: {e}")
-        return {'error': str(e), 'cliff_info': cliff_info}
+    bp_by_model = {}
+    for mname in model_factories:
+        try:
+            search, meta = get_best_search_for_downstream(
+                reps, labels, groups,
+                downstream_model=mname, budget=budget,
+                augmentations=data.get('augmentations'),
+                speed=search_speed,
+                dataset_name=dataset_name, task_type=task_type,
+                data=data,
+            )
+            bp_m = meta['best_config']['blueprint'] if meta else None
+            if bp_m is not None and meta is not None:
+                # Override blueprint augmentation_strategy with the pool-helper's
+                # resolved aug_condition to avoid cache collisions (s05/s06/s08 pattern).
+                bp_m.augmentation_strategy = meta['aug_condition']
+            bp_by_model[mname] = bp_m
+            if mname == 'rf' and search is not None:
+                top3 = extract_top3_base_reps(search)
+                if top3:
+                    print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+        except Exception as e:
+            print(f"  [warn] hybrid search ({mname}): {type(e).__name__}: {str(e)[:100]}")
+            bp_by_model[mname] = None
 
     # CV evaluation: per-rep baselines + hybrid on cliff vs non-cliff
     sample_X = next(iter(reps.values()))
@@ -194,7 +207,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     m = mfactory()
                     m.fit(X_tr, labels[train_idx])
                     y_pred = m.predict(X_va)
-                except Exception:
+                except Exception as e:
+                    print(f"  [warn] per-rep fit/predict ({rep_name}/{mname}): {type(e).__name__}: {str(e)[:100]}")
                     continue
 
                 val_cliff = [i for i, vi in enumerate(val_idx) if vi in cliff_indices]
@@ -214,6 +228,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Hybrid evaluation per model
     hybrid_results_by_model = {}
     for mname, mfactory in model_factories.items():
+        bp = bp_by_model.get(mname)
+        if bp is None:
+            print(f"  [warn] no hybrid blueprint found for {mname}, skipping hybrid eval")
+            hybrid_results_by_model[mname] = {'skipped': 'no_blueprint'}
+            continue
         h_cliff_scores = []
         h_noncliff_scores = []
         for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, mode=mode):
@@ -226,7 +245,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 X_tr_h, X_va_h, fi = build_fold_hybrid(
                     train_reps_h, val_reps_h, labels[train_idx], bp,
                     augmentations_train=aug_tr, augmentations_val=aug_va)
-            except Exception:
+            except Exception as e:
+                print(f"  [warn] hybrid build ({mname}): {type(e).__name__}: {str(e)[:100]}")
                 continue
 
             scaler = StandardScaler()
@@ -237,7 +257,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 m = mfactory()
                 m.fit(X_tr_s, labels[train_idx])
                 y_pred = m.predict(X_va_s)
-            except Exception:
+            except Exception as e:
+                print(f"  [warn] hybrid fit/predict ({mname}): {type(e).__name__}: {str(e)[:100]}")
                 continue
 
             val_cliff = [i for i, vi in enumerate(val_idx) if vi in cliff_indices]

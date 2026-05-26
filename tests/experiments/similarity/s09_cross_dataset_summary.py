@@ -18,7 +18,7 @@ import numpy as np
 from scipy.stats import wilcoxon
 
 from experiments._shared import (
-    save_experiment_results, load_experiment_results, convert_numpy,
+    save_experiment_results, load_experiment_results,
 )
 
 # Metrics where lower scores are better (RMSE, MAE).
@@ -51,6 +51,7 @@ def run(all_dataset_results):
 
     sac_deltas = []
     cliff_reductions = []
+    cliff_n_skipped_clf = 0
     knn_deltas = []
     ad_deltas = []
     fp_reductions = []
@@ -76,6 +77,7 @@ def run(all_dataset_results):
                   f"hybrid={best_hybrid_sac:.4f})")
 
         # Exp 4: RMSE_cliff improvement (hybrid vs best per-rep kNN)
+        # Classification datasets are silently skipped (no rmse_cliff key).
         exp4 = ds_results.get('s04_activity_cliffs')
         if exp4 and 'per_rep' in exp4 and 'hybrid' in exp4:
             per_rep_rmse = [v.get('rmse_cliff', float('nan'))
@@ -90,18 +92,26 @@ def run(all_dataset_results):
                 cliff_reductions.append(reduction)
                 print(f"    RMSE_cliff reduction: {reduction:.1f}% "
                       f"(best_rep={best_rep_rmse:.4f} -> hybrid={hybrid_rmse:.4f})")
+            else:
+                # rmse_cliff absent (e.g., classification dataset)
+                cliff_n_skipped_clf += 1
             ds_summary['n_cliff_compounds'] = exp4.get('cliff_definition', {}).get('n_cliff_compounds', 0)
 
         # Exp 5: kNN improvement vs best individual rep
         exp5 = ds_results.get('s05_knn_prediction')
         if exp5 and 'per_budget' in exp5:
-            # Infer metric direction from per-rep baselines
-            _exp5_metric = None
+            # Infer metric direction from per-rep baselines. All reps must
+            # report the same metric -- mixing directions silently would
+            # invert the delta sign for some datasets.
             per_rep = exp5.get('per_rep_baselines', {})
-            for _prv in per_rep.values():
-                _exp5_metric = _prv.get('metric')
-                if _exp5_metric:
-                    break
+            _metrics_seen = {_prv.get('metric') for _prv in per_rep.values()
+                             if _prv.get('metric') is not None}
+            if len(_metrics_seen) > 1:
+                raise ValueError(
+                    f"s05 per_rep_baselines for {ds_name} mix metrics "
+                    f"{_metrics_seen}; cannot aggregate kNN delta."
+                )
+            _exp5_metric = next(iter(_metrics_seen)) if _metrics_seen else None
             _exp5_lib = _metric_lower_is_better(_exp5_metric)
             _best = min if _exp5_lib else max
 
@@ -133,17 +143,21 @@ def run(all_dataset_results):
             per_k_deltas = []
             per_k_hw = []
             per_k_baseline = []
-            baseline_label = None
+            baseline_label = 'concat'
+            _exp6_missing_concat = False
             for k_key, corrs in exp6['distance_error_correlation'].items():
                 hw = corrs.get('hybrid_weighted')
-                baseline = corrs.get('concat', corrs.get('hybrid'))
-                this_baseline_label = 'concat' if 'concat' in corrs else 'hybrid_uw'
-                if baseline_label is None:
-                    baseline_label = this_baseline_label
-                if hw is not None and baseline is not None:
+                baseline = corrs.get('concat')
+                if baseline is None:
+                    _exp6_missing_concat = True
+                    continue
+                if hw is not None:
                     per_k_deltas.append(hw - baseline)
                     per_k_hw.append(hw)
                     per_k_baseline.append(baseline)
+            if _exp6_missing_concat and not per_k_deltas:
+                print(f"    WARNING: s06 for {ds_name} has no 'concat' baseline; "
+                      f"skipping AD delta.")
             if per_k_deltas:
                 delta_ad = float(np.mean(per_k_deltas))
                 hw_mean = float(np.mean(per_k_hw))
@@ -158,25 +172,29 @@ def run(all_dataset_results):
                       f"{baseline_label}={base_mean:.4f} "
                       f"(delta={delta_ad:+.4f})")
 
-        # Exp 7: noise FP reduction (computed from S07 summary + hybrid results)
+        # Exp 7: noise cliff-contamination reduction (computed from S07 summary
+        # + hybrid results). s07 renamed fp_rate → cliff_contamination_rate
+        # (the metric is precision of the noise flag w.r.t. cliffs, not classical FPR).
         exp7 = ds_results.get('s07_noise_bridge')
         if exp7:
-            hw_fp = exp7.get('hybrid_weighted', {}).get('fp_rate')
-            best_rep_fp = exp7.get('summary', {}).get('best_rep_fp_rate')
+            hw_fp = exp7.get('hybrid_weighted', {}).get('cliff_contamination_rate')
+            best_rep_fp = exp7.get('summary', {}).get('best_rep_cliff_contamination_rate')
             if hw_fp is not None and best_rep_fp is not None and best_rep_fp > 0:
                 fp_red = (best_rep_fp - hw_fp) / best_rep_fp * 100
-                ds_summary['noise_fp_reduction_pct'] = fp_red
+                ds_summary['noise_cliff_contamination_reduction_pct'] = fp_red
                 fp_reductions.append(fp_red)
-                print(f"    Noise FP reduction: {fp_red:.1f}% "
+                print(f"    Noise cliff-contamination reduction: {fp_red:.1f}% "
                       f"(best_rep={best_rep_fp:.3f} -> hybrid_w={hw_fp:.3f})")
 
         # Exp 8: optimal dim ratio
         exp8 = ds_results.get('s08_optimal_dimension')
         if exp8 and 'optimal' in exp8:
             opt = exp8['optimal']
-            knn_opt = opt.get('best_knn_budget', 0)
-            rf_opt = opt.get('best_rf_budget', 0)
-            if rf_opt > 0:
+            # s08 may write None (via .get('knn')) when no budget was found;
+            # treat None and missing the same.
+            knn_opt = opt.get('best_knn_budget') or 0
+            rf_opt = opt.get('best_rf_budget') or 0
+            if rf_opt and knn_opt and rf_opt > 0:
                 ratio = knn_opt / rf_opt
                 ds_summary['optimal_dim_ratio'] = ratio
                 dim_ratios.append(ratio)
@@ -203,14 +221,30 @@ def run(all_dataset_results):
             print(f"    {name}: mean={np.mean(arr):.4f} +/- {np.std(arr):.4f} "
                   f"(n={len(arr)})")
 
-            # Wilcoxon test if enough samples
+            # Wilcoxon test if enough samples. Ratios (centered at 1) must
+            # be log-transformed so the test is against 0 in log-space
+            # (equivalent to ratio=1); the default wilcoxon tests symmetry
+            # around 0, which is meaningless for raw ratios.
             if len(arr) >= 3:
                 try:
-                    stat, p = wilcoxon(arr)
-                    results['summary'][name]['wilcoxon_p'] = float(p)
-                    print(f"      Wilcoxon p={p:.4f}")
+                    if name == 'optimal_dim_ratio':
+                        with np.errstate(divide='ignore', invalid='ignore'):
+                            log_arr = np.log(arr[arr > 0])
+                        if len(log_arr) >= 3:
+                            stat, p = wilcoxon(log_arr)
+                            results['summary'][name]['wilcoxon_p_logratio'] = float(p)
+                            print(f"      Wilcoxon p (log-ratio vs 1)={p:.4f}")
+                    else:
+                        stat, p = wilcoxon(arr)
+                        results['summary'][name]['wilcoxon_p'] = float(p)
+                        print(f"      Wilcoxon p={p:.4f}")
                 except Exception:
                     pass
+
+    if cliff_n_skipped_clf:
+        print(f"\n  Note: {cliff_n_skipped_clf} dataset(s) skipped in "
+              f"cliff_reductions (no rmse_cliff, likely classification).")
+        results['summary']['cliff_n_skipped_clf'] = cliff_n_skipped_clf
 
     return results
 

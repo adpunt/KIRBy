@@ -41,7 +41,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                     n_samples=len(data['labels']))
     n_folds = config['n_splits']
     search_speed = config.get('search_speed', 'full')
-    sweep_budgets = config.get('budgets', [25, 50, 100, 200, 500])
+    # Canonical default (FULL_BUDGETS) — old default [25, 50, 100, 200, 500] had
+    # 200 which is NOT in FULL_BUDGETS, causing silent blueprint misses.
+    from experiments._shared import FULL_BUDGETS
+    sweep_budgets = config.get('budgets', FULL_BUDGETS)
     n_repeats = kwargs.get('n_repeats', 3)
 
     reps = data['reps']

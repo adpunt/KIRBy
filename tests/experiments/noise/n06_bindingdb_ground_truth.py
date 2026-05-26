@@ -5,7 +5,24 @@ Paper: Noise (genuinely novel contribution)
 BindingDB has compound-target pairs measured by multiple labs. Inter-replicate
 disagreement = ground-truth noise. Compare noise estimators against this.
 
-Usage:
+CURRENT STATUS — DISABLED PENDING DATASET DECISION (2026-05-25 audit):
+The current `bindingdb_kd` loader in src/kirby/datasets/dta.py pulls from
+TDC, which aggregates per (drug, target) pair before returning. `data['groups']`
+is `assign_cold_target_groups(metadata['protein_ids'])` — a cold-target CV
+group ID — NOT a replicate ID. Treating `np.std(labels[group])` as inter-
+replicate noise actually measures inter-drug variance within a protein
+target, which is biological signal (different drugs have different Kd).
+The experiment ran without errors but every result was meaningless.
+
+To make this experiment work, we need either (a) a custom BindingDB loader
+that preserves per-pair replicates and exposes them as
+`data['replicate_groups']`, or (b) a swap to a dataset with documented
+replicates (Cortés-Ciriano 2017 ChEMBL replicate set).
+
+Until a decision is made, run() raises an explicit RuntimeError so the
+broken state is loud rather than silent.
+
+Usage (after the loader is fixed):
     python n06_bindingdb_ground_truth.py --mode intermediary
 """
 import sys
@@ -49,9 +66,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("EXPERIMENT N06: BINDINGDB GROUND-TRUTH NOISE")
     print("=" * 70)
 
+    # Fail fast unless the loader has actually provided per-(drug,target)
+    # replicate IDs. data['groups'] from the current loader is the cold-
+    # target CV grouping (one group per protein); using it as a replicate ID
+    # was the bug the 2026-05-25 audit caught.
+    replicate_groups = data.get('replicate_groups')
+    if replicate_groups is None:
+        raise RuntimeError(
+            "N06 requires `data['replicate_groups']` — per-(drug, target) "
+            "replicate IDs from a custom BindingDB loader (or a substitute "
+            "dataset like Cortés-Ciriano 2017). The current dta.bindingdb_kd "
+            "loader only exposes `data['groups']` (protein IDs, used for "
+            "cold-target CV) which is NOT a replicate signal. Running the "
+            "experiment on `data['groups']` measures inter-drug variance "
+            "within a protein, not inter-replicate noise. See the module "
+            "docstring for the open decisions.")
+
     reps = data['reps']
     labels = data['labels']
-    groups = data.get('groups')
+    groups = replicate_groups
     n_samples = len(labels)
 
     # Compute replicate disagreement as ground truth

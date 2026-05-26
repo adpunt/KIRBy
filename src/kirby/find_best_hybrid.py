@@ -795,6 +795,23 @@ class SearchResult:
     best_by_model_budget: Dict[str, Dict[int, dict]] = field(default_factory=dict)
     # Dataset provenance (set by callers who know the dataset name).
     dataset_name: Optional[str] = None
+    # Per-fold importance scores keyed (fold_idx, importance_method) -> {rep_name: scores_array}.
+    # Lets downstream experiments (c06 Option B, c15, c17, c19) reuse precompute's
+    # importance instead of recomputing. Empty by default for back-compat with
+    # pre-2026-05-25 cache files.
+    importance_cache: Dict = field(default_factory=dict)
+    # Per-fold allocation scores keyed (fold_idx, evaluator[, metric_name]) -> {rep_name: float}.
+    alloc_cache: Dict = field(default_factory=dict)
+
+    def __setstate__(self, state):
+        """Backward-compat: old pickled SearchResult files (pre-2026-05-25) do
+        not contain importance_cache / alloc_cache. Python's @dataclass does
+        NOT invoke default_factory on unpickle (only on __init__), so accessing
+        those fields on an old pickle would AttributeError. Fill in defaults."""
+        self.__dict__.update(state)
+        for _fname in ('importance_cache', 'alloc_cache'):
+            if _fname not in self.__dict__:
+                self.__dict__[_fname] = {}
 
 
 # =============================================================================
@@ -2778,7 +2795,11 @@ def _run_search(
     dataset_name: Optional[str] = None,
     task_type: Optional[str] = None,
     baselines: Optional[Dict[str, Dict[str, float]]] = None,
-) -> List[dict]:
+    # Caller-supplied importance_cache (skips the expensive per-fold/method
+    # rebuild at line ~2896 when non-empty). Used by experiments that reuse
+    # precompute's importance scores (c06 Option B, c15, c17, c19).
+    importance_cache_override: Optional[Dict] = None,
+) -> Tuple[List[dict], Dict, Dict]:
     """Main search loop over all configurations.
 
     Adaptive pruning (Phase 2 multi-stage version):
@@ -2893,29 +2914,37 @@ def _run_search(
         _split_args = (_sample_X, labels, groups) if _use_groups else (_sample_X, labels)
         _fold_splits_for_cache = list(_splitter.split(*_split_args))
 
-    importance_cache = {}  # (fold_idx, imp_method) -> {rep_name: scores_array}
-    n_imp_total = len(_fold_splits_for_cache) * len(search_importance)
-    if verbose:
-        print(f"  Pre-computing importance: {len(search_importance)} methods × "
-              f"{len(_fold_splits_for_cache)} folds × {len(base_reps)} reps...")
-    _imp_t0 = time.time()
-    for fold_idx, (train_idx, _) in enumerate(_fold_splits_for_cache):
-        fold_train_reps = {k: v[train_idx] for k, v in base_reps.items()}
-        fold_train_labels = labels[train_idx]
-        # Merge fine-tuned reps for this fold
-        if fold_reps and fold_idx in fold_reps:
-            for rep_name, (ft_train, _) in fold_reps[fold_idx].items():
-                fold_train_reps[rep_name] = ft_train
-        for imp_method in search_importance:
-            try:
-                importance_cache[(fold_idx, imp_method)] = compute_feature_importance(
-                    fold_train_reps, fold_train_labels, method=imp_method)
-            except Exception as e:
-                if verbose:
-                    print(f"    importance {imp_method} fold {fold_idx}: FAILED ({e})")
-    if verbose:
-        print(f"  Importance pre-computed in {time.time() - _imp_t0:.1f}s "
-              f"({len(importance_cache)}/{n_imp_total} successful)")
+    # Use caller-supplied importance_cache if provided and non-empty;
+    # otherwise build from scratch.
+    if importance_cache_override:
+        importance_cache = importance_cache_override
+        if verbose:
+            print(f"  Using caller-supplied importance_cache "
+                  f"({len(importance_cache)} entries) — skipping rebuild")
+    else:
+        importance_cache = {}  # (fold_idx, imp_method) -> {rep_name: scores_array}
+        n_imp_total = len(_fold_splits_for_cache) * len(search_importance)
+        if verbose:
+            print(f"  Pre-computing importance: {len(search_importance)} methods × "
+                  f"{len(_fold_splits_for_cache)} folds × {len(base_reps)} reps...")
+        _imp_t0 = time.time()
+        for fold_idx, (train_idx, _) in enumerate(_fold_splits_for_cache):
+            fold_train_reps = {k: v[train_idx] for k, v in base_reps.items()}
+            fold_train_labels = labels[train_idx]
+            # Merge fine-tuned reps for this fold
+            if fold_reps and fold_idx in fold_reps:
+                for rep_name, (ft_train, _) in fold_reps[fold_idx].items():
+                    fold_train_reps[rep_name] = ft_train
+            for imp_method in search_importance:
+                try:
+                    importance_cache[(fold_idx, imp_method)] = compute_feature_importance(
+                        fold_train_reps, fold_train_labels, method=imp_method)
+                except Exception as e:
+                    if verbose:
+                        print(f"    importance {imp_method} fold {fold_idx}: FAILED ({e})")
+        if verbose:
+            print(f"  Importance pre-computed in {time.time() - _imp_t0:.1f}s "
+                  f"({len(importance_cache)}/{n_imp_total} successful)")
 
     # ── Pre-compute allocation baseline scores for deduplication ──
     # allocate_performance_weighted trains the internal evaluator on each rep
@@ -3407,7 +3436,7 @@ def _run_search(
             print(f"  Feature selection dedup: {dedup_hits} fold evaluations skipped "
                   f"({dedup_entries} unique selections cached)")
 
-    return results
+    return results, importance_cache, alloc_cache
 
 
 # =============================================================================
@@ -3804,6 +3833,10 @@ def find_best_hybrid(
     # rep's full dim (often > n_samples on small antibody datasets).
     # Precompute leaves this False so its cache key is unaffected.
     allow_budget_exceeds_n: bool = False,
+    # Caller-supplied importance_cache (skips _run_search's per-fold importance
+    # rebuild at line ~2896 when non-empty). Pass `search.importance_cache`
+    # from a previously-cached SearchResult to reuse precompute's importance.
+    importance_cache: Optional[Dict[Tuple[int, str], Dict[str, np.ndarray]]] = None,
 ) -> SearchResult:
     """
     Find the best hybrid representation configuration.
@@ -4230,7 +4263,7 @@ def find_best_hybrid(
     if cache and cache_path is not None:
         _ckpt_path = cache_path.with_suffix('.ckpt.pkl')
 
-    all_results = _run_search(
+    all_results, _imp_cache, _alloc_cache = _run_search(
         base_reps, labels, groups, speed, resolved_models,
         metric_fn,
         budgets=budgets,
@@ -4271,6 +4304,7 @@ def find_best_hybrid(
         dataset_name=dataset_name,
         task_type=_task_type_for_meta,
         baselines=baselines,
+        importance_cache_override=importance_cache,
     )
 
     # --- Two-phase refinement ---
@@ -4377,6 +4411,8 @@ def find_best_hybrid(
         fitted_results=fitted_results,
         finetuned_embeddings=finetuned_embeddings,
         dataset_name=dataset_name,
+        importance_cache=_imp_cache,
+        alloc_cache=_alloc_cache,
     )
 
     # --- Print per-model-budget summary (primary selection unit) ---

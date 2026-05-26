@@ -76,7 +76,9 @@ DEFAULT_REPS = [
     'blosum', 'onehot', 'aac',           # classical
     'ablang2', 'esm2', 'antiberty',      # LMs
     'igt5', 'prot_t5',                    # additional LMs
-    'paratope',                            # structural (sequence-based)
+    # 'paratope' (8D Tier 1 structural-sequence rep) intentionally omitted as a
+    # base rep — too low-dimensional to be a meaningful baseline here; it's
+    # consumed indirectly through the hybrid search if relevant.
 ]
 
 MODELS_LIST = DOWNSTREAM_MODELS
@@ -110,6 +112,19 @@ def evaluate_rep_clf(X, labels, groups, model, n_folds):
         raise ValueError(
             f"Cannot create {n_folds}-fold group split: "
             f"groups={'None' if groups is None else len(np.unique(groups))} unique")
+    # WARNING: The caller dedups CDR3 sequences upstream so every group is
+    # size-1 → StratifiedGroupKFold degenerates to stratified per-sample
+    # KFold (effectively random-but-stratified). This violates the
+    # no-random-splits policy in spirit. Surfaced here so future readers see
+    # the trade-off; the dedup behaviour is inherited from the ITsFlexible
+    # paper protocol.
+    # TODO: switch to a real group-aware split (V-gene / germline /
+    # framework-similarity clusters) once a grouping is decided upstream.
+    _, group_sizes = np.unique(groups, return_counts=True)
+    assert group_sizes.max() == 1, (
+        "evaluate_rep_clf assumes 1-sample-per-group (CDR3-deduped); got "
+        f"max group size {group_sizes.max()}. Re-evaluate the split — the "
+        "current 'group' KFold is effectively stratified per-sample KFold.")
     cv = StratifiedGroupKFold(n_splits=n_folds, shuffle=True, random_state=42)
     splits = list(cv.split(X, labels, groups=groups))
 
@@ -207,38 +222,58 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
         print("  No reps available, skipping")
         return None
 
-    # Build hybrid
-    # No augmentation reps for CDR flexibility classification
+    # Run hybrid search to report the search's own CV score for the best
+    # blueprint. We deliberately DO NOT materialise `kirby_hybrid` over the
+    # full data and re-evaluate it under our CV here: that path leaks val
+    # labels into feature selection (every val fold sees its own labels via
+    # the full-data fit of `selected_indices`). Instead we report the
+    # CV-honest score returned by `find_best_hybrid` via the pool metadata.
+    # No augmentation reps for CDR flexibility classification.
+    hybrid_summary = None
     try:
-        from kirby.hybrid import apply_feature_selection
         from experiments._shared import (
             resolve_pruning_kwargs, get_best_search_for_downstream)
         _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
-                                       dataset_label=f"cdr_flex/{'_'.join(cdr_types)}")
+                                       dataset_label=f"cdr_flex/{'_'.join(sorted(cdr_types))}")
         search, _meta = get_best_search_for_downstream(
             reps, labels, groups,
             downstream_model='rf', budget=None,
-            augmentations=None, augmentation_strategy='none',
+            # augmentations=None -> pool only iterates aug_condition='none';
+            # helper sets augmentation_strategy per iteration, no collision.
+            augmentations=None,
             speed='full', metric='auc',
             task_type='classification',
             dataset_name='cdr_flexibility',
             return_fitted=True,
             internal_evaluators=INTERNAL_EVALUATORS,
-            condition_suffix='_'.join(cdr_types),
+            condition_suffix='_'.join(sorted(cdr_types)),
             adaptive_pruning=0.25,
             **_pkw,
         )
         top3 = extract_top3_base_reps(search) if search is not None else None
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-        fitted = (search.fitted_results.get('rf')
-                  if search is not None else None)
-        if fitted is not None:
-            fi = {r: {'selected_indices': idx}
-                  for r, idx in fitted.selected_indices.items()}
-            reps['kirby_hybrid'] = apply_feature_selection(reps, fi)
-            print(f"  kirby_hybrid: {reps['kirby_hybrid'].shape[1]}D (hybrid)")
+        if _meta is not None:
+            hybrid_summary = {
+                'kirby_hybrid_search_score_mean': float(_meta.get('score_mean')),
+                'kirby_hybrid_search_model': _meta.get('model'),
+                'kirby_hybrid_search_budget': _meta.get('budget'),
+                'kirby_hybrid_search_tier': _meta.get('tier'),
+                'kirby_hybrid_search_aug_condition': _meta.get('aug_condition'),
+                'kirby_hybrid_search_metric': 'auc',
+            }
+            print(f"  kirby_hybrid (search CV): "
+                  f"{hybrid_summary['kirby_hybrid_search_score_mean']:.4f} "
+                  f"(model={hybrid_summary['kirby_hybrid_search_model']}, "
+                  f"budget={hybrid_summary['kirby_hybrid_search_budget']}, "
+                  f"tier={hybrid_summary['kirby_hybrid_search_tier']}/"
+                  f"{hybrid_summary['kirby_hybrid_search_aug_condition']})")
+        else:
+            hybrid_summary = {'kirby_hybrid_failed': True,
+                              'error': 'no candidate returned by pool'}
+            print("  Hybrid search returned no candidate")
     except Exception as e:
+        hybrid_summary = {'kirby_hybrid_failed': True, 'error': str(e)}
         print(f"  Hybrid build failed: {e}")
 
     # Evaluate
@@ -260,9 +295,8 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
                 rep_results[model_name] = res
                 roc = res.get('roc_auc', {}).get('mean', float('nan'))
                 pr = res.get('pr_auc', {}).get('mean', float('nan'))
-                tag = ' ***' if rep_name == 'kirby_hybrid' else ''
                 print(f"    {rep_name:25s} {model_name:8s}  "
-                      f"ROC={roc:.4f}  PR={pr:.4f}  ({elapsed:.1f}s){tag}")
+                      f"ROC={roc:.4f}  PR={pr:.4f}  ({elapsed:.1f}s)")
         if rep_results:
             results[rep_name] = {'dim': X.shape[1], 'models': rep_results}
 
@@ -272,6 +306,7 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
         'n_rigid': n - n_flex,
         'cdr_types': cdr_types,
         'results': results,
+        'hybrid_summary': hybrid_summary,
     }
 
 
@@ -315,23 +350,34 @@ def print_analysis(all_results):
         rows.sort(key=lambda r: (r[2] if not np.isnan(r[2]) else 0), reverse=True)
 
         for rep_name, model_name, roc, pr, mcc, bacc in rows:
-            tag = ' ***' if rep_name == 'kirby_hybrid' else ''
             roc_s = f"{roc:.4f}" if not np.isnan(roc) else "—"
             pr_s = f"{pr:.4f}" if not np.isnan(pr) else "—"
             print(f"  {rep_name:25s} {model_name:8s} {roc_s:>8s} {pr_s:>8s} "
-                  f"{mcc:8.4f} {bacc:8.4f}{tag}")
+                  f"{mcc:8.4f} {bacc:8.4f}")
 
-        # Gap analysis
+        # Hybrid search CV (separate from per-rep eval; no test-time leakage).
+        hs = ds.get('hybrid_summary') or {}
+        if hs.get('kirby_hybrid_search_score_mean') is not None:
+            print(f"  kirby_hybrid (search CV, "
+                  f"model={hs.get('kirby_hybrid_search_model')}, "
+                  f"budget={hs.get('kirby_hybrid_search_budget')}): "
+                  f"{hs['kirby_hybrid_search_score_mean']:.4f}")
+        elif hs.get('kirby_hybrid_failed'):
+            print(f"  kirby_hybrid: FAILED ({hs.get('error')})")
+
+        # Comparison to paper baseline.
+        # WARNING: paper used held-out test sets; this experiment uses
+        # CDR3-deduped stratified KFold CV. Numbers are NOT directly
+        # comparable — treat the gap as a rough sanity check only.
         best_roc = max(
             (m.get('roc_auc', {}).get('mean', 0)
              for rd in results.values() for m in rd['models'].values()),
             default=0
         )
         gnn_roc = PAPER_BASELINES['ITsFlexible GNN (crystal)']['roc_auc']
-        gap = gnn_roc - best_roc
         print(f"\n  Best KIRBy ROC AUC: {best_roc:.4f}")
-        print(f"  ITsFlexible GNN:    {gnn_roc:.2f}")
-        print(f"  Gap:                {gap:+.4f}")
+        print(f"  ITsFlexible GNN:    {gnn_roc:.2f} "
+              f"(paper held-out test set — not directly comparable)")
 
 
 # =============================================================================
@@ -363,9 +409,10 @@ def main():
 
     args = parser.parse_args()
 
-    cdr_types = (args.cdr_types.split(',') if args.cdr_types
-                 else DEFAULT_CDR_TYPES)
-    rep_names = (args.reps.split(',') if args.reps else DEFAULT_REPS)
+    cdr_types = ([c.strip() for c in args.cdr_types.split(',') if c.strip()]
+                 if args.cdr_types else DEFAULT_CDR_TYPES)
+    rep_names = ([r.strip() for r in args.reps.split(',') if r.strip()]
+                 if args.reps else DEFAULT_REPS)
 
     print("=" * 70)
     print("CDR FLEXIBILITY EXPERIMENT (Spoendlin et al. 2025)")

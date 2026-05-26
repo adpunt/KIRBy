@@ -9,7 +9,7 @@ properties using the competition's pre-computed hierarchical cluster splits.
 Scientific questions:
   1. Which antibody reps best predict each developability property?
   2. Does hybrid augmentation help on these small (n=94-242) datasets?
-  3. Across all 9 properties, how often does hybrid win?
+  3. Across the configured properties (6 in DATASET_REPS), how often does hybrid win?
   4. Which properties are predictable and which are noise?
 
 Properties (GDPa1 v1.2, 242 antibodies):
@@ -55,8 +55,8 @@ warnings.filterwarnings('ignore')
 from antibody_baseline_survey import load_dataset, DATASET_REGISTRY
 from run_baseline_survey import evaluate_rep as _evaluate_rep
 from experiments._shared import (
-    convert_numpy, get_model_factories, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
-    extract_top3_base_reps, FULL_BUDGETS,
+    convert_numpy, get_model_factories, DOWNSTREAM_MODELS,
+    extract_top3_base_reps,
 )
 
 # =============================================================================
@@ -74,7 +74,9 @@ DEFAULT_REPS = [
     'ablang2', 'esm2', 'antiberty',      # LMs
     'igt5', 'prot_t5',                    # additional LMs
     'esm2_concat',                         # ESM2 concat-chain
-    'paratope',                            # structural
+    'paratope',                            # augmentation (paratope only;
+                                           # 'structural' is not in
+                                           # ginkgo_* DATASET_REPS aug list)
 ]
 
 MODELS_LIST = [m for m in DOWNSTREAM_MODELS if m != 'gp']
@@ -96,23 +98,6 @@ PAPER_BASELINES = {
     'ginkgo_heparin':     {},
 }
 
-# Published method baselines (CV Spearman rho from ginkgobioworks/abdev-benchmark)
-PAPER_METHOD_BASELINES = {
-    'ablang2_elastic_net': {
-        'ginkgo_acsins': 0.509, 'ginkgo_hic': 0.461, 'ginkgo_pr_cho': 0.362,
-        'ginkgo_titer': 0.356, 'ginkgo_tm2': 0.101,
-    },
-    'esm2_tap_ridge': {
-        'ginkgo_acsins': 0.480, 'ginkgo_hic': 0.420, 'ginkgo_pr_cho': 0.413,
-        'ginkgo_titer': 0.221, 'ginkgo_tm2': 0.265,
-    },
-    'moe_baseline': {
-        'ginkgo_acsins': 0.424, 'ginkgo_hic': 0.656, 'ginkgo_pr_cho': 0.353,
-        'ginkgo_titer': 0.184, 'ginkgo_tm2': 0.107,
-    },
-}
-
-
 # =============================================================================
 # EVALUATION
 # =============================================================================
@@ -132,23 +117,6 @@ def _fold_assignments_to_splits(fold_assignments, n_folds):
         train_idx = np.where(fa != fold_id)[0]
         splits.append((train_idx, val_idx))
     return splits
-
-
-class _PrecomputedFoldSplitter:
-    """Sklearn-compatible CV splitter wrapping pre-computed fold assignments.
-
-    Enables find_best_hybrid to use the same hierarchical cluster splits
-    that Ginkgo datasets provide, via the cv_splitter parameter.
-    """
-
-    def __init__(self, fold_assignments, n_folds):
-        self._splits = _fold_assignments_to_splits(fold_assignments, n_folds)
-
-    def get_n_splits(self, X=None, y=None, groups=None):
-        return len(self._splits)
-
-    def split(self, X=None, y=None, groups=None):
-        yield from self._splits
 
 
 def _recall_at_k(y_true, y_pred, frac=0.1):
@@ -173,43 +141,28 @@ def evaluate_rep_reg(X, labels, groups, fold_assignments, model, n_folds,
     """Evaluate one (rep, model) for regression.
 
     Uses pre-computed fold assignments if available, else GroupKFold.
-    Delegates to run_baseline_survey.evaluate_rep for CV, scaling, and metrics.
-    Also computes Top-10% recall (benchmark's secondary metric).
+    Delegates to run_baseline_survey.evaluate_rep for CV, scaling, and metrics
+    AND fold-level predictions (single pass). Computes Top-10% recall from
+    those predictions without retraining.
     Returns dict with r2, spearman, pearson, rmse, top10_recall as {metric: {mean, std}}.
     """
-    from sklearn.base import clone
-    from run_baseline_survey import _make_cv, _maybe_scale
-
     prebuilt = (_fold_assignments_to_splits(fold_assignments, n_folds)
                 if fold_assignments is not None else None)
-    mean_m, std_m = _evaluate_rep(
+    mean_m, std_m, fold_preds = _evaluate_rep(
         X, labels, groups, model, n_folds, 'regression',
-        prebuilt_splits=prebuilt)
+        prebuilt_splits=prebuilt, also_return_predictions=True)
     if not mean_m:
         return None
     result = {k: {'mean': mean_m[k], 'std': std_m.get(k, 0.0)} for k in mean_m}
 
-    # Top-10% recall per fold (benchmark's secondary metric)
-    X_arr = np.asarray(X, dtype=np.float64)
-    labels_arr = np.asarray(labels, dtype=np.float64)
-    if prebuilt:
-        splits = prebuilt
-    else:
-        cv, cv_kw = _make_cv(groups, n_folds, labels_arr)
-        splits = list(cv.split(X_arr, labels_arr, **cv_kw))
-    recall_scores = []
+    # Top-10% recall per fold (benchmark's secondary metric) — computed from
+    # the predictions already returned by _evaluate_rep (no retraining).
     flip = prop_name in LOWER_IS_BETTER
-    for train_idx, val_idx in splits:
-        X_tr, X_va = _maybe_scale(X_arr[train_idx], X_arr[val_idx])
-        try:
-            m = clone(model)
-            m.fit(X_tr, labels_arr[train_idx])
-            preds = m.predict(X_va)
-            y_t = -labels_arr[val_idx] if flip else labels_arr[val_idx]
-            y_p = -preds if flip else preds
-            recall_scores.append(_recall_at_k(y_t, y_p, frac=0.1))
-        except Exception:
-            pass
+    recall_scores = []
+    for _val_idx, y_true, y_pred in fold_preds:
+        y_t = -y_true if flip else y_true
+        y_p = -y_pred if flip else y_pred
+        recall_scores.append(_recall_at_k(y_t, y_p, frac=0.1))
     if recall_scores:
         result['top10_recall'] = {
             'mean': float(np.mean(recall_scores)),
@@ -252,7 +205,8 @@ def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruni
     # Augmentation config matches ginkgo_* in DATASET_REPS:
     # augmentation = ['paratope', 'structural']
     try:
-        from kirby.hybrid import apply_feature_selection
+        from kirby.hybrid import (apply_feature_selection,
+                                   apply_augmentation_selection)
         # Prefer the hierarchical fold assignments as the group label so the
         # internal evaluator's CV does not degenerate to LeaveOneOut (P1-3).
         if groups is not None:
@@ -265,28 +219,33 @@ def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruni
         base = {k: v for k, v in reps.items() if k not in AUG_REPS}
         aug_dict = {k: v for k, v in reps.items() if k in AUG_REPS}
 
-        cv_kw = {}
-        if fold_assignments is not None:
-            cv_kw['cv_splitter'] = _PrecomputedFoldSplitter(
-                fold_assignments, n_folds)
-            cv_kw['cv_splitter_id'] = (
-                f'ginkgo_hierarchical_{n_folds}fold_'
-                f'h{abs(hash(fold_assignments.tobytes())) % (10**12):012d}')
+        # NOTE: do NOT pass cv_splitter/cv_splitter_id here. Precompute uses
+        # GroupKFold over groups=fold_assignments, and the loader already
+        # exposes fold_assignments via data['groups'] (pre_split strategy in
+        # antibody_baseline_survey). GroupKFold with n_folds=5 over the 5
+        # hierarchical-cluster fold IDs reproduces the precomputed splits,
+        # so the cache aligns.
+        if not base:
+            print("  WARNING: no base reps after stripping augmentations; "
+                  "using all reps as base.")
+            base_for_search = reps
+        else:
+            base_for_search = base
 
         from experiments._shared import (resolve_pruning_kwargs,
                                           get_best_search_for_downstream)
         _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
-                                       dataset_label=f"ginkgo_{prop_name}")
+                                       dataset_label=prop_name)
         search, _meta = get_best_search_for_downstream(
-            base if base else reps, labels, grp,
+            base_for_search, labels, grp,
             downstream_model='rf', budget=None,
             augmentations=aug_dict if aug_dict else None,
             speed='full',
             metric='spearman',
             task_type='regression',
-            dataset_name=f"ginkgo_{prop_name}",
+            dataset_name=prop_name,
             return_fitted=True,
-            adaptive_pruning=0.25, **cv_kw, **_pkw,
+            **_pkw,
         )
         if search is not None:
             top3 = extract_top3_base_reps(search)
@@ -294,10 +253,14 @@ def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruni
                 print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
         fitted = search.fitted_results.get('rf') if search is not None else None
         if fitted is not None:
-            all_reps = {**reps, **(aug_dict or {})}
             fi = {r: {'selected_indices': idx}
                   for r, idx in fitted.selected_indices.items()}
-            reps['kirby_hybrid'] = apply_feature_selection(all_reps, fi)
+            X_hybrid = apply_feature_selection(reps, fi)
+            if fitted.augmentation_info and aug_dict:
+                X_aug = apply_augmentation_selection(aug_dict, fitted.augmentation_info)
+                if X_aug is not None:
+                    X_hybrid = np.hstack([X_hybrid, X_aug])
+            reps['kirby_hybrid'] = X_hybrid
     except Exception as e:
         print(f"  Hybrid build failed: {e}")
 

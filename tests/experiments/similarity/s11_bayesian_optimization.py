@@ -57,7 +57,7 @@ from sklearn.decomposition import PCA
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, WhiteKernel, ConstantKernel
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import GroupShuffleSplit, ShuffleSplit
+from sklearn.model_selection import GroupShuffleSplit, ShuffleSplit, KFold, cross_val_score
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
@@ -123,7 +123,6 @@ class TanimotoKernel(Kernel):
 
     def clone_with_theta(self, theta):
         return TanimotoKernel()
-# TODO: create_hybrid API not finalised — revisit after framework experiments.
 
 
 # =============================================================================
@@ -496,32 +495,67 @@ def build_ecfp4_features(reps, seed_idx, pool_idx):
 
 
 def build_best_single_features(reps, labels, seed_idx, pool_idx):
-    """Use the best individual rep (highest GP R2 on seed set)."""
+    """Use the best individual rep (highest CV R2 on seed set).
+
+    Uses k-fold CV on the seed set instead of training-set R² so the
+    selection is not pure overfit noise. Requires every fold to have at
+    least 2 test samples — single-sample folds make R² undefined (NaN).
+    When the seed is too small for any honest CV (n_seed < 4), refuses to
+    pick a "best" and falls back deterministically to the highest-dim rep.
+    """
     y_seed = labels[seed_idx]
+    n_seed = len(y_seed)
+
+    # Need at least 4 samples so that a 2-fold split has >=2 test samples.
+    if n_seed < 4:
+        fallback_name = max(reps.keys(), key=lambda k: reps[k].shape[1])
+        print(f"    WARNING: seed too small (n_seed={n_seed} < 4) for honest "
+              f"CV selection; falling back to highest-dim rep '{fallback_name}'")
+        X_rep = reps[fallback_name]
+        scaler = StandardScaler()
+        X_seed = scaler.fit_transform(X_rep[seed_idx])
+        X_pool = scaler.transform(X_rep[pool_idx])
+        return X_seed, X_pool, X_rep.shape[1]
+
     best_name = None
     best_score = -np.inf
+
+    # Require >=2 test samples per fold AND >=2 splits.
+    # n_splits = max(2, min(5, n_seed // 2)) guarantees every fold has >=2
+    # test rows (since n_seed // n_splits >= 2 when n_splits <= n_seed // 2).
+    n_splits = max(2, min(5, n_seed // 2))
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
 
     for name, X_rep in reps.items():
         scaler = StandardScaler()
         X_s = scaler.fit_transform(X_rep[seed_idx])
-        # Quick GP fit on seed to assess quality
-        gp, ok = fit_gp(X_s, y_seed, optimize=True)
-        if ok:
-            mu = gp.predict(X_s)
-            # R² here is GP goodness-of-fit on training data, not a task metric
-            ss_res = np.sum((y_seed - mu) ** 2)
-            ss_tot = np.sum((y_seed - np.mean(y_seed)) ** 2)
-            score = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
-            if score > best_score:
-                best_score = score
-                best_name = name
+        try:
+            # Use a fresh GP estimator per fold via cross_val_score with
+            # scoring='r2'. Wrap in try/except since GP can fail on small folds.
+            gp_est = GaussianProcessRegressor(
+                kernel=ConstantKernel(1.0) * RBF(1.0) + WhiteKernel(1e-3),
+                normalize_y=True, n_restarts_optimizer=0,
+                random_state=42,
+            )
+            scores = cross_val_score(
+                gp_est, X_s, y_seed, cv=kf, scoring='r2',
+                error_score=np.nan,
+            )
+            score = float(np.nanmean(scores)) if np.any(~np.isnan(scores)) else -np.inf
+        except Exception:
+            score = -np.inf
+        if score > best_score:
+            best_score = score
+            best_name = name
 
     if best_name is None:
-        # GP failed on all reps -- fall back to lowest-dim rep
-        best_name = min(reps.keys(), key=lambda k: reps[k].shape[1])
+        # CV failed on all reps -- fall back to highest-dim rep deterministically
+        best_name = max(reps.keys(), key=lambda k: reps[k].shape[1])
+        print(f"    WARNING: CV failed on all reps; falling back to highest-dim "
+              f"rep '{best_name}'")
 
     print(f"    Best single rep: {best_name} (dim={reps[best_name].shape[1]}, "
-          f"seed GP R2={best_score:.4f})")
+          f"seed CV R2={best_score:.4f})")
 
     X_rep = reps[best_name]
     scaler = StandardScaler()
@@ -567,7 +601,7 @@ def build_hybrid_features(reps, labels, seed_idx, pool_idx, budget=50, bp=None,
 
     alloc = bp.allocation_method if bp else 'entropy_1.0'
     imp = bp.importance_method if bp else 'lightgbm_gain'
-    int_eval = bp.internal_evaluator if bp else 'ridge'
+    int_eval = bp.internal_evaluator if bp else 'match'
     aug_strategy = bp.augmentation_strategy if bp else 'none'
 
     seed_augs = ({k: v[seed_idx] for k, v in augmentations.items()}
@@ -635,6 +669,11 @@ def compute_bo_metrics(best_so_far_curves, y_all, budgets):
     Returns:
         dict with AUC, iterations-to-top-1%, iterations-to-top-5%
     """
+    # NOTE: thresholds are computed on the BO-oriented `y_all`. When the
+    # domain metric is lower_is_better, the caller passes y_bo = -labels, so
+    # these thresholds live in NEGATED space. They are only used internally
+    # for the iters_to_top1pct / iters_to_top5pct counters (which count
+    # iterations, not metric values, so sign does not propagate).
     y_sorted = np.sort(y_all)[::-1]
     top_1pct_threshold = y_sorted[max(0, int(len(y_sorted) * 0.01) - 1)]
     top_5pct_threshold = y_sorted[max(0, int(len(y_sorted) * 0.05) - 1)]
@@ -652,7 +691,8 @@ def compute_bo_metrics(best_so_far_curves, y_all, budgets):
 
             # AUC of best-so-far curve (trapezoidal)
             if len(c) > 1:
-                auc = float(np.trapz(c, dx=1.0))
+                _trapezoid = getattr(np, 'trapezoid', np.trapz)
+                auc = float(_trapezoid(c, dx=1.0))
             else:
                 auc = float(c[0]) if c else 0.0
             auc_values.append(auc)
@@ -728,7 +768,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     try:
         search, meta = get_best_search_for_downstream(
             reps, labels, groups,
-            downstream_model='rf', budget=None,
+            # RF blueprint reused across surrogates — see EXPERIMENT_DEBUGGING.md
+            downstream_model='rf', budget=hybrid_budget,
             augmentations=augmentations,
             speed=config.get('search_speed', 'full'),
             dataset_name=dataset_name, task_type=task_type,
@@ -740,6 +781,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Domain-aware metric for determining "lower_is_better"
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    # BO maximizes -metric when lower_is_better, so curves & AUC are over the
+    # negated objective. We sign-flip the AUC at STORAGE time below so that
+    # JSON consumers read auc_mean in the natural metric direction without
+    # needing to know about negation. display_sign stays 1.0 at display sites.
+    display_sign = 1.0
 
     # For BO we always MAXIMIZE. If the task's primary metric is lower-is-better
     # (e.g., RMSE), negate targets so BO maximizes -RMSE.
@@ -855,28 +901,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             n_unique_groups = len(np.unique(groups)) if groups is not None else 0
             # Need enough groups for 5%/80% split — at least 20 groups so
             # seed gets ≥1 group. Fall through to simple shuffle otherwise.
-            if groups is not None and n_unique_groups >= 20:
-                # Use GroupShuffleSplit: first split off seed set
-                gss_seed = GroupShuffleSplit(
-                    n_splits=1, test_size=1.0 - seed_frac, random_state=seed)
-                seed_idx, rest_idx = next(gss_seed.split(all_idx, y_bo, groups))
+            if groups is None:
+                raise ValueError(
+                    "S11 BO requires group-aware splitting; no groups provided. "
+                    "Random splits are forbidden (see feedback_no_random_splits)."
+                )
+            if n_unique_groups < 20:
+                raise ValueError(
+                    f"Too few unique groups ({n_unique_groups}) for grouped BO "
+                    f"split — need >=20"
+                )
+            # Use GroupShuffleSplit: first split off seed set
+            gss_seed = GroupShuffleSplit(
+                n_splits=1, test_size=1.0 - seed_frac, random_state=seed)
+            seed_idx, rest_idx = next(gss_seed.split(all_idx, y_bo, groups))
 
-                # From rest, take pool_frac / (1 - seed_frac) as pool
-                pool_from_rest = pool_frac / (1.0 - seed_frac)
-                pool_from_rest = min(pool_from_rest, 0.95)  # safety
-                gss_pool = GroupShuffleSplit(
-                    n_splits=1, test_size=1.0 - pool_from_rest, random_state=seed)
-                rest_groups = groups[rest_idx]
-                pool_local_idx, _ = next(gss_pool.split(
-                    rest_idx, y_bo[rest_idx], rest_groups))
-                pool_idx = rest_idx[pool_local_idx]
-            else:
-                # No groups: simple shuffle
-                perm = rng.permutation(n_samples)
-                n_seed = max(10, int(n_samples * seed_frac))
-                n_pool = int(n_samples * pool_frac)
-                seed_idx = perm[:n_seed]
-                pool_idx = perm[n_seed:n_seed + n_pool]
+            # From rest, take pool_frac / (1 - seed_frac) as pool
+            pool_from_rest = pool_frac / (1.0 - seed_frac)
+            pool_from_rest = min(pool_from_rest, 0.95)  # safety
+            gss_pool = GroupShuffleSplit(
+                n_splits=1, test_size=1.0 - pool_from_rest, random_state=seed)
+            rest_groups = groups[rest_idx]
+            pool_local_idx, _ = next(gss_pool.split(
+                rest_idx, y_bo[rest_idx], rest_groups))
+            pool_idx = rest_idx[pool_local_idx]
 
             # Select target: combined objective for multi_obj, else standard
             y_cond = y_multi if condition.startswith('multi_obj_') else y_bo
@@ -918,7 +966,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         curve, gp_fail = _run_bo_with_rebuild(
                             reps, y_bo, seed_idx, pool_idx,
                             max_iterations, hybrid_budget, rebuild_interval,
-                            rng=rng, bp=bp)
+                            rng=rng, bp=bp, augmentations=augmentations)
                         all_curves.append(curve)
                         total_gp_failures += gp_fail
                         best_final = curve[-1] if curve else float('nan')
@@ -936,7 +984,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     curve, gp_fail = _run_bo_with_rebuild(
                         reps, y_bo, seed_idx, pool_idx,
                         max_iterations, hybrid_budget, 25,
-                        rng=rng, bp=bp)
+                        rng=rng, bp=bp, augmentations=augmentations)
                     all_curves.append(curve)
                     total_gp_failures += gp_fail
                     best_final = curve[-1] if curve else float('nan')
@@ -1029,6 +1077,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         y_for_metrics = y_multi if condition.startswith('multi_obj_') else y_bo
         metrics = compute_bo_metrics(all_curves, y_for_metrics, budget_checkpoints)
 
+        # Sign-flip stored AUC back into the natural metric direction when the
+        # underlying domain metric is lower_is_better. BO maximizes -metric so
+        # `auc_mean` from compute_bo_metrics is the AUC of the -metric curve;
+        # negate so consumers read auc_mean in the original metric direction.
+        # auc_std stays untouched (std is sign-invariant). top-K iteration
+        # counts are unaffected (they count iters, not metric values).
+        # Multi-objective curves use y_multi which is constructed in
+        # "higher is better" orientation (see compute_combined_objective),
+        # so they are not sign-flipped.
+        if lower_is_better and not condition.startswith('multi_obj_'):
+            for bk_key, bk_metrics in metrics.items():
+                if 'auc_mean' in bk_metrics:
+                    bk_metrics['auc_mean'] = -bk_metrics['auc_mean']
+
         # Mean curve for plotting
         max_len = max(len(c) for c in all_curves)
         padded = []
@@ -1055,7 +1117,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             key = f'budget_{bk}'
             if key in metrics:
                 m = metrics[key]
-                print(f"    Budget {bk}: AUC={m['auc_mean']:.1f}+/-{m['auc_std']:.1f}, "
+                print(f"    Budget {bk}: AUC={display_sign*m['auc_mean']:.1f}"
+                      f"+/-{m['auc_std']:.1f}, "
                       f"top1%: {m['iters_to_top1pct_mean']}"
                       f"/{m['iters_to_top1pct_found']} found, "
                       f"top5%: {m['iters_to_top5pct_mean']}"
@@ -1065,7 +1128,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # FINAL SUMMARY
     # =================================================================
     print(f"\n{'='*70}")
-    print("  SUMMARY: Best-found AUC at max budget")
+    # Stored AUC is already sign-flipped at storage time when lower_is_better,
+    # so the printed values are always in the natural metric direction.
+    if lower_is_better:
+        print("  SUMMARY: Best-found AUC at max budget "
+              "(in original metric direction; lower is better)")
+    else:
+        print("  SUMMARY: Best-found AUC at max budget (higher is better)")
     print(f"{'='*70}")
 
     max_budget_key = f'budget_{max(budget_checkpoints)}'
@@ -1082,7 +1151,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  {'Condition':<16} {'Dim':>5} {'AUC':>10} {'Std':>8} {'GP Fail':>8}")
     print(f"  {'-'*16} {'-'*5} {'-'*10} {'-'*8} {'-'*8}")
     for cond, dim, auc, auc_std, gp_fail in summary_rows:
-        print(f"  {cond:<16} {dim:>5} {auc:>10.1f} {auc_std:>8.1f} {gp_fail:>8}")
+        print(f"  {cond:<16} {dim:>5} {display_sign*auc:>10.1f} "
+              f"{auc_std:>8.1f} {gp_fail:>8}")
 
     # Highlight key comparison: hybrid vs ecfp4
     hybrid_res = results['conditions'].get('hybrid_50d', {}).get('metrics', {})
@@ -1091,8 +1161,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         h_auc = hybrid_res.get(max_budget_key, {}).get('auc_mean', float('nan'))
         e_auc = ecfp4_res.get(max_budget_key, {}).get('auc_mean', float('nan'))
         if not (np.isnan(h_auc) or np.isnan(e_auc)):
-            pct_gain = 100.0 * (h_auc - e_auc) / abs(e_auc) if e_auc != 0 else 0
-            print(f"\n  Hybrid vs ECFP4: AUC gain = {h_auc - e_auc:+.1f} ({pct_gain:+.1f}%)")
+            # Compare in original metric direction.
+            h_disp = display_sign * h_auc
+            e_disp = display_sign * e_auc
+            pct_gain = 100.0 * (h_disp - e_disp) / abs(e_disp) if e_disp != 0 else 0
+            print(f"\n  Hybrid vs ECFP4: AUC gain = {h_disp - e_disp:+.1f} "
+                  f"({pct_gain:+.1f}%)")
 
     # Build structured output
     output = make_structured_output(
@@ -1108,7 +1182,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
 def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
                          max_iterations, hybrid_budget, rebuild_interval,
-                         rng=None, bp=None):
+                         rng=None, bp=None, augmentations=None):
     """BO loop with periodic hybrid rebuilding.
 
     Every rebuild_interval iterations, re-create the hybrid using all
@@ -1117,6 +1191,8 @@ def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
     Args:
         bp: Blueprint from search. If provided, uses blueprint params instead
             of hardcoded defaults.
+        augmentations: optional dict[name, array] of full-dataset augmentation
+            features. Subset per-call so create_hybrid sees only labeled rows.
     """
     if rng is None:
         rng = np.random.RandomState(42)
@@ -1125,12 +1201,14 @@ def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
 
     alloc = bp.allocation_method if bp else 'entropy_1.0'
     imp = bp.importance_method if bp else 'lightgbm_gain'
-    int_eval = bp.internal_evaluator if bp else 'ridge'
+    int_eval = bp.internal_evaluator if bp else 'match'
 
     # Initial hybrid build — honour caller's hybrid_budget; blueprint may have
     # been discovered at a different budget but the BO condition fixes one.
     seed_reps = {k: v[seed_idx] for k, v in reps.items()}
     pool_reps_all = {k: v[pool_idx] for k, v in reps.items()}
+    seed_augs = ({k: v[seed_idx] for k, v in augmentations.items()}
+                 if augmentations else None)
 
     X_seed, feature_info = create_hybrid(
         seed_reps, y_seed,
@@ -1138,6 +1216,8 @@ def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
         importance_method=imp,
         internal_evaluator=int_eval,
         budget=hybrid_budget,
+        augmentations=seed_augs,
+        augmentation_strategy='uncapped',
     )
     X_pool_all = apply_feature_selection(pool_reps_all, feature_info)
 
@@ -1164,13 +1244,17 @@ def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
                 lab_reps = {k: v[lab_idx_arr] for k, v in reps.items()}
                 remaining_pool_orig = pool_idx[pool_mask]
                 remaining_reps = {k: v[remaining_pool_orig] for k, v in reps.items()}
+                lab_augs = ({k: v[lab_idx_arr] for k, v in augmentations.items()}
+                            if augmentations else None)
 
                 X_lab_new, feature_info = create_hybrid(
                     lab_reps, y_lab,
                     allocation_method=alloc,
                     importance_method=imp,
                     internal_evaluator=int_eval,
-                    budget=bgt,
+                    budget=hybrid_budget,
+                    augmentations=lab_augs,
+                    augmentation_strategy='uncapped',
                 )
                 X_remaining = apply_feature_selection(remaining_reps, feature_info)
 

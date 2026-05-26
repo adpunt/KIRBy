@@ -813,7 +813,11 @@ def run_all(dataset_name: str, output_dir: str,
             kwargs['k_values'] = config.get('k_values', [5, 10])
             kwargs['conditions'] = config.get('knn_conditions')
         if exp_id == 's08':
-            kwargs['budgets'] = config.get('budgets', [25, 50, 100, 200])
+            # s08 uses downstream_model='knn' (distance lineage), so budgets
+            # must match DISTANCE_BUDGETS=[10,25,50,100,250,500] for the cache
+            # lookups to hit. Old default [25,50,100,200] silently missed 200.
+            from experiments._shared import DISTANCE_BUDGETS
+            kwargs['budgets'] = config.get('budgets', DISTANCE_BUDGETS)
 
         try:
             exp_result = mod.run(data, config, output_dir, dataset_name, **kwargs)

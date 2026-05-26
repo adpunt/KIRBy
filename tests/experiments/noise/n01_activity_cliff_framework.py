@@ -38,7 +38,8 @@ from experiments._shared import (
     save_experiment_results, make_structured_output, convert_numpy,
     get_model_factories, get_domain_metric, cv_split, make_cv_splitter,
     get_fitted_hybrid, get_fitted_pool_hybrid, flatten_fold_weights, build_fold_hybrid,
-    get_best_for_downstream, extract_top3_base_reps,
+    get_best_for_downstream, get_best_search_for_downstream,
+    extract_top3_base_reps,
     DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 
@@ -197,8 +198,18 @@ def compute_sali_stats(D, y, eps=1e-6, is_clf=False):
 # SUB-ANALYSIS 1: CONSENSUS CLIFF IDENTIFICATION
 # =============================================================================
 
+def _get_dist(name, X, cache):
+    """Lazily fill the distance-matrix cache. Cache key is the space name."""
+    if cache is not None and name in cache:
+        return cache[name]
+    D = compute_distance_matrix(X, standardize=True)
+    if cache is not None:
+        cache[name] = D
+    return D
+
+
 def _run_consensus(reps, labels, sim_threshold, activity_k, domain, smiles=None,
-                   is_clf=False):
+                   is_clf=False, dist_cache=None):
     """Compute cliff sets per rep and pairwise Jaccard overlap."""
     print("\n  --- Sub-analysis 1: Consensus Cliff Identification ---")
 
@@ -206,8 +217,10 @@ def _run_consensus(reps, labels, sim_threshold, activity_k, domain, smiles=None,
     cliff_infos = {}
 
     for rep_name, X_rep in reps.items():
-        # Build similarity matrix for this rep (Euclidean-based)
-        D = compute_distance_matrix(X_rep, standardize=True)
+        # Build similarity matrix for this rep (Euclidean-based, cached so
+        # sub-analyses 2 + 3 + the per-rep cliff-jaccard loop reuse the same
+        # computation rather than redoing it 4× per rep).
+        D = _get_dist(rep_name, X_rep, dist_cache)
         sim = 1.0 / (1.0 + D)
         np.fill_diagonal(sim, 0.0)
 
@@ -253,14 +266,14 @@ def _run_consensus(reps, labels, sim_threshold, activity_k, domain, smiles=None,
 # SUB-ANALYSIS 2: SALI LANDSCAPE SMOOTHING
 # =============================================================================
 
-def _run_sali_smoothing(reps, labels, X_hybrid, is_clf=False):
+def _run_sali_smoothing(reps, labels, X_hybrid, is_clf=False, dist_cache=None):
     """Compare SALI landscape smoothness across reps and hybrid."""
     print("\n  --- Sub-analysis 2: SALI Landscape Smoothing ---")
 
     sali_results = {}
 
     for rep_name, X_rep in reps.items():
-        D = compute_distance_matrix(X_rep, standardize=True)
+        D = _get_dist(rep_name, X_rep, dist_cache)
         stats = compute_sali_stats(D, labels, is_clf=is_clf)
         sali_results[rep_name] = stats
         print(f"    {rep_name:<20} SALI mean={stats['mean']:.3f}  "
@@ -268,7 +281,7 @@ def _run_sali_smoothing(reps, labels, X_hybrid, is_clf=False):
 
     # Hybrid SALI
     if X_hybrid is not None:
-        D_hybrid = compute_distance_matrix(X_hybrid, standardize=True)
+        D_hybrid = _get_dist('_hybrid', X_hybrid, dist_cache)
         stats_hybrid = compute_sali_stats(D_hybrid, labels, is_clf=is_clf)
         sali_results['_hybrid'] = stats_hybrid
         print(f"    {'_hybrid':<20} SALI mean={stats_hybrid['mean']:.3f}  "
@@ -297,14 +310,14 @@ def _run_sali_smoothing(reps, labels, X_hybrid, is_clf=False):
 # =============================================================================
 
 def _run_cliff_mitigation(reps, labels, X_hybrid, sim_threshold, activity_k,
-                          is_clf=False):
+                          is_clf=False, dist_cache=None):
     """Count cliff pairs in each rep space vs hybrid space at same threshold."""
     print("\n  --- Sub-analysis 3: Cliff Mitigation by Hybridization ---")
 
     mitigation = {}
 
     for rep_name, X_rep in reps.items():
-        D = compute_distance_matrix(X_rep, standardize=True)
+        D = _get_dist(rep_name, X_rep, dist_cache)
         sim = 1.0 / (1.0 + D)
         np.fill_diagonal(sim, 0.0)
         mask, info = identify_cliff_pairs(sim, labels, sim_threshold, activity_k,
@@ -317,7 +330,7 @@ def _run_cliff_mitigation(reps, labels, X_hybrid, sim_threshold, activity_k,
 
     # Hybrid
     if X_hybrid is not None:
-        D_hybrid = compute_distance_matrix(X_hybrid, standardize=True)
+        D_hybrid = _get_dist('_hybrid', X_hybrid, dist_cache)
         sim_hybrid = 1.0 / (1.0 + D_hybrid)
         np.fill_diagonal(sim_hybrid, 0.0)
         mask_h, info_h = identify_cliff_pairs(sim_hybrid, labels, sim_threshold, activity_k,
@@ -361,15 +374,37 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
                           sim_threshold, activity_k,
                           hybrid_blueprint, smiles=None,
                           augmentations=None, augmentation_strategy='uncapped',
-                          is_clf=False):
-    """Compare prediction error on cliff vs non-cliff compounds."""
+                          is_clf=False, bp_by_model=None, aug_by_model=None):
+    """Compare prediction error on cliff vs non-cliff compounds.
+
+    bp_by_model / aug_by_model (optional): pre-fetched per-model blueprints
+    and aug_conditions for the matched-evaluator expansion. When provided,
+    the evaluation runs across DOWNSTREAM_MODELS_NOISE; otherwise falls back
+    to RF-only with the legacy hybrid_blueprint (the audit's P1 was that
+    only RF was tested even though the noise suite convention is multi-model).
+    """
+    from experiments._shared import DOWNSTREAM_MODELS_NOISE
+
     print("\n  --- Sub-analysis 4: Cliff-Stratified Prediction Error ---")
 
     domain = data.get('domain', 'molecular')
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
-    model_factory = get_model_factories(
-        ['rf'], task_type=data['task_type'],
-        n_samples=len(labels))['rf']
+
+    # Multi-model factory dict (matched evaluator). Falls back to RF only if
+    # the caller didn't pre-fetch per-model blueprints.
+    if bp_by_model is None:
+        models_to_run = ['rf']
+        bp_by_model = {'rf': hybrid_blueprint}
+        aug_by_model = {'rf': augmentation_strategy}
+    else:
+        models_to_run = list(bp_by_model.keys())
+
+    model_factories = get_model_factories(
+        models_to_run, task_type=data['task_type'],
+        n_samples=len(labels))
+    if not model_factories:
+        return {'error': 'no_model_factories'}
+
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
 
@@ -433,10 +468,9 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
-    def _evaluate_condition(get_Xy_fn, label):
-        """Run CV, return {metric_all, metric_cliff, metric_noncliff, rmse_*}."""
+    def _evaluate_condition(get_Xy_fn, label, model_factory):
+        """Run CV, return {metric_all, metric_cliff, metric_noncliff, gap, ...}."""
         fold_all, fold_cliff, fold_noncliff = [], [], []
-        fold_domain_all = []
 
         split_args = (sample_X, labels, groups) if use_groups else (sample_X, labels)
         for train_idx, val_idx in splitter.split(*split_args):
@@ -454,10 +488,16 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
 
             model = model_factory()
             model.fit(X_tr_s, y_train)
-            y_pred = model.predict(X_va_s)
+            if metric_name == 'auc' and hasattr(model, 'predict_proba'):
+                proba = model.predict_proba(X_va_s)
+                if getattr(proba, 'ndim', 1) == 2 and proba.shape[1] == 2:
+                    y_pred = proba[:, 1]
+                else:
+                    y_pred = proba
+            else:
+                y_pred = model.predict(X_va_s)
 
             fold_all.append(metric_fn(y_val, y_pred))
-            fold_domain_all.append(metric_fn(y_val, y_pred))
 
             val_cliff = np.array([i for i, vi in enumerate(val_idx)
                                   if vi in cliff_indices])
@@ -478,8 +518,6 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
 
         gap = float('nan')
         if not (np.isnan(score_c) or np.isnan(score_nc)):
-            # For higher-is-better: gap = noncliff - cliff (positive = noncliff easier)
-            # For lower-is-better: gap = cliff - noncliff (positive = cliff harder)
             if lower_is_better:
                 gap = float(score_c - score_nc)
             else:
@@ -494,62 +532,80 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
             'lower_is_better': lower_is_better,
         }
 
-    strat_results = {}
+    # Per-model loop (matched evaluator). Each downstream model uses its own
+    # blueprint, and per-rep baselines are also reported per-model so the
+    # cliff-noncliff gap claim isn't single-model-biased (audit P1 finding).
+    strat_results_by_model = {}
+    for model_name, model_factory in model_factories.items():
+        model_bp = bp_by_model.get(model_name)
+        model_aug = aug_by_model.get(model_name,
+                                     augmentation_strategy) if aug_by_model else augmentation_strategy
+        model_use_augs = augmentations if model_aug != 'none' else None
+        per_model = {}
 
-    # Per-rep RF baselines
-    print(f"\n    Per-rep RF baselines:")
-    for rep_name, X_rep in reps.items():
-        def _get_rep(tr, va, yt, _X=X_rep):
-            return _X[tr], _X[va]
-        res = _evaluate_condition(_get_rep, rep_name)
-        if res:
-            strat_results[rep_name] = res
-            mn = res['metric']
-            print(f"      {rep_name:<20} {mn}_all={res[f'{mn}_all']:.4f}  "
-                  f"{mn}_cliff={res[f'{mn}_cliff']:.4f}  {mn}_noncliff={res[f'{mn}_noncliff']:.4f}  "
-                  f"gap={res['cliff_noncliff_gap']:.4f}")
+        print(f"\n    [{model_name}] Per-rep baselines:")
+        for rep_name, X_rep in reps.items():
+            def _get_rep(tr, va, yt, _X=X_rep):
+                return _X[tr], _X[va]
+            res = _evaluate_condition(_get_rep, rep_name, model_factory)
+            if res:
+                per_model[rep_name] = res
+                mn = res['metric']
+                print(f"      {rep_name:<20} {mn}_all={res[f'{mn}_all']:.4f}  "
+                      f"{mn}_cliff={res[f'{mn}_cliff']:.4f}  "
+                      f"{mn}_noncliff={res[f'{mn}_noncliff']:.4f}  "
+                      f"gap={res['cliff_noncliff_gap']:.4f}")
 
-    # Hybrid RF
-    if hybrid_blueprint is not None:
-        print(f"\n    Hybrid RF:")
+        if model_bp is not None:
+            print(f"    [{model_name}] Hybrid:")
 
-        def _get_hybrid(tr, va, yt):
-            train_reps = {name: rep[tr] for name, rep in reps.items()}
-            val_reps = {name: rep[va] for name, rep in reps.items()}
-            train_augs = {k: v[tr] for k, v in augmentations.items()} if augmentations else None
-            val_augs = {k: v[va] for k, v in augmentations.items()} if augmentations else None
-            X_tr_h, X_va_h, _ = build_fold_hybrid(
-                train_reps, val_reps, yt, hybrid_blueprint,
-                augmentations_train=train_augs, augmentations_val=val_augs)
-            return X_tr_h, X_va_h
+            def _get_hybrid(tr, va, yt, _bp=model_bp, _augs=model_use_augs):
+                train_reps = {name: rep[tr] for name, rep in reps.items()}
+                val_reps = {name: rep[va] for name, rep in reps.items()}
+                train_augs = {k: v[tr] for k, v in _augs.items()} if _augs else None
+                val_augs = {k: v[va] for k, v in _augs.items()} if _augs else None
+                X_tr_h, X_va_h, _ = build_fold_hybrid(
+                    train_reps, val_reps, yt, _bp,
+                    augmentations_train=train_augs, augmentations_val=val_augs)
+                return X_tr_h, X_va_h
 
-        res = _evaluate_condition(_get_hybrid, 'hybrid')
-        if res:
-            strat_results['_hybrid'] = res
-            mn = res['metric']
-            print(f"      {'_hybrid':<20} {mn}_all={res[f'{mn}_all']:.4f}  "
-                  f"{mn}_cliff={res[f'{mn}_cliff']:.4f}  {mn}_noncliff={res[f'{mn}_noncliff']:.4f}  "
-                  f"gap={res['cliff_noncliff_gap']:.4f}")
+            res = _evaluate_condition(_get_hybrid, 'hybrid', model_factory)
+            if res:
+                per_model['_hybrid'] = res
+                mn = res['metric']
+                print(f"      {'_hybrid':<20} {mn}_all={res[f'{mn}_all']:.4f}  "
+                      f"{mn}_cliff={res[f'{mn}_cliff']:.4f}  "
+                      f"{mn}_noncliff={res[f'{mn}_noncliff']:.4f}  "
+                      f"gap={res['cliff_noncliff_gap']:.4f}")
 
-        # Comparison: top-3 smallest gap
-        rep_gap_list = [(k, v['cliff_noncliff_gap']) for k, v in strat_results.items()
-                        if k != '_hybrid' and not np.isnan(v.get('cliff_noncliff_gap', float('nan')))]
-        if rep_gap_list and '_hybrid' in strat_results:
-            top3_gap = sorted(rep_gap_list, key=lambda x: abs(x[1]))[:3]
-            hybrid_gap = strat_results['_hybrid']['cliff_noncliff_gap']
-            strat_results['_comparison'] = {
-                'top3_smallest_gap': top3_gap,
-                'hybrid_gap': hybrid_gap,
-            }
-            print(f"      Top-3 smallest cliff-noncliff gap:")
-            for rn, rg in top3_gap:
-                print(f"        {rn}: {rg:.4f}")
-            print(f"      Hybrid: {hybrid_gap:.4f}")
+            rep_gap_list = [(k, v['cliff_noncliff_gap'])
+                            for k, v in per_model.items()
+                            if k != '_hybrid'
+                            and not np.isnan(v.get('cliff_noncliff_gap', float('nan')))]
+            if rep_gap_list and '_hybrid' in per_model:
+                top3_gap = sorted(rep_gap_list, key=lambda x: abs(x[1]))[:3]
+                hybrid_gap = per_model['_hybrid']['cliff_noncliff_gap']
+                per_model['_comparison'] = {
+                    'top3_smallest_gap': top3_gap,
+                    'hybrid_gap': hybrid_gap,
+                }
+
+        strat_results_by_model[model_name] = per_model
+
+    # Legacy flat structure: RF view (or first available) for backwards
+    # compatibility. Downstream readers preferring multi-model should use
+    # strat_results_by_model.
+    _legacy_model = 'rf' if 'rf' in strat_results_by_model else (
+        next(iter(strat_results_by_model)) if strat_results_by_model else None)
+    strat_results = (dict(strat_results_by_model[_legacy_model])
+                     if _legacy_model else {})
 
     return {
         'cliff_source': sim_source,
         'cliff_info': convert_numpy(cliff_info),
         'stratified': convert_numpy(strat_results),
+        'stratified_by_model': convert_numpy(strat_results_by_model),
+        'models': list(strat_results_by_model.keys()),
     }
 
 
@@ -593,9 +649,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     X_hybrid = None
 
     try:
+        # Matched-evaluator rule. Sub-analyses 1-3 use the hybrid only as a
+        # feature space (downstream model choice doesn't matter); sub-4 scores
+        # the hybrid with a model and must use that model's blueprint. RF is
+        # built first because it doubles as the "representative" hybrid for
+        # the cliff-geometry sub-analyses and as the canonical top-3 anchor.
         X_hybrid, fi_hybrid, search, meta = get_fitted_pool_hybrid(
             reps, labels, groups,
-            downstream_model='knn', budget=None,
+            downstream_model='rf', budget=None,
             augmentations=augmentations,
             speed=search_speed, data=data,
             dataset_name=dataset_name, task_type=task_type)
@@ -604,11 +665,47 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  Hybrid: dim={X_hybrid.shape[1]}")
         top3 = extract_top3_base_reps(search)
         if top3:
-            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+            print(f"  Top-3 base reps (ranked by RF baseline): "
+                  f"{', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     except Exception as e:
         print(f"  WARNING: Hybrid search failed ({e}), hybrid comparisons skipped")
         search = None
         top3 = None
+
+    # Pre-fetch per-model blueprints for sub-analysis 4. Each call is cached
+    # so re-fetching is cheap when the pool already has the entry. RF is
+    # already loaded above; just reuse its bp/aug_condition.
+    from experiments._shared import DOWNSTREAM_MODELS_NOISE
+    bp_by_model_s4 = {}
+    aug_by_model_s4 = {}
+    if hybrid_blueprint is not None:
+        bp_by_model_s4['rf'] = hybrid_blueprint
+        aug_by_model_s4['rf'] = (meta.get('aug_condition', 'uncapped')
+                                 if meta else 'uncapped')
+    for _mname in DOWNSTREAM_MODELS_NOISE:
+        if _mname == 'rf':
+            continue
+        try:
+            _search, _meta = get_best_search_for_downstream(
+                reps, labels, groups,
+                downstream_model=_mname, budget=None,
+                augmentations=augmentations,
+                speed=search_speed,
+                dataset_name=dataset_name, task_type=task_type, data=data,
+            )
+            if _meta is not None:
+                _bp = _meta['best_config']['blueprint']
+                _aug = _meta.get('aug_condition', 'uncapped')
+                if getattr(_bp, 'augmentation_strategy', None) != _aug:
+                    try:
+                        _bp.augmentation_strategy = _aug
+                    except Exception:
+                        pass
+                bp_by_model_s4[_mname] = _bp
+                aug_by_model_s4[_mname] = _aug
+        except Exception:
+            # If a model's blueprint can't be fetched, skip it for sub-4.
+            pass
 
     results = {
         'config': {
@@ -621,25 +718,30 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
     }
 
+    # Shared distance-matrix cache for sub-analyses 1-3 and the hybrid-vs-rep
+    # cliff jaccard block below. Each (rep, X) pair is computed at most once.
+    dist_cache = {}
+
     # --- Sub-analysis 1: Consensus cliff identification ---
     results['consensus'] = _run_consensus(
         reps, labels, sim_threshold, activity_threshold, domain, smiles,
-        is_clf=is_clf)
+        is_clf=is_clf, dist_cache=dist_cache)
 
     # Add hybrid consensus if available
     if X_hybrid is not None:
-        # Build hybrid cliff set
-        D_hybrid = compute_distance_matrix(X_hybrid, standardize=True)
+        # Build hybrid cliff set (reuses cached '_hybrid' distance matrix
+        # populated by sub-analysis 2/3).
+        D_hybrid = _get_dist('_hybrid', X_hybrid, dist_cache)
         sim_hybrid = 1.0 / (1.0 + D_hybrid)
         np.fill_diagonal(sim_hybrid, 0.0)
         mask_h, _ = identify_cliff_pairs(sim_hybrid, labels, sim_threshold,
                                          activity_threshold, is_clf=is_clf)
         hybrid_cliff_set = _cliff_pair_set(mask_h)
 
-        # Jaccard of hybrid vs each rep
+        # Jaccard of hybrid vs each rep (cached per-rep matrices)
         hybrid_jaccards = {}
         for rep_name, X_rep in reps.items():
-            D_rep = compute_distance_matrix(X_rep, standardize=True)
+            D_rep = _get_dist(rep_name, X_rep, dist_cache)
             sim_rep = 1.0 / (1.0 + D_rep)
             np.fill_diagonal(sim_rep, 0.0)
             mask_r, _ = identify_cliff_pairs(sim_rep, labels, sim_threshold,
@@ -660,22 +762,32 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"{results['consensus']['avg_pairwise_jaccard']:.4f})")
 
     # --- Sub-analysis 2: SALI landscape smoothing ---
-    results['sali'] = _run_sali_smoothing(reps, labels, X_hybrid, is_clf=is_clf)
+    results['sali'] = _run_sali_smoothing(reps, labels, X_hybrid,
+                                          is_clf=is_clf,
+                                          dist_cache=dist_cache)
 
     # --- Sub-analysis 3: Cliff mitigation by hybridization ---
     results['mitigation'] = _run_cliff_mitigation(
         reps, labels, X_hybrid, sim_threshold, activity_threshold,
-        is_clf=is_clf)
+        is_clf=is_clf, dist_cache=dist_cache)
 
     # --- Sub-analysis 4: Cliff-stratified prediction error ---
-    augmentation_strategy = 'uncapped'
+    # Use the augmentation condition the pool actually selected, not a
+    # hardcoded 'uncapped' — the latter is the 2026-04-21 cache-collision
+    # pattern (see project_cache_collision_fix). meta['aug_condition'] holds
+    # the slot the winning blueprint came from.
+    aug_strategy_from_pool = (meta.get('aug_condition', 'uncapped')
+                              if meta else 'uncapped')
+    augs_for_cliff = augmentations if aug_strategy_from_pool != 'none' else None
     results['stratified'] = _run_cliff_stratified(
         reps, labels, groups, config, data,
         sim_threshold, activity_threshold,
         hybrid_blueprint, smiles,
         augmentations=augmentations,
-        augmentation_strategy=augmentation_strategy,
-        is_clf=is_clf)
+        augmentation_strategy=aug_strategy_from_pool,
+        is_clf=is_clf,
+        bp_by_model=bp_by_model_s4,
+        aug_by_model=aug_by_model_s4)
 
     # --- Grand summary ---
     print("\n" + "=" * 70)

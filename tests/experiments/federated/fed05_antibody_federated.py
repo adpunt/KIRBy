@@ -18,8 +18,16 @@ fusion outperform prediction-level ensemble across heterogeneous antibody silos?
     C4: Noise heterogeneity (Gaussian noise on one silo)
     C5: Pooled binding (DDG + DMS, z-score normalized)
     C6: Rep diversity per silo (different rep subsets)
-    C7: FLuID quality-weighted ensemble (inverse-RMSE)
-    C8: FLuID similarity-weighted ensemble (ESM2 distance)
+    C7: SKIPPED — FLuID quality-weighted ensemble is incompatible with the
+        antibody silo structure here. Each silo has a different feature space
+        (different shared-rep dimensionalities + a per-silo PCA basis via
+        cap_dimensions), and labels are in incompatible ranges (kcal/mol vs
+        normalized DMS score vs °C). Calling a teacher.predict on another
+        silo's features either crashes or silently returns meaningless
+        predictions, so we report an explicit skip rather than fake numbers.
+    C8: SKIPPED — same reason as C7. The KNN distance still uses the target
+        silo's ESM2 embedding, but the regression head was fit on a
+        different feature space, so predictions are not comparable.
 
 Usage:
     python fed05_antibody_federated.py
@@ -46,6 +54,7 @@ from experiments.federated.federated_helpers import (
     extract_importance_profile, compare_importance_profiles,
     cluster_antibody_silos,
     predict_fluid_quality_ensemble_regression,
+    _resolve_match,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
 from kirby.find_best_hybrid import find_best_hybrid
@@ -130,7 +139,7 @@ def _silo_baseline(sd, shared_reps, seed=42,
     if sd.get('task_type') == 'classification':
         clf = RandomForestClassifier(
             n_estimators=150, max_depth=15,
-            class_weight='balanced', random_state=0)
+            class_weight='balanced', random_state=42)
         clf.fit(X_h, y_tr)
         y_pred = clf.predict(X_h_te)
         y_prob = (clf.predict_proba(X_h_te)
@@ -138,7 +147,7 @@ def _silo_baseline(sd, shared_reps, seed=42,
         metrics = compute_clf_metrics(y_te, y_pred, y_prob)
     else:
         reg = RandomForestRegressor(
-            n_estimators=150, max_depth=15, random_state=0)
+            n_estimators=150, max_depth=15, random_state=42)
         reg.fit(X_h, y_tr)
         y_pred = reg.predict(X_h_te)
         metrics = compute_reg_metrics(y_te, y_pred)
@@ -188,6 +197,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     _alloc = _default_bp.allocation_method if _default_bp else 'performance_weighted'
     _imp = _default_bp.importance_method if _default_bp else 'treeshap'
     _int_eval = _default_bp.internal_evaluator if _default_bp else 'match'
+    _int_eval = _resolve_match(_int_eval, 'rf')
 
     # Find shared reps
     all_rep_sets = [set(sd['reps'].keys()) for sd in silo_data.values()]
@@ -213,7 +223,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             sbp = silo_blueprints.get(sname)
             s_alloc = sbp.allocation_method if sbp else _alloc
             s_imp = sbp.importance_method if sbp else _imp
-            s_int_eval = sbp.internal_evaluator if sbp else _int_eval
+            s_int_eval = _resolve_match(sbp.internal_evaluator if sbp else _int_eval, 'rf')
             metrics, fi, split = _silo_baseline(
                 sd, shared_reps,
                 alloc=s_alloc, imp=s_imp, int_eval=s_int_eval)
@@ -268,11 +278,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     continue
 
                 X_te = apply_feature_selection(rep_te, transferred_fi)
-                reg = RandomForestRegressor(
-                    n_estimators=150, max_depth=15, random_state=0)
-                reg.fit(X_target, y_tr)
-                y_pred = reg.predict(X_te)
-                metrics = compute_reg_metrics(y_te, y_pred)
+                if target_sd.get('task_type') == 'classification':
+                    mdl = RandomForestClassifier(
+                        n_estimators=150, max_depth=15,
+                        class_weight='balanced', random_state=42)
+                    mdl.fit(X_target, y_tr)
+                    y_pred = mdl.predict(X_te)
+                    y_prob = (mdl.predict_proba(X_te)
+                              if hasattr(mdl, 'predict_proba') else None)
+                    metrics = compute_clf_metrics(y_te, y_pred, y_prob)
+                else:
+                    mdl = RandomForestRegressor(
+                        n_estimators=150, max_depth=15, random_state=42)
+                    mdl.fit(X_target, y_tr)
+                    y_pred = mdl.predict(X_te)
+                    metrics = compute_reg_metrics(y_te, y_pred)
                 metrics['transfer_stats'] = stats
 
                 ind_rmse = independent.get(target_name, {}).get('rmse', float('nan'))
@@ -280,8 +300,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     metrics['rmse_improvement'] = float(ind_rmse - metrics['rmse'])
 
                 transfer_results[key] = metrics
-                print(f"RMSE={metrics['rmse']:.4f}  "
-                      f"(vs ind {ind_rmse:.4f})")
+                if 'rmse' in metrics:
+                    print(f"RMSE={metrics['rmse']:.4f}  "
+                          f"(vs ind {ind_rmse:.4f})")
+                else:
+                    print(f"MCC={metrics.get('mcc', float('nan')):.4f}")
             except Exception as e:
                 transfer_results[key] = {'error': str(e)}
                 print(f"FAILED: {e}")
@@ -341,6 +364,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         allocation_method=_alloc,
                         importance_method=_imp,
                         internal_evaluator=_int_eval,
+                        budget=c_budget,
                         augmentations=c_augs,
                         augmentation_strategy=s_aug_cond)
                     profiles[c_id] = extract_importance_profile(fi_c)
@@ -423,7 +447,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     valid_reps, labels_noisy, noise_silo_idx,
                     len(silo_names),
                     allocation_method=_alloc, importance_method=_imp,
-                    internal_evaluator=_int_eval)
+                    internal_evaluator=_int_eval,
+                    downstream_model='rf')
 
             # Check: does noisy silo get less budget?
             noise_results = {
@@ -494,16 +519,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     pool_valid_reps[r] = np.vstack(parts)
 
             if len(pool_valid_reps) >= 2:
-                # Concatenate groups with offset to avoid cross-silo collisions
+                # Concatenate groups with offset to avoid cross-silo collisions.
+                # offset must ACCUMULATE across silos — if we reassigned it to
+                # the current silo's max+1, silos ≥ 3 would collide because the
+                # third silo's offset would be based only on silo 2's range and
+                # could overlap silo 1.
                 pool_groups_list = []
                 offset = 0
                 for sname in available_binding:
                     sd = silo_data[sname]
                     tr_s, _ = silo_splits.get(sname, _split_silo(sd))
+                    if len(tr_s) == 0:
+                        continue
                     g = sd.get('groups')
                     if g is not None:
-                        pool_groups_list.append(g[tr_s] + offset)
-                        offset = int(g[tr_s].max()) + 1
+                        shifted = g[tr_s] + offset
+                        pool_groups_list.append(shifted)
+                        offset = int(shifted.max()) + 1
                     else:
                         pool_groups_list.append(np.arange(len(tr_s)) + offset)
                         offset += len(tr_s)
@@ -528,7 +560,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 X_h_te = apply_feature_selection(rep_te, fi)
 
                 reg = RandomForestRegressor(
-                    n_estimators=150, max_depth=15, random_state=0)
+                    n_estimators=150, max_depth=15, random_state=42)
                 reg.fit(X_h, pool_labels[p_tr])
                 y_pred = reg.predict(X_h_te)
                 pooled_binding = compute_reg_metrics(pool_labels[p_te], y_pred)
@@ -592,7 +624,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             X_te = np.hstack([sd_lead['reps'][r][te] for r in rlist])
 
             reg = RandomForestRegressor(
-                n_estimators=150, max_depth=15, random_state=0)
+                n_estimators=150, max_depth=15, random_state=42)
             reg.fit(X_tr, y_tr)
             y_pred = reg.predict(X_te)
             div_baselines[dname] = compute_reg_metrics(y_te, y_pred)
@@ -647,7 +679,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     X_h_te = np.hstack([X_h_te, _X_te_aug_h])
 
             reg_h = RandomForestRegressor(
-                n_estimators=150, max_depth=15, random_state=0)
+                n_estimators=150, max_depth=15, random_state=42)
             reg_h.fit(X_h, y_tr)
             y_pred_h = reg_h.predict(X_h_te)
             hybrid_metrics = compute_reg_metrics(y_te, y_pred_h)
@@ -668,160 +700,34 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     results['c6_rep_diversity'] = convert_numpy(rep_diversity)
 
-    # ── Phase 8: C7/C8 — FLuID ensemble baselines ───────────────────────
-    # Tests the central claim: KIRBy outperforms FLuID for antibodies.
-    # C7: FLuID quality ensemble. C8: FLuID similarity ensemble (ESM2 dist).
+    # ── Phase 8: C7/C8 — FLuID ensemble baselines (SKIPPED) ──────────────
+    # Original intent: train per-silo teachers, then predict-and-ensemble
+    # across silos to compare KIRBy's feature-level fusion against FLuID's
+    # prediction-level ensemble.
+    #
+    # NOT IMPLEMENTED here: the antibody silos do not share a common feature
+    # space. Each silo's teacher is trained on `cap_dimensions(X_tr, X_te)`
+    # where X_tr/X_te come from its OWN shared-rep concatenation. The
+    # cap_dimensions PCA basis is fit per silo, so a teacher's `predict()`
+    # called on another silo's features either crashes (dim mismatch) or
+    # silently returns meaningless numbers (different PCA basis, different
+    # label scale: kcal/mol vs normalized DMS score vs °C). Either failure
+    # mode produces invalid results.
+    #
+    # Safer to report an explicit skip than fabricate numbers. A correct
+    # implementation would require a shared feature space (e.g. a fixed
+    # cross-silo PCA basis) AND per-silo label z-scoring before teacher
+    # training. Left for future work.
     print("\n--- Phase 8: C7/C8 — FLuID ensemble baselines ---")
-
-    # Train per-silo teachers on concatenated shared reps
-    silo_teachers = {}
-    silo_test_X = {}
-    silo_test_y = {}
-    for sname in silo_names:
-        sd = silo_data[sname]
-        tr, te = silo_splits.get(sname, _split_silo(sd))
-        reps_s = {r: sd['reps'][r] for r in shared_reps if r in sd['reps']}
-        if len(reps_s) < 2:
-            continue
-        X_tr = np.hstack([reps_s[r][tr] for r in sorted(reps_s)])
-        X_te = np.hstack([reps_s[r][te] for r in sorted(reps_s)])
-        X_tr, X_te = cap_dimensions(X_tr, X_te)
-        y_tr = sd['labels'][tr]
-        y_te = sd['labels'][te]
-
-        reg = RandomForestRegressor(
-            n_estimators=150, max_depth=15, random_state=0)
-        reg.fit(X_tr, y_tr)
-        silo_teachers[sname] = (reg, X_tr, y_tr)
-        silo_test_X[sname] = X_te
-        silo_test_y[sname] = y_te
-
-    if len(silo_teachers) >= 2:
-        # C7: FLuID quality ensemble — weight by inverse-RMSE per silo
-        print("  C7: FLuID quality ensemble...")
-        c7_per_silo = {}
-        for target_name in silo_names:
-            if target_name not in silo_test_X:
-                continue
-            X_te = silo_test_X[target_name]
-            y_te = silo_test_y[target_name]
-
-            # Each silo-teacher predicts on target's test set
-            preds = {}
-            weights = {}
-            for sname, (reg, X_tr, y_tr) in silo_teachers.items():
-                pred = reg.predict(X_te)
-                preds[sname] = pred
-                # Weight = inverse RMSE on own train set (cross-val)
-                from sklearn.model_selection import cross_val_predict
-                try:
-                    cv_pred = cross_val_predict(reg, X_tr, y_tr, cv=3)
-                    rmse = float(np.sqrt(np.mean((y_tr - cv_pred) ** 2)))
-                    weights[sname] = 1.0 / max(rmse, 1e-6)
-                except Exception:
-                    weights[sname] = 1.0
-
-            # Weighted average prediction.
-            # Freeze silo order in one list so weights and preds can't drift
-            # apart if anything iterates `preds` later (P1-13).
-            silo_order = list(preds)
-            w_arr = np.array([weights[s] for s in silo_order])
-            w_arr /= w_arr.sum()
-            ensemble_pred = sum(
-                w * preds[s] for s, w in zip(silo_order, w_arr))
-            c7_m = compute_reg_metrics(y_te, ensemble_pred)
-            c7_m['weights'] = convert_numpy(
-                {s: float(w) for s, w in zip(silo_order, w_arr)})
-            c7_per_silo[target_name] = c7_m
-            print(f"    {target_name}: RMSE={c7_m['rmse']:.4f}  "
-                  f"rho={c7_m['spearman_rho']:.4f}")
-
-        results['c7_fluid_quality'] = convert_numpy(c7_per_silo)
-
-        # C8: FLuID similarity ensemble — weight by ESM2 embedding distance
-        print("  C8: FLuID similarity ensemble (ESM2 distance)...")
-        c8_per_silo = {}
-        esm2_key = 'esm2' if 'esm2' in shared_reps else None
-        if esm2_key is None:
-            # Fall back to a known-good embedding rep for distance
-            for _fb in ['prot_t5', 'ablang2', 'esmc', 'antiberty']:
-                if _fb in shared_reps:
-                    esm2_key = _fb
-                    break
-            else:
-                esm2_key = shared_reps[0] if shared_reps else None
-
-        if esm2_key is not None:
-            for target_name in silo_names:
-                sd_target = silo_data[target_name]
-                if target_name not in silo_test_X:
-                    continue
-                _, te = silo_splits.get(
-                    target_name, _split_silo(sd_target))
-                y_te = silo_test_y[target_name]
-
-                # Get ESM2 embeddings for KNN distance
-                if esm2_key not in sd_target['reps']:
-                    c8_per_silo[target_name] = {
-                        'error': f'{esm2_key} not in target reps'}
-                    continue
-                test_emb = sd_target['reps'][esm2_key][te]
-
-                # Build KNN from each silo's train ESM2
-                from sklearn.neighbors import NearestNeighbors
-                silo_preds = {}
-                silo_dists = {}
-                for sname, (reg, _, _) in silo_teachers.items():
-                    sd_s = silo_data[sname]
-                    tr_s, _ = silo_splits.get(sname, _split_silo(sd_s))
-                    if esm2_key not in sd_s['reps']:
-                        continue
-                    train_emb = sd_s['reps'][esm2_key][tr_s]
-
-                    # 8-NN distance to silo's train set
-                    k_nn = min(8, len(train_emb) - 1)
-                    if k_nn < 1:
-                        continue
-                    nn = NearestNeighbors(n_neighbors=k_nn)
-                    nn.fit(train_emb)
-                    dists, _ = nn.kneighbors(test_emb)
-                    mean_dist = dists.mean(axis=1)
-
-                    X_te = silo_test_X[target_name]
-                    pred = reg.predict(X_te)
-                    silo_preds[sname] = pred
-                    silo_dists[sname] = mean_dist
-
-                if len(silo_preds) >= 2:
-                    # Similarity weight = inverse distance
-                    # Per test sample: weight each silo by 1/dist
-                    n_te = len(y_te)
-                    ensemble_pred = np.zeros(n_te)
-                    total_w = np.zeros(n_te)
-                    for sname in silo_preds:
-                        w = 1.0 / np.maximum(silo_dists[sname], 1e-10)
-                        ensemble_pred += w * silo_preds[sname]
-                        total_w += w
-                    ensemble_pred /= total_w
-
-                    c8_m = compute_reg_metrics(y_te, ensemble_pred)
-                    c8_m['distance_rep'] = esm2_key
-                    c8_per_silo[target_name] = c8_m
-                    print(f"    {target_name}: RMSE={c8_m['rmse']:.4f}  "
-                          f"rho={c8_m['spearman_rho']:.4f}")
-                else:
-                    c8_per_silo[target_name] = {
-                        'error': 'insufficient silos with distance rep'}
-        else:
-            c8_per_silo = {'error': 'no shared rep for distance'}
-
-        results['c8_fluid_similarity'] = convert_numpy(c8_per_silo)
-    else:
-        results['c7_fluid_quality'] = {
-            'error': f'only {len(silo_teachers)} silos with teachers'}
-        results['c8_fluid_similarity'] = {
-            'error': f'only {len(silo_teachers)} silos with teachers'}
-        print("  SKIP: insufficient silo teachers")
+    _skip_msg = (
+        "NOT IMPLEMENTED: cross-silo predict() requires a shared feature "
+        "space and shared label scale. Antibody silos here have neither "
+        "(per-silo PCA basis via cap_dimensions; labels in kcal/mol vs "
+        "normalized DMS vs °C). See module docstring."
+    )
+    results['c7_fluid_quality'] = {'error': _skip_msg, 'skipped': True}
+    results['c8_fluid_similarity'] = {'error': _skip_msg, 'skipped': True}
+    print(f"  SKIP — {_skip_msg}")
 
     # ── Phase 9: Save results ─────────────────────────────────────────────
     final = {

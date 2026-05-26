@@ -11,8 +11,20 @@ SPACE for methods that compute neighbors. The evaluation model uses ECFP4 + RF
 by default (only the neighbor space varies), with an additional weighted hybrid
 eval condition that uses importance-weighted hybrid features as eval input.
 
-6 neighbor space conditions × 3 estimators × 4 remediations × 2 sigmas
-+ 9 binary detectors × 6 spaces × 2 sigmas
+Neighbor spaces (the 6 documented conditions, plus one space per base rep):
+    base_raw, base_pca, hybrid_25, hybrid_100, hybrid_250, imp_weighted_hybrid,
+    {each rep_name} — the per-rep spaces are added implicitly by
+    `_build_neighbor_spaces` because the rest of the analysis is rep-by-rep.
+    The total space count is therefore 6 + n_reps, not 6.
+
+Estimators (3): neighbor_residual, local_variance_ratio, activity_cliff_aware.
+Their metric and k default to euclidean / 10 — the same setting used in the
+confirmation report. These can be overridden by passing `--metric` or
+`--neighbor-k` on the CLI; the audit flagged the hardcoded default as a
+sensitivity concern, but the default reproduces the report.
+
+3 estimators × 4 remediations × 2 sigmas × (6 + n_reps) spaces
++ 9 binary detectors × (6 + n_reps) spaces × 2 sigmas
 + weighted hybrid eval (search-derived importance weights as eval features)
 
 Usage:
@@ -51,11 +63,26 @@ from kirby.utils.noise_mitigation_methods import (
 
 SIGMAS = [0.3, 0.6]
 
-ESTIMATOR_CONFIGS = {
-    'neighbor_residual': lambda: NeighborResidualEstimator(k=10, metric='euclidean'),
-    'local_variance_ratio': lambda: LocalVarianceRatioEstimator(k=10, metric='euclidean'),
-    'activity_cliff_aware': lambda: ActivityCliffAwareEstimator(k=10, metric='euclidean'),
-}
+# Default neighbor-method hyperparameters. The audit (P2) flagged the
+# hardcoded euclidean/k=10 as a sensitivity concern; expose them via
+# `_make_estimator_configs(k, metric)` so the CLI or harness can override
+# without touching the module body.
+DEFAULT_NEIGHBOR_K = 10
+DEFAULT_NEIGHBOR_METRIC = 'euclidean'
+
+
+def _make_estimator_configs(k=DEFAULT_NEIGHBOR_K,
+                             metric=DEFAULT_NEIGHBOR_METRIC):
+    """Build the 3-estimator factory dict at the given (k, metric)."""
+    return {
+        'neighbor_residual': lambda _k=k, _m=metric: NeighborResidualEstimator(k=_k, metric=_m),
+        'local_variance_ratio': lambda _k=k, _m=metric: LocalVarianceRatioEstimator(k=_k, metric=_m),
+        'activity_cliff_aware': lambda _k=k, _m=metric: ActivityCliffAwareEstimator(k=_k, metric=_m),
+    }
+
+
+# Convenience: defaults that reproduce the confirmation-report setting.
+ESTIMATOR_CONFIGS = _make_estimator_configs()
 
 # Weighting: (method, strength) — confirmation report showed alpha=0.1 dominates
 WEIGHT_CONFIGS = [
@@ -357,19 +384,42 @@ def _compute_summary(results):
         s['space_avg_f1'] = space_avg_f1
 
         # Q3: Does hybrid rescue distance methods?
-        # Compare positive recovery count: any hybrid > ecfp4
+        # Compare AVERAGE recovery, not count of positive configs.
+        # The old count-based comparison treated a hybrid that scraped one
+        # extra positive recovery on the margin as a "rescue", even if the
+        # base rep had fewer-but-much-larger gains. Average recovery is
+        # a more honest summary of "does the hybrid representation help
+        # neighbor-based LNL on average".
+        base_raw_keys = [k for k in space_avg_recovery if k.endswith('_raw')]
+        # First _raw is the canonical base rep (ecfp4 in the original setup,
+        # whatever the dataset's actual base rep is otherwise).
+        base_raw_key = base_raw_keys[0] if base_raw_keys else None
+        base_avg = (space_avg_recovery.get(base_raw_key, float('-inf'))
+                    if base_raw_key else float('-inf'))
+        hybrid_avgs = {k: v for k, v in space_avg_recovery.items()
+                       if 'hybrid' in k}
+        best_hybrid_avg = (max(hybrid_avgs.values())
+                           if hybrid_avgs else float('-inf'))
+        s['hybrid_rescues'] = best_hybrid_avg > base_avg
+        s['base_raw_avg_recovery'] = (float(base_avg)
+                                      if not np.isinf(base_avg) else None)
+        s['best_hybrid_avg_recovery'] = (float(best_hybrid_avg)
+                                         if not np.isinf(best_hybrid_avg) else None)
+        # Keep the legacy count-based numbers in case anyone consumed them.
         ecfp4_key = [k for k in space_positive_count if 'raw' in k]
         ecfp4_pos = space_positive_count.get(ecfp4_key[0], 0) if ecfp4_key else 0
         hybrid_pos = {k: v for k, v in space_positive_count.items()
                       if 'hybrid' in k}
         best_hybrid_pos = max(hybrid_pos.values()) if hybrid_pos else 0
-        s['hybrid_rescues'] = best_hybrid_pos > ecfp4_pos
-        s['n_positive_ecfp4'] = ecfp4_pos
+        s['n_positive_base_raw_legacy'] = ecfp4_pos
+        s['best_n_positive_hybrid_legacy'] = best_hybrid_pos
         s['n_positive_per_space'] = space_positive_count
 
-        # Q4: Budget effect
+        # Q4: Budget effect (matches the actual hybrid_budgets used —
+        # previously hardcoded as [25, 100, 200] but the experiment runs
+        # [25, 100, 250] after the audit fix).
         budget_effect = {}
-        for b in [25, 100, 200]:
+        for b in [25, 100, 250]:
             key = f'hybrid_{b}'
             if key in space_avg_recovery:
                 budget_effect[str(b)] = space_avg_recovery[key]
@@ -409,8 +459,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     sigmas = kwargs.get('sigmas', SIGMAS)
     sample_X = next(iter(reps.values()))
 
-    # Precompute hybrid blueprints ONCE (cached) for all 3 budgets
-    hybrid_budgets = [25, 100, 200]
+    # Precompute hybrid blueprints ONCE (cached) for all 3 budgets.
+    # Values must be in FULL_BUDGETS — previously [25, 100, 200] but 200 is
+    # not in FULL_BUDGETS, causing silent cache misses from the pool helper.
+    # Swapped 200 -> 250 (the nearest canonical neighbor).
+    hybrid_budgets = [25, 100, 250]
     blueprints = {}
     search_for_top3 = None
     for b in hybrid_budgets:
@@ -424,7 +477,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 data=data,
             )
             if meta:
-                blueprints[b] = meta['best_config']['blueprint']
+                bp = meta['best_config']['blueprint']
+                # Sanity check: the pool sometimes falls back to the model-best
+                # blueprint across all budgets when the exact budget is absent
+                # from the cache. If that happens we'd label results under the
+                # requested budget while they're really for a different one;
+                # surface a warning and tag the blueprint with its actual budget.
+                if getattr(bp, 'budget', b) != b:
+                    print(f"  WARNING: requested budget={b} but pool returned "
+                          f"blueprint with budget={bp.budget}; skipping this "
+                          f"budget to avoid mislabelled results.")
+                else:
+                    blueprints[b] = bp
             if b == 100:
                 search_for_top3 = search
         except Exception as e:
@@ -432,7 +496,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     top3 = extract_top3_base_reps(search_for_top3) if search_for_top3 is not None else None
     if top3:
-        print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+        print(f"  Top-3 base reps (ranked by RF baseline): "
+              f"{', '.join(f'{n}={s:.4f}' for n, s in top3)}")
 
     print(f"  Dataset: {dataset_name} ({len(labels)} samples)")
     print(f"  Metric: {metric_name}")
@@ -452,6 +517,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'per_sigma': {},
     }
 
+    # Pre-compute MAD per fold once: it only depends on the (clean) y_train,
+    # which is identical across sigmas — recomputing it on every (sigma, fold)
+    # iteration is wasted work.
+    mad_by_fold = {}
+    _fi = 0
+    for _train_idx, _val_idx in cv_split(groups, n_folds, sample_X,
+                                          labels, mode=mode):
+        _fi += 1
+        _yc = labels[_train_idx]
+        mad_by_fold[_fi] = float(np.median(np.abs(_yc - np.median(_yc))))
+
+    # NOTE: sigma is the OUTER loop and fold is the INNER loop. Each (sigma,
+    # fold) iteration rebuilds the per-fold rep slices because y_noisy
+    # depends on sigma — so we can't trivially hoist the fold loop outside.
+    # The mad_by_fold cache above is the cheapest hoist available without a
+    # restructuring of the accumulators.
     for sigma in sigmas:
         print(f"\n  === Sigma={sigma} ===")
         t_sigma = time.time()
@@ -511,11 +592,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             rf_noisy.fit(X_eval_train_s, y_noisy)
             noisy_scores.append(float(metric_fn(y_val, rf_noisy.predict(X_eval_val_s))))
 
-            # Ground-truth noise mask
+            # Ground-truth noise mask (uses cached MAD)
             if is_clf:
                 noise_mask = (y_noisy != y_train_clean)
             else:
-                mad = float(np.median(np.abs(y_train_clean - np.median(y_train_clean))))
+                mad = mad_by_fold.get(fold_idx, 0.0)
                 noise_mask = np.abs(noise_vec) > max(mad, 1e-10)
 
             # Per-space evaluation

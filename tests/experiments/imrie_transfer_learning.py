@@ -11,12 +11,11 @@ Scientific questions:
   3. Does model improvement beat rep improvement?
      (TL-DNN on ECFP4 vs Ridge on mordred)
 
-Conditions per (dataset, rep):
+Conditions per (dataset, rep) — 4 total (GP dropped, see build_models):
   - dnn_scratch:  DNNRegressor (no pre-training, control)
   - dnn_tl_full:  PretrainedDNNRegressor(freeze=0, lr=1e-4) — full fine-tuning
   - dnn_tl_frozen: PretrainedDNNRegressor(freeze=-1, lr=1e-3) — linear probe
   - ridge:        RidgeCV (simple model control)
-  - gp:           GaussianProcessRegressor (current best for many reps)
 
 Usage:
     # Smoke test (local, ~5 min)
@@ -25,7 +24,7 @@ Usage:
 
     # Full evaluation
     python tests/experiments/imrie_transfer_learning.py \
-        --datasets logd,caco2,herg \
+        --datasets logd,caco2,herg_ki \
         --reps ecfp4,maccs,pdv,mol2vec,mordred,avalon \
         --n-folds 5
 
@@ -73,17 +72,13 @@ HIDDEN_SIZES = (256, 128, 64)
 # MODEL BUILDERS
 # =============================================================================
 
-def build_models(rep_name, pretrain_dir, rep_dim=None):
-    """Build the 5 conditions for a given rep.
+def list_conditions(rep_name, pretrain_dir):
+    """Return (condition_names, has_pretrained, pt_path) for a rep.
 
-    Returns dict of {condition_name: model_instance}.
-    GP is skipped for high-dim reps (>500D) where O(n^3) kernel is impractical.
+    Used by evaluate_dataset to know which conditions to iterate; per-fold
+    instantiation happens in build_model_for_fold so each fold gets its
+    own random_state (no clone-induced seed sharing).
     """
-    from kirby.models.dnn import DNNRegressor
-    from kirby.models.dnn_pretrained import PretrainedDNNRegressor
-    from sklearn.linear_model import RidgeCV
-
-    # Check for pre-trained weights
     hs_str = '_'.join(str(h) for h in HIDDEN_SIZES)
     pt_path = os.path.join(pretrain_dir, f'{rep_name}_{hs_str}.pt')
     has_pretrained = os.path.exists(pt_path)
@@ -91,51 +86,81 @@ def build_models(rep_name, pretrain_dir, rep_dim=None):
     # GP previously enabled only for rep_dim <= 500 — that produced an
     # asymmetric model set across reps (ECFP4/mordred skipped GP) and
     # muddied the cross-rep model comparison. Dropped entirely (P1-2).
-    models = {
-        'dnn_scratch': DNNRegressor(
-            hidden_sizes=HIDDEN_SIZES, dropout=0.2, lr=0.001,
-            epochs=200, batch_size=256, patience=20, random_state=42),
-        'ridge': RidgeCV(alphas=np.logspace(-4, 4, 50)),
-    }
-
+    conds = ['dnn_scratch', 'ridge']
     if has_pretrained:
-        models['dnn_tl_full'] = PretrainedDNNRegressor(
-            hidden_sizes=HIDDEN_SIZES, dropout=0.2,
-            pretrained_path=pt_path, finetune_lr=0.0001,
-            freeze_layers=0, epochs=200, batch_size=256,
-            patience=20, random_state=42)
-        models['dnn_tl_frozen'] = PretrainedDNNRegressor(
-            hidden_sizes=HIDDEN_SIZES, dropout=0.2,
-            pretrained_path=pt_path, finetune_lr=0.001,
-            freeze_layers=-1, epochs=200, batch_size=256,
-            patience=20, random_state=42)
+        conds += ['dnn_tl_full', 'dnn_tl_frozen']
     else:
         print(f"    WARNING: No pre-trained weights at {pt_path}")
         print(f"    Skipping TL conditions for {rep_name}")
+    return conds, has_pretrained, pt_path
 
-    return models
+
+def build_model_for_fold(cond_name, pt_path, fold_idx):
+    """Instantiate a fresh model for one fold with fold-varying seed.
+
+    Building inside the fold loop avoids the sklearn.base.clone() trap where
+    all folds share random_state=42 and produce identical init noise.
+    """
+    from kirby.models.dnn import DNNRegressor
+    from kirby.models.dnn_pretrained import PretrainedDNNRegressor
+    from sklearn.linear_model import RidgeCV
+
+    seed = 42 + fold_idx
+
+    if cond_name == 'dnn_scratch':
+        return DNNRegressor(
+            hidden_sizes=HIDDEN_SIZES, dropout=0.2, lr=0.001,
+            epochs=200, batch_size=256, patience=20, random_state=seed)
+    if cond_name == 'ridge':
+        return RidgeCV(alphas=np.logspace(-4, 4, 50))
+    if cond_name == 'dnn_tl_full':
+        return PretrainedDNNRegressor(
+            hidden_sizes=HIDDEN_SIZES, dropout=0.2,
+            pretrained_path=pt_path, finetune_lr=0.0001,
+            freeze_layers=0, epochs=200, batch_size=256,
+            patience=20, random_state=seed)
+    if cond_name == 'dnn_tl_frozen':
+        return PretrainedDNNRegressor(
+            hidden_sizes=HIDDEN_SIZES, dropout=0.2,
+            pretrained_path=pt_path, finetune_lr=0.001,
+            freeze_layers=-1, epochs=200, batch_size=256,
+            patience=20, random_state=seed)
+    raise ValueError(f"Unknown condition: {cond_name}")
 
 
 # =============================================================================
 # EVALUATION
 # =============================================================================
 
-def evaluate_condition(X, labels, groups, model, n_folds):
+def evaluate_condition(X, labels, groups, cond_name, pt_path, n_folds):
     """Evaluate one condition via scaffold GroupKFold.
+
+    Builds a fresh model per fold with seed=42+fold_idx so init variance is
+    visible across folds (sklearn.base.clone would otherwise pin one seed).
+    Passes scaffold groups through to DNN ES splits.
 
     Returns dict of {metric: value} with mean and std.
     """
-    from sklearn.base import clone
-
     cv, cv_kwargs = _make_cv(groups, n_folds, labels)
     splits = list(cv.split(X, labels, **cv_kwargs))
 
+    from kirby.models.dnn import DNNRegressor
+    from kirby.models.dnn_pretrained import PretrainedDNNRegressor
+
     fold_metrics = []
-    for train_idx, val_idx in splits:
+    for fold_idx, (train_idx, val_idx) in enumerate(splits):
         X_train, X_val = _maybe_scale(X[train_idx], X[val_idx])
         try:
-            m = clone(model)
-            m.fit(X_train, labels[train_idx])
+            m = build_model_for_fold(cond_name, pt_path, fold_idx)
+            # Pass groups to DNN models so internal ES split is scaffold-aware.
+            # Only the two custom DNN models accept `groups=`; Ridge etc.
+            # raise ValueError (not TypeError) on sklearn 1.8+ metadata routing,
+            # so gate on model type rather than catching exceptions.
+            if isinstance(m, (DNNRegressor, PretrainedDNNRegressor)):
+                m.fit(X_train, labels[train_idx],
+                      groups=np.asarray(groups)[train_idx])
+            else:
+                m.fit(X_train, labels[train_idx])
             preds = m.predict(X_val)
             if not np.all(np.isfinite(preds)):
                 print(" [NaN]", end='')
@@ -177,38 +202,39 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pretrain_dir):
     rep_str = ','.join(rep_names)
     reps = get_representations(smiles, rep_str)
 
-    # Build hybrid and add as another "rep" (evaluated with non-TL models only)
+    # Pull the kirby_hybrid CV score from the cached search rather than
+    # re-evaluating with a separately-fit hybrid: re-fitting feature
+    # selection on the full dataset and then evaluating on (any subset of)
+    # that same dataset leaks the val rows into the selection step. The
+    # search's `score_mean` is the cleanly cross-validated number.
+    hybrid_search_score = None
     try:
-        from kirby.hybrid import apply_feature_selection
-        from experiments._shared import (
-            get_best_search_for_downstream)
+        from experiments._shared import get_best_search_for_downstream
         # Use the pool helper so we benefit from any precomputed (tier, aug)
-        # cache that already exists for logd/caco2 (no augs for transfer
-        # learning, so only 'none' aug condition is eligible).
-        search, _meta = get_best_search_for_downstream(
+        # cache that already exists for logd/caco2. augmentations=None ->
+        # pool only iterates aug_condition='none' (helper sets aug_strat
+        # per iteration), so no cache collision is possible.
+        _search, _meta = get_best_search_for_downstream(
             reps, labels, groups,
             downstream_model='rf', budget=None,
-            augmentations=None, augmentation_strategy='none',
+            augmentations=None,
             speed='full', metric='rmse', task_type=task_type,
             dataset_name=dataset_name,
             return_fitted=True, adaptive_pruning=0.25,
         )
-        fitted = (search.fitted_results.get('rf')
-                  if search is not None else None)
-        if fitted is not None:
-            fi = {r: {'selected_indices': idx}
-                  for r, idx in fitted.selected_indices.items()}
-            reps['kirby_hybrid'] = apply_feature_selection(reps, fi)
-            rep_names = list(rep_names) + ['kirby_hybrid']
-            print(f"  Hybrid built: {reps['kirby_hybrid'].shape[1]}D")
+        if isinstance(_meta, dict) and 'score_mean' in _meta:
+            hybrid_search_score = float(_meta['score_mean'])
+            print(f"  kirby_hybrid search CV {_meta.get('metric', 'rmse')}"
+                  f"={hybrid_search_score:.4f} (from cached search)")
     except Exception as e:
-        print(f"  Hybrid build failed: {e}")
+        print(f"  Hybrid search lookup failed: {e}")
 
     ds_results = {
         'n_samples': len(labels),
         'n_scaffolds': n_scaffolds,
         'task_type': task_type,
         'reps': {},
+        'kirby_hybrid_search_score': hybrid_search_score,
     }
 
     for rep_name in rep_names:
@@ -223,13 +249,14 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pretrain_dir):
             continue
 
         print(f"\n  --- {rep_name} (dim={X.shape[1]}) ---")
-        models = build_models(rep_name, pretrain_dir, rep_dim=X.shape[1])
+        conds, _has_pt, pt_path = list_conditions(rep_name, pretrain_dir)
 
         rep_results = {'dim': X.shape[1], 'conditions': {}}
-        for cond_name, model in models.items():
+        for cond_name in conds:
             t0 = time.time()
             print(f"    {cond_name}...", end='', flush=True)
-            result = evaluate_condition(X, labels, groups, model, n_folds)
+            result = evaluate_condition(
+                X, labels, groups, cond_name, pt_path, n_folds)
             elapsed = time.time() - t0
 
             rmse = result['mean'].get('rmse', float('nan'))
@@ -401,6 +428,25 @@ def main():
     # Print analysis
     if all_results:
         print_analysis(all_results)
+
+    # Coverage summary: which (rep, condition) pairs actually ran, and which
+    # were skipped because pretrain weights were missing.
+    print(f"\n{'='*70}")
+    print("COVERAGE SUMMARY (rep, condition pairs)")
+    print(f"{'='*70}")
+    hs_str = '_'.join(str(h) for h in HIDDEN_SIZES)
+    for ds_name, ds_res in all_results.items():
+        reps_block = ds_res.get('reps', {}) if isinstance(ds_res, dict) else {}
+        print(f"  {ds_name}:")
+        for rn in rep_names:
+            if rn not in reps_block:
+                print(f"    {rn}: rep not generated / skipped")
+                continue
+            ran = sorted(reps_block[rn].get('conditions', {}).keys())
+            pt_path = os.path.join(args.pretrain_dir, f'{rn}_{hs_str}.pt')
+            missing_pt = not os.path.exists(pt_path)
+            note = " [no pretrain weights]" if missing_pt else ""
+            print(f"    {rn}: {', '.join(ran) if ran else '(none)'}{note}")
 
     # Save results
     output_path = (args.output or

@@ -18,8 +18,6 @@ import time
 import numpy as np
 from scipy.stats import spearmanr, skew
 from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import r2_score
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
@@ -71,11 +69,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = data['labels']
     groups = data['groups']
     augmentations = data.get('augmentations')
-    n_folds = config['n_splits']
-    mode = 'intermediary' if n_folds == 1 else 'full'
     task_type = data['task_type']
     is_clf = task_type == 'classification'
-    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    # metric_name surfaces in results; the fn / direction aren't used here —
+    # this experiment correlates noise scores with cliff masks, not against
+    # the domain metric. n_folds / mode were set but never read either; the
+    # estimator survey runs a single in-sample fit on a fixed subsample by
+    # design, so removing them removes a misleading config knob.
+    metric_name, _metric_fn, _lower_is_better = get_domain_metric(data)
     budget = kwargs.get('budget', 100)
     n_samples = len(labels)
 
@@ -177,13 +178,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'score_max': float(np.max(scores)),
                 }
 
-                # Cliff discrimination: Spearman(score, is_cliff)
-                # Good estimators should NOT correlate positively (cliffs aren't noise)
+                # Cliff discrimination: |Spearman(score, is_cliff)| should be
+                # small. A good estimator's noise score is INDEPENDENT of
+                # cliff status (cliffs are real chemistry signal, not noise).
+                # Both strong positive correlation (rates cliffs as noisy) AND
+                # strong negative correlation (rates cliffs as the cleanest
+                # samples) are failure modes; we want |rho| ≈ 0.
                 if n_cliffs >= 5:
                     rho_cliff, p_cliff = spearmanr(scores, cliff_mask_sub.astype(float))
                     entry['cliff_correlation'] = float(rho_cliff)
+                    entry['cliff_abs_correlation'] = float(abs(rho_cliff))
                     entry['cliff_p'] = float(p_cliff)
-                    entry['cliff_discriminates'] = rho_cliff < 0.1  # not flagging cliffs
+                    entry['cliff_discriminates'] = abs(rho_cliff) < 0.1
 
                 # Sample weights
                 try:
@@ -202,42 +208,57 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 print(f" FAILED: {e}")
                 space_results[est_name] = {'error': str(e)}
 
-        # Cross-estimator correlations
+        # Cross-estimator correlations. Keep the pair-level results in two
+        # parallel structures: a string-keyed `_cross_correlations` (kept for
+        # backwards compat with anything that reads it) and a tuple-keyed
+        # internal map used for the aggregation. The aggregation uses
+        # tuple-membership lookup rather than substring matching on the
+        # string keys — substring matching would silently double-count if a
+        # future estimator's name contains another's as a substring (e.g.
+        # adding "ensemble" with existing "ensemble_disagreement" /
+        # "deep_ensemble").
         est_names_ok = [e for e in all_estimators if e in space_scores]
         if len(est_names_ok) >= 2:
             corr_matrix = {}
+            corr_pairs = {}
             for i, e1 in enumerate(est_names_ok):
                 for e2 in est_names_ok[i+1:]:
                     rho, _ = spearmanr(space_scores[e1], space_scores[e2])
                     corr_matrix[f'{e1}_vs_{e2}'] = float(rho)
+                    corr_pairs[(e1, e2)] = float(rho)
 
             space_results['_cross_correlations'] = corr_matrix
-            # Find estimator clusters (high mutual correlation)
             avg_corr = {}
             for e in est_names_ok:
-                rhos = [v for k, v in corr_matrix.items() if e in k]
+                rhos = [v for (a, b), v in corr_pairs.items() if e in (a, b)]
                 avg_corr[e] = float(np.mean(rhos)) if rhos else 0.0
             space_results['_avg_cross_correlation'] = avg_corr
 
         results['per_space'][space_name] = convert_numpy(space_results)
         all_scores_by_space[space_name] = space_scores
 
-    # Summary
+    # Summary — rank cliff discrimination by |rho|, smaller is better.
+    # (Signed rho would happily pick an estimator with rho=-0.9 as the
+    # 'best discriminator', which is just the inverted failure mode.)
     summary = {}
     for space_name in spaces:
         sr = results['per_space'].get(space_name, {})
-        # Best cliff-discriminating estimator (lowest cliff correlation)
         best_cliff_est = None
-        best_cliff_rho = 1.0
+        best_cliff_abs = float('inf')
+        best_cliff_signed = None
         for est_name in all_estimators:
-            rho = sr.get(est_name, {}).get('cliff_correlation', 1.0)
-            if isinstance(rho, (int, float)) and rho < best_cliff_rho:
-                best_cliff_rho = rho
+            rho = sr.get(est_name, {}).get('cliff_correlation')
+            if isinstance(rho, (int, float)) and abs(rho) < best_cliff_abs:
+                best_cliff_abs = abs(rho)
+                best_cliff_signed = float(rho)
                 best_cliff_est = est_name
         summary[space_name] = {
             'best_cliff_discriminator': best_cliff_est,
-            'cliff_correlation': float(best_cliff_rho),
-            'n_estimators_ok': sum(1 for e in all_estimators if 'error' not in sr.get(e, {})),
+            'cliff_abs_correlation': (float(best_cliff_abs)
+                                      if best_cliff_est else None),
+            'cliff_correlation_signed': best_cliff_signed,
+            'n_estimators_ok': sum(1 for e in all_estimators
+                                   if 'error' not in sr.get(e, {})),
         }
 
     results['summary'] = summary

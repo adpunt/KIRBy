@@ -30,8 +30,9 @@ Paper baselines (Prihoda et al. 2022, BioPhi):
   - KIRBy uses VH-only; BioPhi averages VH+VL scores.
 
 Usage:
-    # Smoke test (~3 min)
-    python tests/experiments/opig_humanness.py --n-folds 2 --reps blosum,onehot,aac
+    # Smoke test (therapeutic only — species has 10K samples and is slow)
+    python tests/experiments/opig_humanness.py --datasets humanness_therapeutic \
+        --n-folds 3 --reps blosum,onehot,aac
 
     # Full evaluation
     python tests/experiments/opig_humanness.py --datasets species,therapeutic
@@ -78,12 +79,15 @@ from experiments._shared import (
 
 DEFAULT_DATASETS = ['humanness_species', 'humanness_therapeutic']
 
-# Hand-picked reps: classical + LMs + LLR + CDR variants
+# Hand-picked reps: classical + LMs + CDR variants
+# NOTE: LLR reps (esmc_llr, antiberty_llr) intentionally excluded — they require
+# mutation lists, but the humanness loader sets mutations=[[] for _ in range(n)]
+# (see src/kirby/datasets/humanness.py:244,322), which makes
+# src/kirby/representations/mutation.py:490-494 emit all-zero 3D vectors per sample.
 DEFAULT_REPS = [
     'blosum', 'onehot', 'aac',           # classical
     'ablang2', 'esm2', 'antiberty',      # LMs
     'igt5', 'prot_t5',                    # additional LMs
-    'esmc_llr', 'antiberty_llr',          # log-likelihood ratios
     'abroberta',                           # Ab-RoBERTa
     'paratope',                            # structural (sequence-based)
 ]
@@ -124,7 +128,7 @@ def _is_binary_rep(X):
     return len(uniq) <= 2 and set(uniq).issubset({0, 0.0, 1, 1.0})
 
 
-def evaluate_rep_clf(X, labels, groups, model, n_folds, rep_name=''):
+def evaluate_rep_clf(X, labels, groups, model, n_folds):
     """Evaluate one (rep, model) pair for classification via stratified CV.
 
     Returns dict with accuracy, f1_weighted, auroc, balanced_accuracy (mean/std).
@@ -205,7 +209,13 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
     print(f"  {n} samples, {n_pos} human ({100*n_pos/n:.1f}%), "
           f"{n - n_pos} non-human ({100*(n-n_pos)/n:.1f}%)")
 
-    # Generate identity groups (unique sequence → group ID)
+    # Generate identity groups (unique sequence → group ID).
+    # Grouping strategy follows tests/antibody_baseline_survey.py:89 (humanness_species
+    # and humanness_therapeutic both registered with 'identity' grouping).
+    # CAVEAT: for the species preset (~10K near-unique OAS VH sequences) virtually
+    # every sample is its own group, so StratifiedGroupKFold reduces to an effectively
+    # random stratified split. Identity grouping is meaningful only when duplicates
+    # exist (e.g. therapeutic preset, where INN entries can share VH sequences).
     unique_seqs = {}
     group_ids = np.zeros(n, dtype=int)
     for i, s in enumerate(heavy_seqs):
@@ -228,9 +238,16 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
         print("  No reps available, skipping dataset")
         return None
 
-    # Build hybrid and add as rep
+    # Build hybrid and add as rep.
     # Augmentation config matches humanness_therapeutic in DATASET_REPS:
-    # augmentation = [] (no augmentation reps for antibody classification)
+    # augmentation = [] (no augmentation reps for antibody classification).
+    # DESIGN NOTE (asymmetry): the hybrid is searched/fitted ONLY for the RF
+    # downstream model (downstream_model='rf' below), but `kirby_hybrid` is then
+    # evaluated under every model in MODELS_LIST (ridge, svm, lightgbm, mlp, ...).
+    # Those non-RF rows therefore score on RF-tuned features. This is intentional
+    # for cost — building per-downstream hybrids would multiply hybrid-search
+    # compute by len(MODELS_LIST). Treat non-RF `kirby_hybrid` numbers as
+    # informational, not as proper hybrid evaluations for those models.
     try:
         from kirby.hybrid import apply_feature_selection
         from experiments._shared import (resolve_pruning_kwargs,
@@ -240,10 +257,10 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
         search, _meta = get_best_search_for_downstream(
             reps, labels, groups,
             downstream_model='rf', budget=None,
+            # augmentations=None -> pool iterates only aug_condition='none',
+            # so no cache-key collision is possible (helper sets aug_strat
+            # per iteration). See project_cache_collision_fix.
             augmentations=None,
-            # Explicit 'none' avoids cache-key collision with real
-            # uncapped-augmentation runs (project_cache_collision_fix).
-            augmentation_strategy='none',
             speed='full',
             metric='auc',
             task_type='classification',
@@ -275,7 +292,7 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
         for model_name, factory in models.items():
             t0 = time.time()
             try:
-                res = evaluate_rep_clf(X, labels, groups, factory(), n_folds, rep_name)
+                res = evaluate_rep_clf(X, labels, groups, factory(), n_folds)
             except ValueError as e:
                 print(f"    {rep_name:25s} {model_name:8s}  SKIPPED: {e}")
                 continue
@@ -397,7 +414,7 @@ def main():
              '(default: humanness_species,humanness_therapeutic)')
     parser.add_argument(
         '--reps', type=str, default=None,
-        help='Comma-separated rep names (default: hand-picked set of 12)')
+        help='Comma-separated rep names (default: hand-picked set of 10)')
     parser.add_argument(
         '--n-folds', type=int, default=5,
         help='Number of stratified CV folds (default: 5)')

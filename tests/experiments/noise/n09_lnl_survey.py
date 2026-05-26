@@ -1,17 +1,29 @@
 #!/usr/bin/env python3
-"""N09: LNL Method Survey with Hybrids — 12 Learning with Noisy Labels methods.
+"""N09: LNL Method Survey with Hybrids — Learning with Noisy Labels methods.
 
 Paper: Noise
 Tests whether hybrid representations change which LNL methods work best.
 Replicates confirmation report LNL survey, then repeats with hybrids.
 
-6 conditions × 5 noise levels × 12 methods:
-  A: base_no_lnl          — ECFP4 + standard DNN (baseline)
-  B: hybrid_no_lnl         — Hybrid + standard DNN (baseline)
-  C: base_lnl              — ECFP4 + each LNL method
-  D: hybrid_lnl            — Hybrid + each LNL method
+Methods tested:
+  - 12 total in LNL_REGISTRY
+  - 10 support both regression and classification (MSE↔CE swap inside the
+    method, see lnl_methods.py).
+  - 2 are regression-only (heteroscedastic_gp, evidential_kernel); they are
+    auto-filtered when task_type='classification' via REGRESSION_ONLY_LNL.
+
+6 conditions × 5 noise levels × {12 or 10} methods:
+  A: base_no_lnl            — Base rep + standard DNN (baseline)
+  B: hybrid_no_lnl          — Hybrid + standard DNN
+  C: base_lnl               — Base rep + each LNL method
+  D: hybrid_lnl             — Hybrid + each LNL method
   E: weighted_hybrid_no_lnl — Importance-weighted hybrid + standard DNN
   F: weighted_hybrid_lnl    — Importance-weighted hybrid + each LNL method
+
+Outputs per-sigma:
+  - delta_from_clean: signed (noisy_score - clean_score); always defined.
+  - retention_pct: ratio*100 when both sides are positive, else NaN
+    (R² and MCC can be negative — naive ratio was historically misleading).
 
 Usage:
     python n09_lnl_survey.py --dataset logd --mode intermediary
@@ -35,7 +47,8 @@ from experiments._shared import (
     extract_top3_base_reps,
 )
 from kirby.utils.lnl_methods import (
-    get_lnl_method, LNL_REGISTRY, _standard_dnn_train_predict,
+    get_lnl_method, LNL_REGISTRY, REGRESSION_ONLY_LNL,
+    _standard_dnn_train_predict, _standard_dnn_train_predict_clf,
 )
 
 SIGMAS = [0.0, 0.1, 0.3, 0.6, 1.0]
@@ -62,15 +75,23 @@ def _inject_noise(y, sigma_frac, seed=42, is_clf=False):
         return y + noise
 
 
-def _run_baseline(X_train, y_train, X_val, y_val, random_state=42):
-    """Standard DNN baseline (no LNL)."""
-    y_pred = _standard_dnn_train_predict(
+def _run_baseline(X_train, y_train, X_val, y_val, random_state=42,
+                  is_clf=False, classes_=None):
+    """Standard DNN baseline (no LNL). Routes to clf trainer when is_clf=True."""
+    if is_clf:
+        return _standard_dnn_train_predict_clf(
+            X_train, y_train, X_val,
+            epochs=200, hidden_sizes=(256, 128, 64),
+            dropout=0.2, lr=0.001, batch_size=256,
+            patience=20, random_state=random_state,
+            classes_=classes_,
+        )
+    return _standard_dnn_train_predict(
         X_train, y_train, X_val,
         epochs=200, hidden_sizes=(256, 128, 64),
         dropout=0.2, lr=0.001, batch_size=256,
         patience=20, random_state=random_state,
     )
-    return y_pred
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -83,7 +104,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = data['labels']
     groups = data['groups']
     augmentations = data.get('augmentations')
-    augmentation_strategy = 'uncapped'
     n_folds = config['n_splits']
     mode = 'intermediary' if n_folds == 1 else 'full'
     task_type = data['task_type']
@@ -91,13 +111,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
     sigmas = kwargs.get('sigmas', SIGMAS)
-    budget = kwargs.get('budget', 100)
     methods_to_test = kwargs.get('methods', ALL_METHODS)
 
-    # Filter out regression-only LNL methods for classification
-    REGRESSION_ONLY_LNL = {'heteroscedastic_gp'}
+    # heteroscedastic_gp and evidential_kernel have no classification analog
+    # (continuous-noise-variance / NIG distribution math doesn't transform via
+    # a loss-function swap). All 10 other methods support clf via MSE→CE in
+    # their inner training. See REGRESSION_ONLY_LNL in lnl_methods.py.
     if is_clf:
-        methods_to_test = [m for m in methods_to_test if m not in REGRESSION_ONLY_LNL]
+        methods_to_test = [m for m in methods_to_test
+                           if m not in REGRESSION_ONLY_LNL]
+
+    # Resolve the full class set up front so per-fold y_train subsets all
+    # train classifiers with the same n_classes outputs.
+    classes_ = np.unique(labels) if is_clf else None
 
     sample_X = next(iter(reps.values()))
 
@@ -123,7 +149,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if search is not None:
         top3 = extract_top3_base_reps(search)
         if top3:
-            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+            # extract_top3_base_reps ranks by RF baselines regardless of which
+            # downstream model the blueprint pool selected — make that explicit
+            # in the log so readers don't conflate the two.
+            print(f"  Top-3 base reps (ranked by RF baseline): "
+                  f"{', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     bp = meta['best_config']['blueprint'] if meta else None
     if bp is None:
         print("  WARNING: No blueprint found, skipping")
@@ -153,7 +183,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'base_rep': base_rep_name,
         'sigmas': sigmas,
         'methods': methods_to_test,
-        'budget': budget,
+        # Record the actual budget the pool selected, not the kwargs default
+        # (previously hard-coded to 100 regardless of what the pool returned).
+        'budget': int(bp.budget) if bp is not None else None,
+        'task_type': task_type,
+        'is_clf': is_clf,
+        'n_classes': int(len(classes_)) if is_clf else None,
         'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
         'per_sigma': {},
     }
@@ -217,7 +252,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             try:
                 y_pred_a = _run_baseline(X_base_train_s, y_train,
                                          X_base_val_s, y_val,
-                                         random_state=42 + fold_idx)
+                                         random_state=42 + fold_idx,
+                                         is_clf=is_clf, classes_=classes_)
                 score_a = float(metric_fn(y_val, y_pred_a))
                 sigma_results['base_no_lnl'].append(score_a)
             except Exception as e:
@@ -228,7 +264,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 try:
                     y_pred_b = _run_baseline(X_hybrid_train_s, y_train,
                                              X_hybrid_val_s, y_val,
-                                             random_state=42 + fold_idx)
+                                             random_state=42 + fold_idx,
+                                             is_clf=is_clf, classes_=classes_)
                     score_b = float(metric_fn(y_val, y_pred_b))
                     sigma_results['hybrid_no_lnl'].append(score_b)
                 except Exception as e:
@@ -258,7 +295,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 try:
                     y_pred_e = _run_baseline(X_whybrid_train_s, y_train,
                                              X_whybrid_val_s, y_val,
-                                             random_state=42 + fold_idx)
+                                             random_state=42 + fold_idx,
+                                             is_clf=is_clf, classes_=classes_)
                     score_e = float(metric_fn(y_val, y_pred_e))
                     sigma_results['weighted_hybrid_no_lnl'].append(score_e)
                 except Exception as e:
@@ -266,11 +304,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             # --- Conditions C, D & F: LNL methods (skip at sigma=0) ---
             if sigma > 0:
+                lnl_kwargs = dict(random_state=42 + fold_idx,
+                                  is_clf=is_clf, classes_=classes_)
                 for method_name in methods_to_test:
                     # Condition C: base + LNL
                     try:
-                        method_c = get_lnl_method(method_name,
-                                                  random_state=42 + fold_idx)
+                        method_c = get_lnl_method(method_name, **lnl_kwargs)
                         result_c = method_c.train_and_predict(
                             X_base_train_s, y_train, X_base_val_s, y_val)
                         score_c = float(metric_fn(y_val, result_c['y_pred']))
@@ -281,8 +320,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # Condition D: hybrid + LNL
                     if hybrid_ok:
                         try:
-                            method_d = get_lnl_method(method_name,
-                                                      random_state=42 + fold_idx)
+                            method_d = get_lnl_method(method_name, **lnl_kwargs)
                             result_d = method_d.train_and_predict(
                                 X_hybrid_train_s, y_train,
                                 X_hybrid_val_s, y_val)
@@ -294,8 +332,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     # Condition F: weighted hybrid + LNL
                     if weighted_ok:
                         try:
-                            method_f = get_lnl_method(method_name,
-                                                      random_state=42 + fold_idx)
+                            method_f = get_lnl_method(method_name, **lnl_kwargs)
                             result_f = method_f.train_and_predict(
                                 X_whybrid_train_s, y_train,
                                 X_whybrid_val_s, y_val)
@@ -362,10 +399,43 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # =========================================================================
     # RETENTION COMPUTATION
     # =========================================================================
+    # For each (sigma, condition) record TWO quantities:
+    #   delta_from_clean: signed (noisy_score - clean_score); always defined.
+    #   retention_pct:    ratio expressed as a percentage; only defined when
+    #                     both scores have the same sign AND the denominator
+    #                     is bounded away from zero. The original ratio-only
+    #                     formulation produced garbage for negative R²
+    #                     (e.g. clean=-0.1, noisy=-0.5 → 500%). The signed
+    #                     delta is the safer headline quantity.
     clean_sigma = results['per_sigma'].get('0.0', {})
     clean_base = clean_sigma.get('base_no_lnl', {}).get('mean', float('nan'))
     clean_hybrid = clean_sigma.get('hybrid_no_lnl', {}).get('mean', float('nan'))
     clean_whybrid = clean_sigma.get('weighted_hybrid_no_lnl', {}).get('mean', float('nan'))
+
+    def _retention_pct(noisy_val, clean_val):
+        """Ratio in percent. Returns NaN when ill-defined."""
+        if np.isnan(noisy_val) or np.isnan(clean_val):
+            return float('nan')
+        if lower_is_better:
+            # clean/noisy; both should be positive (e.g. RMSE)
+            if clean_val <= 1e-10 or noisy_val <= 1e-10:
+                return float('nan')
+            return float(clean_val / noisy_val * 100)
+        # higher-is-better; both should be positive (e.g. R^2, AUROC)
+        if clean_val <= 1e-10 or noisy_val <= 1e-10:
+            return float('nan')
+        return float(noisy_val / clean_val * 100)
+
+    def _delta(noisy_val, clean_val):
+        if np.isnan(noisy_val) or np.isnan(clean_val):
+            return float('nan')
+        return float(noisy_val - clean_val)
+
+    def _pair(noisy_val, clean_val):
+        return {
+            'delta_from_clean': _delta(noisy_val, clean_val),
+            'retention_pct': _retention_pct(noisy_val, clean_val),
+        }
 
     retention = {}
     for sigma_key, sigma_data in results['per_sigma'].items():
@@ -373,27 +443,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             continue
         sigma_ret = {}
 
-        # Baselines
         noisy_base = sigma_data.get('base_no_lnl', {}).get('mean', float('nan'))
         noisy_hybrid = sigma_data.get('hybrid_no_lnl', {}).get('mean', float('nan'))
         noisy_whybrid = sigma_data.get('weighted_hybrid_no_lnl', {}).get('mean', float('nan'))
 
-        # For lower-is-better metrics (e.g. RMSE), retention = clean/noisy
-        # (a higher noisy value means worse performance, so invert).
-        # For higher-is-better (e.g. R2), retention = noisy/clean as before.
-        def _retention(noisy_val, clean_val):
-            if lower_is_better:
-                return float(clean_val / noisy_val * 100)
-            return float(noisy_val / clean_val * 100)
+        sigma_ret['base_no_lnl'] = _pair(noisy_base, clean_base)
+        sigma_ret['hybrid_no_lnl'] = _pair(noisy_hybrid, clean_hybrid)
+        sigma_ret['weighted_hybrid_no_lnl'] = _pair(noisy_whybrid, clean_whybrid)
 
-        if not np.isnan(clean_base) and abs(clean_base) > 1e-10 and abs(noisy_base) > 1e-10:
-            sigma_ret['base_no_lnl'] = _retention(noisy_base, clean_base)
-        if not np.isnan(clean_hybrid) and abs(clean_hybrid) > 1e-10 and abs(noisy_hybrid) > 1e-10:
-            sigma_ret['hybrid_no_lnl'] = _retention(noisy_hybrid, clean_hybrid)
-        if not np.isnan(clean_whybrid) and abs(clean_whybrid) > 1e-10 and abs(noisy_whybrid) > 1e-10:
-            sigma_ret['weighted_hybrid_no_lnl'] = _retention(noisy_whybrid, clean_whybrid)
-
-        # LNL methods
         for cond in ['base_lnl', 'hybrid_lnl', 'weighted_hybrid_lnl']:
             sigma_ret[cond] = {}
             if 'weighted_hybrid' in cond:
@@ -402,17 +459,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 clean_ref = clean_hybrid
             else:
                 clean_ref = clean_base
-            if np.isnan(clean_ref) or abs(clean_ref) < 1e-10:
-                continue
             for method_name in methods_to_test:
                 m_score = sigma_data.get(cond, {}).get(method_name, {}).get(
                     'mean', float('nan'))
-                if not np.isnan(m_score) and abs(m_score) > 1e-10:
-                    sigma_ret[cond][method_name] = _retention(m_score, clean_ref)
+                sigma_ret[cond][method_name] = _pair(m_score, clean_ref)
 
         retention[sigma_key] = sigma_ret
 
     results['retention'] = convert_numpy(retention)
+    results['retention_schema'] = (
+        'Each entry has {delta_from_clean: noisy-clean, retention_pct: '
+        'ratio*100 when both sides are positive else NaN}. Prefer delta '
+        'for direction-robust comparison.')
 
     # =========================================================================
     # SUMMARY

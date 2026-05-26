@@ -15,6 +15,9 @@ import numpy as np
 from sklearn.base import BaseEstimator, RegressorMixin
 
 
+_GROUPS_WARNED = False
+
+
 class PretrainedDNNRegressor(BaseEstimator, RegressorMixin):
     """DNN with optional pre-trained weight initialization.
 
@@ -150,7 +153,7 @@ class PretrainedDNNRegressor(BaseEstimator, RegressorMixin):
                 for p in module.parameters():
                     p.requires_grad = False
 
-    def fit(self, X, y):
+    def fit(self, X, y, groups=None):
         import torch
         import torch.nn as nn
         from sklearn.preprocessing import StandardScaler
@@ -164,10 +167,41 @@ class PretrainedDNNRegressor(BaseEstimator, RegressorMixin):
         if self.zero_shot:
             return self._fit_zero_shot(X)
 
-        # Z-normalize features to match pre-training (pretrain_chembl_dnn.py
-        # applies StandardScaler before training — weights expect scaled input)
-        self.feat_scaler_ = StandardScaler()
-        X = self.feat_scaler_.fit_transform(X).astype(np.float32)
+        # Z-normalize features. Prefer the pretrain feature scaler stored on
+        # the checkpoint (so DNN-TL sees the SAME scaling DNN was pretrained
+        # on, and so binary reps are not silently treated differently from
+        # DNN-scratch — both should see consistent inputs). Fall back to
+        # refitting on downstream data if the checkpoint predates the scaler
+        # save (warn so the inconsistency is visible).
+        ckpt_for_scaler = None
+        if self.pretrained_path is not None:
+            try:
+                import torch as _torch
+                ckpt_for_scaler = _torch.load(
+                    self.pretrained_path, map_location='cpu',
+                    weights_only=True)
+            except Exception:
+                ckpt_for_scaler = None
+
+        if (isinstance(ckpt_for_scaler, dict)
+                and 'feat_mean' in ckpt_for_scaler
+                and 'feat_scale' in ckpt_for_scaler):
+            sc = StandardScaler()
+            sc.mean_ = np.asarray(ckpt_for_scaler['feat_mean'],
+                                  dtype=np.float64)
+            sc.scale_ = np.asarray(ckpt_for_scaler['feat_scale'],
+                                   dtype=np.float64)
+            sc.var_ = sc.scale_ ** 2
+            sc.n_features_in_ = sc.mean_.shape[0]
+            self.feat_scaler_ = sc
+            X = self.feat_scaler_.transform(X).astype(np.float32)
+        else:
+            if self.pretrained_path is not None:
+                print(f"  WARNING: checkpoint {self.pretrained_path} has no "
+                      f"'feat_mean'/'feat_scale' — refitting StandardScaler "
+                      f"on downstream data (inconsistent with pretrain).")
+            self.feat_scaler_ = StandardScaler()
+            X = self.feat_scaler_.fit_transform(X).astype(np.float32)
         X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
 
         # Z-normalize targets
@@ -175,11 +209,31 @@ class PretrainedDNNRegressor(BaseEstimator, RegressorMixin):
         self.y_std_ = float(y.std()) if y.std() > 1e-8 else 1.0
         y_norm = (y - self.y_mean_) / self.y_std_
 
-        # 80/20 holdout for early stopping
+        # 80/20 holdout for early stopping. Use group-aware split when groups
+        # are provided so the internal ES holdout does not leak scaffolds from
+        # the outer CV's train fold into its ES validation.
         n = len(y)
-        idx = rng.permutation(n)
-        split = int(0.8 * n)
-        train_idx, ho_idx = idx[:split], idx[split:]
+        if groups is not None:
+            from sklearn.model_selection import GroupShuffleSplit
+            groups_arr = np.asarray(groups)
+            if len(groups_arr) != n:
+                raise ValueError(
+                    f"groups length {len(groups_arr)} != X length {n}")
+            gss = GroupShuffleSplit(n_splits=1, test_size=0.2,
+                                    random_state=42)
+            train_idx, ho_idx = next(gss.split(X, y_norm, groups=groups_arr))
+        else:
+            global _GROUPS_WARNED
+            if not _GROUPS_WARNED:
+                import warnings as _warnings
+                _warnings.warn(
+                    "PretrainedDNNRegressor.fit called without groups — internal "
+                    "early-stopping split is random and may leak scaffolds.",
+                    stacklevel=2)
+                _GROUPS_WARNED = True
+            idx = rng.permutation(n)
+            split = int(0.8 * n)
+            train_idx, ho_idx = idx[:split], idx[split:]
 
         X_train = torch.from_numpy(X[train_idx])
         y_train = torch.from_numpy(y_norm[train_idx])

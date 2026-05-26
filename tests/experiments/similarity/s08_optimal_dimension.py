@@ -47,8 +47,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     n_folds = config['n_splits']
     search_speed = config['search_speed']
-    budgets = kwargs.get('budgets', config.get('budgets',
-                         [10, 25, 50, 100, 250, 500, 1000, 2000]))
+    # knn is a distance-tier evaluator, so budgets must come from
+    # DISTANCE_BUDGETS=[10,25,50,100,250,500] to match the cached lineage.
+    budgets = kwargs.get('budgets', config.get('budgets', list(DISTANCE_BUDGETS)))
+    budgets = [b for b in budgets if b in DISTANCE_BUDGETS]
     n_sample = kwargs.get('n_sample', 5000)
 
     reps = data['reps']
@@ -79,9 +81,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     n = len(labels)
     triu_i, triu_j = np.triu_indices(n, k=1)
     n_pairs = len(triu_i)
-    if n_pairs > 10000:
+    if n_pairs > 5000:
         rng = np.random.RandomState(42)
-        _idx = rng.choice(n_pairs, 10000, replace=False)
+        _idx = rng.choice(n_pairs, 5000, replace=False)
         triu_i_s, triu_j_s = triu_i[_idx], triu_j[_idx]
     else:
         triu_i_s, triu_j_s = triu_i, triu_j
@@ -101,7 +103,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 augmentations=data.get('augmentations'),
                 speed=search_speed, data=data,
                 metric=metric_name, task_type=task_type, domain=domain,
-                dataset_name=dataset_name)
+                dataset_name=dataset_name, distance=True)
             weights_flat = flatten_fold_weights(fi) if fi else np.ones(X_hybrid.shape[1])
             if not _top3_reported:
                 top3 = extract_top3_base_reps(search)
@@ -117,11 +119,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         actual_dim = X_hybrid.shape[1]
 
         # MLE intrinsic dimensionality of the hybrid
-        try:
-            X_hybrid_scaled = StandardScaler().fit_transform(X_hybrid)
-            mle_id = float(estimate_intrinsic_dim_mle(X_hybrid_scaled, k=10))
-        except Exception:
+        if len(X_hybrid) <= 11:
+            print(f"    Skipping MLE_ID: n={len(X_hybrid)} too small for k=10")
             mle_id = float('nan')
+        else:
+            try:
+                X_hybrid_scaled = StandardScaler().fit_transform(X_hybrid)
+                mle_id = float(estimate_intrinsic_dim_mle(X_hybrid_scaled, k=10))
+            except Exception:
+                mle_id = float('nan')
 
         # Similarity quality
         D_weighted = compute_distance_matrix(X_hybrid, feature_weights=weights_flat,
@@ -133,39 +139,64 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         d_hybrid_sampled = D_weighted[triu_i_s, triu_j_s]
         dist_corr, _ = spearmanr(d_full_sampled, d_hybrid_sampled)
 
-        # Prediction quality: RF R2 (CV) -- use search blueprint's method
+        # Prediction quality: per-model CV -- use search blueprint's method
         bp = search.best_by_model['knn']['blueprint'] if search.best_by_model.get('knn') else None
         if bp is None:
             print(f"    No blueprint at budget={budget}, skipping prediction")
             continue
 
+        # 2026-04-21 cache-collision fix: align blueprint.augmentation_strategy
+        # with the pool helper's winning aug_condition BEFORE fold loop so
+        # build_fold_hybrid sees the correct strategy.
+        aug_cond = _meta.get('aug_condition', 'uncapped') if _meta else 'uncapped'
+        bp.augmentation_strategy = aug_cond
+
+        # Reuse cached fold_scores for any model already in best_by_model
+        # at this (model, budget) — avoids re-fitting the cached evaluators.
         model_scores = {mname: [] for mname in model_factories}
-        for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
-            y_train, y_val = labels[train_idx], labels[val_idx]
+        cached_models = set()
+        for mname in model_factories:
+            cached = search.best_by_model.get(mname)
+            if cached and cached.get('budget') == budget and cached.get('fold_scores'):
+                model_scores[mname] = list(cached['fold_scores'])
+                cached_models.add(mname)
 
-            train_reps_fold = {name: rep[train_idx] for name, rep in reps.items()}
-            val_reps_fold = {name: rep[val_idx] for name, rep in reps.items()}
-            aug_tr = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
-            aug_va = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
+        # Models that need fresh CV (those not in cache for this budget).
+        refit_models = {mn: f for mn, f in model_factories.items()
+                        if mn not in cached_models}
 
-            try:
-                X_tr_h, X_va_h, feat_info = build_fold_hybrid(
-                    train_reps_fold, val_reps_fold, y_train, bp,
-                    augmentations_train=aug_tr, augmentations_val=aug_va)
-            except Exception:
-                continue
+        if refit_models:
+            for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
+                y_train, y_val = labels[train_idx], labels[val_idx]
 
-            scaler = StandardScaler()
-            X_tr_s = scaler.fit_transform(X_tr_h)
-            X_va_s = scaler.transform(X_va_h)
+                train_reps_fold = {name: rep[train_idx] for name, rep in reps.items()}
+                val_reps_fold = {name: rep[val_idx] for name, rep in reps.items()}
+                # Skip augmentations when winning condition is 'none' — the
+                # pool-fitted X_hybrid was built without them, mismatch otherwise.
+                if aug_cond == 'none' or not augmentations:
+                    aug_tr, aug_va = None, None
+                else:
+                    aug_tr = {k: v[train_idx] for k, v in augmentations.items()}
+                    aug_va = {k: v[val_idx] for k, v in augmentations.items()}
 
-            for mname, mfactory in model_factories.items():
                 try:
-                    m = mfactory()
-                    m.fit(X_tr_s, y_train)
-                    model_scores[mname].append(metric_fn(y_val, m.predict(X_va_s)))
+                    X_tr_h, X_va_h, feat_info = build_fold_hybrid(
+                        train_reps_fold, val_reps_fold, y_train, bp,
+                        augmentations_train=aug_tr, augmentations_val=aug_va)
                 except Exception:
-                    pass
+                    continue
+
+                scaler = StandardScaler()
+                X_tr_s = scaler.fit_transform(X_tr_h)
+                X_va_s = scaler.transform(X_va_h)
+
+                for mname, mfactory in refit_models.items():
+                    try:
+                        m = mfactory()
+                        m.fit(X_tr_s, y_train)
+                        model_scores[mname].append(metric_fn(y_val, m.predict(X_va_s)))
+                    except Exception:
+                        pass
 
         model_means = {mname: float(np.mean(s)) if s else float('nan')
                        for mname, s in model_scores.items()}
@@ -201,7 +232,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Compute importance once for weighted baselines
     from kirby.hybrid import compute_feature_importance as _cfi
     try:
-        importance = _cfi(reps, labels, method='lightgbm_gain')
+        importance = _cfi(reps, labels, method='lightgbm_gain', task_type=task_type)
     except Exception:
         importance = None
 
@@ -236,11 +267,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                            for mname, s in rep_model_scores.items()}
 
         # MLE ID for individual rep
-        try:
-            rep_mle = float(estimate_intrinsic_dim_mle(
-                StandardScaler().fit_transform(X), k=10))
-        except Exception:
+        if len(X) <= 11:
             rep_mle = float('nan')
+        else:
+            try:
+                rep_mle = float(estimate_intrinsic_dim_mle(
+                    StandardScaler().fit_transform(X), k=10))
+            except Exception:
+                rep_mle = float('nan')
 
         rep_result = {
             'dim': X.shape[1],
@@ -331,7 +365,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             pareto_points.sort(key=lambda x: x[1], reverse=True)
             best_rf_seen = float('-inf')
             for budget_val, sac, rf_max, rf_orig in pareto_points:
-                if rf_max >= best_rf_seen:
+                if rf_max > best_rf_seen:
                     pareto_front.append({
                         'budget': budget_val,
                         'sac_rho': sac,
@@ -378,8 +412,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 if __name__ == '__main__':
     parser = create_experiment_parser('S08: Optimal Dimension for Similarity vs Prediction',
                                      has_delta=True, has_augment=True)
-    parser.add_argument('--budgets', type=int, nargs='+', default=[10, 25, 50, 100, 250, 500, 1000, 2000],
-                        help='Budget values to test')
+    parser.add_argument('--budgets', type=int, nargs='+', default=list(DISTANCE_BUDGETS),
+                        help='Budget values to test (must be subset of DISTANCE_BUDGETS for knn)')
     parser.add_argument('--n-sample', type=int, default=5000,
                         help='Number of pairs to sample for SAC (default: 5000)')
     args = parser.parse_args()

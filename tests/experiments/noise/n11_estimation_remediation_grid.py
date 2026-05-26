@@ -84,16 +84,26 @@ def _get_correction_target(estimator):
     """Extract correction target from estimator for smoothing methods.
 
     Returns (target_array, source_name) or (None, None) if no target available.
+
+    Look-up priority is fixed: neighbor-based correction targets win over
+    model-based ones. This matters for ensemble estimators that expose both
+    `neighbor_means_` AND e.g. `mu_` — without a stable priority the smoothing
+    target would silently flip depending on which attribute was set first.
+    The priority is intentional: neighbor-mean smoothing converges to local
+    structure of the data, whereas a model's own prediction is the SAME
+    quantity that defined the noise score, so smoothing toward it is
+    self-fulfilling.
     """
-    # Neighbor-based: neighbor_means_ or weighted_means_
-    for attr in ['neighbor_means_', 'weighted_means_']:
+    NEIGHBOR_ATTRS = ('neighbor_means_', 'weighted_means_')
+    MODEL_ATTRS = ('mu_', 'cv_predictions_', 'prediction_means_',
+                   'oob_predictions_', 'predictions_')
+
+    for attr in NEIGHBOR_ATTRS:
         target = getattr(estimator, attr, None)
         if target is not None:
             return target, attr
 
-    # Model-based: various prediction attributes
-    for attr in ['mu_', 'cv_predictions_', 'prediction_means_',
-                 'oob_predictions_', 'predictions_']:
+    for attr in MODEL_ATTRS:
         target = getattr(estimator, attr, None)
         if target is not None:
             return target, attr
@@ -127,7 +137,9 @@ def _build_estimation_spaces(train_reps, y_train, augmentations, bp):
     scaler = StandardScaler()
     spaces[f'{base_rep_name}_raw'] = scaler.fit_transform(X_base)
 
-    # Hybrid via blueprint
+    # Hybrid via blueprint. Label the space with the actual blueprint budget
+    # (was previously hardcoded as 'hybrid_100' even when bp.budget differed).
+    hybrid_key = f'hybrid_{int(bp.budget)}' if hasattr(bp, 'budget') else 'hybrid'
     try:
         X_h, fi = create_hybrid(
             train_reps, y_train,
@@ -139,12 +151,17 @@ def _build_estimation_spaces(train_reps, y_train, augmentations, bp):
             augmentation_strategy=bp.augmentation_strategy,
         )
         scaler_h = StandardScaler()
-        spaces['hybrid_100'] = scaler_h.fit_transform(X_h)
+        spaces[hybrid_key] = scaler_h.fit_transform(X_h)
     except Exception as e:
-        print(f"      hybrid_100 failed: {e}")
+        print(f"      {hybrid_key} failed: {e}")
 
-    # All base rep spaces
+    # All other base rep spaces. Skip the canonical base rep itself — it's
+    # already added above as f'{base_rep_name}_raw'. Adding it twice (under
+    # both names, with different scaling/capping treatments) inflates the
+    # "best space" win count and double-charges per-sigma config counts.
     for rep_name, X_rep in train_reps.items():
+        if rep_name == base_rep_name:
+            continue
         scaler = StandardScaler()
         spaces[rep_name] = cap_dimensions(scaler.fit_transform(X_rep))[0]
 
@@ -173,19 +190,27 @@ def _resolve_estimators():
 
 def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
                          X_eval_train, X_eval_val, y_val,
-                         model_factory, metric_fn, n_samples):
+                         model_factory, metric_fn, n_samples,
+                         is_clf=False):
     """Run full alpha × remediation grid for one estimator config.
 
-    Returns: {remed_key: denoised_score} where remed_key = f'{method}_{alpha}'
+    Returns: {remed_key: denoised_score} where remed_key = f'{method}_{alpha}'.
+
+    For classification (is_clf=True) the smoothing branch is intentionally
+    skipped: smooth_by_scores produces continuous floats which a
+    RandomForestClassifier cannot consume — the old code's bare-except
+    swallowed the resulting ValueError on every (estimator, alpha, method)
+    triple, so half the grid silently produced no results for clf datasets.
+    Smoothing results carry a `_smoothing_skipped_clf: True` marker so
+    downstream readers don't confuse the empty cells with failed runs.
     """
     # Build estimator with appropriate kwargs
     kwargs = {}
     if est_name in NEIGHBOR_ESTIMATORS:
         kwargs['metric'] = metric_name
         kwargs['k'] = 10
-    if est_name == 'gaussian_process' and n_samples > GP_MAX:
-        # GP will subsample internally, but we should warn
-        pass
+    # GP subsamples internally to GP_MAX. n_samples is passed in for future
+    # heuristics; the dead `pass` block that used to guard it has been removed.
 
     try:
         estimator = get_noise_estimator(est_name, **kwargs)
@@ -195,9 +220,13 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
 
     target, target_source = _get_correction_target(estimator)
     results = {}
+    # Record per-(strategy, alpha) failure reasons so the grid's empty cells
+    # can be distinguished from real failures during downstream analysis.
+    failure_log = {}
 
     for alpha in ALPHAS:
-        # Weighting methods (always available)
+        # Weighting methods (always available, sample_weight path works for
+        # both regression and classification model factories)
         for wm in WEIGHT_METHODS:
             key = f'{wm}_{alpha}'
             try:
@@ -206,11 +235,11 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
                 model.fit(X_eval_train, y_noisy, sample_weight=weights)
                 y_pred = model.predict(X_eval_val)
                 results[key] = float(metric_fn(y_val, y_pred))
-            except Exception:
-                pass
+            except Exception as exc:
+                failure_log[key] = f'{type(exc).__name__}: {exc}'
 
-        # Smoothing methods (need a correction target)
-        if target is not None:
+        # Smoothing methods (need a correction target AND a regression task)
+        if target is not None and not is_clf:
             for sm in SMOOTH_METHODS:
                 key = f'{sm}_{alpha}'
                 try:
@@ -222,8 +251,13 @@ def _run_estimator_grid(est_name, metric_name, X_space, y_noisy,
                     model.fit(X_eval_train, y_smoothed)
                     y_pred = model.predict(X_eval_val)
                     results[key] = float(metric_fn(y_val, y_pred))
-                except Exception:
-                    pass
+                except Exception as exc:
+                    failure_log[key] = f'{type(exc).__name__}: {exc}'
+
+    if is_clf:
+        results['_smoothing_skipped_clf'] = True
+    if failure_log:
+        results['_failures'] = failure_log
 
     return results
 
@@ -297,11 +331,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'per_sigma': {},
     }
 
+    # Multi-seed noise injection: average across NOISE_SEEDS to reduce
+    # dependence on a single noise realization. The clean baseline is
+    # noise-independent so it's only computed once per fold; the noisy
+    # baseline + estimation spaces + grid are recomputed per seed.
+    NOISE_SEEDS = kwargs.get('noise_seeds', [0, 1, 2])
+
     for sigma in sigmas:
         print(f"\n  === Sigma={sigma} ===")
         t_sigma = time.time()
 
-        # Accumulators across folds
         clean_scores = []
         noisy_scores = []
         # {space: {est_key: {remed_key: [scores]}}}
@@ -316,69 +355,71 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             train_reps_fold = {k: v[train_idx] for k, v in reps.items()}
 
-            # Fixed evaluation features (base rep — independent of labels)
             X_eval_train = reps[base_rep_name][train_idx]
             X_eval_val = reps[base_rep_name][val_idx]
             scaler_eval = StandardScaler()
             X_eval_train_s = scaler_eval.fit_transform(X_eval_train)
             X_eval_val_s = scaler_eval.transform(X_eval_val)
 
-            # Clean baseline
+            # Clean baseline (noise-independent — compute once per fold)
             rf_clean = model_factory()
             rf_clean.fit(X_eval_train_s, y_train_clean)
             clean_scores.append(float(metric_fn(y_val, rf_clean.predict(X_eval_val_s))))
 
-            # Inject noise BEFORE building estimation spaces (no oracle leak)
-            y_noisy = _inject_noise(y_train_clean, sigma, seed=42 + fold_idx,
-                                    is_clf=is_clf)
-
-            # Slice augmentations to train fold
             train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
 
-            # Build estimation spaces from noisy labels (realistic scenario)
-            spaces, _brn = _build_estimation_spaces(
-                train_reps_fold, y_noisy, train_augs, bp,
-            )
+            for noise_seed in NOISE_SEEDS:
+                # Per-(fold, seed) noise realization. Combining fold_idx and
+                # noise_seed into the seed keeps every (fold, seed) draw
+                # distinct without collisions.
+                y_noisy = _inject_noise(
+                    y_train_clean, sigma,
+                    seed=42 + fold_idx * 1000 + noise_seed,
+                    is_clf=is_clf)
 
-            # Noisy baseline
-            rf_noisy = model_factory()
-            rf_noisy.fit(X_eval_train_s, y_noisy)
-            noisy_scores.append(float(metric_fn(y_val, rf_noisy.predict(X_eval_val_s))))
+                spaces, _brn = _build_estimation_spaces(
+                    train_reps_fold, y_noisy, train_augs, bp,
+                )
 
-            # Run grid per space
-            for space_name, X_space in spaces.items():
-                if space_name not in grid_acc:
-                    grid_acc[space_name] = {}
+                rf_noisy = model_factory()
+                rf_noisy.fit(X_eval_train_s, y_noisy)
+                noisy_scores.append(float(metric_fn(y_val, rf_noisy.predict(X_eval_val_s))))
 
-                for est_name in available_estimators:
-                    # Determine which metrics to test
-                    if est_name in NEIGHBOR_ESTIMATORS:
-                        metrics_to_test = NEIGHBOR_METRICS
-                    else:
-                        metrics_to_test = [None]  # no metric variation
+                for space_name, X_space in spaces.items():
+                    if space_name not in grid_acc:
+                        grid_acc[space_name] = {}
 
-                    for metric_var in metrics_to_test:
-                        est_key = est_name
-                        if metric_var:
-                            est_key = f'{est_name}_{metric_var}'
+                    for est_name in available_estimators:
+                        if est_name in NEIGHBOR_ESTIMATORS:
+                            metrics_to_test = NEIGHBOR_METRICS
+                        else:
+                            metrics_to_test = [None]
 
-                        grid_result = _run_estimator_grid(
-                            est_name, metric_var or 'euclidean',
-                            X_space, y_noisy,
-                            X_eval_train_s, X_eval_val_s, y_val,
-                            model_factory, metric_fn, n_samples,
-                        )
+                        for metric_var in metrics_to_test:
+                            est_key = est_name
+                            if metric_var:
+                                est_key = f'{est_name}_{metric_var}'
 
-                        if est_key not in grid_acc[space_name]:
-                            grid_acc[space_name][est_key] = {}
+                            grid_result = _run_estimator_grid(
+                                est_name, metric_var or 'euclidean',
+                                X_space, y_noisy,
+                                X_eval_train_s, X_eval_val_s, y_val,
+                                model_factory, metric_fn, n_samples,
+                                is_clf=is_clf,
+                            )
 
-                        if '_error' in grid_result:
-                            continue
+                            if est_key not in grid_acc[space_name]:
+                                grid_acc[space_name][est_key] = {}
 
-                        for remed_key, score in grid_result.items():
-                            if remed_key not in grid_acc[space_name][est_key]:
-                                grid_acc[space_name][est_key][remed_key] = []
-                            grid_acc[space_name][est_key][remed_key].append(score)
+                            if '_error' in grid_result:
+                                continue
+
+                            for remed_key, score in grid_result.items():
+                                if remed_key.startswith('_'):
+                                    continue
+                                if remed_key not in grid_acc[space_name][est_key]:
+                                    grid_acc[space_name][est_key][remed_key] = []
+                                grid_acc[space_name][est_key][remed_key].append(score)
 
         # Aggregate across folds
         clean_mean = float(np.mean(clean_scores))
@@ -403,8 +444,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             recovery = float((denoised - noisy_mean) / gap * 100)
                         else:
                             recovery = float('nan')
+                        # Tag the metric direction alongside each entry so
+                        # downstream tooling sorting by `denoised_score`
+                        # alone doesn't accidentally sort RMSE backwards.
+                        # `recovery` is direction-agnostic by construction
+                        # (positive = improvement); `denoised_score` is the
+                        # raw metric value.
                         est_agg[remed_key] = {
                             'denoised_score': denoised,
+                            'lower_is_better': bool(lower_is_better),
                             'recovery': recovery,
                         }
                 if est_agg:
@@ -434,6 +482,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
               f"({100*n_positive/max(n_total,1):.1f}%)")
         if best_config:
             print(f"    Best: {best_config} ({best_recovery:+.1f}%)")
+        elif n_total > 0:
+            # All recoveries were NaN. Usually this means the (clean, noisy)
+            # gap was near-zero for this sigma (no detectable noise effect)
+            # so dividing by it produced NaN everywhere. Surface that
+            # explicitly rather than silently skipping the "Best" line.
+            print(f"    Best: None — all {n_total} configs returned NaN "
+                  f"recovery (gap={gap:.4g}; sigma may be uninformative).")
         print(f"    [{time.time() - t_sigma:.0f}s]")
 
     # Summary

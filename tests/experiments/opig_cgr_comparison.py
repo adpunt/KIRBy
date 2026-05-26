@@ -206,7 +206,9 @@ def _is_binary_rep(X):
 
 def evaluate_rep(X, labels, groups, model, n_folds):
     """Evaluate one rep x model via GroupKFold, return R2/RMSE/Spearman."""
-    X = np.asarray(X, dtype=np.float64)
+    X_raw = np.asarray(X)
+    is_binary = _is_binary_rep(X_raw)
+    X = X_raw.astype(np.float64, copy=False)
     labels = np.asarray(labels, dtype=np.float64)
 
     n_groups = len(np.unique(groups))
@@ -216,8 +218,6 @@ def evaluate_rep(X, labels, groups, model, n_folds):
 
     cv = GroupKFold(n_splits=actual_folds)
     splits = list(cv.split(X, labels, groups=groups))
-
-    is_binary = _is_binary_rep(X)
     r2_scores, rmse_scores, spearman_scores = [], [], []
 
     for train_idx, val_idx in splits:
@@ -239,22 +239,22 @@ def evaluate_rep(X, labels, groups, model, n_folds):
 
         ss_res = np.sum((y_val - preds) ** 2)
         ss_tot = np.sum((y_val - y_val.mean()) ** 2)
-        r2_scores.append(1 - ss_res / ss_tot if ss_tot > 0 else 0.0)
+        r2_scores.append(1 - ss_res / ss_tot if ss_tot > 0 else np.nan)
         rmse_scores.append(np.sqrt(np.mean((y_val - preds) ** 2)))
 
         if len(y_val) > 2:
             rho, _ = spearmanr(y_val, preds)
-            spearman_scores.append(rho if not np.isnan(rho) else 0.0)
+            spearman_scores.append(rho)
 
     if not r2_scores:
         return None
 
     return {
-        'r2': {'mean': float(np.mean(r2_scores)), 'std': float(np.std(r2_scores))},
-        'rmse': {'mean': float(np.mean(rmse_scores)), 'std': float(np.std(rmse_scores))},
+        'r2': {'mean': float(np.nanmean(r2_scores)), 'std': float(np.nanstd(r2_scores))},
+        'rmse': {'mean': float(np.nanmean(rmse_scores)), 'std': float(np.nanstd(rmse_scores))},
         'spearman': {
-            'mean': float(np.mean(spearman_scores)) if spearman_scores else 0.0,
-            'std': float(np.std(spearman_scores)) if spearman_scores else 0.0,
+            'mean': float(np.nanmean(spearman_scores)) if spearman_scores else float('nan'),
+            'std': float(np.nanstd(spearman_scores)) if spearman_scores else float('nan'),
         },
         'n_folds_completed': len(r2_scores),
     }
@@ -292,20 +292,18 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
     # Sanitize condition_suffix: pool_name contains spaces / '+' which can
     # produce ambiguous cache filenames (P1-6).
     safe_suffix = pool_name.lower().replace('+', '_plus_').replace(' ', '_').replace('-', '_')
+    # augmentations=None for this experiment; the pool selects aug_condition
+    # internally per iteration, so we don't pass augmentation_strategy.
     search, _meta = get_best_search_for_downstream(
         pool_reps, labels, groups,
         downstream_model='rf', budget=None,
         augmentations=None,
-        # Explicit 'none' avoids cache-key collision with real
-        # uncapped-augmentation runs (project_cache_collision_fix).
-        augmentation_strategy='none',
         speed='full',
         metric='rmse',
         task_type='regression',
         dataset_name=dataset_name,
         return_fitted=True,
         condition_suffix=safe_suffix,
-        adaptive_pruning=0.25,
         **_pkw,
     )
 
@@ -347,7 +345,7 @@ def build_and_evaluate_hybrid(pool_reps, all_reps, labels, groups, n_folds,
     return {
         'n_reps': len(pool_reps),
         'rep_names': sorted(pool_reps.keys()),
-        'top3_base': [[n, s] for n, s in top3],
+        'top3_base': [[n, s] for n, s in (top3 or [])],
         'hybrid_eval': hybrid_eval,
         'selected_reps': selected_reps,
         'baselines': {

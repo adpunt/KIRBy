@@ -14,9 +14,14 @@ Steps:
      more often than genuine cliff compounds?
 
 Comparison conditions:
-  - GP-LOO in hybrid space (MAIN — should have lowest cliff FP rate)
+  - GP-LOO in hybrid space (MAIN — should have lowest cliff FP rate).
+    Hybrid is built using downstream_model='rf' (the noise precompute pool
+    excludes GP); GP-LOO is then applied downstream to the RF-optimised
+    feature space.
   - GP-LOO in full concat space (baseline)
-  - GP-LOO in PCA-50 space (dimension-matched)
+  - GP-LOO in PCA-dim-matched space (n_components = budget, NOT 50 — earlier
+    docstring said "PCA-50" but the code uses min(budget, total_dim, n-1)
+    which matches the hybrid budget rather than a fixed 50)
   - GP-LOO in each individual base rep space (per-rep baselines)
   - ActivityCliffAwareEstimator (library, non-GP)
   - Prediction error filter (naive baseline)
@@ -36,14 +41,13 @@ from sklearn.decomposition import PCA
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, WhiteKernel, ConstantKernel
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import cross_val_predict
+from sklearn.model_selection import cross_val_predict, GroupKFold, KFold
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     get_domain_metric, get_fitted_hybrid, get_fitted_pool_hybrid, extract_top3_base_reps,
     cap_dimensions,
-    DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
 )
 from kirby.utils.noise_estimation import ActivityCliffAwareEstimator
 from kirby.utils.noise_mitigation_methods import compute_distance_matrix
@@ -51,6 +55,12 @@ from kirby.utils.noise_mitigation_methods import compute_distance_matrix
 
 # Maximum samples for GP (O(n³))
 GP_MAX_SAMPLES = 1000
+
+# Multi-seed noise averaging. Single-seed numbers are point estimates with
+# no variance over noise realizations — easy to misread when a method's
+# detection rate happens to be sensitive to which subset of samples got
+# corrupted. Aggregate across NOISE_SEEDS and report mean ± std.
+NOISE_SEEDS = [0, 1, 2]
 
 
 def _subsample_if_needed(X, y, max_n, seed=42):
@@ -169,7 +179,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     labels = data['labels']
     groups = data['groups']
     augmentations = data.get('augmentations')
-    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    # metric_name is used in summary print/return paths; metric_fn/lower_is_better
+    # aren't (this experiment reports precision/recall/cliff_FP, not the domain
+    # metric). Keep the name for surface area; drop the unused values.
+    metric_name, _metric_fn, _lower_is_better = get_domain_metric(data)
 
     noise_fractions = kwargs.get('noise_fractions', [0.05, 0.1, 0.2])
     budget = kwargs.get('budget', 100)
@@ -180,21 +193,31 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     spaces = {}
 
-    # 1. Hybrid
+    # 1. Hybrid. We previously requested downstream_model='gp', but the noise
+    # precompute pool builds blueprints only for DOWNSTREAM_MODELS_NOISE
+    # (rf, xgboost, ridge, svm, mlp, lightgbm) — gp was never present, so the
+    # pool returned no candidate and the hybrid was silently absent on every
+    # dataset. GP-LOO is downstream of the hybrid feature space, not part of
+    # it; an RF-optimised hybrid is the correct feature space to score with
+    # GP. Track whether the hybrid actually built so the summary can flag
+    # missing-hybrid runs instead of defaulting to the 1.0 sentinel.
     _search = None
+    hybrid_available = False
     try:
         X_hybrid, fi, _search, _meta = get_fitted_pool_hybrid(
             reps, labels, groups,
-            downstream_model='gp', budget=budget,
+            downstream_model='rf', budget=budget,
             augmentations=augmentations,
             speed=config.get('search_speed', 'full'),
             data=data,
             dataset_name=dataset_name,
             task_type=task_type)
         spaces['hybrid'] = X_hybrid
+        hybrid_available = True
         top3 = extract_top3_base_reps(_search)
         if top3:
-            print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+            print(f"  Top-3 base reps (ranked by RF baseline): "
+                  f"{', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     except Exception as e:
         print(f"  Hybrid creation failed: {e}")
 
@@ -234,133 +257,202 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     for frac in noise_fractions:
         print(f"\n  === Noise fraction: {frac:.0%} ===")
-        y_noisy, noise_mask_full = _inject_noise(labels, frac)
+        # Per-seed accumulators: {space_name_or_method: [list_of_metric_dicts]}
+        per_seed_acc = {}
 
-        # Subsample noise mask
-        noise_mask = noise_mask_full[sub_idx]
-        y_noisy_sub = y_noisy[sub_idx]
-        n_injected = int(noise_mask.sum())
-        print(f"    Injected: {n_injected} noisy samples")
+        for noise_seed in NOISE_SEEDS:
+            y_noisy, noise_mask_full = _inject_noise(labels, frac, seed=noise_seed)
 
-        level_results = {}
+            # Subsample noise mask
+            noise_mask = noise_mask_full[sub_idx]
+            y_noisy_sub = y_noisy[sub_idx]
+            n_injected = int(noise_mask.sum())
+            print(f"    [seed={noise_seed}] Injected: {n_injected} noisy samples")
 
-        # GP-LOO conditions
-        for space_name, X_full in spaces.items():
-            X_space_sub = X_full[sub_idx] if len(X_full) > len(sub_idx) else X_full
-            if X_space_sub.shape[0] != len(y_noisy_sub):
-                continue
+            level_results = {}
 
-            print(f"    {space_name} (dim={X_space_sub.shape[1]})...", end='', flush=True)
-            scores, gp_failures = _gp_loo_scores(X_space_sub, y_noisy_sub)
+            # GP-LOO conditions
+            for space_name, X_full in spaces.items():
+                X_space_sub = X_full[sub_idx] if len(X_full) > len(sub_idx) else X_full
+                if X_space_sub.shape[0] != len(y_noisy_sub):
+                    continue
 
-            # Threshold: flag top (frac * 100)% by score
-            threshold_pct = min(frac * 2, 0.3)  # flag up to 2× the injection rate
-            threshold = np.percentile(scores, (1 - threshold_pct) * 100)
-            flagged = scores >= threshold
+                print(f"      {space_name} (dim={X_space_sub.shape[1]})...", end='', flush=True)
+                scores, gp_failures = _gp_loo_scores(X_space_sub, y_noisy_sub)
 
-            # Metrics
-            tp = int((flagged & noise_mask).sum())  # correctly flagged injected noise
-            fp_cliff = int((flagged & cliff_mask & ~noise_mask).sum())  # cliffs wrongly flagged
-            fp_other = int((flagged & ~noise_mask & ~cliff_mask).sum())
-            fn = int((~flagged & noise_mask).sum())
+                threshold_pct = min(frac * 2, 0.3)
+                threshold = np.percentile(scores, (1 - threshold_pct) * 100)
+                flagged = scores >= threshold
 
-            precision = tp / max(flagged.sum(), 1)
-            recall = tp / max(noise_mask.sum(), 1)
-            cliff_fp_rate = fp_cliff / max(cliff_mask.sum(), 1)
+                tp = int((flagged & noise_mask).sum())
+                fp_cliff = int((flagged & cliff_mask & ~noise_mask).sum())
+                fp_other = int((flagged & ~noise_mask & ~cliff_mask).sum())
+                fn = int((~flagged & noise_mask).sum())
 
-            level_results[space_name] = {
-                'gp_failures': gp_failures,
-                'n_flagged': int(flagged.sum()),
-                'true_positives': tp,
-                'false_positives_cliff': fp_cliff,
-                'false_positives_other': fp_other,
-                'false_negatives': fn,
-                'precision': float(precision),
-                'recall': float(recall),
-                'cliff_fp_rate': float(cliff_fp_rate),
+                precision = tp / max(flagged.sum(), 1)
+                recall = tp / max(noise_mask.sum(), 1)
+                cliff_fp_rate = fp_cliff / max(cliff_mask.sum(), 1)
+
+                level_results[space_name] = {
+                    'gp_failures': gp_failures,
+                    'n_flagged': int(flagged.sum()),
+                    'true_positives': tp,
+                    'false_positives_cliff': fp_cliff,
+                    'false_positives_other': fp_other,
+                    'false_negatives': fn,
+                    'precision': float(precision),
+                    'recall': float(recall),
+                    'cliff_fp_rate': float(cliff_fp_rate),
+                }
+                print(f" precision={precision:.3f}, recall={recall:.3f}, "
+                      f"cliff_FP={cliff_fp_rate:.3f}")
+
+            # ActivityCliffAwareEstimator condition (non-GP)
+            if 'hybrid' in spaces:
+                X_h_sub = spaces['hybrid'][sub_idx] if len(spaces['hybrid']) > len(sub_idx) else spaces['hybrid']
+                if X_h_sub.shape[0] == len(y_noisy_sub):
+                    print(f"      cliff_aware_estimator...", end='', flush=True)
+                    try:
+                        estimator = ActivityCliffAwareEstimator(k=10, metric='cosine')
+                        estimator.fit(StandardScaler().fit_transform(X_h_sub), y_noisy_sub)
+                        scores_ca = estimator.noise_scores_
+                        threshold_ca = np.percentile(scores_ca, (1 - threshold_pct) * 100)
+                        flagged_ca = scores_ca >= threshold_ca
+
+                        tp_ca = int((flagged_ca & noise_mask).sum())
+                        fp_cliff_ca = int((flagged_ca & cliff_mask & ~noise_mask).sum())
+                        precision_ca = tp_ca / max(flagged_ca.sum(), 1)
+                        recall_ca = tp_ca / max(noise_mask.sum(), 1)
+                        cliff_fp_ca = fp_cliff_ca / max(cliff_mask.sum(), 1)
+
+                        level_results['cliff_aware_estimator'] = {
+                            'n_flagged': int(flagged_ca.sum()),
+                            'true_positives': tp_ca,
+                            'false_positives_cliff': fp_cliff_ca,
+                            'precision': float(precision_ca),
+                            'recall': float(recall_ca),
+                            'cliff_fp_rate': float(cliff_fp_ca),
+                        }
+                        print(f" precision={precision_ca:.3f}, recall={recall_ca:.3f}, "
+                              f"cliff_FP={cliff_fp_ca:.3f}")
+                    except Exception as e:
+                        print(f" FAILED: {e}")
+
+            # Prediction error baseline
+            print(f"      prediction_error...", end='', flush=True)
+            X_concat_sub = X_concat[sub_idx] if len(X_concat) > len(sub_idx) else X_concat
+            scaler = StandardScaler()
+            X_cs = scaler.fit_transform(X_concat_sub)
+            rf = RandomForestRegressor(n_estimators=100,
+                                       random_state=42 + noise_seed, n_jobs=-1)
+            if groups is not None:
+                groups_sub = np.asarray(groups)[sub_idx]
+                n_groups = len(np.unique(groups_sub))
+                if n_groups >= 5:
+                    cv_pe = GroupKFold(n_splits=5)
+                    y_pred_cv = cross_val_predict(rf, X_cs, y_noisy_sub,
+                                                  groups=groups_sub, cv=cv_pe)
+                else:
+                    cv_pe = GroupKFold(n_splits=max(2, n_groups))
+                    y_pred_cv = cross_val_predict(rf, X_cs, y_noisy_sub,
+                                                  groups=groups_sub, cv=cv_pe)
+            else:
+                print("      WARNING: no groups available; using plain 5-fold KFold")
+                y_pred_cv = cross_val_predict(rf, X_cs, y_noisy_sub,
+                                              cv=KFold(n_splits=5, shuffle=False))
+            pe_scores = np.abs(y_noisy_sub - y_pred_cv)
+            threshold_pe = np.percentile(pe_scores, (1 - threshold_pct) * 100)
+            flagged_pe = pe_scores >= threshold_pe
+            tp_pe = int((flagged_pe & noise_mask).sum())
+            fp_cliff_pe = int((flagged_pe & cliff_mask & ~noise_mask).sum())
+            precision_pe = tp_pe / max(flagged_pe.sum(), 1)
+            recall_pe = tp_pe / max(noise_mask.sum(), 1)
+            cliff_fp_pe = fp_cliff_pe / max(cliff_mask.sum(), 1)
+
+            level_results['prediction_error'] = {
+                'n_flagged': int(flagged_pe.sum()),
+                'true_positives': tp_pe,
+                'false_positives_cliff': fp_cliff_pe,
+                'precision': float(precision_pe),
+                'recall': float(recall_pe),
+                'cliff_fp_rate': float(cliff_fp_pe),
             }
-            print(f" precision={precision:.3f}, recall={recall:.3f}, "
-                  f"cliff_FP={cliff_fp_rate:.3f}")
+            print(f" precision={precision_pe:.3f}, recall={recall_pe:.3f}, "
+                  f"cliff_FP={cliff_fp_pe:.3f}")
 
-        # ActivityCliffAwareEstimator condition (non-GP)
-        if 'hybrid' in spaces:
-            X_h_sub = spaces['hybrid'][sub_idx] if len(spaces['hybrid']) > len(sub_idx) else spaces['hybrid']
-            if X_h_sub.shape[0] == len(y_noisy_sub):
-                print(f"    cliff_aware_estimator...", end='', flush=True)
-                try:
-                    estimator = ActivityCliffAwareEstimator(k=10, metric='cosine')
-                    estimator.fit(StandardScaler().fit_transform(X_h_sub), y_noisy_sub)
-                    scores_ca = estimator.noise_scores_
-                    threshold_ca = np.percentile(scores_ca, (1 - threshold_pct) * 100)
-                    flagged_ca = scores_ca >= threshold_ca
+            # Accumulate this seed's per-space results
+            for key, entry in level_results.items():
+                per_seed_acc.setdefault(key, []).append(entry)
 
-                    tp_ca = int((flagged_ca & noise_mask).sum())
-                    fp_cliff_ca = int((flagged_ca & cliff_mask & ~noise_mask).sum())
-                    precision_ca = tp_ca / max(flagged_ca.sum(), 1)
-                    recall_ca = tp_ca / max(noise_mask.sum(), 1)
-                    cliff_fp_ca = fp_cliff_ca / max(cliff_mask.sum(), 1)
+        # Aggregate across seeds: report mean ± std of each numeric metric.
+        # Sticky fields (n_flagged etc. that vary by integer count) are kept
+        # as means too; if seed variance matters for that field, the std is
+        # right there alongside.
+        agg_level = {}
+        numeric_fields = ('precision', 'recall', 'cliff_fp_rate',
+                          'n_flagged', 'true_positives',
+                          'false_positives_cliff', 'false_positives_other',
+                          'false_negatives')
+        for key, entries in per_seed_acc.items():
+            agg = {'n_seeds': len(entries)}
+            for fld in numeric_fields:
+                vals = [e[fld] for e in entries
+                        if isinstance(e, dict) and fld in e]
+                if vals:
+                    agg[f'{fld}_mean'] = float(np.mean(vals))
+                    agg[f'{fld}_std'] = float(np.std(vals))
+                    # Backwards-compat: also expose the mean under the plain
+                    # field name (older consumers reading e.g. cliff_fp_rate
+                    # directly continue to work, with the mean across seeds).
+                    agg[fld] = float(np.mean(vals))
+            # Forward gp_failures (sum across seeds, qualitative)
+            if all('gp_failures' in e for e in entries):
+                agg['gp_failures'] = sum(e['gp_failures'] for e in entries)
+            agg_level[key] = agg
 
-                    level_results['cliff_aware_estimator'] = {
-                        'n_flagged': int(flagged_ca.sum()),
-                        'true_positives': tp_ca,
-                        'false_positives_cliff': fp_cliff_ca,
-                        'precision': float(precision_ca),
-                        'recall': float(recall_ca),
-                        'cliff_fp_rate': float(cliff_fp_ca),
-                    }
-                    print(f" precision={precision_ca:.3f}, recall={recall_ca:.3f}, "
-                          f"cliff_FP={cliff_fp_ca:.3f}")
-                except Exception as e:
-                    print(f" FAILED: {e}")
-
-        # Prediction error baseline
-        print(f"    prediction_error...", end='', flush=True)
-        X_concat_sub = X_concat[sub_idx] if len(X_concat) > len(sub_idx) else X_concat
-        scaler = StandardScaler()
-        X_cs = scaler.fit_transform(X_concat_sub)
-        rf = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
-        y_pred_cv = cross_val_predict(rf, X_cs, y_noisy_sub, cv=5)
-        pe_scores = np.abs(y_noisy_sub - y_pred_cv)
-        threshold_pe = np.percentile(pe_scores, (1 - threshold_pct) * 100)
-        flagged_pe = pe_scores >= threshold_pe
-        tp_pe = int((flagged_pe & noise_mask).sum())
-        fp_cliff_pe = int((flagged_pe & cliff_mask & ~noise_mask).sum())
-        precision_pe = tp_pe / max(flagged_pe.sum(), 1)
-        recall_pe = tp_pe / max(noise_mask.sum(), 1)
-        cliff_fp_pe = fp_cliff_pe / max(cliff_mask.sum(), 1)
-
-        level_results['prediction_error'] = {
-            'n_flagged': int(flagged_pe.sum()),
-            'true_positives': tp_pe,
-            'false_positives_cliff': fp_cliff_pe,
-            'precision': float(precision_pe),
-            'recall': float(recall_pe),
-            'cliff_fp_rate': float(cliff_fp_pe),
-        }
-        print(f" precision={precision_pe:.3f}, recall={recall_pe:.3f}, "
-              f"cliff_FP={cliff_fp_pe:.3f}")
-
-        results['per_noise_level'][str(frac)] = convert_numpy(level_results)
+        results['per_noise_level'][str(frac)] = convert_numpy(agg_level)
 
     # Summary: does hybrid have the lowest cliff FP rate across noise levels?
-    hybrid_wins = 0
-    total_comparisons = 0
-    for frac_key, level_res in results['per_noise_level'].items():
-        h_cfp = level_res.get('hybrid', {}).get('cliff_fp_rate', 1.0)
-        for cond, cond_res in level_res.items():
-            if cond == 'hybrid':
+    # Previously the missing-hybrid case fell through `.get('hybrid', {}).get(
+    # 'cliff_fp_rate', 1.0)` which is a VALID value (cliff_fp_rate ∈ [0, 1]),
+    # not a sentinel — making the win/loss count meaningless when the hybrid
+    # build had silently failed. Now we explicitly skip the win-rate
+    # computation in that case and flag the run.
+    results['hybrid_available'] = bool(hybrid_available)
+    if not hybrid_available:
+        results['summary'] = {
+            'hybrid_available': False,
+            'note': ('Hybrid was not built (pool returned no candidate for the '
+                     'requested downstream model); win-rate intentionally not '
+                     'reported.'),
+        }
+        print(f"\n  Hybrid unavailable — win-rate not reported.")
+    else:
+        hybrid_wins = 0
+        total_comparisons = 0
+        for frac_key, level_res in results['per_noise_level'].items():
+            h_entry = level_res.get('hybrid')
+            if h_entry is None or 'cliff_fp_rate' not in h_entry:
                 continue
-            c_cfp = cond_res.get('cliff_fp_rate', 1.0)
-            total_comparisons += 1
-            if h_cfp <= c_cfp:
-                hybrid_wins += 1
+            h_cfp = h_entry['cliff_fp_rate']
+            for cond, cond_res in level_res.items():
+                if cond == 'hybrid':
+                    continue
+                if not isinstance(cond_res, dict) or 'cliff_fp_rate' not in cond_res:
+                    continue
+                c_cfp = cond_res['cliff_fp_rate']
+                total_comparisons += 1
+                if h_cfp <= c_cfp:
+                    hybrid_wins += 1
 
-    results['summary'] = {
-        'hybrid_lowest_cliff_fp_rate': hybrid_wins,
-        'total_comparisons': total_comparisons,
-        'win_rate': float(hybrid_wins / total_comparisons) if total_comparisons > 0 else 0.0,
-    }
-    print(f"\n  Hybrid lowest cliff FP rate: {hybrid_wins}/{total_comparisons}")
+        results['summary'] = {
+            'hybrid_available': True,
+            'hybrid_lowest_cliff_fp_rate': hybrid_wins,
+            'total_comparisons': total_comparisons,
+            'win_rate': (float(hybrid_wins / total_comparisons)
+                         if total_comparisons > 0 else None),
+        }
+        print(f"\n  Hybrid lowest cliff FP rate: {hybrid_wins}/{total_comparisons}")
 
     return results
 

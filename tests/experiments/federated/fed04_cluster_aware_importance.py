@@ -30,6 +30,7 @@ from experiments._shared import (
 from experiments.federated.federated_helpers import (
     smiles_to_fluid_df, cluster_training_only, compute_clf_metrics,
     extract_importance_profile, compare_importance_profiles,
+    _resolve_match,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection
 
@@ -40,6 +41,7 @@ K = 5
 PKI_THRESHOLD = 6.0
 SMOOTH_FACTORS = [0, 0.01, 0.05, 0.1, 0.2]
 BUDGET = 100
+N_FOLDS = 5
 
 
 def _compute_cluster_importance(train_reps, train_labels, silo_indices, k,
@@ -142,209 +144,239 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         labels = labels[valid_idx]
         if groups is not None:
             groups = groups[valid_idx]
+        # P0 fix: reindex augmentations too — otherwise subsequent indexing
+        # with post-filter indices corrupts non-Lhasa runs.
+        if data.get('augmentations'):
+            data = {**data, 'augmentations': {
+                k: v[valid_idx] for k, v in data['augmentations'].items()}}
 
     n_samples = len(labels_binary)
 
     # ── Get optimal hybrid config from precomputed search ──
     augs = data.get('augmentations')
-    metric_name, metric_fn, lower_is_better = get_domain_metric(data)
+    metric_name, _metric_fn, _lower_is_better = get_domain_metric(data)  # metric_name used below; fn/dir unused here
+    # P1 fix: pool blueprint must be computed on the labels that create_hybrid
+    # will actually see downstream (labels_binary). Labels were binarized at
+    # line 127, so force task_type='classification' even when the original
+    # dataset is regression (e.g. caco2/logd) — labels_binary is always binary.
     try:
         _search, _meta = get_best_search_for_downstream(
-            reps, labels, groups,
+            reps, labels_binary, groups,
             downstream_model='rf', budget=BUDGET,
             augmentations=augs,
             speed=config.get('search_speed', 'full'),
             metric=metric_name,
-            task_type=data['task_type'],
+            task_type='classification',
             domain=data.get('domain', 'molecular'),
             dataset_name=dataset_name,
             data=data,
         )
         _bp = _meta['best_config']['blueprint'] if _meta else None
-    except Exception:
+    except Exception as e:
+        print(f"  WARN: pool selection failed: {e}, using defaults")
         _bp = None
     aug_cond = _bp.augmentation_strategy if _bp else ('uncapped' if augs else 'none')
     _alloc = _bp.allocation_method if _bp else 'performance_weighted'
     _imp = _bp.importance_method if _bp else 'treeshap'
     _int_eval = _bp.internal_evaluator if _bp else 'match'
+    _int_eval = _resolve_match(_int_eval, 'rf')
 
-    # SPLIT FIRST — scaffold-group-aware, matching FLuID's pattern
-    train_idx, test_idx = next(cv_split(
-        groups, 1, np.zeros(n_samples), labels_binary))
+    # SPLIT — scaffold-group-aware, 5-fold per-fold accumulation.
+    # P1 fix: hard-fail when groups unavailable. federated_helpers.py:107-110
+    # silently sets groups=None, which would trigger the cv_split random
+    # fallback (forbidden by feedback_no_random_splits.md).
+    if groups is None or len(np.unique(groups)) < N_FOLDS:
+        raise RuntimeError(
+            f"fed04 requires scaffold groups for {N_FOLDS}-fold CV "
+            f"(got groups={'None' if groups is None else f'{len(np.unique(groups))} unique'}). "
+            "Random splits are forbidden — fix the loader to provide groups.")
 
-    y_train = labels_binary[train_idx]
-    y_test = labels_binary[test_idx]
-    print(f"  Split: {len(train_idx)} train / {len(test_idx)} test")
+    fold_records = []
+    for fold_id, (train_idx, test_idx) in enumerate(cv_split(
+            groups, N_FOLDS, np.zeros(n_samples), labels_binary)):
+        print(f"\n=== Fold {fold_id + 1}/{N_FOLDS}: "
+              f"{len(train_idx)} train / {len(test_idx)} test ===")
 
-    train_reps = {r: arr[train_idx] for r, arr in reps.items()}
-    test_reps = {r: arr[test_idx] for r, arr in reps.items()}
-    train_augs = ({k: v[train_idx] for k, v in augs.items()}
-                  if augs else None)
+        y_train = labels_binary[train_idx]
+        y_test = labels_binary[test_idx]
 
-    # CLUSTER TRAINING DATA ONLY — matching FLuID's pattern
-    t0 = time.time()
-    train_fluid_df = fluid_df_all.iloc[train_idx]
-    train_silo_indices, cluster_data, kmeans_model = cluster_training_only(
-        train_fluid_df, k=K, smooth_factor=0.05)
-    print(f"  Clustering (train only): K={K}, {time.time() - t0:.1f}s")
+        train_reps = {r: arr[train_idx] for r, arr in reps.items()}
+        test_reps = {r: arr[test_idx] for r, arr in reps.items()}
+        train_augs = ({k: v[train_idx] for k, v in augs.items()}
+                      if augs else None)
 
-    for s in range(1, K + 1):
-        idx = train_silo_indices[s]
-        n_act = int(y_train[idx].sum())
-        print(f"    Silo {s}: {len(idx)} samples "
-              f"({n_act} active, {len(idx) - n_act} inactive)")
+        # CLUSTER TRAINING DATA ONLY — matching FLuID's pattern
+        t0 = time.time()
+        train_fluid_df = fluid_df_all.iloc[train_idx]
+        train_silo_indices, cluster_data, kmeans_model = cluster_training_only(
+            train_fluid_df, k=K, smooth_factor=0.05)
+        print(f"  Clustering (train only): K={K}, {time.time() - t0:.1f}s")
 
-    # Assign test molecules to nearest training cluster centroid
-    # (test data never influenced clustering — just predict nearest centroid)
-    test_fps = np.asarray(list(fluid_df_all.iloc[test_idx].FP))
-    test_silo = kmeans_model.predict(test_fps) + 1  # 1-indexed to match silos
+        for s in range(1, K + 1):
+            idx = train_silo_indices[s]
+            n_act = int(y_train[idx].sum())
+            print(f"    Silo {s}: {len(idx)} samples "
+                  f"({n_act} active, {len(idx) - n_act} inactive)")
 
-    # ── Phase 2: Per-cluster importance ───────────────────────────────────
-    print("\n--- Phase 2: Per-cluster importance (smooth=0.05) ---")
+        # Assign test molecules to nearest training cluster centroid
+        test_fps = np.asarray(list(fluid_df_all.iloc[test_idx].FP))
+        test_silo = kmeans_model.predict(test_fps) + 1  # 1-indexed to match silos
 
-    profiles, feature_infos, cluster_stats = _compute_cluster_importance(
-        train_reps, y_train, train_silo_indices, K,
-        alloc=_alloc, imp=_imp, int_eval=_int_eval,
-        augs=train_augs, aug_cond=aug_cond)
+        # ── Phase 2: Per-cluster importance ──────────────────────────────
+        print("  --- Phase 2: Per-cluster importance (smooth=0.05) ---")
+        profiles, feature_infos, cluster_stats = _compute_cluster_importance(
+            train_reps, y_train, train_silo_indices, K,
+            alloc=_alloc, imp=_imp, int_eval=_int_eval,
+            augs=train_augs, aug_cond=aug_cond)
 
-    # Global baseline (full training set)
-    print("  Global (all clusters)...")
-    _, fi_global = create_hybrid(
-        train_reps, y_train,
-        allocation_method=_alloc,
-        importance_method=_imp,
-        budget=BUDGET,
-        internal_evaluator=_int_eval,
-        augmentations=train_augs,
-        augmentation_strategy=aug_cond)
-    global_profile = extract_importance_profile(fi_global)
-    global_top = max(global_profile, key=global_profile.get) if global_profile else 'none'
+        # Global baseline (full training set)
+        _, fi_global = create_hybrid(
+            train_reps, y_train,
+            allocation_method=_alloc,
+            importance_method=_imp,
+            budget=BUDGET,
+            internal_evaluator=_int_eval,
+            augmentations=train_augs,
+            augmentation_strategy=aug_cond)
+        global_profile = extract_importance_profile(fi_global)
+        global_top = max(global_profile, key=global_profile.get) if global_profile else 'none'
+        print(f"  Global top rep: {global_top}")
 
-    print(f"  Global top rep: {global_top}")
-    for s in range(1, K + 1):
-        stats = cluster_stats.get(s, {})
-        top = stats.get('top_rep', 'N/A')
-        n = stats.get('n_samples', 0)
-        differs = ' ***' if top != global_top and top != 'N/A' else ''
-        print(f"  Cluster {s}: {n} samples, top={top}{differs}")
+        # ── Phase 3: Compare importance profiles ─────────────────────────
+        mean_spearman, pairwise = compare_importance_profiles(profiles)
+        print(f"  Phase 3 mean pairwise Spearman: {mean_spearman:.3f}")
+        rep_rankings = {}
+        for s, profile in profiles.items():
+            ranked = sorted(profile.items(), key=lambda x: -x[1])
+            rep_rankings[s] = [r for r, _ in ranked]
 
-    # ── Phase 3: Compare importance profiles ──────────────────────────────
-    print("\n--- Phase 3: Profile comparison ---")
+        # ── Phase 4: Cluster-conditional hybrid ──────────────────────────
+        per_cluster_models = {}
+        per_cluster_fis = {}
+        for s in range(1, K + 1):
+            fi = feature_infos.get(s)
+            if fi is None:
+                continue
+            idx = train_silo_indices[s]
+            X_s = apply_feature_selection(train_reps, fi)
+            clf = RandomForestClassifier(
+                n_estimators=150, max_depth=15,
+                class_weight='balanced', random_state=42)
+            clf.fit(X_s[idx], y_train[idx])
+            per_cluster_models[s] = clf
+            per_cluster_fis[s] = fi
 
-    mean_spearman, pairwise = compare_importance_profiles(profiles)
-    print(f"  Mean pairwise Spearman: {mean_spearman:.3f}")
-    if mean_spearman < 0.7:
-        print("  --> Profiles DIVERGE across clusters (different reps matter)")
-    else:
-        print("  --> Profiles are STABLE across clusters (same reps dominate)")
+        # Predict: use ORIGINAL FLuID cluster assignments for test molecules
+        # (test_silo was computed earlier in this fold from the original
+        # clustering — do NOT re-fit KMeans, which would produce misaligned
+        # cluster IDs)
+        per_cluster_test_X = {}
+        for s, fi in per_cluster_fis.items():
+            per_cluster_test_X[s] = apply_feature_selection(test_reps, fi)
 
-    # Rank reps per cluster for detailed comparison
-    rep_rankings = {}
-    for s, profile in profiles.items():
-        ranked = sorted(profile.items(), key=lambda x: -x[1])
-        rep_rankings[s] = [r for r, _ in ranked]
-
-    # ── Phase 4: Cluster-conditional hybrid ───────────────────────────────
-    print("\n--- Phase 4: Cluster-conditional hybrid ---")
-
-    # Train per-cluster models
-    per_cluster_models = {}
-    per_cluster_fis = {}
-    for s in range(1, K + 1):
-        fi = feature_infos.get(s)
-        if fi is None:
-            continue
-        idx = train_silo_indices[s]
-        X_s = apply_feature_selection(train_reps, fi)
-        # X_s has all train samples but features selected by cluster s
-        # Train only on cluster s's samples
-        clf = RandomForestClassifier(
+        # Global hybrid baseline (compute first so fallback is available)
+        X_global_train = apply_feature_selection(train_reps, fi_global)
+        X_global_test = apply_feature_selection(test_reps, fi_global)
+        clf_global = RandomForestClassifier(
             n_estimators=150, max_depth=15,
-            class_weight='balanced', random_state=0)
-        clf.fit(X_s[idx], y_train[idx])
-        per_cluster_models[s] = clf
-        per_cluster_fis[s] = fi
+            class_weight='balanced', random_state=42)
+        clf_global.fit(X_global_train, y_train)
+        y_pred_global = clf_global.predict(X_global_test)
+        y_prob_global = clf_global.predict_proba(X_global_test)[:, 1]
 
-    # Predict: use ORIGINAL FLuID cluster assignments for test molecules
-    # (test_silo was computed at line 158 from the original clustering —
-    # do NOT re-fit KMeans, which would produce misaligned cluster IDs)
+        # Per-cluster prediction using original cluster assignments
+        y_pred_conditional = y_pred_global.copy()
+        y_prob_conditional = y_prob_global.copy()
+        fallback_mask = np.ones(len(test_idx), dtype=bool)
+        for i in range(len(test_idx)):
+            cluster = test_silo[i]
+            if cluster in per_cluster_models and cluster in per_cluster_test_X:
+                model = per_cluster_models[cluster]
+                X_i = per_cluster_test_X[cluster][[i]]
+                y_pred_conditional[i] = model.predict(X_i)[0]
+                proba = model.predict_proba(X_i)
+                y_prob_conditional[i] = proba[0, 1] if proba.shape[1] == 2 else 0.5
+                fallback_mask[i] = False
+        n_fallback = int(fallback_mask.sum())
+        if n_fallback > 0:
+            print(f"  {n_fallback} test samples used global fallback")
 
-    # Pre-compute per-cluster test features (efficient: K calls, not N_test)
-    per_cluster_test_X = {}
-    for s, fi in per_cluster_fis.items():
-        per_cluster_test_X[s] = apply_feature_selection(test_reps, fi)
+        conditional_metrics = compute_clf_metrics(
+            y_test, y_pred_conditional, y_prob_conditional)
+        global_metrics = compute_clf_metrics(
+            y_test, y_pred_global, y_prob_global)
+        print(f"  Cluster-conditional MCC={conditional_metrics['mcc']:.3f} | "
+              f"Global hybrid MCC={global_metrics['mcc']:.3f}")
 
-    # Global hybrid baseline (compute first so fallback is available)
-    X_global_train = apply_feature_selection(train_reps, fi_global)
-    X_global_test = apply_feature_selection(test_reps, fi_global)
-    clf_global = RandomForestClassifier(
-        n_estimators=150, max_depth=15,
-        class_weight='balanced', random_state=0)
-    clf_global.fit(X_global_train, y_train)
-    y_pred_global = clf_global.predict(X_global_test)
-    y_prob_global = clf_global.predict_proba(X_global_test)[:, 1]
+        # ── Phase 5: Smooth factor sweep ─────────────────────────────────
+        smooth_sweep = {}
+        for sf in SMOOTH_FACTORS:
+            try:
+                train_silo_idx_sf, _, _ = cluster_training_only(
+                    train_fluid_df, k=K, smooth_factor=sf)
+                # P1 fix: pass augs/aug_cond — Phase 2 does, so Phase 5 must too.
+                prof_sf, _, stats_sf = _compute_cluster_importance(
+                    train_reps, y_train, train_silo_idx_sf, K,
+                    alloc=_alloc, imp=_imp, int_eval=_int_eval,
+                    augs=train_augs, aug_cond=aug_cond)
+                mean_sp, pw = compare_importance_profiles(prof_sf)
+                smooth_sweep[str(sf)] = convert_numpy({
+                    'stability': mean_sp,
+                    'pairwise': pw,
+                    'cluster_stats': stats_sf,
+                    'profiles': prof_sf,
+                })
+            except Exception as e:
+                smooth_sweep[str(sf)] = {'error': str(e)}
 
-    # Per-cluster prediction using original cluster assignments
-    y_pred_conditional = y_pred_global.copy()  # start with global as fallback
-    y_prob_conditional = y_prob_global.copy()
-    fallback_mask = np.ones(len(test_idx), dtype=bool)
+        fold_records.append({
+            'fold': fold_id,
+            'n_train': len(train_idx),
+            'n_test': len(test_idx),
+            'global_importance': convert_numpy({
+                'profile': global_profile,
+                'top_rep': global_top,
+            }),
+            'per_cluster_importance': convert_numpy({
+                'profiles': profiles,
+                'cluster_stats': cluster_stats,
+                'rep_rankings': rep_rankings,
+            }),
+            'profile_stability': convert_numpy({
+                'mean_spearman': mean_spearman,
+                'pairwise': pairwise,
+            }),
+            'cluster_conditional_hybrid': convert_numpy(conditional_metrics),
+            'global_hybrid': convert_numpy(global_metrics),
+            'smooth_factor_sweep': smooth_sweep,
+            'n_fallback': n_fallback,
+        })
 
-    for i in range(len(test_idx)):
-        cluster = test_silo[i]
-        if cluster in per_cluster_models and cluster in per_cluster_test_X:
-            model = per_cluster_models[cluster]
-            X_i = per_cluster_test_X[cluster][[i]]
-            y_pred_conditional[i] = model.predict(X_i)[0]
-            proba = model.predict_proba(X_i)
-            y_prob_conditional[i] = proba[0, 1] if proba.shape[1] == 2 else 0.5
-            fallback_mask[i] = False
+    # ── Aggregate across folds ───────────────────────────────────────────
+    def _mean_metric(records, key, metric):
+        vals = [r[key].get(metric) for r in records
+                if isinstance(r[key].get(metric), (int, float))
+                and not np.isnan(r[key].get(metric))]
+        return float(np.mean(vals)) if vals else float('nan')
 
-    n_fallback = int(fallback_mask.sum())
-    if n_fallback > 0:
-        print(f"  {n_fallback} test samples used global fallback")
+    def _std_metric(records, key, metric):
+        vals = [r[key].get(metric) for r in records
+                if isinstance(r[key].get(metric), (int, float))
+                and not np.isnan(r[key].get(metric))]
+        return float(np.std(vals)) if vals else float('nan')
 
-    conditional_metrics = compute_clf_metrics(
-        y_test, y_pred_conditional, y_prob_conditional)
-    global_metrics = compute_clf_metrics(
-        y_test, y_pred_global, y_prob_global)
+    metric_keys = ['mcc', 'bac', 'f1', 'auroc']
+    cond_agg = {m: {'mean': _mean_metric(fold_records, 'cluster_conditional_hybrid', m),
+                    'std': _std_metric(fold_records, 'cluster_conditional_hybrid', m)}
+                for m in metric_keys}
+    glob_agg = {m: {'mean': _mean_metric(fold_records, 'global_hybrid', m),
+                    'std': _std_metric(fold_records, 'global_hybrid', m)}
+                for m in metric_keys}
 
-    print(f"  Cluster-conditional: MCC={conditional_metrics['mcc']:.3f}")
-    print(f"  Global hybrid:      MCC={global_metrics['mcc']:.3f}")
-    if conditional_metrics['mcc'] > global_metrics['mcc']:
-        print("  --> Cluster-conditional WINS (adaptation helps)")
-    else:
-        print("  --> Global hybrid wins (uniform allocation sufficient)")
-
-    # ── Phase 5: Smooth factor sweep ──────────────────────────────────────
-    print("\n--- Phase 5: Smooth factor sweep ---")
-    smooth_sweep = {}
-
-    for sf in SMOOTH_FACTORS:
-        print(f"  smooth_factor={sf}...", end=' ')
-        try:
-            # Re-cluster training data with different smooth factor
-            train_silo_idx_sf, _, _ = cluster_training_only(
-                train_fluid_df, k=K, smooth_factor=sf)
-
-            # Per-cluster importance
-            prof_sf, _, stats_sf = _compute_cluster_importance(
-                train_reps, y_train, train_silo_idx_sf, K,
-                alloc=_alloc, imp=_imp, int_eval=_int_eval)
-
-            # Profile stability
-            mean_sp, pw = compare_importance_profiles(prof_sf)
-
-            smooth_sweep[str(sf)] = convert_numpy({
-                'stability': mean_sp,
-                'pairwise': pw,
-                'cluster_stats': stats_sf,
-                'profiles': prof_sf,
-            })
-            print(f"stability={mean_sp:.3f}")
-
-        except Exception as e:
-            smooth_sweep[str(sf)] = {'error': str(e)}
-            print(f"FAILED: {e}")
+    stability_vals = [r['profile_stability'].get('mean_spearman') for r in fold_records]
+    stability_vals = [v for v in stability_vals
+                      if isinstance(v, (int, float)) and not np.isnan(v)]
+    mean_stability = float(np.mean(stability_vals)) if stability_vals else float('nan')
 
     # ── Phase 6: Results ──────────────────────────────────────────────────
     results = {
@@ -356,37 +388,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'budget': BUDGET,
             'smooth_factors': SMOOTH_FACTORS,
             'n_samples': n_samples,
-            'n_train': len(train_idx),
-            'n_test': len(test_idx),
+            'n_folds': N_FOLDS,
         },
-        'global_importance': convert_numpy({
-            'profile': global_profile,
-            'top_rep': global_top,
-        }),
-        'per_cluster_importance': convert_numpy({
-            'profiles': profiles,
-            'cluster_stats': cluster_stats,
-            'rep_rankings': rep_rankings,
-        }),
-        'profile_stability': convert_numpy({
-            'mean_spearman': mean_spearman,
-            'pairwise': pairwise,
-        }),
-        'cluster_conditional_hybrid': convert_numpy(conditional_metrics),
-        'global_hybrid': convert_numpy(global_metrics),
-        'smooth_factor_sweep': smooth_sweep,
+        'folds': fold_records,
+        'aggregate': {
+            'cluster_conditional_hybrid': cond_agg,
+            'global_hybrid': glob_agg,
+            'mean_profile_stability': mean_stability,
+        },
     }
 
     # Summary
     print(f"\n{'─' * 70}")
-    print(f"  Global top rep: {global_top}")
-    print(f"  Profile stability: {mean_spearman:.3f}")
-    print(f"  Conditional MCC: {conditional_metrics['mcc']:.3f}")
-    print(f"  Global MCC:      {global_metrics['mcc']:.3f}")
-    print(f"  Smooth factor sweep:")
-    for sf_str, sf_res in smooth_sweep.items():
-        stab = sf_res.get('stability', 'N/A')
-        print(f"    sf={sf_str}: stability={stab}")
+    print(f"  Aggregated over {N_FOLDS} folds:")
+    print(f"  Profile stability (mean): {mean_stability:.3f}")
+    print(f"  Conditional MCC: {cond_agg['mcc']['mean']:.3f} ± {cond_agg['mcc']['std']:.3f}")
+    print(f"  Global MCC:      {glob_agg['mcc']['mean']:.3f} ± {glob_agg['mcc']['std']:.3f}")
+    print(f"  Per-fold smooth factor sweep recorded under folds[].smooth_factor_sweep")
 
     return results
 

@@ -295,7 +295,8 @@ def get_feature_importance(X, y) -> np.ndarray:
 # QUICK COMBINATION + BUDGET TEST
 # ============================================================================
 
-def find_best_hybrid(
+# Renamed from `find_best_hybrid` to avoid shadowing the library function in kirby.find_best_hybrid.
+def _noise_paper_hybrid_search(
     filtered_reps_train: Dict[str, np.ndarray],
     unfiltered_reps_train: Dict[str, np.ndarray],
     train_labels: np.ndarray,
@@ -739,7 +740,7 @@ def test_dataset(
         print(f"  Hybrid dims: {hybrid_train.shape[1]}")
     else:
         (best_combo, best_budget, best_allocation, best_filtered,
-         base_train, base_test, hybrid_train, hybrid_test, hybrid_info) = find_best_hybrid(
+         base_train, base_test, hybrid_train, hybrid_test, hybrid_info) = _noise_paper_hybrid_search(
             filtered_reps_train=filtered_train,
             unfiltered_reps_train=unfiltered_train,
             train_labels=train_labels,

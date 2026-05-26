@@ -27,11 +27,11 @@ Motivation:
   complementary chemical information — improve OOS generalization compared
   to individual reps on each component split axis.
 
-Split conditions (all GroupKFold):
-  - additive:    leave-one-additive-out (current default, 23 groups)
-  - aryl_halide: leave-one-aryl-halide-out (15 groups for original BH)
-  - ligand:      leave-one-ligand-out (4 groups — hardest, fewest groups)
-  - base:        leave-one-base-out (3 groups — very few, extreme OOS)
+Split conditions (true leave-one-group-out GroupKFold; n_folds == n_groups):
+  - additive:    leave-one-additive-out (23 groups → 23 folds)
+  - aryl_halide: leave-one-aryl-halide-out (15 groups → 15 folds)
+  - ligand:      leave-one-ligand-out (4 groups → 4 folds — hardest)
+  - base:        leave-one-base-out (3 groups → 3 folds — very few, extreme OOS)
 
 Datasets:
   - buchwald_hartwig (Ahneman/Dreher/Doyle, Science 2018, ~3955 reactions)
@@ -44,9 +44,9 @@ Paper baselines:
   - Saebi et al. 2024: showed leave-one-component-out drops vs random
 
 Usage:
-    # Smoke test (~5 min, 1 dataset, 2 splits)
+    # Smoke test (1 dataset, 2 splits; n_folds == n_groups always)
     python tests/experiments/opig_kingsmith_component_splits.py \\
-        --datasets buchwald_hartwig --splits additive,aryl_halide --n-folds 2
+        --datasets buchwald_hartwig --splits additive,aryl_halide
 
     # Full evaluation
     python tests/experiments/opig_kingsmith_component_splits.py
@@ -279,107 +279,253 @@ def evaluate_rep(X, labels, groups, model, n_folds):
 
         ss_res = np.sum((y_val - preds) ** 2)
         ss_tot = np.sum((y_val - y_val.mean()) ** 2)
-        r2_scores.append(1 - ss_res / ss_tot if ss_tot > 0 else 0.0)
+        # LOO folds frequently have ss_tot ≈ 0 (single-group held out): treat
+        # as undefined R2 (np.nan) and aggregate with nanmean below. The old
+        # 0.0 fallback silently dragged the mean toward zero.
+        r2_scores.append(1 - ss_res / ss_tot if ss_tot > 0 else np.nan)
         rmse_scores.append(np.sqrt(np.mean((y_val - preds) ** 2)))
 
         if len(y_val) > 2:
             rho, _ = spearmanr(y_val, preds)
-            spearman_scores.append(rho if not np.isnan(rho) else 0.0)
+            spearman_scores.append(rho if not np.isnan(rho) else np.nan)
 
     if not r2_scores:
         return None
 
+    return _summarize_scores(r2_scores, rmse_scores, spearman_scores)
+
+
+def _summarize_scores(r2_scores, rmse_scores, spearman_scores):
+    """Aggregate per-fold metrics, ignoring NaNs (LOO ss_tot=0 folds)."""
+    r2_arr = np.asarray(r2_scores, dtype=np.float64)
+    rmse_arr = np.asarray(rmse_scores, dtype=np.float64)
+    sp_arr = np.asarray(spearman_scores, dtype=np.float64) if spearman_scores else None
     return {
-        'r2': {'mean': float(np.mean(r2_scores)), 'std': float(np.std(r2_scores))},
-        'rmse': {'mean': float(np.mean(rmse_scores)), 'std': float(np.std(rmse_scores))},
-        'spearman': {
-            'mean': float(np.mean(spearman_scores)) if spearman_scores else 0.0,
-            'std': float(np.std(spearman_scores)) if spearman_scores else 0.0,
+        'r2': {
+            'mean': float(np.nanmean(r2_arr)) if np.any(~np.isnan(r2_arr)) else float('nan'),
+            'std': float(np.nanstd(r2_arr)) if np.any(~np.isnan(r2_arr)) else float('nan'),
         },
-        'n_folds_completed': len(r2_scores),
+        'rmse': {
+            'mean': float(np.nanmean(rmse_arr)) if np.any(~np.isnan(rmse_arr)) else float('nan'),
+            'std': float(np.nanstd(rmse_arr)) if np.any(~np.isnan(rmse_arr)) else float('nan'),
+        },
+        'spearman': {
+            'mean': (float(np.nanmean(sp_arr))
+                     if sp_arr is not None and np.any(~np.isnan(sp_arr)) else float('nan')),
+            'std': (float(np.nanstd(sp_arr))
+                    if sp_arr is not None and np.any(~np.isnan(sp_arr)) else float('nan')),
+        },
+        'n_folds_completed': int(np.sum(~np.isnan(rmse_arr))),
     }
+
+
+def _evaluate_hybrid_per_fold(
+    dataset_name, split_key, base_reps, aug_dict, labels, groups,
+    fold_splits, models, pruning_mode='default_pruning',
+):
+    """Build the KIRBy hybrid PER FOLD and evaluate downstream models.
+
+    Each fold:
+      1. Runs find_best_hybrid on train indices only (no peeking at val).
+      2. Pulls FittedResult (selected_indices + augmentation_info) for 'rf'.
+      3. Applies apply_feature_selection on train_reps -> train_hybrid.
+         Applies it on val_reps -> val_hybrid.
+      4. If augmentation_info present, applies apply_augmentation_selection on
+         train/val augs and hstack-s to the hybrid blocks.
+      5. Trains each downstream model on (scaled) train_hybrid, predicts on
+         val_hybrid, accumulates R2/RMSE/Spearman.
+
+    Returns:
+        (rep_results_dict_for_kirby_hybrid_per_model, dim_estimate, top3_first_fold)
+        or (None, 0, None) if every fold failed.
+    """
+    from kirby.find_best_hybrid import find_best_hybrid
+    from kirby.hybrid import apply_feature_selection, apply_augmentation_selection
+    from experiments._shared import resolve_pruning_kwargs
+
+    per_model_scores = {m: {'r2': [], 'rmse': [], 'spearman': []}
+                        for m in models}
+    dims = []
+    top3_first_fold = None
+
+    src_reps = base_reps if base_reps else {}
+    has_aug = bool(aug_dict)
+
+    for fold_idx, (train_idx, val_idx) in enumerate(fold_splits):
+        # ----- slice everything to train indices -----
+        train_reps = {r: arr[train_idx] for r, arr in src_reps.items()}
+        train_aug = ({r: arr[train_idx] for r, arr in aug_dict.items()}
+                     if has_aug else None)
+        train_groups = groups[train_idx]
+        train_labels = labels[train_idx]
+
+        # ----- build hybrid on train only -----
+        try:
+            _pkw = resolve_pruning_kwargs(
+                pruning_mode, len(train_labels),
+                dataset_label=f'{dataset_name}/loo_{split_key}/fold{fold_idx}',
+            )
+            fold_search = find_best_hybrid(
+                train_reps, train_labels,
+                groups=train_groups,
+                augmentations=train_aug,
+                augmentation_strategy=('uncapped' if has_aug else 'none'),
+                speed='full', metric='rmse',
+                task_type='regression',
+                internal_evaluators=INTERNAL_EVALUATORS,
+                return_fitted=True,
+                cache=True,
+                dataset_name=dataset_name,
+                condition_suffix=f'loo_{split_key}_fold{fold_idx}',
+                adaptive_pruning=0.25,
+                **_pkw,
+            )
+        except Exception as e:
+            print(f"    fold {fold_idx}: find_best_hybrid failed: {e}")
+            continue
+
+        if fold_idx == 0 and fold_search is not None:
+            top3_first_fold = extract_top3_base_reps(fold_search)
+
+        fitted = (fold_search.fitted_results.get('rf')
+                  if fold_search is not None else None)
+        if fitted is None:
+            print(f"    fold {fold_idx}: no fitted 'rf' result; skipping")
+            continue
+
+        # ----- assemble train/val hybrid using the fold's selection -----
+        try:
+            fi = {r: {'selected_indices': idx}
+                  for r, idx in fitted.selected_indices.items()}
+            train_hybrid = apply_feature_selection(train_reps, fi)
+            val_reps = {r: arr[val_idx] for r, arr in src_reps.items()}
+            val_hybrid = apply_feature_selection(val_reps, fi)
+
+            if fitted.augmentation_info and has_aug:
+                val_aug = {r: arr[val_idx] for r, arr in aug_dict.items()}
+                train_aug_block = apply_augmentation_selection(
+                    train_aug, fitted.augmentation_info)
+                val_aug_block = apply_augmentation_selection(
+                    val_aug, fitted.augmentation_info)
+                if train_aug_block is not None and val_aug_block is not None:
+                    train_hybrid = np.hstack([train_hybrid, train_aug_block])
+                    val_hybrid = np.hstack([val_hybrid, val_aug_block])
+        except Exception as e:
+            print(f"    fold {fold_idx}: hybrid assembly failed: {e}")
+            continue
+
+        dims.append(train_hybrid.shape[1])
+
+        train_hybrid = np.asarray(train_hybrid, dtype=np.float64)
+        val_hybrid = np.asarray(val_hybrid, dtype=np.float64)
+        y_train = labels[train_idx]
+        y_val = labels[val_idx]
+
+        # Scale unless binary
+        if not _is_binary_rep(train_hybrid):
+            scaler = StandardScaler()
+            train_hybrid_s = scaler.fit_transform(train_hybrid)
+            val_hybrid_s = scaler.transform(val_hybrid)
+        else:
+            train_hybrid_s, val_hybrid_s = train_hybrid, val_hybrid
+
+        # ----- train each downstream model -----
+        for model_name, factory in models.items():
+            try:
+                m = clone(factory())
+                m.fit(train_hybrid_s, y_train)
+                preds = m.predict(val_hybrid_s)
+            except Exception:
+                continue
+
+            ss_res = np.sum((y_val - preds) ** 2)
+            ss_tot = np.sum((y_val - y_val.mean()) ** 2)
+            per_model_scores[model_name]['r2'].append(
+                1 - ss_res / ss_tot if ss_tot > 0 else np.nan)
+            per_model_scores[model_name]['rmse'].append(
+                np.sqrt(np.mean((y_val - preds) ** 2)))
+            if len(y_val) > 2:
+                rho, _ = spearmanr(y_val, preds)
+                per_model_scores[model_name]['spearman'].append(
+                    rho if not np.isnan(rho) else np.nan)
+
+    if not dims:
+        return None, 0, top3_first_fold
+
+    # Aggregate per model
+    rep_results = {}
+    for model_name, scores in per_model_scores.items():
+        if not scores['rmse']:
+            continue
+        rep_results[model_name] = _summarize_scores(
+            scores['r2'], scores['rmse'], scores['spearman'])
+
+    return rep_results, int(np.mean(dims)), top3_first_fold
 
 
 def evaluate_split(dataset_name, data, split_key, n_folds, pruning_mode='default_pruning'):
     """Evaluate all reps + hybrid under one component split.
 
+    Note: ``n_folds`` is IGNORED — this experiment runs TRUE leave-one-group-out
+    (n_folds == n_groups) so the docstring/cache_suffix and the CV setup agree.
+    The parameter is kept for backward-compatible CLI but unused.
+
     Returns dict with per-rep per-model metrics and hybrid comparison.
     """
+    del n_folds  # unused; we always run true LOO
     reps = data['reps']
     labels = data['labels']
     components = data['components']
 
     groups, n_groups, group_names = assign_component_groups(components, split_key)
-    actual_folds = min(n_folds, n_groups)
+    actual_folds = n_groups  # TRUE leave-one-group-out
 
     print(f"\n  --- Split: leave-one-{split_key}-out "
-          f"({n_groups} groups, {actual_folds}-fold) ---")
+          f"({n_groups} groups, {actual_folds}-fold TRUE LOO) ---")
 
     if actual_folds < 2:
         print(f"  SKIPPED: only {n_groups} groups, need >= 2 for CV")
         return {'skipped': True, 'reason': f'only {n_groups} groups',
                 'n_groups': n_groups, 'group_names': group_names}
 
-    # Build hybrid under this split's groups
+    # Partition reps into base + augmentation according to DATASET_REPS
     aug_reps = set(DATASET_REPS.get(dataset_name, {}).get('augmentation', []))
     base_reps = {k: v for k, v in reps.items() if k not in aug_reps}
     aug_dict = {k: v for k, v in reps.items() if k in aug_reps}
 
-    try:
-        from kirby.hybrid import apply_feature_selection
-        from experiments._shared import (
-            resolve_pruning_kwargs, get_best_search_for_downstream)
+    # Build fold splits ONCE so the hybrid is built and evaluated on identical
+    # train/val partitions (avoids any drift between baseline eval and hybrid).
+    sample_X = next(iter(reps.values()))
+    cv = GroupKFold(n_splits=actual_folds)
+    fold_splits = list(cv.split(sample_X, labels, groups=groups))
 
-        # Pool helper iterates (tier, aug_condition) cache files for the
-        # given condition_suffix — picks whichever scores best for 'rf'.
-        # Falls through to find_best_hybrid + cache when no precompute hit.
-        _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
-                                       dataset_label=f'{dataset_name}/loo_{split_key}')
-        aug_cond = 'uncapped' if aug_dict else 'none'
-        search, _meta = get_best_search_for_downstream(
-            base_reps if base_reps else reps, labels, groups,
-            downstream_model='rf', budget=None,
-            augmentations=aug_dict if aug_dict else None,
-            augmentation_strategy=aug_cond,
-            speed='full', metric='rmse',
-            task_type='regression',
-            dataset_name=dataset_name,
-            return_fitted=True,
-            internal_evaluators=INTERNAL_EVALUATORS,
-            condition_suffix=f'loo_{split_key}',
-            adaptive_pruning=0.25,
-            **_pkw,
-        )
-
-        top3 = extract_top3_base_reps(search) if search is not None else None
-        if top3:
-            print(f"  Top-3 base reps: {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-
-        fitted = (search.fitted_results.get('rf')
-                  if search is not None else None)
-        if fitted is not None:
-            all_reps = {**reps}
-            fi = {r: {'selected_indices': idx}
-                  for r, idx in fitted.selected_indices.items()}
-            reps_eval = dict(reps)
-            reps_eval['kirby_hybrid'] = apply_feature_selection(all_reps, fi)
-            print(f"  kirby_hybrid: {reps_eval['kirby_hybrid'].shape[1]}D")
-        else:
-            reps_eval = dict(reps)
-    except Exception as e:
-        print(f"  Hybrid build failed: {e}")
-        reps_eval = dict(reps)
-
-    # Evaluate all reps x models
-    models = get_model_factories(MODELS_LIST, 'regression', n_samples=len(labels))
+    # ===== Per-fold hybrid build + evaluate =====
     n = len(labels)
+    models = get_model_factories(MODELS_LIST, 'regression', n_samples=n)
 
-    print(f"  Evaluating {len(reps_eval)} reps x {len(models)} models "
-          f"x {actual_folds}-fold CV...")
+    print(f"  Building KIRBy hybrid per fold ({actual_folds} folds, train-only) ...")
+    hybrid_results, hybrid_dim, top3 = _evaluate_hybrid_per_fold(
+        dataset_name=dataset_name,
+        split_key=split_key,
+        base_reps=base_reps if base_reps else reps,
+        aug_dict=aug_dict,
+        labels=labels, groups=groups,
+        fold_splits=fold_splits,
+        models=models,
+        pruning_mode=pruning_mode,
+    )
+
+    if top3:
+        print(f"  Top-3 base reps (fold 0): "
+              f"{', '.join(f'{nm}={sc:.4f}' for nm, sc in top3)}")
+
+    # ===== Evaluate base reps (same fold_splits, no leakage) =====
+    print(f"  Evaluating {len(reps)} base reps x {len(models)} models "
+          f"x {actual_folds}-fold LOO...")
 
     results = {}
-    for rep_name in sorted(reps_eval.keys()):
-        X = reps_eval[rep_name]
+    for rep_name in sorted(reps.keys()):
+        X = reps[rep_name]
         try:
             X = np.asarray(X, dtype=np.float64)
         except Exception:
@@ -392,18 +538,22 @@ def evaluate_split(dataset_name, data, split_key, n_folds, pruning_mode='default
             t0 = time.time()
             res = evaluate_rep(X, labels, groups, factory(), actual_folds)
             elapsed = time.time() - t0
-
             if res is None:
                 continue
-
             rep_results[model_name] = res
             r2 = res['r2']['mean']
-            tag = ' ***' if rep_name == 'kirby_hybrid' else ''
             print(f"    {rep_name:25s} {model_name:8s}  "
-                  f"R2={r2:.4f}  RMSE={res['rmse']['mean']:.2f}  ({elapsed:.1f}s){tag}")
+                  f"R2={r2:.4f}  RMSE={res['rmse']['mean']:.2f}  ({elapsed:.1f}s)")
 
         if rep_results:
             results[rep_name] = {'dim': X.shape[1], 'models': rep_results}
+
+    # Insert hybrid results
+    if hybrid_results:
+        results['kirby_hybrid'] = {'dim': hybrid_dim, 'models': hybrid_results}
+        for model_name, res in hybrid_results.items():
+            print(f"    {'kirby_hybrid':25s} {model_name:8s}  "
+                  f"R2={res['r2']['mean']:.4f}  RMSE={res['rmse']['mean']:.2f}  ***")
 
     return {
         'split_key': split_key,
@@ -451,6 +601,8 @@ def print_analysis(all_results):
             for rep_name, rep_data in results.items():
                 for model_name, model_res in rep_data['models'].items():
                     r2 = model_res['r2']['mean']
+                    if np.isnan(r2):
+                        continue
                     if rep_name == 'kirby_hybrid':
                         if np.isnan(hybrid_r2) or r2 > hybrid_r2:
                             hybrid_r2 = r2
@@ -490,8 +642,9 @@ def main():
         help='Comma-separated component keys to split by '
              '(default: additive,aryl_halide,ligand,base)')
     parser.add_argument(
-        '--n-folds', type=int, default=5,
-        help='Max folds for GroupKFold (capped by #groups, default: 5)')
+        '--n-folds', type=int, default=0,
+        help='IGNORED. True leave-one-group-out is always used '
+             '(n_folds == n_groups per split).')
     parser.add_argument(
         '--output', type=str, default=None,
         help='Output JSON path (default: tests/results/comparisons/'
@@ -513,7 +666,7 @@ def main():
     print(f"  Datasets: {datasets}")
     print(f"  Split axes: {split_keys}")
     print(f"  Models: {MODELS_LIST}")
-    print(f"  Max folds: {args.n_folds}")
+    print(f"  Folds: TRUE LOO (n_folds == n_groups per split)")
     print("=" * 70)
 
     all_results = {}
