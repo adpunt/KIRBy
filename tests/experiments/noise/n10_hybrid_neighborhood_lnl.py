@@ -19,9 +19,9 @@ Neighbor spaces (the 6 documented conditions, plus one space per base rep):
 
 Estimators (3): neighbor_residual, local_variance_ratio, activity_cliff_aware.
 Their metric and k default to euclidean / 10 — the same setting used in the
-confirmation report. These can be overridden by passing `--metric` or
-`--neighbor-k` on the CLI; the audit flagged the hardcoded default as a
-sensitivity concern, but the default reproduces the report.
+confirmation report. To override, edit `DEFAULT_NEIGHBOR_K` /
+`DEFAULT_NEIGHBOR_METRIC` at module top or call `_make_estimator_configs(k,
+metric)` directly. The defaults reproduce the report.
 
 3 estimators × 4 remediations × 2 sigmas × (6 + n_reps) spaces
 + 9 binary detectors × (6 + n_reps) spaces × 2 sigmas
@@ -400,7 +400,13 @@ def _compute_summary(results):
                        if 'hybrid' in k}
         best_hybrid_avg = (max(hybrid_avgs.values())
                            if hybrid_avgs else float('-inf'))
-        s['hybrid_rescues'] = best_hybrid_avg > base_avg
+        # If the base raw recovery is missing (-inf), the "hybrid rescues"
+        # comparison is vacuous — flag it as None rather than claiming a
+        # rescue based on a missing baseline.
+        if base_raw_key is None or np.isinf(base_avg):
+            s['hybrid_rescues'] = None
+        else:
+            s['hybrid_rescues'] = best_hybrid_avg > base_avg
         s['base_raw_avg_recovery'] = (float(base_avg)
                                       if not np.isinf(base_avg) else None)
         s['best_hybrid_avg_recovery'] = (float(best_hybrid_avg)
@@ -517,22 +523,55 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'per_sigma': {},
     }
 
-    # Pre-compute MAD per fold once: it only depends on the (clean) y_train,
-    # which is identical across sigmas — recomputing it on every (sigma, fold)
-    # iteration is wasted work.
-    mad_by_fold = {}
+    # Per-fold cache: everything that depends only on the data split (not on
+    # the noise level). Computed once before the sigma loop and reused
+    # across all sigma iterations. Includes:
+    #   - train_reps_fold and train_augs (feature slicing)
+    #   - X_eval_train_s, X_eval_val_s (StandardScaler-fit base features)
+    #   - rf_clean and its clean-baseline score (noise-independent)
+    #   - MAD of clean train labels (used as a noise-mask threshold below)
+    fold_cache = {}
     _fi = 0
+    # Need base_rep_name to slice X_eval; figure it out by building one
+    # set of neighbor spaces on y_train_clean (uses one fold's data, but
+    # base_rep_name is dataset-level not fold-level).
+    _probe_base_rep_name = None
     for _train_idx, _val_idx in cv_split(groups, n_folds, sample_X,
                                           labels, mode=mode):
         _fi += 1
         _yc = labels[_train_idx]
-        mad_by_fold[_fi] = float(np.median(np.abs(_yc - np.median(_yc))))
+        _train_reps_fold = {k: v[_train_idx] for k, v in reps.items()}
+        _train_augs = ({k: v[_train_idx] for k, v in augmentations.items()}
+                       if augmentations else None)
+        if _probe_base_rep_name is None:
+            _, _probe_base_rep_name = _build_neighbor_spaces(
+                _train_reps_fold, _yc, blueprints, _train_augs)
+        _X_eval_train = reps[_probe_base_rep_name][_train_idx]
+        _X_eval_val = reps[_probe_base_rep_name][_val_idx]
+        _scaler_eval = StandardScaler()
+        _X_eval_train_s = _scaler_eval.fit_transform(_X_eval_train)
+        _X_eval_val_s = _scaler_eval.transform(_X_eval_val)
+        _rf_clean = model_factory()
+        _rf_clean.fit(_X_eval_train_s, _yc)
+        _clean_score = float(metric_fn(labels[_val_idx],
+                                       _rf_clean.predict(_X_eval_val_s)))
+        fold_cache[_fi] = {
+            'train_idx': _train_idx,
+            'val_idx': _val_idx,
+            'y_train_clean': _yc,
+            'y_val': labels[_val_idx],
+            'train_reps_fold': _train_reps_fold,
+            'train_augs': _train_augs,
+            'X_eval_train_s': _X_eval_train_s,
+            'X_eval_val_s': _X_eval_val_s,
+            'clean_score': _clean_score,
+            'mad': float(np.median(np.abs(_yc - np.median(_yc)))),
+        }
 
     # NOTE: sigma is the OUTER loop and fold is the INNER loop. Each (sigma,
-    # fold) iteration rebuilds the per-fold rep slices because y_noisy
-    # depends on sigma — so we can't trivially hoist the fold loop outside.
-    # The mad_by_fold cache above is the cheapest hoist available without a
-    # restructuring of the accumulators.
+    # fold) iteration still re-injects noise + rebuilds neighbor spaces
+    # (because y_noisy depends on sigma) but pulls the fold-only work from
+    # `fold_cache` instead of recomputing it.
     for sigma in sigmas:
         print(f"\n  === Sigma={sigma} ===")
         t_sigma = time.time()
@@ -550,19 +589,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # {space: {est: {remed: [scores]}}} — same neighbor spaces, weighted hybrid eval
         whybrid_est_acc = {}
 
-        fold_idx = 0
-        for train_idx, val_idx in cv_split(groups, n_folds, sample_X,
-                                            labels, mode=mode):
-            fold_idx += 1
-            y_train_clean = labels[train_idx]
-            y_val = labels[val_idx]
+        for fold_idx in sorted(fold_cache.keys()):
+            fold = fold_cache[fold_idx]
+            train_idx = fold['train_idx']
+            val_idx = fold['val_idx']
+            y_train_clean = fold['y_train_clean']
+            y_val = fold['y_val']
+            train_reps_fold = fold['train_reps_fold']
+            train_augs = fold['train_augs']
+            X_eval_train_s = fold['X_eval_train_s']
+            X_eval_val_s = fold['X_eval_val_s']
 
-            # Build neighbor spaces
-            train_reps_fold = {k: v[train_idx] for k, v in reps.items()}
-            train_augs = ({k: v[train_idx] for k, v in augmentations.items()}
-                          if augmentations else None)
-
-            # Inject noise
+            # Inject noise (sigma-dependent — can't be cached)
             y_noisy, noise_vec = _inject_noise(y_train_clean, sigma,
                                                 seed=42 + fold_idx,
                                                 is_clf=is_clf)
@@ -575,19 +613,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             if not results['neighbor_spaces']:
                 results['neighbor_spaces'] = sorted(spaces.keys())
 
-            # Fixed evaluation features (base rep, e.g. ECFP4)
-            X_eval_train = reps[base_rep_name][train_idx]
-            X_eval_val = reps[base_rep_name][val_idx]
-            scaler_eval = StandardScaler()
-            X_eval_train_s = scaler_eval.fit_transform(X_eval_train)
-            X_eval_val_s = scaler_eval.transform(X_eval_val)
+            # Clean baseline: pulled from per-fold cache (sigma-independent)
+            clean_scores.append(fold['clean_score'])
 
-            # Clean baseline
-            rf_clean = model_factory()
-            rf_clean.fit(X_eval_train_s, y_train_clean)
-            clean_scores.append(float(metric_fn(y_val, rf_clean.predict(X_eval_val_s))))
-
-            # Noisy baseline
+            # Noisy baseline (sigma-dependent: y_noisy changes)
             rf_noisy = model_factory()
             rf_noisy.fit(X_eval_train_s, y_noisy)
             noisy_scores.append(float(metric_fn(y_val, rf_noisy.predict(X_eval_val_s))))
@@ -596,7 +625,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             if is_clf:
                 noise_mask = (y_noisy != y_train_clean)
             else:
-                mad = mad_by_fold.get(fold_idx, 0.0)
+                mad = fold['mad']
                 noise_mask = np.abs(noise_vec) > max(mad, 1e-10)
 
             # Per-space evaluation

@@ -202,7 +202,10 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
             m.fit(X_tr_s, y_corrected)
             return metric_fn(y_val, _predict_for_metric(m, X_va_s, metric_name))
 
-    except Exception:
+    except Exception as exc:
+        # Surface the failure rather than silently dropping it. Helps
+        # distinguish real bugs from "strategy not applicable here" cases.
+        print(f"      {strategy} fold failed: {type(exc).__name__}: {exc}")
         return None
 
     return None
@@ -427,34 +430,59 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'rf', next(iter(model_factories.values())))
     results['per_rep_model'] = 'rf' if 'rf' in model_factories else \
         next(iter(model_factories))
+    # Restructured to (rep × fold × seed × strategy) so noise_scores and y_tr
+    # are computed ONCE per (rep, fold, seed) and reused across all 6 noise-
+    # dependent strategies. The previous (rep × strategy × fold × seed) order
+    # recomputed them 4× per (fold, seed) — the same waste the hybrid block
+    # avoids via `_compute_noise_scores` hoisting.
     for rep_name, X_rep in reps.items():
-        for strategy in strategies:
-            key = f"{rep_name}/{strategy}"
-            print(f"\n  {key}...", end='', flush=True)
-            fold_scores = []
+        per_strategy_scores_rep = {s: [] for s in strategies}
 
-            for fold_i, (train_idx, val_idx) in enumerate(
-                    cv_split(groups, n_folds, sample_X, labels, mode=mode)):
-                y_train_clean = labels[train_idx]
-                y_val = labels[val_idx]
+        for fold_i, (train_idx, val_idx) in enumerate(
+                cv_split(groups, n_folds, sample_X, labels, mode=mode)):
+            y_train_clean = labels[train_idx]
+            y_val = labels[val_idx]
 
-                scaler = StandardScaler()
-                X_tr_s = scaler.fit_transform(X_rep[train_idx])
-                X_va_s = scaler.transform(X_rep[val_idx])
+            scaler = StandardScaler()
+            X_tr_s = scaler.fit_transform(X_rep[train_idx])
+            X_va_s = scaler.transform(X_rep[val_idx])
 
-                seeds_to_run = (NOISE_SEEDS if strategy != 'no_noise' else [0])
-                for noise_seed in seeds_to_run:
+            # no_noise: noise-independent, run once per fold
+            no_noise_score = _evaluate_fold(
+                X_tr_s, X_va_s, y_train_clean, y_val, 'no_noise',
+                noise_fraction, rep_model_factory, metric_fn,
+                is_clf=is_clf, metric_name=metric_name)
+            if no_noise_score is not None:
+                per_strategy_scores_rep['no_noise'].append(no_noise_score)
+
+            for noise_seed in NOISE_SEEDS:
+                actual_seed = 42 + fold_i * 1000 + noise_seed
+                y_tr_noisy, _ = _inject_noise(
+                    y_train_clean, noise_fraction,
+                    seed=actual_seed, is_clf=is_clf)
+                noise_scores_cache = _compute_noise_scores(X_tr_s, y_tr_noisy)
+
+                for strategy in strategies:
+                    if strategy == 'no_noise':
+                        continue
+                    needs_scores = strategy in (
+                        'remove', 'downweight', 'label_smooth', 'knn_smooth')
                     fold_score = _evaluate_fold(
                         X_tr_s, X_va_s, y_train_clean, y_val, strategy,
                         noise_fraction, rep_model_factory, metric_fn,
                         is_clf=is_clf, metric_name=metric_name,
-                        noise_seed=42 + fold_i * 1000 + noise_seed)
+                        noise_seed=actual_seed,
+                        precomputed_y_tr=y_tr_noisy,
+                        noise_scores=(noise_scores_cache if needs_scores else None))
                     if fold_score is not None:
-                        fold_scores.append(fold_score)
+                        per_strategy_scores_rep[strategy].append(fold_score)
 
+        for strategy in strategies:
+            key = f"{rep_name}/{strategy}"
+            fold_scores = per_strategy_scores_rep[strategy]
             score = float(np.mean(fold_scores)) if fold_scores else float('nan')
             results['per_strategy'][key] = {'score': score, 'n_folds': len(fold_scores)}
-            print(f" {metric_name}={score:.4f}")
+            print(f"  {key}... {metric_name}={score:.4f}")
 
     # Summary: recovery = (strategy - noisy_baseline) / (no_noise - noisy_baseline)
     clean = results['per_strategy'].get('no_noise', {}).get('score', float('nan'))
@@ -470,15 +498,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                           and k not in ('no_noise', 'noisy_baseline')]
     for key in all_condition_keys:
         s = results['per_strategy'].get(key, {}).get('score', float('nan'))
-        # For per-rep conditions, use their own baselines if available
+        # For per-rep conditions use the per-rep baselines. If a per-rep
+        # baseline is missing (NaN), do NOT silently fall through to the
+        # hybrid baselines — that would mix denominators and reintroduce
+        # exactly the cross-denominator pollution that best_strategy_per_rep
+        # was supposed to avoid. Mark recovery NaN instead so the reader
+        # knows the per-rep number isn't trustworthy.
         if '/' in key:
             prefix = key.rsplit('/', 1)[0]
-            ref_clean = results['per_strategy'].get(f'{prefix}/no_noise', {}).get('score', clean)
-            ref_noisy = results['per_strategy'].get(f'{prefix}/noisy_baseline', {}).get('score', noisy)
+            ref_clean = results['per_strategy'].get(
+                f'{prefix}/no_noise', {}).get('score', float('nan'))
+            ref_noisy = results['per_strategy'].get(
+                f'{prefix}/noisy_baseline', {}).get('score', float('nan'))
         else:
             ref_clean = clean
             ref_noisy = noisy
-        ref_gap = ref_clean - ref_noisy if not any(np.isnan(x) for x in [ref_clean, ref_noisy]) else float('nan')
+        ref_gap = (ref_clean - ref_noisy
+                   if not any(np.isnan(x) for x in [ref_clean, ref_noisy])
+                   else float('nan'))
         if not np.isnan(s) and not np.isnan(ref_gap) and abs(ref_gap) > 1e-10:
             recovery[key] = float((s - ref_noisy) / ref_gap * 100)
         else:

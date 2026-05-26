@@ -25,6 +25,15 @@ Outputs per-sigma:
   - retention_pct: ratio*100 when both sides are positive, else NaN
     (R² and MCC can be negative — naive ratio was historically misleading).
 
+Feature selection: the hybrid feature mix is re-searched per (noise level,
+data split) on the NOISY training labels using `find_best_hybrid` in fast
+mode with a reduced budget grid (NOISY_SEARCH_BUDGETS). The previous
+version pulled the mix from a precomputed pool that ran on clean labels,
+which gave the methods oracle access to ground truth they wouldn't have
+in a real noisy-label setting. The inner search uses random forest as a
+fast proxy downstream model — DNN-based search would be more matched but
+~10x slower per (noise level, fold).
+
 Usage:
     python n09_lnl_survey.py --dataset logd --mode intermediary
     python n09_lnl_survey.py --dataset qm9 --mode full
@@ -37,22 +46,29 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 import time
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import r2_score
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
-    cv_split, get_domain_metric,
-    get_precomputed_search, get_best_search_for_downstream, build_fold_hybrid,
+    cv_split, get_domain_metric, get_model_factories,
+    get_best_search_for_downstream, build_fold_hybrid,
     extract_top3_base_reps,
 )
 from kirby.utils.lnl_methods import (
     get_lnl_method, LNL_REGISTRY, REGRESSION_ONLY_LNL,
     _standard_dnn_train_predict, _standard_dnn_train_predict_clf,
 )
+from kirby.find_best_hybrid import find_best_hybrid
 
 SIGMAS = [0.0, 0.1, 0.3, 0.6, 1.0]
 ALL_METHODS = list(LNL_REGISTRY.keys())
+
+# Reduced budget grid for the per-(noise level, fold) feature search.
+# The full pool covers [10, 25, 50, 100, 250, 500, 1000, 2000]; we trim to
+# three representative budgets here because the search runs inside the
+# noise injection loop and full-grid runtime would be prohibitive. Pattern
+# mirrors c06's per-variant searches with reduced budgets + 'fast' speed.
+NOISY_SEARCH_BUDGETS = [50, 100, 250]
 
 
 def _inject_noise(y, sigma_frac, seed=42, is_clf=False):
@@ -228,17 +244,64 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             X_base_train_s = scaler_base.fit_transform(X_base_train)
             X_base_val_s = scaler_base.transform(X_base_val)
 
-            # Build hybrid features from blueprint.
-            # NOTE: y_train (noisy) is used intentionally — tests end-to-end
-            # noise resilience where both feature selection and model training
-            # see the same noisy labels (real-life conditions).
+            # Build hybrid features by running a fresh feature-mix search on
+            # the NOISY training labels (matching the c06 per-variant pattern).
+            # The pool blueprint `bp` above was fit on clean labels, which
+            # would give the LNL methods a feature mix chosen with oracle
+            # access to ground truth. Refitting per (noise level, fold) on
+            # noisy labels removes that leak. Uses fast speed + reduced budget
+            # grid to keep runtime tractable; downstream model is 'rf' as a
+            # fast proxy for DNN (RF-best and DNN-best feature mixes are
+            # usually well-correlated on tabular molecular features).
             train_reps = {k: v[train_idx] for k, v in reps.items()}
             val_reps = {k: v[val_idx] for k, v in reps.items()}
             try:
                 train_augs = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
                 val_augs = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
+
+                # Run search WITHIN the train fold using noisy labels.
+                # Subset groups (if present) so inner CV stays inside the train fold.
+                train_groups_subset = (groups[train_idx]
+                                       if groups is not None else None)
+                inner_n_folds = max(2, min(3, n_folds))
+                _rf_factory = get_model_factories(
+                    ['rf'], task_type=task_type,
+                    n_samples=len(train_idx))['rf']
+                inner_search = find_best_hybrid(
+                    base_reps={k: v[train_idx] for k, v in reps.items()},
+                    labels=y_train,
+                    groups=train_groups_subset,
+                    models={'rf': _rf_factory()},
+                    budgets=NOISY_SEARCH_BUDGETS,
+                    task_type=task_type,
+                    metric=metric_name,
+                    speed='fast',
+                    seed=42 + fold_idx,
+                    n_folds=inner_n_folds,
+                    cache=False,
+                    augmentations=({k: v[train_idx] for k, v in augmentations.items()}
+                                   if augmentations else None),
+                    augmentation_strategy=meta.get('aug_condition', 'uncapped') if meta else 'uncapped',
+                    verbose=False,
+                )
+                # Pick the best blueprint across the reduced budget grid
+                per_budget = inner_search.best_by_model_budget.get('rf', {})
+                _best_bp = None
+                _best_score = float('inf') if lower_is_better else float('-inf')
+                for _budget, _entry in per_budget.items():
+                    if _entry is None:
+                        continue
+                    _score = _entry.get('score_mean', float('nan'))
+                    if np.isnan(_score):
+                        continue
+                    if (lower_is_better and _score < _best_score) or \
+                       (not lower_is_better and _score > _best_score):
+                        _best_score = _score
+                        _best_bp = _entry['blueprint']
+                inner_bp = _best_bp if _best_bp is not None else bp
+
                 X_hybrid_train, X_hybrid_val, fi = build_fold_hybrid(
-                    train_reps, val_reps, y_train, bp,
+                    train_reps, val_reps, y_train, inner_bp,
                     augmentations_train=train_augs, augmentations_val=val_augs)
                 scaler_hyb = StandardScaler()
                 X_hybrid_train_s = scaler_hyb.fit_transform(X_hybrid_train)

@@ -234,10 +234,13 @@ def _build_conditions(train_reps, y_train, augmentations, bp,
 
 
 def _run_condition(X_space, y_noisy, X_eval_train, X_eval_val, y_val,
-                    model_factory, metric_fn):
+                    model_factory, metric_fn, is_clf=False):
     """Run 3 estimators × 3 k values on one condition.
 
     Fixed remediation: exponential weighting, alpha=0.1.
+    Passes is_clf to each estimator so classification uses class-disagreement
+    instead of the regression value-residual that's meaningless for class
+    labels.
 
     Returns {f'{est_name}_k{k}': denoised_score}.
     """
@@ -247,7 +250,7 @@ def _run_condition(X_space, y_noisy, X_eval_train, X_eval_val, y_val,
         for k in K_VALUES:
             key = f'{est_name}_k{k}'
             try:
-                est = est_cls(k=k, metric='euclidean')
+                est = est_cls(k=k, metric='euclidean', is_clf=is_clf)
                 scores = est.estimate(X_space, y_noisy)
                 weights = weights_from_scores(scores, strength=0.1,
                                               method='exponential')
@@ -384,7 +387,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                     cond_results = _run_condition(
                         X_space, y_noisy, X_eval_train_s, X_eval_val_s,
-                        y_val, model_factory, metric_fn,
+                        y_val, model_factory, metric_fn, is_clf=is_clf,
                     )
 
                     for ek, score in cond_results.items():

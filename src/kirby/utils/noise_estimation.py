@@ -107,40 +107,54 @@ class NoiseEstimator(ABC):
 
 class NeighborResidualEstimator(NoiseEstimator):
     """
-    Estimate noise as deviation from k-NN mean.
-    
-    Intuition: If your label differs from similar molecules, 
-    you might have more measurement error.
-    
-    noise_score = |y - neighbor_mean| / scale
+    Estimate noise as deviation from k-NN consensus.
+
+    Regression: noise_score = |y - neighbor_mean| / scale
+    Classification (is_clf=True): noise_score = fraction of neighbors with a
+        different class than y. The regression formulation (|y - 0.4|) is
+        meaningless for integer class labels — averaging "no"s and "yes"es
+        and asking distance-from-fractional-average doesn't measure
+        anything about how mislabeled a compound looks.
     """
-    
-    def __init__(self, k: int = 10, metric: str = 'cosine', 
-                 normalize: bool = True, random_state: int = 42):
+
+    def __init__(self, k: int = 10, metric: str = 'cosine',
+                 normalize: bool = True, is_clf: bool = False,
+                 random_state: int = 42):
         super().__init__(random_state)
         self.k = k
         self.metric = metric
         self.normalize = normalize
-        
+        self.is_clf = is_clf
+
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         k = min(self.k, len(y) - 1)
-        
+
         nn = NearestNeighbors(n_neighbors=k + 1, metric=self.metric)
         nn.fit(X)
         _, indices = nn.kneighbors(X)
-        
+
         # Exclude self
         neighbor_indices = indices[:, 1:]
         neighbor_labels = y[neighbor_indices]
+
+        if self.is_clf:
+            # Classification: class-disagreement score = fraction of
+            # neighbors whose class differs from this sample's class.
+            disagreement = (neighbor_labels != y[:, None]).mean(axis=1)
+            self.noise_scores_ = disagreement
+            # neighbor_means_ for classification = majority-vote class
+            # (used by downstream label-correction code that expects an
+            # array shaped like y)
+            from scipy.stats import mode as _scipy_mode
+            self.neighbor_means_ = _scipy_mode(
+                neighbor_labels, axis=1, keepdims=False).mode
+            return disagreement
+
+        # Regression: residual from neighbor mean
         neighbor_mean = np.mean(neighbor_labels, axis=1)
-        
-        # Raw residual
         residuals = np.abs(y - neighbor_mean)
-        
         if self.normalize:
-            # Normalize by global std
             residuals = residuals / (np.std(y) + 1e-10)
-        
         self.noise_scores_ = residuals
         self.neighbor_means_ = neighbor_mean
         return residuals
@@ -155,35 +169,61 @@ class NeighborResidualEstimator(NoiseEstimator):
 class LocalVarianceRatioEstimator(NoiseEstimator):
     """
     Estimate noise relative to local label variance.
-    
-    noise_score = |y - neighbor_mean| / neighbor_std
-    
-    High score means: you deviate from neighbors more than 
-    neighbors deviate from each other.
+
+    Regression: noise_score = |y - neighbor_mean| / neighbor_std
+        High score means: you deviate from neighbors more than neighbors
+        deviate from each other.
+    Classification (is_clf=True): noise_score = disagreement_with_me /
+        (1 - max_class_purity). Numerator is the fraction of neighbors
+        with a different class than y; denominator is one minus the
+        purity of the dominant class among neighbors. So a sample whose
+        class differs from neighbors AND whose neighbors are themselves
+        uniform (high purity, low denominator) scores higher than one
+        whose neighbors are already heterogeneous.
     """
-    
-    def __init__(self, k: int = 10, metric: str = 'cosine', random_state: int = 42):
+
+    def __init__(self, k: int = 10, metric: str = 'cosine',
+                 is_clf: bool = False, random_state: int = 42):
         super().__init__(random_state)
         self.k = k
         self.metric = metric
-        
+        self.is_clf = is_clf
+
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         k = min(self.k, len(y) - 1)
-        
+
         nn = NearestNeighbors(n_neighbors=k + 1, metric=self.metric)
         nn.fit(X)
         _, indices = nn.kneighbors(X)
-        
+
         neighbor_indices = indices[:, 1:]
         neighbor_labels = y[neighbor_indices]
-        
+
+        if self.is_clf:
+            from scipy.stats import mode as _scipy_mode
+            disagreement = (neighbor_labels != y[:, None]).mean(axis=1)
+            modes = _scipy_mode(neighbor_labels, axis=1, keepdims=False)
+            dominant_class = modes.mode
+            # Per-row class purity: fraction of neighbors that share the
+            # dominant class within those neighbors.
+            purity = (neighbor_labels == dominant_class[:, None]).mean(axis=1)
+            local_heterogeneity = 1.0 - purity
+            # Floor the denominator at 1/k (the minimum non-zero
+            # heterogeneity a k-neighbor sample can have). Without this,
+            # disagreement / 1e-10 yields ~1e10 for samples in perfectly-
+            # pure neighborhoods, which dominates min-max normalisation
+            # downstream and collapses every other score to ~0.
+            heterogeneity_floor = max(1.0 / k, 1e-3)
+            scores = disagreement / np.maximum(local_heterogeneity, heterogeneity_floor)
+            self.noise_scores_ = scores
+            self.neighbor_means_ = dominant_class
+            self.neighbor_stds_ = local_heterogeneity
+            return scores
+
         neighbor_mean = np.mean(neighbor_labels, axis=1)
         neighbor_std = np.std(neighbor_labels, axis=1)
-        
-        # Ratio of deviation to local spread
         deviation = np.abs(y - neighbor_mean)
         scores = deviation / (neighbor_std + 1e-10)
-        
         self.noise_scores_ = scores
         self.neighbor_means_ = neighbor_mean
         self.neighbor_stds_ = neighbor_std
@@ -193,41 +233,55 @@ class LocalVarianceRatioEstimator(NoiseEstimator):
 class DistanceWeightedResidualEstimator(NoiseEstimator):
     """
     Like NeighborResidual, but weight closer neighbors more heavily.
-    
-    noise_score = |y - weighted_neighbor_mean|
-    where weights ∝ 1/distance
+
+    Regression: noise_score = |y - weighted_neighbor_mean|, weights ∝ 1/distance
+    Classification (is_clf=True): noise_score = weighted fraction of
+        neighbors with a different class than y, weights ∝ 1/distance.
     """
-    
-    def __init__(self, k: int = 10, metric: str = 'cosine', 
-                 normalize: bool = True, random_state: int = 42):
+
+    def __init__(self, k: int = 10, metric: str = 'cosine',
+                 normalize: bool = True, is_clf: bool = False,
+                 random_state: int = 42):
         super().__init__(random_state)
         self.k = k
         self.metric = metric
         self.normalize = normalize
-        
+        self.is_clf = is_clf
+
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         k = min(self.k, len(y) - 1)
-        
+
         nn = NearestNeighbors(n_neighbors=k + 1, metric=self.metric)
         nn.fit(X)
         distances, indices = nn.kneighbors(X)
-        
-        # Exclude self
+
         neighbor_distances = distances[:, 1:]
         neighbor_indices = indices[:, 1:]
         neighbor_labels = y[neighbor_indices]
-        
-        # Inverse distance weighting
+
         weights = 1 / (neighbor_distances + 1e-10)
         weights = weights / weights.sum(axis=1, keepdims=True)
-        
+
+        if self.is_clf:
+            from scipy.stats import mode as _scipy_mode
+            different = (neighbor_labels != y[:, None]).astype(float)
+            scores = np.sum(different * weights, axis=1)
+            self.noise_scores_ = scores
+            _modes = _scipy_mode(neighbor_labels, axis=1, keepdims=False).mode
+            # Set BOTH attributes so downstream code reading either name works.
+            self.neighbor_means_ = _modes
+            self.weighted_means_ = _modes
+            return scores
+
         weighted_mean = np.sum(neighbor_labels * weights, axis=1)
         residuals = np.abs(y - weighted_mean)
-        
+
         if self.normalize:
             residuals = residuals / (np.std(y) + 1e-10)
-        
+
         self.noise_scores_ = residuals
+        # Set BOTH so consumers reading either name work in both modes.
+        self.neighbor_means_ = weighted_mean
         self.weighted_means_ = weighted_mean
         return residuals
 
@@ -236,47 +290,65 @@ class ActivityCliffAwareEstimator(NoiseEstimator):
     """
     Distinguish noise from activity cliffs.
 
-    Key insight:
+    Regression key insight:
     - NOISE: Sample deviates from neighbors, but neighbors agree with each other
     - ACTIVITY CLIFF: Sample deviates from neighbors, and neighbors also disagree
 
     noise_score = deviation * (1 - local_variance_normalized)
 
-    This downweights deviations in high-variance regions (cliffs).
+    Classification (is_clf=True) analog:
+    - NOISE: y differs from neighbors AND neighbors are class-pure
+    - CLIFF-LIKE: y differs from neighbors AND neighbors are class-heterogeneous
+
+    noise_score = class_disagreement * class_purity_of_neighbors
+
+    Class-disagreement is the fraction of neighbors with a different class
+    than this sample; class-purity is the fraction of neighbors sharing
+    their own dominant class. A noisy sample is one that disagrees with
+    neighbors who otherwise all agree with each other.
     """
 
-    def __init__(self, k: int = 10, metric: str = 'cosine', random_state: int = 42):
+    def __init__(self, k: int = 10, metric: str = 'cosine',
+                 is_clf: bool = False, random_state: int = 42):
         super().__init__(random_state)
         self.k = k
         self.metric = metric
+        self.is_clf = is_clf
 
     def estimate(self, X: np.ndarray, y: np.ndarray) -> np.ndarray:
         k = min(self.k, len(y) - 1)
-        global_std = np.std(y) + 1e-10
-        
+
         nn = NearestNeighbors(n_neighbors=k + 1, metric=self.metric)
         nn.fit(X)
         _, indices = nn.kneighbors(X)
-        
+
         neighbor_indices = indices[:, 1:]
         neighbor_labels = y[neighbor_indices]
-        
+
+        if self.is_clf:
+            from scipy.stats import mode as _scipy_mode
+            disagreement = (neighbor_labels != y[:, None]).mean(axis=1)
+            modes = _scipy_mode(neighbor_labels, axis=1, keepdims=False)
+            dominant_class = modes.mode
+            purity = (neighbor_labels == dominant_class[:, None]).mean(axis=1)
+            # Noise: high disagreement + high neighbor purity (neighbors all
+            # agree but this sample disagrees with them)
+            scores = disagreement * purity
+            self.noise_scores_ = scores
+            self.neighbor_means_ = dominant_class
+            self.consistency_scores_ = purity
+            self.is_likely_cliff_ = (disagreement > 0.5) & (purity < 0.5)
+            return scores
+
+        global_std = np.std(y) + 1e-10
         neighbor_mean = np.mean(neighbor_labels, axis=1)
         neighbor_std = np.std(neighbor_labels, axis=1)
-        
-        # Sample-to-neighborhood deviation
+
         deviation = np.abs(y - neighbor_mean) / global_std
-        
-        # Neighborhood consistency (high = neighbors agree = likely noise not cliff)
-        # Normalize neighbor_std by global_std
         local_variance_norm = neighbor_std / global_std
-        consistency = 1 / (1 + local_variance_norm)  # High when neighbors agree
-        
-        # Noise score: deviation weighted by consistency
-        # High deviation + high consistency = likely noise
-        # High deviation + low consistency = likely activity cliff
+        consistency = 1 / (1 + local_variance_norm)
+
         scores = deviation * consistency
-        
         self.noise_scores_ = scores
         self.neighbor_means_ = neighbor_mean
         self.consistency_scores_ = consistency
