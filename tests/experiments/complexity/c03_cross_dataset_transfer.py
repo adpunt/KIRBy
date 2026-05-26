@@ -131,9 +131,11 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
                 # not bp.augmentation_strategy (can be stale per the 2026-04-21
                 # cache-collision bug).
                 aug_strat = meta.get('aug_condition', 'none') if meta else 'none'
-                for novel_name, novel_model in (novel_results.items() if False else novel_models.items()):
-                    if bp_eval is None:
-                        break
+                if bp_eval is None:
+                    novel_iter = []
+                else:
+                    novel_iter = list(novel_models.items())
+                for novel_name, novel_model in novel_iter:
                     try:
                         sample_X = next(iter(data['reps'].values()))
                         novel_scores = []

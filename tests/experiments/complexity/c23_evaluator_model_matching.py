@@ -17,7 +17,8 @@ Conditions:
                     (rf->lightgbm, xgb->rf, mlp->dnn, etc.)
     C_strong_off:   evaluator from a very different family
                     (rf->ridge, gp->xgb, mlp->knn, etc.)
-    D_nn_size:      NN size mismatches (mlp->dnn, dnn->mlp)
+    D_nn_size:      NN size mismatches (mlp->dnn; dnn->mlp removed as
+                    duplicate of ABC B_slight_off for dnn).
     E_quick_set:    evaluator always from {rf, lightgbm, xgboost}
 
 Reports score delta (matched - mismatched) per model x dataset x condition.
@@ -44,8 +45,8 @@ from kirby.find_best_hybrid import find_best_hybrid
 
 # ── Evaluator mismatch configurations ──
 # For each downstream model, define which internal evaluator to use per condition.
-# Models without a natural evaluator equivalent (catboost, dnn, cnn) use ridge
-# for matched (A) since there's no evaluator for them — they serve as controls.
+# Note: catboost/dnn/cnn use themselves as A_matched evaluators
+# (_evaluate_allocation in hybrid.py has explicit branches for each).
 MATCH_TABLE = {
     # model:     A_matched   B_slight_off  C_strong_off
     'rf':        ('rf',      'lightgbm',   'ridge'),
@@ -61,10 +62,12 @@ MATCH_TABLE = {
     'cnn':       ('cnn',     'mlp',        'knn'),
 }
 
-# NN size mismatch pairs — Condition D
+# NN size mismatch pairs — Condition D.
+# ('dnn', 'mlp') removed: it would produce the exact cache key already covered
+# by ABC B_slight_off for dnn (MATCH_TABLE['dnn'][1] == 'mlp'), giving a
+# duplicate score column with no extra information.
 NN_PAIRS = [
     ('mlp', 'dnn'),   # small NN downstream, large NN evaluator
-    ('dnn', 'mlp'),   # large NN downstream, small NN evaluator
 ]
 
 # Quick default set — Condition E

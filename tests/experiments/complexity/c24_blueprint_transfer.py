@@ -126,7 +126,9 @@ def run(data, config, output_dir, dataset_name):
     reps = data['reps']
     labels = data['labels']
     groups = data['groups']
-    augs = data.get('augmentations') or {}
+    # Use None (not {}) so downstream `if augs:` checks correctly skip the
+    # aug-handling path when no augmentations exist for this dataset.
+    augs = data.get('augmentations') or None
     n_folds = config['n_splits']
 
     sample_X = next(iter(reps.values()))
