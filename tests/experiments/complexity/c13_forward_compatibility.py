@@ -64,12 +64,18 @@ from kirby.find_best_hybrid import find_best_hybrid
 # LEGACY REPS — anything NOT in this set is considered "new"
 # =============================================================================
 
-# Molecular legacy reps (available before Phase 4 forward-compat additions)
+# Molecular legacy reps (available before Phase 4 forward-compat additions).
+# Audited 2026-05-25 against current DATASET_REPS molecular `general` lists
+# (logd, caco2, herg/herg_ki, adme_*, qm9, etc.).  Stale entries removed
+# (rdkit_desc, map4, erg, molbert), missing-but-pre-Phase-4 added.
 _LEGACY_MOLECULAR = {
     'ecfp4', 'maccs', 'rdkit_desc', 'mordred', 'mordred_pca50', 'avalon',
-    'mol2vec', 'map4', 'erg',
+    'mol2vec',
+    # Pre-Phase 4 fingerprints / kernels / descriptors / GNNs
+    'atom_pair', 'top_torsion', 'rdkfp', 'pdv', 'graph_kernel', 'smited',
+    'grover', 'mhg_gnn', 'graphmvp',
     # Pre-trained language models (pre-Phase 4)
-    'molbert', 'chemberta',
+    'molbert', 'chemberta', 'chembert', 'molformer', 'selformer',
 }
 
 # Antibody legacy reps
@@ -162,7 +168,7 @@ def _eval_single_rep_per_fold(X, labels, groups, model_factory, n_folds, mode,
 def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
                            metric_fn, search_speed='full', augmentations=None,
                            metric_name='r2', dataset_name=None,
-                           task_type='regression'):
+                           task_type='regression', condition_suffix=None):
     """Run find_best_hybrid and evaluate the best config per fold.
 
     Returns (per_fold_scores, search_result_dict).
@@ -189,6 +195,7 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
     best_meta = None
     for candidate_model in ['rf', 'svm', 'lightgbm', 'mlp', 'knn']:
         try:
+            _extra = {'condition_suffix': condition_suffix} if condition_suffix else {}
             s, m = get_best_search_for_downstream(
                 reps, labels, groups,
                 downstream_model=candidate_model, budget=None,
@@ -197,6 +204,7 @@ def _eval_hybrid_per_fold(reps, labels, groups, model_factory, n_folds, mode,
                 dataset_name=dataset_name,
                 task_type=task_type, metric=metric_name,
                 return_fitted=True,
+                **_extra,
             )
         except Exception:
             continue
@@ -478,7 +486,13 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                 existing_reps, labels, groups, c_model_factory,
                 n_folds, mode, metric_fn, search_speed=search_speed,
                 augmentations=augs, metric_name=metric_name,
-                dataset_name=f"{dataset_name}_without_{rep_name}",
+                # Pass real dataset_name + condition_suffix so the cache key
+                # remains content-validated (the rep_shapes hash will already
+                # distinguish "with r" vs "without r" automatically); synthetic
+                # dataset names bypass the precompute cache and force a live
+                # find_best_hybrid that sees all labels in its internal CV.
+                dataset_name=dataset_name,
+                condition_suffix=f"c13_without_{rep_name}",
                 task_type=data['task_type'])
             c_mean = float(np.mean(c_scores)) if c_scores else float('nan')
             c_std = float(np.std(c_scores)) if c_scores else float('nan')
@@ -514,7 +528,8 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
                 all_reps_for_d, labels, groups, d_model_factory,
                 n_folds, mode, metric_fn, search_speed=search_speed,
                 augmentations=augs, metric_name=metric_name,
-                dataset_name=f"{dataset_name}_with_{rep_name}",
+                dataset_name=dataset_name,
+                condition_suffix=f"c13_with_{rep_name}",
                 task_type=data['task_type'])
             d_mean = float(np.mean(d_scores)) if d_scores else float('nan')
             d_std = float(np.std(d_scores)) if d_scores else float('nan')
@@ -580,21 +595,22 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
             }
 
         # =================================================================
-        # Condition E: r + existing reps in hybrid (does hybrid improve r?)
-        # This is the same as D conceptually, but we report the metric
-        # differently: E - B tells us if hybridization helps the new rep.
-        # E uses the same scores as D (the hybrid includes r).
+        # Condition E REMOVED 2026-05-25: previously identical to D
+        # (`e_scores = d_scores`).  The intended "does hybrid feature
+        # selection help r alone" comparison requires a different design
+        # (e.g. apply hybrid feature selection to r-only data) and is not
+        # currently implemented.  Use the D - B (augmentation gain) and
+        # D - C (new rep contribution) deltas instead.  Leaving the field
+        # in the result dict as null for backward-compat with downstream
+        # parsers; the wilcoxon_E_vs_B test is also skipped.
         # =================================================================
-        print(f"\n  Condition E: hybrid improves {rep_name}?")
-        # E is the same evaluation as D: the full hybrid including r.
-        # The key question is E - B (does hybrid improve r beyond its best single-model?)
-        e_scores = d_scores
-        e_mean = d_mean
+        e_scores = []
+        e_mean = float('nan')
         rep_result['conditions']['E'] = {
-            'description': f'{rep_name} in hybrid (same as D)',
-            'score_mean': e_mean,
-            'score_std': float(np.std(e_scores)) if e_scores else float('nan'),
-            'fold_scores': [float(s) for s in e_scores],
+            'description': 'REMOVED — was identical to D, no information added',
+            'score_mean': float('nan'),
+            'score_std': float('nan'),
+            'fold_scores': [],
         }
 
         # =================================================================
@@ -719,14 +735,15 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
         eb = deltas['E_minus_B']
         alloc_pct = conds['D'].get('allocation_share', 0) * 100
 
-        # Win counting
+        # Win counting. `dc` and `eb` are ALREADY sign-normalised at the
+        # delta computation site (positive = improvement regardless of metric
+        # direction).  Re-applying the lower_is_better check would invert
+        # win-counts for RMSE/MAE/logloss domains.
         total_reps_tested += 1
-        if not np.isnan(dc):
-            if (not lower_is_better and dc > 0) or (lower_is_better and dc < 0):
-                win_count_dc += 1
-        if not np.isnan(eb):
-            if (not lower_is_better and eb > 0) or (lower_is_better and eb < 0):
-                win_count_eb += 1
+        if not np.isnan(dc) and dc > 0:
+            win_count_dc += 1
+        if not np.isnan(eb) and eb > 0:
+            win_count_eb += 1
 
         print(f"  {rep_name:<20} {rr['dim']:>5} {a_val:>9.4f} {b_val:>9.4f} "
               f"{c_val:>9.4f} {d_val:>9.4f} {dc:>+8.4f} {eb:>+8.4f} "

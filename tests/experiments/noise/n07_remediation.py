@@ -2,20 +2,23 @@
 """N07: Noise Remediation Strategies — what to do after detecting noise.
 
 Paper: Noise
-Compares 5 remediation strategies after noise detection: remove, downweight,
-label_smooth, knn_smooth, robust_loss (Huber). Two baselines (no_noise,
-noisy_baseline) anchor recovery. Earlier docstring said "6 strategies"; the
-actual count is 5 (the supposed "relabel-GP-mean" was never implemented).
+Compares 4 remediation strategies after noise detection: remove, downweight,
+label_smooth, knn_smooth. Two baselines (no_noise, noisy_baseline) anchor
+recovery. All strategies keep the iteration's downstream model fixed so the
+comparison is apples-to-apples within a column.
 
-Evaluated across DOWNSTREAM_MODELS_NOISE (rf, xgboost, ridge, svm, mlp,
-lightgbm) for the hybrid feature space — each model uses its own matched-
-evaluator blueprint. The per-rep block is RF-only (diagnostic; expanding it
-to 6 × n_reps × 5 strategies would balloon runtime without adding to the
-core remediation claim). Note: robust_loss is HuberRegressor and ignores
-the per-iteration model_factory entirely — its "recovery" number is
-comparing Huber to the RF clean/noisy denominators, so it isn't on the
-same footing as the other 4 strategies; treat it as a parallel data point
-rather than a head-to-head row.
+(Earlier versions also included a robust_loss strategy that swapped in
+HuberRegressor, but that conflated "different cleanup strategy" with
+"different model entirely" — its number wasn't comparable to the other
+rows. Removed in the 2026-05-26 audit. If you want to evaluate Huber as
+a noise-robust model, run a separate experiment with Huber as the
+baseline across all strategies.)
+
+Evaluated across all six noise-suite models (random forest, xgboost,
+ridge, support vector, MLP, lightgbm) for the hybrid feature space —
+each model uses its own search-derived feature mix. The per-rep block
+is RF-only (diagnostic; expanding it to 6 × n_reps × 4 strategies would
+balloon runtime without adding to the core remediation claim).
 
 Usage:
     python n07_remediation.py --dataset logd --mode intermediary
@@ -27,7 +30,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
 from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import HuberRegressor
 from sklearn.neighbors import NearestNeighbors
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
@@ -181,13 +183,6 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
                 m.fit(X_tr_s, y_smoothed)
                 return metric_fn(y_val, _predict_for_metric(m, X_va_s, metric_name))
 
-        elif strategy == 'robust_loss':
-            if is_clf:
-                return None  # HuberRegressor is regression-only
-            huber = HuberRegressor(epsilon=1.35, max_iter=500)
-            huber.fit(X_tr_s, y_tr)
-            return metric_fn(y_val, _predict_for_metric(huber, X_va_s, metric_name))
-
         elif strategy == 'knn_smooth':
             threshold = np.percentile(noise_scores, 80)
             flagged = noise_scores >= threshold
@@ -311,9 +306,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'remove',           # detect + remove flagged samples
         'downweight',       # detect + weight by 1/(1+score)
         'label_smooth',     # detect + smooth labels toward neighbor means
-        'robust_loss',      # Huber regression (no detection needed)
         'knn_smooth',       # replace flagged labels with kNN-mean in hybrid space
     ]
+    # robust_loss removed (2026-05-26 audit decision): the strategy swapped
+    # the iteration's downstream model for HuberRegressor, conflating "data
+    # cleanup" with "different model entirely" — its recovery numbers were
+    # not comparable to the four cleanup strategies above. If you want to
+    # test Huber separately, run a dedicated experiment with Huber as the
+    # baseline model across all strategies.
 
     results = {
         'metric': metric_name,
@@ -397,20 +397,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     if fold_score is not None:
                         per_strategy_scores[strategy].append(fold_score)
 
-        # Aggregate per strategy
+        # Aggregate per strategy. All strategies now use the iteration's
+        # model, so model_used == model_name throughout.
         print(f"\n  {model_name}/hybrid:")
         for strategy in strategies:
             fold_scores = per_strategy_scores[strategy]
             score = float(np.mean(fold_scores)) if fold_scores else float('nan')
-            entry = {'score': score, 'n_folds': len(fold_scores)}
-            if strategy == 'robust_loss':
-                entry['model_used'] = 'HuberRegressor'
-                entry['model_used_note'] = (
-                    'robust_loss replaces the iteration model with Huber, '
-                    'so this row is not comparable to other strategies in '
-                    'the same model column. Treat as parallel data.')
-            else:
-                entry['model_used'] = model_name
+            entry = {
+                'score': score,
+                'n_folds': len(fold_scores),
+                'model_used': model_name,
+            }
             results['per_model_per_strategy'][model_name][strategy] = entry
             print(f"    {strategy:<18} {metric_name}={score:.4f} (n={len(fold_scores)})")
 

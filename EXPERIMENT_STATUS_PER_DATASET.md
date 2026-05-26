@@ -324,3 +324,116 @@ verify with `squeue -j <pair>`): 12115471, 12115473, 12115475, 12115477,
 | submit_dataset.sh masks failures (exit 0 on bus) | Add `set -e` or `exit $?` |
 | s03 SVD non-convergence on abagym_Ang2 | Fix `s03_feature_concentration.py:86` |
 | genomic_benchmarks cache race | Pre-warm cache or serialize submits |
+
+---
+
+## Precompute timing (from `check_precompute_status.py --timing --incomplete`)
+
+65 datasets checked → **13 DONE, 28 partial, 24 missing**. The flags below are filtered to the rule you gave me: ignore tiny-dataset GP dominance that finishes in hours; flag (a) one evaluator eating days on its own, (b) any single condition projected past ~4 days wall, (c) anything that would push a dataset to 10+ days across all 6 conditions.
+
+### 🚩 FLAG 1 — Suspected timing-calculation bug in `capped` (RF 10–20× slower than uncapped)
+
+Five datasets show the same pattern: RF in **capped** is 435–605 s/config, but RF in **uncapped** on the same dataset is 13–33 s/config. The other evaluators in capped are mildly elevated (2–3×), but RF is the only one that explodes. Either the capped wrapper is mis-attributing wall time to RF, or RF retraining inside the augmentation loop is genuinely running 15× more often than it should.
+
+| Dataset | n | RF capped (s/cfg) | RF uncapped (s/cfg) | Ratio | Capped total |
+|---|---:|---:|---:|---:|---:|
+| flab_aggregation_jain_hicrt | 137 | **604.00** | 32.90 | 18.4× | **137.13 h (5.7 d)** |
+| flab_pk_jain_fcrnrt | 132 | **435.77** | 13.28 | 32.8× | **97.59 h (4.1 d)** |
+| ginkgo_colloidal | 242 | **474.91** | 12.02 | 39.5× | **113.17 h (4.7 d)** |
+| ginkgo_hic | 242 | **437.40** | 12.20 | 35.9× | **103.71 h (4.3 d)** |
+| ginkgo_pr_cho | 197 | **536.95** | 12.23 | 43.9× | **119.38 h (5.0 d)** |
+
+These are tiny datasets (n=132–242). RF on a 132-row table should not take 7 minutes/config under any reasonable book-keeping. **Diagnose the capped wall-time accounting before any large-scale capped resubmission** — if the bug is in instrumentation only, results are fine; if RF is genuinely retraining 15× per augmentation pass, capped output is suspect.
+
+### 🚩 FLAG 2 — Single evaluator burning ≥1 day in one condition
+
+Ordered by single-evaluator hours. Everything below is one model in one condition — multiply by 6 to project full-dataset cost.
+
+| Dataset | Condition | Evaluator | Wall (h) | Days | Total cond (h) | Notes |
+|---|---|---|---:|---:|---:|---|
+| caco2 | general/none | **GP** | 75.27 | 3.1 | 79.76 | n=2158, not tiny — flag |
+| flab_thermo_tresanco | general/uncapped | **GP** | 66.44 | 2.8 | 128.49 | n=672, MLP also 40.33h |
+| caco2 | top/none | **GP** | 62.01 | 2.6 | 64.91 | n=2158 |
+| tcga_luad_vs_lusc | general/uncapped | **GP** | 57.70 | 2.4 | 90.35 | n=1017 |
+| flab_thermo_tresanco | general/uncapped | **MLP** | 40.33 | 1.7 | (same row) | second-worst in same cond |
+| nt_H2AFZ | general/none | **Ridge** | 37.39 | 1.6 | 76.39 | n=33000, nucleotide |
+| nt_H3K4me1 | general/none | **Ridge** | 35.94 | 1.5 | 75.01 | n=33000 |
+| herg_ki | general/none | **GP** | 31.34 | 1.3 | 39.62 | n=1412 |
+| nt_H3K27me3 | general/none | **Ridge** | 30.63 | 1.3 | 71.57 | n=33000 |
+| nt_H3K27ac | general/none | **Ridge** | 27.14 | 1.1 | 62.58 | n=31616 |
+| ddg_combined | general/uncapped | **GP** | 26.18 | 1.1 | 41.37 | n=429 |
+| nt_H3K9ac | general/none | **Ridge** | 22.58 | 0.94 | 50.81 | n=24278, near 1d |
+| herg_ki | top/none | **GP** | 19.49 | 0.81 | 21.91 | borderline |
+| qm9 | general/none | **SVM** | 18.46 | 0.77 | 45.06 | n=9978, borderline |
+
+(All 5 capped RF cases from FLAG 1 also belong here — omitted to avoid double-counting.)
+
+### 🚩 FLAG 3 — Conditions projected past 4 days wall (>96 h in one of six conditions)
+
+| Dataset | Condition | Wall (h) | Days | Bottleneck |
+|---|---|---:|---:|---|
+| flab_aggregation_jain_hicrt | general/capped | 137.13 | **5.7** | RF (FLAG 1) |
+| flab_thermo_tresanco | general/uncapped | 128.49 | **5.4** | GP + MLP |
+| ginkgo_pr_cho | general/capped | 119.38 | **5.0** | RF (FLAG 1) |
+| ginkgo_colloidal | general/capped | 113.17 | **4.7** | RF (FLAG 1) |
+| ginkgo_hic | general/capped | 103.71 | **4.3** | RF (FLAG 1) |
+| flab_pk_jain_fcrnrt | general/capped | 97.59 | 4.1 | RF (FLAG 1) |
+| tcga_luad_vs_lusc | general/uncapped | 90.35 | 3.8 | GP |
+| caco2 | general/none | 79.76 | 3.3 | GP |
+| nt_H2AFZ | general/none | 76.39 | 3.2 | Ridge |
+| nt_H3K4me1 | general/none | 75.01 | 3.1 | Ridge |
+| nt_H3K27me3 | general/none | 71.57 | 3.0 | Ridge |
+| caco2 | top/none | 64.91 | 2.7 | GP |
+| nt_H3K27ac | general/none | 62.58 | 2.6 | Ridge |
+| nt_H3K9ac | general/none | 50.81 | 2.1 | Ridge |
+
+### 🚩 FLAG 4 — Projected to exceed 10 days across all 6 conditions
+
+Datasets where the worst observed condition × the missing condition count would push total wall >240 h. The 7-day SLURM wall (`--time=7-00:00:00`) means **any one of these will not finish a single job to completion** — they need partitioning or per-condition submission.
+
+| Dataset | Observed worst (h) | Missing conds | Risk |
+|---|---:|---|---|
+| **flab_aggregation_jain_hicrt** | 137 capped | top/uncapped, top/capped | top/capped likely repeats the RF bug → **≥7d single job** |
+| **flab_pk_jain_fcrnrt** | 97 capped | top/capped only | top/capped alone is the risk |
+| **ginkgo_colloidal** | 113 capped | top/capped only | RF bug recurs → likely ≥4d on its own |
+| **ginkgo_hic** | 103 capped | top/capped only | same |
+| **ginkgo_pr_cho** | 119 capped | top/capped only | same |
+| **flab_thermo_tresanco** | 128 uncapped | general/capped + 3 top | general/capped will be **massive** if RF bug applies |
+| **caco2** | 79 + 65 (both none) | uncapped + capped × top/general | GP at n=2158 in uncapped is unbounded — **definite >10d** |
+| **tcga_luad_vs_lusc** | 90 uncapped | general/capped + 3 top | GP scaling — **likely >10d total** |
+| **herg_ki** | 39 + 22 (both none) | uncapped + capped × top/general | GP at n=1412, scales — **possibly >10d** |
+| **nt_H2AFZ / H3K4me1 / H3K27me3 / H3K27ac / H3K9ac / H3K4me3** | 50–76 none | uncapped + capped × top/general | Ridge at n=24k–33k — uncapped/capped will be far worse |
+
+### 🚩 FLAG 5 — Datasets with zero precompute caches (still missing entirely)
+
+```
+flab_binding_adams        flab_binding_koenig        flab_binding_phillips_h3
+flab_expression_adams     flab_expression_koenig     tz_her2_multiclass
+bindingdb_kd              kiba                       herg
+logd                      bh_doyle_plates            buchwald_hartwig
+gb_demo_coding_vs_intergenomic_seqs                  gb_demo_human_or_worm
+gb_human_nontata_promoters
+nt_H3K36me3   nt_H3K4me2   nt_H4K20me1
+nt_enhancers  nt_enhancers_types
+nt_promoter_all   nt_promoter_no_tata   nt_promoter_tata
+nt_splice_sites_acceptors
+```
+
+(24 datasets. The Wave-3 RUNNING jobs from Section A–M above will produce caches for many of these once they progress past stage 2; this list is current state, not lost work.)
+
+### What's NOT flagged (tiny + GP-dominated, finishes in hours)
+
+For context — these match the "GP eats 99% but whole thing in hours" pattern you said to ignore:
+
+- ddg_combined general/none: GP 76% share but total 1.66h ✅
+- abagym_lysozyme general/none: GP 66% but total 0.59h ✅
+- ginkgo_acsins / ginkgo_titer general/none: total <1h ✅
+- All `top/none` conditions on Ginkgo / flab_pk: total <0.2h ✅
+- adme_hlm / adme_mdr1 / adme_rlm general/none: GP 94% but 8–13h, n=2.6–3k — borderline, *not* flagged
+
+### Recommended next moves
+
+1. **Diagnose the capped RF timing first.** Read one cache pickle's `_cache_meta` for `flab_aggregation_jain_hicrt__general__capped__full.pkl` and inspect the per-config time entries — if RF entries are individually 600s, the bug is in evaluation; if entries are 30s but the per-config count is inflated, the bug is in book-keeping/loop structure. Cheapest test before resubmitting any capped condition.
+2. **Don't resubmit caco2 / tcga_luad_vs_lusc / flab_thermo_tresanco** with one job per dataset under the 7-day wall — they will time out. Split by `(condition × evaluator-subset)` or shorten `EVALUATORS`.
+3. **Nucleotide Ridge wall**: at n=30k+, Ridge at 35–124 s/config on a 1080-config grid is a Ridge-implementation cost (likely the high-α grid + per-fold refit). Worth checking whether the Ridge grid was meant to be that wide on nucleotide.
+4. Everything else (the per-dataset table in Section A–M) is already on the right track; resubmit list under "Action list" still stands.

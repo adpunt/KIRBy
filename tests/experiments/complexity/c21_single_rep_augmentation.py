@@ -142,9 +142,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             is_baseline = aug_dict is None
 
             # Search for best augmentation config (skip for baseline)
+            best_by_model = None
             bp = None
             if not is_baseline:
-                base_rep_dict = {base_name: X_base}
                 try:
                     search = find_best_single_rep_augmented(
                         primary_rep=base_name,
@@ -152,19 +152,37 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         augmentation_pool=aug_dict,
                         labels=labels,
                         groups=groups,
+                        task_type=task_type,
+                        metric=metric_name,
+                        n_folds=n_folds,
                         speed=search_speed,
                         internal_evaluators=INTERNAL_EVALUATORS,
                         cache=True,
+                        dataset_name=dataset_name,
+                        tier=f'c21_{base_name}',
+                        condition_suffix=cond_name,
                         verbose=False,
                     )
-                    best = (search.best_by_model.get('rf') or
-                            next(iter(search.best_by_model.values()), None))
+                    best_by_model = search.best_by_model
+                    best = (best_by_model.get('rf') or
+                            next(iter(best_by_model.values()), None))
                     bp = best['blueprint'] if best else None
                 except Exception as e:
                     print(f"    {cond_name}: search FAILED - {e}")
-                    bp = None
+                    raise
 
             for model_name, model_factory in models.items():
+                # Use this downstream model's own blueprint when available
+                # (knn/xgboost should not be scored against rf-optimal feature
+                # selection). Falls back to rf when the search didn't run
+                # (baseline) or didn't include this model.
+                bp_model = bp
+                if best_by_model is not None:
+                    _best = (best_by_model.get(model_name)
+                             or best_by_model.get('rf')
+                             or next(iter(best_by_model.values()), None))
+                    bp_model = _best['blueprint'] if _best else bp
+
                 scores_base = []
                 scores_aug = []
                 fold_aug_info = []
@@ -198,7 +216,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                     try:
                         Xtr_h, Xva_h, feature_info = build_fold_hybrid(
-                            train_base, val_base, y_train, bp,
+                            train_base, val_base, y_train, bp_model,
                             augmentations_train=train_augs,
                             augmentations_val=val_augs)
 
@@ -246,7 +264,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'aug_std': float(np.nanstd(scores_aug)) if not is_baseline else 0.0,
                     'aug_scores': scores_aug,
                     'delta': delta,
-                    'relative_improvement': delta / abs(base_mean) if base_mean != 0 else 0.0,
+                    # Sign-normalise: positive == improvement regardless of
+                    # metric direction.  Without this, RMSE/MAE wins are
+                    # stored as negative relative_improvement and any
+                    # downstream filter on positive sign rejects them.
+                    'relative_improvement': (
+                        (-1 if lower_is_better else 1) * delta / abs(base_mean)
+                        if base_mean != 0 else 0.0),
                     'kept_augmentations': sorted(all_kept),
                     'mean_features_added': float(np.mean(total_added)),
                     'fold_aug_info': fold_aug_info,

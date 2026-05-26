@@ -40,6 +40,7 @@ from experiments._shared import (
     find_best_hybrid, get_config,
     extract_top3_base_reps,
     INTERNAL_EVALUATORS, SCREENING_BUDGETS, FULL_BUDGETS,
+    DOWNSTREAM_MODELS,
     get_best_search_for_downstream,
 )
 from experiments.complexity.complexity_helpers import DATASET_REPS
@@ -103,7 +104,12 @@ def _evaluate_task(task_name, rep_preset, config):
     # -----------------------------------------------------------------
     # 1. Evaluate each individual rep with each model, track fold scores
     # -----------------------------------------------------------------
-    factories = get_model_factories(model_names, task_type=task_type,
+    # Restrict single-rep baseline to DOWNSTREAM_MODELS so the comparison
+    # against the hybrid pool (which also iterates DOWNSTREAM_MODELS below) is
+    # symmetric — config['models'] is 11 models, the hybrid pool was only 5
+    # (missing xgboost+ridge), which biased best_single in favour of models
+    # the hybrid could not match.
+    factories = get_model_factories(DOWNSTREAM_MODELS, task_type=task_type,
                                     n_samples=n_samples)
 
     best_single_score = None
@@ -182,7 +188,7 @@ def _evaluate_task(task_name, rep_preset, config):
     best_entry = None
     best_model_name = None
     search = None
-    for candidate_model in ['rf', 'svm', 'lightgbm', 'mlp', 'knn']:
+    for candidate_model in DOWNSTREAM_MODELS:
         try:
             s, m = get_best_search_for_downstream(
                 reps, labels, groups,

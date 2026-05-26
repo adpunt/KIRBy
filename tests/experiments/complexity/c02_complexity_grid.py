@@ -28,6 +28,7 @@ from experiments._shared import (
     _build_rep_factories,
     INTERNAL_EVALUATORS, FULL_BUDGETS,
 )
+from kirby.find_best_hybrid import _predict_for_metric
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -41,7 +42,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     models = get_model_factories(config['models'],
                                     task_type=data['task_type'],
                                     n_samples=len(data['labels']))
-    budgets = config['budgets']
+    # PCA baselines and the heatmap iterate the SAME full grid as the hybrid
+    # search; using config['budgets'] (SCREENING_BUDGETS=[50,500,1000,2000])
+    # left half the heatmap columns without PCA baseline entries.
+    budgets = list(FULL_BUDGETS)
     allocation_methods = config['allocations']
     importance_methods = config['importance_methods']
     n_folds = config['n_splits']
@@ -382,7 +386,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 X_val_p = pca.transform(X_val_s)
                 m = model_factory()
                 m.fit(X_train_p, labels[train_idx])
-                pca_scores.append(metric_fn(labels[val_idx], m.predict(X_val_p)))
+                # Use _predict_for_metric so AUC/probabilistic metrics get
+                # predict_proba — m.predict() returns class labels and gives a
+                # meaningless AUROC on classification datasets.
+                pca_scores.append(metric_fn(
+                    labels[val_idx],
+                    _predict_for_metric(m, X_val_p, metric_fn)))
             pca_baselines[budget][model_name] = (
                 float(np.mean(pca_scores)) if pca_scores else float('nan'))
 

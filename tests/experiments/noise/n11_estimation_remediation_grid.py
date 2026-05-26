@@ -46,11 +46,15 @@ NEIGHBOR_ESTIMATORS = {
     'activity_cliff_aware', 'distance_weighted', 'hybrid',
 }
 
-# All estimators to try (torch-dependent ones are try-imported)
+# All estimators to try (torch-dependent ones are try-imported).
+# leave_one_out removed (2026-05-26 audit decision): it required N model
+# fits per use, dominating runtime on datasets above ~500 samples while
+# the other estimators ran in seconds. The library function still exists
+# in kirby.utils.noise_estimation if any other experiment wants it.
 BASE_ESTIMATORS = [
     'neighbor_residual', 'local_variance_ratio', 'activity_cliff_aware',
     'distance_weighted', 'hybrid',
-    'cross_val', 'ensemble', 'leave_one_out',
+    'cross_val', 'ensemble',
     'gaussian_process', 'conformal', 'bayesian_rf',
 ]
 TORCH_ESTIMATORS = ['heteroscedastic_nn', 'deep_ensemble', 'quantile_regression']

@@ -200,22 +200,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 fold_scores.setdefault('uniform_all', []).append(
                     _score_prediction(rf, X_va_s, y_val, metric_fn, task_type))
 
-            # Natural hybrid (per-fold via search blueprint)
+            # Natural hybrid (per-fold via search blueprint).
+            # depth_N and uniform_all operate on base reps only, so the natural
+            # arm must also be base-reps-only to keep the comparison apples-to-
+            # apples. Augmentations were inflating natural's feature pool.
             if meta is not None:
                 try:
                     best_config = meta['best_config']
                     if 'blueprint' in best_config:
                         bp = best_config['blueprint']
-                        train_augs = (
-                            {n: A[train_idx] for n, A in augmentations.items()}
-                            if augmentations else None)
-                        val_augs = (
-                            {n: A[val_idx] for n, A in augmentations.items()}
-                            if augmentations else None)
                         X_tr_h, X_va_h, _fi = build_fold_hybrid(
                             train_reps, val_reps_fold, y_train, bp,
-                            augmentations_train=train_augs,
-                            augmentations_val=val_augs)
+                            augmentations_train=None,
+                            augmentations_val=None)
                         scaler = StandardScaler()
                         X_tr_s = scaler.fit_transform(X_tr_h)
                         X_va_s = scaler.transform(X_va_h)

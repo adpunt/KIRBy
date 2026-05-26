@@ -44,7 +44,7 @@ from experiments._shared import (
     INTERNAL_EVALUATORS, SCREENING_BUDGETS, FULL_BUDGETS,
 )
 from kirby.hybrid import create_hybrid, apply_augmentation_selection
-from kirby.find_best_hybrid import find_best_hybrid
+from kirby.find_best_hybrid import find_best_hybrid, _predict_for_metric
 
 
 def nogueira_stability(feature_sets, total_features):
@@ -223,7 +223,8 @@ def run(data, config, output_dir, dataset_name):
                 n_samples=len(y_train))
             model = model_factories[best_model]()
             model.fit(X_tr, y_train)
-            own_fold_scores[fold_i] = float(metric_fn(y_val, model.predict(X_va)))
+            own_fold_scores[fold_i] = float(metric_fn(
+                y_val, _predict_for_metric(model, X_va, metric_fn)))
             print(f"      Own-fold {metric_name}: {own_fold_scores[fold_i]:.4f}")
         except Exception as e:
             print(f"      Own-fold eval failed: {e}")
@@ -238,10 +239,18 @@ def run(data, config, output_dir, dataset_name):
 
     transfer_matrix = {}  # (source_fold, target_fold) -> score
 
+    # Seed the diagonal with Step 1's own-fold scores so the diagonal is
+    # consistent with the explicit own-fold eval (avoids stochastic divergence
+    # from re-running create_hybrid + fit a second time on the same data).
+    for fold_i, sc in own_fold_scores.items():
+        transfer_matrix[(fold_i, fold_i)] = sc
+
     for src_fold, src_bp in fold_blueprints.items():
         for tgt_fold, (train_idx, val_idx) in enumerate(folds):
             if tgt_fold not in fold_blueprints:
                 continue  # skip folds that failed
+            if src_fold == tgt_fold:
+                continue  # diagonal already populated from own-fold eval
 
             # Use target fold's TRAINING data to create hybrid with source's config,
             # then evaluate on target fold's TEST data
@@ -273,19 +282,22 @@ def run(data, config, output_dir, dataset_name):
                 X_tr = scaler.fit_transform(X_train)
                 X_va = scaler.transform(X_val)
 
-                # Use the SAME model type as the source fold's best model.
-                best_model_src = fold_best_models.get(src_fold)
-                if best_model_src is not None:
+                # Use the TARGET fold's best model so the feature-selection
+                # contrast (own-blueprint vs cross-blueprint) is not confounded
+                # by model-type variation across folds.
+                best_model_tgt = fold_best_models.get(tgt_fold)
+                if best_model_tgt is not None:
                     factories = get_model_factories(
-                        [best_model_src], task_type=task_type,
+                        [best_model_tgt], task_type=task_type,
                         n_samples=len(y_train_tgt))
-                    model = factories[best_model_src]()
+                    model = factories[best_model_tgt]()
                 elif task_type == 'classification':
                     model = RandomForestClassifier(n_estimators=100, random_state=42, n_jobs=-1)
                 else:
                     model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
                 model.fit(X_tr, y_train_tgt)
-                score = float(metric_fn(y_val_tgt, model.predict(X_va)))
+                score = float(metric_fn(
+                    y_val_tgt, _predict_for_metric(model, X_va, metric_fn)))
                 transfer_matrix[(src_fold, tgt_fold)] = score
             except Exception:
                 continue

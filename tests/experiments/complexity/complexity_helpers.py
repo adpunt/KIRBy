@@ -5,7 +5,9 @@ run_all() with its rep list from the pipeline readiness tiers.
 Cross-dataset experiments (C03, C14) stay in their own files and
 consume the per-dataset JSON outputs.
 
-Config: RF / LightGBM / MLP, 1-fold scaffold CV, fast search.
+Config: SPEED_TIERS['full'] — 5-fold scaffold CV, 6 downstream models
+(DOWNSTREAM_MODELS = rf / xgboost / ridge / svm / mlp / lightgbm),
+FULL_BUDGETS, INTERNAL_EVALUATORS = ['match', 'rf', 'svm', 'lightgbm', 'mlp'].
 """
 
 import sys
@@ -607,8 +609,8 @@ DATASET_REPS = {
             'diff_mol2vec', 'onehot_components', 'reactant_mol2vec', 'rxnfp',
             'diff_maccs', 'reactant_mordred', 'diff_mordred'],
         'augmentation': [
-            'product_maccs', 'reactant_maccs', 'onehot_components',
-            'diff_maccs', 'product_pharmacophore3d',
+            'product_maccs', 'reactant_maccs',
+            'product_pharmacophore3d',
             'reactant_pharmacophore3d'],
         'top_tier': [
             'reactant_avalon', 'diff_avalon', 'diff_mhg_gnn', 'diff_ecfp4',
@@ -841,7 +843,7 @@ DATASET_REPS = {
         'general': [
             'tetranuc_freq', 'tnf_canonical', 'kmer4', 'kmer5', 'grover_dna',
             'kmer3', 'nt_v2_500m', 'nt_v2_250m', 'mistral_dna', 'kmer6',
-            'hyenadna', 'codon_usage'],
+            'hyenadna'],
         'augmentation': ['codon_usage'],
         'top_tier': ['tetranuc_freq', 'tnf_canonical', 'kmer4', 'kmer5',
                      'grover_dna', 'kmer3', 'nt_v2_500m', 'nt_v2_250m'],
@@ -875,20 +877,28 @@ AUG_GROUPS = {
     },
     'dta': {
         'drug_structural': ['drug_ecfp4', 'drug_maccs', 'drug_avalon',
-                            'drug_pharmacophore3d'],
-        'drug_learned': ['drug_chemberta', 'drug_molformer', 'drug_grover',
+                            'drug_pdv'],
+        'drug_learned': ['drug_chemberta', 'drug_molformer', 'drug_selformer',
                          'drug_mol2vec'],
-        'protein': ['prot_esm2', 'prot_prost', 'prot_t5', 'prot_aac'],
-        'interaction': ['drug_sns', 'mordred'],
+        'drug_descriptor': ['drug_mordred'],
+        'protein': ['protein_esm2', 'protein_saprot', 'protein_esmc',
+                    'protein_esm2_midlayers', 'protein_esm3',
+                    'protein_esm2_pocket', 'protein_kmer'],
     },
     'tcga': {
-        'expression': ['rnaseq_pca50', 'rnaseq_hallmark', 'rnaseq_kegg',
-                        'rnaseq_reactome', 'gsva_hallmark'],
-        'mutation': ['mutation_binary', 'mutation_burden', 'mutation_signature'],
-        'epigenetic': ['methylation_pca50', 'promoter_meth'],
-        'structural': ['cnv_arm', 'cnv_focal', 'splicing_psi50'],
-        'immune': ['immune_cibersort', 'immune_xcell', 'gene_immune'],
-        'histology': ['wsi_titan', 'wsi_uni2h'],
+        'expression': ['gene_geneformer_v2', 'gene_bulkrnabert',
+                       'gene_geneformer', 'gene_stats',
+                       'gene_chromosome_arm'],
+        'mutation': ['mutation_matrix', 'mut_driver', 'mut_pca50',
+                     'mut_pathway', 'mut_tmb'],
+        'epigenetic': ['methyl_pca50', 'methyl_hvg'],
+        'cnv': ['cnv_pca50', 'cnv_gistic'],
+        'immune': ['immune_cibersort', 'immune_xcell', 'stemness_mrnasi',
+                   'purity_consensus', 'hrd_score', 'cimp_status'],
+        'histology': ['wsi_titan', 'wsi_gigapath', 'wsi_hoptimus0',
+                      'wsi_ctranspath', 'wsi_moco', 'wsi_phikon'],
+        'mirna': ['mirna_top200'],
+        'protein': ['rppa'],
     },
     'reaction': {
         'fingerprint': ['reactant_ecfp4', 'diff_ecfp4', 'reactant_avalon',
@@ -1081,17 +1091,26 @@ def run_all(dataset_name: str, output_dir: str,
     aug_rep_names = DATASET_REPS.get(dataset_name, {}).get('augmentation', [])
     if aug_rep_names:
         missing = [r for r in aug_rep_names if r not in reps]
+        aug_reps = {}
         if missing:
             print(f"  Loading {len(missing)} augmentation reps: {missing}")
             aug_data = load_data(dataset_name, rep_preset='all', rep_names=missing)
-            aug_reps = {}
             for rn, arr in aug_data['reps'].items():
                 if int(np.isnan(arr).sum()) > 0:
                     arr = np.nan_to_num(arr, nan=0.0)
                 aug_reps[rn] = arr
-            data['augmentations'] = aug_reps
-        else:
-            data['augmentations'] = {r: reps[r] for r in aug_rep_names}
+        # Merge in any aug reps that were already loaded as base reps.
+        for rn in aug_rep_names:
+            if rn in reps and rn not in aug_reps:
+                aug_reps[rn] = reps[rn]
+        # If an aug rep was ONLY supposed to be an augmentation (not a base
+        # rep), drop it from data['reps'] so find_best_hybrid does not see it
+        # in both base and augmentation sets (double-counting / cache pollution).
+        _general = DATASET_REPS.get(dataset_name, {}).get('general', [])
+        for rn in aug_rep_names:
+            if rn in reps and rn not in _general:
+                reps.pop(rn, None)
+        data['augmentations'] = aug_reps
         print(f"  Augmentations ({len(data['augmentations'])}): "
               f"{', '.join(f'{k}={v.shape[1]}' for k, v in data['augmentations'].items())}")
     else:
@@ -1258,6 +1277,7 @@ def _experiment_full_name(exp_id: str) -> str:
         'c09': 'c09_formal_analysis',
         'c10': 'c10_noise_robustness',
         'c11': 'c11_ensemble_vs_hybrid',
+        'c12': 'c12_modality_ablation',
         'c13': 'c13_forward_compatibility',
         'c15': 'c15_ml_theory_depth',
         'c16': 'c16_feature_selection_as_regularization',

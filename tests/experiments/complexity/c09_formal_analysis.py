@@ -27,6 +27,7 @@ from experiments._shared import (
     INTERNAL_EVALUATORS,
 )
 from kirby.hybrid import create_hybrid
+from experiments._shared import create_hybrid_cached
 # TODO: create_hybrid API not finalised — allocation_method / importance_method
 #       semantics may change after framework experiments. Revisit call sites below.
 
@@ -250,7 +251,10 @@ def _run_anova_decomposition(exp2_results):
         'n_observations': n_total,
         'n_models': len(models_set),
         'n_budgets': len(budgets_set),
-        'grand_mean_r2': float(grand_mean),
+        # ANOVA values are computed over whatever metric c02 used (R² for
+        # molecular, CI for DTA, AUROC/MCC for classification, Spearman for
+        # antibody) — naming the key "r2" was wrong for non-molecular runs.
+        'grand_mean_score': float(grand_mean),
         'eta2': eta2,
         'f_model': float(f_model), 'p_model': float(p_model),
         'f_budget': float(f_budget), 'p_budget': float(p_budget),
@@ -335,8 +339,8 @@ def _run_information_retention(data, budgets, search_speed='full', dataset_name=
             y_train = labels[train_idx]
             train_augs = {k: v[train_idx] for k, v in augs.items()} if augs else None
             try:
-                X_hybrid, _ = create_hybrid(
-                    train_reps, y_train,
+                X_hybrid, _ = create_hybrid_cached(
+                    train_reps, y_train, train_idx,
                     allocation_method=alloc,
                     importance_method=imp,
                     budget=budget,
@@ -393,7 +397,11 @@ def _run_information_retention(data, budgets, search_speed='full', dataset_name=
             plateau_mask = gains < 0.1 * max_gain
             if np.any(plateau_mask):
                 inflection_idx = int(np.argmax(plateau_mask))
-                results['inflection_budget'] = results['budgets'][inflection_idx + 1]
+                # gains[i] is the MI increase from budgets[i]→budgets[i+1].
+                # When plateau_mask[i] is first True the plateau STARTS at
+                # budgets[i] (the last productive budget) — that is the
+                # inflection point, not budgets[i+1].
+                results['inflection_budget'] = results['budgets'][inflection_idx]
                 print(f"    Inflection point: budget ~{results['inflection_budget']}")
             else:
                 print("    No inflection detected (MI still increasing)")
@@ -465,8 +473,8 @@ def _run_effective_rank_analysis(data, budgets, search_speed='full', dataset_nam
             try:
                 train_reps = {k: v[train_idx] for k, v in reps.items()}
                 train_augs = {k: v[train_idx] for k, v in augs.items()} if augs else None
-                X_hybrid, _ = create_hybrid(
-                    train_reps, labels[train_idx],
+                X_hybrid, _ = create_hybrid_cached(
+                    train_reps, labels[train_idx], train_idx,
                     allocation_method=alloc,
                     importance_method=imp,
                     budget=budget,

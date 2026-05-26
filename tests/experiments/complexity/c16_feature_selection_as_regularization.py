@@ -180,6 +180,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     task_type = data['task_type']
+    augmentations = data.get('augmentations')
     total_dim = sum(v.shape[1] for v in reps.values())
     n_samples = len(labels)
     # capped_full = "full-dim baseline" budget. Bounded by 2n to keep MLP/SVM
@@ -202,7 +203,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Apply canonical model-size gate via _resolve_models (list form triggers
     # _max_samples and _DOMAIN_MODEL_SKIPS / _DATASET_STRATEGY_SKIPS lookups).
-    _family_to_canonical = {'Ridge': 'ridge', 'LogReg': 'logreg',
+    # 'LogReg' has no entry in DEFAULT_MODELS; route it through 'ridge' for
+    # _max_samples and skip gating purposes (same family for gating intent).
+    _family_to_canonical = {'Ridge': 'ridge', 'LogReg': 'ridge',
                             'RF': 'rf', 'SVM': 'svm'}
     # c16 evaluates on a fixed blueprint pulled via aug-aware pool helper;
     # 'uncapped' when augs present, 'none' otherwise.
@@ -220,8 +223,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"(canonical={canonical}, n_samples={n_samples}, "
                   f"strategy={_c16_strategy})")
             del families[fam_name]
-
-    augmentations = data.get('augmentations')
 
     # Pre-compute search blueprints per budget.
     # - pool_budgets: precompute has results, use the pool helper (free).
