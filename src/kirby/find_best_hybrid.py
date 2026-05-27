@@ -1705,7 +1705,7 @@ SPEED_TIERS = {
 MODEL_MAX_BUDGET = {
     'gp': 1000,
     'knn': 2000,
-    'svm': 1000,
+    'svm': 500,
     'mlp': 1000,
     'bnn': 1000,
     'dnn': 1000,
