@@ -140,9 +140,13 @@ fi
 
 # Per-segment FASTAs (V/D/J)
 if [ ! -s "$GERM_DIR/canis_lupus_familiaris_imgt_V.fasta" ]; then
+    # IMGT tags canine entries with breed suffixes ("Canis lupus familiaris_Boxer",
+    # "_Labrador Retriever", etc.) — the canonical canine IGH germline DB is the
+    # Boxer assembly. Prefix-match picks up all 9 breed-tagged species strings.
     python scripts/filter_imgt_germlines.py \
         --input "$IMGT_COMBINED" \
         --species "Canis lupus familiaris" \
+        --species-match prefix \
         --locus IGH \
         --out-dir "$GERM_DIR" \
         --out-prefix canis_lupus_familiaris_imgt \
