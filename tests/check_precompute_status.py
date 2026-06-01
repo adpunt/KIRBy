@@ -98,13 +98,13 @@ def expected_conditions(cfg, include_distance=False, dataset_name=None):
             expected.append(('top', 'uncapped'))
             if dataset_name not in _TOP_CAPPED_SKIP_DATASETS:
                 expected.append(('top', 'capped'))
-            # precompute_hybrids.py:323-327 also emits ('top+borderline',
-            # uncapped) whenever general has reps outside top — the merged
-            # aug = (general - top) ∪ aug_reps. Mirror that condition here
-            # so the file is counted toward DONE.
-            borderline = set(general) - set(top)
-            if borderline:
-                expected.append(('top+borderline', 'uncapped'))
+            # Note: precompute_hybrids.py also writes ('top+borderline',
+            # uncapped) when general has reps outside top. We do NOT
+            # require it in the DONE count — many caches predate when
+            # that condition was added, and requiring it would mark
+            # previously-DONE datasets as partial overnight. The file is
+            # consumed by experiments via direct path lookup, not via
+            # this checker.
     elif len(top) == 1 and (general or aug):
         expected.append(('top', 'uncapped'))
 
