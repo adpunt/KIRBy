@@ -78,12 +78,15 @@ WORST_RC=0
 for CAT in "${_CATEGORIES[@]}"; do
     echo ""
     echo "--- Category: ${CAT} ---"
+    # -u: unbuffered stdout. Without this Python's ~8KB block buffer hides
+    # progress from slurm-<jid>.out until the buffer fills (can be hours on
+    # cache-hit jobs), making monitor_slurm.sh blind to running jobs.
     if [ -n "$EXPERIMENTS" ]; then
-        python tests/experiments/run_dataset.py ${CAT} ${DATASET} \
+        python -u tests/experiments/run_dataset.py ${CAT} ${DATASET} \
             --pruning-mode "${PRUNING_MODE}" \
             --experiments ${EXPERIMENTS}
     else
-        python tests/experiments/run_dataset.py ${CAT} ${DATASET} \
+        python -u tests/experiments/run_dataset.py ${CAT} ${DATASET} \
             --pruning-mode "${PRUNING_MODE}"
     fi
     RC=$?
