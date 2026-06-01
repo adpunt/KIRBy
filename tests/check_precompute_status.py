@@ -73,6 +73,12 @@ _TOP_CAPPED_SKIP_DATASETS = {
     'tcga_luad_vs_lusc',
     'ddg_combined',
     'nt_H3K4me3',
+    'adme_mdr1',
+    'caco2',
+    'herg_ki',
+    'flab_thermo_tresanco',
+    'flab_binding_adams',
+    'flab_expression_adams',
 }
 
 

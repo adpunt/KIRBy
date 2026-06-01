@@ -52,8 +52,15 @@ squeue -u "$USER_NAME" -h -o "%i|%j|%T|%M|%L|%R" | while IFS='|' read -r jid nam
         step="-"
         size="0"
     else
-        pct=$(grep -oE "^  \[[0-9]+/[0-9]+\]" "$log" 2>/dev/null | tail -1)
+        # Catch [N/M] anywhere on a line, not just at start. Precompute
+        # prints "  [N/M] model/...", experiment phase prints things like
+        # "[1/3] c01_baselines" without the leading two-space indent.
+        pct=$(grep -oE "\[[0-9]+/[0-9]+\]" "$log" 2>/dev/null | tail -1)
         pct="${pct:-???}"
+        # If no [N/M] but the experiment phase has started, mark as "exp".
+        if [ "$pct" = "???" ] && grep -qE "^=== .* experiments:|^--- Category:" "$log" 2>/dev/null; then
+            pct="[exp]"
+        fi
         step=$(grep -oE "[a-z_0-9.]+/[a-z_0-9.]+/[a-z_]+/b=[0-9]+/ev=[a-z]+" "$log" 2>/dev/null | tail -1)
         step="${step:--}"
         size=$(stat -c %s "$log" 2>/dev/null || echo 0)
@@ -122,6 +129,7 @@ function hours(rt,    np,a,t,b,dd) {
 function summarize(prog, rt,    nm, parts, n, m, eh, rem) {
     if (prog=="") return "-";
     eh=hours(rt);
+    if (prog ~ /\[exp\]/) return sprintf(" [exp]  %4.0fh", eh);
     nm=prog; sub(/^\[/, "", nm); sub(/\].*/, "", nm);
     if (split(nm, parts, "/") == 2) {
         n=parts[1]+0; m=parts[2]+0;
