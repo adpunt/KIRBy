@@ -36,7 +36,7 @@ USER_NAME="${USER}"
 TMPFILE=$(mktemp)
 trap 'rm -f $TMPFILE' EXIT
 
-squeue -u "$USER_NAME" -h -o "%i|%j|%T|%M|%L|%R" | while IFS='|' read -r jid name state runtime left node; do
+squeue -u "$USER_NAME" -h -o "%i|%j|%T|%M|%L|%R|%S" | while IFS='|' read -r jid name state runtime left node startt; do
     [ "$state" = "RUNNING" ] || continue
 
     # Strip prefix to get bare dataset name (cx_, sim_, etc.); keep prefix
@@ -45,6 +45,38 @@ squeue -u "$USER_NAME" -h -o "%i|%j|%T|%M|%L|%R" | while IFS='|' read -r jid nam
     [ -z "$prefix" ] && prefix="other"
     dataset=$(echo "$name" | sed -E 's/^(cx|sim|cmp|noi|fed|opig|frm)_//')
     domain=$(classify "$dataset")
+
+    # Map prefix → tests/results/<category> subdir for disk-based progress.
+    case "$prefix" in
+        cx)   cat_dir="complexity" ;;
+        sim)  cat_dir="similarity" ;;
+        noi)  cat_dir="noise" ;;
+        fed)  cat_dir="federated" ;;
+        opig) cat_dir="opig" ;;
+        *)    cat_dir="" ;;
+    esac
+
+    # Disk-based experiment progress: count ${dataset}.json files written
+    # AFTER job start in tests/results/${cat_dir}/<expN>/. Bypasses Python
+    # stdout buffering — JSON writes are sync'd to disk regardless of
+    # whether print() has flushed yet.
+    disk_done=0
+    disk_curr=""
+    if [ -n "$cat_dir" ] && [ -d "tests/results/${cat_dir}" ] && [ -n "$startt" ] && [ "$startt" != "N/A" ]; then
+        # `-newermt $startt` filters out stale JSONs from prior waves.
+        # If the job has been running, only files written since are counted.
+        result_files=$(find "tests/results/${cat_dir}" -mindepth 2 -maxdepth 2 \
+            -name "${dataset}.json" -type f -newermt "$startt" 2>/dev/null)
+        if [ -n "$result_files" ]; then
+            disk_done=$(echo "$result_files" | wc -l | tr -d ' ')
+            # Latest by mtime → which experiment most recently saved
+            latest=$(echo "$result_files" | xargs -I{} stat -c "%Y {}" {} 2>/dev/null | sort -nr | head -1 | awk '{print $2}')
+            if [ -n "$latest" ]; then
+                # Extract "c05" or "s08" from the directory name
+                disk_curr=$(basename "$(dirname "$latest")" | grep -oE "^[cs][0-9]+" | tr '[:lower:]' '[:upper:]')
+            fi
+        fi
+    fi
 
     log="slurm-${jid}.out"
     if [ ! -f "$log" ]; then
@@ -57,21 +89,20 @@ squeue -u "$USER_NAME" -h -o "%i|%j|%T|%M|%L|%R" | while IFS='|' read -r jid nam
         # "[1/3] c01_baselines" without the leading two-space indent.
         pct=$(grep -oE "\[[0-9]+/[0-9]+\]" "$log" 2>/dev/null | tail -1)
         pct="${pct:-???}"
-        # Experiment-phase markers from the cx/sim helpers:
+        # Experiment-phase markers in the log (when buffer has flushed):
         #   start of each sub-experiment:  "^EXPERIMENT C05: TITLE"
         #   end of each sub-experiment:    "^  c05 done in 84.2s"
-        # When the job has reached the experiment phase, the [N/M] from
-        # precompute is stale — replace pct with the richer experiment
-        # label ("[C05 4done]") so the by-dataset pivot can show progress.
         exp_curr=$(grep -oE "^EXPERIMENT [CS][0-9]+" "$log" 2>/dev/null \
             | tail -1 | awk '{print $2}')
         exp_done=$(grep -cE "^  [cs][0-9]+ done in [0-9.]+s" "$log" 2>/dev/null)
+        # Precedence: log-based current marker (most accurate) > disk-based
+        # progress (unaffected by stdout buffering) > legacy [exp] fallback.
         if [ -n "$exp_curr" ]; then
             pct="[${exp_curr} ${exp_done}done]"
+        elif [ -n "$disk_curr" ]; then
+            # "~" suffix: from disk; actual current is at-or-past this experiment.
+            pct="[${disk_curr}~ ${disk_done}done]"
         elif [ "$pct" = "???" ] && grep -qE "^=== .* experiments:|^--- Category:" "$log" 2>/dev/null; then
-            # Older fallback: experiment phase header seen but no
-            # EXPERIMENT C/S marker yet (shouldn't fire under current
-            # helpers, kept as safety net).
             pct="[exp]"
         fi
         step=$(grep -oE "[a-z_0-9.]+/[a-z_0-9.]+/[a-z_]+/b=[0-9]+/ev=[a-z]+" "$log" 2>/dev/null | tail -1)
@@ -133,33 +164,45 @@ echo ""
 echo "--- BY DATASET (cx vs sim: progress, elapsed, eta-remaining) ---"
 printf "%-32s  %-30s  %-30s\n" "DATASET" "CX" "SIM"
 awk -F'|' '
-function hours(rt,    np,a,t,b,dd) {
+function hours(rt,    np,a,t,b,dd,nc) {
+    # squeue %M format depends on duration:
+    #   SS          (< 1 min)
+    #   MM:SS       (< 1 hour)
+    #   HH:MM:SS    (< 1 day)
+    #   D-HH:MM:SS  (>= 1 day)
     np=split(rt, a, "-");
     if (np==2) { dd=a[1]; t=a[2]; } else { dd=0; t=a[1]; }
-    split(t, b, ":");
-    return dd*24 + b[1] + b[2]/60 + b[3]/3600;
+    nc=split(t, b, ":");
+    if (nc==1)       return dd*24 + b[1]/3600;             # SS
+    else if (nc==2)  return dd*24 + b[1]/60 + b[2]/3600;   # MM:SS
+    else             return dd*24 + b[1] + b[2]/60 + b[3]/3600;  # HH:MM:SS
 }
-function summarize(prog, rt,    nm, parts, n, m, eh, rem, ename, dcnt) {
+function fmt_elapsed(eh) {
+    if (eh < 1) return sprintf("%3dm", int(eh*60+0.5));
+    else        return sprintf("%3.0fh", eh);
+}
+function summarize(prog, rt,    nm, parts, n, m, eh, rem, ename, dcnt, tilde) {
     if (prog=="") return "-";
     eh=hours(rt);
-    if (prog ~ /\[exp\]/) return sprintf(" [exp]  %4.0fh", eh);
-    # Experiment-phase format from the loop above: "[C05 4done]" or "[S08 12done]"
-    if (prog ~ /^\[[CS][0-9]+ [0-9]+done\]$/) {
-        ename=prog; sub(/^\[/, "", ename); sub(/ .*/, "", ename);
-        dcnt=prog; sub(/^\[[CS][0-9]+ /, "", dcnt); sub(/done\].*/, "", dcnt);
-        return sprintf("%-4s %sdone %4.0fh", ename, dcnt, eh);
+    if (prog ~ /\[exp\]/) return sprintf(" [exp]  %s", fmt_elapsed(eh));
+    # Experiment-phase: "[C05 4done]" (from log) or "[C05~ 4done]" (from disk)
+    if (prog ~ /^\[[CS][0-9]+~? [0-9]+done\]$/) {
+        tilde = (prog ~ /~/) ? "~" : ""
+        ename=prog; sub(/^\[/, "", ename); sub(/~? .*/, "", ename);
+        dcnt=prog;  sub(/^\[[CS][0-9]+~? /, "", dcnt); sub(/done\].*/, "", dcnt);
+        return sprintf("%s%s %sdone %s", ename, tilde, dcnt, fmt_elapsed(eh));
     }
     nm=prog; sub(/^\[/, "", nm); sub(/\].*/, "", nm);
     if (split(nm, parts, "/") == 2) {
         n=parts[1]+0; m=parts[2]+0;
-        if (n>0 && m>0 && n==m) return sprintf("%5.1f%% %4.0fh wrap-up", 100.0, eh);
+        if (n>0 && m>0 && n==m) return sprintf("%5.1f%% %s wrap-up", 100.0, fmt_elapsed(eh));
         if (n>0 && m>0) {
             rem = eh * (m/n - 1);
-            if (rem >= 999.5) return sprintf("%5.1f%% %4.0fh +%4.0fh*", 100*n/m, eh, rem);
-            return sprintf("%5.1f%% %4.0fh +%4.0fh", 100*n/m, eh, rem);
+            if (rem >= 999.5) return sprintf("%5.1f%% %s +%4.0fh*", 100*n/m, fmt_elapsed(eh), rem);
+            return sprintf("%5.1f%% %s +%4.0fh", 100*n/m, fmt_elapsed(eh), rem);
         }
     }
-    return sprintf("    ?  %4.0fh", eh);
+    return sprintf("    ? %s", fmt_elapsed(eh));
 }
 {
     pfx=$9; jid=$2+0; ds=$3; rt=$4; prog=$6;
