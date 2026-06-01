@@ -315,11 +315,27 @@ def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
             # Single general rep — use augmentation mode
             conditions.append(('general', general_reps, aug_reps, 'uncapped'))
 
+        # Datasets where top/capped is infeasible on the 7-day partition.
+        # Justified per dataset from check_precompute timing data (2026-06-01):
+        # the capped strategy inflates the training set so far that per-cell
+        # cost is 70-400x uncapped, projecting 200-8000h vs the 168h limit.
+        # See SVM_CAP_RESUBMIT_2026_05_27.md / per-dataset notes.
+        TOP_CAPPED_SKIP_DATASETS = {
+            'tcga_brca_pam50',    # 4/5 done; top/capped projected ~8400h
+            'tcga_luad_vs_lusc',  # 4/5 done; top/capped projected ~1700h
+            'ddg_combined',       # 4/5 done; top/capped projected ~360h
+            'nt_H3K4me3',         # 2/5 done; n=18244, top/capped won't fit
+        }
+
         if 'top' in tiers and len(top_reps) >= 2:
             conditions.append(('top', top_reps, None, 'none'))
             if aug_reps:
                 conditions.append(('top', top_reps, aug_reps, 'uncapped'))
-                conditions.append(('top', top_reps, aug_reps, 'capped'))
+                if dataset_name in TOP_CAPPED_SKIP_DATASETS:
+                    print(f"  SKIP top/capped for {dataset_name} "
+                          f"(infeasible on 7-day partition — see check_precompute)")
+                else:
+                    conditions.append(('top', top_reps, aug_reps, 'capped'))
             # Also test with general-minus-top as augmentation (borderline reps)
             borderline = {k: v for k, v in general_reps.items() if k not in top_reps}
             if borderline:

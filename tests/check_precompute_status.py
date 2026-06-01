@@ -65,7 +65,18 @@ def _get_domain(name):
     return 'molecular'
 
 
-def expected_conditions(cfg, include_distance=False):
+# Datasets where top/capped is skipped by precompute_hybrids.py because the
+# capped strategy projects past the 7-day partition limit. Keep in sync with
+# TOP_CAPPED_SKIP_DATASETS in tests/precompute_hybrids.py.
+_TOP_CAPPED_SKIP_DATASETS = {
+    'tcga_brca_pam50',
+    'tcga_luad_vs_lusc',
+    'ddg_combined',
+    'nt_H3K4me3',
+}
+
+
+def expected_conditions(cfg, include_distance=False, dataset_name=None):
     """Return list of expected (tier, aug_strategy) tuples for a dataset."""
     general = cfg.get('general', [])
     top = cfg.get('top_tier', [])
@@ -85,7 +96,8 @@ def expected_conditions(cfg, include_distance=False):
         expected.append(('top', 'none'))
         if aug:
             expected.append(('top', 'uncapped'))
-            expected.append(('top', 'capped'))
+            if dataset_name not in _TOP_CAPPED_SKIP_DATASETS:
+                expected.append(('top', 'capped'))
     elif len(top) == 1 and (general or aug):
         expected.append(('top', 'uncapped'))
 
@@ -179,7 +191,8 @@ def find_top_rep_dim_files(dataset, searches_dir):
 
 
 def classify_dataset(dataset, cfg, searches_dir, include_distance):
-    expected = expected_conditions(cfg, include_distance=include_distance)
+    expected = expected_conditions(
+        cfg, include_distance=include_distance, dataset_name=dataset)
     results = []
     n_ok = 0
     for tier, strat in expected:
