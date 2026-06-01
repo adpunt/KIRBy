@@ -45,7 +45,7 @@ import numpy as np
 
 from experiments._shared import (
     load_data, SCREENING_BUDGETS, FULL_BUDGETS, DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
-    DISTANCE_BUDGETS, DISTANCE_EVALUATORS,
+    DISTANCE_BUDGETS, DISTANCE_EVALUATORS, TOP_CAPPED_MAX_N,
 )
 from experiments.complexity.complexity_helpers import DATASET_REPS
 from kirby.find_best_hybrid import find_best_hybrid, _cache_stats_summary, _reset_cache_stats
@@ -315,34 +315,22 @@ def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
             # Single general rep — use augmentation mode
             conditions.append(('general', general_reps, aug_reps, 'uncapped'))
 
-        # Datasets where top/capped is infeasible on the 7-day partition.
-        # Justified per dataset from check_precompute timing data (2026-06-01):
-        # the capped strategy inflates the training set so far that per-cell
-        # cost is 70-400x uncapped, projecting 200-8000h vs the 168h limit.
-        # See SVM_CAP_RESUBMIT_2026_05_27.md / per-dataset notes.
-        TOP_CAPPED_SKIP_DATASETS = {
-            'tcga_brca_pam50',    # 4/5 done; top/capped projected ~8400h
-            'tcga_luad_vs_lusc',  # 4/5 done; top/capped projected ~1700h
-            'ddg_combined',       # 4/5 done; top/capped projected ~360h
-            'nt_H3K4me3',         # 2/5 done; n=18244, top/capped won't fit
-            # Extension (2026-06-02): same justification — sitting at 4/5,
-            # top/capped projects past 7-day partition for each (rf at
-            # capped strategy on n>2000 → 80-200h per cell).
-            'adme_mdr1',
-            'caco2',
-            'herg_ki',
-            'flab_thermo_tresanco',
-            'flab_binding_adams',
-            'flab_expression_adams',
-        }
+        # Top/capped is only emitted when n_samples <= TOP_CAPPED_MAX_N
+        # (imported from experiments._shared as single source of truth).
+        # Above that threshold the capped strategy projects past the 7-day
+        # partition limit (empirically: top/capped has only ever completed
+        # for n<=242; n=429 ddg_combined has never finished within a 7d
+        # window). Experiments fall back to top/uncapped on larger datasets.
+        n_samples = len(labels)
 
         if 'top' in tiers and len(top_reps) >= 2:
             conditions.append(('top', top_reps, None, 'none'))
             if aug_reps:
                 conditions.append(('top', top_reps, aug_reps, 'uncapped'))
-                if dataset_name in TOP_CAPPED_SKIP_DATASETS:
+                if n_samples > TOP_CAPPED_MAX_N:
                     print(f"  SKIP top/capped for {dataset_name} "
-                          f"(infeasible on 7-day partition — see check_precompute)")
+                          f"(n={n_samples} > {TOP_CAPPED_MAX_N}; "
+                          f"projects past 7-day partition)")
                 else:
                     conditions.append(('top', top_reps, aug_reps, 'capped'))
             # Also test with general-minus-top as augmentation (borderline reps)

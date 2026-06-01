@@ -260,6 +260,15 @@ FULL_BUDGETS = [10, 25, 50, 100, 250, 500, 1000, 2000]
 DISTANCE_BUDGETS = [10, 25, 50, 100, 250, 500]
 DISTANCE_EVALUATORS = ['knn', 'ridge', 'rf', 'mlp', 'lightgbm', 'svm']
 
+# Top/capped is only emitted when n_samples <= TOP_CAPPED_MAX_N. Above
+# that threshold the capped strategy projects past the 7-day partition
+# limit (empirically: top/capped has only ever completed for n<=242;
+# n=429 ddg_combined has never finished within a 7d window).
+# Used by precompute_hybrid_searches (below) AND by c02/c05/c07 to skip
+# their own direct find_best_hybrid(strategy='capped') calls when the
+# dataset (or subsample / subpop) is above the threshold.
+TOP_CAPPED_MAX_N = 250
+
 # Core 6 downstream models (lit-validated across molecular, antibody, DTA, TCGA, reaction).
 # RF + XGBoost (tree ensembles), Ridge (linear probe), SVM (kernel), MLP (neural), LightGBM (boosting).
 DOWNSTREAM_MODELS = ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm']
@@ -2189,9 +2198,16 @@ def precompute_hybrid_searches(reps, labels, groups, config,
         aug_conditions.append('uncapped')
         # Capped lives on the top tier only, and only for the standard
         # (non-distance) lineage. Distance precompute doesn't emit capped
-        # because no consumer needs it.
+        # because no consumer needs it. Above n=TOP_CAPPED_MAX_N the
+        # capped strategy projects past the 7-day partition; skip it so
+        # experiments don't sit there computing it on the spot.
         if tier == 'top':
-            aug_conditions.append('capped')
+            _n = len(labels)
+            if _n <= TOP_CAPPED_MAX_N:
+                aug_conditions.append('capped')
+            elif verbose:
+                print(f"  SKIP top/capped for {dataset_name} "
+                      f"(n={_n} > {TOP_CAPPED_MAX_N}; would project past 7d)")
     if os.environ.get('KIRBY_PRECOMPUTE_REVERSE_ORDER') == '1':
         aug_conditions = list(reversed(aug_conditions))
         if verbose:

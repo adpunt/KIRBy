@@ -22,7 +22,7 @@ from experiments._shared import (
     compute_intrinsic_dimensionality,
     find_best_hybrid,
     extract_top3_base_reps,
-    INTERNAL_EVALUATORS,
+    INTERNAL_EVALUATORS, TOP_CAPPED_MAX_N,
     get_best_search_for_downstream,
 )
 
@@ -177,7 +177,12 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             print(f"    {subpop_name}: eff_rank={metrics['effective_rank']:.1f}, "
                   f"MI={metrics.get('mi', '?')}, PCA95={metrics.get('pca_95', '?')}")
 
-            # Use find_best_hybrid for proper search
+            # Use find_best_hybrid for proper search.
+            # Subpop-specific cache key — won't collide with main precompute.
+            # Capped is fine for small subpops but projects past the 7-day
+            # partition when subpop n>TOP_CAPPED_MAX_N. Fall back to uncapped.
+            n_sub = int(mask.sum())
+            sub_aug_strategy = 'capped' if n_sub <= TOP_CAPPED_MAX_N else 'uncapped'
             top3 = []
             try:
                 search = find_best_hybrid(
@@ -185,7 +190,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                     speed=search_speed,
                     budgets=budgets,
                     augmentations=sub_augs,
-                    augmentation_strategy='capped',
+                    augmentation_strategy=sub_aug_strategy,
                     internal_evaluators=INTERNAL_EVALUATORS,
                     metric=metric_name,
                     task_type=data['task_type'],

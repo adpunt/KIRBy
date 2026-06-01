@@ -27,6 +27,7 @@ from experiments._shared import (
     extract_top3_base_reps,
     _build_rep_factories,
     INTERNAL_EVALUATORS, FULL_BUDGETS,
+    TOP_CAPPED_MAX_N,
 )
 from kirby.find_best_hybrid import _predict_for_metric
 
@@ -160,29 +161,40 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # general/capped precompute was dropped (9× cost vs uncapped on the
     # large general-rep pool); capped semantics preserved on the top
     # rep subset.
+    # 2026-06-01: skip the capped pass entirely when n_samples >
+    # TOP_CAPPED_MAX_N. Above that threshold the capped strategy projects
+    # past the 7-day partition; computing it on the fly during the
+    # experiment would block the whole job. Cache won't exist either
+    # (precompute_hybrids.py applies the same rule).
     search_capped = None
+    n_samples = len(labels)
     if augs and len(top_tier_reps) >= 2:
-        print(f"\n  --- Capped augmentation, top-tier reps "
-              f"({len(top_tier_reps)} reps, {len(augs)} aug reps) ---")
-        search_capped = find_best_hybrid(
-            base_reps=top_tier_reps,
-            labels=labels,
-            groups=groups,
-            models=None,
-            budgets=full_budgets,
-            allocation_methods=allocation_methods,
-            importance_methods=importance_methods,
-            n_folds=n_folds,
-            augmentations=augs,
-            augmentation_strategy='capped',
-            internal_evaluators=INTERNAL_EVALUATORS,
-            metric=metric_name,
-            task_type=data['task_type'],
-            verbose=True,
-            cache=True,
-            dataset_name=dataset_name,
-            tier='top',
-        )
+        if n_samples > TOP_CAPPED_MAX_N:
+            print(f"\n  --- SKIP capped augmentation, top-tier reps "
+                  f"(n={n_samples} > {TOP_CAPPED_MAX_N}; "
+                  f"would project past 7-day partition) ---")
+        else:
+            print(f"\n  --- Capped augmentation, top-tier reps "
+                  f"({len(top_tier_reps)} reps, {len(augs)} aug reps) ---")
+            search_capped = find_best_hybrid(
+                base_reps=top_tier_reps,
+                labels=labels,
+                groups=groups,
+                models=None,
+                budgets=full_budgets,
+                allocation_methods=allocation_methods,
+                importance_methods=importance_methods,
+                n_folds=n_folds,
+                augmentations=augs,
+                augmentation_strategy='capped',
+                internal_evaluators=INTERNAL_EVALUATORS,
+                metric=metric_name,
+                task_type=data['task_type'],
+                verbose=True,
+                cache=True,
+                dataset_name=dataset_name,
+                tier='top',
+            )
 
     # --- Frozen + FT comparison (fifth search pass) ---
     # Compares hybrid(frozen_only) vs hybrid(frozen+FT) by feeding the same
