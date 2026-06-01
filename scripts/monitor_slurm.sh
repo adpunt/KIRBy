@@ -57,22 +57,21 @@ squeue -u "$USER_NAME" -h -o "%i|%j|%T|%M|%L|%R|%S" | while IFS='|' read -r jid 
     esac
 
     # Disk-based experiment progress: count ${dataset}.json files written
-    # AFTER job start in tests/results/${cat_dir}/<expN>/. Bypasses Python
-    # stdout buffering — JSON writes are sync'd to disk regardless of
-    # whether print() has flushed yet.
+    # AFTER the current job's start time. JSON saves are sync'd writes, so
+    # this signal bypasses Python stdout buffering. The -newermt filter is
+    # intentional: it shows progress made BY THIS RUNNING JOB ONLY (not
+    # cumulative progress for the dataset across all waves). The "~" suffix
+    # and the legend at the bottom flag this so the count isn't misread.
     disk_done=0
     disk_curr=""
     if [ -n "$cat_dir" ] && [ -d "tests/results/${cat_dir}" ] && [ -n "$startt" ] && [ "$startt" != "N/A" ]; then
-        # `-newermt $startt` filters out stale JSONs from prior waves.
-        # If the job has been running, only files written since are counted.
         result_files=$(find "tests/results/${cat_dir}" -mindepth 2 -maxdepth 2 \
             -name "${dataset}.json" -type f -newermt "$startt" 2>/dev/null)
         if [ -n "$result_files" ]; then
             disk_done=$(echo "$result_files" | wc -l | tr -d ' ')
-            # Latest by mtime → which experiment most recently saved
+            # Latest by mtime → which experiment most recently saved.
             latest=$(echo "$result_files" | xargs -I{} stat -c "%Y {}" {} 2>/dev/null | sort -nr | head -1 | awk '{print $2}')
             if [ -n "$latest" ]; then
-                # Extract "c05" or "s08" from the directory name
                 disk_curr=$(basename "$(dirname "$latest")" | grep -oE "^[cs][0-9]+" | tr '[:lower:]' '[:upper:]')
             fi
         fi
@@ -218,8 +217,15 @@ END {
 }' "$TMPFILE" | sort
 
 echo ""
-echo "  Reading: \"30.5% 43h +98h\" = at 30.5% after 43h elapsed, ~98h remaining."
-echo "  \"+####h*\" means the * extrapolation exceeds 999h — will time out."
+echo "  Reading:"
+echo "    \"30.5% 43h +98h\"   = precompute at 30.5% after 43h elapsed, ~98h remaining."
+echo "    \"+####h*\"          = ETA extrapolation exceeds 999h — will time out."
+echo "    \"C05 4done 23h\"    = experiment phase, currently in C05, 4 cN done"
+echo "                          (parsed from the slurm-<jobid>.out log)."
+echo "    \"C05~ 4done 23h\"   = same, but parsed from JSON files written by"
+echo "                          THIS JOB ONLY since it started (filtered by"
+echo "                          squeue StartTime). Used when stdout is still"
+echo "                          buffered. Does NOT include prior-wave results."
 echo "  ETA assumes constant cell rate; late-grid cells are usually slower."
 
 echo ""
