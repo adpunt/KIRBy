@@ -98,6 +98,13 @@ def expected_conditions(cfg, include_distance=False, dataset_name=None):
             expected.append(('top', 'uncapped'))
             if dataset_name not in _TOP_CAPPED_SKIP_DATASETS:
                 expected.append(('top', 'capped'))
+            # precompute_hybrids.py:323-327 also emits ('top+borderline',
+            # uncapped) whenever general has reps outside top — the merged
+            # aug = (general - top) ∪ aug_reps. Mirror that condition here
+            # so the file is counted toward DONE.
+            borderline = set(general) - set(top)
+            if borderline:
+                expected.append(('top+borderline', 'uncapped'))
     elif len(top) == 1 and (general or aug):
         expected.append(('top', 'uncapped'))
 
@@ -190,13 +197,21 @@ def find_top_rep_dim_files(dataset, searches_dir):
     return out
 
 
+def _sanitize(s):
+    """Match find_best_hybrid._sanitize_filename_part — keep the cache
+    filename lookup in sync with how precompute_hybrids writes them.
+    Without this, tiers like 'top+borderline' would never match the file
+    'top_borderline' that's actually on disk."""
+    return str(s).replace('+', '_').replace('/', '_').replace(' ', '_')
+
+
 def classify_dataset(dataset, cfg, searches_dir, include_distance):
     expected = expected_conditions(
         cfg, include_distance=include_distance, dataset_name=dataset)
     results = []
     n_ok = 0
     for tier, strat in expected:
-        fname = f"{dataset}__{tier}__{strat}__full.pkl"
+        fname = f"{dataset}__{_sanitize(tier)}__{_sanitize(strat)}__full.pkl"
         path = searches_dir / fname
         status, detail, extras = _check_file(path)
         results.append((tier, strat, status, detail, extras))
