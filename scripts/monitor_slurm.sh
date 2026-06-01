@@ -39,7 +39,10 @@ trap 'rm -f $TMPFILE' EXIT
 squeue -u "$USER_NAME" -h -o "%i|%j|%T|%M|%L|%R" | while IFS='|' read -r jid name state runtime left node; do
     [ "$state" = "RUNNING" ] || continue
 
-    # Strip prefix to get bare dataset name (cx_, sim_, etc.)
+    # Strip prefix to get bare dataset name (cx_, sim_, etc.); keep prefix
+    # separately so the by-dataset pivot at the bottom can pair cx with sim.
+    prefix=$(echo "$name" | sed -nE 's/^(cx|sim|cmp|noi|fed|opig|frm)_.*/\1/p')
+    [ -z "$prefix" ] && prefix="other"
     dataset=$(echo "$name" | sed -E 's/^(cx|sim|cmp|noi|fed|opig|frm)_//')
     domain=$(classify "$dataset")
 
@@ -79,8 +82,8 @@ squeue -u "$USER_NAME" -h -o "%i|%j|%T|%M|%L|%R" | while IFS='|' read -r jid nam
         size_h="${size}B"
     fi
 
-    printf "%s|%s|%s|%s|%s|%s|%s|%s\n" \
-        "$domain" "$jid" "$dataset" "$runtime" "$left" "$pct_disp" "$size_h" "$step" \
+    printf "%s|%s|%s|%s|%s|%s|%s|%s|%s\n" \
+        "$domain" "$jid" "$dataset" "$runtime" "$left" "$pct_disp" "$size_h" "$step" "$prefix" \
         >> "$TMPFILE"
 done
 
@@ -101,6 +104,53 @@ for domain in "${DOMAIN_ORDER[@]}"; do
     grep "^${domain}|" "$TMPFILE" | sort -t'|' -k3,3 | \
         awk -F'|' '{ printf "%-10s  %-30s  %-9s  %-22s  %-7s  %s\n", $2, $3, $4, $6, $7, $8 }'
 done
+
+# --- Per-dataset cx vs sim pivot -------------------------------------------
+# For each dataset, show cx and sim side-by-side with progress + elapsed +
+# linear-rate ETA. When more than one job exists for a (dataset,prefix) pair
+# (e.g. old wave + backfill resubmit), pick the highest job ID (most recent).
+echo ""
+echo "--- BY DATASET (cx vs sim: progress, elapsed, eta-remaining) ---"
+printf "%-32s  %-30s  %-30s\n" "DATASET" "CX" "SIM"
+awk -F'|' '
+function hours(rt,    np,a,t,b,dd) {
+    np=split(rt, a, "-");
+    if (np==2) { dd=a[1]; t=a[2]; } else { dd=0; t=a[1]; }
+    split(t, b, ":");
+    return dd*24 + b[1] + b[2]/60 + b[3]/3600;
+}
+function summarize(prog, rt,    nm, parts, n, m, eh, rem) {
+    if (prog=="") return "-";
+    eh=hours(rt);
+    nm=prog; sub(/^\[/, "", nm); sub(/\].*/, "", nm);
+    if (split(nm, parts, "/") == 2) {
+        n=parts[1]+0; m=parts[2]+0;
+        if (n>0 && m>0 && n==m) return sprintf("%5.1f%% %4.0fh wrap-up", 100.0, eh);
+        if (n>0 && m>0) {
+            rem = eh * (m/n - 1);
+            if (rem >= 999.5) return sprintf("%5.1f%% %4.0fh +%4.0fh*", 100*n/m, eh, rem);
+            return sprintf("%5.1f%% %4.0fh +%4.0fh", 100*n/m, eh, rem);
+        }
+    }
+    return sprintf("    ?  %4.0fh", eh);
+}
+{
+    pfx=$9; jid=$2+0; ds=$3; rt=$4; prog=$6;
+    if (pfx=="cx"  && jid > cxj[ds]) { cxj[ds]=jid; cxp[ds]=prog; cxr[ds]=rt; ds_seen[ds]=1 }
+    if (pfx=="sim" && jid > sj[ds])  { sj[ds]=jid;  sp[ds]=prog;  sr[ds]=rt;  ds_seen[ds]=1 }
+}
+END {
+    for (d in ds_seen) {
+        cx=summarize(cxp[d], cxr[d]);
+        sm=summarize(sp[d], sr[d]);
+        printf "%-32s  %-30s  %-30s\n", d, cx, sm;
+    }
+}' "$TMPFILE" | sort
+
+echo ""
+echo "  Reading: \"30.5% 43h +98h\" = at 30.5% after 43h elapsed, ~98h remaining."
+echo "  \"+####h*\" means the * extrapolation exceeds 999h — will time out."
+echo "  ETA assumes constant cell rate; late-grid cells are usually slower."
 
 echo ""
 echo "==========================================================================="
