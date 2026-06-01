@@ -32,7 +32,13 @@ def main(argv=None) -> int:
     ap.add_argument('--input', type=Path, required=True,
                     help='Combined IMGT reference FASTA')
     ap.add_argument('--species', required=True,
-                    help='Exact IMGT species name e.g. "Bos taurus"')
+                    help='IMGT species name e.g. "Bos taurus"')
+    ap.add_argument('--species-match', choices=['exact', 'prefix'],
+                    default='exact',
+                    help='exact: species field must equal --species. '
+                         'prefix: species field must start with --species '
+                         '(needed for canine, where IMGT tags each entry '
+                         'with a breed suffix like "Canis lupus familiaris_Boxer").')
     ap.add_argument('--locus', required=True, choices=['IGH', 'IGK', 'IGL'],
                     help='Receptor locus to extract')
     ap.add_argument('--out-dir', type=Path, required=True)
@@ -91,8 +97,12 @@ def main(argv=None) -> int:
                     continue
                 gene_allele = fields[1].strip()
                 species = fields[2].strip()
-                if species != args.species:
-                    continue
+                if args.species_match == 'exact':
+                    if species != args.species:
+                        continue
+                else:
+                    if not species.startswith(args.species):
+                        continue
                 m = gene_re.match(gene_allele)
                 if not m:
                     continue
