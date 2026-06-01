@@ -65,25 +65,48 @@ def _get_domain(name):
     return 'molecular'
 
 
-# Datasets where top/capped is skipped by precompute_hybrids.py because the
-# capped strategy projects past the 7-day partition limit. Keep in sync with
-# TOP_CAPPED_SKIP_DATASETS in tests/precompute_hybrids.py.
-_TOP_CAPPED_SKIP_DATASETS = {
-    'tcga_brca_pam50',
-    'tcga_luad_vs_lusc',
-    'ddg_combined',
-    'nt_H3K4me3',
-    'adme_mdr1',
-    'caco2',
-    'herg_ki',
-    'flab_thermo_tresanco',
-    'flab_binding_adams',
-    'flab_expression_adams',
-}
+# Top/capped is only expected when n_samples <= TOP_CAPPED_MAX_N. Above
+# that threshold both precompute_hybrids.py and experiments._shared skip
+# the capped strategy (projects past the 7-day partition). When n is
+# unknown — no cache yet on disk — we default to EXPECTING top/capped so
+# missing-cache datasets still surface in the "partial" report.
+TOP_CAPPED_MAX_N = 250
 
 
-def expected_conditions(cfg, include_distance=False, dataset_name=None):
-    """Return list of expected (tier, aug_strategy) tuples for a dataset."""
+def _peek_n_samples(searches_dir, dataset):
+    """Return n_samples for a dataset by reading meta from any cached
+    search file. Returns None when no cache exists yet.
+
+    Order of preference: general/none → top/none → general/uncapped →
+    top/uncapped. Stops at the first hit; this is purely a metadata peek,
+    not the full _check_file pipeline."""
+    for tier, strat in [('general', 'none'), ('top', 'none'),
+                        ('general', 'uncapped'), ('top', 'uncapped')]:
+        fname = f"{dataset}__{_sanitize(tier)}__{_sanitize(strat)}__full.pkl"
+        path = searches_dir / fname
+        if not path.exists():
+            continue
+        try:
+            wrapper = pickle.loads(path.read_bytes())
+        except Exception:
+            continue
+        if not isinstance(wrapper, dict):
+            continue
+        meta = wrapper.get('_cache_meta') or {}
+        n = meta.get('n_samples')
+        if n is not None:
+            return int(n)
+    return None
+
+
+def expected_conditions(cfg, include_distance=False, dataset_name=None,
+                        n_samples=None):
+    """Return list of expected (tier, aug_strategy) tuples for a dataset.
+
+    n_samples (when known) controls whether top/capped is expected:
+    only datasets with n <= TOP_CAPPED_MAX_N have it. Pass None to expect
+    top/capped (the conservative default for not-yet-precomputed datasets).
+    """
     general = cfg.get('general', [])
     top = cfg.get('top_tier', [])
     aug = cfg.get('augmentation', [])
@@ -102,7 +125,9 @@ def expected_conditions(cfg, include_distance=False, dataset_name=None):
         expected.append(('top', 'none'))
         if aug:
             expected.append(('top', 'uncapped'))
-            if dataset_name not in _TOP_CAPPED_SKIP_DATASETS:
+            # n_samples is None when no cache exists yet for this dataset
+            # — we still expect top/capped so the "missing" status surfaces.
+            if n_samples is None or n_samples <= TOP_CAPPED_MAX_N:
                 expected.append(('top', 'capped'))
             # Note: precompute_hybrids.py also writes ('top+borderline',
             # uncapped) when general has reps outside top. We do NOT
@@ -212,8 +237,12 @@ def _sanitize(s):
 
 
 def classify_dataset(dataset, cfg, searches_dir, include_distance):
+    # Peek at any cached file to learn n_samples — drives whether
+    # top/capped is expected. None ⇒ no cache yet ⇒ default to expecting.
+    n_samples = _peek_n_samples(searches_dir, dataset)
     expected = expected_conditions(
-        cfg, include_distance=include_distance, dataset_name=dataset)
+        cfg, include_distance=include_distance, dataset_name=dataset,
+        n_samples=n_samples)
     results = []
     n_ok = 0
     for tier, strat in expected:

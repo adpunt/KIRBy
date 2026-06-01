@@ -57,8 +57,21 @@ squeue -u "$USER_NAME" -h -o "%i|%j|%T|%M|%L|%R" | while IFS='|' read -r jid nam
         # "[1/3] c01_baselines" without the leading two-space indent.
         pct=$(grep -oE "\[[0-9]+/[0-9]+\]" "$log" 2>/dev/null | tail -1)
         pct="${pct:-???}"
-        # If no [N/M] but the experiment phase has started, mark as "exp".
-        if [ "$pct" = "???" ] && grep -qE "^=== .* experiments:|^--- Category:" "$log" 2>/dev/null; then
+        # Experiment-phase markers from the cx/sim helpers:
+        #   start of each sub-experiment:  "^EXPERIMENT C05: TITLE"
+        #   end of each sub-experiment:    "^  c05 done in 84.2s"
+        # When the job has reached the experiment phase, the [N/M] from
+        # precompute is stale — replace pct with the richer experiment
+        # label ("[C05 4done]") so the by-dataset pivot can show progress.
+        exp_curr=$(grep -oE "^EXPERIMENT [CS][0-9]+" "$log" 2>/dev/null \
+            | tail -1 | awk '{print $2}')
+        exp_done=$(grep -cE "^  [cs][0-9]+ done in [0-9.]+s" "$log" 2>/dev/null)
+        if [ -n "$exp_curr" ]; then
+            pct="[${exp_curr} ${exp_done}done]"
+        elif [ "$pct" = "???" ] && grep -qE "^=== .* experiments:|^--- Category:" "$log" 2>/dev/null; then
+            # Older fallback: experiment phase header seen but no
+            # EXPERIMENT C/S marker yet (shouldn't fire under current
+            # helpers, kept as safety net).
             pct="[exp]"
         fi
         step=$(grep -oE "[a-z_0-9.]+/[a-z_0-9.]+/[a-z_]+/b=[0-9]+/ev=[a-z]+" "$log" 2>/dev/null | tail -1)
@@ -126,10 +139,16 @@ function hours(rt,    np,a,t,b,dd) {
     split(t, b, ":");
     return dd*24 + b[1] + b[2]/60 + b[3]/3600;
 }
-function summarize(prog, rt,    nm, parts, n, m, eh, rem) {
+function summarize(prog, rt,    nm, parts, n, m, eh, rem, ename, dcnt) {
     if (prog=="") return "-";
     eh=hours(rt);
     if (prog ~ /\[exp\]/) return sprintf(" [exp]  %4.0fh", eh);
+    # Experiment-phase format from the loop above: "[C05 4done]" or "[S08 12done]"
+    if (prog ~ /^\[[CS][0-9]+ [0-9]+done\]$/) {
+        ename=prog; sub(/^\[/, "", ename); sub(/ .*/, "", ename);
+        dcnt=prog; sub(/^\[[CS][0-9]+ /, "", dcnt); sub(/done\].*/, "", dcnt);
+        return sprintf("%-4s %sdone %4.0fh", ename, dcnt, eh);
+    }
     nm=prog; sub(/^\[/, "", nm); sub(/\].*/, "", nm);
     if (split(nm, parts, "/") == 2) {
         n=parts[1]+0; m=parts[2]+0;

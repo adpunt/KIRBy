@@ -22,7 +22,7 @@ from experiments._shared import (
     get_model_factories, evaluate_single_rep_cv, fit_learning_curve,
     find_best_hybrid, get_domain_metric,
     extract_top3_base_reps,
-    INTERNAL_EVALUATORS,
+    INTERNAL_EVALUATORS, TOP_CAPPED_MAX_N,
     get_best_search_for_downstream, build_fold_hybrid, cv_split,
 )
 from sklearn.preprocessing import StandardScaler
@@ -161,6 +161,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             sub_budgets = [b for b in sweep_budgets if b <= n_sub]
             if not sub_budgets:
                 sub_budgets = [min(sweep_budgets)]
+            # Subsample-specific cache key — won't collide with main precompute
+            # cache. Capped strategy is fine for small subsamples but projects
+            # past the 7-day partition for n>TOP_CAPPED_MAX_N. Fall back to
+            # uncapped when the subsample is over the threshold.
+            sub_aug_strategy = 'capped' if n_sub <= TOP_CAPPED_MAX_N else 'uncapped'
             try:
                 search = find_best_hybrid(
                     sub_reps, sub_labels, groups=sub_groups,
@@ -169,7 +174,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     speed=search_speed,
                     n_folds=sub_folds,
                     augmentations=sub_augs,
-                    augmentation_strategy='capped',
+                    augmentation_strategy=sub_aug_strategy,
                     internal_evaluators=INTERNAL_EVALUATORS,
                     metric=metric_name,
                     task_type=data['task_type'],
