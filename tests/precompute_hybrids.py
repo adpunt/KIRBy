@@ -325,6 +325,15 @@ def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
             'tcga_luad_vs_lusc',  # 4/5 done; top/capped projected ~1700h
             'ddg_combined',       # 4/5 done; top/capped projected ~360h
             'nt_H3K4me3',         # 2/5 done; n=18244, top/capped won't fit
+            # Extension (2026-06-02): same justification — sitting at 4/5,
+            # top/capped projects past 7-day partition for each (rf at
+            # capped strategy on n>2000 → 80-200h per cell).
+            'adme_mdr1',
+            'caco2',
+            'herg_ki',
+            'flab_thermo_tresanco',
+            'flab_binding_adams',
+            'flab_expression_adams',
         }
 
         if 'top' in tiers and len(top_reps) >= 2:
