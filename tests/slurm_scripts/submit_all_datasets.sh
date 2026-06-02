@@ -129,9 +129,12 @@ get_mem_override() {
         # DTA: kiba (n=30K, 229 protein groups) and bindingdb_kd (n=30K, 1219 groups).
         kiba|bindingdb_kd)
             echo "128G" ;;
-        # Nucleotide: n=30K (nt_*) to 100K (gb_demo_*), high-dim reps need RAM
+        # Nucleotide: n=30K (nt_*) to 100K (gb_demo_*), high-dim reps need RAM.
+        # Bumped 128G → 256G 2026-06-02 alongside cpus-per-task=32 in
+        # submit_dataset.sh: more parallel workers via joblib need more RAM
+        # to avoid OOM under find_best_hybrid's per-fold importance compute.
         nt_*|gb_*)
-            echo "128G" ;;
+            echo "256G" ;;
         *) echo "" ;;
     esac
 }

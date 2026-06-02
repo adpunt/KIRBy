@@ -2,7 +2,7 @@
 #SBATCH --job-name=exp_%j
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
+#SBATCH --cpus-per-task=32
 #SBATCH --time=7-00:00:00
 #SBATCH --partition=long
 #SBATCH --mem=128G
