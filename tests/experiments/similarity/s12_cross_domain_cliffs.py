@@ -40,7 +40,8 @@ from kirby.utils.noise_mitigation_methods import compute_distance_matrix
 # =========================================================================
 
 def identify_cliff_pairs_euclidean(X_concat, y, sim_threshold=0.55, activity_k=2.0,
-                                   max_compounds=5000, is_clf=False):
+                                   max_compounds=5000, is_clf=False,
+                                   similar_percentile=None):
     """Identify activity cliff pairs using Euclidean similarity.
 
     sim = 1/(1+d) on standardised features. Cliff = high structural similarity
@@ -48,6 +49,17 @@ def identify_cliff_pairs_euclidean(X_concat, y, sim_threshold=0.55, activity_k=2
 
     Regression / binary: |delta_y| > k * MAD(y).
     Classification (is_clf): different class (high sim + different label).
+
+    Args:
+        sim_threshold: absolute similarity cutoff (used only when
+            ``similar_percentile`` is None).
+        similar_percentile: if set (e.g. 5.0), define "structurally similar" as
+            the top ``similar_percentile``% most-similar off-diagonal pairs
+            instead of the absolute ``sim_threshold``. On standardised high-D
+            embeddings the pairwise Euclidean distance is large so sim = 1/(1+d)
+            never reaches an absolute 0.55 (s12 found 0 cliffs in 13/16
+            datasets). A percentile makes the threshold distribution-relative.
+            See COMPLEXITY_SIMILARITY_BROKEN_2026_06_03.md.
 
     Returns (cliff_mask, info) where cliff_mask is boolean array marking cliff compounds.
     """
@@ -75,8 +87,16 @@ def identify_cliff_pairs_euclidean(X_concat, y, sim_threshold=0.55, activity_k=2
         mad_y = float(np.median(np.abs(y_sub - np.median(y_sub))))
         activity_threshold = activity_k * mad_y
 
+    # "Structurally similar" pairs: absolute cutoff, or distribution-relative
+    # (top similar_percentile% most-similar off-diagonal pairs).
+    if similar_percentile is not None:
+        _off = sim[~np.eye(len(sim), dtype=bool)]
+        sim_cutoff = float(np.percentile(_off, 100.0 - similar_percentile))
+    else:
+        sim_cutoff = sim_threshold
+
     delta_y = _pairwise_delta_matrix(y_sub, is_clf=is_clf)
-    cliff_pair_mask = (sim >= sim_threshold) & (delta_y > activity_threshold)
+    cliff_pair_mask = (sim >= sim_cutoff) & (delta_y > activity_threshold)
     np.fill_diagonal(cliff_pair_mask, False)
 
     cliff_mask_sub = cliff_pair_mask.any(axis=1)
@@ -88,6 +108,8 @@ def identify_cliff_pairs_euclidean(X_concat, y, sim_threshold=0.55, activity_k=2
 
     info = {
         'sim_threshold': sim_threshold,
+        'similar_percentile': similar_percentile,
+        'sim_cutoff': float(sim_cutoff),
         'activity_k': activity_k,
         'activity_threshold': float(activity_threshold),
         'mad_y': float(mad_y),
@@ -130,6 +152,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     sim_threshold = kwargs.get('sim_threshold', 0.55)
     activity_k = kwargs.get('activity_k', 2.0)
+    # Distribution-relative structural threshold (top 2% most-similar pairs;
+    # tunable kwarg). Absolute sim_threshold=0.55 found 0 cliffs in 13/16
+    # datasets on standardised high-D embeddings. See
+    # COMPLEXITY_SIMILARITY_BROKEN_2026_06_03.md.
+    # TODO(cliff-percentile, post-ARC-rerun): the 2.0 default is provisional.
+    # After the full ARC rerun, inspect cliff_info['n_cliff_pairs'] per dataset
+    # and retune so prevalence lands in a sane minority band (NOT 0%, NOT ~100%)
+    # before trusting any s12 delta.
+    similar_pct = kwargs.get('similar_percentile', 2.0)
 
     X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
     print(f"  Domain: {domain}, n={len(labels)}, dim={X_concat.shape[1]}")
@@ -138,21 +169,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # NOTE: cliff identity uses full-dataset labels — accepted leakage for cliff
     # partitioning, per N01 precedent.
     cliff_indices, cliff_info = identify_cliff_pairs_euclidean(
-        X_concat, labels, sim_threshold, activity_k, is_clf=is_clf)
+        X_concat, labels, sim_threshold, activity_k, is_clf=is_clf,
+        similar_percentile=similar_pct)
     print(f"  Cliffs: {cliff_info['n_cliff_compounds']}/{cliff_info['n_analyzed']} "
           f"({cliff_info['pct_cliff_compounds']:.1f}%), "
           f"{cliff_info['n_cliff_pairs']} pairs")
 
     if not cliff_indices:
-        print("  No cliffs found — adjusting threshold...")
-        # Auto-threshold: find threshold that gives ~10% cliff compounds
-        for t in [0.4, 0.3, 0.2, 0.1]:
+        print("  No cliffs found — widening structural percentile...")
+        # Relax by treating more pairs as structurally similar.
+        for pct in [10.0, 20.0, 30.0]:
             cliff_indices, cliff_info = identify_cliff_pairs_euclidean(
-                X_concat, labels, t, activity_k, is_clf=is_clf)
+                X_concat, labels, sim_threshold, activity_k, is_clf=is_clf,
+                similar_percentile=pct)
             if cliff_info['pct_cliff_compounds'] >= 5:
                 cliff_info['threshold_was_relaxed'] = True
-                cliff_info['final_threshold'] = t
-                print(f"  Auto-threshold {t}: {cliff_info['n_cliff_compounds']} cliffs "
+                cliff_info['final_percentile'] = pct
+                print(f"  Widened to top {pct}% similar: "
+                      f"{cliff_info['n_cliff_compounds']} cliffs "
                       f"({cliff_info['pct_cliff_compounds']:.1f}%)")
                 break
 

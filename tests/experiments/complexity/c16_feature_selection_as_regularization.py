@@ -246,6 +246,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         pass  # will skip pool-side budgets
 
     # Fast search for the capped_full slot (not in FULL_BUDGETS).
+    capped_full_error = None  # surfaced in results so a NaN full-dim baseline
+    # (blueprint never built -> _evaluate_cell skips all folds) is diagnosable
+    # without the slurm log. This was the cause of full-dim NaN on VEGF/Ang2.
     if capped_full not in blueprints:
         try:
             from kirby.find_best_hybrid import find_best_hybrid as _fbh16
@@ -274,6 +277,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             if cf_best:
                 blueprints[capped_full] = cf_best['blueprint']
         except Exception as e:
+            capped_full_error = f'{type(e).__name__}: {e}'
             print(f"  c16 fast search at capped_full={capped_full} failed: {e}")
 
     results = {
@@ -281,6 +285,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'lower_is_better': lower_is_better,
         'budgets': budgets,
         'total_dim': total_dim,
+        'capped_full': capped_full,
+        'capped_full_blueprint_built': capped_full in blueprints,
+        'capped_full_error': capped_full_error,
         'families': {},
     }
 

@@ -7,20 +7,25 @@ Conclusion: Quantifies the symbiotic value of new representations within the
     hybrid can improve a new rep beyond its best single-model performance.
 Dependencies: None (standalone).
 
-5-condition ablation per new rep r, per dataset d:
+Condition ablation per new rep r, per dataset d:
   A: New rep r + ridge           (raw embedding quality, linear)
   B: New rep r + best model      (best-case single-rep)
   C: Best hybrid WITHOUT r       (current KIRBy ceiling)
   D: Best hybrid WITH r          (does r improve the hybrid? D - C)
-  E: r + existing reps in hybrid (does hybrid improve r? E - B)
+  E: REMOVED 2026-05-25          (was identical to D; the intended "does
+                                  hybrid selection help r alone" needs a
+                                  different design and is not implemented.
+                                  E and E - B are emitted as null for
+                                  backward-compat — they are NOT a measurement
+                                  failure. Use D - C and D - B instead.)
 
 Controls per new rep r:
   - Random Gaussian matrix (same dims as r): permutation null
   - Row-shuffled r: tests content vs dimensionality
 
 Key metrics:
-  1. Delta performance: D - C (does new rep help hybrid?)
-  2. Augmentation gain: E - B (does hybrid help new rep?)
+  1. Delta performance: D - C (does new rep help hybrid?)  [the live metric]
+  2. (E - B is null — see condition E note above)
   3. Allocation share: features_from_r / total_budget
   4. Win rate: fraction of datasets where condition improves
 

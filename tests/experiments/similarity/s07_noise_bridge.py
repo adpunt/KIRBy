@@ -89,10 +89,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     if 'heavy_seqs' in data and data['heavy_seqs'] is not None:
         heavy_seqs = data['heavy_seqs']
         max_edits = kwargs.get('max_edits', 5)
+        # Distribution-relative structural threshold (closest 2% of pairs;
+        # tunable kwarg). Absolute max_edits=5 was degenerate: ~0% cliffs on
+        # distinct-antibody datasets (flab) and ~100% on mutational-scan
+        # datasets (abagym). See COMPLEXITY_SIMILARITY_BROKEN_2026_06_03.md.
+        # TODO(cliff-percentile, post-ARC-rerun): the 2.0 default is provisional.
+        # After the full ARC rerun, inspect cliff_info['n_cliff_compounds'] /
+        # 'pct_cliff_compounds' per dataset and retune so prevalence lands in a
+        # sane minority band (NOT 0%, NOT ~100%) before trusting any s07 delta.
+        similar_pct = kwargs.get('similar_percentile', 2.0)
         cliff_mask, cliff_info = identify_cliff_compounds_editdist(
-            heavy_seqs, labels, max_edits=max_edits, is_clf=is_clf)
+            heavy_seqs, labels, max_edits=max_edits, is_clf=is_clf,
+            similar_percentile=similar_pct)
         ground_truth_cliffs = set(np.where(cliff_mask)[0].tolist())
-        print(f"\n  Ground-truth cliffs (edit distance, max_edits={max_edits}):")
+        print(f"\n  Ground-truth cliffs (edit distance, similar_pct={similar_pct}, "
+              f"cutoff={cliff_info['edit_cutoff']:.0f} edits):")
         print(f"    {cliff_info['n_cliff_compounds']} compounds "
               f"({cliff_info['pct_cliff_compounds']:.1f}%), "
               f"{cliff_info['n_cliff_pairs']} pairs")

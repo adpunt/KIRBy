@@ -1,16 +1,26 @@
 #!/usr/bin/env python3
-"""S06: Applicability Domain -- hybrid distance tracks prediction uncertainty.
+"""S06: Applicability Domain -- does hybrid distance track prediction error?
 
 Paper: Similarity
-Conclusion: Hybrid distance correlates with prediction error (AD).
+Question: does distance-to-training in the hybrid space correlate with the
+          model's prediction error (i.e. is it a usable applicability domain)?
 Dependencies: s02 (reads JSON, optional -- falls back to fresh search).
 
 Per-fold CV with per-fold hybrid construction:
   - kNN distances in concat, hybrid, and weighted hybrid spaces
-  - RF prediction |errors|
-  - Spearman correlation between distance and |error|
+  - error = |residual| (regression) or 1 - P(true class) (classification;
+    graded, NOT a degenerate 0/1 indicator)
+  - Spearman correlation between distance and error
   - Reliability diagram (distance decile -> mean error)
-  - Conformal calibration comparison: concat vs hybrid
+  - Conformal calibration comparison: concat vs hybrid (PICP, MPIW, AND
+    undercoverage + `hybrid_genuinely_tighter` so a tighter-but-undercovered
+    interval cannot be misread as an improvement)
+
+Empirically (2026-06-03) the regression distance-error correlation is near
+zero and sign-inconsistent across reps -> for these representations the
+applicability-domain signal does NOT hold. This is a genuine negative finding,
+not a measurement bug (error is the absolute residual; per-fold standardization
+is train-only and consistent).
 """
 import sys
 import os
@@ -34,6 +44,21 @@ from experiments._shared import (
 # Default kNN budget for AD hybrid search (kept modest; AD is a diagnostic, not
 # a tuned downstream model).
 _DEFAULT_AD_BUDGET = 100
+
+
+def _graded_clf_error(clf, X, y_true):
+    """Continuous classification error = 1 - P(true class).
+
+    Robust to classes present in y_true but unseen in training (those get
+    error 1.0). Far higher power than a 0/1 misclassification indicator for
+    Spearman(distance, error) applicability-domain correlations.
+    """
+    proba = clf.predict_proba(X)
+    col = {c: i for i, c in enumerate(clf.classes_)}
+    return np.array([
+        1.0 - (proba[i, col[c]] if c in col else 0.0)
+        for i, c in enumerate(y_true)
+    ], dtype=float)
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -134,9 +159,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             rf = _rf_factory()
             rf.fit(X_tr_s, y_train)
             y_pred = rf.predict(X_va_s)
-            # Classification: error = misclassification (0/1). Regression: |residual|.
+            # Classification: graded error = 1 - P(true class). A 0/1
+            # misclassification indicator makes Spearman(dist, error) a
+            # degenerate, low-power statistic; the predicted-probability of the
+            # true label is the continuous AD analogue. Regression: |residual|.
             if task_type == 'classification':
-                errors = (y_val != y_pred).astype(float)
+                errors = _graded_clf_error(rf, X_va_s, y_val)
             else:
                 errors = np.abs(y_val - y_pred)
 
@@ -150,7 +178,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             rf_neutral.fit(Xtr_c, y_train)
             y_pred_neutral = rf_neutral.predict(Xva_c)
             if task_type == 'classification':
-                errors_neutral = (y_val != y_pred_neutral).astype(float)
+                errors_neutral = _graded_clf_error(rf_neutral, Xva_c, y_val)
             else:
                 errors_neutral = np.abs(y_val - y_pred_neutral)
 
@@ -358,16 +386,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     conf_picp[feat_name].append(picp)
                     conf_mpiw[feat_name].append(mpiw)
 
-            results['conformal'] = {}
+            results['conformal'] = {'nominal_coverage': 1 - alpha}
             for feat_name in ['concat', 'hybrid']:
                 if conf_picp[feat_name]:
                     picp_mean = float(np.mean(conf_picp[feat_name]))
                     mpiw_mean = float(np.mean(conf_mpiw[feat_name]))
+                    # undercoverage = how far PICP falls below the 90% target.
+                    # A smaller MPIW (tighter interval) is ONLY an improvement
+                    # if undercoverage stays ~0; tighter-but-undercovered is not.
+                    undercov = float((1 - alpha) - picp_mean)
                     results['conformal'][feat_name] = {
                         'picp': picp_mean, 'mpiw': mpiw_mean,
+                        'undercoverage': undercov,
                     }
                     print(f"    {feat_name.capitalize()}:  PICP={picp_mean:.3f}, "
-                          f"MPIW={mpiw_mean:.3f}")
+                          f"MPIW={mpiw_mean:.3f}, undercoverage={undercov:+.3f}")
+            # Honest comparison: hybrid's tighter interval only counts as better
+            # if it does not lose coverage relative to concat (tolerance 0.02).
+            if 'concat' in results['conformal'] and 'hybrid' in results['conformal']:
+                c, h = results['conformal']['concat'], results['conformal']['hybrid']
+                results['conformal']['hybrid_genuinely_tighter'] = bool(
+                    h['mpiw'] < c['mpiw'] and h['picp'] >= c['picp'] - 0.02)
         except Exception as e:
             print(f"    Conformal failed: {e}")
             results['conformal'] = {'error': str(e)}

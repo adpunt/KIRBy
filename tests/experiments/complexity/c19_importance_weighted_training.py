@@ -3,9 +3,15 @@
 
 Paper: Complexity
 Core question: How should hybrid importance scores enter the training process?
-    Tests 5 weighting strategies across models, on both raw concat and hybrid
-    features. The key question: does importance weighting help MORE on raw
-    features (compensating for noise) or on the hybrid (further refining)?
+    Tests 5 weighting strategies across models on the HYBRID feature space.
+
+    NOTE (design): an earlier version also evaluated a raw full-concat space to
+    ask whether weighting helps more on raw vs hybrid features. The raw-concat
+    arm was deliberately removed per design directive — with this many reps the
+    full concat is not a meaningful comparison (see the input_spaces block in
+    run()). So this experiment answers the narrower question "which weighting
+    strategy, if any, helps on the hybrid" — NOT the raw-vs-hybrid contrast.
+    The raw-vs-hybrid framing is retained here only as historical context.
 
 Conditions:
   0. unweighted (baseline)

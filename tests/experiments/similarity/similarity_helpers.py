@@ -166,22 +166,31 @@ def violation_rate(D, y, k=5, is_clf=False):
 
 
 def identify_cliff_compounds_editdist(sequences, y, max_edits=5, activity_k=2.0,
-                                      is_clf=False):
+                                      is_clf=False, similar_percentile=None):
     """Identify activity cliff compounds using pairwise edit distance (Hamming).
 
     Representation-independent cliff definition for protein/antibody data.
     Uses sequence Hamming distance (on aligned sequences of equal length)
     or Levenshtein distance (if lengths differ).
 
-    Definition: cliff = few mutations (edits <= max_edits) but large activity
-    difference (|delta_y| > activity_k * MAD(y)).
+    Definition: cliff = structurally similar but large activity difference
+    (|delta_y| > activity_k * MAD(y)).
 
     Args:
         sequences: list of str (aligned sequences, e.g., heavy chains).
         y: array of activity values.
-        max_edits: Maximum edit distance to be considered "structurally similar".
+        max_edits: absolute edit-distance cutoff for "structurally similar"
+            (used only when ``similar_percentile`` is None).
         activity_k: Multiplier for MAD-based activity threshold.
-        is_clf: If True, cliff = few edits + different class.
+        is_clf: If True, cliff = structurally similar + different class.
+        similar_percentile: if set (e.g. 5.0), define "structurally similar" as
+            the closest ``similar_percentile``% of nonzero pairwise edit
+            distances instead of the absolute ``max_edits``. This is
+            distribution-relative: on deep-mutational-scan antibody data an
+            absolute ``max_edits=5`` flags a huge fraction of pairs as similar
+            (s07 contamination saturated near 1.0); a percentile keeps the
+            similar set a bounded fraction regardless of domain. See
+            COMPLEXITY_SIMILARITY_BROKEN_2026_06_03.md.
 
     Returns:
         cliff_mask: boolean array, True for cliff compounds.
@@ -229,8 +238,18 @@ def identify_cliff_compounds_editdist(sequences, y, max_edits=5, activity_k=2.0,
         mad_y = float(np.median(np.abs(y - np.median(y))))
         activity_threshold = activity_k * mad_y
 
-    # Cliff: few edits AND large activity difference
-    cliff_pair_mask = (edit_dist <= max_edits) & (edit_dist > 0) & (delta_y > activity_threshold)
+    # "Structurally similar" pairs: absolute cutoff, or distribution-relative
+    # (closest similar_percentile% of nonzero edit distances).
+    if similar_percentile is not None:
+        _triu = edit_dist[np.triu_indices(n, k=1)]
+        _nz = _triu[_triu > 0]
+        edit_cutoff = float(np.percentile(_nz, similar_percentile)) if _nz.size else 0.0
+    else:
+        edit_cutoff = float(max_edits)
+    structural_mask = (edit_dist <= edit_cutoff) & (edit_dist > 0)
+
+    # Cliff: structurally similar AND large activity difference
+    cliff_pair_mask = structural_mask & (delta_y > activity_threshold)
     cliff_mask = cliff_pair_mask.any(axis=1)
     cliff_pair_counts = cliff_pair_mask.sum(axis=1)
     n_cliff_pairs = int(cliff_pair_mask.sum()) // 2
@@ -239,6 +258,8 @@ def identify_cliff_compounds_editdist(sequences, y, max_edits=5, activity_k=2.0,
     info = {
         'method': 'edit_distance',
         'max_edits': max_edits,
+        'similar_percentile': similar_percentile,
+        'edit_cutoff': edit_cutoff,
         'activity_k': activity_k,
         'activity_threshold': activity_threshold,
         'mad_y': mad_y,

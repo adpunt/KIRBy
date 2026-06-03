@@ -145,6 +145,8 @@ def run(data, config, output_dir, dataset_name):
     fold_best_models = {}  # fold_idx -> best downstream model name for that fold
     fold_feature_sets = {}  # fold_idx -> set of (rep, idx) tuples
     own_fold_scores = {}  # fold_idx -> score on own test data
+    fold_errors = []  # (fold_idx, stage, error) — surfaced in the result so
+    # an 'insufficient_folds' failure is self-diagnosing without the slurm log.
 
     for fold_i, (train_idx, val_idx) in enumerate(folds):
         train_reps = {k: v[train_idx] for k, v in reps.items()}
@@ -178,6 +180,8 @@ def run(data, config, output_dir, dataset_name):
                     best_model = m_name
         except Exception as e:
             print(f"    Fold {fold_i}: search failed ({e}), skipping")
+            fold_errors.append({'fold': fold_i, 'stage': 'search',
+                                'error': f'{type(e).__name__}: {e}'})
             continue
 
         if best is None:
@@ -230,11 +234,15 @@ def run(data, config, output_dir, dataset_name):
             print(f"      Own-fold {metric_name}: {own_fold_scores[fold_i]:.4f}")
         except Exception as e:
             print(f"      Own-fold eval failed: {e}")
+            fold_errors.append({'fold': fold_i, 'stage': 'own_fold_eval',
+                                'error': f'{type(e).__name__}: {e}'})
             continue
 
     if len(fold_blueprints) < 2:
         print("  ERROR: Need at least 2 successful folds for transfer test")
-        return {'error': 'insufficient_folds'}
+        return {'error': 'insufficient_folds',
+                'n_folds_succeeded': len(fold_blueprints),
+                'fold_errors': fold_errors}
 
     # --- Step 2: Cross-fold transfer ---
     print(f"\n  Step 2: Apply each fold's blueprint to all other folds' test data")

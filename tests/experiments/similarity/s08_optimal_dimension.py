@@ -12,6 +12,14 @@ reference. Finds optimal budget for prediction (RF) vs similarity (SAC).
 
 Includes Pareto frontier analysis to quantify the SAC-vs-prediction trade-off
 and determine whether the optima genuinely differ or coincide.
+
+Self-diagnosis (2026-06-03): an "optimal budget" is only meaningful if several
+DISTINCT feature dimensions were evaluated. Budgets cap at the feature pool, so
+many requested budgets collapse to the same actual_dim, giving tied SAC and a
+noise-driven argmax. The output now carries `n_distinct_dims` /
+`insufficient_budgets`, and `pareto.tradeoff.optima_differ` is suppressed (None,
+`optima_differ_trustworthy=False`) when fewer than 4 distinct dims were seen.
+The budget grid is also deduped/sorted to the full DISTANCE_BUDGETS sweep.
 """
 import sys
 import os
@@ -50,7 +58,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # knn is a distance-tier evaluator, so budgets must come from
     # DISTANCE_BUDGETS=[10,25,50,100,250,500] to match the cached lineage.
     budgets = kwargs.get('budgets', config.get('budgets', list(DISTANCE_BUDGETS)))
-    budgets = [b for b in budgets if b in DISTANCE_BUDGETS]
+    # Keep only cache-lineage budgets, dedupe, and sort so the full
+    # DISTANCE_BUDGETS=[10,25,50,100,250,500] grid is swept (older runs that
+    # passed [50, 500] are the reason "optima" looked meaningless).
+    budgets = sorted({b for b in budgets if b in DISTANCE_BUDGETS})
     n_sample = kwargs.get('n_sample', 5000)
 
     reps = data['reps']
@@ -319,6 +330,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Find optimal budget for prediction (per model) vs similarity
     budget_list = sorted(results['budgets'].keys())
+
+    # ── Self-diagnosis: an "optimal budget" is only meaningful if several
+    # DISTINCT feature dimensions were actually evaluated. Many budgets collapse
+    # to the same actual_dim (capped at the feature pool), so 6 budget requests
+    # can yield only 1-2 distinct dims and SAC/argmax becomes floating-point
+    # noise. Record the distinct-dim count and flag when it is too small. ──
+    _evaluated = [b for b in budget_list if 'error' not in results['budgets'][b]]
+    _distinct_dims = sorted({results['budgets'][b].get('actual_dim')
+                             for b in _evaluated
+                             if results['budgets'][b].get('actual_dim') is not None})
+    results['n_budgets_evaluated'] = len(_evaluated)
+    results['n_distinct_dims'] = len(_distinct_dims)
+    results['distinct_dims'] = _distinct_dims
+    insufficient = len(_distinct_dims) < 4
+    results['insufficient_budgets'] = bool(insufficient)
+    if insufficient:
+        print(f"\n  [diag] only {len(_distinct_dims)} distinct feature dim(s) "
+              f"evaluated ({_distinct_dims}) across {len(_evaluated)} budget(s) "
+              f"-> 'optima_differ' is NOT trustworthy and is suppressed.")
+
     if budget_list:
         _best_fn = min if lower_is_better else max
         _default = 999 if lower_is_better else -999
@@ -380,11 +411,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             sac_at_sac_opt = results['budgets'][best_sac_budget].get('sac_rho', float('nan'))
             rf_at_rf_opt = results['budgets'][best_rf_budget].get('rf_score', float('nan'))
 
+            # optima_differ is only trustworthy with >=4 distinct dims; otherwise
+            # the argmax is decided by SAC ties / float noise -> report None.
+            optima_differ = (None if insufficient
+                             else best_rf_budget != best_sac_budget)
             tradeoff = {
                 'sac_loss_at_rf_optimum': float(sac_at_sac_opt - sac_at_rf_opt),
                 'rf_loss_at_sac_optimum': float(rf_at_rf_opt - rf_at_sac_opt) if not lower_is_better
                     else float(rf_at_sac_opt - rf_at_rf_opt),
-                'optima_differ': best_rf_budget != best_sac_budget,
+                'optima_differ': optima_differ,
+                'optima_differ_trustworthy': not insufficient,
                 'budget_gap': abs(best_rf_budget - best_sac_budget),
             }
 
@@ -399,7 +435,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 print(f"    budget={pt['budget']:4d}  "
                       f"SAC={pt['sac_rho']:.4f}  "
                       f"RF_{metric_name}={pt[f'rf_{metric_name}']:.4f}")
-            if tradeoff['optima_differ']:
+            if tradeoff['optima_differ'] is None:
+                print(f"  Optima comparison suppressed (too few distinct dims).")
+            elif tradeoff['optima_differ']:
                 print(f"  Trade-off: SAC-opt@{best_sac_budget} vs RF-opt@{best_rf_budget}")
                 print(f"    SAC loss at RF-optimum: {tradeoff['sac_loss_at_rf_optimum']:.4f}")
                 print(f"    RF loss at SAC-optimum: {tradeoff['rf_loss_at_sac_optimum']:.4f}")
