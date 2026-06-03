@@ -7,8 +7,19 @@ If hybrid distance is a better metric, it should produce better clusters
 neighbors). Tests this across per-rep, concat, PCA-matched, and hybrid spaces.
 
 Two sub-analyses:
-  13a. Clustering: k-means label coherence (within-cluster label variance)
-  13b. Retrieval: mean |y_query - y_neighbor| for k-NN retrieval
+  13a. Clustering: k-means label coherence (regression: 1 - within-cluster
+       std(y)/std(y); classification: mean cluster majority-class purity).
+       Higher = better. Silhouette is recorded but NOT used for the win test.
+  13b. Retrieval: mean |y_query - y_neighbor| (regression) or 1 - precision@k
+       (classification) for k-NN retrieval. Lower = better.
+
+Both metrics are computed identically for hybrid and every baseline (same KMeans
+config, same k-list), and their win tests respect the correct direction.
+Empirically (2026-06-03) this is a MIXED finding: the hybrid tends to WIN
+retrieval but LOSE clustering coherence on the powered antibody sets -- a real
+result, not a metric bug. `summary.metrics_agree` flags the divergence, and
+`best_rep_retrieval` / `best_rep_coherence` name the (different) baseline rep
+that each axis is compared against.
 
 Usage:
     python s13_clustering_retrieval.py --dataset logd --mode intermediary
@@ -287,6 +298,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'best_rep_retrieval': (best_rep_ret_name, best_rep_ret_val),
             'hybrid_clustering_wins': h_coh > best_rep_coh_val,
             'hybrid_retrieval_wins': h_ret < best_rep_ret_val,
+            # The two axes have different best-baseline reps and frequently
+            # disagree (hybrid tends to win retrieval, lose clustering). Flag the
+            # divergence so the mixed result is not read as a clean win/loss.
+            'metrics_agree': (h_coh > best_rep_coh_val) == (h_ret < best_rep_ret_val),
         }
         print(f"\n  Top-3 baselines (retrieval): "
               + ", ".join(f"{n}={v:.4f}" for n, v in top3_retrieval))

@@ -1159,51 +1159,75 @@ def estimate_intrinsic_dim_mle(X: np.ndarray, k: int = 10) -> float:
 
 def estimate_mutual_information_knn(X: np.ndarray, y: np.ndarray, k: int = 5,
                                     max_dim: int = 50) -> float:
-    """Estimate I(X; Y) using KSG estimator (Kraskov et al. 2004).
+    """Estimate I(X; Y) with a robust kNN estimator.
+
+    History: this previously ran a hand-rolled joint KSG estimator (Kraskov
+    et al. 2004) on PCA-reduced features. With ``max_dim`` up to 50 it operated
+    far outside the KSG validity regime (joint dimension >> the ~6 dims KSG
+    tolerates for n in the low hundreds), so the estimate was systematically
+    negative and clamped to 0. The result was that *every* MI value across
+    c01/c09/c17/s03 came out 0 — the metric was dead. See
+    COMPLEXITY_SIMILARITY_BROKEN_2026_06_03.md.
+
+    This replacement uses scikit-learn's per-feature Kraskov estimator
+    (``mutual_info_regression`` / ``mutual_info_classif``), summed over a set of
+    PCA-decorrelated components. It (a) does not collapse to 0, (b) auto-detects
+    a discrete target and uses the classification estimator (the old code scaled
+    class labels as if continuous, which was wrong for humanness/tcga/tz), and
+    (c) keeps the n >> d guard so larger feature blocks can still carry more
+    total information. Returns total estimated information in nats (>= 0).
 
     Args:
-        max_dim: Maximum dimensionality before PCA reduction. Higher values
-            preserve more nonlinear structure but need more samples for stable
-            estimates. Capped at n_samples // 5 for the n >> d requirement.
+        k: neighbours for the Kraskov estimator (sklearn ``n_neighbors``).
+        max_dim: cap on PCA components, further capped at n_samples // 5.
     """
+    from sklearn.feature_selection import (
+        mutual_info_regression, mutual_info_classif)
+
+    X = np.asarray(X)
+    if X.ndim == 1:
+        X = X.reshape(-1, 1)
+    y = np.asarray(y).ravel()
     n_samples, d = X.shape
-    k = min(k, n_samples - 1)
+    if n_samples < 10:
+        return 0.0  # too few samples for any stable MI estimate
+    k = max(1, min(k, n_samples - 1))
 
     X_scaled = StandardScaler().fit_transform(X)
 
-    # KSG needs n >> d; reduce dimensions when d is large relative to n.
-    max_components = min(max_dim, n_samples // 5)
-    if d > max_components >= 1:
+    # Keep the n >> d guard, but PCA-decorrelate so per-feature MI can be summed
+    # without double-counting linearly-shared information.
+    max_components = max(1, min(max_dim, n_samples // 5))
+    if d > max_components:
         from sklearn.decomposition import PCA as _PCA
-        X_scaled = _PCA(n_components=max_components, random_state=42).fit_transform(X_scaled)
-    elif max_components < 1:
-        return 0.0  # too few samples for any MI estimate
-    y_scaled = (y - y.mean()) / (y.std() + 1e-10)
+        X_scaled = _PCA(n_components=max_components,
+                        random_state=42).fit_transform(X_scaled)
 
-    XY = np.column_stack([X_scaled, y_scaled.reshape(-1, 1)])
+    # Detect a discrete target: few unique values and (near-)integer encoded.
+    y_unique = np.unique(y)
+    is_discrete = (y_unique.size <= max(20, int(0.05 * n_samples))
+                   and np.allclose(y, np.round(y)))
 
-    nn_joint = NearestNeighbors(n_neighbors=k + 1, metric='chebyshev')
-    nn_joint.fit(XY)
-    distances_joint, _ = nn_joint.kneighbors(XY)
-    eps = distances_joint[:, -1]
+    def _mi(target):
+        if is_discrete:
+            return float(np.sum(mutual_info_classif(
+                X_scaled, target.astype(int), n_neighbors=k, random_state=42)))
+        return float(np.sum(mutual_info_regression(
+            X_scaled, target, n_neighbors=k, random_state=42)))
 
-    nn_x = NearestNeighbors(metric='chebyshev')
-    nn_x.fit(X_scaled)
+    mi_raw = _mi(y)
 
-    nn_y = NearestNeighbors(metric='chebyshev')
-    nn_y.fit(y_scaled.reshape(-1, 1))
+    # Permutation bias correction. The summed per-feature kNN estimator has a
+    # positive finite-sample bias that grows with the number of components, so
+    # it does NOT cancel when comparing feature blocks of different sizes
+    # (e.g. s03 full-vs-selected) and can swamp weak signal at small n. Subtract
+    # the mean MI under label permutation (the null) to de-bias. Deterministic
+    # seeds keep the estimate reproducible across runs.
+    n_perm = 3
+    null = np.mean([_mi(np.random.default_rng(1000 + s).permutation(y))
+                    for s in range(n_perm)])
 
-    n_x = np.zeros(n_samples)
-    n_y = np.zeros(n_samples)
-
-    for i in range(n_samples):
-        n_x[i] = len(nn_x.radius_neighbors([X_scaled[i]], radius=eps[i],
-                      return_distance=False)[0]) - 1
-        n_y[i] = len(nn_y.radius_neighbors([y_scaled[i:i + 1]], radius=eps[i],
-                      return_distance=False)[0]) - 1
-
-    mi = digamma(k) - np.mean(digamma(n_x + 1) + digamma(n_y + 1)) + digamma(n_samples)
-    return max(0, mi)
+    return float(max(0.0, mi_raw - null))
 
 
 def fit_learning_curve(n_samples: np.ndarray, scores: np.ndarray) -> Dict[str, float]:
@@ -1514,6 +1538,64 @@ def _require_task_type(data: dict, source: str) -> str:
     return tt
 
 
+def _smoke_subsample(data: dict) -> dict:
+    """Test-only row cap, gated behind the KIRBY_SMOKE_N env var (default off).
+
+    When KIRBY_SMOKE_N is set to a positive integer N and the dataset has more
+    than N rows, deterministically keep N evenly-spaced rows (preserving class /
+    scaffold diversity across the original order — NOT a random split). This
+    exists purely so the experiment suite can be smoke-tested locally on tiny
+    subsets; it is a no-op in any normal/server run where the env var is unset.
+    """
+    import os as _os
+    raw = _os.environ.get('KIRBY_SMOKE_N', '').strip()
+    if not raw:
+        return data
+    try:
+        n_keep = int(raw)
+    except ValueError:
+        return data
+    if n_keep <= 0:
+        return data
+    labels = data.get('labels')
+    if labels is None:
+        return data
+    n = len(labels)
+    if n <= n_keep:
+        return data
+    idx = np.linspace(0, n - 1, n_keep).round().astype(int)
+    idx = np.unique(idx)
+
+    def _take(v):
+        if isinstance(v, np.ndarray) and len(v) == n:
+            return v[idx]
+        if isinstance(v, list) and len(v) == n:
+            return [v[i] for i in idx]
+        return v
+
+    # Per-row top-level keys
+    for key in ('labels', 'groups', 'heavy_seqs', 'light_seqs', 'sequences',
+                'seqs', 'smiles', 'sample_ids', 'sample_weights'):
+        if key in data and data[key] is not None:
+            data[key] = _take(data[key])
+    # Rep dicts (and augmentation dict)
+    for key in ('reps', 'augmentations'):
+        v = data.get(key)
+        if isinstance(v, dict):
+            data[key] = {r: (arr[idx] if isinstance(arr, np.ndarray)
+                             and len(arr) == n else arr)
+                         for r, arr in v.items()}
+    # Recompute group counts if present
+    if 'groups' in data and isinstance(data['groups'], np.ndarray):
+        n_uniq = int(len(np.unique(data['groups'])))
+        if 'n_groups' in data:
+            data['n_groups'] = n_uniq
+        if 'n_scaffolds' in data:
+            data['n_scaffolds'] = n_uniq
+    print(f"  [SMOKE] KIRBY_SMOKE_N={n_keep}: subsampled {n} -> {len(idx)} rows")
+    return data
+
+
 def _finalize_load_data(data: dict, dataset_name: str) -> dict:
     """Post-process a load_data result: inject dataset_name, cross-check registry.
 
@@ -1546,7 +1628,7 @@ def _finalize_load_data(data: dict, dataset_name: str) -> dict:
                 f"{info.domain!r}. Using registry value."
             )
             data['domain'] = info.domain
-    return data
+    return _smoke_subsample(data)
 
 
 def load_data(dataset_name: str, rep_preset: str = 'fast',

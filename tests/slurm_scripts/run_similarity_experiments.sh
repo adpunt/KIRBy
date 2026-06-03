@@ -61,8 +61,24 @@ elif [ "$MODE" = "full_cross" ]; then
         --datasets logd caco2 herg qm9 \
         --experiments 9 --output tests/results/similarity_cross
 
+elif [ "$MODE" = "full_mol" ]; then
+    # Molecular-only experiments. s04 (activity cliffs, ECFP4-Tanimoto) and
+    # s11 (GP-BO on fingerprints) both gate on domain=='molecular' and were
+    # skipped in the antibody/reaction/TCGA batch. Run them on the molecular
+    # datasets so they actually produce results (user decision 2026-06-03).
+    # Uses the canonical run_dataset.py runner (the s-module dispatch that
+    # writes tests/results/similarity/s04_* and s11_*), one dataset at a time.
+    echo "=== FULL MOLECULAR: logd caco2 herg qm9, s04 + s11 ==="
+    rc=0
+    for DS in logd caco2 herg qm9; do
+        echo "--- $DS: s04 s11 ---"
+        python tests/experiments/run_dataset.py similarity "$DS" \
+            --experiments s04 s11 || rc=1
+    done
+    exit $rc
+
 else
-    echo "Usage: sbatch run_similarity_experiments.sh [quick|full_a|full_b|full_cross] [dataset] [reps]"
+    echo "Usage: sbatch run_similarity_experiments.sh [quick|full_a|full_b|full_cross|full_mol] [dataset] [reps]"
     echo "Datasets: logd, caco2, herg, qm9"
     echo "Reps: fast+hf (default), all (needs run_precache_reps.sh first)"
     echo ""
@@ -70,5 +86,6 @@ else
     echo "  full_a    = Exp 1,2,4,5,6,8 (core similarity experiments)"
     echo "  full_b    = Exp 3,7          (supplementary: neighbor preservation, noise FP)"
     echo "  full_cross = Exp 9           (cross-dataset summary, loads all datasets)"
+    echo "  full_mol  = Exp 4,11         (molecular-only: activity cliffs + GP-BO; molecular datasets)"
     exit 1
 fi

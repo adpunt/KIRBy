@@ -152,6 +152,28 @@ _install_if_missing xformers 'xformers==0.0.25'
 _install_if_missing openpyxl 'openpyxl>=3.1.0'
 _install_if_missing peft peft
 
+# --- Label-noise injection (c10 noise-robustness) ---
+# Private package (github.com/adpunt/noise_inject); not on PyPI, so the
+# requirements pin alone never installs it on ARC. Clone + editable install,
+# same precedent as CLAMP/MolE below. Runtime deps are only numpy/pandas/scipy
+# (already locked), so --no-deps keeps the scientific stack untouched.
+NOISEINJECT_DIR="${SCRIPT_DIR}/src/noise_inject"
+if ! python -c "import noiseInject" 2>/dev/null; then
+    if [ ! -d "$NOISEINJECT_DIR" ]; then
+        git clone --quiet https://github.com/adpunt/noise_inject.git "$NOISEINJECT_DIR" 2>/dev/null || true
+    fi
+    if [ -d "$NOISEINJECT_DIR" ]; then
+        pip install --quiet --no-deps $CONSTRAINTS -e "$NOISEINJECT_DIR" 2>/dev/null || true
+        python -c "import noiseInject" 2>/dev/null \
+            && echo "[setup.sh] noiseInject installed (editable from $NOISEINJECT_DIR)" \
+            || echo "[setup.sh] WARNING: noiseInject install failed — c10 will skip"
+    else
+        echo "noiseInject not installed (c10 noise-robustness will skip). Clone manually:"
+        echo "  git clone https://github.com/adpunt/noise_inject.git $NOISEINJECT_DIR"
+        echo "  pip install --no-deps -e $NOISEINJECT_DIR"
+    fi
+fi
+
 # --- Phase 3B: Molecular descriptors + reaction reps ---
 _install_if_missing mordred mordredcommunity
 _install_if_missing drfp drfp

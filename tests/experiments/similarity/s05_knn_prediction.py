@@ -2,13 +2,22 @@
 """S05: kNN Prediction with Hybrid Distance.
 
 Paper: Similarity
-Conclusion: Hybrid-weighted kNN outperforms standard kNN when the hybrid
-            is optimized with a distance-aware evaluator at appropriate budgets.
+Question: does kNN in the hybrid feature space beat kNN in each single rep's space?
 Dependencies: None (runs its own distance-aware hybrid search).
 
 CV evaluation with per-budget hybrid conditions: hybrid_unweighted, hybrid_weighted.
 Per-rep kNN baselines (the real baselines). Budget sweep over DISTANCE_BUDGETS
 to show how dimensionality affects kNN performance.
+
+Reporting honesty (2026-06-03): the "best hybrid" taken as the MAX over
+budgets x conditions x k is post-hoc optimistic (multiple-comparison inflation,
+scored on the same CV used to report). `results['summary']` therefore carries
+BOTH that `posthoc_max` AND a pre-registered `fixed_ref` (a fixed budget /
+condition / k chosen a priori, no selection over the grid). Report `fixed_ref`
+as the honest hybrid-vs-rep delta; `posthoc_max` only as an upper bound.
+The importance-WEIGHTED condition is genuinely applied (sqrt-importance scaling
+of the standardized features, lines ~161-169) but empirically does NOT beat the
+unweighted hybrid downstream — that is a real result, not a wiring bug.
 """
 import sys
 import os
@@ -311,16 +320,54 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for b_res in results['per_budget'].values():
             for v in b_res.values():
                 all_hybrid_scores.append(v)
+        results['summary'] = {
+            'best_rep_baseline': best_rep,
+            'best_rep_score': best_rep_score,
+        }
         if all_hybrid_scores:
+            sign = -1 if lower_is_better else 1
             best_hybrid = (min if lower_is_better else max)(
                 all_hybrid_scores, key=lambda v: v['score_mean'])
-            # Sign-correct delta: positive = improvement
-            sign = -1 if lower_is_better else 1
             delta = sign * (best_hybrid['score_mean'] - best_rep_score)
-            print(f"  Best hybrid kNN: budget={best_hybrid['budget']}, "
+            # post-hoc MAX over budgets x conditions x k = optimistic (in-sample
+            # multiple comparison). Recorded but NOT the headline number.
+            results['summary']['posthoc_max'] = {
+                'budget': best_hybrid['budget'], 'condition': best_hybrid['condition'],
+                'k': best_hybrid['k'], 'score_mean': best_hybrid['score_mean'],
+                'delta_vs_best_rep': delta,
+                'note': ('MAX over budgets x conditions x k, scored in-sample = '
+                         'post-hoc optimistic; do not report as the headline.'),
+            }
+            print(f"  Best hybrid kNN [posthoc-max, optimistic]: "
+                  f"budget={best_hybrid['budget']}, "
                   f"{best_hybrid['condition']} k={best_hybrid['k']}, "
                   f"{metric_name}={best_hybrid['score_mean']:.4f} "
-                  f"(delta vs {best_rep}: {delta:+.4f}, positive=improvement)")
+                  f"(delta vs {best_rep}: {delta:+.4f})")
+
+            # Pre-registered fixed cell (no cherry-picking over the grid): the
+            # honest hybrid-vs-rep comparator. budget=100 (nearest available),
+            # hybrid_unweighted, k=max(k_values).
+            FIXED_BUDGET, FIXED_COND = 100, 'hybrid_unweighted'
+            avail = sorted(results['per_budget'].keys())
+            fb = min(avail, key=lambda b: abs(b - FIXED_BUDGET)) if avail else None
+            fixed_cell = None
+            if fb is not None:
+                cells = results['per_budget'][fb]
+                fixed_cell = (cells.get(f'{FIXED_COND}_k{max(k_values)}')
+                              or cells.get(f'{FIXED_COND}_k{k_values[0]}'))
+            if fixed_cell is not None:
+                fdelta = sign * (fixed_cell['score_mean'] - best_rep_score)
+                results['summary']['fixed_ref'] = {
+                    'budget': fixed_cell['budget'], 'condition': fixed_cell['condition'],
+                    'k': fixed_cell['k'], 'score_mean': fixed_cell['score_mean'],
+                    'delta_vs_best_rep': fdelta,
+                    'note': ('pre-registered budget/condition/k (no selection over '
+                             'the grid); report THIS as the honest delta.'),
+                }
+                print(f"  Best hybrid kNN [fixed-ref, HONEST]: "
+                      f"budget={fixed_cell['budget']}, {fixed_cell['condition']} "
+                      f"k={fixed_cell['k']}, {metric_name}={fixed_cell['score_mean']:.4f} "
+                      f"(delta vs {best_rep}: {fdelta:+.4f}, positive=improvement)")
 
     return results
 

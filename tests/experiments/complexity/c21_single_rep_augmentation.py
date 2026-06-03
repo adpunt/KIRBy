@@ -167,6 +167,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     best = (best_by_model.get('rf') or
                             next(iter(best_by_model.values()), None))
                     bp = best['blueprint'] if best else None
+                    if bp is None:
+                        # Diagnostic: search returned but found no winning config
+                        # -> every augmented fold scores NaN -> aug_mean NaN.
+                        # This was the cause of the NaN c21 results on
+                        # VEGF/Ang2/abcov_kd. Surface it instead of silently NaN.
+                        print(f"    {cond_name}: search returned no config "
+                              f"(best_by_model has {len(best_by_model)} entries)")
                 except Exception as e:
                     print(f"    {cond_name}: search FAILED - {e}")
                     raise

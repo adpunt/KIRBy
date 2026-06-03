@@ -2,8 +2,8 @@
 """S10: Importance Scores as Feature Weights for Distance-Dependent Downstream Tasks.
 
 Paper: Similarity
-Conclusion: Importance-weighted distance improves GP, SVR, and q-RASAR-style
-    similarity-augmented features beyond kNN (already shown in S05).
+Question: does importance-weighted distance help GP, SVR, and q-RASAR-style
+    similarity-augmented features (beyond the kNN case in S05)?
 Dependencies: S05 (extends kNN), C04 (importance weighting).
 
 Goes beyond kNN (S05) to test importance weighting on GP, SVR, and
@@ -12,6 +12,14 @@ similarity-augmented features (q-RASAR style). Four downstream tasks:
   2. GP with importance-weighted RBF kernel
   3. SVR with importance-weighted RBF kernel
   4. Similarity-augmented features (q-RASAR style)
+
+Delta convention (2026-06-03): every stored `delta*` field is direction-
+oriented by `_orient_deltas` so that POSITIVE always means improvement,
+regardless of whether the dataset metric is higher-better (Spearman/AUC/F1) or
+lower-better (RMSE/MAE). Before this fix, buchwald's RMSE delta "+13.077" (a
+near-doubling of error) was misread as a gain. `results['deltas_oriented']`
+flags that the convention is applied. Empirically weighting is neutral-to-
+negative downstream -- a real result, not a wiring bug (the weights ARE applied).
 """
 import sys
 import os
@@ -56,6 +64,30 @@ def _importance_weights(imp_scores):
     w = np.sqrt(np.maximum(imp_scores, 0))
     w = w / (w.sum() + 1e-10)
     return w
+
+
+def _orient_deltas(obj, lower_is_better):
+    """Recursively flip the sign of every 'delta*' field so positive always
+    means improvement, regardless of metric direction.
+
+    Each stored delta is (treatment - reference). For higher-is-better metrics
+    (Spearman/AUC/F1) positive already means improvement -> no-op. For
+    lower-is-better metrics (RMSE/MAE, e.g. buchwald) a positive raw delta means
+    the treatment got WORSE, so it is negated. This fixes the trap where
+    buchwald GP "delta +13.077" (an RMSE increase) read as a gain.
+    """
+    if not lower_is_better:
+        return obj
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if isinstance(v, (dict, list)):
+                _orient_deltas(v, lower_is_better)
+            elif k.startswith('delta') and isinstance(v, (int, float)) and not isinstance(v, bool):
+                obj[k] = -v
+    elif isinstance(obj, list):
+        for item in obj:
+            _orient_deltas(item, lower_is_better)
+    return obj
 
 
 def _compute_importance_for_reps(train_reps, y_train, method='lightgbm_gain'):
@@ -782,6 +814,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         fold_splits=fold_splits, fold_importance=fold_importance)
     print(f"  [Task 4 elapsed: {time.time() - t0:.1f}s]")
 
+    # Orient every stored delta so positive == improvement regardless of metric
+    # direction (RMSE etc.). MUST run before _print_summary, which now treats
+    # the stored deltas as already direction-corrected.
+    for _task_key in ('weighted_knn', 'weighted_gp', 'weighted_svr', 'qrasar'):
+        if isinstance(results.get(_task_key), dict):
+            _orient_deltas(results[_task_key], lower_is_better)
+    results['deltas_oriented'] = True  # positive delta == improvement everywhere
+
     # Summary
     print(f"\n  Total elapsed: {time.time() - start_total:.1f}s")
     _print_summary(results, metric_name, lower_is_better)
@@ -799,8 +839,9 @@ def _print_summary(results, metric_name, lower_is_better):
     print(f"  SUMMARY (metric={metric_name}, lower_is_better={lower_is_better})")
     print(f"  {'='*60}")
 
-    # For each task, find the best per-rep delta and hybrid delta
-    sign = -1 if lower_is_better else 1
+    # Deltas are already direction-oriented (positive == improvement) by
+    # _orient_deltas before this is called, so select/print them as-is.
+    sign = 1
 
     for task_name, task_key, delta_key in [
         ('Weighted kNN', 'weighted_knn', 'delta'),

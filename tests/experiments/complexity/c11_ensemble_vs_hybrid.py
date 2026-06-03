@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
-"""C11: Ensemble vs hybrid — is feature-level fusion better than model-level fusion?
+"""C11: Feature-level fusion (hybrid) vs best single rep vs PCA-matched control.
 
 Paper: Complexity
-Conclusion: Whether a single model on a hybrid representation outperforms an
-ensemble of models each trained on individual base representations, and how
-both compare to the best single base rep.
+Conclusion: Whether a single model on a fused hybrid representation outperforms
+the best single base rep and a dimension-matched PCA control.
 Dependencies: None (standalone).
 
-Three conditions per model type:
+Conditions per model type:
   1. Best single base rep (train one model on each rep, report best)
-  2. Ensemble: train one model per base rep, average predictions
+  2. PCA-matched: concat all reps, PCA-compress to the budget dim, one model
   3. Hybrid: train one model on the fused hybrid representation
 
+NOTE (design): the original "ensemble" arm (train one model per base rep and
+average predictions = model-level fusion) was REMOVED 2026-05-12 per user
+directive — averaged baselines are not a valid comparator (report individual
+reps only). The experiment name is kept for continuity, but model-level fusion
+is intentionally absent; the comparison is hybrid vs best-single vs PCA control.
+
 Each condition is tested with and without augmented features.
-Reports R2, total dimensionality, model count, training time, and inference time.
+Reports the domain metric, total dimensionality, model count, training time,
+and inference time.
 """
 import sys
 import os
