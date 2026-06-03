@@ -34,7 +34,16 @@ DOMAIN_ORDER=(MOLECULAR DTA DDG REACTION TCGA ANTIBODY FEDERATED OTHER)
 # --- Collect data ----------------------------------------------------------
 USER_NAME="${USER}"
 TMPFILE=$(mktemp)
-trap 'rm -f $TMPFILE' EXIT
+ALERTFILE=$(mktemp)
+trap 'rm -f $TMPFILE $ALERTFILE' EXIT
+
+# Persisted state for cross-snapshot "stuck" detection. Saved as
+# tests/.snapshot_state/jobid.txt with the last-seen (timestamp, pct, fbh_cfg).
+# Next snapshot reads, compares, flags "stuck if the inner counter hasn't
+# moved across two consecutive snapshots more than 20 minutes apart".
+STATE_DIR="tests/.snapshot_state"
+mkdir -p "$STATE_DIR" 2>/dev/null
+NOW_EPOCH=$(date +%s)
 
 squeue -u "$USER_NAME" -h -o "%i|%j|%T|%M|%L|%R|%S" | while IFS='|' read -r jid name state runtime left node startt; do
     [ "$state" = "RUNNING" ] || continue
@@ -107,6 +116,55 @@ squeue -u "$USER_NAME" -h -o "%i|%j|%T|%M|%L|%R|%S" | while IFS='|' read -r jid 
         step=$(grep -oE "[a-z_0-9.]+/[a-z_0-9.]+/[a-z_]+/b=[0-9]+/ev=[a-z]+" "$log" 2>/dev/null | tail -1)
         step="${step:--}"
         size=$(stat -c %s "$log" 2>/dev/null || echo 0)
+
+        # --- Health metrics ----------------------------------------------
+        # log_age_sec: seconds since last write. >600 = potentially wedged.
+        log_age_sec=$(( NOW_EPOCH - $(stat -c %Y "$log" 2>/dev/null || echo 0) ))
+        # Cache-rejection counters. drift_n grows when stored rep_hashes don't
+        # match in-memory; stale_n is the broader "cache rejected" counter.
+        stale_n=$(grep -cE "stale\b|will recompute" "$log" 2>/dev/null)
+        drift_n=$(grep -c "meta drift" "$log" 2>/dev/null)
+        # JSON output count from THIS job's run.
+        # json_1h / json_6h: per-dataset (counts overwrites/new files in
+        # tests/results/<cat>/*/<dataset>.json). If both are 0 while
+        # drift_n keeps climbing, the job is spinning on cache rejections.
+        if [ -n "$cat_dir" ] && [ -d "tests/results/${cat_dir}" ]; then
+            json_1h=$(find "tests/results/${cat_dir}" -mindepth 2 -maxdepth 2 \
+                -name "${dataset}.json" -newermt '1 hour ago' 2>/dev/null | wc -l | tr -d ' ')
+            json_6h=$(find "tests/results/${cat_dir}" -mindepth 2 -maxdepth 2 \
+                -name "${dataset}.json" -newermt '6 hours ago' 2>/dev/null | wc -l | tr -d ' ')
+        else
+            json_1h=0
+            json_6h=0
+        fi
+
+        # --- Cross-snapshot stuck detection -------------------------------
+        # State file: $STATE_DIR/$jid.txt holds "<epoch>|<pct>|<step>" of the
+        # last snapshot. If the inner counter (pct) hasn't moved since the
+        # previous snapshot more than 20 minutes ago, flag as stuck.
+        stuck_min=0
+        prev="$STATE_DIR/$jid.txt"
+        if [ -f "$prev" ]; then
+            IFS='|' read -r prev_epoch prev_pct prev_step < "$prev"
+            elapsed_since_prev=$(( NOW_EPOCH - prev_epoch ))
+            if [ "$prev_pct" = "$pct" ] && [ "$elapsed_since_prev" -gt 1200 ]; then
+                stuck_min=$(( elapsed_since_prev / 60 ))
+            fi
+        fi
+        printf "%s|%s|%s\n" "$NOW_EPOCH" "$pct" "$step" > "$prev"
+
+        # --- Alert classification ----------------------------------------
+        alert=""
+        if [ "$log_age_sec" -gt 600 ]; then
+            alert="WEDGED ${log_age_sec}s_idle"
+        elif [ "$stuck_min" -gt 0 ]; then
+            alert="STUCK ${stuck_min}min_no_progress on ${pct}"
+        elif [ "$drift_n" -gt 5 ] && [ "$json_6h" -eq 0 ]; then
+            alert="SPINNING ${drift_n}_cache_drifts no_json_in_6h"
+        fi
+        if [ -n "$alert" ]; then
+            printf "%-10s  %-30s  %s\n" "$jid" "$name" "$alert" >> "$ALERTFILE"
+        fi
     fi
 
     # Compute % done if pct is parseable
@@ -132,16 +190,35 @@ squeue -u "$USER_NAME" -h -o "%i|%j|%T|%M|%L|%R|%S" | while IFS='|' read -r jid 
         size_h="${size}B"
     fi
 
-    printf "%s|%s|%s|%s|%s|%s|%s|%s|%s\n" \
+    printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n" \
         "$domain" "$jid" "$dataset" "$runtime" "$left" "$pct_disp" "$size_h" "$step" "$prefix" \
+        "$log_age_sec" "$stale_n" "$drift_n" "$json_1h" "$json_6h" \
         >> "$TMPFILE"
 done
 
 # --- Print grouped by domain ----------------------------------------------
 TOTAL=$(wc -l < "$TMPFILE")
+ALERT_COUNT=$(wc -l < "$ALERTFILE")
 echo "==========================================================================="
 echo " SLURM MONITOR  ($(date '+%Y-%m-%d %H:%M'))   running jobs: $TOTAL"
+if [ "$ALERT_COUNT" -gt 0 ]; then
+    echo "  ⚠  ALERTS: $ALERT_COUNT job(s) need attention — see below"
+else
+    echo "  ✓ no alerts (all jobs healthy)"
+fi
 echo "==========================================================================="
+
+# --- Health alerts (only printed if any) ---------------------------------
+if [ "$ALERT_COUNT" -gt 0 ]; then
+    echo ""
+    echo "--- HEALTH ALERTS ($ALERT_COUNT) ---"
+    echo "  WEDGED   = log file untouched >10min (job may have hung/crashed silently)"
+    echo "  STUCK    = inner progress counter hasn't moved across 2+ snapshots (>20min)"
+    echo "  SPINNING = cache rejections accumulating with no JSON saves in 6h"
+    echo ""
+    printf "%-10s  %-30s  %s\n" "JOBID" "JOB_NAME" "WHY"
+    cat "$ALERTFILE" | sort
+fi
 
 for domain in "${DOMAIN_ORDER[@]}"; do
     count=$(grep -c "^${domain}|" "$TMPFILE" || true)
@@ -149,10 +226,13 @@ for domain in "${DOMAIN_ORDER[@]}"; do
 
     echo ""
     echo "--- $domain ($count jobs) ---"
-    printf "%-10s  %-30s  %-9s  %-22s  %-7s  %s\n" \
-        "JOBID" "DATASET" "RUNTIME" "PROGRESS" "LOG" "CURRENT STEP"
+    printf "%-10s  %-28s  %-9s  %-20s  %-5s  %-5s  %-5s  %-5s  %-6s  %s\n" \
+        "JOBID" "DATASET" "RUNTIME" "PROGRESS" "j1h" "j6h" "drift" "stale" "idle_s" "CURRENT STEP"
+    # Columns: $2 jid, $3 dataset, $4 runtime, $6 pct_disp, $13 j1h, $14 j6h,
+    # $12 drift, $11 stale, $10 idle_sec, $8 step
     grep "^${domain}|" "$TMPFILE" | sort -t'|' -k3,3 | \
-        awk -F'|' '{ printf "%-10s  %-30s  %-9s  %-22s  %-7s  %s\n", $2, $3, $4, $6, $7, $8 }'
+        awk -F'|' '{ printf "%-10s  %-28s  %-9s  %-20s  %-5s  %-5s  %-5s  %-5s  %-6s  %s\n", \
+                    $2, $3, $4, $6, $13, $14, $12, $11, $10, $8 }'
 done
 
 # --- Per-dataset cx vs sim pivot -------------------------------------------
