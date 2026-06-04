@@ -64,6 +64,23 @@ OPTIONAL_ESTIMATORS = [
     'ngboost',
 ]
 
+# is_clf-aware estimators: the kNN/neighbour-based ones whose constructor
+# accepts is_clf and switches the per-neighbour disagreement to a class-mismatch
+# rate (see _make_estimator). On a CLASSIFICATION dataset ONLY these produce a
+# meaningful noise score. Every OTHER estimator here is model-based and
+# regression-only — it fits a RandomForestRegressor (or GP / NN / quantile /
+# ngboost) on the integer class labels, which does NOT crash but yields a
+# meaningless noise number (FIX 4f). `hybrid_noise` is included in the skip set
+# because HybridNoiseEstimator internally averages a CrossValResidualEstimator
+# (a regressor on the labels) and exposes no is_clf branch, so it has the same
+# defect. On classification we SKIP the regression-only estimators and record an
+# explicit reason instead of producing a meaningless score; the kNN ones run.
+IS_CLF_AWARE_ESTIMATORS = {
+    'neighbor_residual', 'local_variance_ratio',
+    'distance_weighted', 'distance_weighted_residual',
+    'activity_cliff_aware',
+}
+
 GP_MAX = 1000
 
 # Activity-cliff percentile knob sweep. A pair counts as "structurally similar"
@@ -304,6 +321,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"    {est_name}...", end='', flush=True)
             t0 = time.time()
 
+            # FIX 4f: on a classification dataset, the model-based regression
+            # estimators fit a regressor on integer class labels — they don't
+            # crash but the noise score is meaningless. Skip them and record an
+            # explicit reason rather than storing a junk number. The kNN/is_clf-
+            # aware estimators (IS_CLF_AWARE_ESTIMATORS) handle classification
+            # correctly via _make_estimator, so they still run.
+            if is_clf and est_name not in IS_CLF_AWARE_ESTIMATORS:
+                space_results[est_name] = {
+                    'skipped': 'skipped_regression_estimator_on_clf'}
+                print(" SKIP (regression-only estimator on clf)")
+                continue
+
             # Per-estimator subsample: GP-class estimators use the small
             # subset; everything else sees the full data. Cross-estimator
             # correlations below will only compare estimators that ran on
@@ -419,8 +448,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'cliff_abs_correlation': (float(best_cliff_abs)
                                       if best_cliff_est else None),
             'cliff_correlation_signed': best_cliff_signed,
-            'n_estimators_ok': sum(1 for e in all_estimators
-                                   if 'error' not in sr.get(e, {})),
+            'n_estimators_ok': sum(
+                1 for e in all_estimators
+                if 'error' not in sr.get(e, {})
+                and 'skipped' not in sr.get(e, {})),
         }
 
     results['summary'] = summary

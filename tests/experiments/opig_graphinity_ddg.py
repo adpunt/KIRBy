@@ -162,7 +162,11 @@ def evaluate_rep_ddg(X, labels, groups, model, n_folds):
             preds = m.predict(X_va)
             all_preds[val_idx] = preds
             fold_metrics.append(_score(labels[val_idx], preds, 'regression'))
-        except Exception:
+        except Exception as e:
+            # Log rather than silently drop the fold (OPIG-18) — a missing fold
+            # biases both the per-fold mean and pearson_global.
+            print(f"      [fold failed: {type(model).__name__} "
+                  f"{type(e).__name__}: {e}]", flush=True)
             continue
 
     if not fold_metrics:

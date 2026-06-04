@@ -342,8 +342,16 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                         'ue_corr': float('nan'),
                     }
                 fold_metrics.append(fold_result)
-                print(f"    fold {fold_i}: {metric_name}={val_score:.4f}, PICP={picp:.3f}, "
-                      f"set_size={avg_set_size:.2f}, cal_error={cal_error:.3f}")
+                # Read from fold_result (defined in both branches) — the locals
+                # picp/avg_set_size/cal_error are only assigned inside the
+                # predict_proba branch, so a classification model WITHOUT
+                # predict_proba (e.g. SVC without probability=True) used to crash
+                # this print with NameError. (OTHER-22)
+                print(f"    fold {fold_i}: {metric_name}="
+                      f"{fold_result['val_score']:.4f}, "
+                      f"PICP={fold_result['picp']:.3f}, "
+                      f"set_size={fold_result['avg_set_size']:.2f}, "
+                      f"cal_error={fold_result['cal_error']:.3f}")
             else:
                 # Regression: conformal prediction intervals.
                 # val_r2 must come from model_conf (not `model` trained on full
@@ -404,8 +412,16 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
 
         if fold_metrics:
             avg = {}
-            for key in fold_metrics[0]:
-                vals = [fm[key] for fm in fold_metrics if not np.isnan(fm[key])]
+            # Union of keys across folds, missing-key-tolerant: a classification
+            # model without predict_proba emits fewer keys (no 'n_classes') than
+            # one with it. If folds ever disagree on key sets, indexing
+            # fold_metrics[0] keys with fm[key] would KeyError. (OTHER-22)
+            all_keys = set()
+            for fm in fold_metrics:
+                all_keys.update(fm.keys())
+            for key in all_keys:
+                vals = [fm[key] for fm in fold_metrics
+                        if key in fm and not np.isnan(fm[key])]
                 avg[key] = float(np.mean(vals)) if vals else float('nan')
             results['conditions'][cond_name] = {
                 'description': desc,

@@ -5,42 +5,43 @@ run_all() with its rep list from the pipeline readiness tiers.
 Cross-dataset experiments (C03, C14) stay in their own files and
 consume the per-dataset JSON outputs.
 
-Config: SPEED_TIERS['full'] — 5-fold scaffold CV, 6 downstream models
-(DOWNSTREAM_MODELS = rf / xgboost / ridge / svm / mlp / lightgbm),
-FULL_BUDGETS, INTERNAL_EVALUATORS = ['match', 'rf', 'svm', 'lightgbm', 'mlp'].
+Config (run_all default): SPEED_TIERS['full'] — 5-fold scaffold CV, 6
+downstream models (DOWNSTREAM_MODELS = rf / xgboost / ridge / svm / mlp /
+lightgbm), INTERNAL_EVALUATORS = ['match', 'rf', 'svm', 'lightgbm', 'mlp'],
+and budgets = SCREENING_BUDGETS ([50, 500, 1000, 2000]).
+
+NOTE on budgets: the SCREENING_BUDGETS value in the default config only
+affects experiments that sweep config['budgets'] directly (c06, c07, c09,
+c10, c15, c18). The precompute itself (precompute_hybrid_searches) ignores
+config['budgets'] and always runs FULL_BUDGETS, so the precompute cache and
+pool lookups are always built at the full 8-budget grid. c02/c05/c17/c24
+override to FULL_BUDGETS locally. See COST-11 write-up before changing the
+budget list — it is a results/cache decision, not a no-op.
 """
 
 import sys
 import os
 import time
-from pathlib import Path
 
 # Ensure imports work regardless of where the script is run from
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'src'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))  # tests/
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))         # tests/experiments/
 
-import hashlib
-import pickle
-
 import numpy as np
 
 from experiments._shared import (
-    load_data, save_experiment_results, convert_numpy,
+    load_data, save_experiment_results,
     DOWNSTREAM_MODELS, INTERNAL_EVALUATORS,
 )
 
 
-# ── Cached create_hybrid wrapper ───────────────────────────────────────────
-# Experiments that call create_hybrid directly (C09, C10, C11, C15) should
-# use this wrapper so repeated runs don't recompute identical hybrids.
-# TODO: create_hybrid API is not finalised — allocation_method, importance_method,
-#       and budget semantics may change after framework experiments complete.
-#       When they do, delete the cache dir (~/.cache/kirby/create_hybrid_cache/).
-
-# cached_create_hybrid DELETED (2026-03-29) — operated on full data with
-# random internal split, causing data leakage. Replaced by precompute_hybrids
-# system that operates on proper per-fold train splits.
+# ── (historical note) cached_create_hybrid was removed ────────────────────
+# A `cached_create_hybrid` wrapper used to live here. DELETED (2026-03-29)
+# because it operated on full data with a random internal split, causing data
+# leakage. It is replaced by the precompute_hybrids system (find_best_hybrid
+# with cache=True), which operates on proper per-fold train splits. No
+# create_hybrid wrapper exists in this module any more.
 
 
 # ── Experiment config is derived from SPEED_TIERS (fast/full) ─────────────
@@ -848,6 +849,115 @@ DATASET_REPS = {
         'top_tier': ['tetranuc_freq', 'tnf_canonical', 'kmer4', 'kmer5',
                      'grover_dna', 'kmer3', 'nt_v2_500m', 'nt_v2_250m'],
     },
+
+    # ── FIX 4c: register precompute-seeded datasets (rep lists copied from
+    # the named domain/rep-set sibling so the search seeds them instead of
+    # cold-recomputing under an unregistered name). ──────────────────────
+    # Graphinity ΔΔG (synthetic antibody-protein ΔΔG) ← copy from ddg_combined.
+    'graphinity_foldx': {
+        'general': [
+            'esm2_wt_delta', 'prot_t5', 'esm2_midlayers', 'esm2_concat',
+            'onehot', 'prot_t5_cdr', 'antiberty_cdr', 'esmc',
+            'mutation_features', 'saprot', 'esmc_cdr', 'antiberty',
+            'esm2_cdr', 'esm2_cdr3', 'esm2', 'esm2_layer24', 'saprot_cdr',
+            'esm2_per_cdr'],
+        'augmentation': ['aac'],
+        'top_tier': ['esm2_wt_delta', 'prot_t5', 'esm2_midlayers'],
+    },
+    'graphinity_rosetta': {
+        'general': [
+            'esm2_wt_delta', 'prot_t5', 'esm2_midlayers', 'esm2_concat',
+            'onehot', 'prot_t5_cdr', 'antiberty_cdr', 'esmc',
+            'mutation_features', 'saprot', 'esmc_cdr', 'antiberty',
+            'esm2_cdr', 'esm2_cdr3', 'esm2', 'esm2_layer24', 'saprot_cdr',
+            'esm2_per_cdr'],
+        'augmentation': ['aac'],
+        'top_tier': ['esm2_wt_delta', 'prot_t5', 'esm2_midlayers'],
+    },
+    # Ginkgo developability (antibody) ← copy from ginkgo_hic.
+    'ginkgo_tm2': {
+        'general': [
+            'aac', 'ablang2',
+            'esm2', 'esm2_cdr', 'esm2_cdr3', 'esm2_concat',
+            'esm2_early', 'esm2_layer24', 'esm2_midlayers',
+            'esm2_per_cdr', 'esm2_per_region',
+            'esm3', 'esm3_cdr', 'esmc', 'esmc_cdr',
+            'igt5',
+            'prot_t5', 'prot_t5_cdr',
+            'saprot', 'saprot_cdr', 'esm2_entropy_top20'],
+        'augmentation': ['paratope', 'structural'],
+        'top_tier': ['esm2_concat', 'prot_t5', 'prot_t5_cdr'],
+    },
+    'ginkgo_aggregation': {
+        'general': [
+            'aac', 'ablang2',
+            'esm2', 'esm2_cdr', 'esm2_cdr3', 'esm2_concat',
+            'esm2_early', 'esm2_layer24', 'esm2_midlayers',
+            'esm2_per_cdr', 'esm2_per_region',
+            'esm3', 'esm3_cdr', 'esmc', 'esmc_cdr',
+            'igt5',
+            'prot_t5', 'prot_t5_cdr',
+            'saprot', 'saprot_cdr', 'esm2_entropy_top20'],
+        'augmentation': ['paratope', 'structural'],
+        'top_tier': ['esm2_concat', 'prot_t5', 'prot_t5_cdr'],
+    },
+    'ginkgo_purity': {
+        'general': [
+            'aac', 'ablang2',
+            'esm2', 'esm2_cdr', 'esm2_cdr3', 'esm2_concat',
+            'esm2_early', 'esm2_layer24', 'esm2_midlayers',
+            'esm2_per_cdr', 'esm2_per_region',
+            'esm3', 'esm3_cdr', 'esmc', 'esmc_cdr',
+            'igt5',
+            'prot_t5', 'prot_t5_cdr',
+            'saprot', 'saprot_cdr', 'esm2_entropy_top20'],
+        'augmentation': ['paratope', 'structural'],
+        'top_tier': ['esm2_concat', 'prot_t5', 'prot_t5_cdr'],
+    },
+    # Humanness species (antibody clf) ← copy from humanness_therapeutic.
+    'humanness_species': {
+        'general': [
+            'antiberty_cdr', 'antiberty', 'igt5', 'abroberta_cdr', 'abroberta',
+            'ablang2', 'blosum', 'onehot', 'esm2_per_cdr', 'esm2_cdr3',
+            'esm2_cdr', 'esm2_concat', 'esm2', 'esm2_per_region',
+            'esm2_midlayers', 'esmc_cdr', 'esmc', 'esm2_entropy_top20',
+            'prot_t5', 'prot_t5_cdr', 'esm2_layer24',
+            'esm3_cdr', 'esm3', 'saprot_cdr', 'saprot', 'esm2_early'],
+        'augmentation': [],
+        'top_tier': [
+            'antiberty_cdr', 'antiberty', 'igt5', 'abroberta_cdr', 'abroberta',
+            'ablang2', 'blosum', 'onehot', 'esm2_per_cdr', 'esm2_cdr3',
+            'esm2_cdr', 'esm2_concat', 'esm2', 'esm2_per_region',
+            'esm2_midlayers', 'esmc_cdr', 'esmc', 'esm2_entropy_top20',
+            'prot_t5', 'prot_t5_cdr', 'esm2_layer24'],
+    },
+    # ChEMBL QSAR activity-cliff (molecular regression) ← copy from caco2.
+    'chembl_qsar': {
+        'general': [
+            'graph_kernel', 'mol2vec', 'mhg_gnn', 'ecfp4', 'pdv', 'grover',
+            'avalon', 'mordred', 'top_torsion', 'smited', 'atom_pair', 'molformer'],
+        'augmentation': ['maccs', 'pharmacophore3d', 'usrcat', 'coulomb_matrix', 'usr'],
+        'top_tier': [
+            'graph_kernel', 'mol2vec', 'mhg_gnn', 'ecfp4', 'pdv', 'grover',
+            'avalon', 'mordred'],
+    },
+    # CDR flexibility (antibody clf, sequence reps) ← copy from humanness_therapeutic.
+    'cdr_flexibility': {
+        'general': [
+            'antiberty_cdr', 'antiberty', 'igt5', 'abroberta_cdr', 'abroberta',
+            'ablang2', 'blosum', 'onehot', 'esm2_per_cdr', 'esm2_cdr3',
+            'esm2_cdr', 'esm2_concat', 'esm2', 'esm2_per_region',
+            'esm2_midlayers', 'esmc_cdr', 'esmc', 'esm2_entropy_top20',
+            'prot_t5', 'prot_t5_cdr', 'esm2_layer24',
+            'esm3_cdr', 'esm3', 'saprot_cdr', 'saprot', 'esm2_early'],
+        'augmentation': [],
+        'top_tier': [
+            'antiberty_cdr', 'antiberty', 'igt5', 'abroberta_cdr', 'abroberta',
+            'ablang2', 'blosum', 'onehot', 'esm2_per_cdr', 'esm2_cdr3',
+            'esm2_cdr', 'esm2_concat', 'esm2', 'esm2_per_region',
+            'esm2_midlayers', 'esmc_cdr', 'esmc', 'esm2_entropy_top20',
+            'prot_t5', 'prot_t5_cdr', 'esm2_layer24'],
+    },
 }
 
 
@@ -1035,7 +1145,7 @@ def run_all(dataset_name: str, output_dir: str,
     """
     if config is None:
         from kirby.find_best_hybrid import SPEED_TIERS
-        from experiments._shared import SCREENING_BUDGETS
+        from experiments._shared import FULL_BUDGETS
         tier = SPEED_TIERS['full']
         config = {
             'n_splits': tier['n_folds'],
@@ -1043,7 +1153,7 @@ def run_all(dataset_name: str, output_dir: str,
             'allocations': tier['allocation_methods'],
             'importance_methods': tier['importance_methods'],
             'internal_evaluators': INTERNAL_EVALUATORS,
-            'budgets': SCREENING_BUDGETS,
+            'budgets': FULL_BUDGETS,
             'models': DOWNSTREAM_MODELS,
         }
     if experiments is None:

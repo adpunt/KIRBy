@@ -22,7 +22,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import numpy as np
-from scipy.optimize import minimize_scalar
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import Ridge, LogisticRegression
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
@@ -31,8 +30,8 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, convert_numpy,
     cv_split, get_domain_metric,
-    get_precomputed_search, build_fold_hybrid,
-    get_best_for_downstream, get_best_search_for_downstream,
+    build_fold_hybrid,
+    get_best_search_for_downstream,
 )
 from kirby.find_best_hybrid import _resolve_models, DEFAULT_MODELS
 
@@ -349,6 +348,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'best_tuned_full_dim': {
                 'param_value': best_tuned_full[0],
                 'score': best_tuned_full[1],
+                # OTHER-27: this baseline is evaluated at full_dim_budget =
+                # max(budgets) = capped_full = min(total_dim, 2n, 2048), which
+                # is NOT necessarily the true full dimensionality. Record the
+                # actual budget + a flag so the "full_dim" label can't be
+                # misread when total_dim > the cap.
+                'budget': int(full_dim_budget),
+                'is_capped': bool(full_dim_budget < total_dim),
             },
             'simple_hybrid': {
                 'budget': best_simple_hybrid[0],

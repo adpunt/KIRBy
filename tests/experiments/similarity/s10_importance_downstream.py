@@ -706,16 +706,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # Get hybrid blueprint via find_best_hybrid
     hybrid_blueprint = None
+    domain = data.get('domain', 'molecular')
     budget = kwargs.get('budget', config.get('budgets', [100])[0])
     search_speed = config.get('search_speed', 'full')
 
+    # SIMA-2: surface (do NOT swallow) the hybrid-search outcome. Previously a
+    # failed/empty search silently left hybrid_blueprint=None, so EVERY hybrid
+    # branch in Tasks 1-4 was skipped while the experiment still reported as if
+    # it produced hybrid results. We now record an explicit flag in the output.
+    hybrid_status = 'ok'
     try:
+        # Pass metric/task_type/domain + data so the pooled search resolves the
+        # SAME cache lineage used at precompute time and can hit the in-memory
+        # precomputed_searches_distance dict (instead of a cold recompute /
+        # mismatched metric).
         search, meta = get_best_search_for_downstream(
             reps, labels, groups,
             downstream_model='knn', budget=budget,
             augmentations=data.get('augmentations'),
             speed=search_speed,
-            dataset_name=dataset_name, task_type=task_type,
+            metric=metric_name, task_type=task_type, domain=domain,
+            dataset_name=dataset_name, data=data,
             distance=True,
         )
         if meta:
@@ -725,15 +736,26 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"budget={hybrid_blueprint.budget}, "
                   f"imp={hybrid_blueprint.importance_method}, "
                   f"ev={hybrid_blueprint.internal_evaluator}")
+        else:
+            hybrid_status = 'no_blueprint'
+            print("  WARNING: pooled search returned no blueprint -- all hybrid "
+                  "branches (Tasks 1-4) will be SKIPPED (per-rep baselines only).")
         top3 = extract_top3_base_reps(search)
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
     except Exception as e:
+        hybrid_status = f'error: {type(e).__name__}: {e}'
         print(f"  Hybrid search failed: {e}")
+        print("  WARNING: all hybrid branches (Tasks 1-4) will be SKIPPED "
+              "(per-rep baselines only).")
         top3 = None
 
     start_total = time.time()
     results = {}
+    # Flag the hybrid outcome so downstream readers/aggregators (s09) can tell a
+    # baseline-only run apart from a complete hybrid run.
+    results['hybrid_status'] = hybrid_status
+    results['hybrid_evaluated'] = hybrid_blueprint is not None
     if top3:
         results['top3_base_reps'] = [(n, s) for n, s in top3]
 

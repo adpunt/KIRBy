@@ -1789,6 +1789,9 @@ _PROSTT5_MODEL = None
 _PROSTT5_TOKENIZER = None
 _SAPROT_MODEL = None
 _SAPROT_TOKENIZER = None
+_PROSST_MODEL = None
+_PROSST_TOKENIZER = None
+_ESMC6B_MODEL = None
 
 
 def _prostt5_cache_dir() -> 'Path':
@@ -2884,6 +2887,392 @@ def create_xtrimopglm_protein_embeddings(
     result = np.vstack(all_embeddings).astype(np.float32)
     print(f"  Generated xTrimoPGLM protein embeddings: {result.shape}")
     return result
+
+
+def create_prosst_protein_embeddings(
+    sequences: List[str],
+    device: str = None,
+    batch_size: int = 4,
+    model_name: str = 'AI4Protein/ProSST-2048',
+) -> np.ndarray:
+    """Extract ProSST mean-pooled embeddings for protein sequences.
+
+    ProSST (NeurIPS 2024) is a structure-aware protein language model with
+    disentangled attention over amino-acid tokens AND quantized structure
+    tokens. The HuggingFace model auto-downloads via transformers
+    (trust_remote_code=True).
+
+    IMPORTANT — structure-token requirement:
+        ProSST's full forward pass expects `ss_input_ids` (per-residue
+        structure tokens produced by ProSST's structure quantizer from a PDB
+        file). The forward signature makes `ss_input_ids` optional (defaults
+        to None), but for the `*-2048` / `*-Foldseek` checkpoints
+        `ss_vocab_size > 0`, so a None structure input raises inside the
+        structure-embedding layer. This function therefore runs in
+        SEQUENCE-ONLY mode: it passes `input_ids` only. That works directly
+        only for a checkpoint whose config has `ss_vocab_size == 0`. For a
+        structure-vocab checkpoint we fall back to feeding a neutral
+        all-zero `ss_input_ids` of matching length so embeddings can still be
+        produced (the structure track is then uninformative — flagged below).
+
+    To get the *intended* structure-aware embeddings on the server, supply
+    real structure tokens: run ProSST's quantizer on predicted/known PDBs
+    (see https://github.com/ai4protein/ProSST — `src/prosst/structure`),
+    then extend this function to pass the resulting `ss_input_ids`.
+
+    Args:
+        sequences: List of protein amino acid sequences.
+        device: 'cpu' or 'cuda'.
+        batch_size: Sequences per batch.
+        model_name: HF id. Default 'AI4Protein/ProSST-2048'. Variants:
+            AI4Protein/ProSST-{20,128,512,1024,2048,4096}, ProSST-Foldseek.
+
+    Returns:
+        np.ndarray: (n_sequences, hidden_size) embeddings.
+
+    Requires: pip install transformers  (model auto-downloads, ~0.4GB).
+    Status: code wired; sequence-only path. Structure-aware extraction needs
+    the quantizer step above — see docstring.
+    """
+    device = _default_device(device)
+    import torch
+    global _PROSST_MODEL, _PROSST_TOKENIZER
+
+    try:
+        from transformers import AutoModelForMaskedLM, AutoTokenizer
+    except ImportError:
+        raise ImportError("ProSST requires transformers: pip install transformers")
+
+    if _PROSST_MODEL is None:
+        print(f"  Loading ProSST ({model_name})...")
+        _PROSST_TOKENIZER = AutoTokenizer.from_pretrained(
+            model_name, trust_remote_code=True,
+        )
+        _PROSST_MODEL = AutoModelForMaskedLM.from_pretrained(
+            model_name, trust_remote_code=True,
+        ).to(device).eval()
+
+    model = _PROSST_MODEL
+    tokenizer = _PROSST_TOKENIZER
+    ss_vocab = int(getattr(model.config, 'ss_vocab_size', 0) or 0)
+    hidden_dim = int(getattr(model.config, 'hidden_size', 768))
+    if ss_vocab > 0:
+        print(f"    NOTE: ProSST ss_vocab_size={ss_vocab} > 0 — running with "
+              f"neutral (all-zero) structure tokens. Structure track is "
+              f"uninformative; supply real ss_input_ids for structure-aware "
+              f"embeddings (see docstring).")
+
+    all_embeddings = []
+    n = len(sequences)
+    with torch.no_grad():
+        for start in range(0, n, batch_size):
+            batch = [s.upper().strip()[:2046] for s in sequences[start:start + batch_size]]
+            batch_embs = []
+            for j, seq in enumerate(batch):
+                idx = start + j
+                try:
+                    inputs = tokenizer(
+                        seq, return_tensors='pt', padding=False,
+                        truncation=True, max_length=2048,
+                    )
+                    inputs = {k: v.to(device) for k, v in inputs.items()}
+                    if ss_vocab > 0:
+                        # Neutral structure tokens, same length as input_ids.
+                        inputs['ss_input_ids'] = torch.zeros_like(
+                            inputs['input_ids'])
+                    outputs = model(**inputs, output_hidden_states=True)
+                    hidden = outputs.hidden_states[-1]  # (1, L, H)
+                    if hidden.shape[1] > 2:
+                        emb = hidden[:, 1:-1, :].mean(dim=1)
+                    else:
+                        emb = hidden.mean(dim=1)
+                    batch_embs.append(emb.squeeze(0).float().cpu().numpy())
+                except Exception as e:
+                    print(f"    WARNING: ProSST failed on seq {idx} "
+                          f"(len={len(seq)}): {e}")
+                    batch_embs.append(np.zeros(hidden_dim, dtype=np.float32))
+            all_embeddings.extend(batch_embs)
+
+            end = min(start + batch_size, n)
+            if end < n and end % 20 == 0:
+                print(f"    ProSST progress: {end}/{n}")
+
+    result = np.vstack(all_embeddings).astype(np.float32)
+    print(f"  Generated ProSST protein embeddings: {result.shape}")
+    return result
+
+
+def create_esmc6b_protein_embeddings(
+    sequences: List[str],
+    device: str = None,
+) -> np.ndarray:
+    """Extract ESM-C 6B mean-pooled embeddings for protein sequences.
+
+    Larger sibling of the 600M ESM-C already wired as `protein_esmc`. The 6B
+    checkpoint is gated to EvolutionaryScale's Forge API (the open `esm`
+    package ships the 300M/600M weights; the 6B model is served remotely and
+    needs an access token).
+
+    Args:
+        sequences: List of protein amino acid sequences.
+        device: 'cpu' or 'cuda'.
+
+    Returns:
+        np.ndarray: (n_sequences, 2560) embeddings.
+
+    Requires: pip install esm  AND  an EvolutionaryScale Forge token
+              (env var ESM_FORGE_TOKEN). Without the token this raises a
+              clear error — the 6B weights are not in the open package.
+    Status: scaffold — blocked on Forge access (see error).
+    """
+    device = _default_device(device)
+    import torch
+    global _ESMC6B_MODEL
+
+    try:
+        from esm.models.esmc import ESMC
+        from esm.sdk.api import ESMProtein, LogitsConfig
+    except ImportError:
+        raise ImportError("ESM-C requires the esm package: pip install esm")
+
+    token = os.environ.get('ESM_FORGE_TOKEN', '').strip()
+
+    if _ESMC6B_MODEL is None:
+        # Try local open-weights first (works only if EvolutionaryScale
+        # publishes esmc_6b in the open package), else fall through to Forge.
+        try:
+            print("  Loading ESM-C 6B (esmc_6b, open weights)...")
+            _ESMC6B_MODEL = ESMC.from_pretrained("esmc_6b")
+            if device == 'cpu' or (device == 'cuda'
+                                   and not torch.cuda.is_bf16_supported()):
+                _ESMC6B_MODEL = _ESMC6B_MODEL.float()
+            _ESMC6B_MODEL = _ESMC6B_MODEL.to(device).eval()
+        except Exception as local_err:
+            if not token:
+                raise RuntimeError(
+                    "ESM-C 6B weights are not available in the open `esm` "
+                    "package and no Forge token was found. Set "
+                    "ESM_FORGE_TOKEN (request access at "
+                    "https://forge.evolutionaryscale.ai) — then this rep "
+                    "uses the remote 6B model. "
+                    f"(local load error: {local_err})"
+                )
+            # Forge remote client path.
+            try:
+                from esm.sdk import client as _forge_client
+            except ImportError as e:
+                raise ImportError(
+                    "ESM-C 6B via Forge needs the esm SDK client: "
+                    "pip install esm"
+                ) from e
+            print("  Using ESM-C 6B via EvolutionaryScale Forge (remote)...")
+            _ESMC6B_MODEL = _forge_client(
+                model="esmc-6b-2024-12", token=token,
+            )
+
+    model = _ESMC6B_MODEL
+    config = LogitsConfig(sequence=True, return_embeddings=True)
+    all_embeddings = []
+    n = len(sequences)
+    with torch.no_grad():
+        for i, seq in enumerate(sequences):
+            seq = seq.upper().strip()[:2048]
+            protein = ESMProtein(sequence=seq)
+            protein_tensor = model.encode(protein)
+            output = model.logits(protein_tensor, config)
+            emb = output.embeddings[:, 1:-1, :].mean(dim=1).squeeze(0)
+            all_embeddings.append(np.asarray(emb.float().cpu().numpy()))
+            if (i + 1) % 50 == 0:
+                print(f"    Progress: {i + 1}/{n}")
+
+    result = np.vstack(all_embeddings).astype(np.float32)
+    print(f"  Generated ESM-C 6B protein embeddings: {result.shape}")
+    return result
+
+
+def create_chai1_protein_embeddings(
+    sequences: List[str],
+    device: str = None,
+) -> np.ndarray:
+    """Extract Chai-1 internal protein-LM (trunk) embeddings.
+
+    Chai-1 (Apache 2.0) is a biomolecular structure predictor that runs a
+    ~3B-parameter protein language model internally. Per-residue trunk
+    representations are NOT exposed by the public `chai_lab` API — extracting
+    them requires registering a forward hook on the trunk module inside
+    `chai_lab.chai1.run_folding_on_context`.
+
+    Args:
+        sequences: List of protein amino acid sequences.
+        device: 'cpu' or 'cuda'.
+
+    Returns:
+        np.ndarray: (n_sequences, D) trunk embeddings — once the hook below
+        is implemented.
+
+    Requires: pip install chai_lab  (Apache 2.0; weights auto-download).
+    Status: SCAFFOLD — blocked on a forward hook into the trunk. The package
+    import is verified here; the embedding path raises until the hook lands.
+    Step to finish: in chai_lab, hook `trunk`/`Pairformer` output inside
+    run_folding_on_context and mean-pool the single representation.
+    """
+    device = _default_device(device)  # noqa: F841 (used once hook lands)
+    try:
+        import chai_lab  # noqa: F401
+    except ImportError:
+        raise ImportError(
+            "Chai-1 requires the chai_lab package: pip install chai_lab"
+        )
+    raise NotImplementedError(
+        "Chai-1 embedding extraction needs a forward hook on the trunk "
+        "module (run_folding_on_context). chai_lab exposes structure outputs "
+        "but not trunk representations. Implement the hook to enable this "
+        "rep — see https://github.com/chaidiscovery/chai-lab"
+    )
+
+
+def create_protenix_protein_embeddings(
+    sequences: List[str],
+    device: str = None,
+) -> np.ndarray:
+    """Extract Protenix (ByteDance AF3 reproduction) trunk embeddings.
+
+    Protenix (Apache 2.0) reproduces AlphaFold3 and consumes ESM2-3B
+    embeddings in its input pipeline; its Pairformer trunk produces single
+    (per-token) and pair representations. As with Chai-1, the public API
+    returns structures, not trunk reps — a forward hook into the Pairformer
+    is required.
+
+    Args:
+        sequences: List of protein amino acid sequences.
+        device: 'cpu' or 'cuda'.
+
+    Returns:
+        np.ndarray: (n_sequences, D) — once the hook below is implemented.
+
+    Requires: git clone https://github.com/bytedance/Protenix && pip install -e .
+    Status: SCAFFOLD — blocked on a forward hook into the Pairformer trunk.
+    NOTE: the ESM2-3B input embeddings Protenix already computes are an
+    easier interim target than the trunk reps.
+    """
+    device = _default_device(device)  # noqa: F841 (used once hook lands)
+    try:
+        import protenix  # noqa: F401
+    except ImportError:
+        raise ImportError(
+            "Protenix requires the protenix package: "
+            "git clone https://github.com/bytedance/Protenix && pip install -e ."
+        )
+    raise NotImplementedError(
+        "Protenix embedding extraction needs a forward hook on the Pairformer "
+        "trunk. Interim option: dump the ESM2-3B input embeddings Protenix "
+        "computes. See https://github.com/bytedance/Protenix"
+    )
+
+
+def create_alphafold3_protein_embeddings(
+    sequences: List[str],
+    device: str = None,
+    embeddings_dir: str = None,
+) -> np.ndarray:
+    """Load AlphaFold3 single-representation embeddings (mean-pooled → 384D).
+
+    AlphaFold3 emits `embeddings.npz` with `single_embeddings`
+    (num_tokens, 384) when run with `--save_embeddings=true`. We mean-pool
+    the single representation to a fixed 384D vector per protein.
+
+    AF3 cannot be auto-run here: the model weights are under a RESTRICTIVE
+    Google DeepMind academic-use licence (manual request + signed terms) and
+    inference needs a large GPU + genetic databases. This function therefore
+    consumes PRE-COMPUTED AF3 outputs: point `embeddings_dir` (or
+    $KIRBY_MODELS_DIR/af3_embeddings) at a folder of `<i>.npz` files, one per
+    input sequence (in order), each containing `single_embeddings`.
+
+    Args:
+        sequences: List of protein amino acid sequences (used for count +
+            ordering only; AF3 must already have been run on them).
+        device: unused (kept for signature parity).
+        embeddings_dir: folder of pre-computed AF3 `.npz` files.
+
+    Returns:
+        np.ndarray: (n_sequences, 384) embeddings.
+
+    Requires: AF3 weights+licence (https://github.com/google-deepmind/alphafold3),
+    run with --save_embeddings=true, then place per-sequence npz files in
+    embeddings_dir.
+    Status: SCAFFOLD — blocked on AF3 licence/weights + a pre-compute pass.
+    """
+    if embeddings_dir is None:
+        embeddings_dir = os.path.join(
+            os.environ.get('KIRBY_MODELS_DIR', ''), 'af3_embeddings')
+    if not embeddings_dir or not os.path.isdir(embeddings_dir):
+        raise FileNotFoundError(
+            "AlphaFold3 embeddings not found. AF3 needs a restrictive "
+            "DeepMind academic licence + manual weight download "
+            "(https://github.com/google-deepmind/alphafold3); run inference "
+            "with --save_embeddings=true and place per-sequence <i>.npz files "
+            f"(key 'single_embeddings') in {embeddings_dir!r} or set "
+            "KIRBY_MODELS_DIR/af3_embeddings."
+        )
+
+    all_embeddings = []
+    for i in range(len(sequences)):
+        npz_path = os.path.join(embeddings_dir, f"{i}.npz")
+        if not os.path.isfile(npz_path):
+            raise FileNotFoundError(
+                f"Missing AF3 embedding {npz_path} for sequence index {i}. "
+                f"Expected one <i>.npz per input sequence."
+            )
+        with np.load(npz_path) as data:
+            single = data['single_embeddings']  # (num_tokens, 384)
+        all_embeddings.append(single.astype(np.float32).mean(axis=0))
+
+    result = np.vstack(all_embeddings).astype(np.float32)
+    print(f"  Loaded AlphaFold3 single-rep embeddings: {result.shape}")
+    return result
+
+
+def create_s3f_protein_embeddings(
+    sequences: List[str],
+    device: str = None,
+) -> np.ndarray:
+    """Extract S3F (Sequence-Structure-Surface Fitness, NeurIPS 2024) reps.
+
+    S3F combines ESM-2 sequence embeddings with a GVP structure encoder and a
+    surface-topology encoder into a multi-scale fixed-size representation
+    (SOTA on ProteinGym substitution DMS among non-MSA methods). It is a
+    research repo (DeepGraphLearning/S3F), not a pip/HF package, and the
+    structure + surface branches require per-protein structures (PDB) plus
+    GVP / surface-mesh dependencies.
+
+    Args:
+        sequences: List of protein amino acid sequences.
+        device: 'cpu' or 'cuda'.
+
+    Returns:
+        np.ndarray: (n_sequences, D) multi-scale embeddings — once wired.
+
+    Requires: git clone https://github.com/DeepGraphLearning/S3F  + its
+    structure/surface deps (GVP, mesh tooling) + per-protein PDBs.
+    Status: SCAFFOLD — blocked on the S3F repo install + structures.
+    Step to finish: install S3F, predict/collect PDBs, call its encoder and
+    mean-pool the fused representation.
+    """
+    device = _default_device(device)  # noqa: F841 (used once wired)
+    try:
+        import s3f  # noqa: F401
+    except ImportError:
+        raise ImportError(
+            "S3F is a research repo, not on PyPI: "
+            "git clone https://github.com/DeepGraphLearning/S3F and install "
+            "it (+ GVP/surface deps). Per-protein PDB structures are also "
+            "required for the structure + surface branches."
+        )
+    raise NotImplementedError(
+        "S3F embedding extraction is not wired: it needs per-protein "
+        "structures (PDB) and the GVP/surface encoders from the S3F repo. "
+        "See https://github.com/DeepGraphLearning/S3F"
+    )
 
 
 def create_protein_kmer(sequences: List[str], k: int = 3) -> np.ndarray:

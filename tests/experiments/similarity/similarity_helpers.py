@@ -467,6 +467,12 @@ def antibody_sequence_cliff_sweep(sequences, labels, is_clf,
                           if k not in ('cliff_pair_counts',)}
             result['thresholds'][int(max_edits)] = info_clean
         except Exception as e:
+            # SIMA-15: surface the failure on the console (exception class +
+            # threshold) so a blown threshold is visible at run time, not only
+            # by reading the saved JSON afterwards. Error is still captured in
+            # the result dict for downstream aggregation.
+            print(f"    WARNING: cliff sweep failed at max_edits={max_edits} "
+                  f"({scope_label}): {type(e).__name__}: {e}")
             result['thresholds'][int(max_edits)] = {'error': str(e)}
 
     if is_clf:
@@ -636,7 +642,7 @@ def run_all(dataset_name: str, output_dir: str,
     """
     if config is None:
         from kirby.find_best_hybrid import SPEED_TIERS
-        from experiments._shared import SCREENING_BUDGETS
+        from experiments._shared import FULL_BUDGETS
         tier = SPEED_TIERS['full']
         config = {
             'n_splits': tier['n_folds'],
@@ -644,7 +650,7 @@ def run_all(dataset_name: str, output_dir: str,
             'allocations': tier['allocation_methods'],
             'importance_methods': tier['importance_methods'],
             'internal_evaluators': INTERNAL_EVALUATORS,
-            'budgets': SCREENING_BUDGETS,
+            'budgets': FULL_BUDGETS,
             'models': DOWNSTREAM_MODELS,
         }
         config.update(SIMILARITY_EXTRA)

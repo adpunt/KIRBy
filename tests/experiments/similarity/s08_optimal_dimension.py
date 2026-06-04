@@ -115,12 +115,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 speed=search_speed, data=data,
                 metric=metric_name, task_type=task_type, domain=domain,
                 dataset_name=dataset_name, distance=True)
-            weights_flat = flatten_fold_weights(fi) if fi else np.ones(X_hybrid.shape[1])
+            # Clamp to >=0: weights feed compute_distance_matrix (X*sqrt(w),
+            # no internal guard). lightgbm_gain is non-negative today, so this
+            # is a no-op now but prevents silent NaN if importance ever becomes
+            # signed. Mirrors the per-rep clamp below.
+            weights_flat = (np.maximum(flatten_fold_weights(fi), 0) if fi
+                            else np.ones(X_hybrid.shape[1]))
             if not _top3_reported:
                 top3 = extract_top3_base_reps(search)
                 if top3:
-                    print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
-                    results['top3_base_reps'] = [(n, s) for n, s in top3]
+                    # Use distinct loop vars (rep_n/rep_s) to avoid shadowing the
+                    # scalar `n = len(labels)` bound above (OTHER-32).
+                    print(f"  Top-3 base reps (by RF): {', '.join(f'{rep_n}={rep_s:.4f}' for rep_n, rep_s in top3)}")
+                    results['top3_base_reps'] = [(rep_n, rep_s) for rep_n, rep_s in top3]
                 _top3_reported = True
         except Exception as e:
             print(f"    Failed: {e}")
@@ -255,7 +262,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Weighted SAC
         sac_rep_w = float('nan')
         if importance is not None and rep_name in importance:
-            D_rep_w = compute_distance_matrix(X, feature_weights=importance[rep_name],
+            # Clamp importance to >=0 before passing: compute_distance_matrix
+            # does X * sqrt(feature_weights) with NO internal guard, so any
+            # negative weight (future signed importance) would inject NaN into
+            # the distance matrix and silently corrupt SAC. lightgbm_gain is
+            # non-negative today; this makes the contract explicit and matches
+            # the np.sqrt(np.maximum(.,0)) pattern used everywhere else in s02-s07.
+            _w_rep = np.maximum(importance[rep_name], 0)
+            D_rep_w = compute_distance_matrix(X, feature_weights=_w_rep,
                                               standardize=True)
             sac_rep_w, _ = similarity_activity_correlation(D_rep_w, labels, n_sample, is_clf=is_clf)
 

@@ -63,6 +63,16 @@ from kirby.utils.noise_mitigation_methods import (
 
 SIGMAS = [0.3, 0.6]
 
+# Hybrid blueprint budgets requested per fold. These MUST be a subset of the
+# noise precompute budget set (FULL_BUDGETS), otherwise get_best_search_for_
+# downstream's strict per-budget guard (n10 run(): "skipping this budget to
+# avoid mislabelled results") rejects every one and the hybrid-vs-base
+# comparison — n10's entire purpose — comes back silently empty. FULL_BUDGETS =
+# [10,25,50,100,250,500,1000,2000] contains all of [25,100,250]; the old
+# SCREENING_BUDGETS = [50,500,1000,2000] contained none of them (the bug).
+# _smoke_audit_n09_n10.py asserts this containment.
+HYBRID_BUDGETS = [25, 100, 250]
+
 # Ground-truth noise-mask definition for REGRESSION detection F1 (P1#6 audit
 # fix). 'mad' = a sample counts as noisy iff |perturbation| > MAD(y_clean)
 # (informative detector ranking, but the positive class is a thresholded
@@ -509,7 +519,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # search would multiply runtime across {budget × sigma × fold × space}).
     # Read all n10 hybrid-vs-base comparisons as "best-case hybrid blueprint,
     # constructed under noise".
-    hybrid_budgets = [25, 100, 250]
+    hybrid_budgets = list(HYBRID_BUDGETS)
     blueprints = {}
     search_for_top3 = None
     for b in hybrid_budgets:

@@ -3779,6 +3779,55 @@ def create_mole(smiles_list, pretrained_model=None, batch_size=32):
 
 
 # =============================================================================
+# Boltz-2 as a molecular representation (cross-domain forward-compat)
+# =============================================================================
+
+
+def create_boltz2_molecular_embeddings(smiles_list, device=None, cache_dir=None):
+    """Create Boltz-2 atom-level molecular embeddings (mean-pooled).
+
+    A Feb 2026 result (arxiv:2602.13249) shows Boltz-2 atom-level
+    representations match/outperform specialized molecular foundation models
+    (MiniMol, MolGPS) on the TDC ADMET benchmark — i.e. the same structure
+    predictor that gives protein reps (`protein_boltz2`) is also a molecular
+    embedder. This is the cross-domain forward-compat experiment.
+
+    Unlike the protein path (where `boltz predict --write_embeddings` dumps a
+    per-residue single representation), the ATOM-level small-molecule
+    representation is produced inside Boltz-2's Pairformer trunk and is NOT
+    written out by the public CLI. Extracting it requires a forward hook on
+    the atom/token single representation in the trunk (the same hook noted as
+    deferred in project memory: "Boltz-2 molecular deferred (needs Pairformer
+    hooks)").
+
+    Args:
+        smiles_list: List of SMILES strings.
+        device: 'cpu' or 'cuda' (CUDA strongly recommended).
+        cache_dir: Optional cache directory (unused until the hook lands).
+
+    Returns:
+        np.ndarray: (n_molecules, D) atom-pooled embeddings — once wired.
+
+    Requires: pip install boltz (CUDA recommended).
+    Status: SCAFFOLD — blocked on a Pairformer atom-rep forward hook.
+    Step to finish: register a hook on Boltz-2's trunk single representation,
+    run it per molecule (ligand-only input), mean-pool over atoms.
+    """
+    _ = (device, cache_dir, smiles_list)
+    try:
+        import boltz  # noqa: F401
+    except ImportError:
+        raise ImportError("Boltz-2 requires the boltz package: pip install boltz")
+    raise NotImplementedError(
+        "Boltz-2 molecular (atom-level) embeddings need a forward hook on the "
+        "Pairformer trunk single representation — the public `boltz predict` "
+        "CLI does not write atom-level reps. The protein path "
+        "(create_boltz2_protein_embeddings) is unaffected. "
+        "See https://github.com/jwohlwend/boltz and arxiv:2602.13249."
+    )
+
+
+# =============================================================================
 # GRAPH KERNEL FEATURES
 # =============================================================================
 

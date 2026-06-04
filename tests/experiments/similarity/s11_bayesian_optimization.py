@@ -65,22 +65,43 @@ from experiments._shared import (
     make_structured_output, get_precomputed_search, get_best_search_for_downstream,
 )
 
-from sklearn.gaussian_process.kernels import Kernel
+from sklearn.gaussian_process.kernels import Kernel, NormalizedKernelMixin
 from kirby.hybrid import apply_feature_selection, apply_augmentation_selection
 from kirby.hybrid import create_hybrid
 
 
-class TanimotoKernel(Kernel):
+class TanimotoKernel(NormalizedKernelMixin, Kernel):
     """Tanimoto (Jaccard) kernel for binary/count fingerprints.
 
     k(x, y) = <x, y> / (||x||² + ||y||² - <x, y>)
 
     Appropriate for molecular fingerprints where RBF assumes smooth
-    continuous features. Bounded in [0, 1]. No learnable hyperparameters.
+    continuous features. Bounded in [0, 1]. Parameter-free: it has NO
+    learnable hyperparameters, so we deliberately do NOT define any
+    ``hyperparameter_*`` attribute and do NOT override ``theta`` / ``bounds``
+    / ``hyperparameters``. The base ``Kernel`` machinery then correctly yields
+    an empty hyperparameter list (``hyperparameters == []``,
+    ``theta == array([])``, ``bounds == array([]).``), which is what
+    GaussianProcessRegressor.fit expects. (The previous override of
+    ``hyperparameter_names`` was itself picked up by
+    ``Kernel.hyperparameters`` — which collects every ``hyperparameter_*``
+    attribute — and crashed fit with "'list' object has no attribute 'name'".)
+
+    ``NormalizedKernelMixin`` supplies ``diag(X) -> ones`` (correct, since
+    k(x, x) = 1 for any non-zero fingerprint). Tanimoto is NOT stationary, so
+    ``is_stationary`` returns False (we do not use StationaryKernelMixin).
+    A tunable variance/scale should be added by wrapping in
+    ``ConstantKernel(...) * TanimotoKernel()`` (as fit_gp does), not by giving
+    this kernel its own hyperparameter.
     """
 
     def __init__(self):
-        super().__init__()
+        # Explicit parameter-free __init__ is REQUIRED: sklearn's
+        # Kernel.get_params introspects __init__'s signature and rejects any
+        # *args/**kwargs (the inherited object.__init__ has them). A bare
+        # `def __init__(self)` makes get_params return {} cleanly, which
+        # clone()/clone_with_theta() rely on.
+        pass
 
     def __call__(self, X, Y=None, eval_gradient=False):
         X = np.asarray(X, dtype=np.float64)
@@ -94,35 +115,12 @@ class TanimotoKernel(Kernel):
         denom = X_sq[:, None] + Y_sq[None, :] - XY
         K = np.where(denom > 0, XY / denom, 0.0)
         if eval_gradient:
+            # Parameter-free kernel: zero-width gradient w.r.t. theta.
             return K, np.empty((X.shape[0], Y.shape[0], 0))
         return K
 
-    def diag(self, X):
-        X = np.asarray(X, dtype=np.float64)
-        norms = np.sum(X ** 2, axis=1)
-        return np.where(norms > 0, 1.0, 0.0)
-
     def is_stationary(self):
         return False
-
-    @property
-    def hyperparameter_names(self):
-        return []
-
-    @property
-    def theta(self):
-        return np.empty(0)
-
-    @theta.setter
-    def theta(self, value):
-        pass
-
-    @property
-    def bounds(self):
-        return np.empty((0, 2))
-
-    def clone_with_theta(self, theta):
-        return TanimotoKernel()
 
 
 # =============================================================================
@@ -299,6 +297,31 @@ SURROGATE_MODELS = {
     'ngboost': (fit_ngboost, False),
     'bnn': (fit_bnn, False),
 }
+
+# Optional surrogate packages. If the import is missing, the corresponding
+# hybrid_<surrogate> condition would have EVERY fit fail and silently degrade to
+# pure random acquisition while still being reported under the surrogate's name
+# (SIMA-11). We probe availability up front and skip+flag instead.
+_OPTIONAL_SURROGATE_IMPORTS = {
+    'ngboost': 'ngboost',
+    'bnn': 'kirby.models.bnn',
+    'gauche_gp': 'gauche',
+}
+
+
+def _surrogate_available(surrogate):
+    """Return True if the optional surrogate's package can be imported.
+
+    'gp' (sklearn) is always available. Anything in
+    _OPTIONAL_SURROGATE_IMPORTS is checked via importlib so a missing package
+    becomes an explicit skip rather than a random-acquisition curve mislabelled
+    as a real method.
+    """
+    mod = _OPTIONAL_SURROGATE_IMPORTS.get(surrogate)
+    if mod is None:
+        return True  # 'gp' or unknown -> assume present (gp is sklearn)
+    import importlib.util
+    return importlib.util.find_spec(mod) is not None
 
 
 def predict_with_uncertainty(model, X):
@@ -603,6 +626,10 @@ def build_hybrid_features(reps, labels, seed_idx, pool_idx, budget=50, bp=None,
     imp = bp.importance_method if bp else 'lightgbm_gain'
     int_eval = bp.internal_evaluator if bp else 'match'
     aug_strategy = bp.augmentation_strategy if bp else 'none'
+    # SIMA-5: honour the blueprint's step_size (greedy allocation granularity).
+    # Bare create_hybrid silently defaults step_size=5, so the hybrid here could
+    # differ from the feature space the blueprint was scored against.
+    step_sz = getattr(bp, 'step_size', 5) if bp else 5
 
     seed_augs = ({k: v[seed_idx] for k, v in augmentations.items()}
                  if augmentations else None)
@@ -615,6 +642,7 @@ def build_hybrid_features(reps, labels, seed_idx, pool_idx, budget=50, bp=None,
         importance_method=imp,
         internal_evaluator=int_eval,
         budget=budget,
+        step_size=step_sz,
         augmentations=seed_augs,
         augmentation_strategy=aug_strategy,
     )
@@ -763,6 +791,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  Skipping S11: n={n_samples} < 200 (BO seed set too small for greedy allocation)")
         return {'error': 'dataset_too_small', 'n_samples': n_samples}
 
+    # SIMA-10: the BO seed/pool split MUST be group-aware. Random splits are
+    # forbidden (feedback_no_random_splits). Check ONCE here (the requirement is
+    # deterministic in `groups`, not per-seed) and skip the whole experiment
+    # cleanly with a flag rather than raising mid-loop (which used to crash all
+    # conditions) or silently shuffling. >=20 groups are needed so the 5% seed
+    # split lands at least one group.
+    _n_unique_groups = len(np.unique(groups)) if groups is not None else 0
+    if groups is None:
+        print("  Skipping S11: no groups provided; group-aware BO split required "
+              "(random splits forbidden, see feedback_no_random_splits).")
+        return {'skipped': True, 'reason': 'no_groups_for_grouped_bo_split',
+                'n_samples': n_samples}
+    if _n_unique_groups < 20:
+        print(f"  Skipping S11: only {_n_unique_groups} unique groups (<20); "
+              f"too few for a group-aware 5%/80% BO split.")
+        return {'skipped': True, 'reason': f'too_few_groups:{_n_unique_groups}',
+                'n_unique_groups': _n_unique_groups, 'n_samples': n_samples}
+
     # Get blueprint from pool helper (used by hybrid conditions)
     augmentations = data.get('augmentations')
     try:
@@ -877,14 +923,43 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         },
     }
 
+    _has_ecfp4 = 'ecfp4' in reps
+
     for condition in conditions:
         print(f"\n  {'='*60}")
         print(f"  Condition: {condition}")
         print(f"  {'='*60}")
 
+        # --- SIMA-11: skip conditions whose precondition is absent, with a flag,
+        # instead of running a degenerate curve that looks like a real method. ---
+        # (1) Optional-surrogate hybrid_<surr> conditions: if the package is not
+        #     installed, every fit fails -> pure random acquisition mislabelled.
+        if condition.startswith('hybrid_') and condition.split('_', 1)[1] in SURROGATE_MODELS:
+            _surr = condition.split('_', 1)[1]
+            if not _surrogate_available(_surr):
+                print(f"    SKIP: surrogate '{_surr}' package not installed "
+                      f"-> would be pure random acquisition mislabelled as a method.")
+                results['conditions'][condition] = {
+                    'skipped': True,
+                    'reason': f'surrogate_unavailable:{_surr}',
+                }
+                continue
+        # (2) tanimoto_ecfp4 needs real binary fingerprints. With no ecfp4 rep it
+        #     falls back to a continuous max-dim rep, where the Tanimoto kernel is
+        #     meaningless. Skip + flag rather than report a fake "tanimoto" result.
+        if condition == 'tanimoto_ecfp4' and not _has_ecfp4:
+            print("    SKIP: tanimoto_ecfp4 requires an 'ecfp4' rep "
+                  "(Tanimoto kernel is meaningless on continuous features).")
+            results['conditions'][condition] = {
+                'skipped': True,
+                'reason': 'no_ecfp4_rep_for_tanimoto',
+            }
+            continue
+
         all_curves = []
         total_gp_failures = 0
         cond_dim = target_dim  # default; overwritten by feature builders
+        degenerate_split_seeds = 0  # SIMA-10b: count of skipped seed iterations
 
         for seed_i in range(n_seeds):
             seed = 42 + seed_i
@@ -898,33 +973,49 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             # Total used = seed + pool = 85%, held out = 15%
 
             all_idx = np.arange(n_samples)
-            n_unique_groups = len(np.unique(groups)) if groups is not None else 0
-            # Need enough groups for 5%/80% split — at least 20 groups so
-            # seed gets ≥1 group. Fall through to simple shuffle otherwise.
-            if groups is None:
-                raise ValueError(
-                    "S11 BO requires group-aware splitting; no groups provided. "
-                    "Random splits are forbidden (see feedback_no_random_splits)."
-                )
-            if n_unique_groups < 20:
-                raise ValueError(
-                    f"Too few unique groups ({n_unique_groups}) for grouped BO "
-                    f"split — need >=20"
-                )
-            # Use GroupShuffleSplit: first split off seed set
-            gss_seed = GroupShuffleSplit(
-                n_splits=1, test_size=1.0 - seed_frac, random_state=seed)
-            seed_idx, rest_idx = next(gss_seed.split(all_idx, y_bo, groups))
+            # groups is guaranteed non-None with >=20 unique groups by the
+            # early skip check above (SIMA-10) — splitting is always group-aware.
+            #
+            # SIMA-10b: the group-aware seed/sub-pool split can be degenerate
+            # even past the >=20-group gate, in TWO distinct ways, BOTH handled
+            # here as a graceful per-seed skip+flag (never a random-split
+            # fallback — feedback_no_random_splits — and never a silent empty
+            # result):
+            #   (a) GroupShuffleSplit RAISES ValueError when a whole-group
+            #       allocation makes a side of the split empty (e.g. the
+            #       sub-pool split over a reduced/coarse group set). We catch it.
+            #   (b) GroupShuffleSplit returns a non-empty but too-small seed
+            #       (<2 rows, unfittable) or an empty pool. We detect it below.
+            try:
+                # Use GroupShuffleSplit: first split off seed set
+                gss_seed = GroupShuffleSplit(
+                    n_splits=1, test_size=1.0 - seed_frac, random_state=seed)
+                seed_idx, rest_idx = next(gss_seed.split(all_idx, y_bo, groups))
 
-            # From rest, take pool_frac / (1 - seed_frac) as pool
-            pool_from_rest = pool_frac / (1.0 - seed_frac)
-            pool_from_rest = min(pool_from_rest, 0.95)  # safety
-            gss_pool = GroupShuffleSplit(
-                n_splits=1, test_size=1.0 - pool_from_rest, random_state=seed)
-            rest_groups = groups[rest_idx]
-            pool_local_idx, _ = next(gss_pool.split(
-                rest_idx, y_bo[rest_idx], rest_groups))
-            pool_idx = rest_idx[pool_local_idx]
+                # From rest, take pool_frac / (1 - seed_frac) as pool
+                pool_from_rest = pool_frac / (1.0 - seed_frac)
+                pool_from_rest = min(pool_from_rest, 0.95)  # safety
+                gss_pool = GroupShuffleSplit(
+                    n_splits=1, test_size=1.0 - pool_from_rest, random_state=seed)
+                rest_groups = groups[rest_idx]
+                pool_local_idx, _ = next(gss_pool.split(
+                    rest_idx, y_bo[rest_idx], rest_groups))
+                pool_idx = rest_idx[pool_local_idx]
+            except ValueError as _split_err:
+                # (a) split impossible for this seed/group layout.
+                degenerate_split_seeds += 1
+                print(f"      SKIP seed {seed_i + 1}: group-aware split raised "
+                      f"({_split_err}); too few/uneven groups for a 5%/80% "
+                      f"split.")
+                continue
+
+            # (b) split succeeded but is too small to fit / acquire from.
+            if len(seed_idx) < 2 or len(pool_idx) < 1:
+                degenerate_split_seeds += 1
+                print(f"      SKIP seed {seed_i + 1}: degenerate group-aware "
+                      f"split (seed={len(seed_idx)}, pool={len(pool_idx)}); "
+                      f"too few/uneven groups for a 5%/80% split.")
+                continue
 
             # Select target: combined objective for multi_obj, else standard
             y_cond = y_multi if condition.startswith('multi_obj_') else y_bo
@@ -962,11 +1053,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                 elif condition == 'hybrid_50d':
                     if rebuild_interval > 0:
-                        # BO with periodic hybrid rebuilding
+                        # BO with periodic hybrid rebuilding. refit_interval=10
+                        # keeps the GP-refit cadence aligned with run_bo_loop
+                        # (SIMA-12).
                         curve, gp_fail = _run_bo_with_rebuild(
                             reps, y_bo, seed_idx, pool_idx,
                             max_iterations, hybrid_budget, rebuild_interval,
-                            rng=rng, bp=bp, augmentations=augmentations)
+                            rng=rng, bp=bp, augmentations=augmentations,
+                            refit_interval=10)
                         all_curves.append(curve)
                         total_gp_failures += gp_fail
                         best_final = curve[-1] if curve else float('nan')
@@ -980,11 +1074,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             augmentations=augmentations)
 
                 elif condition == 'hybrid_50d_refit':
-                    # Always rebuild hybrid every 25 iterations
+                    # Always rebuild hybrid every 25 iterations; GP refit stays
+                    # at 10 to match run_bo_loop (SIMA-12: rebuild cadence and
+                    # refit cadence are distinct).
                     curve, gp_fail = _run_bo_with_rebuild(
                         reps, y_bo, seed_idx, pool_idx,
                         max_iterations, hybrid_budget, 25,
-                        rng=rng, bp=bp, augmentations=augmentations)
+                        rng=rng, bp=bp, augmentations=augmentations,
+                        refit_interval=10)
                     all_curves.append(curve)
                     total_gp_failures += gp_fail
                     best_final = curve[-1] if curve else float('nan')
@@ -1071,7 +1168,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         # --- Aggregate metrics across seeds ---
         if not all_curves:
-            results['conditions'][condition] = {'error': 'no successful runs'}
+            # SIMA-10b: distinguish "all seeds had a degenerate group-aware
+            # split" from a generic failure so the empty result is explicit and
+            # flagged, not silently swallowed.
+            if degenerate_split_seeds >= n_seeds:
+                results['conditions'][condition] = {
+                    'skipped': True,
+                    'reason': 'all_seeds_degenerate_group_split',
+                    'degenerate_split_seeds': degenerate_split_seeds,
+                }
+            else:
+                results['conditions'][condition] = {'error': 'no successful runs'}
             continue
 
         y_for_metrics = y_multi if condition.startswith('multi_obj_') else y_bo
@@ -1103,14 +1210,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         mean_curve = list(np.nanmean(padded, axis=0))
         std_curve = list(np.nanstd(padded, axis=0))
 
+        # SIMA-11: when a surrogate-driven condition's fits ALL fail, the BO loop
+        # falls back to random selection every iteration, so the reported "best
+        # curve" is actually pure random acquisition. Flag it (informational --
+        # for ecfp4_raw this degeneracy IS the hypothesis, but the flag stops a
+        # silently-random curve being read as a successful method elsewhere).
+        _is_random_only = condition in ('random_acq', 'random_50d', 'multi_obj_random')
+        _max_possible_fails = n_seeds * max_iterations
+        degenerate_random = (
+            not _is_random_only
+            and _max_possible_fails > 0
+            and total_gp_failures >= 0.99 * _max_possible_fails
+        )
+
         results['conditions'][condition] = {
             'metrics': metrics,
             'mean_curve': mean_curve,
             'std_curve': std_curve,
             'n_curves': len(all_curves),
             'total_gp_failures': total_gp_failures,
+            'degenerate_random_fallback': bool(degenerate_random),
+            'degenerate_split_seeds': degenerate_split_seeds,
             'dim': cond_dim,
         }
+        if degenerate_random:
+            print(f"    [flag] {condition}: every surrogate fit failed "
+                  f"({total_gp_failures}/{_max_possible_fails}) -> this curve is "
+                  f"pure random acquisition, not a real {condition} result.")
 
         # Print summary for this condition
         for bk in budget_checkpoints:
@@ -1182,7 +1308,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
 def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
                          max_iterations, hybrid_budget, rebuild_interval,
-                         rng=None, bp=None, augmentations=None):
+                         rng=None, bp=None, augmentations=None,
+                         refit_interval=10):
     """BO loop with periodic hybrid rebuilding.
 
     Every rebuild_interval iterations, re-create the hybrid using all
@@ -1193,6 +1320,11 @@ def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
             of hardcoded defaults.
         augmentations: optional dict[name, array] of full-dataset augmentation
             features. Subset per-call so create_hybrid sees only labeled rows.
+        refit_interval: GP hyperparameter re-optimisation cadence (SIMA-12).
+            Kept SEPARATE from rebuild_interval (the hybrid-rebuild cadence);
+            both previously diverged because this path hard-coded 10 while
+            run_bo_loop exposed refit_interval as a parameter. Defaults to 10
+            to match run_bo_loop's default.
     """
     if rng is None:
         rng = np.random.RandomState(42)
@@ -1202,6 +1334,13 @@ def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
     alloc = bp.allocation_method if bp else 'entropy_1.0'
     imp = bp.importance_method if bp else 'lightgbm_gain'
     int_eval = bp.internal_evaluator if bp else 'match'
+    # SIMA-5: thread the blueprint's step_size and augmentation_strategy so the
+    # rebuilt hybrid matches the search blueprint's feature space (bare
+    # create_hybrid silently defaults step_size=5 and would otherwise hardcode
+    # 'uncapped' even when the blueprint used 'none'/'capped').
+    step_sz = getattr(bp, 'step_size', 5) if bp else 5
+    aug_strategy = (getattr(bp, 'augmentation_strategy', 'uncapped') if bp
+                    else ('uncapped' if augmentations else 'none'))
 
     # Initial hybrid build — honour caller's hybrid_budget; blueprint may have
     # been discovered at a different budget but the BO condition fixes one.
@@ -1216,8 +1355,9 @@ def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
         importance_method=imp,
         internal_evaluator=int_eval,
         budget=hybrid_budget,
+        step_size=step_sz,
         augmentations=seed_augs,
-        augmentation_strategy='uncapped',
+        augmentation_strategy=aug_strategy,
     )
     X_pool_all = apply_feature_selection(pool_reps_all, feature_info)
 
@@ -1231,7 +1371,7 @@ def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
 
     best_so_far = [float(np.max(y_lab))]
     gp_failures = 0
-    last_optimize = -10
+    last_optimize = -refit_interval
 
     for it in range(max_iterations):
         if pool_mask.sum() == 0:
@@ -1253,8 +1393,9 @@ def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
                     importance_method=imp,
                     internal_evaluator=int_eval,
                     budget=hybrid_budget,
+                    step_size=step_sz,
                     augmentations=lab_augs,
-                    augmentation_strategy='uncapped',
+                    augmentation_strategy=aug_strategy,
                 )
                 X_remaining = apply_feature_selection(remaining_reps, feature_info)
 
@@ -1272,7 +1413,7 @@ def _run_bo_with_rebuild(reps, y_bo, seed_idx, pool_idx,
                 print(f"        [rebuild failed at iter {it}: {e}]")
 
         # Fit GP
-        optimize = (it - last_optimize) >= 10
+        optimize = (it - last_optimize) >= refit_interval
         if optimize:
             last_optimize = it
 

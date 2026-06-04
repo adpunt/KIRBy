@@ -103,18 +103,24 @@ def load_ginkgo_dataset(name: str = 'ginkgo_hic') -> Dict:
     col = GINKGO_PROPERTIES[name]
     df = _download_ginkgo()
 
-    # Filter rows with valid property values and sequences
+    # Pre-computed 5-fold cluster assignments (0-4)
+    fold_col = 'hierarchical_cluster_IgG_isotype_stratified_fold'
+
+    # Filter rows with valid property values, sequences, AND fold IDs.
+    # fold_col is included in the mask so the .astype(int) below cannot crash
+    # on a NaN fold (rows without a cluster assignment can't be CV-split
+    # anyway). Without this guard astype(int) raises ValueError: cannot
+    # convert float NaN to integer.
     mask = (df[col].notna()
             & df['vh_protein_sequence'].notna()
-            & df['vl_protein_sequence'].notna())
+            & df['vl_protein_sequence'].notna()
+            & df[fold_col].notna())
     df = df[mask].copy()
 
     heavy_seqs = df['vh_protein_sequence'].tolist()
     light_seqs = df['vl_protein_sequence'].tolist()
     labels = df[col].values.astype(np.float64)
 
-    # Pre-computed 5-fold cluster assignments (0-4)
-    fold_col = 'hierarchical_cluster_IgG_isotype_stratified_fold'
     fold_assignments = df[fold_col].values.astype(int)
 
     n = len(heavy_seqs)

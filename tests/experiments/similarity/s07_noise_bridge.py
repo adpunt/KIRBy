@@ -145,6 +145,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     # ── Step 2: Get hybrid ──
     augmentations = data.get('augmentations')
+    results['hybrid_search'] = {'status': 'ok'}
     try:
         X_hybrid, fi, search, _meta = get_fitted_pool_hybrid(
             reps, labels, groups,
@@ -164,11 +165,22 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
             results['top3_base_reps'] = [(n, s) for n, s in top3]
     except Exception as e:
+        # Narrow-ish catch: the hybrid arm is what failed, NOT the whole
+        # experiment. Record an EXPLICIT failure flag so s09 aggregation can
+        # drop the hybrid arm for this dataset instead of silently reading the
+        # per-rep baselines as if the hybrid was evaluated (the bare-except
+        # bug — the JSON had no skip marker).
         import traceback
-        print(f"  Hybrid search failed: {type(e).__name__}: {e}")
+        print(f"  Hybrid search FAILED: {type(e).__name__}: {e}")
         traceback.print_exc()
         X_hybrid = None
         weights_flat = None
+        results['hybrid_search'] = {
+            'status': 'failed',
+            'error': f"{type(e).__name__}: {e}",
+        }
+        results['hybrid_unweighted'] = {'failed': True, 'error': f"{type(e).__name__}: {e}"}
+        results['hybrid_weighted'] = {'failed': True, 'error': f"{type(e).__name__}: {e}"}
 
     # ── Step 3: Compute FP rates for hybrid ──
     if X_hybrid is not None:
@@ -252,6 +264,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'top3_reps': [(name, r['cliff_contamination_rate']) for name, r in top3],
         'delta_vs_best_rep': delta_uw if delta_uw is not None else float('nan'),
         'delta_vs_best_rep_weighted': delta_w if delta_w is not None else float('nan'),
+        # Explicit flag: when the hybrid search failed, the deltas are NaN
+        # because the hybrid arm did not run (NOT because the hybrid tied the
+        # baseline). s09 should drop the hybrid delta for this dataset.
+        'hybrid_failed': bool(X_hybrid is None),
     }
 
     return results

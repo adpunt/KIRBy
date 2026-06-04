@@ -184,6 +184,12 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             n_sub = int(mask.sum())
             sub_aug_strategy = 'capped' if n_sub <= TOP_CAPPED_MAX_N else 'uncapped'
             top3 = []
+            # Initialize before the try so the `search.baselines` read further
+            # down (part_result['baselines']) can never NameError if a future
+            # refactor makes best_config truthy on a path where the search
+            # raised. Today it's guarded by the `if best_config` short-circuit,
+            # but None is the safe default. (CXA-17)
+            search = None
             try:
                 search = find_best_hybrid(
                     sub_reps, sub_labels, groups=sub_groups,
@@ -244,12 +250,25 @@ def run(data, config, output_dir, dataset_name, partitions=None):
             # Second pass: apply the full-data pool-best blueprint per model
             # to this subpopulation (re-fit on subpop data only) and record.
             fulldata_bp_scores = {}
+            # FIX 4d: this partitioned sub-population can have fewer distinct
+            # scaffold groups than the fold count, and cv_split RAISES rather
+            # than fall back to a random split. Reduce the fold count to the
+            # available groups (min 2); if the sub-population has fewer than 2
+            # distinct groups, skip the second pass for it and record an
+            # explicit flag rather than crash or silently emit nothing.
+            fulldata_bp_skipped = None
             from sklearn.preprocessing import StandardScaler as _SS
             from experiments._shared import cv_split as _cv_sp7, get_model_factories as _gmf
             n_folds = config.get('n_splits', 5)
-            sub_folds = min(n_folds, n_unique_groups)
+            n_sub_groups = len(np.unique(sub_groups))
+            sub_folds = min(n_folds, max(2, n_sub_groups))
             sub_sample_X = next(iter(sub_reps.values()))
-            for cand_model, (bp_fd, _t, _a) in fulldata_blueprints.items():
+            if n_sub_groups < 2:
+                fulldata_bp_skipped = (
+                    f'insufficient_groups: {n_sub_groups} distinct group(s) '
+                    f'< 2 required for fulldata-bp CV')
+            for cand_model, (bp_fd, _t, _a) in (
+                    fulldata_blueprints.items() if fulldata_bp_skipped is None else []):
                 if bp_fd.budget is not None and bp_fd.budget > len(sub_labels):
                     continue
                 try:
@@ -258,9 +277,17 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                     if factory is None:
                         continue
                     fold_scores = []
-                    for tr_i, va_i in _cv_sp7(sub_groups, sub_folds,
-                                              sub_sample_X, sub_labels,
-                                              mode='intermediary' if sub_folds == 1 else 'full'):
+                    try:
+                        _sp7_splits = list(_cv_sp7(sub_groups, sub_folds,
+                                                   sub_sample_X, sub_labels))
+                    except ValueError:
+                        # Group count below the (reduced) fold count after
+                        # StratifiedGroupKFold's own checks — flag + skip.
+                        fulldata_bp_skipped = (
+                            'insufficient_groups: cv_split rejected '
+                            'fulldata-bp folds')
+                        break
+                    for tr_i, va_i in _sp7_splits:
                         tr_reps_f = {k: v[tr_i] for k, v in sub_reps.items()}
                         va_reps_f = {k: v[va_i] for k, v in sub_reps.items()}
                         tr_augs_f = ({k: v[tr_i] for k, v in sub_augs.items()}
@@ -290,9 +317,12 @@ def run(data, config, output_dir, dataset_name, partitions=None):
                 'metrics': metrics,
                 'best': best_config,
                 'best_by_model': best_by_model,
-                'baselines': search.baselines if best_config else {},
+                'baselines': search.baselines if (best_config and search is not None) else {},
                 'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
                 'fulldata_bp_scores': fulldata_bp_scores,
+                # FIX 4d: None when the fulldata-bp second pass ran normally,
+                # else a string explaining why it was skipped (too few groups).
+                'skipped_insufficient_groups': fulldata_bp_skipped,
             }
             if best_config:
                 print(f"    {subpop_name} best: {best_config['model']}/b={best_config['budget']} "

@@ -22,7 +22,7 @@ from scipy.special import digamma
 from scipy.stats import spearmanr, f as f_dist
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import GroupKFold, GroupShuffleSplit, KFold
+from sklearn.model_selection import GroupKFold, GroupShuffleSplit
 from sklearn.metrics import r2_score
 from sklearn.neighbors import NearestNeighbors
 
@@ -258,7 +258,14 @@ def _cache_rep_dict(dataset_name: str, compute_all_fn,
 SCREENING_BUDGETS = [50, 500, 1000, 2000]
 FULL_BUDGETS = [10, 25, 50, 100, 250, 500, 1000, 2000]
 DISTANCE_BUDGETS = [10, 25, 50, 100, 250, 500]
-DISTANCE_EVALUATORS = ['knn', 'ridge', 'rf', 'mlp', 'lightgbm', 'svm']
+# Internal evaluators for the DISTANCE-pool hybrid search (s04/s05/s06/s07/
+# s10/s13/c03). 'ridge' was removed 2026-06-04: feedback_no_ridge.md forbids
+# Ridge as an internal evaluator / sensitivity model. The remaining five span
+# the relevant inductive biases — neighbour (knn), tree-ensemble (rf), neural
+# (mlp), boosted (lightgbm), kernel (svm) — and the per-model 'match' evaluator
+# is added by the search tier when applicable, so dropping ridge does not
+# leave the distance pool without a sensible evaluator.
+DISTANCE_EVALUATORS = ['knn', 'rf', 'mlp', 'lightgbm', 'svm']
 
 # Top/capped is only emitted when n_samples <= TOP_CAPPED_MAX_N. Above
 # that threshold the capped strategy projects past the 7-day partition
@@ -492,65 +499,411 @@ def classify_rep_tier(dim: int, rep_name: str = None) -> int:
 # CV SPLITTING
 # =============================================================================
 
-def cv_split(groups, n_splits, X, labels, seed=42, mode='intermediary'):
-    """Yield (train_idx, val_idx) using appropriate CV strategy.
+def _should_stratify(task_type, labels):
+    """Decide whether a k-fold split should be class-stratified.
 
-    - n_splits=1 (any mode): single 80/20 GroupShuffleSplit/ShuffleSplit
-    - n_splits>1: GroupKFold (or KFold if not enough groups)
+    Two-tier rule (ISS-84):
+      1. If `task_type` is given, it is authoritative — 'classification'
+         stratifies, 'regression' never does. This is the correct signal:
+         the loader / registry already knows the task, and the label *dtype*
+         is a poor proxy (a regression target can be integer-typed, e.g.
+         counts/ordinals, and a classification target can be float-typed,
+         e.g. 0.0/1.0). Passing task_type removes both failure modes.
+      2. If `task_type` is None (the many existing positional callers that
+         predate this argument), fall back to the historical integer-dtype
+         heuristic so their behaviour is unchanged.
     """
+    if task_type == 'classification':
+        return True
+    if task_type == 'regression':
+        return False
+    # Heuristic fallback (task_type not supplied by caller).
+    return labels is not None and np.issubdtype(
+        np.asarray(labels).dtype, np.integer)
+
+
+def cv_split(groups, n_splits, X, labels, seed=42, mode=None, *,
+             task_type=None):
+    """Yield (train_idx, val_idx) using a group-aware CV strategy.
+
+    - n_splits=1: single 80/20 GroupShuffleSplit (scaffold/site-grouped).
+    - n_splits>1: StratifiedGroupKFold for classification (class-balanced
+      *and* group-respecting), GroupKFold otherwise.
+
+    `groups` is REQUIRED and must have at least `max(2, n_splits)` distinct
+    values. There is NO random-split fallback: per project rule
+    (feedback_no_random_splits.md) random KFold/ShuffleSplit is forbidden for
+    any production result, so an absent or under-resolved `groups` is a loud
+    error rather than a silent degradation to random splitting. If a caller
+    genuinely has no grouping it must be fixed upstream (assign scaffold/site
+    groups in the loader) — not papered over here.
+
+    `task_type` (keyword-only, ISS-84) selects the k-fold strategy
+    authoritatively: 'classification' -> StratifiedGroupKFold (classes stay
+    balanced across folds while groups are preserved — required for TCGA
+    classification e.g. tcga_brca_pam50 / tcga_luad_vs_lusc and any other
+    grouped classification task), 'regression' -> plain GroupKFold. When it is
+    left None (existing positional callers), the strategy falls back to the
+    historical integer-label heuristic, so no existing caller changes
+    behaviour. Pass task_type explicitly for classification datasets whose
+    labels are not integer-typed, which the heuristic would otherwise miss.
+    StratifiedGroupKFold itself remains group-respecting (no sample's group
+    spans train+test) — stratification only rebalances *which* groups go to
+    each fold.
+
+    The historical `mode` argument is accepted only for backward-compatibility
+    with existing callers and is ignored: the split strategy is fully
+    determined by `n_splits` (it always was — `mode` never altered behaviour).
+    Passing it now emits a DeprecationWarning so callers can drop it.
+    """
+    if mode is not None:
+        warnings.warn(
+            "cv_split(mode=...) is vestigial and ignored; the split strategy "
+            "is determined entirely by n_splits. Drop the `mode` argument.",
+            DeprecationWarning, stacklevel=2,
+        )
+
+    n_groups_seen = 0 if groups is None else len(np.unique(groups))
+    required = max(2, n_splits)
+    if groups is None or n_groups_seen < required:
+        raise ValueError(
+            f"cv_split: group-aware splitting requires groups with >= "
+            f"{required} distinct values for n_splits={n_splits}, but got "
+            f"{'groups=None' if groups is None else f'{n_groups_seen} distinct group(s)'}. "
+            "Random splitting is forbidden (feedback_no_random_splits.md) — "
+            "fix the caller to supply scaffold/site/identity groups instead of "
+            "falling back to a random split."
+        )
+
     if n_splits == 1:
-        if groups is not None and len(np.unique(groups)) >= 2:
-            gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=seed)
-            yield from gss.split(X, labels, groups=groups)
-        else:
-            from sklearn.model_selection import ShuffleSplit
-            ss = ShuffleSplit(n_splits=1, test_size=0.2, random_state=seed)
-            yield from ss.split(X, labels)
-    else:
-        if groups is not None and len(np.unique(groups)) >= n_splits:
-            # Use StratifiedGroupKFold for classification (preserves class balance
-            # within site-grouped folds). Falls back to GroupKFold if unavailable.
-            if labels is not None and np.issubdtype(np.asarray(labels).dtype, np.integer):
-                try:
-                    from sklearn.model_selection import StratifiedGroupKFold
-                    yield from StratifiedGroupKFold(
-                        n_splits=n_splits, shuffle=True, random_state=seed
-                    ).split(X, labels, groups=groups)
-                    return
-                except ImportError:
-                    pass
-            yield from GroupKFold(n_splits=n_splits).split(X, labels, groups=groups)
-        else:
-            n_groups_seen = 0 if groups is None else len(np.unique(groups))
-            warnings.warn(
-                f"cv_split: falling back to KFold(shuffle=True) — "
-                f"groups={'None' if groups is None else f'{n_groups_seen} unique'}, "
-                f"n_splits={n_splits}. Per project rule (feedback_no_random_splits.md) "
-                "this is forbidden for any production result; investigate the caller.",
-                RuntimeWarning, stacklevel=2,
-            )
-            yield from KFold(n_splits=n_splits, shuffle=True, random_state=seed).split(X, labels)
+        gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=seed)
+        yield from gss.split(X, labels, groups=groups)
+        return
+
+    # Use StratifiedGroupKFold for classification (preserves class balance
+    # within grouped folds). Falls back to GroupKFold if unavailable.
+    if _should_stratify(task_type, labels):
+        try:
+            from sklearn.model_selection import StratifiedGroupKFold
+            yield from StratifiedGroupKFold(
+                n_splits=n_splits, shuffle=True, random_state=seed
+            ).split(X, labels, groups=groups)
+            return
+        except ImportError:
+            pass
+    yield from GroupKFold(n_splits=n_splits).split(X, labels, groups=groups)
 
 
-def _cv_split(groups, n_folds, X, labels, seed=42):
-    """Legacy wrapper — delegates to cv_split."""
-    mode = 'intermediary' if n_folds == 1 else 'full'
-    yield from cv_split(groups, n_folds, X, labels, seed=seed, mode=mode)
+def _cv_split(groups, n_folds, X, labels, seed=42, *, task_type=None):
+    """Legacy wrapper — delegates to cv_split (group-aware, no random fallback).
+
+    Forwards the keyword-only `task_type` (ISS-84) so callers using the
+    `_cv_split` alias can also request classification stratification.
+    """
+    yield from cv_split(groups, n_folds, X, labels, seed=seed,
+                         task_type=task_type)
 
 
-def make_cv_splitter(n_folds, groups=None, seed=42):
+def make_cv_splitter(n_folds, groups=None, seed=42, *, task_type=None):
     """Return (splitter, use_groups) for direct sklearn CV loops.
 
-    Handles n_folds=1 (intermediary) via GroupShuffleSplit/ShuffleSplit.
+    `groups` is REQUIRED and must have >= max(2, n_folds) distinct values.
+    There is NO random-split fallback (feedback_no_random_splits.md): an
+    absent or under-resolved `groups` raises rather than silently degrading
+    to a random KFold/ShuffleSplit. `use_groups` is always True on success;
+    callers must pass `groups` into `splitter.split(X, y, groups=groups)`.
+
+    `task_type='classification'` (keyword-only, ISS-84) returns a
+    StratifiedGroupKFold so classes stay balanced across grouped folds; this
+    is compatible with the existing `splitter.split(X, y, groups=groups)`
+    call convention (StratifiedGroupKFold also consumes `y`). Anything else
+    (including the default None used by all current callers, which are
+    regression splits) returns plain GroupKFold — unchanged behaviour.
     """
+    n_groups_seen = 0 if groups is None else len(np.unique(groups))
+    required = max(2, n_folds)
+    if groups is None or n_groups_seen < required:
+        raise ValueError(
+            f"make_cv_splitter: group-aware splitting requires groups with "
+            f">= {required} distinct values for n_folds={n_folds}, but got "
+            f"{'groups=None' if groups is None else f'{n_groups_seen} distinct group(s)'}. "
+            "Random splitting is forbidden (feedback_no_random_splits.md) — "
+            "fix the caller to supply scaffold/site/identity groups."
+        )
     if n_folds == 1:
-        if groups is not None and len(np.unique(groups)) >= 2:
-            return GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=seed), True
-        from sklearn.model_selection import ShuffleSplit
-        return ShuffleSplit(n_splits=1, test_size=0.2, random_state=seed), False
-    if groups is not None and len(np.unique(groups)) >= n_folds:
-        return GroupKFold(n_splits=n_folds), True
-    return KFold(n_splits=n_folds, shuffle=True, random_state=seed), False
+        return GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=seed), True
+    if task_type == 'classification':
+        try:
+            from sklearn.model_selection import StratifiedGroupKFold
+            return StratifiedGroupKFold(
+                n_splits=n_folds, shuffle=True, random_state=seed), True
+        except ImportError:
+            pass
+    return GroupKFold(n_splits=n_folds), True
+
+
+# =============================================================================
+# MOLECULAR GROUPING ALTERNATIVES (Butina clustering — ISS-85)
+# =============================================================================
+
+def butina_clusters(smiles_list, cutoff: float = 0.6,
+                    radius: int = 2, n_bits: int = 2048):
+    """Group molecules by RDKit Butina (Taylor-Butina) Tanimoto clustering.
+
+    A lab-standard, group-aware alternative/complement to Murcko-scaffold
+    splitting for the molecular domain (ISS-85). Two molecules with Tanimoto
+    similarity >= `cutoff` (on Morgan/ECFP fingerprints) tend to land in the
+    same cluster, so using the returned cluster ids as CV `groups` keeps
+    near-duplicate / analog molecules together in a fold — tighter than a
+    pure scaffold split when many molecules share a scaffold but differ in
+    substituents, and it catches analog pairs that have *different* Murcko
+    scaffolds.
+
+    Butina is an exclusion-sphere clustering: it repeatedly picks the molecule
+    with the most neighbours within the distance threshold (1 - cutoff) as a
+    new cluster centroid and removes its neighbourhood. Singletons (molecules
+    with no neighbour within the threshold) each become their own one-member
+    cluster — handled naturally (every input row gets a cluster id, so the
+    returned array is exactly len(smiles_list); no row is dropped).
+
+    Args:
+        smiles_list: list of SMILES strings. Invalid SMILES are tolerated:
+            each invalid entry is given its own singleton cluster id (it has
+            no fingerprint, so it cannot share a cluster — this keeps the
+            output length aligned and avoids silently merging parse failures).
+        cutoff: Tanimoto similarity threshold in [0, 1]. Higher cutoff =>
+            stricter => more, smaller clusters (Butina distance = 1 - cutoff).
+            0.6 is the common ECFP default (Butina 1999; RDKit cookbook).
+        radius: Morgan fingerprint radius (2 == ECFP4).
+        n_bits: fingerprint length.
+
+    Returns:
+        (groups, n_clusters): groups is an int np.ndarray of length
+        len(smiles_list) with a cluster id per molecule (0..n_clusters-1,
+        contiguous, assignment order = Butina cluster order with invalid /
+        singleton molecules appended); n_clusters is the number of distinct
+        clusters. Suitable to pass straight into cv_split / GroupKFold as
+        `groups`.
+
+    Wiring (how to select this instead of the default scaffold split):
+        This is provided as an OPTION and deliberately does NOT change the
+        default split of any existing molecular dataset (the default remains
+        Murcko scaffold via assign_scaffold_groups in
+        tests/find_best_hybrid_molecular.py — changing a dataset's split
+        silently would change every published result for it). To use Butina
+        for a molecular run, an experiment/loader that has the SMILES list can
+        override the groups after load_data, e.g.:
+
+            data = load_data('herg_ki', rep_names=[...])
+            from experiments._shared import butina_clusters
+            data['groups'], data['n_groups'] = butina_clusters(
+                data['smiles'], cutoff=0.6)
+            data['n_scaffolds'] = data['n_groups']
+
+        (find_best_hybrid_molecular.assign_scaffold_groups is the function to
+        mirror if/when a CLI flag for split-type is added there — that file is
+        owned elsewhere, so the flag wiring is left as a documented follow-up.)
+    """
+    from rdkit import Chem, DataStructs
+    from rdkit.Chem import AllChem
+    from rdkit.ML.Cluster import Butina
+
+    smiles_list = list(smiles_list)
+    n = len(smiles_list)
+
+    # Build fingerprints; track which rows are valid (parseable).
+    fps = []
+    valid_rows = []
+    for i, smi in enumerate(smiles_list):
+        mol = Chem.MolFromSmiles(smi) if smi else None
+        if mol is None:
+            continue
+        fps.append(AllChem.GetMorganFingerprintAsBitVect(
+            mol, radius, nBits=n_bits))
+        valid_rows.append(i)
+
+    groups = np.full(n, -1, dtype=int)
+
+    if len(fps) >= 2:
+        # Condensed lower-triangle distance matrix (1 - Tanimoto), as RDKit
+        # Butina.ClusterData expects.
+        dists = []
+        for i in range(1, len(fps)):
+            sims = DataStructs.BulkTanimotoSimilarity(fps[i], fps[:i])
+            dists.extend(1.0 - s for s in sims)
+        clusters = Butina.ClusterData(
+            dists, len(fps), 1.0 - cutoff, isDistData=True)
+        # clusters is a tuple of tuples of *local* indices into `fps`.
+        for cid, member_local_idxs in enumerate(clusters):
+            for local_i in member_local_idxs:
+                groups[valid_rows[local_i]] = cid
+    elif len(fps) == 1:
+        groups[valid_rows[0]] = 0
+
+    # Any still-unassigned row (invalid SMILES, or the degenerate <2-fp case)
+    # gets its own singleton cluster so the output stays length-n and no two
+    # unparseable molecules are silently merged.
+    next_id = int(groups.max()) + 1 if (groups >= 0).any() else 0
+    for i in range(n):
+        if groups[i] < 0:
+            groups[i] = next_id
+            next_id += 1
+
+    return groups, int(len(np.unique(groups)))
+
+
+def sequence_identity_clusters(seqs, identity_threshold: float = 0.95,
+                               min_groups: int = 3):
+    """Group protein/antibody sequences by near-identity (ISS-29/30).
+
+    Exact-identity grouping (the current antibody `_identity_groups`) keeps
+    *byte-identical* sequences together but puts two sequences that differ by
+    a single residue into DIFFERENT groups, so analog / near-duplicate pairs
+    leak across a GroupKFold train/test boundary. Measured on
+    flab_thermo_tresanco (672 VHH rows, 556 unique): 899 row-level near-dup
+    pairs (heavy chain Levenshtein distance <= 2), of which 784 (87%) span a
+    train/test split under 5-fold exact-identity grouping. This helper closes
+    that gap: any two sequences with normalised identity >= `identity_threshold`
+    are placed in the same cluster (single-linkage), so near-duplicates stay
+    on the same side of every fold.
+
+    Normalised identity = 1 - levenshtein(a, b) / max(len(a), len(b)). Greedy
+    single-linkage with length-band bucketing keeps it tractable for the
+    antibody dataset sizes here (hundreds to a few thousand sequences); it is
+    O(n^2) within a length band in the worst case but bands are small.
+
+    Args:
+        seqs: list of sequence strings (e.g. heavy chains; for paired data,
+            concatenate heavy+light before calling so both chains count).
+        identity_threshold: in (0, 1]. 1.0 reproduces exact-identity grouping
+            (no near-dup merging). 0.95 merges sequences <=5% different — a
+            sensible default that collapses single/double point-mutant analogs
+            without over-merging genuinely distinct antibodies. Lower it to be
+            stricter about leakage (bigger clusters), raise it to keep clusters
+            tighter.
+        min_groups: if the resulting cluster count is below this (degenerate,
+            e.g. everything merged on a tiny near-clonal panel), fall back to a
+            deterministic hash bucketing so GroupKFold still has enough groups —
+            mirrors the existing `_identity_groups` min_groups guard.
+
+    Returns:
+        (groups, n_clusters): int np.ndarray of length len(seqs) with a cluster
+        id per sequence, contiguous 0..n_clusters-1, plus the cluster count.
+        Drop-in for use as CV `groups`.
+
+    Wiring (ISS-29/30 fix, left as a documented follow-up because the call
+    site is out of this task's edit lane):
+        tests/antibody_baseline_survey.py::_identity_groups is the single
+        function that produces antibody CV groups for the `identity` strategy
+        (small FLAb panels, abcov, humanness). To remove the near-duplicate
+        leakage, that function should delegate to this helper, i.e. replace its
+        exact-dict body with:
+
+            from experiments._shared import sequence_identity_clusters
+            return sequence_identity_clusters(seqs, identity_threshold=0.95,
+                                              min_groups=min_groups)
+
+        For paired datasets the caller should pass heavy+light concatenated
+        (the survey currently passes heavy only — a second, smaller gap noted
+        in NEW ISSUES). This file (_shared.py) is in-lane; the survey edit is
+        not, so the helper is shipped ready-to-use and the one-line swap is
+        documented rather than applied.
+    """
+    seqs = list(seqs)
+    n = len(seqs)
+    if n == 0:
+        return np.zeros(0, dtype=int), 0
+
+    try:
+        from Levenshtein import distance as _lev
+
+        def _norm_identity(a, b):
+            m = max(len(a), len(b))
+            if m == 0:
+                return 1.0
+            return 1.0 - _lev(a, b) / m
+    except ImportError:
+        import difflib
+
+        def _norm_identity(a, b):
+            return difflib.SequenceMatcher(None, a, b).ratio()
+
+    # Bucket by length band: two sequences can only reach `identity_threshold`
+    # if their lengths are within (1 - threshold) * max_len of each other, so
+    # we only need to compare within a band. Use exact length as the key and
+    # also probe neighbouring lengths within the allowed gap.
+    from collections import defaultdict
+    by_len = defaultdict(list)
+    for i, s in enumerate(seqs):
+        by_len[len(s)].append(i)
+    lengths = sorted(by_len.keys())
+
+    parent = list(range(n))
+
+    def _find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def _union(a, b):
+        ra, rb = _find(a), _find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    # First merge exact duplicates cheaply (within each length band).
+    for L in lengths:
+        idxs = by_len[L]
+        seen = {}
+        for i in idxs:
+            s = seqs[i]
+            if s in seen:
+                _union(seen[s], i)
+            else:
+                seen[s] = i
+
+    # Then near-duplicate single-linkage across compatible length bands.
+    for li, L in enumerate(lengths):
+        idxs_L = by_len[L]
+        # candidate partner lengths: those within the max allowed length gap
+        for L2 in lengths[li:]:
+            if L2 == L:
+                partners = idxs_L
+                same_band = True
+            else:
+                if (L2 - L) / max(L2, 1) > (1.0 - identity_threshold):
+                    break  # lengths sorted: further ones only get more distant
+                partners = by_len[L2]
+                same_band = False
+            for ai, i in enumerate(idxs_L):
+                start = ai + 1 if same_band else 0
+                for j in partners[start:]:
+                    if _find(i) == _find(j):
+                        continue
+                    if _norm_identity(seqs[i], seqs[j]) >= identity_threshold:
+                        _union(i, j)
+
+    # Relabel roots to contiguous ids.
+    root_to_id = {}
+    groups = np.empty(n, dtype=int)
+    for i in range(n):
+        r = _find(i)
+        if r not in root_to_id:
+            root_to_id[r] = len(root_to_id)
+        groups[i] = root_to_id[r]
+    n_clusters = len(root_to_id)
+
+    # Degenerate-collapse guard (mirror _identity_groups' min_groups behaviour).
+    if n_clusters < min_groups:
+        import hashlib
+        n_buckets = max(min_groups, n // 5)
+        groups = np.array([
+            int(hashlib.sha256(s.encode()).hexdigest(), 16) % n_buckets
+            for s in seqs
+        ])
+        n_clusters = len(np.unique(groups))
+
+    return groups, int(n_clusters)
 
 
 # =============================================================================
@@ -699,7 +1052,9 @@ def evaluate_cv(
     scores = []
     n_feats = []
 
-    for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, seed, mode):
+    # `mode` is vestigial in cv_split (split strategy is set by n_folds); do
+    # not forward it, to avoid the cv_split deprecation warning per fold.
+    for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, seed):
         train_reps = {k: v[train_idx] for k, v in base_reps.items()}
         val_reps = {k: v[val_idx] for k, v in base_reps.items()}
         y_train, y_val = labels[train_idx], labels[val_idx]
@@ -741,13 +1096,20 @@ def evaluate_cv_with_train(
     seed: int = 42,
     mode: str = 'full',
     metric_fn=None,
-    internal_evaluator: str = 'ridge',
+    internal_evaluator: str = 'match',
     augmentations: Optional[Dict[str, np.ndarray]] = None,
     augmentation_strategy: str = 'uncapped',
 ) -> Tuple[float, float, float, float, int]:
     """Like evaluate_cv but also returns train score.
 
     Returns (val_mean, val_std, train_mean, train_std, n_features).
+
+    `internal_evaluator` defaults to 'match' (the canonical default used
+    across the hybrid search). It was previously 'ridge'; Ridge is forbidden
+    as an internal hybrid-search evaluator (feedback_no_ridge.md), so the
+    default no longer silently selects it. Callers that want a specific
+    evaluator (e.g. c09 forwarding a blueprint's evaluator) still pass it
+    explicitly.
     """
     from kirby.hybrid import apply_augmentation_selection
 
@@ -759,7 +1121,9 @@ def evaluate_cv_with_train(
     train_scores = []
     n_feats = []
 
-    for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, seed, mode):
+    # `mode` is vestigial in cv_split (split strategy is set by n_folds); do
+    # not forward it, to avoid the cv_split deprecation warning per fold.
+    for train_idx, val_idx in cv_split(groups, n_folds, sample_X, labels, seed):
         train_reps = {k: v[train_idx] for k, v in base_reps.items()}
         val_reps = {k: v[val_idx] for k, v in base_reps.items()}
         y_train, y_val = labels[train_idx], labels[val_idx]
@@ -836,7 +1200,8 @@ def evaluate_single_rep_cv(
         metric_fn = r2_score
 
     scores = []
-    for train_idx, val_idx in cv_split(groups, n_folds, X, labels, mode=mode):
+    # `mode` is vestigial in cv_split; do not forward it.
+    for train_idx, val_idx in cv_split(groups, n_folds, X, labels):
         scaler = StandardScaler()
         X_train = scaler.fit_transform(X[train_idx])
         X_val = scaler.transform(X[val_idx])
@@ -1011,78 +1376,135 @@ def get_model_factories(model_names: List[str],
     return factories
 
 
-def get_model_family_variants() -> Dict[str, List[Tuple[str, callable, float]]]:
-    """Return model families with complexity gradients.
+def get_model_family_variants(
+    task_type: str = 'regression',
+) -> Dict[str, List[Tuple[str, callable, float]]]:
+    """Return model families with complexity gradients, per task_type.
 
-    Each family: list of (variant_name, factory_fn, capacity_index).
+    Each family: list of (variant_name, factory_fn, capacity_index), where a
+    larger capacity_index means a higher-capacity / less-regularised variant.
+
+    `task_type` selects regressor vs classifier estimators so callers (c06,
+    etc.) study a capacity gradient with the right model class — previously
+    this hardcoded regressors, so on classification data the variants were
+    trained on integer labels and scored with classification metrics, which
+    is silently wrong (audit CXA-6).
+
+    The linear family uses Ridge (alpha sweep) for regression and
+    LogisticRegression (C sweep) for classification. NOTE: this Ridge is the
+    object of study — a capacity gradient over a downstream linear model —
+    NOT an internal hybrid-search evaluator or a bolted-on sensitivity check,
+    so it is permitted under feedback_no_ridge.md. No Ridge is introduced on
+    the classification side.
     """
-    from sklearn.ensemble import RandomForestRegressor
-    from sklearn.linear_model import Ridge
-    from sklearn.neighbors import KNeighborsRegressor
-    from sklearn.neural_network import MLPRegressor
+    is_clf = (task_type == 'classification')
+
+    if is_clf:
+        from sklearn.ensemble import RandomForestClassifier as _RF
+        from sklearn.linear_model import LogisticRegression as _Logit
+        from sklearn.neighbors import KNeighborsClassifier as _KNN
+        from sklearn.neural_network import MLPClassifier as _MLP
+    else:
+        from sklearn.ensemble import RandomForestRegressor as _RF
+        from sklearn.linear_model import Ridge
+        from sklearn.neighbors import KNeighborsRegressor as _KNN
+        from sklearn.neural_network import MLPRegressor as _MLP
 
     families = {
         'RF': [
-            ('depth=3', lambda: RandomForestRegressor(n_estimators=100, max_depth=3, random_state=42, n_jobs=-1), 1),
-            ('depth=5', lambda: RandomForestRegressor(n_estimators=100, max_depth=5, random_state=42, n_jobs=-1), 2),
-            ('depth=10', lambda: RandomForestRegressor(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1), 3),
-            ('depth=None', lambda: RandomForestRegressor(n_estimators=100, max_depth=None, random_state=42, n_jobs=-1), 4),
+            ('depth=3', lambda: _RF(n_estimators=100, max_depth=3, random_state=42, n_jobs=-1), 1),
+            ('depth=5', lambda: _RF(n_estimators=100, max_depth=5, random_state=42, n_jobs=-1), 2),
+            ('depth=10', lambda: _RF(n_estimators=100, max_depth=10, random_state=42, n_jobs=-1), 3),
+            ('depth=None', lambda: _RF(n_estimators=100, max_depth=None, random_state=42, n_jobs=-1), 4),
         ],
-        'Ridge': [
+        'kNN': [
+            ('k=20', lambda: _KNN(n_neighbors=20, n_jobs=-1), 1),
+            ('k=10', lambda: _KNN(n_neighbors=10, n_jobs=-1), 2),
+            ('k=5', lambda: _KNN(n_neighbors=5, n_jobs=-1), 3),
+            ('k=1', lambda: _KNN(n_neighbors=1, n_jobs=-1), 4),
+        ],
+        'MLP': [
+            ('16', lambda: _MLP(hidden_layer_sizes=(16,), random_state=42, max_iter=500), 1),
+            ('64', lambda: _MLP(hidden_layer_sizes=(64,), random_state=42, max_iter=500), 2),
+            ('128,64', lambda: _MLP(hidden_layer_sizes=(128, 64), random_state=42, max_iter=500), 3),
+            ('256,128,64', lambda: _MLP(hidden_layer_sizes=(256, 128, 64), random_state=42, max_iter=500), 4),
+        ],
+    }
+
+    # Linear family: capacity rises with weaker regularisation. For regression
+    # this is Ridge (small alpha = high capacity); for classification it is
+    # LogisticRegression (large C = high capacity), NOT a Ridge variant.
+    if is_clf:
+        families['Logit'] = [
+            ('C=0.01', lambda: _Logit(C=0.01, max_iter=1000), 1),
+            ('C=0.1', lambda: _Logit(C=0.1, max_iter=1000), 2),
+            ('C=1.0', lambda: _Logit(C=1.0, max_iter=1000), 3),
+            ('C=100', lambda: _Logit(C=100.0, max_iter=1000), 4),
+        ]
+    else:
+        families['Ridge'] = [
             ('alpha=100', lambda: Ridge(alpha=100.0), 1),
             ('alpha=10', lambda: Ridge(alpha=10.0), 2),
             ('alpha=1', lambda: Ridge(alpha=1.0), 3),
             ('alpha=0.01', lambda: Ridge(alpha=0.01), 4),
-        ],
-        'kNN': [
-            ('k=20', lambda: KNeighborsRegressor(n_neighbors=20, n_jobs=-1), 1),
-            ('k=10', lambda: KNeighborsRegressor(n_neighbors=10, n_jobs=-1), 2),
-            ('k=5', lambda: KNeighborsRegressor(n_neighbors=5, n_jobs=-1), 3),
-            ('k=1', lambda: KNeighborsRegressor(n_neighbors=1, n_jobs=-1), 4),
-        ],
-        'MLP': [
-            ('16', lambda: MLPRegressor(hidden_layer_sizes=(16,), random_state=42, max_iter=500), 1),
-            ('64', lambda: MLPRegressor(hidden_layer_sizes=(64,), random_state=42, max_iter=500), 2),
-            ('128,64', lambda: MLPRegressor(hidden_layer_sizes=(128, 64), random_state=42, max_iter=500), 3),
-            ('256,128,64', lambda: MLPRegressor(hidden_layer_sizes=(256, 128, 64), random_state=42, max_iter=500), 4),
-        ],
-    }
+        ]
 
     try:
-        from xgboost import XGBRegressor
+        if is_clf:
+            from xgboost import XGBClassifier as _XGB
+        else:
+            from xgboost import XGBRegressor as _XGB
         families['XGBoost'] = [
-            ('depth=2', lambda: XGBRegressor(n_estimators=100, max_depth=2, random_state=42, n_jobs=-1, verbosity=0), 1),
-            ('depth=4', lambda: XGBRegressor(n_estimators=100, max_depth=4, random_state=42, n_jobs=-1, verbosity=0), 2),
-            ('depth=6', lambda: XGBRegressor(n_estimators=100, max_depth=6, random_state=42, n_jobs=-1, verbosity=0), 3),
-            ('depth=None', lambda: XGBRegressor(n_estimators=100, max_depth=0, random_state=42, n_jobs=-1, verbosity=0, tree_method='hist'), 4),
+            ('depth=2', lambda: _XGB(n_estimators=100, max_depth=2, random_state=42, n_jobs=-1, verbosity=0), 1),
+            ('depth=4', lambda: _XGB(n_estimators=100, max_depth=4, random_state=42, n_jobs=-1, verbosity=0), 2),
+            ('depth=6', lambda: _XGB(n_estimators=100, max_depth=6, random_state=42, n_jobs=-1, verbosity=0), 3),
+            ('depth=None', lambda: _XGB(n_estimators=100, max_depth=0, random_state=42, n_jobs=-1, verbosity=0, tree_method='hist'), 4),
         ]
     except ImportError:
         pass
 
     # SVM: C controls capacity (low C = high regularisation = low capacity)
-    from sklearn.svm import SVR
-    families['SVM'] = [
-        ('C=0.01', lambda: SVR(kernel='rbf', C=0.01), 1),
-        ('C=0.1', lambda: SVR(kernel='rbf', C=0.1), 2),
-        ('C=1.0', lambda: SVR(kernel='rbf', C=1.0), 3),
-        ('C=10.0', lambda: SVR(kernel='rbf', C=10.0), 4),
-    ]
+    if is_clf:
+        from sklearn.svm import SVC as _SVC
+        families['SVM'] = [
+            ('C=0.01', lambda: _SVC(kernel='rbf', C=0.01, probability=False), 1),
+            ('C=0.1', lambda: _SVC(kernel='rbf', C=0.1, probability=False), 2),
+            ('C=1.0', lambda: _SVC(kernel='rbf', C=1.0, probability=False), 3),
+            ('C=10.0', lambda: _SVC(kernel='rbf', C=10.0, probability=False), 4),
+        ]
+    else:
+        from sklearn.svm import SVR
+        families['SVM'] = [
+            ('C=0.01', lambda: SVR(kernel='rbf', C=0.01), 1),
+            ('C=0.1', lambda: SVR(kernel='rbf', C=0.1), 2),
+            ('C=1.0', lambda: SVR(kernel='rbf', C=1.0), 3),
+            ('C=10.0', lambda: SVR(kernel='rbf', C=10.0), 4),
+        ]
 
     # GP: length_scale controls capacity (large = smooth/low capacity, small = wiggly/high)
     # Size guard: GP is O(n³), only viable for n ≤ 2000
     try:
-        from sklearn.gaussian_process import GaussianProcessRegressor
         from sklearn.gaussian_process.kernels import RBF as _RBF, WhiteKernel as _WK
-        families['GP'] = [
-            ('ls=10', lambda: GaussianProcessRegressor(
-                kernel=_RBF(length_scale=10.0) + _WK(), n_restarts_optimizer=2, random_state=42), 1),
-            ('ls=1', lambda: GaussianProcessRegressor(
-                kernel=_RBF(length_scale=1.0) + _WK(), n_restarts_optimizer=2, random_state=42), 2),
-            ('ls=0.1', lambda: GaussianProcessRegressor(
-                kernel=_RBF(length_scale=0.1) + _WK(), n_restarts_optimizer=2, random_state=42), 3),
-            ('ls=0.01', lambda: GaussianProcessRegressor(
-                kernel=_RBF(length_scale=0.01) + _WK(), n_restarts_optimizer=2, random_state=42), 4),
-        ]
+        if is_clf:
+            from sklearn.gaussian_process import GaussianProcessClassifier as _GPC
+            families['GP'] = [
+                ('ls=10', lambda: _GPC(kernel=_RBF(length_scale=10.0), random_state=42), 1),
+                ('ls=1', lambda: _GPC(kernel=_RBF(length_scale=1.0), random_state=42), 2),
+                ('ls=0.1', lambda: _GPC(kernel=_RBF(length_scale=0.1), random_state=42), 3),
+                ('ls=0.01', lambda: _GPC(kernel=_RBF(length_scale=0.01), random_state=42), 4),
+            ]
+        else:
+            from sklearn.gaussian_process import GaussianProcessRegressor as _GPR
+            families['GP'] = [
+                ('ls=10', lambda: _GPR(
+                    kernel=_RBF(length_scale=10.0) + _WK(), n_restarts_optimizer=2, random_state=42), 1),
+                ('ls=1', lambda: _GPR(
+                    kernel=_RBF(length_scale=1.0) + _WK(), n_restarts_optimizer=2, random_state=42), 2),
+                ('ls=0.1', lambda: _GPR(
+                    kernel=_RBF(length_scale=0.1) + _WK(), n_restarts_optimizer=2, random_state=42), 3),
+                ('ls=0.01', lambda: _GPR(
+                    kernel=_RBF(length_scale=0.01) + _WK(), n_restarts_optimizer=2, random_state=42), 4),
+            ]
     except ImportError:
         pass
 

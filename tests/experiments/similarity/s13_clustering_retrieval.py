@@ -179,10 +179,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     k_retrieval = kwargs.get('k_retrieval', 5)
     n_clusters_list = kwargs.get('n_clusters_list', [3, 5, 10])
 
-    X_concat = np.hstack([reps[k] for k in sorted(reps.keys())])
+    # Use distinct comprehension vars (rep_k / aug_k) for clarity; in Python 3
+    # comprehension vars don't leak, but the audit (OTHER-32) flagged the reuse
+    # of `k` across the function as confusing. Keep them locally scoped + named.
+    X_concat = np.hstack([reps[rep_k] for rep_k in sorted(reps.keys())])
     augmentations = data.get('augmentations')
     if augmentations:
-        X_concat = np.hstack([X_concat] + [augmentations[k] for k in sorted(augmentations.keys())])
+        X_concat = np.hstack([X_concat] + [augmentations[aug_k] for aug_k in sorted(augmentations.keys())])
     total_dim = X_concat.shape[1]
 
     # Build spaces to compare

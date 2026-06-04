@@ -121,7 +121,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     task_type = data['task_type']
     _RF = RandomForestClassifier if task_type == 'classification' else RandomForestRegressor
 
-    budgets = kwargs.get('budgets', [50, 100])
+    # Budget source priority: explicit kwargs override > config['budgets']
+    # (set by get_config from FULL_BUDGETS, or --budgets) > legacy [50, 100]
+    # fallback. CXA-14: previously this was hardcoded to kwargs.get(..., [50,100])
+    # and __main__ never passed budgets, so the sweep was permanently locked to
+    # [50, 100] regardless of --budgets / config. Filter to budgets that are
+    # meaningful given the feature pool (a budget above total_dim collapses to
+    # full-dim and adds no information to the diversity-vs-depth contrast).
+    total_dim = sum(v.shape[1] for v in reps.values())
+    budgets = kwargs.get('budgets') or config.get('budgets') or [50, 100]
+    budgets = sorted({b for b in budgets if b <= total_dim} or {min(budgets)})
     all_rep_names = sorted(reps.keys())
     n_reps = len(all_rep_names)
     sample_X = next(iter(reps.values()))
@@ -229,7 +238,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             score = float(np.mean(scores)) if scores else float('nan')
             conditions[cond_name] = {
                 'score': score,
-                'n_features': budget,
+                # OTHER-28: this is the REQUESTED budget, not the realised
+                # feature count (each arm selects min(budget, available); depth_1
+                # may select fewer than budget when the top rep is small). Label
+                # it accurately as 'budget' rather than the misleading 'n_features'.
+                'budget': budget,
             }
             print(f"    {cond_name}: {metric_name}={score:.4f}")
 

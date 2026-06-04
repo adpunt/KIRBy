@@ -312,24 +312,22 @@ def _rep_cache_path(heavy_seqs: List[str], light_seqs: List[str],
 
 
 def _identity_groups(seqs, min_groups=3):
-    """Assign groups by unique sequence identity."""
-    import hashlib
-    unique = {}
-    groups = np.zeros(len(seqs), dtype=int)
-    for i, s in enumerate(seqs):
-        if s not in unique:
-            unique[s] = len(unique)
-        groups[i] = unique[s]
-    n_groups = len(unique)
-    # If too few groups (e.g. DMS with identical-ish seqs), deterministic hash
-    if n_groups < min_groups:
-        n_buckets = max(min_groups, len(seqs) // 5)
-        groups = np.array([
-            int(hashlib.sha256(s.encode()).hexdigest(), 16) % n_buckets
-            for s in seqs
-        ])
-        n_groups = len(np.unique(groups))
-    return groups, n_groups
+    """Assign CV groups by sequence NEAR-identity (ISS-29 leakage fix).
+
+    Was exact-byte-identity grouping, which put single-residue analogs into
+    DIFFERENT groups → near-duplicate pairs leaked across the GroupKFold
+    train/test boundary (measured: 87% of near-dup pairs spanned a fold on
+    flab_thermo_tresanco). Now delegates to sequence_identity_clusters, which
+    keeps any pair with normalised identity >= 0.95 in the same cluster
+    (single-linkage), so near-duplicates stay on one side of every fold. The
+    helper keeps the same min_groups hash-bucket fallback for degenerate panels.
+    NOTE (follow-up, NEW issue): for paired datasets this still receives the
+    heavy chain only; pass heavy+light concatenated to also catch
+    light-chain-only near-duplicates.
+    """
+    from experiments._shared import sequence_identity_clusters
+    return sequence_identity_clusters(seqs, identity_threshold=0.95,
+                                      min_groups=min_groups)
 
 
 def _assign_position_groups_modulo(mutations, n_folds=5):

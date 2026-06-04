@@ -15,8 +15,7 @@ from sklearn.preprocessing import StandardScaler
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
-    save_experiment_results, convert_numpy,
-    get_model_factories, _cv_split,
+    save_experiment_results, _cv_split,
     apply_feature_selection, get_domain_metric,
     get_best_search_for_downstream,
 )

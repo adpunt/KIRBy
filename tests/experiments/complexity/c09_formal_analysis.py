@@ -276,11 +276,18 @@ def _run_anova_decomposition(exp2_results):
 # 9b: Information retention
 # =========================================================================
 
-def _run_information_retention(data, budgets, search_speed='full', dataset_name=None):
+def _run_information_retention(data, budgets, search_speed='full', dataset_name=None,
+                               n_folds=5):
     """9b: MI(X_selected, Y) and MI(X_selected, X_full) vs budget.
 
     At each budget, uses find_best_hybrid to discover the best hybrid config,
     then profiles its information content.
+
+    n_folds matches the suite-wide CV count (config['n_splits'], =5 in full
+    mode). The per-fold train_idx sets must equal the rest of the suite's so
+    the shared hybrid_fold_cache (keyed on train_idx) is reused instead of
+    cold-recomputed — previously hardcoded to 3, which guaranteed a miss
+    against the 5-fold precompute (CACHE-5 / PCB-19).
     """
     print("\n  9b: Information Retention Curves")
 
@@ -334,7 +341,8 @@ def _run_information_retention(data, budgets, search_speed='full', dataset_name=
         fold_mi_xy = []
         fold_mi_xx = []
         from experiments._shared import cv_split as _cv_split_9b
-        for train_idx, val_idx in _cv_split_9b(groups, 3, sample_X, labels, mode='full'):
+        _mode_9b = 'intermediary' if n_folds == 1 else 'full'
+        for train_idx, val_idx in _cv_split_9b(groups, n_folds, sample_X, labels, mode=_mode_9b):
             train_reps = {k: v[train_idx] for k, v in reps.items()}
             y_train = labels[train_idx]
             train_augs = {k: v[train_idx] for k, v in augs.items()} if augs else None
@@ -413,11 +421,16 @@ def _run_information_retention(data, budgets, search_speed='full', dataset_name=
 # 9c: Effective rank analysis
 # =========================================================================
 
-def _run_effective_rank_analysis(data, budgets, search_speed='full', dataset_name=None):
+def _run_effective_rank_analysis(data, budgets, search_speed='full', dataset_name=None,
+                                 n_folds=5):
     """9c: Effective rank of hybrid vs PCA vs random at each budget.
 
     At each budget, uses find_best_hybrid to discover the best config,
     then compares effective rank: best hybrid vs PCA vs random subset.
+
+    n_folds matches the suite-wide CV count so the per-fold train_idx sets
+    align with the shared hybrid_fold_cache (CACHE-5 / PCB-19) — previously
+    hardcoded to 3.
     """
     print("\n  9c: Effective Rank Profile")
 
@@ -432,6 +445,7 @@ def _run_effective_rank_analysis(data, budgets, search_speed='full', dataset_nam
     augs = data.get('augmentations')
     sample_X = next(iter(reps.values()))
     from experiments._shared import cv_split as _cv_split_9c
+    _mode_9c = 'intermediary' if n_folds == 1 else 'full'
 
     for budget in sorted(budgets):
         n_feat = min(budget, X_concat.shape[1], X_concat.shape[0] - 1)
@@ -469,7 +483,7 @@ def _run_effective_rank_analysis(data, budgets, search_speed='full', dataset_nam
 
         # Per-fold hybrid creation to avoid label leakage in rank measurement
         fold_ranks = []
-        for train_idx, _ in _cv_split_9c(groups, 3, sample_X, labels, mode='full'):
+        for train_idx, _ in _cv_split_9c(groups, n_folds, sample_X, labels, mode=_mode_9c):
             try:
                 train_reps = {k: v[train_idx] for k, v in reps.items()}
                 train_augs = {k: v[train_idx] for k, v in augs.items()} if augs else None
@@ -489,7 +503,7 @@ def _run_effective_rank_analysis(data, budgets, search_speed='full', dataset_nam
 
         # PCA — per-fold to match hybrid (avoids using val data in fit)
         pca_fold_ranks = []
-        for train_idx, _ in _cv_split_9c(groups, 3, sample_X, labels, mode='full'):
+        for train_idx, _ in _cv_split_9c(groups, n_folds, sample_X, labels, mode=_mode_9c):
             try:
                 pca = PCA(n_components=n_feat)
                 X_pca = pca.fit_transform(StandardScaler().fit_transform(X_concat[train_idx]))
@@ -502,7 +516,7 @@ def _run_effective_rank_analysis(data, budgets, search_speed='full', dataset_nam
         random_fold_ranks = []
         rng = np.random.RandomState(42)
         random_idx = rng.choice(X_concat.shape[1], n_feat, replace=False)
-        for train_idx, _ in _cv_split_9c(groups, 3, sample_X, labels, mode='full'):
+        for train_idx, _ in _cv_split_9c(groups, n_folds, sample_X, labels, mode=_mode_9c):
             try:
                 X_random = X_concat[train_idx][:, random_idx]
                 random_fold_ranks.append(compute_effective_rank(X_random))
@@ -669,10 +683,12 @@ def run(data, config, output_dir, dataset_name, sub_analyses=None,
         results['anova'] = _run_anova_decomposition(exp2_results)
 
     if 'information' in all_subs:
-        results['information'] = _run_information_retention(data, budgets, search_speed, dataset_name=dataset_name)
+        results['information'] = _run_information_retention(
+            data, budgets, search_speed, dataset_name=dataset_name, n_folds=n_folds)
 
     if 'effective_rank' in all_subs:
-        results['effective_rank'] = _run_effective_rank_analysis(data, budgets, search_speed, dataset_name=dataset_name)
+        results['effective_rank'] = _run_effective_rank_analysis(
+            data, budgets, search_speed, dataset_name=dataset_name, n_folds=n_folds)
 
     if 'bias_variance' in all_subs:
         results['bias_variance'] = _run_bias_variance_analysis(

@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import time
+import traceback
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 from experiments._shared import (
@@ -60,6 +61,12 @@ def _compute_cluster_importance(train_reps, train_labels, silo_indices, k,
         - feature_infos: {cluster_id: feature_info_dict}
         - cluster_stats: {cluster_id: {n_samples, n_active, top_rep}}
     """
+    # Defensive: resolve 'match' to a concrete evaluator ('rf') so the
+    # no-model create_hybrid calls below never fall through to 'ridge'
+    # (hybrid.py:3354-3355, forbidden by feedback_no_ridge.md). run() already
+    # passes a resolved int_eval; this guards future callers.
+    int_eval = _resolve_match(int_eval, 'rf')
+
     profiles = {}
     feature_infos = {}
     cluster_stats = {}
@@ -102,10 +109,15 @@ def _compute_cluster_importance(train_reps, train_labels, silo_indices, k,
                 'n_reps_selected': len(profile),
             }
         except Exception as e:
+            # Surface the traceback so a real bug (shape/import/NameError) in
+            # the per-cluster create_hybrid path is debuggable from the
+            # expensive run's logs rather than reduced to a string (FED-21).
             cluster_stats[s] = {
                 'n_samples': len(idx),
                 'error': str(e),
+                'traceback': traceback.format_exc(),
             }
+            traceback.print_exc()
 
     return profiles, feature_infos, cluster_stats
 
@@ -368,7 +380,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 and not np.isnan(r[key].get(metric))]
         return float(np.std(vals)) if vals else float('nan')
 
-    metric_keys = ['mcc', 'bac', 'f1', 'auroc']
+    metric_keys = ['mcc', 'bac', 'f1', 'auroc', 'accuracy', 'f1_weighted']
     cond_agg = {m: {'mean': _mean_metric(fold_records, 'cluster_conditional_hybrid', m),
                     'std': _std_metric(fold_records, 'cluster_conditional_hybrid', m)}
                 for m in metric_keys}
@@ -405,7 +417,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Summary
     print(f"\n{'─' * 70}")
     print(f"  Aggregated over {N_FOLDS} folds:")
-    print(f"  Profile stability (mean): {mean_stability:.3f}")
+    # mean_stability is None (JSON null) when no fold produced a defined
+    # stability (<3 reps or all-constant importance) — guard the format spec.
+    _stab_str = 'n/a' if mean_stability is None else f"{mean_stability:.3f}"
+    print(f"  Profile stability (mean): {_stab_str}")
     print(f"  Conditional MCC: {cond_agg['mcc']['mean']:.3f} ± {cond_agg['mcc']['std']:.3f}")
     print(f"  Global MCC:      {glob_agg['mcc']['mean']:.3f} ± {glob_agg['mcc']['std']:.3f}")
     print(f"  Per-fold smooth factor sweep recorded under folds[].smooth_factor_sweep")

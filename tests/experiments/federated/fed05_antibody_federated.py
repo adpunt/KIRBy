@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import time
+import traceback
 import warnings
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
@@ -119,6 +120,12 @@ def _silo_baseline(sd, shared_reps, seed=42,
     fix: prior hardcoded RandomForestRegressor silently mis-handled clf
     silos.
     """
+    # Defensive: resolve 'match' to a concrete evaluator ('rf') so the no-model
+    # create_hybrid call below never falls through to 'ridge'
+    # (hybrid.py:3354-3355, forbidden by feedback_no_ridge.md). run() already
+    # passes a resolved int_eval; this guards future callers.
+    int_eval = _resolve_match(int_eval, 'rf')
+
     reps_s = {r: sd['reps'][r] for r in shared_reps if r in sd['reps']}
     if len(reps_s) < 2:
         reps_s = sd['reps']
@@ -248,8 +255,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 print(f"MCC={metrics.get('mcc', float('nan')):.4f}  "
                       f"BAC={metrics.get('bac', float('nan')):.4f}")
         except Exception as e:
-            independent[sname] = {'error': str(e)}
+            # Surface the traceback (not just str(e)) so a shape/import/
+            # NameError in the create_hybrid path is debuggable from the
+            # expensive run's logs (FED-21).
+            independent[sname] = {
+                'error': str(e), 'traceback': traceback.format_exc()}
             print(f"FAILED: {e}")
+            traceback.print_exc()
 
     results['c1_independent'] = convert_numpy(independent)
 
@@ -394,8 +406,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"stability={mean_sp:.3f}")
 
         except Exception as e:
-            clustering_results[sname] = {'error': str(e)}
+            clustering_results[sname] = {
+                'error': str(e), 'traceback': traceback.format_exc()}
             print(f"FAILED: {e}")
+            traceback.print_exc()
 
     results['c3_within_silo_clustering'] = convert_numpy(clustering_results)
 
@@ -698,8 +712,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 fi_h.get('allocation', {}))
             print(f"    KIRBy hybrid: RMSE={hybrid_metrics['rmse']:.4f}")
         except Exception as e:
-            hybrid_metrics = {'error': str(e)}
+            hybrid_metrics = {'error': str(e), 'traceback': traceback.format_exc()}
             print(f"    Hybrid FAILED: {e}")
+            traceback.print_exc()
 
         rep_diversity = {
             'lead_silo': lead_silo,

@@ -98,8 +98,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         search = None
 
     # ── Per-budget hybrid kNN evaluation ──
-    splitter, use_groups = make_cv_splitter(n_folds, groups)
     sample_X = next(iter(reps.values()))
+    # Build the CV folds ONCE (make_cv_splitter is deterministic: random_state
+    # is fixed, so the folds are identical for every budget/condition/k). All
+    # per-budget conditions MUST share the same folds for a fair comparison;
+    # hoisting also avoids reconstructing the splitter inside the budget loop
+    # (SIMA-18, result-neutral).
+    splitter_b, use_groups_b = make_cv_splitter(n_folds, groups)
+    folds_b = list(
+        splitter_b.split(sample_X, labels, groups=groups)
+        if use_groups_b
+        else splitter_b.split(sample_X, labels)
+    )
 
     def _make_knn(k_val, n_train):
         nn = min(k_val, n_train - 1)
@@ -124,15 +134,6 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"alloc={blueprint.allocation_method}):")
 
             budget_results = {}
-
-            # Create splitter ONCE per budget so all conditions share
-            # the same fold splits — required for fair comparison.
-            splitter_b, use_groups_b = make_cv_splitter(n_folds, groups)
-            folds_b = list(
-                splitter_b.split(sample_X, labels, groups=groups)
-                if use_groups_b
-                else splitter_b.split(sample_X, labels)
-            )
 
             for condition in ['hybrid_unweighted', 'hybrid_weighted']:
                 for k in k_values:
@@ -211,13 +212,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # ── Per-rep kNN baselines (individual representations) ──
     # Try all k values and pick the best per metric direction.
     print(f"\n  Individual representation kNN baselines (metric={metric_name}):")
-    # Precompute per-fold importance (k-independent) once per rep.
-    splitter_b2, use_groups_b2 = make_cv_splitter(n_folds, groups)
-    folds_baseline = list(
-        splitter_b2.split(sample_X, labels, groups=groups)
-        if use_groups_b2
-        else splitter_b2.split(sample_X, labels)
-    )
+    # Reuse the SAME folds as the hybrid conditions (folds_b) so the
+    # hybrid-vs-baseline comparison is on identical splits. (Previously a
+    # separate, deterministic splitter rebuilt identical folds — SIMA-18.)
+    folds_baseline = folds_b
 
     for rep_name, X_rep in reps.items():
         best_k_score = None

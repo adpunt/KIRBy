@@ -94,7 +94,14 @@ def _find_fasta_files(root: Path, species: str) -> List[Path]:
 
 
 def _find_heavy_fasta(root: Path, species: str) -> Optional[Path]:
-    """Find the heavy chain FASTA file for a species."""
+    """Find the heavy chain FASTA file for a species.
+
+    Returns the first file whose name/dir clearly marks it as heavy/VH. If no
+    candidate can be positively identified as heavy, falls back to the sole
+    or first candidate but warns LOUDLY (OPIG-21): a silent fallback can
+    return a light-chain (VL) FASTA, which would mislabel the entire dataset's
+    "heavy" sequences as light and silently corrupt every downstream result.
+    """
     candidates = _find_fasta_files(root, species)
     # Prefer files with 'heavy' or 'vh' in name, exclude 'light'/'vl'
     heavy = [f for f in candidates
@@ -102,12 +109,24 @@ def _find_heavy_fasta(root: Path, species: str) -> Optional[Path]:
              and 'light' not in f.name.lower() and 'vl' not in f.name.lower()]
     if heavy:
         return heavy[0]
-    if len(candidates) == 1:
-        return candidates[0]
     in_heavy_dir = [f for f in candidates if 'heavy' in str(f.parent).lower()]
     if in_heavy_dir:
         return in_heavy_dir[0]
-    return candidates[0] if candidates else None
+    if len(candidates) == 1:
+        chosen = candidates[0]
+        # Single candidate but it is NOT positively identified as heavy. If it
+        # looks like a light chain, that's almost certainly wrong — surface it.
+        if ('light' in chosen.name.lower() or 'vl' in chosen.name.lower()):
+            print(f"  WARNING: only FASTA found for '{species}' looks like a "
+                  f"LIGHT chain ({chosen.name}); using it as heavy may be "
+                  f"wrong. Check the archive layout.")
+        return chosen
+    if candidates:
+        print(f"  WARNING: no FASTA for '{species}' is identifiable as heavy/VH "
+              f"({[c.name for c in candidates]}); falling back to "
+              f"'{candidates[0].name}'. Verify this is the heavy chain.")
+        return candidates[0]
+    return None
 
 
 def load_humanness_dataset(

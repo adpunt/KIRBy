@@ -171,7 +171,11 @@ def evaluate_rep_clf(X, labels, groups, model, n_folds):
         try:
             m = clone(model)
             m.fit(X_train, y_train)
-        except Exception:
+        except Exception as e:
+            # Don't swallow fold-fit failures silently (OPIG-18): a dropped
+            # fold biases the mean. Log the model + exception type and skip.
+            print(f"      [fold fit failed: {type(model).__name__} "
+                  f"{type(e).__name__}: {e}]", flush=True)
             continue
 
         preds = m.predict(X_val)

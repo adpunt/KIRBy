@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import time
+import traceback
 import numpy as np
 from scipy.stats import spearmanr
 from sklearn.ensemble import RandomForestClassifier
@@ -327,8 +328,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 sigma_results['c0_centralized_kirby'] = c0
                 print(f"MCC={c0['mcc']:.3f}")
             except Exception as e:
-                sigma_results['c0_centralized_kirby'] = {'error': str(e)}
+                # Record traceback (not just str(e)) so a shape/import/NameError
+                # in the create_hybrid path surfaces during the expensive run
+                # rather than being reduced to a one-line message (FED-21).
+                sigma_results['c0_centralized_kirby'] = {
+                    'error': str(e), 'traceback': traceback.format_exc()}
                 print(f"FAILED: {e}")
+                traceback.print_exc()
 
             # -- Condition 1: Naive pool --
             print("    C1: Naive pool...", end=' ')
@@ -440,8 +446,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 print(f"{mcc_str} budgets={silo_budgets}")
 
             except Exception as e:
-                sigma_results['c5_kirby_federated'] = {'error': str(e)}
+                sigma_results['c5_kirby_federated'] = {
+                    'error': str(e), 'traceback': traceback.format_exc()}
                 print(f"FAILED: {e}")
+                traceback.print_exc()
 
             # -- Condition 6: KIRBy + per-silo noise detection --
             # Each silo runs detectors locally, flags noisy samples, retrain
@@ -569,8 +577,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 print(f"{mcc_str} (excluded {n_excluded})")
 
             except Exception as e:
-                sigma_results['c6_kirby_noise_detect'] = {'error': str(e)}
+                sigma_results['c6_kirby_noise_detect'] = {
+                    'error': str(e), 'traceback': traceback.format_exc()}
                 print(f"FAILED: {e}")
+                traceback.print_exc()
 
             primary_sweep[str(sigma_frac)] = convert_numpy(sigma_results)
 

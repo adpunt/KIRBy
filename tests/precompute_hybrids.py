@@ -204,6 +204,88 @@ def _datasets_for_domain(domain):
     return sorted(result)
 
 
+def _condition_cost_rank(condition):
+    """Deterministic cost proxy for a precompute condition.
+
+    Higher = more expensive (should run FIRST when cost-ordering so a
+    wall-clock timeout sacrifices the cheap tail, not the costly variants).
+
+    Pure ordering signal — does NOT change which conditions are computed.
+    The proxy is built from the same inputs every run, so the sort is
+    stable and reproducible:
+
+      1. augmentation strategy:  capped (refits the model up to
+         max_candidates per slot AND runs a phase-B replace pass) is the
+         most expensive, then uncapped (single fill pass), then none.
+      2. augmentation-pool width: more aug features = a wider candidate
+         ranking + more A/B-test fits.
+      3. base-rep count: more reps = more per-rep baselines + allocation work.
+
+    Ties broken by the (tier, strat) label so equal-cost conditions keep a
+    deterministic relative order.
+    """
+    tier, reps, augs, strat = condition
+    strat_cost = {'none': 0, 'uncapped': 1, 'capped': 2}.get(strat, 1)
+    n_aug = len(augs) if augs else 0
+    n_reps = len(reps) if reps else 0
+    return (strat_cost, n_aug, n_reps, tier, strat)
+
+
+def _order_conditions_expensive_first(conditions):
+    """Return conditions sorted most-expensive-first (descending cost rank).
+
+    Behaviour-preserving: returns a permutation of the SAME list — same
+    elements, same count — only the order differs. Verified by
+    test_condition_ordering_preserves_set below.
+    """
+    return sorted(conditions, key=_condition_cost_rank, reverse=True)
+
+
+def test_condition_ordering_preserves_set():
+    """Cost-ordering must be a pure permutation (same SET, different order).
+
+    Run with: python tests/precompute_hybrids.py --selftest-ordering
+    """
+    import numpy as _np
+    r = {'a': _np.zeros((4, 3)), 'b': _np.zeros((4, 2))}
+    aug_small = {'x': _np.zeros((4, 5))}
+    aug_big = {'x': _np.zeros((4, 5)), 'y': _np.zeros((4, 7)), 'z': _np.zeros((4, 9))}
+    conditions = [
+        ('general', r, None, 'none'),
+        ('general', r, aug_small, 'uncapped'),
+        ('top', r, None, 'none'),
+        ('top', r, aug_small, 'uncapped'),
+        ('top', r, aug_small, 'capped'),
+        ('top+borderline', r, aug_big, 'uncapped'),
+    ]
+    ordered = _order_conditions_expensive_first(conditions)
+
+    # 1. SET preserved (same elements, same count) — compare by identity
+    #    because the tuples contain unhashable numpy-array dicts.
+    assert sorted(id(c) for c in conditions) == sorted(id(c) for c in ordered), \
+        "ordering changed the set of conditions"
+    assert len(ordered) == len(conditions)
+
+    # 2. capped runs before its uncapped sibling, which runs before none
+    labels = [(t, s) for t, _, _, s in ordered]
+    assert labels.index(('top', 'capped')) < labels.index(('top', 'uncapped')), \
+        "capped should sort before uncapped"
+    assert labels.index(('top', 'uncapped')) < labels.index(('top', 'none')), \
+        "uncapped should sort before none"
+    assert labels.index(('general', 'uncapped')) < labels.index(('general', 'none')), \
+        "uncapped should sort before none (general tier)"
+
+    # 3. capped (most expensive strategy) is first overall
+    assert labels[0] == ('top', 'capped'), \
+        f"expected top/capped first, got {labels[0]}"
+
+    # 4. idempotent + deterministic
+    assert _order_conditions_expensive_first(ordered) == ordered, \
+        "ordering is not idempotent"
+    print("test_condition_ordering_preserves_set: PASS")
+    return True
+
+
 def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
                        models=None, condition_filter=None, distance=False,
                        adaptive_pruning=True, adaptive_pruning_schedule=None,
@@ -365,14 +447,43 @@ def precompute_dataset(dataset_name, speed='full', tiers=('general', 'top'),
             conditions = [(t, r, a, s) for t, r, a, s in conditions
                           if t == want_tier and s == want_strat]
 
-    # Optional iteration-order flip for parallelization across overlapping
-    # waves. Setting KIRBY_PRECOMPUTE_REVERSE_ORDER=1 makes a second batch
-    # start at the END of the condition list (e.g. top/capped) while a
-    # still-running first batch is at the START (general/none) — so they
-    # naturally work on different cache files. Output identical either way.
-    if os.environ.get('KIRBY_PRECOMPUTE_REVERSE_ORDER') == '1':
-        conditions = list(reversed(conditions))
-        print(f"  KIRBY_PRECOMPUTE_REVERSE_ORDER=1 → reversed condition order")
+    # Optional iteration-order change. Two opt-in env vars, both ORDER-ONLY
+    # (the SET of conditions computed is identical — only the sequence
+    # changes; the cached output is byte-identical either way):
+    #
+    #   KIRBY_PRECOMPUTE_EXPENSIVE_FIRST=1  — cost-sort expensive-first so a
+    #       wall-clock timeout sacrifices the CHEAP tail (general/none) rather
+    #       than the costly variants (top/capped, top+borderline). Addresses
+    #       the "expensive-last → capped never reached at the wall" failure.
+    #
+    #   KIRBY_PRECOMPUTE_REVERSE_ORDER=1    — legacy two-wave parallelisation
+    #       flag. Originally a blind list-reverse so a second batch started at
+    #       the END while a first batch ran from the START. Upgraded to the
+    #       same deterministic cost-sort (expensive-first) so the reversed
+    #       wave also tackles the costly conditions first instead of relying
+    #       on incidental list position. Still ORDER-ONLY.
+    #
+    # NOTE (write-up ORD-REVFLAG): the two-wave premise — that the forward and
+    # reverse waves touch disjoint cache files — is unreliable. The search and
+    # hybrid-eval caches are keyed on rep CONTENT hashes for some reps but the
+    # cross-invocation dedup means both waves ultimately target the same
+    # {dataset}__{tier}__{strat}__full.pkl files; a SLURM array of per-job
+    # `--condition` runs (see --condition / _cond_map below) gives genuinely
+    # disjoint work without a race and is the preferred mechanism.
+    if (os.environ.get('KIRBY_PRECOMPUTE_EXPENSIVE_FIRST') == '1'
+            or os.environ.get('KIRBY_PRECOMPUTE_REVERSE_ORDER') == '1'):
+        _before = list(conditions)
+        conditions = _order_conditions_expensive_first(conditions)
+        # Safety assertion: ordering must never drop or add a condition.
+        # Condition tuples carry numpy-array-valued dicts (not orderable /
+        # hashable), so compare the multiset by object identity instead.
+        assert (sorted(id(c) for c in _before)
+                == sorted(id(c) for c in conditions)), (
+            "condition reordering changed the SET of conditions — bug")
+        _flag = ('KIRBY_PRECOMPUTE_EXPENSIVE_FIRST'
+                 if os.environ.get('KIRBY_PRECOMPUTE_EXPENSIVE_FIRST') == '1'
+                 else 'KIRBY_PRECOMPUTE_REVERSE_ORDER')
+        print(f"  {_flag}=1 → cost-sorted conditions expensive-first")
 
     print(f"  {len(conditions)} conditions to precompute:")
     for tier, reps, augs, strat in conditions:
@@ -445,6 +556,9 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument('datasets', nargs='*', help='Dataset names')
+    parser.add_argument('--selftest-ordering', action='store_true',
+                        help='Run the condition-ordering permutation self-test '
+                             'and exit (no compute).')
     parser.add_argument('--domain', type=str, default=None,
                         choices=['molecular', 'antibody', 'tcga', 'dta', 'reaction'],
                         help='Precompute all datasets in a domain')
@@ -503,6 +617,10 @@ def main():
                              'aggressive_pruning uses 1000.')
 
     args = parser.parse_args()
+
+    if args.selftest_ordering:
+        test_condition_ordering_preserves_set()
+        sys.exit(0)
 
     # Resolve dataset list
     if args.all:

@@ -1284,6 +1284,57 @@ def embed_s2alm(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
     )
 
 
+def embed_prosst(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """ProSST embeddings: H+L concatenated → (N, 2*hidden_size).
+
+    Structure-aware protein LM (NeurIPS 2024). Reuses the protein-side
+    `create_prosst_protein_embeddings`, which runs sequence-only (neutral
+    structure tokens) unless real per-residue structure tokens are supplied —
+    see that function's docstring for the structure-quantizer step needed for
+    the intended structure-aware embeddings.
+
+    Requires: pip install transformers (model AI4Protein/ProSST-2048 auto-downloads).
+    Status: code wired; sequence-only path (structure track uninformative).
+    """
+    from kirby.representations.protein import create_prosst_protein_embeddings
+    h_embs = create_prosst_protein_embeddings(list(heavy_seqs))
+    if not _has_light(light_seqs):
+        return h_embs.astype(np.float32)
+    l_embs = create_prosst_protein_embeddings(list(light_seqs))
+    return _concat_hl(h_embs, l_embs, light_seqs)
+
+
+def embed_igblend(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """IgBlend embeddings: multi-modal (sequence + 3D structure) → (N, D).
+
+    IgBlend (bioRxiv 2024) fuses an antibody sequence encoder with a 3D
+    structure encoder (512D structure embedding), trained on 4M structures +
+    200M sequences. It is a research repo (not pip/HF), and the structure
+    branch needs per-antibody 3D coordinates.
+
+    Requires: the IgBlend code + weights from
+    https://www.biorxiv.org/content/10.1101/2024.10.01.615796v2 (repo link in
+    paper) and per-antibody structures for the structure branch.
+    Status: SCAFFOLD — blocked on the IgBlend repo/weights + structures.
+    Step to finish: install IgBlend, predict/collect Fv structures, call its
+    encoder and concatenate the sequence + 512D structure embeddings.
+    """
+    try:
+        import igblend  # noqa: F401
+    except ImportError:
+        raise ImportError(
+            "IgBlend is a research model (not on PyPI). Obtain the code + "
+            "weights from the paper "
+            "(https://www.biorxiv.org/content/10.1101/2024.10.01.615796v2) "
+            "and provide per-antibody 3D structures for the structure branch."
+        )
+    raise NotImplementedError(
+        "IgBlend embedding extraction is not wired: it needs the IgBlend repo "
+        "and per-antibody 3D structures for the structure encoder. See the "
+        "paper for the code/weights link."
+    )
+
+
 # ── Structural features (from structural.py) ─────────────────────────────────
 
 
@@ -1650,6 +1701,11 @@ ANTIBODY_REPS = {
     'aido_protein': embed_aido_protein,              # 4608D (2304 × 2)
     # xTrimoPGLM-1B (BioMap, 1B MLM, ~2048D per chain)
     'xtrimopglm': embed_xtrimopglm,                  # ~4096D (2048 × 2)
+    # ProSST (structure-aware, NeurIPS 2024; sequence-only path until
+    # structure tokens supplied — see embed_prosst docstring)
+    'prosst': embed_prosst,                          # 2*hidden (H+L)
+    # IgBlend (multi-modal seq+structure) — SCAFFOLD, blocked on repo+structures
+    'igblend': embed_igblend,                        # structure branch needed
 }
 
 # LM reps (require GPU / torch / transformers)
@@ -1667,6 +1723,8 @@ ANTIBODY_LM_REPS = {
     'abroberta', 'abroberta_cdr',
     'aido_protein',
     'xtrimopglm',
+    'prosst',
+    'igblend',
 }
 
 # Structural reps (require ImmuneBuilder + biopython, CPU-heavy)
