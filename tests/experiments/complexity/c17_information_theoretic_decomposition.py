@@ -131,7 +131,12 @@ def _greedy_mrmr(X, y, budget, k_mi=5, max_features=None):
 # =========================================================================
 
 def _rfe_select(X, y, budget):
-    """Select top features via sklearn RFE with RF."""
+    """Select top features via sklearn RFE with RF.
+
+    REGRESSION-ONLY: uses RandomForestRegressor. run() gates the whole
+    experiment to regression (CXA-5), so this is never reached with
+    classification labels.
+    """
     from sklearn.feature_selection import RFE
     budget = min(budget, X.shape[1])
     rf = RandomForestRegressor(n_estimators=50, max_depth=5, random_state=42, n_jobs=-1)
@@ -145,7 +150,12 @@ def _rfe_select(X, y, budget):
 # =========================================================================
 
 def _evaluate_strategy(X_selected, y, groups, n_folds, mode, metric_fn):
-    """Evaluate a feature-selected matrix: MI, MI density, erank, downstream R²."""
+    """Evaluate a feature-selected matrix: MI, MI density, erank, downstream R².
+
+    REGRESSION-ONLY: the downstream model is RandomForestRegressor. run()
+    gates the experiment to regression (CXA-5), so the classification
+    metric_fn / regressor-output mismatch cannot occur.
+    """
     n_feat = X_selected.shape[1]
 
     # MI with labels — let estimate_mutual_information_knn handle PCA
@@ -225,6 +235,24 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     else:
         print(f"  mRMR: enabled (full feature set)")
 
+    # COST-2: greedy mRMR is prefix-monotone — the budget-k selection is the
+    # first k features of the full greedy ranking (the per-step argmax depends
+    # only on already-selected features, not on the target budget; verified by
+    # synthetic test in the fix that introduced this). So compute the full
+    # ranking ONCE at the largest budget and slice [:budget] per budget,
+    # instead of re-running the O(budget·n_feat·n_samples) greedy from scratch
+    # for every budget. Result-identical, ~Nbudgets× cheaper on the dominant
+    # cost driver of this experiment.
+    mrmr_full_ranking = None
+    if budgets:
+        _mf = mrmr_prefilter if total_dim > mrmr_prefilter else None
+        try:
+            mrmr_full_ranking = _greedy_mrmr(
+                X_concat_scaled, labels, budget=max(budgets),
+                k_mi=5, max_features=_mf)
+        except Exception as _e:
+            print(f"  mRMR full-ranking precompute failed: {_e}")
+
     strategies = ['hybrid', 'pca', 'mrmr', 'rfe', 'random']
 
     # NOTE: All supervised methods (hybrid, mRMR, RFE) perform feature selection
@@ -270,9 +298,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     X_selected = pca.fit_transform(X_concat_scaled)
 
                 elif strategy == 'mrmr':
-                    mf = mrmr_prefilter if total_dim > mrmr_prefilter else None
-                    indices = _greedy_mrmr(X_concat_scaled, labels, budget,
-                                           k_mi=5, max_features=mf)
+                    # COST-2: slice the prefix-monotone full ranking instead of
+                    # recomputing greedy mRMR for this budget (identical result).
+                    if mrmr_full_ranking is None:
+                        raise RuntimeError("mRMR full ranking unavailable")
+                    indices = mrmr_full_ranking[:budget]
                     X_selected = X_concat_scaled[:, indices]
 
                 elif strategy == 'rfe':

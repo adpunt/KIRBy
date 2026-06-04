@@ -97,6 +97,53 @@ def smoke_n10_noise_mask_recorded():
             "'all' option = literal injected set")
 
 
+def smoke_n10_hybrid_budgets_in_precompute_set():
+    """n10's requested hybrid budgets must be a subset of the noise precompute
+    budget set (FIX 4a).
+
+    n10 requests hybrid blueprints at HYBRID_BUDGETS and guards each strictly:
+    get_best_search_for_downstream skips any budget the precompute didn't build,
+    so if HYBRID_BUDGETS were not a subset of the precompute set, ALL of them
+    would be skipped and the hybrid-vs-base comparison (n10's whole point) would
+    be silently empty while n10 still 'succeeds'. The noise precompute (built by
+    noise_helpers.run_all's default config) uses FULL_BUDGETS; this asserts
+    HYBRID_BUDGETS ⊆ FULL_BUDGETS ⊆ noise-config budgets, and that the old
+    SCREENING_BUDGETS (the bug) contained NONE of them.
+    """
+    import importlib
+    from experiments._shared import FULL_BUDGETS, SCREENING_BUDGETS
+    n10 = importlib.import_module('experiments.noise.n10_hybrid_neighborhood_lnl')
+    assert hasattr(n10, 'HYBRID_BUDGETS'), 'n10 missing HYBRID_BUDGETS constant'
+    hb = set(n10.HYBRID_BUDGETS)
+    assert hb, 'n10.HYBRID_BUDGETS is empty'
+
+    # The budget set the noise precompute actually builds = noise_helpers'
+    # default config['budgets']. Read it directly (no compute) to prove the
+    # two are aligned rather than asserting against a hardcoded list.
+    nh = importlib.import_module('experiments.noise.noise_helpers')
+    import inspect as _inspect
+    src = _inspect.getsource(nh.run_all)
+    assert "'budgets': FULL_BUDGETS" in src, (
+        "noise_helpers.run_all default config must set budgets=FULL_BUDGETS "
+        "(FIX 4a); found SCREENING_BUDGETS or other instead")
+
+    missing = sorted(hb - set(FULL_BUDGETS))
+    assert not missing, (
+        f"n10 hybrid budgets {sorted(hb)} NOT all in FULL_BUDGETS "
+        f"{FULL_BUDGETS}; missing {missing} → strict guard would skip them "
+        "and the hybrid arm would be empty")
+    # Regression guard: the old SCREENING_BUDGETS contained none of them — that
+    # was exactly the silent-empty bug. If a future edit points the precompute
+    # back at SCREENING_BUDGETS, n10 would break again.
+    overlap_screen = sorted(hb & set(SCREENING_BUDGETS))
+    assert not overlap_screen, (
+        f"unexpected: SCREENING_BUDGETS now overlaps n10 budgets "
+        f"({overlap_screen}); the bug premise changed — re-check FIX 4a")
+    return (f"n10 HYBRID_BUDGETS={sorted(hb)} ⊆ FULL_BUDGETS (precompute set); "
+            f"noise_helpers builds FULL_BUDGETS; SCREENING_BUDGETS contained "
+            f"none of them (the fixed bug)")
+
+
 def smoke_n09_speed_tier_valid():
     """n09's inner search must NOT request the removed 'fast' speed tier.
 
@@ -125,6 +172,8 @@ SMOKE_TESTS = [
     ('n09/n10 StandardScaler cancellation no-op', smoke_standardscaler_cancellation),
     ('n09/n10 mean-1 vs sum-1 weighting scale', smoke_mean1_vs_sum1_scale),
     ('n10 regression noise-mask recorded (P1#6)', smoke_n10_noise_mask_recorded),
+    ('n10 hybrid budgets ⊆ precompute set (FIX 4a)',
+     smoke_n10_hybrid_budgets_in_precompute_set),
     ('n09 no removed fast speed tier', smoke_n09_speed_tier_valid),
 ]
 

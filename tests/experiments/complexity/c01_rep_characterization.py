@@ -45,7 +45,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     mode = 'intermediary' if config['n_splits'] == 1 else 'full'
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
 
-    results = {}
+    # Record the metric + its direction so the per-rep baseline scores in the
+    # output JSON are interpretable without re-deriving the domain metric.
+    # (MISS-24: c01 baselines are stored as bare numbers; a reader can't tell
+    # whether higher or lower is better, nor which metric was used.)
+    results = {
+        '_meta': {
+            'metric': metric_name,
+            'lower_is_better': bool(lower_is_better),
+            'task_type': data['task_type'],
+        }
+    }
 
     for rep_name, X in reps.items():
         print(f"\n  {rep_name} (dim={X.shape[1]}):")
@@ -97,6 +107,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(header)
     print("  " + "-" * (len(header) - 2))
     for rep_name, r in results.items():
+        if rep_name == '_meta':
+            continue
         dim_info = r['intrinsic_dim']
         mi_str = f"{r['mutual_info']:.4f}" if r['mutual_info'] is not None else "N/A"
         mle_str = f"{dim_info['mle']:.1f}" if dim_info.get('mle') is not None else "N/A"

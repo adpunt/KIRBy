@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import time
+import traceback
 import numpy as np
 from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier
 
@@ -386,8 +387,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             c4['n_features'] = int(X_h_train.shape[1])
             c4['allocation'] = convert_numpy(fi_c4.get('allocation', {}))
         except Exception as e:
-            c4 = {'error': str(e)}
+            # Record traceback (not just str(e)) so a shape/import/NameError in
+            # the create_hybrid path surfaces during the expensive run instead
+            # of being reduced to a one-line message (FED-21).
+            c4 = {'error': str(e), 'traceback': traceback.format_exc()}
             print(f"FAILED: {e}")
+            traceback.print_exc()
         fold_c4.append(c4)
 
         # Condition 5: KIRBy top-tier hybrid (top 3 reps by best silo metric)
@@ -439,8 +444,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             fold_top_3_silos.append(top_3_silos)
             fold_top_3_reps.append(top_3_names)
         except Exception as e:
-            c5 = {'error': str(e)}
+            c5 = {'error': str(e), 'traceback': traceback.format_exc()}
             print(f"FAILED: {e}")
+            traceback.print_exc()
             fold_top_3_silos.append(None)
             fold_top_3_reps.append(None)
         fold_c5.append(c5)
@@ -480,8 +486,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             print(f"{_c6_label}  "
                   f"({c6['n_features']}D, {c6['n_virtual_silos']} virtual silos)")
         except Exception as e:
-            c6 = {'error': str(e)}
+            c6 = {'error': str(e), 'traceback': traceback.format_exc()}
             print(f"FAILED: {e}")
+            traceback.print_exc()
         fold_c6.append(c6)
 
     # ── Phase 6: Aggregate per-fold metrics → mean ± std ─────────────────
@@ -489,7 +496,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     _scalar_keys_reg = ['rmse', 'spearman_rho', 'spearman_p',
                         'pearson_r', 'pearson_p', 'r2']
-    _scalar_keys_clf = ['mcc', 'bac', 'f1', 'auroc']
+    _scalar_keys_clf = ['mcc', 'bac', 'f1', 'auroc', 'accuracy', 'f1_weighted']
     _scalar_keys = _scalar_keys_clf if is_clf else _scalar_keys_reg
 
     def _aggregate_folds(fold_list):

@@ -118,11 +118,11 @@ submit_dataset_distance() {
 # Datasets with NO augmentation reps get 2 jobs instead of 6 (standard)
 # and 1 job instead of 2 (distance). Saves ~70 no-op SLURM submissions.
 
-# Molecular: all have augmentation
-MOLECULAR="herg_ki caco2 logd qm9 adme_hlm adme_rlm adme_mdr1"
+# Molecular: all have augmentation (chembl_qsar = FIX 4c, activity-cliff QSAR)
+MOLECULAR="herg_ki caco2 logd qm9 adme_hlm adme_rlm adme_mdr1 chembl_qsar"
 
-# Antibody inter-family: mixed
-ANTIBODY_IF_AUG="flab_thermo_tresanco flab_pk_jain_heprt flab_pk_jain_fcrnrt flab_aggregation_jain_hicrt flab_thermo_jain flab_aggregation_jain ddg_combined"
+# Antibody inter-family: mixed (graphinity_foldx/rosetta = FIX 4c, synthetic DDG)
+ANTIBODY_IF_AUG="flab_thermo_tresanco flab_pk_jain_heprt flab_pk_jain_fcrnrt flab_aggregation_jain_hicrt flab_thermo_jain flab_aggregation_jain ddg_combined graphinity_foldx graphinity_rosetta"
 ANTIBODY_IF_NOAUG="flab_polyreact_jain_cic abcov_kd flab_immunogenicity_marks flab_polyreact_jain_bvp"
 
 # DMS: all have augmentation
@@ -131,11 +131,11 @@ ANTIBODY_DMS="flab_binding_koenig flab_expression_koenig flab_binding_adams flab
 # AbAgym: none have augmentation
 ABAGYM="abagym_Ang2 abagym_EGFR abagym_HER2 abagym_lysozyme abagym_VEGF"
 
-# CLF: none have augmentation
-ANTIBODY_CLF="tz_her2_binary humanness_therapeutic"
+# CLF: none have augmentation (humanness_species + cdr_flexibility = FIX 4c)
+ANTIBODY_CLF="tz_her2_binary humanness_therapeutic humanness_species cdr_flexibility"
 
-# Ginkgo: all have augmentation
-GINKGO="ginkgo_acsins ginkgo_colloidal ginkgo_heparin ginkgo_hic ginkgo_pr_cho ginkgo_titer"
+# Ginkgo: all have augmentation (tm2/aggregation/purity = FIX 4c)
+GINKGO="ginkgo_acsins ginkgo_colloidal ginkgo_heparin ginkgo_hic ginkgo_pr_cho ginkgo_titer ginkgo_tm2 ginkgo_aggregation ginkgo_purity"
 
 TCGA="tcga_luad_vs_lusc tcga_brca_pam50"
 
@@ -158,13 +158,13 @@ run_standard() {
     local P=${2:-long}
 
     if [[ "$filter_domain" == "all" || "$filter_domain" == "molecular" ]]; then
-        echo "--- Molecular (7 datasets, all have aug) ---"
+        echo "--- Molecular (8 datasets, all have aug) ---"
         for ds in ${MOLECULAR}; do submit_dataset "${ds}" yes 64G "${P}"; done
         echo ""
     fi
 
     if [[ "$filter_domain" == "all" || "$filter_domain" == "antibody" ]]; then
-        echo "--- Antibody IF with aug (7 datasets) ---"
+        echo "--- Antibody IF with aug (9 datasets) ---"
         for ds in ${ANTIBODY_IF_AUG}; do submit_dataset "${ds}" yes 64G "${P}"; done
         echo "--- Antibody IF no aug (4 datasets) ---"
         for ds in ${ANTIBODY_IF_NOAUG}; do submit_dataset "${ds}" no 64G "${P}"; done
@@ -175,10 +175,10 @@ run_standard() {
         echo "--- AbAgym (5 datasets, no aug) ---"
         for ds in ${ABAGYM}; do submit_dataset "${ds}" no 64G "${P}"; done
 
-        echo "--- Antibody CLF (2 datasets, no aug) ---"
+        echo "--- Antibody CLF (4 datasets, no aug) ---"
         for ds in ${ANTIBODY_CLF}; do submit_dataset "${ds}" no 64G "${P}"; done
 
-        echo "--- Ginkgo (6 datasets, all have aug) ---"
+        echo "--- Ginkgo (9 datasets, all have aug) ---"
         for ds in ${GINKGO}; do submit_dataset "${ds}" yes 64G "${P}"; done
         echo ""
     fi

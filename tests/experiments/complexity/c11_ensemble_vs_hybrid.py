@@ -34,7 +34,7 @@ from sklearn.decomposition import PCA
 
 from experiments._shared import (
     load_data, get_config, create_experiment_parser,
-    save_experiment_results, convert_numpy,
+    save_experiment_results,
     get_model_factories, cv_split,
     get_domain_metric, cap_dimensions,
     build_fold_hybrid, extract_top3_base_reps,

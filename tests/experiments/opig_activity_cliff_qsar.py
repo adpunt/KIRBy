@@ -151,7 +151,11 @@ def evaluate_qsar(X, labels, groups, model, n_folds):
         try:
             m = clone(model)
             m.fit(X_train, y_train)
-        except Exception:
+        except Exception as e:
+            # Log fold-fit failures (OPIG-18) instead of silently dropping —
+            # a missing fold biases the per-fold metrics and pooled preds.
+            print(f"      [fold fit failed: {type(model).__name__} "
+                  f"{type(e).__name__}: {e}]", flush=True)
             continue
 
         preds = m.predict(X_val)

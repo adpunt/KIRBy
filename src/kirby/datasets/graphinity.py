@@ -86,10 +86,15 @@ def _parse_complex_column(complex_str: str) -> Dict:
     mut_str = parts[-1]  # Last segment is always the mutation
 
     # Parse mutation string: {wt_aa}{chain}{resi}{mut_aa}
-    # Chain may be multi-character (e.g. 'AA') in some Graphinity entries —
-    # P1-4 fix widens the regex. Mutation rows that don't match this shape
-    # still fail loudly via the ValueError below.
-    m = re.match(r'^([A-Z])([A-Za-z0-9]+)(\d+)([A-Z])$', mut_str)
+    # Chain may be multi-character (e.g. 'AA') in some Graphinity entries.
+    # The chain group MUST be letters only: PDB chain IDs are alphabetic, and
+    # a digit-permissive group ([A-Za-z0-9]+) is greedy and steals trailing
+    # digits from the residue number (e.g. 'YH102A' -> chain='H10', pos=2
+    # instead of chain='H', pos=102), silently corrupting every mutation
+    # position and the mutation-aware reps that depend on it. Letters-only
+    # still admits multi-letter chains ('AA') while keeping position intact.
+    # Mutation rows that don't match this shape still fail loudly below.
+    m = re.match(r'^([A-Z])([A-Za-z]+)(\d+)([A-Z])$', mut_str)
     if m:
         return {
             'pdb': pdb,

@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 import time
+import traceback
 import warnings
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
@@ -420,8 +421,13 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
             mcc_str = f"MCC={c4['mcc']:.3f}" if 'mcc' in c4 else 'N/A'
             print(f"    {mcc_str}  budgets={silo_budgets}")
         except Exception as e:
-            results['c4_kirby_federated'] = {'error': str(e)}
+            # Surface the traceback (not just str(e)) so a shape/import/NameError
+            # in the federated_feature_selection path is debuggable from the
+            # expensive run's logs (FED-21).
+            results['c4_kirby_federated'] = {
+                'error': str(e), 'traceback': traceback.format_exc()}
             print(f"    FAILED: {e}")
+            traceback.print_exc()
 
         # C5: Naive pool (unrealistic baseline)
         print("  C5: Naive pool...")
@@ -673,7 +679,14 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
             f"Part B 5-fold CV requires >= 5 unique groups; "
             f"got {n_unique_groups}.")
 
-    is_clf = len(np.unique(labels)) <= 10
+    # Use the dataset's declared task_type (FED-6) — the cardinality heuristic
+    # (len(unique)<=10) misroutes low-cardinality regression targets into the
+    # classification path. Fall back to the heuristic only if task_type absent.
+    _task_type_b = data.get('task_type')
+    if _task_type_b in ('classification', 'regression'):
+        is_clf = (_task_type_b == 'classification')
+    else:
+        is_clf = len(np.unique(labels)) <= 10
     metrics_fn = compute_clf_metrics if is_clf else compute_reg_metrics
 
     n_folds = smoke_n_folds(5)   # 2 under KIRBY_SMOKE_N, else 5
@@ -781,8 +794,10 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
             primary = c2.get('mcc', c2.get('rmse'))
             print(f"    {primary:.4f}  ({c2['n_features']}D)")
         except Exception as e:
-            results['c2_kirby_hybrid'] = {'error': str(e)}
+            results['c2_kirby_hybrid'] = {
+                'error': str(e), 'traceback': traceback.format_exc()}
             print(f"    FAILED: {e}")
+            traceback.print_exc()
 
         # C3: Federated feature selection (privacy-preserving)
         print("  C3: Federated FS (per-silo importance)...")
@@ -795,6 +810,19 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
             silo_task_type = 'classification' if is_clf else 'regression'
             train_groups = groups[train_idx] if groups is not None else None
 
+            # Resolve 'match' → concrete evaluator ('rf' default) BEFORE the
+            # create_hybrid call. Without this, _int_eval='match' + no model=
+            # arg makes create_hybrid silently fall back to 'ridge'
+            # (hybrid.py:3354-3355), which is forbidden (feedback_no_ridge.md).
+            _resolved_eval = _resolve_match(_int_eval, 'rf')
+            _silo_model_c3 = (
+                RandomForestClassifier(
+                    n_estimators=150, max_depth=15,
+                    class_weight='balanced', random_state=0)
+                if is_clf else
+                RandomForestRegressor(
+                    n_estimators=150, max_depth=15, random_state=0))
+
             silo_fis = {}
             silo_scores = {}
             for i, sname in enumerate(silo_names, 1):
@@ -805,7 +833,8 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
                         silo_rep_tr, y_train,
                         allocation_method=_alloc,
                         importance_method=_imp,
-                        internal_evaluator=_int_eval)
+                        internal_evaluator=_resolved_eval,
+                        model=_silo_model_c3)
                     silo_fis[i] = fi_s
                     if (train_groups is not None
                             and len(np.unique(train_groups)) >= 2):
@@ -819,7 +848,6 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
                             n_splits=1, test_size=0.2,
                             random_state=42 + i + fold_idx)
                         tr, va = next(splitter.split(X_s))
-                    _resolved_eval = _resolve_match(_int_eval, 'rf')
                     eval_factory = get_model_factories(
                         [_resolved_eval], task_type=silo_task_type,
                         n_samples=len(tr)).get(_resolved_eval)
@@ -876,8 +904,10 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
             primary = c3.get('mcc', c3.get('rmse', float('nan')))
             print(f"    {primary:.4f}")
         except Exception as e:
-            results['c3_federated_fs'] = {'error': str(e)}
+            results['c3_federated_fs'] = {
+                'error': str(e), 'traceback': traceback.format_exc()}
             print(f"    FAILED: {e}")
+            traceback.print_exc()
 
         per_fold_results.append(results)
 
@@ -1294,6 +1324,14 @@ def _run_antibody_federated(data, config, output_dir, dataset_name):
                 target_groups = target_sd.get('groups')
                 target_task_type = target_sd.get('task_type', 'regression')
                 target_is_clf = (target_task_type == 'classification')
+                # FED-32: importance_profile_transfer is purely index-based, so
+                # it does not crash on a source/target task_type mismatch — but
+                # transferring importance learned on (e.g.) a regression endpoint
+                # to a classification endpoint changes the scientific meaning.
+                # Record both task types so the mismatch is visible in the
+                # output rather than silently averaged into a transfer score.
+                source_task_type = silo_data.get(
+                    source_name, {}).get('task_type', 'regression')
 
                 rep_dict = {r: target_reps[r]
                             for r in shared_reps if r in target_reps}
@@ -1366,6 +1404,9 @@ def _run_antibody_federated(data, config, output_dir, dataset_name):
                                 else float('nan')),
                         'per_fold': per_fold_t,
                         'n_folds_completed': len(good),
+                        'source_task_type': source_task_type,
+                        'target_task_type': target_task_type,
+                        'task_type_mismatch': source_task_type != target_task_type,
                     }
                     ind_mcc = ind.get('mcc_mean', ind.get('mcc', float('nan')))
                     if not np.isnan(ind_mcc) and not np.isnan(agg['mcc_mean']):
@@ -1384,6 +1425,9 @@ def _run_antibody_federated(data, config, output_dir, dataset_name):
                                  else float('nan')),
                         'per_fold': per_fold_t,
                         'n_folds_completed': len(good),
+                        'source_task_type': source_task_type,
+                        'target_task_type': target_task_type,
+                        'task_type_mismatch': source_task_type != target_task_type,
                     }
                     ind_rmse = ind.get('rmse_mean', ind.get('rmse', float('nan')))
                     if (not np.isnan(ind_rmse)

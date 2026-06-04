@@ -96,15 +96,71 @@ def _download_csv(target_dir: str, filename: str) -> pd.DataFrame:
     return pd.read_csv(cached)
 
 
+def _dedup_compounds(smiles, labels):
+    """Drop duplicate compounds, keeping the first occurrence and its label.
+
+    Identity is by InChIKey when RDKit is importable (collapses tautomer /
+    stereo / formatting variants of the same molecule), otherwise by the raw
+    SMILES string. The returned ``smiles`` list preserves the original SMILES
+    strings of the kept representatives so a downstream SMILES->index map still
+    matches MMP-pair SMILES verbatim; dropped duplicates simply won't resolve
+    (correct — they are redundant compounds). SMILES that RDKit can't parse are
+    kept (deduped by raw string) rather than silently discarded.
+    """
+    labels = np.asarray(labels)
+
+    keyfn = None
+    try:
+        from rdkit import Chem
+        from rdkit.Chem.inchi import MolToInchi, InchiToInchiKey
+
+        def keyfn(smi):
+            mol = Chem.MolFromSmiles(smi) if smi else None
+            if mol is None:
+                return ('raw', smi)
+            try:
+                inchi = MolToInchi(mol)
+                ikey = InchiToInchiKey(inchi) if inchi else None
+            except Exception:
+                ikey = None
+            return ('ikey', ikey) if ikey else ('raw', smi)
+    except Exception:
+        # RDKit absent — fall back to exact-SMILES dedup.
+        def keyfn(smi):
+            return ('raw', smi)
+
+    seen = set()
+    keep_idx = []
+    for i, smi in enumerate(smiles):
+        k = keyfn(smi)
+        if k in seen:
+            continue
+        seen.add(k)
+        keep_idx.append(i)
+
+    n_removed = len(smiles) - len(keep_idx)
+    if n_removed:
+        smiles = [smiles[i] for i in keep_idx]
+        labels = labels[keep_idx]
+        print(f"  Deduplicated compounds: removed {n_removed} duplicate(s) "
+              f"({len(smiles)} unique remaining)")
+    return smiles, labels
+
+
 def load_chembl_qsar(
     target: str = 'd2',
     ac_threshold: float = 2.0,
+    max_samples: Optional[int] = None,
 ) -> Dict:
     """Load a ChEMBL QSAR dataset for activity cliff analysis.
 
     Args:
         target: 'd2' (dopamine D2), 'fxa' (Factor Xa), or 'mpro' (SARS-CoV-2 Mpro).
         ac_threshold: pIC50 difference threshold for activity cliff definition.
+        max_samples: Test-only cap. If set, deterministically keep the first
+            ``max_samples`` cleaned compounds BEFORE building MMP pairs (so the
+            SMILES->index map and mmp_pairs stay consistent). No-op when None or
+            >= dataset size. Used for local smoke tests only.
 
     Returns:
         dict with:
@@ -160,6 +216,22 @@ def load_chembl_qsar(
         raise ValueError(f"Unknown activity unit: {unit}")
 
     labels = -np.log10(activity_M)
+
+    # Deduplicate compounds (OPIG-19 / project InChIKey-dedup rule). Dablander's
+    # cleaned CSVs are usually unique, but duplicate molecules across train/test
+    # are a leakage vector, so dedup defensively here. Prefer InChIKey identity
+    # (collapses tautomer/stereo/formatting variants of the SAME molecule); fall
+    # back to exact-SMILES dedup when RDKit is unavailable (e.g. local smoke).
+    # Dedup runs BEFORE the smoke cap and BEFORE the MMP index map is built so
+    # the SMILES->index map stays consistent with mmp_pairs.
+    smiles, labels = _dedup_compounds(smiles, labels)
+
+    # Test-only row cap: keep the first max_samples cleaned compounds before
+    # MMP pairs are built so the SMILES->index map stays consistent.
+    if max_samples is not None and 0 < max_samples < len(smiles):
+        smiles = smiles[:max_samples]
+        labels = labels[:max_samples]
+        print(f"  [SMOKE] capped to first {max_samples} compounds")
 
     print(f"  {info['label']}: {len(smiles)} compounds, "
           f"pActivity range [{labels.min():.2f}, {labels.max():.2f}] "

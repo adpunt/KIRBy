@@ -39,9 +39,42 @@ from experiments._shared import (
     get_best_search_for_downstream,
 )
 from kirby.hybrid import create_hybrid, compute_feature_importance
+from kirby.find_best_hybrid import _predict_for_metric
 from kirby.importance.hybrid import (
     explain_hybrid, aggregate_importance_by_rep, format_explanation_summary,
 )
+
+
+def _reduce_shap_to_per_feature(shap_vals, n_features):
+    """Collapse a SHAP output to a 1-D mean-abs-importance per feature.
+
+    OTHER-29: downstream `explain_hybrid` / `aggregate_importance_by_rep`
+    index importances as a 1-D array of length n_features. But SHAP's shape
+    is task-dependent:
+      - regression / single-output: (n_samples, n_features)
+      - multiclass (shap>=0.40): a 3-D ndarray (n_samples, n_features, n_classes)
+      - older shap multiclass: a Python list of (n_samples, n_features) arrays
+    Without normalisation, binary/multiclass classification produces a
+    2-D (n_features, n_classes) importance array → explain_hybrid crashes on
+    float(importances[i]) (length-2 array) → SHAP silently marked 'fail' and
+    the per-rep SHAP breakdown is empty. Reduce all cases to 1-D here.
+    Returns None if the result can't be aligned to n_features.
+    """
+    arr = shap_vals
+    if isinstance(arr, list):
+        # list of per-class (n_samples, n_features) -> mean abs across classes
+        arr = np.mean([np.abs(sv) for sv in arr], axis=0)
+    arr = np.abs(np.asarray(arr))
+    # Mean over the sample axis (axis 0) first.
+    if arr.ndim >= 1:
+        arr = arr.mean(axis=0)
+    # arr is now either (n_features,) or (n_features, n_classes); collapse any
+    # trailing class axis by averaging.
+    while arr.ndim > 1:
+        arr = arr.mean(axis=-1)
+    if arr.shape[0] != n_features:
+        return None
+    return arr
 
 
 def run(data, config, output_dir, dataset_name, **kwargs):
@@ -126,7 +159,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for model_name, model_factory in models.items():
             m = model_factory()
             m.fit(X_train_s, y_train)
-            pred = m.predict(X_val_s)
+            # OTHER-29: use _predict_for_metric so a binary-AUROC metric is
+            # scored on class-1 probabilities, not hard labels (raw .predict
+            # gave a degraded AUROC on classification datasets like humanness).
+            pred = _predict_for_metric(m, X_val_s, metric_fn)
             score = float(metric_fn(y_val, pred))
             fold_model_scores[model_name] = score
 
@@ -154,18 +190,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 explainer = shap.KernelExplainer(best_model.predict, bg)
                 shap_vals = explainer.shap_values(X_val_s)
 
-            # For multi-output (classification), take mean abs across classes
-            if isinstance(shap_vals, list):
-                shap_vals = np.mean([np.abs(sv) for sv in shap_vals], axis=0)
-
-            # Mean absolute SHAP per feature
-            mean_abs_shap = np.mean(np.abs(shap_vals), axis=0)
-            shap_info = {
-                'mean_abs_shap': mean_abs_shap,
-                'model': best_model_name,
-                'n_val_samples': len(X_val_s),
-            }
-            all_shap_values.append(mean_abs_shap)
+            # Reduce to a 1-D mean-abs importance per hybrid feature, handling
+            # regression (2-D), multiclass-list, and multiclass-3-D-ndarray
+            # (shap>=0.40) shapes uniformly (OTHER-29).
+            n_feat = X_val_s.shape[1]
+            mean_abs_shap = _reduce_shap_to_per_feature(shap_vals, n_feat)
+            if mean_abs_shap is None:
+                print(f"    Fold {fold_idx}: SHAP shape could not be aligned "
+                      f"to {n_feat} features — skipping this fold's SHAP.")
+            else:
+                shap_info = {
+                    'mean_abs_shap': mean_abs_shap,
+                    'model': best_model_name,
+                    'n_val_samples': len(X_val_s),
+                }
+                all_shap_values.append(mean_abs_shap)
         except Exception as e:
             print(f"    Fold {fold_idx}: SHAP failed — {e}")
 

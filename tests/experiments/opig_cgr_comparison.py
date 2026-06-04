@@ -264,7 +264,10 @@ def evaluate_rep(X, labels, groups, model, n_folds):
         try:
             m = clone(model)
             m.fit(X_train, y_train)
-        except Exception:
+        except Exception as e:
+            # Log fold-fit failures (OPIG-18) instead of silently dropping.
+            print(f"      [fold fit failed: {type(model).__name__} "
+                  f"{type(e).__name__}: {e}]", flush=True)
             continue
 
         preds = m.predict(X_val)
@@ -420,6 +423,14 @@ def linear_cka(X, Y):
     """
     X = np.asarray(X, dtype=np.float64)
     Y = np.asarray(Y, dtype=np.float64)
+    # CKA is only defined for representations of the SAME samples in the SAME
+    # order. If a rep silently changed its row count (e.g. a generator dropped
+    # rows), the matmuls below would still produce a number — assert instead so
+    # a row-count drift fails loudly rather than returning a meaningless score
+    # (and 0.0, which is indistinguishable from "no similarity") (OPIG-23).
+    assert X.shape[0] == Y.shape[0], (
+        f"linear_cka: row-count mismatch X={X.shape[0]} vs Y={Y.shape[0]}; "
+        "reps must describe the same samples in the same order")
     X = X - X.mean(axis=0)
     Y = Y - Y.mean(axis=0)
 

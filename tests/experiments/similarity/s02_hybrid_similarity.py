@@ -76,10 +76,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             'dim': X.shape[1], 'sac_rho': sac_rep, 'violation_rate': viol_rep,
         }
 
-        # Weighted version
+        # Weighted version. Clamp importance to >=0 before passing: the helper
+        # applies sqrt(feature_weights) with no guard, so any signed importance
+        # (permutation / SHAP, which weight_methods may request) would inject
+        # NaN. lightgbm_gain is non-negative so this is a no-op there; the
+        # clamp matches every other similarity experiment (s04/s05/s06/s07).
         if importance is not None and rep_name in importance:
-            D_rep_w = compute_distance_matrix(X, feature_weights=importance[rep_name],
-                                              standardize=True)
+            D_rep_w = compute_distance_matrix(
+                X, feature_weights=np.maximum(importance[rep_name], 0),
+                standardize=True)
             sac_rep_w, _ = similarity_activity_correlation(D_rep_w, labels, n_sample, is_clf=is_classification)
             viol_rep_w = violation_rate(D_rep_w, labels, k=5, is_clf=is_classification)
             rep_result['sac_rho_weighted'] = sac_rep_w
@@ -124,8 +129,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     if importance is not None:
         w_concat = np.concatenate([importance[k] for k in sorted(reps.keys())])
-        D_concat_w = compute_distance_matrix(X_concat, feature_weights=w_concat,
-                                             standardize=True)
+        # Clamp to >=0 (sqrt-weighting in the helper has no guard; see above).
+        D_concat_w = compute_distance_matrix(
+            X_concat, feature_weights=np.maximum(w_concat, 0), standardize=True)
         sac_concat_w, _ = similarity_activity_correlation(D_concat_w, labels, n_sample, is_clf=is_classification)
         viol_concat_w = violation_rate(D_concat_w, labels, k=5, is_clf=is_classification)
         concat_result['sac_rho_weighted'] = sac_concat_w
@@ -211,9 +217,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             results['weight_methods'][wm] = {'error': str(e)}
             continue
 
-        # Hybrid weighted
-        D_weighted = compute_distance_matrix(X_hybrid, feature_weights=weights_flat,
-                                             standardize=True)
+        # Hybrid weighted. Clamp to >=0 (sqrt-weighting in the helper has no
+        # guard; wm may be a signed importance method).
+        D_weighted = compute_distance_matrix(
+            X_hybrid, feature_weights=np.maximum(weights_flat, 0), standardize=True)
         sac_weighted, _ = similarity_activity_correlation(D_weighted, labels, n_sample, is_clf=is_classification)
         viol_weighted = violation_rate(D_weighted, labels, k=5, is_clf=is_classification)
         sali_weighted = compute_sali(D_weighted, labels, is_clf=is_classification)

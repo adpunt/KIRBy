@@ -47,6 +47,23 @@ NEIGHBOR_ESTIMATORS = {
     'activity_cliff_aware', 'distance_weighted', 'hybrid',
 }
 
+# is_clf-aware estimators: the kNN/neighbour-based ones whose constructor
+# accepts is_clf (class-mismatch disagreement instead of a regression value
+# residual). On a CLASSIFICATION dataset ONLY these produce a meaningful noise
+# score (FIX 4f). Every other estimator in BASE_ESTIMATORS / TORCH_ESTIMATORS /
+# OPTIONAL_ESTIMATORS is model-based and regression-only — it fits a regressor
+# (or GP / NN / quantile / ngboost) on the integer class labels, which does not
+# crash but yields a meaningless number. NOTE this is a STRICT SUBSET of
+# NEIGHBOR_ESTIMATORS: 'hybrid' is in NEIGHBOR_ESTIMATORS (it uses kNN distance
+# metrics) but is NOT is_clf-aware — HybridNoiseEstimator averages a
+# CrossValResidualEstimator (a regressor on the labels) and exposes no is_clf
+# branch — so it is correctly skipped on classification.
+IS_CLF_AWARE_ESTIMATORS = {
+    'neighbor_residual', 'local_variance_ratio',
+    'activity_cliff_aware', 'distance_weighted',
+    'distance_weighted_residual',
+}
+
 # All estimators to try (torch-dependent ones are try-imported).
 # leave_one_out removed (2026-05-26 audit decision): it required N model
 # fits per use, dominating runtime on datasets above ~500 samples while
@@ -306,10 +323,20 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     sample_X = next(iter(reps.values()))
 
     available_estimators = _resolve_estimators()
-    # GP is regression-only
+    # FIX 4f: on a classification dataset, the model-based regression estimators
+    # (cross_val, ensemble, gaussian_process, conformal, bayesian_rf, hybrid,
+    # ngboost, and the torch heteroscedastic_nn / deep_ensemble /
+    # quantile_regression) fit a regressor on integer class labels — no crash
+    # but a meaningless noise score. Keep ONLY the kNN/is_clf-aware estimators
+    # (IS_CLF_AWARE_ESTIMATORS), which _run_estimator_grid passes is_clf=True so
+    # they score class disagreement. Previously only gaussian_process was
+    # dropped, leaving the rest to emit junk. Record the dropped names + reason.
+    skipped_estimators = []
     if is_clf:
+        skipped_estimators = [e for e in available_estimators
+                              if e not in IS_CLF_AWARE_ESTIMATORS]
         available_estimators = [e for e in available_estimators
-                                if e != 'gaussian_process']
+                                if e in IS_CLF_AWARE_ESTIMATORS]
 
     # Resolve base rep name once (same logic as _build_estimation_spaces)
     base_rep_name = None
@@ -323,6 +350,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Dataset: {dataset_name} ({n_samples} samples)")
     print(f"  Metric: {metric_name}")
     print(f"  Estimators: {len(available_estimators)}")
+    if skipped_estimators:
+        print(f"  Skipped (regression-only on clf): {skipped_estimators}")
     print(f"  Alphas: {ALPHAS}")
     print(f"  Sigmas: {sigmas}")
     print(f"  Folds: {n_folds}")
@@ -352,6 +381,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'metric': metric_name,
         'lower_is_better': lower_is_better,
         'estimators': available_estimators,
+        # FIX 4f: regression-only estimators dropped on classification, with the
+        # explicit reason, so empty cells aren't confused with failed runs.
+        'skipped_estimators': {e: 'skipped_regression_estimator_on_clf'
+                               for e in skipped_estimators},
         'alphas': ALPHAS,
         'sigmas': sigmas,
         'per_sigma': {},

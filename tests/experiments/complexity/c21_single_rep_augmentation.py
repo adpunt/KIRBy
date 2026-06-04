@@ -249,8 +249,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                              'final_dim': base_dim})
 
                 base_mean = float(np.nanmean(scores_base))
-                aug_mean = float(np.nanmean(scores_aug)) if not is_baseline else float('nan')
-                delta = (aug_mean - base_mean) if not is_baseline else 0.0
+                # BRK-7/8: when the augmentation search returned no winning
+                # config (bp is None), every augmented fold is NaN. Skip cleanly
+                # with an explicit flag instead of emitting a bare NaN aug_mean
+                # (which nan-saturated all the powered c21 results — VEGF/Ang2/
+                # abcov_kd). A real all-NaN fold set (e.g. every fold raised) is
+                # treated the same: flagged, not silently averaged.
+                if is_baseline:
+                    aug_status = 'baseline'
+                elif bp is None:
+                    aug_status = 'search_no_config'
+                elif np.all(np.isnan(scores_aug)):
+                    aug_status = 'all_folds_failed'
+                else:
+                    aug_status = 'ok'
+
+                if aug_status in ('baseline', 'search_no_config', 'all_folds_failed'):
+                    aug_mean = float('nan')
+                    delta = 0.0 if is_baseline else float('nan')
+                else:
+                    aug_mean = float(np.nanmean(scores_aug))
+                    delta = aug_mean - base_mean
 
                 # Aggregate aug info across folds
                 all_kept = set()
@@ -271,13 +290,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     'aug_std': float(np.nanstd(scores_aug)) if not is_baseline else 0.0,
                     'aug_scores': scores_aug,
                     'delta': delta,
+                    'aug_status': aug_status,
                     # Sign-normalise: positive == improvement regardless of
                     # metric direction.  Without this, RMSE/MAE wins are
                     # stored as negative relative_improvement and any
                     # downstream filter on positive sign rejects them.
                     'relative_improvement': (
                         (-1 if lower_is_better else 1) * delta / abs(base_mean)
-                        if base_mean != 0 else 0.0),
+                        if (base_mean != 0 and not np.isnan(delta)) else float('nan')),
                     'kept_augmentations': sorted(all_kept),
                     'mean_features_added': float(np.mean(total_added)),
                     'fold_aug_info': fold_aug_info,
@@ -287,26 +307,44 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 rep_results.append(result)
 
                 sign = -1 if lower_is_better else 1
-                status = "+" if sign * delta > 0 else "-" if sign * delta < 0 else "="
-                print(f"    {cond_name}/{model_name}: base={base_mean:.4f}  aug={aug_mean:.4f}  "
-                      f"delta={sign * delta:+.4f} [{status}]  "
-                  f"kept={sorted(all_kept)}  added={np.mean(total_added):.1f}")
+                if aug_status not in ('ok', 'baseline'):
+                    print(f"    {cond_name}/{model_name}: base={base_mean:.4f}  "
+                          f"SKIPPED ({aug_status})")
+                else:
+                    status = "+" if sign * delta > 0 else "-" if sign * delta < 0 else "="
+                    print(f"    {cond_name}/{model_name}: base={base_mean:.4f}  aug={aug_mean:.4f}  "
+                          f"delta={sign * delta:+.4f} [{status}]  "
+                      f"kept={sorted(all_kept)}  added={np.mean(total_added):.1f}")
 
     # ── Summary ──
     print(f"\n{'=' * 70}")
     print("SUMMARY")
     print(f"{'=' * 70}")
 
-    # Exclude baseline condition from aug analysis
-    aug_results = [r for r in rep_results if r['condition'] != 'A_baseline']
+    # Exclude baseline condition from aug analysis. BRK-7/8: only aggregate
+    # over results that were actually evaluable (aug_status == 'ok'); skipped
+    # ones (search returned no config / all folds failed) carry a NaN delta and
+    # would poison the mean / argmax. Count them separately so a NaN-saturated
+    # run reads as "N skipped" rather than a meaningless NaN mean_delta.
+    aug_results_all = [r for r in rep_results if r['condition'] != 'A_baseline']
+    aug_results = [r for r in aug_results_all if r.get('aug_status') == 'ok']
+    n_skipped = len(aug_results_all) - len(aug_results)
     n_tests = len(aug_results)
+    improved = hurt = 0
+    mean_delta = 0.0
+    if n_skipped:
+        skip_reasons = {}
+        for r in aug_results_all:
+            if r.get('aug_status') != 'ok':
+                skip_reasons[r['aug_status']] = skip_reasons.get(r['aug_status'], 0) + 1
+        print(f"  Skipped (not evaluable): {n_skipped} ({skip_reasons})")
     if n_tests > 0:
         sign = -1 if lower_is_better else 1
         improved = sum(1 for r in aug_results if sign * r['delta'] > 0)
         hurt = sum(1 for r in aug_results if sign * r['delta'] < 0)
         mean_delta = float(np.mean([sign * r['delta'] for r in aug_results]))
         all_conditions = sorted(set(r['condition'] for r in aug_results))
-        print(f"  Total tests: {n_tests} "
+        print(f"  Total evaluable tests: {n_tests} "
               f"({len(base_reps_available)} reps x {len(models)} models x "
               f"{len(all_conditions)} conditions)")
         print(f"  Augmentation improved: {improved}/{n_tests}")
@@ -323,6 +361,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                   f"mean={cond_mean:+.4f}, "
                   f"best={best_c['base_rep']}/{best_c['model']} "
                   f"delta={sign * best_c['delta']:+.4f}")
+    else:
+        print(f"  No evaluable augmentation results "
+              f"(all {len(aug_results_all)} non-baseline tests were skipped).")
 
     return convert_numpy({
         'metric': metric_name,
@@ -334,10 +375,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'aug_groups': {k: v for k, v in aug_group_defs.items()},
         'rep_results': rep_results,
         'summary': {
-            'n_tests': n_tests,
+            'n_tests': n_tests,          # evaluable (aug_status == 'ok') only
+            'n_skipped': n_skipped,       # search_no_config / all_folds_failed
             'improved': improved if n_tests > 0 else 0,
             'hurt': hurt if n_tests > 0 else 0,
             'mean_delta': mean_delta if n_tests > 0 else 0.0,
+            # When every non-baseline test was skipped the experiment produced
+            # no augmentation signal — flag it so a NaN-saturated run is not
+            # mistaken for a "no improvement" result.
+            'all_skipped': (n_tests == 0 and n_skipped > 0),
         },
     })
 

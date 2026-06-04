@@ -129,11 +129,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for train_idx, val_idx in splitter.split(sample_X, labels, groups=groups) if use_groups else splitter.split(sample_X, labels):
             y_train, y_val = labels[train_idx], labels[val_idx]
 
-            # Per-fold hybrid using search blueprint
+            # Per-fold hybrid using search blueprint.
+            # NOTE: use a distinct comprehension variable (aug_k) — NOT `k` —
+            # so the outer `for k in k_values:` loop variable is never at risk of
+            # being shadowed (Python-3 comprehensions are scoped, but a bare
+            # `for k,...` would leak; keep this unambiguous so every downstream
+            # min(k, len(y_train)-1) uses the integer neighbour count, never a key).
             train_reps_h = {name: rep[train_idx] for name, rep in reps.items()}
             val_reps_h = {name: rep[val_idx] for name, rep in reps.items()}
-            aug_tr = {k: v[train_idx] for k, v in augmentations.items()} if augmentations else None
-            aug_va = {k: v[val_idx] for k, v in augmentations.items()} if augmentations else None
+            aug_tr = {aug_k: v[train_idx] for aug_k, v in augmentations.items()} if augmentations else None
+            aug_va = {aug_k: v[val_idx] for aug_k, v in augmentations.items()} if augmentations else None
             try:
                 X_tr_h, X_va_h, feat_info = build_fold_hybrid(
                     train_reps_h, val_reps_h, y_train, bp,

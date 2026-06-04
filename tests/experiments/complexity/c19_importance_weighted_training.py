@@ -270,7 +270,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     results['summary'] = {
         'condition_wins': condition_wins,
-        'best_overall': max(condition_wins, key=condition_wins.get),
+        # CXA-16/OTHER-14: renamed from 'best_overall' — that name collides with
+        # the removed internal-evaluator concept and was easy to misread. This is
+        # simply the weighting condition that won the most (model x space) cells.
+        'most_winning_condition': max(condition_wins, key=condition_wins.get),
     }
     print(f"\n  Condition wins: {condition_wins}")
 

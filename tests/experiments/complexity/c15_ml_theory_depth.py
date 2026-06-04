@@ -632,6 +632,13 @@ def _eval_at_budget(reps, labels, groups, n_folds, mode, metric_fn,
     If `prefetched_search` is provided, pull blueprint for `model_name`
     from that result (c15c fast-search path). Otherwise fall back to the
     pool helper (c15a/c15b/c15d use this path).
+
+    REGRESSION-ONLY: the RF/Ridge regressors below are correct because
+    run() gates the whole experiment to regression (see the regression
+    guard + comment at the top of run()). Ridge is the double-descent
+    interpolation probe (Bartlett/Belkin), not a sensitivity comparator.
+    Never call this on classification data — clf metrics would be applied
+    to continuous regressor outputs.
     """
     from sklearn.ensemble import RandomForestRegressor
     from sklearn.linear_model import Ridge

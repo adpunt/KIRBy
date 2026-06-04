@@ -312,6 +312,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # hybrid_eval cache, keyed by (subset_hash, alloc, imp, eval, budget,
     # fold, model, aug) — re-runs hit cache.
     search_per_model_top_rep = {}  # model_name -> SearchResult
+    # Budgets the main search already evaluated for every model, so a per-model
+    # top-rep-dim pass at one of these would be redundant. This is the explicit
+    # full grid (full_budgets) PLUS len(labels): find_best_hybrid always appends
+    # n_samples as an at-n boundary point, so budget==n is already covered. (Not
+    # related to the allow_budget_exceeds_n path — that lets a SINGLE budget D
+    # exceed n; this set just avoids re-running budgets the main grid covered.)
     skipped_already_tested = set(full_budgets) | {len(labels)}
     # GP and KNN are numerically unreliable at top_rep_dim budgets (≥1280D
     # ESM-style reps): GP's RBF kernel matrix degenerates and KNN hits curse

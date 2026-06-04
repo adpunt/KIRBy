@@ -29,6 +29,7 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.model_selection import cross_val_predict
 from sklearn.metrics import (
     matthews_corrcoef, balanced_accuracy_score, roc_auc_score, f1_score,
+    accuracy_score,
 )
 
 from experiments._shared import (
@@ -394,6 +395,14 @@ def cluster_training_only(train_fluid_df, k=5, smooth_factor=0.05, seed=42):
         mask = smoothed_labels == c
         if mask.any():
             kmeans_model.cluster_centers_[c] = X_train[mask].mean(axis=0)
+    # FED-29: overriding cluster_centers_ leaves labels_/inertia_ from the raw
+    # K-Means fit, which no longer match the smoothed centroids. Re-derive both
+    # from the overridden centroids so any downstream read of .labels_/.inertia_
+    # is consistent (fed04 only calls .predict(), but keep the object coherent).
+    new_labels = kmeans_model.predict(X_train)
+    kmeans_model.labels_ = new_labels
+    _dist_sq = ((X_train - kmeans_model.cluster_centers_[new_labels]) ** 2).sum()
+    kmeans_model.inertia_ = float(_dist_sq)
 
     return silo_indices, cluster_data, kmeans_model
 
@@ -1146,6 +1155,9 @@ def compute_clf_metrics(y_true, y_pred, y_prob=None):
     """Compute classification metrics for federated experiment evaluation.
 
     Returns dict with MCC, BAC, AUROC, F1 (binary and macro-F1 for multiclass).
+    Also includes 'accuracy' and 'f1_weighted' (FED-26) — the registered
+    primary metrics for several antibody-classification datasets, so a fed
+    experiment routing such a dataset through here reports the right metric.
     `y_prob` may be a 1-D positive-class probability (binary) or the full
     (n, n_classes) probability matrix (multiclass).
     """
@@ -1155,6 +1167,9 @@ def compute_clf_metrics(y_true, y_pred, y_prob=None):
         'mcc': float(matthews_corrcoef(y_true, y_pred)),
         'bac': float(balanced_accuracy_score(y_true, y_pred)),
         'f1': float(f1_score(y_true, y_pred, average=f1_avg, zero_division=0)),
+        'accuracy': float(accuracy_score(y_true, y_pred)),
+        'f1_weighted': float(
+            f1_score(y_true, y_pred, average='weighted', zero_division=0)),
     }
     if y_prob is not None:
         try:
@@ -1803,6 +1818,9 @@ def cluster_antibody_silos(rep_dict, k=3, seed=42, cluster_rep='esm2'):
     from sklearn.decomposition import PCA
     from sklearn.preprocessing import StandardScaler
 
+    if not rep_dict:
+        raise ValueError("cluster_antibody_silos: rep_dict is empty")
+
     # Find clustering rep
     if cluster_rep in rep_dict:
         X = rep_dict[cluster_rep]
@@ -1814,9 +1832,19 @@ def cluster_antibody_silos(rep_dict, k=3, seed=42, cluster_rep='esm2'):
                 cluster_rep = fallback
                 break
         else:
-            # Last resort: concatenate all reps
-            X = np.hstack([rep_dict[r] for r in sorted(rep_dict.keys())])
-            cluster_rep = 'concat'
+            # FED-28: previously this hstacked EVERY rep ('concat'), which is a
+            # memory bomb for high-dim antibody embeddings (ESM2 1280D × ablang2
+            # × prot_t5 ...) AND silently changes the clustering geometry vs the
+            # single-rep path. Instead pick the single highest-dimensional
+            # available rep deterministically (PCA below reduces it anyway).
+            cluster_rep = max(sorted(rep_dict.keys()),
+                              key=lambda r: rep_dict[r].shape[1])
+            X = rep_dict[cluster_rep]
+            warnings.warn(
+                f"cluster_antibody_silos: none of the preferred reps "
+                f"(esm2/esmc/prot_t5/ablang2/antiberty) present; clustering on "
+                f"single highest-dim rep '{cluster_rep}' "
+                f"({X.shape[1]}D) instead of concatenating all reps.")
 
     # PCA reduction if high-dimensional
     scaler = StandardScaler()

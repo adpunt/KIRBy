@@ -52,7 +52,8 @@ from sklearn.metrics import (
     r2_score,
     roc_auc_score,
 )
-from sklearn.model_selection import GroupKFold, GroupShuffleSplit, KFold, ShuffleSplit
+from sklearn.model_selection import (GroupKFold, GroupShuffleSplit, KFold,
+                                     ShuffleSplit, StratifiedGroupKFold)
 from sklearn.preprocessing import StandardScaler
 
 warnings.filterwarnings('ignore')
@@ -177,7 +178,21 @@ def _cache_stats_summary() -> str:
 def _load_cache_with_meta(
     path: Path,
     expected_meta: Dict[str, Any],
-    ignore_keys: Tuple[str, ...] = ('code_timestamp',),
+    # rep_hashes/aug_hashes/rep_hash excluded (2026-06-04 fix): neural/transformer
+    # reps (ESM/prot_t5/geneformer/DNA-LMs/chembert etc.) are NOT bit-reproducible
+    # across CPU thread counts / GPU / library versions, so their value-hash drifts
+    # run-to-run and wrongly rejects valid caches (the infinite-recompute churn on
+    # molecular jobs). The SEARCH meta uses the plural rep_hashes/aug_hashes; the
+    # per-(rep,model) BASELINE meta uses the singular rep_hash (set at line ~2633) —
+    # all three are the same non-reproducible content hash, so all three are ignored
+    # here or the baseline layer would keep churning even after the search layer
+    # stopped. Cache identity stays fully guarded by rep_names + rep_shape(s) +
+    # n_samples + seed + labels_hash + groups_hash + budgets + tier + strategy +
+    # model/metric/fold config (see _make_search_meta / _make_baseline_meta). A genuine
+    # rep change that alters dimensionality is still caught by rep_shape(s); a target
+    # change is still caught by labels_hash + n_samples.
+    ignore_keys: Tuple[str, ...] = (
+        'code_timestamp', 'rep_hashes', 'aug_hashes', 'rep_hash'),
     *,
     kind: str = 'search',
     verbose: bool = False,
@@ -1853,20 +1868,37 @@ def _compute_tail_prunes(
 # INTERNAL EVALUATION FUNCTIONS
 # =============================================================================
 
-def _make_cv_splitter(groups: Optional[np.ndarray], n_folds: int, seed: int, cv_splitter=None):
-    """Return (splitter, use_groups) depending on whether groups are provided."""
+def _make_cv_splitter(groups: Optional[np.ndarray], n_folds: int, seed: int,
+                      cv_splitter=None, task_type: Optional[str] = None):
+    """Return (splitter, use_groups).
+
+    Group-aware always. For classification (ISS-84) the full-fold case uses
+    StratifiedGroupKFold so classes stay balanced across folds WHILE groups are
+    respected (TCGA clf folds were previously unstratified → imbalanced folds →
+    noisy clf metrics). NEVER falls back to a random k-fold split (the
+    non-negotiable no-random-splits rule): a groupless / single-group request
+    for k-fold RAISES so the caller fixes the upstream grouping instead of
+    silently random-splitting. task_type defaults to None → GroupKFold
+    (backward-compatible for the ~callers that don't thread it).
+    """
     if cv_splitter is not None:
         return cv_splitter, False
+    _is_clf = (task_type == 'classification')
     if n_folds == 1:
-        # Single 80/20 split (intermediary mode)
+        # Single 80/20 split (intermediary quick-check mode, NOT production CV)
         if groups is not None:
             return GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=seed), True
         return ShuffleSplit(n_splits=1, test_size=0.2, random_state=seed), False
     if groups is not None:
         n_unique = len(np.unique(groups))
         if n_unique >= n_folds:
+            if _is_clf:
+                return StratifiedGroupKFold(
+                    n_splits=n_folds, shuffle=True, random_state=seed), True
             return GroupKFold(n_splits=n_folds), True
         # Not enough groups for requested n_folds — reduce folds to match groups
+        # (group-aware; stratification with very few groups is unreliable, so the
+        # reduced case stays GroupKFold for both task types).
         if n_unique >= 2:
             import warnings
             warnings.warn(
@@ -1875,14 +1907,15 @@ def _make_cv_splitter(groups: Optional[np.ndarray], n_folds: int, seed: int, cv_
                 stacklevel=2,
             )
             return GroupKFold(n_splits=n_unique), True
-        # Only 1 group — groups are meaningless, warn and fall back
-        import warnings
-        warnings.warn(
-            f"Only 1 unique group — GroupKFold impossible. "
-            f"Falling back to KFold({n_folds}).",
-            stacklevel=2,
-        )
-    return KFold(n_splits=n_folds, shuffle=True, random_state=seed), False
+    # groups is None, or only 1 unique group → a leak-free split is impossible.
+    # NO random fallback (forbidden). Raise so the upstream grouping is fixed.
+    raise ValueError(
+        "_make_cv_splitter: cannot build a group-aware "
+        f"{n_folds}-fold split — "
+        f"{'groups is None' if groups is None else 'only 1 unique group'}. "
+        "Supply scaffold/site/identity/complex groups. No random-split "
+        "fallback (see feedback_no_random_splits)."
+    )
 
 
 def _precompute_fold_reps(
@@ -1896,6 +1929,7 @@ def _precompute_fold_reps(
     dataset_name: Optional[str] = None,
     factory_ids: Optional[Dict[str, str]] = None,
     cv_splitter_id: Optional[str] = None,
+    task_type: Optional[str] = None,
 ) -> Tuple[Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]]], List[Tuple[np.ndarray, np.ndarray]]]:
     """Pre-compute fine-tuned representations for each fold.
 
@@ -1934,7 +1968,8 @@ def _precompute_fold_reps(
               f"({len(rep_factories)} factories × {n_folds} folds)...")
 
     # Materialize fold splits (cached when dataset_name is supplied)
-    splitter, use_groups = _make_cv_splitter(groups, n_folds, seed, cv_splitter=cv_splitter)
+    splitter, use_groups = _make_cv_splitter(groups, n_folds, seed,
+                                             cv_splitter=cv_splitter, task_type=task_type)
     precomputed_folds = _load_or_compute_folds(
         dataset_name=dataset_name, splitter=splitter, use_groups=use_groups,
         labels=labels, groups=groups, n_folds=n_folds, seed=seed,
@@ -2108,7 +2143,8 @@ def _evaluate_single(
     dataset has >= 1000 samples else 200. This is a standalone-eval-only
     safeguard — hybrid search itself is unaffected.
     """
-    splitter, use_groups = _make_cv_splitter(groups, n_folds, seed, cv_splitter=cv_splitter)
+    splitter, use_groups = _make_cv_splitter(groups, n_folds, seed,
+                                             cv_splitter=cv_splitter, task_type=task_type)
     split_args = (X, y, groups) if use_groups else (X, y)
     scores = []
     sec_scores = {name: [] for name in (secondary_metric_fns or {})}
@@ -3058,6 +3094,27 @@ def _run_search(
                                 model_name, model, eval_name,
                             ))
 
+    # ── Optional expensive-first ordering (opt-in; default OFF) ──
+    # When KIRBY_EXPENSIVE_FIRST / KIRBY_PRECOMPUTE_EXPENSIVE_FIRST is set, sort
+    # the flat config list so the costliest cells (slow models, largest budgets)
+    # run FIRST. This is the inner-loop complement to the precompute reverse flag
+    # (which only reorders the OUTER condition list). On a wall-clock TIMEOUT it
+    # makes the cheap, fast-to-recompute cells the casualties instead of the
+    # gp/svm/large-budget cells you most want to keep. RESULT-NEUTRAL on a
+    # complete run: the best config is chosen by max score regardless of
+    # iteration order, and checkpoint/resume keys on config identity not index.
+    # Default (no env var) leaves `configs` in its original build order.
+    if os.environ.get('KIRBY_EXPENSIVE_FIRST') or \
+            os.environ.get('KIRBY_PRECOMPUTE_EXPENSIVE_FIRST'):
+        # Lower rank == more expensive == sorted earlier. Budget DESC within a model.
+        _MODEL_COST_RANK = {
+            'gp': 0, 'svm': 1, 'cnn': 2, 'dnn': 3, 'bnn': 3, 'mlp': 4,
+            'catboost': 5, 'lightgbm': 6, 'xgboost': 7, 'rf': 8,
+            'knn': 9, 'ridge': 10,
+        }
+        # config tuple = (rep_set, rep_set_name, alloc, bgt, imp, model_name, model, eval_name)
+        configs.sort(key=lambda c: (_MODEL_COST_RANK.get(c[5], 5), -c[3]))
+
     # ── Evaluate configs sequentially ──
     # sklearn models use n_jobs=-1 internally for C-level parallelism.
     # Python-level threading on top causes CPU oversubscription and GIL contention.
@@ -3949,6 +4006,27 @@ def find_best_hybrid(
     if len(labels) != n_samples:
         raise ValueError(f"labels length ({len(labels)}) != n_samples ({n_samples})")
 
+    # --- Normalize augmentation_strategy when there are no augmentations ---
+    # CACHE-2: the parameter default is 'uncapped', but with augmentations=None
+    # the augmentation logic in hybrid.create_hybrid never fires (it is gated on
+    # `augmentations is not None` at hybrid.py:3417/3741), so 'uncapped' and
+    # 'none' produce bit-identical search results. The strategy string IS part
+    # of the cache filename / skip-set / meta, however, so a no-aug caller that
+    # left the default would write a no-aug result into the same `*__uncapped`
+    # filename space as a real uncapped run with different aug_names — meta
+    # mismatch → permanent STALE flip-flop (the 9255-stale-hybrid_evals churn
+    # fixed caller-side in a13e0f4). Collapsing the strategy to 'none' here
+    # closes that trap for ALL callers and matches what precompute already
+    # passes for its no-aug conditions (precompute_hybrids.py uses strat='none').
+    # Behaviour-preserving: only the cache key changes; scores are unaffected
+    # because no augmentation is ever applied when augmentations is falsy.
+    if not augmentations and augmentation_strategy != 'none':
+        if verbose:
+            print(f"  No augmentations supplied — normalizing "
+                  f"augmentation_strategy={augmentation_strategy!r} -> 'none' "
+                  f"for cache key.")
+        augmentation_strategy = 'none'
+
     # --- Budget filter (before cache key) ---
     # Rule: drop any caller-supplied budget > n_samples. If anything was
     # dropped, also append n_samples as an at-n boundary test point so
@@ -4225,6 +4303,7 @@ def find_best_hybrid(
             dataset_name=dataset_name,
             factory_ids=_factory_ids,
             cv_splitter_id=cv_splitter_id,
+            task_type=task_type,
         )
     else:
         fold_reps = None
@@ -4587,9 +4666,11 @@ def get_best_hybrid(
     import json as _json
 
     if registry_path is None:
-        cache_root = Path(os.environ.get(
-            'KIRBY_CACHE_DIR', str(Path.home() / '.cache' / 'kirby')))
-        reg_path = cache_root / 'hybrid_registry.json'
+        # PCB-15: use the single _cache_base() helper instead of re-reading
+        # KIRBY_CACHE_DIR inline, so this site can never drift from the rest
+        # of the module's cache-root resolution. Behaviour-identical (same
+        # env var, same ~/.cache/kirby default).
+        reg_path = _cache_base() / 'hybrid_registry.json'
     else:
         reg_path = Path(registry_path)
 

@@ -119,7 +119,16 @@ def run_all(dataset_name: str, output_dir: str,
     """
     if config is None:
         from kirby.find_best_hybrid import SPEED_TIERS
-        from experiments._shared import SCREENING_BUDGETS
+        # Production precompute uses FULL_BUDGETS (SCREENING_BUDGETS was
+        # test-only). FULL_BUDGETS = [10,25,50,100,250,500,1000,2000] CONTAINS
+        # the hybrid budgets n10 requests ([25,100,250]); SCREENING_BUDGETS =
+        # [50,500,1000,2000] does not, so n10's strict budget guard skipped all
+        # three and the hybrid-vs-base comparison (n10's whole point) came back
+        # silently empty. Both the in-memory precompute below and the SLURM
+        # disk cache (tests/precompute_hybrids.py, speed='full') already build
+        # FULL_BUDGETS, so this only makes config['budgets'] truthful and keeps
+        # n10's requested hybrid budgets reachable.
+        from experiments._shared import FULL_BUDGETS
         tier = SPEED_TIERS['full']
         config = {
             'n_splits': tier['n_folds'],
@@ -127,7 +136,7 @@ def run_all(dataset_name: str, output_dir: str,
             'allocations': tier['allocation_methods'],
             'importance_methods': tier['importance_methods'],
             'internal_evaluators': INTERNAL_EVALUATORS,
-            'budgets': SCREENING_BUDGETS,
+            'budgets': FULL_BUDGETS,
             'models': DOWNSTREAM_MODELS_NOISE,
         }
     if experiments is None:

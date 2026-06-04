@@ -57,12 +57,9 @@ from experiments._shared import (
     load_data, get_config, create_experiment_parser,
     save_experiment_results, make_structured_output, convert_numpy,
     get_model_factories, get_domain_metric, cv_split,
-    create_hybrid, apply_feature_selection,
-    evaluate_single_rep_cv, build_fold_hybrid,
-    INTERNAL_EVALUATORS, SCREENING_BUDGETS, FULL_BUDGETS,
+    build_fold_hybrid,
     get_best_search_for_downstream,
 )
-from kirby.find_best_hybrid import find_best_hybrid
 
 
 # =============================================================================

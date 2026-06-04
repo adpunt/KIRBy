@@ -31,7 +31,9 @@ from sklearn.preprocessing import StandardScaler  # noqa: E402
 from experiments.noise.n12_importance_weighted_distance import (  # noqa: E402
     _weight_features, _inject_noise as n12_inject, _run_condition,
 )
+from experiments.noise import n08_estimation_survey as n08  # noqa: E402
 from experiments.noise.n08_estimation_survey import _make_estimator  # noqa: E402
+from experiments.noise import n11_estimation_remediation_grid as n11  # noqa: E402
 from experiments.noise.n11_estimation_remediation_grid import (  # noqa: E402
     _run_estimator_grid,
 )
@@ -214,6 +216,65 @@ def test_n11_run_estimator_grid():
           '_error' not in rc)
 
 
+# ---------------------------------------------------------------------------
+# FIX 4f: on classification, n08 / n11 must SKIP the model-based regression
+# estimators (they fit a regressor on integer class labels = meaningless) and
+# KEEP only the kNN/is_clf-aware ones. Verify the skip partition is correct,
+# that 'hybrid'/'hybrid_noise' is in the skip set (its cross-val component is a
+# regressor with no is_clf branch), and that the kept estimators genuinely
+# accept is_clf while the skipped model-based ones do not.
+# ---------------------------------------------------------------------------
+def test_fix4f_clf_skip_partition():
+    print("FIX 4f clf skip partition (n08 + n11):")
+
+    # n08: every enumerated estimator that is NOT is_clf-aware is regression-only
+    # and would be skipped on clf. The kept set must be exactly the kNN ones.
+    n08_all = (list(n08.ESTIMATORS) + list(n08.TORCH_ESTIMATORS)
+               + list(n08.OPTIONAL_ESTIMATORS))
+    n08_kept = [e for e in n08_all if e in n08.IS_CLF_AWARE_ESTIMATORS]
+    n08_skip = [e for e in n08_all if e not in n08.IS_CLF_AWARE_ESTIMATORS]
+    check('n08 keeps exactly the kNN/is_clf-aware estimators on clf',
+          set(n08_kept) == {'neighbor_residual', 'local_variance_ratio',
+                            'distance_weighted_residual', 'activity_cliff_aware'},
+          f'kept={n08_kept}')
+    check('n08 skips hybrid_noise + all model-based on clf',
+          {'hybrid_noise', 'cross_val_residual', 'ensemble_disagreement',
+           'leave_one_out', 'gaussian_process', 'conformal',
+           'bayesian_rf'}.issubset(set(n08_skip)),
+          f'skip={n08_skip}')
+
+    # n11: same partition over BASE + TORCH + OPTIONAL. 'hybrid' (short name) is
+    # in NEIGHBOR_ESTIMATORS but must STILL be skipped (not is_clf-aware).
+    n11_all = (list(n11.BASE_ESTIMATORS) + list(n11.TORCH_ESTIMATORS)
+               + list(n11.OPTIONAL_ESTIMATORS))
+    n11_kept = [e for e in n11_all if e in n11.IS_CLF_AWARE_ESTIMATORS]
+    n11_skip = [e for e in n11_all if e not in n11.IS_CLF_AWARE_ESTIMATORS]
+    check('n11 keeps exactly the kNN/is_clf-aware estimators on clf',
+          set(n11_kept) == {'neighbor_residual', 'local_variance_ratio',
+                            'activity_cliff_aware', 'distance_weighted'},
+          f'kept={n11_kept}')
+    check("n11 skips 'hybrid' even though it's in NEIGHBOR_ESTIMATORS",
+          'hybrid' in n11_skip and 'hybrid' in n11.NEIGHBOR_ESTIMATORS)
+    check('n11 skips cross_val/ensemble/gaussian_process/conformal/bayesian_rf',
+          {'cross_val', 'ensemble', 'gaussian_process', 'conformal',
+           'bayesian_rf'}.issubset(set(n11_skip)),
+          f'skip={n11_skip}')
+
+    # The kept estimators must actually accept is_clf in the library; the
+    # skipped model-based ones must NOT (that's why they can't run clf-aware).
+    for e in ('neighbor_residual', 'local_variance_ratio',
+              'distance_weighted', 'activity_cliff_aware'):
+        est = get_noise_estimator(e)
+        params = inspect.signature(type(est).__init__).parameters
+        check(f'kept estimator "{e}" accepts is_clf', 'is_clf' in params)
+    for e in ('cross_val', 'ensemble', 'hybrid', 'gaussian_process',
+              'conformal', 'bayesian_rf'):
+        est = get_noise_estimator(e)
+        params = inspect.signature(type(est).__init__).parameters
+        check(f'skipped estimator "{e}" has NO is_clf (regression-only)',
+              'is_clf' not in params)
+
+
 def main():
     print("=" * 60)
     print("FAST SMOKE: n08 / n11 / n12 helpers")
@@ -225,6 +286,7 @@ def main():
     test_run_condition_populates(is_clf=False)
     test_run_condition_populates(is_clf=True)
     test_n11_run_estimator_grid()
+    test_fix4f_clf_skip_partition()
     print("=" * 60)
     if FAILS:
         print(f"RESULT: {len(FAILS)} FAILURES: {FAILS}")

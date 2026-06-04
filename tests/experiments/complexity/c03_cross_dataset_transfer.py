@@ -91,8 +91,13 @@ def run(datasets, config, output_dir, dataset_name=None, **kwargs):
             }
 
             # Distance-tier pool helper: picks best across
-            # (general_distance, top_distance) x (none, uncapped) for SVM (the
-            # eval that best matches the SVR downstream); falls back to RF.
+            # (general_distance, top_distance) x (none, uncapped). We request
+            # downstream_model='svm' as a PROXY blueprint for the two novel
+            # regressors evaluated below (SVR + ElasticNet): both are linear/
+            # kernel models whose feature-budget preference is closest to the
+            # SVM evaluator's, and neither is a precompute downstream model in
+            # its own right (so no dedicated cache exists). Falls back to RF if
+            # the SVM-keyed pool entry is missing.
             search_result, meta = get_best_search_for_downstream(
                 data['reps'], data['labels'], data['groups'],
                 downstream_model='svm', budget=None,

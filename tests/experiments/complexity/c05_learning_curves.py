@@ -66,7 +66,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     last_search = None
     results = {'sample_sizes': sample_sizes, 'budgets': sweep_budgets,
-                'models': {}, 'search_speed': search_speed}
+                'models': {}, 'search_speed': search_speed,
+                # FIX 4d: explicit log of (n, model) full-data-blueprint
+                # second-pass points that had too few scaffold groups for the
+                # requested fold count. cv_split raises (no random-split
+                # fallback) on groups < fold count, so rather than let that
+                # propagate or be swallowed into an empty score we reduce folds
+                # to the available groups (min 2) or record a skip here.
+                'skipped_insufficient_groups': []}
 
     # Initialize per-model result structure
     for model_name in model_names:
@@ -123,7 +130,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # across train/val of the same fold).
         _unique_groups = np.unique(groups)
         _group_to_idx = {g: np.where(groups == g)[0] for g in _unique_groups}
-        for seed in range(n_repeats):
+        # FIX 3h: at the full-data point the group sampling below picks EVERY
+        # group regardless of seed, so all n_repeats seeds draw the identical
+        # dataset and run the identical (expensive) search under different cache
+        # names. The mean of n_repeats identical runs is just the value, so
+        # collapse to a single seed here. <100% fractions still use n_repeats.
+        n_repeats_eff = 1 if n_sub >= n_total else n_repeats
+        for seed in range(n_repeats_eff):
             rng = np.random.RandomState(seed)
             # Draw whole scaffold groups until we hit ~n_sub samples (the
             # exact size is approximate; group sizes vary).
@@ -236,12 +249,35 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if bp_fd_budget is not None and bp_fd_budget > n_sub:
                     # Blueprint budget exceeds subsample — skip this n.
                     continue
+                # FIX 4d: cv_split RAISES (no random-split fallback) when the
+                # subsample has fewer distinct groups than the requested fold
+                # count. Reduce the fold count to the available groups (min 2);
+                # if fewer than 2 distinct groups exist, record an explicit skip
+                # flag instead of crashing or silently emitting nothing.
+                n_sub_groups = len(np.unique(sub_groups))
+                if n_sub_groups < 2:
+                    results['skipped_insufficient_groups'].append(
+                        {'n': int(n_sub), 'model': model_name, 'seed': int(seed),
+                         'n_groups': int(n_sub_groups),
+                         'reason': 'fewer than 2 distinct groups for fulldata-bp CV'})
+                    continue
+                sub_folds_fd = min(sub_folds, n_sub_groups)
                 try:
                     fold_scores = []
                     sample_sub_X = next(iter(sub_reps.values()))
-                    for tr_i, va_i in cv_split(sub_groups, sub_folds,
-                                                sample_sub_X, sub_labels,
-                                                mode='intermediary' if sub_folds == 1 else 'full'):
+                    try:
+                        _fd_splits = list(cv_split(sub_groups, sub_folds_fd,
+                                                   sample_sub_X, sub_labels))
+                    except ValueError:
+                        # Group count fell below the (already-reduced) fold
+                        # count after StratifiedGroupKFold's own checks — skip
+                        # cleanly with a flag rather than propagate.
+                        results['skipped_insufficient_groups'].append(
+                            {'n': int(n_sub), 'model': model_name, 'seed': int(seed),
+                             'n_groups': int(n_sub_groups),
+                             'reason': 'cv_split rejected fulldata-bp folds'})
+                        continue
+                    for tr_i, va_i in _fd_splits:
                         train_reps_fold = {k: v[tr_i] for k, v in sub_reps.items()}
                         val_reps_fold = {k: v[va_i] for k, v in sub_reps.items()}
                         train_augs_fold = ({k: v[tr_i] for k, v in sub_augs.items()}

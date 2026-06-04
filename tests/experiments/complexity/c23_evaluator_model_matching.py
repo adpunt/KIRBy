@@ -77,6 +77,17 @@ QUICK_EVALUATORS = ['rf', 'lightgbm', 'xgboost']
 TEST_MODELS = ['rf', 'lightgbm', 'xgboost', 'ridge', 'knn', 'mlp', 'svm', 'gp',
                'catboost', 'dnn', 'cnn']
 
+# FIX 3e: catboost/dnn/cnn are the slow "extra" tier (DEFAULT_MODELS tier=='extra').
+# c23 runs each candidate model as BOTH a downstream model AND an internal
+# evaluator, so including these three on a large dataset multiplies the slow
+# fit cost and causes a runtime explosion (e.g. HER2 +49857%). Above this size
+# they are skipped — as downstream models (Conditions A/B/C/E) and as evaluators
+# (the NN_PAIRS dnn evaluator in Condition D). The 8 cheap models
+# (rf/xgboost/ridge/knn/lightgbm/mlp/svm/gp) always run. 1000 matches the cap
+# applied to this same slow-model class elsewhere (gp _max_samples, dnn/cnn FT).
+C23_EXTRA_TIER_MAX_N = 1000
+EXTRA_TIER_MODELS = ('catboost', 'dnn', 'cnn')
+
 
 def _run_single_config(reps, labels, groups, model_name, model_factory,
                        evaluator, budgets, speed, metric_name, task_type,
@@ -128,8 +139,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     groups = data.get('groups')
     task_type = data['task_type']
     n_samples = len(labels)
-    augmentations = data.get('augmentations')
-    aug_strategy = data.get('augmentation_strategy', 'uncapped')
+    augmentations = data.get('augmentations') or None
+    # CXA-15: `data` never carries an 'augmentation_strategy' key (no loader sets
+    # it), so the old `data.get('augmentation_strategy', 'uncapped')` was a dead
+    # lookup that always returned 'uncapped' — even when there are NO
+    # augmentations. Passing augmentation_strategy='uncapped' with
+    # augmentations=None writes a DIFFERENT find_best_hybrid cache key than the
+    # canonical 'none' used by precompute / the other experiments, so c23 would
+    # silently miss the cache and recompute. Derive it from whether
+    # augmentations actually exist (mirrors c24:165 and get_precomputed_search).
+    aug_strategy = 'uncapped' if augmentations else 'none'
 
     metric_name, metric_fn, lower_is_better = get_domain_metric(data)
     print(f"  Metric: {metric_name} (lower_is_better={lower_is_better})")
@@ -137,6 +156,21 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     all_models = get_model_factories(TEST_MODELS, task_type=task_type,
                                      n_samples=n_samples)
     available_models = {k: v for k, v in all_models.items() if k in MATCH_TABLE}
+
+    # FIX 3e: size gate on the expensive extra-model tier. Above
+    # C23_EXTRA_TIER_MAX_N, drop catboost/dnn/cnn so they run neither as
+    # downstream models (Conditions A/B/C/E) nor as evaluators (gated in the
+    # Condition D loop below). The 8 cheap models always remain. Skip is logged
+    # in the returned 'extra_tier_skipped_large_n' flag for downstream parsing.
+    extra_tier_skipped = []
+    if n_samples > C23_EXTRA_TIER_MAX_N:
+        extra_tier_skipped = [m for m in available_models if m in EXTRA_TIER_MODELS]
+        if extra_tier_skipped:
+            available_models = {k: v for k, v in available_models.items()
+                                if k not in EXTRA_TIER_MODELS}
+            print(f"  extra_tier_skipped_large_n: n_samples={n_samples} > "
+                  f"C23_EXTRA_TIER_MAX_N={C23_EXTRA_TIER_MAX_N}; skipping "
+                  f"extra-tier models {extra_tier_skipped} (downstream + evaluator)")
     print(f"  Models: {list(available_models.keys())}")
 
     budgets = FULL_BUDGETS
@@ -189,6 +223,12 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"\n  NN size mismatch pairs:")
     for downstream, evaluator in NN_PAIRS:
         if downstream not in available_models:
+            continue
+        # FIX 3e: skip the pair when its EVALUATOR is a skipped extra-tier model
+        # (e.g. the dnn evaluator in ('mlp','dnn')) — that is the same slow-model
+        # fit the size gate is meant to avoid on large n.
+        if evaluator in extra_tier_skipped:
+            print(f"    {downstream} -> eval={evaluator}: extra_tier_skipped_large_n")
             continue
         model_factory = available_models[downstream]
         print(f"    {downstream} -> eval={evaluator}...", end=' ', flush=True)
@@ -315,6 +355,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'models_tested': list(available_models.keys()),
         'budgets': budgets,
         'results': results,
+        # FIX 3e: extra-tier models (catboost/dnn/cnn) dropped because
+        # n_samples > C23_EXTRA_TIER_MAX_N. Empty list when none were skipped.
+        'extra_tier_skipped_large_n': extra_tier_skipped,
+        'extra_tier_max_n': C23_EXTRA_TIER_MAX_N,
     })
 
 

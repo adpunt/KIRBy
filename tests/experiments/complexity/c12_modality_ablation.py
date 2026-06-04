@@ -56,7 +56,7 @@ from sklearn.metrics import r2_score, roc_auc_score, f1_score
 
 from experiments._shared import (
     get_config, create_experiment_parser,
-    save_experiment_results, convert_numpy,
+    save_experiment_results,
     get_model_factories, cv_split,
 )
 

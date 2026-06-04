@@ -55,6 +55,7 @@ def run(all_dataset_results):
     knn_deltas = []
     ad_deltas = []
     fp_reductions = []
+    fp_skipped_reasons = {}  # ds_name -> reason a dataset was dropped from FP reduction
     dim_ratios = []
 
     for ds_name, ds_results in all_dataset_results.items():
@@ -185,6 +186,20 @@ def run(all_dataset_results):
                 fp_reductions.append(fp_red)
                 print(f"    Noise cliff-contamination reduction: {fp_red:.1f}% "
                       f"(best_rep={best_rep_fp:.3f} -> hybrid_w={hw_fp:.3f})")
+            else:
+                # Dataset dropped from the FP-reduction aggregate. Previously this
+                # was silent; log + record WHY so a missing dataset is explainable
+                # (SIMA-9). The divide-by-zero case (best_rep_fp == 0, no false
+                # positives) is legitimate but must not vanish without trace.
+                if best_rep_fp == 0:
+                    _reason = 'best_rep_contamination_rate=0 (no false positives; ratio undefined)'
+                elif hw_fp is None or best_rep_fp is None:
+                    _reason = 'missing cliff_contamination_rate (hybrid or best-rep field absent)'
+                else:
+                    _reason = f'best_rep_contamination_rate<=0 ({best_rep_fp})'
+                fp_skipped_reasons[ds_name] = _reason
+                ds_summary['noise_fp_reduction_skipped'] = _reason
+                print(f"    [skip] noise FP reduction not computed: {_reason}")
 
         # Exp 8: optimal dim ratio
         exp8 = ds_results.get('s08_optimal_dimension')
@@ -245,6 +260,13 @@ def run(all_dataset_results):
         print(f"\n  Note: {cliff_n_skipped_clf} dataset(s) skipped in "
               f"cliff_reductions (no rmse_cliff, likely classification).")
         results['summary']['cliff_n_skipped_clf'] = cliff_n_skipped_clf
+
+    if fp_skipped_reasons:
+        print(f"\n  Note: {len(fp_skipped_reasons)} dataset(s) dropped from "
+              f"noise_FP_reduction (reasons logged per-dataset):")
+        for _ds, _why in fp_skipped_reasons.items():
+            print(f"    - {_ds}: {_why}")
+        results['summary']['noise_fp_reduction_skipped'] = fp_skipped_reasons
 
     return results
 
