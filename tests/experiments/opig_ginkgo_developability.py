@@ -81,6 +81,18 @@ DEFAULT_REPS = [
 
 MODELS_LIST = [m for m in DOWNSTREAM_MODELS if m != 'gp']
 
+
+def _smoke_search_kwargs():
+    """Smoke-only hybrid-search shrink, gated on KIRBY_SMOKE_N.
+
+    Caps the find_best_hybrid pool to one small budget + fast tier for local
+    smoke runs (default is speed='full' + FULL_BUDGETS, minutes of compute).
+    No-op when KIRBY_SMOKE_N is unset.
+    """
+    if not os.environ.get('KIRBY_SMOKE_N', '').strip():
+        return {}
+    return {'speed': 'fast', 'budgets': [25, 50]}
+
 # Competition baselines (van Niekerk et al. 2026, 113 teams)
 # test_top = best team Spearman rho on held-out test set (80 antibodies)
 # cv_top = best team cross-validation Spearman rho (246 training antibodies)
@@ -180,12 +192,20 @@ def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruni
     print(f"\n  --- {prop_name} ---")
 
     data = load_dataset(prop_name)
+    from experiments._shared import _smoke_subsample
+    data = _smoke_subsample(data)
     heavy_seqs = data['heavy_seqs']
     light_seqs = data['light_seqs']
     labels = data['labels']
     groups = data.get('groups')
     fold_assignments = data.get('fold_assignments')
     n = len(labels)
+    # _smoke_subsample subsets 'groups' but not 'fold_assignments' (separate
+    # per-row key). For Ginkgo the two are identical (groups == fold IDs), so
+    # under KIRBY_SMOKE_N realign fold_assignments to the subsampled groups
+    # when lengths disagree, otherwise the fold-index splits run out of bounds.
+    if fold_assignments is not None and len(fold_assignments) != n:
+        fold_assignments = groups
     print(f"  {n} samples, target={data.get('property_name', prop_name)}")
 
     # Generate representations (with disk caching for expensive LM reps)
@@ -236,15 +256,17 @@ def evaluate_property(prop_name, rep_names, n_folds, pruning_mode='default_pruni
                                           get_best_search_for_downstream)
         _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
                                        dataset_label=prop_name)
+        _smoke = _smoke_search_kwargs()
         search, _meta = get_best_search_for_downstream(
             base_for_search, labels, grp,
             downstream_model='rf', budget=None,
             augmentations=aug_dict if aug_dict else None,
-            speed='full',
+            speed=_smoke.get('speed', 'full'),
             metric='spearman',
             task_type='regression',
             dataset_name=prop_name,
             return_fitted=True,
+            **{k: v for k, v in _smoke.items() if k != 'speed'},
             **_pkw,
         )
         if search is not None:

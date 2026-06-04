@@ -63,6 +63,14 @@ from kirby.utils.noise_mitigation_methods import (
 
 SIGMAS = [0.3, 0.6]
 
+# Ground-truth noise-mask definition for REGRESSION detection F1 (P1#6 audit
+# fix). 'mad' = a sample counts as noisy iff |perturbation| > MAD(y_clean)
+# (informative detector ranking, but the positive class is a thresholded
+# subset of the injected set — must be documented). 'all' = every additively
+# perturbed sample counts (the literal injected set; detection degenerates to
+# flag-rate). Classification is always exact label-flip membership regardless.
+REGRESSION_NOISE_MASK = 'mad'
+
 # Default neighbor-method hyperparameters. The audit (P2) flagged the
 # hardcoded euclidean/k=10 as a sensitivity concern; expose them via
 # `_make_estimator_configs(k, metric)` so the CLI or harness can override
@@ -178,16 +186,27 @@ def _build_neighbor_spaces(train_reps, y_train, blueprints, train_augs):
         except Exception as e:
             print(f"      hybrid_{budget} failed: {e}")
 
-    # 5. Importance-weighted base rep
+    # 5. Importance-weighted base rep.
+    # ORDER MATTERS: standardise FIRST, then apply the importance weights.
+    # The previous code multiplied raw X_base by sum-to-1 weights and THEN ran
+    # StandardScaler — but a per-column StandardScaler applied after a
+    # per-column multiply exactly cancels the weighting (it divides each column
+    # by a std that was itself scaled by that column's weight), so the
+    # "imp_weighted" neighbour space was byte-for-byte identical to the plain
+    # standardised base rep — a complete no-op. We now standardise first, then
+    # scale columns by MEAN-1-normalised sqrt(importance): this keeps the
+    # relative column weighting EXACTLY and leaves the distance space on a
+    # sensible ~unit scale. (lightgbm_gain importance here is fitted on the
+    # noisy y_train — see the per-fold call site; documented as realistic
+    # noisy-training, the imp_weighted space is doubly noisy.)
     try:
         imp = compute_feature_importance(
             {base_rep_name: X_base}, y_train, method='lightgbm_gain'
         )[base_rep_name]
         weights = np.sqrt(np.maximum(imp, 0))
-        weights = weights / (weights.sum() + 1e-10)
-        X_weighted = X_base * weights
-        scaler_w = StandardScaler()
-        spaces[f'imp_weighted_{base_rep_name}'] = scaler_w.fit_transform(X_weighted)
+        weights = weights / (weights.mean() + 1e-10)
+        X_base_std = StandardScaler().fit_transform(X_base)
+        spaces[f'imp_weighted_{base_rep_name}'] = X_base_std * weights
     except Exception as e:
         print(f"      imp_weighted_{base_rep_name} failed: {e}")
 
@@ -198,11 +217,13 @@ def _build_neighbor_spaces(train_reps, y_train, blueprints, train_augs):
             X_h100 = hybrids[100]
             fold_w = flatten_fold_weights(hybrid_fis[100])
             if len(fold_w) == X_h100.shape[1]:
+                # Standardise first, then mean-1 importance weight (see the
+                # imp_weighted base-rep block above for why StandardScaler must
+                # NOT be applied after the multiply — it cancels the weighting).
                 w = np.sqrt(np.maximum(fold_w, 0))
-                w = w / (w.sum() + 1e-10)
-                X_h_weighted = X_h100 * w
-                scaler_hw = StandardScaler()
-                spaces['imp_weighted_hybrid'] = scaler_hw.fit_transform(X_h_weighted)
+                w = w / (w.mean() + 1e-10)
+                X_h100_std = StandardScaler().fit_transform(X_h100)
+                spaces['imp_weighted_hybrid'] = X_h100_std * w
             else:
                 print(f"      imp_weighted_hybrid: weight dim mismatch "
                       f"({len(fold_w)} vs {X_h100.shape[1]})")
@@ -215,11 +236,12 @@ def _build_neighbor_spaces(train_reps, y_train, blueprints, train_augs):
             imp_h = compute_feature_importance(
                 {'hybrid': X_h100}, y_train, method='lightgbm_gain'
             )['hybrid']
+            # Standardise first, then mean-1 importance weight (StandardScaler
+            # after the multiply would cancel the weighting — see block above).
             weights_h = np.sqrt(np.maximum(imp_h, 0))
-            weights_h = weights_h / (weights_h.sum() + 1e-10)
-            X_h_weighted = X_h100 * weights_h
-            scaler_hw = StandardScaler()
-            spaces['imp_weighted_hybrid'] = scaler_hw.fit_transform(X_h_weighted)
+            weights_h = weights_h / (weights_h.mean() + 1e-10)
+            X_h100_std = StandardScaler().fit_transform(X_h100)
+            spaces['imp_weighted_hybrid'] = X_h100_std * weights_h
         except Exception as e:
             print(f"      imp_weighted_hybrid (fallback) failed: {e}")
 
@@ -320,6 +342,7 @@ def _run_detection(X_space, y_noisy, noise_mask):
 
             results[method_name] = {
                 'n_flagged': n_flagged,
+                'n_noisy': n_noisy,  # positive-class size = recall denominator
                 'precision': float(precision),
                 'recall': float(recall),
                 'f1': float(f1),
@@ -469,6 +492,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # Values must be in FULL_BUDGETS — previously [25, 100, 200] but 200 is
     # not in FULL_BUDGETS, causing silent cache misses from the pool helper.
     # Swapped 200 -> 250 (the nearest canonical neighbor).
+    #
+    # AUDIT P1#5 — BEST-CASE HYBRID, NOT A FAIR BASELINE. These blueprints come
+    # from the precomputed pool, which was fit on the CLEAN labels (see
+    # noise_helpers.precompute_hybrid_searches). The per-fold create_hybrid /
+    # build_fold_hybrid calls below then re-BUILD the hybrid features under the
+    # NOISY labels, but they reuse this blueprint's allocation_method,
+    # importance_method and internal_evaluator — choices that were made with
+    # access to clean ground truth. So the per-fold feature CONSTRUCTION sees
+    # only noisy labels, but the blueprint SELECTION (which reps, which
+    # allocation/importance strategy) had a clean-label oracle. The hybrid
+    # neighbour/eval spaces here are therefore a BEST-CASE hybrid, not a fully
+    # noise-blind one. A fully fair version would re-derive the blueprint per
+    # fold on noisy labels (as n09 does in its inner find_best_hybrid search);
+    # that is intentionally NOT done here to keep n10 tractable (the per-fold
+    # search would multiply runtime across {budget × sigma × fold × space}).
+    # Read all n10 hybrid-vs-base comparisons as "best-case hybrid blueprint,
+    # constructed under noise".
     hybrid_budgets = [25, 100, 250]
     blueprints = {}
     search_for_top3 = None
@@ -519,6 +559,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'estimators': list(ESTIMATOR_CONFIGS.keys()),
         'detection_methods': DETECTION_METHODS,
         'sigmas': sigmas,
+        # Document the regression detection ground-truth definition so the
+        # writeup states which denominator the precision/recall use (P1#6).
+        'regression_noise_mask': (REGRESSION_NOISE_MASK if not is_clf
+                                  else 'label_flip'),
         'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
         'per_sigma': {},
     }
@@ -621,10 +665,35 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             rf_noisy.fit(X_eval_train_s, y_noisy)
             noisy_scores.append(float(metric_fn(y_val, rf_noisy.predict(X_eval_val_s))))
 
-            # Ground-truth noise mask (uses cached MAD)
+            # Ground-truth noise mask.
+            #
+            # Classification: unambiguous — a sample is noisy iff its label was
+            # flipped (y_noisy != y_train_clean). No threshold involved.
+            #
+            # Regression: additive Gaussian noise perturbs EVERY training label
+            # by a non-zero amount, so a literal "injected set" is all n_train
+            # samples. Two defensible ground-truth definitions:
+            #   - REGRESSION_NOISE_MASK = 'all'  -> |noise_vec| > 0, i.e. every
+            #       injected sample counts. This is the *actual* injected set;
+            #       precision/recall denominators are then the full training set.
+            #       Detection then degenerates to "flag-rate" (recall = fraction
+            #       flagged; precision = fraction of flagged that are noisy = ~1
+            #       trivially) — honest but uninformative for ranking detectors.
+            #   - REGRESSION_NOISE_MASK = 'mad'  -> |noise_vec| > MAD(y_clean),
+            #       i.e. only *materially* perturbed samples count as the
+            #       positive class. This is a THRESHOLD on the injected set, not
+            #       the injected set itself; it makes the F1 ranking informative
+            #       but the audit (P1#6) correctly flags that the reported
+            #       precision/recall denominators then reflect a thresholded
+            #       subset. It must be documented, not silent.
+            # We make the choice explicit and record it in the output so the
+            # writeup states which denominator is in play. Default 'mad' keeps
+            # the informative ranking; switch to 'all' for the literal set.
             if is_clf:
                 noise_mask = (y_noisy != y_train_clean)
-            else:
+            elif REGRESSION_NOISE_MASK == 'all':
+                noise_mask = np.abs(noise_vec) > 0
+            else:  # 'mad'
                 mad = fold['mad']
                 noise_mask = np.abs(noise_vec) > max(mad, 1e-10)
 
@@ -655,9 +724,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 for mn, mv in det_res.items():
                     if mn not in space_det_acc[space_name]:
                         space_det_acc[space_name][mn] = {
-                            'f1': [], 'precision': [], 'recall': []}
+                            'f1': [], 'precision': [], 'recall': [],
+                            'n_noisy': [], 'n_flagged': []}
                     if isinstance(mv, dict) and 'error' not in mv:
-                        for k in ['f1', 'precision', 'recall']:
+                        for k in ['f1', 'precision', 'recall',
+                                  'n_noisy', 'n_flagged']:
                             if k in mv:
                                 space_det_acc[space_name][mn][k].append(mv[k])
 
@@ -679,11 +750,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     from experiments._shared import flatten_fold_weights
                     wh = flatten_fold_weights(fi_wh)
                     if len(wh) == X_h_train.shape[1]:
+                        # Standardise first (scaler fit on train only), THEN
+                        # apply mean-1 importance weights to both splits. The
+                        # old order — multiply then StandardScaler — cancelled
+                        # the weighting on the train fit (so the RF learned an
+                        # effectively-unweighted hybrid) and only left a partial,
+                        # inconsistent weight on val. Standardise-then-weight
+                        # keeps the importance weighting intact and consistent
+                        # across train/val.
                         w = np.sqrt(np.maximum(wh, 0))
-                        w = w / (w.sum() + 1e-10)
+                        w = w / (w.mean() + 1e-10)
                         scaler_wh = StandardScaler()
-                        X_wh_eval_train = scaler_wh.fit_transform(X_h_train * w)
-                        X_wh_eval_val = scaler_wh.transform(X_h_val * w)
+                        X_wh_eval_train = scaler_wh.fit_transform(X_h_train) * w
+                        X_wh_eval_val = scaler_wh.transform(X_h_val) * w
 
                         # Clean baseline on weighted hybrid
                         rf_wh_clean = model_factory()

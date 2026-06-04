@@ -38,6 +38,20 @@ Usage:
 """
 import sys
 import os
+
+# Load xgboost/lightgbm native OpenMP runtimes BEFORE rdkit (imported during
+# rep generation) to avoid a duplicate-libomp segfault on macOS when these
+# models and threaded sklearn estimators run in sequence. Optional deps —
+# guard so environments without them are unaffected.
+try:
+    import xgboost as _xgboost  # noqa: F401
+except Exception:
+    pass
+try:
+    import lightgbm as _lightgbm  # noqa: F401
+except Exception:
+    pass
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 

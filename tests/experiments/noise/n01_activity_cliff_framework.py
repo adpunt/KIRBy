@@ -52,6 +52,29 @@ from kirby.utils.noise_mitigation_methods import compute_distance_matrix, Activi
 # CLIFF DETECTION HELPERS
 # =============================================================================
 
+# Distribution-relative "structurally similar" cutoff. On standardised high-D
+# embeddings (antibody / reaction / TCGA) the pairwise Euclidean distance is
+# large, so sim = 1/(1+d) never reaches an absolute 0.55 and the experiment
+# found ~0 cliffs on every non-molecular dataset (ginkgo_hic all-zero, tcga
+# stratified too_few_cliff_compounds, buchwald 0 cliffs). The similarity suite
+# fixed the identical bug by switching to a percentile: "structurally similar"
+# = the closest SIMILAR_PERCENTILE% of off-diagonal pairs, regardless of the
+# absolute distance scale. See COMPLEXITY_SIMILARITY_BROKEN_2026_06_03.md and
+# s12.identify_cliff_pairs_euclidean. The molecular ECFP4-Tanimoto branch keeps
+# the absolute threshold (0.55 is meaningful for Tanimoto).
+SIMILAR_PERCENTILE = 2.0
+
+# Activity-cliff percentile knob sweep. The cheap distance-threshold
+# sub-analyses (1 consensus Jaccard, 3 cliff mitigation) are run at EACH knob
+# and reported under the additive `ac_percentile_sweep` output so the user can
+# pick a cliff prevalence after the ARC rerun. The headline outputs and the
+# EXPENSIVE sub-analysis 4 (cliff-stratified prediction, which trains models
+# per model×rep) use PRIMARY_AC_PERCENTILE only. SIMILAR_PERCENTILE (the legacy
+# module constant) equals PRIMARY_AC_PERCENTILE so existing headline keys are
+# unchanged.
+AC_PERCENTILES = [1.0, 2.0, 5.0, 10.0]
+PRIMARY_AC_PERCENTILE = SIMILAR_PERCENTILE  # = 2.0
+
 def _compute_ecfp4_tanimoto_sim(smiles_list):
     """Compute ECFP4 Tanimoto similarity matrix from SMILES.
 
@@ -97,15 +120,23 @@ def _compute_euclidean_sim(X, standardize=True):
     return sim
 
 
-def identify_cliff_pairs(sim_matrix, y, sim_threshold, activity_k, is_clf=False):
+def identify_cliff_pairs(sim_matrix, y, sim_threshold, activity_k, is_clf=False,
+                         similar_percentile=None):
     """Identify activity cliff pairs from a similarity matrix.
 
     Args:
         sim_matrix: (n, n) similarity matrix (0 = dissimilar, 1 = identical).
         y: (n,) activity values.
-        sim_threshold: minimum similarity to count as "structurally similar".
+        sim_threshold: minimum similarity to count as "structurally similar"
+            (used only when ``similar_percentile`` is None).
         activity_k: activity difference threshold in MAD units.
         is_clf: if True, use binary indicator (different class = cliff).
+        similar_percentile: if set (e.g. 2.0), define "structurally similar" as
+            the top ``similar_percentile``% most-similar off-diagonal pairs
+            instead of the absolute ``sim_threshold``. Distribution-relative —
+            required for Euclidean similarity on standardised high-D reps where
+            sim = 1/(1+d) never reaches an absolute 0.55 (see SIMILAR_PERCENTILE
+            note above). Mirrors s12.identify_cliff_pairs_euclidean.
 
     Returns:
         cliff_pair_mask: (n, n) boolean, True where (i,j) is a cliff pair.
@@ -123,7 +154,16 @@ def identify_cliff_pairs(sim_matrix, y, sim_threshold, activity_k, is_clf=False)
         activity_threshold = activity_k * mad_y
         delta_y = np.abs(y[:, None] - y[None, :])
 
-    cliff_pair_mask = (sim_matrix >= sim_threshold) & (delta_y > activity_threshold)
+    # "Structurally similar" cutoff: absolute, or distribution-relative (top
+    # similar_percentile% most-similar off-diagonal pairs).
+    if similar_percentile is not None:
+        _off = sim_matrix[~np.eye(n, dtype=bool)]
+        sim_cutoff = float(np.percentile(_off, 100.0 - similar_percentile)) \
+            if _off.size else sim_threshold
+    else:
+        sim_cutoff = sim_threshold
+
+    cliff_pair_mask = (sim_matrix >= sim_cutoff) & (delta_y > activity_threshold)
     np.fill_diagonal(cliff_pair_mask, False)
 
     cliff_mask = cliff_pair_mask.any(axis=1)
@@ -132,6 +172,8 @@ def identify_cliff_pairs(sim_matrix, y, sim_threshold, activity_k, is_clf=False)
 
     info = {
         'sim_threshold': sim_threshold,
+        'similar_percentile': similar_percentile,
+        'sim_cutoff': float(sim_cutoff),
         'activity_k': activity_k,
         'activity_threshold': float(activity_threshold),
         'mad_y': float(mad_y),
@@ -209,9 +251,11 @@ def _get_dist(name, X, cache):
 
 
 def _run_consensus(reps, labels, sim_threshold, activity_k, domain, smiles=None,
-                   is_clf=False, dist_cache=None):
+                   is_clf=False, dist_cache=None,
+                   similar_percentile=SIMILAR_PERCENTILE, verbose=True):
     """Compute cliff sets per rep and pairwise Jaccard overlap."""
-    print("\n  --- Sub-analysis 1: Consensus Cliff Identification ---")
+    if verbose:
+        print("\n  --- Sub-analysis 1: Consensus Cliff Identification ---")
 
     cliff_sets = {}  # rep_name -> set of frozenset pairs
     cliff_infos = {}
@@ -219,17 +263,20 @@ def _run_consensus(reps, labels, sim_threshold, activity_k, domain, smiles=None,
     for rep_name, X_rep in reps.items():
         # Build similarity matrix for this rep (Euclidean-based, cached so
         # sub-analyses 2 + 3 + the per-rep cliff-jaccard loop reuse the same
-        # computation rather than redoing it 4× per rep).
+        # computation rather than redoing it 4× per rep). The distance matrix
+        # is percentile-independent, so the cached D is reused across all knobs.
         D = _get_dist(rep_name, X_rep, dist_cache)
         sim = 1.0 / (1.0 + D)
         np.fill_diagonal(sim, 0.0)
 
         mask, info = identify_cliff_pairs(sim, labels, sim_threshold, activity_k,
-                                          is_clf=is_clf)
+                                          is_clf=is_clf,
+                                          similar_percentile=similar_percentile)
         cliff_sets[rep_name] = _cliff_pair_set(mask)
         cliff_infos[rep_name] = info
-        print(f"    {rep_name:<20} cliffs={info['n_cliff_pairs']:>5} "
-              f"({info['pct_cliff_compounds']:.1f}% compounds)")
+        if verbose:
+            print(f"    {rep_name:<20} cliffs={info['n_cliff_pairs']:>5} "
+                  f"({info['pct_cliff_compounds']:.1f}% compounds)")
 
     # Pairwise Jaccard between all rep pairs
     rep_names = sorted(cliff_sets.keys())
@@ -250,9 +297,10 @@ def _run_consensus(reps, labels, sim_threshold, activity_k, domain, smiles=None,
     np.fill_diagonal(jaccard_matrix, 1.0)
     avg_jaccard = float(np.mean([p['jaccard'] for p in pairwise_jaccards])) if pairwise_jaccards else 0.0
 
-    print(f"    Average pairwise Jaccard: {avg_jaccard:.4f}")
-    print(f"    Min Jaccard: {min(p['jaccard'] for p in pairwise_jaccards):.4f}" if pairwise_jaccards else "")
-    print(f"    Max Jaccard: {max(p['jaccard'] for p in pairwise_jaccards):.4f}" if pairwise_jaccards else "")
+    if verbose:
+        print(f"    Average pairwise Jaccard: {avg_jaccard:.4f}")
+        print(f"    Min Jaccard: {min(p['jaccard'] for p in pairwise_jaccards):.4f}" if pairwise_jaccards else "")
+        print(f"    Max Jaccard: {max(p['jaccard'] for p in pairwise_jaccards):.4f}" if pairwise_jaccards else "")
 
     return {
         'per_rep_cliff_counts': {k: v['n_cliff_pairs'] for k, v in cliff_infos.items()},
@@ -310,9 +358,11 @@ def _run_sali_smoothing(reps, labels, X_hybrid, is_clf=False, dist_cache=None):
 # =============================================================================
 
 def _run_cliff_mitigation(reps, labels, X_hybrid, sim_threshold, activity_k,
-                          is_clf=False, dist_cache=None):
+                          is_clf=False, dist_cache=None,
+                          similar_percentile=SIMILAR_PERCENTILE, verbose=True):
     """Count cliff pairs in each rep space vs hybrid space at same threshold."""
-    print("\n  --- Sub-analysis 3: Cliff Mitigation by Hybridization ---")
+    if verbose:
+        print("\n  --- Sub-analysis 3: Cliff Mitigation by Hybridization ---")
 
     mitigation = {}
 
@@ -321,7 +371,8 @@ def _run_cliff_mitigation(reps, labels, X_hybrid, sim_threshold, activity_k,
         sim = 1.0 / (1.0 + D)
         np.fill_diagonal(sim, 0.0)
         mask, info = identify_cliff_pairs(sim, labels, sim_threshold, activity_k,
-                                          is_clf=is_clf)
+                                          is_clf=is_clf,
+                                          similar_percentile=similar_percentile)
         mitigation[rep_name] = {
             'n_cliff_pairs': info['n_cliff_pairs'],
             'n_cliff_compounds': info['n_cliff_compounds'],
@@ -334,7 +385,8 @@ def _run_cliff_mitigation(reps, labels, X_hybrid, sim_threshold, activity_k,
         sim_hybrid = 1.0 / (1.0 + D_hybrid)
         np.fill_diagonal(sim_hybrid, 0.0)
         mask_h, info_h = identify_cliff_pairs(sim_hybrid, labels, sim_threshold, activity_k,
-                                               is_clf=is_clf)
+                                               is_clf=is_clf,
+                                               similar_percentile=similar_percentile)
         mitigation['_hybrid'] = {
             'n_cliff_pairs': info_h['n_cliff_pairs'],
             'n_cliff_compounds': info_h['n_cliff_compounds'],
@@ -350,18 +402,20 @@ def _run_cliff_mitigation(reps, labels, X_hybrid, sim_threshold, activity_k,
             'hybrid_cliff_pairs': info_h['n_cliff_pairs'],
         }
 
-        print(f"    Top-3 fewest cliff pairs:")
-        for rn, rp in top3_fewest:
-            print(f"      {rn}: {rp}")
-        print(f"    Hybrid: {info_h['n_cliff_pairs']}")
-    else:
+        if verbose:
+            print(f"    Top-3 fewest cliff pairs:")
+            for rn, rp in top3_fewest:
+                print(f"      {rn}: {rp}")
+            print(f"    Hybrid: {info_h['n_cliff_pairs']}")
+    elif verbose:
         print("    (hybrid not available, skipping comparison)")
 
     # Print per-rep
-    for rep_name in sorted(k for k in mitigation if not k.startswith('_')):
-        v = mitigation[rep_name]
-        print(f"    {rep_name:<20} pairs={v['n_cliff_pairs']:>5}  "
-              f"compounds={v['n_cliff_compounds']:>4} ({v['pct_cliff_compounds']:.1f}%)")
+    if verbose:
+        for rep_name in sorted(k for k in mitigation if not k.startswith('_')):
+            v = mitigation[rep_name]
+            print(f"    {rep_name:<20} pairs={v['n_cliff_pairs']:>5}  "
+                  f"compounds={v['n_cliff_compounds']:>4} ({v['pct_cliff_compounds']:.1f}%)")
 
     return mitigation
 
@@ -418,12 +472,17 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
     if heavy_seqs is not None and domain == 'antibody':
         # Edit-distance ground truth for antibodies
         from experiments.similarity.similarity_helpers import identify_cliff_compounds_editdist
-        max_edits = 5
+        # Distribution-relative similar set (closest SIMILAR_PERCENTILE% of
+        # sequence-pair edit distances) rather than an absolute max_edits=5.
+        # On deep-mutational-scan antibody data max_edits=5 either flags a huge
+        # fraction (s07 contamination saturated) or — on therapeutic panels
+        # with high mutual edit distance (median 54-75 here) — flags ~none,
+        # which is why ginkgo_hic yielded too_few_cliff_compounds.
         cliff_mask, cliff_info = identify_cliff_compounds_editdist(
-            heavy_seqs, labels, max_edits=max_edits, activity_k=activity_k,
-            is_clf=is_clf)
+            heavy_seqs, labels, activity_k=activity_k,
+            is_clf=is_clf, similar_percentile=SIMILAR_PERCENTILE)
         cliff_indices = set(np.where(cliff_mask)[0].tolist())
-        sim_source = f'edit_distance(max_edits={max_edits})'
+        sim_source = f'edit_distance(similar_pct={SIMILAR_PERCENTILE})'
     elif smiles is not None and domain == 'molecular':
         try:
             ref_sim = _compute_ecfp4_tanimoto_sim(smiles)
@@ -438,7 +497,8 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
             ref_sim = _compute_euclidean_sim(X_concat)
             sim_source = 'euclidean_concat'
             cliff_pair_mask, cliff_info = identify_cliff_pairs(
-                ref_sim, labels, sim_threshold, activity_k, is_clf=is_clf)
+                ref_sim, labels, sim_threshold, activity_k, is_clf=is_clf,
+                similar_percentile=SIMILAR_PERCENTILE)
             cliff_mask = cliff_pair_mask.any(axis=1)
             cliff_indices = set(np.where(cliff_mask)[0].tolist())
     else:
@@ -446,7 +506,8 @@ def _run_cliff_stratified(reps, labels, groups, config, data,
         ref_sim = _compute_euclidean_sim(X_concat)
         sim_source = 'euclidean_concat'
         cliff_pair_mask, cliff_info = identify_cliff_pairs(
-            ref_sim, labels, sim_threshold, activity_k, is_clf=is_clf)
+            ref_sim, labels, sim_threshold, activity_k, is_clf=is_clf,
+            similar_percentile=SIMILAR_PERCENTILE)
         cliff_mask = cliff_pair_mask.any(axis=1)
         cliff_indices = set(np.where(cliff_mask)[0].tolist())
 
@@ -713,6 +774,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     results = {
         'config': {
             'sim_threshold': sim_threshold,
+            'similar_percentile': SIMILAR_PERCENTILE,
+            'ac_percentiles': AC_PERCENTILES,
+            'primary_ac_percentile': PRIMARY_AC_PERCENTILE,
             'activity_threshold': activity_threshold,
             'domain': domain,
             'n_samples': n,
@@ -738,7 +802,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         sim_hybrid = 1.0 / (1.0 + D_hybrid)
         np.fill_diagonal(sim_hybrid, 0.0)
         mask_h, _ = identify_cliff_pairs(sim_hybrid, labels, sim_threshold,
-                                         activity_threshold, is_clf=is_clf)
+                                         activity_threshold, is_clf=is_clf,
+                                         similar_percentile=SIMILAR_PERCENTILE)
         hybrid_cliff_set = _cliff_pair_set(mask_h)
 
         # Jaccard of hybrid vs each rep (cached per-rep matrices)
@@ -748,7 +813,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             sim_rep = 1.0 / (1.0 + D_rep)
             np.fill_diagonal(sim_rep, 0.0)
             mask_r, _ = identify_cliff_pairs(sim_rep, labels, sim_threshold,
-                                             activity_threshold, is_clf=is_clf)
+                                             activity_threshold, is_clf=is_clf,
+                                             similar_percentile=SIMILAR_PERCENTILE)
             rep_cliff_set = _cliff_pair_set(mask_r)
             jac = _jaccard_index(hybrid_cliff_set, rep_cliff_set)
             hybrid_jaccards[rep_name] = float(jac)
@@ -774,7 +840,60 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         reps, labels, X_hybrid, sim_threshold, activity_threshold,
         is_clf=is_clf, dist_cache=dist_cache)
 
+    # =========================================================================
+    # ADDITIVE: activity-cliff percentile knob SWEEP (sub-analyses 1 + 3 only)
+    # =========================================================================
+    # Sub-analyses 1 (consensus Jaccard) and 3 (cliff mitigation) are cheap
+    # distance-threshold operations: the per-rep/per-hybrid distance matrices
+    # are already cached in dist_cache, so re-running them at each percentile
+    # knob only redoes the percentile cutoff + boolean mask, NOT any model
+    # training. SALI (sub-2) is a continuous landscape statistic with no cliff
+    # cutoff, so it is NOT swept. Sub-analysis 4 (cliff-STRATIFIED PREDICTION)
+    # trains models per model×rep and is EXPENSIVE — it runs ONLY at
+    # PRIMARY_AC_PERCENTILE below and is deliberately NOT in this sweep.
+    print("\n  === ac_percentile_sweep (sub-analyses 1 + 3) ===")
+    ac_sweep = {}
+    for pct in AC_PERCENTILES:
+        consensus_pct = _run_consensus(
+            reps, labels, sim_threshold, activity_threshold, domain, smiles,
+            is_clf=is_clf, dist_cache=dist_cache,
+            similar_percentile=pct, verbose=False)
+        mitigation_pct = _run_cliff_mitigation(
+            reps, labels, X_hybrid, sim_threshold, activity_threshold,
+            is_clf=is_clf, dist_cache=dist_cache,
+            similar_percentile=pct, verbose=False)
+
+        # Prevalence summary for this knob: hybrid cliff-compound % if the
+        # hybrid built, plus the mean cliff-compound % across the base reps.
+        rep_pcts = [v['pct_cliff_compounds'] for k, v in mitigation_pct.items()
+                    if not k.startswith('_')]
+        mean_rep_pct = float(np.mean(rep_pcts)) if rep_pcts else 0.0
+        hybrid_pct = (mitigation_pct['_hybrid']['pct_cliff_compounds']
+                      if '_hybrid' in mitigation_pct else None)
+
+        ac_sweep[str(pct)] = convert_numpy({
+            'similar_percentile': pct,
+            # Prevalence
+            'mean_rep_pct_cliff_compounds': mean_rep_pct,
+            'hybrid_pct_cliff_compounds': hybrid_pct,
+            'per_rep_cliff_pct': consensus_pct['per_rep_cliff_pct'],
+            'per_rep_cliff_counts': consensus_pct['per_rep_cliff_counts'],
+            # Consensus headline metric
+            'avg_pairwise_jaccard': consensus_pct['avg_pairwise_jaccard'],
+            # Mitigation headline metric
+            'mitigation_comparison': mitigation_pct.get('_comparison'),
+        })
+        print(f"    knob {pct:>5.1f}%: mean_rep_prevalence={mean_rep_pct:.1f}%  "
+              f"hybrid_prevalence="
+              f"{'n/a' if hybrid_pct is None else f'{hybrid_pct:.1f}%'}  "
+              f"avg_jaccard={consensus_pct['avg_pairwise_jaccard']:.4f}")
+
+    results['ac_percentile_sweep'] = ac_sweep
+
     # --- Sub-analysis 4: Cliff-stratified prediction error ---
+    # EXPENSIVE (trains models per model×rep): run ONLY at the PRIMARY knob,
+    # NOT swept across AC_PERCENTILES. The cliff mask inside _run_cliff_stratified
+    # uses the module SIMILAR_PERCENTILE (= PRIMARY_AC_PERCENTILE).
     # Use the augmentation condition the pool actually selected, not a
     # hardcoded 'uncapped' — the latter is the 2026-04-21 cache-collision
     # pattern (see project_cache_collision_fix). meta['aug_condition'] holds

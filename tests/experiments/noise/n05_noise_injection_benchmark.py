@@ -47,6 +47,63 @@ ALL_METHODS = [
 # (non-per-rep) evaluation.
 Y_ONLY_METHODS = {'zscore'}
 
+# Multi-seed noise averaging. A single fixed-seed injection per sigma means
+# every method is scored on ONE noise realization, so per-rep / per-method F1
+# differences partly reflect single-draw variance rather than true method
+# robustness. Inject under each seed and report mean ± std per (method, space).
+NOISE_SEEDS = [0, 1, 2]
+
+
+def _detect_metrics(detector_X, y_noisy, noise_mask, n_noisy, n_total,
+                    detector_kwargs):
+    """Run one detector on one feature space and return its detection metrics.
+
+    Returns a dict with n_flagged/precision/recall/f1, or {'error': ...}.
+    Pulled out of the inline triple-duplicate (concat / hybrid / per-rep) so
+    the multi-seed loop has a single code path to average over.
+    """
+    try:
+        method_name, kwargs_m = detector_kwargs
+        detector = get_mitigation_method(method_name, **kwargs_m)
+        flagged_idx = detector.identify_noise(detector_X, y_noisy)
+        flagged_mask = np.zeros(n_total, dtype=bool)
+        flagged_mask[flagged_idx] = True
+        tp = int((flagged_mask & noise_mask).sum())
+        n_flagged = int(flagged_mask.sum())
+        precision = tp / max(n_flagged, 1)
+        recall = tp / max(n_noisy, 1)
+        f1 = 2 * precision * recall / max(precision + recall, 1e-10)
+        return {
+            'n_flagged': n_flagged,
+            'precision': float(precision),
+            'recall': float(recall),
+            'f1': float(f1),
+        }
+    except Exception as e:
+        return {'error': str(e)}
+
+
+def _aggregate_seed_entries(entries):
+    """Mean ± std over a list of per-seed metric dicts for one (method, space).
+
+    Error entries are dropped from the average; if every seed errored, the last
+    error is surfaced. Means are also exposed under the plain field names
+    (precision/recall/f1/n_flagged) for backwards compatibility with readers
+    that consumed the single-realization output.
+    """
+    ok = [e for e in entries if 'error' not in e]
+    if not ok:
+        return {'error': entries[-1].get('error', 'all seeds failed'),
+                'n_seeds': len(entries)}
+    agg = {'n_seeds': len(ok)}
+    for fld in ('precision', 'recall', 'f1', 'n_flagged'):
+        vals = [e[fld] for e in ok if fld in e]
+        if vals:
+            agg[f'{fld}_mean'] = float(np.mean(vals))
+            agg[f'{fld}_std'] = float(np.std(vals))
+            agg[fld] = float(np.mean(vals))  # backwards-compat plain field
+    return agg
+
 
 def _inject_noise(y, sigma_frac, seed=42, is_clf=False):
     """Inject noise. Regression: Gaussian additive. Classification: label flipping."""
@@ -143,117 +200,75 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         'per_sigma': {},
     }
 
+    n_total = len(labels)
     for sigma in sigmas:
         print(f"\n  === Sigma={sigma} ===")
-        y_noisy, noise_mask = _inject_noise(labels, sigma, is_clf=is_clf)
-        n_noisy = int(noise_mask.sum())
-        print(f"    {n_noisy}/{len(labels)} truly noisy samples")
 
-        sigma_results = {'n_noisy': n_noisy}
+        # Per-seed accumulators: {method_name: {space: [metric_dict, ...]}}
+        seed_acc = {m: {} for m in ALL_METHODS}
+        n_noisy_seeds = []
 
-        for method_name in ALL_METHODS:
-            is_distance_aware = method_name in DISTANCE_AWARE_METHODS
+        for noise_seed in NOISE_SEEDS:
+            y_noisy, noise_mask = _inject_noise(labels, sigma, seed=noise_seed,
+                                                is_clf=is_clf)
+            n_noisy = int(noise_mask.sum())
+            n_noisy_seeds.append(n_noisy)
+            print(f"    [seed={noise_seed}] {n_noisy}/{n_total} truly noisy samples")
 
-            # Run with concat distance
-            try:
+            for method_name in ALL_METHODS:
+                is_distance_aware = method_name in DISTANCE_AWARE_METHODS
+                m_acc = seed_acc[method_name]
+
+                # concat space
                 kwargs_m = {}
                 if is_distance_aware:
                     kwargs_m['precomputed_distances'] = D_concat
+                m_acc.setdefault('concat', []).append(
+                    _detect_metrics(X_concat_s, y_noisy, noise_mask, n_noisy,
+                                    n_total, (method_name, kwargs_m)))
 
-                detector = get_mitigation_method(method_name, **kwargs_m)
-                flagged_idx = detector.identify_noise(X_concat_s, y_noisy)
-                flagged_mask = np.zeros(len(labels), dtype=bool)
-                flagged_mask[flagged_idx] = True
-
-                tp = int((flagged_mask & noise_mask).sum())
-                fp = int((flagged_mask & ~noise_mask).sum())
-                fn = int((~flagged_mask & noise_mask).sum())
-                n_flagged = int(flagged_mask.sum())
-
-                precision = tp / max(n_flagged, 1)
-                recall = tp / max(n_noisy, 1)
-                f1 = 2 * precision * recall / max(precision + recall, 1e-10)
-
-                entry = {
-                    'concat': {
-                        'n_flagged': n_flagged,
-                        'precision': float(precision),
-                        'recall': float(recall),
-                        'f1': float(f1),
-                    },
-                }
-            except Exception as e:
-                entry = {'concat': {'error': str(e)}}
-
-            # Run with hybrid distance (distance-aware methods only)
-            if is_distance_aware and D_hybrid is not None:
-                try:
+                # hybrid space (distance-aware methods only)
+                if is_distance_aware and D_hybrid is not None:
                     X_h_s = StandardScaler().fit_transform(X_hybrid)
-                    detector_h = get_mitigation_method(
-                        method_name, precomputed_distances=D_hybrid)
-                    flagged_h = detector_h.identify_noise(X_h_s, y_noisy)
-                    flagged_h_mask = np.zeros(len(labels), dtype=bool)
-                    flagged_h_mask[flagged_h] = True
+                    m_acc.setdefault('hybrid', []).append(
+                        _detect_metrics(
+                            X_h_s, y_noisy, noise_mask, n_noisy, n_total,
+                            (method_name, {'precomputed_distances': D_hybrid})))
 
-                    tp_h = int((flagged_h_mask & noise_mask).sum())
-                    n_flagged_h = int(flagged_h_mask.sum())
-                    precision_h = tp_h / max(n_flagged_h, 1)
-                    recall_h = tp_h / max(n_noisy, 1)
-                    f1_h = 2 * precision_h * recall_h / max(precision_h + recall_h, 1e-10)
-
-                    entry['hybrid'] = {
-                        'n_flagged': n_flagged_h,
-                        'precision': float(precision_h),
-                        'recall': float(recall_h),
-                        'f1': float(f1_h),
-                    }
-                except Exception as e:
-                    entry['hybrid'] = {'error': str(e)}
-
-            # Run with per-rep distance matrices. y-only methods (zscore) are
-            # rep-independent — running them per-rep produces identical F1
-            # values and would arbitrarily tie-break the "best per-rep space"
-            # summary. Skip them and mark the entry so downstream readers
-            # know it isn't a per-rep result.
-            if method_name in Y_ONLY_METHODS:
-                entry['_per_rep_skipped_reason'] = 'method depends only on y, not X'
-            else:
-                for rep_name in per_rep_D:
-                    try:
+                # per-rep spaces — skip y-only methods (rep-independent)
+                if method_name not in Y_ONLY_METHODS:
+                    for rep_name in per_rep_D:
                         kwargs_r = {}
                         if is_distance_aware:
                             kwargs_r['precomputed_distances'] = per_rep_D[rep_name]
+                        m_acc.setdefault(rep_name, []).append(
+                            _detect_metrics(
+                                per_rep_Xs[rep_name], y_noisy, noise_mask,
+                                n_noisy, n_total, (method_name, kwargs_r)))
 
-                        detector_r = get_mitigation_method(method_name, **kwargs_r)
-                        flagged_r = detector_r.identify_noise(per_rep_Xs[rep_name], y_noisy)
-                        flagged_r_mask = np.zeros(len(labels), dtype=bool)
-                        flagged_r_mask[flagged_r] = True
-
-                        tp_r = int((flagged_r_mask & noise_mask).sum())
-                        n_flagged_r = int(flagged_r_mask.sum())
-                        precision_r = tp_r / max(n_flagged_r, 1)
-                        recall_r = tp_r / max(n_noisy, 1)
-                        f1_r = 2 * precision_r * recall_r / max(precision_r + recall_r, 1e-10)
-
-                        entry[rep_name] = {
-                            'n_flagged': n_flagged_r,
-                            'precision': float(precision_r),
-                            'recall': float(recall_r),
-                            'f1': float(f1_r),
-                        }
-                    except Exception as e:
-                        entry[rep_name] = {'error': str(e)}
-
+        # Aggregate across seeds.
+        sigma_results = {
+            'n_noisy_mean': float(np.mean(n_noisy_seeds)),
+            'n_noisy_std': float(np.std(n_noisy_seeds)),
+            'n_noisy': float(np.mean(n_noisy_seeds)),  # backwards-compat
+            'n_seeds': len(NOISE_SEEDS),
+        }
+        for method_name in ALL_METHODS:
+            entry = {}
+            for space, entries in seed_acc[method_name].items():
+                entry[space] = _aggregate_seed_entries(entries)
+            if method_name in Y_ONLY_METHODS:
+                entry['_per_rep_skipped_reason'] = 'method depends only on y, not X'
             sigma_results[method_name] = entry
 
-            # Print compact summary
+            # Print compact summary (mean F1 across seeds)
             c = entry.get('concat', {})
             h = entry.get('hybrid', {})
             c_str = f"F1={c.get('f1', 0):.3f}" if 'f1' in c else c.get('error', '?')[:20]
             h_str = f"F1={h.get('f1', 0):.3f}" if 'f1' in h else ''
             rep_strs = [f"{rn}:F1={entry[rn].get('f1', 0):.3f}"
                         for rn in per_rep_D if rn in entry and 'f1' in entry[rn]]
-            rep_summary = '  '.join(rep_strs[:3])  # show first 3 to avoid line overflow
+            rep_summary = '  '.join(rep_strs[:3])
             if len(rep_strs) > 3:
                 rep_summary += f"  (+{len(rep_strs)-3} more)"
             print(f"    {method_name:<25} concat: {c_str}" +

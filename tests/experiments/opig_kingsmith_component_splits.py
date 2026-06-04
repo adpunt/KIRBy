@@ -60,6 +60,19 @@ Reference:
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+# Load xgboost/lightgbm native OpenMP runtimes BEFORE rdkit (imported during
+# rep generation) to avoid a duplicate-libomp segfault on macOS when these
+# models and threaded sklearn estimators run in sequence. Optional deps —
+# guard so environments without them are unaffected.
+try:
+    import xgboost as _xgboost  # noqa: F401
+except Exception:
+    pass
+try:
+    import lightgbm as _lightgbm  # noqa: F401
+except Exception:
+    pass
+
 import sys
 import json
 import time
@@ -135,6 +148,21 @@ def load_reaction_data(dataset_name):
 
     rxn_smiles = data['rxn_smiles']
     components = data['components']
+    labels = list(data['labels'])
+
+    # Test-only row cap BEFORE rep generation (no-op unless KIRBY_SMOKE_N set).
+    # Capping here keeps the slow rxnmapper/neural rep generators off the full
+    # dataset and keeps components aligned for the per-row component->group map.
+    _smoke = os.environ.get('KIRBY_SMOKE_N', '').strip()
+    if _smoke.isdigit() and 0 < int(_smoke) < len(labels):
+        n_keep = int(_smoke)
+        n = len(labels)
+        _idx = np.unique(np.linspace(0, n - 1, n_keep).round().astype(int))
+        rxn_smiles = [rxn_smiles[i] for i in _idx]
+        components = [components[i] for i in _idx]
+        labels = [labels[i] for i in _idx]
+        print(f"  [SMOKE] KIRBY_SMOKE_N={n_keep}: capped {n} -> {len(_idx)} reactions before rep gen")
+    labels = np.asarray(labels, dtype=np.float64)
 
     # Build only the reps listed in DATASET_REPS for this dataset
     ds_config = DATASET_REPS.get(dataset_name, {})
@@ -188,7 +216,7 @@ def load_reaction_data(dataset_name):
             print(f"  WARNING: {name} failed: {e}")
 
     return {
-        'labels': np.array(data['labels'], dtype=np.float64),
+        'labels': labels,
         'components': components,
         'reps': reps,
         'metadata': data.get('metadata', {}),
@@ -365,17 +393,30 @@ def _evaluate_hybrid_per_fold(
                 pruning_mode, len(train_labels),
                 dataset_label=f'{dataset_name}/loo_{split_key}/fold{fold_idx}',
             )
+            # Test-only: shrink the budget grid under KIRBY_SMOKE_N so the
+            # per-fold search finishes quickly on tiny local subsets. No-op
+            # (full budgets) when the env var is unset, so server runs and the
+            # precompute cache key are unchanged.
+            _smoke_budgets = ([25, 50]
+                              if os.environ.get('KIRBY_SMOKE_N', '').strip()
+                              else FULL_BUDGETS)
             fold_search = find_best_hybrid(
                 train_reps, train_labels,
                 groups=train_groups,
                 augmentations=train_aug,
                 augmentation_strategy=('uncapped' if has_aug else 'none'),
+                budgets=_smoke_budgets,
                 speed='full', metric='rmse',
                 task_type='regression',
                 internal_evaluators=INTERNAL_EVALUATORS,
                 return_fitted=True,
                 cache=True,
                 dataset_name=dataset_name,
+                # find_best_hybrid(cache=True) requires a tier. These BH datasets
+                # have no shared precompute, so hardcode 'general' (same
+                # convention as opig_blueprint_transfer); the per-fold
+                # condition_suffix keeps each fold's cache file distinct.
+                tier='general',
                 condition_suffix=f'loo_{split_key}_fold{fold_idx}',
                 adaptive_pruning=0.25,
                 **_pkw,

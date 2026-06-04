@@ -32,9 +32,13 @@ def main():
     parser.add_argument(
         '--output', type=str, default=DEFAULT_OUTPUT,
         help=f'Output directory (default: {DEFAULT_OUTPUT})')
+    parser.add_argument(
+        '--reps', nargs='+', default=None,
+        help='Explicit rep list override (e.g. a tiny cheap set for smoke '
+             'tests). Default: the dataset general rep list.')
     args = parser.parse_args()
     run_all(dataset_name=DATASET, output_dir=args.output,
-            experiments=args.experiments)
+            experiments=args.experiments, rep_names=args.reps)
 
 
 if __name__ == '__main__':

@@ -245,6 +245,11 @@ def _run_condition(X_space, y_noisy, X_eval_train, X_eval_val, y_val,
     Returns {f'{est_name}_k{k}': denoised_score}.
     """
     results = {}
+    # Record per-(estimator, k) failures so a degenerate rerun isn't blind:
+    # previously every error was swallowed into `results[key] = None`, the
+    # aggregation dropped all-None cells, and per_importance_method came back
+    # as empty {} with no trace of WHY. Now the error string is preserved.
+    errors = {}
 
     for est_name, est_cls in ESTIMATOR_FACTORIES.items():
         for k in K_VALUES:
@@ -260,6 +265,10 @@ def _run_condition(X_space, y_noisy, X_eval_train, X_eval_val, y_val,
                 results[key] = float(metric_fn(y_val, y_pred))
             except Exception as e:
                 results[key] = None
+                errors[key] = f'{type(e).__name__}: {e}'
+
+    if errors:
+        results['_errors'] = errors
 
     return results
 
@@ -303,7 +312,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Importance methods: {IMPORTANCE_METHODS}")
     print(f"  Sigmas: {sigmas}, Folds: {n_folds}")
 
-    # Get blueprint ONCE from pool helper (uses clean labels)
+    # Blueprint selection (which reps / allocation / budget make the best
+    # hybrid) comes ONCE from the clean-label pool helper. Per fold below the
+    # hybrid is REBUILT under the noisy labels using that blueprint, so the
+    # feature-selection geometry is noisy but the structural choice of blueprint
+    # is clean. This is a deliberate BEST-CASE-hybrid setup, NOT a leak-free
+    # one: a fully leak-free design would re-select the blueprint per fold under
+    # noise. We keep clean-label blueprint selection because the ablation's
+    # question is "does importance-weighting the distance help given a good
+    # hybrid", not "can we discover the hybrid under noise". (Audit P1#5.)
     search, meta = get_best_search_for_downstream(
         reps, labels, groups,
         downstream_model='rf', budget=None,
@@ -391,6 +408,14 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     )
 
                     for ek, score in cond_results.items():
+                        if ek == '_errors':
+                            # Carry the per-(estimator,k) error dict through so
+                            # a degenerate output records WHY, instead of an
+                            # untraceable empty {}. Merge across folds/sigmas.
+                            merged = grid_acc[imp_method][cond_name].setdefault(
+                                '_errors', {})
+                            merged.update(score)
+                            continue
                         if ek not in grid_acc[imp_method][cond_name]:
                             grid_acc[imp_method][cond_name][ek] = []
                         if score is not None:
@@ -412,7 +437,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             imp_result = {}
             for cond_name in CONDITION_NAMES:
                 cond_agg = {}
+                cond_errors = None
                 for ek, score_list in grid_acc.get(imp_method, {}).get(cond_name, {}).items():
+                    if ek == '_errors':
+                        # Diagnostic marker: pass the error dict straight
+                        # through rather than averaging it as a score list.
+                        cond_errors = score_list
+                        continue
                     if score_list:
                         denoised = float(np.mean(score_list))
                         recovery = float((denoised - noisy_mean) / gap * 100) if abs(gap) > 1e-10 else float('nan')
@@ -420,6 +451,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                             'denoised': denoised,
                             'recovery': recovery,
                         }
+                if cond_errors and not cond_agg:
+                    # Every estimator failed for this condition: keep the
+                    # errors so a future rerun isn't blind to the cause.
+                    cond_agg['_errors'] = cond_errors
                 if cond_agg:
                     imp_result[cond_name] = cond_agg
             sigma_result['per_importance_method'][imp_method] = imp_result

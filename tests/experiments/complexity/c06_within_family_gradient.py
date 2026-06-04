@@ -69,6 +69,21 @@ def run(data, config, output_dir, dataset_name, families=None):
     if dropped:
         print(f"  Dropped budgets > n_samples={n_samples}: {dropped}")
 
+    # The capacity<->budget correlation is undefined unless several DISTINCT
+    # budgets are viable. On small datasets a coarse grid (e.g. [50,500,...])
+    # collapses to a single value <= n_samples, pinning every variant's optimal
+    # budget and forcing a NaN correlation. Guarantee a data-relative spread of
+    # at least 4 distinct budgets below n_samples (and below the feature dim).
+    # See COMPLEXITY_SIMILARITY_BROKEN_2026_06_03.md.
+    max_dim = max((v.shape[1] for v in reps.values()), default=n_samples)
+    viable_cap = min(n_samples, max_dim)
+    if len(eff_budgets) < 4:
+        data_rel = sorted({max(5, int(viable_cap * f))
+                           for f in (0.05, 0.1, 0.2, 0.35, 0.5)})
+        eff_budgets = sorted({b for b in (eff_budgets + data_rel)
+                              if 5 <= b <= viable_cap})
+        print(f"  Small-data budget grid widened to {eff_budgets}")
+
     all_families = get_model_family_variants()
     if families:
         all_families = {k: v for k, v in all_families.items() if k in families}
@@ -224,15 +239,32 @@ def run(data, config, output_dir, dataset_name, families=None):
                 capacities.append(info['capacity_index'])
                 opt_budgets.append(info['budget'])
 
-        if len(capacities) >= 3:
+        # spearmanr is NaN unless BOTH variables vary. On small/low-signal data
+        # every capacity variant can optimise at the same budget -> no variance
+        # -> NaN. Distinguish that genuine "no budget variance" case from a real
+        # measured correlation so the result is interpretable (not a bare NaN).
+        n_distinct_budgets = len(set(opt_budgets))
+        if len(capacities) >= 3 and n_distinct_budgets >= 2:
             rho, pval = spearmanr(capacities, opt_budgets)
             fam_result['capacity_budget_correlation'] = {
                 'rho': float(rho), 'p': float(pval),
+                'n_distinct_budgets': n_distinct_budgets,
+                'status': 'measured',
             }
             print(f"\n  >> {fam_name}: capacity vs optimal_budget: "
                   f"rho={rho:.3f}, p={pval:.3f}")
         else:
-            fam_result['capacity_budget_correlation'] = None
+            status = ('insufficient_variants' if len(capacities) < 3
+                      else 'no_budget_variance')
+            fam_result['capacity_budget_correlation'] = {
+                'rho': float('nan'), 'p': float('nan'),
+                'n_distinct_budgets': n_distinct_budgets,
+                'n_variants': len(capacities),
+                'status': status,
+            }
+            print(f"\n  >> {fam_name}: capacity vs optimal_budget UNDEFINED "
+                  f"({status}: {n_distinct_budgets} distinct budget(s) over "
+                  f"{len(capacities)} variants)")
 
         results['families'][fam_name] = fam_result
 

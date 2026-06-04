@@ -25,14 +25,21 @@ Outputs per-sigma:
   - retention_pct: ratio*100 when both sides are positive, else NaN
     (R² and MCC can be negative — naive ratio was historically misleading).
 
-Feature selection: the hybrid feature mix is re-searched per (noise level,
-data split) on the NOISY training labels using `find_best_hybrid` in fast
-mode with a reduced budget grid (NOISY_SEARCH_BUDGETS). The previous
-version pulled the mix from a precomputed pool that ran on clean labels,
-which gave the methods oracle access to ground truth they wouldn't have
-in a real noisy-label setting. The inner search uses random forest as a
-fast proxy downstream model — DNN-based search would be more matched but
-~10x slower per (noise level, fold).
+Feature selection (AUDIT P1#5 — this is the FAIR version, unlike n10):
+the hybrid feature mix is re-searched per (noise level, data split) on the
+NOISY training labels using `find_best_hybrid` with a reduced budget grid
+(NOISY_SEARCH_BUDGETS). The previous version pulled the mix from a precomputed
+pool that ran on CLEAN labels, which gave the methods oracle access to ground
+truth they wouldn't have in a real noisy-label setting; the per-fold re-search
+removes that clean-label oracle so BOTH the blueprint selection (which reps,
+which allocation/importance strategy) AND the feature construction see only
+noisy labels. The clean-label pool blueprint `bp` survives only as a fallback
+if the inner search fails. The inner search uses random forest as a fast proxy
+downstream model — DNN-based search would be more matched but ~10x slower per
+(noise level, fold). Note: the inner search runs at speed='full' (the 'fast'
+speed tier was removed in the F12/F13 tier reduction); runtime is kept
+tractable by the trimmed NOISY_SEARCH_BUDGETS grid and small inner n_folds,
+not by a speed tier.
 
 Usage:
     python n09_lnl_survey.py --dataset logd --mode intermediary
@@ -67,7 +74,9 @@ ALL_METHODS = list(LNL_REGISTRY.keys())
 # The full pool covers [10, 25, 50, 100, 250, 500, 1000, 2000]; we trim to
 # three representative budgets here because the search runs inside the
 # noise injection loop and full-grid runtime would be prohibitive. Pattern
-# mirrors c06's per-variant searches with reduced budgets + 'fast' speed.
+# mirrors c06's per-variant searches with reduced budgets (the 'fast' speed
+# tier no longer exists — only 'full' — so the inner search runs at 'full'
+# speed but with this trimmed budget grid to stay tractable).
 NOISY_SEARCH_BUDGETS = [50, 100, 250]
 
 
@@ -275,7 +284,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     budgets=NOISY_SEARCH_BUDGETS,
                     task_type=task_type,
                     metric=metric_name,
-                    speed='fast',
+                    # SPEED_TIERS only defines 'full' now (the 'fast' tier was
+                    # removed in the F12/F13 tier reduction). Passing
+                    # speed='fast' raised KeyError('fast') inside
+                    # find_best_hybrid, which the try/except below swallowed —
+                    # killing the ENTIRE hybrid arm (conditions B/D/E/F) on
+                    # every fold and leaving only base_lnl populated. Runtime
+                    # is kept tractable by the reduced NOISY_SEARCH_BUDGETS grid
+                    # and the small inner n_folds, not by a speed tier.
+                    speed='full',
                     seed=42 + fold_idx,
                     n_folds=inner_n_folds,
                     cache=False,
@@ -343,8 +360,27 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     fold_weights = flatten_fold_weights(fi)
                     n_cols = X_hybrid_train_s.shape[1]
                     if len(fold_weights) == n_cols:
+                        # MEAN-1 normalisation (not sum-to-1). The previous
+                        # `w = w / (w.sum() + 1e-10)` forced the weights to sum
+                        # to 1, so for a ~budget-feature hybrid each column was
+                        # multiplied by ~1/n_cols (≈0.01 for 100 features).
+                        # X_hybrid_*_s is already StandardScaler'd (unit
+                        # variance), so that global shrink crushed every input
+                        # to ~0.01·N(0,1); the DNN/LNL methods (Adam lr=0.001,
+                        # no input re-norm) then trained on near-zero inputs —
+                        # handicapping conditions E/F by SCALE rather than by
+                        # the weighting hypothesis. Dividing by the MEAN keeps
+                        # the relative column weighting EXACTLY (ratio between
+                        # any two columns is unchanged) while restoring an
+                        # overall scale of ~1. We deliberately do NOT re-run
+                        # StandardScaler here: a per-column StandardScaler
+                        # applied after a per-column multiply exactly cancels
+                        # the weighting (divide by std, which itself scaled by
+                        # the weight) — making the "weighted" condition
+                        # identical to the unweighted hybrid. See
+                        # _smoke_audit_n09_n10.py for the cancellation proof.
                         w = np.sqrt(np.maximum(fold_weights, 0))
-                        w = w / (w.sum() + 1e-10)
+                        w = w / (w.mean() + 1e-10)
                         X_whybrid_train_s = X_hybrid_train_s * w
                         X_whybrid_val_s = X_hybrid_val_s * w
                         weighted_ok = True

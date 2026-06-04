@@ -31,17 +31,19 @@ from experiments.federated.federated_helpers import (
     smiles_to_fluid_df, cluster_training_only, compute_clf_metrics,
     extract_importance_profile, compare_importance_profiles,
     _resolve_match,
+    smoke_grid, smoke_n_folds, smoke_k_silos,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection
 
 
 # ── Constants ────────────────────────────────────────────────────────────────
+# smoke_* helpers are no-ops unless KIRBY_SMOKE_N is set.
 
-K = 5
+K = smoke_k_silos(5)
 PKI_THRESHOLD = 6.0
-SMOOTH_FACTORS = [0, 0.01, 0.05, 0.1, 0.2]
+SMOOTH_FACTORS = smoke_grid([0, 0.01, 0.05, 0.1, 0.2], [0, 0.05])
 BUDGET = 100
-N_FOLDS = 5
+N_FOLDS = smoke_n_folds(5)
 
 
 def _compute_cluster_importance(train_reps, train_labels, silo_indices, k,
@@ -244,7 +246,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         # ── Phase 3: Compare importance profiles ─────────────────────────
         mean_spearman, pairwise = compare_importance_profiles(profiles)
-        print(f"  Phase 3 mean pairwise Spearman: {mean_spearman:.3f}")
+        _ms_str = 'n/a' if mean_spearman is None else f"{mean_spearman:.3f}"
+        print(f"  Phase 3 mean pairwise Spearman: {_ms_str}")
         rep_rankings = {}
         for s, profile in profiles.items():
             ranked = sorted(profile.items(), key=lambda x: -x[1])
@@ -376,7 +379,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     stability_vals = [r['profile_stability'].get('mean_spearman') for r in fold_records]
     stability_vals = [v for v in stability_vals
                       if isinstance(v, (int, float)) and not np.isnan(v)]
-    mean_stability = float(np.mean(stability_vals)) if stability_vals else float('nan')
+    # None (JSON null) when no fold produced a defined stability — not NaN.
+    mean_stability = float(np.mean(stability_vals)) if stability_vals else None
 
     # ── Phase 6: Results ──────────────────────────────────────────────────
     results = {

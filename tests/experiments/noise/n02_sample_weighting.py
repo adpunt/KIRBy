@@ -54,14 +54,19 @@ from kirby.utils.noise_estimation import ActivityCliffAwareEstimator
 WEIGHTED_MODELS = ['rf', 'xgboost', 'lightgbm']
 
 
-def compute_cliff_aware_weights(X, y, k=10, strength=1.0):
+def compute_cliff_aware_weights(X, y, k=10, strength=1.0, is_clf=False):
     """Use ActivityCliffAwareEstimator to compute sample weights.
 
     Unlike compute_reliability_scores, this distinguishes cliffs from noise:
     cliff compounds get higher weights (they're not noise), while genuinely
     noisy samples get lower weights.
+
+    is_clf must be threaded through: the estimator's default (is_clf=False)
+    runs the REGRESSION noise-scoring path (neighbor-mean deviation / local
+    variance) on raw class labels, which is meaningless for classification.
+    With is_clf=True it uses the class-disagreement x neighbor-purity path.
     """
-    estimator = ActivityCliffAwareEstimator(k=k, metric='cosine')
+    estimator = ActivityCliffAwareEstimator(k=k, metric='cosine', is_clf=is_clf)
     estimator.fit(X, y)
     return estimator.get_weights(strength=strength)
 
@@ -448,7 +453,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 scaler = StandardScaler()
                 X_tr_s = scaler.fit_transform(X_train_h)
                 X_va_s = scaler.transform(X_val_h)
-                ca_weights = compute_cliff_aware_weights(X_tr_s, y_train, k=k_neighbors)
+                ca_weights = compute_cliff_aware_weights(X_tr_s, y_train, k=k_neighbors,
+                                                         is_clf=is_clf)
                 model = model_factory()
                 model.fit(X_tr_s, y_train, sample_weight=ca_weights)
                 ca_scores.append(metric_fn(y_val, _predict_for_metric(model, X_va_s)))

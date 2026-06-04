@@ -83,6 +83,22 @@ DEFAULT_REPS = [
 
 MODELS_LIST = DOWNSTREAM_MODELS
 
+
+def _smoke_search_kwargs():
+    """Smoke-only hybrid-search shrink, gated on KIRBY_SMOKE_N.
+
+    The hybrid search (find_best_hybrid via get_best_search_for_downstream)
+    defaults to speed='full' + FULL_BUDGETS (budgets up to 2000) across a
+    pool of tier x aug conditions — minutes of compute even on tiny data.
+    For local smoke runs this caps it to one small budget + fast tier so the
+    experiment finishes in seconds. No-op (empty dict) when KIRBY_SMOKE_N is
+    unset, so server/full runs are unaffected.
+    """
+    if not os.environ.get('KIRBY_SMOKE_N', '').strip():
+        return {}
+    return {'speed': 'fast', 'budgets': [25, 50]}
+
+
 # Paper baselines
 PAPER_BASELINES = {
     'ITsFlexible GNN (crystal)': {'roc_auc': 0.82, 'pr_auc': 0.60},
@@ -191,6 +207,8 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
     print(f"{'=' * 60}")
 
     data = load_itsflexible(mode='cdr', cdr_types=cdr_types)
+    from experiments._shared import _smoke_subsample
+    data = _smoke_subsample(data)
     heavy_seqs = data['heavy_seqs']
     light_seqs = data['light_seqs']
     labels = data['labels']
@@ -200,7 +218,13 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
     print(f"  {n} sequences, {n_flex} flexible ({100*n_flex/n:.1f}%)")
 
     # Groups by CDR3 sequence identity (unique sequence → group ID)
+    # NOTE: cdr_seqs is a per-row field not handled by _smoke_subsample, so
+    # under KIRBY_SMOKE_N it stays full-length while heavy_seqs/labels are
+    # subsampled. Fall back to heavy_seqs (always consistently subsampled)
+    # when lengths disagree, so groups align with X/labels.
     cdr_seqs = data.get('cdr_seqs', heavy_seqs)
+    if cdr_seqs is None or len(cdr_seqs) != len(heavy_seqs):
+        cdr_seqs = heavy_seqs
     unique_seqs = {}
     group_ids = np.zeros(len(cdr_seqs), dtype=int)
     for i, s in enumerate(cdr_seqs):
@@ -235,19 +259,21 @@ def evaluate_cdr_type(cdr_types, rep_names, n_folds, pruning_mode='default_pruni
             resolve_pruning_kwargs, get_best_search_for_downstream)
         _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
                                        dataset_label=f"cdr_flex/{'_'.join(sorted(cdr_types))}")
+        _smoke = _smoke_search_kwargs()
         search, _meta = get_best_search_for_downstream(
             reps, labels, groups,
             downstream_model='rf', budget=None,
             # augmentations=None -> pool only iterates aug_condition='none';
             # helper sets augmentation_strategy per iteration, no collision.
             augmentations=None,
-            speed='full', metric='auc',
+            speed=_smoke.get('speed', 'full'), metric='auc',
             task_type='classification',
             dataset_name='cdr_flexibility',
             return_fitted=True,
             internal_evaluators=INTERNAL_EVALUATORS,
             condition_suffix='_'.join(sorted(cdr_types)),
             adaptive_pruning=0.25,
+            **{k: v for k, v in _smoke.items() if k != 'speed'},
             **_pkw,
         )
         top3 = extract_top3_base_reps(search) if search is not None else None

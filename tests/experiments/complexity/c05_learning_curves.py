@@ -156,11 +156,18 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             sub_folds = min(n_folds, n_unique_groups)
 
-            # find_best_hybrid discovers optimal config per model at this sample size
-            # Cap budgets to subsample size (budget > n makes no sense)
-            sub_budgets = [b for b in sweep_budgets if b <= n_sub]
+            # find_best_hybrid discovers optimal config per model at this sample size.
+            # Cap budgets to the TRAINING partition, not the whole subsample: a
+            # budget > train rows yields a degenerate selection -> NaN (this was
+            # the all-NaN-at-small-n bug, e.g. budget 50 at n_sub=50 leaves only
+            # ~40 train rows). See COMPLEXITY_SIMILARITY_BROKEN_2026_06_03.md.
+            train_size = (int(n_sub * (sub_folds - 1) / sub_folds)
+                          if sub_folds > 1 else int(n_sub * 0.8))
+            sub_budgets = [b for b in sweep_budgets if b <= train_size]
             if not sub_budgets:
-                sub_budgets = [min(sweep_budgets)]
+                # smallest sweep budget that still fits the training partition
+                sub_budgets = [min((b for b in sweep_budgets if b <= train_size),
+                                   default=max(2, train_size))]
             # Subsample-specific cache key — won't collide with main precompute
             # cache. Capped strategy is fine for small subsamples but projects
             # past the 7-day partition for n>TOP_CAPPED_MAX_N. Fall back to

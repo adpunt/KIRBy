@@ -94,6 +94,19 @@ DEFAULT_REPS = [
 
 MODELS_LIST = DOWNSTREAM_MODELS
 
+
+def _smoke_search_kwargs():
+    """Smoke-only hybrid-search shrink, gated on KIRBY_SMOKE_N.
+
+    Caps the find_best_hybrid pool to one small budget + fast tier for local
+    smoke runs (default is speed='full' + FULL_BUDGETS, minutes of compute).
+    No-op when KIRBY_SMOKE_N is unset.
+    """
+    if not os.environ.get('KIRBY_SMOKE_N', '').strip():
+        return {}
+    return {'speed': 'fast', 'budgets': [25, 50]}
+
+
 # Published reference baselines
 # Prihoda et al. 2022 (BioPhi): threshold-sweep on full therapeutic dataset,
 # NO train/test split. Numbers from notebook 03_oasis_humanness.ipynb Cell 49.
@@ -201,6 +214,8 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
     print(f"{'=' * 60}")
 
     data = load_dataset(dataset_name)
+    from experiments._shared import _smoke_subsample
+    data = _smoke_subsample(data)
     heavy_seqs = data['heavy_seqs']
     light_seqs = data['light_seqs']
     labels = data['labels']
@@ -254,6 +269,7 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
                                           get_best_search_for_downstream)
         _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
                                        dataset_label=dataset_name)
+        _smoke = _smoke_search_kwargs()
         search, _meta = get_best_search_for_downstream(
             reps, labels, groups,
             downstream_model='rf', budget=None,
@@ -261,12 +277,13 @@ def evaluate_dataset(dataset_name, rep_names, n_folds, pruning_mode='default_pru
             # so no cache-key collision is possible (helper sets aug_strat
             # per iteration). See project_cache_collision_fix.
             augmentations=None,
-            speed='full',
+            speed=_smoke.get('speed', 'full'),
             metric='auc',
             task_type='classification',
             dataset_name=dataset_name,
             return_fitted=True,
             adaptive_pruning=0.25,
+            **{k: v for k, v in _smoke.items() if k != 'speed'},
             **_pkw,
         )
         if search is not None:

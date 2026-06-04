@@ -6,7 +6,7 @@ Tests whether methods that work for Gaussian noise generalize to other
 distributions: uniform, multiplicative, heavy-tailed, and partial corruption.
 
 Two evaluation tracks:
-  Track A: Selected LNL methods covering each family tested in N09
+  Track A: ALL 12 LNL methods from the registry (not a pre-hybrid shortlist)
            (data-level, training-loop, GP) — retention metric
   Track B: Selected estimators covering each family tested in N11
            (kNN-based, GP-based, gradient-boosted) — recovery metric
@@ -32,13 +32,17 @@ from experiments._shared import (
     get_precomputed_search, get_best_search_for_downstream, extract_top3_base_reps,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
-from kirby.utils.lnl_methods import get_lnl_method, _standard_dnn_train_predict
+from kirby.utils.lnl_methods import (
+    get_lnl_method, _standard_dnn_train_predict, LNL_REGISTRY)
 from kirby.utils.noise_estimation import get_noise_estimator, weights_from_scores
 
 
 NOISE_TYPES = ['gaussian', 'uniform', 'multiplicative', 'heavy_tailed', 'partial']
 STRENGTHS = [0.1, 0.3, 0.6]
 PARTIAL_FRACTIONS = [0.1, 0.3, 0.5]  # for partial noise type
+# 'partial' noise sweeps PARTIAL_FRACTIONS at this FIXED strength (the other
+# noise types sweep STRENGTHS instead). See the 'partial_axis' note in results.
+PARTIAL_STRENGTH = 0.3
 
 # Multi-seed noise injection: aggregate scores across NOISE_SEEDS to reduce
 # dependence on a single noise realization. Per-fold injection still uses
@@ -46,7 +50,15 @@ PARTIAL_FRACTIONS = [0.1, 0.3, 0.5]  # for partial noise type
 # is unique.
 NOISE_SEEDS = [0, 1, 2]
 
-LNL_METHODS = ['dividemix', 'small_loss', 'uncertainty_curriculum', 'heteroscedastic_gp']
+# Test the FULL LNL method registry (all 12), NOT a pre-selected shortlist.
+# The previous 4-method list ('dividemix', 'small_loss', 'uncertainty_curriculum',
+# 'heteroscedastic_gp') was the winner set from the OLD pre-hybrid confirmation
+# report. But n09's whole question is whether hybrids RERANK the methods — so
+# pre-filtering n13 to a pre-hybrid shortlist would bias the cross-distribution
+# robustness result. Testing all 12 keeps n13 self-contained (no dependency on
+# n09's output) at ~3x the track-A training cost. Regression-only methods are
+# still gated out for classification datasets below (REGRESSION_ONLY_LNL).
+LNL_METHODS = list(LNL_REGISTRY.keys())
 ESTIMATORS = ['local_variance_ratio', 'gaussian_process']
 # ngboost is optional
 try:
@@ -57,9 +69,17 @@ except Exception:
 
 LNL_EPOCHS = 50  # reduced for speed
 
+# Downstream models whose fit() does NOT accept a `sample_weight` argument, so
+# they cannot participate in the Track-B sample-weight remediation track. Seeded
+# with 'mlp' (sklearn MLPRegressor/MLPClassifier reject sample_weight); the loop
+# below auto-adds any other model that raises TypeError on a weighted fit. Rows
+# for these models are intentionally absent from track_b (not recorded as a
+# zero-recovery result) and the names are surfaced in results['track_b_unweighted_models'].
+UNWEIGHTED_TRACK_B_MODELS = {'mlp'}
+
 
 def _inject_noise(y, noise_type, strength, seed=42, partial_fraction=0.3,
-                  is_clf=False):
+                  is_clf=False, return_corrupt_mask=False):
     """Inject noise of the specified distribution.
 
     Args:
@@ -70,13 +90,23 @@ def _inject_noise(y, noise_type, strength, seed=42, partial_fraction=0.3,
         partial_fraction: Fraction of samples to corrupt (for 'partial' type).
         is_clf: If True, use the DivideMix-style label flipping models
             described below — strength now has a meaning for classification.
+        return_corrupt_mask: If True, also return a boolean mask of the samples
+            whose label actually changed (the ground-truth corruption mask).
+            For 'partial' noise this is the genuine corrupted subset; for the
+            other distributions every sample is perturbed (continuous Gaussian/
+            uniform/etc draws), so the mask is all-True for regression and the
+            flip mask for classification. Previously this mask was computed
+            locally and discarded, so downstream detection/recovery tracks had
+            no ground truth for "did the estimator find the corrupted samples".
 
     Returns:
-        y_noisy: Noisy labels (same shape as y).
+        y_noisy: Noisy labels (same shape as y), or
+        (y_noisy, corrupt_mask) if return_corrupt_mask is True.
     """
     rng = np.random.RandomState(seed)
     y = np.asarray(y, dtype=np.float64)
     n = len(y)
+    corrupt_mask = np.zeros(n, dtype=bool)
 
     if is_clf:
         # DivideMix-style label-noise models (Li et al. 2020). Each noise
@@ -126,31 +156,39 @@ def _inject_noise(y, noise_type, strength, seed=42, partial_fraction=0.3,
                     y_noisy_idx[i] = rng.choice(choices)
 
         y_noisy = classes[y_noisy_idx]
-        return y_noisy.astype(y.dtype if y.dtype != np.float64 else np.float32)
+        # Ground-truth corruption mask: labels that actually changed.
+        corrupt_mask = (y_noisy_idx != y_idx)
+        y_noisy = y_noisy.astype(y.dtype if y.dtype != np.float64 else np.float32)
+        if return_corrupt_mask:
+            return y_noisy, corrupt_mask
+        return y_noisy
 
     y_range = float(np.max(y) - np.min(y))
 
     if noise_type == 'gaussian':
         noise = rng.normal(0, strength * y_range, n)
-        return (y + noise).astype(np.float32)
+        corrupt_mask = np.ones(n, dtype=bool)  # all samples perturbed
+        y_noisy = (y + noise).astype(np.float32)
 
     elif noise_type == 'uniform':
         half_width = strength * y_range
         noise = rng.uniform(-half_width, half_width, n)
-        return (y + noise).astype(np.float32)
+        corrupt_mask = np.ones(n, dtype=bool)
+        y_noisy = (y + noise).astype(np.float32)
 
     elif noise_type == 'multiplicative':
         # Relative noise: y_noisy = y * (1 + N(0, sigma))
         multiplier = 1 + rng.normal(0, strength, n)
-        return (y * multiplier).astype(np.float32)
+        corrupt_mask = np.ones(n, dtype=bool)
+        y_noisy = (y * multiplier).astype(np.float32)
 
     elif noise_type == 'heavy_tailed':
         # Student-t with df=3, scaled to match Gaussian sigma
-        from scipy.stats import t as t_dist
         t_std = np.sqrt(3 / (3 - 2))  # theoretical std of t(df=3)
         raw = rng.standard_t(df=3, size=n)
         noise = raw * (strength * y_range / t_std)
-        return (y + noise).astype(np.float32)
+        corrupt_mask = np.ones(n, dtype=bool)
+        y_noisy = (y + noise).astype(np.float32)
 
     elif noise_type == 'partial':
         # Gaussian noise on only a fraction of samples
@@ -158,10 +196,15 @@ def _inject_noise(y, noise_type, strength, seed=42, partial_fraction=0.3,
         corrupt_idx = rng.choice(n, n_corrupt, replace=False)
         noise = np.zeros(n)
         noise[corrupt_idx] = rng.normal(0, strength * y_range, n_corrupt)
-        return (y + noise).astype(np.float32)
+        corrupt_mask[corrupt_idx] = True  # only the corrupted subset
+        y_noisy = (y + noise).astype(np.float32)
 
     else:
         raise ValueError(f"Unknown noise type: {noise_type}")
+
+    if return_corrupt_mask:
+        return y_noisy, corrupt_mask
+    return y_noisy
 
 
 def _build_spaces(train_reps, y_train, augmentations, bp, base_rep_name):
@@ -297,14 +340,33 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             pass
     use_augmentations = augmentations if aug_condition != 'none' else None
 
+    # Reset the unweighted-model registry to its seed for this run (module-level
+    # mutable set persists across run() calls in a single process).
+    global UNWEIGHTED_TRACK_B_MODELS
+    UNWEIGHTED_TRACK_B_MODELS = {'mlp'}
+
     results = {
         'metric': metric_name,
         'lower_is_better': lower_is_better,
         'noise_types': NOISE_TYPES,
         'strengths': STRENGTHS,
+        # AXIS NOTE: every noise type except 'partial' sweeps `strength`
+        # (STRENGTHS). 'partial' instead holds strength fixed at
+        # PARTIAL_STRENGTH and sweeps the corrupted-subset fraction
+        # (partial_fractions). The two axes are NOT comparable cell-for-cell —
+        # downstream readers must treat the partial track as a fraction sweep,
+        # not a strength sweep. Strength keys for partial are encoded as
+        # '<strength>_frac<fraction>' to make this explicit.
+        'partial_fractions': PARTIAL_FRACTIONS,
+        'partial_strength': PARTIAL_STRENGTH,
+        'partial_axis': 'partial_fraction (strength fixed at PARTIAL_STRENGTH)',
         'lnl_methods': lnl_methods,
         'estimators': estimators,
         'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
+        # Track-B sample-weight remediation excludes these models because their
+        # fit() ignores sample_weight; their rows are absent from track_b
+        # rather than masquerading as zero-recovery noisy-baseline ties.
+        'track_b_unweighted_models': sorted(UNWEIGHTED_TRACK_B_MODELS),
         'per_noise_type': {},
     }
 
@@ -392,7 +454,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         # Determine strength variants
         if noise_type == 'partial':
-            strength_variants = [(0.3, f) for f in PARTIAL_FRACTIONS]
+            # Fixed strength, sweep the corrupted-subset fraction. NOT a
+            # strength sweep — see 'partial_axis' note in results.
+            strength_variants = [(PARTIAL_STRENGTH, f) for f in PARTIAL_FRACTIONS]
         else:
             strength_variants = [(s, None) for s in STRENGTHS]
 
@@ -508,13 +572,34 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                                 for mname, mfactory in model_factories.items():
                                     if mname not in track_b_acc[space_name][est_name]:
                                         track_b_acc[space_name][est_name][mname] = []
+                                    # Track B is a SAMPLE-WEIGHT remediation track:
+                                    # the only thing distinguishing it from the
+                                    # noisy baseline is the per-sample reliability
+                                    # weight. Models whose fit() does NOT accept
+                                    # `sample_weight` (sklearn MLPRegressor /
+                                    # MLPClassifier) cannot be remediated this
+                                    # way — a fallback unweighted fit would
+                                    # reproduce the noisy baseline EXACTLY
+                                    # (recovery == 0 by construction) and silently
+                                    # inflate "no recovery" counts. Skip such
+                                    # models entirely and record them so the
+                                    # aggregation can mark them as N/A rather than
+                                    # as a genuine zero-recovery result.
+                                    if mname in UNWEIGHTED_TRACK_B_MODELS:
+                                        continue
                                     try:
                                         m = mfactory()
                                         try:
                                             m.fit(fd['X_eval_train_s'], y_noisy,
                                                   sample_weight=weights)
                                         except TypeError:
-                                            m.fit(fd['X_eval_train_s'], y_noisy)
+                                            # Model does not support sample_weight:
+                                            # it is not remediable in Track B.
+                                            # Remember it and skip — do NOT record
+                                            # an unweighted score masquerading as
+                                            # a remediated one.
+                                            UNWEIGHTED_TRACK_B_MODELS.add(mname)
+                                            continue
                                         score = float(metric_fn(fd['y_val'],
                                                                  m.predict(fd['X_eval_val_s'])))
                                         track_b_acc[space_name][est_name][mname].append(score)
@@ -610,6 +695,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         results['per_noise_type'][noise_type] = convert_numpy(nt_result)
         print(f"    [{time.time() - t_nt:.0f}s]")
+
+    # Refresh after the loop in case extra models were auto-detected as
+    # sample_weight-incompatible (TypeError on weighted fit).
+    results['track_b_unweighted_models'] = sorted(UNWEIGHTED_TRACK_B_MODELS)
 
     # Summary
     results['summary'] = _compute_summary(results)
