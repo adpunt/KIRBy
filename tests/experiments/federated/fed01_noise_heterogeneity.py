@@ -41,22 +41,24 @@ from experiments.federated.federated_helpers import (
     predict_fluid_quality_ensemble, federate_labels_and_train_student,
     federated_feature_selection, federated_noise_detection,
     compute_clf_metrics, _resolve_match,
+    smoke_grid, smoke_n_folds, smoke_k_silos,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
 
 
 # ── Constants ────────────────────────────────────────────────────────────────
+# smoke_grid/smoke_n_folds/smoke_k_silos are no-ops unless KIRBY_SMOKE_N is set.
 
-K = 5                              # number of silos/clusters
+K = smoke_k_silos(5)               # number of silos/clusters
 PKI_THRESHOLD = 6.0                # pKi >= 6.0 → Active (Ki <= 1 uM)
-SIGMA_FRACS = [0, 0.05, 0.1, 0.15, 0.2, 0.3]
-SMOOTH_FACTORS = [0, 0.01, 0.05, 0.1, 0.2]
+SIGMA_FRACS = smoke_grid([0, 0.05, 0.1, 0.15, 0.2, 0.3], [0, 0.2])
+SMOOTH_FACTORS = smoke_grid([0, 0.01, 0.05, 0.1, 0.2], [0, 0.05])
 
-DETECTORS = [
+DETECTORS = smoke_grid([
     'knn_k5', 'knn_k10', 'lof', 'distance_weighted',
     'cv_disagreement', 'bootstrap_ensemble',
     'zscore', 'prediction_error',
-]
+], ['knn_k5', 'zscore'])
 
 
 
@@ -172,7 +174,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             "scaffold groups (no random splits)."
         )
 
-    N_FOLDS = 5
+    N_FOLDS = smoke_n_folds(5)   # 2 under KIRBY_SMOKE_N, else 5
     # Second guard: cv_split also falls back to random KFold when the
     # number of unique groups is below n_splits. That fallback violates
     # feedback_no_random_splits.md just as silently as `groups is None`.
@@ -402,7 +404,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         task_type=data.get('task_type'))
 
                 # Reconstruct hybrid on test set using same feature selections
-                from kirby.hybrid import apply_feature_selection
+                # (apply_feature_selection is imported at module level; a
+                # redundant local import here made Python treat the name as a
+                # function-local everywhere in run(), raising "cannot access
+                # local variable 'apply_feature_selection'" in the C0 path).
                 hybrid_test_parts = []
                 for s in range(1, K + 1):
                     fi = silo_fis.get(s)

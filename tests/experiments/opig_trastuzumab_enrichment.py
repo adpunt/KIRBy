@@ -84,6 +84,19 @@ ENRICHMENT_FRACTIONS = [0.01, 0.05, 0.10]  # top-1%, top-5%, top-10%
 
 MODELS_LIST = DOWNSTREAM_MODELS
 
+
+def _smoke_search_kwargs():
+    """Smoke-only hybrid-search shrink, gated on KIRBY_SMOKE_N.
+
+    Caps the find_best_hybrid pool to one small budget + fast tier for local
+    smoke runs (default is speed='full' + FULL_BUDGETS, minutes of compute).
+    No-op when KIRBY_SMOKE_N is unset.
+    """
+    if not os.environ.get('KIRBY_SMOKE_N', '').strip():
+        return {}
+    return {'speed': 'fast', 'budgets': [25, 50]}
+
+
 # Paper baselines: CNN-predicted binder enrichment (Chinery et al. 2024)
 # % sequences with CNN-HER2-max binding probability >90%
 # Note: these are predicted enrichment rates, not raw top-K enrichment.
@@ -261,6 +274,8 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
     print(f"{'=' * 60}")
 
     data = load_dataset('tz_her2_binary')
+    from experiments._shared import _smoke_subsample
+    data = _smoke_subsample(data)
     heavy_seqs = data['heavy_seqs']
     light_seqs = data['light_seqs']
     labels = data['labels']
@@ -315,16 +330,18 @@ def evaluate_dataset(rep_names, n_folds, pruning_mode='default_pruning'):
                                           get_best_search_for_downstream)
         _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
                                        dataset_label='tz_her2_binary')
+        _smoke = _smoke_search_kwargs()
         search, _meta = get_best_search_for_downstream(
             reps, labels, groups,
             downstream_model='rf', budget=None,
             augmentations=None,
-            speed='full',
+            speed=_smoke.get('speed', 'full'),
             metric='auc',
             task_type='classification',
             dataset_name='tz_her2_binary',
             return_fitted=True,
             adaptive_pruning=0.25,
+            **{k: v for k, v in _smoke.items() if k != 'speed'},
             **_pkw,
         )
         if search is not None:
@@ -459,7 +476,9 @@ def print_analysis(ds_results):
         for model_name, metrics in rep_data['models'].items():
             e1 = metrics.get('enrich_0.01', {}).get('mean', float('nan'))
             e5 = metrics.get('enrich_0.05', {}).get('mean', float('nan'))
-            e10 = metrics.get('enrich_0.10', {}).get('mean', float('nan'))
+            # Stored key is f'enrich_{0.10}' -> 'enrich_0.1' (Python drops the
+            # trailing zero), so look up 'enrich_0.1' not 'enrich_0.10'.
+            e10 = metrics.get('enrich_0.1', {}).get('mean', float('nan'))
             auroc = metrics.get('auroc', {}).get('mean', float('nan'))
             acc = metrics.get('accuracy', {}).get('mean', float('nan'))
             rows.append((rep_name, model_name, e1, e5, e10, auroc, acc))

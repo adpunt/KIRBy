@@ -82,7 +82,18 @@ NOISE_SIGMA = 0.2  # noise level for Condition 4
 def _load_silo(silo_name, ds_name):
     """Load one antibody silo dataset. Returns data dict or None."""
     try:
-        sd = load_data(ds_name, rep_preset='all')
+        # Test-only: under KIRBY_SMOKE_N load cheap sequence reps so the silo
+        # loads locally without server-only antibody foundation models (ESM2,
+        # ProtT5, AntiBERTy, SaProt, AbLang2). rep_names must be passed
+        # EXPLICITLY — leaving it None makes load_data auto-resolve to the full
+        # 18-rep DATASET_REPS 'general' list (which includes the foundation
+        # models). The rep-diversity condition (C6) self-skips when those
+        # foundation reps are absent. No-op ('all') on the server, where the
+        # foundation reps are the whole point of this study.
+        if os.environ.get('KIRBY_SMOKE_N', '').strip():
+            sd = load_data(ds_name, rep_names=['aac', 'onehot', 'blosum'])
+        else:
+            sd = load_data(ds_name, rep_preset='all')
         n = len(sd['labels'])
         print(f"    {silo_name} ({ds_name}): {n} samples, "
               f"{len(sd['reps'])} reps")

@@ -99,8 +99,16 @@ def load_lhasa_herg_data(rep_names=None):
         get_representations as get_molecular_representations,
         assign_scaffold_groups,
     )
-    if rep_names is None:
+    # get_molecular_representations expects a preset name OR a comma-separated
+    # string. run_all hands us None (no override) or a Python list (explicit
+    # --reps). Normalize: None/empty -> 'all'; a list -> comma-joined string.
+    # Without this, an empty list ([]) silently produced ZERO reps and a list
+    # override raised AttributeError on .split — both real bugs.
+    if rep_names is None or (isinstance(rep_names, (list, tuple))
+                             and len(rep_names) == 0):
         rep_names = 'all'
+    elif isinstance(rep_names, (list, tuple)):
+        rep_names = ','.join(rep_names)
     reps = get_molecular_representations(smiles, rep_names)
 
     # Scaffold groups
@@ -109,7 +117,7 @@ def load_lhasa_herg_data(rep_names=None):
     except Exception:
         groups = None
 
-    return {
+    data = {
         'reps': reps,
         'labels': labels,
         'smiles': smiles,
@@ -119,6 +127,49 @@ def load_lhasa_herg_data(rep_names=None):
         'is_binary': True,  # Signal to experiments: labels already binarized
         'augmentations': None,
     }
+    # Honor the test-only KIRBY_SMOKE_N row cap (no-op when env var unset)
+    from experiments._shared import _smoke_subsample
+    return _smoke_subsample(data)
+
+
+# ── Smoke-test gating (test-only) ────────────────────────────────────────────
+# When KIRBY_SMOKE_N is set, the federated suite shrinks its fan-out (folds,
+# budgets, downstream models, noise/sigma/smooth/detector grids) so it runs in
+# minutes on tiny local subsets. ALL of this is a no-op when the env var is
+# unset, so normal/server runs use the full grids unchanged.
+
+def _smoke_active() -> bool:
+    raw = os.environ.get('KIRBY_SMOKE_N', '').strip()
+    if not raw:
+        return False
+    try:
+        return int(raw) > 0
+    except ValueError:
+        return False
+
+
+def smoke_grid(full_values, smoke_values):
+    """Return smoke_values when KIRBY_SMOKE_N is set, else full_values.
+
+    Used to shrink per-experiment noise/sigma/smooth/detector grids without
+    touching the production grids (which are the `full_values`).
+    """
+    return list(smoke_values) if _smoke_active() else list(full_values)
+
+
+def smoke_n_folds(full_n: int) -> int:
+    """Cut cross-validation folds to 2 under smoke mode, else full_n."""
+    return 2 if _smoke_active() else full_n
+
+
+def smoke_k_silos(full_k: int) -> int:
+    """Cut number of silos/clusters to 2 under smoke mode, else full_k.
+
+    Two clusters (not three) keeps each cluster above fed04's 20-sample
+    minimum at the small smoke row caps, so per-cluster importance profiles
+    are actually computed instead of skipped as 'too few samples'.
+    """
+    return 2 if _smoke_active() else full_k
 
 
 # ── Federated-specific config ────────────────────────────────────────────────
@@ -131,15 +182,28 @@ def _get_federated_config():
     if _FEDERATED_CONFIG_CACHE is None:
         from kirby.find_best_hybrid import SPEED_TIERS
         tier = SPEED_TIERS['full']
-        _FEDERATED_CONFIG_CACHE = {
-            'n_splits': tier['n_folds'],
-            'search_speed': 'full',
-            'allocations': tier['allocation_methods'],
-            'importance_methods': tier['importance_methods'],
-            'internal_evaluators': INTERNAL_EVALUATORS,
-            'budgets': [100],
-            'models': DOWNSTREAM_MODELS,
-        }
+        if _smoke_active():
+            # Test-only: shrink folds/budgets/models so the heavy hybrid
+            # search fans out minimally. Gated — server runs never see this.
+            _FEDERATED_CONFIG_CACHE = {
+                'n_splits': 2,
+                'search_speed': 'full',
+                'allocations': tier['allocation_methods'],
+                'importance_methods': tier['importance_methods'],
+                'internal_evaluators': ['match', 'rf'],
+                'budgets': [50],
+                'models': ['rf', 'knn'],
+            }
+        else:
+            _FEDERATED_CONFIG_CACHE = {
+                'n_splits': tier['n_folds'],
+                'search_speed': 'full',
+                'allocations': tier['allocation_methods'],
+                'importance_methods': tier['importance_methods'],
+                'internal_evaluators': INTERNAL_EVALUATORS,
+                'budgets': [100],
+                'models': DOWNSTREAM_MODELS,
+            }
     return _FEDERATED_CONFIG_CACHE
 
 
@@ -1687,7 +1751,9 @@ def compare_importance_profiles(profiles_dict):
     all_reps = sorted(set().union(
         *[set(p.keys()) for p in profiles_dict.values()]))
     if len(all_reps) < 3:
-        return float('nan'), {}
+        # Stability is undefined with <3 reps — return None (JSON null), not
+        # NaN (which is invalid JSON and trips the "no NaN" requirement).
+        return None, {}
 
     # Build importance vectors (missing reps get 0)
     vectors = {}
@@ -1708,7 +1774,9 @@ def compare_importance_profiles(profiles_dict):
         if not np.isnan(r):
             correlations.append(r)
 
-    mean_r = float(np.mean(correlations)) if correlations else float('nan')
+    # None (JSON null) when no pairwise correlation is computable (e.g. all
+    # clusters' importance vectors are constant) — never NaN.
+    mean_r = float(np.mean(correlations)) if correlations else None
     return mean_r, pairwise
 
 
@@ -1941,7 +2009,15 @@ def run_all(dataset_name: str, output_dir: str,
         print(f"  Loaded in {time.time() - t0:.1f}s")
     else:
         print(f"\nLoading {dataset_name}...")
-        data = load_data(dataset_name, rep_preset='all', rep_names=rep_names)
+        # Pass the resolved rep list AS the preset (comma-joined) rather than
+        # 'all'. get_representations() generates only the named reps, instead of
+        # generating the full 'all' set and filtering afterwards. This avoids
+        # triggering heavy/optional neural reps (which may be slow or fail
+        # locally) when only a small cheap rep set was requested — and on the
+        # server it generates exactly the DATASET_REPS general list. Equivalent
+        # results (same per-rep arrays, same cache files), strictly less work.
+        _preset = ','.join(rep_names) if rep_names else 'all'
+        data = load_data(dataset_name, rep_preset=_preset, rep_names=rep_names)
         print(f"  Loaded in {time.time() - t0:.1f}s")
 
         # NaN guard
@@ -1957,12 +2033,22 @@ def run_all(dataset_name: str, output_dir: str,
         # ── Load augmentation reps ──
         aug_rep_names = DATASET_REPS.get(dataset_name, {}).get(
             'augmentation', [])
+        if aug_rep_names and _smoke_active():
+            # Test-only: skip augmentation reps under KIRBY_SMOKE_N. They are
+            # optional enrichment and several (e.g. pharmacophore3d,
+            # coulomb_matrix) require slow 3D-conformer generation over the FULL
+            # dataset before the row cap applies — minutes per smoke run with no
+            # value at tiny n. No-op when the env var is unset (server unchanged).
+            print(f"  [SMOKE] skipping {len(aug_rep_names)} augmentation reps")
+            data['augmentations'] = None
+            aug_rep_names = []
         if aug_rep_names:
             missing = [r for r in aug_rep_names if r not in reps_data]
             if missing:
                 print(f"  Loading {len(missing)} augmentation reps: "
                       f"{missing}")
-                aug_data = load_data(dataset_name, rep_preset='all',
+                aug_data = load_data(dataset_name,
+                                     rep_preset=','.join(missing),
                                      rep_names=missing)
                 aug_reps = {}
                 for rn, arr in aug_data['reps'].items():

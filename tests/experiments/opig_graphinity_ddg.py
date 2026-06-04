@@ -77,6 +77,19 @@ DEFAULT_REPS = [
 
 MODELS_LIST = DOWNSTREAM_MODELS
 
+
+def _smoke_search_kwargs():
+    """Smoke-only hybrid-search shrink, gated on KIRBY_SMOKE_N.
+
+    Caps the find_best_hybrid pool to one small budget + fast tier for local
+    smoke runs (default is speed='full' + FULL_BUDGETS, minutes of compute).
+    No-op when KIRBY_SMOKE_N is unset.
+    """
+    if not os.environ.get('KIRBY_SMOKE_N', '').strip():
+        return {}
+    return {'speed': 'fast', 'budgets': [25, 50]}
+
+
 # Condition → dataset name mapping
 CONDITION_DATASETS = {
     'within_foldx':   'graphinity_foldx',
@@ -187,6 +200,10 @@ def evaluate_transfer(rep_names, n_folds, max_foldx=5000):
     from kirby.datasets.graphinity import load_graphinity_dataset
     train_data = load_graphinity_dataset(preset='foldx', max_samples=max_foldx)
     test_data = load_dataset('ddg_combined')
+
+    from experiments._shared import _smoke_subsample
+    train_data = _smoke_subsample(train_data)
+    test_data = _smoke_subsample(test_data)
 
     # Guard: unpaired sequences → empty strings
     for d in [train_data, test_data]:
@@ -329,17 +346,24 @@ def evaluate_condition(condition, rep_names, n_folds, max_foldx=5000,
     else:
         data = load_dataset(ds_name)
 
+    # Graphinity direct load returns pdb_ids but not groups — convert to a
+    # per-row 'groups' array BEFORE smoke subsampling so _smoke_subsample
+    # (which knows 'groups' but not 'pdb_ids') keeps groups aligned with the
+    # subsampled labels/seqs. Without this, groups would stay full-length and
+    # GroupKFold would see inconsistent sample counts under KIRBY_SMOKE_N.
+    if data.get('groups') is None and data.get('pdb_ids') is not None:
+        pdb_ids = data['pdb_ids']
+        unique_ids = {pid: i for i, pid in enumerate(sorted(set(pdb_ids)))}
+        data['groups'] = np.array([unique_ids[pid] for pid in pdb_ids])
+
+    from experiments._shared import _smoke_subsample
+    data = _smoke_subsample(data)
     heavy_seqs = data['heavy_seqs']
     light_seqs = data['light_seqs']
     if light_seqs is None:
         light_seqs = [''] * len(heavy_seqs)
     labels = data['labels']
     groups = data.get('groups')
-    # Graphinity direct load returns pdb_ids but not groups — convert
-    if groups is None and 'pdb_ids' in data:
-        pdb_ids = data['pdb_ids']
-        unique_ids = {pid: i for i, pid in enumerate(sorted(set(pdb_ids)))}
-        groups = np.array([unique_ids[pid] for pid in pdb_ids])
     n = len(labels)
 
     print(f"  {n} samples, DDG range [{labels.min():.2f}, {labels.max():.2f}]")
@@ -382,17 +406,19 @@ def evaluate_condition(condition, rep_names, n_folds, max_foldx=5000,
             resolve_pruning_kwargs, get_best_search_for_downstream)
         _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
                                        dataset_label=f"{ds_name}/n{n}")
+        _smoke = _smoke_search_kwargs()
         search, _meta = get_best_search_for_downstream(
             base if base else reps, labels, grp,
             downstream_model='rf', budget=None,
             augmentations=aug_dict if aug_dict else None,
-            speed='full', metric='pearson',
+            speed=_smoke.get('speed', 'full'), metric='pearson',
             task_type='regression',
             dataset_name=ds_name,
             return_fitted=True,
             internal_evaluators=INTERNAL_EVALUATORS,
             condition_suffix=f'n{n}',
             adaptive_pruning=0.25,
+            **{k: v for k, v in _smoke.items() if k != 'speed'},
             **_pkw,
         )
         top3 = extract_top3_base_reps(search) if search is not None else None

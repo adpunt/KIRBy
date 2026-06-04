@@ -62,6 +62,17 @@ GP_MAX_SAMPLES = 1000
 # corrupted. Aggregate across NOISE_SEEDS and report mean ± std.
 NOISE_SEEDS = [0, 1, 2]
 
+# Activity-cliff percentile knob sweep. "Structurally similar" = the closest
+# `similar_percentile`% of off-diagonal Euclidean pairs. The main analysis
+# uses PRIMARY_AC_PERCENTILE; the additive `ac_percentile_sweep` output
+# reports cliff prevalence + the cliff false-positive win-rate at EACH knob
+# so the user can pick a prevalence after the ARC rerun. The cliff mask is a
+# fixed structural property of (X, y) and is INDEPENDENT of the noise-injection
+# loop, so the sweep reuses the already-computed per-(fraction,seed,space)
+# `flagged` masks rather than re-running any GP-LOO scoring.
+AC_PERCENTILES = [1.0, 2.0, 5.0, 10.0]
+PRIMARY_AC_PERCENTILE = 2.0
+
 
 def _subsample_if_needed(X, y, max_n, seed=42):
     """Subsample to max_n if needed. Returns (X_sub, y_sub, idx)."""
@@ -72,8 +83,24 @@ def _subsample_if_needed(X, y, max_n, seed=42):
     return X[idx], y[idx], idx
 
 
-def _identify_cliffs_euclidean(X, y, sim_threshold=0.55, activity_k=2.0, is_clf=False):
-    """Identify activity cliff compounds using Euclidean distance."""
+def _identify_cliffs_euclidean(X, y, similar_percentile=PRIMARY_AC_PERCENTILE,
+                               activity_k=2.0, is_clf=False):
+    """Identify activity cliff compounds using Euclidean distance.
+
+    A cliff compound is one that has at least one neighbour that is
+    structurally SIMILAR (small Euclidean distance) but has a very DIFFERENT
+    activity. Similarity is sim = 1/(1+D).
+
+    BUG FIX (2026-06-03): the previous version used an absolute similarity
+    cutoff of 0.55. On standardised high-dimensional reps, sim = 1/(1+D)
+    never approaches 0.55 (observed max ≈ 0.14 on buchwald_hartwig concat),
+    so the cutoff matched zero pairs and n_cliffs was always 0 — which made
+    the whole cliff-false-positive thesis (and the win-rate summary) degenerate.
+
+    Fix mirrors n01.identify_cliff_pairs / s12.identify_cliff_pairs_euclidean:
+    define "structurally similar" as the top ``similar_percentile``% most-
+    similar off-diagonal pairs (distribution-relative), not an absolute cutoff.
+    """
     D = compute_distance_matrix(X, standardize=True)
     sim = 1.0 / (1.0 + D)
     np.fill_diagonal(sim, 0.0)
@@ -84,7 +111,13 @@ def _identify_cliffs_euclidean(X, y, sim_threshold=0.55, activity_k=2.0, is_clf=
         mad_y = float(np.median(np.abs(y - np.median(y))))
         activity_threshold = activity_k * mad_y
         delta_y = np.abs(y[:, None] - y[None, :])
-    cliff_mask = ((sim >= sim_threshold) & (delta_y > activity_threshold)).any(axis=1)
+    # Distribution-relative similarity cutoff: the top similar_percentile%
+    # most-similar off-diagonal pairs count as "structurally similar".
+    n = len(y)
+    off = sim[~np.eye(n, dtype=bool)]
+    sim_cutoff = float(np.percentile(off, 100.0 - similar_percentile)) \
+        if off.size else 1.0
+    cliff_mask = ((sim >= sim_cutoff) & (delta_y > activity_threshold)).any(axis=1)
     return cliff_mask
 
 
@@ -183,7 +216,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # aren't used here (this experiment reports precision/recall/cliff_FP,
     # not the domain metric). Expose metric_name in the returned summary
     # so downstream readers know which dataset metric the run targeted.
-    metric_name, _metric_fn, _lower_is_better = get_domain_metric(data)
+    metric_name, _metric_fn, lower_is_better = get_domain_metric(data)
 
     noise_fractions = kwargs.get('noise_fractions', [0.05, 0.1, 0.2])
     budget = kwargs.get('budget', 100)
@@ -238,24 +271,57 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print(f"  Spaces: {list(spaces.keys())}")
     print(f"  Noise fractions: {noise_fractions}")
 
-    # Identify cliffs in the original data (using concat Euclidean)
+    # Identify cliffs in the original data (using concat Euclidean). The cliff
+    # mask is a fixed structural property of (X_sub, y_sub) and does NOT depend
+    # on the noise-injection loop below, so we compute one mask PER percentile
+    # knob up front and reuse them in the additive sweep. The PRIMARY knob
+    # drives the headline `cliff_mask` / `n_cliffs` used by the legacy summary.
     X_sub, y_sub, sub_idx = _subsample_if_needed(X_concat, labels, GP_MAX_SAMPLES)
-    cliff_mask = _identify_cliffs_euclidean(X_sub, y_sub)
+    cliff_masks_by_pct = {
+        pct: _identify_cliffs_euclidean(X_sub, y_sub, similar_percentile=pct)
+        for pct in AC_PERCENTILES
+    }
+    # Ensure the primary knob has a mask even if it isn't in AC_PERCENTILES.
+    if PRIMARY_AC_PERCENTILE not in cliff_masks_by_pct:
+        cliff_masks_by_pct[PRIMARY_AC_PERCENTILE] = _identify_cliffs_euclidean(
+            X_sub, y_sub, similar_percentile=PRIMARY_AC_PERCENTILE)
+    cliff_mask = cliff_masks_by_pct[PRIMARY_AC_PERCENTILE]
     n_cliffs = int(cliff_mask.sum())
-    print(f"  Cliff compounds: {n_cliffs}/{len(y_sub)} ({100*n_cliffs/len(y_sub):.1f}%)")
+    print(f"  Cliff compounds (primary {PRIMARY_AC_PERCENTILE}%): "
+          f"{n_cliffs}/{len(y_sub)} ({100*n_cliffs/len(y_sub):.1f}%)")
+    for pct in AC_PERCENTILES:
+        nc = int(cliff_masks_by_pct[pct].sum())
+        print(f"    cliff knob {pct:>5.1f}%: {nc}/{len(y_sub)} "
+              f"({100*nc/len(y_sub):.1f}%)")
 
     top3 = extract_top3_base_reps(_search) if _search is not None else None
     results = {
         'metric': metric_name,
+        # Direction of the dataset's domain metric. This experiment reports
+        # detection precision/recall/cliff_FP (not the domain metric itself),
+        # but downstream readers that key on a standard envelope expect a
+        # lower_is_better flag; surface it here. n04 deliberately returns a flat
+        # dict (matching n05/n07-n13, which also do NOT use
+        # make_structured_output) rather than the structured wrapper used only
+        # by n01/n02/n03.
+        'lower_is_better': bool(lower_is_better),
         'n_samples': len(labels),
         'n_subsampled': len(y_sub),
         'n_cliffs': n_cliffs,
         'pct_cliffs': float(100 * n_cliffs / len(y_sub)),
+        'ac_percentiles': AC_PERCENTILES,
+        'primary_ac_percentile': PRIMARY_AC_PERCENTILE,
         'noise_fractions': noise_fractions,
         'spaces': list(spaces.keys()),
         'top3_base_reps': [(n, s) for n, s in top3] if top3 else [],
         'per_noise_level': {},
     }
+
+    # Retained per-(fraction, seed, condition) `flagged` + `noise_mask` so the
+    # additive cliff-percentile sweep can recompute cliff_fp_rate per knob
+    # WITHOUT re-running GP-LOO. Structure: flagged_records[(frac, cond)] is a
+    # list (one per seed) of {'flagged': bool[n_sub], 'noise_mask': bool[n_sub]}.
+    flagged_records = {}
 
     for frac in noise_fractions:
         print(f"\n  === Noise fraction: {frac:.0%} ===")
@@ -285,6 +351,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 threshold_pct = min(frac * 2, 0.3)
                 threshold = np.percentile(scores, (1 - threshold_pct) * 100)
                 flagged = scores >= threshold
+
+                # Retain for the cliff-percentile sweep (cliff-independent).
+                flagged_records.setdefault((frac, space_name), []).append(
+                    {'flagged': flagged.copy(), 'noise_mask': noise_mask.copy()})
 
                 tp = int((flagged & noise_mask).sum())
                 fp_cliff = int((flagged & cliff_mask & ~noise_mask).sum())
@@ -320,6 +390,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                         scores_ca = estimator.noise_scores_
                         threshold_ca = np.percentile(scores_ca, (1 - threshold_pct) * 100)
                         flagged_ca = scores_ca >= threshold_ca
+
+                        flagged_records.setdefault(
+                            (frac, 'cliff_aware_estimator'), []).append(
+                            {'flagged': flagged_ca.copy(),
+                             'noise_mask': noise_mask.copy()})
 
                         tp_ca = int((flagged_ca & noise_mask).sum())
                         fp_cliff_ca = int((flagged_ca & cliff_mask & ~noise_mask).sum())
@@ -374,6 +449,10 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             pe_scores = np.abs(y_noisy_sub - y_pred_cv)
             threshold_pe = np.percentile(pe_scores, (1 - threshold_pct) * 100)
             flagged_pe = pe_scores >= threshold_pe
+
+            flagged_records.setdefault((frac, 'prediction_error'), []).append(
+                {'flagged': flagged_pe.copy(), 'noise_mask': noise_mask.copy()})
+
             tp_pe = int((flagged_pe & noise_mask).sum())
             fp_cliff_pe = int((flagged_pe & cliff_mask & ~noise_mask).sum())
             precision_pe = tp_pe / max(flagged_pe.sum(), 1)
@@ -423,6 +502,97 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         results['per_noise_level'][str(frac)] = convert_numpy(agg_level)
 
+    # =========================================================================
+    # ADDITIVE: activity-cliff percentile knob SWEEP
+    # =========================================================================
+    # For EACH percentile knob, recompute the cliff false-positive rate per
+    # (fraction, condition) by REUSING the retained `flagged` masks (the
+    # noise-detection decision is independent of the cliff definition) against
+    # that knob's cliff mask, then aggregate across seeds and compute the same
+    # hybrid-win-rate the headline summary uses. No GP-LOO re-scoring happens.
+    print("\n  === ac_percentile_sweep ===")
+    ac_sweep = {}
+    for pct in AC_PERCENTILES:
+        c_mask = cliff_masks_by_pct[pct]
+        n_cliffs_pct = int(c_mask.sum())
+        cliff_count = max(int(c_mask.sum()), 1)
+
+        # Per (fraction, condition): mean cliff_fp_rate across seeds.
+        per_noise = {}
+        for (frac, cond), records in flagged_records.items():
+            rates = []
+            for rec in records:
+                flagged = rec['flagged']
+                nmask = rec['noise_mask']
+                fp_cliff = int((flagged & c_mask & ~nmask).sum())
+                rates.append(fp_cliff / cliff_count)
+            per_noise.setdefault(str(frac), {})[cond] = {
+                'cliff_fp_rate': float(np.mean(rates)) if rates else float('nan'),
+                'cliff_fp_rate_std': float(np.std(rates)) if rates else float('nan'),
+                'n_seeds': len(rates),
+            }
+
+        # Win-rate: hybrid has the lowest cliff_fp_rate vs every other
+        # condition, summed over all (fraction, condition) comparisons. Mirrors
+        # the headline summary's logic. Degenerate (0-cliff) knobs are guarded.
+        if n_cliffs_pct == 0:
+            entry = {
+                'similar_percentile': pct,
+                'n_cliffs': 0,
+                'pct_cliffs': 0.0,
+                'cliffs_degenerate': True,
+                'win_rate': None,
+                'hybrid_lowest_cliff_fp_rate': None,
+                'total_comparisons': 0,
+                'per_noise_level': per_noise,
+                'note': ('No cliff compounds at this knob: every condition has '
+                         'cliff_fp_rate=0, win-rate is a meaningless 0<=0 tie.'),
+            }
+        elif not hybrid_available:
+            entry = {
+                'similar_percentile': pct,
+                'n_cliffs': n_cliffs_pct,
+                'pct_cliffs': float(100 * n_cliffs_pct / len(y_sub)),
+                'cliffs_degenerate': False,
+                'win_rate': None,
+                'hybrid_lowest_cliff_fp_rate': None,
+                'total_comparisons': 0,
+                'per_noise_level': per_noise,
+                'note': 'Hybrid not built; win-rate intentionally not reported.',
+            }
+        else:
+            hybrid_wins = 0
+            total_comparisons = 0
+            for frac_key, level_res in per_noise.items():
+                h_entry = level_res.get('hybrid')
+                if h_entry is None or np.isnan(h_entry['cliff_fp_rate']):
+                    continue
+                h_cfp = h_entry['cliff_fp_rate']
+                for cond, cond_res in level_res.items():
+                    if cond == 'hybrid' or np.isnan(cond_res['cliff_fp_rate']):
+                        continue
+                    total_comparisons += 1
+                    if h_cfp <= cond_res['cliff_fp_rate']:
+                        hybrid_wins += 1
+            entry = {
+                'similar_percentile': pct,
+                'n_cliffs': n_cliffs_pct,
+                'pct_cliffs': float(100 * n_cliffs_pct / len(y_sub)),
+                'cliffs_degenerate': False,
+                'hybrid_lowest_cliff_fp_rate': hybrid_wins,
+                'total_comparisons': total_comparisons,
+                'win_rate': (float(hybrid_wins / total_comparisons)
+                             if total_comparisons > 0 else None),
+                'per_noise_level': per_noise,
+            }
+        ac_sweep[str(pct)] = convert_numpy(entry)
+        _wr = entry['win_rate']
+        print(f"    knob {pct:>5.1f}%: n_cliffs={n_cliffs_pct:>4} "
+              f"({entry['pct_cliffs']:.1f}%)  "
+              f"win_rate={'n/a' if _wr is None else f'{_wr:.3f}'}")
+
+    results['ac_percentile_sweep'] = ac_sweep
+
     # Summary: does hybrid have the lowest cliff FP rate across noise levels?
     # Previously the missing-hybrid case fell through `.get('hybrid', {}).get(
     # 'cliff_fp_rate', 1.0)` which is a VALID value (cliff_fp_rate ∈ [0, 1]),
@@ -430,6 +600,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # build had silently failed. Now we explicitly skip the win-rate
     # computation in that case and flag the run.
     results['hybrid_available'] = bool(hybrid_available)
+    # Self-diagnosing guard: the win-rate compares cliff false-positive RATES,
+    # which are all identically 0 when no cliff compounds exist. Reporting a
+    # 1.0 win-rate from `0 <= 0` comparisons is a false positive (this is
+    # exactly the degeneracy the 2026-06-03 cliff-cutoff fix targets). Flag it.
+    results['cliffs_degenerate'] = bool(n_cliffs == 0)
     if not hybrid_available:
         results['summary'] = {
             'hybrid_available': False,
@@ -438,6 +613,19 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                      'reported.'),
         }
         print(f"\n  Hybrid unavailable — win-rate not reported.")
+    elif n_cliffs == 0:
+        results['summary'] = {
+            'hybrid_available': True,
+            'cliffs_degenerate': True,
+            'win_rate': None,
+            'note': ('No cliff compounds identified (n_cliffs=0): every '
+                     'condition has cliff_fp_rate=0, so the win-rate would be '
+                     'a meaningless 0<=0 tie. Win-rate intentionally not '
+                     'reported. If this recurs after the cliff-cutoff fix, the '
+                     'dataset genuinely has no near-duplicate/different-activity '
+                     'pairs at the top-2%% similarity cutoff.'),
+        }
+        print(f"\n  No cliffs identified — win-rate not reported (degenerate).")
     else:
         hybrid_wins = 0
         total_comparisons = 0

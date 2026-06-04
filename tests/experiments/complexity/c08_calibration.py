@@ -182,7 +182,25 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                        mismatched_desc),
     }
 
-    results = {'conditions': {}, 'task_type': task_type}
+    # Condition-distinctness diagnostic. The calibration comparison is only
+    # meaningful if optimal / underfit / overfit use genuinely different budgets.
+    # (Earlier analysis mis-stated that "optimal == full dim" on EGFR — in fact
+    # optimal=659 vs total_dim=68948, so they ARE separated and the "underfit
+    # calibrates best" result is a real finding, not a collapse. This field lets
+    # the rerun confirm separation per dataset.) See
+    # COMPLEXITY_SIMILARITY_BROKEN_2026_06_03.md.
+    _cond_budgets = {'optimal': optimal_budget, 'underfit': underfit_budget,
+                     'overfit': total_dim}
+    results = {
+        'conditions': {},
+        'task_type': task_type,
+        'total_dim': total_dim,
+        'condition_budgets': _cond_budgets,
+        'conditions_distinct': len(set(_cond_budgets.values())) == len(_cond_budgets),
+    }
+    if not results['conditions_distinct']:
+        print(f"  WARNING: calibration conditions collapse (budgets "
+              f"{_cond_budgets}) — optimal/underfit/overfit not separated.")
 
     for cond_name in all_conditions:
         if cond_name not in condition_specs:
@@ -366,7 +384,7 @@ def run(data, config, output_dir, dataset_name, conditions=None, c02_results_dir
                 sharpness_ratio = mpiw / target_range if target_range > 0 else float('nan')
                 cal_error = abs(picp - (1 - alpha))
 
-                errors = np.abs(y_val - y_pred_conf)
+                errors = np.abs(y_val - y_pred_val)  # 2026-06-04 fix: y_pred_conf was undefined (NameError crashed c08 on every regression dataset); same model/X_val per L376
                 ue_corr = float('nan')
                 if hasattr(model_conf, 'estimators_') and len(errors) >= 3:
                     tree_preds = np.array([t.predict(X_val_s) for t in model_conf.estimators_])

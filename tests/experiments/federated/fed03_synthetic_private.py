@@ -39,6 +39,7 @@ from experiments.federated.federated_helpers import (
     federated_feature_selection,
     importance_profile_transfer,
     _resolve_match,
+    smoke_n_folds,
 )
 
 
@@ -263,10 +264,10 @@ def _run_herg_source_based(data, config, output_dir, dataset_name):
 
     # ── Per-fold accumulators ─────────────────────────────────────────────
     per_fold_results = []
-    n_folds = 5
+    n_folds = smoke_n_folds(5)   # 2 under KIRBY_SMOKE_N, else 5
     folds = list(cv_split(
         pooled_groups, n_folds, np.zeros(n_total), all_labels))
-    print(f"\n5-fold scaffold CV: {n_folds} folds over {n_unique_groups} groups")
+    print(f"\n{n_folds}-fold scaffold CV over {n_unique_groups} groups")
 
     for fold_idx, (train_idx, test_idx) in enumerate(folds):
         print(f"\n── Fold {fold_idx + 1}/{n_folds} "
@@ -675,9 +676,9 @@ def _run_asymmetric_reps(data, config, output_dir, dataset_name):
     is_clf = len(np.unique(labels)) <= 10
     metrics_fn = compute_clf_metrics if is_clf else compute_reg_metrics
 
-    n_folds = 5
+    n_folds = smoke_n_folds(5)   # 2 under KIRBY_SMOKE_N, else 5
     folds = list(cv_split(groups, n_folds, np.zeros(n_samples), labels))
-    print(f"  5-fold CV: {n_folds} folds over {n_unique_groups} groups "
+    print(f"  {n_folds}-fold CV over {n_unique_groups} groups "
           f"({'clf' if is_clf else 'reg'})")
 
     per_fold_results = []
@@ -1032,7 +1033,7 @@ def _run_antibody_federated(data, config, output_dir, dataset_name):
     print("\n  C1: Independent silo baselines (5-fold)...")
     independent = {}
     silo_fis = {}  # keep a representative fi per silo for cross-task transfer (C3)
-    N_FOLDS_C = 5
+    N_FOLDS_C = smoke_n_folds(5)   # 2 under KIRBY_SMOKE_N, else 5
     for silo_name, sd in silo_data.items():
         reps_s = sd['reps']
         labels_s = sd['labels']

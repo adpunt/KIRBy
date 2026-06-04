@@ -85,7 +85,7 @@ def _predict_for_metric(model, X, metric_name):
     return model.predict(X)
 
 
-def _compute_noise_scores(X_tr_s, y_tr):
+def _compute_noise_scores(X_tr_s, y_tr, is_clf=False):
     """Fit ActivityCliffAwareEstimator on (X_tr_s, y_tr) and return noise_scores_.
 
     Hoisted out of _evaluate_fold so the caller can compute once per (fold,
@@ -93,9 +93,15 @@ def _compute_noise_scores(X_tr_s, y_tr):
     downweight, label_smooth, knn_smooth). Previously each strategy refit
     the same estimator on the same data — ~4× wasted work per fold.
     Returns None if the estimator fit fails.
+
+    is_clf threads into the estimator so classification datasets use its
+    class-disagreement noise-scoring branch instead of the regression
+    neighbor-mean / local-variance path (which divides integer class labels
+    by their range — meaningless on nominal labels). Mirrors the per-rep /
+    hybrid is_clf threading audited as P0#1.
     """
     try:
-        est = ActivityCliffAwareEstimator(k=10, metric='cosine')
+        est = ActivityCliffAwareEstimator(k=10, metric='cosine', is_clf=is_clf)
         est.fit(X_tr_s, y_tr)
         return est.noise_scores_
     except Exception as exc:
@@ -132,7 +138,7 @@ def _evaluate_fold(X_tr_s, X_va_s, y_train, y_val, strategy, noise_fraction,
     # None when the strategy needs scores and they're unavailable (loud).
     if strategy in ('remove', 'downweight', 'label_smooth', 'knn_smooth'):
         if noise_scores is None:
-            noise_scores = _compute_noise_scores(X_tr_s, y_tr)
+            noise_scores = _compute_noise_scores(X_tr_s, y_tr, is_clf=is_clf)
         if noise_scores is None:
             return None
 
@@ -383,7 +389,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 y_tr_noisy, _ = _inject_noise(
                     y_train_clean, noise_fraction,
                     seed=actual_seed, is_clf=is_clf)
-                noise_scores_cache = _compute_noise_scores(X_tr_s, y_tr_noisy)
+                noise_scores_cache = _compute_noise_scores(
+                    X_tr_s, y_tr_noisy, is_clf=is_clf)
 
                 for strategy in strategies:
                     if strategy == 'no_noise':
@@ -460,7 +467,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 y_tr_noisy, _ = _inject_noise(
                     y_train_clean, noise_fraction,
                     seed=actual_seed, is_clf=is_clf)
-                noise_scores_cache = _compute_noise_scores(X_tr_s, y_tr_noisy)
+                noise_scores_cache = _compute_noise_scores(
+                    X_tr_s, y_tr_noisy, is_clf=is_clf)
 
                 for strategy in strategies:
                     if strategy == 'no_noise':

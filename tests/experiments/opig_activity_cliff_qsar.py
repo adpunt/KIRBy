@@ -39,6 +39,19 @@ Reference:
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+# Load xgboost/lightgbm native OpenMP runtimes BEFORE rdkit (imported during
+# rep generation) to avoid a duplicate-libomp segfault on macOS when these
+# models and threaded sklearn estimators run in sequence. Optional deps —
+# guard so environments without them are unaffected.
+try:
+    import xgboost as _xgboost  # noqa: F401
+except Exception:
+    pass
+try:
+    import lightgbm as _lightgbm  # noqa: F401
+except Exception:
+    pass
+
 import sys
 import json
 import time
@@ -271,7 +284,10 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
     print(f"Target: {target}")
     print(f"{'=' * 60}")
 
-    data = load_chembl_qsar(target)
+    # Test-only row cap (smoke tests). No-op unless KIRBY_SMOKE_N is set.
+    _smoke_n = os.environ.get('KIRBY_SMOKE_N', '').strip()
+    _max = int(_smoke_n) if _smoke_n.isdigit() and int(_smoke_n) > 0 else None
+    data = load_chembl_qsar(target, max_samples=_max)
     smiles = data['smiles']
     labels = data['labels']
     mmp_pairs = data['mmp_pairs']
@@ -553,8 +569,21 @@ def main():
     p = Path(output_path)
     p.parent.mkdir(parents=True, exist_ok=True)
 
+    # Replace non-finite floats (NaN/inf) with null before serialising. These
+    # arise from genuinely undefined metrics at tiny n (e.g. activity-cliff
+    # AUROC when a subset contains 0 cliffs), and NaN is not valid JSON. null
+    # is the honest representation of "undefined", and keeps the file NaN-free.
+    def _nan_to_none(o):
+        if isinstance(o, float):
+            return None if (o != o or o in (float('inf'), float('-inf'))) else o
+        if isinstance(o, dict):
+            return {k: _nan_to_none(v) for k, v in o.items()}
+        if isinstance(o, list):
+            return [_nan_to_none(v) for v in o]
+        return o
+
     with open(p, 'w') as f:
-        json.dump(convert_numpy(save_results), f, indent=2)
+        json.dump(_nan_to_none(convert_numpy(save_results)), f, indent=2)
     print(f"\nResults saved: {p}")
 
 

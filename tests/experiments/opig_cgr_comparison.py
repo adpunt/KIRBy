@@ -35,6 +35,19 @@ Reference:
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+# Load xgboost/lightgbm native OpenMP runtimes BEFORE rdkit (imported during
+# rep generation) to avoid a duplicate-libomp segfault on macOS when these
+# models and threaded sklearn estimators run in sequence. Optional deps —
+# guard so environments without them are unaffected.
+try:
+    import xgboost as _xgboost  # noqa: F401
+except Exception:
+    pass
+try:
+    import lightgbm as _lightgbm  # noqa: F401
+except Exception:
+    pass
+
 import sys
 import json
 import argparse
@@ -122,6 +135,25 @@ def load_cgr_comparison_data(dataset_name):
 
     rxn_smiles = data['rxn_smiles']
     components = data['components']
+    labels = list(data['labels'])
+
+    # Test-only row cap BEFORE rep generation (no-op unless KIRBY_SMOKE_N set).
+    # Capping here keeps the slow rxnmapper/neural rep generators off the full
+    # dataset. Cache key is suffixed so capped reps never pollute the real cache.
+    _smoke = os.environ.get('KIRBY_SMOKE_N', '').strip()
+    cache_key = dataset_name
+    if _smoke.isdigit() and 0 < int(_smoke) < len(labels):
+        n_keep = int(_smoke)
+        n = len(labels)
+        _idx = np.unique(np.linspace(0, n - 1, n_keep).round().astype(int))
+        rxn_smiles = [rxn_smiles[i] for i in _idx]
+        components = [components[i] for i in _idx]
+        labels = [labels[i] for i in _idx]
+        groups = np.asarray(groups)[_idx]
+        cache_key = f'{dataset_name}_smoke{n_keep}'
+        print(f"  [SMOKE] KIRBY_SMOKE_N={n_keep}: capped {n} -> {len(_idx)} reactions before rep gen")
+    data = dict(data)
+    data['labels'] = np.asarray(labels, dtype=np.float64)
 
     # Full generator registry — all reaction reps
     _generators = {
@@ -160,7 +192,7 @@ def load_cgr_comparison_data(dataset_name):
     reps = {}
     for name, gen_fn in _generators.items():
         try:
-            reps[name] = _cache_rep(dataset_name, name, gen_fn)
+            reps[name] = _cache_rep(cache_key, name, gen_fn)
         except ImportError as e:
             print(f"  WARNING: {name} skipped (missing dep): {e}")
         except Exception as e:
@@ -480,6 +512,11 @@ def evaluate_dataset(dataset_name, n_folds, skip_hybrid=False,
     if data is None:
         return None
 
+    # Test-only row cap for local smoke tests (no-op unless KIRBY_SMOKE_N set).
+    # Caps reps/labels/groups consistently; components stays unused downstream.
+    from experiments._shared import _smoke_subsample
+    data = _smoke_subsample(data)
+
     reps = data['reps']
     labels = data['labels']
     groups = data['groups']
@@ -780,8 +817,19 @@ def main():
     p = Path(output_path)
     p.parent.mkdir(parents=True, exist_ok=True)
 
+    # Replace non-finite floats (NaN/inf) with null before serialising —
+    # undefined metrics at tiny n should be JSON null, not NaN (invalid JSON).
+    def _nan_to_none(o):
+        if isinstance(o, float):
+            return None if (o != o or o in (float('inf'), float('-inf'))) else o
+        if isinstance(o, dict):
+            return {k: _nan_to_none(v) for k, v in o.items()}
+        if isinstance(o, list):
+            return [_nan_to_none(v) for v in o]
+        return o
+
     with open(p, 'w') as f:
-        json.dump(convert_numpy(all_results), f, indent=2)
+        json.dump(_nan_to_none(convert_numpy(all_results)), f, indent=2)
     print(f"\nResults saved: {p}")
 
 

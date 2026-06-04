@@ -380,9 +380,13 @@ def _run_sas_bo_bridge(reps, labels, groups, struct_t, act_t,
         gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=123)
         train_local, val_local = next(gss.split(dummy_X, sub_labels, sub_groups))
     else:
-        from sklearn.model_selection import ShuffleSplit
-        ss = ShuffleSplit(n_splits=1, test_size=0.2, random_state=123)
-        train_local, val_local = next(ss.split(dummy_X, sub_labels))
+        # No usable groups -> the only alternative is a random split, which the
+        # lab rules forbid. Skip the GP bridge rather than fabricate a random
+        # split. (All real noise datasets carry scaffold/cluster/component
+        # groups, so this branch is a guard, not the normal path.)
+        print("    WARNING: no usable groups for GP-bridge split — "
+              "skipping (no random splits allowed)")
+        return {'error': 'no_groups_for_gp_bridge_split'}
 
     train_idx = gp_idx[train_local]
     val_idx = gp_idx[val_local]
@@ -621,8 +625,23 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         top3 = extract_top3_base_reps(search)
         if top3:
             print(f"  Top-3 base reps (by RF): {', '.join(f'{n}={s:.4f}' for n, s in top3)}")
+    except (KeyError, ValueError, TypeError) as e:
+        # These are configuration / cache-contract errors (e.g. an invalid
+        # search-speed tier, or find_best_hybrid(cache=True) missing
+        # dataset_name/tier/task_type). Per the 2026-05-23 audit (P0#2), the
+        # old blanket `except Exception` swallowed exactly these and left
+        # X_hybrid=None, silently emptying sub-analyses 2-3 for every dataset.
+        # Re-raise loudly so the failure is impossible to miss instead of
+        # producing a result file with hollow hybrid columns.
+        raise RuntimeError(
+            f"N03 hybrid search failed with a configuration/cache error "
+            f"({type(e).__name__}: {e}). This would have silently emptied "
+            f"sub-analyses 2-3. Fix the call rather than swallowing it."
+        ) from e
     except Exception as e:
-        print(f"  WARNING: Hybrid search failed ({e})")
+        # Genuinely tolerable runtime failures (e.g. a degenerate fold during
+        # the search) — keep going with rep-only sub-analyses but surface it.
+        print(f"  WARNING: Hybrid search failed ({type(e).__name__}: {e})")
 
     results = {
         'config': {
@@ -651,7 +670,11 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         sub_reps, sub_labels, per_rep_results)
 
     # --- Sub-analysis 4: SAS-BO bridge ---
-    augmentation_strategy = 'uncapped'
+    # When there are no augmentations, pass 'none' rather than the default
+    # 'uncapped'. Hardcoding 'uncapped' with augmentations=None is the
+    # 2026-04-21 cache-collision pattern (default 'uncapped' silently collides
+    # with real uncapped cache files). See project_cache_collision_fix.
+    augmentation_strategy = 'uncapped' if augmentations else 'none'
     results['bo_bridge'] = _run_sas_bo_bridge(
         reps, labels, groups, struct_t, act_t,
         augmentations=augmentations,

@@ -42,6 +42,7 @@ from experiments.federated.federated_helpers import (
     predict_fluid_similarity_ensemble_classification,
     predict_fluid_quality_ensemble_classification,
     fluid_within_kirby_across,
+    smoke_n_folds,
 )
 
 
@@ -166,7 +167,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # evaluated on one fold). Hard-fail when groups unavailable (per
     # feedback_no_random_splits.md — no random splits anywhere).
     n_samples = len(labels)
-    N_FOLDS = 5
+    N_FOLDS = smoke_n_folds(5)   # 2 under KIRBY_SMOKE_N, else 5
     if groups is None or len(np.unique(groups)) < N_FOLDS:
         n_groups = 0 if groups is None else len(np.unique(groups))
         raise ValueError(
