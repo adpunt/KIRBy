@@ -49,13 +49,18 @@ fi
 echo "Submitting ${#DATASETS[@]} dataset jobs..."
 echo
 
-EXPORT_EXTRA=""
-if [[ -n "${CATEGORIES:-}" ]]; then
-    EXPORT_EXTRA=",CATEGORIES=\"$CATEGORIES\""
-fi
+# Pass DATASET + CATEGORIES into the job via real environment inheritance
+# (--export=ALL). The previous comma-string form
+# (--export="DATASET=..,CATEGORIES=\"a b c\"") leaked the literal quotes AND
+# split on the spaces, so a multi-word CATEGORIES arrived inside the job as the
+# tokens '"complexity', 'similarity', 'noise"' — run_dataset.py then rejected
+# the quoted first/last tokens ("invalid choice"), silently running only the
+# middle category. Real env inheritance carries the value verbatim.
+[[ -n "${CATEGORIES:-}" ]] && export CATEGORIES
 
 for DS in "${DATASETS[@]}"; do
-    OUT=$(sbatch --export="DATASET=$DS${EXPORT_EXTRA}" "$SLURM_SCRIPT")
+    export DATASET="$DS"
+    OUT=$(sbatch --export=ALL "$SLURM_SCRIPT")
     echo "  $DS -> $OUT"
 done
 
