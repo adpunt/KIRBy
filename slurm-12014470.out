@@ -1,0 +1,485 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+=== similarity experiments: ginkgo_heparin ===
+Branch: main (685ad36)
+Job ID: 12014470
+Node:   arc-c280
+Pruning mode: aggressive_pruning
+Start:  Tue  5 May 05:58:34 BST 2026
+
+======================================================================
+SIMILARITY EXPERIMENTS: GINKGO_HEPARIN
+======================================================================
+Config:      5 fold, ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm'], speed=full
+Reps (27): aac, ablang2, abroberta, abroberta_cdr, antiberty, antiberty_cdr, blosum, esm2, esm2_cdr, esm2_cdr3, esm2_concat, esm2_early, esm2_layer24, esm2_midlayers, esm2_per_cdr, esm2_per_region, esm3, esm3_cdr, esmc, esmc_cdr, igt5, onehot, prot_t5, prot_t5_cdr, saprot, saprot_cdr, esm2_entropy_top20
+Experiments: ['s01', 's02', 's03', 's04', 's05', 's06', 's07', 's08', 's10', 's11', 's12', 's13']
+Output:      tests/results/similarity
+
+Loading ginkgo_heparin...
+  Ginkgo HAC: 94 samples, label range [1.005, 6.530]
+    aac: cached (40D)
+    ablang2: cached (480D)
+    abroberta: cached (1536D)
+    abroberta_cdr: cached (1536D)
+    antiberty: cached (1024D)
+    antiberty_cdr: cached (1024D)
+    blosum: cached (5600D)
+    esm2: cached (2560D)
+    esm2_cdr: cached (2560D)
+    esm2_cdr3: cached (2560D)
+    esm2_concat: cached (1280D)
+    esm2_early: cached (2560D)
+    esm2_layer24: cached (2560D)
+    esm2_midlayers: cached (2560D)
+    esm2_per_cdr: cached (7680D)
+    esm2_per_region: cached (17920D)
+    esm3: cached (3072D)
+    esm3_cdr: cached (3072D)
+    esmc: cached (2304D)
+    esmc_cdr: cached (2304D)
+    igt5: cached (1024D)
+    onehot: cached (5600D)
+    prot_t5: cached (2048D)
+    prot_t5_cdr: cached (2048D)
+    saprot: cached (2560D)
+    saprot_cdr: cached (2560D)
+    esm2_entropy_top20: cached (2560D)
+  ginkgo_heparin: 94 antibodies, 5 groups, 27 reps (aac=40, ablang2=480, abroberta=1536, abroberta_cdr=1536, antiberty=1024, antiberty_cdr=1024, blosum=5600, esm2=2560, esm2_cdr=2560, esm2_cdr3=2560, esm2_concat=1280, esm2_early=2560, esm2_layer24=2560, esm2_midlayers=2560, esm2_per_cdr=7680, esm2_per_region=17920, esm3=3072, esm3_cdr=3072, esmc=2304, esmc_cdr=2304, igt5=1024, onehot=5600, prot_t5=2048, prot_t5_cdr=2048, saprot=2560, saprot_cdr=2560, esm2_entropy_top20=2560)
+  Loaded in 1.9s
+  Loading 2 augmentation reps: ['paratope', 'structural']
+  Ginkgo HAC: 94 samples, label range [1.005, 6.530]
+    paratope: cached (8D)
+    structural: cached (28D)
+  ginkgo_heparin: 94 antibodies, 5 groups, 2 reps (paratope=8, structural=28)
+  Augmentations (2): paratope=8, structural=28
+
+  Pruning mode: aggressive_pruning
+    overrides gated off (n=94 < 1000)
+
+  Precomputing hybrid searches (general, 27 reps)...
+  KIRBY_PRECOMPUTE_REVERSE_ORDER=1 → iterating aug_conditions in reverse: ['capped', 'uncapped', 'none']
+  [1/3] aug=capped budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=94: [100, 250, 500, 1000, 2000]; added n=94 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/ginkgo_heparin__general__capped__full.pkl
+ done 0.2s (8 models, top=ridge score=0.7606)
+  [2/3] aug=uncapped budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=94: [100, 250, 500, 1000, 2000]; added n=94 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/ginkgo_heparin__general__uncapped__full.pkl
+ done 0.2s (8 models, top=gp score=0.7623)
+  [3/3] aug=none budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=94: [100, 250, 500, 1000, 2000]; added n=94 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/ginkgo_heparin__general__none__full.pkl
+ done 0.2s (8 models, top=gp score=0.7536)
+  Precompute complete: 3/3 searches in 1s
+
+  Precomputing hybrid searches (top-tier, 4 reps)...
+  KIRBY_PRECOMPUTE_REVERSE_ORDER=1 → iterating aug_conditions in reverse: ['capped', 'uncapped', 'none']
+  [1/3] aug=capped budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=94: [100, 250, 500, 1000, 2000]; added n=94 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/ginkgo_heparin__top__capped__full.pkl
+ done 0.1s (8 models, top=gp score=0.7675)
+  [2/3] aug=uncapped budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=94: [100, 250, 500, 1000, 2000]; added n=94 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/ginkgo_heparin__top__uncapped__full.pkl
+ done 0.1s (8 models, top=gp score=0.7858)
+  [3/3] aug=none budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=94: [100, 250, 500, 1000, 2000]; added n=94 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/ginkgo_heparin__top__none__full.pkl
+ done 0.1s (8 models, top=gp score=0.7960)
+  Precompute complete: 3/3 searches in 0s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S01: SIMILARITY-ACTIVITY CORRELATION BASELINE
+======================================================================
+  Computing feature importance (lgbm_gain)...
+
+  aac (dim=40):
+    SAC rho=0.0340, weighted=0.1401, viol=0.464/0.406, SALI=110.331/110.008
+
+  ablang2 (dim=480):
+    SAC rho=-0.0452, weighted=0.1460, viol=0.443/0.336, SALI=110.040/110.000
+
+  abroberta (dim=1536):
+    SAC rho=-0.0051, weighted=0.1139, viol=0.496/0.387, SALI=109.972/109.995
+
+  abroberta_cdr (dim=1536):
+    SAC rho=-0.0051, weighted=0.1139, viol=0.496/0.387, SALI=109.972/109.995
+
+  antiberty (dim=1024):
+    SAC rho=0.0067, weighted=0.0992, viol=0.457/0.409, SALI=109.985/110.002
+
+  antiberty_cdr (dim=1024):
+    SAC rho=0.0064, weighted=0.0966, viol=0.457/0.415, SALI=109.985/110.003
+
+  blosum (dim=5600):
+    SAC rho=-0.0025, weighted=0.1197, viol=0.468/0.413, SALI=109.950/110.013
+
+  esm2 (dim=2560):
+    SAC rho=0.0513, weighted=0.1882, viol=0.453/0.334, SALI=109.956/109.992
+
+  esm2_cdr (dim=2560):
+    SAC rho=0.0513, weighted=0.1960, viol=0.453/0.323, SALI=109.956/109.992
+
+  esm2_cdr3 (dim=2560):
+    SAC rho=0.0513, weighted=0.1960, viol=0.453/0.323, SALI=109.956/109.992
+
+  esm2_concat (dim=1280):
+    SAC rho=0.0458, weighted=0.3127, viol=0.404/0.302, SALI=109.976/109.989
+
+  esm2_early (dim=2560):
+    SAC rho=0.0779, weighted=0.2639, viol=0.419/0.321, SALI=109.956/109.991
+
+  esm2_layer24 (dim=2560):
+    SAC rho=0.0469, weighted=0.1952, viol=0.460/0.362, SALI=109.958/110.001
+
+  esm2_midlayers (dim=2560):
+    SAC rho=0.0482, weighted=0.2160, viol=0.451/0.372, SALI=109.958/110.004
+
+  esm2_per_cdr (dim=7680):
+    SAC rho=0.0513, weighted=0.1488, viol=0.453/0.372, SALI=109.935/109.994
+
+  esm2_per_region (dim=17920):
+    SAC rho=0.0513, weighted=0.1497, viol=0.453/0.398, SALI=109.925/110.001
+
+  esm3 (dim=3072):
+    SAC rho=0.0376, weighted=0.2348, viol=0.449/0.360, SALI=109.958/109.991
+
+  esm3_cdr (dim=3072):
+    SAC rho=0.0376, weighted=0.2348, viol=0.449/0.360, SALI=109.958/109.991
+
+  esmc (dim=2304):
+    SAC rho=0.0810, weighted=0.2644, viol=0.432/0.330, SALI=109.965/109.991
+
+  esmc_cdr (dim=2304):
+    SAC rho=0.0810, weighted=0.2644, viol=0.432/0.330, SALI=109.965/109.991
+
+  igt5 (dim=1024):
+    SAC rho=-0.0636, weighted=0.1326, viol=0.419/0.370, SALI=109.991/109.996
+
+  onehot (dim=5600):
+    SAC rho=0.0049, weighted=0.1186, viol=0.438/0.415, SALI=109.971/110.026
+
+  prot_t5 (dim=2048):
+    SAC rho=0.1384, weighted=0.3550, viol=0.374/0.291, SALI=109.963/109.986
+
+  prot_t5_cdr (dim=2048):
+    SAC rho=0.1384, weighted=0.3550, viol=0.374/0.291, SALI=109.963/109.986
+
+  saprot (dim=2560):
+    SAC rho=0.1059, weighted=0.1959, viol=0.457/0.304, SALI=109.958/109.998
+
+  saprot_cdr (dim=2560):
+    SAC rho=0.1059, weighted=0.1959, viol=0.457/0.304, SALI=109.958/109.998
+
+  esm2_entropy_top20 (dim=2560):
+    SAC rho=0.0466, weighted=0.0759, viol=0.440/0.385, SALI=109.959/110.007
+
+  Summary:
+  Rep               Dim       SAC     SAC_w   Viol% Viol_w%
+  --------------- ----- --------- --------- ------- -------
+  aac                40    0.0340    0.1401   0.464   0.406
+  ablang2           480   -0.0452    0.1460   0.443   0.336
+  abroberta        1536   -0.0051    0.1139   0.496   0.387
+  abroberta_cdr    1536   -0.0051    0.1139   0.496   0.387
+  antiberty        1024    0.0067    0.0992   0.457   0.409
+  antiberty_cdr    1024    0.0064    0.0966   0.457   0.415
+  blosum           5600   -0.0025    0.1197   0.468   0.413
+  esm2             2560    0.0513    0.1882   0.453   0.334
+  esm2_cdr         2560    0.0513    0.1960   0.453   0.323
+  esm2_cdr3        2560    0.0513    0.1960   0.453   0.323
+  esm2_concat      1280    0.0458    0.3127   0.404   0.302
+  esm2_early       2560    0.0779    0.2639   0.419   0.321
+  esm2_layer24     2560    0.0469    0.1952   0.460   0.362
+  esm2_midlayers   2560    0.0482    0.2160   0.451   0.372
+  esm2_per_cdr     7680    0.0513    0.1488   0.453   0.372
+  esm2_per_region 17920    0.0513    0.1497   0.453   0.398
+  esm3             3072    0.0376    0.2348   0.449   0.360
+  esm3_cdr         3072    0.0376    0.2348   0.449   0.360
+  esmc             2304    0.0810    0.2644   0.432   0.330
+  esmc_cdr         2304    0.0810    0.2644   0.432   0.330
+  igt5             1024   -0.0636    0.1326   0.419   0.370
+  onehot           5600    0.0049    0.1186   0.438   0.415
+  prot_t5          2048    0.1384    0.3550   0.374   0.291
+  prot_t5_cdr      2048    0.1384    0.3550   0.374   0.291
+  saprot           2560    0.1059    0.1959   0.457   0.304
+  saprot_cdr       2560    0.1059    0.1959   0.457   0.304
+  esm2_entropy_top20  2560    0.0466    0.0759   0.440   0.385
+  Sequence cliff sweep (full V-region, n=94)...
+    Hamming<=1: 0 pairs, 0 cliff compounds (0.0%)
+    Hamming<=2: 0 pairs, 0 cliff compounds (0.0%)
+    Hamming<=3: 0 pairs, 0 cliff compounds (0.0%)
+    Hamming<=5: 0 pairs, 0 cliff compounds (0.0%)
+  Sequence cliff sweep (CDR-only, from ANARCI/IMGT)...
+    Hamming<=1: 0 pairs, 0 cliff compounds (0.0%)
+    Hamming<=2: 0 pairs, 0 cliff compounds (0.0%)
+    Hamming<=3: 0 pairs, 0 cliff compounds (0.0%)
+    Hamming<=5: 0 pairs, 0 cliff compounds (0.0%)
+  [saved tests/results/similarity/s01_similarity_baseline/ginkgo_heparin.json]
+  s01 done in 122.9s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S02: HYBRID PROPERTY-AWARE SIMILARITY
+======================================================================
+  Computing feature importance (lgbm_gain) for weighted baselines...
+  aac: SAC=0.0340, SAC_w=0.1401, dim=40
+  ablang2: SAC=-0.0452, SAC_w=0.1460, dim=480
+  abroberta: SAC=-0.0051, SAC_w=0.1139, dim=1536
+  abroberta_cdr: SAC=-0.0051, SAC_w=0.1139, dim=1536
+  antiberty: SAC=0.0067, SAC_w=0.0992, dim=1024
+  antiberty_cdr: SAC=0.0064, SAC_w=0.0966, dim=1024
+  blosum: SAC=-0.0025, SAC_w=0.1197, dim=5600
+  esm2: SAC=0.0513, SAC_w=0.1882, dim=2560
+  esm2_cdr: SAC=0.0513, SAC_w=0.1960, dim=2560
+  esm2_cdr3: SAC=0.0513, SAC_w=0.1960, dim=2560
+  esm2_concat: SAC=0.0458, SAC_w=0.3127, dim=1280
+  esm2_early: SAC=0.0779, SAC_w=0.2639, dim=2560
+  esm2_layer24: SAC=0.0469, SAC_w=0.1952, dim=2560
+  esm2_midlayers: SAC=0.0482, SAC_w=0.2160, dim=2560
+  esm2_per_cdr: SAC=0.0513, SAC_w=0.1488, dim=7680
+  esm2_per_region: SAC=0.0513, SAC_w=0.1497, dim=17920
+  esm3: SAC=0.0376, SAC_w=0.2348, dim=3072
+  esm3_cdr: SAC=0.0376, SAC_w=0.2348, dim=3072
+  esmc: SAC=0.0810, SAC_w=0.2644, dim=2304
+  esmc_cdr: SAC=0.0810, SAC_w=0.2644, dim=2304
+  igt5: SAC=-0.0636, SAC_w=0.1326, dim=1024
+  onehot: SAC=0.0049, SAC_w=0.1186, dim=5600
+  prot_t5: SAC=0.1384, SAC_w=0.3550, dim=2048
+  prot_t5_cdr: SAC=0.1384, SAC_w=0.3550, dim=2048
+  saprot: SAC=0.1059, SAC_w=0.1959, dim=2560
+  saprot_cdr: SAC=0.1059, SAC_w=0.1959, dim=2560
+  esm2_entropy_top20: SAC=0.0466, SAC_w=0.0759, dim=2560
+
+  Best individual rep: prot_t5 (SAC=0.1384)
+  Best individual rep (weighted): prot_t5 (SAC_w=0.3550)
+  Concat: SAC=0.0541, SAC_w=0.3157, dim=82632
+  Running hybrid search (budget=100, speed=full)...
+  Top-3 base reps (by RF): ablang2=0.6588, igt5=0.6259, prot_t5=0.5929
+    Search done (7.6s), dim=96
+    Hybrid unweighted: SAC=0.2428, viol=0.304
+
+  Weight method: lightgbm_gain
+    Weight computation failed: 'NoneType' object has no attribute 'selected_indices'
+
+  Summary:
+    Best individual rep: prot_t5 (SAC=0.1384, dim=2048)
+    Best hybrid:        prot_t5 (SAC=0.1384, dim=96)
+    Delta vs best rep:  +0.0000
+  Sequence cliff sweep (full V-region, n=94)...
+    Hamming<=1: 0 pairs, 0 cliff compounds (0.0%)
+    Hamming<=2: 0 pairs, 0 cliff compounds (0.0%)
+    Hamming<=3: 0 pairs, 0 cliff compounds (0.0%)
+    Hamming<=5: 0 pairs, 0 cliff compounds (0.0%)
+  Sequence cliff sweep (CDR-only, from ANARCI/IMGT)...
+    Hamming<=1: 0 pairs, 0 cliff compounds (0.0%)
+    Hamming<=2: 0 pairs, 0 cliff compounds (0.0%)
+    Hamming<=3: 0 pairs, 0 cliff compounds (0.0%)
+    Hamming<=5: 0 pairs, 0 cliff compounds (0.0%)
+  [saved tests/results/similarity/s02_hybrid_similarity/ginkgo_heparin.json]
+  s02 done in 130.7s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S03: FEATURE CONCENTRATION ANALYSIS
+======================================================================
+
+  aac (dim=40):
+    Not in hybrid selection
+
+  ablang2 (dim=480):
+    Not in hybrid selection
+
+  abroberta (dim=1536):
+    Not in hybrid selection
+
+  abroberta_cdr (dim=1536):
+    Not in hybrid selection
+
+  antiberty (dim=1024):
+    Not in hybrid selection
+
+  antiberty_cdr (dim=1024):
+    Not in hybrid selection
+
+  blosum (dim=5600):
+    Not in hybrid selection
+
+  esm2 (dim=2560):
+    Not in hybrid selection
+
+  esm2_cdr (dim=2560):
+    Not in hybrid selection
+
+  esm2_cdr3 (dim=2560):
+    Not in hybrid selection
+
+  esm2_concat (dim=1280):
+    Not in hybrid selection
+
+  esm2_early (dim=2560):
+    Not in hybrid selection
+
+  esm2_layer24 (dim=2560):
+    Not in hybrid selection
+
+  esm2_midlayers (dim=2560):
+    Not in hybrid selection
+
+  esm2_per_cdr (dim=7680):
+    Not in hybrid selection
+
+  esm2_per_region (dim=17920):
+    Not in hybrid selection
+
+  esm3 (dim=3072):
+    Not in hybrid selection
+
+  esm3_cdr (dim=3072):
+    Not in hybrid selection
+
+  esmc (dim=2304):
+    Not in hybrid selection
+
+  esmc_cdr (dim=2304):
+    Not in hybrid selection
+
+  igt5 (dim=1024):
+    Not in hybrid selection
+
+  onehot (dim=5600):
+    Not in hybrid selection
+
+  prot_t5 (dim=2048):
+    Not in hybrid selection
+
+  prot_t5_cdr (dim=2048):
+    Not in hybrid selection
+
+  saprot (dim=2560):
+    Not in hybrid selection
+
+  saprot_cdr (dim=2560):
+    Not in hybrid selection
+
+  esm2_entropy_top20 (dim=2560):
+    Not in hybrid selection
+
+  Gini coefficients (lightgbm_gain):
+    aac: Gini=0.726
+    ablang2: Gini=0.957
+    abroberta: Gini=0.978
+    abroberta_cdr: Gini=0.978
+    antiberty: Gini=0.967
+    antiberty_cdr: Gini=0.964
+    blosum: Gini=0.995
+    esm2: Gini=0.988
+    esm2_cdr: Gini=0.989
+    esm2_cdr3: Gini=0.989
+    esm2_concat: Gini=0.978
+    esm2_early: Gini=0.989
+    esm2_layer24: Gini=0.987
+    esm2_midlayers: Gini=0.986
+    esm2_per_cdr: Gini=0.996
+    esm2_per_region: Gini=0.998
+    esm3: Gini=0.989
+    esm3_cdr: Gini=0.989
+    esmc: Gini=0.988
+    esmc_cdr: Gini=0.988
+    igt5: Gini=0.974
+    onehot: Gini=0.997
+    prot_t5: Gini=0.987
+    prot_t5_cdr: Gini=0.987
+    saprot: Gini=0.989
+    saprot_cdr: Gini=0.989
+    esm2_entropy_top20: Gini=0.989
+  [saved tests/results/similarity/s03_feature_concentration/ginkgo_heparin.json]
+  s03 done in 36.9s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S04: PREDICTION PERFORMANCE ON ACTIVITY CLIFFS
+======================================================================
+  SKIP: S04 requires molecular ECFP4 (domain=antibody). Use S12 for cross-domain cliffs.
+  [saved tests/results/similarity/s04_activity_cliffs/ginkgo_heparin.json]
+  s04 done in 0.1s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S05: kNN PREDICTION WITH HYBRID DISTANCE
+======================================================================
+  Running distance-aware hybrid search (evaluators=['knn', 'ridge', 'rf', 'mlp', 'lightgbm', 'svm'], budgets=[10, 25, 50, 100, 250, 500])...
+[cache] cache stats — search: 6 hit / 0 miss / 1 stale; baseline: 216 hit / 0 miss / 0 stale; hybrid_eval: 1838 hit / 322 miss / 8208 stale
+  Best kNN config: alloc=rank_exp_d0.5, imp=lightgbm_gain, ev=mlp, budget=94, score=0.7087
+  Top-3 base reps (by RF): ablang2=0.6588, igt5=0.6259, prot_t5=0.5929
+
+  Budget=10 (ev=lightgbm, alloc=rank_exp_d0.5):
+    hybrid_unweighted k=5: spearman=0.6264+/-0.105
+    hybrid_unweighted k=10: spearman=0.6582+/-0.091
+
+  Budget=25 (ev=rf, alloc=performance_weighted):
+    hybrid_unweighted k=5: spearman=0.6409+/-0.131
+    hybrid_unweighted k=10: spearman=0.6773+/-0.112
+
+  Budget=50 (ev=knn, alloc=entropy_1.0):
+    hybrid_unweighted k=5: spearman=0.7059+/-0.121
+    hybrid_unweighted k=10: spearman=0.7680+/-0.143
+
+  Budget=100 (ev=mlp, alloc=rank_exp_d0.5):
+    hybrid_unweighted k=5: spearman=0.6443+/-0.102
+    hybrid_unweighted k=10: spearman=0.6815+/-0.135
+
+  Budget=250 (ev=mlp, alloc=rank_exp_d0.5):
+    hybrid_unweighted k=5: spearman=0.6443+/-0.102
+    hybrid_unweighted k=10: spearman=0.6815+/-0.135
+
+  Budget=500 (ev=mlp, alloc=rank_exp_d0.5):
+    hybrid_unweighted k=5: spearman=0.6443+/-0.102
+    hybrid_unweighted k=10: spearman=0.6815+/-0.135
+
+  Individual representation kNN baselines (metric=spearman):
+    aac (dim=40, k=10): kNN spearman=0.3215+/-0.289, weighted spearman=0.2080 (delta=-0.1135)
+    ablang2 (dim=480, k=10): kNN spearman=0.5216+/-0.120, weighted spearman=0.5663 (delta=+0.0447)
+    abroberta (dim=1536, k=10): kNN spearman=0.2345+/-0.183, weighted spearman=0.2777 (delta=+0.0433)
+    abroberta_cdr (dim=1536, k=10): kNN spearman=0.2345+/-0.183, weighted spearman=0.2777 (delta=+0.0433)
+    antiberty (dim=1024, k=5): kNN spearman=0.3513+/-0.183, weighted spearman=0.3599 (delta=+0.0086)
+    antiberty_cdr (dim=1024, k=5): kNN spearman=0.3314+/-0.217, weighted spearman=0.4382 (delta=+0.1068)
+    blosum (dim=5600, k=10): kNN spearman=0.2891+/-0.136, weighted spearman=0.1093 (delta=-0.1798)
+    esm2 (dim=2560, k=10): kNN spearman=0.4068+/-0.329, weighted spearman=0.4284 (delta=+0.0216)
+    esm2_cdr (dim=2560, k=10): kNN spearman=0.4068+/-0.329, weighted spearman=0.4359 (delta=+0.0291)
+    esm2_cdr3 (dim=2560, k=10): kNN spearman=0.4068+/-0.329, weighted spearman=0.4359 (delta=+0.0291)
+    esm2_concat (dim=1280, k=10): kNN spearman=0.4745+/-0.300, weighted spearman=0.4813 (delta=+0.0068)
+    esm2_early (dim=2560, k=10): kNN spearman=0.4158+/-0.248, weighted spearman=0.3726 (delta=-0.0432)
+    esm2_layer24 (dim=2560, k=10): kNN spearman=0.2380+/-0.264, weighted spearman=0.1087 (delta=-0.1293)
+    esm2_midlayers (dim=2560, k=10): kNN spearman=0.2900+/-0.311, weighted spearman=0.2861 (delta=-0.0039)
+    esm2_per_cdr (dim=7680, k=10): kNN spearman=0.4068+/-0.329, weighted spearman=0.3719 (delta=-0.0349)
+    esm2_per_region (dim=17920, k=10): kNN spearman=0.4068+/-0.329, weighted spearman=0.3839 (delta=-0.0229)
+    esm3 (dim=3072, k=10): kNN spearman=0.2516+/-0.198, weighted spearman=0.4737 (delta=+0.2221)
+    esm3_cdr (dim=3072, k=10): kNN spearman=0.2516+/-0.198, weighted spearman=0.4737 (delta=+0.2221)
+    esmc (dim=2304, k=10): kNN spearman=0.3762+/-0.344, weighted spearman=0.5817 (delta=+0.2056)
+    esmc_cdr (dim=2304, k=10): kNN spearman=0.3762+/-0.344, weighted spearman=0.5817 (delta=+0.2056)
+    igt5 (dim=1024, k=10): kNN spearman=0.5789+/-0.128, weighted spearman=0.6595 (delta=+0.0806)
+    onehot (dim=5600, k=10): kNN spearman=0.2270+/-0.237, weighted spearman=0.1131 (delta=-0.1138)
+    prot_t5 (dim=2048, k=10): kNN spearman=0.4633+/-0.372, weighted spearman=0.5242 (delta=+0.0608)
+    prot_t5_cdr (dim=2048, k=10): kNN spearman=0.4633+/-0.372, weighted spearman=0.5242 (delta=+0.0608)
+    saprot (dim=2560, k=10): kNN spearman=0.3102+/-0.327, weighted spearman=0.4324 (delta=+0.1222)
+    saprot_cdr (dim=2560, k=10): kNN spearman=0.3102+/-0.327, weighted spearman=0.4324 (delta=+0.1222)
+    esm2_entropy_top20 (dim=2560, k=10): kNN spearman=0.1393+/-0.383, weighted spearman=0.2785 (delta=+0.1391)
+
+  Summary (best per budget):
+    budget=10: best=hybrid_unweighted k=10, spearman=0.6582 (ev=lightgbm)
+    budget=25: best=hybrid_unweighted k=10, spearman=0.6773 (ev=rf)
+    budget=50: best=hybrid_unweighted k=10, spearman=0.7680 (ev=knn)
+    budget=100: best=hybrid_unweighted k=10, spearman=0.6815 (ev=mlp)
+    budget=250: best=hybrid_unweighted k=10, spearman=0.6815 (ev=mlp)
+    budget=500: best=hybrid_unweighted k=10, spearman=0.6815 (ev=mlp)
+
+  Best individual rep baseline: igt5 (kNN spearman=0.5789)
+  Best hybrid kNN: budget=50, hybrid_unweighted k=10, spearman=0.7680 (delta vs igt5: +0.1891)
+  [saved tests/results/similarity/s05_knn_prediction/ginkgo_heparin.json]
+  s05 done in 44362.6s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S06: APPLICABILITY DOMAIN
+======================================================================

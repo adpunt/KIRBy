@@ -912,6 +912,48 @@ def create_mordred(smiles_list, ignore_3D=True):
     return X
 
 
+def create_padel(smiles_list):
+    """Compute PaDEL 1D/2D molecular descriptors (~1444 features) via padelpy.
+
+    Forward-compat rep for the c13 forward-compatibility experiment (CaliciBoost
+    2025 reported PaDEL+XGBoost beating Morgan/RDKit on Caco2). Models the same
+    valid-mol/zero-fill pattern as create_mordred.
+
+    Requires: ``pip install padelpy`` AND a Java runtime (PaDEL is Java-based).
+    If either is missing, padelpy raises (ImportError / RuntimeError) and the
+    per-rep try/except in get_representations skips this rep gracefully.
+    NOTE: not smoke-tested locally (no Java here) — verify on the server.
+
+    Args:
+        smiles_list: list of SMILES strings.
+    Returns:
+        np.ndarray (n_molecules, ~1444) float32; zero rows for invalid SMILES.
+    """
+    import pandas as pd
+    from padelpy import from_smiles  # ImportError here -> rep is skipped
+
+    mols = [_safe_mol(smi) for smi in smiles_list]
+    valid_idx = [i for i, m in enumerate(mols) if m is not None]
+    if not valid_idx:
+        return np.zeros((len(smiles_list), 1), dtype=np.float32)
+
+    valid_smiles = [str(smiles_list[i]) for i in valid_idx]
+    # padelpy.from_smiles(list) -> list of dicts {descriptor_name: value}.
+    descs = from_smiles(valid_smiles)
+    if isinstance(descs, dict):  # single-molecule edge case returns one dict
+        descs = [descs]
+    df = pd.DataFrame(descs)
+    X_valid = df.apply(pd.to_numeric, errors='coerce').fillna(0.0).values.astype(np.float32)
+    X_valid = np.nan_to_num(X_valid, nan=0.0, posinf=0.0, neginf=0.0)
+
+    if len(valid_idx) == len(smiles_list):
+        return X_valid
+    X = np.zeros((len(smiles_list), X_valid.shape[1]), dtype=np.float32)
+    for out_i, src_i in enumerate(valid_idx):
+        X[src_i] = X_valid[out_i]
+    return X
+
+
 def create_pdv_binary_mean(smiles_list, descriptor_list=None):
     """
     Binarize PDV: each descriptor becomes 1 if above the column mean, else 0.
@@ -1219,6 +1261,192 @@ def make_sns_factory(smiles_list, **kwargs):
         val_features = create_sns(val_smiles, reference_featurizer=featurizer)
 
         return train_features, val_features
+
+    return factory
+
+
+# Column order produced by the sali_cliff representation (see factory below).
+SALI_CLIFF_COLUMNS = [
+    'is_cliff',              # 1.0 if the molecule participates in any activity cliff
+    'local_sali',           # max over neighbours of |delta_activity| / (1 - tanimoto_sim)
+    'neighbor_disagreement',# |label - mean(neighbour labels)| / std(train labels)
+    'mean_neighbor_sim',     # mean Tanimoto similarity to its k nearest neighbours
+]
+SALI_CLIFF_DIM = len(SALI_CLIFF_COLUMNS)
+
+
+def make_sali_cliff_factory(smiles_list, k=10, sim_threshold=0.5,
+                            radius=2, n_bits=2048):
+    """Factory for per-fold activity-cliff / structure-activity-landscape features.
+
+    Produces, for each molecule, a small fixed-width supervised structural
+    feature vector that captures how "cliffy" the molecule is within the
+    structure-activity landscape:
+
+        [is_cliff, local_sali, neighbor_disagreement, mean_neighbor_sim]
+
+    (see ``SALI_CLIFF_COLUMNS``). Reuses the existing
+    :class:`ActivityCliffDetector` (from ``kirby.utils.noise_mitigation_methods``)
+    to flag cliff participation, and the same Tanimoto pairwise-similarity
+    machinery (1 - distance) it would use for the structural neighbourhood.
+
+    LEAKAGE SAFETY
+    --------------
+    ECFP4 structural fingerprints are precomputed once for all molecules
+    (structure is not the label, so this is safe). Everything that touches the
+    *labels* is fit on the training fold only:
+
+    * The activity-cliff flag, local SALI and disagreement scores for TRAINING
+      molecules are computed from a train-vs-train Tanimoto similarity matrix
+      and TRAIN labels only.
+    * VALIDATION molecules are featurised by looking up their nearest TRAIN
+      neighbours (train labels only). A validation molecule's own (unseen)
+      label is never read.
+
+    Args:
+        smiles_list: List of SMILES strings (full dataset order).
+        k: Number of nearest structural neighbours to summarise (default 10).
+        sim_threshold: Tanimoto similarity above which a neighbour counts as
+            "structurally similar" for cliff flagging (default 0.5).
+        radius: Morgan/ECFP radius (default 2 = ECFP4).
+        n_bits: Fingerprint length (default 2048).
+
+    Returns:
+        Callable: factory(train_idx, val_idx, train_labels) -> (train, val)
+        with each output shaped (n, SALI_CLIFF_DIM) float32.
+    """
+    # Precompute ECFP4 once (structure only — no labels involved → no leakage).
+    full_fp = create_ecfp4(smiles_list, radius=radius, n_bits=n_bits)
+
+    def _tanimoto(a, b):
+        # a: (na, d), b: (nb, d) binary fingerprints → (na, nb) Tanimoto sim.
+        inter = a @ b.T
+        sa = a.sum(axis=1)[:, None]
+        sb = b.sum(axis=1)[None, :]
+        union = sa + sb - inter
+        with np.errstate(divide='ignore', invalid='ignore'):
+            sim = np.where(union > 0, inter / union, 0.0)
+        return sim
+
+    def _features_from_sim(sim, neighbor_labels_source, self_labels, kk,
+                           label_std, exclude_self):
+        """Build the 4 SALI columns from a (n_query, n_ref) similarity matrix.
+
+        neighbor_labels_source: labels of the reference set (train labels).
+        self_labels: label of each query row (train labels for train, None-safe
+                     handled by caller — for val we use predicted neighbour mean
+                     so self label is not needed for disagreement leakage).
+        exclude_self: if True the diagonal (query==ref) is masked out (train).
+        """
+        n_query = sim.shape[0]
+        feats = np.zeros((n_query, SALI_CLIFF_DIM), dtype=np.float32)
+        ref_labels = np.asarray(neighbor_labels_source, dtype=float)
+
+        for i in range(n_query):
+            row = sim[i].copy()
+            if exclude_self:
+                row[i] = -np.inf  # never pick self as its own neighbour
+            # k nearest by similarity
+            order = np.argsort(row)[::-1]
+            order = [j for j in order if np.isfinite(row[j])][:kk]
+            if not order:
+                continue
+            nbr_sim = row[list(order)]
+            nbr_lab = ref_labels[list(order)]
+
+            mean_sim = float(np.mean(nbr_sim))
+            mean_lab = float(np.mean(nbr_lab))
+
+            # Neighbour-based predicted activity vs. self → disagreement.
+            if self_labels is not None:
+                pred_err = abs(float(self_labels[i]) - mean_lab)
+            else:
+                # Validation: no self label. Use spread of neighbour labels as a
+                # leakage-free proxy for landscape roughness around the query.
+                pred_err = float(np.std(nbr_lab))
+            disagreement = pred_err / label_std
+
+            # Local SALI = max |delta activity| / (1 - sim) over neighbours.
+            if self_labels is not None:
+                delta = np.abs(float(self_labels[i]) - nbr_lab)
+            else:
+                # Pairwise among neighbours: roughness of the local landscape.
+                delta = np.abs(nbr_lab[:, None] - nbr_lab[None, :])
+                delta = delta[np.triu_indices(len(nbr_lab), k=1)] \
+                    if len(nbr_lab) > 1 else np.array([0.0])
+                # Align dims: recompute corresponding sims for the proxy below.
+            denom = np.clip(1.0 - nbr_sim, 1e-3, None)
+            if self_labels is not None:
+                sali = float(np.max(delta / denom)) if len(delta) else 0.0
+            else:
+                # neighbour-pair landscape: use min pairwise sim as denominator.
+                if len(nbr_lab) > 1:
+                    pair_sim = np.minimum(nbr_sim[:, None], nbr_sim[None, :])
+                    pair_sim = pair_sim[np.triu_indices(len(nbr_lab), k=1)]
+                    sali = float(np.max(delta / np.clip(1.0 - pair_sim, 1e-3, None)))
+                else:
+                    sali = 0.0
+
+            # is_cliff: a similar neighbour (sim > threshold) with a large
+            # activity gap (gap > label_std) → a structure-activity cliff.
+            if self_labels is not None:
+                gaps = np.abs(float(self_labels[i]) - nbr_lab)
+                is_cliff = float(np.any((nbr_sim > sim_threshold) &
+                                        (gaps > label_std)))
+            else:
+                is_cliff = float(np.any((nbr_sim > sim_threshold) &
+                                        (np.abs(nbr_lab - mean_lab) > label_std)))
+
+            feats[i, 0] = is_cliff
+            feats[i, 1] = sali
+            feats[i, 2] = disagreement
+            feats[i, 3] = mean_sim
+
+        return feats
+
+    def factory(train_idx, val_idx, train_labels):
+        train_idx = np.asarray(train_idx)
+        val_idx = np.asarray(val_idx)
+        y_train = np.asarray(train_labels, dtype=float)
+        label_std = float(np.std(y_train)) + 1e-10
+
+        fp_train = full_fp[train_idx]
+        fp_val = full_fp[val_idx]
+        kk = int(min(k, max(1, len(train_idx) - 1)))
+
+        # --- TRAIN features: train-vs-train similarity + TRAIN labels only ---
+        sim_tt = _tanimoto(fp_train, fp_train)
+        train_features = _features_from_sim(
+            sim_tt, neighbor_labels_source=y_train, self_labels=y_train,
+            kk=kk, label_std=label_std, exclude_self=True,
+        )
+
+        # Cross-check cliff flag with the existing ActivityCliffDetector on the
+        # training fold (uses the same Tanimoto-distance machinery + train y).
+        try:
+            from kirby.utils.noise_mitigation_methods import ActivityCliffDetector
+            dist_tt = 1.0 - sim_tt
+            np.fill_diagonal(dist_tt, 0.0)
+            detector = ActivityCliffDetector(
+                similarity_threshold=1.0 - sim_threshold,
+                precomputed_distances=dist_tt,
+            )
+            cliff_idx = detector.identify_noise(fp_train, y_train)
+            flag = np.zeros(len(train_idx), dtype=np.float32)
+            flag[cliff_idx] = 1.0
+            # OR the detector's flag into our heuristic flag.
+            train_features[:, 0] = np.maximum(train_features[:, 0], flag)
+        except Exception:
+            pass
+
+        # --- VAL features: val-vs-train similarity + TRAIN labels only ---
+        sim_vt = _tanimoto(fp_val, fp_train)
+        val_features = _features_from_sim(
+            sim_vt, neighbor_labels_source=y_train, self_labels=None,
+            kk=kk, label_std=label_std, exclude_self=False,
+        )
+
+        return train_features.astype(np.float32), val_features.astype(np.float32)
 
     return factory
 
@@ -3777,54 +4005,6 @@ def create_mole(smiles_list, pretrained_model=None, batch_size=32):
     print(f"  MolE embeddings: {result.shape}")
     return result
 
-
-# =============================================================================
-# Boltz-2 as a molecular representation (cross-domain forward-compat)
-# =============================================================================
-
-
-def create_boltz2_molecular_embeddings(smiles_list, device=None, cache_dir=None):
-    """Create Boltz-2 atom-level molecular embeddings (mean-pooled).
-
-    A Feb 2026 result (arxiv:2602.13249) shows Boltz-2 atom-level
-    representations match/outperform specialized molecular foundation models
-    (MiniMol, MolGPS) on the TDC ADMET benchmark — i.e. the same structure
-    predictor that gives protein reps (`protein_boltz2`) is also a molecular
-    embedder. This is the cross-domain forward-compat experiment.
-
-    Unlike the protein path (where `boltz predict --write_embeddings` dumps a
-    per-residue single representation), the ATOM-level small-molecule
-    representation is produced inside Boltz-2's Pairformer trunk and is NOT
-    written out by the public CLI. Extracting it requires a forward hook on
-    the atom/token single representation in the trunk (the same hook noted as
-    deferred in project memory: "Boltz-2 molecular deferred (needs Pairformer
-    hooks)").
-
-    Args:
-        smiles_list: List of SMILES strings.
-        device: 'cpu' or 'cuda' (CUDA strongly recommended).
-        cache_dir: Optional cache directory (unused until the hook lands).
-
-    Returns:
-        np.ndarray: (n_molecules, D) atom-pooled embeddings — once wired.
-
-    Requires: pip install boltz (CUDA recommended).
-    Status: SCAFFOLD — blocked on a Pairformer atom-rep forward hook.
-    Step to finish: register a hook on Boltz-2's trunk single representation,
-    run it per molecule (ligand-only input), mean-pool over atoms.
-    """
-    _ = (device, cache_dir, smiles_list)
-    try:
-        import boltz  # noqa: F401
-    except ImportError:
-        raise ImportError("Boltz-2 requires the boltz package: pip install boltz")
-    raise NotImplementedError(
-        "Boltz-2 molecular (atom-level) embeddings need a forward hook on the "
-        "Pairformer trunk single representation — the public `boltz predict` "
-        "CLI does not write atom-level reps. The protein path "
-        "(create_boltz2_protein_embeddings) is unaffected. "
-        "See https://github.com/jwohlwend/boltz and arxiv:2602.13249."
-    )
 
 
 # =============================================================================

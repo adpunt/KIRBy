@@ -1,0 +1,331 @@
+Already up to date.
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+==================================================================
+BEFORE RUN: cache state for flab_immunogenicity_marks
+==================================================================
+
+=== flab_immunogenicity_marks: hybrid_eval files on disk ===
+  Total: 16711
+    __none.pkl: 15634
+    __uncapped.pkl: 1077
+
+=== Stored aug_names distribution (sample of up to 200 per suffix) ===
+
+  __none.pkl (200 sampled):
+    unreadable: 0
+    aug_strategy counts:
+      'none': 200
+    aug_names counts:
+      (): 200
+
+  __uncapped.pkl (200 sampled):
+    unreadable: 0
+    aug_strategy counts:
+      'uncapped': 200
+    aug_names counts:
+      ('aac', 'ablang2', 'blosum', 'esm2', 'esm2_cdr', 'esm2_cdr3', 'esm2...: 200
+
+=== Verdict for fixed c02 runs ===
+  c02 no_aug (reads __none.pkl):
+    ✓ 15634 __none.pkl files exist — probes will hit.
+  c02 uncapped (reads __uncapped.pkl):
+    ✓ All sampled __uncapped.pkl files have non-empty aug_names — c02 uncapped probes will HIT.
+  c02 capped (reads __capped.pkl):
+    ✗ ZERO __capped.pkl files — will recompute.
+
+==================================================================
+RUNNING c02 on flab_immunogenicity_marks
+==================================================================
+Mode: full
+Dataset: flab_immunogenicity_marks
+Reps: fast
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp', 'svm', 'gp', 'catboost', 'dnn', 'cnn']
+Budgets: [10, 25, 50, 100, 250, 500, 1000, 2000]
+  [auto] flab_immunogenicity_marks: filtering to 27 general reps from DATASET_REPS
+  FLAb flab_immunogenicity_marks: 217 samples, paired, property=Immunogenicity
+  Fitness range: [0.000, 100.000], mean=10.459, std=18.132
+  Wildtype heavy: QVQLVQSGAEVKKPGSSVKVSCKASGYAFS...
+  215/217 samples have mutations, avg 146.1 mutations/sample
+    antiberty_cdr: cached (1024D)
+    antiberty: cached (1024D)
+    igt5: cached (1024D)
+    prot_t5: cached (2048D)
+    prot_t5_cdr: cached (2048D)
+    abroberta_cdr: cached (1536D)
+    esm2_early: cached (2560D)
+    abroberta: cached (1536D)
+    ablang2: cached (480D)
+    onehot: cached (5600D)
+    saprot_cdr: cached (2560D)
+    saprot: cached (2560D)
+    esm2_midlayers: cached (2560D)
+    blosum: cached (5600D)
+    esm2: cached (2560D)
+    esm2_cdr3: cached (2560D)
+    esm2_cdr: cached (2560D)
+    esm2_layer24: cached (2560D)
+    esmc_cdr: cached (2304D)
+    esmc: cached (2304D)
+    aac: cached (40D)
+    esm2_concat: cached (1280D)
+    esm3_cdr: cached (3072D)
+    esm3: cached (3072D)
+    esm2_per_cdr: cached (7680D)
+    esm2_per_region: cached (17920D)
+    esm2_entropy_top20: cached (2560D)
+  flab_immunogenicity_marks: 217 antibodies, 211 groups, 27 reps (antiberty_cdr=1024, antiberty=1024, igt5=1024, prot_t5=2048, prot_t5_cdr=2048, abroberta_cdr=1536, esm2_early=2560, abroberta=1536, ablang2=480, onehot=5600, saprot_cdr=2560, saprot=2560, esm2_midlayers=2560, blosum=5600, esm2=2560, esm2_cdr3=2560, esm2_cdr=2560, esm2_layer24=2560, esmc_cdr=2304, esmc=2304, aac=40, esm2_concat=1280, esm3_cdr=3072, esm3=3072, esm2_per_cdr=7680, esm2_per_region=17920, esm2_entropy_top20=2560)
+
+======================================================================
+EXPERIMENT C02: COMPLEXITY MATCHING GRID
+======================================================================
+
+  --- Top-tier reps only (8/27: ['antiberty_cdr', 'antiberty', 'igt5', 'prot_t5', 'prot_t5_cdr', 'abroberta_cdr', 'abroberta', 'esm2_entropy_top20']) ---
+Dropped budgets > n=217: [250, 500, 1000, 2000]; added n=217 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/flab_immunogenicity_marks__top__none__full.pkl
+
+  --- All reps, no augmentation (27 reps) ---
+  11 models x 8 budgets x 9 allocations x 3 importance
+Dropped budgets > n=217: [250, 500, 1000, 2000]; added n=217 as at-n boundary
+  Cache flab_immunogenicity_marks__general__none__full.pkl: meta drift on 'budgets' (stored=(10, 25, 50, 100), expected=(10, 25, 50, 100, 217)) — will recompute.
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp', 'svm', 'gp']
+Representations: ['antiberty_cdr', 'antiberty', 'igt5', 'prot_t5', 'prot_t5_cdr', 'abroberta_cdr', 'esm2_early', 'abroberta', 'ablang2', 'onehot', 'saprot_cdr', 'saprot', 'esm2_midlayers', 'blosum', 'esm2', 'esm2_cdr3', 'esm2_cdr', 'esm2_layer24', 'esmc_cdr', 'esmc', 'aac', 'esm2_concat', 'esm3_cdr', 'esm3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_entropy_top20'] (dims: [1024, 1024, 1024, 2048, 2048, 1536, 2560, 1536, 480, 5600, 2560, 2560, 2560, 5600, 2560, 2560, 2560, 2560, 2304, 2304, 40, 1280, 3072, 3072, 7680, 17920, 2560])
+
+Evaluating full-dimension baselines...
+  antiberty_cdr (dim=1024): rf=0.325, xgboost=0.284, ridge=0.356, knn=0.253, lightgbm=0.229, mlp=0.399, svm=0.300, gp=nan
+  antiberty (dim=1024): rf=0.343, xgboost=0.232, ridge=0.359, knn=0.251, lightgbm=0.284, mlp=0.398, svm=0.302, gp=nan
+  igt5 (dim=1024): rf=0.331, xgboost=0.270, ridge=0.327, knn=0.324, lightgbm=0.306, mlp=0.325, svm=0.324, gp=nan
+  prot_t5 (dim=2048): rf=0.283, xgboost=0.176, ridge=0.356, knn=0.181, lightgbm=0.239, mlp=0.226, svm=0.266, gp=nan
+  prot_t5_cdr (dim=2048): rf=0.283, xgboost=0.176, ridge=0.356, knn=0.181, lightgbm=0.239, mlp=0.226, svm=0.266, gp=nan
+  abroberta_cdr (dim=1536): rf=0.349, xgboost=0.332, ridge=0.299, knn=0.293, lightgbm=0.132, mlp=0.246, svm=0.323, gp=nan
+  esm2_early (dim=2560): rf=0.256, xgboost=0.253, ridge=0.300, knn=0.195, lightgbm=0.283, mlp=0.340, svm=0.262, gp=nan
+  abroberta (dim=1536): rf=0.349, xgboost=0.332, ridge=0.298, knn=0.293, lightgbm=0.132, mlp=0.246, svm=0.323, gp=nan
+  ablang2 (dim=480): rf=0.318, xgboost=0.258, ridge=0.326, knn=0.396, lightgbm=0.261, mlp=0.306, svm=0.316, gp=nan
+  onehot (dim=5600): rf=0.295, xgboost=0.277, ridge=0.301, knn=0.244, lightgbm=0.268, mlp=0.262, svm=0.202, gp=0.187
+  saprot_cdr (dim=2560): rf=0.248, xgboost=0.147, ridge=0.325, knn=0.181, lightgbm=0.240, mlp=0.331, svm=0.270, gp=nan
+  saprot (dim=2560): rf=0.248, xgboost=0.147, ridge=0.325, knn=0.181, lightgbm=0.240, mlp=0.331, svm=0.270, gp=nan
+  esm2_midlayers (dim=2560): rf=0.248, xgboost=0.278, ridge=0.295, knn=0.216, lightgbm=0.180, mlp=0.330, svm=0.230, gp=nan
+  blosum (dim=5600): rf=0.300, xgboost=0.271, ridge=0.265, knn=0.141, lightgbm=0.301, mlp=0.214, svm=0.208, gp=0.069
+  esm2 (dim=2560): rf=0.241, xgboost=0.204, ridge=0.299, knn=0.253, lightgbm=0.174, mlp=0.323, svm=0.242, gp=nan
+  esm2_cdr3 (dim=2560): rf=0.241, xgboost=0.204, ridge=0.299, knn=0.253, lightgbm=0.174, mlp=0.323, svm=0.242, gp=nan
+  esm2_cdr (dim=2560): rf=0.241, xgboost=0.204, ridge=0.299, knn=0.253, lightgbm=0.174, mlp=0.323, svm=0.242, gp=nan
+  esm2_layer24 (dim=2560): rf=0.189, xgboost=0.148, ridge=0.278, knn=0.130, lightgbm=0.126, mlp=0.321, svm=0.234, gp=nan
+  esmc_cdr (dim=2304): rf=0.287, xgboost=0.284, ridge=0.312, knn=0.281, lightgbm=0.131, mlp=0.281, svm=0.255, gp=nan
+  esmc (dim=2304): rf=0.287, xgboost=0.284, ridge=0.312, knn=0.281, lightgbm=0.131, mlp=0.281, svm=0.255, gp=nan
+  aac (dim=40): rf=0.271, xgboost=0.267, ridge=0.288, knn=0.211, lightgbm=0.180, mlp=0.212, svm=0.237, gp=0.125
+  esm2_concat (dim=1280): rf=0.268, xgboost=0.229, ridge=0.307, knn=0.185, lightgbm=0.194, mlp=0.232, svm=0.232, gp=nan
+  esm3_cdr (dim=3072): rf=0.302, xgboost=0.230, ridge=0.303, knn=0.268, lightgbm=0.253, mlp=0.287, svm=0.226, gp=nan
+  esm3 (dim=3072): rf=0.302, xgboost=0.230, ridge=0.303, knn=0.268, lightgbm=0.253, mlp=0.287, svm=0.226, gp=nan
+  esm2_per_cdr (dim=7680): rf=0.232, xgboost=0.138, ridge=0.226, knn=0.223, lightgbm=0.140, mlp=0.295, svm=0.242, gp=nan
+  esm2_per_region (dim=17920): rf=0.247, xgboost=0.169, ridge=0.240, knn=0.224, lightgbm=0.142, mlp=0.281, svm=0.245, gp=nan
+  esm2_entropy_top20 (dim=2560): rf=0.269, xgboost=0.257, ridge=0.327, knn=0.214, lightgbm=0.208, mlp=0.367, svm=0.261, gp=nan
+
+Searching 4860 unique configurations (full mode)...
+  Pre-computing importance: 3 methods × 5 folds × 27 reps...
+  Importance pre-computed in 252.4s (15/15 successful)
+  Allocation scores pre-computed in 401.4s (8 evaluators × 10 metrics, evaluators: ['gp', 'knn', 'lightgbm', 'mlp', 'rf', 'ridge', 'svm', 'xgboost'])
+
+  Resumed from checkpoint: fold 0 complete (0 results, 0 strategies pruned)
+  Resuming full eval: 4800/4860 already done
+
+  Evaluating 4860 configs (all 5 folds)...
+  [4801/4860] gp/rank_exp_d0.5/deeplift/b=25/ev=rf: score=0.1072+/-0.143, dim=25
+  [4802/4860] gp/rank_exp_d0.5/deeplift/b=25/ev=svm: score=0.1223+/-0.130, dim=25
+  [4803/4860] gp/rank_exp_d0.5/deeplift/b=25/ev=lightgbm: score=-0.0188+/-0.132, dim=25
+  [4804/4860] gp/rank_exp_d0.5/deeplift/b=25/ev=mlp: score=-0.0420+/-0.171, dim=25
+  [4805/4860] gp/rank_exp_d0.5/deeplift/b=25/ev=gp: score=0.0952+/-0.082, dim=25
+  [4806/4860] gp/rank_exp_d0.5/lightgbm_gain/b=25/ev=rf: score=0.3141+/-0.091, dim=25
+  [4807/4860] gp/rank_exp_d0.5/lightgbm_gain/b=25/ev=svm: score=0.2530+/-0.112, dim=25
+  [4808/4860] gp/rank_exp_d0.5/lightgbm_gain/b=25/ev=lightgbm: score=0.3254+/-0.086, dim=25
+  [4809/4860] gp/rank_exp_d0.5/lightgbm_gain/b=25/ev=mlp: score=0.2498+/-0.058, dim=25
+  [4810/4860] gp/rank_exp_d0.5/lightgbm_gain/b=25/ev=gp: score=0.3315+/-0.056, dim=25
+  [4811/4860] gp/rank_exp_d0.5/treeshap/b=25/ev=rf: score=0.2866+/-0.125, dim=25
+  [4812/4860] gp/rank_exp_d0.5/treeshap/b=25/ev=svm: score=0.2505+/-0.169, dim=25
+  [4813/4860] gp/rank_exp_d0.5/treeshap/b=25/ev=lightgbm: score=0.2553+/-0.147, dim=25
+  [4814/4860] gp/rank_exp_d0.5/treeshap/b=25/ev=mlp: score=0.2568+/-0.061, dim=25
+  [4815/4860] gp/rank_exp_d0.5/treeshap/b=25/ev=gp: score=0.3086+/-0.103, dim=25
+  [4816/4860] gp/rank_exp_d0.5/deeplift/b=50/ev=rf: score=0.0613+/-0.090, dim=50
+  [4817/4860] gp/rank_exp_d0.5/deeplift/b=50/ev=svm: score=0.0479+/-0.129, dim=50
+  [4818/4860] gp/rank_exp_d0.5/deeplift/b=50/ev=lightgbm: score=0.0076+/-0.122, dim=50
+  [4819/4860] gp/rank_exp_d0.5/deeplift/b=50/ev=mlp: score=-0.0146+/-0.135, dim=50
+  [4820/4860] gp/rank_exp_d0.5/deeplift/b=50/ev=gp: score=0.0924+/-0.138, dim=50
+  [4821/4860] gp/rank_exp_d0.5/lightgbm_gain/b=50/ev=rf: score=nan+/-nan, dim=50
+  [4822/4860] gp/rank_exp_d0.5/lightgbm_gain/b=50/ev=svm: score=0.0120+/-0.223, dim=50
+  [4823/4860] gp/rank_exp_d0.5/lightgbm_gain/b=50/ev=lightgbm: score=nan+/-nan, dim=50
+  [4824/4860] gp/rank_exp_d0.5/lightgbm_gain/b=50/ev=mlp: score=-0.0154+/-0.132, dim=50
+  [4825/4860] gp/rank_exp_d0.5/lightgbm_gain/b=50/ev=gp: score=nan+/-nan, dim=50
+  [4826/4860] gp/rank_exp_d0.5/treeshap/b=50/ev=rf: score=nan+/-nan, dim=50
+  [4827/4860] gp/rank_exp_d0.5/treeshap/b=50/ev=svm: score=-0.0835+/-0.191, dim=50
+  [4828/4860] gp/rank_exp_d0.5/treeshap/b=50/ev=lightgbm: score=nan+/-nan, dim=50
+  [4829/4860] gp/rank_exp_d0.5/treeshap/b=50/ev=mlp: score=nan+/-nan, dim=50
+  [4830/4860] gp/rank_exp_d0.5/treeshap/b=50/ev=gp: score=nan+/-nan, dim=50
+  [4831/4860] gp/rank_exp_d0.5/deeplift/b=100/ev=rf: score=0.0617+/-0.092, dim=100
+  [4832/4860] gp/rank_exp_d0.5/deeplift/b=100/ev=svm: score=0.0574+/-0.080, dim=100
+  [4833/4860] gp/rank_exp_d0.5/deeplift/b=100/ev=lightgbm: score=0.0651+/-0.087, dim=100
+  [4834/4860] gp/rank_exp_d0.5/deeplift/b=100/ev=mlp: score=0.0445+/-0.144, dim=100
+  [4835/4860] gp/rank_exp_d0.5/deeplift/b=100/ev=gp: score=0.1369+/-0.132, dim=100
+  [4836/4860] gp/rank_exp_d0.5/lightgbm_gain/b=100/ev=rf: score=nan+/-nan, dim=100
+  [4837/4860] gp/rank_exp_d0.5/lightgbm_gain/b=100/ev=svm: score=nan+/-nan, dim=100
+  [4838/4860] gp/rank_exp_d0.5/lightgbm_gain/b=100/ev=lightgbm: score=nan+/-nan, dim=100
+  [4839/4860] gp/rank_exp_d0.5/lightgbm_gain/b=100/ev=mlp: score=nan+/-nan, dim=100
+  [4840/4860] gp/rank_exp_d0.5/lightgbm_gain/b=100/ev=gp: score=nan+/-nan, dim=100
+  [4841/4860] gp/rank_exp_d0.5/treeshap/b=100/ev=rf: score=nan+/-nan, dim=100
+  [4842/4860] gp/rank_exp_d0.5/treeshap/b=100/ev=svm: score=nan+/-nan, dim=100
+  [4843/4860] gp/rank_exp_d0.5/treeshap/b=100/ev=lightgbm: score=nan+/-nan, dim=100
+  [4844/4860] gp/rank_exp_d0.5/treeshap/b=100/ev=mlp: score=nan+/-nan, dim=100
+  [4845/4860] gp/rank_exp_d0.5/treeshap/b=100/ev=gp: score=nan+/-nan, dim=100
+  [4846/4860] gp/rank_exp_d0.5/deeplift/b=217/ev=rf: score=0.0583+/-0.127, dim=217
+  [4847/4860] gp/rank_exp_d0.5/deeplift/b=217/ev=svm: score=-0.0219+/-0.161, dim=217
+  [4848/4860] gp/rank_exp_d0.5/deeplift/b=217/ev=lightgbm: score=-0.0175+/-0.059, dim=217
+  [4849/4860] gp/rank_exp_d0.5/deeplift/b=217/ev=mlp: score=nan+/-nan, dim=217
+  [4850/4860] gp/rank_exp_d0.5/deeplift/b=217/ev=gp: score=0.0255+/-0.138, dim=217
+  [4851/4860] gp/rank_exp_d0.5/lightgbm_gain/b=217/ev=rf: score=nan+/-nan, dim=217
+  [4852/4860] gp/rank_exp_d0.5/lightgbm_gain/b=217/ev=svm: score=nan+/-nan, dim=217
+  [4853/4860] gp/rank_exp_d0.5/lightgbm_gain/b=217/ev=lightgbm: score=nan+/-nan, dim=217
+  [4854/4860] gp/rank_exp_d0.5/lightgbm_gain/b=217/ev=mlp: score=nan+/-nan, dim=217
+  [4855/4860] gp/rank_exp_d0.5/lightgbm_gain/b=217/ev=gp: score=nan+/-nan, dim=217
+  [4856/4860] gp/rank_exp_d0.5/treeshap/b=217/ev=rf: score=nan+/-nan, dim=217
+  [4857/4860] gp/rank_exp_d0.5/treeshap/b=217/ev=svm: score=nan+/-nan, dim=217
+  [4858/4860] gp/rank_exp_d0.5/treeshap/b=217/ev=lightgbm: score=nan+/-nan, dim=217
+  [4859/4860] gp/rank_exp_d0.5/treeshap/b=217/ev=mlp: score=nan+/-nan, dim=217
+  [4860/4860] gp/rank_exp_d0.5/treeshap/b=217/ev=gp: score=nan+/-nan, dim=217
+
+Best features per model x budget (spearman):
+  model         b=10     b=25     b=50     b=100    b=217  
+  ---------------------------------------------------------
+  gp            0.3726  0.3912  0.2831  0.2059  0.2386
+  knn           0.3761  0.3476  0.3236  0.3582  0.3302
+  lightgbm      0.3142  0.3051  0.3025  0.2965  0.3228
+  mlp           0.3845  0.3640  0.3965  0.3651  0.3637
+  rf            0.3416  0.3288  0.3410  0.3514  0.3555
+  ridge         0.3755  0.3855  0.3846  0.3930  0.3720
+  svm           0.3591  0.3508  0.3579  0.3479  0.3487
+  xgboost       0.3321  0.3399  0.3202  0.3555  0.3669
+  Cached result to /data/stat-cadd/scat9264/.cache/kirby/searches/flab_immunogenicity_marks__general__none__full.pkl
+[cache] cache stats — search: 1 hit / 0 miss / 1 stale; baseline: 216 hit / 0 miss / 0 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+  WARNING: No augmentation reps available — uncapped/capped conditions will be identical to no-augmentation.
+  Top-3 base reps (by RF): abroberta_cdr=0.3495, abroberta=0.3495, antiberty=0.3433
+  rf: best_rep=abroberta_cdr spearman=0.3495
+  xgboost: best_rep=abroberta_cdr spearman=0.3318
+  ridge: best_rep=antiberty spearman=0.3588
+  knn: best_rep=ablang2 spearman=0.3959
+  lightgbm: best_rep=igt5 spearman=0.3063
+  mlp: best_rep=antiberty_cdr spearman=0.3990
+  svm: best_rep=igt5 spearman=0.3243
+  gp: best_rep=onehot spearman=0.1867
+  catboost: best_rep=None spearman=-inf
+  dnn: best_rep=None spearman=-inf
+  cnn: best_rep=None spearman=-inf
+
+  --- Per-model hybrid at top-baseline-rep dim ---
+[cache] cache stats — search: 1 hit / 1 miss / 1 stale; baseline: 243 hit / 0 miss / 0 stale; hybrid_eval: 24 hit / 192 miss / 0 stale
+    rf: hybrid@1536D (abroberta_cdr) -> spearman=0.3479 (vs abroberta_cdr 0.3495, delta=-0.0016)
+[cache] cache stats — search: 1 hit / 2 miss / 1 stale; baseline: 270 hit / 0 miss / 0 stale; hybrid_eval: 57 hit / 429 miss / 0 stale
+    xgboost: hybrid@1536D (abroberta_cdr) -> spearman=0.3466 (vs abroberta_cdr 0.3318, delta=+0.0148)
+[cache] cache stats — search: 1 hit / 3 miss / 1 stale; baseline: 297 hit / 0 miss / 0 stale; hybrid_eval: 87 hit / 669 miss / 0 stale
+    ridge: hybrid@1024D (antiberty) -> spearman=0.3675 (vs antiberty 0.3588, delta=+0.0087)
+[cache] cache stats — search: 1 hit / 4 miss / 1 stale; baseline: 324 hit / 0 miss / 0 stale; hybrid_eval: 96 hit / 780 miss / 0 stale
+    knn: hybrid@480D (ablang2) -> spearman=0.3722 (vs ablang2 0.3959, delta=-0.0237)
+[cache] cache stats — search: 1 hit / 5 miss / 1 stale; baseline: 351 hit / 0 miss / 0 stale; hybrid_eval: 111 hit / 921 miss / 0 stale
+    lightgbm: hybrid@1024D (igt5) -> spearman=0.2629 (vs igt5 0.3063, delta=-0.0434)
+[cache] cache stats — search: 1 hit / 6 miss / 1 stale; baseline: 378 hit / 0 miss / 0 stale; hybrid_eval: 135 hit / 1113 miss / 0 stale
+    mlp: hybrid@1024D (antiberty_cdr) -> spearman=0.3770 (vs antiberty_cdr 0.3990, delta=-0.0220)
+[cache] cache stats — search: 1 hit / 7 miss / 1 stale; baseline: 405 hit / 0 miss / 0 stale; hybrid_eval: 159 hit / 1305 miss / 0 stale
+    svm: hybrid@1024D (igt5) -> spearman=0.3319 (vs igt5 0.3243, delta=+0.0076)
+[cache] cache stats — search: 1 hit / 8 miss / 1 stale; baseline: 432 hit / 0 miss / 0 stale; hybrid_eval: 159 hit / 1305 miss / 0 stale
+
+  Computing PCA baselines...
+
+  BEST BY MODEL (metric: spearman):
+  >> gp: entropy_2.0/lightgbm_gain/b=25 -> spearman=0.3912 (vs onehot 0.1867, delta=+0.2045)
+  >> knn: rank_linear/treeshap/b=10 -> spearman=0.3761 (vs ablang2 0.3959, delta=-0.0198)
+  >> lightgbm: top_2/deeplift/b=217 -> spearman=0.3228 (vs igt5 0.3063, delta=+0.0165)
+  >> mlp: entropy_1.0/treeshap/b=50 -> spearman=0.3965 (vs antiberty_cdr 0.3990, delta=-0.0025)
+  >> rf: power_2/treeshap/b=217 -> spearman=0.3555 (vs abroberta_cdr 0.3495, delta=+0.0060)
+  >> ridge: power_2/lightgbm_gain/b=100 -> spearman=0.3930 (vs antiberty 0.3588, delta=+0.0342)
+  >> svm: entropy_1.0/treeshap/b=10 -> spearman=0.3591 (vs igt5 0.3243, delta=+0.0348)
+  >> xgboost: top_2/deeplift/b=217 -> spearman=0.3669 (vs abroberta_cdr 0.3318, delta=+0.0351)
+
+  IMPORTANCE METHOD WINS:
+    treeshap: 4/11
+    deeplift: 2/11
+    lightgbm_gain: 2/11
+
+  HEATMAP (model x budget -> best spearman):
+  Model             10      25      50     100     250     500    1000    2000
+  ----------------------------------------------------------------------------
+  rf            0.3416  0.3288  0.3410  0.3514      --      --      --      --
+  xgboost       0.3321  0.3399  0.3202  0.3555      --      --      --      --
+  ridge         0.3755  0.3855  0.3846  0.3930      --      --      --      --
+  knn           0.3761  0.3476  0.3236  0.3582      --      --      --      --
+  lightgbm      0.3142  0.3051  0.3025  0.2965      --      --      --      --
+  mlp           0.3845  0.3640  0.3965  0.3651      --      --      --      --
+  svm           0.3591  0.3508  0.3579  0.3479      --      --      --      --
+  gp            0.3726  0.3912  0.2831  0.2059      --      --      --      --
+  catboost          --      --      --      --      --      --      --      --
+  dnn               --      --      --      --      --      --      --      --
+  cnn               --      --      --      --      --      --      --      --
+
+  CONDITION COMPARISON (best score per model):
+    rf: no_aug=0.3555, uncapped=0.3555, top_tier_only=0.3643, per_model_top_rep_dim=0.3479
+    xgboost: no_aug=0.3669, uncapped=0.3669, top_tier_only=0.3421, per_model_top_rep_dim=0.3466
+    ridge: no_aug=0.3930, uncapped=0.3930, top_tier_only=0.4286, per_model_top_rep_dim=0.3675
+    knn: no_aug=0.3761, uncapped=0.3761, top_tier_only=0.3687, per_model_top_rep_dim=0.3722
+    lightgbm: no_aug=0.3228, uncapped=0.3228, top_tier_only=0.3771, per_model_top_rep_dim=0.2629
+    mlp: no_aug=0.3965, uncapped=0.3965, top_tier_only=0.4055, per_model_top_rep_dim=0.3770
+    svm: no_aug=0.3591, uncapped=0.3591, top_tier_only=0.3876, per_model_top_rep_dim=0.3319
+    gp: no_aug=0.3912, uncapped=0.3912, top_tier_only=0.3880
+
+  BEST PER MODEL ACROSS CONDITIONS:
+    rf: top_tier_only (entropy_2.0/lightgbm_gain/b=217) -> spearman=0.3643
+    xgboost: no_aug (top_2/deeplift/b=217) -> spearman=0.3669
+    ridge: top_tier_only (top_2/lightgbm_gain/b=25) -> spearman=0.4286
+    knn: no_aug (rank_linear/treeshap/b=10) -> spearman=0.3761
+    lightgbm: top_tier_only (top_5/lightgbm_gain/b=100) -> spearman=0.3771
+    mlp: top_tier_only (top_5/treeshap/b=100) -> spearman=0.4055
+    svm: top_tier_only (rank_linear/treeshap/b=10) -> spearman=0.3876
+    gp: no_aug (entropy_2.0/lightgbm_gain/b=25) -> spearman=0.3912
+  [saved tests/results/c02_verify_fresh/c02_complexity_matching_grid/flab_immunogenicity_marks.json]
+
+real	110m6.734s
+user	585m52.349s
+sys	81m49.606s
+
+==================================================================
+AFTER RUN: cache state for flab_immunogenicity_marks
+==================================================================
+
+=== flab_immunogenicity_marks: hybrid_eval files on disk ===
+  Total: 17689
+    __none.pkl: 16612
+    __uncapped.pkl: 1077
+
+=== Stored aug_names distribution (sample of up to 200 per suffix) ===
+
+  __none.pkl (200 sampled):
+    unreadable: 0
+    aug_strategy counts:
+      'none': 200
+    aug_names counts:
+      (): 200
+
+  __uncapped.pkl (200 sampled):
+    unreadable: 0
+    aug_strategy counts:
+      'uncapped': 200
+    aug_names counts:
+      ('aac', 'ablang2', 'blosum', 'esm2', 'esm2_cdr', 'esm2_cdr3', 'esm2...: 200
+
+=== Verdict for fixed c02 runs ===
+  c02 no_aug (reads __none.pkl):
+    ✓ 16612 __none.pkl files exist — probes will hit.
+  c02 uncapped (reads __uncapped.pkl):
+    ✓ All sampled __uncapped.pkl files have non-empty aug_names — c02 uncapped probes will HIT.
+  c02 capped (reads __capped.pkl):
+    ✗ ZERO __capped.pkl files — will recompute.
+
+==================================================================
+KEY METRIC — look for [cache] lines above. Every search emits one.
+If hybrid_eval shows mostly HIT, the cache is working.
+If mostly MISS or STALE, we have a bug to chase.
+==================================================================

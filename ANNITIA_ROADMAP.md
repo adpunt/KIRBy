@@ -58,9 +58,12 @@
 - [x] **Trend / ratio features for hep**: 16-feature sparse Cox (0.8445 hep / 0.8122 death) + RSF-300 (0.8339 hep / **0.8584 death**) — competitive with full pipeline despite using only 16 features. Added to pool.
 
 ### P2 — server jobs to monitor and integrate
-- [ ] **7631242** MITRA-only resubmit (was 7631111, silent fail — autogluon missing in venv). **Status: submitted after install-at-start fix.**
-- [ ] **7631243** foundations resubmit (was 7631175). Should produce MITRA + TabSurv + TabPFN-2.5 K10 hep + synaug + SurvTRACE.
-- [ ] **7631244** NHANES T2.x resubmit (was 7631176). 60-cell ablation now wired correctly.
+- [ ] **7631242** MITRA-only resubmit (was 7631111). DEAD — val_test path bug.
+- [ ] **7631243** foundations resubmit (was 7631175). DEAD — val_test path bug.
+- [ ] **7631244** NHANES T2.x resubmit (was 7631176). DEAD — val_test path bug.
+- [ ] **7631459** foundations re-resubmit, post env-var fix (commit 153ce24).
+- [ ] **7631460** NHANES T2.x re-resubmit, post env-var fix.
+- [ ] **7631461** MITRA-only re-resubmit, post env-var fix.
 
 ### P1.5 — RESPONSE TO USER FAILURE-FOCUS REQUEST (2026-05-08, post-pivot)
 - [x] **Failure-focused fusion** — `sub_master_failure_focused.csv` built. Per-val-patient model weighting by K-NN (K=30) local OOF C. Avg only 10/214 hep models active per patient. Most aggressive per-patient selection yet. Mechanism distinct from anomaly_router_meta (discrete buckets), hard_specialist (single override), per_patient (failed on no-event neighbours).
@@ -133,8 +136,130 @@ in trajectory features, not by base-model quality. Audit verified.
 
 ## Won't do (out of time)
 - Real Sanyal 2023 AGILE coefficients (need paper access; current proxies are good enough)
-- XGBoost-survival wrapper + RepeatedStratifiedKFold (~3h, marginal expected lift)
 - MITRA fine-tune (T1.2) via TabTune — torch issues, low ROI given MITRA in-context already running
 - Foundation-model GPU scaling — server jobs handle this
 - Pseudolabel iterative training — already tested, ρ_death=0.20 said no
 - Mixup augmentation — already tested, weak baseline
+
+---
+
+## P6 — VALIDATION METHODOLOGY OVERHAUL (added 2026-05-08, post cherry-pick failure)
+
+**Trigger.** `cherry_pick_hep_anomBlend_death_wapp` was projected at 0.9323 with bootstrap 95% CI [0.9025, 0.9569] and 99% paired-bootstrap probability of beating anchor. Actual LB **0.89788** — outside the 95% CI lower bound, below current LB best (0.9302) by 0.032. Bootstrap CI on training OOF demonstrably fails to predict LB transfer. The OOF protocol itself is suspect.
+
+### Diagnosis: what's wrong with the current OOF
+Current setup (verified in `_oof.py` + `experiment_branches.py` + ~all variants):
+- **5-fold StratifiedKFold(seed=42), stratified on event flag only.** Single split, single seed. n=1106, hep events=47 → ~9 events per fold → **fold-level C-index variance is enormous** (per-fold C ranges 0.83–0.96 in the bootstrap report).
+- **OOF risks concatenated across 5 different fits**, then a single Harrell C is computed on the concatenation. Cox PH baseline hazards / tree calibrations differ per fold, so cross-fold rank comparisons are not survival-statistically valid. We are summing apples and oranges.
+- **Harrell's C is biased upward under heavy censoring** (Uno 2011). We have ~96% censoring on hep — exactly the regime where Harrell's C is most optimistic and Uno's IPCW C is preferred (sksurv: "for moderate-to-high censoring, use `concordance_index_ipcw` instead of `concordance_index_censored`").
+- **No optimism correction.** Harrell's bootstrap optimism correction (200 resamples) is the standard for small-sample survival prognostic models (Steyerberg / Harrell RMS). We don't do it.
+- **Fusion variants fit on the same OOF used for evaluation** (anomaly_blend_meta picks specialists by per-quartile max-OOF-C; weighted_anomaly_per_patient fits per-bucket weights on OOF). This is selection-bias amplification — every parameter fit on the OOF bleeds into the C-index measurement. Caruana 2004's exact warning.
+- **No nested CV.** Any meta-learner / fusion-weight fit needs an inner-fold to fit and an outer-fold to evaluate. We only have one level of OOF.
+- **No held-out test set actually gating submissions.** A 10% fusion-test exists (task #61) but cherry_pick was not gated on it.
+- **Discrimination only.** Brier / IBS would catch calibration failures the C-index misses.
+- **No adversarial validation** between train-OOF and val_test. We don't even know if the OOF distribution is representative of the LB scoring distribution.
+
+### Validation mechanisms to add (literature-backed)
+
+**V1 — Repeated Stratified K-Fold (5×5 or 10×5)**
+Multiple seeds (e.g. 42–46, ×5 folds) → 25 OOF predictions per patient. Average rank, report SE across repeats. Reduces single-split variance from rare events. The NHS / Royston standard for small-event clinical models. Cheap.
+
+**V2 — Harrell bootstrap optimism correction (200 resamples)**
+Standard for small-sample survival (Harrell RMS, ch. 5). For each bootstrap sample: refit, compute apparent C on bootstrap, compute C on original. Optimism = mean(apparent − orig). Corrected = apparent − optimism. Replaces single-OOF-C as primary reporting statistic.
+
+**V3 — .632+ bootstrap estimator (Efron-Tibshirani 1997)**
+Better small-sample properties than Harrell's correction *unless* heavy regularization is used. Worth running both V2 and V3 and comparing — if they disagree by >0.01, our regularization is dominating and we should trust V2.
+
+**V4 — Uno's IPCW concordance (`concordance_index_ipcw` in sksurv)**
+Censoring-corrected C. With 96% censoring on hep, Harrell's C is materially upward-biased. Uno's C is the published-paper standard for our regime. Switch primary metric.
+
+**V5 — Integrated Brier Score (IPCW-weighted, sksurv `integrated_brier_score`)**
+Calibration + discrimination. Catches models that rank well but predict probabilities at the wrong scale. A variant that improves C but worsens IBS is a red flag — it's distorting calibration to chase rank.
+
+**V6 — Time-dependent / cumulative-dynamic AUC (Heagerty)**
+Discrimination at fixed horizons (e.g. 5y, 10y, 15y). The competition target is event-by-end-of-followup, but t-AUC at multiple horizons reveals when each base model is strong. Useful for fusion: weight by horizon-specific performance.
+
+**V7 — Adversarial validation: train-OOF vs val_test**
+Train a binary classifier to discriminate OOF predictions from val_test predictions per variant. AUC ≈ 0.5 ⇒ OOF distribution is representative; AUC ≫ 0.5 ⇒ distribution shift, OOF is unsafe. The Kaggle-canonical sanity check we never ran.
+
+**V8 — Held-out fusion-test gate (already built, not enforced)**
+10% carve-out (task #61). All fusion candidates *must* beat anchor on this set, not just on OOF, to be submission-eligible.
+
+**V9 — Nested cross-validation for fusion weights**
+Outer fold = candidate evaluation. Inner fold = fit fusion weights / pick variants. Eliminates "fit weights on OOF then eval on same OOF" leak. Standard stacking protocol (mlxtend `StackingCVClassifier`, Brad Boehmke HOML ch. 15).
+
+**V10 — Permutation null distribution for ΔC**
+Shuffle predictions within candidate, recompute C 1000 times. Gives a null for ΔC between candidates. Tells us how big a ΔC has to be before it's not noise. We've been treating ΔC=0.005 as signal; permutation will probably show that's well within null.
+
+**V11 — Cross-validated Brier residual analysis**
+Per-patient IBS-residual; cluster patients by who-each-variant-misses; pick variants that miss *different* patients. Diversity-by-residual instead of correlation-by-prediction.
+
+**V12 — Royston-Sauerbrei D / Schemper-Henderson V**
+Effect-size measures for survival; complement C. Useful as a second-opinion ranking when C-index is ambiguous between candidates.
+
+### Fusion / ensembling mechanisms to add
+
+**F1 — Caruana bagged ensemble selection (KDD 2004)**
+Library = all candidates. 20 bootstrap-bag runs of forward greedy selection *with replacement*. Sort-init = top-5 by hold-out (V8) C, not by OOF. Final weights = mean across bags. Bagging the *selection process* directly addresses the cherry-pick failure mode. Reference impl: `dclambert/pyensemble`.
+
+**F2 — Geometric mean of rank-transformed predictions**
+Rank-percentile each variant, geomean across the 10 most-decorrelated bases (chosen by mutual rank-correlation, not OOF C). Zero parameters fit; inherently robust to outlier variants.
+
+**F3 — Hodges-Lehmann pseudomedian**
+Median of pairwise means. Robust location estimator that dominates median when bases are noisy. No fitting.
+
+**F4 — Bates-Granger variance-weighted combination (1969)**
+Weights = 1/Var(error) per variant, computed on V8 hold-out (not OOF). Theoretically optimal under independence, robust under correlated errors. Only one parameter (the variance) per base; minimal selection bias.
+
+**F5 — Stacking with regularized meta-learner + nested CV (V9)**
+Logistic regression (L2 strong) or isotonic regression as meta-learner. Trained on inner-fold OOF, evaluated on outer fold. Replaces all current meta-meta variants.
+
+**F6 — Diversity-penalized forward selection ("Getting the Most Out of Ensemble Selection", Caruana 2006)**
+Forward step penalizes correlation with already-selected variants. Forces breadth, prevents collapse onto a single base family.
+
+**F7 — Bayesian Model Averaging (reference prior)**
+Weights ∝ posterior (BIC-style approximation). Less prone to selection winner's curse than max-OOF-C.
+
+**F8 — Frequentist Model Averaging (Hjort & Claeskens 2003)**
+Weights based on AIC/BIC-type criteria. Theoretical guarantees absent from greedy selection.
+
+**F9 — Trimmed mean / winsorized mean of predictions**
+Drop top/bottom q% before averaging. Robust to a single rogue variant.
+
+**F10 — Snapshot averaging within base models**
+Each base model trained 5× with different seeds, predictions averaged before entering the fusion pool. Reduces base-level variance before fusion sees it. Already partially done for RSF (multi-seed, task #88); extend to all bases.
+
+### Action sequence for remaining 9 submissions
+
+Premise: **no submission goes out without (a) V8 hold-out gate AND (b) at least one of V2/V3/V4 corroborating ΔC vs anchor.** Bootstrap-CI-on-OOF is no longer accepted as evidence.
+
+1. **Switch primary metric to Uno's IPCW C** (V4). Re-rank all 108 candidates. Expect re-ordering — Harrell's C has been over-rewarding heavily-censored-favorable variants.
+2. **Run V2 + V3** on top-20 Uno-C candidates. Discard any whose optimism-corrected C drops below anchor.
+3. **Build F1 (Caruana bagged)** on the survivors using V8 hold-out as the selection objective. Sub A.
+4. **Build F2 (geomean ranks of decorrelated 10)** independently. Sub B.
+5. **Build F4 (Bates-Granger)** on V8 hold-out. Sub C.
+6. **Adversarial validation (V7)** between A/B/C OOFs and val_test. Drop any with AUC > 0.6.
+7. Submit A, B, C in that order with an LB check between each. If A loses to anchor, abort B/C — the OOF→LB transfer is broken at a deeper level than fusion can fix.
+8. If A wins by ≥0.01, proceed with F5 (proper stacking) + F6 (diversity-penalized) over the same survivor pool. Subs D/E.
+9. Hold ≥2 submissions in reserve in case server foundation jobs land and contribute new diverse bases.
+
+### What NOT to do (post-mortem rules)
+- ❌ Submit any variant whose construction fits parameters on the OOF used to score it (kills all current meta-meta variants: anomaly_blend_meta, weighted_anomaly_per_patient, anomaly_router_meta, disagreement_router_meta, cluster_router_meta).
+- ❌ Cherry-pick the per-endpoint OOF winners. The cherry_pick failure proved this is dominated by selection winner's curse.
+- ❌ Use Harrell's C as the only metric.
+- ❌ Use single-seed StratifiedKFold OOF C as a transfer estimator without optimism correction.
+- ❌ Trust bootstrap CI on the same OOF used to construct candidates.
+- ❌ Add new candidates to the pool without a V8 hold-out gate.
+
+### Sources
+- [Caruana et al., "Ensemble Selection from Libraries of Models", ICML 2004](https://www.cs.cornell.edu/~alexn/papers/shotgun.icml04.revised.rev2.pdf)
+- [Caruana et al., "Getting the Most Out of Ensemble Selection", ICDM 2006](http://www.niculescu-mizil.org/papers/enssel_most_long.pdf)
+- [Niculescu-Mizil et al., "Winning the KDD Cup Orange Challenge with Ensemble Selection", 2009](http://proceedings.mlr.press/v7/niculescu09/niculescu09.pdf)
+- [Uno et al., "On the C-statistics for Evaluating Overall Adequacy of Risk Prediction Procedures with Censored Survival Data", Stat Med 2011](https://www.researchgate.net/publication/51043571_On_the_C-statistics_for_Evaluating_Overall_Adequacy_of_Risk_Prediction_Procedures_with_Censored_Survival_Data)
+- [Iba et al., "Re-evaluation of comparative effectiveness of bootstrap-based optimism correction methods", BMC Med Res Methodol 2021](https://pmc.ncbi.nlm.nih.gov/articles/PMC7789544/)
+- [scikit-survival evaluation guide (Uno IPCW vs Harrell)](https://scikit-survival.readthedocs.io/en/stable/user_guide/evaluating-survival-models.html)
+- [Pölsterl, "Evaluating Survival Models" (k-d-w blog)](https://k-d-w.org/blog/2019/05/evaluating-survival-models/)
+- [Pyensemble — Caruana ensemble selection in scikit-learn (dclambert)](https://github.com/dclambert/pyensemble)
+- [Adversarial Validation overview (KDnuggets / Zak Jost)](https://www.kdnuggets.com/2020/02/adversarial-validation-overview.html)
+- [Hands-On Machine Learning with R, ch. 15: Stacking](https://bradleyboehmke.github.io/HOML/stacking.html)
+- [Subasi et al., "Stop Chasing the C-index", arXiv:2506.02075](https://arxiv.org/html/2506.02075v1)

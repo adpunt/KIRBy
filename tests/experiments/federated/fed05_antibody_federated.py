@@ -56,6 +56,7 @@ from experiments.federated.federated_helpers import (
     cluster_antibody_silos,
     predict_fluid_quality_ensemble_regression,
     _resolve_match,
+    fit_fed_classifier, fit_fed_regressor, fit_fed_model, fed_to_kirby_model,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection, apply_augmentation_selection
 from kirby.find_best_hybrid import find_best_hybrid
@@ -113,7 +114,7 @@ def _split_silo(sd, seed=42):
 
 def _silo_baseline(sd, shared_reps, seed=42,
                    alloc='performance_weighted', imp='treeshap',
-                   int_eval='match'):
+                   int_eval='match', fed_model='rf', fed_seed=0):
     """Train create_hybrid on one silo and evaluate. Returns metrics + fi.
 
     Routes the downstream model + metric on the silo's task_type — P1-4
@@ -155,18 +156,13 @@ def _silo_baseline(sd, shared_reps, seed=42,
             X_h_te = np.hstack([X_h_te, _X_te_aug_b])
 
     if sd.get('task_type') == 'classification':
-        clf = RandomForestClassifier(
-            n_estimators=150, max_depth=15,
-            class_weight='balanced', random_state=42)
-        clf.fit(X_h, y_tr)
+        clf = fit_fed_classifier(fed_model, X_h, y_tr, seed=fed_seed)
         y_pred = clf.predict(X_h_te)
         y_prob = (clf.predict_proba(X_h_te)
                   if hasattr(clf, 'predict_proba') else None)
         metrics = compute_clf_metrics(y_te, y_pred, y_prob)
     else:
-        reg = RandomForestRegressor(
-            n_estimators=150, max_depth=15, random_state=42)
-        reg.fit(X_h, y_tr)
+        reg = fit_fed_regressor(fed_model, X_h, y_tr, seed=fed_seed)
         y_pred = reg.predict(X_h_te)
         metrics = compute_reg_metrics(y_te, y_pred)
     metrics['n_features'] = int(X_h.shape[1])
@@ -178,6 +174,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("\n" + "=" * 70)
     print("EXPERIMENT FED05: ANTIBODY FEDERATED EXTENSION")
     print("=" * 70)
+
+    fed_model = config.get('fed_model', 'rf')
+    fed_seed = config.get('fed_seed', 0)
 
     # ── Phase 1: Load silos ──────────────────────────────────────────────
     print("\n--- Phase 1: Load silos ---")
@@ -206,7 +205,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     metric=_metric, task_type=sd['task_type'],
                     adaptive_pruning=0.25,
                     augmentation_strategy='none')
-                s_bp_entry = s_search.best_by_model.get('rf')
+                s_bp_entry = s_search.best_by_model.get(
+                    fed_to_kirby_model(fed_model))
                 if s_bp_entry:
                     silo_blueprints[sname] = s_bp_entry['blueprint']
             except Exception:
@@ -243,8 +243,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             s_imp = sbp.importance_method if sbp else _imp
             s_int_eval = _resolve_match(sbp.internal_evaluator if sbp else _int_eval, 'rf')
             metrics, fi, split = _silo_baseline(
-                sd, shared_reps,
-                alloc=s_alloc, imp=s_imp, int_eval=s_int_eval)
+                sd, shared_reps, seed=fed_seed,
+                alloc=s_alloc, imp=s_imp, int_eval=s_int_eval,
+                fed_model=fed_model, fed_seed=fed_seed)
             independent[sname] = metrics
             silo_fis[sname] = fi
             silo_splits[sname] = split
@@ -286,7 +287,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     target_reps = target_sd['reps']
 
                 tr, te = silo_splits.get(target_name,
-                                         _split_silo(target_sd))
+                                         _split_silo(target_sd, fed_seed))
                 rep_tr = {r: arr[tr] for r, arr in target_reps.items()}
                 rep_te = {r: arr[te] for r, arr in target_reps.items()}
                 y_tr = target_sd['labels'][tr]
@@ -302,18 +303,15 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
                 X_te = apply_feature_selection(rep_te, transferred_fi)
                 if target_sd.get('task_type') == 'classification':
-                    mdl = RandomForestClassifier(
-                        n_estimators=150, max_depth=15,
-                        class_weight='balanced', random_state=42)
-                    mdl.fit(X_target, y_tr)
+                    mdl = fit_fed_classifier(
+                        fed_model, X_target, y_tr, seed=fed_seed)
                     y_pred = mdl.predict(X_te)
                     y_prob = (mdl.predict_proba(X_te)
                               if hasattr(mdl, 'predict_proba') else None)
                     metrics = compute_clf_metrics(y_te, y_pred, y_prob)
                 else:
-                    mdl = RandomForestRegressor(
-                        n_estimators=150, max_depth=15, random_state=42)
-                    mdl.fit(X_target, y_tr)
+                    mdl = fit_fed_regressor(
+                        fed_model, X_target, y_tr, seed=fed_seed)
                     y_pred = mdl.predict(X_te)
                     metrics = compute_reg_metrics(y_te, y_pred)
                 metrics['transfer_stats'] = stats
@@ -346,7 +344,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
         print(f"  {sname}: clustering...", end=' ')
         try:
-            tr, te = silo_splits.get(sname, _split_silo(sd))
+            tr, te = silo_splits.get(sname, _split_silo(sd, fed_seed))
             y_tr = sd['labels'][tr]
             rep_tr = {r: arr[tr] for r, arr in silo_reps.items()}
             rep_te = {r: arr[te] for r, arr in silo_reps.items()}
@@ -356,7 +354,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             # Cluster on TRAIN data only (no test leakage into clusters)
             sub_silo_indices = cluster_antibody_silos(
-                rep_tr, k=K_INTRA, seed=42)
+                rep_tr, k=K_INTRA, seed=fed_seed)
 
             # sub_silo_indices are already train-relative (0..len(tr)-1)
             train_sub_indices = {}
@@ -429,7 +427,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     for sname in silo_names:
         sd = silo_data[sname]
-        tr, _ = silo_splits.get(sname, _split_silo(sd))
+        tr, _ = silo_splits.get(sname, _split_silo(sd, fed_seed))
         n_tr = len(tr)
         # Z-score normalize per silo before pooling (different endpoints)
         silo_y = sd['labels'][tr]
@@ -473,7 +471,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     len(silo_names),
                     allocation_method=_alloc, importance_method=_imp,
                     internal_evaluator=_int_eval,
-                    downstream_model='rf')
+                    downstream_model=fed_to_kirby_model(fed_model))
 
             # Check: does noisy silo get less budget?
             noise_results = {
@@ -526,7 +524,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
             for sname in available_binding:
                 sd = silo_data[sname]
-                tr, _ = silo_splits.get(sname, _split_silo(sd))
+                tr, _ = silo_splits.get(sname, _split_silo(sd, fed_seed))
                 y_tr = sd['labels'][tr]
                 y_z = (zscore(y_tr) if len(y_tr) > 1 and np.std(y_tr) > 1e-12
                        else np.zeros_like(y_tr))
@@ -553,7 +551,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 offset = 0
                 for sname in available_binding:
                     sd = silo_data[sname]
-                    tr_s, _ = silo_splits.get(sname, _split_silo(sd))
+                    tr_s, _ = silo_splits.get(sname, _split_silo(sd, fed_seed))
                     if len(tr_s) == 0:
                         continue
                     g = sd.get('groups')
@@ -569,7 +567,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 # 80/20 split (group-aware)
                 p_tr, p_te = next(cv_split(
                     pool_groups, 1, np.zeros(len(pool_labels)),
-                    pool_labels))
+                    pool_labels, seed=fed_seed))
 
                 rep_tr = {r: arr[p_tr] for r, arr in pool_valid_reps.items()}
                 rep_te = {r: arr[p_te] for r, arr in pool_valid_reps.items()}
@@ -584,9 +582,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     augmentation_strategy='none')
                 X_h_te = apply_feature_selection(rep_te, fi)
 
-                reg = RandomForestRegressor(
-                    n_estimators=150, max_depth=15, random_state=42)
-                reg.fit(X_h, pool_labels[p_tr])
+                reg = fit_fed_regressor(
+                    fed_model, X_h, pool_labels[p_tr], seed=fed_seed)
                 y_pred = reg.predict(X_h_te)
                 pooled_binding = compute_reg_metrics(pool_labels[p_te], y_pred)
                 pooled_binding['n_pooled'] = len(pool_labels)
@@ -630,7 +627,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  {K_div} diversity silos: "
               f"{', '.join(f'{k}={v}' for k, v in div_silos.items())}")
 
-        tr, te = silo_splits.get(lead_silo, _split_silo(sd_lead))
+        tr, te = silo_splits.get(lead_silo, _split_silo(sd_lead, fed_seed))
         y_tr = sd_lead['labels'][tr]
         y_te = sd_lead['labels'][te]
 
@@ -648,9 +645,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             X_tr = np.hstack([sd_lead['reps'][r][tr] for r in rlist])
             X_te = np.hstack([sd_lead['reps'][r][te] for r in rlist])
 
-            reg = RandomForestRegressor(
-                n_estimators=150, max_depth=15, random_state=42)
-            reg.fit(X_tr, y_tr)
+            reg = fit_fed_regressor(fed_model, X_tr, y_tr, seed=fed_seed)
             y_pred = reg.predict(X_te)
             div_baselines[dname] = compute_reg_metrics(y_te, y_pred)
             div_baselines[dname]['reps'] = rlist
@@ -703,9 +698,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 if _X_te_aug_h is not None:
                     X_h_te = np.hstack([X_h_te, _X_te_aug_h])
 
-            reg_h = RandomForestRegressor(
-                n_estimators=150, max_depth=15, random_state=42)
-            reg_h.fit(X_h, y_tr)
+            reg_h = fit_fed_regressor(fed_model, X_h, y_tr, seed=fed_seed)
             y_pred_h = reg_h.predict(X_h_te)
             hybrid_metrics = compute_reg_metrics(y_te, y_pred_h)
             hybrid_metrics['allocation'] = convert_numpy(

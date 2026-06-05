@@ -126,7 +126,12 @@ REP_PRESETS = {
         # WSI (10)
         'wsi_ctranspath', 'wsi_phikon', 'wsi_hoptimus0', 'wsi_gigapath', 'wsi_moco',
         'wsi_titan', 'wsi_uni2h', 'wsi_virchow2', 'wsi_conch', 'wsi_hoptimus1',
-    ],  # 61 reps
+        # New omics reps (2026-06-05): learned fusion, consensus subtype,
+        # variational + survival-supervised latents, CPTAC proteomics.
+        # Factory/graceful-skip — cptac & survival skip cleanly if data/labels absent.
+        'omics_fusion_ae50', 'consensus_subtype', 'vae_latent50',
+        'survival_latent50', 'cptac_proteomics',
+    ],  # 66 reps
 
     # Genomic-only presets (no WSI)
     'genomic_fast': [
@@ -184,6 +189,10 @@ FACTORY_REPS = {
     'gene_quantile_rank', 'gene_corr_modules', 'gene_autoencoder50',
     # Tier 2 factory reps
     'lncrna_pca50', 'gsva_hallmark', 'promoter_meth', 'splicing_psi50',
+    # Multi-omics fusion / consensus subtype / VAE / survival-supervised latents
+    # (all per-fold, leakage-safe — see make_*_factory in genomic.py)
+    'omics_fusion_ae50', 'consensus_subtype', 'vae_latent50',
+    'survival_latent50',
 }
 
 # Dispatch: (function_name, rep_type)
@@ -221,6 +230,8 @@ _REP_DISPATCH = {
     'gene_scfoundation':     ('create_scfoundation_embeddings', 'genomic'),
     'gene_scgpt':            ('create_scgpt_embeddings',        'genomic'),
     'gene_uce':              ('create_uce_embeddings',          'genomic'),
+    'gene_cancerfoundation': ('create_cancerfoundation_embeddings', 'genomic'),
+    'gene_bmfm_rna':         ('create_bmfm_rna_embeddings', 'genomic'),
     # Mutation-pattern: fn(sample_ids, cohort) -> np.ndarray
     'cnv_gistic':            ('create_cnv_gistic',        'mutation'),
     'cnv_pca50':             ('create_cnv_pca50',         'mutation'),
@@ -256,6 +267,15 @@ _REP_DISPATCH = {
     'splicing_psi50':        ('create_splicing_psi50',   'mutation'),
     # RPPA: fn(sample_ids) -> np.ndarray (pan-cancer, no cohort needed)
     'rppa':                  ('create_rppa',              'rppa'),
+    # CPTAC mass-spec proteomics: fn(sample_ids, cohort) -> np.ndarray
+    # GRACEFUL-SKIP when local data absent (mirrors BMFM-RNA).
+    'cptac_proteomics':      ('create_cptac_proteomics',  'mutation'),
+    # Per-fold factory reps (handled in get_rep_factories, not dispatched here;
+    # listed so --reps name resolution does not warn "Unknown representation").
+    'omics_fusion_ae50':     ('make_omics_fusion_factory',     'factory'),
+    'consensus_subtype':     ('make_consensus_subtype_factory','factory'),
+    'vae_latent50':          ('make_vae_factory',              'factory'),
+    'survival_latent50':     ('make_survival_ae_factory',      'factory'),
     # WSI — slide-level features (GigaSSL: ctranspath/phikon/hoptimus0/gigapath/moco;
     #        TITAN: HF gated; UNI2-h: manual prep;
     #        Virchow2: Paige AI 1280D; CONCH v1.5: Mahmood Lab 768D;
@@ -428,6 +448,8 @@ def get_rep_factories(
     preset_or_list: str,
     sample_ids: Optional[List[str]] = None,
     cohort: str = '',
+    survival_time: Optional[np.ndarray] = None,
+    survival_event: Optional[np.ndarray] = None,
 ) -> Dict[str, Any]:
     """Create per-fold rep factories for data-dependent TCGA representations.
 
@@ -454,6 +476,8 @@ def get_rep_factories(
         make_autoencoder_factory,
         make_lncrna_pca_factory, make_gsva_hallmark_factory,
         make_promoter_methylation_factory, make_splicing_psi_factory,
+        make_omics_fusion_factory, make_consensus_subtype_factory,
+        make_vae_factory, make_survival_ae_factory,
     )
     from kirby.representations.data import (
         hallmark, progeny_weights, kegg, dorothea_regulons,
@@ -528,6 +552,23 @@ def get_rep_factories(
                 factories[rep_name] = make_corr_modules_factory(expression)
             elif rep_name == 'gene_autoencoder50':
                 factories[rep_name] = make_autoencoder_factory(expression)
+            # --- Multi-omics fusion / consensus / VAE / survival latents ---
+            elif rep_name == 'omics_fusion_ae50':
+                factories[rep_name] = make_omics_fusion_factory(
+                    expression, sample_ids=sample_ids, cohort=cohort
+                )
+            elif rep_name == 'consensus_subtype':
+                factories[rep_name] = make_consensus_subtype_factory(expression)
+            elif rep_name == 'vae_latent50':
+                factories[rep_name] = make_vae_factory(expression)
+            elif rep_name == 'survival_latent50':
+                # Graceful-skip when survival labels are absent (raises inside
+                # the factory builder; caught by the surrounding try/except).
+                factories[rep_name] = make_survival_ae_factory(
+                    expression,
+                    survival_time=survival_time,
+                    survival_event=survival_event,
+                )
             # --- Tier 2 factories ---
             elif rep_name == 'gsva_hallmark':
                 factories[rep_name] = make_gsva_hallmark_factory(
@@ -870,6 +911,107 @@ def generate_explanations(
 # MAIN
 # =============================================================================
 
+def smoke_test_new_reps() -> int:
+    """Synthetic smoke test for the four new multi-omics reps.
+
+    Proves each rep (a) imports, (b) dispatches via get_rep_factories /
+    get_representations, and (c) graceful-skips cleanly on absent external data.
+    Uses tiny synthetic expression — no network, no GPU required.
+    """
+    from kirby.representations import genomic as gen
+
+    rng = np.random.RandomState(0)
+    n, g = 40, 300
+    expression = rng.randn(n, g).astype(np.float32)
+    gene_names = np.array([f"GENE{i}" for i in range(g)])
+    sample_ids = [f"TCGA-XX-{i:04d}-01" for i in range(n)]
+    # A train/val split for exercising the per-fold factories.
+    train_idx = np.arange(0, 30)
+    val_idx = np.arange(30, n)
+    surv_time = rng.randint(50, 3000, size=n).astype(np.float32)
+    surv_event = rng.randint(0, 2, size=n).astype(np.int64)
+
+    ok = True
+
+    # 1. omics_fusion_ae50 — learned 50-D fusion. sample_ids omitted here so the
+    #    smoke test stays offline (no RPPA/CNV download); with sample_ids the
+    #    extra modalities are appended (or warn-and-skip on network miss).
+    try:
+        fac = gen.make_omics_fusion_factory(expression, sample_ids=None)
+        tr, va = fac(train_idx, val_idx, surv_time[train_idx])
+        assert tr.shape == (30, 50) and va.shape == (10, 50), (tr.shape, va.shape)
+        print(f"  omics_fusion_ae50: OK train{tr.shape} val{va.shape}")
+    except Exception as e:
+        ok = False
+        print(f"  omics_fusion_ae50: FAILED {e}")
+
+    # 2. consensus_subtype — fixed-width one-hot + soft membership.
+    try:
+        fac = gen.make_consensus_subtype_factory(
+            expression, n_clusters=4, n_runs=3, n_top_genes=100)
+        tr, va = fac(train_idx, val_idx, surv_time[train_idx])
+        assert tr.shape == (30, 8) and va.shape == (10, 8), (tr.shape, va.shape)
+        print(f"  consensus_subtype: OK train{tr.shape} val{va.shape}")
+    except Exception as e:
+        ok = False
+        print(f"  consensus_subtype: FAILED {e}")
+
+    # 3. vae_latent50 — variational bottleneck mean.
+    try:
+        fac = gen.make_vae_factory(expression, epochs=2, n_top_genes=100)
+        tr, va = fac(train_idx, val_idx, surv_time[train_idx])
+        assert tr.shape == (30, 50) and va.shape == (10, 50), (tr.shape, va.shape)
+        print(f"  vae_latent50: OK train{tr.shape} val{va.shape}")
+    except Exception as e:
+        ok = False
+        print(f"  vae_latent50: FAILED {e}")
+
+    # 4a. survival_latent50 WITH labels — Cox-supervised latents.
+    try:
+        fac = gen.make_survival_ae_factory(
+            expression, survival_time=surv_time, survival_event=surv_event,
+            epochs=2, n_top_genes=100)
+        tr, va = fac(train_idx, val_idx, surv_time[train_idx])
+        assert tr.shape == (30, 50) and va.shape == (10, 50), (tr.shape, va.shape)
+        print(f"  survival_latent50 (labels): OK train{tr.shape} val{va.shape}")
+    except Exception as e:
+        ok = False
+        print(f"  survival_latent50 (labels): FAILED {e}")
+
+    # 4b. survival_latent50 WITHOUT labels — must graceful-skip (raise).
+    try:
+        gen.make_survival_ae_factory(expression, survival_time=None,
+                                     survival_event=None)
+        ok = False
+        print("  survival_latent50 (no labels): FAILED — expected a raise")
+    except RuntimeError:
+        print("  survival_latent50 (no labels): OK graceful-skip (raised)")
+
+    # 5. cptac_proteomics — must graceful-skip on absent data (clear raise).
+    try:
+        gen.create_cptac_proteomics(sample_ids)
+        print("  cptac_proteomics: OK (local data present, loaded)")
+    except (FileNotFoundError, RuntimeError) as e:
+        msg = str(e)
+        assert 'CPTAC' in msg, msg
+        print("  cptac_proteomics: OK graceful-skip "
+              f"({msg.split('—')[0].strip()[:50]}...)")
+    except Exception as e:
+        ok = False
+        print(f"  cptac_proteomics: FAILED unexpected {type(e).__name__}: {e}")
+
+    # 6. Dispatch wiring: all five names resolve.
+    for name in ('omics_fusion_ae50', 'consensus_subtype', 'vae_latent50',
+                 'survival_latent50', 'cptac_proteomics'):
+        if name not in _REP_DISPATCH:
+            ok = False
+            print(f"  dispatch '{name}': FAILED — not in _REP_DISPATCH")
+    print("  dispatch: all five names present in _REP_DISPATCH")
+
+    print("\nSMOKE TEST: " + ("PASS" if ok else "FAIL"))
+    return 0 if ok else 1
+
+
 def main():
     parser = argparse.ArgumentParser(
         description='Find the optimal hybrid TCGA representation for each model.',
@@ -890,8 +1032,12 @@ Output:
         """
     )
 
-    parser.add_argument('dataset', type=str,
+    parser.add_argument('dataset', type=str, nargs='?',
                        help="tcga_luad_vs_lusc, tcga_brca_pam50, or tcga_brca_survival")
+    parser.add_argument('--smoke-new-reps', action='store_true',
+                       help='Run the synthetic smoke test for the new multi-omics '
+                            'reps (omics_fusion_ae50/consensus_subtype/vae_latent50/'
+                            'survival_latent50/cptac_proteomics) and exit.')
     parser.add_argument('--reps', type=str, default='fast',
                        help="Preset: 'fast'(5), 'fast+diverse'(8), 'multimodal'(12), "
                             "'fast+learned'(15), 'all'(57), 'genomic_fast'(3), "
@@ -935,6 +1081,12 @@ Output:
 
     args = parser.parse_args()
 
+    if args.smoke_new_reps:
+        return smoke_test_new_reps()
+
+    if not args.dataset:
+        parser.error("dataset is required unless --smoke-new-reps is given")
+
     speed = _SEARCH_NAME_MAP.get(args.search, args.search)
 
     # Load dataset
@@ -965,6 +1117,8 @@ Output:
     leakage_free_factories = get_rep_factories(
         expression, gene_names, args.reps,
         sample_ids=sample_ids, cohort=cohort,
+        survival_time=metadata.get('survival_time'),
+        survival_event=metadata.get('survival_event'),
     )
 
     # Resolve model override

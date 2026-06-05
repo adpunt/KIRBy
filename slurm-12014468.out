@@ -1,0 +1,219 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+=== similarity experiments: ginkgo_acsins ===
+Branch: main (685ad36)
+Job ID: 12014468
+Node:   arc-c278
+Pruning mode: aggressive_pruning
+Start:  Tue  5 May 05:58:35 BST 2026
+
+======================================================================
+SIMILARITY EXPERIMENTS: GINKGO_ACSINS
+======================================================================
+Config:      5 fold, ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm'], speed=full
+Reps (26): aac, ablang2, abroberta, abroberta_cdr, antiberty, antiberty_cdr, blosum, esm2, esm2_cdr, esm2_cdr3, esm2_concat, esm2_early, esm2_layer24, esm2_midlayers, esm2_per_cdr, esm2_per_region, esm3, esm3_cdr, esmc, esmc_cdr, igt5, prot_t5, prot_t5_cdr, saprot, saprot_cdr, esm2_entropy_top20
+Experiments: ['s01', 's02', 's03', 's04', 's05', 's06', 's07', 's08', 's10', 's11', 's12', 's13']
+Output:      tests/results/similarity
+
+Loading ginkgo_acsins...
+  Ginkgo AC-SINS_pH7.4: 242 samples, label range [-1.875, 29.500]
+    aac: cached (40D)
+    ablang2: cached (480D)
+    abroberta: cached (1536D)
+    abroberta_cdr: cached (1536D)
+    antiberty: cached (1024D)
+    antiberty_cdr: cached (1024D)
+    blosum: cached (5600D)
+    esm2: cached (2560D)
+    esm2_cdr: cached (2560D)
+    esm2_cdr3: cached (2560D)
+    esm2_concat: cached (1280D)
+    esm2_early: cached (2560D)
+    esm2_layer24: cached (2560D)
+    esm2_midlayers: cached (2560D)
+    esm2_per_cdr: cached (7680D)
+    esm2_per_region: cached (17920D)
+    esm3: cached (3072D)
+    esm3_cdr: cached (3072D)
+    esmc: cached (2304D)
+    esmc_cdr: cached (2304D)
+    igt5: cached (1024D)
+    prot_t5: cached (2048D)
+    prot_t5_cdr: cached (2048D)
+    saprot: cached (2560D)
+    saprot_cdr: cached (2560D)
+    esm2_entropy_top20: cached (2560D)
+  ginkgo_acsins: 242 antibodies, 5 groups, 26 reps (aac=40, ablang2=480, abroberta=1536, abroberta_cdr=1536, antiberty=1024, antiberty_cdr=1024, blosum=5600, esm2=2560, esm2_cdr=2560, esm2_cdr3=2560, esm2_concat=1280, esm2_early=2560, esm2_layer24=2560, esm2_midlayers=2560, esm2_per_cdr=7680, esm2_per_region=17920, esm3=3072, esm3_cdr=3072, esmc=2304, esmc_cdr=2304, igt5=1024, prot_t5=2048, prot_t5_cdr=2048, saprot=2560, saprot_cdr=2560, esm2_entropy_top20=2560)
+  Loaded in 3.2s
+  Loading 2 augmentation reps: ['paratope', 'structural']
+  Ginkgo AC-SINS_pH7.4: 242 samples, label range [-1.875, 29.500]
+    paratope: cached (8D)
+    structural: cached (28D)
+  ginkgo_acsins: 242 antibodies, 5 groups, 2 reps (paratope=8, structural=28)
+  Augmentations (2): paratope=8, structural=28
+
+  Pruning mode: aggressive_pruning
+    overrides gated off (n=242 < 1000)
+
+  Precomputing hybrid searches (general, 26 reps)...
+  KIRBY_PRECOMPUTE_REVERSE_ORDER=1 → iterating aug_conditions in reverse: ['capped', 'uncapped', 'none']
+  [1/3] aug=capped budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=242: [250, 500, 1000, 2000]; added n=242 as at-n boundary
+Augmentations: {'paratope': 8, 'structural': 28} (strategy=capped)
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp', 'svm', 'gp']
+Representations: ['aac', 'ablang2', 'abroberta', 'abroberta_cdr', 'antiberty', 'antiberty_cdr', 'blosum', 'esm2', 'esm2_cdr', 'esm2_cdr3', 'esm2_concat', 'esm2_early', 'esm2_layer24', 'esm2_midlayers', 'esm2_per_cdr', 'esm2_per_region', 'esm3', 'esm3_cdr', 'esmc', 'esmc_cdr', 'igt5', 'prot_t5', 'prot_t5_cdr', 'saprot', 'saprot_cdr', 'esm2_entropy_top20'] (dims: [40, 480, 1536, 1536, 1024, 1024, 5600, 2560, 2560, 2560, 1280, 2560, 2560, 2560, 7680, 17920, 3072, 3072, 2304, 2304, 1024, 2048, 2048, 2560, 2560, 2560])
+
+Evaluating full-dimension baselines...
+  aac (dim=40): rf=0.267, xgboost=0.241, ridge=0.418, knn=0.226, lightgbm=0.332, mlp=0.374, svm=0.322, gp=0.168
+  ablang2 (dim=480): rf=0.479, xgboost=0.400, ridge=0.544, knn=0.394, lightgbm=0.460, mlp=0.558, svm=0.516, gp=0.371
+  abroberta (dim=1536): rf=0.221, xgboost=0.257, ridge=0.374, knn=0.142, lightgbm=0.300, mlp=0.406, svm=0.280, gp=0.200
+  abroberta_cdr (dim=1536): rf=0.221, xgboost=0.257, ridge=0.374, knn=0.142, lightgbm=0.300, mlp=0.406, svm=0.280, gp=0.200
+  antiberty (dim=1024): rf=0.295, xgboost=0.279, ridge=0.424, knn=0.237, lightgbm=0.346, mlp=0.329, svm=0.302, gp=0.238
+  antiberty_cdr (dim=1024): rf=0.289, xgboost=0.311, ridge=0.425, knn=0.244, lightgbm=0.309, mlp=0.329, svm=0.300, gp=0.239
+  blosum (dim=5600): rf=0.132, xgboost=0.153, ridge=0.233, knn=0.091, lightgbm=0.180, mlp=0.208, svm=0.211, gp=0.104
+  esm2 (dim=2560): rf=0.279, xgboost=0.305, ridge=0.391, knn=0.142, lightgbm=0.243, mlp=0.240, svm=0.283, gp=0.176
+  esm2_cdr (dim=2560): rf=0.279, xgboost=0.305, ridge=0.391, knn=0.142, lightgbm=0.243, mlp=0.240, svm=0.283, gp=0.176
+  esm2_cdr3 (dim=2560): rf=0.279, xgboost=0.305, ridge=0.391, knn=0.142, lightgbm=0.243, mlp=0.240, svm=0.283, gp=0.176
+  esm2_concat (dim=1280): rf=0.340, xgboost=0.334, ridge=0.415, knn=0.304, lightgbm=0.371, mlp=0.321, svm=0.315, gp=0.263
+  esm2_early (dim=2560): rf=0.332, xgboost=0.312, ridge=0.456, knn=0.253, lightgbm=0.405, mlp=0.358, svm=0.369, gp=0.157
+  esm2_layer24 (dim=2560): rf=0.218, xgboost=0.249, ridge=0.329, knn=0.186, lightgbm=0.300, mlp=0.287, svm=0.268, gp=0.111
+  esm2_midlayers (dim=2560): rf=0.209, xgboost=0.247, ridge=0.362, knn=0.178, lightgbm=0.283, mlp=0.311, svm=0.288, gp=0.076
+  esm2_per_cdr (dim=7680): rf=0.299, xgboost=0.241, ridge=0.434, knn=0.214, lightgbm=0.298, mlp=0.393, svm=0.344, gp=0.288
+  esm2_per_region (dim=17920): rf=0.311, xgboost=0.304, ridge=0.449, knn=0.250, lightgbm=0.259, mlp=0.390, svm=0.337, gp=0.299
+  esm3 (dim=3072): rf=0.249, xgboost=0.236, ridge=0.403, knn=0.204, lightgbm=0.309, mlp=0.324, svm=0.316, gp=0.026
+  esm3_cdr (dim=3072): rf=0.249, xgboost=0.236, ridge=0.403, knn=0.204, lightgbm=0.309, mlp=0.324, svm=0.316, gp=0.026
+  esmc (dim=2304): rf=0.357, xgboost=0.353, ridge=0.390, knn=0.221, lightgbm=0.367, mlp=0.397, svm=0.335, gp=0.061
+  esmc_cdr (dim=2304): rf=0.357, xgboost=0.353, ridge=0.390, knn=0.221, lightgbm=0.367, mlp=0.397, svm=0.335, gp=0.061
+  igt5 (dim=1024): rf=0.487, xgboost=0.465, ridge=0.560, knn=0.393, lightgbm=0.472, mlp=0.509, svm=0.503, gp=0.221
+  prot_t5 (dim=2048): rf=0.400, xgboost=0.280, ridge=0.458, knn=0.207, lightgbm=0.355, mlp=0.390, svm=0.328, gp=0.233
+  prot_t5_cdr (dim=2048): rf=0.400, xgboost=0.280, ridge=0.458, knn=0.207, lightgbm=0.355, mlp=0.390, svm=0.328, gp=0.233
+  saprot (dim=2560): rf=0.292, xgboost=0.322, ridge=0.438, knn=0.170, lightgbm=0.347, mlp=0.399, svm=0.332, gp=0.175
+  saprot_cdr (dim=2560): rf=0.292, xgboost=0.322, ridge=0.438, knn=0.170, lightgbm=0.347, mlp=0.399, svm=0.332, gp=0.175
+  esm2_entropy_top20 (dim=2560): rf=0.151, xgboost=0.114, ridge=0.241, knn=0.188, lightgbm=0.213, mlp=0.179, svm=0.166, gp=0.154
+
+Searching 4860 unique configurations (full mode)...
+  Pre-computing importance: 3 methods × 5 folds × 26 reps...
+  Importance pre-computed in 258.7s (15/15 successful)
+  Allocation scores pre-computed in 405.8s (8 evaluators × 10 metrics, evaluators: ['gp', 'knn', 'lightgbm', 'mlp', 'rf', 'ridge', 'svm', 'xgboost'])
+
+  Resumed from checkpoint: fold 0 complete (0 results, 0 strategies pruned, 0 mid-flight pairs dropped)
+  Resuming full eval: 2100/4860 already done
+
+  Evaluating 4860 configs (all 5 folds)...
+  [2101/4860] gp/performance_weighted/deeplift/b=25/ev=rf: score=0.2784+/-0.130, dim=25
+  [2102/4860] gp/performance_weighted/deeplift/b=25/ev=svm: score=0.3680+/-0.156, dim=25
+  [2103/4860] gp/performance_weighted/deeplift/b=25/ev=lightgbm: score=0.3545+/-0.084, dim=25
+  [2104/4860] gp/performance_weighted/deeplift/b=25/ev=mlp: score=0.3084+/-0.142, dim=25
+  [2105/4860] gp/performance_weighted/deeplift/b=25/ev=gp: score=0.3683+/-0.113, dim=25
+  [2106/4860] gp/performance_weighted/lightgbm_gain/b=25/ev=rf: score=0.4680+/-0.149, dim=25
+  [2107/4860] gp/performance_weighted/lightgbm_gain/b=25/ev=svm: score=0.4365+/-0.140, dim=25
+  [2108/4860] gp/performance_weighted/lightgbm_gain/b=25/ev=lightgbm: score=0.4343+/-0.146, dim=25
+  [2109/4860] gp/performance_weighted/lightgbm_gain/b=25/ev=mlp: score=0.4178+/-0.137, dim=25
+  [2110/4860] gp/performance_weighted/lightgbm_gain/b=25/ev=gp: score=0.4425+/-0.136, dim=25
+  [2111/4860] gp/performance_weighted/treeshap/b=25/ev=rf: score=0.4560+/-0.130, dim=25
+  [2112/4860] gp/performance_weighted/treeshap/b=25/ev=svm: score=0.4629+/-0.137, dim=25
+  [2113/4860] gp/performance_weighted/treeshap/b=25/ev=lightgbm: score=0.4684+/-0.148, dim=25
+  [2114/4860] gp/performance_weighted/treeshap/b=25/ev=mlp: score=0.4465+/-0.138, dim=25
+  [2115/4860] gp/performance_weighted/treeshap/b=25/ev=gp: score=0.4516+/-0.106, dim=25
+  [2116/4860] gp/performance_weighted/deeplift/b=50/ev=rf: score=0.4264+/-0.153, dim=50
+  [2117/4860] gp/performance_weighted/deeplift/b=50/ev=svm: score=0.3957+/-0.125, dim=50
+  [2118/4860] gp/performance_weighted/deeplift/b=50/ev=lightgbm: score=0.3818+/-0.123, dim=50
+  [2119/4860] gp/performance_weighted/deeplift/b=50/ev=mlp: score=0.3442+/-0.126, dim=50
+  [2120/4860] gp/performance_weighted/deeplift/b=50/ev=gp: score=0.3829+/-0.135, dim=50
+  [2121/4860] gp/performance_weighted/lightgbm_gain/b=50/ev=rf: score=0.4510+/-0.170, dim=50
+  [2122/4860] gp/performance_weighted/lightgbm_gain/b=50/ev=svm: score=0.4460+/-0.102, dim=50
+  [2123/4860] gp/performance_weighted/lightgbm_gain/b=50/ev=lightgbm: score=0.5078+/-0.132, dim=50
+  [2124/4860] gp/performance_weighted/lightgbm_gain/b=50/ev=mlp: score=0.4962+/-0.138, dim=50
+  [2125/4860] gp/performance_weighted/lightgbm_gain/b=50/ev=gp: score=0.5236+/-0.139, dim=50
+  [2126/4860] gp/performance_weighted/treeshap/b=50/ev=rf: score=0.4684+/-0.170, dim=50
+  [2127/4860] gp/performance_weighted/treeshap/b=50/ev=svm: score=0.5156+/-0.156, dim=50
+  [2128/4860] gp/performance_weighted/treeshap/b=50/ev=lightgbm: score=0.5268+/-0.138, dim=50
+  [2129/4860] gp/performance_weighted/treeshap/b=50/ev=mlp: score=0.5078+/-0.159, dim=50
+  [2130/4860] gp/performance_weighted/treeshap/b=50/ev=gp: score=0.5582+/-0.118, dim=50
+  [2131/4860] gp/performance_weighted/deeplift/b=100/ev=rf: score=0.4625+/-0.149, dim=100
+  [2132/4860] gp/performance_weighted/deeplift/b=100/ev=svm: score=0.4545+/-0.095, dim=100
+  [2133/4860] gp/performance_weighted/deeplift/b=100/ev=lightgbm: score=0.4279+/-0.142, dim=100
+  [2134/4860] gp/performance_weighted/deeplift/b=100/ev=mlp: score=0.4391+/-0.126, dim=100
+  [2135/4860] gp/performance_weighted/deeplift/b=100/ev=gp: score=0.4726+/-0.153, dim=100
+  [2136/4860] gp/performance_weighted/lightgbm_gain/b=100/ev=rf: score=0.4944+/-0.144, dim=100
+  [2137/4860] gp/performance_weighted/lightgbm_gain/b=100/ev=svm: score=0.4840+/-0.170, dim=100
+  [2138/4860] gp/performance_weighted/lightgbm_gain/b=100/ev=lightgbm: score=0.5083+/-0.141, dim=100
+  [2139/4860] gp/performance_weighted/lightgbm_gain/b=100/ev=mlp: score=0.5199+/-0.173, dim=100
+  [2140/4860] gp/performance_weighted/lightgbm_gain/b=100/ev=gp: score=0.4722+/-0.123, dim=100
+  [2141/4860] gp/performance_weighted/treeshap/b=100/ev=rf: score=0.5342+/-0.163, dim=100
+  [2142/4860] gp/performance_weighted/treeshap/b=100/ev=svm: score=0.5192+/-0.166, dim=100
+  [2143/4860] gp/performance_weighted/treeshap/b=100/ev=lightgbm: score=0.5413+/-0.188, dim=100
+  [2144/4860] gp/performance_weighted/treeshap/b=100/ev=mlp: score=0.5583+/-0.146, dim=100
+  [2145/4860] gp/performance_weighted/treeshap/b=100/ev=gp: score=0.5332+/-0.157, dim=100
+  [2146/4860] gp/performance_weighted/deeplift/b=242/ev=rf: score=0.4597+/-0.138, dim=242
+  [2147/4860] gp/performance_weighted/deeplift/b=242/ev=svm: score=0.4985+/-0.166, dim=242
+  [2148/4860] gp/performance_weighted/deeplift/b=242/ev=lightgbm: score=0.4467+/-0.137, dim=242
+  [2149/4860] gp/performance_weighted/deeplift/b=242/ev=mlp: score=0.4338+/-0.133, dim=242
+  [2150/4860] gp/performance_weighted/deeplift/b=242/ev=gp: score=0.5015+/-0.170, dim=242
+  [2151/4860] gp/performance_weighted/lightgbm_gain/b=242/ev=rf: score=0.5289+/-0.179, dim=242
+  [2152/4860] gp/performance_weighted/lightgbm_gain/b=242/ev=svm: score=0.5449+/-0.162, dim=242
+  [2153/4860] gp/performance_weighted/lightgbm_gain/b=242/ev=lightgbm: score=0.5360+/-0.153, dim=242
+  [2154/4860] gp/performance_weighted/lightgbm_gain/b=242/ev=mlp: score=0.5434+/-0.152, dim=242
+  [2155/4860] gp/performance_weighted/lightgbm_gain/b=242/ev=gp: score=0.5357+/-0.141, dim=242
+  [2156/4860] gp/performance_weighted/treeshap/b=242/ev=rf: score=0.5629+/-0.123, dim=242
+  [2157/4860] gp/performance_weighted/treeshap/b=242/ev=svm: score=0.5681+/-0.130, dim=242
+  [2158/4860] gp/performance_weighted/treeshap/b=242/ev=lightgbm: score=0.5624+/-0.126, dim=242
+  [2159/4860] gp/performance_weighted/treeshap/b=242/ev=mlp: score=0.5816+/-0.131, dim=242
+  [2160/4860] gp/performance_weighted/treeshap/b=242/ev=gp: score=0.5668+/-0.134, dim=242
+  [2161/4860] rf/entropy_1.0/deeplift/b=10/ev=rf: score=0.2928+/-0.140, dim=10
+  [2162/4860] rf/entropy_1.0/deeplift/b=10/ev=svm: score=0.3499+/-0.144, dim=10
+  [2163/4860] rf/entropy_1.0/deeplift/b=10/ev=lightgbm: score=0.2831+/-0.070, dim=10
+  [2164/4860] rf/entropy_1.0/deeplift/b=10/ev=mlp: score=0.3486+/-0.084, dim=10
+  [2165/4860] rf/entropy_1.0/lightgbm_gain/b=10/ev=rf: score=0.4104+/-0.154, dim=10
+  [2166/4860] rf/entropy_1.0/lightgbm_gain/b=10/ev=svm: score=0.4244+/-0.147, dim=10
+  [2167/4860] rf/entropy_1.0/lightgbm_gain/b=10/ev=lightgbm: score=0.4143+/-0.151, dim=10
+  [2168/4860] rf/entropy_1.0/lightgbm_gain/b=10/ev=mlp: score=0.4169+/-0.180, dim=10
+  [2169/4860] rf/entropy_1.0/treeshap/b=10/ev=rf: score=0.3861+/-0.157, dim=10
+  [2170/4860] rf/entropy_1.0/treeshap/b=10/ev=svm: score=0.4434+/-0.160, dim=10
+  [2171/4860] rf/entropy_1.0/treeshap/b=10/ev=lightgbm: score=0.4049+/-0.171, dim=10
+  [2172/4860] rf/entropy_1.0/treeshap/b=10/ev=mlp: score=0.4294+/-0.162, dim=10
+  [2173/4860] rf/entropy_1.0/deeplift/b=25/ev=rf: score=0.2963+/-0.145, dim=25
+  [2174/4860] rf/entropy_1.0/deeplift/b=25/ev=svm: score=0.2874+/-0.167, dim=25
+  [2175/4860] rf/entropy_1.0/deeplift/b=25/ev=lightgbm: score=0.3326+/-0.178, dim=25
+  [2176/4860] rf/entropy_1.0/deeplift/b=25/ev=mlp: score=0.2796+/-0.145, dim=25
+  [2177/4860] rf/entropy_1.0/lightgbm_gain/b=25/ev=rf: score=0.4924+/-0.149, dim=25
+  [2178/4860] rf/entropy_1.0/lightgbm_gain/b=25/ev=svm: score=0.5163+/-0.149, dim=25
+  [2179/4860] rf/entropy_1.0/lightgbm_gain/b=25/ev=lightgbm: score=0.4762+/-0.155, dim=25
+  [2180/4860] rf/entropy_1.0/lightgbm_gain/b=25/ev=mlp: score=0.4891+/-0.158, dim=25
+  [2181/4860] rf/entropy_1.0/treeshap/b=25/ev=rf: score=0.4635+/-0.122, dim=25
+  [2182/4860] rf/entropy_1.0/treeshap/b=25/ev=svm: score=0.5047+/-0.162, dim=25
+  [2183/4860] rf/entropy_1.0/treeshap/b=25/ev=lightgbm: score=0.4956+/-0.120, dim=25
+  [2184/4860] rf/entropy_1.0/treeshap/b=25/ev=mlp: score=0.5071+/-0.163, dim=25
+  [2185/4860] rf/entropy_1.0/deeplift/b=50/ev=rf: score=0.3938+/-0.152, dim=50
+  [2186/4860] rf/entropy_1.0/deeplift/b=50/ev=svm: score=0.3872+/-0.202, dim=50
+  [2187/4860] rf/entropy_1.0/deeplift/b=50/ev=lightgbm: score=0.2947+/-0.121, dim=50
+  [2188/4860] rf/entropy_1.0/deeplift/b=50/ev=mlp: score=0.3819+/-0.146, dim=50
+  [2189/4860] rf/entropy_1.0/lightgbm_gain/b=50/ev=rf: score=0.5001+/-0.141, dim=50
+  [2190/4860] rf/entropy_1.0/lightgbm_gain/b=50/ev=svm: score=0.5227+/-0.128, dim=50
+  [2191/4860] rf/entropy_1.0/lightgbm_gain/b=50/ev=lightgbm: score=0.4782+/-0.137, dim=50
+  [2192/4860] rf/entropy_1.0/lightgbm_gain/b=50/ev=mlp: score=0.4938+/-0.185, dim=50
+  [2193/4860] rf/entropy_1.0/treeshap/b=50/ev=rf: score=0.4919+/-0.129, dim=50
+  [2194/4860] rf/entropy_1.0/treeshap/b=50/ev=svm: score=0.5153+/-0.195, dim=50
+  [2195/4860] rf/entropy_1.0/treeshap/b=50/ev=lightgbm: score=0.4881+/-0.165, dim=50
+  [2196/4860] rf/entropy_1.0/treeshap/b=50/ev=mlp: score=0.5132+/-0.180, dim=50
+  [2197/4860] rf/entropy_1.0/deeplift/b=100/ev=rf: score=0.3826+/-0.110, dim=100
+  [2198/4860] rf/entropy_1.0/deeplift/b=100/ev=svm: score=0.4037+/-0.142, dim=100
+  [2199/4860] rf/entropy_1.0/deeplift/b=100/ev=lightgbm: score=0.4396+/-0.097, dim=100
+  [2200/4860] rf/entropy_1.0/deeplift/b=100/ev=mlp: score=0.4182+/-0.101, dim=100
+  [2201/4860] rf/entropy_1.0/lightgbm_gain/b=100/ev=rf: score=0.4807+/-0.182, dim=100
+  [2202/4860] rf/entropy_1.0/lightgbm_gain/b=100/ev=svm: score=0.5163+/-0.143, dim=100
+  [2203/4860] rf/entropy_1.0/lightgbm_gain/b=100/ev=lightgbm: score=0.5062+/-0.155, dim=100
+  [2204/4860] rf/entropy_1.0/lightgbm_gain/b=100/ev=mlp: score=0.4978+/-0.181, dim=100
+  [2205/4860] rf/entropy_1.0/treeshap/b=100/ev=rf: score=0.4859+/-0.162, dim=100
+  [2206/4860] rf/entropy_1.0/treeshap/b=100/ev=svm: score=0.4933+/-0.158, dim=100
+  [2207/4860] rf/entropy_1.0/treeshap/b=100/ev=lightgbm: score=0.5332+/-0.140, dim=100
+  [2208/4860] rf/entropy_1.0/treeshap/b=100/ev=mlp: score=0.5111+/-0.192, dim=100
+  [2209/4860] rf/entropy_1.0/deeplift/b=242/ev=rf: score=0.4127+/-0.223, dim=242
+  [2210/4860] rf/entropy_1.0/deeplift/b=242/ev=svm: score=0.4589+/-0.149, dim=242
+  [2211/4860] rf/entropy_1.0/deeplift/b=242/ev=lightgbm: score=0.4606+/-0.161, dim=242
+  [2212/4860] rf/entropy_1.0/deeplift/b=242/ev=mlp: score=0.4507+/-0.139, dim=242
+  [2213/4860] rf/entropy_1.0/lightgbm_gain/b=242/ev=rf: score=0.5030+/-0.141, dim=242
+  [2214/4860] rf/entropy_1.0/lightgbm_gain/b=242/ev=svm: score=0.5272+/-0.177, dim=242
+  [2215/4860] rf/entropy_1.0/lightgbm_gain/b=242/ev=lightgbm: score=0.5237+/-0.188, dim=242
+  [2216/4860] rf/entropy_1.0/lightgbm_gain/b=242/ev=mlp: score=0.4902+/-0.158, dim=242
+  [2217/4860] rf/entropy_1.0/treeshap/b=242/ev=rf: score=0.4951+/-0.141, dim=242
+  [2218/4860] rf/entropy_1.0/treeshap/b=242/ev=svm: score=0.4660+/-0.174, dim=242

@@ -44,6 +44,10 @@ from experiments.federated.federated_helpers import (
     predict_fluid_quality_ensemble_classification,
     fluid_within_kirby_across,
     smoke_n_folds,
+    fit_fed_model,
+    fed_to_kirby_model,
+    make_fed_classifier,
+    make_fed_regressor,
 )
 
 
@@ -97,6 +101,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("EXPERIMENT FED02: REPRESENTATION DIVERSITY AS FEDERATED SILOS")
     print("=" * 70)
 
+    fed_model = config.get('fed_model', 'rf')
+    fed_seed = config.get('fed_seed', 0)
+
     reps = data['reps']
     labels = data['labels']
     groups = data.get('groups')
@@ -109,7 +116,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     try:
         _search, meta = get_best_search_for_downstream(
             reps, labels, groups,
-            downstream_model='rf', budget=BUDGET,
+            downstream_model=fed_to_kirby_model(fed_model), budget=BUDGET,
             augmentations=augs,
             speed=config.get('search_speed', 'full'),
             metric=metric_name,
@@ -178,16 +185,16 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             f"to KFold.")
 
     fold_splits = list(cv_split(
-        groups, N_FOLDS, np.zeros(n_samples), labels))
+        groups, N_FOLDS, np.zeros(n_samples), labels, seed=fed_seed))
     print(f"  Using {N_FOLDS}-fold GroupKFold CV")
 
     def _make_model():
+        # Unfitted template of the swept FLuID model family (per-run fed_model
+        # + fed_seed). Used only as create_hybrid's model= for 'match' → model
+        # family resolution; all *fitted* models go through fit_fed_model.
         if is_clf:
-            return RandomForestClassifier(
-                n_estimators=150, max_depth=15,
-                class_weight='balanced', random_state=0)
-        return RandomForestRegressor(
-            n_estimators=150, max_depth=15, random_state=0)
+            return make_fed_classifier(fed_model, seed=fed_seed)
+        return make_fed_regressor(fed_model, seed=fed_seed)
 
     _compute_metrics = compute_clf_metrics if is_clf else compute_reg_metrics
 
@@ -250,8 +257,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             X_tr = train_reps[rep_name]
             X_te = test_reps[rep_name]
 
-            mdl = _make_model()
-            mdl.fit(X_tr, y_train)
+            mdl = fit_fed_model(fed_model, X_tr, y_train, seed=fed_seed,
+                                task_type=task_type)
             y_pred = mdl.predict(X_te)
 
             if is_clf:
@@ -297,8 +304,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             X_tr = train_reps[rep_name]
             X_te = test_reps[rep_name]
 
-            mdl = _make_model()
-            mdl.fit(X_tr, y_train)
+            mdl = fit_fed_model(fed_model, X_tr, y_train, seed=fed_seed,
+                                task_type=task_type)
 
             teacher_models.append((mdl, len(X_tr), X_tr))
             silo_train_features_sim.append(X_tr)
@@ -373,8 +380,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             X_h_test = _append_test_augs(
                 apply_feature_selection(kirby_test, fi_c4), fi_c4)
 
-            mdl_c4 = _make_model()
-            mdl_c4.fit(X_h_train, y_train)
+            mdl_c4 = fit_fed_model(fed_model, X_h_train, y_train, seed=fed_seed,
+                                   task_type=task_type)
             y_pred_c4 = mdl_c4.predict(X_h_test)
 
             if is_clf:
@@ -424,8 +431,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
             X_t3_test = _append_test_augs(
                 apply_feature_selection(kirby_top3_test, fi_c5), fi_c5)
 
-            mdl_c5 = _make_model()
-            mdl_c5.fit(X_t3_train, y_train)
+            mdl_c5 = fit_fed_model(fed_model, X_t3_train, y_train, seed=fed_seed,
+                                   task_type=task_type)
             y_pred_c5 = mdl_c5.predict(X_t3_test)
 
             if is_clf:
@@ -463,12 +470,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                     k_intra=K_INTRA,
                     allocation_method=_alloc, importance_method=_imp,
                     internal_evaluator=_int_eval,
-                    downstream_model='rf',  # P0/P1: 'match' resolution
+                    downstream_model=fed_to_kirby_model(fed_model),  # 'match' resolution
                     groups=train_groups_c6,
+                    seed=fed_seed,
                     task_type=task_type)
 
-            mdl_c6 = _make_model()
-            mdl_c6.fit(X_c6_train, y_train)
+            mdl_c6 = fit_fed_model(fed_model, X_c6_train, y_train, seed=fed_seed,
+                                   task_type=task_type)
             y_pred_c6 = mdl_c6.predict(X_c6_test)
 
             if is_clf:

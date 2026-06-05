@@ -1,0 +1,80 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+=== similarity experiments: gb_human_nontata_promoters ===
+Branch: main (6b50ecf)
+Job ID: 12044263
+Node:   arc-c316
+Pruning mode: aggressive_pruning
+Start:  Mon  4 May 11:55:56 BST 2026
+
+======================================================================
+SIMILARITY EXPERIMENTS: GB_HUMAN_NONTATA_PROMOTERS
+======================================================================
+Config:      5 fold, ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm'], speed=full
+Reps (9): kmer5, kmer6, kmer4, tetranuc_freq, grover_dna, tnf_canonical, dnabert2, mistral_dna, kmer3
+Experiments: ['s01', 's02', 's03', 's04', 's05', 's06', 's07', 's08', 's10', 's11', 's12', 's13']
+Output:      tests/results/similarity
+
+Loading gb_human_nontata_promoters...
+Loading Genomic Benchmark: human_nontata_promoters...
+Generating train split: 0 examples [00:00, ? examples/s]Generating train split: 10000 examples [00:00, 65576.88 examples/s]Generating train split: 12355 examples [00:00, 53249.80 examples/s]
+  Using genomic-benchmarks package...
+  36131 sequences, 2 classes, 5 groups, seq lengths: 251-251 bp
+    kmer5: cached (1024D)
+    kmer6: cached (4096D)
+    kmer4: cached (256D)
+    tetranuc_freq: cached (256D)
+    grover_dna: cached (768D)
+    tnf_canonical: cached (136D)
+    dnabert2: cached (768D)
+    mistral_dna: cached (768D)
+    kmer3: cached (64D)
+  gb_human_nontata_promoters: 36131 sequences, 5 groups, 9 reps (kmer5=1024, kmer6=4096, kmer4=256, tetranuc_freq=256, grover_dna=768, tnf_canonical=136, dnabert2=768, mistral_dna=768, kmer3=64)
+  Loaded in 82.7s
+  Loading 5 augmentation reps: ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content']
+Loading Genomic Benchmark: human_nontata_promoters...
+Generating train split: 0 examples [00:00, ? examples/s]Generating train split: 12355 examples [00:00, 451183.02 examples/s]
+  Using genomic-benchmarks package...
+  36131 sequences, 2 classes, 5 groups, seq lengths: 251-251 bp
+    codon_usage: cached (61D)
+    complexity: cached (5D)
+    dinuc_freq: cached (16D)
+    dna_shape: cached (8D)
+    gc_content: cached (5D)
+  gb_human_nontata_promoters: 36131 sequences, 5 groups, 5 reps (codon_usage=61, complexity=5, dinuc_freq=16, dna_shape=8, gc_content=5)
+  Augmentations (5): codon_usage=61, complexity=5, dinuc_freq=16, dna_shape=8, gc_content=5
+
+  Pruning mode: aggressive_pruning
+    overrides active for: ['gp', 'mlp', 'svm']
+
+  Precomputing hybrid searches (general, 9 reps)...
+  KIRBY_PRECOMPUTE_REVERSE_ORDER=1 → iterating aug_conditions in reverse: ['capped', 'uncapped', 'none']
+  [1/3] aug=capped budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Augmentations: {'codon_usage': 61, 'complexity': 5, 'dinuc_freq': 16, 'dna_shape': 8, 'gc_content': 5} (strategy=capped)
+  Skipping svm: n_samples=36131 > _max_samples=10000
+  Skipping gp: n_samples=36131 > _max_samples=6000
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp']
+Representations: ['kmer5', 'kmer6', 'kmer4', 'tetranuc_freq', 'grover_dna', 'tnf_canonical', 'dnabert2', 'mistral_dna', 'kmer3'] (dims: [1024, 4096, 256, 256, 768, 136, 768, 768, 64])
+
+Evaluating full-dimension baselines...
+  kmer5 (dim=1024): rf=0.831, xgboost=0.824, ridge=0.697, knn=0.821, lightgbm=0.771, mlp=0.889
+  kmer6 (dim=4096): rf=0.871, xgboost=0.829, ridge=0.781, knn=0.953, lightgbm=0.789, mlp=0.891
+  kmer4 (dim=256): rf=0.796, xgboost=0.795, ridge=0.663, knn=0.781, lightgbm=0.751, mlp=0.858
+  tetranuc_freq (dim=256): rf=0.774, xgboost=0.794, ridge=0.660, knn=0.808, lightgbm=0.752, mlp=0.860
+  grover_dna (dim=768): rf=0.731, xgboost=0.751, ridge=0.694, knn=0.784, lightgbm=0.727, mlp=0.833
+  tnf_canonical (dim=136): rf=0.786, xgboost=0.775, ridge=0.654, knn=0.771, lightgbm=0.739, mlp=0.804
+  dnabert2 (dim=768): rf=0.686, xgboost=0.704, ridge=0.648, knn=0.760, lightgbm=0.672, mlp=0.799
+  mistral_dna (dim=768): rf=0.686, xgboost=0.721, ridge=0.686, knn=0.761, lightgbm=0.696, mlp=0.804
+  kmer3 (dim=64): rf=0.766, xgboost=0.746, ridge=0.630, knn=0.759, lightgbm=0.721, mlp=0.761
+
+Searching 5832 unique configurations (full mode)...
+  Pre-computing importance: 3 methods × 5 folds × 9 reps...
+  Importance pre-computed in 8487.7s (15/15 successful)
+  Allocation scores pre-computed in 14304.6s (7 evaluators × 10 metrics, evaluators: ['knn', 'lightgbm', 'mlp', 'rf', 'ridge', 'svm', 'xgboost'])
+
+  Adaptive pruning: evaluating fold 0 for 5832 configs...
+    Schedule: global checkpoints=[] global tail_drop=0%
+    Per-model overrides active for: ['mlp']
+    fold 0: 200/5832
+    fold 0: 400/5832
+    fold 0: 600/5832
+    fold 0: 800/5832

@@ -153,16 +153,31 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
     # Source/target are arbitrary OPIG datasets — no shared precompute.
     # Hardcode (tier=general, aug=none) per empirical winning trend; no
     # augmentations in this experiment.
+    # Honour the CLI/config budget list (default FULL_BUDGETS). Previously the
+    # two searches hardcoded FULL_BUDGETS, silently ignoring the --budgets flag
+    # and making local smoke runs intractable. config['budgets'] defaults to
+    # FULL_BUDGETS in get_config, so server runs are unchanged.
+    search_budgets = config.get('budgets', FULL_BUDGETS)
+
+    # Test-only: under KIRBY_SMOKE_N use a single rf evaluator + cheap
+    # lightgbm_gain importance for both searches. No-op (full INTERNAL_EVALUATORS
+    # + default importance tier) when the env var is unset, so server runs are
+    # unchanged.
+    _is_smoke = bool(os.environ.get('KIRBY_SMOKE_N', '').strip())
+    _eval_list = ['rf'] if _is_smoke else INTERNAL_EVALUATORS
+    _smoke_imp = ({'importance_methods': ['lightgbm_gain']} if _is_smoke else {})
+
     print(f"\n  Step 1: Hybrid search on source ({source_name})")
     source_search = find_best_hybrid(
         base_reps=src, labels=source_labels, groups=source_groups,
         speed=config['search_speed'],
-        budgets=FULL_BUDGETS,
+        budgets=search_budgets,
         augmentation_strategy='none',
-        internal_evaluators=INTERNAL_EVALUATORS,
+        internal_evaluators=_eval_list,
         metric=metric_name, task_type=task_type,
         verbose=False, cache=True,
         dataset_name=source_name, tier='general',
+        **_smoke_imp,
         **_src_pkw,
     )
 
@@ -170,12 +185,13 @@ def run(source_data, target_data, config, output_dir, source_name, target_name,
     target_search = find_best_hybrid(
         base_reps=tgt, labels=target_labels, groups=target_groups,
         speed=config['search_speed'],
-        budgets=FULL_BUDGETS,
+        budgets=search_budgets,
         augmentation_strategy='none',
-        internal_evaluators=INTERNAL_EVALUATORS,
+        internal_evaluators=_eval_list,
         metric=metric_name, task_type=task_type,
         verbose=False, cache=True,
         dataset_name=target_name, tier='general',
+        **_smoke_imp,
         **_tgt_pkw,
     )
 

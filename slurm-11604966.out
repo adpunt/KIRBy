@@ -1,0 +1,90 @@
+Already up to date.
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+Mode: full
+Dataset: logd
+Reps: fast
+Models: ['ridge', 'rf', 'xgboost', 'lightgbm']
+Importance: treeshap
+  Loaded 5028 molecules from OpenADMET-LogD
+    mhg_gnn: cached (1024D)
+    grover: cached (4800D)
+    mordred: cached (1613D)
+    mol2vec: cached (300D)
+    ecfp4: cached (2048D)
+    molformer: cached (768D)
+    pdv: cached (200D)
+    smited: cached (768D)
+    avalon: cached (2048D)
+    chemberta: cached (384D)
+    graph_kernel: cached (290D)
+    maccs: cached (167D)
+  logd: 5028 samples, 2413 scaffolds, 12 reps (mhg_gnn=1024, grover=4800, mordred=1613, mol2vec=300, ecfp4=2048, molformer=768, pdv=200, smited=768, avalon=2048, chemberta=384, graph_kernel=290, maccs=167)
+
+======================================================================
+EXPERIMENT F01: ALLOCATION STRATEGY COMPARISON (tiered)
+======================================================================
+  Dataset: logd (molecular, 5028 samples)
+  Metric: rmse (lower is better)
+  Strategies: 21
+  Tier 1: 21 evals — screen strategies (b=150, model=rf)
+  Tier 2: top 5 tunable families — param grid × 3 budgets × 4 models
+  Importance: treeshap, folds: 1/5
+
+  --- Tier 1: Strategy screening ---
+  [1] dominant_greedy: rmse=0.6485 dim=150 (140.1s)
+  [2] entropy: rmse=0.6392 dim=150 (450.4s)
+  [3] fixed: rmse=0.6311 dim=1200 (445.0s)
+  [4] greedy: rmse=0.6395 dim=150 (137.8s)
+  [5] greedy_feature: rmse=0.6313 dim=95 (462.8s)
+  [6] min_floor_0.05: rmse=0.6262 dim=150 (446.8s)
+  [7] performance_weighted: rmse=0.6360 dim=150 (446.3s)
+  [8] power_2: rmse=0.6309 dim=150 (449.2s)
+  [9] power_3: rmse=0.6362 dim=150 (453.5s)
+  [10] rank_exp: rmse=0.6491 dim=150 (448.9s)
+  [11] rank_linear: rmse=0.6293 dim=150 (463.6s)
+  [12] score_gap: rmse=0.6353 dim=150 (446.1s)
+  [13] softmax_T0.5: rmse=0.6285 dim=150 (449.6s)
+  [14] softmax_T1: rmse=0.6275 dim=150 (460.2s)
+  [15] softmax_T10: rmse=0.6262 dim=150 (450.5s)
+  [16] softmax_T2: rmse=0.6262 dim=150 (446.8s)
+  [17] softmax_T5: rmse=0.6262 dim=150 (447.8s)
+  [18] stability_selection: rmse=0.6256 dim=71 (2680.8s)
+  [19] thresh_0.5: rmse=0.6360 dim=150 (450.7s)
+  [20] top_3: rmse=0.6368 dim=150 (454.5s)
+  [21] two_stage: rmse=0.6326 dim=150 (180.7s)
+
+  TIER 1 RANKING:
+     1. stability_selection       -0.6256
+     2. min_floor_0.05            -0.6262
+     3. softmax_T10               -0.6262
+     4. softmax_T2                -0.6262
+     5. softmax_T5                -0.6262
+     6. softmax_T1                -0.6275
+     7. softmax_T0.5              -0.6285
+     8. rank_linear               -0.6293
+     9. power_2                   -0.6309
+    10. fixed                     -0.6311
+    11. greedy_feature            -0.6313
+    12. two_stage                 -0.6326
+    13. score_gap                 -0.6353
+    14. performance_weighted      -0.6360
+    15. thresh_0.5                -0.6360
+    16. power_3                   -0.6362
+    17. top_3                     -0.6368
+    18. entropy                   -0.6392
+    19. greedy                    -0.6395
+    20. dominant_greedy           -0.6485
+    21. rank_exp                  -0.6491
+
+  Tier 2 families: ['softmax', 'power', 'score_gap', 'thresholded', 'top_k']
+
+  --- Tier 2: Parameter tuning ---
+
+  >> Family: softmax (5 param settings × 3 budgets × 4 models)
+  [40] softmax_T1/b=300/ridge: rmse=0.5254 (450.9s)
+  [60] softmax_T5/b=150/xgboost: rmse=0.6188 (450.5s)
+
+  >> Family: power (4 param settings × 3 budgets × 4 models)
+  [80] power_1.5/b=50/lightgbm: rmse=0.6120 (452.6s)
+  [100] power_3/b=50/ridge: rmse=0.7237 (445.2s)
+  [120] power_5/b=300/rf: rmse=0.6297 (444.9s)

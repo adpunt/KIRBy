@@ -1,0 +1,1871 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+=== complexity experiments: abcov_kd ===
+Branch: main (685ad36)
+Job ID: 12013714
+Node:   arc-c268
+Pruning mode: aggressive_pruning
+Start:  Tue  5 May 05:58:34 BST 2026
+
+======================================================================
+COMPLEXITY EXPERIMENTS: ABCOV_KD
+======================================================================
+Config:      5 fold, ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm'], speed=full
+Reps (27): igt5, esm2_per_cdr, prot_t5, esm2_per_region, antiberty, esm2_midlayers, esm2_cdr3, esm2_cdr, abroberta, esmc_cdr, esm2, blosum, ablang2, onehot, abroberta_cdr, saprot, esm2_layer24, prot_t5_cdr, saprot_cdr, esm3, esmc, antiberty_cdr, aac, esm3_cdr, esm2_early, esm2_concat, esm2_entropy_top20
+Experiments: ['c01', 'c02', 'c04', 'c05', 'c06', 'c07', 'c08', 'c09', 'c10', 'c11', 'c13', 'c15', 'c16', 'c17', 'c18', 'c19', 'c21', 'c22', 'c23', 'c24']
+Output:      tests/results/complexity
+
+Loading abcov_kd...
+  Ab-CoV abcov_kd: 141 antibodies, paired, property=Binding (-log Kd)
+  Fitness range: [5.222, 11.222]
+    igt5: cached (1024D)
+    esm2_per_cdr: cached (7680D)
+    prot_t5: cached (2048D)
+    esm2_per_region: cached (17920D)
+    antiberty: cached (1024D)
+    esm2_midlayers: cached (2560D)
+    esm2_cdr3: cached (2560D)
+    esm2_cdr: cached (2560D)
+    abroberta: cached (1536D)
+    esmc_cdr: cached (2304D)
+    esm2: cached (2560D)
+    blosum: cached (5600D)
+    ablang2: cached (480D)
+    onehot: cached (5600D)
+    abroberta_cdr: cached (1536D)
+    saprot: cached (2560D)
+    esm2_layer24: cached (2560D)
+    prot_t5_cdr: cached (2048D)
+    saprot_cdr: cached (2560D)
+    esm3: cached (3072D)
+    esmc: cached (2304D)
+    antiberty_cdr: cached (1024D)
+    aac: cached (40D)
+    esm3_cdr: cached (3072D)
+    esm2_early: cached (2560D)
+    esm2_concat: cached (1280D)
+    esm2_entropy_top20: cached (2560D)
+  abcov_kd: 141 antibodies, 136 groups, 27 reps (igt5=1024, esm2_per_cdr=7680, prot_t5=2048, esm2_per_region=17920, antiberty=1024, esm2_midlayers=2560, esm2_cdr3=2560, esm2_cdr=2560, abroberta=1536, esmc_cdr=2304, esm2=2560, blosum=5600, ablang2=480, onehot=5600, abroberta_cdr=1536, saprot=2560, esm2_layer24=2560, prot_t5_cdr=2048, saprot_cdr=2560, esm3=3072, esmc=2304, antiberty_cdr=1024, aac=40, esm3_cdr=3072, esm2_early=2560, esm2_concat=1280, esm2_entropy_top20=2560)
+  Loaded in 3.2s
+  WARNING: esm2_per_cdr has 122880 NaN values (11.3%) — imputing 0
+  WARNING: esm2_per_region has 286720 NaN values (11.3%) — imputing 0
+  WARNING: saprot has 40960 NaN values (11.3%) — imputing 0
+  WARNING: esm3 has 49152 NaN values (11.3%) — imputing 0
+  WARNING: esmc has 36864 NaN values (11.3%) — imputing 0
+  WARNING: esm2_entropy_top20 has 40960 NaN values (11.3%) — imputing 0
+
+  Pruning mode: aggressive_pruning
+    overrides gated off (n=141 < 1000)
+
+  Precomputing hybrid searches (general, 27 reps)...
+  [1/1] aug=none budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=141: [250, 500, 1000, 2000]; added n=141 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/abcov_kd__general__none__full.pkl
+ done 0.2s (8 models, top=knn score=0.4549)
+  Precompute complete: 1/1 searches in 0s
+
+  Precomputing hybrid searches (top-tier, 8 reps)...
+  [1/1] aug=none budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=141: [250, 500, 1000, 2000]; added n=141 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/abcov_kd__top__none__full.pkl
+ done 0.2s (8 models, top=rf score=0.4729)
+  Precompute complete: 1/1 searches in 0s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT C01: REPRESENTATION CHARACTERIZATION
+======================================================================
+
+  igt5 (dim=1024):
+    PCA95=42, MLE=10.9
+    MI=0.0000
+    Effective rank=77.1
+    Baselines (spearman): rf=0.379, xgboost=0.273, ridge=0.445, svm=0.460, mlp=0.136, lightgbm=0.346
+
+  esm2_per_cdr (dim=7680):
+    PCA95=45, MLE=8.9
+    MI=0.0000
+    Effective rank=79.8
+    Baselines (spearman): rf=0.255, xgboost=0.169, ridge=0.256, svm=0.301, mlp=0.121, lightgbm=0.155
+
+  prot_t5 (dim=2048):
+    PCA95=42, MLE=8.8
+    MI=0.0000
+    Effective rank=77.2
+    Baselines (spearman): rf=0.445, xgboost=0.321, ridge=0.264, svm=0.338, mlp=0.203, lightgbm=0.284
+
+  esm2_per_region (dim=17920):
+    PCA95=45, MLE=8.9
+    MI=0.0000
+    Effective rank=79.8
+    Baselines (spearman): rf=0.208, xgboost=0.141, ridge=0.278, svm=0.301, mlp=0.058, lightgbm=0.165
+
+  antiberty (dim=1024):
+    PCA95=53, MLE=10.1
+    MI=0.0000
+    Effective rank=84.4
+    Baselines (spearman): rf=0.202, xgboost=0.134, ridge=0.254, svm=0.283, mlp=0.085, lightgbm=0.294
+
+  esm2_midlayers (dim=2560):
+    PCA95=43, MLE=9.3
+    MI=0.0000
+    Effective rank=78.0
+    Baselines (spearman): rf=0.246, xgboost=0.114, ridge=0.325, svm=0.328, mlp=0.152, lightgbm=0.265
+
+  esm2_cdr3 (dim=2560):
+    PCA95=40, MLE=9.4
+    MI=0.0000
+    Effective rank=76.2
+    Baselines (spearman): rf=0.397, xgboost=0.268, ridge=0.256, svm=0.314, mlp=0.355, lightgbm=0.231
+
+  esm2_cdr (dim=2560):
+    PCA95=40, MLE=9.4
+    MI=0.0000
+    Effective rank=76.2
+    Baselines (spearman): rf=0.397, xgboost=0.268, ridge=0.256, svm=0.314, mlp=0.355, lightgbm=0.231
+
+  abroberta (dim=1536):
+    PCA95=72, MLE=13.8
+    MI=0.0000
+    Effective rank=96.8
+    Baselines (spearman): rf=0.474, xgboost=0.385, ridge=0.412, svm=0.343, mlp=0.047, lightgbm=0.394
+
+  esmc_cdr (dim=2304):
+    PCA95=28, MLE=6.3
+    MI=0.0000
+    Effective rank=65.8
+    Baselines (spearman): rf=0.153, xgboost=0.188, ridge=0.182, svm=0.257, mlp=0.256, lightgbm=0.072
+
+  esm2 (dim=2560):
+    PCA95=45, MLE=8.9
+    MI=0.0000
+    Effective rank=79.8
+    Baselines (spearman): rf=0.215, xgboost=0.172, ridge=0.248, svm=0.301, mlp=0.205, lightgbm=0.155
+
+  blosum (dim=5600):
+    PCA95=67, MLE=9.8
+    MI=0.0000
+    Effective rank=94.8
+    Baselines (spearman): rf=0.309, xgboost=0.232, ridge=0.411, svm=0.389, mlp=0.040, lightgbm=0.242
+
+  ablang2 (dim=480):
+    PCA95=41, MLE=11.1
+    MI=0.0000
+    Effective rank=75.1
+    Baselines (spearman): rf=0.164, xgboost=0.204, ridge=0.407, svm=0.346, mlp=0.239, lightgbm=0.267
+
+  onehot (dim=5600):
+    PCA95=93, MLE=19.4
+    MI=0.0000
+    Effective rank=113.8
+    Baselines (spearman): rf=0.254, xgboost=0.317, ridge=0.351, svm=0.359, mlp=-0.049, lightgbm=0.331
+
+  abroberta_cdr (dim=1536):
+    PCA95=68, MLE=13.6
+    MI=0.0000
+    Effective rank=94.1
+    Baselines (spearman): rf=0.325, xgboost=0.317, ridge=0.396, svm=0.333, mlp=-0.002, lightgbm=0.426
+
+  saprot (dim=2560):
+    PCA95=47, MLE=9.0
+    MI=0.0000
+    Effective rank=81.2
+    Baselines (spearman): rf=0.306, xgboost=0.132, ridge=0.267, svm=0.290, mlp=0.183, lightgbm=0.237
+
+  esm2_layer24 (dim=2560):
+    PCA95=42, MLE=9.5
+    MI=0.0000
+    Effective rank=77.4
+    Baselines (spearman): rf=0.269, xgboost=0.284, ridge=0.305, svm=0.302, mlp=0.168, lightgbm=0.317
+
+  prot_t5_cdr (dim=2048):
+    PCA95=34, MLE=9.8
+    MI=0.0000
+    Effective rank=70.5
+    Baselines (spearman): rf=0.205, xgboost=0.243, ridge=0.229, svm=0.319, mlp=0.192, lightgbm=0.154
+
+  saprot_cdr (dim=2560):
+    PCA95=47, MLE=9.1
+    MI=0.0000
+    Effective rank=81.1
+    Baselines (spearman): rf=0.247, xgboost=0.198, ridge=0.257, svm=0.288, mlp=0.086, lightgbm=0.236
+
+  esm3 (dim=3072):
+    PCA95=26, MLE=6.9
+    MI=0.0000
+    Effective rank=63.2
+    Baselines (spearman): rf=0.267, xgboost=0.222, ridge=0.291, svm=0.310, mlp=0.304, lightgbm=0.234
+
+  esmc (dim=2304):
+    PCA95=32, MLE=6.3
+    MI=0.0000
+    Effective rank=69.2
+    Baselines (spearman): rf=0.293, xgboost=0.271, ridge=0.201, svm=0.242, mlp=0.101, lightgbm=0.216
+
+  antiberty_cdr (dim=1024):
+    PCA95=53, MLE=10.1
+    MI=0.0000
+    Effective rank=84.4
+    Baselines (spearman): rf=0.252, xgboost=0.145, ridge=0.251, svm=0.281, mlp=0.083, lightgbm=0.339
+
+  aac (dim=40):
+    PCA95=21, MLE=9.5
+    MI=0.0000
+    Effective rank=28.7
+    Baselines (spearman): rf=0.374, xgboost=0.310, ridge=0.121, svm=0.090, mlp=-0.073, lightgbm=0.278
+
+  esm3_cdr (dim=3072):
+    PCA95=24, MLE=7.1
+    MI=0.0000
+    Effective rank=61.9
+    Baselines (spearman): rf=0.165, xgboost=0.232, ridge=0.315, svm=0.306, mlp=0.222, lightgbm=0.106
+
+  esm2_early (dim=2560):
+    PCA95=53, MLE=11.2
+    MI=0.0000
+    Effective rank=85.5
+    Baselines (spearman): rf=0.185, xgboost=0.118, ridge=0.219, svm=0.224, mlp=0.188, lightgbm=0.155
+
+  esm2_concat (dim=1280):
+    PCA95=46, MLE=8.4
+    MI=0.0000
+    Effective rank=80.0
+    Baselines (spearman): rf=0.202, xgboost=0.121, ridge=0.142, svm=0.241, mlp=0.217, lightgbm=0.172
+
+  esm2_entropy_top20 (dim=2560):
+    PCA95=41, MLE=6.8
+    MI=0.0000
+    Effective rank=76.3
+    Baselines (spearman): rf=0.278, xgboost=0.205, ridge=0.257, svm=0.293, mlp=0.142, lightgbm=0.327
+
+----------------------------------------------------------------------
+SUMMARY (metric: spearman)
+----------------------------------------------------------------------
+  Rep                    Dim  PCA95    MLE       MI   ERank       rf  xgboost    ridge      svm      mlp lightgbm
+  ---------------------------------------------------------------------------------------------------------------
+  igt5                  1024     42   10.9   0.0000    77.1    0.379    0.273    0.445    0.460    0.136    0.346
+  esm2_per_cdr          7680     45    8.9   0.0000    79.8    0.255    0.169    0.256    0.301    0.121    0.155
+  prot_t5               2048     42    8.8   0.0000    77.2    0.445    0.321    0.264    0.338    0.203    0.284
+  esm2_per_region      17920     45    8.9   0.0000    79.8    0.208    0.141    0.278    0.301    0.058    0.165
+  antiberty             1024     53   10.1   0.0000    84.4    0.202    0.134    0.254    0.283    0.085    0.294
+  esm2_midlayers        2560     43    9.3   0.0000    78.0    0.246    0.114    0.325    0.328    0.152    0.265
+  esm2_cdr3             2560     40    9.4   0.0000    76.2    0.397    0.268    0.256    0.314    0.355    0.231
+  esm2_cdr              2560     40    9.4   0.0000    76.2    0.397    0.268    0.256    0.314    0.355    0.231
+  abroberta             1536     72   13.8   0.0000    96.8    0.474    0.385    0.412    0.343    0.047    0.394
+  esmc_cdr              2304     28    6.3   0.0000    65.8    0.153    0.188    0.182    0.257    0.256    0.072
+  esm2                  2560     45    8.9   0.0000    79.8    0.215    0.172    0.248    0.301    0.205    0.155
+  blosum                5600     67    9.8   0.0000    94.8    0.309    0.232    0.411    0.389    0.040    0.242
+  ablang2                480     41   11.1   0.0000    75.1    0.164    0.204    0.407    0.346    0.239    0.267
+  onehot                5600     93   19.4   0.0000   113.8    0.254    0.317    0.351    0.359   -0.049    0.331
+  abroberta_cdr         1536     68   13.6   0.0000    94.1    0.325    0.317    0.396    0.333   -0.002    0.426
+  saprot                2560     47    9.0   0.0000    81.2    0.306    0.132    0.267    0.290    0.183    0.237
+  esm2_layer24          2560     42    9.5   0.0000    77.4    0.269    0.284    0.305    0.302    0.168    0.317
+  prot_t5_cdr           2048     34    9.8   0.0000    70.5    0.205    0.243    0.229    0.319    0.192    0.154
+  saprot_cdr            2560     47    9.1   0.0000    81.1    0.247    0.198    0.257    0.288    0.086    0.236
+  esm3                  3072     26    6.9   0.0000    63.2    0.267    0.222    0.291    0.310    0.304    0.234
+  esmc                  2304     32    6.3   0.0000    69.2    0.293    0.271    0.201    0.242    0.101    0.216
+  antiberty_cdr         1024     53   10.1   0.0000    84.4    0.252    0.145    0.251    0.281    0.083    0.339
+  aac                     40     21    9.5   0.0000    28.7    0.374    0.310    0.121    0.090   -0.073    0.278
+  esm3_cdr              3072     24    7.1   0.0000    61.9    0.165    0.232    0.315    0.306    0.222    0.106
+  esm2_early            2560     53   11.2   0.0000    85.5    0.185    0.118    0.219    0.224    0.188    0.155
+  esm2_concat           1280     46    8.4   0.0000    80.0    0.202    0.121    0.142    0.241    0.217    0.172
+  esm2_entropy_top20    2560     41    6.8   0.0000    76.3    0.278    0.205    0.257    0.293    0.142    0.327
+  [saved tests/results/complexity/c01_rep_characterization/abcov_kd.json]
+  c01 done in 135.9s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT C02: COMPLEXITY MATCHING GRID
+======================================================================
+
+  --- Top-tier reps only (8/27: ['prot_t5', 'antiberty', 'esm2_midlayers', 'abroberta', 'esm2', 'blosum', 'ablang2', 'esm2_entropy_top20']) ---
+Dropped budgets > n=141: [250, 500, 1000, 2000]; added n=141 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/abcov_kd__top__none__full.pkl
+
+  --- All reps, no augmentation (27 reps) ---
+  6 models x 8 budgets x 9 allocations x 3 importance
+Dropped budgets > n=141: [250, 500, 1000, 2000]; added n=141 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/abcov_kd__general__none__full.pkl
+  WARNING: No augmentation reps available — uncapped/capped conditions will be identical to no-augmentation.
+  [ft] 1 FT factories: antibody_lora_esm2
+
+  --- Frozen + FT (27 frozen + 1 FT: antibody_lora_esm2) ---
+Dropped budgets > n=141: [250, 500, 1000, 2000]; added n=141 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/abcov_kd__general_ft__none__full.pkl
+  Top-3 base reps (by RF): prot_t5=0.4263, saprot=0.4049, esm2_midlayers=0.4043
+  rf: best_rep=prot_t5 spearman=0.4263
+  xgboost: best_rep=esm3_cdr spearman=0.3268
+  ridge: best_rep=igt5 spearman=0.4446
+  svm: best_rep=igt5 spearman=0.4602
+  mlp: best_rep=prot_t5_cdr spearman=0.2650
+  lightgbm: best_rep=igt5 spearman=0.4467
+
+  --- Per-model hybrid at top-baseline-rep dim ---
+    rf: hybrid@2048D (prot_t5) -> spearman=0.4325 (vs prot_t5 0.4263, delta=+0.0062)
+    xgboost: hybrid@3072D (esm3_cdr) -> spearman=0.3619 (vs esm3_cdr 0.3268, delta=+0.0351)
+    ridge: hybrid@1024D (igt5) -> spearman=0.4243 (vs igt5 0.4446, delta=-0.0203)
+    svm: hybrid@1024D (igt5) -> spearman=0.4231 (vs igt5 0.4602, delta=-0.0371)
+    mlp: hybrid@2048D (prot_t5_cdr) -> spearman=0.3185 (vs prot_t5_cdr 0.2650, delta=+0.0535)
+    lightgbm: hybrid@1024D (igt5) -> spearman=0.4085 (vs igt5 0.4467, delta=-0.0382)
+
+  Computing PCA baselines...
+
+  BEST BY MODEL (metric: spearman):
+  >> rf: entropy_1.0/lightgbm_gain/b=141 -> spearman=0.4167 (vs prot_t5 0.4263, delta=-0.0096)
+  >> xgboost: power_2/lightgbm_gain/b=10 -> spearman=0.4138 (vs esm3_cdr 0.3268, delta=+0.0870)
+  >> ridge: top_3/lightgbm_gain/b=50 -> spearman=0.4369 (vs igt5 0.4446, delta=-0.0077)
+  >> svm: entropy_2.0/lightgbm_gain/b=141 -> spearman=0.4508 (vs igt5 0.4602, delta=-0.0094)
+  >> mlp: entropy_1.0/lightgbm_gain/b=25 -> spearman=0.3621 (vs prot_t5_cdr 0.2650, delta=+0.0971)
+  >> lightgbm: top_3/lightgbm_gain/b=141 -> spearman=0.4273 (vs igt5 0.4467, delta=-0.0194)
+
+  IMPORTANCE METHOD WINS:
+    lightgbm_gain: 6/6
+    deeplift: 0/6
+    treeshap: 0/6
+
+  HEATMAP (model x budget -> best spearman):
+  Model             10      25      50     100     250     500    1000    2000
+  ----------------------------------------------------------------------------
+  rf            0.3876  0.4018  0.3878  0.4022      --      --      --      --
+  xgboost       0.4138  0.3842  0.3897  0.4050      --      --      --      --
+  ridge         0.4024  0.4061  0.4369  0.4087      --      --      --      --
+  svm           0.4178  0.4141  0.4321  0.4171      --      --      --      --
+  mlp           0.2775  0.3621  0.3196  0.3308      --      --      --      --
+  lightgbm      0.3430  0.3531  0.4189  0.4143      --      --      --      --
+
+  CONDITION COMPARISON (best score per model):
+    rf: no_aug=0.4167, uncapped=0.4167, top_tier_only=0.4729, frozen_plus_ft=0.4350, per_model_top_rep_dim=0.4325
+    xgboost: no_aug=0.4138, uncapped=0.4138, top_tier_only=0.4310, frozen_plus_ft=0.4525, per_model_top_rep_dim=0.3619
+    ridge: no_aug=0.4369, uncapped=0.4369, top_tier_only=0.4376, frozen_plus_ft=0.4369, per_model_top_rep_dim=0.4243
+    svm: no_aug=0.4508, uncapped=0.4508, top_tier_only=0.4187, frozen_plus_ft=0.4334, per_model_top_rep_dim=0.4231
+    mlp: no_aug=0.3621, uncapped=0.3621, top_tier_only=0.3284, frozen_plus_ft=0.3447, per_model_top_rep_dim=0.3185
+    lightgbm: no_aug=0.4273, uncapped=0.4273, top_tier_only=0.4505, frozen_plus_ft=0.4273, per_model_top_rep_dim=0.4085
+
+  BEST PER MODEL ACROSS CONDITIONS:
+    rf: top_tier_only (top_3/lightgbm_gain/b=141) -> spearman=0.4729
+    xgboost: frozen_plus_ft (entropy_2.0/lightgbm_gain/b=141) -> spearman=0.4525
+    ridge: top_tier_only (entropy_2.0/lightgbm_gain/b=50) -> spearman=0.4376
+    svm: no_aug (entropy_2.0/lightgbm_gain/b=141) -> spearman=0.4508
+    mlp: no_aug (entropy_1.0/lightgbm_gain/b=25) -> spearman=0.3621
+    lightgbm: top_tier_only (top_3/lightgbm_gain/b=141) -> spearman=0.4505
+  [saved tests/results/complexity/c02_complexity_matching_grid/abcov_kd.json]
+  c02 done in 128.6s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT C04: IMPORTANCE WEIGHTS AS LEARNED METRICS
+======================================================================
+  Concatenated features: (141, 82632)
+
+  Evaluating methods (per-fold importance)...
+  deeplift... kNN delta=+0.0089, sim delta=+0.0099 (50.1s)
+  lightgbm_gain... kNN delta=-0.0011, sim delta=+0.0072 (41.9s)
+  treeshap... kNN delta=-0.0098, sim delta=-0.0039 (93.0s)
+
+  Cross-test matrix (select x weight)...
+
+  Low-dim (budget=25) selected + weighted...
+    deeplift: weighted R2=0.0653, unweighted R2=0.0584
+    lightgbm_gain: weighted R2=0.0724, unweighted R2=0.1031
+    treeshap: weighted R2=-0.0512, unweighted R2=-0.0346
+
+  Best kNN weight source: deeplift (delta=+0.0089)
+  Best similarity weight source: deeplift (delta=+0.0099)
+
+  CROSS-TEST MATRIX (select x weight -> weighted R2):
+  select\weight             deeplift lightgbm_gain      treeshap
+  deeplift                    0.0653       -0.0275       -0.0487
+  lightgbm_gain               0.0047        0.0724        0.0091
+  treeshap                   -0.0207       -0.0227       -0.0512
+  [saved tests/results/complexity/c04_importance_as_metric/abcov_kd.json]
+  c04 done in 1052.8s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT C05: LEARNING CURVES
+======================================================================
+  Models: ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm']
+  Sample sizes: [50, 70, 105, 141]
+  Budgets: [50, 500, 1000, 2000]
+  Repeats: 3
+  Search speed: full
+
+  n=50:
+    Top-3 base reps (by RF): abroberta_cdr=0.4837, abroberta=0.4668, ablang2=0.4304
+    rf: hybrid=0.4382, best_single=0.4616, delta=-0.0234
+    xgboost: hybrid=0.4948, best_single=0.4147, delta=+0.0801
+    ridge: hybrid=0.5053, best_single=0.4505, delta=+0.0548
+    svm: hybrid=0.4866, best_single=0.4375, delta=+0.0491
+    mlp: hybrid=0.4131, best_single=0.3315, delta=+0.0816
+    lightgbm: hybrid=0.4303, best_single=0.3403, delta=+0.0900
+
+  n=70:
+    Top-3 base reps (by RF): prot_t5=0.3873, aac=0.3645, esm2_layer24=0.3512
+    rf: hybrid=0.4381, best_single=0.4386, delta=-0.0006
+    xgboost: hybrid=0.4296, best_single=0.4492, delta=-0.0197
+    ridge: hybrid=0.4006, best_single=0.4316, delta=-0.0311
+    svm: hybrid=0.4504, best_single=0.4223, delta=+0.0281
+    mlp: hybrid=0.3279, best_single=0.3833, delta=-0.0554
+    lightgbm: hybrid=0.4216, best_single=0.3586, delta=+0.0630
+
+  n=105:
+    Top-3 base reps (by RF): esm2=0.4828, esm2_layer24=0.4374, esm2_midlayers=0.4252
+    rf: hybrid=0.4677, best_single=0.4733, delta=-0.0057
+    xgboost: hybrid=0.4605, best_single=0.4666, delta=-0.0061
+    ridge: hybrid=0.4492, best_single=0.4775, delta=-0.0283
+    svm: hybrid=0.4817, best_single=0.5190, delta=-0.0373
+    mlp: hybrid=0.2994, best_single=0.3125, delta=-0.0131
+    lightgbm: hybrid=0.4632, best_single=0.4159, delta=+0.0473
+
+  n=141:
+    Top-3 base reps (by RF): prot_t5_cdr=0.4552, prot_t5=0.4230, igt5=0.4084
+    rf: hybrid=0.4190, best_single=0.4160, delta=+0.0030
+    xgboost: hybrid=0.3932, best_single=0.3853, delta=+0.0079
+    ridge: hybrid=0.4662, best_single=0.4446, delta=+0.0216
+    svm: hybrid=0.4344, best_single=0.4601, delta=-0.0258
+    mlp: hybrid=0.3325, best_single=0.2932, delta=+0.0393
+    lightgbm: hybrid=0.3868, best_single=0.4364, delta=-0.0495
+
+----------------------------------------------------------------------
+LEARNING CURVE SUMMARY
+----------------------------------------------------------------------
+       n        rf_h       rf_s    delta   xgboost_h  xgboost_s    delta     ridge_h    ridge_s    delta       svm_h      svm_s    delta       mlp_h      mlp_s    delta  lightgbm_h lightgbm_s    delta
+  ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+      50      0.4382     0.4616  -0.0234      0.4948     0.4147  +0.0801      0.5053     0.4505  +0.0548      0.4866     0.4375  +0.0491      0.4131     0.3315  +0.0816      0.4303     0.3403  +0.0900
+      70      0.4381     0.4386  -0.0006      0.4296     0.4492  -0.0197      0.4006     0.4316  -0.0311      0.4504     0.4223  +0.0281      0.3279     0.3833  -0.0554      0.4216     0.3586  +0.0630
+     105      0.4677     0.4733  -0.0057      0.4605     0.4666  -0.0061      0.4492     0.4775  -0.0283      0.4817     0.5190  -0.0373      0.2994     0.3125  -0.0131      0.4632     0.4159  +0.0473
+     141      0.4190     0.4160  +0.0030      0.3932     0.3853  +0.0079      0.4662     0.4446  +0.0216      0.4344     0.4601  -0.0258      0.3325     0.2932  +0.0393      0.3868     0.4364  -0.0495
+
+  LEARNING CURVE FITS (score_max = asymptotic spearman):
+    rf: spearman_max=0.4413, a=3.037, b=2.000, fit_R2=0.001
+    xgboost: spearman_max=0.4445, a=0.000, b=2.000, fit_R2=-0.000
+    ridge: spearman_max=0.4553, a=0.000, b=2.000, fit_R2=-0.000
+    svm: spearman_max=0.4633, a=0.000, b=2.000, fit_R2=-0.000
+    mlp: spearman_max=0.3432, a=0.000, b=2.000, fit_R2=-0.000
+    lightgbm: spearman_max=0.4255, a=0.000, b=2.000, fit_R2=-0.000
+  [saved tests/results/complexity/c05_learning_curves/abcov_kd.json]
+  c05 done in 1061.6s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT 6: WITHIN-FAMILY MODEL COMPLEXITY GRADIENT
+======================================================================
+
+  Family: RF (4 variants, search_speed=full)
+
+    Variant: depth=3 (capacity=1)
+      Top-3 base reps (by depth=3): prot_t5=0.3876, esm2_midlayers=0.3689, esm3=0.3673
+      b=50: spearman=0.3155±0.158, train_spearman=0.8652, gap=0.550 [deeplift/entropy_1.0]
+      >> optimal: b=141, spearman=0.3718 [deeplift/power_2]
+
+    Variant: depth=5 (capacity=2)
+      Top-3 base reps (by depth=5): prot_t5=0.4148, esm3=0.3922, esm3_cdr=0.3743
+      b=50: spearman=0.2986±0.143, train_spearman=0.9444, gap=0.646 [deeplift/entropy_1.0]
+      >> optimal: b=141, spearman=0.4044 [deeplift/power_2]
+
+    Variant: depth=10 (capacity=3)
+      Top-3 base reps (by depth=10): prot_t5=0.4059, antiberty_cdr=0.3839, esm3=0.3834
+      b=50: spearman=0.3238±0.117, train_spearman=0.9669, gap=0.643 [deeplift/rank_exp_d0.5]
+      >> optimal: b=141, spearman=0.4063 [deeplift/power_2]
+
+    Variant: depth=None (capacity=4)
+      Top-3 base reps (by depth=None): prot_t5=0.4080, esm2_cdr3=0.3862, esm2_cdr=0.3862
+      b=50: spearman=0.2805±0.136, train_spearman=0.9689, gap=0.688 [deeplift/entropy_1.0]
+      >> optimal: b=141, spearman=0.4010 [deeplift/power_2]
+
+  >> RF: capacity vs optimal_budget: rho=nan, p=nan
+
+  Family: Ridge (4 variants, search_speed=full)
+
+    Variant: alpha=100 (capacity=1)
+      Top-3 base reps (by alpha=100): abroberta=0.4411, abroberta_cdr=0.4016, igt5=0.3984
+      b=50: spearman=0.4122±0.170, train_spearman=0.7523, gap=0.340 [lightgbm_gain/top_3]
+      >> optimal: b=50, spearman=0.4188 [lightgbm_gain/top_3]
+
+    Variant: alpha=10 (capacity=2)
+      Top-3 base reps (by alpha=10): ablang2=0.3868, abroberta=0.3783, abroberta_cdr=0.3701
+      b=50: spearman=0.4259±0.188, train_spearman=0.8115, gap=0.386 [lightgbm_gain/top_3]
+      >> optimal: b=50, spearman=0.4305 [lightgbm_gain/top_3]
+
+    Variant: alpha=1 (capacity=3)
+      Top-3 base reps (by alpha=1): abroberta=0.3548, abroberta_cdr=0.3485, ablang2=0.3129
+      b=50: spearman=0.3856±0.188, train_spearman=0.8281, gap=0.443 [lightgbm_gain/top_3]
+      >> optimal: b=50, spearman=0.4385 [lightgbm_gain/top_3]
+
+    Variant: alpha=0.01 (capacity=4)
+      Top-3 base reps (by alpha=0.01): abroberta=0.3498, abroberta_cdr=0.3395, igt5=0.3041
+      b=50: spearman=0.3531±0.202, train_spearman=0.8318, gap=0.479 [lightgbm_gain/top_3]
+      >> optimal: b=50, spearman=0.4425 [lightgbm_gain/top_3]
+
+  >> Ridge: capacity vs optimal_budget: rho=nan, p=nan
+
+  Family: kNN (4 variants, search_speed=full)
+
+    Variant: k=20 (capacity=1)
+      Top-3 base reps (by k=20): igt5=0.3799, esm2_concat=0.3407, esmc=0.3352
+      b=50: spearman=0.3586±0.113, train_spearman=0.6108, gap=0.252 [treeshap/entropy_1.0]
+      >> optimal: b=50, spearman=0.4549 [treeshap/entropy_1.0]
+
+    Variant: k=10 (capacity=2)
+      Top-3 base reps (by k=10): igt5=0.3799, esm2_concat=0.3407, esmc=0.3352
+      b=50: spearman=0.3019±0.145, train_spearman=0.6883, gap=0.386 [treeshap/entropy_1.0]
+      >> optimal: b=50, spearman=0.4549 [treeshap/entropy_1.0]
+
+    Variant: k=5 (capacity=3)
+      Top-3 base reps (by k=5): igt5=0.3799, esm2_concat=0.3407, esmc=0.3352
+      b=50: spearman=0.3204±0.167, train_spearman=0.7349, gap=0.415 [treeshap/entropy_1.0]
+      >> optimal: b=50, spearman=0.4549 [treeshap/entropy_1.0]
+
+    Variant: k=1 (capacity=4)
+      Top-3 base reps (by k=1): igt5=0.3799, esm2_concat=0.3407, esmc=0.3352
+      b=50: spearman=0.2835±0.221, train_spearman=0.9912, gap=0.708 [treeshap/entropy_1.0]
+      >> optimal: b=50, spearman=0.4549 [treeshap/entropy_1.0]
+
+  >> kNN: capacity vs optimal_budget: rho=nan, p=nan
+
+  Family: MLP (4 variants, search_speed=full)
+
+    Variant: 16 (capacity=1)
+      Top-3 base reps (by 16): esm2_midlayers=0.3620, esm2_cdr3=0.3107, esm2_cdr=0.3107
+      b=50: spearman=0.1014±0.204, train_spearman=0.5285, gap=0.427 [deeplift/performance_weighted]
+      >> optimal: b=50, spearman=0.3136 [deeplift/performance_weighted]
+
+    Variant: 64 (capacity=2)
+      Top-3 base reps (by 64): esm2=0.3844, esm2_midlayers=0.3385, esm2_per_cdr=0.3374
+      b=50: spearman=0.1783±0.221, train_spearman=0.9387, gap=0.760 [lightgbm_gain/top_3]
+      >> optimal: b=141, spearman=0.3335 [lightgbm_gain/entropy_1.0]
+
+    Variant: 128,64 (capacity=3)
+      Top-3 base reps (by 128,64): esm2=0.4437, esm2_entropy_top20=0.4002, esm2_cdr3=0.3553
+      b=50: spearman=0.2755±0.153, train_spearman=0.6535, gap=0.378 [deeplift/entropy_1.0]
+      >> optimal: b=141, spearman=0.3684 [deeplift/top_5]
+
+    Variant: 256,128,64 (capacity=4)
+      Top-3 base reps (by 256,128,64): esm2=0.4446, esm2_cdr3=0.4262, esm2_cdr=0.4262
+      b=50: spearman=0.2952±0.159, train_spearman=0.9408, gap=0.646 [deeplift/entropy_1.0]
+      >> optimal: b=141, spearman=0.3971 [deeplift/top_2]
+
+  >> MLP: capacity vs optimal_budget: rho=0.775, p=0.225
+
+  Family: XGBoost (4 variants, search_speed=full)
+
+    Variant: depth=2 (capacity=1)
+      Top-3 base reps (by depth=2): esm3_cdr=0.3918, esm3=0.3752, abroberta=0.3626
+      b=50: spearman=0.1235±0.092, train_spearman=0.9942, gap=0.871 [deeplift/entropy_2.0]
+      >> optimal: b=141, spearman=0.3691 [lightgbm_gain/rank_exp_d0.5]
+
+    Variant: depth=4 (capacity=2)
+      Top-3 base reps (by depth=4): esm3=0.3898, esm3_cdr=0.3878, esm2_entropy_top20=0.3607
+      b=50: spearman=0.2117±0.274, train_spearman=0.9951, gap=0.783 [lightgbm_gain/rank_exp_d0.5]
+      >> optimal: b=141, spearman=0.4498 [deeplift/power_2]
+
+    Variant: depth=6 (capacity=3)
+      Top-3 base reps (by depth=6): igt5=0.3612, esm2_per_cdr=0.3296, aac=0.3239
+      b=50: spearman=0.0990±0.092, train_spearman=0.9951, gap=0.896 [deeplift/entropy_2.0]
+      >> optimal: b=141, spearman=0.3787 [lightgbm_gain/entropy_2.0]
+
+    Variant: depth=None (capacity=4)
+      Top-3 base reps (by depth=None): prot_t5=0.4080, esm2_cdr3=0.3862, esm2_cdr=0.3862
+      b=50: spearman=0.0864±0.170, train_spearman=0.9951, gap=0.909 [deeplift/entropy_1.0]
+      >> optimal: b=141, spearman=0.4010 [deeplift/power_2]
+
+  >> XGBoost: capacity vs optimal_budget: rho=nan, p=nan
+
+  Family: SVM (4 variants, search_speed=full)
+
+    Variant: C=0.01 (capacity=1)
+      Top-3 base reps (by C=0.01): prot_t5_cdr=0.3369, prot_t5=0.3344, blosum=0.3272
+      b=50: spearman=0.3210±0.145, train_spearman=0.6645, gap=0.344 [treeshap/top_5]
+      >> optimal: b=141, spearman=0.3874 [deeplift/performance_weighted]
+
+    Variant: C=0.1 (capacity=2)
+      Top-3 base reps (by C=0.1): blosum=0.3771, igt5=0.3462, prot_t5_cdr=0.3456
+      b=50: spearman=0.3471±0.130, train_spearman=0.7410, gap=0.394 [lightgbm_gain/entropy_2.0]
+      >> optimal: b=141, spearman=0.4107 [lightgbm_gain/entropy_1.0]
+
+    Variant: C=1.0 (capacity=3)
+      Top-3 base reps (by C=1.0): igt5=0.4602, abroberta=0.3548, esm2_per_region=0.3532
+      b=50: spearman=0.3442±0.103, train_spearman=0.9295, gap=0.585 [deeplift/entropy_1.0]
+      >> optimal: b=141, spearman=0.4508 [lightgbm_gain/entropy_2.0]
+
+    Variant: C=10.0 (capacity=4)
+      Top-3 base reps (by C=10.0): igt5=0.4874, esm2_cdr3=0.4276, esm2_cdr=0.4276
+      b=50: spearman=0.2956±0.200, train_spearman=0.9824, gap=0.687 [lightgbm_gain/top_3]
+      >> optimal: b=141, spearman=0.4360 [deeplift/entropy_1.0]
+
+  >> SVM: capacity vs optimal_budget: rho=nan, p=nan
+
+  Family: GP (4 variants, search_speed=full)
+
+    Variant: ls=10 (capacity=1)
+      Top-3 base reps (by ls=10): onehot=0.3348, blosum=0.2822, prot_t5=0.2811
+      b=50: spearman=0.3349±0.177, train_spearman=0.6690, gap=0.334 [lightgbm_gain/top_3]
+      >> optimal: b=50, spearman=0.3941 [lightgbm_gain/top_3]
+
+    Variant: ls=1 (capacity=2)
+      Top-3 base reps (by ls=1): onehot=0.3348, blosum=0.2822, prot_t5=0.2811
+      b=50: spearman=0.3349±0.177, train_spearman=0.6690, gap=0.334 [lightgbm_gain/top_3]
+      >> optimal: b=50, spearman=0.3941 [lightgbm_gain/top_3]
+
+    Variant: ls=0.1 (capacity=3)
+      Top-3 base reps (by ls=0.1): onehot=0.3348, blosum=0.2822, prot_t5=0.2811
+      b=50: spearman=0.3349±0.177, train_spearman=0.6690, gap=0.334 [lightgbm_gain/top_3]
+      >> optimal: b=50, spearman=0.3941 [lightgbm_gain/top_3]
+
+    Variant: ls=0.01 (capacity=4)
+      Top-3 base reps (by ls=0.01): onehot=0.3348, blosum=0.2822, prot_t5=0.2811
+      b=50: spearman=0.3349±0.177, train_spearman=0.6690, gap=0.334 [lightgbm_gain/top_3]
+      >> optimal: b=50, spearman=0.3941 [lightgbm_gain/top_3]
+
+  >> GP: capacity vs optimal_budget: rho=nan, p=nan
+
+  SUMMARY: optimal budget by variant
+    RF/depth=3: optimal_budget=141, spearman=0.3718 [deeplift]
+    RF/depth=5: optimal_budget=141, spearman=0.4044 [deeplift]
+    RF/depth=10: optimal_budget=141, spearman=0.4063 [deeplift]
+    RF/depth=None: optimal_budget=141, spearman=0.4010 [deeplift]
+    Ridge/alpha=100: optimal_budget=50, spearman=0.4188 [lightgbm_gain]
+    Ridge/alpha=10: optimal_budget=50, spearman=0.4305 [lightgbm_gain]
+    Ridge/alpha=1: optimal_budget=50, spearman=0.4385 [lightgbm_gain]
+    Ridge/alpha=0.01: optimal_budget=50, spearman=0.4425 [lightgbm_gain]
+    kNN/k=20: optimal_budget=50, spearman=0.4549 [treeshap]
+    kNN/k=10: optimal_budget=50, spearman=0.4549 [treeshap]
+    kNN/k=5: optimal_budget=50, spearman=0.4549 [treeshap]
+    kNN/k=1: optimal_budget=50, spearman=0.4549 [treeshap]
+    MLP/16: optimal_budget=50, spearman=0.3136 [deeplift]
+    MLP/64: optimal_budget=141, spearman=0.3335 [lightgbm_gain]
+    MLP/128,64: optimal_budget=141, spearman=0.3684 [deeplift]
+    MLP/256,128,64: optimal_budget=141, spearman=0.3971 [deeplift]
+    XGBoost/depth=2: optimal_budget=141, spearman=0.3691 [lightgbm_gain]
+    XGBoost/depth=4: optimal_budget=141, spearman=0.4498 [deeplift]
+    XGBoost/depth=6: optimal_budget=141, spearman=0.3787 [lightgbm_gain]
+    XGBoost/depth=None: optimal_budget=141, spearman=0.4010 [deeplift]
+    SVM/C=0.01: optimal_budget=141, spearman=0.3874 [deeplift]
+    SVM/C=0.1: optimal_budget=141, spearman=0.4107 [lightgbm_gain]
+    SVM/C=1.0: optimal_budget=141, spearman=0.4508 [lightgbm_gain]
+    SVM/C=10.0: optimal_budget=141, spearman=0.4360 [deeplift]
+    GP/ls=10: optimal_budget=50, spearman=0.3941 [lightgbm_gain]
+    GP/ls=1: optimal_budget=50, spearman=0.3941 [lightgbm_gain]
+    GP/ls=0.1: optimal_budget=50, spearman=0.3941 [lightgbm_gain]
+    GP/ls=0.01: optimal_budget=50, spearman=0.3941 [lightgbm_gain]
+  [saved tests/results/complexity/c06_within_family_gradient/abcov_kd.json]
+  c06 done in 1082.6s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT 7: DATA COMPLEXITY VIA SCAFFOLD PARTITIONING
+======================================================================
+
+  Partition: scaffold_frequency
+    easy=141, hard=0
+    Subpopulation too small, skipping
+
+  Partition: molecular_complexity
+    No SMILES available (antibody dataset?), skipping molecular_complexity
+
+  Partition: target_variance
+    easy=136, hard=5
+    Subpopulation too small, skipping
+  [saved tests/results/complexity/c07_data_complexity_partitions/abcov_kd.json]
+  c07 done in 0.1s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT 8: UNCERTAINTY CALIBRATION AT OPTIMAL VS SUBOPTIMAL COMPLEXITY
+======================================================================
+  Loaded Exp 2 results from tests/results/complexity
+  Using Exp 2 optimal: svm at budget=141 [lightgbm_gain/entropy_2.0] (from Exp 2)
+
+  optimal: svm at budget=141 [lightgbm_gain/entropy_2.0] (from Exp 2)
+    fold 0: spearman=0.2730, PICP=0.759, MPIW=2.688, cal_error=0.141
+    fold 1: spearman=0.4152, PICP=0.964, MPIW=4.048, cal_error=0.064
+    fold 2: spearman=0.5543, PICP=0.929, MPIW=2.893, cal_error=0.029
+    fold 3: spearman=0.1676, PICP=1.000, MPIW=4.537, cal_error=0.100
+    fold 4: spearman=0.5282, PICP=0.786, MPIW=3.275, cal_error=0.114
+  >> optimal avg: spearman=0.3877, PICP=0.887, MPIW=3.488, cal_error=0.090
+
+  underfit: Same model at budget=25 (too compressed)
+    fold 0: spearman=0.2159, PICP=0.724, MPIW=2.619, cal_error=0.176
+    fold 1: spearman=0.3446, PICP=0.929, MPIW=3.496, cal_error=0.029
+    fold 2: spearman=0.4940, PICP=0.893, MPIW=2.699, cal_error=0.007
+    fold 3: spearman=0.1035, PICP=0.929, MPIW=4.331, cal_error=0.029
+    fold 4: spearman=0.3552, PICP=0.714, MPIW=2.699, cal_error=0.186
+  >> underfit avg: spearman=0.3027, PICP=0.838, MPIW=3.169, cal_error=0.085
+
+  overfit: Same model at full dim=82632 (too many features)
+    fold 0: spearman=0.2159, PICP=0.759, MPIW=3.247, cal_error=0.141
+    fold 1: spearman=0.5083, PICP=0.964, MPIW=3.959, cal_error=0.064
+    fold 2: spearman=0.4930, PICP=1.000, MPIW=3.053, cal_error=0.100
+    fold 3: spearman=0.1835, PICP=0.857, MPIW=3.455, cal_error=0.043
+    fold 4: spearman=0.4209, PICP=0.857, MPIW=3.929, cal_error=0.043
+  >> overfit avg: spearman=0.3643, PICP=0.887, MPIW=3.528, cal_error=0.078
+
+  mismatched: Ridge at full dim (low-capacity model, high-dim input)
+    fold 0: hybrid creation failed - No importance scores for rep 'igt5'. precomputed_importance and importance_cache are both missing this rep. This likely means the importance pre-computation in find_best_hybrid failed or the scores weren't passed through.
+    fold 1: hybrid creation failed - No importance scores for rep 'igt5'. precomputed_importance and importance_cache are both missing this rep. This likely means the importance pre-computation in find_best_hybrid failed or the scores weren't passed through.
+    fold 2: hybrid creation failed - No importance scores for rep 'igt5'. precomputed_importance and importance_cache are both missing this rep. This likely means the importance pre-computation in find_best_hybrid failed or the scores weren't passed through.
+    fold 3: hybrid creation failed - No importance scores for rep 'igt5'. precomputed_importance and importance_cache are both missing this rep. This likely means the importance pre-computation in find_best_hybrid failed or the scores weren't passed through.
+    fold 4: hybrid creation failed - No importance scores for rep 'igt5'. precomputed_importance and importance_cache are both missing this rep. This likely means the importance pre-computation in find_best_hybrid failed or the scores weren't passed through.
+
+  CALIBRATION SUMMARY:
+  Condition      spearman PICP     MPIW     Cal Error  Budget  
+  --------------------------------------------------------
+  optimal        0.3877  0.887  3.488  0.0897    141
+  underfit       0.3027  0.838  3.169  0.0852    25
+  overfit        0.3643  0.887  3.528  0.0783    82632
+  [saved tests/results/complexity/c08_calibration/abcov_kd.json]
+  c08 done in 104.0s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT 9: FORMAL COMPLEXITY ANALYSIS
+======================================================================
+  Loaded c02 results from tests/results/complexity
+  Loaded c06 results from tests/results/complexity
+
+  9a: ANOVA Variance Decomposition
+
+    ICC(1,1) between model pairs (budgets as subjects):
+      gp vs knn: ICC=-0.5095
+      gp vs lightgbm: ICC=-0.7828
+      gp vs mlp: ICC=-0.9424
+      gp vs rf: ICC=-0.1068
+      gp vs ridge: ICC=-0.0219
+      gp vs svm: ICC=-0.1305
+      gp vs xgboost: ICC=-0.4308
+      knn vs lightgbm: ICC=0.3822
+      knn vs mlp: ICC=-0.2350
+      knn vs rf: ICC=0.4985
+      knn vs ridge: ICC=0.0761
+      knn vs svm: ICC=0.5452
+      knn vs xgboost: ICC=0.1349
+      lightgbm vs mlp: ICC=0.3235
+      lightgbm vs rf: ICC=-0.3466
+      lightgbm vs ridge: ICC=-0.3151
+      lightgbm vs svm: ICC=0.0082
+      lightgbm vs xgboost: ICC=-0.4699
+      mlp vs rf: ICC=-0.7659
+      mlp vs ridge: ICC=-0.8497
+      mlp vs svm: ICC=-0.6337
+      mlp vs xgboost: ICC=-0.8293
+      rf vs ridge: ICC=-0.0381
+      rf vs svm: ICC=0.4354
+      rf vs xgboost: ICC=-0.1082
+      ridge vs svm: ICC=0.6187
+      ridge vs xgboost: ICC=-0.1766
+      svm vs xgboost: ICC=0.2730
+    ICC(1,1) between budget pairs (models as subjects):
+      b=10 vs b=25: ICC=0.5537
+      b=10 vs b=50: ICC=0.6655
+      b=10 vs b=100: ICC=0.7109
+      b=10 vs b=141: ICC=0.5727
+      b=25 vs b=50: ICC=0.8176
+      b=25 vs b=100: ICC=0.6189
+      b=25 vs b=141: ICC=0.3564
+      b=50 vs b=100: ICC=0.8460
+      b=50 vs b=141: ICC=0.6275
+      b=100 vs b=141: ICC=0.8968
+    Grand mean R²: 0.2631
+    eta2 model:       6.9%  (F=262.11, p=0.0000)
+    eta2 budget:      1.3%  (F=85.70, p=0.0000)
+    eta2 interaction: 0.2%  (F=1.68, p=0.0136)
+    eta2 residual:    91.6%
+
+  9b: Information Retention Curves
+[cache] cache stats — search: 51 hit / 0 miss / 1 stale; baseline: 216 hit / 0 miss / 0 stale; hybrid_eval: 1842 hit / 102 miss / 0 stale
+    budget=50: MI(X,Y)=0.0000, info_retained=0.7494
+[cache] cache stats — search: 51 hit / 0 miss / 2 stale; baseline: 432 hit / 0 miss / 0 stale; hybrid_eval: 3684 hit / 204 miss / 0 stale
+    budget=500: MI(X,Y)=0.0000, info_retained=0.8313
+    budget=1000: MI(X,Y)=0.0000, info_retained=0.8313
+    budget=2000: MI(X,Y)=0.0000, info_retained=0.8313
+
+  9c: Effective Rank Profile
+[cache] cache stats — search: 53 hit / 0 miss / 3 stale; baseline: 648 hit / 0 miss / 0 stale; hybrid_eval: 5526 hit / 306 miss / 0 stale
+    budget=50: hybrid=32.9, pca=50.0, random=33.0
+[cache] cache stats — search: 53 hit / 0 miss / 4 stale; baseline: 864 hit / 0 miss / 0 stale; hybrid_eval: 7368 hit / 408 miss / 0 stale
+    budget=500: hybrid=65.4, pca=nan, random=56.6
+    budget=1000: hybrid=67.4, pca=nan, random=56.6
+    budget=2000: hybrid=67.5, pca=nan, random=56.6
+
+  9d: Bias-Variance Proxy
+    Using Exp 6 data for bias-variance analysis
+    RF:
+      depth=10_b50: gap=0.643, bias=0.033
+      depth=3_b50: gap=0.550, bias=0.135
+      depth=5_b50: gap=0.646, bias=0.056
+      depth=None_b50: gap=0.688, bias=0.031
+    Ridge:
+      alpha=0.01_b50: gap=0.479, bias=0.168
+      alpha=100_b50: gap=0.340, bias=0.248
+      alpha=10_b50: gap=0.386, bias=0.189
+      alpha=1_b50: gap=0.443, bias=0.172
+    kNN:
+      k=10_b50: gap=0.386, bias=0.312
+      k=1_b50: gap=0.708, bias=0.009
+      k=20_b50: gap=0.252, bias=0.389
+      k=5_b50: gap=0.415, bias=0.265
+    MLP:
+      128,64_b50: gap=0.378, bias=0.347
+      16_b50: gap=0.427, bias=0.471
+      256,128,64_b50: gap=0.646, bias=0.059
+      64_b50: gap=0.760, bias=0.061
+    XGBoost:
+      depth=2_b50: gap=0.871, bias=0.006
+      depth=4_b50: gap=0.783, bias=0.005
+      depth=6_b50: gap=0.896, bias=0.005
+      depth=None_b50: gap=0.909, bias=0.005
+    SVM:
+      C=0.01_b50: gap=0.344, bias=0.336
+      C=0.1_b50: gap=0.394, bias=0.259
+      C=1.0_b50: gap=0.585, bias=0.070
+      C=10.0_b50: gap=0.687, bias=0.018
+    GP:
+      ls=0.01_b50: gap=0.334, bias=0.331
+      ls=0.1_b50: gap=0.334, bias=0.331
+      ls=10_b50: gap=0.334, bias=0.331
+      ls=1_b50: gap=0.334, bias=0.331
+  [saved tests/results/complexity/c09_formal_analysis/abcov_kd.json]
+  c09 done in 3602.1s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT 10: NOISE ROBUSTNESS & FEATURE STABILITY
+======================================================================
+  NoiseInject not installed, skipping. Install: pip install noiseInject
+  [saved tests/results/complexity/c10_noise_robustness/abcov_kd.json]
+  c10 done in 1.1s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT C11: ENSEMBLE VS HYBRID
+======================================================================
+  27 base reps, total dim=82632, 6 models, 5 folds
+  Reps: aac(40), ablang2(480), abroberta(1536), abroberta_cdr(1536), antiberty(1024), antiberty_cdr(1024), blosum(5600), esm2(2560), esm2_cdr(2560), esm2_cdr3(2560), esm2_concat(1280), esm2_early(2560), esm2_entropy_top20(2560), esm2_layer24(2560), esm2_midlayers(2560), esm2_per_cdr(7680), esm2_per_region(17920), esm3(3072), esm3_cdr(3072), esmc(2304), esmc_cdr(2304), igt5(1024), onehot(5600), prot_t5(2048), prot_t5_cdr(2048), saprot(2560), saprot_cdr(2560)
+
+[cache] cache stats — search: 55 hit / 0 miss / 5 stale; baseline: 1080 hit / 0 miss / 0 stale; hybrid_eval: 16551 hit / 945 miss / 0 stale
+  Blueprints: [50, 100, 200, 500, 1024]
+  Top-3 base reps (by RF): prot_t5=0.4263, saprot=0.4049, esm2_midlayers=0.4043
+
+  --- rf ---
+    Best single: abroberta R2=0.4745 dim=1536
+    Ensemble:    R2=0.4071 max_rep_dim=17920 (27 models, hd-filtered)
+    Hybrid b=50   : R2=0.2938 dim=50
+    Hybrid b=100  : R2=0.3618 dim=100
+    Hybrid b=200  : R2=0.4071 dim=141
+    Hybrid b=500  : R2=0.4071 dim=141
+    Hybrid b=1024 : R2=0.4071 dim=141
+
+  --- xgboost ---
+    Best single: abroberta R2=0.3853 dim=1536
+    Ensemble:    R2=0.3828 max_rep_dim=17920 (27 models, hd-filtered)
+    Hybrid b=50   : R2=0.1553 dim=50
+    Hybrid b=100  : R2=0.2957 dim=100
+    Hybrid b=200  : R2=0.2974 dim=141
+    Hybrid b=500  : R2=0.2974 dim=141
+    Hybrid b=1024 : R2=0.2974 dim=141
+
+  --- ridge ---
+    Best single: igt5 R2=0.4446 dim=1024
+    Ensemble:    R2=0.3524 max_rep_dim=17920 (27 models, hd-filtered)
+    Hybrid b=50   : R2=0.2336 dim=50
+    Hybrid b=100  : R2=0.1828 dim=100
+    Hybrid b=200  : R2=0.3340 dim=141
+    Hybrid b=500  : R2=0.3340 dim=141
+    Hybrid b=1024 : R2=0.3340 dim=141
+
+  --- svm ---
+    Best single: igt5 R2=0.4603 dim=1024
+    Ensemble:    R2=0.3322 max_rep_dim=17920 (27 models, hd-filtered)
+    Hybrid b=50   : R2=0.3369 dim=50
+    Hybrid b=100  : R2=0.3414 dim=100
+    Hybrid b=200  : R2=0.4008 dim=141
+    Hybrid b=500  : R2=0.4008 dim=141
+    Hybrid b=1024 : R2=0.4008 dim=141
+
+  --- mlp ---
+    Best single: esm2_cdr R2=0.3552 dim=2560
+    Ensemble:    R2=0.3583 max_rep_dim=17920 (27 models, hd-filtered)
+    Hybrid b=50   : R2=0.2953 dim=50
+    Hybrid b=100  : R2=0.2396 dim=100
+    Hybrid b=200  : R2=0.1727 dim=141
+    Hybrid b=500  : R2=0.1727 dim=141
+    Hybrid b=1024 : R2=0.1727 dim=141
+
+  --- lightgbm ---
+    Best single: abroberta_cdr R2=0.4256 dim=1536
+    Ensemble:    R2=0.3759 max_rep_dim=17920 (27 models, hd-filtered)
+    Hybrid b=50   : R2=0.2398 dim=50
+    Hybrid b=100  : R2=0.4203 dim=100
+    Hybrid b=200  : R2=0.2642 dim=141
+    Hybrid b=500  : R2=0.2642 dim=141
+    Hybrid b=1024 : R2=0.2642 dim=141
+
+======================================================================
+  SUMMARY
+======================================================================
+
+  rf:
+    Method                       R2    Dim  Models   Fit(s)  Pred(s)
+    --------------------------------------------------------------
+    best_single              0.4745   1536       1    0.168   0.0235
+    ensemble                 0.4071  82632      27    2.966   0.6335
+    pca_matched              0.3486     50       1    0.129   0.0232
+    pca_matched              0.3334    100       1    0.131   0.0235
+    pca_matched              0.3493    112       1    0.132   0.0235
+    pca_matched              0.3493    112       1    0.132   0.0234
+    pca_matched              0.3493    112       1    0.132   0.0237
+    hybrid b=50              0.2938     50       1   19.012   0.0241
+    hybrid b=100             0.3618    100       1   20.177   0.0235
+    hybrid b=200             0.4071    141       1    6.598   0.0233
+    hybrid b=500             0.4071    141       1    6.613   0.0233
+    hybrid b=1024            0.4071    141       1    6.688   0.0232
+
+  xgboost:
+    Method                       R2    Dim  Models   Fit(s)  Pred(s)
+    --------------------------------------------------------------
+    best_single              0.3853   1536       1    0.132   0.0010
+    ensemble                 0.3828  82632      27   14.488   0.0302
+    pca_matched              0.3048     50       1    0.143   0.0010
+    pca_matched              0.2410    100       1    0.137   0.0009
+    pca_matched              0.2062    112       1    0.128   0.0009
+    pca_matched              0.2062    112       1    0.148   0.0010
+    pca_matched              0.2062    112       1    0.126   0.0009
+    hybrid b=50              0.1553     50       1   18.922   0.0010
+    hybrid b=100             0.2957    100       1   20.281   0.0010
+    hybrid b=200             0.2974    141       1    6.594   0.0010
+    hybrid b=500             0.2974    141       1    6.605   0.0010
+    hybrid b=1024            0.2974    141       1    6.625   0.0010
+
+  ridge:
+    Method                       R2    Dim  Models   Fit(s)  Pred(s)
+    --------------------------------------------------------------
+    best_single              0.4446   1024       1    0.014   0.0003
+    ensemble                 0.3524  82632      27    0.379   0.0150
+    pca_matched              0.3091     50       1    0.006   0.0003
+    pca_matched              0.3304    100       1    0.012   0.0003
+    pca_matched              0.3338    112       1    0.013   0.0003
+    pca_matched              0.3338    112       1    0.013   0.0003
+    pca_matched              0.3338    112       1    0.012   0.0003
+    hybrid b=50              0.2336     50       1   19.002   0.0003
+    hybrid b=100             0.1828    100       1   20.342   0.0003
+    hybrid b=200             0.3340    141       1    6.624   0.0003
+    hybrid b=500             0.3340    141       1    6.631   0.0003
+    hybrid b=1024            0.3340    141       1    6.689   0.0003
+
+  svm:
+    Method                       R2    Dim  Models   Fit(s)  Pred(s)
+    --------------------------------------------------------------
+    best_single              0.4603   1024       1    0.002   0.0006
+    ensemble                 0.3322  82632      27    0.273   0.1118
+    pca_matched              0.3267     50       1    0.002   0.0005
+    pca_matched              0.3407    100       1    0.002   0.0006
+    pca_matched              0.3435    112       1    0.002   0.0006
+    pca_matched              0.3435    112       1    0.002   0.0006
+    pca_matched              0.3435    112       1    0.002   0.0006
+    hybrid b=50              0.3369     50       1   19.135   0.0005
+    hybrid b=100             0.3414    100       1   20.472   0.0006
+    hybrid b=200             0.4008    141       1    6.704   0.0008
+    hybrid b=500             0.4008    141       1    6.725   0.0008
+    hybrid b=1024            0.4008    141       1    6.723   0.0008
+
+  mlp:
+    Method                       R2    Dim  Models   Fit(s)  Pred(s)
+    --------------------------------------------------------------
+    best_single              0.3552   2560       1    0.079   0.0003
+    ensemble                 0.3583  82632      27    8.394   0.0139
+    pca_matched             -0.0636     50       1    0.055   0.0003
+    pca_matched              0.1221    100       1    0.046   0.0003
+    pca_matched             -0.0726    112       1    0.038   0.0003
+    pca_matched             -0.0726    112       1    0.037   0.0003
+    pca_matched             -0.0726    112       1    0.037   0.0003
+    hybrid b=50              0.2953     50       1   19.662   0.0003
+    hybrid b=100             0.2396    100       1   21.114   0.0003
+    hybrid b=200             0.1727    141       1    7.115   0.0003
+    hybrid b=500             0.1727    141       1    7.126   0.0003
+    hybrid b=1024            0.1727    141       1    7.181   0.0003
+
+  lightgbm:
+    Method                       R2    Dim  Models   Fit(s)  Pred(s)
+    --------------------------------------------------------------
+    best_single              0.4256   1536       1    0.077   0.0032
+    ensemble                 0.3759  82632      27    2.524   0.0793
+    pca_matched              0.2414     50       1    0.084   0.0010
+    pca_matched              0.2166    100       1    0.031   0.0011
+    pca_matched              0.1927    112       1    0.032   0.0028
+    pca_matched              0.1927    112       1    0.031   0.0033
+    pca_matched              0.1927    112       1    0.019   0.0019
+    hybrid b=50              0.2398     50       1   19.472   0.0010
+    hybrid b=100             0.4203    100       1   20.727   0.0013
+    hybrid b=200             0.2642    141       1    7.165   0.0011
+    hybrid b=500             0.2642    141       1    6.836   0.0011
+    hybrid b=1024            0.2642    141       1    6.539   0.0011
+
+  EFFICIENCY COMPARISON (best hybrid vs ensemble per model):
+    Model          Ens R2   Hyb R2    Delta  Ens #M  Hyb Dim  Ens Fit  Hyb Fit  Speedup
+    ----------------------------------------------------------------------------------
+    rf             0.4071   0.4071  +0.0000      27      141    2.966    6.598     0.4x
+    xgboost        0.3828   0.2974  -0.0854      27      141   14.488    6.594     2.2x
+    ridge          0.3524   0.3340  -0.0183      27      141    0.379    6.624     0.1x
+    svm            0.3322   0.4008  +0.0686      27      141    0.273    6.704     0.0x
+    mlp            0.3583   0.2953  -0.0630      27       50    8.394   19.662     0.4x
+    lightgbm       0.3759   0.4203  +0.0445      27      100    2.524   20.727     0.1x
+  [saved tests/results/complexity/c11_ensemble_vs_hybrid/abcov_kd.json]
+  c11 done in 5105.9s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT C13: FORWARD COMPATIBILITY
+======================================================================
+  Domain:       antibody
+  Metric:       spearman (higher is better)
+  n_samples:    141
+  n_folds:      5
+  Models:       ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm']
+  Search speed: full
+
+  New reps (15): ablang2(480D), antiberty_cdr(1024D), esm2_cdr(2560D), esm2_entropy_top20(2560D), esm2_midlayers(2560D), esm2_per_cdr(7680D), esm2_per_region(17920D), esm3(3072D), esm3_cdr(3072D), esmc(2304D), esmc_cdr(2304D), igt5(1024D), prot_t5_cdr(2048D), saprot(2560D), saprot_cdr(2560D)
+  Existing reps (12): aac(40D), abroberta(1536D), abroberta_cdr(1536D), antiberty(1024D), blosum(5600D), esm2(2560D), esm2_cdr3(2560D), esm2_concat(1280D), esm2_early(2560D), esm2_layer24(2560D), onehot(5600D), prot_t5(2048D)
+
+============================================================
+  NEW REP: ablang2 (dim=480)
+============================================================
+
+  Condition A: ablang2 + ridge
+    spearman = 0.4066 +/- 0.1243
+
+  Condition B: ablang2 + best model
+    Best model: ridge
+    spearman = 0.4066 +/- 0.1243
+
+  Condition C: best hybrid WITHOUT ablang2
+    spearman = 0.3096 +/- 0.1689
+    Allocation: {'aac': 1.2, 'abroberta': 4.8, 'abroberta_cdr': 5.4, 'antiberty': 4.6, 'blosum': 4.4, 'esm2': 3.4, 'esm2_cdr3': 3.8, 'esm2_concat': 3.4, 'esm2_early': 2.8, 'esm2_layer24': 5.4, 'onehot': 4.8, 'prot_t5': 6.0}
+
+  Condition D: best hybrid WITH ablang2
+    spearman = 0.3555 +/- 0.1461
+    Allocation: {'aac': 1.0, 'ablang2': 15.4, 'abroberta': 14.2, 'abroberta_cdr': 12.0, 'antiberty': 11.0, 'blosum': 14.8, 'esm2': 12.0, 'esm2_cdr3': 11.6, 'esm2_concat': 10.0, 'esm2_early': 5.8, 'esm2_layer24': 10.0, 'onehot': 13.0, 'prot_t5': 10.2}
+    Features from ablang2: 15.4 (10.9% of budget)
+
+  Condition E: hybrid improves ablang2?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   +0.0460  (new rep HELPS hybrid)
+    E - B (hybrid helps new rep?):   -0.0510  (hybrid HURTS or neutral for new rep)
+    Wilcoxon D vs C: p=0.0625
+
+  Controls for ablang2:
+    Random Gaussian (480D): spearman = -0.1206
+    Row-shuffled ablang2: spearman = -0.1973
+    Signal above random: +0.5271
+    Signal above shuffled: +0.6038
+
+============================================================
+  NEW REP: antiberty_cdr (dim=1024)
+============================================================
+
+  Condition A: antiberty_cdr + ridge
+    spearman = 0.2511 +/- 0.1877
+
+  Condition B: antiberty_cdr + best model
+    Best model: lightgbm
+    spearman = 0.3644 +/- 0.1951
+
+  Condition C: best hybrid WITHOUT antiberty_cdr
+    spearman = 0.2928 +/- 0.2098
+    Allocation: {'aac': 1.2, 'abroberta': 4.8, 'abroberta_cdr': 5.4, 'antiberty': 4.6, 'blosum': 4.4, 'esm2': 3.4, 'esm2_cdr3': 3.8, 'esm2_concat': 3.4, 'esm2_early': 2.8, 'esm2_layer24': 5.4, 'onehot': 4.8, 'prot_t5': 6.0}
+
+  Condition D: best hybrid WITH antiberty_cdr
+    spearman = 0.3235 +/- 0.2051
+    Allocation: {'aac': 1.0, 'abroberta': 4.8, 'abroberta_cdr': 5.2, 'antiberty': 4.0, 'antiberty_cdr': 4.6, 'blosum': 4.4, 'esm2': 2.8, 'esm2_cdr3': 3.4, 'esm2_concat': 2.8, 'esm2_early': 2.6, 'esm2_layer24': 5.2, 'onehot': 3.8, 'prot_t5': 5.4}
+    Features from antiberty_cdr: 4.6 (9.2% of budget)
+
+  Condition E: hybrid improves antiberty_cdr?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   +0.0307  (new rep HELPS hybrid)
+    E - B (hybrid helps new rep?):   -0.0409  (hybrid HURTS or neutral for new rep)
+    Wilcoxon D vs C: p=0.6250
+    Wilcoxon E vs B: p=0.4375
+
+  Controls for antiberty_cdr:
+    Random Gaussian (1024D): spearman = 0.0151
+    Row-shuffled antiberty_cdr: spearman = 0.0446
+    Signal above random: +0.2359
+    Signal above shuffled: +0.2065
+
+============================================================
+  NEW REP: esm2_cdr (dim=2560)
+============================================================
+
+  Condition A: esm2_cdr + ridge
+    spearman = 0.2562 +/- 0.1872
+
+  Condition B: esm2_cdr + best model
+    Best model: rf
+    spearman = 0.3570 +/- 0.1242
+
+  Condition C: best hybrid WITHOUT esm2_cdr
+    spearman = 0.3735 +/- 0.1677
+    Allocation: {'aac': 1.2, 'abroberta': 4.8, 'abroberta_cdr': 5.4, 'antiberty': 4.6, 'blosum': 4.4, 'esm2': 3.4, 'esm2_cdr3': 3.8, 'esm2_concat': 3.4, 'esm2_early': 2.8, 'esm2_layer24': 5.4, 'onehot': 4.8, 'prot_t5': 6.0}
+
+  Condition D: best hybrid WITH esm2_cdr
+    spearman = 0.3171 +/- 0.1977
+    Allocation: {'aac': 0.0, 'abroberta': 0.0, 'abroberta_cdr': 0.0, 'antiberty': 0.0, 'blosum': 0.0, 'esm2': 0.0, 'esm2_cdr': 0.0, 'esm2_cdr3': 0.0, 'esm2_concat': 0.0, 'esm2_early': 56.4, 'esm2_layer24': 28.2, 'onehot': 0.0, 'prot_t5': 56.4}
+    Features from esm2_cdr: 0.0 (0.0% of budget)
+
+  Condition E: hybrid improves esm2_cdr?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   -0.0564  (new rep HURTS or neutral for hybrid)
+    E - B (hybrid helps new rep?):   -0.0399  (hybrid HURTS or neutral for new rep)
+    Wilcoxon D vs C: p=0.4375
+    Wilcoxon E vs B: p=0.8125
+
+  Controls for esm2_cdr:
+    Random Gaussian (2560D): spearman = 0.1256
+    Row-shuffled esm2_cdr: spearman = 0.1351
+    Signal above random: +0.1307
+    Signal above shuffled: +0.1211
+
+============================================================
+  NEW REP: esm2_entropy_top20 (dim=2560)
+============================================================
+
+  Condition A: esm2_entropy_top20 + ridge
+    spearman = 0.2573 +/- 0.0680
+
+  Condition B: esm2_entropy_top20 + best model
+    Best model: rf
+    spearman = 0.3446 +/- 0.1148
+
+  Condition C: best hybrid WITHOUT esm2_entropy_top20
+    spearman = 0.3735 +/- 0.1677
+    Allocation: {'aac': 1.2, 'abroberta': 4.8, 'abroberta_cdr': 5.4, 'antiberty': 4.6, 'blosum': 4.4, 'esm2': 3.4, 'esm2_cdr3': 3.8, 'esm2_concat': 3.4, 'esm2_early': 2.8, 'esm2_layer24': 5.4, 'onehot': 4.8, 'prot_t5': 6.0}
+
+  Condition D: best hybrid WITH esm2_entropy_top20
+    spearman = 0.3822 +/- 0.1655
+    Allocation: {'aac': 1.2, 'abroberta': 4.6, 'abroberta_cdr': 5.0, 'antiberty': 4.2, 'blosum': 4.0, 'esm2': 3.0, 'esm2_cdr3': 3.6, 'esm2_concat': 3.4, 'esm2_early': 2.4, 'esm2_entropy_top20': 4.0, 'esm2_layer24': 5.0, 'onehot': 4.4, 'prot_t5': 5.2}
+    Features from esm2_entropy_top20: 4.0 (8.0% of budget)
+
+  Condition E: hybrid improves esm2_entropy_top20?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   +0.0087  (new rep HELPS hybrid)
+    E - B (hybrid helps new rep?):   +0.0376  (hybrid HELPS new rep)
+    Wilcoxon D vs C: p=0.8125
+    Wilcoxon E vs B: p=0.4375
+
+  Controls for esm2_entropy_top20:
+    Random Gaussian (2560D): spearman = 0.1256
+    Row-shuffled esm2_entropy_top20: spearman = -0.0174
+    Signal above random: +0.1318
+    Signal above shuffled: +0.2747
+
+============================================================
+  NEW REP: esm2_midlayers (dim=2560)
+============================================================
+
+  Condition A: esm2_midlayers + ridge
+    spearman = 0.3248 +/- 0.1150
+
+  Condition B: esm2_midlayers + best model
+    Best model: lightgbm
+    spearman = 0.4208 +/- 0.1567
+
+  Condition C: best hybrid WITHOUT esm2_midlayers
+    spearman = 0.2928 +/- 0.2098
+    Allocation: {'aac': 1.2, 'abroberta': 4.8, 'abroberta_cdr': 5.4, 'antiberty': 4.6, 'blosum': 4.4, 'esm2': 3.4, 'esm2_cdr3': 3.8, 'esm2_concat': 3.4, 'esm2_early': 2.8, 'esm2_layer24': 5.4, 'onehot': 4.8, 'prot_t5': 6.0}
+
+  Condition D: best hybrid WITH esm2_midlayers
+    spearman = 0.1413 +/- 0.3160
+    Allocation: {'aac': 0.0, 'abroberta': 0.6, 'abroberta_cdr': 1.0, 'antiberty': 0.6, 'blosum': 2.0, 'esm2': 0.2, 'esm2_cdr3': 0.2, 'esm2_concat': 0.4, 'esm2_early': 0.0, 'esm2_layer24': 1.6, 'esm2_midlayers': 0.2, 'onehot': 0.8, 'prot_t5': 2.4}
+    Features from esm2_midlayers: 0.2 (2.0% of budget)
+
+  Condition E: hybrid improves esm2_midlayers?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   -0.1515  (new rep HURTS or neutral for hybrid)
+    E - B (hybrid helps new rep?):   -0.2795  (hybrid HURTS or neutral for new rep)
+    Wilcoxon D vs C: p=0.1875
+    Wilcoxon E vs B: p=0.1250
+
+  Controls for esm2_midlayers:
+    Random Gaussian (2560D): spearman = 0.1256
+    Row-shuffled esm2_midlayers: spearman = -0.0389
+    Signal above random: +0.1993
+    Signal above shuffled: +0.3638
+
+============================================================
+  NEW REP: esm2_per_cdr (dim=7680)
+============================================================
+
+  Condition A: esm2_per_cdr + ridge
+    spearman = 0.2557 +/- 0.1507
+
+  Condition B: esm2_per_cdr + best model
+    Best model: rf
+    spearman = 0.3808 +/- 0.1199
+
+  Condition C: best hybrid WITHOUT esm2_per_cdr
+    spearman = 0.3735 +/- 0.1677
+    Allocation: {'aac': 1.2, 'abroberta': 4.8, 'abroberta_cdr': 5.4, 'antiberty': 4.6, 'blosum': 4.4, 'esm2': 3.4, 'esm2_cdr3': 3.8, 'esm2_concat': 3.4, 'esm2_early': 2.8, 'esm2_layer24': 5.4, 'onehot': 4.8, 'prot_t5': 6.0}
+
+  Condition D: best hybrid WITH esm2_per_cdr
+    spearman = 0.3405 +/- 0.2097
+    Allocation: {'aac': 0.2, 'abroberta': 2.0, 'abroberta_cdr': 3.6, 'antiberty': 3.8, 'blosum': 3.4, 'esm2': 0.4, 'esm2_cdr3': 0.0, 'esm2_concat': 3.4, 'esm2_early': 0.4, 'esm2_layer24': 2.4, 'esm2_per_cdr': 0.4, 'onehot': 1.8, 'prot_t5': 3.2}
+    Features from esm2_per_cdr: 0.4 (1.6% of budget)
+
+  Condition E: hybrid improves esm2_per_cdr?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   -0.0329  (new rep HURTS or neutral for hybrid)
+    E - B (hybrid helps new rep?):   -0.0403  (hybrid HURTS or neutral for new rep)
+    Wilcoxon D vs C: p=0.8125
+    Wilcoxon E vs B: p=0.8125
+
+  Controls for esm2_per_cdr:
+    Random Gaussian (7680D): spearman = 0.0693
+    Row-shuffled esm2_per_cdr: spearman = -0.1025
+    Signal above random: +0.1863
+    Signal above shuffled: +0.3581
+
+============================================================
+  NEW REP: esm2_per_region (dim=17920)
+============================================================
+
+  Condition A: esm2_per_region + ridge
+    spearman = 0.2777 +/- 0.1795
+
+  Condition B: esm2_per_region + best model
+    Best model: rf
+    spearman = 0.3962 +/- 0.1400
+
+  Condition C: best hybrid WITHOUT esm2_per_region
+    spearman = 0.3735 +/- 0.1677
+    Allocation: {'aac': 1.2, 'abroberta': 4.8, 'abroberta_cdr': 5.4, 'antiberty': 4.6, 'blosum': 4.4, 'esm2': 3.4, 'esm2_cdr3': 3.8, 'esm2_concat': 3.4, 'esm2_early': 2.8, 'esm2_layer24': 5.4, 'onehot': 4.8, 'prot_t5': 6.0}
+
+  Condition D: best hybrid WITH esm2_per_region
+    spearman = 0.3408 +/- 0.1956
+    Allocation: {'aac': 3.2, 'abroberta': 10.0, 'abroberta_cdr': 11.6, 'antiberty': 11.4, 'blosum': 11.0, 'esm2': 5.4, 'esm2_cdr3': 6.0, 'esm2_concat': 7.2, 'esm2_early': 2.2, 'esm2_layer24': 8.6, 'esm2_per_region': 5.4, 'onehot': 8.0, 'prot_t5': 10.0}
+    Features from esm2_per_region: 5.4 (5.4% of budget)
+
+  Condition E: hybrid improves esm2_per_region?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   -0.0327  (new rep HURTS or neutral for hybrid)
+    E - B (hybrid helps new rep?):   -0.0554  (hybrid HURTS or neutral for new rep)
+    Wilcoxon D vs C: p=0.3125
+    Wilcoxon E vs B: p=0.4375
+
+  Controls for esm2_per_region:
+    Random Gaussian (17920D): spearman = -0.2091
+    Row-shuffled esm2_per_region: spearman = 0.0812
+    Signal above random: +0.4868
+    Signal above shuffled: +0.1965
+
+============================================================
+  NEW REP: esm3 (dim=3072)
+============================================================
+
+  Condition A: esm3 + ridge
+    spearman = 0.2906 +/- 0.1763
+
+  Condition B: esm3 + best model
+    Best model: rf
+    spearman = 0.3931 +/- 0.1731
+
+  Condition C: best hybrid WITHOUT esm3
+    spearman = 0.3735 +/- 0.1677
+    Allocation: {'aac': 1.2, 'abroberta': 4.8, 'abroberta_cdr': 5.4, 'antiberty': 4.6, 'blosum': 4.4, 'esm2': 3.4, 'esm2_cdr3': 3.8, 'esm2_concat': 3.4, 'esm2_early': 2.8, 'esm2_layer24': 5.4, 'onehot': 4.8, 'prot_t5': 6.0}
+
+  Condition D: best hybrid WITH esm3
+    spearman = 0.4120 +/- 0.1517
+    Allocation: {'aac': 0.0, 'abroberta': 8.6, 'abroberta_cdr': 14.4, 'antiberty': 9.6, 'blosum': 23.0, 'esm2': 2.6, 'esm2_cdr3': 5.2, 'esm2_concat': 6.4, 'esm2_early': 0.6, 'esm2_layer24': 20.6, 'esm3': 11.0, 'onehot': 9.2, 'prot_t5': 29.8}
+    Features from esm3: 11.0 (7.8% of budget)
+
+  Condition E: hybrid improves esm3?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   +0.0385  (new rep HELPS hybrid)
+    E - B (hybrid helps new rep?):   +0.0189  (hybrid HELPS new rep)
+    Wilcoxon D vs C: p=0.1875
+    Wilcoxon E vs B: p=0.8125
+
+  Controls for esm3:
+    Random Gaussian (3072D): spearman = 0.0925
+    Row-shuffled esm3: spearman = 0.0452
+    Signal above random: +0.1981
+    Signal above shuffled: +0.2455
+
+============================================================
+  NEW REP: esm3_cdr (dim=3072)
+============================================================
+
+  Condition A: esm3_cdr + ridge
+    spearman = 0.3145 +/- 0.1620
+
+  Condition B: esm3_cdr + best model
+    Best model: rf
+    spearman = 0.3840 +/- 0.1604
+
+  Condition C: best hybrid WITHOUT esm3_cdr
+    spearman = 0.3735 +/- 0.1677
+    Allocation: {'aac': 1.2, 'abroberta': 4.8, 'abroberta_cdr': 5.4, 'antiberty': 4.6, 'blosum': 4.4, 'esm2': 3.4, 'esm2_cdr3': 3.8, 'esm2_concat': 3.4, 'esm2_early': 2.8, 'esm2_layer24': 5.4, 'onehot': 4.8, 'prot_t5': 6.0}
+
+  Condition D: best hybrid WITH esm3_cdr
+    spearman = 0.4027 +/- 0.1703
+    Allocation: {'aac': 1.0, 'abroberta': 1.2, 'abroberta_cdr': 1.4, 'antiberty': 10.2, 'blosum': 0.4, 'esm2': 2.6, 'esm2_cdr3': 1.8, 'esm2_concat': 16.6, 'esm2_early': 36.8, 'esm2_layer24': 24.4, 'esm3_cdr': 1.6, 'onehot': 0.4, 'prot_t5': 42.6}
+    Features from esm3_cdr: 1.6 (1.1% of budget)
+
+  Condition E: hybrid improves esm3_cdr?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   +0.0292  (new rep HELPS hybrid)
+    E - B (hybrid helps new rep?):   +0.0187  (hybrid HELPS new rep)
+    Wilcoxon D vs C: p=0.6250
+    Wilcoxon E vs B: p=0.6250
+
+  Controls for esm3_cdr:
+    Random Gaussian (3072D): spearman = 0.0925
+    Row-shuffled esm3_cdr: spearman = -0.0111
+    Signal above random: +0.2220
+    Signal above shuffled: +0.3256
+
+============================================================
+  NEW REP: esmc (dim=2304)
+============================================================
+
+  Condition A: esmc + ridge
+    spearman = 0.2006 +/- 0.2203
+
+  Condition B: esmc + best model
+    Best model: rf
+    spearman = 0.2916 +/- 0.1480
+
+  Condition C: best hybrid WITHOUT esmc
+    spearman = 0.3735 +/- 0.1677
+    Allocation: {'aac': 1.2, 'abroberta': 4.8, 'abroberta_cdr': 5.4, 'antiberty': 4.6, 'blosum': 4.4, 'esm2': 3.4, 'esm2_cdr3': 3.8, 'esm2_concat': 3.4, 'esm2_early': 2.8, 'esm2_layer24': 5.4, 'onehot': 4.8, 'prot_t5': 6.0}
+
+  Condition D: best hybrid WITH esmc
+    spearman = 0.3645 +/- 0.1525
+    Allocation: {'aac': 0.0, 'abroberta': 2.0, 'abroberta_cdr': 3.2, 'antiberty': 3.0, 'blosum': 3.4, 'esm2': 0.4, 'esm2_cdr3': 0.2, 'esm2_concat': 3.4, 'esm2_early': 0.4, 'esm2_layer24': 2.0, 'esmc': 3.4, 'onehot': 1.2, 'prot_t5': 2.4}
+    Features from esmc: 3.4 (13.6% of budget)
+
+  Condition E: hybrid improves esmc?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   -0.0089  (new rep HURTS or neutral for hybrid)
+    E - B (hybrid helps new rep?):   +0.0729  (hybrid HELPS new rep)
+    Wilcoxon D vs C: p=1.0000
+    Wilcoxon E vs B: p=0.1875
+
+  Controls for esmc:
+    Random Gaussian (2304D): spearman = 0.3099
+    Row-shuffled esmc: spearman = 0.0854
+    Signal above random: -0.1093
+    Signal above shuffled: +0.1152
+
+============================================================
+  NEW REP: esmc_cdr (dim=2304)
+============================================================
+
+  Condition A: esmc_cdr + ridge
+    spearman = 0.1823 +/- 0.2120
+
+  Condition B: esmc_cdr + best model
+    Best model: rf
+    spearman = 0.3396 +/- 0.1495
+
+  Condition C: best hybrid WITHOUT esmc_cdr
+    spearman = 0.3735 +/- 0.1677
+    Allocation: {'aac': 1.2, 'abroberta': 4.8, 'abroberta_cdr': 5.4, 'antiberty': 4.6, 'blosum': 4.4, 'esm2': 3.4, 'esm2_cdr3': 3.8, 'esm2_concat': 3.4, 'esm2_early': 2.8, 'esm2_layer24': 5.4, 'onehot': 4.8, 'prot_t5': 6.0}
+
+  Condition D: best hybrid WITH esmc_cdr
+    spearman = 0.3535 +/- 0.1419
+    Allocation: {'aac': 0.0, 'abroberta': 2.0, 'abroberta_cdr': 3.2, 'antiberty': 3.4, 'blosum': 3.4, 'esm2': 0.4, 'esm2_cdr3': 0.2, 'esm2_concat': 3.4, 'esm2_early': 0.4, 'esm2_layer24': 2.4, 'esmc_cdr': 1.4, 'onehot': 1.4, 'prot_t5': 3.4}
+    Features from esmc_cdr: 1.4 (5.6% of budget)
+
+  Condition E: hybrid improves esmc_cdr?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   -0.0200  (new rep HURTS or neutral for hybrid)
+    E - B (hybrid helps new rep?):   +0.0139  (hybrid HELPS new rep)
+    Wilcoxon D vs C: p=0.6250
+    Wilcoxon E vs B: p=1.0000
+
+  Controls for esmc_cdr:
+    Random Gaussian (2304D): spearman = 0.3099
+    Row-shuffled esmc_cdr: spearman = 0.1302
+    Signal above random: -0.1276
+    Signal above shuffled: +0.0521
+
+============================================================
+  NEW REP: igt5 (dim=1024)
+============================================================
+
+  Condition A: igt5 + ridge
+    spearman = 0.4446 +/- 0.1001
+
+  Condition B: igt5 + best model
+    Best model: svm
+    spearman = 0.4602 +/- 0.1112
+
+  Condition C: best hybrid WITHOUT igt5
+    spearman = 0.3715 +/- 0.1628
+    Allocation: {'aac': 1.2, 'abroberta': 4.8, 'abroberta_cdr': 5.4, 'antiberty': 4.6, 'blosum': 4.4, 'esm2': 3.4, 'esm2_cdr3': 3.8, 'esm2_concat': 3.4, 'esm2_early': 2.8, 'esm2_layer24': 5.4, 'onehot': 4.8, 'prot_t5': 6.0}
+
+  Condition D: best hybrid WITH igt5
+    spearman = 0.3502 +/- 0.1375
+    Allocation: {'aac': 0.0, 'abroberta': 0.0, 'abroberta_cdr': 10.0, 'antiberty': 10.0, 'blosum': 0.8, 'esm2': 0.0, 'esm2_cdr3': 0.0, 'esm2_concat': 6.0, 'esm2_early': 0.0, 'esm2_layer24': 0.0, 'igt5': 13.2, 'onehot': 0.0, 'prot_t5': 10.0}
+    Features from igt5: 13.2 (26.4% of budget)
+
+  Condition E: hybrid improves igt5?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   -0.0213  (new rep HURTS or neutral for hybrid)
+    E - B (hybrid helps new rep?):   -0.1099  (hybrid HURTS or neutral for new rep)
+    Wilcoxon D vs C: p=0.4375
+    Wilcoxon E vs B: p=0.0625
+
+  Controls for igt5:
+    Random Gaussian (1024D): spearman = 0.0151
+    Row-shuffled igt5: spearman = 0.1698
+    Signal above random: +0.4295
+    Signal above shuffled: +0.2748
+
+============================================================
+  NEW REP: prot_t5_cdr (dim=2048)
+============================================================
+
+  Condition A: prot_t5_cdr + ridge
+    spearman = 0.2290 +/- 0.1963
+
+  Condition B: prot_t5_cdr + best model
+    Best model: rf
+    spearman = 0.3682 +/- 0.1697
+
+  Condition C: best hybrid WITHOUT prot_t5_cdr
+    spearman = 0.3735 +/- 0.1677
+    Allocation: {'aac': 1.2, 'abroberta': 4.8, 'abroberta_cdr': 5.4, 'antiberty': 4.6, 'blosum': 4.4, 'esm2': 3.4, 'esm2_cdr3': 3.8, 'esm2_concat': 3.4, 'esm2_early': 2.8, 'esm2_layer24': 5.4, 'onehot': 4.8, 'prot_t5': 6.0}
+
+  Condition D: best hybrid WITH prot_t5_cdr
+    spearman = 0.3406 +/- 0.2009
+    Allocation: {'aac': 0.0, 'abroberta': 2.8, 'abroberta_cdr': 2.8, 'antiberty': 3.2, 'blosum': 2.6, 'esm2': 1.4, 'esm2_cdr3': 0.0, 'esm2_concat': 2.2, 'esm2_early': 1.0, 'esm2_layer24': 3.0, 'onehot': 2.2, 'prot_t5': 2.0, 'prot_t5_cdr': 1.8}
+    Features from prot_t5_cdr: 1.8 (7.2% of budget)
+
+  Condition E: hybrid improves prot_t5_cdr?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   -0.0329  (new rep HURTS or neutral for hybrid)
+    E - B (hybrid helps new rep?):   -0.0277  (hybrid HURTS or neutral for new rep)
+    Wilcoxon D vs C: p=0.8125
+    Wilcoxon E vs B: p=0.3125
+
+  Controls for prot_t5_cdr:
+    Random Gaussian (2048D): spearman = 0.0612
+    Row-shuffled prot_t5_cdr: spearman = -0.0328
+    Signal above random: +0.1679
+    Signal above shuffled: +0.2618
+
+============================================================
+  NEW REP: saprot (dim=2560)
+============================================================
+
+  Condition A: saprot + ridge
+    spearman = 0.2671 +/- 0.1649
+
+  Condition B: saprot + best model
+    Best model: rf
+    spearman = 0.4049 +/- 0.1268
+
+  Condition C: best hybrid WITHOUT saprot
+    spearman = 0.3735 +/- 0.1677
+    Allocation: {'aac': 1.2, 'abroberta': 4.8, 'abroberta_cdr': 5.4, 'antiberty': 4.6, 'blosum': 4.4, 'esm2': 3.4, 'esm2_cdr3': 3.8, 'esm2_concat': 3.4, 'esm2_early': 2.8, 'esm2_layer24': 5.4, 'onehot': 4.8, 'prot_t5': 6.0}
+
+  Condition D: best hybrid WITH saprot
+    spearman = 0.3171 +/- 0.1977
+    Allocation: {'aac': 0.0, 'abroberta': 0.0, 'abroberta_cdr': 0.0, 'antiberty': 0.0, 'blosum': 0.0, 'esm2': 0.0, 'esm2_cdr3': 0.0, 'esm2_concat': 0.0, 'esm2_early': 56.4, 'esm2_layer24': 28.2, 'onehot': 0.0, 'prot_t5': 56.4, 'saprot': 0.0}
+    Features from saprot: 0.0 (0.0% of budget)
+
+  Condition E: hybrid improves saprot?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   -0.0564  (new rep HURTS or neutral for hybrid)
+    E - B (hybrid helps new rep?):   -0.0878  (hybrid HURTS or neutral for new rep)
+    Wilcoxon D vs C: p=0.4375
+    Wilcoxon E vs B: p=0.3125
+
+  Controls for saprot:
+    Random Gaussian (2560D): spearman = 0.1256
+    Row-shuffled saprot: spearman = 0.0239
+    Signal above random: +0.1415
+    Signal above shuffled: +0.2431
+
+============================================================
+  NEW REP: saprot_cdr (dim=2560)
+============================================================
+
+  Condition A: saprot_cdr + ridge
+    spearman = 0.2567 +/- 0.1679
+
+  Condition B: saprot_cdr + best model
+    Best model: rf
+    spearman = 0.3742 +/- 0.1611
+
+  Condition C: best hybrid WITHOUT saprot_cdr
+    spearman = 0.3735 +/- 0.1677
+    Allocation: {'aac': 1.2, 'abroberta': 4.8, 'abroberta_cdr': 5.4, 'antiberty': 4.6, 'blosum': 4.4, 'esm2': 3.4, 'esm2_cdr3': 3.8, 'esm2_concat': 3.4, 'esm2_early': 2.8, 'esm2_layer24': 5.4, 'onehot': 4.8, 'prot_t5': 6.0}
+
+  Condition D: best hybrid WITH saprot_cdr
+    spearman = 0.3515 +/- 0.0854
+    Allocation: {'aac': 0.0, 'abroberta': 1.2, 'abroberta_cdr': 0.8, 'antiberty': 0.8, 'blosum': 0.8, 'esm2': 0.4, 'esm2_cdr3': 0.8, 'esm2_concat': 0.4, 'esm2_early': 0.8, 'esm2_layer24': 0.8, 'onehot': 1.6, 'prot_t5': 1.0, 'saprot_cdr': 0.6}
+    Features from saprot_cdr: 0.6 (6.0% of budget)
+
+  Condition E: hybrid improves saprot_cdr?
+
+  --- DELTAS ---
+    D - C (new rep helps hybrid?):   -0.0220  (new rep HURTS or neutral for hybrid)
+    E - B (hybrid helps new rep?):   -0.0227  (hybrid HURTS or neutral for new rep)
+    Wilcoxon D vs C: p=0.6250
+    Wilcoxon E vs B: p=1.0000
+
+  Controls for saprot_cdr:
+    Random Gaussian (2560D): spearman = 0.1256
+    Row-shuffled saprot_cdr: spearman = 0.0023
+    Signal above random: +0.1311
+    Signal above shuffled: +0.2544
+
+======================================================================
+  FORWARD COMPATIBILITY SUMMARY
+======================================================================
+
+  Dataset: abcov_kd | Metric: spearman | Domain: antibody | n_folds: 5
+  higher is better
+
+  New Rep                Dim  A(ridge)   B(best)   C(no r)     D(+r)      D-C      E-B  Alloc%
+  -------------------- ----- --------- --------- --------- --------- -------- -------- -------
+  ablang2                480    0.4066    0.4066    0.3096    0.3555  +0.0460  -0.0510   10.9%
+  antiberty_cdr         1024    0.2511    0.3644    0.2928    0.3235  +0.0307  -0.0409    9.2%
+  esm2_cdr              2560    0.2562    0.3570    0.3735    0.3171  -0.0564  -0.0399    0.0%
+  esm2_entropy_top20    2560    0.2573    0.3446    0.3735    0.3822  +0.0087  +0.0376    8.0%
+  esm2_midlayers        2560    0.3248    0.4208    0.2928    0.1413  -0.1515  -0.2795    2.0%
+  esm2_per_cdr          7680    0.2557    0.3808    0.3735    0.3405  -0.0329  -0.0403    1.6%
+  esm2_per_region      17920    0.2777    0.3962    0.3735    0.3408  -0.0327  -0.0554    5.4%
+  esm3                  3072    0.2906    0.3931    0.3735    0.4120  +0.0385  +0.0189    7.8%
+  esm3_cdr              3072    0.3145    0.3840    0.3735    0.4027  +0.0292  +0.0187    1.1%
+  esmc                  2304    0.2006    0.2916    0.3735    0.3645  -0.0089  +0.0729   13.6%
+  esmc_cdr              2304    0.1823    0.3396    0.3735    0.3535  -0.0200  +0.0139    5.6%
+  igt5                  1024    0.4446    0.4602    0.3715    0.3502  -0.0213  -0.1099   26.4%
+  prot_t5_cdr           2048    0.2290    0.3682    0.3735    0.3406  -0.0329  -0.0277    7.2%
+  saprot                2560    0.2671    0.4049    0.3735    0.3171  -0.0564  -0.0878    0.0%
+  saprot_cdr            2560    0.2567    0.3742    0.3735    0.3515  -0.0220  -0.0227    6.0%
+
+  Win rates:
+    D > C (new rep helps hybrid):  5/15 (33%)
+    E > B (hybrid helps new rep):  5/15 (33%)
+
+  Controls:
+  New Rep                A(real)  Gaussian  Shuffled  vs Random    vs Shuf
+  -------------------- --------- --------- --------- ---------- ----------
+  ablang2                 0.4066   -0.1206   -0.1973    +0.5271    +0.6038
+  antiberty_cdr           0.2511    0.0151    0.0446    +0.2359    +0.2065
+  esm2_cdr                0.2562    0.1256    0.1351    +0.1307    +0.1211
+  esm2_entropy_top20      0.2573    0.1256   -0.0174    +0.1318    +0.2747
+  esm2_midlayers          0.3248    0.1256   -0.0389    +0.1993    +0.3638
+  esm2_per_cdr            0.2557    0.0693   -0.1025    +0.1863    +0.3581
+  esm2_per_region         0.2777   -0.2091    0.0812    +0.4868    +0.1965
+  esm3                    0.2906    0.0925    0.0452    +0.1981    +0.2455
+  esm3_cdr                0.3145    0.0925   -0.0111    +0.2220    +0.3256
+  esmc                    0.2006    0.3099    0.0854    -0.1093    +0.1152
+  esmc_cdr                0.1823    0.3099    0.1302    -0.1276    +0.0521
+  igt5                    0.4446    0.0151    0.1698    +0.4295    +0.2748
+  prot_t5_cdr             0.2290    0.0612   -0.0328    +0.1679    +0.2618
+  saprot                  0.2671    0.1256    0.0239    +0.1415    +0.2431
+  saprot_cdr              0.2567    0.1256    0.0023    +0.1311    +0.2544
+  [saved tests/results/complexity/c13_forward_compatibility/abcov_kd.json]
+  c13 done in 1082.3s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT C15: ML THEORY DEPTH
+======================================================================
+
+  15a: Distance Concentration Analysis
+  ------------------------------------------------------------
+    aac                  dim=   40  beyer=17.4429  cv=0.2755  hubness=0.848
+    ablang2              dim=  480  beyer=18.4169  cv=0.3434  hubness=1.079
+    abroberta            dim= 1536  beyer=18.2194  cv=0.1928  hubness=1.306
+    abroberta_cdr        dim= 1536  beyer=18.8564  cv=0.2444  hubness=1.171
+    antiberty            dim= 1024  beyer=36.7036  cv=0.2220  hubness=0.696
+    antiberty_cdr        dim= 1024  beyer=36.6214  cv=0.2214  hubness=0.658
+    blosum               dim= 5600  beyer=17.3533  cv=0.2168  hubness=0.986
+    esm2                 dim= 2560  beyer=14.4163  cv=0.2923  hubness=0.532
+    esm2_cdr             dim= 2560  beyer=16.5586  cv=0.3568  hubness=0.580
+    esm2_cdr3            dim= 2560  beyer=16.5586  cv=0.3568  hubness=0.580
+    esm2_concat          dim= 1280  beyer=17.6692  cv=0.2324  hubness=0.684
+    esm2_early           dim= 2560  beyer=16.6028  cv=0.2894  hubness=1.071
+    esm2_entropy_top20   dim= 2560  beyer=19.8445  cv=0.2782  hubness=0.239
+    esm2_layer24         dim= 2560  beyer=20.8729  cv=0.3664  hubness=0.698
+    esm2_midlayers       dim= 2560  beyer=20.4678  cv=0.3757  hubness=0.777
+    esm2_per_cdr         dim= 7680  beyer=14.4163  cv=0.2923  hubness=0.532
+    esm2_per_region      dim=17920  beyer=14.4163  cv=0.2923  hubness=0.532
+    esm3                 dim= 3072  beyer=19.5522  cv=0.3154  hubness=0.447
+    esm3_cdr             dim= 3072  beyer=19.9058  cv=0.3391  hubness=0.351
+    esmc                 dim= 2304  beyer=18.2297  cv=0.2740  hubness=0.494
+    esmc_cdr             dim= 2304  beyer=19.3288  cv=0.3339  hubness=0.428
+    igt5                 dim= 1024  beyer=17.2370  cv=0.3125  hubness=0.774
+    onehot               dim= 5600  beyer=14.1096  cv=0.2184  hubness=2.425
+    prot_t5              dim= 2048  beyer=17.6268  cv=0.2637  hubness=0.886
+    prot_t5_cdr          dim= 2048  beyer=19.6207  cv=0.3515  hubness=0.583
+    saprot               dim= 2560  beyer=14.3417  cv=0.2635  hubness=0.850
+    saprot_cdr           dim= 2560  beyer=14.4625  cv=0.2671  hubness=0.802
+
+    Budget sweep (hybrid):
+      budget=  50  dim=  50  beyer=15.8730  cv=0.2334  hubness=2.074
+      budget= 500  dim= 141  beyer=10.0731  cv=0.2008  hubness=0.991
+      budget=1000  dim= 141  beyer=10.0731  cv=0.2008  hubness=0.991
+      budget=2000  dim= 141  beyer=10.0731  cv=0.2008  hubness=0.991
+
+    PCA baselines (unsupervised):
+      pca_d=  50  beyer=87642996.4192  cv=0.2924  hubness=0.525
+      pca_d= 140  beyer=1714619.3464  cv=0.2619  hubness=0.426
+      pca_d= 140  beyer=1714619.3464  cv=0.2619  hubness=0.426
+      pca_d= 140  beyer=1714619.3464  cv=0.2619  hubness=0.426
+
+    Summary:
+    Space                  Dim    Beyer       CV  Hubness
+    -------------------- ----- -------- -------- --------
+    aac                     40  17.4429   0.2755    0.848
+    ablang2                480  18.4169   0.3434    1.079
+    antiberty             1024  36.7036   0.2220    0.696
+    antiberty_cdr         1024  36.6214   0.2214    0.658
+    igt5                  1024  17.2370   0.3125    0.774
+    esm2_concat           1280  17.6692   0.2324    0.684
+    abroberta             1536  18.2194   0.1928    1.306
+    abroberta_cdr         1536  18.8564   0.2444    1.171
+    prot_t5               2048  17.6268   0.2637    0.886
+    prot_t5_cdr           2048  19.6207   0.3515    0.583
+    esmc                  2304  18.2297   0.2740    0.494
+    esmc_cdr              2304  19.3288   0.3339    0.428
+    esm2                  2560  14.4163   0.2923    0.532
+    esm2_cdr              2560  16.5586   0.3568    0.580
+    esm2_cdr3             2560  16.5586   0.3568    0.580
+    esm2_early            2560  16.6028   0.2894    1.071
+    esm2_entropy_top20    2560  19.8445   0.2782    0.239
+    esm2_layer24          2560  20.8729   0.3664    0.698
+    esm2_midlayers        2560  20.4678   0.3757    0.777
+    saprot                2560  14.3417   0.2635    0.850
+    saprot_cdr            2560  14.4625   0.2671    0.802
+    esm3                  3072  19.5522   0.3154    0.447
+    esm3_cdr              3072  19.9058   0.3391    0.351
+    blosum                5600  17.3533   0.2168    0.986
+    onehot                5600  14.1096   0.2184    2.425
+    esm2_per_cdr          7680  14.4163   0.2923    0.532
+    esm2_per_region      17920  14.4163   0.2923    0.532
+    hybrid_b50              50  15.8730   0.2334    2.074
+    hybrid_b500            141  10.0731   0.2008    0.991
+    hybrid_b1000           141  10.0731   0.2008    0.991
+    hybrid_b2000           141  10.0731   0.2008    0.991
+
+  15b: Kernel Matrix Analysis
+  ------------------------------------------------------------
+    aac                  dim=   40  cond=    3.4  k_cv=0.8456  align=0.0498
+    ablang2              dim=  480  cond=    3.5  k_cv=0.7681  align=0.0511
+    abroberta            dim= 1536  cond=    3.5  k_cv=0.8153  align=0.0721
+    abroberta_cdr        dim= 1536  cond=    3.6  k_cv=0.8170  align=0.0676
+    antiberty            dim= 1024  cond=    4.2  k_cv=0.9516  align=0.0658
+    antiberty_cdr        dim= 1024  cond=    4.2  k_cv=0.9520  align=0.0658
+    blosum               dim= 5600  cond=    3.5  k_cv=0.8042  align=0.0701
+    esm2                 dim= 2560  cond=    3.4  k_cv=0.8282  align=0.0554
+    esm2_cdr             dim= 2560  cond=    3.5  k_cv=0.8252  align=0.0476
+    esm2_cdr3            dim= 2560  cond=    3.5  k_cv=0.8252  align=0.0476
+    esm2_concat          dim= 1280  cond=    3.3  k_cv=0.7999  align=0.0469
+    esm2_early           dim= 2560  cond=    3.3  k_cv=0.7909  align=0.0562
+    esm2_entropy_top20   dim= 2560  cond=    3.5  k_cv=0.9027  align=0.0631
+    esm2_layer24         dim= 2560  cond=    3.7  k_cv=0.8042  align=0.0500
+    esm2_midlayers       dim= 2560  cond=    3.6  k_cv=0.8012  align=0.0502
+    esm2_per_cdr         dim= 7680  cond=    3.4  k_cv=0.8282  align=0.0554
+    esm2_per_region      dim=17920  cond=    3.4  k_cv=0.8282  align=0.0554
+    esm3                 dim= 3072  cond=    3.6  k_cv=0.9851  align=0.0493
+    esm3_cdr             dim= 3072  cond=    3.6  k_cv=0.9749  align=0.0472
+    esmc                 dim= 2304  cond=    3.5  k_cv=0.9824  align=0.0582
+    esmc_cdr             dim= 2304  cond=    3.6  k_cv=0.9499  align=0.0530
+    igt5                 dim= 1024  cond=    3.6  k_cv=0.8618  align=0.0621
+    onehot               dim= 5600  cond=    3.0  k_cv=0.6869  align=0.0486
+    prot_t5              dim= 2048  cond=    3.4  k_cv=0.8756  align=0.0595
+    prot_t5_cdr          dim= 2048  cond=    3.6  k_cv=0.8742  align=0.0433
+    saprot               dim= 2560  cond=    3.3  k_cv=0.8907  align=0.0512
+    saprot_cdr           dim= 2560  cond=    3.3  k_cv=0.8914  align=0.0508
+
+    Budget sweep (hybrid kernel):
+      budget=  50  dim=  50  cond=    3.5  k_cv=0.7600  align=0.1111
+      budget= 500  dim= 141  cond=    3.0  k_cv=0.7068  align=0.0914
+      budget=1000  dim= 141  cond=    3.0  k_cv=0.7068  align=0.0914
+      budget=2000  dim= 141  cond=    3.0  k_cv=0.7068  align=0.0914
+
+    Length-scale sensitivity (gamma sweep):
+    Space              Dim | g=0.001    g=0.01     g=0.1      g=1.0      g=10.0     g=100.0  
+    ---------------- ------+-----------------------------------------------------------------
+    esm2_per_region  17920 |       1.0        0.5        0.5        0.5        0.5        0.5  range=0.5
+    hybrid_b50          50 |       6.3        4.2        1.8        0.7        0.5        0.5  range=5.9
+    Most robust to gamma: esm2_per_region (logCond range=0.5)
+
+    Summary:
+    Space                  Dim  logCond     K_cv   K_mean    K_std    Align  EigRank
+    -------------------- ----- -------- -------- -------- -------- -------- --------
+    aac                     40      3.4   0.8456   0.2075   0.1754   0.0498     37.2
+    ablang2                480      3.5   0.7681   0.2315   0.1778   0.0511     34.7
+    abroberta             1536      3.5   0.8153   0.1708   0.1393   0.0721     53.9
+    abroberta_cdr         1536      3.6   0.8170   0.1926   0.1573   0.0676     46.0
+    antiberty             1024      4.2   0.9516   0.1805   0.1718   0.0658     43.2
+    antiberty_cdr         1024      4.2   0.9520   0.1803   0.1716   0.0658     43.3
+    blosum                5600      3.5   0.8042   0.1795   0.1443   0.0701     48.6
+    esm2                  2560      3.4   0.8282   0.2154   0.1784   0.0554     36.8
+    esm2_cdr              2560      3.5   0.8252   0.2505   0.2068   0.0476     29.8
+    esm2_cdr3             2560      3.5   0.8252   0.2505   0.2068   0.0476     29.8
+    esm2_concat           1280      3.3   0.7999   0.1867   0.1493   0.0469     48.1
+    esm2_early            2560      3.3   0.7909   0.2145   0.1697   0.0562     41.1
+    esm2_entropy_top20    2560      3.5   0.9027   0.2080   0.1878   0.0631     32.8
+    esm2_layer24          2560      3.7   0.8042   0.2560   0.2059   0.0500     29.5
+    esm2_midlayers        2560      3.6   0.8012   0.2615   0.2095   0.0502     28.8
+    esm2_per_cdr          7680      3.4   0.8282   0.2154   0.1784   0.0554     36.8
+    esm2_per_region      17920      3.4   0.8282   0.2154   0.1784   0.0554     36.8
+    esm3                  3072      3.6   0.9851   0.2265   0.2231   0.0493     24.0
+    esm3_cdr              3072      3.6   0.9749   0.2393   0.2333   0.0472     22.1
+    esmc                  2304      3.5   0.9824   0.2054   0.2018   0.0582     29.9
+    esmc_cdr              2304      3.6   0.9499   0.2360   0.2242   0.0530     24.6
+    igt5                  1024      3.6   0.8618   0.2269   0.1956   0.0621     32.7
+    onehot                5600      3.0   0.6869   0.1797   0.1235   0.0486     64.4
+    prot_t5               2048      3.4   0.8756   0.2018   0.1767   0.0595     37.5
+    prot_t5_cdr           2048      3.6   0.8742   0.2464   0.2154   0.0433     28.1
+    saprot                2560      3.3   0.8907   0.2022   0.1801   0.0512     37.4
+    saprot_cdr            2560      3.3   0.8914   0.2039   0.1817   0.0508     37.0
+    hybrid_b50              50      3.5   0.7600   0.1866   0.1419   0.1111     48.0
+    hybrid_b500            141      3.0   0.7068   0.1744   0.1233   0.0914     57.3
+    hybrid_b1000           141      3.0   0.7068   0.1744   0.1233   0.0914     57.3
+    hybrid_b2000           141      3.0   0.7068   0.1744   0.1233   0.0914     57.3
+
+  15c: Double Descent Probe
+  ------------------------------------------------------------
+    n_samples=141, total_dim=82632
+    Budgets: [10, 25, 50, 70, 75, 100, 105, 126, 141, 150, 155, 176, 200, 211, 282, 300]
+    Metric: spearman (higher is better)
+    budget=   10 (p/n=0.07)  hybrid= 0.2004  pca= 0.3110  random= 0.2426  ridge_hyb= 0.2542  ridge_pca= 0.2301
+    budget=   25 (p/n=0.18)  hybrid= 0.3179  pca= 0.3339  random= 0.3292  ridge_hyb= 0.1827  ridge_pca= 0.2753
+    budget=   50 (p/n=0.35)  hybrid= 0.2575  pca= 0.3378  random= 0.3607  ridge_hyb= 0.3856  ridge_pca= 0.3022
+    budget=   70 (p/n=0.50)  hybrid= 0.3247  pca= 0.3832  random= 0.3517  ridge_hyb= 0.3856  ridge_pca= 0.3555
+    budget=   75 (p/n=0.53)  hybrid= 0.3247  pca= 0.2936  random= 0.3388  ridge_hyb= 0.3856  ridge_pca= 0.3358
+    budget=  100 (p/n=0.71)  hybrid= 0.3677  pca= 0.3176  random= 0.4036  ridge_hyb= 0.3944  ridge_pca= 0.2925
+    budget=  105 (p/n=0.74)  hybrid= 0.3247  pca= 0.3290  random= 0.4084  ridge_hyb= 0.3856  ridge_pca= 0.2916
+    budget=  126 (p/n=0.89)  hybrid= 0.3247  pca= 0.3103  random= 0.3715  ridge_hyb= 0.3856  ridge_pca= 0.2781 *** p ≈ n
+    budget=  141 (p/n=1.00)  hybrid= 0.3247  pca= 0.3103  random= 0.3899  ridge_hyb= 0.2846  ridge_pca= 0.2781 *** p ≈ n
+    budget=  150 (p/n=1.06)  hybrid= 0.3247  pca= 0.3103  random= 0.3899  ridge_hyb= 0.3856  ridge_pca= 0.2781 *** p ≈ n
+    budget=  155 (p/n=1.10)  hybrid= 0.3247  pca= 0.3103  random= 0.3899  ridge_hyb= 0.3856  ridge_pca= 0.2781 *** p ≈ n
+    budget=  176 (p/n=1.25)  hybrid= 0.3247  pca= 0.3103  random= 0.3899  ridge_hyb= 0.3856  ridge_pca= 0.2781
+    budget=  200 (p/n=1.42)  hybrid= 0.3247  pca= 0.3103  random= 0.3899  ridge_hyb= 0.3856  ridge_pca= 0.2781
+    budget=  211 (p/n=1.50)  hybrid= 0.3247  pca= 0.3103  random= 0.3899  ridge_hyb= 0.3856  ridge_pca= 0.2781
+    budget=  282 (p/n=2.00)  hybrid= 0.3247  pca= 0.3103  random= 0.3899  ridge_hyb= 0.3856  ridge_pca= 0.2781
+    budget=  300 (p/n=2.13)  hybrid= 0.3247  pca= 0.3103  random= 0.3899  ridge_hyb= 0.3856  ridge_pca= 0.2781
+
+    PCA instability near p≈n: variance_ratio=0.07 (stable)
+    Hybrid instability near p≈n: variance_ratio=0.13 (stable)
+
+  15d: Approximation Theory (Rademacher Complexity)
+  ------------------------------------------------------------
+    Full dim (82632D): Rademacher=0.9544, real_spearman=0.2781
+    budget=   50 (p/n=0.35)  Rad_hyb=0.3537  Rad_pca=0.4198  Real_hyb=0.3856  Real_pca=0.3128
+    budget=  500 (p/n=3.55)  Rad_hyb=0.3537  Rad_pca=0.9544  Real_hyb=0.3856  Real_pca=0.2781
+    budget= 1000 (p/n=7.09)  Rad_hyb=0.3537  Rad_pca=0.9544  Real_hyb=0.3856  Real_pca=0.2781
+    budget= 2000 (p/n=14.18)  Rad_hyb=0.3537  Rad_pca=0.9544  Real_hyb=0.3856  Real_pca=0.2781
+
+    Theoretical sqrt(d/n) scaling:
+      budget=   50: sqrt(d/n) = 0.5955
+      budget=  500: sqrt(d/n) = 1.8831
+      budget= 1000: sqrt(d/n) = 2.6631
+      budget= 2000: sqrt(d/n) = 3.7662
+  [saved tests/results/complexity/c15_ml_theory_depth/abcov_kd.json]
+  c15 done in 2513.8s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT C16: FEATURE SELECTION AS REGULARIZATION
+======================================================================
+
+  --- Ridge (6 regularization levels × 7 budgets) ---
+    budget=25: 0.001=0.2950, 0.01=0.2950, 0.1=0.2976, 1.0=0.2921, 10.0=0.3094, 100.0=0.2982
+    budget=50: 0.001=0.1828, 0.01=0.1844, 0.1=0.1908, 1.0=0.1974, 10.0=0.2283, 100.0=0.2585
+    budget=100: 0.001=0.0971, 0.01=0.1212, 0.1=0.1633, 1.0=0.2343, 10.0=0.2092, 100.0=0.2187
+    budget=200: 0.001=0.1736, 0.01=0.1772, 0.1=0.1872, 1.0=0.2140, 10.0=0.2836, 100.0=0.3476
+    budget=500: 0.001=0.1736, 0.01=0.1772, 0.1=0.1872, 1.0=0.2140, 10.0=0.2836, 100.0=0.3476
+    budget=1024: 0.001=0.1736, 0.01=0.1772, 0.1=0.1872, 1.0=0.2140, 10.0=0.2836, 100.0=0.3476
+    budget=2048: 0.001=0.1736, 0.01=0.1772, 0.1=0.1872, 1.0=0.2140, 10.0=0.2836, 100.0=0.3476
+    L2 equiv: budget=25 ≈ alpha=100.000 (gap diff=0.0692)
+    L2 equiv: budget=50 ≈ alpha=10.000 (gap diff=0.0521)
+    L2 equiv: budget=100 ≈ alpha=10.000 (gap diff=0.0151)
+    L2 equiv: budget=200 ≈ alpha=1.000 (gap diff=0.0000)
+    L2 equiv: budget=500 ≈ alpha=1.000 (gap diff=0.0000)
+    L2 equiv: budget=1024 ≈ alpha=1.000 (gap diff=0.0000)
+    Sensitivity: b=25:0.0055, b=50:0.0276, b=100:0.0511, b=200:0.0642, b=500:0.0642, b=1024:0.0642, b=2048:0.0642
+    Winner: tuned_full_dim
+
+  --- RF (4 regularization levels × 7 budgets) ---
+    budget=25: 3=0.2970, 5=0.3035, 10=0.3288, None=0.3179
+    budget=50: 3=0.2590, 5=0.2644, 10=0.2605, None=0.2575
+    budget=100: 3=0.3342, 5=0.3835, 10=0.3768, None=0.3677
+    budget=200: 3=0.3255, 5=0.3294, 10=0.3187, None=0.3247
+    budget=500: 3=0.3255, 5=0.3294, 10=0.3187, None=0.3247
+    budget=1024: 3=0.3255, 5=0.3294, 10=0.3187, None=0.3247
+    budget=2048: 3=0.3255, 5=0.3294, 10=0.3187, None=0.3247
+    Sensitivity: b=25:0.0124, b=50:0.0026, b=100:0.0189, b=200:0.0038, b=500:0.0038, b=1024:0.0038, b=2048:0.0038
+    Winner: simple_hybrid
+
+  --- SVM (4 regularization levels × 7 budgets) ---
+    budget=25: 0.01=0.2580, 0.1=0.3107, 1.0=0.3474, 10.0=0.3675
+    budget=50: 0.01=0.2613, 0.1=0.2878, 1.0=0.3369, 10.0=0.2918
+    budget=100: 0.01=0.2855, 0.1=0.3161, 1.0=0.3414, 10.0=0.4074
+    budget=200: 0.01=0.3389, 0.1=0.3637, 1.0=0.4008, 10.0=0.3634
+    budget=500: 0.01=0.3389, 0.1=0.3637, 1.0=0.4008, 10.0=0.3634
+    budget=1024: 0.01=0.3389, 0.1=0.3637, 1.0=0.4008, 10.0=0.3634
+    budget=2048: 0.01=0.3389, 0.1=0.3637, 1.0=0.4008, 10.0=0.3634
+    Sensitivity: b=25:0.0417, b=50:0.0272, b=100:0.0449, b=200:0.0221, b=500:0.0221, b=1024:0.0221, b=2048:0.0221
+    Winner: tuned_full_dim
+  [saved tests/results/complexity/c16_feature_selection_as_regularization/abcov_kd.json]
+  c16 done in 5227.4s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT C17: INFORMATION-THEORETIC DECOMPOSITION
+======================================================================
+  Total dim: 82632, budgets: [25, 50, 100, 200]
+  mRMR: enabled with pre-filter to top 2000 features
+
+  Budget=25:
+    hybrid... MI=0.000, density=0.0000, R²=0.5827
+    pca... MI=0.000, density=0.0000, R²=0.2761
+    mrmr... MI=0.000, density=0.0000, R²=0.4853
+    rfe... MI=0.000, density=0.0000, R²=0.6092
+    random... MI=0.000, density=0.0000, R²=0.3241
+
+  Budget=50:
+    hybrid... MI=0.000, density=0.0000, R²=0.5827
+    pca... MI=0.000, density=0.0000, R²=0.2360
+    mrmr... MI=0.000, density=0.0000, R²=0.5353
+    rfe... MI=0.000, density=0.0000, R²=0.5469
+    random... MI=0.000, density=0.0000, R²=0.3540
+
+  Budget=100:
+    hybrid... MI=0.000, density=0.0000, R²=0.5827
+    pca... MI=0.000, density=0.0000, R²=0.1519
+    mrmr...

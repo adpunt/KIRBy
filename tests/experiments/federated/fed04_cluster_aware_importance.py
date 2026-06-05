@@ -31,7 +31,7 @@ from experiments._shared import (
 from experiments.federated.federated_helpers import (
     smiles_to_fluid_df, cluster_training_only, compute_clf_metrics,
     extract_importance_profile, compare_importance_profiles,
-    _resolve_match,
+    _resolve_match, fit_fed_classifier, fed_to_kirby_model,
     smoke_grid, smoke_n_folds, smoke_k_silos,
 )
 from kirby.hybrid import create_hybrid, apply_feature_selection
@@ -128,6 +128,9 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     print("EXPERIMENT FED04: CLUSTER-AWARE IMPORTANCE")
     print("=" * 70)
 
+    fed_model = config.get('fed_model', 'rf')
+    fed_seed = config.get('fed_seed', 0)
+
     reps = data['reps']
     labels = data['labels']
     smiles = data['smiles']
@@ -135,8 +138,13 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     # ── Phase 1: Setup ───────────────────────────────────────────────────
     print("\n--- Phase 1: Setup ---")
 
-    # Binarize labels (skip if already binary from Lhasa loader)
-    if data.get('is_binary'):
+    # Binarize labels (skip if already binary). The Lhasa loader sets
+    # data['is_binary'], but the regular load_data('herg', ...) path returns
+    # 0/1 labels WITHOUT that flag — so also detect already-binary labels by
+    # value (unique values ⊆ {0,1}). Without this, the pKi>=6.0 threshold on
+    # already-0/1 labels collapses every sample to class 0 (degenerate).
+    _uniq = set(np.unique(labels).tolist())
+    if data.get('is_binary') or _uniq <= {0, 1, 0.0, 1.0}:
         labels_binary = labels.astype(int)
     else:
         labels_binary = (labels >= PKI_THRESHOLD).astype(int)
@@ -176,7 +184,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     try:
         _search, _meta = get_best_search_for_downstream(
             reps, labels_binary, groups,
-            downstream_model='rf', budget=BUDGET,
+            downstream_model=fed_to_kirby_model(fed_model), budget=BUDGET,
             augmentations=augs,
             speed=config.get('search_speed', 'full'),
             metric=metric_name,
@@ -207,7 +215,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
 
     fold_records = []
     for fold_id, (train_idx, test_idx) in enumerate(cv_split(
-            groups, N_FOLDS, np.zeros(n_samples), labels_binary)):
+            groups, N_FOLDS, np.zeros(n_samples), labels_binary,
+            seed=fed_seed)):
         print(f"\n=== Fold {fold_id + 1}/{N_FOLDS}: "
               f"{len(train_idx)} train / {len(test_idx)} test ===")
 
@@ -223,7 +232,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         t0 = time.time()
         train_fluid_df = fluid_df_all.iloc[train_idx]
         train_silo_indices, cluster_data, kmeans_model = cluster_training_only(
-            train_fluid_df, k=K, smooth_factor=0.05)
+            train_fluid_df, k=K, smooth_factor=0.05, seed=fed_seed)
         print(f"  Clustering (train only): K={K}, {time.time() - t0:.1f}s")
 
         for s in range(1, K + 1):
@@ -274,10 +283,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
                 continue
             idx = train_silo_indices[s]
             X_s = apply_feature_selection(train_reps, fi)
-            clf = RandomForestClassifier(
-                n_estimators=150, max_depth=15,
-                class_weight='balanced', random_state=42)
-            clf.fit(X_s[idx], y_train[idx])
+            clf = fit_fed_classifier(
+                fed_model, X_s[idx], y_train[idx], seed=fed_seed)
             per_cluster_models[s] = clf
             per_cluster_fis[s] = fi
 
@@ -292,10 +299,8 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         # Global hybrid baseline (compute first so fallback is available)
         X_global_train = apply_feature_selection(train_reps, fi_global)
         X_global_test = apply_feature_selection(test_reps, fi_global)
-        clf_global = RandomForestClassifier(
-            n_estimators=150, max_depth=15,
-            class_weight='balanced', random_state=42)
-        clf_global.fit(X_global_train, y_train)
+        clf_global = fit_fed_classifier(
+            fed_model, X_global_train, y_train, seed=fed_seed)
         y_pred_global = clf_global.predict(X_global_test)
         y_prob_global = clf_global.predict_proba(X_global_test)[:, 1]
 
@@ -328,7 +333,7 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         for sf in SMOOTH_FACTORS:
             try:
                 train_silo_idx_sf, _, _ = cluster_training_only(
-                    train_fluid_df, k=K, smooth_factor=sf)
+                    train_fluid_df, k=K, smooth_factor=sf, seed=fed_seed)
                 # P1 fix: pass augs/aug_cond — Phase 2 does, so Phase 5 must too.
                 prof_sf, _, stats_sf = _compute_cluster_importance(
                     train_reps, y_train, train_silo_idx_sf, K,

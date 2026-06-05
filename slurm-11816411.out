@@ -1,0 +1,190 @@
+Already up to date.
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+==================================================================
+BEFORE RUN: cache state for flab_aggregation_jain_hicrt
+==================================================================
+
+=== flab_aggregation_jain_hicrt: hybrid_eval files on disk ===
+  Total: 21735
+    __capped.pkl: 772
+    __none.pkl: 11898
+    __uncapped.pkl: 9065
+
+=== Stored aug_names distribution (sample of up to 200 per suffix) ===
+
+  __capped.pkl (200 sampled):
+    unreadable: 0
+    aug_strategy counts:
+      'capped': 200
+    aug_names counts:
+      ('mutation_features', 'paratope', 'structural'): 200
+
+  __none.pkl (200 sampled):
+    unreadable: 0
+    aug_strategy counts:
+      'none': 200
+    aug_names counts:
+      (): 200
+
+  __uncapped.pkl (200 sampled):
+    unreadable: 0
+    aug_strategy counts:
+      'uncapped': 200
+    aug_names counts:
+      ('mutation_features', 'paratope', 'structural'): 200
+
+=== Verdict for fixed c02 runs ===
+  c02 no_aug (reads __none.pkl):
+    ✓ 11898 __none.pkl files exist — probes will hit.
+  c02 uncapped (reads __uncapped.pkl):
+    ✓ All sampled __uncapped.pkl files have non-empty aug_names — c02 uncapped probes will HIT.
+  c02 capped (reads __capped.pkl):
+    ✓ 772 files exist.
+
+==================================================================
+RUNNING c02 on flab_aggregation_jain_hicrt
+==================================================================
+Mode: full
+Dataset: flab_aggregation_jain_hicrt
+Reps: fast
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp', 'svm', 'gp', 'catboost', 'dnn', 'cnn']
+Budgets: [10, 25, 50, 100, 250, 500, 1000, 2000]
+  [auto] flab_aggregation_jain_hicrt: filtering to 23 general reps from DATASET_REPS
+  FLAb flab_aggregation_jain_hicrt: 137 samples, paired, property=Aggregation (HIC RT)
+  Fitness range: [8.500, 25.000], mean=10.328, std=2.089
+  Wildtype heavy: QVQLQQSGGELAKPGASVKVSCKASGYTFS...
+  137/137 samples have mutations, avg 120.3 mutations/sample
+    prot_t5: cached (2048D)
+    prot_t5_cdr: cached (2048D)
+    esm2_early: cached (2560D)
+    esm2_concat: cached (1280D)
+    esmc: cached (2304D)
+    esmc_cdr: cached (2304D)
+    esm3: cached (3072D)
+    esm3_cdr: cached (3072D)
+    esm2_layer24: cached (2560D)
+    ablang2: cached (480D)
+    saprot: cached (2560D)
+    saprot_cdr: cached (2560D)
+    esm2_per_region: cached (17920D)
+    esm2_midlayers: cached (2560D)
+    blosum: cached (5600D)
+    esm2_cdr: cached (2560D)
+    esm2_cdr3: cached (2560D)
+    aac: cached (40D)
+    esm2: cached (2560D)
+    esm2_per_cdr: cached (7680D)
+    onehot: cached (5600D)
+    esm2_mutsite: cached (1280D)
+    esm2_wt_delta: cached (2560D)
+  flab_aggregation_jain_hicrt: 137 antibodies, 137 groups, 23 reps (prot_t5=2048, prot_t5_cdr=2048, esm2_early=2560, esm2_concat=1280, esmc=2304, esmc_cdr=2304, esm3=3072, esm3_cdr=3072, esm2_layer24=2560, ablang2=480, saprot=2560, saprot_cdr=2560, esm2_per_region=17920, esm2_midlayers=2560, blosum=5600, esm2_cdr=2560, esm2_cdr3=2560, aac=40, esm2=2560, esm2_per_cdr=7680, onehot=5600, esm2_mutsite=1280, esm2_wt_delta=2560)
+
+======================================================================
+EXPERIMENT C02: COMPLEXITY MATCHING GRID
+======================================================================
+
+  --- Top-tier reps only (3/23: ['prot_t5', 'prot_t5_cdr', 'esm2_early']) ---
+Dropped budgets > n=137: [250, 500, 1000, 2000]
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/flab_aggregation_jain_hicrt__top__none__full.pkl
+
+  --- All reps, no augmentation (23 reps) ---
+  11 models x 8 budgets x 9 allocations x 3 importance
+Dropped budgets > n=137: [250, 500, 1000, 2000]
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/flab_aggregation_jain_hicrt__general__none__full.pkl
+  WARNING: No augmentation reps available — uncapped/capped conditions will be identical to no-augmentation.
+  Top-3 base reps (by RF): prot_t5=0.3636, prot_t5_cdr=0.3636, blosum=0.3610
+  rf: best_rep=prot_t5 spearman=0.3636
+  xgboost: best_rep=esm2_per_cdr spearman=0.3884
+  ridge: best_rep=prot_t5 spearman=0.5044
+  knn: best_rep=esm2_early spearman=0.3837
+  lightgbm: best_rep=esm2_early spearman=0.4785
+  mlp: best_rep=saprot spearman=0.3670
+  svm: best_rep=prot_t5 spearman=0.4905
+  gp: best_rep=prot_t5 spearman=0.2693
+  catboost: best_rep=None spearman=-inf
+  dnn: best_rep=None spearman=-inf
+  cnn: best_rep=None spearman=-inf
+
+  Computing PCA baselines...
+Traceback (most recent call last):
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/complexity/c02_complexity_grid.py", line 416, in <module>
+    results = run(data, config, args.output, args.dataset)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/complexity/c02_complexity_grid.py", line 296, in run
+    X_train_p = pca.fit_transform(X_train_s)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/utils/_set_output.py", line 319, in wrapped
+    data_to_wrap = f(self, X, *args, **kwargs)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/base.py", line 1389, in wrapper
+    return fit_method(estimator, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/decomposition/_pca.py", line 468, in fit_transform
+    U, S, _, X, x_is_centered, xp = self._fit(X)
+                                    ^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/decomposition/_pca.py", line 505, in _fit
+    X = validate_data(
+        ^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/utils/validation.py", line 2944, in validate_data
+    out = check_array(X, input_name="X", **check_params)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/utils/validation.py", line 1107, in check_array
+    _assert_all_finite(
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/utils/validation.py", line 120, in _assert_all_finite
+    _assert_all_finite_element_wise(
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/utils/validation.py", line 169, in _assert_all_finite_element_wise
+    raise ValueError(msg_err)
+ValueError: Input X contains NaN.
+PCA does not accept missing values encoded as NaN natively. For supervised learning, you might want to consider sklearn.ensemble.HistGradientBoostingClassifier and Regressor which accept missing values encoded as NaNs natively. Alternatively, it is possible to preprocess the data, for instance by using an imputer transformer in a pipeline or drop samples with missing values. See https://scikit-learn.org/stable/modules/impute.html You can find a list of all estimators that handle NaN values at the following page: https://scikit-learn.org/stable/modules/impute.html#estimators-that-handle-nan-values
+
+real	0m14.542s
+user	0m2.028s
+sys	0m1.500s
+
+==================================================================
+AFTER RUN: cache state for flab_aggregation_jain_hicrt
+==================================================================
+
+=== flab_aggregation_jain_hicrt: hybrid_eval files on disk ===
+  Total: 21735
+    __capped.pkl: 772
+    __none.pkl: 11898
+    __uncapped.pkl: 9065
+
+=== Stored aug_names distribution (sample of up to 200 per suffix) ===
+
+  __capped.pkl (200 sampled):
+    unreadable: 0
+    aug_strategy counts:
+      'capped': 200
+    aug_names counts:
+      ('mutation_features', 'paratope', 'structural'): 200
+
+  __none.pkl (200 sampled):
+    unreadable: 0
+    aug_strategy counts:
+      'none': 200
+    aug_names counts:
+      (): 200
+
+  __uncapped.pkl (200 sampled):
+    unreadable: 0
+    aug_strategy counts:
+      'uncapped': 200
+    aug_names counts:
+      ('mutation_features', 'paratope', 'structural'): 200
+
+=== Verdict for fixed c02 runs ===
+  c02 no_aug (reads __none.pkl):
+    ✓ 11898 __none.pkl files exist — probes will hit.
+  c02 uncapped (reads __uncapped.pkl):
+    ✓ All sampled __uncapped.pkl files have non-empty aug_names — c02 uncapped probes will HIT.
+  c02 capped (reads __capped.pkl):
+    ✓ 772 files exist.
+
+==================================================================
+KEY METRIC — look for [cache] lines above. Every search emits one.
+If hybrid_eval shows mostly HIT, the cache is working.
+If mostly MISS or STALE, we have a bug to chase.
+==================================================================

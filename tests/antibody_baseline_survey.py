@@ -251,7 +251,7 @@ def _assign_groups(heavy_seqs, light_seqs, strategy, data):
         # Fallback if no fold assignments
         print("    WARNING: pre_split strategy but no fold_assignments, "
               "falling back to identity")
-        return _identity_groups(heavy_seqs)
+        return _identity_groups(heavy_seqs, light_seqs)
     elif strategy == 'edit_distance':
         # Group by edit distance from wildtype (preserves distribution across folds)
         ed = data.get('edit_distances')
@@ -259,7 +259,7 @@ def _assign_groups(heavy_seqs, light_seqs, strategy, data):
             groups = np.asarray(ed, dtype=int)
             return groups, len(np.unique(groups))
         # Fallback
-        return _identity_groups(heavy_seqs)
+        return _identity_groups(heavy_seqs, light_seqs)
     elif strategy == 'complex':
         from kirby.datasets.ddg_combined import assign_complex_groups
         pdb_ids = data.get('pdb_ids', [])
@@ -275,7 +275,7 @@ def _assign_groups(heavy_seqs, light_seqs, strategy, data):
             groups = np.array([label_to_id[l] for l in exp_labels])
             return groups, len(unique)
         # Fallback: identity groups
-        return _identity_groups(heavy_seqs)
+        return _identity_groups(heavy_seqs, light_seqs)
     elif strategy == 'position_modulo':
         # DMS/SSM data: group by mutation position (ProteinGym standard).
         # Prevents same-position leakage where mutations at the same residue
@@ -289,9 +289,9 @@ def _assign_groups(heavy_seqs, light_seqs, strategy, data):
             print("    WARNING: <3 position groups, falling back to identity")
         else:
             print("    WARNING: no mutation data, falling back to identity")
-        return _identity_groups(heavy_seqs)
+        return _identity_groups(heavy_seqs, light_seqs)
     else:  # identity
-        return _identity_groups(heavy_seqs)
+        return _identity_groups(heavy_seqs, light_seqs)
 
 
 def _rep_cache_path(heavy_seqs: List[str], light_seqs: List[str],
@@ -311,20 +311,26 @@ def _rep_cache_path(heavy_seqs: List[str], light_seqs: List[str],
     return cache_dir / f'{rep_name}.npy'
 
 
-def _identity_groups(seqs, min_groups=3):
+def _identity_groups(heavy_seqs, light_seqs=None, min_groups=3):
     """Assign CV groups by sequence NEAR-identity (ISS-29 leakage fix).
 
-    Was exact-byte-identity grouping, which put single-residue analogs into
-    DIFFERENT groups → near-duplicate pairs leaked across the GroupKFold
+    Groups any two antibodies with >= 95% sequence identity into the same fold
+    (single-linkage), so near-duplicates can't straddle the GroupKFold
     train/test boundary (measured: 87% of near-dup pairs spanned a fold on
-    flab_thermo_tresanco). Now delegates to sequence_identity_clusters, which
-    keeps any pair with normalised identity >= 0.95 in the same cluster
-    (single-linkage), so near-duplicates stay on one side of every fold. The
-    helper keeps the same min_groups hash-bucket fallback for degenerate panels.
-    NOTE (follow-up, NEW issue): for paired datasets this still receives the
-    heavy chain only; pass heavy+light concatenated to also catch
-    light-chain-only near-duplicates.
+    flab_thermo_tresanco under the old exact-identity grouping).
+
+    Uses BOTH chains (heavy + light concatenated) for paired datasets, matching
+    OPIG practice: Kenlay et al. "Large scale paired antibody language models"
+    (PLOS Comput Biol 2024) cluster paired antibodies at 95% identity on the
+    concatenated heavy+light sequence; AbLang2 (Olsen et al. 2024) likewise uses
+    both chains. For UNPAIRED datasets light_seqs is empty strings, so the
+    concatenation reduces to heavy-only (no behaviour change). Updated 2026-06-05
+    (NEW-O5) from heavy-only after reading the OPIG papers.
     """
+    if light_seqs is not None:
+        seqs = [(h or '') + (l or '') for h, l in zip(heavy_seqs, light_seqs)]
+    else:
+        seqs = heavy_seqs
     from experiments._shared import sequence_identity_clusters
     return sequence_identity_clusters(seqs, identity_threshold=0.95,
                                       min_groups=min_groups)

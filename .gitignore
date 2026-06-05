@@ -130,6 +130,14 @@ gdc-client
 gdc-client_v1.6.1_*
 *.hdf5
 
+# Local Claude Code state (machine-local, not project code)
+.claude/
+
+# Temporary smoke/workflow scratch dirs (agent/tool artifacts)
+.tmp_wf/
+.tmp_smoke_opig/
+.tmp_smoke*/
+
 # Git LFS (if you use it for large files)
 *.lfs
 
@@ -152,3 +160,6 @@ bin/
 !SETUP.md
 !SETUP_PRETRAINED_MODELS.md
 experiment_extension.txt
+
+# Manuscript bibliography (worked on locally, compiled elsewhere)
+sn_bibliography.bib

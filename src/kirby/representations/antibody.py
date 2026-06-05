@@ -1269,18 +1269,21 @@ def embed_igt5(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
 
 
 def embed_s2alm(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
-    """S2ALM (Structure and Sequence Aligned Language Model) embeddings.
+    """S2ALM antibody language model embeddings — SCAFFOLD.
 
-    S2ALM is an ESM-2 architecture model jointly trained on protein
-    structure and sequence. Produces 2560D embeddings (H+L concat).
-
-    NOTE: This function is a stub — S2ALM weights may not be publicly
-    available. Will raise NotImplementedError until weights are confirmed.
+    S2ALM (sequence-structure antibody LM) — public weights are not confirmed
+    available. This is a graceful-skip shell: it raises a clear error so the
+    per-rep loader skips it (flagged, not dropped). Wire the real model here
+    once weights are confirmed.
+    NOTE: not runnable — needs confirmed S2ALM weights.
     """
+    try:
+        import s2alm  # noqa: F401
+    except ImportError:
+        pass
     raise NotImplementedError(
-        "S2ALM weights are not yet publicly available. "
-        "This rep is blocked until weights are confirmed on HuggingFace or "
-        "another public source. See ISSUES.md Phase 4A."
+        "S2ALM embedding is not wired: public weights are unconfirmed. "
+        "Confirm the model + weights source, then implement here."
     )
 
 
@@ -1303,36 +1306,6 @@ def embed_prosst(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
     l_embs = create_prosst_protein_embeddings(list(light_seqs))
     return _concat_hl(h_embs, l_embs, light_seqs)
 
-
-def embed_igblend(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
-    """IgBlend embeddings: multi-modal (sequence + 3D structure) → (N, D).
-
-    IgBlend (bioRxiv 2024) fuses an antibody sequence encoder with a 3D
-    structure encoder (512D structure embedding), trained on 4M structures +
-    200M sequences. It is a research repo (not pip/HF), and the structure
-    branch needs per-antibody 3D coordinates.
-
-    Requires: the IgBlend code + weights from
-    https://www.biorxiv.org/content/10.1101/2024.10.01.615796v2 (repo link in
-    paper) and per-antibody structures for the structure branch.
-    Status: SCAFFOLD — blocked on the IgBlend repo/weights + structures.
-    Step to finish: install IgBlend, predict/collect Fv structures, call its
-    encoder and concatenate the sequence + 512D structure embeddings.
-    """
-    try:
-        import igblend  # noqa: F401
-    except ImportError:
-        raise ImportError(
-            "IgBlend is a research model (not on PyPI). Obtain the code + "
-            "weights from the paper "
-            "(https://www.biorxiv.org/content/10.1101/2024.10.01.615796v2) "
-            "and provide per-antibody 3D structures for the structure branch."
-        )
-    raise NotImplementedError(
-        "IgBlend embedding extraction is not wired: it needs the IgBlend repo "
-        "and per-antibody 3D structures for the structure encoder. See the "
-        "paper for the code/weights link."
-    )
 
 
 # ── Structural features (from structural.py) ─────────────────────────────────
@@ -1615,6 +1588,168 @@ def make_esm2_entropy_factory(heavy_seqs: List[str], light_seqs: List[str]):
     return factory
 
 
+# ── Antibody LM fine-tuning (LoRA) ───────────────────────────────────────────
+#
+# Real per-fold, leakage-safe fine-tuning lives in
+# `kirby.finetuning.antibody_lora.make_antibody_lora_factory`: it LoRA-adapts a
+# protein/antibody LM on the TRAIN sequences+labels of each fold and extracts
+# mean-pooled embeddings for both train and val from the fine-tuned model. The
+# heavy weights / GPU / `transformers` / `peft` deps are NOT available in every
+# environment, so the wiring below mirrors the `embed_s2alm` graceful-skip
+# convention: the code path exists and is registered, but raises a clear,
+# actionable error (rather than crashing) when a dependency is missing, so the
+# per-rep loader flags-and-skips the rep instead of dropping it silently.
+
+# Supported fine-tune base models and the embedding-fitness rep dimension each
+# fine-tuned heavy-chain extractor produces (see antibody_lora._MODEL_CONFIGS).
+_FT_BASE_MODELS = {
+    'esm2': 1280,
+    'esmc': 1152,
+    'esm3': 1536,
+    'saprot': 1280,
+    'prott5': 1024,
+    'amplify': 960,
+    'abroberta': 768,
+    'mint': 1280,
+}
+
+
+def _require_ft_deps(base_model: str) -> None:
+    """Raise a clear, actionable error if antibody LM fine-tuning can't run.
+
+    Graceful-skip gate (mirrors `embed_s2alm`): the per-rep loader catches this
+    and flags-and-skips the rep rather than crashing the whole survey. Triggers
+    when torch / transformers / peft are not importable, when no GPU is present
+    (LoRA fine-tuning per fold is GPU-bound), or when the requested base model
+    is unknown / its weights are unavailable.
+    """
+    if base_model not in _FT_BASE_MODELS:
+        raise NotImplementedError(
+            f"Antibody LM fine-tuning base_model '{base_model}' is not wired. "
+            f"Available base models: {sorted(_FT_BASE_MODELS)}."
+        )
+    missing = []
+    try:
+        import torch  # noqa: F401
+    except ImportError:
+        missing.append('torch')
+    try:
+        import transformers  # noqa: F401
+    except ImportError:
+        missing.append('transformers')
+    try:
+        import peft  # noqa: F401
+    except ImportError:
+        missing.append('peft')
+    if missing:
+        raise ImportError(
+            f"Antibody LM fine-tuning (base_model='{base_model}') needs "
+            f"{', '.join(missing)}. Install with `pip install {' '.join(missing)}` "
+            f"on a GPU node, then re-run. Skipping this rep until available."
+        )
+    # GPU check — per-fold LoRA fine-tuning is not feasible on CPU.
+    import torch
+    if not torch.cuda.is_available():
+        raise NotImplementedError(
+            f"Antibody LM fine-tuning (base_model='{base_model}') requires a "
+            f"CUDA GPU (per-fold LoRA fine-tune of a protein LM is GPU-bound); "
+            f"none detected. Run on a GPU node. Skipping this rep until available."
+        )
+
+
+def make_antibody_ft_factory(
+    heavy_seqs: List[str],
+    light_seqs: List[str],
+    dataset_name: str,
+    base_model: str = 'esm2',
+    lora_rank: int = 8,
+    lora_alpha: int = 16,
+    epochs: int = 5,
+    lr: float = 2e-5,
+    batch_size: int = 8,
+    cache: bool = True,
+):
+    """Per-fold, leakage-safe antibody LM fine-tuning factory.
+
+    Returns a factory `(train_idx, val_idx, train_labels) -> (train_embs,
+    val_embs)` that LoRA fine-tunes `base_model` on the fold's TRAIN sequences +
+    labels ONLY, then extracts mean-pooled embeddings for train and val from the
+    fine-tuned model. Leakage is avoided because the fit only ever sees
+    `train_idx` (val sequences are embedded by the already-fitted model, never
+    used for the gradient step or early-stopping holdout); each fold trains a
+    fresh adapter keyed on `train_idx` in the disk cache.
+
+    Fine-tuning is parameter-efficient (LoRA on attention query/value
+    projections) rather than full fine-tune — far cheaper per fold and the
+    convention already established by `kirby.finetuning.antibody_lora`.
+
+    Graceful-skip: raises ImportError (torch/transformers/peft missing) or
+    NotImplementedError (no CUDA GPU, or unknown base_model / unavailable
+    weights) with an actionable message — the per-rep loader flags-and-skips.
+
+    Supported base_model values: esm2 (1280D), esmc (1152D), esm3 (1536D),
+    saprot (1280D), prott5 (1024D), amplify (960D), abroberta (768D),
+    mint (1280D).
+    """
+    _require_ft_deps(base_model)
+    from kirby.finetuning.antibody_lora import make_antibody_lora_factory
+    return make_antibody_lora_factory(
+        heavy_seqs=heavy_seqs,
+        light_seqs=light_seqs,
+        dataset_name=dataset_name,
+        base_model=base_model,
+        lora_rank=lora_rank,
+        lora_alpha=lora_alpha,
+        epochs=epochs,
+        lr=lr,
+        batch_size=batch_size,
+        cache=cache,
+    )
+
+
+def embed_esm2_ft(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """ESM-2 fine-tuning antibody rep (`esm2_ft`) — graceful-skip stub.
+
+    Fine-tuning is inherently per-fold (fit on train only), so the real path is
+    the factory `make_antibody_ft_factory(base_model='esm2')`, which the
+    experiment harness must call with fold indices. The plain
+    `(heavy_seqs, light_seqs)->(N,D)` signature used by `ANTIBODY_REPS` has no
+    train/val split, so calling it here always raises — mirroring `embed_s2alm`
+    so the per-rep loader flags-and-skips the static-embedding path and routes
+    fine-tuning through the factory instead.
+
+    See `make_antibody_ft_factory` for the runnable, leakage-safe entry point
+    and its dependency / GPU graceful-skip behaviour.
+    """
+    _require_ft_deps('esm2')
+    raise NotImplementedError(
+        "esm2_ft is a fine-tuning rep and must be run per-fold via "
+        "make_antibody_ft_factory(base_model='esm2'); it has no static "
+        "(heavy_seqs, light_seqs)->embedding path."
+    )
+
+
+def embed_ablang2_ft(heavy_seqs: List[str], light_seqs: List[str]) -> np.ndarray:
+    """AbLang2 fine-tuning antibody rep (`ablang2_ft`) — graceful-skip stub.
+
+    AbLang2 is a paired antibody LM exposed through the `ablang2` package rather
+    than a `transformers` AutoModel, so it is not yet in the LoRA factory's
+    model table. This stub raises a clear error until an AbLang2 LoRA/adapter
+    fine-tune path is wired (mirrors `embed_s2alm`); the per-rep loader
+    flags-and-skips it meanwhile.
+    """
+    try:
+        import ablang2  # noqa: F401
+    except ImportError:
+        pass
+    raise NotImplementedError(
+        "ablang2_ft (AbLang2 fine-tuning) is not wired: AbLang2 is served via "
+        "the `ablang2` package, not a transformers/peft AutoModel, so it is "
+        "absent from antibody_lora._MODEL_CONFIGS. Add an AbLang2 LoRA/adapter "
+        "fine-tune path there, then route this through make_antibody_ft_factory."
+    )
+
+
 # ── Pair-level deduplication wrapper ──────────────────────────────────────────
 
 def _dedup_embed(fn):
@@ -1654,8 +1789,11 @@ ANTIBODY_REPS = {
     'esm2': embed_esm2,                # 2560D
     'esmc': embed_esmc,                # 2304D
     'ablang2': embed_ablang2,           # 768D
-    'igbert': embed_igbert,             # 768D
-    'igbert_cls': embed_igbert_cls,     # 768D ([CLS] pooling)
+    # REMOVED from default list (NEW-O2, 2026-06-05): empirically dead —
+    # NaN/near-zero, CI=0.5 (random); already excluded by the complexity
+    # experiments (complexity_helpers.py:77-78). Functions kept for recovery.
+    # 'igbert': embed_igbert,             # 768D
+    # 'igbert_cls': embed_igbert_cls,     # 768D ([CLS] pooling)
     'antiberty': embed_antiberty,       # 1024D
     'prot_t5': embed_prot_t5,           # 2048D
     'onehot': onehot_encode,            # 5600D
@@ -1682,8 +1820,9 @@ ANTIBODY_REPS = {
     # SaProt (structure-aware, ProstT5 for 3Di, 1280D per chain)
     'saprot': embed_saprot,                  # 2560D (1280 × 2)
     'saprot_cdr': embed_saprot_cdr,          # 2560D (CDR-pooled)
-    # MINT (protein foundation model, 1280D per chain)
-    'mint': embed_mint,                      # 2560D (1280 × 2)
+    # MINT — REMOVED from default list (NEW-O2, 2026-06-05): empirically dead
+    # (CI=0.5 random; complexity_helpers.py:649). Function kept for recovery.
+    # 'mint': embed_mint,                      # 2560D (1280 × 2)
     # Entropy/region-aware pooling
     'esm2_entropy_top20': embed_esm2_entropy_top20,  # 2560D
     'esm2_per_cdr': embed_esm2_per_cdr,              # 7680D
@@ -1697,34 +1836,41 @@ ANTIBODY_REPS = {
     # Ab-RoBERTa (mogam-ai, RoBERTa-based, 768D per chain)
     'abroberta': embed_abroberta,                    # 1536D (768 × 2)
     'abroberta_cdr': embed_abroberta_cdr,            # 1536D (CDR-pooled)
-    # AIDO.Protein-16B (GenBio AI, MoE, 2304D per chain)
-    'aido_protein': embed_aido_protein,              # 4608D (2304 × 2)
-    # xTrimoPGLM-1B (BioMap, 1B MLM, ~2048D per chain)
-    'xtrimopglm': embed_xtrimopglm,                  # ~4096D (2048 × 2)
+    # AIDO.Protein-16B + xTrimoPGLM — REMOVED from default list (NEW-O2,
+    # 2026-06-05): empirically dead (NaN/near-zero on all datasets;
+    # complexity_helpers.py:78,484). Functions kept for recovery.
+    # 'aido_protein': embed_aido_protein,              # 4608D (2304 × 2)
+    # 'xtrimopglm': embed_xtrimopglm,                  # ~4096D (2048 × 2)
     # ProSST (structure-aware, NeurIPS 2024; sequence-only path until
     # structure tokens supplied — see embed_prosst docstring)
     'prosst': embed_prosst,                          # 2*hidden (H+L)
-    # IgBlend (multi-modal seq+structure) — SCAFFOLD, blocked on repo+structures
-    'igblend': embed_igblend,                        # structure branch needed
+    # S2ALM removed from the default list 2026-06-05 (weights unconfirmed → it
+    # raised on every antibody run; embed_s2alm kept on the shelf for recovery).
+    # Antibody LM fine-tuning (LoRA, per-fold leakage-safe). Static-embedding
+    # entries are graceful-skip stubs (raise until deps+GPU present, so the
+    # loader flags-and-skips); the runnable path is make_antibody_ft_factory.
+    'esm2_ft': embed_esm2_ft,                        # 1280D (LoRA ESM-2)
+    'ablang2_ft': embed_ablang2_ft,                  # AbLang2 LoRA (not yet wired)
 }
 
 # LM reps (require GPU / torch / transformers)
 ANTIBODY_LM_REPS = {
-    'esm2', 'esmc', 'ablang2', 'igbert', 'igbert_cls', 'antiberty', 'prot_t5',
+    # NEW-O2 (2026-06-05): igbert, igbert_cls, mint, aido_protein, xtrimopglm
+    # removed from the default ANTIBODY_REPS (empirically dead) → dropped here too.
+    'esm2', 'esmc', 'ablang2', 'antiberty', 'prot_t5',
     'esm2_cdr', 'esmc_cdr', 'antiberty_cdr', 'prot_t5_cdr',
     'esm2_midlayers', 'amplify', 'amplify_cdr',
     'igt5',
     'esm3', 'esm3_cdr',
     'saprot', 'saprot_cdr',
-    'mint',
     'esm2_entropy_top20', 'esm2_per_cdr', 'esm2_per_region',
     'esm2_layer24', 'esm2_early',
     'esm2_concat', 'esm2_cdr3',
     'abroberta', 'abroberta_cdr',
-    'aido_protein',
-    'xtrimopglm',
     'prosst',
-    'igblend',
+    # Fine-tuning reps (LoRA; need torch+transformers+peft+GPU — graceful-skip
+    # otherwise). Runnable path is make_antibody_ft_factory; static stubs raise.
+    'esm2_ft', 'ablang2_ft',
 }
 
 # Structural reps (require ImmuneBuilder + biopython, CPU-heavy)

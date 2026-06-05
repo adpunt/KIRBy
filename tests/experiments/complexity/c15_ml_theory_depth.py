@@ -513,7 +513,7 @@ def _run_double_descent(data, config, dataset_name=None):
                 },
                 budgets=[_b],
                 task_type='regression', metric=metric_name,
-                speed='fast', seed=42, n_folds=n_folds,
+                speed='full', seed=42, n_folds=n_folds,
                 cache=True,
                 dataset_name=f"{dataset_name}__c15c_b{_b}",
                 tier='c15c_fast',

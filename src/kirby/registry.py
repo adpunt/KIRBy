@@ -161,6 +161,7 @@ DATASET_REGISTRY: Dict[str, DatasetInfo] = {
     'davis':            DatasetInfo('davis',        'regression', 'ci', False, 'dta'),
     'kiba':             DatasetInfo('kiba',         'regression', 'ci', False, 'dta'),
     'bindingdb_kd':     DatasetInfo('bindingdb_kd', 'regression', 'ci', False, 'dta', notes='TDC BindingDB_Kd, ~52K pairs.'),
+    'metz':             DatasetInfo('metz',         'regression', 'ci', False, 'dta', notes='TDC Metz kinase Ki, ~35K pairs. TDC name "Metz".'),
 
     # ── OPIG meta-entries ────────────────────────────────────────────────
     # These cover experiment "families" that use the same underlying loader

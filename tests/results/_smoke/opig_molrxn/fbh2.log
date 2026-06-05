@@ -1,0 +1,20 @@
+  [SMOKE] capped to first 120 compounds
+  Dopamine D2 receptor: 120 compounds, pActivity range [4.25, 8.76] (from Ki [nM])
+  25 MMP pairs, 1 activity cliffs (|delta pActivity| >= 2.0)
+
+Generating 2 base representations (+ 0 per-fold factory reps)...
+  ecfp4: loaded from cache (2048 features)
+  maccs: loaded from cache (167 features)
+start search
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp', 'svm', 'gp']
+Representations: ['ecfp4', 'maccs'] (dims: [2048, 167])
+
+Evaluating full-dimension baselines...
+  ecfp4 (dim=2048): rf=0.662, xgboost=0.645, ridge=0.655, knn=0.742, lightgbm=0.760, mlp=1.186, svm=0.658, gp=0.628
+  maccs (dim=167): rf=0.684, xgboost=0.671, ridge=0.721, knn=0.749, lightgbm=0.706, mlp=1.188, svm=0.702, gp=0.656
+  Skipping top_2: k=2 >= n_reps=2 (equivalent to performance_weighted)
+  Skipping top_3: k=3 >= n_reps=2 (equivalent to performance_weighted)
+  Skipping top_5: k=5 >= n_reps=2 (equivalent to performance_weighted)
+
+Searching 144 unique configurations (full mode)...
+  Pre-computing importance: 3 methods × 5 folds × 2 reps...

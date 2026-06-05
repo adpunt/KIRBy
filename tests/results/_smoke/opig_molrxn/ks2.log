@@ -1,0 +1,96 @@
+======================================================================
+COMPONENT-WISE EXTRAPOLATION EXPERIMENT
+  King-Smith et al. (2024), Saebi et al. (2024)
+  Datasets: ['buchwald_hartwig']
+  Split axes: ['ligand']
+  Models: ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm']
+  Folds: TRUE LOO (n_folds == n_groups per split)
+======================================================================
+
+============================================================
+Dataset: buchwald_hartwig
+============================================================
+  Parsing Buchwald-Hartwig Excel...
+  Buchwald-Hartwig: 3955 reactions, 22 additive groups, yield range [0.0, 100.0]
+  [SMOKE] KIRBY_SMOKE_N=150: capped 3955 -> 150 reactions before rep gen
+  Loading ReactionT5 (sagawa/ReactionT5v2-forward)...
+  Generated ReactionT5 embeddings: (150, 768)
+  reactiont5: (150, 768)
+  WARNING: drfp_2048 failed: No module named 'drfp'
+  diff_ecfp4: (150, 2048)
+  reactant_pdv: (150, 208)
+  WARNING: rxnfp failed: No module named 'rxnfp'
+  reactant_ecfp4: (150, 2048)
+  onehot_components: (150, 45)
+  diff_maccs: (150, 167)
+
+  --- Split: leave-one-ligand-out (4 groups, 4-fold TRUE LOO) ---
+  Building KIRBy hybrid per fold (4 folds, train-only) ...
+  [buchwald_hartwig/loo_ligand/fold0] pruning_mode=default_pruning (no per-model overrides)
+Dropped budgets > n=110: [150, 300]; added n=110 as at-n boundary
+    fold 0: find_best_hybrid failed: find_best_hybrid(cache=True) requires tier=... (e.g. 'general', 'top', 'general_distance')
+  [buchwald_hartwig/loo_ligand/fold1] pruning_mode=default_pruning (no per-model overrides)
+Dropped budgets > n=112: [150, 300]; added n=112 as at-n boundary
+    fold 1: find_best_hybrid failed: find_best_hybrid(cache=True) requires tier=... (e.g. 'general', 'top', 'general_distance')
+  [buchwald_hartwig/loo_ligand/fold2] pruning_mode=default_pruning (no per-model overrides)
+Dropped budgets > n=113: [150, 300]; added n=113 as at-n boundary
+    fold 2: find_best_hybrid failed: find_best_hybrid(cache=True) requires tier=... (e.g. 'general', 'top', 'general_distance')
+  [buchwald_hartwig/loo_ligand/fold3] pruning_mode=default_pruning (no per-model overrides)
+Dropped budgets > n=115: [150, 300]; added n=115 as at-n boundary
+    fold 3: find_best_hybrid failed: find_best_hybrid(cache=True) requires tier=... (e.g. 'general', 'top', 'general_distance')
+  Evaluating 6 base reps x 6 models x 4-fold LOO...
+    diff_ecfp4                rf        R2=0.0962  RMSE=22.96  (1.4s)
+    diff_ecfp4                xgboost   R2=0.0790  RMSE=21.88  (1.6s)
+    diff_ecfp4                ridge     R2=-0.1391  RMSE=23.42  (0.1s)
+    diff_ecfp4                svm       R2=-0.2137  RMSE=28.16  (0.1s)
+    diff_ecfp4                mlp       R2=-0.1505  RMSE=24.68  (32.5s)
+    diff_ecfp4                lightgbm  R2=0.1086  RMSE=21.36  (0.3s)
+    diff_maccs                rf        R2=-0.1398  RMSE=24.65  (1.3s)
+    diff_maccs                xgboost   R2=-0.1410  RMSE=24.29  (0.4s)
+    diff_maccs                ridge     R2=-0.7777  RMSE=26.90  (0.1s)
+    diff_maccs                svm       R2=-0.2257  RMSE=28.29  (0.0s)
+    diff_maccs                mlp       R2=0.0176  RMSE=22.73  (5.7s)
+    diff_maccs                lightgbm  R2=-0.7551  RMSE=27.00  (0.1s)
+    onehot_components         rf        R2=0.2258  RMSE=21.71  (1.3s)
+    onehot_components         xgboost   R2=0.1724  RMSE=20.54  (0.2s)
+    onehot_components         ridge     R2=0.0705  RMSE=21.54  (0.1s)
+    onehot_components         svm       R2=-0.2239  RMSE=28.28  (0.0s)
+    onehot_components         mlp       R2=0.1018  RMSE=23.60  (3.5s)
+    onehot_components         lightgbm  R2=-0.1322  RMSE=26.95  (0.1s)
+    reactant_ecfp4            rf        R2=0.0919  RMSE=22.64  (1.7s)
+    reactant_ecfp4            xgboost   R2=-0.0991  RMSE=22.40  (1.7s)
+    reactant_ecfp4            ridge     R2=-0.0673  RMSE=22.40  (0.1s)
+    reactant_ecfp4            svm       R2=-0.2218  RMSE=28.22  (0.2s)
+    reactant_ecfp4            mlp       R2=-0.6104  RMSE=29.52  (11.2s)
+    reactant_ecfp4            lightgbm  R2=0.0152  RMSE=21.15  (0.3s)
+    reactant_pdv              rf        R2=-0.2035  RMSE=25.66  (1.8s)
+    reactant_pdv              xgboost   R2=-0.5086  RMSE=27.08  (1.8s)
+    reactant_pdv              ridge     R2=-224.0254  RMSE=238.91  (0.1s)
+    reactant_pdv              svm       R2=-0.2248  RMSE=28.29  (0.0s)
+    reactant_pdv              mlp       R2=-124.7497  RMSE=172.03  (6.5s)
+    reactant_pdv              lightgbm  R2=-0.4405  RMSE=25.25  (0.3s)
+    reactiont5                rf        R2=-0.3221  RMSE=27.59  (2.0s)
+    reactiont5                xgboost   R2=-0.0165  RMSE=24.37  (10.6s)
+    reactiont5                ridge     R2=-0.5118  RMSE=24.42  (0.1s)
+    reactiont5                svm       R2=-0.2685  RMSE=28.70  (0.1s)
+    reactiont5                mlp       R2=0.0728  RMSE=23.71  (3.5s)
+    reactiont5                lightgbm  R2=-0.2982  RMSE=26.39  (1.4s)
+
+====================================================================================================
+COMPONENT-WISE EXTRAPOLATION ANALYSIS (King-Smith et al. 2024)
+====================================================================================================
+
+  Dataset: buchwald_hartwig (150 reactions)
+  Split key       #Groups Best base                       R2  Hybrid R2    Delta
+  --------------- ------- ------------------------- -------- ---------- --------
+  additive              — SKIPPED                          —          —        —  (not run)
+  aryl_halide           — SKIPPED                          —          —        —  (not run)
+  ligand                4 onehot_components           0.2258        ---      ---
+  base                  — SKIPPED                          —          —        —  (not run)
+
+  Key question: does the hybrid maintain its advantage as split
+  difficulty increases (additive > aryl_halide > ligand > base)?
+  If hybrid delta stays positive or grows, it suggests the hybrid
+  captures complementary chemical info that aids extrapolation.
+
+Results saved: tests/results/_smoke/opig_molrxn/ks2.json

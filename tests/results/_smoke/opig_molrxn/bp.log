@@ -1,0 +1,100 @@
+  Loaded 5028 molecules from OpenADMET-LogD
+    ecfp4: cached (2048D)
+    pdv: cached (200D)
+    Computing representations...
+
+Generating 3 base representations (+ 0 per-fold factory reps)...
+  ecfp4: loaded from cache (2048 features)
+  maccs: loaded from cache (167 features)
+  pdv: loaded from cache (200 features)
+    ecfp4: computed + cached (2048D)
+    maccs: computed + cached (167D)
+    pdv: computed + cached (200D)
+  logd: 5028 samples, 2413 scaffolds, 2 reps (ecfp4=2048, pdv=200)
+  [SMOKE] KIRBY_SMOKE_N=100: subsampled 5028 -> 100 rows
+  Loading cached ChEMBL hERG Ki from /Users/apunt/.cache/kirby/chembl_herg_ki.csv
+  Loaded 1415 molecules from ChEMBL-hERG-Ki (pKi)
+  InChIKey dedup: 1415 → 1412 (3 duplicates removed)
+    ecfp4: cached (2048D)
+    pdv: cached (200D)
+    Computing representations...
+
+Generating 3 base representations (+ 0 per-fold factory reps)...
+  ecfp4: loaded from cache (2048 features)
+  maccs: loaded from cache (167 features)
+  pdv: loaded from cache (200 features)
+    ecfp4: computed + cached (2048D)
+    maccs: computed + cached (167D)
+    pdv: computed + cached (200D)
+  herg_ki: 1412 samples, 769 scaffolds, 2 reps (ecfp4=2048, pdv=200)
+  [SMOKE] KIRBY_SMOKE_N=100: subsampled 1412 -> 100 rows
+
+======================================================================
+OPIG C5: CROSS-DATASET BLUEPRINT TRANSFER
+  Source: logd (100 samples)
+  Target: herg_ki (100 samples)
+======================================================================
+
+  Shared reps (2): ecfp4, pdv
+  Metric: rmse (lower is better)
+  [logd] pruning_mode=default_pruning (no per-model overrides)
+  [herg_ki] pruning_mode=default_pruning (no per-model overrides)
+
+  Step 1: Hybrid search on source (logd)
+[cache] cache stats — search: 0 hit / 1 miss / 0 stale; baseline: 0 hit / 16 miss / 0 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+
+  Step 2: Hybrid search on target (herg_ki)
+[cache] cache stats — search: 0 hit / 2 miss / 0 stale; baseline: 0 hit / 32 miss / 0 stale; hybrid_eval: 0 hit / 0 miss / 0 stale
+
+  Step 3: Per-model evaluation (1-fold CV)
+  Models available from search: ['rf', 'ridge']
+
+    rf:
+      Source BP: budget=10, alloc=rank_exp_d0.5, imp=treeshap, eval=mlp
+      Target BP: budget=25, alloc=rank_exp_d0.5, imp=treeshap, eval=mlp
+      Source blueprint feature selection:
+        ecfp4: 4/2048
+        pdv: 6/200
+      Best base rep (target): pdv
+      Best base rep (source): pdv
+      Target evaluation (herg_ki):
+        Fold 0: base=0.6923 (pdv), native=0.7174, recipe=0.7267, full=0.7619
+      Source evaluation (logd):
+        Fold 0: base=0.8402, hybrid=0.6931
+
+    ridge:
+      Source BP: budget=100, alloc=rank_linear, imp=treeshap, eval=mlp
+      Target BP: budget=100, alloc=rank_linear, imp=lightgbm_gain, eval=ridge
+      Source blueprint feature selection:
+        ecfp4: 33/2048
+        pdv: 67/200
+      Best base rep (target): ecfp4
+      Best base rep (source): pdv
+      Target evaluation (herg_ki):
+        Fold 0: base=0.6453 (ecfp4), native=0.8124, recipe=0.6428, full=0.6682
+      Source evaluation (logd):
+        Fold 0: base=0.9049, hybrid=0.7476
+
+  ==========================================================================================
+  CROSS-DATASET BLUEPRINT TRANSFER SUMMARY
+  Source: logd -> Target: herg_ki
+  Metric: rmse (↓ better)
+  ==========================================================================================
+
+  Source (logd):
+  Model              Base     Hybrid      Delta
+  ------------------------------------------
+  rf               0.8402     0.6931    +0.1471
+  ridge            0.9049     0.7476    +0.1573
+
+  Target (herg_ki):
+  Model              Base     Native     Recipe       Full   d(Rec)  d(Full)
+  ------------------------------------------------------------------------------
+  rf               0.6923     0.7174     0.7267     0.7619  -0.0344  -0.0696
+  ridge            0.6453     0.8124     0.6428     0.6682  +0.0025  -0.0229
+
+  Mean delta recipe: -0.0160  (wins 1/2 models)
+  Mean delta full:   -0.0462  (wins 0/2 models)
+
+  RESULT: Blueprint does NOT transfer reliably. Hybrid is dataset-specific for this pair.
+  [saved tests/results/_smoke/opig_molrxn/opig_blueprint_transfer/logd_to_herg_ki.json]

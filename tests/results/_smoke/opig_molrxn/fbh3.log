@@ -1,0 +1,30 @@
+Traceback (most recent call last):
+  File "<string>", line 14, in <module>
+  File "/Users/apunt/repos/KIRBy/tests/find_best_hybrid_molecular.py", line 48, in <module>
+    from kirby.find_best_hybrid import find_best_hybrid, SearchResult, Blueprint
+  File "/Users/apunt/repos/KIRBy/src/kirby/find_best_hybrid.py", line 46, in <module>
+    from sklearn.metrics import (
+  File "/Users/apunt/anaconda3/lib/python3.11/site-packages/sklearn/__init__.py", line 70, in <module>
+    from sklearn.base import clone  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/apunt/anaconda3/lib/python3.11/site-packages/sklearn/base.py", line 19, in <module>
+    from sklearn.utils._metadata_requests import _MetadataRequester, _routing_enabled
+  File "/Users/apunt/anaconda3/lib/python3.11/site-packages/sklearn/utils/__init__.py", line 9, in <module>
+    from sklearn.utils._chunking import gen_batches, gen_even_slices
+  File "/Users/apunt/anaconda3/lib/python3.11/site-packages/sklearn/utils/_chunking.py", line 11, in <module>
+    from sklearn.utils._param_validation import Interval, validate_params
+  File "/Users/apunt/anaconda3/lib/python3.11/site-packages/sklearn/utils/_param_validation.py", line 17, in <module>
+    from sklearn.utils.validation import _is_arraylike_not_scalar
+  File "/Users/apunt/anaconda3/lib/python3.11/site-packages/sklearn/utils/validation.py", line 14, in <module>
+    import joblib
+  File "/Users/apunt/anaconda3/lib/python3.11/site-packages/joblib/__init__.py", line 122, in <module>
+    from .parallel import (
+  File "/Users/apunt/anaconda3/lib/python3.11/site-packages/joblib/parallel.py", line 583, in <module>
+    DEFAULT_MP_CONTEXT = mp.get_context(method=method)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/context.py", line 243, in get_context
+    return super().get_context(method)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/apunt/anaconda3/lib/python3.11/multiprocessing/context.py", line 193, in get_context
+    raise ValueError('cannot find context for %r' % method) from None
+ValueError: cannot find context for 'threading'

@@ -1,0 +1,21 @@
+======================================================================
+COMPONENT-WISE EXTRAPOLATION EXPERIMENT
+  King-Smith et al. (2024), Saebi et al. (2024)
+  Datasets: ['buchwald_hartwig']
+  Split axes: ['ligand']
+  Models: ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm']
+  Folds: TRUE LOO (n_folds == n_groups per split)
+======================================================================
+
+============================================================
+Dataset: buchwald_hartwig
+============================================================
+  Parsing Buchwald-Hartwig Excel...
+  Buchwald-Hartwig: 3955 reactions, 22 additive groups, yield range [0.0, 100.0]
+  WARNING: rxnfp failed: No module named 'rxnfp'
+  reactant_pdv: (3955, 208)
+  WARNING: drfp_2048 failed: No module named 'drfp'
+  onehot_components: (3955, 45)
+  diff_ecfp4: (3955, 2048)
+  reactant_ecfp4: (3955, 2048)
+  Loading ReactionT5 (sagawa/ReactionT5v2-forward)...

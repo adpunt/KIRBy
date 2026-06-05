@@ -33,6 +33,22 @@ from experiments._shared import get_fitted_hybrid, get_fitted_pool_hybrid
 # mRMR (greedy max-relevance minus redundancy)
 # =========================================================================
 
+def _subsample_for_mi(X, y, max_rows=2000, seed=42):
+    """COST-1: row-subsample for KSG mutual-information estimation.
+
+    KSG MI converges well before ~2000 samples; capping rows makes each MI call
+    O(const) instead of O(n^~1.08) — the lever that keeps c17 finite at large n
+    — while leaving feature selection essentially unchanged. Returns (X, y)
+    unchanged when n <= max_rows. Deterministic (seeded).
+    """
+    X = np.asarray(X)
+    y = np.asarray(y)
+    if X.shape[0] <= max_rows:
+        return X, y
+    idx = np.random.RandomState(seed).choice(X.shape[0], max_rows, replace=False)
+    return X[idx], y[idx]
+
+
 def _greedy_mrmr(X, y, budget, k_mi=5, max_features=None):
     """Greedy mRMR feature selection using KSG MI estimator.
 
@@ -47,6 +63,10 @@ def _greedy_mrmr(X, y, budget, k_mi=5, max_features=None):
     """
     n_features = X.shape[1]
     budget = min(budget, n_features)
+
+    # COST-1: cap rows for MI estimation (rows only — feature indices and the
+    # full-data downstream slice are unaffected). Keeps c17 finite at large n.
+    X, y = _subsample_for_mi(X, y)
 
     # Pre-filter for large feature sets: rank all features by MI(x_j, y)
     # and keep top max_features for greedy selection
@@ -161,7 +181,8 @@ def _evaluate_strategy(X_selected, y, groups, n_folds, mode, metric_fn):
     # MI with labels — let estimate_mutual_information_knn handle PCA
     # internally (max_dim=50) for consistent treatment across strategies.
     X_scaled = StandardScaler().fit_transform(X_selected)
-    mi = estimate_mutual_information_knn(X_scaled, y, k=5)
+    _mi_X, _mi_y = _subsample_for_mi(X_scaled, y)  # COST-1 row cap (MI only)
+    mi = estimate_mutual_information_knn(_mi_X, _mi_y, k=5)
 
     # MI density
     mi_density = mi / n_feat if n_feat > 0 else 0.0
@@ -246,9 +267,25 @@ def run(data, config, output_dir, dataset_name, **kwargs):
     mrmr_full_ranking = None
     if budgets:
         _mf = mrmr_prefilter if total_dim > mrmr_prefilter else None
+        # COST-1 (signed off 2026-06-05): cap the rows used for the MI/mRMR
+        # ranking at MRMR_MAX_ROWS. The KSG mutual-information estimator
+        # converges well before ~2000 samples, so ranking on a fixed seeded
+        # subsample is statistically equivalent and makes c17 cost independent
+        # of n (the large-n wall-buster: ~thousands of h -> ~300h at n>=10k).
+        # The returned indices are feature indices into the FULL matrix; every
+        # row is still used for the per-budget CV evaluation below. This is a
+        # feature-selection subsample, NOT an evaluation/CV split.
+        MRMR_MAX_ROWS = 2000
+        _y_all = np.asarray(labels)
+        if X_concat_scaled.shape[0] > MRMR_MAX_ROWS:
+            _ridx = np.random.RandomState(42).choice(
+                X_concat_scaled.shape[0], MRMR_MAX_ROWS, replace=False)
+            _X_rank, _y_rank = X_concat_scaled[_ridx], _y_all[_ridx]
+        else:
+            _X_rank, _y_rank = X_concat_scaled, _y_all
         try:
             mrmr_full_ranking = _greedy_mrmr(
-                X_concat_scaled, labels, budget=max(budgets),
+                _X_rank, _y_rank, budget=max(budgets),
                 k_mi=5, max_features=_mf)
         except Exception as _e:
             print(f"  mRMR full-ranking precompute failed: {_e}")

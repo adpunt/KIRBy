@@ -1,0 +1,217 @@
+Already up to date.
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+==================================================================
+BEFORE RUN: cache state for abcov_kd
+==================================================================
+
+=== abcov_kd: hybrid_eval files on disk ===
+  Total: 28713
+    __none.pkl: 24639
+    __uncapped.pkl: 4074
+
+=== Stored aug_names distribution (sample of up to 200 per suffix) ===
+
+  __none.pkl (200 sampled):
+    unreadable: 0
+    aug_strategy counts:
+      'none': 200
+    aug_names counts:
+      (): 200
+
+  __uncapped.pkl (200 sampled):
+    unreadable: 0
+    aug_strategy counts:
+      'uncapped': 200
+    aug_names counts:
+      ('aac', 'abroberta_cdr', 'antiberty_cdr', 'esm2_cdr', 'esm2_cdr3', ...: 200
+
+=== Verdict for fixed c02 runs ===
+  c02 no_aug (reads __none.pkl):
+    ✓ 24639 __none.pkl files exist — probes will hit.
+  c02 uncapped (reads __uncapped.pkl):
+    ✓ All sampled __uncapped.pkl files have non-empty aug_names — c02 uncapped probes will HIT.
+  c02 capped (reads __capped.pkl):
+    ✗ ZERO __capped.pkl files — will recompute.
+
+==================================================================
+RUNNING c02 on abcov_kd
+==================================================================
+Mode: full
+Dataset: abcov_kd
+Reps: fast
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp', 'svm', 'gp', 'catboost', 'dnn', 'cnn']
+Budgets: [10, 25, 50, 100, 250, 500, 1000, 2000]
+  [auto] abcov_kd: filtering to 27 general reps from DATASET_REPS
+  Ab-CoV abcov_kd: 141 antibodies, paired, property=Binding (-log Kd)
+  Fitness range: [5.222, 11.222]
+    igt5: cached (1024D)
+    esm2_per_cdr: cached (7680D)
+    prot_t5: cached (2048D)
+    esm2_per_region: cached (17920D)
+    antiberty: cached (1024D)
+    esm2_midlayers: cached (2560D)
+    esm2_cdr3: cached (2560D)
+    esm2_cdr: cached (2560D)
+    abroberta: cached (1536D)
+    esmc_cdr: cached (2304D)
+    esm2: cached (2560D)
+    blosum: cached (5600D)
+    ablang2: cached (480D)
+    onehot: cached (5600D)
+    abroberta_cdr: cached (1536D)
+    saprot: cached (2560D)
+    esm2_layer24: cached (2560D)
+    prot_t5_cdr: cached (2048D)
+    saprot_cdr: cached (2560D)
+    esm3: cached (3072D)
+    esmc: cached (2304D)
+    antiberty_cdr: cached (1024D)
+    aac: cached (40D)
+    esm3_cdr: cached (3072D)
+    esm2_early: cached (2560D)
+    esm2_concat: cached (1280D)
+    esm2_entropy_top20: cached (2560D)
+  abcov_kd: 141 antibodies, 136 groups, 27 reps (igt5=1024, esm2_per_cdr=7680, prot_t5=2048, esm2_per_region=17920, antiberty=1024, esm2_midlayers=2560, esm2_cdr3=2560, esm2_cdr=2560, abroberta=1536, esmc_cdr=2304, esm2=2560, blosum=5600, ablang2=480, onehot=5600, abroberta_cdr=1536, saprot=2560, esm2_layer24=2560, prot_t5_cdr=2048, saprot_cdr=2560, esm3=3072, esmc=2304, antiberty_cdr=1024, aac=40, esm3_cdr=3072, esm2_early=2560, esm2_concat=1280, esm2_entropy_top20=2560)
+
+======================================================================
+EXPERIMENT C02: COMPLEXITY MATCHING GRID
+======================================================================
+
+  --- Top-tier reps only (8/27: ['prot_t5', 'antiberty', 'esm2_midlayers', 'abroberta', 'esm2', 'blosum', 'ablang2', 'esm2_entropy_top20']) ---
+Dropped budgets > n=141: [250, 500, 1000, 2000]; added n=141 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/abcov_kd__top__none__full.pkl
+
+  --- All reps, no augmentation (27 reps) ---
+  11 models x 8 budgets x 9 allocations x 3 importance
+Dropped budgets > n=141: [250, 500, 1000, 2000]; added n=141 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/abcov_kd__general__none__full.pkl
+  WARNING: No augmentation reps available — uncapped/capped conditions will be identical to no-augmentation.
+  [ft] 1 FT factories: antibody_lora_esm2
+
+  --- Frozen + FT (27 frozen + 1 FT: antibody_lora_esm2) ---
+Dropped budgets > n=141: [250, 500, 1000, 2000]; added n=141 as at-n boundary
+  Loaded cached result from /data/stat-cadd/scat9264/.cache/kirby/searches/abcov_kd__general_ft__none__full.pkl
+  Top-3 base reps (by RF): prot_t5=0.4263, esm2_midlayers=0.4043, esm2_layer24=0.3938
+  rf: best_rep=prot_t5 spearman=0.4263
+  xgboost: best_rep=saprot spearman=0.3436
+  ridge: best_rep=igt5 spearman=0.4446
+  knn: best_rep=esm2_entropy_top20 spearman=0.3870
+  lightgbm: best_rep=igt5 spearman=0.4467
+  mlp: best_rep=esm2_per_cdr spearman=0.3865
+  svm: best_rep=igt5 spearman=0.4602
+  gp: best_rep=onehot spearman=0.3348
+  catboost: best_rep=None spearman=-inf
+  dnn: best_rep=None spearman=-inf
+  cnn: best_rep=None spearman=-inf
+
+  --- Per-model hybrid at top-baseline-rep dim ---
+[cache] cache stats — search: 3 hit / 1 miss / 0 stale; baseline: 27 hit / 0 miss / 0 stale; hybrid_eval: 197 hit / 19 miss / 0 stale
+    rf: hybrid@2048D (prot_t5) -> spearman=0.4714 (vs prot_t5 0.4263, delta=+0.0451)
+[cache] cache stats — search: 3 hit / 2 miss / 0 stale; baseline: 54 hit / 0 miss / 0 stale; hybrid_eval: 425 hit / 61 miss / 0 stale
+    xgboost: hybrid@2560D (saprot) -> spearman=0.3727 (vs saprot 0.3436, delta=+0.0291)
+[cache] cache stats — search: 3 hit / 3 miss / 0 stale; baseline: 81 hit / 0 miss / 0 stale; hybrid_eval: 614 hit / 67 miss / 0 stale
+    ridge: hybrid@1024D (igt5) -> spearman=0.4257 (vs igt5 0.4446, delta=-0.0189)
+[cache] cache stats — search: 3 hit / 4 miss / 0 stale; baseline: 108 hit / 0 miss / 0 stale; hybrid_eval: 614 hit / 67 miss / 0 stale
+[cache] cache stats — search: 3 hit / 5 miss / 0 stale; baseline: 135 hit / 0 miss / 0 stale; hybrid_eval: 827 hit / 70 miss / 0 stale
+    lightgbm: hybrid@1024D (igt5) -> spearman=0.4018 (vs igt5 0.4467, delta=-0.0449)
+[cache] cache stats — search: 3 hit / 6 miss / 0 stale; baseline: 162 hit / 0 miss / 0 stale; hybrid_eval: 827 hit / 70 miss / 0 stale
+[cache] cache stats — search: 3 hit / 7 miss / 0 stale; baseline: 189 hit / 0 miss / 0 stale; hybrid_eval: 1040 hit / 73 miss / 0 stale
+    svm: hybrid@1024D (igt5) -> spearman=0.4225 (vs igt5 0.4602, delta=-0.0377)
+[cache] cache stats — search: 3 hit / 8 miss / 0 stale; baseline: 216 hit / 0 miss / 0 stale; hybrid_eval: 1040 hit / 73 miss / 0 stale
+
+  Computing PCA baselines...
+
+  BEST BY MODEL (metric: spearman):
+  >> gp: entropy_1.0/treeshap/b=10 -> spearman=0.4262 (vs onehot 0.3348, delta=+0.0914)
+  >> knn: entropy_1.0/treeshap/b=50 -> spearman=0.4844 (vs esm2_entropy_top20 0.3870, delta=+0.0974)
+  >> lightgbm: rank_exp_d0.5/lightgbm_gain/b=50 -> spearman=0.4522 (vs igt5 0.4467, delta=+0.0055)
+  >> mlp: performance_weighted/lightgbm_gain/b=100 -> spearman=0.3425 (vs esm2_per_cdr 0.3865, delta=-0.0440)
+  >> rf: entropy_1.0/lightgbm_gain/b=141 -> spearman=0.4344 (vs prot_t5 0.4263, delta=+0.0081)
+  >> ridge: top_3/lightgbm_gain/b=50 -> spearman=0.4361 (vs igt5 0.4446, delta=-0.0085)
+  >> svm: entropy_2.0/lightgbm_gain/b=141 -> spearman=0.4508 (vs igt5 0.4602, delta=-0.0094)
+  >> xgboost: power_2/lightgbm_gain/b=100 -> spearman=0.4165 (vs saprot 0.3436, delta=+0.0729)
+
+  IMPORTANCE METHOD WINS:
+    lightgbm_gain: 6/11
+    treeshap: 2/11
+    deeplift: 0/11
+
+  HEATMAP (model x budget -> best spearman):
+  Model             10      25      50     100     250     500    1000    2000
+  ----------------------------------------------------------------------------
+  rf            0.3876  0.4241  0.4161  0.4071      --      --      --      --
+  xgboost       0.4126  0.4043  0.4006  0.4165      --      --      --      --
+  ridge         0.4095  0.4058  0.4361  0.4268      --      --      --      --
+  knn           0.3544  0.3956  0.4844  0.4477      --      --      --      --
+  lightgbm      0.4221  0.3827  0.4522  0.4267      --      --      --      --
+  mlp           0.2976  0.2791  0.2741  0.3425      --      --      --      --
+  svm           0.3793  0.4141  0.4386  0.4398      --      --      --      --
+  gp            0.4262  0.3686  0.3867  0.3662      --      --      --      --
+  catboost          --      --      --      --      --      --      --      --
+  dnn               --      --      --      --      --      --      --      --
+  cnn               --      --      --      --      --      --      --      --
+
+  CONDITION COMPARISON (best score per model):
+    rf: no_aug=0.4344, uncapped=0.4344, top_tier_only=0.4459, frozen_plus_ft=0.4250, per_model_top_rep_dim=0.4714
+    xgboost: no_aug=0.4165, uncapped=0.4165, top_tier_only=0.4810, frozen_plus_ft=0.4525, per_model_top_rep_dim=0.3727
+    ridge: no_aug=0.4361, uncapped=0.4361, top_tier_only=0.4499, frozen_plus_ft=0.4398, per_model_top_rep_dim=0.4257
+    knn: no_aug=0.4844, uncapped=0.4844, top_tier_only=0.4730, frozen_plus_ft=0.4676
+    lightgbm: no_aug=0.4522, uncapped=0.4522, top_tier_only=0.4314, frozen_plus_ft=0.4267, per_model_top_rep_dim=0.4018
+    mlp: no_aug=0.3425, uncapped=0.3425, top_tier_only=0.3640, frozen_plus_ft=0.3564
+    svm: no_aug=0.4508, uncapped=0.4508, top_tier_only=0.4202, frozen_plus_ft=0.4385, per_model_top_rep_dim=0.4225
+    gp: no_aug=0.4262, uncapped=0.4262, top_tier_only=0.3703, frozen_plus_ft=0.4201
+
+  BEST PER MODEL ACROSS CONDITIONS:
+    rf: per_model_top_rep_dim (entropy_1.0/lightgbm_gain/b=2048) -> spearman=0.4714
+    xgboost: top_tier_only (power_2/deeplift/b=100) -> spearman=0.4810
+    ridge: top_tier_only (power_2/lightgbm_gain/b=141) -> spearman=0.4499
+    knn: no_aug (entropy_1.0/treeshap/b=50) -> spearman=0.4844
+    lightgbm: no_aug (rank_exp_d0.5/lightgbm_gain/b=50) -> spearman=0.4522
+    mlp: top_tier_only (power_2/lightgbm_gain/b=100) -> spearman=0.3640
+    svm: no_aug (entropy_2.0/lightgbm_gain/b=141) -> spearman=0.4508
+    gp: no_aug (entropy_1.0/treeshap/b=10) -> spearman=0.4262
+  [saved tests/results/c02_verify_fresh/c02_complexity_matching_grid/abcov_kd.json]
+
+real	62m54.478s
+user	357m11.124s
+sys	29m55.339s
+
+==================================================================
+AFTER RUN: cache state for abcov_kd
+==================================================================
+
+=== abcov_kd: hybrid_eval files on disk ===
+  Total: 28713
+    __none.pkl: 24639
+    __uncapped.pkl: 4074
+
+=== Stored aug_names distribution (sample of up to 200 per suffix) ===
+
+  __none.pkl (200 sampled):
+    unreadable: 0
+    aug_strategy counts:
+      'none': 200
+    aug_names counts:
+      (): 200
+
+  __uncapped.pkl (200 sampled):
+    unreadable: 0
+    aug_strategy counts:
+      'uncapped': 200
+    aug_names counts:
+      ('aac', 'abroberta_cdr', 'antiberty_cdr', 'esm2_cdr', 'esm2_cdr3', ...: 200
+
+=== Verdict for fixed c02 runs ===
+  c02 no_aug (reads __none.pkl):
+    ✓ 24639 __none.pkl files exist — probes will hit.
+  c02 uncapped (reads __uncapped.pkl):
+    ✓ All sampled __uncapped.pkl files have non-empty aug_names — c02 uncapped probes will HIT.
+  c02 capped (reads __capped.pkl):
+    ✗ ZERO __capped.pkl files — will recompute.
+
+==================================================================
+KEY METRIC — look for [cache] lines above. Every search emits one.
+If hybrid_eval shows mostly HIT, the cache is working.
+If mostly MISS or STALE, we have a bug to chase.
+==================================================================

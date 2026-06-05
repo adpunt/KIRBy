@@ -1,0 +1,98 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+=== complexity experiments: nt_H4K20me1 ===
+Branch: main (685ad36)
+Job ID: 12044257
+Node:   arc-c277
+Pruning mode: aggressive_pruning
+Start:  Tue  5 May 05:58:18 BST 2026
+
+======================================================================
+COMPLEXITY EXPERIMENTS: NT_H4K20ME1
+======================================================================
+Config:      5 fold, ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm'], speed=full
+Reps (11): hyenadna, mistral_dna, grover_dna, nt_v2_250m, nt_v2_500m, kmer3, kmer4, tetranuc_freq, tnf_canonical, kmer6, kmer5
+Experiments: ['c01', 'c02', 'c04', 'c05', 'c06', 'c07', 'c08', 'c09', 'c10', 'c11', 'c13', 'c15', 'c16', 'c17', 'c18', 'c19', 'c21', 'c22', 'c23', 'c24']
+Output:      tests/results/complexity
+
+Loading nt_H4K20me1...
+Loading NT Revised task: H4K20me1...
+  32270 sequences, 2 classes, 23 chromosome groups, seq lengths: 1000-1000 bp
+    hyenadna: cached (256D)
+    mistral_dna: cached (768D)
+    grover_dna: cached (768D)
+    nt_v2_250m: cached (768D)
+    nt_v2_500m: cached (1024D)
+    kmer3: cached (64D)
+    kmer4: cached (256D)
+    tetranuc_freq: cached (256D)
+    tnf_canonical: cached (136D)
+    kmer6: cached (4096D)
+    kmer5: cached (1024D)
+  nt_H4K20me1: 32270 sequences, 23 groups, 11 reps (hyenadna=256, mistral_dna=768, grover_dna=768, nt_v2_250m=768, nt_v2_500m=1024, kmer3=64, kmer4=256, tetranuc_freq=256, tnf_canonical=136, kmer6=4096, kmer5=1024)
+  Loaded in 31.7s
+  Loading 5 augmentation reps: ['codon_usage', 'complexity', 'dinuc_freq', 'dna_shape', 'gc_content']
+Loading NT Revised task: H4K20me1...
+  32270 sequences, 2 classes, 23 chromosome groups, seq lengths: 1000-1000 bp
+    codon_usage: cached (61D)
+    complexity: cached (5D)
+    dinuc_freq: cached (16D)
+    dna_shape: cached (8D)
+    gc_content: cached (5D)
+  nt_H4K20me1: 32270 sequences, 23 groups, 5 reps (codon_usage=61, complexity=5, dinuc_freq=16, dna_shape=8, gc_content=5)
+  Augmentations (5): codon_usage=61, complexity=5, dinuc_freq=16, dna_shape=8, gc_content=5
+
+  Pruning mode: aggressive_pruning
+    overrides active for: ['gp', 'mlp', 'svm']
+
+  Precomputing hybrid searches (general, 11 reps)...
+  [1/3] aug=none budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...  Skipping svm: n_samples=32270 > _max_samples=10000
+  Skipping gp: n_samples=32270 > _max_samples=6000
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp']
+Representations: ['hyenadna', 'mistral_dna', 'grover_dna', 'nt_v2_250m', 'nt_v2_500m', 'kmer3', 'kmer4', 'tetranuc_freq', 'tnf_canonical', 'kmer6', 'kmer5'] (dims: [256, 768, 768, 768, 1024, 64, 256, 256, 136, 4096, 1024])
+
+Evaluating full-dimension baselines...
+  hyenadna (dim=256): rf=0.574, xgboost=0.575, ridge=0.589, knn=0.525, lightgbm=0.584, mlp=0.612
+  mistral_dna (dim=768): rf=0.580, xgboost=0.587, ridge=0.608, knn=0.537, lightgbm=0.601, mlp=0.614
+  grover_dna (dim=768): rf=0.578, xgboost=0.576, ridge=0.591, knn=0.530, lightgbm=0.595, mlp=0.602
+  nt_v2_250m (dim=768): rf=0.551, xgboost=0.560, ridge=0.581, knn=0.510, lightgbm=0.578, mlp=0.574
+  nt_v2_500m (dim=1024): rf=0.551, xgboost=0.555, ridge=0.571, knn=0.507, lightgbm=0.574, mlp=0.566
+  kmer3 (dim=64): rf=0.542, xgboost=0.549, ridge=0.525, knn=0.496, lightgbm=0.557, mlp=0.560
+  kmer4 (dim=256): rf=0.528, xgboost=0.539, ridge=0.537, knn=0.499, lightgbm=0.553, mlp=0.567
+  tetranuc_freq (dim=256): rf=0.524, xgboost=0.540, ridge=0.532, knn=0.492, lightgbm=0.553, mlp=0.556
+  tnf_canonical (dim=136): rf=0.534, xgboost=0.540, ridge=0.539, knn=0.490, lightgbm=0.547, mlp=0.553
+  kmer6 (dim=4096): rf=0.511, xgboost=0.512, ridge=0.554, knn=0.432, lightgbm=0.530, mlp=0.536
+  kmer5 (dim=1024): rf=0.518, xgboost=0.533, ridge=0.546, knn=0.477, lightgbm=0.539, mlp=0.550
+
+Searching 5832 unique configurations (full mode)...
+  Pre-computing importance: 3 methods × 5 folds × 11 reps...
+  Importance pre-computed in 16496.5s (15/15 successful)
+  Allocation scores pre-computed in 27379.3s (7 evaluators × 10 metrics, evaluators: ['knn', 'lightgbm', 'mlp', 'rf', 'ridge', 'svm', 'xgboost'])
+  Checkpoint nt_H4K20me1__general__none__full.ckpt.pkl stale (model_pruning_overrides drifted) — discarding and recomputing.
+
+  Adaptive pruning: evaluating fold 0 for 5832 configs...
+    Schedule: global checkpoints=[] global tail_drop=0%
+    Per-model overrides active for: ['mlp']
+    fold 0: 200/5832
+    fold 0: 400/5832
+    fold 0: 600/5832
+    fold 0: 800/5832
+    fold 0: 1000/5832
+    fold 0: 1200/5832
+    fold 0: 1400/5832
+    fold 0: 1600/5832
+    fold 0: 1800/5832
+    fold 0: 2000/5832
+    checkpoint b=50: pruned 3 (alloc, imp) pairs across 2 (model, eval) groups [active models: ['mlp']]
+    fold 0: 2200/5832
+    fold 0: 2400/5832
+    fold 0: 2600/5832
+    fold 0: 2800/5832
+    fold 0: 3000/5832
+    fold 0: 3200/5832
+    fold 0: 3400/5832
+    fold 0: 3600/5832
+    fold 0: 3800/5832
+    fold 0: 4000/5832
+    fold 0: 4200/5832
+    fold 0: 4400/5832

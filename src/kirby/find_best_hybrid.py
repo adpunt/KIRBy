@@ -53,7 +53,7 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from sklearn.model_selection import (GroupKFold, GroupShuffleSplit, KFold,
-                                     ShuffleSplit, StratifiedGroupKFold)
+                                     StratifiedGroupKFold)
 from sklearn.preprocessing import StandardScaler
 
 warnings.filterwarnings('ignore')
@@ -128,6 +128,10 @@ def _atomic_write_pickle(path: Path, obj: Any) -> bool:
         try:
             with os.fdopen(fd, 'wb') as f:
                 f.write(pickle.dumps(obj))
+                f.flush()
+                os.fsync(f.fileno())  # PCB-14: force bytes to disk BEFORE the
+                # rename, so a node crash / NFS hiccup can't leave a
+                # renamed-but-truncated cache file that loads as junk.
             os.replace(tmp, str(path))
             return True
         except BaseException:
@@ -1885,10 +1889,18 @@ def _make_cv_splitter(groups: Optional[np.ndarray], n_folds: int, seed: int,
         return cv_splitter, False
     _is_clf = (task_type == 'classification')
     if n_folds == 1:
-        # Single 80/20 split (intermediary quick-check mode, NOT production CV)
+        # Single 80/20 split (intermediary quick-check mode, NOT production CV).
         if groups is not None:
             return GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=seed), True
-        return ShuffleSplit(n_splits=1, test_size=0.2, random_state=seed), False
+        # No groups → a leak-free split is impossible. NO random ShuffleSplit
+        # fallback (forbidden, see feedback_no_random_splits); mirror the
+        # production branch below and raise instead.
+        raise ValueError(
+            "_make_cv_splitter: cannot build a group-aware single 80/20 "
+            "quick-check split — groups is None. Supply scaffold/site/identity/"
+            "complex groups. No random-split fallback (see "
+            "feedback_no_random_splits)."
+        )
     if groups is not None:
         n_unique = len(np.unique(groups))
         if n_unique >= n_folds:

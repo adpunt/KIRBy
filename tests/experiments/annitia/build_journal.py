@@ -46,7 +46,7 @@ def _build_notebook(csv_basename: str, variant: str,
                     hep_method: str, death_method: str,
                     hep_members: list, death_members: list,
                     notes: str = '') -> dict:
-    overall_c = (hep_c + death_c) / 2.0 if hep_c and death_c else float('nan')
+    overall_c = (0.7 * hep_c + 0.3 * death_c) if hep_c and death_c else float('nan')
     title_md = textwrap.dedent(f"""\
         # ANNITIA MASLD survival — `{variant}` submission
 
@@ -60,7 +60,7 @@ def _build_notebook(csv_basename: str, variant: str,
         |----------|--------|-------|
         | Hep      | `{hep_method}` | **{hep_c:.4f}** |
         | Death    | `{death_method}` | **{death_c:.4f}** |
-        | **Macro avg** |  | **{overall_c:.4f}** |
+        | **LB-weighted (0.7·hep + 0.3·death)** |  | **{overall_c:.4f}** |
 
         ## Methodology
 

@@ -52,6 +52,14 @@ _DATASETS = {
         'transform': 'pkd',
         'source': 'tdc',
     },
+    'metz': {
+        'property': 'Ki binding affinity (already log-scaled by TDC)',
+        'description': '~35K drug-target pairs (~1,400 drugs × ~170 kinases), '
+                       'Metz kinase profiling Ki. TDC ships values pre-log-transformed '
+                       '(higher = stronger), so no pKd transform is applied.',
+        'transform': None,  # TDC Metz Y is already log-scaled affinity (like KIBA)
+        'source': 'tdc',
+    },
 }
 
 
@@ -132,11 +140,17 @@ def _load_from_tdc(name_lower: str, info: dict, cache: Path) -> Tuple[List[str],
     try:
         from tdc.multi_pred import DTI
     except ImportError:
-        raise ImportError("TDC required for BindingDB: pip install PyTDC")
+        raise ImportError("TDC required: pip install PyTDC")
 
     # Map dataset names to TDC names
+    # TDC name strings are case-insensitive (TDC lowercases internally before
+    # lookup). 'Metz' is the documented TDC DTI benchmark identifier for the
+    # Metz et al. kinase profiling set (resolves to 'metz'). Confirmed via TDC
+    # docs/source DTI group listing; some older PyTDC builds may not ship it,
+    # in which case DTI(name='Metz') raises a clear TDC error.
     tdc_name_map = {
         'bindingdb_kd': 'BindingDB_Kd',
+        'metz': 'Metz',
     }
     tdc_name = tdc_name_map.get(name_lower, name_lower)
 

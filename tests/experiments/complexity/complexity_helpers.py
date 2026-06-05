@@ -36,6 +36,27 @@ from experiments._shared import (
 )
 
 
+def rep_dim_summary(reps):
+    """Per-rep feature dimensions + total, stamped into every complexity
+    experiment's output JSON so wall-time can be attributed to representation
+    dimensionality — the cost driver behind CX-9/11/12 and the per-dataset
+    dimension dump UA-1 needs (it was previously recorded nowhere). Pure
+    metadata: does NOT change any computed score or cache key."""
+    if not isinstance(reps, dict):
+        return {}
+    dims = {}
+    for name, X in reps.items():
+        try:
+            dims[name] = int(np.asarray(X).shape[1])
+        except (IndexError, AttributeError, TypeError, ValueError):
+            continue
+    return {
+        'per_rep': dims,
+        'total_dim': int(sum(dims.values())),
+        'n_reps': len(dims),
+    }
+
+
 # ── (historical note) cached_create_hybrid was removed ────────────────────
 # A `cached_create_hybrid` wrapper used to live here. DELETED (2026-03-29)
 # because it operated on full data with a random internal split, causing data
@@ -1354,6 +1375,13 @@ def run_all(dataset_name: str, output_dir: str,
         try:
             exp_result = mod.run(data, config, output_dir, dataset_name, **kwargs)
             results[exp_id] = exp_result
+
+            # Cost-attribution metadata (UA-1 input): stamp the per-rep feature
+            # dimensions for this dataset into the experiment output. Pure
+            # metadata — never changes a score or cache key. Experiments that
+            # already set their own '_rep_dims' are left untouched.
+            if isinstance(exp_result, dict) and '_rep_dims' not in exp_result:
+                exp_result['_rep_dims'] = rep_dim_summary(data.get('reps'))
 
             # Save per-experiment JSON
             exp_full_name = _experiment_full_name(exp_id)

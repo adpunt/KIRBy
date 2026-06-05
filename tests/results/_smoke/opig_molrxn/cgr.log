@@ -1,0 +1,45 @@
+======================================================================
+CGR vs SMILES REPRESENTATION COMPARISON
+  Phase 3 of CGR_EMBEDDING_RESEARCH.md
+  Datasets: ['buchwald_hartwig']
+  Models: ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm']
+  Max folds: 2
+  Hybrid: skip
+  CKA: skip
+======================================================================
+
+============================================================
+Dataset: buchwald_hartwig
+============================================================
+  Parsing Buchwald-Hartwig Excel...
+  Buchwald-Hartwig: 3955 reactions, 22 additive groups, yield range [0.0, 100.0]
+  WARNING: drfp_2048 skipped (missing dep): No module named 'drfp'
+    concat_ecfp4: cached (5120D)
+    concat_maccs: cached (835D)
+    concat_pdv: cached (1040D)
+    product_ecfp4: cached (2048D)
+    reactant_ecfp4: cached (2048D)
+    product_maccs: computed + cached (167D)
+    reactant_maccs: computed + cached (167D)
+    product_pdv: computed + cached (208D)
+    reactant_pdv: cached (208D)
+  WARNING: rxnfp skipped (missing dep): No module named 'rxnfp'
+    onehot_components: cached (45D)
+    diff_ecfp4: cached (2048D)
+    diff_maccs: cached (167D)
+  Component descriptors: (3955, 70) (5 components × 14 props)
+    component_descriptors: computed + cached (70D)
+  Ligand descriptors: (3955, 16) (8 steric + 8 electronic)
+    ligand_descriptors: computed + cached (16D)
+    reactiont5: cached (768D)
+  CGR Morgan: mapping 3955 reactions with rxnmapper...
+    rxnmapper progress: 500/3955
+    rxnmapper progress: 1000/3955
+    rxnmapper progress: 1500/3955
+    rxnmapper progress: 2000/3955
+    rxnmapper progress: 2500/3955
+    rxnmapper progress: 3000/3955
+    rxnmapper progress: 3500/3955
+  CGR Morgan fingerprint: (3955, 2048) (3955/3955 non-zero rows)
+    cgr_morgan: computed + cached (2048D)
+  Loading Chytorch Graphormer (pretrained rxnmap)...

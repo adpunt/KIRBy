@@ -1,0 +1,11 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+usage: run_baseline_survey.py [-h] [--reps REPS] [--n-folds N_FOLDS]
+                              [--finetune] [--tune N] [--l2-norm] [--augment]
+                              [--models MODELS]
+                              [--split-strategy {scaffold,mw,spectral}]
+                              [--seed SEED] [--skip-existing]
+                              [--output OUTPUT]
+                              dataset
+run_baseline_survey.py: error: argument --models: expected one argument
+/var/spool/slurmd/job7459734/slurm_script: line 5: ridge,rf,xgboost: command not found

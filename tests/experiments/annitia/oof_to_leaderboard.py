@@ -5,8 +5,9 @@ concordance on the training set (using the same prediction logic but evaluating
 against training labels). Fit a calibration curve OOF C → public C and project
 expected leaderboard scores for new variants.
 
-Critical observation: leaderboard score is the AVERAGE of hep concordance and
-death concordance on val_test. For each submission we have hep and death
+Critical observation: leaderboard score is LB = 0.7 * Cindex_hepatic + 0.3 *
+Cindex_death on val_test (per Trustii spec — see README.md:13 and run.py:210).
+For each submission we have hep and death
 predictions separately (in the CSV) but only the joint score. To compute OOF
 analogue we need to reconstruct training-side hep + death predictions per
 submission. We can do that by:
@@ -20,7 +21,7 @@ For the variants that don't save their OOF, we use the consensus base OOF
 median, trimmed mean, soft route). For meta-aware variants this is approximate.
 
 Outputs:
-  oof_to_leaderboard.json — per-submission OOF C (hep + death + avg) vs LB score
+  oof_to_leaderboard.json — per-submission OOF C (hep + death + 0.7*hep+0.3*death) vs LB score
   oof_to_leaderboard.md   — calibration curve report
 """
 from __future__ import annotations
@@ -148,32 +149,32 @@ def main():
         d_finite = d_v & np.isfinite(d_proxy) & np.isfinite(d_y['time'])
         h_c = float(concordance(h_y[h_finite], h_proxy[h_finite])) if h_finite.sum() >= 5 else float('nan')
         d_c = float(concordance(d_y[d_finite], d_proxy[d_finite])) if d_finite.sum() >= 5 else float('nan')
-        oof_avg = (h_c + d_c) / 2
+        oof_lb = 0.7 * h_c + 0.3 * d_c  # Trustii LB formula (run.py:210)
 
-        rows.append({'stem': stem, 'lb': lb, 'oof_h': h_c, 'oof_d': d_c, 'oof_avg': oof_avg,
-                     'gap': oof_avg - lb})
-        print(f'  {stem:40s} LB={lb:.4f}  OOF avg={oof_avg:.4f}  gap={oof_avg - lb:+.4f}')
+        rows.append({'stem': stem, 'lb': lb, 'oof_h': h_c, 'oof_d': d_c, 'oof_lb': oof_lb,
+                     'gap': oof_lb - lb})
+        print(f'  {stem:40s} LB={lb:.4f}  OOF LB={oof_lb:.4f}  gap={oof_lb - lb:+.4f}')
 
     rows = sorted(rows, key=lambda r: -r['lb'])
 
     # Fit a simple linear calibration: LB = a + b * OOF
-    valid = [r for r in rows if np.isfinite(r['oof_avg']) and r['stem'] != 'submission']  # exclude broken round3
+    valid = [r for r in rows if np.isfinite(r['oof_lb']) and r['stem'] != 'submission']  # exclude broken round3
     if len(valid) >= 3:
-        X = np.array([r['oof_avg'] for r in valid])
+        X = np.array([r['oof_lb'] for r in valid])
         Y = np.array([r['lb'] for r in valid])
         # Linear fit
         b, a = np.polyfit(X, Y, 1)
         # Spearman to gauge monotone correlation
         rho, _ = spearmanr(X, Y)
-        print(f'\nLinear fit: LB = {a:.4f} + {b:.4f} * OOF_avg')
+        print(f'\nLinear fit: LB = {a:.4f} + {b:.4f} * OOF_LB (where OOF_LB = 0.7*hep+0.3*death)')
         print(f'Spearman rho(OOF, LB) = {rho:.3f}')
         residuals = Y - (a + b * X)
         print(f'Residual std: {residuals.std():.4f}')
         # Empirical discount at OOF=0.97
         proj_097 = a + b * 0.97
-        print(f'\nProjected LB for OOF avg = 0.97: {proj_097:.4f}')
+        print(f'\nProjected LB for OOF LB = 0.97: {proj_097:.4f}')
         proj_095 = a + b * 0.95
-        print(f'Projected LB for OOF avg = 0.95: {proj_095:.4f}')
+        print(f'Projected LB for OOF LB = 0.95: {proj_095:.4f}')
     else:
         a = b = rho = float('nan')
         residuals = np.array([])
@@ -185,7 +186,7 @@ def main():
           '',
           '## Calibration fit',
           '',
-          f'- Linear: **LB = {a:.4f} + {b:.4f} · OOF_avg**',
+          f'- Linear: **LB = {a:.4f} + {b:.4f} · OOF_LB** (where OOF_LB = 0.7·Cindex_hep + 0.3·Cindex_death, per Trustii spec)',
           f'- Spearman ρ(OOF, LB) = **{rho:.3f}**' if np.isfinite(rho) else '- Spearman ρ: NA',
           f'- Residual std: **{residuals.std():.4f}**' if len(residuals) else '',
           '',
@@ -199,12 +200,12 @@ def main():
         '',
         '## Per-submission detail',
         '',
-        '| Submission | LB | OOF avg | Gap (OOF − LB) | Note |',
+        '| Submission | LB | OOF LB (0.7h+0.3d) | Gap (OOF − LB) | Note |',
         '|---|---|---|---|---|'
     ])
     for r in rows:
         note = '*broken*' if r['stem'] == 'submission' else ''
-        md.append(f'| `{r["stem"]}` | {r["lb"]:.4f} | {r["oof_avg"]:.4f} | {r["gap"]:+.4f} | {note} |')
+        md.append(f'| `{r["stem"]}` | {r["lb"]:.4f} | {r["oof_lb"]:.4f} | {r["gap"]:+.4f} | {note} |')
 
     md.extend([
         '',

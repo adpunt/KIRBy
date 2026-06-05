@@ -59,6 +59,8 @@ from experiments._shared import (
     get_model_factories, get_domain_metric, cv_split,
     build_fold_hybrid,
     get_best_search_for_downstream,
+    parse_rep_args,
+    _is_tcga_dataset, _is_antibody_dataset,
 )
 
 
@@ -361,6 +363,16 @@ def run(data, config, output_dir, dataset_name, new_rep_names=None, **kwargs):
     print("\n" + "=" * 70)
     print("EXPERIMENT C13: FORWARD COMPATIBILITY")
     print("=" * 70)
+
+    # Smoke-test shrink (gated on KIRBY_SMOKE_N; no-op on server/full runs).
+    # precompute_hybrid_searches reads the module-level _shared.FULL_BUDGETS and
+    # IGNORES config['budgets'], so the only way to make the local hybrid search
+    # tractable is to shrink FULL_BUDGETS here before any precompute fires.
+    if os.environ.get('KIRBY_SMOKE_N', '').strip():
+        import experiments._shared as _shared_mod
+        if len(_shared_mod.FULL_BUDGETS) > 1:
+            _shared_mod.FULL_BUDGETS = [25]
+            print("  [SMOKE] FULL_BUDGETS shrunk to [25] for local hybrid search")
 
     reps = data['reps']
     labels = data['labels']
@@ -825,7 +837,14 @@ if __name__ == '__main__':
         new_rep_names = [r.strip() for r in args.new_reps.split(',') if r.strip()]
         print(f"New reps (user-specified): {new_rep_names}")
 
-    data = load_data(args.dataset, args.reps,
+    # Honor a comma-separated --reps list (e.g. "aac,blosum,onehot") as an
+    # explicit rep_names override. Without this, load_data treats the whole
+    # string as a preset name, falls through to rep_names=None, and then
+    # auto-fills the FULL DATASET_REPS 'general' list (foundation models
+    # included) — which is unloadable locally and defeats --reps entirely.
+    rep_preset, rep_names = parse_rep_args(args)
+    data = load_data(args.dataset, rep_preset,
+                     rep_names=rep_names,
                      delta=getattr(args, 'delta', False),
                      augment=getattr(args, 'augment', False))
     results = run(data, config, args.output, args.dataset,

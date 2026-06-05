@@ -1,0 +1,105 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+[setup.sh] setup complete (full mode)
+=== similarity experiments: tcga_brca_pam50 ===
+Branch: main (1ef987b)
+Job ID: 12040026
+Node:   arc-c233
+Pruning mode: aggressive_pruning
+Start:  Tue  5 May 07:45:11 BST 2026
+
+======================================================================
+SIMILARITY EXPERIMENTS: TCGA_BRCA_PAM50
+======================================================================
+Config:      5 fold, ['rf', 'xgboost', 'ridge', 'svm', 'mlp', 'lightgbm'], speed=full
+Reps (21): gene_geneformer_v2, gene_geneformer, gene_bulkrnabert, rppa, cnv_pca50, wsi_titan, methyl_pca50, wsi_hoptimus0, wsi_gigapath, mirna_top200, methyl_hvg, wsi_moco, wsi_phikon, cnv_gistic, wsi_ctranspath, mutation_matrix, mut_pathway, mut_driver, mut_pca50, stemness_mrnasi, immune_cibersort
+Experiments: ['s01', 's02', 's03', 's04', 's05', 's06', 's07', 's08', 's10', 's11', 's12', 's13']
+Output:      tests/results/similarity
+
+Loading tcga_brca_pam50...
+  UNI2-h features not found. To prepare, run:
+    python -c "from kirby.datasets.tcga import prepare_uni2h_features; prepare_uni2h_features()"
+  TCGA BRCA PAM50: 821 samples, 20530 genes, 19 TSS sites
+    LumA: 421 samples
+    LumB: 192 samples
+    Basal: 141 samples
+    Her2: 67 samples
+    gene_geneformer_v2: cached (1152D)
+    gene_geneformer: cached (1152D)
+    gene_bulkrnabert: cached (256D)
+    rppa: cached (258D)
+    cnv_pca50: cached (50D)
+    wsi_titan: cached (768D)
+    methyl_pca50: cached (50D)
+    wsi_hoptimus0: cached (512D)
+    wsi_gigapath: cached (512D)
+    mirna_top200: cached (200D)
+    methyl_hvg: cached (5000D)
+    wsi_moco: cached (512D)
+    wsi_phikon: cached (512D)
+    cnv_gistic: cached (200D)
+    wsi_ctranspath: cached (512D)
+    mutation_matrix: cached (200D)
+    mut_pathway: cached (50D)
+    mut_driver: cached (46D)
+    mut_pca50: cached (50D)
+    stemness_mrnasi: cached (2D)
+    immune_cibersort: cached (21D)
+  tcga_brca_pam50: 821 samples, 19 TSS sites, 21 reps (gene_geneformer_v2=1152, gene_geneformer=1152, gene_bulkrnabert=256, rppa=258, cnv_pca50=50, wsi_titan=768, methyl_pca50=50, wsi_hoptimus0=512, wsi_gigapath=512, mirna_top200=200, methyl_hvg=5000, wsi_moco=512, wsi_phikon=512, cnv_gistic=200, wsi_ctranspath=512, mutation_matrix=200, mut_pathway=50, mut_driver=46, mut_pca50=50, stemness_mrnasi=2, immune_cibersort=21)
+  Loaded in 2.6s
+  Loading 6 augmentation reps: ['hrd_score', 'mut_tmb', 'purity_consensus', 'gene_stats', 'gene_chromosome_arm', 'immune_xcell']
+  UNI2-h features not found. To prepare, run:
+    python -c "from kirby.datasets.tcga import prepare_uni2h_features; prepare_uni2h_features()"
+  TCGA BRCA PAM50: 821 samples, 20530 genes, 19 TSS sites
+    LumA: 421 samples
+    LumB: 192 samples
+    Basal: 141 samples
+    Her2: 67 samples
+    hrd_score: cached (4D)
+    mut_tmb: cached (5D)
+    purity_consensus: cached (4D)
+    gene_stats: cached (15D)
+    gene_chromosome_arm: cached (42D)
+    immune_xcell: cached (12D)
+  tcga_brca_pam50: 821 samples, 19 TSS sites, 6 reps (hrd_score=4, mut_tmb=5, purity_consensus=4, gene_stats=15, gene_chromosome_arm=42, immune_xcell=12)
+  Augmentations (6): hrd_score=4, mut_tmb=5, purity_consensus=4, gene_stats=15, gene_chromosome_arm=42, immune_xcell=12
+
+  Pruning mode: aggressive_pruning
+    overrides gated off (n=821 < 1000)
+
+  Precomputing hybrid searches (general, 21 reps)...
+  KIRBY_PRECOMPUTE_REVERSE_ORDER=1 → iterating aug_conditions in reverse: ['capped', 'uncapped', 'none']
+  [1/3] aug=capped budgets=[10, 25, 50, 100, 250, 500, 1000, 2000] ...Dropped budgets > n=821: [1000, 2000]; added n=821 as at-n boundary
+Augmentations: {'hrd_score': 4, 'mut_tmb': 5, 'purity_consensus': 4, 'gene_stats': 15, 'gene_chromosome_arm': 42, 'immune_xcell': 12} (strategy=capped)
+Models: ['rf', 'xgboost', 'ridge', 'knn', 'lightgbm', 'mlp', 'svm', 'gp']
+Representations: ['gene_geneformer_v2', 'gene_geneformer', 'gene_bulkrnabert', 'rppa', 'cnv_pca50', 'wsi_titan', 'methyl_pca50', 'wsi_hoptimus0', 'wsi_gigapath', 'mirna_top200', 'methyl_hvg', 'wsi_moco', 'wsi_phikon', 'cnv_gistic', 'wsi_ctranspath', 'mutation_matrix', 'mut_pathway', 'mut_driver', 'mut_pca50', 'stemness_mrnasi', 'immune_cibersort'] (dims: [1152, 1152, 256, 258, 50, 768, 50, 512, 512, 200, 5000, 512, 512, 200, 512, 200, 50, 46, 50, 2, 21])
+
+Evaluating full-dimension baselines...
+  gene_geneformer_v2 (dim=1152): rf=0.773, xgboost=0.828, ridge=0.874, knn=0.780, lightgbm=0.820, mlp=0.842, svm=0.848, gp=0.015
+  gene_geneformer (dim=1152): rf=0.773, xgboost=0.822, ridge=0.857, knn=0.779, lightgbm=0.821, mlp=0.838, svm=0.837, gp=0.015
+  gene_bulkrnabert (dim=256): rf=0.716, xgboost=0.771, ridge=0.839, knn=0.655, lightgbm=0.764, mlp=0.818, svm=0.757, gp=0.225
+  rppa (dim=258): rf=0.738, xgboost=0.770, ridge=0.745, knn=0.626, lightgbm=0.772, mlp=0.739, svm=0.749, gp=0.590
+  cnv_pca50 (dim=50): rf=0.660, xgboost=0.669, ridge=0.716, knn=0.478, lightgbm=0.679, mlp=0.642, svm=0.677, gp=0.358
+  wsi_titan (dim=768): rf=0.631, xgboost=0.654, ridge=0.688, knn=0.612, lightgbm=0.653, mlp=0.653, svm=0.640, gp=0.037
+  methyl_pca50 (dim=50): rf=0.588, xgboost=0.638, ridge=0.661, knn=0.540, lightgbm=0.630, mlp=0.628, svm=0.594, gp=0.415
+  wsi_hoptimus0 (dim=512): rf=0.593, xgboost=0.640, ridge=0.656, knn=0.542, lightgbm=0.638, mlp=0.653, svm=0.589, gp=0.049
+  wsi_gigapath (dim=512): rf=0.590, xgboost=0.640, ridge=0.647, knn=0.533, lightgbm=0.643, mlp=0.623, svm=0.591, gp=0.049
+  mirna_top200 (dim=200): rf=0.606, xgboost=0.642, ridge=0.658, knn=0.509, lightgbm=0.645, mlp=0.609, svm=0.580, gp=0.588
+  methyl_hvg (dim=5000): rf=0.488, xgboost=0.588, ridge=0.628, knn=0.406, lightgbm=0.581, mlp=0.367, svm=0.352, gp=0.352
+  wsi_moco (dim=512): rf=0.549, xgboost=0.575, ridge=0.605, knn=0.511, lightgbm=0.573, mlp=0.581, svm=0.554, gp=0.037
+  wsi_phikon (dim=512): rf=0.524, xgboost=0.594, ridge=0.592, knn=0.474, lightgbm=0.581, mlp=0.568, svm=0.504, gp=0.040
+  cnv_gistic (dim=200): rf=0.588, xgboost=0.582, ridge=0.570, knn=0.522, lightgbm=0.580, mlp=0.583, svm=0.555, gp=0.552
+  wsi_ctranspath (dim=512): rf=0.568, xgboost=0.611, ridge=0.604, knn=0.457, lightgbm=0.583, mlp=0.590, svm=0.542, gp=0.040
+  mutation_matrix (dim=200): rf=0.543, xgboost=0.544, ridge=0.517, knn=0.474, lightgbm=0.535, mlp=0.452, svm=0.531, gp=0.378
+  mut_pathway (dim=50): rf=0.540, xgboost=0.528, ridge=0.522, knn=0.473, lightgbm=0.517, mlp=0.516, svm=0.498, gp=0.401
+  mut_driver (dim=46): rf=0.544, xgboost=0.536, ridge=0.512, knn=0.435, lightgbm=0.539, mlp=0.493, svm=0.509, gp=0.421
+  mut_pca50 (dim=50): rf=0.455, xgboost=0.448, ridge=0.453, knn=0.401, lightgbm=0.451, mlp=0.430, svm=0.379, gp=0.365
+  stemness_mrnasi (dim=2): rf=0.571, xgboost=0.567, ridge=0.604, knn=0.566, lightgbm=0.564, mlp=0.577, svm=0.614, gp=0.603
+  immune_cibersort (dim=21): rf=0.527, xgboost=0.549, ridge=0.554, knn=0.482, lightgbm=0.549, mlp=0.508, svm=0.502, gp=0.383
+
+Searching 6804 unique configurations (full mode)...
+  Pre-computing importance: 3 methods × 5 folds × 21 reps...
+  Importance pre-computed in 395.6s (15/15 successful)
+  Allocation scores pre-computed in 1135.7s (8 evaluators × 10 metrics, evaluators: ['gp', 'knn', 'lightgbm', 'mlp', 'rf', 'ridge', 'svm', 'xgboost'])
+
+  Adaptive pruning: evaluating fold 0 for 6804 configs...
+    Resuming fold 0: 700/6804 already done

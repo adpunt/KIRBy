@@ -1,0 +1,1264 @@
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+=== similarity experiments: flab_immunogenicity_marks ===
+Branch: main (61e5a87)
+Job ID: 11668193
+Node:   arc-c288
+Start:  Wed  1 Apr 03:54:03 BST 2026
+You are using the default legacy behaviour of the <class 'transformers.models.t5.tokenization_t5.T5Tokenizer'>. This is expected, and simply means that the `legacy` (previous) behavior will be used so nothing changes for you. If you want to use the new behaviour, set `legacy=False`. This should only be set if you understand what it means, and thoroughly read the reason why this was added as explained in https://github.com/huggingface/transformers/pull/24565
+Some weights of EsmModel were not initialized from the model checkpoint at westlake-repl/SaProt_650M_AF2 and are newly initialized: ['esm.contact_head.regression.bias', 'esm.contact_head.regression.weight', 'esm.embeddings.position_embeddings.weight', 'esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+
+======================================================================
+SIMILARITY EXPERIMENTS: FLAB_IMMUNOGENICITY_MARKS
+======================================================================
+Config:      3 fold, ['rf', 'lightgbm', 'mlp'], speed=fast
+Reps (27): antiberty_cdr, antiberty, igt5, prot_t5, prot_t5_cdr, abroberta_cdr, esm2_early, abroberta, ablang2, onehot, saprot_cdr, saprot, esm2_midlayers, blosum, esm2, esm2_cdr3, esm2_cdr, esm2_layer24, esmc_cdr, esmc, aac, esm2_concat, esm3_cdr, esm3, esm2_per_cdr, esm2_per_region, esm2_entropy_top20
+Experiments: ['s01', 's02', 's03', 's04', 's05', 's06', 's07', 's08', 's10', 's11', 's12', 's13']
+Output:      tests/results/similarity
+
+Loading flab_immunogenicity_marks...
+  FLAb flab_immunogenicity_marks: 217 samples, paired, property=Immunogenicity
+  Fitness range: [0.000, 100.000], mean=10.459, std=18.132
+  Wildtype heavy: QVQLVQSGAEVKKPGSSVKVSCKASGYAFS...
+  215/217 samples have mutations, avg 146.1 mutations/sample
+    antiberty_cdr: cached (1024D)
+    antiberty: cached (1024D)
+    igt5: cached (1024D)
+    prot_t5: cached (2048D)
+    prot_t5_cdr: cached (2048D)
+    abroberta_cdr: cached (1536D)
+    esm2_early: cached (2560D)
+    abroberta: cached (1536D)
+    ablang2: cached (480D)
+    onehot: cached (5600D)
+  [dedup] embed_saprot_cdr: 217 -> 212 unique pairs (1x)
+    ProstT5: 424 seqs, 419 unique, 302 cached, 117 to compute
+  Loading ProstT5 (Rostlab/ProstT5) for 3Di prediction...
+    ProstT5 progress: 20/117
+    ProstT5 progress: 40/117
+    ProstT5 progress: 60/117
+    ProstT5 progress: 80/117
+    ProstT5 progress: 100/117
+  Loading SaProt (westlake-repl/SaProt_650M_AF2)...
+    saprot_cdr: computed + cached (2560D)
+    saprot: cached (2560D)
+    esm2_midlayers: cached (2560D)
+    blosum: cached (5600D)
+    esm2: cached (2560D)
+  [dedup] embed_esm2_cdr3: 217 -> 212 unique pairs (1x)
+    esm2_cdr3: computed + cached (2560D)
+    esm2_cdr: cached (2560D)
+    esm2_layer24: cached (2560D)
+  [dedup] embed_esmc_cdr: 217 -> 212 unique pairs (1x)
+Fetching 4 files:   0%|          | 0/4 [00:00<?, ?it/s]Fetching 4 files: 100%|██████████| 4/4 [00:00<00:00, 393.00it/s]
+    esmc_cdr: computed + cached (2304D)
+    esmc: cached (2304D)
+    aac: cached (40D)
+    esm2_concat: cached (1280D)
+  [dedup] embed_esm3_cdr: 217 -> 212 unique pairs (1x)
+Fetching 22 files:   0%|          | 0/22 [00:00<?, ?it/s]Fetching 22 files: 100%|██████████| 22/22 [00:00<00:00, 1915.53it/s]
+    esm3_cdr: computed + cached (3072D)
+    esm3: cached (3072D)
+  [dedup] embed_esm2_per_cdr: 217 -> 212 unique pairs (1x)
+    Extracting per-residue ESM-2...
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+    Computing IMGT regions...
+    Extracting per-residue ESM-2...
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+    Computing IMGT regions...
+    esm2_per_cdr: computed + cached (7680D)
+  [dedup] embed_esm2_per_region: 217 -> 212 unique pairs (1x)
+    Extracting per-residue ESM-2...
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+    Computing IMGT regions...
+    Extracting per-residue ESM-2...
+Some weights of EsmModel were not initialized from the model checkpoint at facebook/esm2_t33_650M_UR50D and are newly initialized: ['esm.pooler.dense.bias', 'esm.pooler.dense.weight']
+You should probably TRAIN this model on a down-stream task to be able to use it for predictions and inference.
+    Computing IMGT regions...
+    esm2_per_region: computed + cached (17920D)
+    esm2_entropy_top20: cached (2560D)
+  flab_immunogenicity_marks: 217 antibodies, 211 groups, 27 reps (antiberty_cdr=1024, antiberty=1024, igt5=1024, prot_t5=2048, prot_t5_cdr=2048, abroberta_cdr=1536, esm2_early=2560, abroberta=1536, ablang2=480, onehot=5600, saprot_cdr=2560, saprot=2560, esm2_midlayers=2560, blosum=5600, esm2=2560, esm2_cdr3=2560, esm2_cdr=2560, esm2_layer24=2560, esmc_cdr=2304, esmc=2304, aac=40, esm2_concat=1280, esm3_cdr=3072, esm3=3072, esm2_per_cdr=7680, esm2_per_region=17920, esm2_entropy_top20=2560)
+  Loaded in 2493.3s
+
+  Precomputing hybrid searches (general, 27 reps)...
+  [1/1] aug=none budgets=[50, 500, 1000, 2000] ...Models: ['rf', 'lightgbm', 'mlp']
+Representations: ['antiberty_cdr', 'antiberty', 'igt5', 'prot_t5', 'prot_t5_cdr', 'abroberta_cdr', 'esm2_early', 'abroberta', 'ablang2', 'onehot', 'saprot_cdr', 'saprot', 'esm2_midlayers', 'blosum', 'esm2', 'esm2_cdr3', 'esm2_cdr', 'esm2_layer24', 'esmc_cdr', 'esmc', 'aac', 'esm2_concat', 'esm3_cdr', 'esm3', 'esm2_per_cdr', 'esm2_per_region', 'esm2_entropy_top20'] (dims: [1024, 1024, 1024, 2048, 2048, 1536, 2560, 1536, 480, 5600, 2560, 2560, 2560, 5600, 2560, 2560, 2560, 2560, 2304, 2304, 40, 1280, 3072, 3072, 7680, 17920, 2560])
+
+Evaluating full-dimension baselines...
+  antiberty_cdr (dim=1024): rf=0.364, lightgbm=0.299, mlp=0.315
+  antiberty (dim=1024): rf=0.337, lightgbm=0.245, mlp=0.314
+  igt5 (dim=1024): rf=0.341, lightgbm=0.295, mlp=0.338
+  prot_t5 (dim=2048): rf=0.284, lightgbm=0.155, mlp=0.318
+  prot_t5_cdr (dim=2048): rf=0.284, lightgbm=0.155, mlp=0.318
+  abroberta_cdr (dim=1536): rf=0.264, lightgbm=0.271, mlp=0.355
+  esm2_early (dim=2560): rf=0.218, lightgbm=0.221, mlp=0.291
+  abroberta (dim=1536): rf=0.264, lightgbm=0.271, mlp=0.355
+  ablang2 (dim=480): rf=0.277, lightgbm=0.229, mlp=0.321
+  onehot (dim=5600): rf=0.244, lightgbm=0.203, mlp=0.289
+  saprot_cdr (dim=2560): rf=0.215, lightgbm=0.222, mlp=0.137
+  saprot (dim=2560): rf=0.215, lightgbm=0.222, mlp=0.137
+  esm2_midlayers (dim=2560): rf=0.250, lightgbm=0.264, mlp=0.287
+  blosum (dim=5600): rf=0.264, lightgbm=0.239, mlp=0.206
+  esm2 (dim=2560): rf=0.258, lightgbm=0.160, mlp=0.246
+  esm2_cdr3 (dim=2560): rf=0.258, lightgbm=0.160, mlp=0.246
+  esm2_cdr (dim=2560): rf=0.258, lightgbm=0.160, mlp=0.246
+  esm2_layer24 (dim=2560): rf=0.196, lightgbm=0.157, mlp=0.267
+  esmc_cdr (dim=2304): rf=0.261, lightgbm=0.143, mlp=0.292
+  esmc (dim=2304): rf=0.261, lightgbm=0.143, mlp=0.292
+  aac (dim=40): rf=0.240, lightgbm=0.304, mlp=0.276
+  esm2_concat (dim=1280): rf=0.218, lightgbm=0.173, mlp=0.299
+  esm3_cdr (dim=3072): rf=0.262, lightgbm=0.207, mlp=0.346
+  esm3 (dim=3072): rf=0.262, lightgbm=0.207, mlp=0.346
+  esm2_per_cdr (dim=7680): rf=0.246, lightgbm=0.160, mlp=0.211
+  esm2_per_region (dim=17920): rf=0.262, lightgbm=0.160, mlp=0.228
+  esm2_entropy_top20 (dim=2560): rf=0.286, lightgbm=0.277, mlp=0.277
+
+Searching 180 unique configurations (fast mode)...
+  Pre-computing importance: 2 methods × 3 folds × 27 reps...
+  Importance pre-computed in 145.2s (6/6 successful)
+  Allocation scores pre-computed in 83.9s (9 (fold, evaluator) combos)
+  [1/180] rf/entropy_1.0/treeshap/b=50/ev=lightgbm: score=0.2490+/-0.157, dim=50
+  [2/180] rf/entropy_1.0/treeshap/b=50/ev=mlp: score=0.2813+/-0.187, dim=50
+  [3/180] rf/entropy_1.0/treeshap/b=50/ev=xgboost: score=0.2943+/-0.138, dim=50
+  [4/180] lightgbm/entropy_1.0/treeshap/b=50/ev=lightgbm: score=0.2000+/-0.179, dim=50
+  [5/180] lightgbm/entropy_1.0/treeshap/b=50/ev=mlp: score=0.2517+/-0.106, dim=50
+  [6/180] lightgbm/entropy_1.0/treeshap/b=50/ev=xgboost: score=0.2026+/-0.128, dim=50
+  [7/180] mlp/entropy_1.0/treeshap/b=50/ev=lightgbm: score=0.3323+/-0.221, dim=50
+  [8/180] mlp/entropy_1.0/treeshap/b=50/ev=mlp: score=0.3570+/-0.204, dim=50
+  [9/180] mlp/entropy_1.0/treeshap/b=50/ev=xgboost: score=0.3190+/-0.203, dim=50
+  [10/180] rf/entropy_1.0/lightgbm_gain/b=50/ev=lightgbm: score=0.3354+/-0.207, dim=50
+  [11/180] rf/entropy_1.0/lightgbm_gain/b=50/ev=mlp: score=0.2479+/-0.176, dim=50
+  [12/180] rf/entropy_1.0/lightgbm_gain/b=50/ev=xgboost: score=0.2962+/-0.134, dim=50
+  [13/180] lightgbm/entropy_1.0/lightgbm_gain/b=50/ev=lightgbm: score=0.2725+/-0.185, dim=50
+  [14/180] lightgbm/entropy_1.0/lightgbm_gain/b=50/ev=mlp: score=0.2613+/-0.100, dim=50
+  [15/180] lightgbm/entropy_1.0/lightgbm_gain/b=50/ev=xgboost: score=0.2886+/-0.064, dim=50
+  [16/180] mlp/entropy_1.0/lightgbm_gain/b=50/ev=lightgbm: score=0.3442+/-0.254, dim=50
+  [17/180] mlp/entropy_1.0/lightgbm_gain/b=50/ev=mlp: score=0.3329+/-0.187, dim=50
+  [18/180] mlp/entropy_1.0/lightgbm_gain/b=50/ev=xgboost: score=0.2984+/-0.226, dim=50
+  [19/180] rf/entropy_1.0/treeshap/b=500/ev=lightgbm: score=0.2902+/-0.171, dim=500
+  [20/180] rf/entropy_1.0/treeshap/b=500/ev=mlp: score=0.2893+/-0.161, dim=500
+  [21/180] rf/entropy_1.0/treeshap/b=500/ev=xgboost: score=0.3348+/-0.171, dim=500
+  [22/180] lightgbm/entropy_1.0/treeshap/b=500/ev=lightgbm: score=0.2744+/-0.174, dim=500
+  [23/180] lightgbm/entropy_1.0/treeshap/b=500/ev=mlp: score=0.2857+/-0.075, dim=500
+  [24/180] lightgbm/entropy_1.0/treeshap/b=500/ev=xgboost: score=0.2528+/-0.084, dim=500
+  [25/180] mlp/entropy_1.0/treeshap/b=500/ev=lightgbm: score=0.3345+/-0.181, dim=500
+  [26/180] mlp/entropy_1.0/treeshap/b=500/ev=mlp: score=0.3299+/-0.140, dim=500
+  [27/180] mlp/entropy_1.0/treeshap/b=500/ev=xgboost: score=0.3508+/-0.188, dim=500
+  [28/180] rf/entropy_1.0/lightgbm_gain/b=500/ev=lightgbm: score=0.3299+/-0.145, dim=500
+  [29/180] rf/entropy_1.0/lightgbm_gain/b=500/ev=mlp: score=0.2954+/-0.149, dim=500
+  [30/180] rf/entropy_1.0/lightgbm_gain/b=500/ev=xgboost: score=0.3108+/-0.178, dim=500
+  [31/180] lightgbm/entropy_1.0/lightgbm_gain/b=500/ev=lightgbm: score=0.2606+/-0.172, dim=500
+  [32/180] lightgbm/entropy_1.0/lightgbm_gain/b=500/ev=mlp: score=0.3408+/-0.071, dim=500
+  [33/180] lightgbm/entropy_1.0/lightgbm_gain/b=500/ev=xgboost: score=0.2829+/-0.062, dim=500
+  [34/180] mlp/entropy_1.0/lightgbm_gain/b=500/ev=lightgbm: score=0.3059+/-0.173, dim=500
+  [35/180] mlp/entropy_1.0/lightgbm_gain/b=500/ev=mlp: score=0.3188+/-0.153, dim=500
+  [36/180] mlp/entropy_1.0/lightgbm_gain/b=500/ev=xgboost: score=0.3319+/-0.173, dim=500
+  [37/180] rf/entropy_1.0/treeshap/b=1000/ev=lightgbm: score=0.2886+/-0.185, dim=1000
+  [38/180] rf/entropy_1.0/treeshap/b=1000/ev=mlp: score=0.2725+/-0.155, dim=1000
+  [39/180] rf/entropy_1.0/treeshap/b=1000/ev=xgboost: score=0.3397+/-0.150, dim=1000
+  [40/180] lightgbm/entropy_1.0/treeshap/b=1000/ev=lightgbm: score=0.2625+/-0.153, dim=1000
+  [41/180] lightgbm/entropy_1.0/treeshap/b=1000/ev=mlp: score=0.2497+/-0.029, dim=1000
+  [42/180] lightgbm/entropy_1.0/treeshap/b=1000/ev=xgboost: score=0.2673+/-0.121, dim=1000
+  [43/180] mlp/entropy_1.0/treeshap/b=1000/ev=lightgbm: score=0.3215+/-0.132, dim=1000
+  [44/180] mlp/entropy_1.0/treeshap/b=1000/ev=mlp: score=0.2532+/-0.158, dim=1000
+  [45/180] mlp/entropy_1.0/treeshap/b=1000/ev=xgboost: score=0.3272+/-0.207, dim=1000
+  [46/180] rf/entropy_1.0/lightgbm_gain/b=1000/ev=lightgbm: score=0.3258+/-0.179, dim=1000
+  [47/180] rf/entropy_1.0/lightgbm_gain/b=1000/ev=mlp: score=0.3098+/-0.163, dim=1000
+  [48/180] rf/entropy_1.0/lightgbm_gain/b=1000/ev=xgboost: score=0.3117+/-0.188, dim=1000
+  [49/180] lightgbm/entropy_1.0/lightgbm_gain/b=1000/ev=lightgbm: score=0.2906+/-0.139, dim=1000
+  [50/180] lightgbm/entropy_1.0/lightgbm_gain/b=1000/ev=mlp: score=0.2909+/-0.081, dim=1000
+  [51/180] lightgbm/entropy_1.0/lightgbm_gain/b=1000/ev=xgboost: score=0.2788+/-0.044, dim=1000
+  [52/180] mlp/entropy_1.0/lightgbm_gain/b=1000/ev=lightgbm: score=0.3058+/-0.156, dim=1000
+  [53/180] mlp/entropy_1.0/lightgbm_gain/b=1000/ev=mlp: score=0.2276+/-0.105, dim=1000
+  [54/180] mlp/entropy_1.0/lightgbm_gain/b=1000/ev=xgboost: score=0.2923+/-0.187, dim=1000
+  [55/180] rf/entropy_1.0/treeshap/b=2000/ev=lightgbm: score=0.3042+/-0.168, dim=2000
+  [56/180] rf/entropy_1.0/treeshap/b=2000/ev=mlp: score=0.2760+/-0.136, dim=2000
+  [57/180] rf/entropy_1.0/treeshap/b=2000/ev=xgboost: score=0.3374+/-0.178, dim=2000
+  [58/180] lightgbm/entropy_1.0/treeshap/b=2000/ev=lightgbm: score=0.2721+/-0.221, dim=2000
+  [59/180] lightgbm/entropy_1.0/treeshap/b=2000/ev=mlp: score=0.3018+/-0.064, dim=2000
+  [60/180] lightgbm/entropy_1.0/treeshap/b=2000/ev=xgboost: score=0.2948+/-0.131, dim=2000
+  [61/180] mlp/entropy_1.0/treeshap/b=2000/ev=lightgbm: score=0.2840+/-0.166, dim=2000
+  [62/180] mlp/entropy_1.0/treeshap/b=2000/ev=mlp: score=0.2603+/-0.096, dim=2000
+  [63/180] mlp/entropy_1.0/treeshap/b=2000/ev=xgboost: score=0.3206+/-0.136, dim=2000
+  [64/180] rf/entropy_1.0/lightgbm_gain/b=2000/ev=lightgbm: score=0.3185+/-0.175, dim=2000
+  [65/180] rf/entropy_1.0/lightgbm_gain/b=2000/ev=mlp: score=0.2887+/-0.171, dim=2000
+  [66/180] rf/entropy_1.0/lightgbm_gain/b=2000/ev=xgboost: score=0.2868+/-0.181, dim=2000
+  [67/180] lightgbm/entropy_1.0/lightgbm_gain/b=2000/ev=lightgbm: score=0.3082+/-0.122, dim=2000
+  [68/180] lightgbm/entropy_1.0/lightgbm_gain/b=2000/ev=mlp: score=0.3043+/-0.049, dim=2000
+  [69/180] lightgbm/entropy_1.0/lightgbm_gain/b=2000/ev=xgboost: score=0.2837+/-0.022, dim=2000
+  [70/180] mlp/entropy_1.0/lightgbm_gain/b=2000/ev=lightgbm: score=0.3190+/-0.174, dim=2000
+  [71/180] mlp/entropy_1.0/lightgbm_gain/b=2000/ev=mlp: score=0.2401+/-0.102, dim=2000
+  [72/180] mlp/entropy_1.0/lightgbm_gain/b=2000/ev=xgboost: score=0.2682+/-0.157, dim=2000
+  [73/180] rf/top_3/treeshap/b=50/ev=lightgbm: score=0.2113+/-0.171, dim=50
+  [74/180] rf/top_3/treeshap/b=50/ev=mlp: score=0.1926+/-0.143, dim=50
+  [75/180] rf/top_3/treeshap/b=50/ev=xgboost: score=0.3007+/-0.132, dim=50
+  [76/180] lightgbm/top_3/treeshap/b=50/ev=lightgbm: score=0.1452+/-0.278, dim=50
+  [77/180] lightgbm/top_3/treeshap/b=50/ev=mlp: score=0.2453+/-0.141, dim=50
+  [78/180] lightgbm/top_3/treeshap/b=50/ev=xgboost: score=0.1797+/-0.055, dim=50
+  [79/180] mlp/top_3/treeshap/b=50/ev=lightgbm: score=0.2951+/-0.225, dim=50
+  [80/180] mlp/top_3/treeshap/b=50/ev=mlp: score=0.2846+/-0.186, dim=50
+  [81/180] mlp/top_3/treeshap/b=50/ev=xgboost: score=0.3246+/-0.212, dim=50
+  [82/180] rf/top_3/lightgbm_gain/b=50/ev=lightgbm: score=0.3154+/-0.215, dim=50
+  [83/180] rf/top_3/lightgbm_gain/b=50/ev=mlp: score=0.1942+/-0.185, dim=50
+  [84/180] rf/top_3/lightgbm_gain/b=50/ev=xgboost: score=0.2922+/-0.115, dim=50
+  [85/180] lightgbm/top_3/lightgbm_gain/b=50/ev=lightgbm: score=0.3154+/-0.174, dim=50
+  [86/180] lightgbm/top_3/lightgbm_gain/b=50/ev=mlp: score=0.2030+/-0.125, dim=50
+  [87/180] lightgbm/top_3/lightgbm_gain/b=50/ev=xgboost: score=0.2270+/-0.033, dim=50
+  [88/180] mlp/top_3/lightgbm_gain/b=50/ev=lightgbm: score=0.2691+/-0.229, dim=50
+  [89/180] mlp/top_3/lightgbm_gain/b=50/ev=mlp: score=0.2794+/-0.186, dim=50
+  [90/180] mlp/top_3/lightgbm_gain/b=50/ev=xgboost: score=0.3205+/-0.220, dim=50
+  [91/180] rf/top_3/treeshap/b=500/ev=lightgbm: score=0.2868+/-0.170, dim=500
+  [92/180] rf/top_3/treeshap/b=500/ev=mlp: score=0.2657+/-0.133, dim=500
+  [93/180] rf/top_3/treeshap/b=500/ev=xgboost: score=0.2714+/-0.168, dim=500
+  [94/180] lightgbm/top_3/treeshap/b=500/ev=lightgbm: score=0.2547+/-0.156, dim=500
+  [95/180] lightgbm/top_3/treeshap/b=500/ev=mlp: score=0.3165+/-0.046, dim=500
+  [96/180] lightgbm/top_3/treeshap/b=500/ev=xgboost: score=0.2243+/-0.112, dim=500
+  [97/180] mlp/top_3/treeshap/b=500/ev=lightgbm: score=0.3160+/-0.160, dim=500
+  [98/180] mlp/top_3/treeshap/b=500/ev=mlp: score=0.3118+/-0.161, dim=500
+  [99/180] mlp/top_3/treeshap/b=500/ev=xgboost: score=0.3408+/-0.188, dim=500
+  [100/180] rf/top_3/lightgbm_gain/b=500/ev=lightgbm: score=0.2876+/-0.211, dim=500
+  [101/180] rf/top_3/lightgbm_gain/b=500/ev=mlp: score=0.3067+/-0.196, dim=500
+  [102/180] rf/top_3/lightgbm_gain/b=500/ev=xgboost: score=0.3301+/-0.127, dim=500
+  [103/180] lightgbm/top_3/lightgbm_gain/b=500/ev=lightgbm: score=0.2310+/-0.166, dim=500
+  [104/180] lightgbm/top_3/lightgbm_gain/b=500/ev=mlp: score=0.2546+/-0.055, dim=500
+  [105/180] lightgbm/top_3/lightgbm_gain/b=500/ev=xgboost: score=0.2452+/-0.045, dim=500
+  [106/180] mlp/top_3/lightgbm_gain/b=500/ev=lightgbm: score=0.2687+/-0.132, dim=500
+  [107/180] mlp/top_3/lightgbm_gain/b=500/ev=mlp: score=0.2702+/-0.123, dim=500
+  [108/180] mlp/top_3/lightgbm_gain/b=500/ev=xgboost: score=0.3309+/-0.165, dim=500
+  [109/180] rf/top_3/treeshap/b=1000/ev=lightgbm: score=0.2870+/-0.213, dim=1000
+  [110/180] rf/top_3/treeshap/b=1000/ev=mlp: score=0.2921+/-0.144, dim=1000
+  [111/180] rf/top_3/treeshap/b=1000/ev=xgboost: score=0.2639+/-0.126, dim=1000
+  [112/180] lightgbm/top_3/treeshap/b=1000/ev=lightgbm: score=0.1841+/-0.170, dim=1000
+  [113/180] lightgbm/top_3/treeshap/b=1000/ev=mlp: score=0.2817+/-0.098, dim=1000
+  [114/180] lightgbm/top_3/treeshap/b=1000/ev=xgboost: score=0.2441+/-0.126, dim=1000
+  [115/180] mlp/top_3/treeshap/b=1000/ev=lightgbm: score=0.2901+/-0.127, dim=1000
+  [116/180] mlp/top_3/treeshap/b=1000/ev=mlp: score=0.2557+/-0.146, dim=1000
+  [117/180] mlp/top_3/treeshap/b=1000/ev=xgboost: score=0.3113+/-0.183, dim=1000
+  [118/180] rf/top_3/lightgbm_gain/b=1000/ev=lightgbm: score=0.3223+/-0.203, dim=1000
+  [119/180] rf/top_3/lightgbm_gain/b=1000/ev=mlp: score=0.2906+/-0.187, dim=1000
+  [120/180] rf/top_3/lightgbm_gain/b=1000/ev=xgboost: score=0.3034+/-0.201, dim=1000
+  [121/180] lightgbm/top_3/lightgbm_gain/b=1000/ev=lightgbm: score=0.2415+/-0.156, dim=1000
+  [122/180] lightgbm/top_3/lightgbm_gain/b=1000/ev=mlp: score=0.2465+/-0.067, dim=1000
+  [123/180] lightgbm/top_3/lightgbm_gain/b=1000/ev=xgboost: score=0.2725+/-0.060, dim=1000
+  [124/180] mlp/top_3/lightgbm_gain/b=1000/ev=lightgbm: score=0.2733+/-0.165, dim=1000
+  [125/180] mlp/top_3/lightgbm_gain/b=1000/ev=mlp: score=0.2224+/-0.119, dim=1000
+  [126/180] mlp/top_3/lightgbm_gain/b=1000/ev=xgboost: score=0.3010+/-0.229, dim=1000
+  [127/180] rf/top_3/treeshap/b=2000/ev=lightgbm: score=0.2968+/-0.170, dim=2000
+  [128/180] rf/top_3/treeshap/b=2000/ev=mlp: score=0.2841+/-0.194, dim=2000
+  [129/180] rf/top_3/treeshap/b=2000/ev=xgboost: score=0.3159+/-0.178, dim=2000
+  [130/180] lightgbm/top_3/treeshap/b=2000/ev=lightgbm: score=0.2233+/-0.236, dim=2000
+  [131/180] lightgbm/top_3/treeshap/b=2000/ev=mlp: score=0.2872+/-0.116, dim=2000
+  [132/180] lightgbm/top_3/treeshap/b=2000/ev=xgboost: score=0.2453+/-0.140, dim=2000
+  [133/180] mlp/top_3/treeshap/b=2000/ev=lightgbm: score=0.3027+/-0.121, dim=2000
+  [134/180] mlp/top_3/treeshap/b=2000/ev=mlp: score=0.2233+/-0.085, dim=2000
+  [135/180] mlp/top_3/treeshap/b=2000/ev=xgboost: score=0.3172+/-0.155, dim=2000
+  [136/180] rf/top_3/lightgbm_gain/b=2000/ev=lightgbm: score=0.2746+/-0.189, dim=2000
+  [137/180] rf/top_3/lightgbm_gain/b=2000/ev=mlp: score=0.2752+/-0.173, dim=2000
+  [138/180] rf/top_3/lightgbm_gain/b=2000/ev=xgboost: score=0.2789+/-0.180, dim=2000
+  [139/180] lightgbm/top_3/lightgbm_gain/b=2000/ev=lightgbm: score=0.2123+/-0.177, dim=2000
+  [140/180] lightgbm/top_3/lightgbm_gain/b=2000/ev=mlp: score=0.2071+/-0.044, dim=2000
+  [141/180] lightgbm/top_3/lightgbm_gain/b=2000/ev=xgboost: score=0.2560+/-0.047, dim=2000
+  [142/180] mlp/top_3/lightgbm_gain/b=2000/ev=lightgbm: score=0.2923+/-0.149, dim=2000
+  [143/180] mlp/top_3/lightgbm_gain/b=2000/ev=mlp: score=0.2451+/-0.127, dim=2000
+  [144/180] mlp/top_3/lightgbm_gain/b=2000/ev=xgboost: score=0.2947+/-0.199, dim=2000
+  [145/180] rf/greedy_fill_s25/treeshap/b=50/ev=lightgbm: score=0.2601+/-0.129, dim=50
+  [146/180] rf/greedy_fill_s25/treeshap/b=50/ev=mlp: score=0.2601+/-0.129, dim=50
+  [147/180] rf/greedy_fill_s25/treeshap/b=50/ev=xgboost: score=0.2601+/-0.129, dim=50
+  [148/180] lightgbm/greedy_fill_s25/treeshap/b=50/ev=lightgbm: score=0.3100+/-0.106, dim=50
+  [149/180] lightgbm/greedy_fill_s25/treeshap/b=50/ev=mlp: score=0.3100+/-0.106, dim=50
+  [150/180] lightgbm/greedy_fill_s25/treeshap/b=50/ev=xgboost: score=0.3100+/-0.106, dim=50
+  [151/180] mlp/greedy_fill_s25/treeshap/b=50/ev=lightgbm: score=0.3234+/-0.194, dim=50
+  [152/180] mlp/greedy_fill_s25/treeshap/b=50/ev=mlp: score=0.3234+/-0.194, dim=50
+  [153/180] mlp/greedy_fill_s25/treeshap/b=50/ev=xgboost: score=0.3234+/-0.194, dim=50
+  [154/180] rf/greedy_fill_s25/treeshap/b=500/ev=lightgbm: score=0.3090+/-0.190, dim=500
+  [155/180] rf/greedy_fill_s25/treeshap/b=500/ev=mlp: score=0.3090+/-0.190, dim=500
+  [156/180] rf/greedy_fill_s25/treeshap/b=500/ev=xgboost: score=0.3090+/-0.190, dim=500
+  [157/180] lightgbm/greedy_fill_s25/treeshap/b=500/ev=lightgbm: score=0.2662+/-0.126, dim=500
+  [158/180] lightgbm/greedy_fill_s25/treeshap/b=500/ev=mlp: score=0.2662+/-0.126, dim=500
+  [159/180] lightgbm/greedy_fill_s25/treeshap/b=500/ev=xgboost: score=0.2662+/-0.126, dim=500
+  [160/180] mlp/greedy_fill_s25/treeshap/b=500/ev=lightgbm: score=0.3122+/-0.177, dim=500
+  [161/180] mlp/greedy_fill_s25/treeshap/b=500/ev=mlp: score=0.3122+/-0.177, dim=500
+  [162/180] mlp/greedy_fill_s25/treeshap/b=500/ev=xgboost: score=0.3122+/-0.177, dim=500
+  [163/180] rf/greedy_fill_s25/treeshap/b=1000/ev=lightgbm: score=0.2630+/-0.187, dim=1000
+  [164/180] rf/greedy_fill_s25/treeshap/b=1000/ev=mlp: score=0.2630+/-0.187, dim=1000
+  [165/180] rf/greedy_fill_s25/treeshap/b=1000/ev=xgboost: score=0.2630+/-0.187, dim=1000
+  [166/180] lightgbm/greedy_fill_s25/treeshap/b=1000/ev=lightgbm: score=0.2485+/-0.119, dim=1000
+  [167/180] lightgbm/greedy_fill_s25/treeshap/b=1000/ev=mlp: score=0.2485+/-0.119, dim=1000
+  [168/180] lightgbm/greedy_fill_s25/treeshap/b=1000/ev=xgboost: score=0.2485+/-0.119, dim=1000
+  [169/180] mlp/greedy_fill_s25/treeshap/b=1000/ev=lightgbm: score=0.2510+/-0.164, dim=1000
+  [170/180] mlp/greedy_fill_s25/treeshap/b=1000/ev=mlp: score=0.2510+/-0.164, dim=1000
+  [171/180] mlp/greedy_fill_s25/treeshap/b=1000/ev=xgboost: score=0.2510+/-0.164, dim=1000
+  [172/180] rf/greedy_fill_s25/treeshap/b=2000/ev=lightgbm: score=0.2832+/-0.190, dim=2000
+  [173/180] rf/greedy_fill_s25/treeshap/b=2000/ev=mlp: score=0.2832+/-0.190, dim=2000
+  [174/180] rf/greedy_fill_s25/treeshap/b=2000/ev=xgboost: score=0.2832+/-0.190, dim=2000
+  [175/180] lightgbm/greedy_fill_s25/treeshap/b=2000/ev=lightgbm: score=0.2479+/-0.100, dim=2000
+  [176/180] lightgbm/greedy_fill_s25/treeshap/b=2000/ev=mlp: score=0.2479+/-0.100, dim=2000
+  [177/180] lightgbm/greedy_fill_s25/treeshap/b=2000/ev=xgboost: score=0.2479+/-0.100, dim=2000
+  [178/180] mlp/greedy_fill_s25/treeshap/b=2000/ev=lightgbm: score=0.2581+/-0.115, dim=2000
+  [179/180] mlp/greedy_fill_s25/treeshap/b=2000/ev=mlp: score=0.2581+/-0.115, dim=2000
+  [180/180] mlp/greedy_fill_s25/treeshap/b=2000/ev=xgboost: score=0.2581+/-0.115, dim=2000
+  Cached result to /home/scat9264/.cache/kirby/hybrid_search/59a03f64b1845741.pkl
+ done 10276.0s (alloc=entropy_1.0, budget=50, score=0.3570)
+  Precompute complete: 1/1 searches in 10276s
+
+  Precomputing hybrid searches (top-tier, 8 reps)...
+  [1/1] aug=none budgets=[50, 500, 1000, 2000] ...Traceback (most recent call last):
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/similarity/similarity_helpers.py", line 438, in run_all
+    exp_result = mod.run(data, config, output_dir, dataset_name, **kwargs)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/similarity/s11_bayesian_optimization.py", line 811, in run
+    curve, gp_fail = run_bo_loop(
+                     ^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/similarity/s11_bayesian_optimization.py", line 257, in run_bo_loop
+    gp, success = fit_gp(X_lab, y_lab, optimize=optimize,
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/KIRBy/tests/experiments/../experiments/similarity/s11_bayesian_optimization.py", line 161, in fit_gp
+    gp.fit(X_train, y_train)
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/base.py", line 1351, in wrapper
+    return fit_method(estimator, *args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/gaussian_process/_gpr.py", line 292, in fit
+    if self.optimizer is not None and self.kernel_.n_dims > 0:
+                                      ^^^^^^^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/gaussian_process/kernels.py", line 257, in n_dims
+    return self.theta.shape[0]
+           ^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/gaussian_process/kernels.py", line 731, in theta
+    return np.append(self.k1.theta, self.k2.theta)
+                     ^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/gaussian_process/kernels.py", line 731, in theta
+    return np.append(self.k1.theta, self.k2.theta)
+                                    ^^^^^^^^^^^^^
+  File "/data/stat-cadd/scat9264/py311-kirby/lib/python3.11/site-packages/sklearn/gaussian_process/kernels.py", line 287, in theta
+    theta.append(params[hyperparameter.name])
+                 ~~~~~~^^^^^^^^^^^^^^^^^^^^^
+KeyError: 'constant'
+Models: ['rf', 'lightgbm', 'mlp']
+Representations: ['antiberty_cdr', 'antiberty', 'igt5', 'prot_t5', 'prot_t5_cdr', 'abroberta_cdr', 'abroberta', 'esm2_entropy_top20'] (dims: [1024, 1024, 1024, 2048, 2048, 1536, 1536, 2560])
+
+Evaluating full-dimension baselines...
+  antiberty_cdr (dim=1024): rf=0.364, lightgbm=0.299, mlp=0.315
+  antiberty (dim=1024): rf=0.337, lightgbm=0.245, mlp=0.314
+  igt5 (dim=1024): rf=0.341, lightgbm=0.295, mlp=0.338
+  prot_t5 (dim=2048): rf=0.284, lightgbm=0.155, mlp=0.318
+  prot_t5_cdr (dim=2048): rf=0.284, lightgbm=0.155, mlp=0.318
+  abroberta_cdr (dim=1536): rf=0.264, lightgbm=0.271, mlp=0.355
+  abroberta (dim=1536): rf=0.264, lightgbm=0.271, mlp=0.355
+  esm2_entropy_top20 (dim=2560): rf=0.286, lightgbm=0.277, mlp=0.277
+
+Searching 180 unique configurations (fast mode)...
+  Pre-computing importance: 2 methods × 3 folds × 8 reps...
+  Importance pre-computed in 29.4s (6/6 successful)
+  Allocation scores pre-computed in 13.8s (9 (fold, evaluator) combos)
+  [1/180] rf/entropy_1.0/treeshap/b=50/ev=lightgbm: score=0.2825+/-0.102, dim=50
+  [2/180] rf/entropy_1.0/treeshap/b=50/ev=mlp: score=0.3060+/-0.159, dim=50
+  [3/180] rf/entropy_1.0/treeshap/b=50/ev=xgboost: score=0.2796+/-0.172, dim=50
+  [4/180] lightgbm/entropy_1.0/treeshap/b=50/ev=lightgbm: score=0.2308+/-0.095, dim=50
+  [5/180] lightgbm/entropy_1.0/treeshap/b=50/ev=mlp: score=0.2426+/-0.084, dim=50
+  [6/180] lightgbm/entropy_1.0/treeshap/b=50/ev=xgboost: score=0.2506+/-0.069, dim=50
+  [7/180] mlp/entropy_1.0/treeshap/b=50/ev=lightgbm: score=0.3480+/-0.169, dim=50
+  [8/180] mlp/entropy_1.0/treeshap/b=50/ev=mlp: score=0.3572+/-0.168, dim=50
+  [9/180] mlp/entropy_1.0/treeshap/b=50/ev=xgboost: score=0.3557+/-0.166, dim=50
+  [10/180] rf/entropy_1.0/lightgbm_gain/b=50/ev=lightgbm: score=0.3734+/-0.152, dim=50
+  [11/180] rf/entropy_1.0/lightgbm_gain/b=50/ev=mlp: score=0.3214+/-0.131, dim=50
+  [12/180] rf/entropy_1.0/lightgbm_gain/b=50/ev=xgboost: score=0.3230+/-0.145, dim=50
+  [13/180] lightgbm/entropy_1.0/lightgbm_gain/b=50/ev=lightgbm: score=0.3090+/-0.184, dim=50
+  [14/180] lightgbm/entropy_1.0/lightgbm_gain/b=50/ev=mlp: score=0.2020+/-0.103, dim=50
+  [15/180] lightgbm/entropy_1.0/lightgbm_gain/b=50/ev=xgboost: score=0.3227+/-0.134, dim=50
+  [16/180] mlp/entropy_1.0/lightgbm_gain/b=50/ev=lightgbm: score=0.3562+/-0.178, dim=50
+  [17/180] mlp/entropy_1.0/lightgbm_gain/b=50/ev=mlp: score=0.3225+/-0.141, dim=50
+  [18/180] mlp/entropy_1.0/lightgbm_gain/b=50/ev=xgboost: score=0.3791+/-0.190, dim=50
+  [19/180] rf/entropy_1.0/treeshap/b=500/ev=lightgbm: score=0.3554+/-0.137, dim=500
+  [20/180] rf/entropy_1.0/treeshap/b=500/ev=mlp: score=0.3024+/-0.143, dim=500
+  [21/180] rf/entropy_1.0/treeshap/b=500/ev=xgboost: score=0.3152+/-0.191, dim=500
+  [22/180] lightgbm/entropy_1.0/treeshap/b=500/ev=lightgbm: score=0.2900+/-0.143, dim=500
+  [23/180] lightgbm/entropy_1.0/treeshap/b=500/ev=mlp: score=0.2383+/-0.125, dim=500
+  [24/180] lightgbm/entropy_1.0/treeshap/b=500/ev=xgboost: score=0.2848+/-0.102, dim=500
+  [25/180] mlp/entropy_1.0/treeshap/b=500/ev=lightgbm: score=0.3338+/-0.137, dim=500
+  [26/180] mlp/entropy_1.0/treeshap/b=500/ev=mlp: score=0.3546+/-0.157, dim=500
+  [27/180] mlp/entropy_1.0/treeshap/b=500/ev=xgboost: score=0.3480+/-0.181, dim=500
+  [28/180] rf/entropy_1.0/lightgbm_gain/b=500/ev=lightgbm: score=0.3320+/-0.191, dim=500
+  [29/180] rf/entropy_1.0/lightgbm_gain/b=500/ev=mlp: score=0.3437+/-0.142, dim=500
+  [30/180] rf/entropy_1.0/lightgbm_gain/b=500/ev=xgboost: score=0.3427+/-0.183, dim=500
+  [31/180] lightgbm/entropy_1.0/lightgbm_gain/b=500/ev=lightgbm: score=0.3232+/-0.165, dim=500
+  [32/180] lightgbm/entropy_1.0/lightgbm_gain/b=500/ev=mlp: score=0.2397+/-0.075, dim=500
+  [33/180] lightgbm/entropy_1.0/lightgbm_gain/b=500/ev=xgboost: score=0.3465+/-0.108, dim=500
+  [34/180] mlp/entropy_1.0/lightgbm_gain/b=500/ev=lightgbm: score=0.2375+/-0.141, dim=500
+  [35/180] mlp/entropy_1.0/lightgbm_gain/b=500/ev=mlp: score=0.3283+/-0.162, dim=500
+  [36/180] mlp/entropy_1.0/lightgbm_gain/b=500/ev=xgboost: score=0.3484+/-0.177, dim=500
+  [37/180] rf/entropy_1.0/treeshap/b=1000/ev=lightgbm: score=0.3050+/-0.166, dim=1000
+  [38/180] rf/entropy_1.0/treeshap/b=1000/ev=mlp: score=0.2892+/-0.161, dim=1000
+  [39/180] rf/entropy_1.0/treeshap/b=1000/ev=xgboost: score=0.3269+/-0.192, dim=1000
+  [40/180] lightgbm/entropy_1.0/treeshap/b=1000/ev=lightgbm: score=0.2405+/-0.125, dim=1000
+  [41/180] lightgbm/entropy_1.0/treeshap/b=1000/ev=mlp: score=0.2176+/-0.107, dim=1000
+  [42/180] lightgbm/entropy_1.0/treeshap/b=1000/ev=xgboost: score=0.3102+/-0.130, dim=1000
+  [43/180] mlp/entropy_1.0/treeshap/b=1000/ev=lightgbm: score=0.2973+/-0.149, dim=1000
+  [44/180] mlp/entropy_1.0/treeshap/b=1000/ev=mlp: score=0.2992+/-0.095, dim=1000
+  [45/180] mlp/entropy_1.0/treeshap/b=1000/ev=xgboost: score=0.3343+/-0.212, dim=1000
+  [46/180] rf/entropy_1.0/lightgbm_gain/b=1000/ev=lightgbm: score=0.3474+/-0.173, dim=1000
+  [47/180] rf/entropy_1.0/lightgbm_gain/b=1000/ev=mlp: score=0.3321+/-0.153, dim=1000
+  [48/180] rf/entropy_1.0/lightgbm_gain/b=1000/ev=xgboost: score=0.3144+/-0.184, dim=1000
+  [49/180] lightgbm/entropy_1.0/lightgbm_gain/b=1000/ev=lightgbm: score=0.3166+/-0.134, dim=1000
+  [50/180] lightgbm/entropy_1.0/lightgbm_gain/b=1000/ev=mlp: score=0.2360+/-0.061, dim=1000
+  [51/180] lightgbm/entropy_1.0/lightgbm_gain/b=1000/ev=xgboost: score=0.3236+/-0.118, dim=1000
+  [52/180] mlp/entropy_1.0/lightgbm_gain/b=1000/ev=lightgbm: score=0.2581+/-0.197, dim=1000
+  [53/180] mlp/entropy_1.0/lightgbm_gain/b=1000/ev=mlp: score=0.2894+/-0.122, dim=1000
+  [54/180] mlp/entropy_1.0/lightgbm_gain/b=1000/ev=xgboost: score=0.3317+/-0.177, dim=1000
+  [55/180] rf/entropy_1.0/treeshap/b=2000/ev=lightgbm: score=0.3266+/-0.121, dim=2000
+  [56/180] rf/entropy_1.0/treeshap/b=2000/ev=mlp: score=0.3119+/-0.166, dim=2000
+  [57/180] rf/entropy_1.0/treeshap/b=2000/ev=xgboost: score=0.3189+/-0.184, dim=2000
+  [58/180] lightgbm/entropy_1.0/treeshap/b=2000/ev=lightgbm: score=0.2655+/-0.156, dim=2000
+  [59/180] lightgbm/entropy_1.0/treeshap/b=2000/ev=mlp: score=0.2649+/-0.123, dim=2000
+  [60/180] lightgbm/entropy_1.0/treeshap/b=2000/ev=xgboost: score=0.3474+/-0.102, dim=2000
+  [61/180] mlp/entropy_1.0/treeshap/b=2000/ev=lightgbm: score=0.2804+/-0.197, dim=2000
+  [62/180] mlp/entropy_1.0/treeshap/b=2000/ev=mlp: score=0.2855+/-0.136, dim=2000
+  [63/180] mlp/entropy_1.0/treeshap/b=2000/ev=xgboost: score=0.3173+/-0.150, dim=2000
+  [64/180] rf/entropy_1.0/lightgbm_gain/b=2000/ev=lightgbm: score=0.3267+/-0.162, dim=2000
+  [65/180] rf/entropy_1.0/lightgbm_gain/b=2000/ev=mlp: score=0.3508+/-0.140, dim=2000
+  [66/180] rf/entropy_1.0/lightgbm_gain/b=2000/ev=xgboost: score=0.3404+/-0.213, dim=2000
+  [67/180] lightgbm/entropy_1.0/lightgbm_gain/b=2000/ev=lightgbm: score=0.3254+/-0.131, dim=2000
+  [68/180] lightgbm/entropy_1.0/lightgbm_gain/b=2000/ev=mlp: score=0.2728+/-0.093, dim=2000
+  [69/180] lightgbm/entropy_1.0/lightgbm_gain/b=2000/ev=xgboost: score=0.3197+/-0.086, dim=2000
+  [70/180] mlp/entropy_1.0/lightgbm_gain/b=2000/ev=lightgbm: score=0.2926+/-0.170, dim=2000
+  [71/180] mlp/entropy_1.0/lightgbm_gain/b=2000/ev=mlp: score=0.2673+/-0.130, dim=2000
+  [72/180] mlp/entropy_1.0/lightgbm_gain/b=2000/ev=xgboost: score=0.3032+/-0.140, dim=2000
+  [73/180] rf/top_3/treeshap/b=50/ev=lightgbm: score=0.2643+/-0.112, dim=50
+  [74/180] rf/top_3/treeshap/b=50/ev=mlp: score=0.2895+/-0.151, dim=50
+  [75/180] rf/top_3/treeshap/b=50/ev=xgboost: score=0.2522+/-0.165, dim=50
+  [76/180] lightgbm/top_3/treeshap/b=50/ev=lightgbm: score=0.2596+/-0.119, dim=50
+  [77/180] lightgbm/top_3/treeshap/b=50/ev=mlp: score=0.2360+/-0.153, dim=50
+  [78/180] lightgbm/top_3/treeshap/b=50/ev=xgboost: score=0.1894+/-0.064, dim=50
+  [79/180] mlp/top_3/treeshap/b=50/ev=lightgbm: score=0.3377+/-0.169, dim=50
+  [80/180] mlp/top_3/treeshap/b=50/ev=mlp: score=0.2966+/-0.183, dim=50
+  [81/180] mlp/top_3/treeshap/b=50/ev=xgboost: score=0.3331+/-0.170, dim=50
+  [82/180] rf/top_3/lightgbm_gain/b=50/ev=lightgbm: score=0.3638+/-0.149, dim=50
+  [83/180] rf/top_3/lightgbm_gain/b=50/ev=mlp: score=0.3143+/-0.124, dim=50
+  [84/180] rf/top_3/lightgbm_gain/b=50/ev=xgboost: score=0.3369+/-0.156, dim=50
+  [85/180] lightgbm/top_3/lightgbm_gain/b=50/ev=lightgbm: score=0.3118+/-0.179, dim=50
+  [86/180] lightgbm/top_3/lightgbm_gain/b=50/ev=mlp: score=0.2623+/-0.065, dim=50
+  [87/180] lightgbm/top_3/lightgbm_gain/b=50/ev=xgboost: score=0.3144+/-0.126, dim=50
+  [88/180] mlp/top_3/lightgbm_gain/b=50/ev=lightgbm: score=0.3225+/-0.155, dim=50
+  [89/180] mlp/top_3/lightgbm_gain/b=50/ev=mlp: score=0.3193+/-0.163, dim=50
+  [90/180] mlp/top_3/lightgbm_gain/b=50/ev=xgboost: score=0.3618+/-0.180, dim=50
+  [91/180] rf/top_3/treeshap/b=500/ev=lightgbm: score=0.3246+/-0.122, dim=500
+  [92/180] rf/top_3/treeshap/b=500/ev=mlp: score=0.3084+/-0.147, dim=500
+  [93/180] rf/top_3/treeshap/b=500/ev=xgboost: score=0.2844+/-0.174, dim=500
+  [94/180] lightgbm/top_3/treeshap/b=500/ev=lightgbm: score=0.2736+/-0.129, dim=500
+  [95/180] lightgbm/top_3/treeshap/b=500/ev=mlp: score=0.2698+/-0.113, dim=500
+  [96/180] lightgbm/top_3/treeshap/b=500/ev=xgboost: score=0.2559+/-0.082, dim=500
+  [97/180] mlp/top_3/treeshap/b=500/ev=lightgbm: score=0.3329+/-0.136, dim=500
+  [98/180] mlp/top_3/treeshap/b=500/ev=mlp: score=0.2844+/-0.119, dim=500
+  [99/180] mlp/top_3/treeshap/b=500/ev=xgboost: score=0.3557+/-0.179, dim=500
+  [100/180] rf/top_3/lightgbm_gain/b=500/ev=lightgbm: score=0.3065+/-0.187, dim=500
+  [101/180] rf/top_3/lightgbm_gain/b=500/ev=mlp: score=0.3039+/-0.183, dim=500
+  [102/180] rf/top_3/lightgbm_gain/b=500/ev=xgboost: score=0.3271+/-0.162, dim=500
+  [103/180] lightgbm/top_3/lightgbm_gain/b=500/ev=lightgbm: score=0.2610+/-0.125, dim=500
+  [104/180] lightgbm/top_3/lightgbm_gain/b=500/ev=mlp: score=0.2696+/-0.050, dim=500
+  [105/180] lightgbm/top_3/lightgbm_gain/b=500/ev=xgboost: score=0.3237+/-0.061, dim=500
+  [106/180] mlp/top_3/lightgbm_gain/b=500/ev=lightgbm: score=0.2538+/-0.153, dim=500
+  [107/180] mlp/top_3/lightgbm_gain/b=500/ev=mlp: score=0.2811+/-0.153, dim=500
+  [108/180] mlp/top_3/lightgbm_gain/b=500/ev=xgboost: score=0.3413+/-0.175, dim=500
+  [109/180] rf/top_3/treeshap/b=1000/ev=lightgbm: score=0.3249+/-0.162, dim=1000
+  [110/180] rf/top_3/treeshap/b=1000/ev=mlp: score=0.2934+/-0.170, dim=1000
+  [111/180] rf/top_3/treeshap/b=1000/ev=xgboost: score=0.3368+/-0.170, dim=1000
+  [112/180] lightgbm/top_3/treeshap/b=1000/ev=lightgbm: score=0.2240+/-0.113, dim=1000
+  [113/180] lightgbm/top_3/treeshap/b=1000/ev=mlp: score=0.2741+/-0.104, dim=1000
+  [114/180] lightgbm/top_3/treeshap/b=1000/ev=xgboost: score=0.2660+/-0.116, dim=1000
+  [115/180] mlp/top_3/treeshap/b=1000/ev=lightgbm: score=0.2817+/-0.138, dim=1000
+  [116/180] mlp/top_3/treeshap/b=1000/ev=mlp: score=0.2941+/-0.126, dim=1000
+  [117/180] mlp/top_3/treeshap/b=1000/ev=xgboost: score=0.3021+/-0.195, dim=1000
+  [118/180] rf/top_3/lightgbm_gain/b=1000/ev=lightgbm: score=0.3450+/-0.172, dim=1000
+  [119/180] rf/top_3/lightgbm_gain/b=1000/ev=mlp: score=0.3157+/-0.164, dim=1000
+  [120/180] rf/top_3/lightgbm_gain/b=1000/ev=xgboost: score=0.3357+/-0.182, dim=1000
+  [121/180] lightgbm/top_3/lightgbm_gain/b=1000/ev=lightgbm: score=0.2762+/-0.108, dim=1000
+  [122/180] lightgbm/top_3/lightgbm_gain/b=1000/ev=mlp: score=0.2880+/-0.040, dim=1000
+  [123/180] lightgbm/top_3/lightgbm_gain/b=1000/ev=xgboost: score=0.3036+/-0.096, dim=1000
+  [124/180] mlp/top_3/lightgbm_gain/b=1000/ev=lightgbm: score=0.2534+/-0.193, dim=1000
+  [125/180] mlp/top_3/lightgbm_gain/b=1000/ev=mlp: score=0.2694+/-0.148, dim=1000
+  [126/180] mlp/top_3/lightgbm_gain/b=1000/ev=xgboost: score=0.3372+/-0.191, dim=1000
+  [127/180] rf/top_3/treeshap/b=2000/ev=lightgbm: score=0.3326+/-0.122, dim=2000
+  [128/180] rf/top_3/treeshap/b=2000/ev=mlp: score=0.3042+/-0.135, dim=2000
+  [129/180] rf/top_3/treeshap/b=2000/ev=xgboost: score=0.3321+/-0.184, dim=2000
+  [130/180] lightgbm/top_3/treeshap/b=2000/ev=lightgbm: score=0.2766+/-0.162, dim=2000
+  [131/180] lightgbm/top_3/treeshap/b=2000/ev=mlp: score=0.2975+/-0.099, dim=2000
+  [132/180] lightgbm/top_3/treeshap/b=2000/ev=xgboost: score=0.3095+/-0.106, dim=2000
+  [133/180] mlp/top_3/treeshap/b=2000/ev=lightgbm: score=0.2606+/-0.180, dim=2000
+  [134/180] mlp/top_3/treeshap/b=2000/ev=mlp: score=0.2710+/-0.121, dim=2000
+  [135/180] mlp/top_3/treeshap/b=2000/ev=xgboost: score=0.3098+/-0.146, dim=2000
+  [136/180] rf/top_3/lightgbm_gain/b=2000/ev=lightgbm: score=0.2976+/-0.160, dim=2000
+  [137/180] rf/top_3/lightgbm_gain/b=2000/ev=mlp: score=0.3139+/-0.166, dim=2000
+  [138/180] rf/top_3/lightgbm_gain/b=2000/ev=xgboost: score=0.3251+/-0.214, dim=2000
+  [139/180] lightgbm/top_3/lightgbm_gain/b=2000/ev=lightgbm: score=0.2721+/-0.093, dim=2000
+  [140/180] lightgbm/top_3/lightgbm_gain/b=2000/ev=mlp: score=0.2810+/-0.059, dim=2000
+  [141/180] lightgbm/top_3/lightgbm_gain/b=2000/ev=xgboost: score=0.3077+/-0.093, dim=2000
+  [142/180] mlp/top_3/lightgbm_gain/b=2000/ev=lightgbm: score=0.2826+/-0.163, dim=2000
+  [143/180] mlp/top_3/lightgbm_gain/b=2000/ev=mlp: score=0.2950+/-0.144, dim=2000
+  [144/180] mlp/top_3/lightgbm_gain/b=2000/ev=xgboost: score=0.3142+/-0.145, dim=2000
+  [145/180] rf/greedy_fill_s25/treeshap/b=50/ev=lightgbm: score=0.2944+/-0.149, dim=50
+  [146/180] rf/greedy_fill_s25/treeshap/b=50/ev=mlp: score=0.2944+/-0.149, dim=50
+  [147/180] rf/greedy_fill_s25/treeshap/b=50/ev=xgboost: score=0.2944+/-0.149, dim=50
+  [148/180] lightgbm/greedy_fill_s25/treeshap/b=50/ev=lightgbm: score=0.3112+/-0.147, dim=50
+  [149/180] lightgbm/greedy_fill_s25/treeshap/b=50/ev=mlp: score=0.3112+/-0.147, dim=50
+  [150/180] lightgbm/greedy_fill_s25/treeshap/b=50/ev=xgboost: score=0.3112+/-0.147, dim=50
+  [151/180] mlp/greedy_fill_s25/treeshap/b=50/ev=lightgbm: score=0.3659+/-0.168, dim=50
+  [152/180] mlp/greedy_fill_s25/treeshap/b=50/ev=mlp: score=0.3659+/-0.168, dim=50
+  [153/180] mlp/greedy_fill_s25/treeshap/b=50/ev=xgboost: score=0.3659+/-0.168, dim=50
+  [154/180] rf/greedy_fill_s25/treeshap/b=500/ev=lightgbm: score=0.3072+/-0.135, dim=500
+  [155/180] rf/greedy_fill_s25/treeshap/b=500/ev=mlp: score=0.3072+/-0.135, dim=500
+  [156/180] rf/greedy_fill_s25/treeshap/b=500/ev=xgboost: score=0.3072+/-0.135, dim=500
+  [157/180] lightgbm/greedy_fill_s25/treeshap/b=500/ev=lightgbm: score=0.3175+/-0.074, dim=500
+  [158/180] lightgbm/greedy_fill_s25/treeshap/b=500/ev=mlp: score=0.3175+/-0.074, dim=500
+  [159/180] lightgbm/greedy_fill_s25/treeshap/b=500/ev=xgboost: score=0.3175+/-0.074, dim=500
+  [160/180] mlp/greedy_fill_s25/treeshap/b=500/ev=lightgbm: score=0.3722+/-0.173, dim=500
+  [161/180] mlp/greedy_fill_s25/treeshap/b=500/ev=mlp: score=0.3722+/-0.173, dim=500
+  [162/180] mlp/greedy_fill_s25/treeshap/b=500/ev=xgboost: score=0.3722+/-0.173, dim=500
+  [163/180] rf/greedy_fill_s25/treeshap/b=1000/ev=lightgbm: score=0.3012+/-0.150, dim=1000
+  [164/180] rf/greedy_fill_s25/treeshap/b=1000/ev=mlp: score=0.3012+/-0.150, dim=1000
+  [165/180] rf/greedy_fill_s25/treeshap/b=1000/ev=xgboost: score=0.3012+/-0.150, dim=1000
+  [166/180] lightgbm/greedy_fill_s25/treeshap/b=1000/ev=lightgbm: score=0.2654+/-0.155, dim=1000
+  [167/180] lightgbm/greedy_fill_s25/treeshap/b=1000/ev=mlp: score=0.2654+/-0.155, dim=1000
+  [168/180] lightgbm/greedy_fill_s25/treeshap/b=1000/ev=xgboost: score=0.2654+/-0.155, dim=1000
+  [169/180] mlp/greedy_fill_s25/treeshap/b=1000/ev=lightgbm: score=0.2746+/-0.130, dim=1000
+  [170/180] mlp/greedy_fill_s25/treeshap/b=1000/ev=mlp: score=0.2746+/-0.130, dim=1000
+  [171/180] mlp/greedy_fill_s25/treeshap/b=1000/ev=xgboost: score=0.2746+/-0.130, dim=1000
+  [172/180] rf/greedy_fill_s25/treeshap/b=2000/ev=lightgbm: score=0.3166+/-0.157, dim=2000
+  [173/180] rf/greedy_fill_s25/treeshap/b=2000/ev=mlp: score=0.3166+/-0.157, dim=2000
+  [174/180] rf/greedy_fill_s25/treeshap/b=2000/ev=xgboost: score=0.3166+/-0.157, dim=2000
+  [175/180] lightgbm/greedy_fill_s25/treeshap/b=2000/ev=lightgbm: score=0.2927+/-0.154, dim=2000
+  [176/180] lightgbm/greedy_fill_s25/treeshap/b=2000/ev=mlp: score=0.2927+/-0.154, dim=2000
+  [177/180] lightgbm/greedy_fill_s25/treeshap/b=2000/ev=xgboost: score=0.2927+/-0.154, dim=2000
+  [178/180] mlp/greedy_fill_s25/treeshap/b=2000/ev=lightgbm: score=0.2883+/-0.088, dim=2000
+  [179/180] mlp/greedy_fill_s25/treeshap/b=2000/ev=mlp: score=0.2883+/-0.088, dim=2000
+  [180/180] mlp/greedy_fill_s25/treeshap/b=2000/ev=xgboost: score=0.2883+/-0.088, dim=2000
+  Cached result to /home/scat9264/.cache/kirby/hybrid_search/c4f883c453cb8416.pkl
+ done 2515.7s (alloc=entropy_1.0, budget=50, score=0.3791)
+  Precompute complete: 1/1 searches in 2516s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S01: SIMILARITY-ACTIVITY CORRELATION BASELINE
+======================================================================
+  Computing feature importance (lgbm_gain)...
+
+  antiberty_cdr (dim=1024):
+    SAC rho=0.2079, weighted=0.3428, viol=0.414/0.393, SALI=592716.664/592714.882
+
+  antiberty (dim=1024):
+    SAC rho=0.2062, weighted=0.3404, viol=0.415/0.390, SALI=592716.663/592714.881
+
+  igt5 (dim=1024):
+    SAC rho=0.1088, weighted=0.2924, viol=0.434/0.418, SALI=592716.980/592714.908
+
+  prot_t5 (dim=2048):
+    SAC rho=0.0799, weighted=0.2605, viol=0.432/0.431, SALI=592716.168/592714.900
+
+  prot_t5_cdr (dim=2048):
+    SAC rho=0.0799, weighted=0.2605, viol=0.432/0.431, SALI=592716.168/592714.900
+
+  abroberta_cdr (dim=1536):
+    SAC rho=0.0938, weighted=0.2234, viol=0.438/0.430, SALI=592716.402/592714.900
+
+  esm2_early (dim=2560):
+    SAC rho=0.0868, weighted=0.3195, viol=0.435/0.413, SALI=592716.091/592714.896
+
+  abroberta (dim=1536):
+    SAC rho=0.0938, weighted=0.2234, viol=0.438/0.430, SALI=592716.402/592714.900
+
+  ablang2 (dim=480):
+    SAC rho=0.1080, weighted=0.2669, viol=0.415/0.418, SALI=592717.842/592714.900
+
+  onehot (dim=5600):
+    SAC rho=-0.0073, weighted=0.3869, viol=0.467/0.403, SALI=592716.098/1080270.072
+
+  saprot_cdr (dim=2560):
+    SAC rho=0.0564, weighted=0.2492, viol=0.453/0.437, SALI=592716.076/592714.907
+
+  saprot (dim=2560):
+    SAC rho=0.0564, weighted=0.2492, viol=0.453/0.437, SALI=592716.076/592714.907
+
+  esm2_midlayers (dim=2560):
+    SAC rho=0.0586, weighted=0.2601, viol=0.448/0.421, SALI=592716.096/592714.909
+
+  blosum (dim=5600):
+    SAC rho=-0.0598, weighted=0.2244, viol=0.481/0.416, SALI=592715.736/994557.525
+
+  esm2 (dim=2560):
+    SAC rho=0.1212, weighted=0.2847, viol=0.429/0.430, SALI=592716.047/592714.901
+
+  esm2_cdr3 (dim=2560):
+    SAC rho=0.1212, weighted=0.2986, viol=0.429/0.415, SALI=592716.047/592714.898
+
+  esm2_cdr (dim=2560):
+    SAC rho=0.1212, weighted=0.2865, viol=0.429/0.423, SALI=592716.047/592714.897
+
+  esm2_layer24 (dim=2560):
+    SAC rho=0.0557, weighted=0.2361, viol=0.446/0.443, SALI=592716.082/592714.906
+
+  esmc_cdr (dim=2304):
+    SAC rho=0.0488, weighted=0.2476, viol=0.442/0.442, SALI=592716.154/592714.899
+
+  esmc (dim=2304):
+    SAC rho=0.0488, weighted=0.2476, viol=0.442/0.442, SALI=592716.154/592714.899
+
+  aac (dim=40):
+    SAC rho=0.1531, weighted=0.2864, viol=0.436/0.433, SALI=592726.190/592714.929
+
+  esm2_concat (dim=1280):
+    SAC rho=0.1392, weighted=0.2407, viol=0.457/0.451, SALI=592716.534/592714.908
+
+  esm3_cdr (dim=3072):
+    SAC rho=0.0472, weighted=0.1955, viol=0.449/0.449, SALI=592716.009/592714.906
+
+  esm3 (dim=3072):
+    SAC rho=0.0472, weighted=0.1955, viol=0.449/0.449, SALI=592716.009/592714.906
+
+  esm2_per_cdr (dim=7680):
+    SAC rho=0.1212, weighted=0.2833, viol=0.429/0.431, SALI=592715.514/592714.902
+
+  esm2_per_region (dim=17920):
+    SAC rho=0.1212, weighted=0.2812, viol=0.429/0.440, SALI=592715.268/592714.902
+
+  esm2_entropy_top20 (dim=2560):
+    SAC rho=0.0812, weighted=0.2675, viol=0.443/0.437, SALI=592716.014/592714.889
+
+  Summary:
+  Rep               Dim       SAC     SAC_w   Viol% Viol_w%
+  --------------- ----- --------- --------- ------- -------
+  antiberty_cdr    1024    0.2079    0.3428   0.414   0.393
+  antiberty        1024    0.2062    0.3404   0.415   0.390
+  igt5             1024    0.1088    0.2924   0.434   0.418
+  prot_t5          2048    0.0799    0.2605   0.432   0.431
+  prot_t5_cdr      2048    0.0799    0.2605   0.432   0.431
+  abroberta_cdr    1536    0.0938    0.2234   0.438   0.430
+  esm2_early       2560    0.0868    0.3195   0.435   0.413
+  abroberta        1536    0.0938    0.2234   0.438   0.430
+  ablang2           480    0.1080    0.2669   0.415   0.418
+  onehot           5600   -0.0073    0.3869   0.467   0.403
+  saprot_cdr       2560    0.0564    0.2492   0.453   0.437
+  saprot           2560    0.0564    0.2492   0.453   0.437
+  esm2_midlayers   2560    0.0586    0.2601   0.448   0.421
+  blosum           5600   -0.0598    0.2244   0.481   0.416
+  esm2             2560    0.1212    0.2847   0.429   0.430
+  esm2_cdr3        2560    0.1212    0.2986   0.429   0.415
+  esm2_cdr         2560    0.1212    0.2865   0.429   0.423
+  esm2_layer24     2560    0.0557    0.2361   0.446   0.443
+  esmc_cdr         2304    0.0488    0.2476   0.442   0.442
+  esmc             2304    0.0488    0.2476   0.442   0.442
+  aac                40    0.1531    0.2864   0.436   0.433
+  esm2_concat      1280    0.1392    0.2407   0.457   0.451
+  esm3_cdr         3072    0.0472    0.1955   0.449   0.449
+  esm3             3072    0.0472    0.1955   0.449   0.449
+  esm2_per_cdr     7680    0.1212    0.2833   0.429   0.431
+  esm2_per_region 17920    0.1212    0.2812   0.429   0.440
+  esm2_entropy_top20  2560    0.0812    0.2675   0.443   0.437
+  [saved tests/results/similarity/s01_similarity_baseline/flab_immunogenicity_marks.json]
+  s01 done in 29.7s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S02: HYBRID PROPERTY-AWARE SIMILARITY
+======================================================================
+  Computing feature importance (lgbm_gain) for weighted baselines...
+  antiberty_cdr: SAC=0.2079, SAC_w=0.3428, dim=1024
+  antiberty: SAC=0.2062, SAC_w=0.3404, dim=1024
+  igt5: SAC=0.1088, SAC_w=0.2924, dim=1024
+  prot_t5: SAC=0.0799, SAC_w=0.2605, dim=2048
+  prot_t5_cdr: SAC=0.0799, SAC_w=0.2605, dim=2048
+  abroberta_cdr: SAC=0.0938, SAC_w=0.2234, dim=1536
+  esm2_early: SAC=0.0868, SAC_w=0.3195, dim=2560
+  abroberta: SAC=0.0938, SAC_w=0.2234, dim=1536
+  ablang2: SAC=0.1080, SAC_w=0.2669, dim=480
+  onehot: SAC=-0.0073, SAC_w=0.3869, dim=5600
+  saprot_cdr: SAC=0.0564, SAC_w=0.2492, dim=2560
+  saprot: SAC=0.0564, SAC_w=0.2492, dim=2560
+  esm2_midlayers: SAC=0.0586, SAC_w=0.2601, dim=2560
+  blosum: SAC=-0.0598, SAC_w=0.2244, dim=5600
+  esm2: SAC=0.1212, SAC_w=0.2847, dim=2560
+  esm2_cdr3: SAC=0.1212, SAC_w=0.2986, dim=2560
+  esm2_cdr: SAC=0.1212, SAC_w=0.2865, dim=2560
+  esm2_layer24: SAC=0.0557, SAC_w=0.2361, dim=2560
+  esmc_cdr: SAC=0.0488, SAC_w=0.2476, dim=2304
+  esmc: SAC=0.0488, SAC_w=0.2476, dim=2304
+  aac: SAC=0.1531, SAC_w=0.2864, dim=40
+  esm2_concat: SAC=0.1392, SAC_w=0.2407, dim=1280
+  esm3_cdr: SAC=0.0472, SAC_w=0.1955, dim=3072
+  esm3: SAC=0.0472, SAC_w=0.1955, dim=3072
+  esm2_per_cdr: SAC=0.1212, SAC_w=0.2833, dim=7680
+  esm2_per_region: SAC=0.1212, SAC_w=0.2812, dim=17920
+  esm2_entropy_top20: SAC=0.0812, SAC_w=0.2675, dim=2560
+
+  Best individual rep: antiberty_cdr (SAC=0.2079)
+  Best individual rep (weighted): onehot (SAC_w=0.3869)
+  Concat: SAC=0.0951, SAC_w=0.3468, dim=82632
+  Running hybrid search (budget=100, speed=fast)...
+    Search done (4038.2s), dim=1000
+    Hybrid unweighted: SAC=0.4224, viol=0.388
+
+  Weight method: lightgbm_gain
+    Hybrid weighted:   SAC=0.3698, viol=0.411
+    Delta SAC from best rep (antiberty_cdr): +0.1619
+
+  Summary:
+    Best individual rep: antiberty_cdr (SAC=0.2079, dim=1024)
+    Best hybrid:        lightgbm_gain (SAC=0.3698, dim=1000)
+    Delta vs best rep:  +0.1619
+  [saved tests/results/similarity/s02_hybrid_similarity/flab_immunogenicity_marks.json]
+  s02 done in 4079.3s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S03: FEATURE CONCENTRATION ANALYSIS
+======================================================================
+
+  antiberty_cdr (dim=1024):
+    MI full=0.0000 (1024d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  antiberty (dim=1024):
+    MI full=0.0000 (1024d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  igt5 (dim=1024):
+    MI full=0.0000 (1024d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  prot_t5 (dim=2048):
+    MI full=0.0000 (2048d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  prot_t5_cdr (dim=2048):
+    MI full=0.0000 (2048d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  abroberta_cdr (dim=1536):
+    MI full=0.0000 (1536d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  esm2_early (dim=2560):
+    MI full=0.0000 (2560d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  abroberta (dim=1536):
+    MI full=0.0000 (1536d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  ablang2 (dim=480):
+    MI full=0.0000 (480d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  onehot (dim=5600):
+    MI full=0.0000 (5600d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  saprot_cdr (dim=2560):
+    MI full=0.0000 (2560d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  saprot (dim=2560):
+    MI full=0.0000 (2560d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  esm2_midlayers (dim=2560):
+    MI full=0.0000 (2560d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  blosum (dim=5600):
+    MI full=0.0000 (5600d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  esm2 (dim=2560):
+    MI full=0.0000 (2560d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  esm2_cdr3 (dim=2560):
+    MI full=0.0000 (2560d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  esm2_cdr (dim=2560):
+    MI full=0.0000 (2560d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  esm2_layer24 (dim=2560):
+    MI full=0.0000 (2560d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  esmc_cdr (dim=2304):
+    MI full=0.0000 (2304d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  esmc (dim=2304):
+    MI full=0.0000 (2304d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  aac (dim=40):
+    MI full=0.0000 (40d), selected=0.0000 (38d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  esm2_concat (dim=1280):
+    MI full=0.0000 (1280d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  esm3_cdr (dim=3072):
+    MI full=0.0000 (3072d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  esm3 (dim=3072):
+    MI full=0.0000 (3072d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  esm2_per_cdr (dim=7680):
+    MI full=0.0000 (7680d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  esm2_per_region (dim=17920):
+    MI full=0.0000 (17920d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  esm2_entropy_top20 (dim=2560):
+    MI full=0.0000 (2560d), selected=0.0000 (37d), random=0.0000, pca=0.0000
+    MI density ratio (selected/full): nanx
+
+  Gini coefficients (lightgbm_gain):
+    antiberty_cdr: Gini=0.961
+    antiberty: Gini=0.962
+    igt5: Gini=0.958
+    prot_t5: Gini=0.974
+    prot_t5_cdr: Gini=0.974
+    abroberta_cdr: Gini=0.970
+    esm2_early: Gini=0.982
+    abroberta: Gini=0.970
+    ablang2: Gini=0.913
+    onehot: Gini=0.993
+    saprot_cdr: Gini=0.977
+    saprot: Gini=0.977
+    esm2_midlayers: Gini=0.980
+    blosum: Gini=0.991
+    esm2: Gini=0.977
+    esm2_cdr3: Gini=0.979
+    esm2_cdr: Gini=0.978
+    esm2_layer24: Gini=0.978
+    esmc_cdr: Gini=0.979
+    esmc: Gini=0.979
+    aac: Gini=0.681
+    esm2_concat: Gini=0.960
+    esm3_cdr: Gini=0.983
+    esm3: Gini=0.983
+    esm2_per_cdr: Gini=0.994
+    esm2_per_region: Gini=0.998
+    esm2_entropy_top20: Gini=0.983
+  [saved tests/results/similarity/s03_feature_concentration/flab_immunogenicity_marks.json]
+  s03 done in 48.0s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S04: PREDICTION PERFORMANCE ON ACTIVITY CLIFFS
+======================================================================
+  SKIP: S04 requires molecular ECFP4 (domain=antibody). Use S12 for cross-domain cliffs.
+  [saved tests/results/similarity/s04_activity_cliffs/flab_immunogenicity_marks.json]
+  s04 done in 0.1s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S05: kNN PREDICTION WITH HYBRID DISTANCE
+======================================================================
+  WARNING: ecfp4 not available, skipping cliff stratification
+
+  Condition: hybrid_unweighted
+    k=5: spearman=0.2741+/-0.131, cliff=nan, noncliff=0.2741
+    k=10: spearman=0.3444+/-0.197, cliff=nan, noncliff=0.3444
+
+  Condition: hybrid_weighted
+    k=5: spearman=0.2570+/-0.166, cliff=nan, noncliff=0.2570
+    k=10: spearman=0.2815+/-0.164, cliff=nan, noncliff=0.2815
+
+  Individual representation kNN baselines (metric=spearman):
+    antiberty_cdr (dim=1024): kNN spearman=0.3725+/-0.154, weighted spearman=0.3609+/-0.164 (delta=-0.0116)
+    antiberty (dim=1024): kNN spearman=0.3584+/-0.150, weighted spearman=0.3725+/-0.229 (delta=+0.0141)
+    igt5 (dim=1024): kNN spearman=0.3648+/-0.167, weighted spearman=0.3175+/-0.212 (delta=-0.0473)
+    prot_t5 (dim=2048): kNN spearman=0.2493+/-0.154, weighted spearman=0.2461+/-0.172 (delta=-0.0032)
+    prot_t5_cdr (dim=2048): kNN spearman=0.2493+/-0.154, weighted spearman=0.2461+/-0.172 (delta=-0.0032)
+    abroberta_cdr (dim=1536): kNN spearman=0.3137+/-0.207, weighted spearman=0.3306+/-0.245 (delta=+0.0169)
+    esm2_early (dim=2560): kNN spearman=0.2028+/-0.113, weighted spearman=0.2118+/-0.079 (delta=+0.0090)
+    abroberta (dim=1536): kNN spearman=0.3137+/-0.207, weighted spearman=0.3306+/-0.245 (delta=+0.0169)
+    ablang2 (dim=480): kNN spearman=0.3382+/-0.176, weighted spearman=0.2848+/-0.147 (delta=-0.0534)
+    onehot (dim=5600): kNN spearman=0.1315+/-0.155, weighted spearman=0.2037+/-0.143 (delta=+0.0722)
+    saprot_cdr (dim=2560): kNN spearman=0.2042+/-0.087, weighted spearman=0.1470+/-0.138 (delta=-0.0572)
+    saprot (dim=2560): kNN spearman=0.2042+/-0.087, weighted spearman=0.1470+/-0.138 (delta=-0.0572)
+    esm2_midlayers (dim=2560): kNN spearman=0.2690+/-0.137, weighted spearman=0.2207+/-0.151 (delta=-0.0484)
+    blosum (dim=5600): kNN spearman=0.1529+/-0.143, weighted spearman=0.2121+/-0.110 (delta=+0.0591)
+    esm2 (dim=2560): kNN spearman=0.2590+/-0.185, weighted spearman=0.1784+/-0.203 (delta=-0.0806)
+    esm2_cdr3 (dim=2560): kNN spearman=0.2590+/-0.185, weighted spearman=0.2119+/-0.177 (delta=-0.0471)
+    esm2_cdr (dim=2560): kNN spearman=0.2590+/-0.185, weighted spearman=0.2025+/-0.208 (delta=-0.0564)
+    esm2_layer24 (dim=2560): kNN spearman=0.2285+/-0.129, weighted spearman=0.0985+/-0.179 (delta=-0.1300)
+    esmc_cdr (dim=2304): kNN spearman=0.2761+/-0.237, weighted spearman=0.2095+/-0.159 (delta=-0.0666)
+    esmc (dim=2304): kNN spearman=0.2761+/-0.237, weighted spearman=0.2095+/-0.159 (delta=-0.0666)
+    aac (dim=40): kNN spearman=0.2290+/-0.111, weighted spearman=0.2537+/-0.152 (delta=+0.0247)
+    esm2_concat (dim=1280): kNN spearman=0.2554+/-0.223, weighted spearman=0.2127+/-0.193 (delta=-0.0427)
+    esm3_cdr (dim=3072): kNN spearman=0.2370+/-0.136, weighted spearman=0.2802+/-0.141 (delta=+0.0431)
+    esm3 (dim=3072): kNN spearman=0.2370+/-0.136, weighted spearman=0.2802+/-0.141 (delta=+0.0431)
+    esm2_per_cdr (dim=7680): kNN spearman=0.2590+/-0.185, weighted spearman=0.1811+/-0.208 (delta=-0.0779)
+    esm2_per_region (dim=17920): kNN spearman=0.2590+/-0.185, weighted spearman=0.2340+/-0.223 (delta=-0.0249)
+    esm2_entropy_top20 (dim=2560): kNN spearman=0.2171+/-0.206, weighted spearman=0.2777+/-0.188 (delta=+0.0606)
+
+  Summary (best k per condition):
+    hybrid_unweighted: best k=10, spearman=0.3444
+    hybrid_weighted: best k=10, spearman=0.2815
+
+  Best individual rep baseline: antiberty_cdr (kNN spearman=0.3725)
+  Hybrid weighted kNN spearman=0.2815 (delta vs antiberty_cdr: -0.0910)
+  [saved tests/results/similarity/s05_knn_prediction/flab_immunogenicity_marks.json]
+  s05 done in 779.6s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S06: APPLICABILITY DOMAIN
+======================================================================
+
+  k=5:
+    Neutral-model AD: concat=0.3555, hybrid=0.3449, hybrid_w=0.1571
+    Spearman(dist, |error|): concat=0.2540, concat_w=0.2178, hybrid=0.2756, hybrid_w=0.1624
+
+  Conformal calibration (CV):
+    Concat:  PICP=0.866, MPIW=31.822
+    Hybrid:  PICP=0.848, MPIW=30.321
+  [saved tests/results/similarity/s06_applicability_domain/flab_immunogenicity_marks.json]
+  s06 done in 383.9s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S07: NOISE DETECTION BRIDGE (Supplementary)
+======================================================================
+
+  Activity cliff detection:
+    Concat cliffs: 57
+    Hybrid cliffs: 11
+
+  kNN noise detection:
+    Concat noise flagged: 22
+    Hybrid noise flagged: 22
+
+  Neighborhood consensus (noise vs cliff discrimination):
+
+  FP rate (cliff-in-noise):
+    Concat: 0.727 (16 / 22)
+    Hybrid: 0.364 (8 / 22)
+    Reduction: 50.0%
+
+  ActivityCliffAwareEstimator:
+    Concat likely cliffs: 22
+    Hybrid likely cliffs: 13
+  [saved tests/results/similarity/s07_noise_bridge/flab_immunogenicity_marks.json]
+  s07 done in 3.5s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S08: OPTIMAL DIMENSION FOR SIMILARITY VS PREDICTION
+======================================================================
+
+  Budget=50:
+    dim=50 (MLE_ID=11.0): RF_spearman=0.2813, kNN_spearman=0.1434, SAC=0.3234, viol=0.408, dist_corr=0.431
+
+  Budget=500:
+    dim=500 (MLE_ID=15.8): RF_spearman=0.2714, kNN_spearman=0.2790, SAC=0.3646, viol=0.412, dist_corr=0.558
+
+  Budget=1000:
+    dim=1000 (MLE_ID=16.5): RF_spearman=0.3397, kNN_spearman=0.2741, SAC=0.3698, viol=0.411, dist_corr=0.608
+
+  Budget=2000:
+    dim=1965 (MLE_ID=16.6): RF_spearman=0.3159, kNN_spearman=0.3035, SAC=0.3749, viol=0.406, dist_corr=0.619
+
+  Individual rep baselines:
+    antiberty_cdr (dim=1024): RF_spearman=0.3640, kNN_spearman=0.3198, SAC=0.2079, SAC_w=0.3428
+    antiberty (dim=1024): RF_spearman=0.3371, kNN_spearman=0.3189, SAC=0.2062, SAC_w=0.3404
+    igt5 (dim=1024): RF_spearman=0.3411, kNN_spearman=0.3351, SAC=0.1088, SAC_w=0.2924
+    prot_t5 (dim=2048): RF_spearman=0.2841, kNN_spearman=0.2715, SAC=0.0799, SAC_w=0.2605
+    prot_t5_cdr (dim=2048): RF_spearman=0.2841, kNN_spearman=0.2715, SAC=0.0799, SAC_w=0.2605
+    abroberta_cdr (dim=1536): RF_spearman=0.2642, kNN_spearman=0.2649, SAC=0.0938, SAC_w=0.2234
+    esm2_early (dim=2560): RF_spearman=0.2179, kNN_spearman=0.2173, SAC=0.0868, SAC_w=0.3195
+    abroberta (dim=1536): RF_spearman=0.2642, kNN_spearman=0.2649, SAC=0.0938, SAC_w=0.2234
+    ablang2 (dim=480): RF_spearman=0.2766, kNN_spearman=0.3362, SAC=0.1080, SAC_w=0.2669
+    onehot (dim=5600): RF_spearman=0.2442, kNN_spearman=0.1218, SAC=-0.0073, SAC_w=0.3869
+    saprot_cdr (dim=2560): RF_spearman=0.2149, kNN_spearman=0.1080, SAC=0.0564, SAC_w=0.2492
+    saprot (dim=2560): RF_spearman=0.2149, kNN_spearman=0.1080, SAC=0.0564, SAC_w=0.2492
+    esm2_midlayers (dim=2560): RF_spearman=0.2504, kNN_spearman=0.2292, SAC=0.0586, SAC_w=0.2601
+    blosum (dim=5600): RF_spearman=0.2637, kNN_spearman=0.1307, SAC=-0.0598, SAC_w=0.2244
+    esm2 (dim=2560): RF_spearman=0.2575, kNN_spearman=0.2056, SAC=0.1212, SAC_w=0.2847
+    esm2_cdr3 (dim=2560): RF_spearman=0.2575, kNN_spearman=0.2056, SAC=0.1212, SAC_w=0.2986
+    esm2_cdr (dim=2560): RF_spearman=0.2575, kNN_spearman=0.2056, SAC=0.1212, SAC_w=0.2865
+    esm2_layer24 (dim=2560): RF_spearman=0.1957, kNN_spearman=0.1690, SAC=0.0557, SAC_w=0.2361
+    esmc_cdr (dim=2304): RF_spearman=0.2607, kNN_spearman=0.2449, SAC=0.0488, SAC_w=0.2476
+    esmc (dim=2304): RF_spearman=0.2607, kNN_spearman=0.2449, SAC=0.0488, SAC_w=0.2476
+    aac (dim=40): RF_spearman=0.2399, kNN_spearman=0.1491, SAC=0.1531, SAC_w=0.2864
+    esm2_concat (dim=1280): RF_spearman=0.2177, kNN_spearman=0.1820, SAC=0.1392, SAC_w=0.2407
+    esm3_cdr (dim=3072): RF_spearman=0.2617, kNN_spearman=0.2417, SAC=0.0472, SAC_w=0.1955
+    esm3 (dim=3072): RF_spearman=0.2617, kNN_spearman=0.2417, SAC=0.0472, SAC_w=0.1955
+    esm2_per_cdr (dim=7680): RF_spearman=0.2459, kNN_spearman=0.2056, SAC=0.1212, SAC_w=0.2833
+    esm2_per_region (dim=17920): RF_spearman=0.2618, kNN_spearman=0.2056, SAC=0.1212, SAC_w=0.2812
+    esm2_entropy_top20 (dim=2560): RF_spearman=0.2857, kNN_spearman=0.2118, SAC=0.0812, SAC_w=0.2675
+  Best individual rep: antiberty_cdr (SAC=0.2079)
+
+  Concat reference (dim=82632):
+    RF_spearman=0.2684, kNN_spearman=0.2687, SAC=0.0951, SAC_w=0.3468
+
+  Optimal budgets: RF=1000, kNN=2000, SAC=2000
+
+  Pareto frontier (2 points):
+    budget=2000  SAC=0.3749  RF_spearman=0.3159
+    budget=1000  SAC=0.3698  RF_spearman=0.3397
+  Trade-off: SAC-opt@2000 vs RF-opt@1000
+    SAC loss at RF-optimum: 0.0051
+    RF loss at SAC-optimum: 0.0238
+  [saved tests/results/similarity/s08_optimal_dimension/flab_immunogenicity_marks.json]
+  s08 done in 6101.8s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S10: IMPORTANCE WEIGHTS FOR DOWNSTREAM TASKS
+======================================================================
+  Metric: spearman (lower_is_better=False)
+  Samples: 217, Reps: 27
+  Hybrid blueprint: alloc=entropy_1.0, budget=1000, imp=treeshap
+
+  --- Task 1: Weighted kNN Regression ---
+    aac: best k20 weighted=0.2635 (delta=-0.0738)
+    ablang2: best k20 weighted=0.3377 (delta=-0.0091)
+    abroberta: best k20 weighted=0.3432 (delta=+0.0358)
+    abroberta_cdr: best k20 weighted=0.3432 (delta=+0.0358)
+    antiberty: best k20 weighted=0.4140 (delta=+0.0199)
+    antiberty_cdr: best k20 weighted=0.4216 (delta=+0.0274)
+    blosum: best k10 weighted=0.2121 (delta=+0.0591)
+    esm2: best k20 weighted=0.2448 (delta=-0.0384)
+    esm2_cdr: best k20 weighted=0.2195 (delta=-0.0637)
+    esm2_cdr3: best k20 weighted=0.2536 (delta=-0.0296)
+    esm2_concat: best k20 weighted=0.2637 (delta=+0.0274)
+    esm2_early: best k10 weighted=0.2118 (delta=+0.0090)
+    esm2_entropy_top20: best k20 weighted=0.3158 (delta=+0.1002)
+    esm2_layer24: best k20 weighted=0.1158 (delta=-0.0571)
+    esm2_midlayers: best k20 weighted=0.2616 (delta=+0.0564)
+    esm2_per_cdr: best k20 weighted=0.2182 (delta=-0.0649)
+    esm2_per_region: best k20 weighted=0.2915 (delta=+0.0083)
+    esm3: best k10 weighted=0.2802 (delta=+0.0431)
+    esm3_cdr: best k10 weighted=0.2802 (delta=+0.0431)
+    esmc: best k5 weighted=0.2647 (delta=+0.0198)
+    esmc_cdr: best k5 weighted=0.2647 (delta=+0.0198)
+    igt5: best k20 weighted=0.3269 (delta=-0.0483)
+    onehot: best k20 weighted=0.2121 (delta=+0.0677)
+    prot_t5: best k20 weighted=0.2757 (delta=-0.0275)
+    prot_t5_cdr: best k20 weighted=0.2757 (delta=-0.0275)
+    saprot: best k5 weighted=0.1861 (delta=+0.0781)
+    saprot_cdr: best k5 weighted=0.1861 (delta=+0.0781)
+    hybrid k=5: uw=0.2741, w=0.2570 (delta=-0.0171)
+    hybrid k=10: uw=0.3444, w=0.2815 (delta=-0.0630)
+    hybrid k=20: uw=0.3583, w=0.3732 (delta=+0.0149)
+  [Task 1 elapsed: 708.6s]
+
+  --- Task 2: GP with Importance-Weighted RBF ---
+    aac: std=0.3281, weighted=0.3252 (delta=-0.0029)
+    ablang2: std=0.3118, weighted=0.2971 (delta=-0.0147)
+    abroberta: std=0.3481, weighted=0.3446 (delta=-0.0035)
+    abroberta_cdr: std=0.3481, weighted=0.3447 (delta=-0.0034)
+    antiberty: std=0.3581, weighted=0.3632 (delta=+0.0051)
+    antiberty_cdr: std=0.3567, weighted=0.3318 (delta=-0.0249)
+    blosum: std=0.2270, weighted=0.2509 (delta=+0.0239)
+    esm2: std=0.3247, weighted=0.2479 (delta=-0.0768)
+    esm2_cdr: std=0.3247, weighted=0.2486 (delta=-0.0761)
+    esm2_cdr3: std=0.3247, weighted=0.2539 (delta=-0.0708)
+    esm2_concat: std=0.2875, weighted=0.2361 (delta=-0.0513)
+    esm2_early: std=0.3190, weighted=0.2421 (delta=-0.0768)
+    esm2_entropy_top20: std=0.2753, weighted=0.3324 (delta=+0.0571)
+    esm2_layer24: std=0.2396, weighted=0.1628 (delta=-0.0768)
+    esm2_midlayers: std=0.2605, weighted=0.2291 (delta=-0.0314)
+    esm2_per_cdr: std=0.2970, weighted=0.2207 (delta=-0.0763)
+    esm2_per_region: std=0.2970, weighted=0.3052 (delta=+0.0082)
+    esm3: std=0.2946, weighted=0.3241 (delta=+0.0295)
+    esm3_cdr: std=0.2946, weighted=0.3241 (delta=+0.0295)
+    esmc: std=0.2758, weighted=0.2528 (delta=-0.0230)
+    esmc_cdr: std=0.2758, weighted=0.2528 (delta=-0.0230)
+    igt5: std=0.2886, weighted=0.2753 (delta=-0.0133)
+    onehot: std=0.2536, weighted=0.2068 (delta=-0.0468)
+    prot_t5: std=0.3006, weighted=0.2662 (delta=-0.0344)
+    prot_t5_cdr: std=0.3006, weighted=0.2662 (delta=-0.0344)
+    saprot: std=0.2705, weighted=0.2250 (delta=-0.0455)
+    saprot_cdr: std=0.2705, weighted=0.2250 (delta=-0.0455)
+    hybrid: std=0.4022, weighted=0.3304 (delta=-0.0719)
+  [Task 2 elapsed: 485.8s]
+
+  --- Task 3: SVR with Importance-Weighted RBF ---
+    aac: std=0.2258, weighted=0.2258 (delta=+0.0000)
+    ablang2: std=0.2056, weighted=0.2727 (delta=+0.0670)
+    abroberta: std=0.2283, weighted=0.2919 (delta=+0.0636)
+    abroberta_cdr: std=0.2283, weighted=0.2919 (delta=+0.0636)
+    antiberty: std=0.2885, weighted=0.3187 (delta=+0.0302)
+    antiberty_cdr: std=0.2880, weighted=0.3127 (delta=+0.0247)
+    blosum: std=0.1341, weighted=0.1858 (delta=+0.0517)
+    esm2: std=0.2142, weighted=0.2112 (delta=-0.0030)
+    esm2_cdr: std=0.2142, weighted=0.2107 (delta=-0.0036)
+    esm2_cdr3: std=0.2142, weighted=0.2366 (delta=+0.0224)
+    esm2_concat: std=0.2144, weighted=0.1604 (delta=-0.0539)
+    esm2_early: std=0.2266, weighted=0.1911 (delta=-0.0355)
+    esm2_entropy_top20: std=0.2165, weighted=0.3042 (delta=+0.0877)
+    esm2_layer24: std=0.1250, weighted=0.0983 (delta=-0.0266)
+    esm2_midlayers: std=0.1506, weighted=0.1484 (delta=-0.0022)
+    esm2_per_cdr: std=0.2142, weighted=0.2911 (delta=+0.0769)
+    esm2_per_region: std=0.2142, weighted=0.2962 (delta=+0.0820)
+    esm3: std=0.1939, weighted=0.2736 (delta=+0.0798)
+    esm3_cdr: std=0.1939, weighted=0.2736 (delta=+0.0798)
+    esmc: std=0.1681, weighted=0.1973 (delta=+0.0292)
+    esmc_cdr: std=0.1681, weighted=0.1973 (delta=+0.0292)
+    igt5: std=0.3081, weighted=0.3298 (delta=+0.0217)
+    onehot: std=0.1129, weighted=0.2144 (delta=+0.1015)
+    prot_t5: std=0.2299, weighted=0.2391 (delta=+0.0092)
+    prot_t5_cdr: std=0.2299, weighted=0.2391 (delta=+0.0092)
+    saprot: std=0.1941, weighted=0.1887 (delta=-0.0054)
+    saprot_cdr: std=0.1941, weighted=0.1887 (delta=-0.0054)
+    hybrid: std=0.2871, weighted=0.2661 (delta=-0.0209)
+  [Task 3 elapsed: 239.6s]
+
+  --- Task 4: Similarity-Augmented Features (q-RASAR style) ---
+    aac: base=0.2399, +sim_uw=0.2303 (d=-0.0096), +sim_w=0.2083 (d=-0.0316)
+    ablang2: base=0.2766, +sim_uw=0.2694 (d=-0.0072), +sim_w=0.2917 (d=+0.0151)
+    abroberta: base=0.2642, +sim_uw=0.3056 (d=+0.0415), +sim_w=0.3117 (d=+0.0475)
+    abroberta_cdr: base=0.2642, +sim_uw=0.3056 (d=+0.0415), +sim_w=0.3117 (d=+0.0475)
+    antiberty: base=0.3371, +sim_uw=0.3556 (d=+0.0185), +sim_w=0.3518 (d=+0.0146)
+    antiberty_cdr: base=0.3640, +sim_uw=0.3357 (d=-0.0283), +sim_w=0.3307 (d=-0.0333)
+    blosum: base=0.2637, +sim_uw=0.2504 (d=-0.0133), +sim_w=0.2532 (d=-0.0105)
+    esm2: base=0.2575, +sim_uw=0.2397 (d=-0.0178), +sim_w=0.2375 (d=-0.0200)
+    esm2_cdr: base=0.2575, +sim_uw=0.2397 (d=-0.0178), +sim_w=0.2451 (d=-0.0125)
+    esm2_cdr3: base=0.2575, +sim_uw=0.2397 (d=-0.0178), +sim_w=0.2436 (d=-0.0139)
+    esm2_concat: base=0.2177, +sim_uw=0.1912 (d=-0.0265), +sim_w=0.2054 (d=-0.0123)
+    esm2_early: base=0.2179, +sim_uw=0.2298 (d=+0.0119), +sim_w=0.2204 (d=+0.0024)
+    esm2_entropy_top20: base=0.2857, +sim_uw=0.2334 (d=-0.0523), +sim_w=0.2417 (d=-0.0440)
+    esm2_layer24: base=0.1957, +sim_uw=0.2431 (d=+0.0473), +sim_w=0.2456 (d=+0.0499)
+    esm2_midlayers: base=0.2504, +sim_uw=0.2443 (d=-0.0061), +sim_w=0.2382 (d=-0.0121)
+    esm2_per_cdr: base=0.2459, +sim_uw=0.2615 (d=+0.0157), +sim_w=0.2574 (d=+0.0116)
+    esm2_per_region: base=0.2618, +sim_uw=0.2386 (d=-0.0232), +sim_w=0.2445 (d=-0.0173)
+    esm3: base=0.2617, +sim_uw=0.2482 (d=-0.0135), +sim_w=0.2437 (d=-0.0180)
+    esm3_cdr: base=0.2617, +sim_uw=0.2482 (d=-0.0135), +sim_w=0.2437 (d=-0.0180)
+    esmc: base=0.2607, +sim_uw=0.2512 (d=-0.0095), +sim_w=0.2570 (d=-0.0037)
+    esmc_cdr: base=0.2607, +sim_uw=0.2512 (d=-0.0095), +sim_w=0.2570 (d=-0.0037)
+    igt5: base=0.3411, +sim_uw=0.3525 (d=+0.0114), +sim_w=0.3504 (d=+0.0093)
+    onehot: base=0.2442, +sim_uw=0.2949 (d=+0.0507), +sim_w=0.2746 (d=+0.0303)
+    prot_t5: base=0.2841, +sim_uw=0.3004 (d=+0.0163), +sim_w=0.3010 (d=+0.0168)
+    prot_t5_cdr: base=0.2841, +sim_uw=0.3004 (d=+0.0163), +sim_w=0.3010 (d=+0.0168)
+    saprot: base=0.2149, +sim_uw=0.2382 (d=+0.0233), +sim_w=0.2462 (d=+0.0313)
+    saprot_cdr: base=0.2149, +sim_uw=0.2382 (d=+0.0233), +sim_w=0.2462 (d=+0.0313)
+    hybrid: base=0.3397, +sim_uw=0.2802 (d=-0.0595), +sim_w=0.2838 (d=-0.0559)
+  [Task 4 elapsed: 267.3s]
+
+  Total elapsed: 1701.3s
+
+  ============================================================
+  SUMMARY (metric=spearman, lower_is_better=False)
+  ============================================================
+    Weighted kNN: mean_delta=-0.0136, best=esm2_entropy_top20(k20) delta=+0.1002, hybrid_delta=-0.0217
+    Weighted GP: mean_delta=-0.0259, best=esm2_entropy_top20 delta=+0.0571, hybrid_delta=-0.0719
+    Weighted SVR: mean_delta=+0.0294, best=onehot delta=+0.1015, hybrid_delta=-0.0209
+    q-RASAR (w vs base): mean_delta=+0.0027, best=esm2_layer24 delta=+0.0499, hybrid_delta=-0.0559
+  [saved tests/results/similarity/s10_importance_downstream/flab_immunogenicity_marks.json]
+  s10 done in 1701.6s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S11: BAYESIAN OPTIMIZATION IN HYBRID SPACE
+======================================================================
+  Metric: spearman (higher is better) -> direct maximization
+  n_samples: 217
+  n_reps: 27 (antiberty_cdr=1024, antiberty=1024, igt5=1024, prot_t5=2048, prot_t5_cdr=2048, abroberta_cdr=1536, esm2_early=2560, abroberta=1536, ablang2=480, onehot=5600, saprot_cdr=2560, saprot=2560, esm2_midlayers=2560, blosum=5600, esm2=2560, esm2_cdr3=2560, esm2_cdr=2560, esm2_layer24=2560, esmc_cdr=2304, esmc=2304, aac=40, esm2_concat=1280, esm3_cdr=3072, esm3=3072, esm2_per_cdr=7680, esm2_per_region=17920, esm2_entropy_top20=2560)
+  max_iterations: 100
+  n_seeds: 3
+  rebuild_interval: 0
+  hybrid_budget: 50
+  budget_checkpoints: [25, 50, 100]
+  top-1% threshold: 100.0000
+  top-5% threshold: 58.0000
+
+  ============================================================
+  Condition: ecfp4_raw
+  ============================================================
+
+    Seed 1/3 (random_state=42)
+      seed: 10, pool: 174
+    (ecfp4 not found, using esm2_per_region with dim=17920)
+      dim: 17920
+      final best: 100.0000, GP failures: 0
+
+    Seed 2/3 (random_state=43)
+      seed: 10, pool: 172
+    (ecfp4 not found, using esm2_per_region with dim=17920)
+      dim: 17920
+      final best: 85.7000, GP failures: 0
+
+    Seed 3/3 (random_state=44)
+      seed: 10, pool: 174
+    (ecfp4 not found, using esm2_per_region with dim=17920)
+      dim: 17920
+      final best: 100.0000, GP failures: 0
+    Budget 25: AUC=2216.1+/-373.4, top1%: 0.5/2 found, top5%: 0.6666666666666666/3 found
+    Budget 50: AUC=4450.2+/-749.2, top1%: 0.5/2 found, top5%: 0.6666666666666666/3 found
+    Budget 100: AUC=8927.4+/-1488.6, top1%: 0.5/2 found, top5%: 0.6666666666666666/3 found
+
+  ============================================================
+  Condition: tanimoto_ecfp4
+  ============================================================
+
+    Seed 1/3 (random_state=42)
+      seed: 10, pool: 174
+      dim: 17920
+  s11 FAILED: 'constant'
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S12: CROSS-DOMAIN ACTIVITY CLIFFS
+======================================================================
+  Domain: antibody, n=217, dim=82632
+  Cliffs: 6/217 (2.8%), 3 pairs
+  [saved tests/results/similarity/s12_cross_domain_cliffs/flab_immunogenicity_marks.json]
+  s12 done in 189.3s
+
+──────────────────────────────────────────────────────────────────────
+
+======================================================================
+EXPERIMENT S13: CLUSTERING & RETRIEVAL
+======================================================================
+  Spaces: ['rep_esm2_per_region', 'rep_esm2_per_cdr', 'rep_onehot', 'concat', 'pca_matched', 'hybrid']
+
+  13a: Clustering quality
+    rep_esm2_per_region: best coherence=0.2210 (k=5), silhouette=0.0951
+    rep_esm2_per_cdr: best coherence=0.2210 (k=5), silhouette=0.0951
+    rep_onehot: best coherence=0.3639 (k=10), silhouette=0.0801
+    concat: best coherence=0.1467 (k=10), silhouette=0.0910
+    pca_matched: best coherence=0.3767 (k=10), silhouette=-0.0147
+    hybrid: best coherence=0.0689 (k=10), silhouette=0.1536
+
+  13b: Retrieval quality
+    rep_esm2_per_region: mean_delta_y=11.8413
+    rep_esm2_per_cdr: mean_delta_y=11.8413
+    rep_onehot: mean_delta_y=12.1594
+    concat: mean_delta_y=11.9087, weighted=11.4344
+    pca_matched: mean_delta_y=11.1430
+    hybrid: mean_delta_y=9.7968, weighted=10.7642
+
+  Hybrid vs concat: clustering=loss, retrieval=win
+  [saved tests/results/similarity/s13_clustering_retrieval/flab_immunogenicity_marks.json]
+  s13 done in 71.9s
+
+======================================================================
+ALL DONE: flab_immunogenicity_marks — 12 experiments in 28760s
+======================================================================
+Done:   Wed  1 Apr 11:53:26 BST 2026

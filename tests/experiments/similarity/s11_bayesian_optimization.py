@@ -787,6 +787,17 @@ def run(data, config, output_dir, dataset_name, **kwargs):
         print(f"  Skipping S11: domain='{domain}' (molecular-only experiment)")
         return {'skipped': True, 'reason': f'domain={domain}', 'domain': domain}
 
+    # S11 is regression-only. On binary classification labels the Bayesian-
+    # optimization "best value found so far" saturates to 1.0 on the first
+    # positive picked, so every condition ties at a degenerate score — it runs
+    # without error but carries no signal (the library-screening / active-
+    # learning framing assumes a continuous activity to optimise). Skip cleanly.
+    if task_type == 'classification':
+        print("  Skipping S11: task_type='classification' (Bayesian-optimization "
+              "objective is degenerate on binary labels; regression-only).")
+        return {'skipped': True, 'reason': 'classification_degenerate',
+                'task_type': task_type}
+
     if n_samples < 200:
         print(f"  Skipping S11: n={n_samples} < 200 (BO seed set too small for greedy allocation)")
         return {'error': 'dataset_too_small', 'n_samples': n_samples}

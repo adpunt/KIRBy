@@ -55,10 +55,18 @@ def _read_be_top_view_set(be_dir: Path, endpoint: str):
         raise RuntimeError(f'No BE results for {endpoint}')
     recs.sort(key=lambda r: -r['mean_cindex'])
     # Top recs grouped by view_set; pick the view that wins most often.
+    # NOTE: BE writes records under key 'views'; older code used 'view_set'.
+    # Support both for forward-compat.
     by_views = {}
     for r in recs[:20]:
-        key = tuple(r.get('view_set', []))
+        key = tuple(r.get('views', r.get('view_set', [])))
+        if not key:
+            continue
         by_views.setdefault(key, []).append(r['mean_cindex'])
+    if not by_views:
+        raise RuntimeError(
+            f'No BE records had a usable view list for {endpoint}; '
+            f'expected key "views" or "view_set" on each record.')
     best_views = max(by_views, key=lambda k: max(by_views[k]))
     return list(best_views)
 
@@ -67,11 +75,11 @@ def _read_be_top_view_set(be_dir: Path, endpoint: str):
 # Per-model search spaces (Optuna trial → estimator factory)
 # ----------------------------------------------------------------------
 def _space_rsf(trial):
+    # SurvivalRSF wrapper only accepts these constructor args (no max_depth).
     return SurvivalRSF(
         n_estimators=trial.suggest_categorical('n_estimators', [300, 500, 1000, 2000]),
-        max_depth=trial.suggest_categorical('max_depth', [None, 5, 10, 15, 20]),
         min_samples_split=trial.suggest_int('min_samples_split', 2, 20),
-        min_samples_leaf=trial.suggest_int('min_samples_leaf', 1, 10),
+        min_samples_leaf=trial.suggest_int('min_samples_leaf', 1, 30),
         max_features=trial.suggest_categorical('max_features', ['sqrt', 'log2', 0.3, 0.5, 0.7]),
     )
 
@@ -104,20 +112,22 @@ def _space_gbsa(trial):
 
 
 def _space_ngboost(trial):
+    # SurvivalNGBoost wrapper only accepts n_estimators / learning_rate / dist.
     return SurvivalNGBoost(
         n_estimators=trial.suggest_categorical('n_estimators', [200, 500, 1000]),
         learning_rate=trial.suggest_float('learning_rate', 0.005, 0.1, log=True),
-        minibatch_frac=trial.suggest_float('minibatch_frac', 0.5, 1.0),
+        dist=trial.suggest_categorical('dist', ['logNormal', 'exponential']),
     )
 
 
 def _space_lgbm_aft(trial):
+    # SurvivalLightGBMAft wrapper accepts these only (no min_data_in_leaf).
     return SurvivalLightGBMAFT(
         n_estimators=trial.suggest_categorical('n_estimators', [200, 500, 1000, 2000]),
         learning_rate=trial.suggest_float('learning_rate', 0.01, 0.2, log=True),
         max_depth=trial.suggest_int('max_depth', 3, 12),
         num_leaves=trial.suggest_int('num_leaves', 15, 255),
-        min_data_in_leaf=trial.suggest_int('min_data_in_leaf', 5, 100),
+        sigma=trial.suggest_float('sigma', 0.5, 2.0),
     )
 
 

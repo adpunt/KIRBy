@@ -990,6 +990,52 @@ def _download_xena_rppa(sample_ids: List[str]) -> Tuple[np.ndarray, np.ndarray]:
     return result, protein_names
 
 
+def _download_cptac_proteomics(
+    sample_ids: List[str],
+) -> Tuple[np.ndarray, np.ndarray, List[str]]:
+    """Load CPTAC mass-spectrometry proteomics from a locally-placed matrix.
+
+    GRACEFUL-SKIP loader (mirrors create_bmfm_rna_embeddings / RPPA): CPTAC
+    global proteomics is NOT auto-downloaded — the public matrices live behind
+    the CPTAC Data Coordinating Center / the `cptac` Python package per cancer
+    type and need local placement. If no local file exists, raise a clear,
+    actionable error so the caller skips this rep (it does NOT cache junk).
+
+    Expected layout (.npz with keys matrix, protein_names, sample_ids), found at:
+        $CPTAC_PROTEOMICS_NPZ                       (explicit override), or
+        <cache_dir>/cptac/cptac_proteomics.npz
+
+    Returns:
+        matrix:        (n_db_samples, n_proteins) proteomics values
+        protein_names: (n_proteins,) protein/gene identifiers
+        sample_ids:    (n_db_samples,) TCGA/CPTAC barcodes
+    """
+    candidates = []
+    env_path = os.environ.get('CPTAC_PROTEOMICS_NPZ')
+    if env_path:
+        candidates.append(Path(env_path))
+    candidates.append(_cache_dir() / 'cptac' / 'cptac_proteomics.npz')
+
+    npz_path = next((p for p in candidates if p.exists()), None)
+    if npz_path is None:
+        searched = ', '.join(str(p) for p in candidates)
+        raise FileNotFoundError(
+            "CPTAC proteomics data not available — download CPTAC global "
+            "mass-spec proteomics (e.g. via the `cptac` package or the CPTAC "
+            "DCC) and save it as an .npz with keys {matrix, protein_names, "
+            f"sample_ids}} to one of: {searched} "
+            "(or set $CPTAC_PROTEOMICS_NPZ). Skipping."
+        )
+
+    data = np.load(npz_path, allow_pickle=True)
+    matrix = np.asarray(data['matrix'], dtype=np.float32)
+    protein_names = np.asarray(data['protein_names'])
+    all_ids = [str(s) for s in data['sample_ids'].tolist()]
+    print(f"  CPTAC proteomics: loaded {matrix.shape[0]} samples × "
+          f"{matrix.shape[1]} proteins from {npz_path}")
+    return matrix, protein_names, all_ids
+
+
 # =============================================================================
 # miRNA DATA
 # =============================================================================
@@ -1628,6 +1674,16 @@ def _load_brca_survival() -> Tuple[np.ndarray, np.ndarray, str, Dict]:
     sample_ids = [sample_ids[i] for i in valid_indices]
     tss_groups = _extract_tss_groups(sample_ids)
 
+    # Per-sample survival event flags (aligned to sample_ids order), exposed in
+    # metadata so survival-supervised reps (survival_latent50) can build a Cox
+    # head. Primary path keeps uncensored-only (all events=1); the fallback path
+    # above may include censored samples, so recover the true event per sample.
+    survival_event = np.array(
+        [int(surv_lookup.get(sample_ids[k][:15], (0, 0))[1])
+         for k in range(len(sample_ids))],
+        dtype=np.int64,
+    )
+
     # Try to get WSI features
     wsi_dir = None
     try:
@@ -1648,5 +1704,8 @@ def _load_brca_survival() -> Tuple[np.ndarray, np.ndarray, str, Dict]:
         'cohort': 'TCGA-BRCA',
         'wsi_dir': wsi_dir,
         'class_names': None,
+        # For survival-supervised reps: per-sample OS time + event (aligned).
+        'survival_time': labels.astype(np.float32),
+        'survival_event': survival_event,
     }
     return expression, labels, 'regression', metadata

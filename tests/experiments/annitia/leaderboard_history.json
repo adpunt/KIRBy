@@ -1,19 +1,96 @@
 {
-  "_comment": "Trustii leaderboard scores keyed by submission CSV stem. Concordance index = average of hep + death concordance on the val_test holdout.",
+  "_comment": "Trustii leaderboard scores keyed by submission CSV stem. LB = 0.7 * Cindex_hepatic + 0.3 * Cindex_death (per Trustii spec \u2014 see README.md:13 and run.py:210).",
   "submissions": [
-    {"stem": "sub_master_FINAL", "score": 0.92683, "uploaded": "2026-05-08 00:37:24"},
-    {"stem": "sub_master_meta_avg_aware_weighted", "score": 0.9302, "uploaded": "2026-05-08 00:22:12", "best_public": true},
-    {"stem": "sub_master_meta_avg_grand_all", "score": 0.92935, "uploaded": "2026-05-08 00:21:02"},
-    {"stem": "sub_master_meta_avg_all", "score": 0.92942, "uploaded": "2026-05-08 00:16:35"},
-    {"stem": "sub_master_meta_avg_weighted", "score": 0.92845, "uploaded": "2026-05-08 00:15:30"},
-    {"stem": "sub_master_meta_avg_top5", "score": 0.92782, "uploaded": "2026-05-08 00:15:00"},
-    {"stem": "sub_master_meta_avg", "score": 0.92692, "uploaded": "2026-05-08 00:12:34"},
-    {"stem": "sub_master_rank_median", "score": 0.9112, "uploaded": "2026-05-08 00:10:49"},
-    {"stem": "sub_master_best_combined", "score": 0.91225, "uploaded": "2026-05-08 00:05:21"},
-    {"stem": "submission", "score": 0.7181, "uploaded": "2026-05-07 22:42:53", "_note": "Round 3 broken stack_meta — overfit catastrophe"},
-    {"stem": "results_r2", "score": 0.90993, "uploaded": "2026-05-06 16:41:19"},
-    {"stem": "results_stack", "score": 0.912, "uploaded": "2026-05-06 16:40:55"},
-    {"stem": "master_2way", "score": 0.91188, "uploaded": "2026-05-06 16:40:03"},
-    {"stem": "annitia_submission", "score": 0.8898, "uploaded": "2026-05-05 00:13:53"}
+    {
+      "stem": "sub_master_FINAL",
+      "score": 0.92683,
+      "uploaded": "2026-05-08 00:37:24"
+    },
+    {
+      "stem": "sub_master_meta_avg_aware_weighted",
+      "score": 0.9302,
+      "uploaded": "2026-05-08 00:22:12",
+      "best_public": true
+    },
+    {
+      "stem": "sub_master_meta_avg_grand_all",
+      "score": 0.92935,
+      "uploaded": "2026-05-08 00:21:02"
+    },
+    {
+      "stem": "sub_master_meta_avg_all",
+      "score": 0.92942,
+      "uploaded": "2026-05-08 00:16:35"
+    },
+    {
+      "stem": "sub_master_meta_avg_weighted",
+      "score": 0.92845,
+      "uploaded": "2026-05-08 00:15:30"
+    },
+    {
+      "stem": "sub_master_meta_avg_top5",
+      "score": 0.92782,
+      "uploaded": "2026-05-08 00:15:00"
+    },
+    {
+      "stem": "sub_master_meta_avg",
+      "score": 0.92692,
+      "uploaded": "2026-05-08 00:12:34"
+    },
+    {
+      "stem": "sub_master_rank_median",
+      "score": 0.9112,
+      "uploaded": "2026-05-08 00:10:49"
+    },
+    {
+      "stem": "sub_master_best_combined",
+      "score": 0.91225,
+      "uploaded": "2026-05-08 00:05:21"
+    },
+    {
+      "stem": "submission",
+      "score": 0.7181,
+      "uploaded": "2026-05-07 22:42:53",
+      "_note": "Round 3 broken stack_meta \u2014 overfit catastrophe"
+    },
+    {
+      "stem": "results_r2",
+      "score": 0.90993,
+      "uploaded": "2026-05-06 16:41:19"
+    },
+    {
+      "stem": "results_stack",
+      "score": 0.912,
+      "uploaded": "2026-05-06 16:40:55"
+    },
+    {
+      "stem": "master_2way",
+      "score": 0.91188,
+      "uploaded": "2026-05-06 16:40:03"
+    },
+    {
+      "stem": "annitia_submission",
+      "score": 0.8898,
+      "uploaded": "2026-05-05 00:13:53"
+    },
+    {
+      "name": "cherry_pick_hep_anomBlend_death_wapp",
+      "date": "2026-05-08",
+      "lb_score": 0.89788,
+      "predicted_lb": 0.9323,
+      "predicted_ci_95": [
+        0.9025,
+        0.9569
+      ],
+      "oof_combined_LB": 0.9323,
+      "oof_C_hep": 0.9142,
+      "oof_C_death": 0.975,
+      "oof_lb_gap": 0.034420000000000006,
+      "recipe": "cherry-pick: anomaly_blend_meta hep + weighted_anomaly_per_patient death",
+      "category": "single-variant cherry-pick",
+      "anchor_corr_hep": 0.9248,
+      "anchor_corr_death": 0.9955,
+      "lesson": "Bootstrap CI on TRAIN OOF does NOT transfer to LB for single-variant cherry-picks. The +0.005 mean OOF lift over v4 ensemble cost -0.032 on LB. Ensemble averaging dampens the winner-curse; cherry-picking amplifies it. Recipe is fundamentally riskier than ensemble averages."
+    }
   ]
 }

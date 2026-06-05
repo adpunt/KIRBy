@@ -322,17 +322,31 @@ def evaluate_target(target, rep_preset, n_folds, pruning_mode='default_pruning')
         aug_dict = {k: v for k, v in reps.items() if k in AUG_REPS}
         _pkw = resolve_pruning_kwargs(pruning_mode, len(labels),
                                        dataset_label=f'chembl_qsar/{target}')
+        # Test-only: shrink the hybrid search under KIRBY_SMOKE_N (tiny budget,
+        # rf-only evaluator, cheap lightgbm_gain importance) so the on-demand
+        # search finishes on tiny local subsets. No-op when the env var is unset,
+        # so server runs use FULL_BUDGETS + INTERNAL_EVALUATORS unchanged.
+        _is_smoke = bool(os.environ.get('KIRBY_SMOKE_N', '').strip())
+        _smoke_search = ({'budgets': [25], 'importance_methods': ['lightgbm_gain']}
+                         if _is_smoke else {})
+        _eval_list = ['rf'] if _is_smoke else INTERNAL_EVALUATORS
+        # In smoke mode skip the augmentation pool: passing augmentations adds
+        # the 'uncapped'/'capped' pool conditions, each running a full
+        # augmentation search — far too heavy to finish locally. The base hybrid
+        # search still exercises the pipeline. Server runs keep augmentations.
+        _smoke_augs = None if _is_smoke else (aug_dict if aug_dict else None)
         search, _meta = get_best_search_for_downstream(
             base if base else reps, labels, groups,
             downstream_model='rf', budget=None,
-            augmentations=aug_dict if aug_dict else None,
+            augmentations=_smoke_augs,
             speed='full', metric='mae',
             task_type='regression',
             dataset_name='chembl_qsar',
             return_fitted=True,
-            internal_evaluators=INTERNAL_EVALUATORS,
+            internal_evaluators=_eval_list,
             condition_suffix=target,
             adaptive_pruning=0.25,
+            **_smoke_search,
             **_pkw,
         )
         top3 = extract_top3_base_reps(search) if search is not None else None

@@ -1,0 +1,16 @@
+Already up to date.
+Activated venv: /data/stat-cadd/scat9264/py311-kirby (Python 3.11.3)
+Mode: full
+Dataset: tz_her2_binary
+Reps: fast
+Models: ['ridge', 'rf', 'xgboost', 'lightgbm']
+Importance: treeshap
+  Trastuzumab (binary): 524346 total samples
+    Class 0: 352197 (67.2%)
+    Class 1: 172149 (32.8%)
+  Subsampling 524346 -> 5000...
+  After subsampling: 5000 samples
+    Class 0: 3361 (67.2%)
+    Class 1: 1639 (32.8%)
+  5000/5000 samples have mutations, avg 7.3 mutations/sample
+  Edit distance range: [1, 10]

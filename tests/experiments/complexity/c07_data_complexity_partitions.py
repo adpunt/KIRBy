@@ -79,6 +79,41 @@ def run(data, config, output_dir, dataset_name, partitions=None):
         for m, (bp, t, a) in fulldata_blueprints.items()
     }
 
+    # c07 large-dataset cap (signed off 2026-06-05): the per-subpopulation
+    # searches below are full, uncached find_best_hybrid runs (uncapped once a
+    # half exceeds TOP_CAPPED_MAX_N rows), so on big datasets they grow into the
+    # hundreds of hours — c07 was the one expensive experiment with no size
+    # limit. Preselect a fixed subset for the partition searches. Selected by
+    # WHOLE scaffold groups (not random rows) so the scaffold-based partitions
+    # stay intact, no group is fragmented, and downstream CV stays group-aware
+    # (NOT a random split). The full-data blueprints above used the real full
+    # data (cached precompute). Deterministic (seed 42).
+    C07_MAX_SAMPLES = 2000
+    labels = np.asarray(labels)
+    groups = np.asarray(groups)
+    _c07_augs = data.get('augmentations')
+    if len(labels) > C07_MAX_SAMPLES:
+        _rng = np.random.RandomState(42)
+        _uniq = np.unique(groups)
+        _rng.shuffle(_uniq)
+        _chosen, _count = set(), 0
+        for _g in _uniq:
+            _chosen.add(_g)
+            _count += int((groups == _g).sum())
+            if _count >= C07_MAX_SAMPLES:
+                break
+        _idx = np.where(np.array([g in _chosen for g in groups]))[0]
+        reps = {k: v[_idx] for k, v in reps.items()}
+        labels = labels[_idx]
+        groups = groups[_idx]
+        if smiles is not None:
+            smiles = ([smiles[i] for i in _idx] if isinstance(smiles, list)
+                      else np.asarray(smiles)[_idx])
+        if _c07_augs:
+            _c07_augs = {k: v[_idx] for k, v in _c07_augs.items()}
+        print(f"  c07: large dataset capped to {len(labels)} samples "
+              f"({len(_chosen)} whole scaffold groups, seed 42) for partition searches")
+
     for partition_name in all_partitions:
         print(f"\n  Partition: {partition_name}")
 
@@ -146,7 +181,7 @@ def run(data, config, output_dir, dataset_name, partitions=None):
 
         part_result = {'easy': {}, 'hard': {}, 'n_easy': int(n_easy), 'n_hard': int(n_hard)}
 
-        full_augs = data.get('augmentations')
+        full_augs = _c07_augs  # c07 cap: subsampled augmentations (see C07_MAX_SAMPLES)
         for subpop_name, mask in [('easy', mask_easy), ('hard', mask_hard)]:
             sub_reps = {k: v[mask] for k, v in reps.items()}
             sub_labels = labels[mask]
